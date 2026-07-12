@@ -989,11 +989,16 @@ Plans:
 2. FUSE publish retries route through one shared helper with the correct attempt budget; FP-resolve concurrency is globally bounded; Windows D-07 write refs key by stored node_id (CI green)
 3. TEE republish surfaces real DB/config failures (not silent success) and `renewIpnsRecord` rejects an equal/earlier EOL, both covered by tests that assert the intended branch
 
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd-plan-phase 76 to break down)
+- [ ] 76-01-PLAN.md — Vault-init fail-closed preflight + decrypt-and-resume recovery (SC1, todo vault-init-publish-ordering-preflight) [wave 1]
+- [ ] 76-02-PLAN.md — FUSE retry-helper consolidation + global FP-resolve cap + zeroization (SC2 items 1,2,4, todo fuse-publish-and-concurrency-hardening-deferred) [wave 1]
+- [ ] 76-03-PLAN.md — TEE republish/renew error classification + per-entry null guard + CI wiring (SC3 items 1-3, todo tee-republish-writepath-error-handling-hardening) [wave 1]
+- [ ] 76-04-PLAN.md — renewIpnsRecord strictly-later-EOL invariant + validity codec field + tests (SC3 item 4, todo renew-ipns-record-eol-invariant-and-tests) [wave 1]
+- [ ] 76-05-PLAN.md — Windows D-07 write-plane node_id keying (SC2 item 3, CI-gated, autonomous:false) [wave 1]
 
 ### Phase 77: Crypto Hygiene and Terminology Canonicalization
 

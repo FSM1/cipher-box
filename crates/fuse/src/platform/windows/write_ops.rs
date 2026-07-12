@@ -234,8 +234,13 @@ pub mod implementation {
                         // verbatim (the new child is already spliced into BOTH
                         // planes by build_mkdir_journal_entry / build_folder_metadata).
                         let parent_meta_cid = cipherbox_api_client::ipfs::upload_content(&api, &parent_published_node).await.map_err(|e| e.to_string())?;
-                        let parent_key_arr: [u8; 32] = parent_ipns_private_key.try_into()
-                            .map_err(|_| "Invalid parent IPNS key length".to_string())?;
+                        // SC2 item 4: MkdirJournalResult.parent_ipns_private_key is now
+                        // a locally-owned Zeroizing seed; narrow into Zeroizing<[u8;32]>
+                        // (scrubbed on drop) with no transient plaintext Vec.
+                        let parent_key_arr: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+                            <[u8; 32]>::try_from(parent_ipns_private_key.as_slice())
+                                .map_err(|_| "Invalid parent IPNS key length".to_string())?,
+                        );
                         let new_seq = seq + 1;
                         let parent_value = format!("/ipfs/{}", parent_meta_cid);
                         let parent_record = cipherbox_core::ipns::create_ipns_record(
@@ -647,11 +652,11 @@ pub mod implementation {
                 });
 
             // Capture the D-07 dual ref for a File or Folder child from its OWN
-            // node/v3 keys, mirroring the FUSE handle_unlink/handle_rmdir path:
-            // SealedChildRef.ipns_name (READ plane, a k51) and
-            // WriteChildRef.child_id = uuid_from_ino(ino) (WRITE plane, a UUID)
-            // — never conflated. Tuple: (name, size, item_type, content_cid,
-            // child_ref, write_child_ref, child_published_node).
+            // node/v3 keys, mirroring the FUSE handle_unlink/handle_rmdir path
+            // (delete.rs:180/:419): SealedChildRef.ipns_name (READ plane, a k51)
+            // and WriteChildRef.child_id = the inode's STORED node_id (WRITE
+            // plane, a UUID) — never conflated. Tuple: (name, size, item_type,
+            // content_cid, child_ref, write_child_ref, child_published_node).
             let bin_capture: Option<(
                 String,
                 u64,
@@ -662,8 +667,14 @@ pub mod implementation {
                 String,
             )> = match fs.inodes.get(ino) {
                 Some(inode) => {
-                    // WRITE plane is keyed by the child UUID (uuid_from_ino).
-                    let child_id = crate::fs::uuid_from_ino(ino);
+                    // SECURITY-REVIEW: D-07 dual-keying — childId(UUID) vs ipnsName
+                    // must not be conflated. childId is the inode's STORED node_id
+                    // (its real published.id), NOT uuid_from_ino(ino): a
+                    // materialized-then-deleted node keeps its creator's id, so the
+                    // bin entry's WriteChildRef pairs correctly on restore. A
+                    // never-materialized node has node_id == uuid_from_ino(ino)
+                    // (seeded at creation), so the fresh-node case is unchanged.
+                    let child_id = inode.node_id.clone();
                     match &inode.kind {
                         InodeKind::File {
                             ipns_name,
@@ -680,8 +691,8 @@ pub mod implementation {
                                 );
                                 None
                             } else if let Some((pr, pw)) = parent_keys {
-                                // SECURITY-REVIEW: D-07 dual-keying — childId(UUID
-                                // via uuid_from_ino) vs ipnsName must not be
+                                // SECURITY-REVIEW: D-07 dual-keying — childId(UUID,
+                                // the stored node_id) vs ipnsName must not be
                                 // conflated.
                                 cipherbox_sdk::build_child_refs(
                                     &**read_key,
@@ -720,8 +731,8 @@ pub mod implementation {
                             if ipns_name.is_empty() {
                                 None
                             } else if let Some((pr, pw)) = parent_keys {
-                                // SECURITY-REVIEW: D-07 dual-keying — childId(UUID
-                                // via uuid_from_ino) vs ipnsName must not be
+                                // SECURITY-REVIEW: D-07 dual-keying — childId(UUID,
+                                // the stored node_id) vs ipnsName must not be
                                 // conflated.
                                 cipherbox_sdk::build_child_refs(
                                     &**read_key,
@@ -1642,6 +1653,140 @@ pub mod implementation {
             assert!(
                 fs.inodes.get(source).is_some(),
                 "the source must remain untouched when the rename aborts on the dest gate"
+            );
+        }
+
+        /// D-07 dual-keying parity with the shipped Unix fix (delete.rs
+        /// `bin_dual_refs_are_restore_sufficient_and_d07_distinct`, commit
+        /// c4d30e598). Ported for the Windows `cleanup()` bin-capture path,
+        /// which now keys `WriteChildRef.child_id` by the inode's STORED
+        /// `node_id` (`inode.node_id.clone()`), NOT `uuid_from_ino(ino)`.
+        ///
+        /// This asserts the MATERIALIZED-then-removed case: a node whose
+        /// persisted `node_id` was assigned by its remote creator differs from
+        /// `uuid_from_ino(local_ino)`. The bin entry must key by that stored
+        /// node_id so it pairs correctly on restore. Pure `build_child_refs`
+        /// round-trip (no live restore command exists) — the reachable proof.
+        #[test]
+        fn bin_child_id_keys_by_stored_node_id_not_local_ino_d07() {
+            use base64::Engine as _;
+            use cipherbox_core::node::{
+                decode_node, decode_write_body,
+                seal::{seal_published_node, unseal_node},
+                Node, NodeKind, NodeWriteBody,
+            };
+
+            let parent_read_key = [7u8; 32];
+            let parent_write_key = [9u8; 32];
+            let child_read_key = [2u8; 32];
+            let child_write_key = [4u8; 32];
+            let child_ipns_name = "k51childfolder";
+
+            // A MATERIALIZED node: its creator-assigned node_id is unrelated to
+            // this session's local inode number. `cleanup()` sources child_id
+            // from inode.node_id — mirror that here, NOT uuid_from_ino(local_ino).
+            // NOTE: child_id must be a valid UUID — the seal AAD parses it via
+            // `Uuid::parse_str` (crypto/aes.rs), so a non-UUID string fails closed
+            // with `SealFailed(InvalidAadInput)`. Use a fixed remote-assigned UUID
+            // distinct from `uuid_from_ino(local_ino)`.
+            let local_ino = 42u64;
+            let materialized_node_id = "deadbeef-0000-4000-8000-000000000042".to_string();
+            assert_ne!(
+                materialized_node_id,
+                crate::fs::uuid_from_ino(local_ino),
+                "precondition: a materialized node_id must differ from uuid_from_ino(local_ino)"
+            );
+            let child_id = materialized_node_id.clone();
+
+            let (child_ref, write_child_ref) = cipherbox_sdk::build_child_refs(
+                &child_read_key,
+                &child_write_key,
+                &parent_read_key,
+                &parent_write_key,
+                &child_id,
+                child_ipns_name,
+                "restore-me",
+                NodeKind::Folder,
+                0,
+                0,
+            )
+            .expect("build_child_refs must succeed");
+
+            // D-07: the two key spaces are structurally distinct, and the write
+            // plane is keyed by the STORED node_id (not uuid_from_ino).
+            assert_ne!(
+                write_child_ref.child_id, child_ref.ipns_name,
+                "D-07: WriteChildRef.child_id (UUID) must never equal SealedChildRef.ipns_name (k51)"
+            );
+            assert_eq!(
+                write_child_ref.child_id, materialized_node_id,
+                "write plane must be keyed by the inode's STORED node_id"
+            );
+            assert_ne!(
+                write_child_ref.child_id,
+                crate::fs::uuid_from_ino(local_ino),
+                "regression: child_id must NOT fall back to uuid_from_ino(local_ino) for a materialized node"
+            );
+            assert_eq!(
+                child_ref.ipns_name, child_ipns_name,
+                "read plane keyed by ipnsName"
+            );
+
+            // Re-splice BOTH captured refs into a FRESH target parent node and
+            // assert restore-sufficiency across both planes.
+            let parent_id = crate::fs::uuid_from_ino(1);
+            let parent_node = Node::Folder {
+                id: parent_id.clone(),
+                generation: 0,
+                created_at: 0,
+                modified_at: 0,
+                children: vec![child_ref.clone()],
+            };
+            let write_body = NodeWriteBody {
+                ipns_private_key: vec![0u8; 32],
+                write_children: vec![write_child_ref.clone()],
+            };
+            let published = seal_published_node(
+                &parent_node,
+                &parent_read_key,
+                &parent_write_key,
+                Some(&write_body),
+            )
+            .expect("seal_published_node must succeed");
+
+            // Read plane: unseal the parent read-body → child ipns_name present.
+            let read_sealed = base64::engine::general_purpose::STANDARD
+                .decode(&published.read_sealed)
+                .expect("valid base64");
+            let read_body =
+                unseal_node(&read_sealed, &parent_read_key, &parent_id, NodeKind::Folder, 0)
+                    .expect("unseal parent read-body");
+            let recovered = decode_node(&read_body).expect("decode parent node");
+            match recovered {
+                Node::Folder { children, .. } => {
+                    assert!(
+                        children.iter().any(|c| c.ipns_name == child_ipns_name),
+                        "the re-spliced child must be recovered in the parent read plane"
+                    );
+                }
+                other => panic!("expected a recovered Folder node, got {:?}", other.kind()),
+            }
+
+            // Write plane: unseal the parent write-body → child keyed by node_id.
+            let write_sealed_b64 = published.write_sealed.expect("write_sealed present");
+            let write_sealed = base64::engine::general_purpose::STANDARD
+                .decode(write_sealed_b64)
+                .expect("valid base64");
+            let wb_bytes =
+                unseal_node(&write_sealed, &parent_write_key, &parent_id, NodeKind::Folder, 0)
+                    .expect("unseal parent write-body");
+            let recovered_wb = decode_write_body(&wb_bytes).expect("decode write body");
+            assert!(
+                recovered_wb
+                    .write_children
+                    .iter()
+                    .any(|w| w.child_id == materialized_node_id),
+                "the re-spliced child must be recovered in the parent write plane keyed by the stored node_id"
             );
         }
     }
