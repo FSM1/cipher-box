@@ -77,12 +77,11 @@ export async function fetchPublishedNode(
  * `@cipherbox/crypto` (D-03).
  *
  * Integrity note: GCM bodies fail closed on tampered ciphertext via the
- * auth-tag (T-78-04), but CTR bodies carry NO auth tag, and this transport does
- * not re-hash the fetched bytes against the CID — so a hostile gateway can
- * silently tamper a CTR (large-file) body. Closing that gap (verify content
- * bytes against the CID multihash) is tracked as a recovery-tool hardening
- * follow-up; the raw `content.fileKey` is zeroed here once consumed (terminal
- * owner, D-09), mirroring the production read chain.
+ * auth-tag (T-78-04); CTR bodies carry NO auth tag, but `fetchFromIpfs` now
+ * content-address-verifies the fetched bytes against the CID multihash, so a
+ * hostile gateway cannot silently tamper a CTR (large-file) body either. The
+ * raw `content.fileKey` is zeroed here once consumed (terminal owner, D-09),
+ * mirroring the production read chain.
  */
 async function decryptFileContent(
   node: Node,
@@ -120,6 +119,11 @@ async function decryptFileContent(
  * same graceful-degradation contract as `resolveChildren`. The per-child
  * `childReadKey` this function mints is zeroed once consumed (terminal owner,
  * D-09); `parentReadKey` is caller-owned and never zeroed here.
+ *
+ * Cycle guard: a corrupted or rolled-back vault graph can point a child back at
+ * an ancestor, which would otherwise recurse forever (hang / OOM / gateway
+ * rate-limit). `visited` tracks every IPNS name already entered; a revisit is
+ * reported and skipped so the walk always terminates.
  */
 async function walkFolder(
   node: Node,
@@ -127,12 +131,24 @@ async function walkFolder(
   pathPrefix: string,
   gatewayConfig: RecoveryGatewayConfig,
   onProgress: RecoveryProgressFn,
-  out: RecoveredFile[]
+  out: RecoveredFile[],
+  visited: Set<string>
 ): Promise<void> {
   for (const childRef of node.children ?? []) {
     const childPath = pathPrefix ? `${pathPrefix}/${childRef.name}` : childRef.name;
     let childReadKey: Uint8Array | null = null;
     try {
+      // Stop before re-entering a node already on the current recovery — a cycle
+      // in a corrupted/rolled-back graph would otherwise loop forever.
+      if (visited.has(childRef.ipnsName)) {
+        onProgress(
+          `Skipped ${childPath}: cycle detected (${truncate(childRef.ipnsName)} already visited)`,
+          'warn'
+        );
+        continue;
+      }
+      visited.add(childRef.ipnsName);
+
       onProgress(`Resolving ${childPath} (${truncate(childRef.ipnsName)})...`, 'info');
       const published = await fetchPublishedNode(childRef.ipnsName, gatewayConfig);
 
@@ -151,7 +167,15 @@ async function walkFolder(
         onProgress(`Recovered file ${childPath} (${bytes.length} bytes)`, 'success');
       } else {
         onProgress(`Entering folder ${childPath}/...`, 'info');
-        await walkFolder(childNode, childReadKey, childPath, gatewayConfig, onProgress, out);
+        await walkFolder(
+          childNode,
+          childReadKey,
+          childPath,
+          gatewayConfig,
+          onProgress,
+          out,
+          visited
+        );
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -169,15 +193,20 @@ async function walkFolder(
  * @param rootReadKey - The root read key (caller-owned; never zeroed here, D-09).
  * @param gatewayConfig - IPFS/IPNS gateway endpoints (D-04).
  * @param onProgress - Step reporter streamed to the recovery UI progress log.
+ * @param rootIpnsName - Optional root IPNS name; seeds the cycle-guard visited
+ *   set so a descendant pointing back at the root is caught too.
  * @returns Every recovered plaintext file keyed by its tree path.
  */
 export async function recoverTree(
   rootNode: Node,
   rootReadKey: Uint8Array,
   gatewayConfig: RecoveryGatewayConfig,
-  onProgress: RecoveryProgressFn
+  onProgress: RecoveryProgressFn,
+  rootIpnsName?: string
 ): Promise<RecoveredFile[]> {
   const out: RecoveredFile[] = [];
-  await walkFolder(rootNode, rootReadKey, '', gatewayConfig, onProgress, out);
+  const visited = new Set<string>();
+  if (rootIpnsName) visited.add(rootIpnsName);
+  await walkFolder(rootNode, rootReadKey, '', gatewayConfig, onProgress, out, visited);
   return out;
 }

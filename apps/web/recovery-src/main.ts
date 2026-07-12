@@ -129,7 +129,7 @@ async function runRecovery(
     const rootPublished = await fetchPublishedNode(rootKeypair.ipnsName, gatewayConfig);
     const rootNode = await unsealNode(rootPublished, rootReadKey);
     log('Unsealed root node. Walking tree...', 'info');
-    return await recoverTree(rootNode, rootReadKey, gatewayConfig, log);
+    return await recoverTree(rootNode, rootReadKey, gatewayConfig, log, rootKeypair.ipnsName);
   } finally {
     rootReadKey.fill(0);
   }
