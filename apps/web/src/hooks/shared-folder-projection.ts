@@ -75,6 +75,13 @@ export type SeedSharedFolderArgs = {
    * Supplied by Phase-68 wiring; defaults to a sentinel placeholder until then.
    */
   publishedNode?: PublishedNode;
+  /**
+   * Active-depth seed generation captured at navigation start (D-08 item 11).
+   * Forwarded to `client.loadSharedFolder` so a superseded descent's late seed
+   * is discarded rather than repointing the active writeKey/depth. Omitted for
+   * seeds that are unconditionally the latest (none currently).
+   */
+  seedGeneration?: number;
 };
 
 /**
@@ -102,7 +109,9 @@ export function seedSharedFolder(client: SharedFolderClient, args: SeedSharedFol
     ownerPublicKey: args.ownerPublicKey,
     recipientPublicKey: args.recipientPublicKey,
   };
-  client.loadSharedFolder(args.shareId, state);
+  // D-08 item 11: forward the descent generation token so the SDK discards a
+  // superseded seed (a stale descent that resolved after a newer navigateUp).
+  client.loadSharedFolder(args.shareId, state, args.seedGeneration);
 }
 
 /** Callback shape for the projection: receives the SDK's authoritative state. */
