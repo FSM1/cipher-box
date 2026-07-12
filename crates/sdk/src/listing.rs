@@ -139,6 +139,13 @@ pub struct ResolvedOwnedChild {
     /// Raw Ed25519 signing seed recovered from the child's OWN sealed
     /// write-body (D-09 — caller-owned from here).
     pub ipns_private_key: Zeroizing<Vec<u8>>,
+    /// D-03a: the shared node's owner-sealed recipient pins, read from the SAME
+    /// already-unsealed write-body as `ipns_private_key`. These are PUBLIC keys
+    /// (recipient ECIES pubkeys), NOT secret key material — they are cached on
+    /// the materialized inode so the Rust re-mint (80-06) can verify them
+    /// OFFLINE and a rotation republish can PRESERVE them (D-01↔D-03e). Empty
+    /// for a node with no active share grants.
+    pub recipient_pins: Vec<Vec<u8>>,
 }
 
 impl std::fmt::Debug for ResolvedOwnedChild {
@@ -149,6 +156,10 @@ impl std::fmt::Debug for ResolvedOwnedChild {
             .field("read_key", &"[REDACTED]")
             .field("write_key", &"[REDACTED]")
             .field("ipns_private_key", &"[REDACTED]")
+            // Recipient pins are PUBLIC keys, not secret material -- shown as a
+            // count rather than redacted (mirrors the non-secret discipline
+            // while keeping log lines terse).
+            .field("recipient_pins_count", &self.recipient_pins.len())
             .finish()
     }
 }
@@ -541,6 +552,12 @@ where
         published.generation,
     )?);
     let write_body = decode_write_body(&write_body_bytes)?;
+    // D-03a: the recipient pins are read from the SAME already-unsealed
+    // write-body as the signing seed -- issuance data (public ECIES keys), not
+    // derivable from InodeTable material, so they must be surfaced here and
+    // cached on the inode for the offline re-mint (80-06) + rotation
+    // preservation (D-01).
+    let recipient_pins = write_body.recipient_pins;
     let ipns_private_key = Zeroizing::new(write_body.ipns_private_key);
 
     Ok(ResolvedOwnedChild {
@@ -559,6 +576,7 @@ where
         read_key,
         write_key,
         ipns_private_key,
+        recipient_pins,
     })
 }
 

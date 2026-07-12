@@ -641,10 +641,15 @@ fn find_ipns_private_key(inodes: &InodeTable, ipns_name: &str) -> Option<Zeroizi
 /// Child `WriteChildRef.write_key_sealed` is sealed under THIS node's write key
 /// at AAD generation `0` — the `build_folder_metadata` / `build_child_refs`
 /// write-splice convention (the child write plane is not rotated here; only the
-/// node's OWN write-body ROLE_BODY seal uses `new_generation`). Recipient-pin
-/// preservation is a D-03b concern added in 80-05 once the field is populated on
-/// the inode — this reconstruction handles keys + children only, emitting an
-/// empty pin list.
+/// node's OWN write-body ROLE_BODY seal uses `new_generation`).
+///
+/// D-03a/D-01↔D-03e (80-05): the node's CACHED recipient pins (surfaced onto the
+/// inode from the unsealed write-body at materialization) are carried verbatim
+/// into the reconstructed `NodeWriteBody`, so a scope-exit rotation republish
+/// PRESERVES them. Recipient pins are issuance data (public ECIES keys) that are
+/// NOT derivable from InodeTable key material — dropping them here would republish
+/// the node WITHOUT pins, hard-failing a later re-mint after re-materialize
+/// (D-03e). Pins are copied, never rotated.
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 pub(crate) fn reconstruct_write_body(
     inodes: &InodeTable,
@@ -654,28 +659,50 @@ pub(crate) fn reconstruct_write_body(
     use zeroize::Zeroize as _;
 
     // Locate the node by its OWN ipns_name (mirrors `find_ipns_private_key`),
-    // pulling its stable node_id, kind, write key, signing seed, and child inos.
-    let (node_id, node_kind, node_write_key, ipns_private_key, child_inos) =
+    // pulling its stable node_id, kind, write key, signing seed, cached
+    // recipient pins (D-03a), and child inos.
+    let (node_id, node_kind, node_write_key, ipns_private_key, recipient_pins, child_inos) =
         inodes.inodes.values().find_map(|inode| {
-            let (candidate_name, kind, write_key, ipns_priv) = match &inode.kind {
+            let (candidate_name, kind, write_key, ipns_priv, pins) = match &inode.kind {
                 InodeKind::Root {
                     ipns_name,
                     write_key,
                     ipns_private_key,
+                    recipient_pins,
                     ..
-                } => (ipns_name, NodeKind::Root, write_key, ipns_private_key),
+                } => (
+                    ipns_name,
+                    NodeKind::Root,
+                    write_key,
+                    ipns_private_key,
+                    recipient_pins,
+                ),
                 InodeKind::Folder {
                     ipns_name,
                     write_key,
                     ipns_private_key,
+                    recipient_pins,
                     ..
-                } => (ipns_name, NodeKind::Folder, write_key, ipns_private_key),
+                } => (
+                    ipns_name,
+                    NodeKind::Folder,
+                    write_key,
+                    ipns_private_key,
+                    recipient_pins,
+                ),
                 InodeKind::File {
                     ipns_name,
                     write_key,
                     ipns_private_key,
+                    recipient_pins,
                     ..
-                } => (ipns_name, NodeKind::File, write_key, ipns_private_key),
+                } => (
+                    ipns_name,
+                    NodeKind::File,
+                    write_key,
+                    ipns_private_key,
+                    recipient_pins,
+                ),
             };
             (candidate_name == ipns_name && !ipns_priv.is_empty()).then(|| {
                 (
@@ -683,6 +710,7 @@ pub(crate) fn reconstruct_write_body(
                     kind,
                     Zeroizing::new(**write_key),
                     Zeroizing::new(ipns_priv.to_vec()),
+                    pins.clone(),
                     inode.children.clone().unwrap_or_default(),
                 )
             })
@@ -729,10 +757,14 @@ pub(crate) fn reconstruct_write_body(
 
     // Assemble + seal the write-body under the node's OWN write key at the NEW
     // generation (ROLE_BODY 0x01) — the exact AAD `recover_signing_seed` rebuilds.
+    // D-01↔D-03e: carry the node's CACHED recipient pins verbatim so a rotation
+    // republish PRESERVES them (recipient pins are issuance data, not derivable
+    // from InodeTable material — dropping them here would hard-fail a later
+    // re-mint after re-materialize). Pins are PUBLIC keys, copied not rotated.
     let mut write_body = NodeWriteBody {
         ipns_private_key: ipns_private_key.to_vec(),
         write_children,
-        recipient_pins: Vec::new(),
+        recipient_pins,
     };
     let wb_bytes = encode_write_body(&write_body).ok()?;
     // Scrub the bare signing-seed copy inside the (non-Zeroizing) write body once
@@ -1497,6 +1529,7 @@ mod tests {
                 read_key: Zeroizing::new([11u8; 32]),
                 write_key: Zeroizing::new(folder_write_key),
                 ipns_private_key: Zeroizing::new(folder_ipns_private_key.clone()),
+                recipient_pins: Vec::new(),
                 children_loaded: true,
             },
             attr: recon_dir_attrs(folder_ino),
@@ -1513,6 +1546,7 @@ mod tests {
                 read_key: Zeroizing::new([12u8; 32]),
                 write_key: Zeroizing::new(child_write_key),
                 ipns_private_key: Zeroizing::new(vec![32u8; 32]),
+                recipient_pins: Vec::new(),
                 children_loaded: true,
             },
             attr: recon_dir_attrs(child_ino),
@@ -1586,6 +1620,62 @@ mod tests {
             recovered_child_write_key,
             child_write_key.to_vec(),
             "the child write key is copied verbatim (read-key-rotation-independent, never rotated)"
+        );
+    }
+
+    /// Test B (D-03a/D-01↔D-03e, 80-05): `reconstruct_write_body` carries the
+    /// node's CACHED recipient pins into the resealed write-body, so a rotation
+    /// republish PRESERVES them (a subsequent re-materialize + re-mint still
+    /// finds the pins). The reconstructed body must round-trip BOTH the pins
+    /// AND the keys/children (no regression of 80-02's reconstruction contract).
+    #[test]
+    fn reconstruct_write_body_preserves_cached_recipient_pins() {
+        use cipherbox_core::node::seal::unseal_node;
+        use cipherbox_core::node::{decode_write_body, NodeKind};
+
+        let (mut table, folder_ipns, folder_write_key, folder_ipns_private_key, _child_write_key) =
+            table_with_materialized_folder();
+        let new_generation = 7u32;
+        let pins = vec![vec![0x04u8; 33], vec![0x04u8, 0x11, 0x22, 0x33]];
+
+        // Cache recipient pins on the materialized folder inode (D-03a).
+        let folder_ino = table
+            .find_child(crate::inode::ROOT_INO, "folder")
+            .expect("materialized folder linked under root");
+        match &mut table.get_mut(folder_ino).unwrap().kind {
+            InodeKind::Folder { recipient_pins, .. } => *recipient_pins = pins.clone(),
+            other => panic!("expected Folder, got {:?}", other),
+        }
+
+        let sealed = reconstruct_write_body(&table, &folder_ipns, new_generation)
+            .expect("a materialized node reconstructs Some");
+        let wb_bytes = unseal_node(
+            &sealed,
+            &folder_write_key,
+            RECON_FOLDER_NODE_ID,
+            NodeKind::Folder,
+            new_generation,
+        )
+        .expect("unseal the reconstructed write-body under the node write key");
+        let wb = decode_write_body(&wb_bytes).expect("decode the reconstructed write-body");
+
+        assert_eq!(
+            wb.recipient_pins, pins,
+            "reconstruction MUST preserve the cached recipient pins (D-01↔D-03e durability)"
+        );
+        // 80-02 contract intact: keys + children still round-trip.
+        assert_eq!(
+            wb.ipns_private_key, folder_ipns_private_key,
+            "the reconstructed write-body still carries the node's own signing seed"
+        );
+        assert_eq!(
+            wb.write_children.len(),
+            1,
+            "one materialized child -> exactly one WriteChildRef"
+        );
+        assert_eq!(
+            wb.write_children[0].child_id, RECON_CHILD_NODE_ID,
+            "the WriteChildRef is still keyed by the child's stable node_id"
         );
     }
 

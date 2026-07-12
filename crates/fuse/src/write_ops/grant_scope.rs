@@ -861,6 +861,7 @@ mod tests {
                 read_key: Zeroizing::new([0u8; 32]),
                 write_key: Zeroizing::new([0u8; 32]),
                 ipns_private_key: Zeroizing::new(vec![0u8; 32]),
+                recipient_pins: Vec::new(),
                 children_loaded: false,
             },
             attr: make_attrs(ino, true),
@@ -892,6 +893,7 @@ mod tests {
                 read_key: Zeroizing::new([0u8; 32]),
                 write_key: Zeroizing::new([0u8; 32]),
                 ipns_private_key: Zeroizing::new(vec![0u8; 32]),
+                recipient_pins: Vec::new(),
             },
             attr: make_attrs(ino, false),
             children: None,
@@ -909,6 +911,7 @@ mod tests {
                 read_key: Zeroizing::new([0u8; 32]),
                 write_key: Zeroizing::new([0u8; 32]),
                 ipns_private_key: Zeroizing::new(Vec::new()),
+                recipient_pins: Vec::new(),
             };
         }
         let folder_a = table.allocate_ino();

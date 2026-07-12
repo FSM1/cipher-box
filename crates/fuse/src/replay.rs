@@ -1490,6 +1490,7 @@ mod tests {
                 read_key: Zeroizing::new([1u8; 32]),
                 write_key: Zeroizing::new(node_write_key),
                 ipns_private_key: Zeroizing::new(node_ipns_private_key.clone()),
+                recipient_pins: Vec::new(),
                 children_loaded: true,
             },
             attr: FileAttrs {

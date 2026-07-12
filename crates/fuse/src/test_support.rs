@@ -91,6 +91,7 @@ pub(crate) fn make_test_fs_with_keypair(
             read_key: Zeroizing::new([0u8; 32]),
             write_key: Zeroizing::new([0u8; 32]),
             ipns_private_key: Zeroizing::new(vec![7u8; 32]),
+            recipient_pins: Vec::new(),
         };
     }
 

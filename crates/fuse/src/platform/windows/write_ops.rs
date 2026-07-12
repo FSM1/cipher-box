@@ -125,6 +125,8 @@ pub mod implementation {
                         read_key: zeroize::Zeroizing::new(read_key),
                         write_key: zeroize::Zeroizing::new(write_key),
                         ipns_private_key: zeroize::Zeroizing::new(ipns_private_key.to_vec()),
+                        // Freshly created node: no share grants yet, no recipient pins.
+                        recipient_pins: Vec::new(),
                         children_loaded: true,
                     },
                     attr: attr.clone(),
@@ -362,6 +364,8 @@ pub mod implementation {
                     read_key: zeroize::Zeroizing::new(read_key),
                     write_key: zeroize::Zeroizing::new(write_key),
                     ipns_private_key: zeroize::Zeroizing::new(file_ipns_private_key),
+                    // Freshly created node: no share grants yet, no recipient pins.
+                    recipient_pins: Vec::new(),
                 },
                 attr: attr.clone(),
                 children: None,
@@ -1469,6 +1473,7 @@ pub mod implementation {
                     read_key: Zeroizing::new([1u8; 32]),
                     write_key: Zeroizing::new([6u8; 32]),
                     ipns_private_key: Zeroizing::new(vec![5u8; 32]),
+                    recipient_pins: Vec::new(),
                     children_loaded: true,
                 },
                 attr: FileAttrs {
@@ -1528,6 +1533,7 @@ pub mod implementation {
                     read_key: Zeroizing::new([2u8; 32]),
                     write_key: Zeroizing::new([4u8; 32]),
                     ipns_private_key: Zeroizing::new(vec![3u8; 32]),
+                    recipient_pins: Vec::new(),
                 },
                 attr: FileAttrs {
                     ino,

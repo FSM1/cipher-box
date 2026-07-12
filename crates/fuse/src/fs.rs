@@ -834,6 +834,7 @@ mod drain_refresh_completions_tests {
                 read_key: Zeroizing::new([7u8; 32]),
                 write_key: Zeroizing::new([8u8; 32]),
                 ipns_private_key: Zeroizing::new(vec![3u8; 32]),
+                recipient_pins: Vec::new(),
             },
             attr: FileAttrs {
                 ino,
@@ -872,6 +873,7 @@ mod drain_refresh_completions_tests {
             read_key: Zeroizing::new([7u8; 32]),
             write_key: Zeroizing::new([8u8; 32]),
             ipns_private_key: Zeroizing::new(vec![3u8; 32]),
+            recipient_pins: Vec::new(),
         }]
     }
 
@@ -895,6 +897,7 @@ mod drain_refresh_completions_tests {
                 read_key: Zeroizing::new([7u8; 32]),
                 write_key: Zeroizing::new([8u8; 32]),
                 ipns_private_key: Zeroizing::new(vec![3u8; 32]),
+                recipient_pins: Vec::new(),
             },
             attr: FileAttrs {
                 ino,
@@ -934,6 +937,7 @@ mod drain_refresh_completions_tests {
                 read_key: Zeroizing::new([7u8; 32]),
                 write_key: Zeroizing::new([8u8; 32]),
                 ipns_private_key: Zeroizing::new(vec![3u8; 32]),
+                recipient_pins: Vec::new(),
             })
             .collect()
     }
@@ -1326,6 +1330,7 @@ mod d07_write_plane_pairing_tests {
                 read_key: Zeroizing::new(child_read_key),
                 write_key: Zeroizing::new(child_write_key),
                 ipns_private_key: Zeroizing::new(child_ipns_private_key.clone()),
+                recipient_pins: Vec::new(),
             },
             attr: attrs(child_local_ino, false),
             children: None,
@@ -1342,6 +1347,7 @@ mod d07_write_plane_pairing_tests {
                 read_key: Zeroizing::new(parent_read_key),
                 write_key: Zeroizing::new(parent_write_key),
                 ipns_private_key: Zeroizing::new(vec![5u8; 32]),
+                recipient_pins: Vec::new(),
                 children_loaded: true,
             },
             attr: attrs(parent_ino, true),

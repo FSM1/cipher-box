@@ -322,6 +322,7 @@ mod tests {
                 read_key: Zeroizing::new([1u8; 32]),
                 write_key: Zeroizing::new([6u8; 32]),
                 ipns_private_key: Zeroizing::new(vec![5u8; 32]),
+                recipient_pins: Vec::new(),
                 children_loaded: true,
             },
             attr: FileAttrs {
@@ -379,6 +380,7 @@ mod tests {
                 read_key: Zeroizing::new([2u8; 32]),
                 write_key: Zeroizing::new([4u8; 32]),
                 ipns_private_key: Zeroizing::new(vec![3u8; 32]),
+                recipient_pins: Vec::new(),
             },
             attr: FileAttrs {
                 ino,
