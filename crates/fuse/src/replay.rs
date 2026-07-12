@@ -494,14 +494,19 @@ where
             )
         })?,
     );
-    let mut write_children = decode_write_body(&write_body_bytes)
-        .map_err(|e| {
-            format!(
-                "decode parent write-body {}: {} — retaining entry",
-                parent_ipns_name, e
-            )
-        })?
-        .write_children;
+    // Preserve the parent's OWN owner-sealed recipient pins (D-03) verbatim: a
+    // parent folder/root with active shares carries pins in its write-body, and
+    // a re-splice must NOT drop them, or a later re-mint would read empty pins
+    // from the remounted InodeTable and hard fail-closed (D-03e). Only the
+    // write-children plane changes on this path; pins pass through unchanged.
+    let decoded_write_body = decode_write_body(&write_body_bytes).map_err(|e| {
+        format!(
+            "decode parent write-body {}: {} — retaining entry",
+            parent_ipns_name, e
+        )
+    })?;
+    let parent_recipient_pins = decoded_write_body.recipient_pins;
+    let mut write_children = decoded_write_body.write_children;
 
     // Extract read-plane children + node identity, preserving the variant.
     let (id, generation, created_at, modified_at, mut children, is_root) = match node {
@@ -575,7 +580,7 @@ where
     let new_write_body = NodeWriteBody {
         ipns_private_key: parent_signing_seed.to_vec(),
         write_children,
-        recipient_pins: Vec::new(),
+        recipient_pins: parent_recipient_pins,
     };
     let new_published = seal_published_node(
         &new_node,
