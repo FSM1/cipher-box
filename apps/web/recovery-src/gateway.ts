@@ -10,14 +10,17 @@
  *
  * Security upgrade over the v2 hand-rolled recovery.html parser: the primary
  * (delegated-routing / protobuf) rung verifies the IPNS record signature with
- * `verifyIpnsRecordSignature` — self-verifying against the Ed25519 public key
- * embedded in the IPNS name, so a tampered record from a hostile gateway is
- * rejected (T-78-01). The HEAD and Kubo fallback rungs carry no verifiable
- * signature, so — matching the v2 tool's graceful-degradation — they are used
- * only when the primary rung yields nothing.
+ * `verifyIpnsRecordSignatureDetailed` — self-verifying against the Ed25519
+ * public key embedded in the IPNS name, so a tampered record from a hostile
+ * gateway is rejected (T-78-01). A stale-but-authentic (past-EOL) record is
+ * NOT a tamper and does not abort recovery: this is a break-glass tool, so it
+ * favours availability over freshness (D-04) and accepts an expired record's
+ * value. The HEAD and Kubo fallback rungs carry no verifiable signature, so —
+ * matching the v2 tool's graceful-degradation — they are used only when the
+ * primary rung yields nothing.
  */
 
-import { parseIpnsRecord, verifyIpnsRecordSignature } from '@cipherbox/crypto';
+import { parseIpnsRecord, verifyIpnsRecordSignatureDetailed } from '@cipherbox/crypto';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAX_PRIMARY_RETRIES = 3;
@@ -87,8 +90,12 @@ export async function resolveIpnsVerified(
 
       const marshalledRecord = new Uint8Array(await resp.arrayBuffer());
 
-      const valid = await verifyIpnsRecordSignature(ipnsName, marshalledRecord);
-      if (!valid) {
+      // Distinguish a forged record (reject) from a stale-but-authentic one. An
+      // expired record is signed by the real key — only its EOL has lapsed — so
+      // for break-glass recovery we accept its value rather than hard-stopping
+      // before the unverified fallback rungs (availability over freshness, D-04).
+      const verdict = await verifyIpnsRecordSignatureDetailed(ipnsName, marshalledRecord);
+      if (verdict === 'invalid') {
         throw new Error('IPNS record signature verification failed — possible tampering');
       }
 

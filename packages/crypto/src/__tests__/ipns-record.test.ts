@@ -3,7 +3,10 @@ import { createIPNSRecord, marshalIPNSRecord, unmarshalIPNSRecord } from 'ipns';
 import { privateKeyFromRaw } from '@libp2p/crypto/keys';
 import { generateEd25519Keypair } from '../ed25519';
 import { deriveIpnsName, publicKeyFromIpnsName } from '../ipns/derive-name';
-import { verifyIpnsRecordSignature } from '../ipns/verify-record';
+import {
+  verifyIpnsRecordSignature,
+  verifyIpnsRecordSignatureDetailed,
+} from '../ipns/verify-record';
 import { parseIpnsRecord } from '../ipns/parse-record';
 
 const LIFETIME_MS = 24 * 60 * 60 * 1000;
@@ -18,13 +21,16 @@ const TEST_VALUE = '/ipfs/bafkreigaknpexyvxt76zgkitavbwx6ejgfheup5oybpm77f3pxzrv
 async function makeRecord(
   keypair: { privateKey: Uint8Array; publicKey: Uint8Array },
   value = TEST_VALUE,
-  seq = 1n
+  seq = 1n,
+  lifetimeMs = LIFETIME_MS
 ): Promise<Uint8Array> {
   const libp2pKeyBytes = new Uint8Array(64);
   libp2pKeyBytes.set(keypair.privateKey, 0);
   libp2pKeyBytes.set(keypair.publicKey, 32);
   const libp2pPrivateKey = privateKeyFromRaw(libp2pKeyBytes);
-  const record = await createIPNSRecord(libp2pPrivateKey, value, seq, LIFETIME_MS, {
+  // A negative lifetime yields an EOL in the past — a validly-signed but expired
+  // record, used to exercise the availability-over-freshness recovery path.
+  const record = await createIPNSRecord(libp2pPrivateKey, value, seq, lifetimeMs, {
     v1Compatible: true,
   });
   return marshalIPNSRecord(record);
@@ -62,6 +68,59 @@ describe('verifyIpnsRecordSignature', () => {
 
   it('returns false for a malformed name or record instead of throwing', async () => {
     expect(await verifyIpnsRecordSignature('not-a-name', new Uint8Array([1, 2, 3]))).toBe(false);
+  });
+
+  it('returns false for a validly-signed but expired record (strict semantics)', async () => {
+    const keypair = generateEd25519Keypair();
+    const ipnsName = await deriveIpnsName(keypair.publicKey);
+    // EOL one hour in the past — signature is valid, validity window has lapsed.
+    const expired = await makeRecord(keypair, TEST_VALUE, 1n, -60 * 60 * 1000);
+
+    expect(await verifyIpnsRecordSignature(ipnsName, expired)).toBe(false);
+  });
+});
+
+describe('verifyIpnsRecordSignatureDetailed', () => {
+  it('returns "valid" for a fresh, validly-signed record', async () => {
+    const keypair = generateEd25519Keypair();
+    const ipnsName = await deriveIpnsName(keypair.publicKey);
+    const marshalled = await makeRecord(keypair);
+
+    expect(await verifyIpnsRecordSignatureDetailed(ipnsName, marshalled)).toBe('valid');
+  });
+
+  it('returns "expired" for an authentic record whose EOL has passed', async () => {
+    const keypair = generateEd25519Keypair();
+    const ipnsName = await deriveIpnsName(keypair.publicKey);
+    // Signed by the real key, but EOL is one hour in the past — stale, not forged.
+    const expired = await makeRecord(keypair, TEST_VALUE, 1n, -60 * 60 * 1000);
+
+    expect(await verifyIpnsRecordSignatureDetailed(ipnsName, expired)).toBe('expired');
+  });
+
+  it('returns "invalid" for a record signed by a DIFFERENT key', async () => {
+    const owner = generateEd25519Keypair();
+    const attacker = generateEd25519Keypair();
+    const ownerName = await deriveIpnsName(owner.publicKey);
+    const forged = await makeRecord(attacker);
+
+    expect(await verifyIpnsRecordSignatureDetailed(ownerName, forged)).toBe('invalid');
+  });
+
+  it('returns "invalid" for a tampered record', async () => {
+    const keypair = generateEd25519Keypair();
+    const ipnsName = await deriveIpnsName(keypair.publicKey);
+    const marshalled = await makeRecord(keypair);
+    const tampered = new Uint8Array(marshalled);
+    tampered[tampered.length - 5] ^= 0xff;
+
+    expect(await verifyIpnsRecordSignatureDetailed(ipnsName, tampered)).toBe('invalid');
+  });
+
+  it('returns "invalid" for a malformed name', async () => {
+    expect(await verifyIpnsRecordSignatureDetailed('not-a-name', new Uint8Array([1, 2, 3]))).toBe(
+      'invalid'
+    );
   });
 });
 
