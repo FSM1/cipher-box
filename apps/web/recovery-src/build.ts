@@ -24,6 +24,13 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const entryPoint = resolve(scriptDir, 'main.ts');
 const htmlPath = resolve(scriptDir, '..', 'public', 'recovery.html');
 const placeholder = '<!-- RECOVERY_BUNDLE -->';
+// The spliced bundle is wrapped in these markers so the build stays re-runnable:
+// the first run replaces the bare placeholder; every subsequent run replaces the
+// content between the markers, keeping the shipped self-contained file in sync
+// with edits to main.ts/walk.ts without needing to restore the source template.
+const markerStart = '<!-- RECOVERY_BUNDLE:START -->';
+const markerEnd = '<!-- RECOVERY_BUNDLE:END -->';
+const markerRe = /<!-- RECOVERY_BUNDLE:START -->[\s\S]*?<!-- RECOVERY_BUNDLE:END -->/;
 
 /** ~2 MB minified is the discretionary soft ceiling (D-04); over it is a flag, not a failure. */
 const SIZE_FLAG_BYTES = 2 * 1024 * 1024;
@@ -82,15 +89,22 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (!html.includes(placeholder)) {
+  const markedBlock = `${markerStart}\n<script type="module">\n${bundleCode}\n</script>\n${markerEnd}`;
+
+  let splicedHtml: string;
+  if (markerRe.test(html)) {
+    // Re-splice: replace the previously-inlined bundle block in place.
+    splicedHtml = html.replace(markerRe, markedBlock);
+  } else if (html.includes(placeholder)) {
+    // First splice: replace the bare placeholder with the marked bundle block.
+    splicedHtml = html.replace(placeholder, markedBlock);
+  } else {
     console.log(
-      `[recovery:build] placeholder "${placeholder}" absent in recovery.html — skipping html-splice (lands in plan 78-02).`
+      `[recovery:build] neither placeholder "${placeholder}" nor bundle markers present in recovery.html — skipping html-splice.`
     );
     return;
   }
 
-  const scriptTag = `<script type="module">\n${bundleCode}\n</script>`;
-  const splicedHtml = html.replace(placeholder, scriptTag);
   await writeFile(htmlPath, splicedHtml, 'utf8');
   console.log('[recovery:build] spliced bundle into recovery.html.');
 }
