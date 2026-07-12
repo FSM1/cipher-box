@@ -1,0 +1,23 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "9838dbe48fd1",
+  "strategy": "manual-commit",
+  "branch": "feat/recovery-tool-v3-vault-load-guards-web-ux-and-ci-guards",
+  "checkpoints_count": 10,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/98/38dbe48fd1/0/metadata.json",
+      "transcript": "/98/38dbe48fd1/0/full.jsonl",
+      "content_hash": "/98/38dbe48fd1/0/content_hash.txt",
+      "prompt": "/98/38dbe48fd1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 27851,
+    "cache_creation_tokens": 277690,
+    "cache_read_tokens": 7994875,
+    "output_tokens": 85604,
+    "api_call_count": 66
+  }
+}
