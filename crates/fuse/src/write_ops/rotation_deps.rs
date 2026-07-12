@@ -176,6 +176,16 @@ pub struct FuseRotationDeps<T: RotationTransport> {
     /// Combined per-nodeId sidecar (Plan 70.1-03) backing
     /// `persist_wrapped_key`/`get_wrapped_key`/`delete_wrapped_key`.
     floor_store: JsonSidecarFloorStore,
+    /// D-02 job-scoped cache of `GET /shares/sent`. `query_grants_rooted_at` is
+    /// called once per rotated node during re-mint; without this each call
+    /// re-fetches the full sent-share list (O(nodes × shares), 607×/run
+    /// observed). This `FuseRotationDeps` is constructed ONCE per rotation job
+    /// (grant_scope.rs:488) and walked via `&deps`, so an interior-mutable
+    /// `OnceCell` (populated on the first query, reused thereafter) bounds the
+    /// fetch to `<= 1` per job — job-scoped, not static/global. `OnceCell`
+    /// (not `RefCell`) because the fetch is `async` and must not hold a borrow
+    /// across the `.await`.
+    sent_shares_cache: tokio::sync::OnceCell<Vec<SentShareResponse>>,
 }
 
 impl<T: RotationTransport> FuseRotationDeps<T> {
@@ -190,6 +200,7 @@ impl<T: RotationTransport> FuseRotationDeps<T> {
             owner_public_key,
             owner_private_key: Zeroizing::new(owner_private_key),
             floor_store,
+            sent_shares_cache: tokio::sync::OnceCell::new(),
         }
     }
 }
@@ -266,9 +277,16 @@ impl<T: RotationTransport> RotationDeps for FuseRotationDeps<T> {
     /// they never appear in this query result (Pitfall 2 / T-74-14 — a
     /// revoked recipient is cut by ABSENCE, not a flag).
     async fn query_grants_rooted_at(&self, node_id: &str) -> Result<Vec<GrantRow>, RotationError> {
-        let shares = self.transport.collect_sent_shares().await?;
+        // D-02: fetch `GET /shares/sent` once per rotation job, then filter the
+        // cached rows by `root_node_id` on every subsequent node. The per-share
+        // 0x-strip/hex-decode + per-share RotateFailed error path below is
+        // unchanged — only the source (cached slice) differs.
+        let shares = self
+            .sent_shares_cache
+            .get_or_try_init(|| self.transport.collect_sent_shares())
+            .await?;
         shares
-            .into_iter()
+            .iter()
             .filter(|s| s.root_node_id == node_id)
             .map(|s| {
                 let recipient_public_key = cipherbox_crypto::utils::hex_to_bytes(
@@ -281,7 +299,7 @@ impl<T: RotationTransport> RotationDeps for FuseRotationDeps<T> {
                     ))
                 })?;
                 Ok(GrantRow {
-                    share_id: s.share_id,
+                    share_id: s.share_id.clone(),
                     recipient_public_key,
                     is_revoked: false,
                 })
