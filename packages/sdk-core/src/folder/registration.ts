@@ -26,6 +26,7 @@ import { addToIpfs, fetchFromIpfs } from '../ipfs';
 import { createAndPublishIpnsRecord } from '../ipns';
 import { publishWithCas } from '../cas';
 import { mergeChildren } from './merge';
+import { appendRecipientPin } from '../share/recipient-pins';
 import { wrapIpnsKeyForTee } from '../tee/wrap';
 
 /**
@@ -214,6 +215,16 @@ export async function updateFolderMetadataAndPublish(params: {
   writeKey?: Uint8Array;
   /** Write-chain entries to persist in the write-body (preserved verbatim). Defaults to []. */
   writeChildren?: WriteChildRef[];
+  /**
+   * Recipient-pubkey pins (base64 raw-pubkey bytes) to set/append into the
+   * sealed write-body (D-03a/c). Only meaningful when a real `writeKey` is
+   * supplied. Threaded through the seal AND the CAS-409 merge: the sealed
+   * write-body carries these ∪ the current remote pins so a routine update or a
+   * concurrent write never silently drops an existing pin (T-80-11). Omitting it
+   * on a clean publish preserves whatever pins the caller threads in; on a
+   * CAS-409 the remote's pins are always unioned in regardless.
+   */
+  recipientPins?: string[];
   ipnsPrivateKey: Uint8Array;
   ipnsPublicKey?: Uint8Array;
   ipnsName: string;
@@ -270,6 +281,16 @@ export async function updateFolderMetadataAndPublish(params: {
   let currentWriteChildren: WriteChildRef[] = params.writeChildren ?? [];
   let remoteWriteChildren: WriteChildRef[] = [];
 
+  // Recipient-pin CAS state (D-03a/c). `currentRecipientPins` is what
+  // encodeAndUpload seals into the write-body; `remoteRecipientPins` captures
+  // the remote write-body's pins on a 409 so the merge can UNION them in and a
+  // concurrent writer's pin is never dropped (T-80-11). Only sealed when a real
+  // writeKey is supplied (a write-body exists at all). The empty-list case is
+  // omitted from the wire by encodeWriteBody, so it never perturbs the frozen
+  // empty-pin KAT.
+  let currentRecipientPins: string[] = params.recipientPins ?? [];
+  let remoteRecipientPins: string[] = [];
+
   const result = await publishWithCas<SealedChildRef[]>({
     ipnsName: params.ipnsName,
     ipnsPrivateKey: params.ipnsPrivateKey,
@@ -325,6 +346,10 @@ export async function updateFolderMetadataAndPublish(params: {
               writeBody: {
                 ipnsPrivateKey: params.ipnsPrivateKey,
                 writeChildren: currentWriteChildren,
+                // D-03a/c: carry the recipient pins (∪-merged on a CAS-409).
+                // encodeWriteBody omits an empty list from the wire, so this is
+                // inert when there are no pins.
+                recipientPins: currentRecipientPins,
               },
             }
           : {}),
@@ -346,6 +371,10 @@ export async function updateFolderMetadataAndPublish(params: {
       // here (fail-closed, matching the read-body's own auth contract).
       const node = await unsealNode(publishedNode, key, params.writeKey);
       remoteWriteChildren = node.writeBody?.writeChildren ?? [];
+      // Capture the remote write-body's recipient pins so the merge can UNION
+      // them with the local pins — a routine CAS-409 must never drop a
+      // concurrently-added pin (T-80-11 / D-03a durability).
+      remoteRecipientPins = node.writeBody?.recipientPins ?? [];
       return node.children ?? [];
     },
 
@@ -398,6 +427,14 @@ export async function updateFolderMetadataAndPublish(params: {
           for (const wc of currentWriteChildren) byChildId.set(wc.childId, wc);
           for (const wc of remoteWriteChildren) byChildId.set(wc.childId, wc);
           currentWriteChildren = Array.from(byChildId.values());
+        }
+
+        // Recipient pins are a monotonically-growing UNION — unlike the
+        // write-chain, a pin is a permanent trust anchor and is never pruned by
+        // a delete, so a plain dedup-union of local ∪ remote is correct and
+        // avoids ever dropping a concurrently-added pin (T-80-11 / D-03a).
+        for (const pin of remoteRecipientPins) {
+          currentRecipientPins = appendRecipientPin(currentRecipientPins, pin);
         }
       }
       // SC#1 site B / T-70-01: defaults to the generic remote-wins mergeChildren
