@@ -136,9 +136,10 @@ Encoding rules for the read-body JSON:
 
 **Version history:**
 
-| Change               | Phase | Description                                                                  |
-| -------------------- | ----- | ---------------------------------------------------------------------------- |
-| `node/v3` introduced | 62    | Unified Node replaces FolderMetadata, FileMetadata, FilePointer, FolderEntry |
+| Change                        | Phase | Description                                                                                                  |
+| ----------------------------- | ----- | ------------------------------------------------------------------------------------------------------------ |
+| `node/v3` introduced          | 62    | Unified Node replaces FolderMetadata, FileMetadata, FilePointer, FolderEntry                                 |
+| `NodeWriteBody.recipientPins` | 80    | Additive optional recipient-pubkey pin list (D-03b); omitted when empty, `schema` unchanged, tolerant decode |
 
 ---
 
@@ -303,10 +304,21 @@ read-only nodes (when only `readKey` is held).
 
 ### NodeWriteBody
 
-| Field            | Type              | Encoding      | Description                                          |
-| ---------------- | ----------------- | ------------- | ---------------------------------------------------- |
-| `ipnsPrivateKey` | `Uint8Array`      | base64 (wire) | Raw Ed25519 signing seed for this node's IPNS record |
-| `writeChildren`  | `WriteChildRef[]` | --            | Write-chain references to child nodes                |
+| Field            | Type              | Encoding            | Description                                                                                                                                        |
+| ---------------- | ----------------- | ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ipnsPrivateKey` | `Uint8Array`      | base64 (wire)       | Raw Ed25519 signing seed for this node's IPNS record                                                                                               |
+| `writeChildren`  | `WriteChildRef[]` | --                  | Write-chain references to child nodes                                                                                                              |
+| `recipientPins`  | `string[]`        | base64 array (wire) | Optional. Recipient-pubkey pins bound at share/re-mint (D-03b); each entry a raw compressed secp256k1 public key. Omitted from the wire when empty |
+
+**`recipientPins` (additive, optional):** Introduced for the D-03 re-mint recipient-identity
+check. It is an additive optional field per
+[METADATA_EVOLUTION_PROTOCOL §3.1](METADATA_EVOLUTION_PROTOCOL.md#31-additive-non-breaking-changes) —
+the `schema` discriminator is NOT bumped. Both codecs OMIT the field from the wire when the list
+is empty (TS conditional spread; Rust `#[serde(skip_serializing_if = "Vec::is_empty")]`), which
+preserves the frozen empty-pin golden vector (`seal_vectors[0]`) byte-for-byte. Decoders tolerate
+an absent field (TS: field stays absent; Rust: `#[serde(default)]` yields an empty `Vec`) and never
+fail-closed on it — `NodeWriteBody` intentionally carries NO `deny_unknown_fields`. A non-empty-pin
+golden vector (`seal_vectors[1]`) locks the pinned wire path across Rust and TypeScript.
 
 ### WriteChildRef
 

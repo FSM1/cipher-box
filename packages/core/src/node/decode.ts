@@ -360,5 +360,34 @@ export function decodeWriteBody(bytes: Uint8Array): NodeWriteBody {
     };
   });
 
-  return { ipnsPrivateKey, writeChildren };
+  // recipientPins is an ADDITIVE optional field (D-03b). Forward tolerance:
+  // an absent (or empty) field is fine — never fail-closed on it. To keep the
+  // codec symmetric with encodeWriteBody (which OMITS an empty pin list from the
+  // wire, preserving seal_vectors[0]), the field is attached to the returned
+  // object ONLY when non-empty; an empty/absent list decodes to `undefined`
+  // (the optional-field contract). When present it must be an array of base64
+  // strings.
+  const base: NodeWriteBody = { ipnsPrivateKey, writeChildren };
+  if (raw.recipientPins !== undefined) {
+    if (!Array.isArray(raw.recipientPins)) {
+      throw new CryptoError(
+        'Invalid write-body format: recipientPins must be an array',
+        'DECRYPTION_FAILED'
+      );
+    }
+    const recipientPins = (raw.recipientPins as unknown[]).map((pin, idx) => {
+      if (typeof pin !== 'string') {
+        throw new CryptoError(
+          `Invalid write-body format: recipientPins[${idx}] must be a base64 string`,
+          'DECRYPTION_FAILED'
+        );
+      }
+      return pin;
+    });
+    if (recipientPins.length > 0) {
+      base.recipientPins = recipientPins;
+    }
+  }
+
+  return base;
 }

@@ -255,6 +255,40 @@ describe('Node Codec — FULL-SEAL LOCK (D-04, T-62-06)', () => {
 
     expect(reconstructedWriteSealed).toBe(sv.expected_published_node.writeSealed);
   });
+
+  it('folder node writeSealed with non-empty recipientPins matches frozen vector [1] (D-03b)', async () => {
+    const sv = VECTORS.seal_vectors[1];
+    const writeKey = fromHex(sv.write_key);
+    const fixedIv = fromHex(sv.fixed_iv);
+    const ipnsPrivateKey = fromHex(sv.ipns_private_key_hex);
+    const recipientPins = (sv as { recipient_pins: string[] }).recipient_pins;
+
+    // Non-vacuous guard: this KAT must exercise a populated pin list.
+    expect(recipientPins.length).toBeGreaterThanOrEqual(2);
+
+    // Reconstruct the folder node with a pinned writeBody to produce writeSealed
+    const folderNode: Node = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: sv.node_id,
+      generation: sv.generation,
+      children: [],
+      createdAt: 1719532800000,
+      modifiedAt: 1719532800000,
+      writeBody: { ipnsPrivateKey, writeChildren: [], recipientPins },
+    };
+
+    const bodyBytes = encodeWriteBody(folderNode);
+    const aad = buildNodeAad(sv.node_id, sv.kind, sv.generation, 0x01 /* body */);
+    const ciphertext = await encryptAesGcmAad(bodyBytes, writeKey, fixedIv, aad);
+
+    const sealedBlob = new Uint8Array(fixedIv.length + ciphertext.length);
+    sealedBlob.set(fixedIv);
+    sealedBlob.set(ciphertext, fixedIv.length);
+    const reconstructedWriteSealed = uint8ArrayToBase64(sealedBlob);
+
+    expect(reconstructedWriteSealed).toBe(sv.expected_published_node.writeSealed);
+  });
 });
 
 // ---------------------------------------------------------------------------
