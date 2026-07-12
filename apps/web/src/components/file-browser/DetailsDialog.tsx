@@ -80,6 +80,12 @@ export function DetailsDialog({
         name: item.name,
         kind: isFolderHeuristic ? 'folder' : 'file',
         size: undefined,
+        // NaN sentinel for the still-loading/listing-miss fallback: the Details
+        // Created row guards on Number.isFinite, so NaN renders the dim "—"
+        // placeholder rather than formatDate(0) = "January 1, 1970". A real
+        // ResolvedChild from the listing flows through unchanged with its true
+        // createdAt; this literal is only the miss branch.
+        createdAt: Number.NaN,
         modifiedAt: 0,
         sequence: 0,
       })

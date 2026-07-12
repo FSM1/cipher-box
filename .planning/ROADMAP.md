@@ -78,7 +78,7 @@
 - [ ] **Phase 76: FUSE Durability and TEE Write-Path Hardening** — Vault-init publish preflight, deferred Phase 69 publish/concurrency items, TEE republish/renew error handling + later-EOL invariant (4 todos)
 - [x] **Phase 77: Crypto Hygiene and Terminology Canonicalization** — Error-path zeroization, base64 helper dedup, `encryptedIpnsPrivateKey` field renames, dead share-scaffolding retirement, root-ownership helper extract (12 todos; mechanical, no behavior change) (completed 2026-07-11)
 - [x] **Phase 78: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards** — Port recovery.html to node/v3 (un-fixme recovery.spec), download-progress UX resolution, D-07 CI rule, web vitest CI, remaining 68.2/73 hardening incl. two data-integrity races (5 todos) (completed 2026-07-12)
-- [ ] **Phase 79: Web Kind-Discrimination Completion and Deferred Test Revival** — Route the listing UI through `ResolvedChild.kind` (folders-first sort, drag-and-drop, kind-aware dialogs), wire Created date, revive 4 `describe.skip` suites, drive `TODO(phase 63/65)` markers to zero (from marker triage; ~40 still-valid markers)
+- [x] **Phase 79: Web Kind-Discrimination Completion and Deferred Test Revival** — Route the listing UI through `ResolvedChild.kind` (folders-first sort, drag-and-drop, kind-aware dialogs), wire Created date, revive 4 `describe.skip` suites, drive `TODO(phase 63/65)` markers to zero (from marker triage; ~40 still-valid markers)
 
 ## Phase Details
 
@@ -989,11 +989,16 @@ Plans:
 2. FUSE publish retries route through one shared helper with the correct attempt budget; FP-resolve concurrency is globally bounded; Windows D-07 write refs key by stored node_id (CI green)
 3. TEE republish surfaces real DB/config failures (not silent success) and `renewIpnsRecord` rejects an equal/earlier EOL, both covered by tests that assert the intended branch
 
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd-plan-phase 76 to break down)
+- [ ] 76-01-PLAN.md — Vault-init fail-closed preflight + decrypt-and-resume recovery (SC1, todo vault-init-publish-ordering-preflight) [wave 1]
+- [ ] 76-02-PLAN.md — FUSE retry-helper consolidation + global FP-resolve cap + zeroization (SC2 items 1,2,4, todo fuse-publish-and-concurrency-hardening-deferred) [wave 1]
+- [ ] 76-03-PLAN.md — TEE republish/renew error classification + per-entry null guard + CI wiring (SC3 items 1-3, todo tee-republish-writepath-error-handling-hardening) [wave 1]
+- [ ] 76-04-PLAN.md — renewIpnsRecord strictly-later-EOL invariant + validity codec field + tests (SC3 item 4, todo renew-ipns-record-eol-invariant-and-tests) [wave 1]
+- [ ] 76-05-PLAN.md — Windows D-07 write-plane node_id keying (SC2 item 3, CI-gated, autonomous:false) [wave 1]
 
 ### Phase 77: Crypto Hygiene and Terminology Canonicalization
 
@@ -1102,11 +1107,22 @@ Plans:
 2. The details panes show a real Created date (or the field is intentionally dropped), sourced from the Node envelope rather than the "unavailable (phase 63)" stub
 3. The four `describe.skip` suites are revived and passing (or explicitly retired with rationale); zero `TODO(phase 63)`/`TODO(phase 65)` markers remain in the codebase
 
-**Plans:** 0 plans
+**Plans:** 8/8 plans executed
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd-plan-phase 79 to break down)
+- [x] 79-01-PLAN.md — SDK ResolvedChild.createdAt foundation (mandatory field + resolveChildren + sdk suite green)
+- [x] 79-02-PLAN.md — Web hook/service foundation: expose resolvedByIpnsName, real itemType, ipnsName-keying non-change, invite decision
+- [x] 79-03-PLAN.md — Package test revival: bin.test.ts fixture, load.test.ts + file.test.ts revive-or-retire
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 79-04-PLAN.md — Private listing: folders-first sort, folder-only drag-drop, multi-select drag kind
+- [x] 79-05-PLAN.md — Shared listing: folders-first sort + SharedMoveDialog cycle-guard kind filter
+- [x] 79-06-PLAN.md — Private dialogs: kind-aware rename/delete/share labels + MoveDialog cycle guard
+- [x] 79-07-PLAN.md — Details Created-date + DetailsDialog fallback + folder-delete subtree store cleanup
+- [x] 79-08-PLAN.md — Web hook test revival (useSharedWriteOps un-skip) + createdAt fixture fixes
 
 ---
 

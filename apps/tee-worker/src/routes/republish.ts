@@ -92,6 +92,20 @@ router.post('/republish', async (req: Request, res: Response) => {
   const results: RepublishResult[] = [];
 
   for (const entry of entries) {
+    // ── Per-entry defense-in-depth guard (T-76-08) ──────────────────────────
+    // A null / non-object entry must never crash the whole batch: skip it with a
+    // per-entry failure BEFORE the try, so the catch block below can never
+    // dereference a null `entry.ipnsName`. The relay is trusted but hardened.
+    if (entry === null || typeof entry !== 'object') {
+      results.push({
+        ipnsName: 'unknown',
+        success: false,
+        error: 'Invalid entry: expected a non-null object',
+      });
+      republishEntries.inc({ result: 'failure' });
+      continue;
+    }
+
     let ipnsPrivateKey: Uint8Array | null = null;
 
     try {

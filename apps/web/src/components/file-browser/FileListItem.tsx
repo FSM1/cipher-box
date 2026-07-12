@@ -10,7 +10,7 @@ import type { SealedChildRef } from '@cipherbox/core';
 import type { ResolvedChild } from '@cipherbox/sdk';
 import { formatBytes, formatDate, getItemIcon } from '../../utils/format';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
-import { isFileRef } from '../../utils/fileTypes';
+import { isFileRef, isFileRefResolved } from '../../utils/fileTypes';
 
 /**
  * Long press duration in milliseconds for touch context menu.
@@ -35,6 +35,12 @@ type FileListItemProps = {
    * needed at render time (D-02).
    */
   resolved: ResolvedChild;
+  /**
+   * The SDK-resolved listing, keyed by ipnsName -- needed to classify the
+   * real per-item kind for each entry in `allItems` during multi-select drag
+   * (a single `resolved` prop only covers this row's own item).
+   */
+  resolvedByIpnsName: Map<string, ResolvedChild>;
   /** Whether this item is currently selected */
   isSelected: boolean;
   /** Parent folder ID (for drag data) */
@@ -72,6 +78,7 @@ type FileListItemProps = {
 export function FileListItem({
   item,
   resolved,
+  resolvedByIpnsName,
   isSelected,
   parentId,
   selectedIds,
@@ -156,7 +163,6 @@ export function FileListItem({
 
   /**
    * Handle drag start - serialize item data.
-   * TODO(phase 63): SealedChildRef has no .type or .id; use ipnsName and stub type.
    */
   const handleDragStart = useCallback(
     (e: DragEvent) => {
@@ -164,16 +170,21 @@ export function FileListItem({
       if (isSelected && selectedIds.size > 1) {
         items = allItems
           .filter((i) => selectedIds.has(i.ipnsName))
-          .map((i) => ({ id: i.ipnsName, type: 'folder' as const })); // TODO(phase 63) stub type
+          .map((i) => ({
+            id: i.ipnsName,
+            type: isFileRefResolved(i, resolvedByIpnsName)
+              ? ('file' as const)
+              : ('folder' as const),
+          }));
       } else {
-        items = [{ id: item.ipnsName, type: 'folder' as const }]; // TODO(phase 63) stub type
+        items = [{ id: item.ipnsName, type: isFolder ? 'folder' : 'file' }];
       }
 
       e.dataTransfer.setData('application/json', JSON.stringify({ items, parentId }));
       e.dataTransfer.effectAllowed = 'move';
       onDragStart(e, item);
     },
-    [item, isSelected, selectedIds, allItems, parentId, onDragStart]
+    [item, isSelected, selectedIds, allItems, parentId, onDragStart, resolvedByIpnsName, isFolder]
   );
 
   /**

@@ -39,8 +39,23 @@ function createTestBinMetadata(entryCount = 1): RecycleBinMetadata {
       ? {
           contentCid: `bafybeicontent${i}${'a'.repeat(40)}`,
           contentSize: (i + 1) * 512,
-          // nodeRef placeholder — Phase 65 will wire bin restore as a re-link under destination readKey
-          // TODO(phase 65): populate nodeRef with actual Node when bin re-link is implemented
+          nodeRef: {
+            schema: 'node/v3' as const,
+            kind: 'file' as const,
+            id: crypto.randomUUID(),
+            generation: 0,
+            createdAt: now - i * 60_000,
+            modifiedAt: now - i * 60_000,
+            content: {
+              cid: `bafybeicontent${i}${'a'.repeat(40)}`,
+              fileIv: 'AAAAAAAAAAAAAAAA',
+              size: (i + 1) * 512,
+              mimeType: 'text/plain',
+              encryptionMode: 'GCM' as const,
+              fileKey: new Uint8Array(32),
+              versions: [],
+            },
+          },
         }
       : {}),
   }));
@@ -152,8 +167,20 @@ describe('encryptBinMetadata / decryptBinMetadata', () => {
     expect(restored.mimeType).toBe(original.mimeType);
     expect(restored.contentCid).toBe(original.contentCid);
     expect(restored.contentSize).toBe(original.contentSize);
-    // nodeRef round-trip: undefined in test data (Phase 65 will wire bin re-link)
-    expect(restored.nodeRef).toBeUndefined();
+    // nodeRef round-trip: identity/content fields survive JSON wire round-trip.
+    // content.fileKey is NOT asserted here — the bin wire form only hex-encodes
+    // BinEntry.nodeReadKey (see encrypt.ts toBinWireForm); a raw Uint8Array nested
+    // inside nodeRef.content.fileKey is not restored as a Uint8Array by this path.
+    expect(restored.nodeRef).toBeDefined();
+    expect(restored.nodeRef?.schema).toBe(original.nodeRef?.schema);
+    expect(restored.nodeRef?.kind).toBe(original.nodeRef?.kind);
+    expect(restored.nodeRef?.id).toBe(original.nodeRef?.id);
+    expect(restored.nodeRef?.generation).toBe(original.nodeRef?.generation);
+    expect(restored.nodeRef?.createdAt).toBe(original.nodeRef?.createdAt);
+    expect(restored.nodeRef?.modifiedAt).toBe(original.nodeRef?.modifiedAt);
+    expect(restored.nodeRef?.content?.cid).toBe(original.nodeRef?.content?.cid);
+    expect(restored.nodeRef?.content?.size).toBe(original.nodeRef?.content?.size);
+    expect(restored.nodeRef?.content?.mimeType).toBe(original.nodeRef?.content?.mimeType);
   });
 
   it('round-trips a nodeReadKey Uint8Array as a 32-byte Uint8Array (hex wire encoding)', async () => {

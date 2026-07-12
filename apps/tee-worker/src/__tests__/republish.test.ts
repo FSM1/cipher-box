@@ -395,6 +395,46 @@ describe('republish route', () => {
   });
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Per-entry defense-in-depth: null / non-object entries must not 500 the batch (T-76-08)
+  // ─────────────────────────────────────────────────────────────────────────
+
+  it('null / non-object entries yield per-entry failures and never 500 the batch (T-76-08)', async () => {
+    const valid = await makeEntry({ sequenceNumber: 7n });
+
+    const app = await createTestApp();
+    // A valid entry interleaved with a null entry and a non-object (string) entry.
+    // The per-entry guard must skip the malformed entries BEFORE the try, so the
+    // catch's entry.ipnsName dereference can never hit a null → no throw / no 500.
+    const res = await postJson(app, '/republish', {
+      entries: [
+        null,
+        {
+          encryptedIpnsPrivateKey: valid.encryptedIpnsPrivateKey,
+          keyEpoch: valid.keyEpoch,
+          ipnsName: valid.ipnsName,
+          signedRecord: valid.signedRecord,
+        },
+        'not-an-object',
+      ],
+    });
+
+    expect(res.status).toBe(200);
+    const results = res.body.results as Array<Record<string, unknown>>;
+    expect(results).toHaveLength(3);
+    // Entry 0: null → per-entry failure with placeholder ipnsName
+    expect(results[0].success).toBe(false);
+    expect(results[0].ipnsName).toBe('unknown');
+    expect(results[0].error).toBe('Invalid entry: expected a non-null object');
+    // Entry 1: valid → processed normally
+    expect(results[1].success).toBe(true);
+    expect(results[1].ipnsName).toBe(valid.ipnsName);
+    // Entry 2: non-object string → per-entry failure
+    expect(results[2].success).toBe(false);
+    expect(results[2].ipnsName).toBe('unknown');
+    expect(results[2].error).toBe('Invalid entry: expected a non-null object');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
   // Input validation
   // ─────────────────────────────────────────────────────────────────────────
 

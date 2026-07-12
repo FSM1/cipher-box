@@ -11,12 +11,14 @@ use cipherbox_api_client::ApiClient;
 #[cfg(any(feature = "fuse", feature = "winfsp"))]
 use crate::publish::PublishCoordinator;
 
-/// Shared one-retry CAS publish helper (D-03).
+/// Shared attempt-budgeted CAS publish helper (D-03 / SC2 item 1).
 ///
 /// Resolves the current IPNS sequence, calls `make_record(new_seq)` to produce
 /// `(record_b64, metadata_cid)`, publishes with `expected_sequence_number:
-/// Some(seq.to_string())`, and on `Conflict` re-resolves + retries once with a
-/// jitter back-off.
+/// Some(seq.to_string())`, and on `Conflict` re-resolves + retries with a jitter
+/// back-off, up to `max_attempts` total publish attempts (the initial attempt
+/// counts as attempt 1). Callers preserving the original single-retry behavior
+/// pass `max_attempts: 2`; the metadata publish path passes `5`.
 ///
 /// On persistent `Conflict`:
 /// - If `journal_entry: Some((queue, entry))` — enqueue via `WriteQueue::put` and
@@ -49,103 +51,103 @@ pub(crate) async fn publish_with_cas_retry<F>(
     make_record: F,
     old_cids_to_unpin: &[String],
     journal_entry: Option<()>, // placeholder for future (queue, entry) — always None this phase
+    max_attempts: u32,
 ) -> Result<(), String>
 where
     F: Fn(u64) -> Result<(String, String), String>, // make_record(new_seq) -> (record_b64, cid)
 {
-    let seq = match preresolved_seq {
-        Some(s) => s,
-        None => coordinator.resolve_sequence(api, ipns_name).await?,
-    };
-    let new_seq = seq
-        .checked_add(1)
-        .ok_or_else(|| "IPNS sequence number overflow".to_string())?;
+    // CIDs uploaded by attempts that were then superseded by a Conflict. These are
+    // unpinned once the publish resolves (success or exhaustion). Any intermediate
+    // CID equal to the finally-published CID is NOT unpinned — callers that re-publish
+    // the SAME content blob at a fresh sequence (metadata + bin paths) would otherwise
+    // unpin their own live content.
+    let mut superseded_cids: Vec<String> = Vec::new();
+    let mut attempt = 0u32;
 
-    let (record_b64, metadata_cid) = make_record(new_seq)?;
-
-    let req = cipherbox_api_client::IpnsPublishRequest {
-        ipns_name: ipns_name.to_string(),
-        record: record_b64,
-        metadata_cid: metadata_cid.clone(),
-        encrypted_ipns_private_key: None,
-        key_epoch: None,
-        expected_sequence_number: Some(seq.to_string()),
-    };
-
-    match cipherbox_api_client::ipns::publish_ipns(api, &req)
-        .await
-        .map_err(|e| format!("{}", e))?
-    {
-        cipherbox_api_client::PublishResult::Success => {
-            coordinator.record_publish(ipns_name, new_seq);
-            for cid in old_cids_to_unpin {
-                let _ = cipherbox_api_client::ipfs::unpin_content(api, cid).await;
+    loop {
+        // First attempt may reuse a caller-preresolved sequence; a Conflict always
+        // invalidates it, so every retry re-resolves.
+        let seq = if attempt == 0 {
+            match preresolved_seq {
+                Some(s) => s,
+                None => coordinator.resolve_sequence(api, ipns_name).await?,
             }
-            return Ok(());
-        }
-        cipherbox_api_client::PublishResult::Conflict {
-            current_sequence_number,
-        } => {
-            log::warn!(
-                "Conflict for {}: expected seq {}, server has {}. Re-resolving for retry.",
-                ipns_name,
-                seq,
-                current_sequence_number
-            );
+        } else {
+            coordinator.resolve_sequence(api, ipns_name).await?
+        };
+        let new_seq = seq
+            .checked_add(1)
+            .ok_or_else(|| "IPNS sequence number overflow".to_string())?;
 
-            let jitter_ms = (std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .subsec_nanos()
-                % 400) as u64
-                + 100;
-            tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
+        let (record_b64, metadata_cid) = make_record(new_seq)?;
 
-            let fresh_seq = coordinator.resolve_sequence(api, ipns_name).await?;
-            let retry_seq = fresh_seq
-                .checked_add(1)
-                .ok_or_else(|| "IPNS sequence number overflow on retry".to_string())?;
+        let req = cipherbox_api_client::IpnsPublishRequest {
+            ipns_name: ipns_name.to_string(),
+            record: record_b64,
+            metadata_cid: metadata_cid.clone(),
+            encrypted_ipns_private_key: None,
+            key_epoch: None,
+            expected_sequence_number: Some(seq.to_string()),
+        };
 
-            let (retry_b64, retry_cid) = make_record(retry_seq)?;
-
-            let retry_req = cipherbox_api_client::IpnsPublishRequest {
-                ipns_name: ipns_name.to_string(),
-                record: retry_b64,
-                metadata_cid: retry_cid.clone(),
-                encrypted_ipns_private_key: None,
-                key_epoch: None,
-                expected_sequence_number: Some(fresh_seq.to_string()),
-            };
-
-            match cipherbox_api_client::ipns::publish_ipns(api, &retry_req)
-                .await
-                .map_err(|e| format!("{}", e))?
-            {
-                cipherbox_api_client::PublishResult::Success => {
-                    coordinator.record_publish(ipns_name, retry_seq);
-                    // Unpin the initial (now-superseded) CID and the old ones
-                    let _ = cipherbox_api_client::ipfs::unpin_content(api, &metadata_cid).await;
-                    for cid in old_cids_to_unpin {
+        match cipherbox_api_client::ipns::publish_ipns(api, &req)
+            .await
+            .map_err(|e| format!("{}", e))?
+        {
+            cipherbox_api_client::PublishResult::Success => {
+                coordinator.record_publish(ipns_name, new_seq);
+                if attempt > 0 {
+                    log::info!(
+                        "Conflict resolved for {} after {} attempt(s) (seq {})",
+                        ipns_name,
+                        attempt + 1,
+                        new_seq
+                    );
+                }
+                // Unpin superseded CIDs from prior conflicting attempts (never the
+                // just-published one) plus the caller's old CIDs.
+                for cid in &superseded_cids {
+                    if *cid != metadata_cid {
                         let _ = cipherbox_api_client::ipfs::unpin_content(api, cid).await;
                     }
-                    log::info!(
-                        "Conflict resolved for {} after retry (seq {})",
-                        ipns_name,
-                        retry_seq
-                    );
-                    Ok(())
                 }
-                cipherbox_api_client::PublishResult::Conflict { .. } => {
-                    // Clean up both intermediate CIDs
-                    let _ = cipherbox_api_client::ipfs::unpin_content(api, &metadata_cid).await;
-                    let _ = cipherbox_api_client::ipfs::unpin_content(api, &retry_cid).await;
-
+                for cid in old_cids_to_unpin {
+                    let _ = cipherbox_api_client::ipfs::unpin_content(api, cid).await;
+                }
+                return Ok(());
+            }
+            cipherbox_api_client::PublishResult::Conflict {
+                current_sequence_number,
+            } => {
+                attempt += 1;
+                superseded_cids.push(metadata_cid);
+                if attempt >= max_attempts {
+                    // Exhausted the budget: clean up every intermediate CID and surface Err.
+                    for cid in &superseded_cids {
+                        let _ = cipherbox_api_client::ipfs::unpin_content(api, cid).await;
+                    }
                     // D-01a: journal_entry param reserved for future journal-enqueue path
                     // (no JournalOp::FilePublish/BinPublish variant this phase; all call sites
                     // pass None). On persistent conflict: Err → EIO.
                     let _ = &journal_entry; // suppress unused warning until D-01a is wired
-                    Err(format!("persistent conflict for {}", ipns_name))
+                    return Err(format!("persistent conflict for {}", ipns_name));
                 }
+                log::warn!(
+                    "Conflict for {}: expected seq {}, server has {}. Re-resolving for retry (attempt {}/{}).",
+                    ipns_name,
+                    seq,
+                    current_sequence_number,
+                    attempt + 1,
+                    max_attempts
+                );
+
+                let jitter_ms = (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos()
+                    % 400) as u64
+                    + 100;
+                tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
             }
         }
     }
@@ -314,7 +316,11 @@ pub fn spawn_metadata_publish(
                 .map_err(|e| format!("{}", e))?;
             let old_cids: Vec<String> = old_metadata_cid.into_iter().collect();
 
-            let make_record = |new_seq: u64| -> Result<String, String> {
+            // node/v3 make_record: the sealed envelope was uploaded ONCE above, so
+            // every attempt re-signs an IPNS record pointing at the SAME `cid` at a
+            // fresh sequence (last-writer-wins). Adapt to the shared helper's
+            // `(record_b64, cid)` closure shape.
+            let make_record = |new_seq: u64| -> Result<(String, String), String> {
                 use base64::Engine;
                 let value = format!("/ipfs/{}", cid);
                 let record =
@@ -322,68 +328,28 @@ pub fn spawn_metadata_publish(
                         .map_err(|e| format!("IPNS record creation failed: {}", e))?;
                 let marshaled = cipherbox_core::marshal_ipns_record(&record)
                     .map_err(|e| format!("IPNS record marshal failed: {}", e))?;
-                Ok(base64::engine::general_purpose::STANDARD.encode(&marshaled))
+                let record_b64 = base64::engine::general_purpose::STANDARD.encode(&marshaled);
+                Ok((record_b64, cid.clone()))
             };
 
-            // CAS loop: on conflict, republish the SAME sealed bytes at a fresh
-            // sequence (last-writer-wins). Bounded to avoid an unbounded retry.
-            let max_attempts = 5u32;
-            let publish_result: Result<(), String> = async {
-                let mut attempt = 0u32;
-                loop {
-                    let seq = coordinator.resolve_sequence(&api, &ipns_name).await?;
-                    let new_seq = seq
-                        .checked_add(1)
-                        .ok_or_else(|| "IPNS sequence number overflow".to_string())?;
-                    let record_b64 = make_record(new_seq)?;
-                    let req = cipherbox_api_client::IpnsPublishRequest {
-                        ipns_name: ipns_name.clone(),
-                        record: record_b64,
-                        metadata_cid: cid.clone(),
-                        encrypted_ipns_private_key: None,
-                        key_epoch: None,
-                        expected_sequence_number: Some(seq.to_string()),
-                    };
-                    match cipherbox_api_client::ipns::publish_ipns(&api, &req)
-                        .await
-                        .map_err(|e| format!("{}", e))?
-                    {
-                        cipherbox_api_client::PublishResult::Success => {
-                            coordinator.record_publish(&ipns_name, new_seq);
-                            for old in &old_cids {
-                                let _ = cipherbox_api_client::ipfs::unpin_content(&api, old).await;
-                            }
-                            log::info!("Background node/v3 publish succeeded for {}", ipns_name);
-                            return Ok(());
-                        }
-                        cipherbox_api_client::PublishResult::Conflict {
-                            current_sequence_number,
-                        } => {
-                            attempt += 1;
-                            if attempt >= max_attempts {
-                                return Err(format!(
-                                    "Persistent conflict for {} after {} attempts",
-                                    ipns_name, max_attempts
-                                ));
-                            }
-                            log::warn!(
-                                "Conflict for {} (expected {}, server has {}); retrying at fresh seq",
-                                ipns_name,
-                                seq,
-                                current_sequence_number
-                            );
-                            let jitter_ms = (std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .subsec_nanos()
-                                % 400) as u64
-                                + 100;
-                            tokio::time::sleep(std::time::Duration::from_millis(jitter_ms)).await;
-                        }
-                    }
-                }
-            }
+            // Delegate to the single shared CAS-retry helper with the metadata path's
+            // 5-attempt budget (SC2 item 1 — no 5→2 regression). The helper never
+            // unpins the just-published `cid`; on failure the best-effort cleanup below
+            // unpins the now-orphaned sealed envelope.
+            let publish_result = publish_with_cas_retry(
+                &api,
+                &coordinator,
+                &ipns_name,
+                None, // no pre-resolved sequence on the background metadata path
+                make_record,
+                &old_cids,
+                None, // D-01a: no JournalOp variant; exhaustion → Err
+                5,    // metadata publish budget (mirrors the former inline loop)
+            )
             .await;
+            if publish_result.is_ok() {
+                log::info!("Background node/v3 publish succeeded for {}", ipns_name);
+            }
 
             // Best-effort cleanup: any failure path above leaves the sealed
             // envelope uploaded+pinned but unreferenced by a published record —
@@ -553,6 +519,7 @@ pub fn spawn_bin_entry_publish(
                     make_bin_record,
                     &old_cids,
                     None, // D-01a: no JournalOp::BinPublish variant; exhaustion → Err → EIO
+                    2,    // preserve today's single-retry (2-attempt) bin behavior
                 )
                 .await
                 .inspect(|_| log::info!("Bin entry published"))?;
@@ -583,60 +550,54 @@ mod tests {
         Err(String),
     }
 
-    /// Minimal seam for publish_with_cas_retry logic, exercisable without network.
+    /// Minimal seam mirroring the `publish_with_cas_retry` attempt-budget loop,
+    /// exercisable without network. `publishes` supplies one `MockPublishResult`
+    /// per attempt (attempt 1 = index 0), and the loop runs up to `max_attempts`
+    /// attempts, re-making the record on every attempt exactly like the real helper.
     /// Returns (result, make_record_call_count, record_publish_called).
     fn run_publish_retry_seam(
-        first_publish: MockPublishResult,
-        retry_publish: Option<MockPublishResult>,
+        publishes: Vec<MockPublishResult>,
+        max_attempts: u32,
         journal_entry_is_some: bool,
     ) -> (Result<(), String>, usize, bool) {
         let mut make_record_call_count = 0usize;
         let mut record_publish_called = false;
 
-        // Simulate the publish_with_cas_retry decision tree
+        // Simulate the publish_with_cas_retry decision tree over the attempt budget.
         let result: Result<(), String> = (|| {
-            let seq: u64 = 0; // simulated resolved sequence
-            let new_seq = seq.checked_add(1).ok_or_else(|| "overflow".to_string())?;
+            let mut attempt = 0u32;
+            let mut seq: u64 = 0; // simulated resolved sequence (advances on re-resolve)
+            loop {
+                let new_seq = seq.checked_add(1).ok_or_else(|| "overflow".to_string())?;
+                make_record_call_count += 1;
+                let _record = format!("record-seq-{}", new_seq); // simulates make_record(new_seq)
 
-            make_record_call_count += 1;
-            let _record = format!("record-seq-{}", new_seq); // simulates make_record(new_seq)
+                let fallback = MockPublishResult::Err("no publish configured".to_string());
+                let outcome = publishes.get(attempt as usize).unwrap_or(&fallback);
 
-            match first_publish {
-                MockPublishResult::Err(e) => return Err(e),
-                MockPublishResult::Success => {
-                    record_publish_called = true;
-                    return Ok(());
-                }
-                MockPublishResult::Conflict { .. } => {
-                    // Re-resolve + re-make-record (the retry path)
-                    let fresh_seq: u64 = 1; // simulated re-resolved sequence
-                    let retry_seq = fresh_seq
-                        .checked_add(1)
-                        .ok_or_else(|| "overflow".to_string())?;
-                    make_record_call_count += 1;
-                    let _retry_record = format!("record-seq-{}", retry_seq);
-
-                    match retry_publish
-                        .unwrap_or(MockPublishResult::Err("no retry configured".to_string()))
-                    {
-                        MockPublishResult::Success => {
-                            record_publish_called = true;
-                            return Ok(());
-                        }
-                        MockPublishResult::Conflict { .. } => {
-                            // persistent conflict: if journal_entry is Some, enqueue
-                            // (journal path not wired this phase — no call site supplies Some)
-                            // Per D-01a: return Err (fire-and-forget → EIO)
+                match outcome {
+                    MockPublishResult::Err(e) => return Err(e.clone()),
+                    MockPublishResult::Success => {
+                        record_publish_called = true;
+                        return Ok(());
+                    }
+                    MockPublishResult::Conflict {
+                        current_sequence_number,
+                    } => {
+                        attempt += 1;
+                        if attempt >= max_attempts {
+                            // Budget exhausted. Per D-01a: return Err (fire-and-forget → EIO).
+                            // The journal-enqueue path is not wired this phase (no call site
+                            // supplies Some), so both branches surface Err.
                             if journal_entry_is_some {
-                                // Future: queue.put(&entry); return Ok
                                 return Err(
                                     "persistent conflict — journal path placeholder".to_string()
                                 );
-                            } else {
-                                return Err(format!("persistent conflict for test-ipns-name"));
                             }
+                            return Err("persistent conflict for test-ipns-name".to_string());
                         }
-                        MockPublishResult::Err(e) => return Err(e),
+                        // Simulate a re-resolve to a fresh sequence for the next attempt.
+                        seq = *current_sequence_number;
                     }
                 }
             }
@@ -649,7 +610,7 @@ mod tests {
     #[test]
     fn publish_with_cas_retry_success_first_attempt() {
         let (result, call_count, record_publish) =
-            run_publish_retry_seam(MockPublishResult::Success, None, false);
+            run_publish_retry_seam(vec![MockPublishResult::Success], 2, false);
         assert!(result.is_ok(), "expected Ok on first-attempt success");
         assert_eq!(call_count, 1, "make_record must be called once on success");
         assert!(record_publish, "record_publish must be called on success");
@@ -659,10 +620,13 @@ mod tests {
     #[test]
     fn publish_with_cas_retry_conflict_then_success() {
         let (result, call_count, record_publish) = run_publish_retry_seam(
-            MockPublishResult::Conflict {
-                current_sequence_number: 5,
-            },
-            Some(MockPublishResult::Success),
+            vec![
+                MockPublishResult::Conflict {
+                    current_sequence_number: 5,
+                },
+                MockPublishResult::Success,
+            ],
+            2,
             false,
         );
         assert!(result.is_ok(), "expected Ok after conflict+retry success");
@@ -681,12 +645,15 @@ mod tests {
     #[test]
     fn publish_with_cas_retry_persistent_conflict_journal_none_returns_err() {
         let (result, _call_count, record_publish) = run_publish_retry_seam(
-            MockPublishResult::Conflict {
-                current_sequence_number: 5,
-            },
-            Some(MockPublishResult::Conflict {
-                current_sequence_number: 6,
-            }),
+            vec![
+                MockPublishResult::Conflict {
+                    current_sequence_number: 5,
+                },
+                MockPublishResult::Conflict {
+                    current_sequence_number: 6,
+                },
+            ],
+            2,
             false, // journal_entry: None — the per-file/bin path per D-01a
         );
         assert!(
@@ -709,8 +676,10 @@ mod tests {
     #[test]
     fn publish_with_cas_retry_make_record_error_propagates() {
         let (result, _call_count, record_publish) = run_publish_retry_seam(
-            MockPublishResult::Err("wrap_key failed: invalid key".to_string()),
-            None,
+            vec![MockPublishResult::Err(
+                "wrap_key failed: invalid key".to_string(),
+            )],
+            2,
             false,
         );
         assert!(result.is_err(), "make_record Err must propagate");
@@ -723,6 +692,83 @@ mod tests {
         assert!(
             !record_publish,
             "record_publish must NOT be called when make_record errors"
+        );
+    }
+
+    // Test 5 (SC2 item 1): Conflict on attempts 1-4 then Success on attempt 5 must
+    // SUCCEED under max_attempts: 5 — locks in the metadata publish path's budget
+    // (guards against the silent 5→2 regression, RESEARCH Pitfall 2).
+    #[test]
+    fn publish_with_cas_retry_fifth_attempt_succeeds_under_budget_5() {
+        let publishes = vec![
+            MockPublishResult::Conflict {
+                current_sequence_number: 1,
+            },
+            MockPublishResult::Conflict {
+                current_sequence_number: 2,
+            },
+            MockPublishResult::Conflict {
+                current_sequence_number: 3,
+            },
+            MockPublishResult::Conflict {
+                current_sequence_number: 4,
+            },
+            MockPublishResult::Success,
+        ];
+        let (result, call_count, record_publish) = run_publish_retry_seam(publishes, 5, false);
+        assert!(
+            result.is_ok(),
+            "5th-attempt success must be Ok under max_attempts: 5, got: {:?}",
+            result
+        );
+        assert_eq!(
+            call_count, 5,
+            "make_record must be called once per attempt (5 attempts)"
+        );
+        assert!(
+            record_publish,
+            "record_publish must be called on the 5th-attempt success"
+        );
+    }
+
+    // Test 6 (SC2 item 1): the SAME Conflict×4-then-Success sequence must EXHAUST
+    // the budget and return Err under max_attempts: 2 — proves the budget parameter
+    // is load-bearing (a 2-attempt caller never reaches attempt 5).
+    #[test]
+    fn publish_with_cas_retry_fifth_attempt_sequence_exhausts_budget_2() {
+        let publishes = vec![
+            MockPublishResult::Conflict {
+                current_sequence_number: 1,
+            },
+            MockPublishResult::Conflict {
+                current_sequence_number: 2,
+            },
+            MockPublishResult::Conflict {
+                current_sequence_number: 3,
+            },
+            MockPublishResult::Conflict {
+                current_sequence_number: 4,
+            },
+            MockPublishResult::Success,
+        ];
+        let (result, call_count, record_publish) = run_publish_retry_seam(publishes, 2, false);
+        assert!(
+            result.is_err(),
+            "under max_attempts: 2 the sequence must exhaust the budget (Err) before reaching attempt 5"
+        );
+        let err_msg = result.unwrap_err();
+        assert!(
+            err_msg.to_lowercase().contains("conflict"),
+            "budget-exhaustion error must mention 'conflict', got: {}",
+            err_msg
+        );
+        assert_eq!(
+            call_count, 2,
+            "make_record must be called exactly twice before the 2-attempt budget is exhausted"
+        );
+        assert!(
+            !record_publish,
+            "record_publish must NOT be called when the budget is exhausted"
         );
     }
 

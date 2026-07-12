@@ -20,6 +20,7 @@ import {
   type DragEvent,
 } from 'react';
 import type { SealedChildRef } from '@cipherbox/core';
+import type { ResolvedChild } from '@cipherbox/sdk';
 import { useSharedNavigation } from '../../hooks/useSharedNavigation';
 import { useContextMenu } from '../../hooks/useContextMenu';
 import {
@@ -45,14 +46,20 @@ import { SelectionActionBar } from './SelectionActionBar';
 import '../../styles/shared-browser.css';
 
 /**
- * Sort items alphabetically by name.
- * TODO(phase 63): restore folders-first sort once Node.kind discrimination is available.
+ * Sort items folders-first (by resolved kind), then alphabetically by name.
+ * SharedFileBrowser has no upload-in-progress virtual rows, so no
+ * `'_uploading' in item` short-circuit is needed here (unlike FileList.tsx).
  */
-function sortItems(items: SealedChildRef[]): SealedChildRef[] {
-  return [...items].sort((a, b) =>
-    // TODO(phase 63): SealedChildRef has no .type; sort alphabetically only
-    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-  );
+function sortItems(
+  items: SealedChildRef[],
+  resolvedByIpnsName: Map<string, ResolvedChild>
+): SealedChildRef[] {
+  return [...items].sort((a, b) => {
+    const aIsFolder = !isFileRefResolved(a, resolvedByIpnsName);
+    const bIsFolder = !isFileRefResolved(b, resolvedByIpnsName);
+    if (aIsFolder !== bIsFolder) return aIsFolder ? -1 : 1;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+  });
 }
 
 type DialogState = {
@@ -556,7 +563,9 @@ export function SharedFileBrowser() {
             resolvedChildren={resolvedChildren}
             selectedCount={1}
             onClose={contextMenu.hide}
-            // TODO(phase 63): SealedChildRef has no .type; download enabled by default for shared items
+            // List view items are raw top-level shares (file or folder) with no
+            // resolved-kind data available; download here navigates to the share
+            // for both kinds (see handleDownload), so no kind gate is needed.
             onDownload={handleDownload}
             onRename={() => {}}
             onDelete={() => {}}
@@ -580,7 +589,7 @@ export function SharedFileBrowser() {
   }
 
   // Render folder view (inside a shared folder)
-  const sortedChildren = sortItems(folderChildren);
+  const sortedChildren = sortItems(folderChildren, resolvedByIpnsName);
   const hasChildren = folderChildren.length > 0;
 
   return (
@@ -846,6 +855,7 @@ export function SharedFileBrowser() {
       <SharedMoveDialog
         open={!!moveDialogItem}
         item={moveDialogItem}
+        resolvedByIpnsName={resolvedByIpnsName}
         currentFolderId={breadcrumbs[breadcrumbs.length - 1]?.id ?? currentShareId ?? ''}
         shareId={currentShareId}
         onClose={() => setMoveDialogItem(null)}
@@ -862,6 +872,7 @@ export function SharedFileBrowser() {
         open={batchMoveDialogOpen}
         item={null}
         items={batchMoveItems_}
+        resolvedByIpnsName={resolvedByIpnsName}
         currentFolderId={breadcrumbs[breadcrumbs.length - 1]?.id ?? currentShareId ?? ''}
         shareId={currentShareId}
         onClose={() => {

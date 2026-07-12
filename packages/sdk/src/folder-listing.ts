@@ -5,7 +5,8 @@
  * children (`SealedChildRef[]`) and the parent's readKey, resolves each
  * child's OWN `PublishedNode` through a caller-supplied gated resolve
  * function and assembles a `ResolvedChild[]` -- ipnsName, name, kind, an
- * optional file size, modifiedAt, and the child's own IPNS sequence.
+ * optional file size, plus the mandatory createdAt, modifiedAt, and the
+ * child's own IPNS sequence.
  *
  * This subsumes the 68.1 web-side kind-cache, useFileSize, and
  * SealedChildRef size/modifiedAt display-mirror fields as the single
@@ -38,6 +39,7 @@ export type ResolvedChild = {
   name: string;
   kind: NodeKind;
   size?: number;
+  createdAt: number;
   modifiedAt: number;
   sequence: number;
 };
@@ -111,6 +113,7 @@ export async function resolveChildren(
         name: childRef.name,
         kind: node.kind,
         size: node.kind === 'file' ? node.content?.size : undefined,
+        createdAt: node.createdAt,
         modifiedAt: node.modifiedAt,
         sequence: Number(sequenceNumber),
       });

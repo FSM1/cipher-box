@@ -43,6 +43,7 @@ function makeResolvedChild(name: string): ResolvedChild {
     ipnsName: `k51file-${name}`,
     name,
     kind: 'file',
+    createdAt: 0,
     modifiedAt: 0,
     sequence: 0,
   };

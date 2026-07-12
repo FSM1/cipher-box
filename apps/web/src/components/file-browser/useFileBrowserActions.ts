@@ -4,8 +4,10 @@
  * Contains all useCallback handlers, dialog state, selection state,
  * and drag state management.
  *
- * Phase 62: FolderChild → SealedChildRef. Behavioral stubs for item-type
- * discrimination (phase 63) and write-chain mutations (phase 65/68).
+ * Phase 62: FolderChild → SealedChildRef. Item-type discrimination resolves
+ * via `resolvedByIpnsName` + `isFileRefResolved` (79-02); the hook also
+ * exposes `resolvedByIpnsName` so callers (FileBrowser.tsx, dialogs) can
+ * read the real kind.
  */
 
 import {
@@ -332,10 +334,15 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       const isShift = event.shiftKey;
 
       if (isShift && lastSelectedIdRef.current) {
-        // TODO(phase 63): SealedChildRef has no .type; sort alphabetically only
-        const sortedChildren = [...children].sort((a, b) =>
-          a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
-        );
+        // Folders-first-then-alpha, matching FileList.tsx's sortItems display
+        // order (79-02) -- keeps shift-select ranges aligned with what's
+        // visually between the two clicked rows.
+        const sortedChildren = [...children].sort((a, b) => {
+          const aIsFolder = !isFileRefResolved(a, resolvedByIpnsName);
+          const bIsFolder = !isFileRefResolved(b, resolvedByIpnsName);
+          if (aIsFolder !== bIsFolder) return aIsFolder ? -1 : 1;
+          return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        });
         const ids = sortedChildren.map((c) => c.ipnsName);
         const startIdx = ids.indexOf(lastSelectedIdRef.current);
         const endIdx = ids.indexOf(itemId);
@@ -362,7 +369,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
         lastSelectedIdRef.current = itemId;
       }
     },
-    [children]
+    [children, resolvedByIpnsName]
   );
 
   const handleSelectAll = useCallback(() => {
@@ -502,9 +509,11 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
     const items = batchDeleteDialog.items;
     if (items.length === 0) return;
     try {
-      // TODO(phase 63): SealedChildRef uses ipnsName as id; stub type as 'folder'
       await deleteItems(
-        items.map((i) => ({ id: i.ipnsName, type: 'folder' as const })), // phase-63 stub type
+        items.map((i) => ({
+          id: i.ipnsName,
+          type: isFileRefResolved(i, resolvedByIpnsName) ? ('file' as const) : ('folder' as const),
+        })),
         currentFolderId
       );
       setBatchDeleteDialog({ open: false, items: [] });
@@ -512,16 +521,20 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
     } catch (err) {
       logger.error('[FileBrowser] Batch delete failed:', err);
     }
-  }, [batchDeleteDialog.items, deleteItems, currentFolderId, clearSelection]);
+  }, [batchDeleteDialog.items, deleteItems, currentFolderId, clearSelection, resolvedByIpnsName]);
 
   const handleBatchMoveConfirm = useCallback(
     async (destinationFolderId: string) => {
       const items = batchMoveDialog.items;
       if (items.length === 0) return;
       try {
-        // TODO(phase 63): SealedChildRef uses ipnsName as id; stub type as 'folder'
         await moveItems(
-          items.map((i) => ({ id: i.ipnsName, type: 'folder' as const })), // phase-63 stub type
+          items.map((i) => ({
+            id: i.ipnsName,
+            type: isFileRefResolved(i, resolvedByIpnsName)
+              ? ('file' as const)
+              : ('folder' as const),
+          })),
           currentFolderId,
           destinationFolderId
         );
@@ -531,7 +544,7 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
         logger.error('[FileBrowser] Batch move failed:', err);
       }
     },
-    [batchMoveDialog.items, moveItems, currentFolderId, clearSelection]
+    [batchMoveDialog.items, moveItems, currentFolderId, clearSelection, resolvedByIpnsName]
   );
 
   const closeBatchDeleteDialog = useCallback(() => {
@@ -547,41 +560,52 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
       const item = renameDialog.item;
       if (!item) return;
       try {
-        // TODO(phase 63): SealedChildRef uses ipnsName as id; stub type as 'folder'
-        await renameItem(item.ipnsName, 'folder', newName, currentFolderId); // phase-63 stub type
+        await renameItem(
+          item.ipnsName,
+          isFileRefResolved(item, resolvedByIpnsName) ? 'file' : 'folder',
+          newName,
+          currentFolderId
+        );
         closeRenameDialog();
       } catch (err) {
         logger.error('[FileBrowser] Rename failed:', err);
       }
     },
-    [renameDialog.item, renameItem, currentFolderId, closeRenameDialog]
+    [renameDialog.item, renameItem, currentFolderId, closeRenameDialog, resolvedByIpnsName]
   );
 
   const handleDeleteConfirm = useCallback(async () => {
     const item = confirmDialog.item;
     if (!item) return;
     try {
-      // TODO(phase 63): SealedChildRef uses ipnsName as id; stub type as 'folder'
-      await deleteItem(item.ipnsName, 'folder', currentFolderId); // phase-63 stub type
+      await deleteItem(
+        item.ipnsName,
+        isFileRefResolved(item, resolvedByIpnsName) ? 'file' : 'folder',
+        currentFolderId
+      );
       closeConfirmDialog();
     } catch (err) {
       logger.error('[FileBrowser] Delete failed:', err);
     }
-  }, [confirmDialog.item, deleteItem, currentFolderId, closeConfirmDialog]);
+  }, [confirmDialog.item, deleteItem, currentFolderId, closeConfirmDialog, resolvedByIpnsName]);
 
   const handleMoveConfirm = useCallback(
     async (destinationFolderId: string) => {
       const item = moveDialog.item;
       if (!item) return;
       try {
-        // TODO(phase 63): SealedChildRef uses ipnsName as id; stub type as 'folder'
-        await moveItem(item.ipnsName, 'folder', currentFolderId, destinationFolderId); // phase-63 stub type
+        await moveItem(
+          item.ipnsName,
+          isFileRefResolved(item, resolvedByIpnsName) ? 'file' : 'folder',
+          currentFolderId,
+          destinationFolderId
+        );
         closeMoveDialog();
       } catch (err) {
         logger.error('[FileBrowser] Move failed:', err);
       }
     },
-    [moveDialog.item, moveItem, currentFolderId, closeMoveDialog]
+    [moveDialog.item, moveItem, currentFolderId, closeMoveDialog, resolvedByIpnsName]
   );
 
   const closeShareDialog = useCallback(() => {
@@ -610,6 +634,8 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   );
 
   return {
+    // Kind resolution
+    resolvedByIpnsName,
     // Sync
     handleSync,
     // Drag

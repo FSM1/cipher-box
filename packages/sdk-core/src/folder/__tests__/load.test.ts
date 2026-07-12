@@ -1,17 +1,22 @@
 /**
- * fetchAndDecryptMetadata — typed-failure try-catch (D-13)
+ * fetchAndDecryptMetadata — current node/v3 contract
  *
- * Tests that:
- *  1. Malformed bytes (JSON.parse fails) → typed Error with CID in message and { cause }
- *  2. Valid JSON but wrong folderKey (decryptFolderMetadata throws) → same typed Error
- *  3. Happy path → returns decrypted metadata unchanged
+ * Rewritten against the CURRENT `fetchAndDecryptMetadata` implementation
+ * (packages/sdk-core/src/folder/load.ts): fetchFromIpfs → JSON.parse → unsealNode.
+ * The function does NOT wrap errors in a typed Error (no CID-in-message / D-13
+ * try-catch exists in the current implementation) — it propagates whatever the
+ * composed steps throw as-is. Tests that:
+ *  1. Malformed bytes (JSON.parse fails) → rejects with the raw parse error
+ *  2. Valid JSON but wrong folderKey (unsealNode throws) → rejects with unsealNode's error
+ *  3. Happy path → returns the Node produced by unsealNode unchanged
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// We mock the heavy dependencies so we can test the error-wrapping logic in isolation.
+// We mock the heavy dependencies so we can test fetchAndDecryptMetadata's
+// composition logic in isolation, against the CURRENT unsealNode-based contract.
 vi.mock('@cipherbox/core', () => ({
-  decryptFolderMetadata: vi.fn(),
+  unsealNode: vi.fn(),
 }));
 
 vi.mock('../../ipfs', () => {
@@ -27,11 +32,9 @@ vi.mock('../../perf', () => ({
 import { fetchAndDecryptMetadata } from '../load';
 import * as core from '@cipherbox/core';
 import * as ipfsModule from '../../ipfs';
+import type { Node } from '@cipherbox/core';
 
-// decryptFolderMetadata is retired from @cipherbox/core in phase 62 (now a Node/v3 op).
-// Access via `as any` to avoid TS2339 while the suite is quarantined.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const mockDecryptFolderMetadata = vi.mocked((core as any).decryptFolderMetadata);
+const mockUnsealNode = vi.mocked(core.unsealNode);
 const mockFetchFromIpfs = vi.mocked(ipfsModule.fetchFromIpfs);
 
 const TEST_CID = 'QmTestCid1234';
@@ -39,61 +42,66 @@ const DUMMY_KEY = new Uint8Array(32);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const DUMMY_CTX: any = {};
 
-// TODO(phase 63): fetchAndDecryptMetadata stub throws — revive when phase 63
-// implements read-chain navigation (fetch+decrypt PublishedNode from IPNS/IPFS).
-describe.skip('fetchAndDecryptMetadata (D-13 typed-failure) — TODO(phase 63)', () => {
+describe('fetchAndDecryptMetadata (current node/v3 contract)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('throws a typed Error containing the CID when bytes fail JSON.parse', async () => {
+  it('rejects with the raw parse error when bytes fail JSON.parse', async () => {
     // Malformed bytes — not valid JSON
     mockFetchFromIpfs.mockResolvedValue(new TextEncoder().encode('NOT_JSON{{{{'));
 
-    await expect(fetchAndDecryptMetadata(TEST_CID, DUMMY_KEY, DUMMY_CTX)).rejects.toSatisfy(
-      (err: unknown) => {
-        const e = err as Error;
-        return (
-          e instanceof Error &&
-          e.message.includes(TEST_CID) &&
-          e.message.includes('decode or decrypt') &&
-          e.cause !== undefined
-        );
-      }
+    await expect(fetchAndDecryptMetadata(TEST_CID, DUMMY_KEY, DUMMY_CTX)).rejects.toBeInstanceOf(
+      SyntaxError
     );
+    // unsealNode is never reached — JSON.parse throws first.
+    expect(mockUnsealNode).not.toHaveBeenCalled();
   });
 
-  it('throws a typed Error containing the CID when decryptFolderMetadata throws', async () => {
-    // Valid JSON structure but wrong key — decryptFolderMetadata throws
-    const fakeEncrypted = JSON.stringify({ iv: 'aaa', data: 'bbb' });
-    mockFetchFromIpfs.mockResolvedValue(new TextEncoder().encode(fakeEncrypted));
-    mockDecryptFolderMetadata.mockRejectedValue(new Error('decryption failed'));
+  it('rejects with unsealNode error when the key is wrong', async () => {
+    // Valid JSON PublishedNode envelope, but unsealNode throws (auth tag mismatch)
+    const fakePublished = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: 'node-id',
+      generation: 0,
+      aeadVersion: 1,
+      readSealed: 'aaaa',
+    };
+    mockFetchFromIpfs.mockResolvedValue(new TextEncoder().encode(JSON.stringify(fakePublished)));
+    mockUnsealNode.mockRejectedValue(new Error('decryption failed'));
 
-    await expect(fetchAndDecryptMetadata(TEST_CID, DUMMY_KEY, DUMMY_CTX)).rejects.toSatisfy(
-      (err: unknown) => {
-        const e = err as Error;
-        return (
-          e instanceof Error &&
-          e.message.includes(TEST_CID) &&
-          e.message.includes('decode or decrypt') &&
-          e.cause instanceof Error &&
-          (e.cause as Error).message === 'decryption failed'
-        );
-      }
+    await expect(fetchAndDecryptMetadata(TEST_CID, DUMMY_KEY, DUMMY_CTX)).rejects.toThrow(
+      'decryption failed'
     );
+    expect(mockUnsealNode).toHaveBeenCalledWith(fakePublished, DUMMY_KEY);
   });
 
-  it('returns decrypted metadata unchanged on the happy path', async () => {
-    const fakeEncrypted = JSON.stringify({ iv: 'iv-bytes', data: 'encrypted-data' });
-    mockFetchFromIpfs.mockResolvedValue(new TextEncoder().encode(fakeEncrypted));
+  it('returns the decrypted Node unchanged on the happy path', async () => {
+    const fakePublished = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: 'node-id',
+      generation: 0,
+      aeadVersion: 1,
+      readSealed: 'aaaa',
+    };
+    mockFetchFromIpfs.mockResolvedValue(new TextEncoder().encode(JSON.stringify(fakePublished)));
 
-    const expectedMetadata = {
-      version: 'v2' as const,
+    const expectedNode: Node = {
+      schema: 'node/v3',
+      kind: 'folder',
+      id: 'node-id',
+      generation: 0,
+      createdAt: 0,
+      modifiedAt: 0,
       children: [],
     };
-    mockDecryptFolderMetadata.mockResolvedValue(expectedMetadata);
+    mockUnsealNode.mockResolvedValue(expectedNode);
 
     const result = await fetchAndDecryptMetadata(TEST_CID, DUMMY_KEY, DUMMY_CTX);
-    expect(result).toBe(expectedMetadata);
+    expect(result).toBe(expectedNode);
+    expect(mockFetchFromIpfs).toHaveBeenCalledWith(DUMMY_CTX, TEST_CID);
+    expect(mockUnsealNode).toHaveBeenCalledWith(fakePublished, DUMMY_KEY);
   });
 });

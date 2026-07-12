@@ -23,6 +23,8 @@ type ShareDialogProps = {
   onClose: () => void;
   /** The item to share (node/v3 SealedChildRef). */
   item: SealedChildRef;
+  /** Real resolved kind of the shared item (79-06); gates the folder slash suffix. */
+  kind: 'file' | 'folder';
   folderKey: Uint8Array;
   ipnsName: string;
   parentFolderId: string;
@@ -52,6 +54,7 @@ export function ShareDialog({
   isOpen,
   onClose,
   item,
+  kind,
   folderKey,
   ipnsName,
   parentFolderId,
@@ -371,8 +374,8 @@ export function ShareDialog({
     [handleShare, isSharing]
   );
 
-  // TODO(phase 63): SealedChildRef has no .type; display name without kind suffix
-  const itemDisplayName = `${item.name}/`; // phase-63 stub: treat as folder
+  // Folders get a trailing-slash display suffix; files show the bare name.
+  const itemDisplayName = kind === 'folder' ? `${item.name}/` : item.name;
   const title = `SHARE: ${itemDisplayName}`;
 
   return (
@@ -545,7 +548,8 @@ export function ShareDialog({
                       </span>
 
                       <div className="share-recipient-actions">
-                        {/* TODO(phase 63): upgrade/downgrade always shown; SealedChildRef has no .type */}
+                        {/* Upgrade/downgrade is read-vs-write permission UI, shown for
+                            both files and folders — unrelated to item kind. */}
                         <>
                           {recipient.permission === 'read' ? (
                             <button
