@@ -310,3 +310,131 @@ Verification report commit SHA (ready to push): `138f8df44aa3ed3940d30346770a4aa
 ---
 
 the recovery tool crypto question - using the sdk would wire in a whole bunch of cipherbox api requests in to the equation - the entire purpose of the recovery tool is to be capable of recovery even if all cpiherbox api infra disappears - as long as the items are pinned on another server, by providng the private key (no dependency on web3auth/cipherbox api) the entire tree can be recovered by walking the ipns/ipfs links. the lower level libraries should definitely be utilized.
+
+---
+
+<task-notification>
+<task-id>a461e0b4c7169080d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/a461e0b4c7169080d.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship Phase 76" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>CodeRabbit is still reviewing; the monitor will notify me when it completes with the final finding tallies. All findings so far are `.planning/` documentation-consistency nits (0 on source code), which are discard-tier. Once it finishes I'll finalize triage, push, and open the PR.</result>
+<usage><subagent_tokens>150916</subagent_tokens><tool_uses>70</tool_uses><duration_ms>1059604</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a461e0b4c7169080d</worktreePath><worktreeBranch>worktree-agent-a461e0b4c7169080d</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+ok I think you can also kick /ship-phase 79 in the background. just need to merge/rebase when phase 76 lands
+
+---
+
+<task-notification>
+<task-id>a461e0b4c7169080d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/a461e0b4c7169080d.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship Phase 76" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything confirmed. The user's CI-E2E run finished **success** (all 4 E2E jobs green, including Desktop E2E windows/linux/macos + Web E2E). Session processes cleaned up; docker stack left running. PR left unmerged for the user.
+
+---
+
+## Phase 76 ship — complete. PR NOT merged (yours to call).
+
+**PR #610** — https://github.com/FSM1/cipher-box/pull/610
+**Final branch tip:** `91c918869`
+
+Two things you caught me on, both now fixed and verified — my apologies for the premature calls:
+1. I reported CI green while `Cargo Check &amp; Test (Windows)` was actually **failing** (the 76-05 gate). Root cause: the ported winfsp D-07 test used `child_id = "remote-creator-node-uuid"`, not a valid UUID, so the seal AAD (`crypto/aes.rs` `Uuid::parse_str`) rejected it with `SealFailed(InvalidAadInput)`. The production `cleanup()` code was correct — test-data only. Fixed with a valid UUID (`5b6d9a305`).
+2. I missed CodeRabbit's 3 inline threads (they posted after my early thread-count checks). All 3 now triaged and resolved.
+
+### Per-gate results
+| Gate | Result |
+|---|---|
+| Verify (`76-VERIFICATION.md`) | MET (re-confirmed) |
+| Secure (`76-SECURITY.md`) | SECURED, 13/13 threats |
+| Crypto/privacy (`REVIEW-2026-07-12-phase76.md`) | SHIP-SAFE, no Critical/High |
+| Built-in security-review | CLEAN, 0 vulns |
+| Validate (`76-VALIDATION.md`) | Nyquist-compliant, 0 gaps |
+| SDK E2E (local) | 106/106 green (incl. TEE republish round-trip against a Phase-76 worker) |
+| CodeRabbit (PR) | SUCCESS, re-reviewed fix commits, 0 open |
+| Greptile (PR) | SUCCESS |
+
+### CI on final tip: ALL GREEN — 29 SUCCESS, 1 SKIPPED (Sync Cargo.lock, expected), 0 failures
+Includes Test, SDK E2E, Cargo (Windows/macOS/Linux), Cross-Language Vector Parity, Build, Typecheck, Lint, all codecov, Migration Drift.
+
+### 76-05 Windows pre-merge gate: BOTH halves GREEN
+- `Cargo Check &amp; Test (Windows)` = SUCCESS (after the UUID fix)
+- `Desktop E2E (windows)` = SUCCESS (your CI-E2E run 29173277770 finished **success** overall — all E2E jobs green)
+
+### Review threads: 5/5 resolved
+- Greptile ×2 (vault register-dead-end, long-lived-EOL) → logged as todos.
+- CodeRabbit ×3: master-key zeroization (fixed `91c918869`), write-body key zeroization (fixed `91c918869`), duplicate-`spyOn` (false positive — two distinct spies, Test job green — resolved with explanation).
+
+### Triage tally
+- **Fixed (4):** RecoverResume key zeroization (`5daec604c`); Windows D-07 test UUID (`5b6d9a305`); master `private_key_arr` zeroization ×2 sites + `NodeWriteBody.ipns_private_key` zeroization (`91c918869`).
+- **Todos logged (2):** `2026-07-12-vault-init-register-retry-dead-end.md`, `2026-07-12-tee-renewal-over-rejects-longer-lived-records.md` (both out-of-scope P1 follow-ups from Greptile).
+- **Discarded:** CodeRabbit CLI's 6 `.planning/` doc-consistency nits; parse-record `Invalid Date` defense-in-depth; TEE config-string returned to trusted relay; duplicate-`spyOn` false positive.
+
+Learnings written (`76-LEARNINGS.md`) and committed on the branch. Session procs (API :3000, tee-worker :3005) killed; docker stack left up.</result>
+<usage><subagent_tokens>302322</subagent_tokens><tool_uses>143</tool_uses><duration_ms>3629544</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a461e0b4c7169080d</worktreePath><worktreeBranch>worktree-agent-a461e0b4c7169080d</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a5768a79402c0167c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/a5768a79402c0167c.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan Phase 78 in worktree" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything is complete and the tree is clean. Planning finished: research → pattern-map → plan → checker PASSED on the first pass → all post-verification gates green. Per background-mode instructions, I am NOT auto-advancing to execute-phase — leaving the artifacts for merge-back.
+
+---
+
+## Phase 78 planning complete
+
+**Branch:** `feat/recovery-tool-v3-vault-load-guards-web-ux-and-ci-guards` (never switched; all work in the isolation worktree)
+
+**Pipeline:** research → validation-strategy → pattern-map → plan (opus) → plan-checker (**VERIFICATION PASSED on first pass, 0 revision iterations**) → decision-coverage gate **8/8** → STATE/ROADMAP recorded. Requirements-coverage gate skipped (no REQ-IDs mapped — SC1/SC2/SC3 + D-01..D-08 are the coverage units).
+
+### 8 plans, 3 waves
+
+| Plan | Title | Wave | Dep |
+|------|-------|------|-----|
+| 78-01 | SC1 recovery bundle spike + esbuild build tooling + gateway transport | 1 | — |
+| 78-02 | SC1 v3 recovery walk + full recovery.html UI wiring | 2 | 78-01 |
+| 78-03 | SC1 un-fixme recovery.spec.ts + e2e zero-fixme exit gate | 3 | 78-02 |
+| 78-04 | SC2 download + restore progress UX wiring (D-05) | 1 | — |
+| 78-05 | SC3a D-07 web/SDK boundary ESLint rule in CI | 1 | — |
+| 78-06 | SC3b web-vitest CI decision + DEVELOPMENT.md docs (D-06) | 1 | — |
+| 78-07 | SC3c item-3 poll-monotonicity fix + e2e (D-08) | 1 | — |
+| 78-08 | SC3c item-11 descent-vs-restore fix + e2e (D-08) | 1 | — |
+
+Wave 1 = six plans in parallel (zero `files_modified` overlap). Wave 2 = 78-02 (needs 01's build/gateway). Wave 3 = 78-03 (e2e un-fixme gate, needs the built tool).
+
+### SC → plan mapping
+- **SC1** → 78-01/02/03 (serialized 1→2→3). Trust-nothing recovery: standalone HTTP-gateway IPNS→IPFS walk mirroring `folder-listing.ts::resolveChildren` with the parent-mirror `childRef.generation` pitfall called out, `packages/crypto`+`packages/core` only, signature-verified IPNS resolve, configurable gateway. AC asserts the bundle has **no** `@cipherbox/sdk`/`sdk-core`/API import (D-02).
+- **SC2** → 78-04. Wires (not deletes) `useFileBrowserActions` download/batch through `download.store`; restore gets a status affordance (metadata-only, no byte-progress).
+- **SC3** → 78-05 (D-07 ESLint rule in CI), 78-06 (web vitest kept out of blocking CI + documented split), 78-07 + 78-08 (the two named races, each with a new deterministic Playwright spec; rest of 68.2/73 backlog correctly deferred).
+
+### Deviations from CONTEXT: none — but one disambiguation to flag
+The research + checker both surfaced that the repo has **two unrelated "D-07"s**. CONTEXT's D-07 text (and the phase brief) phrase it as "write-plane(UUID)/read-plane(ipnsName)", which is the wording of the Rust/FUSE write-plane invariant — but that invariant is already enforced. The **actual in-scope D-07** (confirmed via the source todo + `68.2-SECURITY.md`, and anchored to the concrete "existing grep gate" the decision says to promote) is the **web/SDK import boundary**: `apps/web/src` must not import runtime bindings from `@cipherbox/sdk-core`/`@cipherbox/core` or call raw IPFS. Plan 78-05 is correctly built against that boundary. Worth a sanity-check on your end since the "write-plane" phrasing recurs, but the grep-gate anchor resolves it unambiguously.
+
+### New commits to push (5, since origin baseline `c04adb7571`)
+```
+02f703a69  docs(78): research recovery tool v3, download UX, D-07 lint, and race fixes
+243069bdf  docs(78): add validation strategy
+2697bd9b3  docs(78): map codebase patterns for phase 78 plans
+f075a0e37  docs(78): create phase plan
+ea701de0d  docs(78): record planning completion and annotate roadmap waves
+```
+(The `02f703a69` research commit was created by the researcher during this run — it was not present at checkout, so all 5 are new.) Working tree is clean; `78-PATTERNS.md` and `78-VALIDATION.md` are both committed. `pnpm install` was run in the worktree (pre-commit hook satisfied). No `apps/api` changes → no `api:generate` needed; no TypeORM schema files in scope → no schema-push task injected.</result>
+<usage><subagent_tokens>163702</subagent_tokens><tool_uses>36</tool_uses><duration_ms>2458946</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a5768a79402c0167c</worktreePath><worktreeBranch>worktree-agent-a5768a79402c0167c</worktreeBranch></worktree>
+</task-notification>
