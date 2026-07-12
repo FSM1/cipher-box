@@ -122,6 +122,30 @@ pnpm --filter @cipherbox/crypto test
 
 > **Note:** `pnpm test` runs tests across all workspaces including E2E — use the filtered commands above for unit tests only.
 
+### Test architecture and CI coverage (the deliberate split)
+
+The repo follows a deliberate testing split, and CI enforces it accordingly (decision D-06):
+
+- **Reusable / business logic → `packages/sdk` (Vitest, CI-gated).** Any logic worth unit-testing is hoisted out of `apps/web` into `packages/sdk` (or another package), where it is covered by Vitest. These suites run in the blocking CI `Test` job (`.github/workflows/ci.yml`), alongside `crypto`, `core`, `sdk-core`, `sdk`, `api-client`, and `api`.
+- **UI behavior → Playwright web-e2e.** User-facing flows are covered by the Playwright web-e2e suite (`pnpm test:web-e2e`), which is dispatch/main-push gated rather than a per-PR blocking unit job.
+- **`apps/web` Vitest is intentionally NOT in a blocking CI unit-test job.** A residual `apps/web` `*.test.ts` suite exists (10 files / 67 tests) and must stay green, but it is deliberately excluded from the blocking CI `Test` job. This is a decision, not an accidental gap: gating CI on `apps/web` Vitest would invite UI-coupled unit tests, which the split above is designed to prevent. Logic that deserves a unit test belongs in `packages/sdk`, not in a web-local test.
+
+Two caveats when working with the residual `apps/web` suite:
+
+- **`.spec.ts` is silently skipped.** The `apps/web` Vitest `include` glob matches `*.test.ts` only, so any `*.spec.ts` file is silently excluded — never rely on a `.spec.ts` under `apps/web` being executed.
+- **Build the cross-package dist chain first.** Running the web suite locally requires the workspace dist to be built, or workspace-package resolution fails. Build the chain, then run the suite:
+
+  ```bash
+  pnpm --filter @cipherbox/crypto build \
+    && pnpm --filter @cipherbox/core build \
+    && pnpm --filter @cipherbox/api-client build \
+    && pnpm --filter @cipherbox/sdk-core build \
+    && pnpm --filter @cipherbox/sdk build
+  cd apps/web && pnpm vitest run
+  ```
+
+If a residual `apps/web` test genuinely rots, relocate its logic to `packages/sdk` (Vitest) or remove the dead test — do not add new `apps/web` unit tests, and do not paper over a real failure by skipping it.
+
 ### Strict IPNS verification — wipe local DB first
 
 The strict fail-closed IPNS verification cutover (Phase 60 / HARD-11) rejects any IPNS record that embeds sequence `0`. A local dev database created before the cutover holds such "embedded-0" records, so a pre-existing vault or folder will fail strict verification and fail to resolve. Before running the strict build against an existing local DB, wipe it per [`DATABASE_EVOLUTION_PROTOCOL.md`](./DATABASE_EVOLUTION_PROTOCOL.md) (§reset) and log in again — the vault self-bootstraps fresh strict-verified records. Because all IPNS keys are deterministically derived from the Web3Auth key, the wipe is non-destructive to identity.
