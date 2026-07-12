@@ -575,6 +575,38 @@ fn find_ipns_private_key(inodes: &InodeTable, ipns_name: &str) -> Option<Zeroizi
     })
 }
 
+/// Reconstruct a node's write-body from the locally-mounted `InodeTable` and
+/// re-seal it under the node's OWN write key at `new_generation` (ROLE_BODY
+/// 0x01 AAD), returning the sealed write-body bytes.
+///
+/// D-01: a scope-exit read-key rotation republish otherwise emits
+/// `write_sealed: None` (the read-key rotation engine never populates it, and
+/// this FUSE adapter — a Phase-72 deferral — never reconstructed it). That
+/// floods `list_folder_owned` with "owned child has no write_sealed body" AND
+/// is a durability hole (`replay.rs::recover_signing_seed` cannot recover the
+/// node's signing seed after rotation+remount). This rebuilds the write plane
+/// from the in-memory `InodeTable` (the node's own stable write key +
+/// `ipns_private_key` + child `WriteChildRef`s rebuilt from child inodes' write
+/// keys — all read-key-rotation-independent) and re-seals via `seal_node` at
+/// the node's NEW generation.
+///
+/// Fail-open to `None` (D-01b, mirroring `find_ipns_private_key`) when the node
+/// is NOT locally materialized. NEVER rotates or mutates the write plane — the
+/// child write keys are copied verbatim from the child inodes.
+///
+/// TODO(80-01/GREEN): this stub is replaced with the real reconstruction in the
+/// Task-2 GREEN step. It intentionally returns `None` so the Task-1 RED tests
+/// compile and fail.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub(crate) fn reconstruct_write_body(
+    inodes: &InodeTable,
+    ipns_name: &str,
+    new_generation: u32,
+) -> Option<Vec<u8>> {
+    let _ = (inodes, ipns_name, new_generation);
+    None
+}
+
 /// Scans the locally-mounted `InodeTable` for the grant-root inode matching
 /// `ipns_name`, returning its stable `node_id` + current `read_key` — the
 /// two inputs `rotate_read_on_scope_exit`'s stub lacked (RESEARCH Sharp
@@ -635,6 +667,11 @@ mod tests {
         /// In-memory `GET /shares/sent` fixture rows (Task 1: grant-seam
         /// tests), consumed verbatim by `collect_sent_shares`.
         sent_shares: Vec<SentShareResponse>,
+        /// D-02 call-counter: how many times `collect_sent_shares` has been
+        /// invoked. A job-scoped cache bounds this to `<= 1` per rotation walk,
+        /// regardless of the number of rotated nodes (mirrors the
+        /// `publish_log`/`publish_count_for` pattern).
+        collect_sent_shares_calls: usize,
         /// Ordered log of every `update_grant` call:
         /// `(share_id, encrypted_read_key, new_generation)`.
         updated_grants: Vec<(String, String, u32)>,
@@ -683,6 +720,12 @@ mod tests {
         /// the next `collect_sent_shares` call.
         fn seed_sent_shares(&self, shares: Vec<SentShareResponse>) {
             self.0.lock().unwrap().sent_shares = shares;
+        }
+
+        /// How many times `collect_sent_shares` has been called so far (D-02
+        /// call-count assertion — a job-scoped cache must keep this `<= 1`).
+        fn collect_sent_shares_count(&self) -> usize {
+            self.0.lock().unwrap().collect_sent_shares_calls
         }
 
         /// Every `update_grant` call captured so far, in order.
@@ -760,7 +803,9 @@ mod tests {
         }
 
         async fn collect_sent_shares(&self) -> Result<Vec<SentShareResponse>, RotationError> {
-            Ok(self.0.lock().unwrap().sent_shares.clone())
+            let mut inner = self.0.lock().unwrap();
+            inner.collect_sent_shares_calls += 1;
+            Ok(inner.sent_shares.clone())
         }
 
         async fn update_grant(
@@ -1266,5 +1311,196 @@ mod tests {
             .await
             .expect_err("a transport failure must surface as an error");
         assert!(matches!(err, RotationError::RotateFailed(_)));
+    }
+
+    // -----------------------------------------------------------------------
+    // D-01 reconstruction + D-02 sent-shares cache (Plan 80-02)
+    // -----------------------------------------------------------------------
+
+    const RECON_FOLDER_NODE_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const RECON_CHILD_NODE_ID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+    /// Minimal directory `FileAttrs` for a test inode.
+    fn recon_dir_attrs(ino: u64) -> crate::inode::FileAttrs {
+        let now = std::time::SystemTime::now();
+        crate::inode::FileAttrs {
+            ino,
+            size: 0,
+            blocks: 0,
+            atime: now,
+            mtime: now,
+            ctime: now,
+            crtime: now,
+            is_dir: true,
+            perm: 0o755,
+            nlink: 2,
+        }
+    }
+
+    /// Build an `InodeTable` with a materialized Folder node (own write_key +
+    /// ipns_private_key) holding one materialized child folder (own write_key).
+    /// Returns `(table, folder_ipns, folder_write_key, folder_ipns_private_key,
+    /// child_write_key)`.
+    fn table_with_materialized_folder() -> (InodeTable, String, [u8; 32], Vec<u8>, [u8; 32]) {
+        use crate::inode::{InodeData, ROOT_INO};
+
+        let mut table = InodeTable::new();
+        let folder_ino = table.allocate_ino();
+        let child_ino = table.allocate_ino();
+
+        let folder_write_key = [21u8; 32];
+        let folder_ipns_private_key = vec![31u8; 32];
+        let child_write_key = [22u8; 32];
+
+        table.insert(InodeData {
+            ino: folder_ino,
+            node_id: RECON_FOLDER_NODE_ID.to_string(),
+            parent_ino: ROOT_INO,
+            name: "folder".to_string(),
+            kind: InodeKind::Folder {
+                ipns_name: "k51recon-folder".to_string(),
+                read_key: Zeroizing::new([11u8; 32]),
+                write_key: Zeroizing::new(folder_write_key),
+                ipns_private_key: Zeroizing::new(folder_ipns_private_key.clone()),
+                children_loaded: true,
+            },
+            attr: recon_dir_attrs(folder_ino),
+            children: Some(vec![child_ino]),
+            write_generation: 0,
+        });
+        table.insert(InodeData {
+            ino: child_ino,
+            node_id: RECON_CHILD_NODE_ID.to_string(),
+            parent_ino: folder_ino,
+            name: "child".to_string(),
+            kind: InodeKind::Folder {
+                ipns_name: "k51recon-child".to_string(),
+                read_key: Zeroizing::new([12u8; 32]),
+                write_key: Zeroizing::new(child_write_key),
+                ipns_private_key: Zeroizing::new(vec![32u8; 32]),
+                children_loaded: true,
+            },
+            attr: recon_dir_attrs(child_ino),
+            children: Some(vec![]),
+            write_generation: 0,
+        });
+
+        (
+            table,
+            "k51recon-folder".to_string(),
+            folder_write_key,
+            folder_ipns_private_key,
+            child_write_key,
+        )
+    }
+
+    /// Test A (D-01): `reconstruct_write_body` for a materialized folder returns
+    /// a write-body that `unseal_node` (under the node's OWN write key, at the
+    /// NEW generation, ROLE_BODY 0x01) decodes back to a `NodeWriteBody` whose
+    /// `ipns_private_key` and child `WriteChildRef`(s) match the InodeTable
+    /// inputs — and whose child write key is copied verbatim (no rotation).
+    #[test]
+    fn reconstruct_write_body_round_trips_ipns_key_and_child_write_refs() {
+        use cipherbox_core::node::seal::{unseal_child_write_key, unseal_node};
+        use cipherbox_core::node::{decode_write_body, NodeKind};
+
+        let (table, folder_ipns, folder_write_key, folder_ipns_private_key, child_write_key) =
+            table_with_materialized_folder();
+        let new_generation = 7u32;
+
+        let sealed = reconstruct_write_body(&table, &folder_ipns, new_generation)
+            .expect("a materialized node reconstructs Some");
+
+        let wb_bytes = unseal_node(
+            &sealed,
+            &folder_write_key,
+            RECON_FOLDER_NODE_ID,
+            NodeKind::Folder,
+            new_generation,
+        )
+        .expect("unseal the reconstructed write-body under the node write key at the new generation");
+        let wb = decode_write_body(&wb_bytes).expect("decode the reconstructed write-body");
+
+        assert_eq!(
+            wb.ipns_private_key, folder_ipns_private_key,
+            "the reconstructed write-body carries the node's own signing seed"
+        );
+        assert_eq!(
+            wb.write_children.len(),
+            1,
+            "one materialized child -> exactly one WriteChildRef"
+        );
+        let wcr = &wb.write_children[0];
+        assert_eq!(
+            wcr.child_id, RECON_CHILD_NODE_ID,
+            "the WriteChildRef is keyed by the child's stable node_id"
+        );
+
+        let sealed_child = STANDARD
+            .decode(&wcr.write_key_sealed)
+            .expect("child write_key_sealed is valid base64");
+        let recovered_child_write_key = unseal_child_write_key(
+            &sealed_child,
+            &folder_write_key,
+            RECON_CHILD_NODE_ID,
+            NodeKind::Folder,
+            0,
+        )
+        .expect("unseal the child write key under the parent write key");
+        assert_eq!(
+            recovered_child_write_key,
+            child_write_key.to_vec(),
+            "the child write key is copied verbatim (read-key-rotation-independent, never rotated)"
+        );
+    }
+
+    /// Test B (D-01b): a node NOT present in the InodeTable fails open to
+    /// `None` (never a panic/Err), mirroring `find_ipns_private_key`.
+    #[test]
+    fn reconstruct_write_body_fails_open_to_none_for_a_non_materialized_node() {
+        let table = InodeTable::new();
+        assert!(
+            reconstruct_write_body(&table, "k51-not-materialized", 3).is_none(),
+            "a non-materialized node must fail open to None, not hard-error"
+        );
+    }
+
+    /// Test C (D-02): a rotation walk that queries grants once per rotated node
+    /// (>= 3 nodes here) fetches `GET /shares/sent` at most once, while the
+    /// per-node `root_node_id` filter still returns exactly the in-scope grant.
+    #[tokio::test]
+    async fn rotation_walk_fetches_sent_shares_at_most_once() {
+        const OTHER_NODE_ID: &str = "33333333-3333-3333-3333-333333333333";
+        let transport = FakeTransport::default();
+        transport.seed_sent_shares(vec![
+            sent_share_fixture(
+                "share-in-scope",
+                ROOT_ID,
+                "0x04aabbccdd00112233445566778899aabbccddeeff001122334455667788990011",
+            ),
+            sent_share_fixture("share-other-root", OTHER_NODE_ID, "0x04ff"),
+        ]);
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+
+        for _ in 0..4 {
+            let rows = deps
+                .query_grants_rooted_at(ROOT_ID)
+                .await
+                .expect("query_grants_rooted_at must succeed");
+            assert_eq!(
+                rows.len(),
+                1,
+                "the root_node_id filter still returns exactly the in-scope grant per node"
+            );
+            assert_eq!(rows[0].share_id, "share-in-scope");
+        }
+
+        assert!(
+            transport.collect_sent_shares_count() <= 1,
+            "a rotation job must fetch GET /shares/sent at most once (got {})",
+            transport.collect_sent_shares_count()
+        );
     }
 }

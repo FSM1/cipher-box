@@ -262,6 +262,7 @@ pub async fn publish_file_node(
     let mut write_body = cipherbox_core::node::NodeWriteBody {
         ipns_private_key: ipns_private_key.to_vec(),
         write_children: Vec::new(),
+        recipient_pins: Vec::new(),
     };
     let seal_result = cipherbox_core::node::seal::seal_published_node(
         &file_node,

@@ -1302,6 +1302,7 @@ mod tests {
         let write_body = NodeWriteBody {
             ipns_private_key: parent_stub.ipns_private_key.clone(),
             write_children,
+            recipient_pins: Vec::new(),
         };
         let published = seal::seal_published_node(
             &parent_node,

@@ -306,6 +306,7 @@ impl CipherBoxFS {
         let mut write_body = NodeWriteBody {
             ipns_private_key: ipns_private_key.to_vec(),
             write_children,
+            recipient_pins: Vec::new(),
         };
         let published = seal_published_node(
             &node,
@@ -1277,6 +1278,7 @@ mod d07_write_plane_pairing_tests {
         let write_body = NodeWriteBody {
             ipns_private_key: ipns_private_key.to_vec(),
             write_children: Vec::new(),
+            recipient_pins: Vec::new(),
         };
         let published = seal_published_node(&node, read_key, write_key, Some(&write_body)).unwrap();
         encode_published_node(&published).unwrap()

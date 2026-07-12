@@ -1061,6 +1061,7 @@ mod tests {
         let write_body = NodeWriteBody {
             ipns_private_key: vec![0u8; 32],
             write_children: vec![write_child_ref.clone()],
+            recipient_pins: Vec::new(),
         };
         let published = seal_published_node(
             &parent_node,
