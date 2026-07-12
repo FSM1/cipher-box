@@ -126,6 +126,78 @@ test.describe.serial('Batch Download', () => {
     await selectionBar.waitForHidden();
   });
 
+  test('download spinner affordance is visible on-screen while a download is in flight (SC2/D-05)', async () => {
+    // Closes the Wave-0 spinner-visibility gap (78-04): proves the store-driven
+    // download affordance actually RENDERS on screen, not just that the store
+    // lifecycle is invoked. `useDownloadStore.isDownloading` flows into
+    // FileBrowser's `isLoading={isOperating || isDownloading}`, which disables
+    // the SelectionActionBar action buttons while a download runs. Instant local
+    // downloads make the transient state un-observable without deterministic
+    // control, so we HOLD the content fetch (`GET /ipfs/<cid>`) at the network
+    // boundary — the same held-resolver technique as poll-monotonicity.spec.ts —
+    // then assert the on-screen affordance (disabled download button) before
+    // releasing. No timing guess.
+    await fileList.selectItem(file1Name);
+    await fileList.ctrlClickItem(file2Name);
+    await selectionBar.waitForVisible();
+
+    // Baseline: the download button is enabled before any download starts.
+    await expect(selectionBar.downloadButton()).toBeEnabled();
+
+    let markContentFetchSeen!: () => void;
+    const contentFetchSeen = new Promise<void>((resolve) => {
+      markContentFetchSeen = resolve;
+    });
+    const heldResolvers: Array<() => void> = [];
+    let holding = true;
+
+    // Hold only the IPFS content GET (`/ipfs/<cid>`); let the POST helpers
+    // (`/ipfs/upload|unpin|register-cid`) and everything else pass through.
+    await page.route('**/ipfs/**', async (route) => {
+      const req = route.request();
+      const pathname = new URL(req.url()).pathname;
+      const isContentGet =
+        req.method() === 'GET' &&
+        /\/ipfs\/[^/]+$/.test(pathname) &&
+        !/\/ipfs\/(upload|unpin|register-cid)$/.test(pathname);
+      if (holding && isContentGet) {
+        markContentFetchSeen();
+        await new Promise<void>((resolve) => heldResolvers.push(resolve));
+      }
+      await route.continue();
+    });
+
+    try {
+      const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+      await selectionBar.clickDownload();
+
+      // Prove the content fetch is actually in flight (held), not a timing guess.
+      await contentFetchSeen;
+
+      // ON-SCREEN AFFORDANCE: while the held download runs, isDownloading is
+      // true and the SelectionActionBar download button is disabled.
+      await expect(selectionBar.downloadButton()).toBeDisabled();
+
+      // Release the held content fetch; the download now completes normally.
+      holding = false;
+      for (const release of heldResolvers.splice(0)) release();
+
+      const download = await downloadPromise;
+      expect(download.suggestedFilename()).toBeTruthy();
+
+      // Affordance clears once the download settles.
+      await expect(selectionBar.downloadButton()).toBeEnabled({ timeout: 10_000 });
+    } finally {
+      holding = false;
+      for (const release of heldResolvers.splice(0)) release();
+      await page.unroute('**/ipfs/**');
+      // Restore selection state even if an assertion or the download failed, so
+      // the next serial test starts from a clean slate.
+      await selectionBar.clickClear();
+      await selectionBar.waitForHidden();
+    }
+  });
+
   test('select three files shows correct count', async () => {
     // Select all 3 files
     await fileList.selectItem(file1Name);

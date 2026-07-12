@@ -5027,11 +5027,46 @@ export class CipherBoxClient {
    * `SharedFolderTree.set()` clones the key buffers, so the caller's `folderKey`
    * / `ipnsPrivateKey` buffers are never zeroed by `destroy()` / `delete()`.
    *
+   * Descent-vs-restore guard (D-08 item 11): the SDK is the AUTHORITATIVE
+   * holder of the active shared-folder depth, so the generation check must
+   * hold HERE — a web-hook-only guard is insufficient. If the caller captured
+   * a `seedGeneration` at the start of an async descent and a newer navigation
+   * (navigateUp / breadcrumb / share-enter / unload) has since bumped the
+   * share's generation, this seed is stale and MUST be rejected: applying it
+   * would repoint the active writeKey/depth to the superseded target and
+   * misroute the next write. Callers that don't pass `seedGeneration` (e.g.
+   * legacy seeds, the same-depth adopt path) are unaffected.
+   *
    * @param shareId - Share ID — the key under which this state lives
    * @param state - Initial shared-folder state
+   * @param seedGeneration - Optional generation captured at navigation start;
+   *   the seed is discarded (returns `false`) if it has been superseded.
+   * @returns `true` if the state was applied, `false` if the seed was stale.
    */
-  loadSharedFolder(shareId: string, state: SharedFolderState): void {
+  loadSharedFolder(shareId: string, state: SharedFolderState, seedGeneration?: number): boolean {
+    if (
+      seedGeneration !== undefined &&
+      seedGeneration < this.sharedFolderTree.currentSeedGeneration(shareId)
+    ) {
+      return false;
+    }
     this.sharedFolderTree.set(shareId, { ...state, shareId });
+    return true;
+  }
+
+  /**
+   * Bump and return the next active-depth seed generation for a share (D-08
+   * item 11). The web nav hook captures this at the START of an async descent
+   * (and on every navigateUp / breadcrumb / share-enter) so a superseded
+   * descent's late seed is discarded by {@link loadSharedFolder}.
+   */
+  nextSharedFolderSeedGeneration(shareId: string): number {
+    return this.sharedFolderTree.nextSeedGeneration(shareId);
+  }
+
+  /** Current active-depth seed generation for a share (D-08 item 11). */
+  currentSharedFolderSeedGeneration(shareId: string): number {
+    return this.sharedFolderTree.currentSeedGeneration(shareId);
   }
 
   /**

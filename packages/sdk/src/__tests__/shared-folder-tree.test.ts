@@ -98,4 +98,46 @@ describe('SharedFolderTree', () => {
     expect(aFolderKey.every((b) => b === 0)).toBe(true);
     expect(bFolderKey.every((b) => b === 0)).toBe(true);
   });
+
+  // D-08 item 11: the active-depth seed generation is the mechanism the client's
+  // loadSharedFolder guard uses to reject a superseded descent's late seed.
+  describe('active-depth seed generation (D-08 item 11)', () => {
+    it('nextSeedGeneration is monotonic and per-share; currentSeedGeneration starts at 0', () => {
+      const tree = new SharedFolderTree();
+      expect(tree.currentSeedGeneration('share-A')).toBe(0);
+      expect(tree.currentSeedGeneration('share-B')).toBe(0);
+
+      expect(tree.nextSeedGeneration('share-A')).toBe(1);
+      expect(tree.nextSeedGeneration('share-A')).toBe(2);
+      expect(tree.currentSeedGeneration('share-A')).toBe(2);
+
+      // Independent per share — no cross-share bleed.
+      expect(tree.nextSeedGeneration('share-B')).toBe(1);
+      expect(tree.currentSeedGeneration('share-A')).toBe(2);
+    });
+
+    it('delete() bumps the generation so an in-flight seed racing an unload is stale', () => {
+      const tree = new SharedFolderTree();
+      tree.set('share-A', makeState({ shareId: 'share-A' }));
+      const genBeforeUnload = tree.nextSeedGeneration('share-A'); // a descent captures this
+      tree.delete('share-A');
+      // The unload advanced the generation past the captured token, so a late
+      // seed that re-creates the entry would be recognised as superseded.
+      expect(tree.currentSeedGeneration('share-A')).toBeGreaterThan(genBeforeUnload);
+    });
+
+    it('clear() bumps the generation for every share so an in-flight seed racing a teardown is stale', () => {
+      const tree = new SharedFolderTree();
+      tree.set('share-A', makeState({ shareId: 'share-A' }));
+      tree.set('share-B', makeState({ shareId: 'share-B' }));
+      const genABeforeClear = tree.nextSeedGeneration('share-A'); // descents capture these
+      const genBBeforeClear = tree.nextSeedGeneration('share-B');
+      tree.clear();
+      // clear() must invalidate like delete() — a late seed re-creating either
+      // entry after teardown is recognised as superseded, so it cannot re-insert
+      // key material into a cleared tree.
+      expect(tree.currentSeedGeneration('share-A')).toBeGreaterThan(genABeforeClear);
+      expect(tree.currentSeedGeneration('share-B')).toBeGreaterThan(genBBeforeClear);
+    });
+  });
 });

@@ -75,7 +75,11 @@ export { signEd25519, verifyEd25519 } from './ed25519/sign';
 // IPNS name derivation + record verification/parsing (pure crypto utilities,
 // backed by the `ipns` package so the wire format matches record creation)
 export { deriveIpnsName, publicKeyFromIpnsName } from './ipns/derive-name';
-export { verifyIpnsRecordSignature } from './ipns/verify-record';
+export {
+  verifyIpnsRecordSignature,
+  verifyIpnsRecordSignatureDetailed,
+  type IpnsSignatureVerdict,
+} from './ipns/verify-record';
 export { parseIpnsRecord, type ParsedIpnsRecord } from './ipns/parse-record';
 
 // Device identity (per-device Ed25519 keypair)

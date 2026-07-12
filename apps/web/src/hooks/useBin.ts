@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useBinStore } from '../stores/bin.store';
+import { useRestoreStore } from '../stores/restore.store';
 import { useVaultSettingsStore } from '../stores/vault-settings.store';
 import { getSdkClient, hasSdkClient } from '../lib/sdk-provider';
 import type { BinEntry } from '@cipherbox/core';
@@ -63,18 +64,23 @@ export function useBin() {
    */
   const restore = useCallback(async (entryId: string) => {
     setState({ isLoading: true, error: null });
+    const restoreStore = useRestoreStore.getState();
     try {
       // Look up the target folder from the bin entry's metadata
       const binEntries = useBinStore.getState().entries;
       const entry = binEntries.find((e) => e.id === entryId);
       if (!entry) throw new Error('Bin entry not found');
 
+      // Metadata-only status affordance (D-05) — restore has no byte stream.
+      restoreStore.startRestore(entry.name);
       const client = getSdkClient();
       await client.restoreFromBin(entryId, entry.originalParentIpnsName);
       // SDK emits bin:updated -> store subscription updates entries
+      restoreStore.setRestoreSuccess();
       setState({ isLoading: false, error: null });
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Failed to restore item';
+      restoreStore.setRestoreError(error);
       setState({ isLoading: false, error });
       throw err;
     }
@@ -119,17 +125,23 @@ export function useBin() {
    */
   const restoreMultiple = useCallback(async (entryIds: string[]) => {
     setState({ isLoading: true, error: null });
+    const restoreStore = useRestoreStore.getState();
     try {
       const binEntries = useBinStore.getState().entries;
       const client = getSdkClient();
       for (const entryId of entryIds) {
         const entry = binEntries.find((e) => e.id === entryId);
         if (!entry) continue;
+        // Drive the status affordance once per entry (D-05) so the bin UI
+        // reflects each in-flight restore.
+        restoreStore.startRestore(entry.name);
         await client.restoreFromBin(entryId, entry.originalParentIpnsName);
       }
+      restoreStore.setRestoreSuccess();
       setState({ isLoading: false, error: null });
     } catch (err) {
       const error = err instanceof Error ? err.message : 'Failed to restore items';
+      restoreStore.setRestoreError(error);
       setState({ isLoading: false, error });
       throw err;
     }

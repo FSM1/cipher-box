@@ -78,7 +78,7 @@
 - [x] **Phase 75: Cross-Language IPNS and Node-Codec Verification Parity** — Strict RFC3339 + ValidityType==0 enforcement, KAT IV-encoding pin, UUID AAD acceptance parity, all Rust↔TS vector-locked (4 todos) (completed 2026-07-11)
 - [x] **Phase 76: FUSE Durability and TEE Write-Path Hardening** — Vault-init publish preflight, deferred Phase 69 publish/concurrency items, TEE republish/renew error handling + later-EOL invariant (4 todos) (completed 2026-07-12, #610)
 - [x] **Phase 77: Crypto Hygiene and Terminology Canonicalization** — Error-path zeroization, base64 helper dedup, `encryptedIpnsPrivateKey` field renames, dead share-scaffolding retirement, root-ownership helper extract (12 todos; mechanical, no behavior change) (completed 2026-07-11)
-- [ ] **Phase 78: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards** — Port recovery.html to node/v3 (un-fixme recovery.spec), download-progress UX resolution, D-07 CI rule, web vitest CI, remaining 68.2/73 hardening incl. two data-integrity races (5 todos) (code-complete on branch, UAT pending)
+- [x] **Phase 78: Recovery Tool v3, Vault-Load Guards, Web UX and CI Guards** — Port recovery.html to node/v3 (un-fixme recovery.spec), download-progress UX resolution, D-07 CI rule, web vitest CI, remaining 68.2/73 hardening incl. two data-integrity races (5 todos) (completed 2026-07-12)
 - [x] **Phase 79: Web Kind-Discrimination Completion and Deferred Test Revival** — Route the listing UI through `ResolvedChild.kind` (folders-first sort, drag-and-drop, kind-aware dialogs), wire Created date, revive 4 `describe.skip` suites, drive `TODO(phase 63/65)` markers to zero (from marker triage; ~40 still-valid markers) (completed 2026-07-12, #611)
 - [ ] **Phase 80: Rotation Write-Plane and Re-Mint Durability** — Restore write-sealed body on rotation republish (owned-walk + replay recovery), verify recipient pubkey binding on re-mint, cache `/shares/sent` per rotation job, defensive-copy readKey for Rust parity (4 todos; straggler closeout, HIGH durability)
 - [ ] **Phase 81: TEE Republish and IPNS-Record Correctness** — Stop over-rejecting still-valid long-lived records, unmask real TEE key-manager config/infra errors, close renewal test residue, integer-only ValidityType CBOR parity (4 todos; straggler closeout)
@@ -1071,11 +1071,25 @@ Plans:
 2. The download-progress dead code is resolved (wired to restore spinners or deleted)
 3. The D-07 boundary is CI-enforced, the web vitest CI decision is implemented, and the two 68.2 data-integrity races (poll-monotonicity, descent-vs-restore) are fixed with e2e coverage
 
-**Plans:** 0 plans
+**Plans:** 8/8 plans complete
 
 Plans:
+**Wave 1**
 
-- [ ] TBD (run /gsd-plan-phase 78 to break down)
+- [x] 78-01-PLAN.md — SC1 recovery bundle spike + esbuild build tooling + gateway transport (Wave 1)
+- [x] 78-04-PLAN.md — SC2 download + restore progress UX wiring (D-05) (Wave 1)
+- [x] 78-05-PLAN.md — SC3a D-07 web/SDK boundary ESLint rule in CI (Wave 1)
+- [x] 78-06-PLAN.md — SC3b web vitest CI decision + DEVELOPMENT.md docs (D-06) (Wave 1)
+- [x] 78-07-PLAN.md — SC3c item 3 poll-monotonicity fix + e2e (D-08) (Wave 1)
+- [x] 78-08-PLAN.md — SC3c item 11 descent-vs-restore fix + e2e (D-08) (Wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 78-02-PLAN.md — SC1 v3 recovery walk + full recovery.html UI wiring (Wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 78-03-PLAN.md — SC1 un-fixme recovery.spec.ts + e2e exit gate (Wave 3)
 
 ### Phase 79: Web Kind-Discrimination Completion and Deferred Test Revival
 

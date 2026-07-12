@@ -255,3 +255,37 @@
   color: var(--color-green-primary);
   border-color: var(--color-green-dim);
 }
+
+/* ==========================================================================
+   Bin Restore Status
+   ========================================================================== */
+
+.bin-restore-status {
+  font-family: var(--font-family-mono);
+  font-size: 0.85rem;
+  padding: var(--spacing-md) var(--spacing-lg);
+  text-align: center;
+  opacity: 0.9;
+}
+
+.bin-restore-status--restoring {
+  color: var(--color-green-primary);
+}
+
+.bin-restore-status--success {
+  color: var(--color-green-primary);
+}
+
+.bin-restore-status--error {
+  color: var(--color-error);
+}
+
+.bin-restore-status-spinner {
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bin-restore-status-spinner {
+    animation: none;
+  }
+}

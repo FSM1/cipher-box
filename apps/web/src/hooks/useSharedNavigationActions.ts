@@ -301,6 +301,10 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         // this (root) depth.
         p.zeroWriteKey();
         p.currentWriteKeyRef.current = shareRootWriteKey ? new Uint8Array(shareRootWriteKey) : null;
+        // D-08 item 11: entering a share establishes a NEW active (root) depth
+        // -- bump the seed generation so any subfolder descent left in flight
+        // from a prior visit to this share cannot repoint the active depth.
+        const enterToken = getSdkClient().nextSharedFolderSeedGeneration(shareId);
         try {
           p.seedActiveSharedFolder({
             shareId,
@@ -313,6 +317,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
             ownerPublicKey: parsePublicKey(share.sharerPublicKey),
             recipientPublicKey: vaultKeypair.publicKey,
             publishedNode: result.published,
+            seedGeneration: enterToken,
           });
         } finally {
           // D-09: seedSharedFolder clones the writeKey buffer internally
@@ -366,6 +371,14 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       }
       const vaultKeypair = auth.vaultKeypair;
 
+      // D-08 item 11: capture the active-depth seed generation BEFORE the async
+      // descent begins. A fast navigateUp/breadcrumb click while this descent's
+      // IPNS resolve is still in flight bumps the generation (see
+      // restoreToBreadcrumbIndex); the guards below (web hook + SDK backstop)
+      // then DISCARD this superseded descent so it can never repoint the active
+      // writeKey/depth to the stale target and misroute the next write.
+      const descentToken = getSdkClient().nextSharedFolderSeedGeneration(currentShareId);
+
       p.setIsLoading(true);
       p.setError(null);
 
@@ -377,30 +390,70 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
         }
         const { readKey: childReadKey, children, sequenceNumber: childSeq, published } = descended;
 
-        let committed = false;
+        // D-08 item 11 (guard #1): a navigateUp/breadcrumb restore superseded
+        // this descent while its IPNS resolve was in flight. Discard the minted
+        // child readKey and bail BEFORE mutating any React / nav-stack state so
+        // the restored (shallower) depth stays the active one.
+        if (getSdkClient().currentSharedFolderSeedGeneration(currentShareId) !== descentToken) {
+          childReadKey.fill(0);
+          return;
+        }
+
+        const shareEntry = p.sharedItems.find((s) => s.share.shareId === currentShareId);
+        if (!shareEntry) {
+          childReadKey.fill(0);
+          p.setError('Shared item not found');
+          return;
+        }
+
+        // 73-07 SC1 correctness fix: capture the CURRENT (pre-descent) depth's
+        // live publishedNode from the SDK's sharedFolderTree while it is still
+        // the seeded depth -- write ops (uploadToSharedFolder et al.) trust
+        // SharedFolderState.publishedNode directly (no network re-resolve), so
+        // restoring this depth later without its real publishedNode would seed
+        // the placeholder and fail every write (see NavStackEntry.publishedNode).
+        const currentPublishedNode =
+          getSdkClient().getSharedFolderState(currentShareId)?.publishedNode;
+
+        // 68.1-30: recover this subfolder's writeKey from the PARENT depth's
+        // write-body chain while the PARENT is STILL the seeded depth (the child
+        // seed has not been applied yet). resolveSharedSubfolderWriteKey reads
+        // sharedFolderTree.get(shareId), so resolving it BEFORE the apply below
+        // preserves that invariant. Closes the deep-shared-write gap (WEB-03).
+        let childWriteKey: Uint8Array | null = null;
         try {
-          const shareEntry = p.sharedItems.find((s) => s.share.shareId === currentShareId);
-          if (!shareEntry) {
-            p.setError('Shared item not found');
+          childWriteKey = await getSdkClient().resolveSharedSubfolderWriteKey(currentShareId, {
+            published,
+            readKey: childReadKey,
+            generation: childRef.generation,
+          });
+        } catch (writeKeyErr) {
+          childReadKey.fill(0);
+          // If a newer navigation superseded this descent, swallow -- the user
+          // already moved on; don't surface a spurious "Failed to open folder"
+          // for a descent we are discarding anyway.
+          if (getSdkClient().currentSharedFolderSeedGeneration(currentShareId) !== descentToken) {
             return;
           }
-          const ipnsPrivateKey = new Uint8Array(32);
+          throw writeKeyErr;
+        }
 
-          // 73-07 SC1 correctness fix: capture the CURRENT (pre-descent)
-          // depth's live publishedNode from the SDK's sharedFolderTree BEFORE
-          // it gets overwritten below by the child's seedActiveSharedFolder
-          // call -- write ops (uploadToSharedFolder et al.) trust
-          // SharedFolderState.publishedNode directly (no network re-resolve),
-          // so restoring this depth later without its real publishedNode
-          // would seed the placeholder and fail every write (see
-          // NavStackEntry.publishedNode doc).
-          const currentPublishedNode =
-            getSdkClient().getSharedFolderState(currentShareId)?.publishedNode;
+        // D-08 item 11 (guard #2): re-check after the writeKey-resolve await --
+        // a restore may have superseded the descent during THIS await too.
+        if (getSdkClient().currentSharedFolderSeedGeneration(currentShareId) !== descentToken) {
+          childReadKey.fill(0);
+          childWriteKey?.fill(0);
+          return;
+        }
 
+        // ---- APPLY (synchronous, no await): the descent is still current ----
+        const ipnsPrivateKey = new Uint8Array(32);
+        let committed = false;
+        try {
           // Push the CURRENT (pre-descent) level so navigateUp / navigateToBreadcrumb
           // can restore it without a network round-trip. 73-07 SC1: TRANSFER
-          // the active-depth writeKey into the pushed entry -- the stack
-          // entry becomes its sole owner, so it is NOT zeroed here.
+          // the active-depth writeKey into the pushed entry -- the stack entry
+          // becomes its sole owner, so it is NOT zeroed here.
           p.navStackRef.current = [
             ...p.navStackRef.current,
             {
@@ -428,17 +481,6 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           p.setCurrentView('folder');
           committed = true;
 
-          // 68.1-30: recover this subfolder's writeKey from the PARENT depth's
-          // write-body chain BEFORE re-seeding sharedFolderTree to the child --
-          // resolveSharedSubfolderWriteKey reads sharedFolderTree.get(shareId),
-          // which is still the parent depth until seedActiveSharedFolder below
-          // overwrites that entry. Closes the deep-shared-write gap (WEB-03,
-          // writable-shares 8.2): previously every descent seeded a zero
-          // writeKey below the share root, failing GCM auth on any write op.
-          const childWriteKey = await getSdkClient().resolveSharedSubfolderWriteKey(
-            currentShareId,
-            { published, readKey: childReadKey, generation: childRef.generation }
-          );
           // 73-07 SC1: the new active depth (the child) gets a fresh clone --
           // currentWriteKeyRef.current was already nulled above (transferred
           // to the pushed stack entry), so this is a plain assignment.
@@ -455,6 +497,10 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
               ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
               recipientPublicKey: vaultKeypair.publicKey,
               publishedNode: published,
+              // D-08 item 11: SDK backstop -- reject even here if a restore
+              // raced between guard #2 and this seed (belt-and-suspenders; the
+              // SDK holds the authoritative active depth).
+              seedGeneration: descentToken,
             });
           } finally {
             // D-09: seedSharedFolder clones the writeKey buffer internally
@@ -492,6 +538,11 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
    * Navigate back to the top-level shared list.
    */
   const navigateToRoot = useCallback(() => {
+    // D-08 item 11: leaving the folder view back to the shared list supersedes
+    // any in-flight subfolder descent -- bump the seed generation so a descent
+    // that resolves after this cannot re-seed a stale active depth into the
+    // SDK's sharedFolderTree (both guards then discard it).
+    if (p.currentShareId) getSdkClient().nextSharedFolderSeedGeneration(p.currentShareId);
     if (p.folderKey) p.folderKey.fill(0);
     for (const entry of p.navStackRef.current) {
       entry.folderKey.fill(0);
@@ -510,7 +561,7 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
     p.setCurrentSequenceNumber(null);
     p.navStackRef.current = [];
     p.setError(null);
-  }, [p.folderKey, p.zeroIpnsKey, p.zeroWriteKey, p.clearPolling]);
+  }, [p.folderKey, p.currentShareId, p.zeroIpnsKey, p.zeroWriteKey, p.clearPolling]);
 
   /**
    * Restore navigation state to a specific breadcrumb/nav-stack index.
@@ -537,6 +588,17 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
       if (crumbIndex < 0 || crumbIndex >= stack.length) return;
       const target = stack[crumbIndex];
       const currentShareId = p.currentShareId;
+
+      // D-08 item 11: bump the shared-folder seed generation UP FRONT so any
+      // in-flight subfolder descent (navigateToSubfolder) whose async resolve
+      // lands AFTER this restore is recognised as superseded and discarded --
+      // it must not repoint the active writeKey/depth to the deeper target the
+      // user just navigated away from. This bump runs synchronously (before the
+      // descent's continuation can execute), and the captured token also stamps
+      // this restore's own re-seed below so the SDK accepts it as the latest.
+      const restoreToken = currentShareId
+        ? getSdkClient().nextSharedFolderSeedGeneration(currentShareId)
+        : undefined;
 
       // Discard the level(s) being left: the current live folderKey/writeKey
       // plus any deeper stack entries beyond crumbIndex (empty range for
@@ -589,6 +651,10 @@ export function useSharedNavigationActions(p: SharedNavigationActionsParams) {
           children: target.children,
           ownerPublicKey: parsePublicKey(shareEntry.share.sharerPublicKey),
           recipientPublicKey: vaultKeypair.publicKey,
+          // D-08 item 11: stamp this restore's re-seed with the token bumped
+          // above so the SDK accepts it as the latest active depth (and rejects
+          // any concurrently-superseded descent).
+          seedGeneration: restoreToken,
         });
 
         // 73-09 SC2: the restored depth's `target.children` is the snapshot

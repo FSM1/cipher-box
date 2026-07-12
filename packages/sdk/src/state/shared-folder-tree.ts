@@ -25,9 +25,41 @@ import type { SharedFolderState } from '../types';
 export class SharedFolderTree {
   private shares = new Map<string, SharedFolderState>();
 
+  /**
+   * Monotonic per-share "active-depth seed generation" (D-08 item 11).
+   *
+   * Every navigation that changes the active depth (descend / navigateUp /
+   * breadcrumb / share-enter / unload) bumps this counter via
+   * {@link nextSeedGeneration}. A seed carrying a stale generation — e.g. a
+   * subfolder descent whose async resolve lands AFTER a navigateUp already
+   * superseded it — is rejected by the client's `loadSharedFolder` guard so it
+   * cannot repoint the active writeKey/depth to the wrong (superseded) target.
+   *
+   * Deliberately NOT reset by delete()/clear(): monotonicity must survive an
+   * unload so an in-flight seed racing the unload is still recognised as stale.
+   */
+  private seedGenerations = new Map<string, number>();
+
   /** Get a shared folder's state by shareId */
   get(shareId: string): SharedFolderState | undefined {
     return this.shares.get(shareId);
+  }
+
+  /**
+   * Bump and return the next monotonic active-depth seed generation for a
+   * share (D-08 item 11). Callers capture the returned value at the START of an
+   * async navigation and pass it back into `loadSharedFolder` so a superseded
+   * seed is discarded.
+   */
+  nextSeedGeneration(shareId: string): number {
+    const next = (this.seedGenerations.get(shareId) ?? 0) + 1;
+    this.seedGenerations.set(shareId, next);
+    return next;
+  }
+
+  /** Current active-depth seed generation for a share (0 if never bumped). */
+  currentSeedGeneration(shareId: string): number {
+    return this.seedGenerations.get(shareId) ?? 0;
   }
 
   /** Set or update a shared folder's state, cloning key material to avoid zeroing caller buffers */
@@ -68,6 +100,9 @@ export class SharedFolderTree {
       if (state.writeKey) state.writeKey.fill(0);
     }
     this.shares.delete(shareId);
+    // D-08 item 11: bump the seed generation so a descent still in flight when
+    // this unload lands cannot re-create the entry with a stale seed.
+    this.seedGenerations.set(shareId, (this.seedGenerations.get(shareId) ?? 0) + 1);
   }
 
   /** Check if a shared folder has been loaded */
@@ -80,10 +115,15 @@ export class SharedFolderTree {
    * Called during client destroy().
    */
   clear(): void {
-    for (const state of this.shares.values()) {
+    for (const [shareId, state] of this.shares) {
       if (state.folderKey) state.folderKey.fill(0);
       if (state.ipnsPrivateKey) state.ipnsPrivateKey.fill(0);
       if (state.writeKey) state.writeKey.fill(0);
+      // D-08 item 11: bump the seed generation for every cleared share (parity
+      // with delete()) so a descent still in flight when this clear lands
+      // cannot re-create the entry with a now-stale seed and re-insert key
+      // material after teardown.
+      this.seedGenerations.set(shareId, (this.seedGenerations.get(shareId) ?? 0) + 1);
     }
     this.shares.clear();
   }

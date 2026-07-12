@@ -1,8 +1,11 @@
 /**
  * Recovery Tool E2E Test
  *
- * Seeds a vault with a file via SDK, then uses recovery.html to verify
- * the IPFS-direct v2 blob recovery path works end-to-end.
+ * Seeds a v3 vault with a file via the real SDK, then drives the shipped
+ * standalone recovery.html to prove the gateway-only v3 read chain recovers
+ * the vault from `privateKey` alone (IPNS resolve -> IPFS fetch -> v3 vault
+ * blob -> rootReadKey -> node/v3 sealed-child walk -> file decrypt), with the
+ * CipherBox API absent from the recovery loop (D-01/D-02).
  *
  * Requires: API + IPFS running locally (same as other web-e2e tests).
  */
@@ -65,14 +68,7 @@ test.describe('Vault Recovery Tool', () => {
     }
   });
 
-  // FIXME(recovery-v3): the standalone recovery tool (apps/web/public/recovery.html)
-  // was never ported to the v3 two-key vault blob + node/v3 sealed codec introduced
-  // in #578. It still hard-checks `blob[0] === 0x02` (recovery.html:394,1160) and
-  // parses the pre-#578 `{iv,data}` folder envelope, so it halts with "not v2 format"
-  // on any current-format vault. This is a real recoverability gap (the shipped
-  // disaster-recovery tool cannot recover a current vault), not a test artifact —
-  // tracked separately for a product fix. Un-fixme once recovery.html speaks v3.
-  test.fixme('recovers vault files via IPFS-direct v2 blob path', async ({ page }) => {
+  test('recovers vault files via IPFS-direct v3 read chain', async ({ page }) => {
     test.setTimeout(RECOVERY_TIMEOUT_MS);
     // Navigate to recovery tool
     await page.goto(`${WEB_URL}/recovery.html`);
@@ -92,7 +88,7 @@ test.describe('Vault Recovery Tool', () => {
     await page.locator('[data-testid="recovery-start-btn"]').click();
 
     // Wait for recovery to complete (progress log should show file name)
-    // Recovery involves: IPNS resolution + IPFS fetch + v2 blob decrypt + folder traversal
+    // Recovery involves: IPNS resolution + IPFS fetch + v3 vault-blob decrypt + folder traversal
     // This can take up to 60 seconds depending on IPNS propagation
     const progressLog = page.locator('[data-testid="recovery-progress-log"]');
 

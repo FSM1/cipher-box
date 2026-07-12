@@ -33,7 +33,7 @@ import { useFolderStore } from '../../stores/folder.store';
 import { useSyncStore } from '../../stores/sync.store';
 import { isExternalFileDrag } from '../../hooks/useDropUpload';
 import { getSdkClient } from '../../lib/sdk-provider';
-import { downloadFileFromIpns, triggerBrowserDownload } from '../../services/download.service';
+import { useFileDownload } from '../../hooks/useFileDownload';
 import { triggerSearchIndexRebuild } from '../../hooks/useSearch';
 import { logger } from '../../lib/logger';
 import { runWithFailureUx } from '../../hooks/useMutationFailureUx';
@@ -115,6 +115,10 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
   } = params;
 
   const children = currentFolder?.children ?? [];
+
+  // Store-driven download wrapper (D-05): drives useDownloadStore so the
+  // existing FileBrowser spinner reflects real in-flight downloads.
+  const { downloadFromIpns } = useFileDownload();
 
   // 68.2-15: kind lookup for identity-only refs (selection/context-menu items
   // are raw `SealedChildRef`s with no `.kind`) -- classify against the
@@ -422,15 +426,17 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
     if (!item || !currentFolder) return;
     if (!isFileRefResolved(item, resolvedByIpnsName)) return; // No folder-archive download feature.
     try {
-      const plaintext = await downloadFileFromIpns({
+      // Route through the store-driven download hook (D-05) so the existing
+      // FileBrowser spinner (bound to useDownloadStore.isDownloading) lights up.
+      await downloadFromIpns({
         fileRef: item,
         folderKey: currentFolder.folderKey,
+        fileName: item.name,
       });
-      triggerBrowserDownload(plaintext, item.name);
     } catch (err) {
       logger.error(`[FileBrowser] Download failed for ${item.name}:`, err);
     }
-  }, [contextMenu.item, currentFolder, resolvedByIpnsName]);
+  }, [contextMenu.item, currentFolder, resolvedByIpnsName, downloadFromIpns]);
 
   const handleRenameClick = useCallback(() => {
     if (contextMenu.item) openRenameDialog(contextMenu.item);
@@ -484,18 +490,20 @@ export function useFileBrowserActions(params: FileBrowserActionsParams) {
 
   const handleBatchDownload = useCallback(async () => {
     if (!currentFolder || selectedItems.length === 0) return;
+    // Drive the download store once per file (D-05) so isDownloading reflects
+    // each in-flight file and the FileBrowser spinner tracks the batch.
     for (const item of selectedItems.filter((it) => isFileRefResolved(it, resolvedByIpnsName))) {
       try {
-        const plaintext = await downloadFileFromIpns({
+        await downloadFromIpns({
           fileRef: item,
           folderKey: currentFolder.folderKey,
+          fileName: item.name,
         });
-        triggerBrowserDownload(plaintext, item.name);
       } catch (err) {
         logger.error(`[FileBrowser] Batch download failed for ${item.name}:`, err);
       }
     }
-  }, [currentFolder, selectedItems, resolvedByIpnsName]);
+  }, [currentFolder, selectedItems, resolvedByIpnsName, downloadFromIpns]);
 
   const handleBatchDeleteConfirm = useCallback(async () => {
     const items = batchDeleteDialog.items;
