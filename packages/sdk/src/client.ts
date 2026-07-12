@@ -1364,14 +1364,16 @@ export class CipherBoxClient {
     folder: FolderState,
     publishedChildren: SealedChildRef[],
     newSequenceNumber: bigint,
-    publishedWriteChildren?: WriteChildRef[]
+    publishedWriteChildren?: WriteChildRef[],
+    publishedRecipientPins?: string[]
   ): void {
     adoptPublishedFolderStateShared(
       this.folderTree,
       folder,
       publishedChildren,
       newSequenceNumber,
-      publishedWriteChildren
+      publishedWriteChildren,
+      publishedRecipientPins
     );
   }
 
@@ -2545,6 +2547,11 @@ export class CipherBoxClient {
             folderKey: parent.folderKey,
             writeKey: parentWriteKey,
             writeChildren: updatedWriteChildren,
+            // D-03 (Plan 80): thread the parent's existing recipient pins so a
+            // shared parent republished on child-create stays pinned (a pin-less
+            // republish hard-fails a later re-mint, D-03e). Pins are copied, never
+            // rotated.
+            recipientPins: parentWriteBodyParams.recipientPins,
             ipnsPrivateKey: parent.ipnsKeypair.privateKey,
             ipnsName: parentIpnsName,
             sequenceNumber: parent.sequenceNumber,
@@ -2557,7 +2564,8 @@ export class CipherBoxClient {
           parent,
           publishedChildren,
           newSequenceNumber,
-          publishedWriteChildren ?? updatedWriteChildren
+          publishedWriteChildren ?? updatedWriteChildren,
+          parentWriteBodyParams.recipientPins
         );
 
         // Register the new child so it is immediately usable (upload/rename/etc.)
@@ -2673,7 +2681,8 @@ export class CipherBoxClient {
         folder,
         publishedChildren,
         newSequenceNumber,
-        publishedWriteChildren ?? writeBodyParams.writeChildren
+        publishedWriteChildren ?? writeBodyParams.writeChildren,
+        writeBodyParams.recipientPins
       );
 
       // 4. Emit update event
@@ -2905,6 +2914,9 @@ export class CipherBoxClient {
         readKey: destFolder.folderKey,
         writeKey: destWriteBodyParams.writeKey,
         writeChildren: rehomedDestWriteChildren,
+        // D-03 (Plan 80): preserve the destination folder's recipient pins on the
+        // move republish (a pin-less republish hard-fails a later re-mint, D-03e).
+        recipientPins: destWriteBodyParams.recipientPins,
         ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
         ipnsName: destIpnsName,
         sequenceNumber: destFolder.sequenceNumber,
@@ -2917,7 +2929,8 @@ export class CipherBoxClient {
         destFolder,
         dstChildren,
         dstSeq,
-        dstPublishedWriteChildren ?? rehomedDestWriteChildren
+        dstPublishedWriteChildren ?? rehomedDestWriteChildren,
+        destWriteBodyParams.recipientPins
       );
       this.emitter.emit({
         type: 'folder:updated',
@@ -2944,6 +2957,9 @@ export class CipherBoxClient {
         writeKey: sourceWriteBodyParams.writeKey,
         writeChildren: rehomedSourceWriteChildren,
         baseWriteChildren: sourceBaseWriteChildren,
+        // D-03 (Plan 80): preserve the source folder's recipient pins on the move
+        // republish (a pin-less republish hard-fails a later re-mint, D-03e).
+        recipientPins: sourceWriteBodyParams.recipientPins,
         ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
         ipnsName: sourceIpnsName,
         sequenceNumber: sourceFolder.sequenceNumber,
@@ -2956,7 +2972,8 @@ export class CipherBoxClient {
         sourceFolder,
         srcChildren,
         srcSeq,
-        srcPublishedWriteChildren ?? rehomedSourceWriteChildren
+        srcPublishedWriteChildren ?? rehomedSourceWriteChildren,
+        sourceWriteBodyParams.recipientPins
       );
       this.emitter.emit({
         type: 'folder:updated',
@@ -3061,6 +3078,9 @@ export class CipherBoxClient {
           writeKey: writeBodyParams.writeKey,
           writeChildren: trimmedWriteChildren,
           baseWriteChildren,
+          // D-03 (Plan 80): preserve the folder's recipient pins on the delete
+          // republish (a pin-less republish hard-fails a later re-mint, D-03e).
+          recipientPins: writeBodyParams.recipientPins,
           ipnsPrivateKey: folder.ipnsKeypair.privateKey,
           ipnsName: folderIpnsName,
           sequenceNumber: folder.sequenceNumber,
@@ -3074,7 +3094,8 @@ export class CipherBoxClient {
         folder,
         publishedChildren,
         newSequenceNumber,
-        publishedWriteChildren ?? trimmedWriteChildren
+        publishedWriteChildren ?? trimmedWriteChildren,
+        writeBodyParams.recipientPins
       );
 
       // 4. Emit update event
@@ -3224,6 +3245,9 @@ export class CipherBoxClient {
             folderKey: folder.folderKey,
             writeKey: writeBodyParams.writeKey,
             writeChildren: updatedWriteChildren,
+            // D-03 (Plan 80): preserve the folder's recipient pins on the upload
+            // republish (a pin-less republish hard-fails a later re-mint, D-03e).
+            recipientPins: writeBodyParams.recipientPins,
             ipnsPrivateKey: folder.ipnsKeypair.privateKey,
             ipnsName: folderIpnsName,
             sequenceNumber: folder.sequenceNumber,
@@ -3279,7 +3303,8 @@ export class CipherBoxClient {
           folder,
           publishedChildren,
           newSequenceNumber,
-          publishedWriteChildren ?? updatedWriteChildren
+          publishedWriteChildren ?? updatedWriteChildren,
+          writeBodyParams.recipientPins
         );
 
         // 5. Emit events
@@ -3543,6 +3568,9 @@ export class CipherBoxClient {
             folderKey: folder.folderKey,
             writeKey: writeBodyParams.writeKey,
             writeChildren: updatedWriteChildren,
+            // D-03 (Plan 80): preserve the folder's recipient pins on the batch
+            // add republish (a pin-less republish hard-fails a later re-mint, D-03e).
+            recipientPins: writeBodyParams.recipientPins,
             ipnsPrivateKey: folder.ipnsKeypair.privateKey,
             ipnsName: folderIpnsName,
             sequenceNumber: freshSeq,
@@ -3594,7 +3622,8 @@ export class CipherBoxClient {
           folder,
           publishedChildren,
           newSequenceNumber,
-          publishedWriteChildren ?? updatedWriteChildren
+          publishedWriteChildren ?? updatedWriteChildren,
+          writeBodyParams.recipientPins
         );
 
         // Emit events
@@ -3935,6 +3964,12 @@ export class CipherBoxClient {
         );
       }
 
+      // Reconcile-before-publish (ROT-07 durable anti-rollback): defer on any
+      // sequence mismatch and gate through the durable floor when configured —
+      // mirrors every other publish path in this file (createFolder/renameItem/
+      // moveItem/deleteItem). The pin-issuance publish must not skip it.
+      await this.reconcileFolderSequence(itemIpnsName, folder.sequenceNumber, folder.folderKey);
+
       const nextPins = sdkCore.appendRecipientPin(
         writeBodyParams.recipientPins ?? [],
         recipientPublicKey
@@ -3962,7 +3997,8 @@ export class CipherBoxClient {
         folder,
         publishedChildren,
         newSequenceNumber,
-        publishedWriteChildren ?? writeBodyParams.writeChildren
+        publishedWriteChildren ?? writeBodyParams.writeChildren,
+        nextPins
       );
       // Keep the in-memory write-body mirror's pin list in sync so a follow-up
       // getRecipientPubkeyPins in the same session reflects the new pin.
@@ -4040,7 +4076,8 @@ export class CipherBoxClient {
         folder,
         publishedChildren,
         newSequenceNumber,
-        publishedWriteChildren ?? writeBodyParams.writeChildren
+        publishedWriteChildren ?? writeBodyParams.writeChildren,
+        writeBodyParams.recipientPins
       );
     }
 

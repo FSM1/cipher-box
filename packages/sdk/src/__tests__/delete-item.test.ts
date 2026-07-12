@@ -56,6 +56,7 @@ interface CapturedPublishArgs {
   writeKey?: Uint8Array;
   writeChildren?: WriteChildRef[];
   baseWriteChildren?: WriteChildRef[];
+  recipientPins?: string[];
   children: SealedChildRef[];
 }
 
@@ -69,7 +70,7 @@ interface CapturedPublishArgs {
  */
 async function seedDelete(
   client: CipherBoxClient,
-  opts: { childResolveFails?: boolean } = {}
+  opts: { childResolveFails?: boolean; recipientPins?: string[] } = {}
 ): Promise<{ writeKey: Uint8Array; captured: () => CapturedPublishArgs | null }> {
   const folderKey = new Uint8Array(32).fill(0x11);
   const writeKey = new Uint8Array(32).fill(0x33);
@@ -131,6 +132,7 @@ async function seedDelete(
       writeBody: {
         ipnsPrivateKey: new Uint8Array(64).fill(3),
         writeChildren: [nodeWriteChildRef, otherWriteChildRef],
+        ...(opts.recipientPins ? { recipientPins: opts.recipientPins } : {}),
       },
     },
     lastLoadedAt: Date.now(),
@@ -207,6 +209,22 @@ describe('CipherBoxClient.deleteItem write-chain trim (SC#1)', () => {
     const published = captured();
     expect(published?.baseWriteChildren).toHaveLength(2);
     expect(published?.baseWriteChildren?.some((wc) => wc.childId === NODE_UUID)).toBe(true);
+  });
+
+  // D-03 (Plan 80) regression: a routine delete republish must PRESERVE the
+  // folder's owner-sealed recipient pins. Before the fix, deleteItem passed
+  // `writeChildren` explicitly and dropped `recipientPins`, so a shared folder
+  // republished pin-less on every ordinary write — hard-failing a later re-mint
+  // after re-materialize (D-03e) and silently defeating revocation. Pins are
+  // PUBLIC ECIES keys, threaded verbatim (never rotated).
+  it('preserves the folder recipient pins on a routine delete republish (D-03e)', async () => {
+    const pins = ['YWFhYWFhYWFh', 'YmJiYmJiYmJi'];
+    const { captured } = await seedDelete(client, { recipientPins: pins });
+
+    await client.deleteItem(FOLDER_IPNS, CHILD_IPNS);
+
+    const published = captured();
+    expect(published?.recipientPins).toEqual(pins);
   });
 
   it('fails OPEN on a UUID resolve failure: delete still succeeds and write-body is left unchanged', async () => {

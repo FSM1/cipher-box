@@ -968,6 +968,21 @@ pub mod implementation {
                             .get(ino)
                             .map(|i| i.node_id.clone())
                             .unwrap_or_else(|| crate::fs::uuid_from_ino(ino));
+                        // D-03 (Plan 80): source the file's CACHED owner-sealed
+                        // recipient pins from the inode so a routine overwrite
+                        // re-publish PRESERVES them (a shared file republished
+                        // pin-less would hard-fail a later re-mint, D-03e). Pins
+                        // are public ECIES keys — copied verbatim, never rotated.
+                        let file_recipient_pins = fs
+                            .inodes
+                            .get(ino)
+                            .map(|i| match &i.kind {
+                                crate::inode::InodeKind::File { recipient_pins, .. } => {
+                                    recipient_pins.clone()
+                                }
+                                _ => Vec::new(),
+                            })
+                            .unwrap_or_default();
 
                         let crate::journal_helpers::UploadJournalResult {
                             ciphertext,
@@ -1039,6 +1054,7 @@ pub mod implementation {
                                         &file_read_key,
                                         &file_write_key,
                                         &file_ipns_private_key,
+                                        &file_recipient_pins,
                                         &coordinator,
                                         encrypted_ipns_for_tee.as_deref(),
                                         tee_key_epoch,

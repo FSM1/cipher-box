@@ -1110,6 +1110,12 @@ where
         modified_at,
         content,
     };
+    // D-03: empty recipient pins is CORRECT here. This re-seals a JOURNALED file
+    // PLACEHOLDER (child_published_node_b64), which `build_upload_journal_entry`
+    // always seals with no pins (journal_helpers.rs), and replay has no InodeTable
+    // to source pins from — there is nothing to preserve at this site. Contrast
+    // the parent re-splice (`fetch_splice_publish_parent`), which DECODES and
+    // preserves the parent's existing `recipient_pins` from its current write-body.
     let write_body = NodeWriteBody {
         ipns_private_key: file_signing_seed.to_vec(),
         write_children: Vec::new(),

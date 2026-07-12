@@ -218,6 +218,7 @@ pub async fn publish_file_node(
     read_key: &[u8; 32],
     write_key: &[u8; 32],
     ipns_private_key: &zeroize::Zeroizing<Vec<u8>>,
+    recipient_pins: &[Vec<u8>],
     coordinator: &crate::PublishCoordinator,
     encrypted_ipns_for_tee: Option<&str>,
     tee_key_epoch: Option<u32>,
@@ -259,10 +260,16 @@ pub async fn publish_file_node(
         modified_at: now_ms,
         content: node_content,
     };
+    // D-03 (Plan 80): thread the file's CACHED owner-sealed recipient pins
+    // (surfaced onto the inode at materialization, 80-05) VERBATIM into the
+    // re-sealed write-body. A file that has been shared carries recipient pins
+    // (public ECIES keys, NOT derivable from key material); sealing `Vec::new()`
+    // on a routine overwrite would republish it WITHOUT pins, hard-failing a
+    // later re-mint after re-materialize (D-03e). Pins are copied, never rotated.
     let mut write_body = cipherbox_core::node::NodeWriteBody {
         ipns_private_key: ipns_private_key.to_vec(),
         write_children: Vec::new(),
-        recipient_pins: Vec::new(),
+        recipient_pins: recipient_pins.to_vec(),
     };
     let seal_result = cipherbox_core::node::seal::seal_published_node(
         &file_node,

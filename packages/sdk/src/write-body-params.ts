@@ -124,7 +124,8 @@ export function adoptPublishedFolderState(
   folder: FolderState,
   publishedChildren: SealedChildRef[],
   newSequenceNumber: bigint,
-  publishedWriteChildren?: WriteChildRef[]
+  publishedWriteChildren?: WriteChildRef[],
+  publishedRecipientPins?: string[]
 ): void {
   folder.children = publishedChildren;
   folder.sequenceNumber = newSequenceNumber;
@@ -134,6 +135,14 @@ export function adoptPublishedFolderState(
     if (publishedWriteChildren) {
       if (folder.metadata.writeBody) {
         folder.metadata.writeBody.writeChildren = publishedWriteChildren;
+        // D-03 (Plan 80): keep the mirror's recipient pins in sync with what was
+        // just published so the NEXT getWriteBodyParams (which prefers this
+        // mirror) threads the pins forward instead of re-sealing pin-less. Pins
+        // are PUBLIC ECIES keys, copied verbatim. Only overwrite when the caller
+        // resolved a pin list to publish; leave the existing pins otherwise.
+        if (publishedRecipientPins !== undefined) {
+          folder.metadata.writeBody.recipientPins = publishedRecipientPins;
+        }
       } else {
         // 68.1-29: the folder carried a read-only metadata mirror (no
         // write-body -- e.g. loaded via loadFolder, or getWriteBodyParams
@@ -142,9 +151,13 @@ export function adoptPublishedFolderState(
         // next getWriteBodyParams (prefers metadata.writeBody) and DFS descent
         // (walks metadata.writeBody.writeChildren) see the new WriteChildRefs
         // instead of the absent-mirror fallback that dropped them.
+        // D-03 (Plan 80): seed the recipient pins too, or the next mutation reads
+        // `metadata.writeBody.recipientPins === undefined` and republishes the
+        // shared folder pin-less (hard-failing a later re-mint, D-03e).
         folder.metadata.writeBody = {
           ipnsPrivateKey: new Uint8Array(folder.ipnsKeypair.privateKey),
           writeChildren: publishedWriteChildren,
+          recipientPins: publishedRecipientPins,
         };
       }
     }

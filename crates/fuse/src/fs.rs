@@ -182,6 +182,7 @@ impl CipherBoxFS {
             ipns_name,
             is_root,
             folder_node_id,
+            recipient_pins,
             child_inos,
         ) = {
             let inode = self
@@ -200,6 +201,7 @@ impl CipherBoxFS {
                     write_key,
                     ipns_private_key,
                     ipns_name,
+                    recipient_pins,
                     ..
                 } => (
                     **read_key,
@@ -208,6 +210,7 @@ impl CipherBoxFS {
                     ipns_name.clone(),
                     true,
                     folder_node_id,
+                    recipient_pins.clone(),
                     children,
                 ),
                 crate::inode::InodeKind::Folder {
@@ -215,6 +218,7 @@ impl CipherBoxFS {
                     write_key,
                     ipns_private_key,
                     ipns_name,
+                    recipient_pins,
                     ..
                 } => (
                     **read_key,
@@ -223,6 +227,7 @@ impl CipherBoxFS {
                     ipns_name.clone(),
                     false,
                     folder_node_id,
+                    recipient_pins.clone(),
                     children,
                 ),
                 _ => return Err("Cannot update metadata for non-folder inode".to_string()),
@@ -303,10 +308,17 @@ impl CipherBoxFS {
                 children: sealed_children,
             }
         };
+        // D-03 (Plan 80): thread the folder's CACHED owner-sealed recipient pins
+        // (surfaced onto the inode at materialization, 80-05) VERBATIM into the
+        // re-sealed write-body. Recipient pins are issuance data (public ECIES
+        // keys) that are NOT derivable from InodeTable key material — sealing
+        // `Vec::new()` here would republish a shared node WITHOUT its pins, hard-
+        // failing a later re-mint after re-materialize (D-03e). Pins are copied,
+        // never rotated. Mirrors `reconstruct_write_body` (rotation republish).
         let mut write_body = NodeWriteBody {
             ipns_private_key: ipns_private_key.to_vec(),
             write_children,
-            recipient_pins: Vec::new(),
+            recipient_pins,
         };
         let published = seal_published_node(
             &node,
@@ -1414,6 +1426,108 @@ mod d07_write_plane_pairing_tests {
         assert_eq!(
             children[0].ipns_private_key.as_slice(),
             child_ipns_private_key.as_slice()
+        );
+    }
+}
+
+/// D-03 (Plan 80) recipient-pin preservation regression: a routine folder
+/// republish through `build_folder_metadata` must carry the folder inode's
+/// cached owner-sealed `recipient_pins` VERBATIM into the sealed write-body.
+///
+/// Before the fix, `build_folder_metadata` sealed `recipient_pins: Vec::new()`,
+/// so any ordinary write to a shared folder republished it PIN-LESS — a later
+/// re-mint (after re-materialize) then read empty pins and hard fail-closed
+/// (D-03e), silently defeating revocation/rotation. Pins are PUBLIC ECIES keys:
+/// copied, never rotated. Models `reconstruct_write_body_preserves_cached_recipient_pins`.
+#[cfg(all(test, feature = "fuse"))]
+mod recipient_pin_preservation_tests {
+    use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
+    use crate::test_support::make_test_fs;
+    use base64::Engine as _;
+    use cipherbox_core::node::seal::unseal_node;
+    use cipherbox_core::node::{decode_published_node, decode_write_body, NodeKind};
+    use std::time::SystemTime;
+    use zeroize::Zeroizing;
+
+    fn dir_attrs(ino: u64) -> FileAttrs {
+        let now = SystemTime::now();
+        FileAttrs {
+            ino,
+            size: 0,
+            blocks: 0,
+            atime: now,
+            mtime: now,
+            ctime: now,
+            crtime: now,
+            is_dir: true,
+            perm: 0o777,
+            nlink: 2,
+        }
+    }
+
+    #[tokio::test]
+    async fn build_folder_metadata_preserves_cached_recipient_pins() {
+        let mut fs = make_test_fs();
+
+        let folder_ino = fs.inodes.allocate_ino();
+        let folder_write_key = [22u8; 32];
+        const FOLDER_IPNS: &str = "k51-folder-pins";
+        // Two distinct owner-sealed recipient pins (public ECIES keys — arbitrary
+        // bytes here; a 33-byte compressed key plus a short marker).
+        let pins = vec![vec![0x04u8; 33], vec![0x04u8, 0x11, 0x22, 0x33]];
+        let folder_node_id = crate::fs::uuid_from_ino(folder_ino);
+
+        fs.inodes.insert(InodeData {
+            ino: folder_ino,
+            node_id: folder_node_id.clone(),
+            parent_ino: ROOT_INO,
+            name: "shared".to_string(),
+            kind: InodeKind::Folder {
+                ipns_name: FOLDER_IPNS.to_string(),
+                read_key: Zeroizing::new([21u8; 32]),
+                write_key: Zeroizing::new(folder_write_key),
+                ipns_private_key: Zeroizing::new(vec![5u8; 32]),
+                recipient_pins: pins.clone(),
+                children_loaded: true,
+            },
+            attr: dir_attrs(folder_ino),
+            children: Some(vec![]),
+            write_generation: 0,
+        });
+        if let Some(root) = fs.inodes.get_mut(ROOT_INO) {
+            root.children.get_or_insert_with(Vec::new).push(folder_ino);
+        }
+
+        // The REAL routine republish path.
+        let (published_bytes, _ipk, ipns_name, _old_cid) = fs
+            .build_folder_metadata(folder_ino)
+            .expect("build_folder_metadata should succeed");
+        assert_eq!(ipns_name, FOLDER_IPNS);
+
+        // Decode the sealed node and recover its write-body (sealed under the
+        // folder's OWN write key at generation 0, ROLE_BODY 0x01).
+        let published =
+            decode_published_node(&published_bytes).expect("decode the published node");
+        let write_sealed_b64 = published
+            .write_sealed
+            .expect("a routine folder republish must populate write_sealed");
+        let write_sealed_bytes = base64::engine::general_purpose::STANDARD
+            .decode(write_sealed_b64)
+            .expect("write_sealed is valid base64");
+        let wb_bytes = unseal_node(
+            &write_sealed_bytes,
+            &folder_write_key,
+            &folder_node_id,
+            NodeKind::Folder,
+            0,
+        )
+        .expect("unseal the write-body under the folder write key");
+        let wb = decode_write_body(&wb_bytes).expect("decode the write-body");
+
+        assert_eq!(
+            wb.recipient_pins, pins,
+            "a routine folder republish MUST preserve the cached recipient pins \
+             (D-03e durability) — sealing Vec::new() here silently defeats revocation"
         );
     }
 }
