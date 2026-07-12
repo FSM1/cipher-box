@@ -383,15 +383,20 @@ export function useFolderMutations() {
         const client = getSdkClient();
         const parentPath = buildFolderPath(parentId);
 
+        // Snapshot the loaded subtree BEFORE the SDK delete (mirrors the batch
+        // path): store events fired during deleteWithBehavior could prune
+        // descendant FolderNodes, and the post-delete walk would then miss them.
+        const preDeleteFolders = itemType === 'folder' ? useFolderStore.getState().folders : null;
+
         await deleteWithBehavior(client, parentFolder.ipnsName, itemId, parentPath);
 
         // SDK emits folder:updated -> store subscription updates children.
         // Remove the deleted folder AND every already-loaded descendant
         // FolderNode (walk parentId links) so no orphaned/stale entry survives
         // to be hit by useFolderNavigation's isLoaded fast path.
-        if (itemType === 'folder') {
+        if (itemType === 'folder' && preDeleteFolders) {
           const store = useFolderStore.getState();
-          for (const descendantId of collectDescendantFolderIds(store.folders, itemId)) {
+          for (const descendantId of collectDescendantFolderIds(preDeleteFolders, itemId)) {
             store.removeFolder(descendantId);
           }
           store.removeFolder(itemId);

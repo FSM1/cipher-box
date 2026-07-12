@@ -86,9 +86,14 @@ export function FileDetails({
       <div className="details-section-header">{'// timestamps'}</div>
 
       <DetailRow label="Created">
-        {typeof item.createdAt === 'number' && Number.isFinite(item.createdAt) ? (
+        {typeof item.createdAt === 'number' &&
+        Number.isFinite(item.createdAt) &&
+        item.createdAt > 0 ? (
           <span className="details-value">{formatDate(item.createdAt)}</span>
         ) : (
+          // > 0 also screens the decoder's epoch-0 default (Number(obj.createdAt ?? 0))
+          // for older nodes lacking createdAt, which Number.isFinite alone lets
+          // through as "January 1, 1970".
           <span className="details-value details-value--dim">—</span>
         )}
       </DetailRow>
