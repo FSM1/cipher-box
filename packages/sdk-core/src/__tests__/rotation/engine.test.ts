@@ -3726,4 +3726,135 @@ describe('rotateReadFromNode — rotatedNodes deep-tree parity with Rust (Plan 7
 
     expect(rotatedNodes.size).toBe(3);
   });
+
+  // D-04 (Plan 80-03, SC3 / T-80-08): every rotatedNodes entry's readKey must
+  // be an INDEPENDENT 32-byte copy, non-aliased with the corresponding
+  // parentNewReadKey the walk retains. Not a live bug today (parentNewReadKey
+  // is never zeroed), but a future D-09 zero-on-drop tightening would otherwise
+  // silently zero the returned map entry → the Rust FUSE consumer
+  // (grant_scope.rs::refresh_rotated_inode_read_keys) refreshes an inode key to
+  // all-zeros → mis-decryption / data loss. Mirrors Rust's Zeroizing-clone.
+  it('D-04: each rotatedNodes readKey is a non-aliased, non-zero copy (mutating parentNewReadKey does not affect the entry)', async () => {
+    const rootNode = makeFolderNode({
+      id: NODE_ID,
+      generation: 0,
+      children: [
+        {
+          name: 'folder-b',
+          ipnsName: P7402_FOLDER_B_IPNS,
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'folder-b-sealed==',
+        },
+      ],
+    });
+    const folderBNode = makeFolderNode({
+      id: P7402_FOLDER_B_ID,
+      generation: 0,
+      children: [
+        {
+          name: 'file-c',
+          ipnsName: P7402_FILE_C_IPNS,
+          generation: 0,
+          versionFloor: 0n,
+          readKeySealed: 'file-c-sealed==',
+        },
+      ],
+    });
+    const fileCNode: import('@cipherbox/core').Node = {
+      schema: 'node/v3',
+      kind: 'file',
+      id: P7402_FILE_C_ID,
+      generation: 0,
+      createdAt: 3000,
+      modifiedAt: 3000,
+      children: [],
+    } as import('@cipherbox/core').Node;
+
+    mockFns.resolveIpnsRecord.mockImplementation(async (ipnsName: string) => {
+      const cidByIpns: Record<string, string> = {
+        [NODE_IPNS]: 'bafy-7402-root',
+        [P7402_FOLDER_B_IPNS]: 'bafy-7402-folder-b',
+        [P7402_FILE_C_IPNS]: 'bafy-7402-file-c',
+      };
+      const cid = cidByIpns[ipnsName];
+      if (!cid) return null;
+      return { cid, sequenceNumber: 1n, signatureVerified: true };
+    });
+    mockFns.fetchFromIpfs.mockImplementation(async (_ctx: unknown, cid: string) => {
+      if (cid === 'bafy-7402-root')
+        return new TextEncoder().encode(JSON.stringify(makePublishedNode(NODE_ID, 0, 'folder')));
+      if (cid === 'bafy-7402-folder-b')
+        return new TextEncoder().encode(
+          JSON.stringify(makePublishedNode(P7402_FOLDER_B_ID, 0, 'folder'))
+        );
+      return new TextEncoder().encode(
+        JSON.stringify(makePublishedNode(P7402_FILE_C_ID, 0, 'file'))
+      );
+    });
+    mockFns.unsealNode.mockImplementation(
+      async (published: import('@cipherbox/core').PublishedNode) => {
+        if (published.id === NODE_ID) return rootNode;
+        if (published.id === P7402_FOLDER_B_ID) return folderBNode;
+        if (published.id === P7402_FILE_C_ID) return fileCNode;
+        throw new Error(`unexpected unsealNode call for ${published.id}`);
+      }
+    );
+    mockFns.sealNode.mockImplementation(async (node: import('@cipherbox/core').Node) =>
+      makePublishedNode(node.id, node.generation + 1, node.kind as 'folder' | 'file')
+    );
+    mockFns.sealChildReadKey.mockResolvedValue('7402-resealed==');
+    mockFns.unsealChildReadKey.mockResolvedValue(new Uint8Array(32).fill(0x99));
+    mockFns.publishWithCas.mockResolvedValue({
+      cid: 'bafy-7402-new',
+      newSequenceNumber: 2n,
+      publishedData: [],
+      prunedCids: [],
+    });
+
+    const jobRecord = makeJobRecord({ rootNodeId: NODE_ID });
+    const result = await rotateReadFromNode({
+      rootNodeId: NODE_ID,
+      rootNodeIpnsName: NODE_IPNS,
+      rootReadKey: P7402_ROOT_READ_KEY,
+      rootIpnsPrivateKey: P7402_ROOT_IPNS_KEY,
+      nodeKeySource: (ipnsName: string) => {
+        if (ipnsName === P7402_FOLDER_B_IPNS)
+          return { privateKey: P7402_FOLDER_B_IPNS_KEY, publicKey: P7402_STUB_PUBLIC_KEY };
+        if (ipnsName === P7402_FILE_C_IPNS)
+          return { privateKey: P7402_FILE_C_IPNS_KEY, publicKey: P7402_STUB_PUBLIC_KEY };
+        return undefined;
+      },
+      jobRecord,
+      ctx: createMockContext(),
+    });
+
+    expect(result).toBeDefined();
+    const rotatedNodes = result!.rotatedNodes;
+
+    // Every entry is a non-zero 32-byte array.
+    for (const ipnsName of [NODE_IPNS, P7402_FOLDER_B_IPNS, P7402_FILE_C_IPNS]) {
+      const entry = rotatedNodes.get(ipnsName)!;
+      expect(entry.readKey).toBeInstanceOf(Uint8Array);
+      expect(entry.readKey.length).toBe(32);
+      expect(
+        entry.readKey.some((b) => b !== 0),
+        `${ipnsName} readKey is all zeros`
+      ).toBe(true);
+    }
+
+    // `result.readKey` is the SAME reference the root branch retains as
+    // `ParentTrackingState.parentNewReadKey` (top-level convenience field aliases
+    // rootResult.childReadKey). The rotatedNodes root entry must be a distinct copy.
+    const rootEntry = rotatedNodes.get(NODE_IPNS)!;
+    const rootEntrySnapshot = new Uint8Array(rootEntry.readKey);
+    expect(rootEntry.readKey).not.toBe(result!.readKey); // distinct object, not aliased
+    expect(rootEntry.readKey).toEqual(result!.readKey); // but equal in value (correct key)
+
+    // Simulate the future zero-on-drop of parentNewReadKey: zeroing the retained
+    // reference must NOT corrupt the returned map entry.
+    result!.readKey.fill(0);
+    expect(rootEntry.readKey).toEqual(rootEntrySnapshot); // entry survives unchanged
+    expect(rootEntry.readKey.some((b) => b !== 0)).toBe(true); // still non-zero
+  });
 });

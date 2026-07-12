@@ -66,9 +66,17 @@ export type OwnerReconcileTransport = {
 export function buildGrantRemintCallbacks(
   transport: OwnerReconcileTransport
 ): GrantRemintCallbacks {
+  // D-02 (TS mirror): memoize the sent-grants fetch for the lifetime of this
+  // callbacks bundle (one runOwnerReconcile pass). `queryGrantsFn(nodeId)` is
+  // invoked once per rotated node, so an un-cached `listSentGrants()` fans out
+  // to O(nodes × shares) relay fetches. The memo is closure-scoped (NOT
+  // global/static) so it never leaks state across reconcile passes; the
+  // per-node `rootNodeId` filter stays applied on each call.
+  let cachedGrants: Promise<GrantRow[]> | undefined;
   return {
     queryGrantsFn: async (nodeId: string) => {
-      const grants = await transport.listSentGrants();
+      cachedGrants ??= transport.listSentGrants();
+      const grants = await cachedGrants;
       return grants
         .filter((grant) => grant.rootNodeId === nodeId)
         .map((grant) => ({

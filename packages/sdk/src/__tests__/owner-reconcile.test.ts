@@ -118,6 +118,69 @@ describe('buildGrantRemintCallbacks', () => {
       { shareId: SHARE_ID_SURVIVING, recipientPublicKey: RECIPIENT_PUB_KEY_A, isRevoked: false },
     ]);
   });
+
+  // D-02 (TS mirror, Plan 80-03 / SC2-perf / T-80-09): queryGrantsFn is invoked
+  // once per rotated node during a reconcile pass. Without a per-pass memo, each
+  // call re-fetches transport.listSentGrants() → O(nodes × shares) relay fetches.
+  // The closure-scoped cache in buildGrantRemintCallbacks bounds it to <=1 fetch
+  // while each call still returns the rootNodeId-filtered subset.
+  it('Test 1b: listSentGrants is fetched at most once across multiple queryGrantsFn calls, filtering stays correct per node', async () => {
+    const transport = makeTransport([
+      {
+        shareId: SHARE_ID_SURVIVING,
+        recipientPublicKey: RECIPIENT_PUB_KEY_A,
+        isRevoked: false,
+        rootNodeId: ROOT_NODE_ID,
+      },
+      {
+        shareId: SHARE_ID_OTHER_ROOT,
+        recipientPublicKey: RECIPIENT_PUB_KEY_B,
+        isRevoked: false,
+        rootNodeId: OTHER_NODE_ID,
+      },
+    ]);
+    const callbacks = buildGrantRemintCallbacks(transport);
+
+    // Invoke across multiple nodes within one pass.
+    const rootGrants = await callbacks.queryGrantsFn(ROOT_NODE_ID);
+    const otherGrants = await callbacks.queryGrantsFn(OTHER_NODE_ID);
+    const rootGrantsAgain = await callbacks.queryGrantsFn(ROOT_NODE_ID);
+
+    // Single fetch across all three calls (the memo).
+    expect(transport.listSentGrants).toHaveBeenCalledTimes(1);
+
+    // Per-node rootNodeId filtering is unchanged.
+    expect(rootGrants).toEqual([
+      { shareId: SHARE_ID_SURVIVING, recipientPublicKey: RECIPIENT_PUB_KEY_A, isRevoked: false },
+    ]);
+    expect(otherGrants).toEqual([
+      { shareId: SHARE_ID_OTHER_ROOT, recipientPublicKey: RECIPIENT_PUB_KEY_B, isRevoked: false },
+    ]);
+    expect(rootGrantsAgain).toEqual(rootGrants);
+  });
+
+  it('Test 1c: the cache is scoped per buildGrantRemintCallbacks call — a fresh callbacks bundle re-fetches (no global/static cache)', async () => {
+    const grants: GrantRow[] = [
+      {
+        shareId: SHARE_ID_SURVIVING,
+        recipientPublicKey: RECIPIENT_PUB_KEY_A,
+        isRevoked: false,
+        rootNodeId: ROOT_NODE_ID,
+      },
+    ];
+    const transport = makeTransport(grants);
+
+    const callbacksA = buildGrantRemintCallbacks(transport);
+    await callbacksA.queryGrantsFn(ROOT_NODE_ID);
+    await callbacksA.queryGrantsFn(ROOT_NODE_ID);
+    expect(transport.listSentGrants).toHaveBeenCalledTimes(1);
+
+    // A new reconcile pass (new callbacks bundle) must fetch again — proving the
+    // memo is closure-scoped, not module-global.
+    const callbacksB = buildGrantRemintCallbacks(transport);
+    await callbacksB.queryGrantsFn(ROOT_NODE_ID);
+    expect(transport.listSentGrants).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('runOwnerReconcile', () => {

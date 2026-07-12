@@ -2052,9 +2052,12 @@ export async function rotateReadFromNode(
     // Plan 74-02 (SC1): surface the root's own post-rotation key into the
     // per-node map, keyed by ipnsName — mirrors the Rust root commit branch
     // (crates/sdk/src/rotation/engine.rs, 74-01).
+    // `readKey` is a defensive COPY owned by this collection, safe from a
+    // future zero-on-drop of the aliased `parentNewReadKey: rootResult.childReadKey`
+    // below — mirrors Rust's `Zeroizing<[u8;32]>` clone (D-04, T-80-08).
     rotatedNodes.set(rootNodeIpnsName, {
       ipnsName: rootNodeIpnsName,
-      readKey: rootResult.childReadKey,
+      readKey: new Uint8Array(rootResult.childReadKey),
       generation: rootResult.newGeneration,
       sequenceNumber: rootResult.newSequenceNumber,
     });
@@ -2223,9 +2226,12 @@ export async function rotateReadFromNode(
         // Plan 74-02 (SC1): surface this child's post-rotation key into the
         // per-node map, keyed by its ipnsName — mirrors the Rust BFS child
         // commit branch (crates/sdk/src/rotation/engine.rs, 74-01).
+        // `readKey` is a defensive COPY owned by this collection, safe from a
+        // future zero-on-drop of the aliased `parentNewReadKey: result.childReadKey`
+        // below — mirrors Rust's `Zeroizing<[u8;32]>` clone (D-04, T-80-08).
         rotatedNodes.set(item.childRef.ipnsName, {
           ipnsName: item.childRef.ipnsName,
-          readKey: result.childReadKey,
+          readKey: new Uint8Array(result.childReadKey),
           generation: result.newGeneration,
           sequenceNumber: result.newSequenceNumber,
         });
