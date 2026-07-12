@@ -46,30 +46,30 @@ coverage:
     verification:
       - kind: e2e
         ref: "pnpm --filter @cipherbox/web-e2e test -- recovery.spec.ts"
-        status: fail
+        status: pass
     human_judgment: true
-    rationale: "Deterministic RED. Two root-caused blockers (stale-CORS docker mock [infra] + missing Buffer polyfill in the recovery esbuild bundle breaking eciesjs unwrapKey in-browser [recovery-src defect, out of this plan's scope]). Requires a recovery-src fix before it can go green — see Issues Encountered."
+    rationale: "Now GREEN. The two root-caused blockers were fixed by the orchestrator (commit ac12fea04: Buffer polyfill injected into the recovery esbuild bundle + a splice-corruption fix). Re-run against a CORS-enabled mock-ipns-routing passes: recovery.spec.ts is GREEN (1 passed, recovery walk 589ms). SC1 proven end-to-end — see SC1 status."
 
 duration: 55min
 completed: 2026-07-12
-status: blocked
+status: complete
 ---
 
 # Phase 78 Plan 03: Un-fixme Recovery E2E and SC1 Integration Gate Summary
 
-**recovery.spec.ts is now an active regression test (SC1 exit-grep clean), and it deterministically catches a real, previously-hidden recovery-tool defect: the browser bundle's ECIES key-unwrap throws because the esbuild bundle ships no `Buffer` polyfill.**
+**recovery.spec.ts is now an active regression test (SC1 exit-grep clean). It deterministically caught a real, previously-hidden recovery-tool defect (the browser bundle's ECIES key-unwrap threw because the esbuild bundle shipped no `Buffer` polyfill); the orchestrator fixed it (commit `ac12fea04`) and the spec now passes GREEN — SC1 is proven end-to-end.**
 
 ## Performance
 
 - **Duration:** ~55 min
 - **Completed:** 2026-07-12
-- **Tasks:** 1 of 2 complete (Task 2 blocked by an out-of-scope recovery-src defect)
+- **Tasks:** 2 of 2 complete (Task 2's SC1 proof went GREEN after the orchestrator's out-of-scope recovery-src fix, commit `ac12fea04`)
 - **Files modified:** 1 (`tests/web-e2e/tests/recovery.spec.ts`)
 
 ## Accomplishments
 
 - **Task 1 (DONE):** Un-fixme'd `recovery.spec.ts` — promoted the single `test.fixme(...)` to an active `test(...)`, refreshed the v2-blob header/inline comments to describe the v3 read chain, and deleted the stale `FIXME(recovery-v3)` porting-gap block. The phase exit grep is clean: `grep -rnE 'test\.(fixme|skip)\(' tests/web-e2e/tests/*.spec.ts` returns nothing, and `grep -c "FIXME(recovery-v3)"` is 0.
-- **Task 2 (BLOCKED, fully diagnosed):** The un-fixme'd spec deterministically fails. Two independent root causes were isolated to airtight certainty (node-side proof that data + crypto are correct; browser is the sole failing surface). SC1 is NOT satisfied — the shipped recovery tool cannot recover a v3 vault in the browser without a `recovery-src` fix. The spec is left ACTIVE (not re-deferred), which is exactly its job as a permanent regression guard.
+- **Task 2 (DONE — GREEN):** The un-fixme'd spec originally failed deterministically; two independent root causes were isolated to airtight certainty (node-side proof that data + crypto are correct; browser was the sole failing surface). The orchestrator then fixed the browser-bundle defect (`Buffer` polyfill + a splice-corruption fix, commit `ac12fea04`). Re-running the spec against a CORS-enabled mock-ipns-routing now passes: **`1 passed (10.4s)`**, recovery walk `589ms`. SC1 is satisfied — the shipped recovery tool recovers a seeded v3 vault from `privateKey` alone via the gateway-only walk. The spec stays ACTIVE as a permanent regression guard.
 
 ## Task Commits
 
@@ -112,14 +112,26 @@ Task 2 fails deterministically (retried across multiple runs — not a flake). D
 - **Node proof (identical inputs):** in node the full chain — resolve -> fetch v3 blob (263 bytes, version byte `0x03`) -> `deserializeVaultBlobV3` (encRootReadKey 129 bytes) -> `unwrapKey` -> 32-byte `rootReadKey` — succeeds and the unwrapped key byte-matches `account.rootFolderKey`. So the data, the codec, and the crypto are all correct; the browser bundle is the sole failing surface.
 - **Fix location (NOT this plan — recovery-src / 78-02 territory):** teach the recovery esbuild build (`apps/web/recovery-src/build.ts`) to inject a `Buffer` polyfill (bundle the `buffer` shim and `define`/`inject` `globalThis.Buffer`, likely `process` too), then re-run `recovery:build` so `public/recovery.html` carries a working `Buffer`. This plan's anchor explicitly forbids touching `recovery-src`.
 
-## SC1 status
+## SC1 status — SATISFIED (green-run confirmed)
 
-NOT satisfied. Task 1's exit-grep criterion is met and the spec is active, but the SC1 integration proof (a passing recovery walk) cannot go green until the `recovery-src` `Buffer`-polyfill defect (Issue 2) is fixed, and — for the e2e to run against the standard docker stack — the stale mock-ipns-routing image is rebuilt with the CORS hook (Issue 1). Neither is in this plan's file scope.
+**Update (2026-07-12, post-fix green run):** SC1 is now proven end-to-end. The blocking `recovery-src` `Buffer`-polyfill defect (Issue 2) was fixed by the orchestrator in **commit `ac12fea04`**, which also fixed a re-splice bug that corrupted `recovery.html` on bundles containing `$` sequences:
+
+1. **Buffer polyfill** — added a `buffer` devDep and injected a buffer-shim in `recovery-src/build.ts`; `apps/web/public/recovery.html` was rebuilt (345,761 bytes, single bundle block) so `globalThis.Buffer` is now defined in-browser and `eciesjs`' internal `Buffer.from(...)` works — `unwrapKey` no longer throws.
+2. **Splice fix** — replaced the string-replace injection with a function replacement so `$`-bearing bundles are not corrupted.
+
+Neither fix is in this plan's file scope (recovery-src / 78-02 territory); this plan (78-03) only re-runs and documents.
+
+### Green-run record
+
+- **Command:** `pnpm --filter @cipherbox/web-e2e test -- recovery.spec.ts` (from the worktree root; Playwright auto-booted API :3000 + web :5173, reused a CORS-enabled mock-ipns-routing on :3001).
+- **Result:** **GREEN — `1 passed (10.4s)`**, recovery walk itself `589ms`. The browser tool recovered the seeded v3 vault file from `privateKey` alone via the gateway-only chain (IPNS resolve → IPFS fetch → v3 vault-blob decrypt → sealed-child walk → file decrypt), with the CipherBox API absent from the recovery loop (D-01/D-02 upheld — the API only appears in `beforeAll` seeding).
+- **Infra note (Issue 1 still stands for the standard stack):** the committed CORS hook in `tools/mock-ipns-routing/src/index.ts` is correct, but the running docker `cipherbox-mock-ipns-routing` image predates it and emits no CORS headers. For this run it was temporarily stopped and replaced with a fresh CORS-enabled instance of the same mock on :3001 (`node tools/mock-ipns-routing/dist/index.js`), then the docker container was restored. A durable fix is `docker compose build mock-ipns-routing && docker compose up -d mock-ipns-routing` so the standard stack serves CORS.
+- **Env note (Issue 0 still stands):** the run exported `SDK_E2E_SECRET=$TEST_LOGIN_SECRET` because `tests/web-e2e/.env` sets only `TEST_LOGIN_SECRET` (the seeding harness reads `SDK_E2E_SECRET`). Not committed. Follow-up candidate: wire `SDK_E2E_SECRET` into the web-e2e env or have the harness also read `TEST_LOGIN_SECRET`.
 
 ## Next Phase Readiness
 
-- **Blocker for SC1:** a `recovery-src` fix is required (Issue 2). Recommend a follow-up plan (78-04 or a 78-02 rework) that: (a) adds the `Buffer` polyfill to `apps/web/recovery-src/build.ts` and re-runs `recovery:build`; (b) rebuilds the docker `mock-ipns-routing` image so its committed CORS hook is live; and optionally (c) wires `SDK_E2E_SECRET` into the web-e2e env. The now-active `recovery.spec.ts` will verify the fix end-to-end.
-- The spec itself is production-ready and correctly gates the recovery path — it is intentionally RED until the tool is fixed.
+- **SC1 blocker cleared:** the recovery-tool defect is fixed (`ac12fea04`) and `recovery.spec.ts` is GREEN. The spec is a live permanent regression guard for the recovery path.
+- **Remaining infra follow-ups (non-blocking for SC1, needed for CI/standard-stack repeatability):** (a) rebuild the docker `mock-ipns-routing` image so its committed CORS hook is live; (b) optionally wire `SDK_E2E_SECRET` into the web-e2e env.
 
 ## Self-Check: PASSED
 
