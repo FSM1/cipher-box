@@ -148,6 +148,17 @@ pub trait RotationTransport {
 
     /// Hard-revoke a single share/invite grant by ID — `DELETE /shares/:shareId`.
     async fn revoke_share(&self, share_id: &str) -> Result<(), RotationError>;
+
+    /// D-03d/D-03e (Plan 80-06): the node's OWN owner-sealed recipient pin list
+    /// (raw ECIES pubkey bytes), read OFFLINE. Production ([`ApiClientTransport`])
+    /// resolves it from the already-materialized `InodeTable` pin cache (80-05)
+    /// — NO extra `GET /shares/sent` or network fetch; tests seed it in-memory.
+    /// An absent/non-materialized node yields an empty list (the caller treats
+    /// empty-at-re-mint as a hard fail-closed, D-03e).
+    async fn get_recipient_pubkey_pins(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<Vec<u8>>, RotationError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +340,19 @@ impl<T: RotationTransport> RotationDeps for FuseRotationDeps<T> {
     /// for engine-contract completeness.
     async fn delete_grant(&self, share_id: &str) -> Result<(), RotationError> {
         self.transport.revoke_share(share_id).await
+    }
+
+    /// D-03d/D-03e (Plan 80-06): resolves the node's OWN owner-sealed recipient
+    /// pins OFFLINE via the transport seam (production: the `InodeTable` pin
+    /// cache surfaced in 80-05; no extra network fetch — D-03a). The engine's
+    /// `re_mint_grants_rooted_at` fails the node's re-mint closed if
+    /// `grant.recipient_public_key` is not among these pins (T-80-15) or the
+    /// list is empty (D-03e no-legacy, T-80-16).
+    async fn get_recipient_pubkey_pins(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<Vec<u8>>, RotationError> {
+        self.transport.get_recipient_pubkey_pins(node_id).await
     }
 
     /// D-01/D-03: ECIES-wraps `wrapped_b64`'s raw key material under the
@@ -576,6 +600,42 @@ impl RotationTransport for ApiClientTransport<'_> {
                 ))
             })
     }
+
+    /// D-03d/D-03e (Plan 80-06): reads the node's cached recipient pins OFFLINE
+    /// from the already-materialized `InodeTable` (80-05) — NO network fetch.
+    /// A node not locally materialized returns an empty list, so a later
+    /// re-mint fails closed (D-03e), rather than trusting the relay pubkey.
+    async fn get_recipient_pubkey_pins(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<Vec<u8>>, RotationError> {
+        Ok(find_recipient_pins(self.inodes, node_id))
+    }
+}
+
+/// Scans the locally-mounted `InodeTable` for the inode whose stable `node_id`
+/// matches, returning its cached (owner-sealed, surfaced in 80-05) recipient
+/// pin list — the D-03d authorization anchor for the re-mint wrap. Returns an
+/// empty list when the node is not locally materialized (fail-closed at the
+/// caller, D-03e). Mirrors `find_grant_root_state`'s `find_map` idiom, keyed on
+/// `node_id` (the value `re_mint_grants_rooted_at` passes) rather than
+/// `ipns_name`.
+fn find_recipient_pins(inodes: &InodeTable, node_id: &str) -> Vec<Vec<u8>> {
+    inodes
+        .inodes
+        .values()
+        .find_map(|inode| {
+            if inode.node_id != node_id {
+                return None;
+            }
+            let pins = match &inode.kind {
+                InodeKind::Root { recipient_pins, .. } => recipient_pins,
+                InodeKind::Folder { recipient_pins, .. } => recipient_pins,
+                InodeKind::File { recipient_pins, .. } => recipient_pins,
+            };
+            Some(pins.clone())
+        })
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -850,6 +910,11 @@ mod tests {
         /// If set, the NEXT `revoke_share` call returns this error message
         /// wrapped in `RotationError::RotateFailed`, then clears.
         fail_next_revoke_share: Option<String>,
+        /// node_id -> the node's owner-sealed recipient pin list (raw ECIES
+        /// pubkey bytes), returned verbatim by `get_recipient_pubkey_pins`
+        /// (Plan 80-06, D-03d/D-03e). An absent entry yields an empty list —
+        /// the pin-absent hard fail-closed case (D-03e).
+        pins_by_node: HashMap<String, Vec<Vec<u8>>>,
     }
 
     /// In-memory `RotationTransport` fake — no live IPNS/IPFS round trip.
@@ -913,6 +978,17 @@ mod tests {
         /// The NEXT `revoke_share` call fails with `RotationError::RotateFailed(message)`.
         fn fail_next_revoke_share(&self, message: &str) {
             self.0.lock().unwrap().fail_next_revoke_share = Some(message.to_string());
+        }
+
+        /// Seeds the owner-sealed recipient pin list returned by
+        /// `get_recipient_pubkey_pins` for `node_id` (Plan 80-06). Not seeding
+        /// a node leaves its pin list empty (the D-03e pin-absent case).
+        fn seed_pins(&self, node_id: &str, pins: Vec<Vec<u8>>) {
+            self.0
+                .lock()
+                .unwrap()
+                .pins_by_node
+                .insert(node_id.to_string(), pins);
         }
     }
 
@@ -1000,6 +1076,20 @@ mod tests {
             }
             inner.revoked_shares.push(share_id.to_string());
             Ok(())
+        }
+
+        async fn get_recipient_pubkey_pins(
+            &self,
+            node_id: &str,
+        ) -> Result<Vec<Vec<u8>>, RotationError> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .pins_by_node
+                .get(node_id)
+                .cloned()
+                .unwrap_or_default())
         }
     }
 
@@ -1727,5 +1817,137 @@ mod tests {
             "a rotation job must fetch GET /shares/sent at most once (got {})",
             transport.collect_sent_shares_count()
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // D-03d / D-03e (Plan 80-06): fail-closed recipient-pin binding at re-mint
+    //
+    // A compromised relay could substitute the `recipient_public_key` that
+    // round-trips through `GET /shares/sent`, causing the owner to ECIES-wrap
+    // the fresh post-rotation read key TO THE ATTACKER. Before every wrap,
+    // `re_mint_grants_rooted_at` must verify the recipient is a member of the
+    // node's OWN owner-sealed `recipient_pins` (read offline from the InodeTable
+    // cache) and fail the WHOLE node's re-mint closed on a non-member (D-03d) OR
+    // an absent/empty pin list (D-03e no-legacy) — never a per-grant skip.
+    // -----------------------------------------------------------------------
+
+    /// Wires a childless grant-root at seq 1 plus a single NON-revoked grant
+    /// rooted at `ROOT_ID` whose recipient is `recipient_pub`, so a
+    /// `rotate_read_from_node` walk reaches the re-mint wrap for that recipient.
+    fn seed_remint_pin_harness(transport: &FakeTransport, recipient_pub: &[u8]) {
+        let read_key = [7u8; 32];
+        transport.seed(
+            "k51root",
+            "cid-root-v1",
+            1,
+            seal_for_seed(&folder_fixture(0), &read_key),
+        );
+        transport.seed_sent_shares(vec![sent_share_fixture(
+            "share-active",
+            ROOT_ID,
+            &format!(
+                "0x{}",
+                cipherbox_crypto::utils::bytes_to_hex(recipient_pub)
+            ),
+        )]);
+    }
+
+    /// Test A (D-03d mismatch): the grant's recipient is NOT among the node's
+    /// owner-sealed pins (a relay-substituted pubkey) — the node's re-mint
+    /// fails closed and NO grant is wrapped/updated.
+    #[tokio::test]
+    async fn re_mint_fails_closed_when_recipient_is_not_pinned() {
+        let transport = FakeTransport::default();
+        let (_sk, pk) = ecies::utils::generate_keypair();
+        seed_remint_pin_harness(&transport, &pk.serialize());
+
+        // Pin a DIFFERENT recipient — the grant's recipient is not a member.
+        let (_other_sk, other_pk) = ecies::utils::generate_keypair();
+        transport.seed_pins(ROOT_ID, vec![other_pk.serialize().to_vec()]);
+
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+        let read_key = [7u8; 32];
+        let mut job = RotationJobRecord::new(ROOT_ID);
+
+        let result =
+            cipherbox_sdk::rotate_read_from_node(&deps, ROOT_ID, "k51root", &read_key, &mut job)
+                .await;
+
+        assert!(
+            result.is_err(),
+            "a relay-substituted (unpinned) recipient must fail the node's re-mint closed (D-03d), got {result:?}"
+        );
+        assert!(
+            transport.updated_grants().is_empty(),
+            "no grant may be re-minted/wrapped on the fail-closed path, got {:?}",
+            transport.updated_grants()
+        );
+    }
+
+    /// Test B (D-03e absent): the node has an EMPTY pin list at re-mint — a
+    /// hard fail-closed (no-legacy, no-TOFU), NOT a silent skip. No grant is
+    /// wrapped/updated.
+    #[tokio::test]
+    async fn re_mint_fails_closed_when_pin_list_is_empty() {
+        let transport = FakeTransport::default();
+        let (_sk, pk) = ecies::utils::generate_keypair();
+        seed_remint_pin_harness(&transport, &pk.serialize());
+        // No pins seeded for ROOT_ID -> empty/absent pin list (D-03e).
+
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+        let read_key = [7u8; 32];
+        let mut job = RotationJobRecord::new(ROOT_ID);
+
+        let result =
+            cipherbox_sdk::rotate_read_from_node(&deps, ROOT_ID, "k51root", &read_key, &mut job)
+                .await;
+
+        assert!(
+            result.is_err(),
+            "an absent/empty pin list at re-mint is a hard fail-closed (D-03e), got {result:?}"
+        );
+        assert!(
+            transport.updated_grants().is_empty(),
+            "no grant may be re-minted on the pin-absent path, got {:?}",
+            transport.updated_grants()
+        );
+    }
+
+    /// Test C (match): the grant's recipient IS pinned — the node re-mints
+    /// exactly that recipient (the pre-80-06 success path is preserved).
+    #[tokio::test]
+    async fn re_mint_succeeds_when_recipient_is_pinned() {
+        let transport = FakeTransport::default();
+        let (_sk, pk) = ecies::utils::generate_keypair();
+        let recipient_pub = pk.serialize().to_vec();
+        seed_remint_pin_harness(&transport, &recipient_pub);
+        transport.seed_pins(ROOT_ID, vec![recipient_pub.clone()]);
+
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+        let read_key = [7u8; 32];
+        let mut job = RotationJobRecord::new(ROOT_ID);
+
+        let result =
+            cipherbox_sdk::rotate_read_from_node(&deps, ROOT_ID, "k51root", &read_key, &mut job)
+                .await;
+
+        assert!(
+            result.is_ok(),
+            "a pinned recipient must re-mint successfully: {:?}",
+            result.err()
+        );
+        let updated = transport.updated_grants();
+        assert_eq!(
+            updated.len(),
+            1,
+            "exactly the pinned recipient is re-minted, got {updated:?}"
+        );
+        assert_eq!(updated[0].0, "share-active");
     }
 }
