@@ -1145,6 +1145,29 @@ Plans:
 2. Scope-exit re-mint binds the new read key to a verified recipient public key (pinned/verified rather than blindly server-supplied), and refetches `/shares/sent` once per rotation job (cached), not once per rotated node.
 3. TS `rotatedNodes` stores a defensive 32-byte copy of `readKey` (no aliasing with `parentNewReadKey`), matching Rust parity.
 
+**Plans**: 8 plans (4 waves)
+
+Plans:
+**Wave 1**
+
+- [ ] 80-01-PLAN.md — D-03b: NodeWriteBody recipientPins field + conditional-emit codec + cross-language JSON KAT + schema doc (wave 1)
+- [ ] 80-02-PLAN.md — D-01/D-02: FUSE write-body reconstruction + job-scoped /shares/sent cache + replay durability regression (wave 1)
+- [ ] 80-03-PLAN.md — D-04/D-02: TS rotatedNodes defensive copy + owner-reconcile listSentGrants cache (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 80-04-PLAN.md — D-03a/c: sdk-core pin write/read/verify helpers + pin-preserving publish + client wrappers (wave 2)
+- [ ] 80-05-PLAN.md — D-03a/D-01: Rust pin plumbing (ResolvedOwnedChild + InodeTable cache + reconstruction preservation) (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 80-06-PLAN.md — D-03d/e: Rust re-mint fail-closed pin enforcement + get_recipient_pubkey_pins seam (wave 3)
+- [ ] 80-07-PLAN.md — D-03d/e: TS re-mint fail-closed pin enforcement + getPinsFn seam (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 80-08-PLAN.md — D-03c/d: web issuance pin write + upgrade/reconcile fail-closed enforcement (wave 4)
+
 ---
 
 ### Phase 81: TEE Republish and IPNS-Record Correctness
