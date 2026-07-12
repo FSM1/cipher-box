@@ -37,3 +37,7 @@ owner-reconcile `queryGrantsFn` for parity.
 A scope-exit rotation over an N-node subtree performs at most ONE
 `/shares/sent` fetch (not N), and re-mint results are unchanged (retained
 recipients re-minted, revoked recipients cut by absence).
+
+## Resolution
+
+Resolved by Phase 80 (rotation-write-plane-and-re-mint-durability), shipped on branch `feat/rotation-write-plane-and-re-mint-durability`. D-01/D-02/D-03/D-04 implemented and verified (SDK-E2E 106/106, fuse 130).

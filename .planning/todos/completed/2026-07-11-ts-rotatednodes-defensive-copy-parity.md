@@ -44,3 +44,7 @@ Store a defensive copy for robustness + Rust parity (cheap, 32 bytes):
 `parentNewReadKey`; add a TS regression test asserting every `rotatedNodes`
 value's `readKey` is non-zero and equals the node's expected new key after
 `rotateReadFromNode`.
+
+## Resolution
+
+Resolved by Phase 80 (rotation-write-plane-and-re-mint-durability), shipped on branch `feat/rotation-write-plane-and-re-mint-durability`. D-01/D-02/D-03/D-04 implemented and verified (SDK-E2E 106/106, fuse 130).
