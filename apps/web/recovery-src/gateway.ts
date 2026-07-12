@@ -23,8 +23,9 @@
  * are re-hashed against the CID's multihash (single raw blocks directly;
  * multi-block dag-pb files via a verified raw-block walk) so a hostile gateway
  * cannot silently swap CTR (auth-tag-less) ciphertext for corrupted bytes
- * (T-78-04). Gateways that cannot serve verifiable raw blocks fall back to the
- * plain assembled fetch (unverified) to preserve availability.
+ * (T-78-04). It fails closed — a gateway that cannot serve verifiable raw blocks
+ * throws rather than returning unverified assembled bytes, so a hostile gateway
+ * cannot force a downgrade; the best-effort walk skips the per-object failure.
  */
 
 import { parseIpnsRecord, verifyIpnsRecordSignatureDetailed } from '@cipherbox/crypto';
@@ -292,23 +293,29 @@ async function fetchVerifiedDag(cid: CID, ipfsGatewayUrl: string): Promise<Uint8
  * GCM-sealed envelopes and GCM file bodies fail closed on tampering via their
  * auth-tag, but CTR (large-file) bodies carry no auth tag — this content-address
  * check closes that gap (T-78-04). Single raw blocks are verified directly;
- * multi-block dag-pb files are reconstructed from verified raw blocks. A gateway
- * that cannot serve verifiable raw blocks falls back to a plain assembled fetch
- * (UNVERIFIED) so recovery still works — but a genuine hash mismatch is a hard
- * reject and is never downgraded to the fallback.
+ * multi-block dag-pb files are reconstructed from verified raw blocks.
+ *
+ * Fail-closed (no unverified fallback): if a gateway cannot serve verifiable raw
+ * blocks, this THROWS rather than returning unauthenticated assembled bytes — a
+ * hostile gateway must not be able to force a downgrade and swap CTR ciphertext.
+ * The best-effort walk catches and skips a per-object failure, so one
+ * unverifiable body never aborts the whole recovery. Small/raw content
+ * (envelopes, small files) is verified from the plain `/ipfs/` response and
+ * needs no raw-block support, so it recovers on any gateway.
  *
  * @param cid - The content CID to fetch.
  * @param ipfsGatewayUrl - IPFS gateway base URL (e.g. "https://ipfs.io").
- * @returns The verified (or, on unsupported gateways, best-effort) content bytes.
- * @throws if the gateway responds non-2xx or the content fails its hash check.
+ * @returns The content-address-verified content bytes.
+ * @throws if the CID is unparseable, the gateway responds non-2xx, the gateway
+ *   cannot serve verifiable raw blocks, or the content fails its hash check.
  */
 export async function fetchFromIpfs(cid: string, ipfsGatewayUrl: string): Promise<Uint8Array> {
   let parsed: CID;
   try {
     parsed = CID.parse(cid);
   } catch {
-    // Not a parseable CID — fall back to the raw assembled fetch (unverified).
-    return fetchAssembled(cid, ipfsGatewayUrl);
+    // Fail closed: an unparseable CID cannot be content-address-verified.
+    throw new Error(`invalid CID, cannot verify content: ${cid}`);
   }
 
   // Raw single block: the plain `/ipfs/<cid>` response bytes ARE the addressed
@@ -320,16 +327,10 @@ export async function fetchFromIpfs(cid: string, ipfsGatewayUrl: string): Promis
   }
 
   // dag-pb / CIDv0: the assembled response is reconstructed, not the block, so it
-  // cannot be hashed against the root multihash. Rebuild from verified blocks.
-  try {
-    return await fetchVerifiedDag(parsed, ipfsGatewayUrl);
-  } catch (err) {
-    if (err instanceof RawBlockUnsupportedError) {
-      // Availability fallback (D-04): gateway can't serve verifiable raw blocks.
-      return fetchAssembled(cid, ipfsGatewayUrl);
-    }
-    throw err;
-  }
+  // cannot be hashed against the root multihash. Rebuild from verified blocks —
+  // and fail closed (propagate RawBlockUnsupportedError / hash mismatch) rather
+  // than ever handing back unverified assembled bytes.
+  return fetchVerifiedDag(parsed, ipfsGatewayUrl);
 }
 
 /**
