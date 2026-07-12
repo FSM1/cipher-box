@@ -125,6 +125,13 @@ async function main(): Promise<void> {
       readKey: rootReadKey,
       writeKey: rootWriteKey,
       writeChildren: rootNode.writeBody.writeChildren,
+      // D-03 (Plan 80): a write-body reseal (writeKey present) now REQUIRES a
+      // recipientPins snapshot — omitting it would erase any owner-sealed pins.
+      // This bump republishes the root UNCHANGED, so preserve its current pins
+      // verbatim (the vault root is unpinned in practice, so this is [] — but
+      // read it from the write-body rather than hardcoding, so a pinned root
+      // round-trips its pins too).
+      recipientPins: rootNode.writeBody.recipientPins ?? [],
       ipnsPrivateKey: rootNode.writeBody.ipnsPrivateKey,
       ipnsName: rootIpnsName,
       sequenceNumber: rootSequenceNumber,

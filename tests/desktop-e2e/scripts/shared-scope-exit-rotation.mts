@@ -44,9 +44,17 @@ import {
   resolveFileMetadata,
   resolveIpnsRecord,
   fetchFromIpfs,
+  updateFolderMetadataAndPublish,
+  appendRecipientPin,
   type SdkContext,
 } from '@cipherbox/sdk-core';
-import { unsealChildReadKey, type PublishedNode, type SealedChildRef } from '@cipherbox/core';
+import {
+  unsealChildReadKey,
+  unsealChildWriteKey,
+  unsealNode,
+  type PublishedNode,
+  type SealedChildRef,
+} from '@cipherbox/core';
 import { wrapKey, unwrapKey, bytesToHex, hexToBytes, clearBytes } from '@cipherbox/crypto';
 import { authenticate, buildSdkContext, parseCliArgs } from '../../e2e-helpers/auth';
 
@@ -343,7 +351,88 @@ async function main(): Promise<void> {
   if (!vaultKeyBlob) {
     throw new Error('Vault key blob not found');
   }
-  const { rootReadKey } = vaultKeyBlob;
+  const { rootReadKey, rootWriteKey } = vaultKeyBlob;
+
+  /**
+   * Pin a recipient's pubkey onto a shared grant-root folder's owner-sealed
+   * write-body (D-03c issuance write), mirroring the real web client's
+   * addRecipientPubkeyPin pin-first share flow (ShareDialog.tsx).
+   *
+   * Every grant root in this script is a DIRECT child of the vault root, so its
+   * write key is derived from the vault root's write key via the grant root's
+   * WriteChildRef (D-07 write plane). The pin is what the desktop scope-exit
+   * rotation's re-mint (FuseRotationDeps::get_recipient_pubkey_pins ->
+   * re_mint_grants_rooted_at, D-03d/D-03e) verifies the retained recipient
+   * against BEFORE re-wrapping the rotated read key. A raw `POST /shares`
+   * alone (no pin) leaves the grant root pin-less, so the re-mint fails closed
+   * ("0 pinned"), aborting the rotation mid-flight and cascading into
+   * AES-GCM refresh failures — exactly the D-16 regression this restores.
+   *
+   * updateFolderMetadataAndPublish runs a CAS-409 loop (maxAttempts 3) that
+   * UNIONs recipient pins, so this is race-safe against the mount's concurrent
+   * publishing of the same grant root. Pins are public ECIES keys — copied,
+   * never rotated.
+   */
+  const pinRecipientOnGrantRoot = async (
+    grantRootRef: SealedChildRef,
+    grantRootReadKey: Uint8Array,
+    grantRootNodeId: string,
+    recipientPublicKey: Uint8Array
+  ): Promise<void> => {
+    // Vault-root write-body -> the grant root's WriteChildRef (keyed by the
+    // child node id, D-07), then derive the grant root's own write key.
+    const rootPublished = await fetchPublishedNode(rootIpnsName, ownerCtx);
+    const rootNode = await unsealNode(rootPublished, rootReadKey, rootWriteKey);
+    const wcr = rootNode.writeBody?.writeChildren.find((w) => w.childId === grantRootNodeId);
+    if (!wcr) {
+      throw new Error(
+        `pinRecipientOnGrantRoot: no WriteChildRef for grant root ${grantRootNodeId} under the vault root`
+      );
+    }
+    const grantRootWriteKey = await unsealChildWriteKey(
+      wcr.writeKeySealed,
+      rootWriteKey,
+      grantRootNodeId,
+      'folder',
+      grantRootRef.generation
+    );
+
+    // Grant root's own write-body -> current pins + writeChildren + signing seed.
+    const grantRootPublished = await fetchPublishedNode(grantRootRef.ipnsName, ownerCtx);
+    const grantRootNode = await unsealNode(grantRootPublished, grantRootReadKey, grantRootWriteKey);
+    if (!grantRootNode.writeBody) {
+      throw new Error(
+        `pinRecipientOnGrantRoot: grant root ${grantRootRef.ipnsName} has no write-body`
+      );
+    }
+    const nextPins = appendRecipientPin(
+      grantRootNode.writeBody.recipientPins ?? [],
+      recipientPublicKey
+    );
+    const resolved = await resolveIpnsRecord(grantRootRef.ipnsName, ownerCtx);
+    if (!resolved) {
+      throw new Error(
+        `pinRecipientOnGrantRoot: grant root ${grantRootRef.ipnsName} did not resolve`
+      );
+    }
+    await updateFolderMetadataAndPublish({
+      children: grantRootNode.children ?? [],
+      baseChildren: grantRootNode.children ?? [],
+      readKey: grantRootReadKey,
+      writeKey: grantRootWriteKey,
+      writeChildren: grantRootNode.writeBody.writeChildren,
+      recipientPins: nextPins,
+      ipnsPrivateKey: grantRootNode.writeBody.ipnsPrivateKey,
+      ipnsName: grantRootRef.ipnsName,
+      sequenceNumber: resolved.sequenceNumber,
+      nodeId: grantRootNodeId,
+      nodeGeneration: grantRootNode.generation,
+      ctx: ownerCtx,
+    });
+    console.log(
+      `  pinned recipient on grant root ${grantRootRef.ipnsName} (${nextPins.length} pin(s) now sealed)`
+    );
+  };
 
   try {
     // -----------------------------------------------------------------
@@ -392,6 +481,14 @@ async function main(): Promise<void> {
     });
     const shareId: string = shareRes.data.shareId;
     console.log(`Created share ${shareId} for ${bobEmail} rooted at ${grantRootIpnsName}`);
+
+    // D-03c (Plan 80): pin Bob's pubkey onto the grant root's owner-sealed
+    // write-body — the real web share flow does this (pin-first), and the
+    // desktop scope-exit re-mint fails closed without it ("0 pinned", D-03e).
+    // Done BEFORE the sent_shares wait below so the mount's periodic metadata
+    // refresh materializes the pin onto the grant-root inode before the delete.
+    await pinRecipientOnGrantRoot(sharedRef, sharedFolderReadKey, grantRootNodeId, bobPublicKey);
+    nudge(join(args.mount, sharedFolderName));
 
     // Bob unwraps his copy of the key WHILE the share is active -- a positive
     // control proving the grant genuinely worked (so "cut off after rotation"
@@ -743,6 +840,16 @@ async function main(): Promise<void> {
       `Created deep-grant shares ${eveShareId} (Eve, will be revoked) and ${carolShareId} (Carol, retained)`
     );
 
+    // D-03c (Plan 80): pin BOTH recipients onto the deep grant root's write-body
+    // (mirrors the web pin-first share flow). Carol is the RETAINED recipient the
+    // re-mint must verify against and re-wrap (D-03d); Eve is revoked before the
+    // delete so her grant is hard-deleted and never re-minted, but pinning her too
+    // matches the web (pin-every-share) and is harmless (a stale pin grants
+    // nothing). Without Carol's pin the deep re-mint fails closed ("0 pinned").
+    await pinRecipientOnGrantRoot(deepGrantRef, deepGrantReadKey, deepGrantNodeId, eve.publicKey);
+    await pinRecipientOnGrantRoot(deepGrantRef, deepGrantReadKey, deepGrantNodeId, carol.publicKey);
+    nudge(join(args.mount, deepGrantFolderName));
+
     // Positive control: BOTH recipients independently derive the grant-root
     // key, then walk it down to folderB, fileC, and fileSibling THEMSELVES --
     // SealedChildRef.readKeySealed is sealed only under the PARENT read key,
@@ -1075,6 +1182,25 @@ async function main(): Promise<void> {
     console.log(
       `Created rename-overwrite shares ${frankShareId} (Frank, will be revoked) and ${graceShareId} (Grace, retained)`
     );
+
+    // D-03c (Plan 80): pin both recipients onto the rename-overwrite grant root's
+    // write-body. Grace is the RETAINED recipient the re-mint re-wraps (D-03d);
+    // Frank is revoked before the rename so he is never re-minted. Without
+    // Grace's pin the re-mint fails closed ("0 pinned"), aborting the covered
+    // overwrite-rename's scope-exit rotation.
+    await pinRecipientOnGrantRoot(
+      renameFolderRef,
+      renameFolderReadKey,
+      renameFolderNodeId,
+      frank.publicKey
+    );
+    await pinRecipientOnGrantRoot(
+      renameFolderRef,
+      renameFolderReadKey,
+      renameFolderNodeId,
+      grace.publicKey
+    );
+    nudge(join(args.mount, renameFolderName));
 
     const frankReceivedRes = await frank.ctx.axiosInstance!.get('/shares/received');
     const frankReceivedShare = (
