@@ -281,7 +281,7 @@ export function ShareDialog({
       setIsSharing(false);
       itemReadKey?.fill(0);
     }
-  }, [pubKeyInput, item, folderKey, permission, parentFolderId]);
+  }, [pubKeyInput, item, folderKey, permission, parentFolderId, kind]);
 
   const handleRevoke = useCallback(async (shareId: string) => {
     setRevokingId(shareId);
