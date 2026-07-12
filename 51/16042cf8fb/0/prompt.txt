@@ -625,3 +625,104 @@ sorry meant 78
 <result>PR #613 is open. Let me check whether the release bot has pushed its `chore(release)` commit yet (I'll need to fetch+rebase before my next push).</result>
 <worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a5838681bf2319bc2</worktreePath><worktreeBranch>worktree-agent-a5838681bf2319bc2</worktreeBranch></worktree>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>bxsk8tbid</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/bxsk8tbid.output</output-file>
+<status>completed</status>
+<summary>Background command "Background watch #613 CI to completion" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+by the time the 4 fixes land, coderabbit quota will have reset (4 more minutes) so expect a thorough review there as well.
+
+---
+
+<task-notification>
+<task-id>abe7b6dbe7a8ba14d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/abe7b6dbe7a8ba14d.output</output-file>
+<status>failed</status>
+<summary>Agent "Fix 4 Greptile findings on 78" failed: Agent terminated early due to an API error: API Error: Connection closed mid-response. The response above may be incomplete.</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Now let me build crypto (dist consumed by recovery bundle), then build the recovery bundle to verify the new deps bundle correctly.</result>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe7b6dbe7a8ba14d</worktreePath><worktreeBranch>worktree-agent-abe7b6dbe7a8ba14d</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>abe7b6dbe7a8ba14d</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/abe7b6dbe7a8ba14d.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix 4 Greptile findings on 78" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All done. Final state: **0 unresolved threads (15/15 resolved), 26 CI checks pass / 4 skip / 0 fail**, PR not merged.
+
+## Summary
+
+**Branch tip:** `a1583993c` (pushed to `feat/recovery-tool-v3-vault-load-guards-web-ux-and-ci-guards`, PR #613)
+
+### The 4 fixes
+
+**1. Expired-but-signed IPNS records no longer hard-stop recovery** — `caa90c048`
+- `packages/crypto/src/ipns/verify-record.ts`: added `verifyIpnsRecordSignatureDetailed` returning a `valid | expired | invalid` verdict. It calls the `ipns` validator and distinguishes `RecordExpiredError` (signature good, EOL lapsed → `expired`) from `SignatureVerificationError`/structural failures (→ `invalid`). Strict `verifyIpnsRecordSignature` now delegates (`=== 'valid'`), preserving the production read chain's reject-expired semantics.
+- `apps/web/recovery-src/gateway.ts:~108`: rung 1 accepts `valid`+`expired`, rejects only `invalid` — a stale-but-authentic record's value is used instead of aborting before the fallback rungs.
+
+**2. Fetched IPFS bytes verified against the CID multihash** — `d0f57dad0` + `bc2cac059`
+- `apps/web/recovery-src/gateway.ts`: `fetchFromIpfs` now content-address-verifies every block. Raw single blocks (envelopes, small files, vault blob) are re-hashed (sha2-256) against the CID and compared directly from the plain `/ipfs/` response. Multi-block dag-pb files are reconstructed from raw blocks fetched via the trustless `?format=raw` API (`@ipld/dag-pb` + `ipfs-unixfs`), each verified against its own CID. This closes the CTR (no-auth-tag) tamper gap. Stays SDK/API-free.
+- Follow-up `bc2cac059` (from a new Greptile P1): removed the unverified availability fallback — it now fails closed (propagates on unparseable CID / unsupported raw-block / hash mismatch) so a hostile gateway can't force a downgrade; the best-effort walk skips per-object failures.
+
+**3. Cycle guard in the folder walk** — `716a515ff`
+- `apps/web/recovery-src/walk.ts`: `walkFolder` threads a `visited` set keyed by IPNS name (seeded with the root name via `recoverTree`, wired in `main.ts`); a revisit is reported (`warn`) and skipped, so a corrupted/rolled-back graph terminates instead of looping.
+
+**4. Bin restore status now consumed + reset** — `6448e6365`
+- `apps/web/src/components/file-browser/BinBrowser.tsx` + `bin-browser.css`: subscribes to `useRestoreStore`, renders a restore status affordance (`data-testid="restore-status"`/`restore-spinner`), resets stale status on mount + unmount, auto-clears the terminal flash — so `resetRestore` is actually called and the SC2 spinner is visible. UI logic stays store-driven (no apps/web unit test added).
+
+### Tests added
+- `packages/crypto/src/__tests__/ipns-record.test.ts`: +6 — the `valid`/`expired`/`invalid` verdict matrix (incl. a validly-signed past-EOL record) and strict-reject-expired. **217 crypto tests pass.**
+- `apps/web/recovery-src/__tests__/gateway.test.ts` + `walk.test.ts`: raw-block CID-mismatch/truncation rejection + dag-pb-CID guard, and A→B→A / descendant→root cycle termination. Wired via `vitest.config.ts` include (local only; apps/web tests aren't a CI gate). **73 web tests pass.**
+
+### Reviewer triage
+- **Greptile:** 4 original findings fixed + resolved; 1 new P1 (fail-closed gap) fixed (`bc2cac059`); 1 follow-on availability finding resolved with rationale (nodes/blobs are raw blocks verified on any gateway; only large bodies on non-trustless gateways affected; unverified ciphertext is strictly worse; verified re-import deferred as it can't be offline-validated vs Kubo layout). → all resolved.
+- **CodeRabbit** (quota reset → full re-review): 1 real doc footgun fixed (`docs/DEVELOPMENT.md` `&amp;&amp;`-chain, `a1583993c`); 8 Minor `.planning/`/phase-doc-sync nits resolved with disposition (point-in-time phase-78 snapshots, out of scope for this fix PR). → all resolved.
+
+**Threads: 0 unresolved / 15 total. CI: all green. Not merged.**</result>
+<usage><subagent_tokens>236327</subagent_tokens><tool_uses>118</tool_uses><duration_ms>2316423</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-abe7b6dbe7a8ba14d</worktreePath><worktreeBranch>worktree-agent-abe7b6dbe7a8ba14d</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>abe7b6dbe7a8ba14d</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/abe7b6dbe7a8ba14d.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix 4 Greptile findings on 78" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Acknowledged — nothing further needed from me. PR #613 landed with all 4 findings fixed (plus the follow-on Greptile P1 fail-closed hardening and the CodeRabbit doc fix), 15/15 review threads resolved, and CI green. The `feat/recovery-tool-v3-vault-load-guards-web-ux-and-ci-guards` branch tip that merged was `a1583993c`.
+
+One thing worth flagging for follow-up: the fail-closed content fetch means **large (&gt;256KiB) dag-pb file bodies won't recover on a gateway that serves `/ipfs/` but not the trustless `?format=raw` API**. All node/envelope/vault-blob content (raw single blocks) and files on any reputable gateway are unaffected. The verified-assembled-fallback (recompute the UnixFS root CID from assembled bytes) that would close that last availability gap was deliberately deferred — it can't be validated against Kubo's DAG layout offline without risking false-rejects. Worth capturing as a recovery-tool hardening todo if you want that path covered.</result>
+<usage><subagent_tokens>214670</subagent_tokens><tool_uses>118</tool_uses><duration_ms>4869757</duration_ms></usage>
+</task-notification>
+
+---
+
+#614 was already merged.
+
+---
+
+anything to discuss on phase 80?
+
+---
+
+regarding the SC2 please could you outline the exact sequence of events for the grant-reissuance and where the zk relay is trusted in this whole flow?
+
+---
+
+yeah go ahead
