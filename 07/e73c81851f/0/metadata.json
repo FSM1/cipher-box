@@ -1,0 +1,98 @@
+{
+  "cli_version": "0.7.7",
+  "checkpoint_id": "07e73c81851f",
+  "session_id": "b8e06324-df4f-4f30-abbf-08a281806014",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-12T14:02:33.777265Z",
+  "branch": "feat/recovery-tool-v3-vault-load-guards-web-ux-and-ci-guards",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "dc03a6ebd679",
+  "token_usage": {
+    "input_tokens": 28019,
+    "cache_creation_tokens": 736559,
+    "cache_read_tokens": 33670576,
+    "output_tokens": 213225,
+    "api_call_count": 151
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01JVJrU6wppwRcyh1dpAMGqw",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "gsd-discuss-phase"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "dc03a6ebd679",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 386,
+        "end": 387,
+        "entry_ids": [
+          "3b25dd8b-9559-491e-8978-1c9229c8ffb4"
+        ],
+        "tool_use_id": "toolu_01JVJrU6wppwRcyh1dpAMGqw"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01JVJrU6wppwRcyh1dpAMGqw"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: gsd-discuss-phase",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 7
+  },
+  "summary": {
+    "intent": "Use the GSD manager dashboard to drive the final phases (76, 78, 79) of the v2.0 CipherBox milestone to completion — plan, execute, verify, and ship them via parallel background agents — then triage the accumulated todo backlog into closeout phases before marking the milestone done.",
+    "outcome": "Phases 76 and 79 were fully shipped and merged (PR #610, #611); a todo-triage pass retired 6 resolved todos and defined 4 new closeout phases (80-83), merged via PR #612; Phase 78 (recovery tool) was executed, UAT-resolved, and shipped as PR #613 (conflict-resolved, CI running, unmerged); a ship-workflow fix (draft-PR-first ordering) was opened as PR #614. Milestone was still open at session end, pending PR #613 merge and phases 80-83.",
+    "learnings": {
+      "repo": [
+        "GSD phase branches follow `feat/{slug}` convention; the GSD commit helper auto-switches a worktree onto `phase_branch_template: feat/{slug}` on first commit rather than committing to the ephemeral `worktree-agent-*` branch — but this is inconsistent (happened for phase 79's planner, not phase 76's), so always verify which branch actually received commits before merge-back.",
+        "`EnterWorktree` refuses a repo-root→worktree switch on this host; background agents must instead drive worktrees via absolute paths / `git -C` rather than relying on cwd switching.",
+        "cipher-box CI's `pr-release-preview` workflow triggers on PR `opened` (including drafts, no draft guard), while `.coderabbit.yaml` has `drafts: false` so CodeRabbit skips draft PRs — meaning `/ship-phase` should open PRs as draft first (let the release bot post `chore(release)`), then mark ready so CodeRabbit reviews the final head, avoiding a race between the release-bot commit and CodeRabbit's review.",
+        "Recovery tool v3 must be infra-independent: reuse only `packages/crypto` + `packages/core` (no SDK, no CipherBox API, no Web3Auth), performing a standalone IPNS→IPFS walk via a configurable HTTP gateway, keyed solely off the user-supplied privateKey.",
+        "There are two unrelated things both loosely called 'D-07' in this repo: the Rust/FUSE write-plane(UUID)/read-plane(ipnsName) invariant (already enforced) vs. the actual in-scope web/SDK import boundary (`apps/web/src` must not import runtime bindings from sdk-core/core or call raw IPFS) — always disambiguate via the source todo before writing CONTEXT.md decisions.",
+        "`ipns@10.1.3`'s `IPNSRecord.validity` is an RFC3339 string, not a `Date` — code assuming `Date` must map via `new Date(record.validity)`.",
+        "Folder identity in the read-plane is intentionally `ipnsName`-keyed, not `Node.id`-keyed; re-keying to UUID reintroduces a known orphaned-store bug — this recurs as a temptation across phases (76, 78, 79) and must be explicitly rejected each time with rationale recorded so executors don't 'fix' it back."
+      ],
+      "code": [],
+      "workflow": [
+        "When two background executors touching related code (e.g. phases 76 and 79 both touching `useFileBrowserActions.ts`) run in parallel and later need merging, code conflicts often auto-merge cleanly while `.planning/ROADMAP.md`/`STATE.md` bookkeeping files are the actual conflict source — resolve those by keeping both sides' completion markers rather than picking one.",
+        "For long-running parallel background pipelines with a shared exclusive resource (e.g. the SDK E2E gate binding :3000 and resetting Postgres/Kubo), that gate must be serialized across concurrent ship runs even if the rest of the pipeline can run in parallel.",
+        "After a session hits its quota limit mid-execution, background agents that commit atomically per plan preserve resumable progress; resuming in the *same* worktree (not a fresh one) preserves partial commits and installed `node_modules`, which is faster and safer than restarting from scratch.",
+        "A killed/stopped background agent (via TaskStop or user interrupt) cannot be resumed via SendMessage — the orchestrator must either dispatch a fresh agent or, for small mechanical steps (like resolving a merge conflict), do the work inline itself.",
+        "Session-scoped cron jobs (via CronCreate) are best-effort: they survive quota throttling (session alive but rate-limited) but do not survive a full session exit, and firing the cron only delivers a prompt for the orchestrator to act on — it does not autonomously resume interrupted work by itself."
+      ]
+    },
+    "friction": [
+      "Two background executors (Phase 76 and 79) were both killed mid-run by hitting the session's Anthropic quota limit simultaneously, losing significant unpushed background progress until manually resumed.",
+      "The Phase 76 ship agent initially misreported CI as fully green while `Cargo Check & Test (Windows)` was actually failing (root cause: a test-only invalid-UUID string in the ported D-07 regression test), requiring the agent to self-correct.",
+      "A `git rebase` of 40 commits from `feat/79` onto updated `main` was abandoned mid-way due to a recurring `.planning/STATE.md` bookkeeping conflict on every replayed commit; switched to a single `git merge` instead, which resolved the conflict once.",
+      "The 'Ship Phase 78' background agent was accidentally stopped by the user mid-pipeline (after opening PR #613 but before finishing conflict resolution/review triage), and could not be resumed via SendMessage, forcing the orchestrator to finish the remaining steps (conflict resolution, learnings doc, CI monitoring) inline instead of via a background agent.",
+      "A `git push` to `feat/78` hit a transient DNS failure requiring a retry.",
+      "The GSD commit helper reported a false-negative `commit_failed` status for the Phase 78 discuss-artifacts commit even though the commit had actually landed cleanly (a previously known/memory-flagged issue)."
+    ],
+    "open_items": [
+      "PR #613 (Phase 78 recovery-tool ship) is open, CI running, not yet merged — user's call to merge.",
+      "PR #614 (ship-workflow draft-PR-first fix) is open, not yet merged.",
+      "Phase 76's `76-05` Windows D-07 code needed a pre-merge CI gate that was eventually cleared, but 2 out-of-scope P1 follow-up todos were logged from Greptile review: vault-init register-retry dead-end, and TEE renewal over-rejecting longer-lived records.",
+      "Four new closeout phases (80: Rotation Write-Plane & Re-Mint Durability [HIGH], 81: TEE Republish & IPNS-Record Correctness, 82: Wire-Encoding Domain Hardening [HIGH], 83: Desktop Resilience) are defined in ROADMAP but not yet discussed/planned — explicitly held until Phase 78 fully lands.",
+      "A v2.1 backlog was identified but left in `pending/todos`: web polish/observability/a11y cluster, ops/CI hygiene chores, Tier-3 large-file refactor, plus three defer-forever v2.1+ features (ERC-1271 contract-wallet auth, CRDT IPNS inbox sharing, alternative MFA factor types).",
+      "Phase 78's formal verification flagged 2 UAT items (poll-monotonicity clean-DB re-run, SC2 spinner-visibility assertion) as `human_needed`; these were addressed during the ship pipeline but should be double-checked given the interrupted/resumed agent history.",
+      "The `extract-learnings` step of `/ship-phase` for Phase 78 was not reached by the (stopped) ship agent; the orchestrator authored `78-LEARNINGS.md` manually inline instead — worth confirming it matches what the automated step would have produced."
+    ]
+  }
+}
