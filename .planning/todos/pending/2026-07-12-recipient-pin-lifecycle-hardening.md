@@ -91,9 +91,14 @@ write-body via `requireFolder` → `ensureFolderLoaded` → `dfsFindFolder`, whi
 walks the FOLDER tree only. A shared FILE is a leaf child (not a folder-tree
 entry), so `addRecipientPubkeyPin(fileIpnsName)` throws "Shared item not loaded".
 Consequently file shares are issued WITHOUT an owner-sealed recipient pin (the
-`ShareDialog` issuance now skips the pin for `kind === 'file'` to avoid blocking
-file sharing — greptile P1 regression). This is a pre-existing D-03 limitation
-(the folder-only helper never pinned files), not introduced here.
+`ShareDialog` issuance skips the pin for `kind === 'file'` to avoid blocking
+file sharing — greptile P1 regression). The read/ENFORCE side is symmetric: the
+`handleUpgrade` path in `ShareDialog.tsx` also gates the folder-only pin reader
+`getRecipientPubkeyPins` → `assertRecipientPinned` on `kind === 'folder'`
+(commit 9978a85ca), so a file-share read→write upgrade no longer throws
+"Shared item not loaded" — but it also carries NO substitution protection. This
+is a pre-existing D-03 limitation (the folder-only helper never pinned files),
+not introduced here.
 
 Impact: if a file share is ever scope-exit re-minted, the D-03e fail-closed pin
 check would reject it (no pin) — file-share revocation-rotation would fail
