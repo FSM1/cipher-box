@@ -18,17 +18,30 @@ export interface MultiAccountFixture {
 /**
  * Create N test accounts with the given labels.
  *
+ * @param labels - account labels to create (created sequentially)
+ * @param optsByLabel - optional per-label options (e.g. `withInlineGrantRemint`
+ *   to wire the web-mirroring rotation seam on a specific owner account). Labels
+ *   absent from the map are created with defaults (no rotationCallbacks).
+ *
  * @example
  * const fixture = await createMultiAccountFixture(['alice', 'bob']);
  * const alice = fixture.accounts.get('alice')!;
  * const bob = fixture.accounts.get('bob')!;
+ *
+ * @example
+ * const fixture = await createMultiAccountFixture(['alice', 'bob'], {
+ *   alice: { withInlineGrantRemint: true },
+ * });
  */
-export async function createMultiAccountFixture(labels: string[]): Promise<MultiAccountFixture> {
+export async function createMultiAccountFixture(
+  labels: string[],
+  optsByLabel?: Record<string, { withInlineGrantRemint?: boolean }>
+): Promise<MultiAccountFixture> {
   const accounts = new Map<string, TestContext>();
 
   // Create accounts sequentially to avoid race conditions on vault init
   for (const label of labels) {
-    const ctx = await createTestContext(label);
+    const ctx = await createTestContext(label, optsByLabel?.[label]);
     accounts.set(label, ctx);
   }
 
