@@ -44,6 +44,7 @@ export type {
   PinningConfig,
   RotationClientCallbacks,
   LocalGrantRecord,
+  InlineGrantRemint,
 } from './types';
 
 // SDK-owned resolved folder listings (SDK-READ-02, D-02) -- the single

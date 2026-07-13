@@ -2095,6 +2095,18 @@ export class CipherBoxClient {
             frontier: [],
             persistCallback: callbacks.persistJob,
           };
+          // recipient-pin-lifecycle §5: resolve the INLINE grant-remint seam for
+          // this rotation root (only now that rotation is actually covered, so an
+          // uncovered mutation never pays the sent-grants fetch). When the host
+          // supplies it and the owner has active sent grants, the returned
+          // innerGrants/grantCallbacks enable rotateReadFromNode's per-node
+          // re-mint — re-minting FILE grants the reconcile sweep can't reach
+          // (no FolderTree entry) under each file's rotated read key. Undefined
+          // (no seam, or no active grants) → unchanged sweep-only behavior.
+          const inlineGrantRemint = await callbacks.resolveInlineGrantRemint?.(
+            params.rootNodeIpnsName,
+            params.rootNodeId
+          );
           try {
             rotationResult = await sdkCore.rotateReadFromNode({
               rootNodeId: params.rootNodeId,
@@ -2121,14 +2133,15 @@ export class CipherBoxClient {
                   writeKey: folder.writeKey,
                 };
               },
-              // SC#4 (Plan 70-06) seam plumbing: no CipherBoxClientConfig seam
-              // supplies grant-remint callbacks/inner-grants today (Phase 66
-              // is the host-wiring follow-up per RESEARCH) -- threading the
-              // fields here (currently always undefined) makes them
-              // structurally reachable from the real walk without requiring
-              // a new config surface in this plan.
-              innerGrants: undefined,
-              grantCallbacks: undefined,
+              // SC#4 (Plan 70-06) seam plumbing, now LIVE-WIRED for web
+              // (recipient-pin-lifecycle §5): the host's rotationCallbacks
+              // `resolveInlineGrantRemint` supplies the per-node re-mint inputs
+              // when the owner has active sent grants, so the walk re-mints
+              // surviving grants inline — closing the file-share re-mint gap the
+              // reconcile sweep cannot reach. Both undefined (no seam / no active
+              // grants) → sdk-core no-ops the seam, unchanged prior behavior.
+              innerGrants: inlineGrantRemint?.innerGrants,
+              grantCallbacks: inlineGrantRemint?.grantCallbacks,
               // SC#3 (Plan 70.1-05 / D-01..D-05): the owner's OWN vault
               // keypair wraps/unwraps the ECIES key-checkpoint. keyCheckpoint
               // is the seam Plan 70.1-05 added to RotationClientCallbacks --

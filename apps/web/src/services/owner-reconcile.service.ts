@@ -19,7 +19,13 @@ import {
   sharesControllerRevokeShare,
 } from '@cipherbox/api-client';
 import { hexToBytes } from '@cipherbox/crypto';
-import { runOwnerReconcile, type OwnerReconcileTransport, type GrantRow } from '@cipherbox/sdk';
+import {
+  runOwnerReconcile,
+  buildGrantRemintCallbacks,
+  type OwnerReconcileTransport,
+  type GrantRow,
+  type InlineGrantRemint,
+} from '@cipherbox/sdk';
 import type { RotationJobRecord, SdkContext } from '@cipherbox/sdk-core';
 import { apiAxios, apiUrl } from '../lib/api-config';
 import { useAuthStore } from '../stores/auth.store';
@@ -121,6 +127,92 @@ function makeWebOwnerReconcileTransport(shareRootIpnsName: string): OwnerReconci
     updateGrant,
     deleteGrant,
     getRecipientPubkeyPins: () => getSdkClient().getRecipientPubkeyPins(shareRootIpnsName),
+  };
+}
+
+/**
+ * Build the concrete `RotationClientCallbacks.resolveInlineGrantRemint` input
+ * for a scope-exit rotation of the folder rooted at `rootNodeIpnsName`
+ * (recipient-pin-lifecycle §5 — web file-grant re-mint gap).
+ *
+ * Unlike the reconcile sweep — which is scoped to ONE root and skips any root
+ * with no in-memory `FolderTree` entry (so it can never re-mint a
+ * separately-shared FILE leaf) — the inline seam re-mints EVERY surviving grant
+ * whose root node is encountered as the rotation walk descends the subtree. The
+ * walk supplies each node's freshly-rotated read key, so a shared file inside
+ * the rotated folder gets its grant re-wrapped under the new key instead of
+ * being stranded (its recipient would otherwise lose access after rotation).
+ *
+ * The transport's `getRecipientPubkeyPins` is nodeId-KEYED here (not bound to a
+ * single root like the sweep transport): the seam invokes it per rotated node,
+ * so it maps the node's id back to its share-root IPNS name — built from the
+ * owner's sent grants, every one of which carries both `rootNodeId` and
+ * `shareRootIpnsName` — and reads that node's owner-sealed pins. (File grants
+ * are pin-exempt in sdk-core, so `getPinsFn` is only ever hit for folder grant
+ * roots, which are always present in the map.) A map miss is a hard fail-closed
+ * throw — the enforced re-mint never trusts a relay-fed recipient.
+ *
+ * Returns `undefined` when the owner has no active sent grants, so the seam
+ * stays disabled and rotation behaves exactly as before this fix.
+ */
+export async function resolveInlineGrantRemint(
+  rootNodeIpnsName: string
+): Promise<InlineGrantRemint | undefined> {
+  if (!hasSdkClient()) return undefined;
+
+  let decoded: DecodedSentGrant[];
+  try {
+    decoded = await decodeSentGrants();
+  } catch (error) {
+    // Fail-safe: a failed sent-grants fetch disables inline re-mint for this
+    // rotation (the eager/opportunistic sweep remains the backstop for folder
+    // grants). Never throw into the rotation path.
+    logger.error(
+      `[owner-reconcile] Failed to fetch sent grants for inline re-mint of ${rootNodeIpnsName}:`,
+      safeError(error)
+    );
+    return undefined;
+  }
+
+  // No active grants → nothing to re-mint; leave the seam disabled (identical to
+  // the pre-fix sweep-only behavior).
+  if (decoded.length === 0) return undefined;
+
+  // The client can be torn down (logout) while the fetch above was in flight.
+  if (!hasSdkClient()) return undefined;
+
+  // nodeId -> shareRootIpnsName, so the per-node `getRecipientPubkeyPins(nodeId)`
+  // seam can resolve the right node's owner-sealed pins during the walk.
+  const nodeIdToIpnsName = new Map<string, string>();
+  for (const grant of decoded) {
+    if (!nodeIdToIpnsName.has(grant.rootNodeId)) {
+      nodeIdToIpnsName.set(grant.rootNodeId, grant.shareRootIpnsName);
+    }
+  }
+
+  const transport: OwnerReconcileTransport = {
+    listSentGrants,
+    updateGrant,
+    deleteGrant,
+    getRecipientPubkeyPins: (nodeId: string) => {
+      const ipnsName = nodeIdToIpnsName.get(nodeId);
+      if (!ipnsName) {
+        // Fail-closed: sdk-core only calls this for a folder grant root with a
+        // surviving grant, which is always in the map. A miss means the relay's
+        // grant set and the rotated node disagree — never TOFU-trust it.
+        throw new Error(
+          `[owner-reconcile] resolveInlineGrantRemint: no share-root IPNS name for node ${nodeId} — refusing to re-mint (fail-closed)`
+        );
+      }
+      return getSdkClient().getRecipientPubkeyPins(ipnsName);
+    },
+  };
+
+  return {
+    // `innerGrants` is only sdk-core's non-empty ENABLE gate; the per-node grant
+    // set is resolved by `grantCallbacks.queryGrantsFn(nodeId)`.
+    innerGrants: decoded,
+    grantCallbacks: buildGrantRemintCallbacks(transport),
   };
 }
 
