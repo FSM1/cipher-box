@@ -3,7 +3,7 @@
   "checkpoint_id": "d1e8728f48af",
   "strategy": "manual-commit",
   "branch": "feat/rotation-write-plane-and-re-mint-durability",
-  "checkpoints_count": 5,
+  "checkpoints_count": 8,
   "files_touched": [
     "packages/sdk/src/__tests__/client-rotation.test.ts"
   ],
@@ -14,13 +14,20 @@
       "compact_transcript": "/d1/e8728f48af/0/transcript.jsonl",
       "content_hash": "/d1/e8728f48af/0/content_hash.txt",
       "prompt": "/d1/e8728f48af/0/prompt.txt"
+    },
+    {
+      "metadata": "/d1/e8728f48af/1/metadata.json",
+      "transcript": "/d1/e8728f48af/1/full.jsonl",
+      "compact_transcript": "/d1/e8728f48af/1/transcript.jsonl",
+      "content_hash": "/d1/e8728f48af/1/content_hash.txt",
+      "prompt": "/d1/e8728f48af/1/prompt.txt"
     }
   ],
   "token_usage": {
-    "input_tokens": 165462,
-    "cache_creation_tokens": 3289239,
-    "cache_read_tokens": 216587612,
-    "output_tokens": 868740,
-    "api_call_count": 702
+    "input_tokens": 165614,
+    "cache_creation_tokens": 3514297,
+    "cache_read_tokens": 232561484,
+    "output_tokens": 958465,
+    "api_call_count": 778
   }
 }
