@@ -726,3 +726,358 @@ regarding the SC2 please could you outline the exact sequence of events for the 
 ---
 
 yeah go ahead
+
+---
+
+<task-notification>
+<task-id>a60d8496ff79f863d</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/a60d8496ff79f863d.output</output-file>
+<status>completed</status>
+<summary>Agent "Plan phase 80 in worktree" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything is complete. Clean fast-forward push, local HEAD == origin tip. The web-e2e fix agent's isolated worktree made no commit (correct — it was a flake, not a regression), so it auto-cleans.
+
+---
+
+## Phase 80 plan-phase — COMPLETE
+
+### Plans produced: 8 files, 4 waves
+
+| Wave | Plans | Coverage |
+|------|-------|----------|
+| 1 (parallel) | `80-01` D-03b schema+codec+JSON KAT (foundational) · `80-02` D-01 write-body reconstruction + D-02 Rust shares-cache + replay durability regression · `80-03` D-04 TS defensive copy + D-02 TS cache | no file overlap |
+| 2 | `80-04` D-03a/c TS pin write/read/verify helpers (dep 01) · `80-05` D-03a/D-01 Rust pin plumbing through reconstruction (dep 01, 02) | |
+| 3 | `80-06` D-03d/e Rust re-mint fail-closed + seam (dep 01, 05) · `80-07` D-03d/e TS re-mint fail-closed + getPinsFn seam (dep 01, 03, 04) | |
+| 4 | `80-08` D-03c/d web issuance pin write + upgrade/reconcile fail-closed (dep 04, 07) | |
+
+DAG is acyclic; parallel plans within each wave have no `files_modified` overlap.
+
+### Landing
+- Branch: `feat/rotation-write-plane-and-re-mint-durability`
+- Commit: `24bfe5cb5` (`docs(80): plan phase 80 …`)
+- Pushed: yes — `a7b21e614..24bfe5cb5`, local HEAD == `origin/feat/rotation-write-plane-and-re-mint-durability`. Committed `--no-verify` (worktree has no installed deps → husky lint-staged unavailable; `.planning/`-only docs, no code touched, CI is the backstop).
+- Artifacts committed: 8 `*-PLAN.md`, `80-RESEARCH.md`, `80-PATTERNS.md`, `80-VALIDATION.md`, plus `.planning/ROADMAP.md` (wave annotations) + `STATE.md` (marked planned).
+
+### Quality gates
+- Plan-checker: **0 blockers, 1 warning** — all 9 phase-specific correctness properties verified (3-consumer completeness, no-legacy hard-fail, JSON-KAT wire format, D-01↔D-03 pin-threading, D-02 once-per-job cache, D-04 defensive copy, scope fence on the 4th co-writer site, deep-work rules, wave DAG). The lone warning was a factual staleness I introduced in `80-VALIDATION.md` (a wrong `cross_language.rs:310` length-guard claim carried from the research) — **fixed** before commit; the plans themselves were already correct.
+- Decision-coverage gate: **14/14** (D-01a/D-01c were only missing the literal sub-ID tokens in 80-02's must_haves — added; substantively they were always covered).
+
+### Key decisions baked in
+- Wire format is **plaintext JSON KAT, not CBOR** (correction confirmed by both research and pattern-mapper) — new `seal_vectors[1]` in `tests/vectors/node-codec.json`, conditional-emit preserves the frozen `seal_vectors[0]`. `crates/crypto/tests/cross_language.rs:310` reads a *different* oracle and stays untouched.
+- All three D-03d enforcement consumers covered; D-03e no-legacy hard-fail with negative tests on Rust + TS; recovery-tool tolerance is a verified no-op AC; no `api:generate`/DB-push (D-03f); D-02 cache resolved to once-per-job construction (`grant_scope.rs:488`); 4th co-writer site explicitly out-of-scope.
+- TDD mode honored (7 `type: tdd` plans, 80-08 `execute` since web UI isn't unit-tested).
+
+### Parallel task — web-e2e failure investigation
+The failing job is **not** a Phase 79 regression. Root cause: a **latency flake** in the run of commit `cba785718` (Phase 78 closeout), spec `writable-shares.spec.ts:8.1` — a 60s timeout on the highest-latency shared-write→IPNS→re-resolve round-trip under `retries: 0`, `workers: 3` CI contention. Evidence: Phase 79's own main-push run (#611) and two later commits were green; the identical mkdir→render pattern in test 8.2 passed on the same run; Phase 78's new guards provably don't gate this path. The agent re-ran only the failed job (`gh run rerun --failed`) and made **no code change** (a fix would be a guess against a non-defect). If it recurs, recommended non-speculative hardening: scoped `test.describe.configure({ retries: 1 })` on that file, and give 8.1 the same fresh folder re-entry that 8.2 already does. No branch/commit created.</result>
+<usage><subagent_tokens>159752</subagent_tokens><tool_uses>37</tool_uses><duration_ms>2753590</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a60d8496ff79f863d</worktreePath><worktreeBranch>worktree-agent-a60d8496ff79f863d</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+while the `phase 79` comment might have been incorrect, the web-e2e has been super stable and consistently passing for a while and only failed for the first time after phase 78 PR was merged. the web e2e was not run as a gate on the phase 78 PR
+
+---
+
+yeah the double resolve does seems like a bit of an excess - is there any chance of this change slotting in with any of the already mapped out phases (81+)
+
+---
+
+yeah lets drop it for now...
+
+---
+
+One thing I am noticing is that a lot of the subagent conversations I am having are not being pushed up to entire leading to a lot of details of the decisions being made during agent execution being lost. is there anything that can be done to ensure that these traces are committed to the entire branches as the normal interactions are.
+
+---
+
+updating ship-phase is doable, but gsd-execute-phase is not authored by me, so would be overwritten next time GSD is updated. honestly think that for now, leaving things as is will be ok, maybe updating entire cli to see if the resolution of what is captured improves.
+
+---
+
+<task-notification>
+<task-id>a821a924aa12ab405</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/a821a924aa12ab405.output</output-file>
+<status>completed</status>
+<summary>Agent "Execute phase 80 in worktree" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Local HEAD == origin, branch fully pushed and in sync. All Phase 80 work complete.
+
+## Phase 80 Execution Report — Rotation Write-Plane and Re-Mint Durability
+
+All 8 plans executed via sequential nested gsd-executor sub-agents, committed directly to `feat/rotation-write-plane-and-re-mint-durability` (no worktree-merge dance), pushed per wave. **Final branch tip: `d863be134` — pushed, local HEAD == origin.**
+
+### Per-plan results
+
+| Plan | Commit(s) | Tests (as observed) |
+|------|-----------|---------------------|
+| 80-01 codec + JSON KAT | `6a9b8ac1c` | Rust KAT 1 passed; node lib 10 passed; TS node-codec-vectors 24 passed; typecheck clean |
+| 80-02 Rust write-body reconstruct + cache + replay | `eaed02937`, `5c1ee8409`, `9c4c68984` | fuse rotation_deps 13, replay 9, full crate 124 passed |
+| 80-03 TS defensive-copy + cache | `274335949` | sdk-core 59 passed, sdk owner-reconcile 6 passed; typechecks clean |
+| 80-04 TS pin write/read/verify helpers | `7d4a1f5e8`, `5dc6ffd21`, `4ef3fd2f7`, `ea3560967` | sdk-core recipient-pins 17 passed; typechecks clean |
+| 80-05 Rust pin plumbing | `028702ab6` | fuse 126 passed, sdk 153 passed; builds clean |
+| 80-06 Rust re-mint fail-closed (consumer 1/3) | `e29b7600a` | sdk rotation 54 passed, fuse rotation_deps 17 passed |
+| 80-07 TS re-mint fail-closed (consumer 2/3) | `f752abe05` | sdk-core grant-remint 8 passed, sdk owner-reconcile 9 passed |
+| 80-08 web issuance + upgrade/reconcile (consumer 3/3) | `d863be134` | web tsc exit 0, eslint 0 problems |
+
+### D-03d consumers — all three wired (fail-closed pubkey compare)
+1. **Rust re-mint** — `RotationDeps::get_recipient_pubkey_pins` seam (offline InodeTable cache) + raw-byte compare before `wrap_key` in `re_mint_grants_rooted_at`, aborts node's re-mint on mismatch.
+2. **TS re-mint** — `getPinsFn` seam calling shared `assertRecipientPinned` before `wrapKey`; wired through `buildGrantRemintCallbacks`/`runOwnerReconcile`.
+3. **Web upgrade/reconcile** — `ShareDialog.handleShare` writes the pin at issuance; `handleUpgrade` calls `assertRecipientPinned` before re-wrap; `owner-reconcile.service.ts` transport supplies `getRecipientPubkeyPins`.
+
+### D-03e negative tests present and green
+Pin-absent AND pin-mismatch hard-fail-closed tests in all four enforcement files (`engine.rs`, `rotation_deps.rs`, `grant-remint.test.ts`, `owner-reconcile.test.ts`) — each confirmed non-vacuous RED before GREEN.
+
+### Constraints honored
+Scoped tests only (no full-suite, no sdk-e2e). Frozen `seal_vectors[0]` preserved via conditional emit; new `seal_vectors[1]` plaintext JSON KAT locked byte-for-byte on both sides; `cross_language.rs:310` untouched. `docs/METADATA_SCHEMAS.md` updated with `recipientPins` + version-history row. No `api:generate`, no DB migration. All commits conventional, no parens in subjects.
+
+### Deviations / flags (none blocking)
+- **Blocking-compile fixes** rippled the additive `recipient_pins`/`InodeKind` field to downstream constructors across `crates/sdk`, `crates/fuse`, and `platform/windows/write_ops.rs` (winfsp) — all `Vec::new()`, no behavior change.
+- **winfsp Windows sites can't build locally** (known macOS/CI split) — updated by inspection; budget one CI round-trip to confirm the Windows build.
+- 80-04 additively surfaced `recipientPins` via `getWriteBodyParams`/`write-body-params.ts`; 80-08 added `assertRecipientPinned` to the `@cipherbox/sdk` facade re-export (apps/web can't import sdk-core directly per the D-07 lint rule). Both minimal and precedent-following.
+- **Out-of-scope follow-ups flagged by executors (NOT actioned — outside the 8 plans):** (a) the 4th co-writer re-wrap site (`rotateWriteFromNode` write-revocation) is intentionally excluded per CONTEXT's "exactly 3 consumers"; (b) `replay.rs::fetch_splice_publish_parent` re-seals a parent write-body with empty `recipient_pins` — no Phase-80 plan owns pin preservation there.
+- **STATE.md left untouched:** it is already stale (records phase 78 "ready to execute" though phase 78 shipped in #613). It's milestone-level bookkeeping out of sync with reality; reconciliation belongs to your verify/ship step (via gsd-tools), not a mid-stream hand-guess. SUMMARY files for all 8 plans ride their respective plan commits.
+
+No STOP conditions were hit; no plan left incomplete. sdk-e2e (the cross-package publish gate) was deliberately not run per instructions — it's your ship-time gate.</result>
+<usage><subagent_tokens>135602</subagent_tokens><tool_uses>34</tool_uses><duration_ms>5985158</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a821a924aa12ab405</worktreePath><worktreeBranch>worktree-agent-a821a924aa12ab405</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+sure thing, kick off ship-phase 80 in the background
+
+---
+
+<task-notification>
+<task-id>a3c8d3b503c30a1ce</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/a3c8d3b503c30a1ce.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship phase 80 in worktree" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PR #615 is drafted. I've armed a poll for the release bot's `chore(release)` commit (the load-bearing release-target commit). I'll keep the local stack (API :3000 + TEE worker :3002 + docker) up in case post-review fixes need another SDK-E2E run, and clean up session procs at the end. Waiting for the bot commit before marking the PR ready.</result>
+<usage><subagent_tokens>303346</subagent_tokens><tool_uses>148</tool_uses><duration_ms>3044300</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3c8d3b503c30a1ce</worktreePath><worktreeBranch>worktree-agent-a3c8d3b503c30a1ce</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3c8d3b503c30a1ce</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/a3c8d3b503c30a1ce.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship phase 80 in worktree" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>CI and reviews are settling in the background (this takes several minutes for the Rust matrix + CodeRabbit/Greptile). I'll fetch and triage review threads once they land. Waiting on the poll.</result>
+<usage><subagent_tokens>342932</subagent_tokens><tool_uses>179</tool_uses><duration_ms>3694153</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3c8d3b503c30a1ce</worktreePath><worktreeBranch>worktree-agent-a3c8d3b503c30a1ce</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a3c8d3b503c30a1ce</task-id>
+<tool-use-id>toolu_01MbN8gqixCzwMfAeyfiyArM</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/a3c8d3b503c30a1ce.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship phase 80 in worktree" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The CI settle poll is armed (the full Rust matrix incl. Windows takes ~10-15 min). All review threads are resolved (5/5), all fixes committed and pushed, and session procs cleaned up. I'll deliver the final report once CI settles — waiting on the poll.</result>
+<usage><subagent_tokens>458296</subagent_tokens><tool_uses>251</tool_uses><duration_ms>5563091</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a3c8d3b503c30a1ce</worktreePath><worktreeBranch>worktree-agent-a3c8d3b503c30a1ce</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bcbmq9ns1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/bcbmq9ns1.output</output-file>
+<status>completed</status>
+<summary>Background command "Background-poll PR #615 CI until settled" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+continue - all e2e tests are failing, so looks like this phase broke things.
+
+---
+
+quota has been reset, spawn an agent
+
+---
+
+theres also a security p1 comment from greptile on that pr
+
+---
+
+<task-notification>
+<task-id>a258e41c4c486967c</task-id>
+<tool-use-id>toolu_01UUQbJUq76iMpR7oqW55LNt</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/a258e41c4c486967c.output</output-file>
+<status>completed</status>
+<summary>Agent "Debug+fix phase 80 e2e regressions" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Worktree clean, all 3 commits pushed, local tip matches remote (`3f3cab58f`). All work is complete. Here is my report.
+
+---
+
+## Report to orchestrator
+
+Fixed all three Phase-80 regressions on `feat/rotation-write-plane-and-re-mint-durability`. Branch tip is now **`3f3cab58f`** (3 new commits on top of `7e0788e07`).
+
+### Root-cause correction (important)
+The PRIMARY was mis-framed as an AAD/generation reseal bug. It is **not**. The Rust reseal paths are sound — `cargo test -p cipherbox-fuse --features fuse` = **130 passed**, and `verify_subtree_clean`'s "unseal failed for root" is a **read-plane** unseal (using a passed-in `root_read_key`), which `reconstruct_write_body` never touches. Empirically (desktop job `86692026144` log), the **first** failure is `re_mint_grants_rooted_at: ... is not among node ...012's owner-sealed recipient pins (0 pinned) — failing closed`. The AES-GCM flood on `list_folder_owned`/`verify_subtree_clean` is a **downstream cascade**: the re-mint fail-closed aborts the rotation *after* the read plane was already republished at the new generation, leaving the mount's stale local key unable to unseal the new-gen nodes.
+
+### 1. PRIMARY — desktop AES-GCM (`0d9459c3d`)
+- **Cause:** the desktop e2e (`tests/desktop-e2e/scripts/shared-scope-exit-rotation.mts`, Parts A/C/D) created shares with a raw `POST /shares` and **never wrote the recipient pin**. The real web share flow pins first (`ShareDialog.addRecipientPubkeyPin`). Phase-80's `re_mint_grants_rooted_at` (crates/sdk/src/rotation/engine.rs:654, D-03e) treats an empty pin list as a hard fail → 0-pinned abort → partial rotation → AES-GCM cascade on every refresh → covered delete/rename EIO on all 3 platforms.
+- **Fix:** added `pinRecipientOnGrantRoot` (derives the grant-root write key from the vault root's `WriteChildRef`, appends the pin via `updateFolderMetadataAndPublish`, whose CAS-409 loop unions pins so it's race-safe against the mount) and call it after each share create (Bob / Eve+Carol / Frank+Grace), before the sent-shares wait so the mount materializes the pin before the delete. Note Part A's "Bob cut off" invariant only checks Bob's *old* key (dead after rotation regardless), so pinning + re-mint still satisfies it. Also fixed `bump-ipns-sequence.ts` to pass the now-required `recipientPins` snapshot.
+- **Proof:** no Rust product bug exists to RED→GREEN (130 fuse tests already pass). The `.mts` typechecks clean against the desktop-e2e tsconfig; it can only be validated via CI (dispatch-gated).
+
+### 2. SECONDARY — web upgrade + greptile P1 (`9978a85ca`)
+- **6.1 cause:** `resealAndPublishParent` (`packages/sdk/src/share/shared-write.ts:246`) rebuilt the parent write-body as `{ ipnsPrivateKey, writeChildren }`, **dropping `recipientPins`**. Bob's shared-writes republished the folder root pin-less, erasing Alice's pin; her re-resolve read empty pins and 6.1's `assertRecipientPinned` hard-failed. `ddb7082e6` fixed the six owned client.ts sites but missed this shared-write chokepoint. **Fix:** preserve `parentNode.writeBody?.recipientPins` verbatim.
+- **greptile P1 (ShareDialog.tsx:337 "File upgrades fail"):** `handleUpgrade` called the folder-only reader `getRecipientPubkeyPins → requireFolder` for a file leaf → "Shared item not loaded". **Fix:** gated the pin read/enforce on `kind === 'folder'`, symmetric with the issuance gate. Replied to greptile comment `3567094759` with the fix (thread was already resolved). The reconcile path (`owner-reconcile.service.ts`) is already folder-tree-gated, so it needs no change.
+- **RED→GREEN test:** `shared-write.test.ts` "preserves the parent recipientPins across a shared-write republish" — RED (`expected undefined to deeply equal [...(2)]`), GREEN after fix. Ran: shared-write 25 + owner-reconcile 9 + sdk-core recipient-pins 17 all pass.
+- **Design gap flagged:** file shares carry no owner-sealed pin (a file leaf has no `NodeWriteBody`) → no substitution protection. Already tracked in `.planning/todos/pending/2026-07-12-recipient-pin-lifecycle-hardening.md` §5; I extended it to note the upgrade gate (`3f3cab58f`). Did **not** expand Phase-80 scope.
+
+### 3. TERTIARY — tee-republish Test A: **genuine flake, NOT a Phase-80 regression**
+Evidence: `git diff --stat origin/main..HEAD` for `apps/api`, `apps/tee-worker`, `crates/tee`, `packages/crypto`, `tests/sdk-e2e` is **completely empty** — the entire renewal path and the test are byte-identical to main. `createSubfolder` builds a node with no write-body, so the codec change is bypassed. On the PR's SDK E2E (`86691785054`), **only** Test A failed (`waitFor timed out after 15000ms`); Test B in the same suite passed (tee-worker was up), and every rotation/IPNS/crypto round-trip suite is green. This is a 15s-waitFor timeout on a contended CI TEE round-trip — no code delta could have caused it. Left unmodified per instructions; if defensive hardening is wanted, bumping the 15s budget is the only lever (no bug to fix).
+
+### CI re-dispatch
+Dispatched **"CI E2E Tests" run `29211804771`** on the branch — **still running** (Web + Desktop linux/macos/windows all in progress). The PR's own SDK E2E will also re-run on push.
+
+### STOP conditions / caveats
+- Desktop e2e fix could not be validated locally (dispatch-gated FUSE stack); relying on run `29211804771`. Residual risk is **pin-materialization timing** — the pin must be cached on the mount's grant-root inode before the delete; it rides the mount's periodic metadata refresh (~30s) with the 6×15s delete-retry loop as backstop. If run `29211804771` still shows `0 pinned`, the materialization window needs widening (not the pin logic).
+- I did **not** merge. Left for you.
+- Minor: two early `pnpm/git` commands accidentally targeted the main repo checkout (I `cd`'d there); those were read-only/no-op and the main checkout was already in a pre-existing dirty state — my worktree and all commits are correct and clean.</result>
+<usage><subagent_tokens>314582</subagent_tokens><tool_uses>131</tool_uses><duration_ms>1939829</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a258e41c4c486967c</worktreePath><worktreeBranch>worktree-agent-a258e41c4c486967c</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>boatpv36y</task-id>
+<tool-use-id>toolu_0144f3Arw9xs2gMso5Go4DJ4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/boatpv36y.output</output-file>
+<status>completed</status>
+<summary>Background command "Background-poll re-dispatched ci-e2e until complete" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a258e41c4c486967c</task-id>
+<tool-use-id>toolu_01JY1TozKGiaAXtsjHuZLYwW</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/a258e41c4c486967c.output</output-file>
+<status>completed</status>
+<summary>Agent "Debug+fix phase 80 e2e regressions" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All committed and pushed cleanly; worktree tip matches remote. Here is my report.
+
+---
+
+## Report to orchestrator — pin-materialization fix (round 2)
+
+Branch tip now **`eb9edd45f`** (2 new commits atop `3f3cab58f`). I stayed entirely in a fresh worktree — my prior worktree was pruned at the session boundary, so I created a new one from `origin/feat/...` and did **not** touch the main checkout.
+
+### Windows root-cause confirmation
+Same cause as macOS. Windows job `86700689152` log shows the identical chain: `re_mint_grants_rooted_at: ... is not among node ...010's owner-sealed recipient pins (0 pinned) — failing closed`, then the `verify_subtree_clean/list_folder_owned: AES-GCM decryption failed` cascade. The only surface difference is the OS error on the aborted op — Windows `EPERM` vs Linux `EIO`. Not a different bug.
+
+### PRODUCT verdict: this is a REAL race, not test-only
+`rotate_read_on_scope_exit` (crates/fuse/src/write_ops/grant_scope.rs) builds `FuseRotationDeps` over `fs.inodes`, and both pin consumers read that in-memory inode cache: `get_recipient_pubkey_pins → find_recipient_pins` (re-mint) and `reconstruct_write_body` (republish). That cache is materialized lazily (mount init / ~30s periodic metadata refresh). **In the real product flow the owner shares a folder from the web client** (which reseals the folder write-body with the new pin), then deletes inside it on their desktop mount before the next refresh → the rotation reads stale empty pins → `re_mint` fail-closes ("0 pinned") **and** `reconstruct` republishes the node pin-less, clobbering the real published pin → partial rotation → AES-GCM cascade. The fast Linux fuser mount happened to win the ~30s refresh race; slower FUSE-T (macOS) / WinFsp (Windows) do not. So this is genuine; fixing only the test would leave a real rotate-after-share gap.
+
+### Fix (in-domain product fix — `da393f99d`)
+Added `refresh_grant_root_recipient_pins` in `crates/fuse/src/write_ops/rotation_deps.rs`, called at the top of `rotate_read_on_scope_exit` **before** the rotation reads pins. It resolves + fetches + unseals the grant root's **current published** write-body (under the unchanged write key — write keys never rotate) and overwrites the inode's cached `recipient_pins` with the authoritative list. This makes both the re-mint read and the reconstruct republish see the fresh pin, deterministically, independent of the periodic-refresh timing. Best-effort: any resolve/fetch/unseal failure leaves the cache untouched and never fails the rotation itself.
+
+I deliberately did **not** add test-side polling — the product fix makes the e2e deterministic without it. The e2e pin write (prior commit `0d9459c3d`) stays: it publishes the pin that the product refresh now reads at rotation time.
+
+### Test / verification
+- New regression test `refresh_grant_root_recipient_pins_is_a_noop_on_resolve_failure` — proves the fail-closed-safe contract (dead endpoint → cache untouched, no panic). `cargo test -p cipherbox-fuse --features fuse` = **131 passed**. `cargo build --features fuse` clean.
+- The happy-path determinism proof is the CI e2e macOS/Windows going green (no local HTTP mock harness — the test ApiClient points at a dead endpoint, so the happy path isn't unit-testable). WinFsp build is CI-only on macOS; my helper mirrors `reconstruct_write_body`'s exact `#[cfg(any(feature="fuse",feature="winfsp"))]` gating, so the Windows job will confirm compilation.
+
+### Related durability gap — logged, not fixed (scope)
+Added **item 6** to `.planning/todos/pending/2026-07-12-recipient-pin-lifecycle-hardening.md` (`eb9edd45f`): a *routine* desktop folder mutation in the same post-share stale-cache window would republish the folder pin-less via `build_folder_metadata` and drop a web-issued pin on the wire. My refresh closes the rotation path; the routine-mutation path is a separate, lower-severity durability concern worth a follow-up (refresh-before-routine-reseal on known grant roots, or eager pin refresh when a new sent-share is observed).
+
+### MFA failure — confirmed unrelated flake
+`mfa-flows.spec.ts:139 TC-MFA-03` (waitForURL 60s timeout). `git diff --stat origin/main..HEAD` shows **zero** MFA/auth/login/device files in this branch. Pre-existing device-approval polling flake, not Phase 80. Left untouched per instructions.
+
+### Deliverables
+- Commits: **`da393f99d`** (product fix + test), **`eb9edd45f`** (todo). Branch tip **`eb9edd45f`**, pushed.
+- Re-dispatched **"CI E2E Tests" run `29212940817`** — **running** (just queued). This will confirm macOS + Windows desktop go green.
+- Did **not** merge.</result>
+<usage><subagent_tokens>359075</subagent_tokens><tool_uses>32</tool_uses><duration_ms>691774</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>br6n9tlel</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/br6n9tlel.output</output-file>
+<status>completed</status>
+<summary>Background command "Background-poll the round-2 ci-e2e re-run" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a258e41c4c486967c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/a258e41c4c486967c.output</output-file>
+<status>completed</status>
+<summary>Agent "Debug+fix phase 80 e2e regressions" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Everything is clean and pushed. Here is my report.
+
+---
+
+## Report — greptile P1 resolution (round 3)
+
+Worktree clean, tip **`575fbff02`** (2 new commits atop `eb9edd45f`), pushed. My previous worktree was pruned at the session boundary; I created a fresh one and stayed entirely within it (never touched the main checkout). CI was fully green on run `29212940817` (the product pin-refresh fix works).
+
+### FINDING 1 — REAL, fixed (`f0a871a4c`)
+`handleShare`'s `useCallback` dep array omitted `kind`, which the callback branches on for the file/folder pin-issuance gate. A stale `kind` (resolving async without `item` changing) could route a file through the folder-only `addRecipientPubkeyPin` and throw. Added `kind` to the deps (`handleUpgrade` already had it). Checked the other callbacks: `handleDowngradeConfirm` doesn't touch pins/kind (no change). **`react-hooks/exhaustive-deps` is not enabled in this repo's `eslint.config.js`** — so it wasn't masking the bug, but it also won't auto-catch this class. eslint on the file is clean.
+
+### FINDING 2 — VERDICT: REAL gap, fixed at the enforcement layer (`575fbff02`)
+Code trace (Rust `crates/sdk/src/rotation/engine.rs` + TS `packages/sdk-core/src/rotation/engine.ts`):
+- `enqueue_child` queues **every** child regardless of kind; the drain loop calls `rotate_one` on file items; `rotate_one_inner` handles `NodeKind::File` (file_key_prime) and calls `re_mint_grants_rooted_at` **unconditionally**.
+- So a scope-exit rotation of a folder that merely **contains** a separately-shared file rotates that file node → `query_grants_rooted_at(fileNodeId)` returns the file grant → `get_recipient_pubkey_pins` is structurally empty (file leaf has no `NodeWriteBody`) → **D-03e "0 pinned" hard fail-closed → whole rotation aborts** (partial rotation → AES-GCM cascade). Latent (no test exercised a shared file inside a rotated folder), but reachable.
+- **Reachable path is the Rust desktop rotation.** The web reconcile (`owner-reconcile.service.ts`) never fail-closes on a file **root** — it skips shares whose ipns isn't a loaded folder. The TS twin change is defense-in-depth/parity.
+
+Fix (single coherent rule, both twins): `re_mint_grants_rooted_at` (Rust) / `reMintGrantsRootedAt` (TS) now **exempt `nodeKind === file`** from the pin fetch + pin check and re-mint the file grant directly. Folder/root grants stay **fully fail-closed** (carve-out is file-only). This accepts the pre-existing file-share recipient-substitution limitation (files were never pinned at issuance either).
+
+Tests (RED-then-GREEN verified):
+- Rust `file_rooted_grant_is_re_minted_without_a_pin_while_folder_still_fails_closed` — File exempt + re-minted; Folder still `Err`. `cargo test -p cipherbox-sdk` = **154 passed**.
+- TS grant-remint `Test F` / `Test F2` — file re-mints without consulting `getPinsFn`; folder with empty pins still throws. sdk-core grant-remint = **10 passed**. `cargo build -p cipherbox-fuse` clean; sdk-core build clean.
+
+### Doc updates
+- **D-03g** added to `.planning/phases/80-.../80-CONTEXT.md` documenting the file-share carve-out and refining D-03e ("folder/root grants fail-closed; file-rooted grants exempt — no pin is structurally possible").
+- `docs/METADATA_SCHEMAS.md` `recipientPins` section: folder/root-only carve-out note.
+
+### greptile threads — both resolved
+- Finding 1 (`3567267434`, ShareDialog:234): thread was already resolved; replied documenting `f0a871a4c` (`#discussion_r3567387440`).
+- Finding 2 (`3567320910`, owner-reconcile:123): replied with the full code trace + fix (`#discussion_r3567387470`) and **resolved** the thread via `resolveReviewThread`.
+- Final sweep: **8 threads total, 0 unresolved.**
+
+### Deliverables
+- Commits: **`f0a871a4c`** (Finding 1), **`575fbff02`** (Finding 2 + tests + docs). Branch tip **`575fbff02`**, pushed.
+- Re-dispatched **"CI E2E Tests" run `29214101163`** — running.
+- Did **not** merge.
+
+### One caveat to flag
+greptile posts a fresh review asynchronously after each push. My sweep is current as of now (0 unresolved), but greptile's re-review of `575fbff02` may still be in-flight — worth a final thread check before merge.</result>
+<usage><subagent_tokens>453308</subagent_tokens><tool_uses>68</tool_uses><duration_ms>1043744</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bwi2t1dre</task-id>
+<tool-use-id>toolu_01KUqBVCUwKPh1GCroLas8GJ</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/bwi2t1dre.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll round-3 ci-e2e + final merge-readiness sweep" completed (exit code 0)</summary>
+</task-notification>
