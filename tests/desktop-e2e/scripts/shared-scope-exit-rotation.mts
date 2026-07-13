@@ -1350,6 +1350,7 @@ async function main(): Promise<void> {
     clearBytes(frankPreRotationKey);
   } finally {
     clearBytes(rootReadKey);
+    clearBytes(rootWriteKey);
     clearBytes(ownerPrivateKey);
     clearBytes(bobPrivateKey);
     clearBytes(eve.privateKey);
