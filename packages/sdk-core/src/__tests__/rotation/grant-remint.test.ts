@@ -46,8 +46,13 @@ const NEW_GENERATION = 3;
 /** Simulated 4-byte wrapped key returned by the mock wrapKey. */
 const MOCK_WRAPPED_BYTES = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
 
-/** Expected base64 encoding of MOCK_WRAPPED_BYTES (what updateGrantFn receives). */
-const EXPECTED_ENCRYPTED_KEY = btoa(String.fromCharCode(0xde, 0xad, 0xbe, 0xef));
+/**
+ * Expected HEX encoding of MOCK_WRAPPED_BYTES (what updateGrantFn receives).
+ * The re-mint `encryptedReadKey` MUST be hex: `PATCH /shares/:id/grant` validates
+ * even-length hex and decodes via `Buffer.from(.., 'hex')`, matching the
+ * share-CREATE path and the Rust re-mint twin (`hex::encode`). base64 400s.
+ */
+const EXPECTED_ENCRYPTED_KEY = 'deadbeef';
 
 const SHARE_ID_A = 'share-aaaa-1111';
 const SHARE_ID_B = 'share-bbbb-2222';
@@ -102,7 +107,7 @@ describe('reMintGrantsRootedAt', () => {
     // wrapKey must be called with (newReadKey, recipientPublicKey) — ECIES wrap
     expect(mockFns.wrapKey).toHaveBeenCalledWith(NEW_READ_KEY, RECIPIENT_PUB_KEY_A);
 
-    // updateGrantFn must be called with (shareId, base64EncryptedKey, newGeneration)
+    // updateGrantFn must be called with (shareId, hexEncryptedKey, newGeneration)
     expect(mockUpdateGrant).toHaveBeenCalledWith(
       SHARE_ID_A,
       EXPECTED_ENCRYPTED_KEY,

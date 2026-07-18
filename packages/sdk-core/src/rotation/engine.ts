@@ -40,6 +40,7 @@ import {
   generateEd25519Keypair,
   deriveIpnsName,
   bytesToBase64,
+  bytesToHex,
   base64ToBytes,
 } from '@cipherbox/crypto';
 import { publishWithCas } from '../cas';
@@ -645,7 +646,15 @@ export async function reMintGrantsRootedAt(
       // T-64-04c: always use wrapKey — never hand-roll key wrapping.
       // Do NOT zero newReadKey here — caller is terminal owner (D-09).
       const wrappedBytes = await wrapKey(newReadKey, grant.recipientPublicKey);
-      const encryptedReadKey = bytesToBase64(wrappedBytes);
+      // Encode as HEX — `PATCH /shares/:id/grant` (UpdateGrantDto.encryptedReadKey)
+      // validates even-length hex (`/^(?:[0-9a-fA-F]{2})+$/`) and decodes via
+      // `Buffer.from(.., 'hex')`, exactly like the share-CREATE path
+      // (share/index.ts `bytesToHex`) and the Rust re-mint twin
+      // (crates/sdk/src/rotation/engine.rs `hex::encode`). base64 here 400s every
+      // re-mint PATCH (folder sweep AND file inline) — the recipient also decodes
+      // it as hex, so base64 would be double-wrong. (Distinct from the owner-only
+      // ECIES key-checkpoint at ~:1152, which stays base64 to match Rust.)
+      const encryptedReadKey = bytesToHex(wrappedBytes);
       await callbacks.updateGrantFn(grant.shareId, encryptedReadKey, newGeneration);
     }
   }
