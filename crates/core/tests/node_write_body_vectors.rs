@@ -51,6 +51,11 @@ struct SealVector {
     write_key: String,
     ipns_private_key_hex: String,
     fixed_iv: String,
+    /// Recipient-pubkey pins (raw compressed secp256k1, base64) sealed inside
+    /// the write-body (D-03b). Absent (defaults to empty) for the frozen
+    /// seal_vectors[0] empty-pin KAT.
+    #[serde(default)]
+    recipient_pins: Vec<String>,
     expected_published_node: ExpectedPublishedNode,
 }
 
@@ -94,9 +99,21 @@ fn write_body_seal_matches_kat() {
         let ipns_private_key = hex::decode(&v.ipns_private_key_hex)
             .unwrap_or_else(|_| panic!("Bad hex ipns_private_key_hex in: {}", v.description));
 
+        // Decode the recipient pins (base64 → raw compressed pubkey bytes).
+        // Empty for seal_vectors[0]; non-empty for seal_vectors[1].
+        let recipient_pins: Vec<Vec<u8>> = v
+            .recipient_pins
+            .iter()
+            .map(|p| {
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, p)
+                    .unwrap_or_else(|_| panic!("Bad base64 recipient_pin in: {}", v.description))
+            })
+            .collect();
+
         let wb = NodeWriteBody {
             ipns_private_key,
             write_children: Vec::<WriteChildRef>::new(),
+            recipient_pins,
         };
         let wb_bytes = encode_write_body(&wb)
             .unwrap_or_else(|e| panic!("encode_write_body failed for {}: {:?}", v.description, e));

@@ -193,6 +193,7 @@ pub fn build_folder_emission(
     let write_body = NodeWriteBody {
         ipns_private_key: ipns_private_key.clone(),
         write_children,
+        recipient_pins: Vec::new(),
     };
 
     let published =
@@ -250,6 +251,7 @@ pub fn build_file_emission(content: NodeContent) -> Result<FileEmission, SdkErro
     let write_body = NodeWriteBody {
         ipns_private_key: ipns_private_key.clone(),
         write_children: Vec::new(),
+        recipient_pins: Vec::new(),
     };
 
     let published =
@@ -607,6 +609,7 @@ mod tests {
         let parent_write_body = NodeWriteBody {
             ipns_private_key: parent_stub.ipns_private_key.clone(),
             write_children: vec![file_write_ref.clone(), folder_write_ref.clone()],
+            recipient_pins: Vec::new(),
         };
         let parent_published = core_seal::seal_published_node(
             &parent_node,

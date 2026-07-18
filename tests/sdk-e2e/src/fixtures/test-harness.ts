@@ -8,7 +8,13 @@
  * initializes their vault, and returns a ready-to-use CipherBoxClient.
  */
 
-import { CipherBoxClient } from '@cipherbox/sdk';
+import {
+  CipherBoxClient,
+  buildGrantRemintCallbacks,
+  type RotationClientCallbacks,
+  type OwnerReconcileTransport,
+  type GrantRow,
+} from '@cipherbox/sdk';
 import { initializeVault } from '@cipherbox/core';
 import { hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { publishVaultKeyBlob, publishEmptyRootNode } from '@cipherbox/sdk-core';
@@ -34,6 +40,135 @@ function fetchHeaders(extra: Record<string, string> = {}): Record<string, string
 /** Default headers for the api-client axios instance (throttle bypass). */
 function axiosDefaultHeaders(): Record<string, string> | undefined {
   return THROTTLE_BYPASS ? { 'X-Throttle-Bypass': THROTTLE_BYPASS } : undefined;
+}
+
+/** Shape of a sent-share row (SentShareResponseDto) as returned by GET /shares/sent. */
+interface SentShareRow {
+  shareId: string;
+  recipientPublicKey: string;
+  encryptedReadKey: string;
+  rootNodeId: string;
+  shareRootIpnsName: string;
+  rootGeneration: string;
+}
+
+/**
+ * Build the opt-in web-mirroring `rotationCallbacks` seam for a single account.
+ *
+ * Mirrors apps/web (`rotation-driver.service.ts` + `owner-reconcile.service.ts`)
+ * but sources every grant op from THIS account's own API via `testFetch` +
+ * `accessToken` (the api-client global singleton carries no per-account auth).
+ *
+ * `clientHolder` is late-bound: the callbacks only fire during later mutations,
+ * so the CipherBoxClient is assigned into the holder AFTER construction.
+ *
+ * `resolveInlineGrantRemint` can be disabled at runtime via the
+ * `E2E_DISABLE_INLINE_REMINT=1` env hook (defaults to enabled) — this lets the
+ * suite prove the seam is a REAL gate by re-running with the seam removed and
+ * confirming the re-mint assertion fails.
+ */
+function buildInlineGrantRemintCallbacks(
+  apiUrl: string,
+  accessToken: string,
+  clientHolder: { client: CipherBoxClient | null }
+): RotationClientCallbacks {
+  const authHeaders = (extra: Record<string, string> = {}) =>
+    fetchHeaders({ Authorization: `Bearer ${accessToken}`, ...extra });
+
+  async function fetchSentShares(): Promise<SentShareRow[]> {
+    const res = await testFetch(`${apiUrl}/shares/sent`, { headers: authHeaders() });
+    if (!res.ok) {
+      throw new Error(`GET /shares/sent failed (${res.status}): ${await res.text()}`);
+    }
+    const data = (await res.json()) as { shares: SentShareRow[] };
+    return data.shares;
+  }
+
+  const toGrantRow = (s: SentShareRow): GrantRow => ({
+    shareId: s.shareId,
+    recipientPublicKey: hexToBytes(
+      s.recipientPublicKey.startsWith('0x') ? s.recipientPublicKey.slice(2) : s.recipientPublicKey
+    ),
+    isRevoked: false,
+    rootNodeId: s.rootNodeId,
+  });
+
+  const listSentGrants = async (): Promise<GrantRow[]> => (await fetchSentShares()).map(toGrantRow);
+
+  const updateGrant = async (
+    shareId: string,
+    encryptedReadKey: string,
+    generation: number
+  ): Promise<void> => {
+    // sdk-core `reMintGrantsRootedAt` hands `encryptedReadKey` as even-length
+    // HEX (Gap C fix), matching PATCH /shares/:id/grant — forward it verbatim.
+    const res = await testFetch(`${apiUrl}/shares/${shareId}/grant`, {
+      method: 'PATCH',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ encryptedReadKey, rootGeneration: String(generation) }),
+    });
+    if (!res.ok) {
+      throw new Error(`PATCH /shares/${shareId}/grant failed (${res.status}): ${await res.text()}`);
+    }
+  };
+
+  const deleteGrant = async (shareId: string): Promise<void> => {
+    const res = await testFetch(`${apiUrl}/shares/${shareId}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
+    if (!res.ok && res.status !== 204) {
+      throw new Error(`DELETE /shares/${shareId} failed (${res.status}): ${await res.text()}`);
+    }
+  };
+
+  return {
+    getActiveGrantRootIpnsNames: async () => {
+      const shares = await fetchSentShares();
+      return new Set(shares.map((s) => s.shareRootIpnsName));
+    },
+    getLocalGrantRecord: () => null,
+    persistJob: () => {},
+    resolveInlineGrantRemint: async (_rootNodeIpnsName: string, _rootNodeId: string) => {
+      const shares = await fetchSentShares();
+      if (shares.length === 0) return undefined;
+
+      // nodeId -> shareRootIpnsName, so the per-node getRecipientPubkeyPins seam
+      // resolves the right node's owner-sealed pins during the rotation walk.
+      const nodeIdToIpnsName = new Map<string, string>();
+      for (const s of shares) {
+        if (!nodeIdToIpnsName.has(s.rootNodeId)) {
+          nodeIdToIpnsName.set(s.rootNodeId, s.shareRootIpnsName);
+        }
+      }
+
+      // Derive grants from the SAME snapshot as nodeIdToIpnsName — a second
+      // /shares/sent fetch could observe different rows and desync the two.
+      const grants = shares.map(toGrantRow);
+
+      const transport: OwnerReconcileTransport = {
+        listSentGrants,
+        updateGrant,
+        deleteGrant,
+        getRecipientPubkeyPins: (nodeId: string) => {
+          const ipnsName = nodeIdToIpnsName.get(nodeId);
+          if (!ipnsName) {
+            throw new Error(
+              `resolveInlineGrantRemint: no share-root IPNS name for node ${nodeId} — refusing to re-mint (fail-closed)`
+            );
+          }
+          const client = clientHolder.client;
+          if (!client) throw new Error('resolveInlineGrantRemint: client not initialized');
+          return client.getRecipientPubkeyPins(ipnsName);
+        },
+      };
+
+      return {
+        innerGrants: grants,
+        grantCallbacks: buildGrantRemintCallbacks(transport),
+      };
+    },
+  };
 }
 
 /** Core account data returned by createTestAccount (shared between sdk-e2e and load tests). */
@@ -65,6 +200,16 @@ export interface CreateAccountOptions {
   secret?: string;
   label: string;
   emailPrefix?: string;
+  /**
+   * Opt-in: wire this account's CipherBoxClient with a `rotationCallbacks` seam
+   * that mirrors apps/web (rotation-driver + owner-reconcile) but sourced from
+   * THIS account's own API via `testFetch` + its `accessToken` (never the
+   * api-client global singleton — that carries no per-account auth). When false
+   * (default) no `rotationCallbacks` is passed and the client behaves exactly as
+   * every other suite's client (zero rotation). Used to prove the web
+   * file-share grant re-mint on scope-exit rotation (recipient-pin-lifecycle §5).
+   */
+  withInlineGrantRemint?: boolean;
 }
 
 /**
@@ -147,6 +292,22 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
       throw new Error(`vault/init failed (${initRes.status}): ${await initRes.text()}`);
     }
 
+    // 6a. Opt-in rotation seam (recipient-pin-lifecycle §5): build the
+    // web-mirroring rotationCallbacks BEFORE constructing the client (the
+    // callbacks close over a late-bound clientHolder, assigned after
+    // construction). The RED test hook `E2E_DISABLE_INLINE_REMINT=1` strips the
+    // inline seam to prove it is a real gate; every other callback stays wired so
+    // scope-exit rotation still triggers (getActiveGrantRootIpnsNames), matching
+    // the pre-fix sweep-only web behavior.
+    const clientHolder: { client: CipherBoxClient | null } = { client: null };
+    let rotationCallbacks: RotationClientCallbacks | undefined;
+    if (opts.withInlineGrantRemint) {
+      rotationCallbacks = buildInlineGrantRemintCallbacks(apiUrl, accessToken, clientHolder);
+      if (process.env.E2E_DISABLE_INLINE_REMINT === '1') {
+        rotationCallbacks.resolveInlineGrantRemint = undefined;
+      }
+    }
+
     // 6. Create CipherBoxClient with instance-scoped axios (no singleton needed).
     // rootWriteKey + rootIpnsKeypair mirror the web host-layer wiring (68.1-03,
     // useAuth.ts) so ensureFolderLoaded / recoverWriteKeyIfNeeded can
@@ -161,7 +322,11 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
       rootWriteKey: vault.rootWriteKey,
       rootIpnsKeypair: vault.rootIpnsKeypair,
       defaultHeaders: axiosDefaultHeaders(),
+      ...(rotationCallbacks ? { rotationCallbacks } : {}),
     });
+    // Late-bind the client into the holder so the rotationCallbacks (which only
+    // fire during later mutations) can reach getRecipientPubkeyPins.
+    clientHolder.client = client;
     // D-06: thread the published root Node's nodeId/nodeGeneration (0, first
     // publish) and rootWriteKey so subsequent publishes (e.g. uploadFile to
     // the root) don't trip registration.ts:221's "nodeId is required" guard.
@@ -197,8 +362,11 @@ export async function createTestAccount(opts: CreateAccountOptions): Promise<Tes
 /**
  * Create a fully-initialized test context (convenience wrapper over createTestAccount).
  */
-export async function createTestContext(label: string): Promise<TestContext> {
-  const account = await createTestAccount({ label });
+export async function createTestContext(
+  label: string,
+  opts?: { withInlineGrantRemint?: boolean }
+): Promise<TestContext> {
+  const account = await createTestAccount({ label, ...opts });
   return { ...account, cleanup: () => account.client.destroy() };
 }
 

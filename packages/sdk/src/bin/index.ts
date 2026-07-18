@@ -533,7 +533,11 @@ export async function restoreFromBin(params: {
   // ipnsName-keyed). Pitfall 4: `generation` here is `restoredItem.generation`
   // (== nodeRef.generation) — the SAME value already used for the read-plane
   // reseal above — never a second, independently-derived generation.
-  let sourceWriteBodyParams: { writeKey?: Uint8Array; writeChildren?: WriteChildRef[] } = {};
+  let sourceWriteBodyParams: {
+    writeKey?: Uint8Array;
+    writeChildren?: WriteChildRef[];
+    recipientPins?: string[];
+  } = {};
   let baseSourceWriteChildren: WriteChildRef[] | undefined;
   let rehomedSourceWriteChildren: WriteChildRef[] | undefined;
   let didRehome = false;
@@ -629,6 +633,10 @@ export async function restoreFromBin(params: {
       writeKey: targetWriteBodyParams.writeKey,
       writeChildren: rehomedTargetWriteChildren,
       baseWriteChildren: baseTargetWriteChildren,
+      // D-03: preserve the target folder's owner-sealed recipient pins on the
+      // restore republish (an omitted snapshot fail-closes; sealing pin-less
+      // would erase pins for a shared folder). Empty [] for an unpinned folder.
+      recipientPins: targetWriteBodyParams.recipientPins ?? [],
       ipnsPrivateKey: targetFolder.ipnsKeypair.privateKey,
       ipnsPublicKey: targetFolder.ipnsKeypair.publicKey,
       ipnsName: targetFolderIpnsName,
@@ -667,6 +675,9 @@ export async function restoreFromBin(params: {
         writeKey: sourceWriteBodyParams.writeKey,
         writeChildren: rehomedSourceWriteChildren,
         baseWriteChildren: baseSourceWriteChildren,
+        // D-03: preserve the source folder's owner-sealed recipient pins on the
+        // lingering-ref drop republish (omitted snapshot fail-closes).
+        recipientPins: sourceWriteBodyParams.recipientPins ?? [],
         ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
         ipnsPublicKey: sourceFolder.ipnsKeypair.publicKey,
         ipnsName: sourceFolder.ipnsName,
@@ -780,6 +791,9 @@ async function dropLingeringWriteChildRef(params: {
         writeKey: writeBodyParams.writeKey,
         writeChildren: trimmedWriteChildren,
         baseWriteChildren,
+        // D-03: preserve the parent's owner-sealed recipient pins on the
+        // lingering-ref drop republish (omitted snapshot fail-closes).
+        recipientPins: writeBodyParams.recipientPins ?? [],
         ipnsPrivateKey: originalParent.ipnsKeypair.privateKey,
         ipnsPublicKey: originalParent.ipnsKeypair.publicKey,
         ipnsName: originalParent.ipnsName,

@@ -3,3 +3,10 @@
 export { navigateReadChain, type NavigateResult } from './navigate';
 
 export { issueReadGrant, claimInviteReadKey, claimInvite, type ReadGrantPayload } from './grant';
+
+export {
+  assertRecipientPinned,
+  appendRecipientPin,
+  extractRecipientPins,
+  type RecipientPubkey,
+} from './recipient-pins';

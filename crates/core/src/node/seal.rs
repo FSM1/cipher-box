@@ -231,6 +231,7 @@ mod seal_published_node_tests {
                 child_id: "660e8400-e29b-41d4-a716-446655440001".to_string(),
                 write_key_sealed: "c2VhbGVkLXdyaXRlLWtleQ==".to_string(),
             }],
+            recipient_pins: vec![],
         }
     }
 

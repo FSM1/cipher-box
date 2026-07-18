@@ -471,6 +471,17 @@ pub async fn rotate_read_on_scope_exit(
     deleted_child_id: &str,
     root_children_override: Option<Vec<SealedChildRef>>,
 ) -> Result<(), RotationError> {
+    // D-03a share→rotate race fix: refresh the grant root's cached recipient
+    // pins from its CURRENT published write-body BEFORE the rotation reads them.
+    // A pin written out of band (e.g. the owner sharing this folder from the web
+    // client) may not yet be materialized on this mount's inode cache; reading
+    // the stale/empty cache would fail-close the retained recipient's re-mint
+    // ("0 pinned", D-03e) AND republish the node pin-less (reconstruct_write_body),
+    // aborting the rotation and cascading into AES-GCM refresh failures on the
+    // slower FUSE-T/WinFsp mounts. Best-effort (never fails the rotation itself).
+    crate::write_ops::rotation_deps::refresh_grant_root_recipient_pins(fs, grant_root_ipns_name)
+        .await;
+
     // ipns_name (read plane) and child UUID (write plane) are PUBLIC
     // identifiers, not key material — safe to log (CLAUDE.md rule 2).
     let Some((root_node_id, root_read_key)) =
@@ -861,6 +872,7 @@ mod tests {
                 read_key: Zeroizing::new([0u8; 32]),
                 write_key: Zeroizing::new([0u8; 32]),
                 ipns_private_key: Zeroizing::new(vec![0u8; 32]),
+                recipient_pins: Vec::new(),
                 children_loaded: false,
             },
             attr: make_attrs(ino, true),
@@ -892,6 +904,7 @@ mod tests {
                 read_key: Zeroizing::new([0u8; 32]),
                 write_key: Zeroizing::new([0u8; 32]),
                 ipns_private_key: Zeroizing::new(vec![0u8; 32]),
+                recipient_pins: Vec::new(),
             },
             attr: make_attrs(ino, false),
             children: None,
@@ -909,6 +922,7 @@ mod tests {
                 read_key: Zeroizing::new([0u8; 32]),
                 write_key: Zeroizing::new([0u8; 32]),
                 ipns_private_key: Zeroizing::new(Vec::new()),
+                recipient_pins: Vec::new(),
             };
         }
         let folder_a = table.allocate_ino();

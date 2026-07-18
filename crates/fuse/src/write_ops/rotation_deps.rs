@@ -64,7 +64,11 @@ use zeroize::Zeroizing;
 use cipherbox_api_client::ipns::{resolve_ipns_verified, VerifyError};
 use cipherbox_api_client::shares::SentShareResponse;
 use cipherbox_api_client::{ApiClient, ApiError, IpnsPublishRequest, PublishResult};
-use cipherbox_core::node::{decode_published_node, encode_published_node, PublishedNode};
+use cipherbox_core::node::seal::{seal_child_write_key, seal_node, unseal_node};
+use cipherbox_core::node::{
+    decode_published_node, decode_write_body, encode_published_node, encode_write_body, NodeKind,
+    NodeWriteBody, PublishedNode, WriteChildRef,
+};
 use cipherbox_sdk::rotation::{GrantRow, PublishAttempt};
 use cipherbox_sdk::{
     JsonSidecarFloorStore, PublishOutcome, ResolvedRecord, RotationDeps, RotationError,
@@ -144,6 +148,17 @@ pub trait RotationTransport {
 
     /// Hard-revoke a single share/invite grant by ID — `DELETE /shares/:shareId`.
     async fn revoke_share(&self, share_id: &str) -> Result<(), RotationError>;
+
+    /// D-03d/D-03e (Plan 80-06): the node's OWN owner-sealed recipient pin list
+    /// (raw ECIES pubkey bytes), read OFFLINE. Production ([`ApiClientTransport`])
+    /// resolves it from the already-materialized `InodeTable` pin cache (80-05)
+    /// — NO extra `GET /shares/sent` or network fetch; tests seed it in-memory.
+    /// An absent/non-materialized node yields an empty list (the caller treats
+    /// empty-at-re-mint as a hard fail-closed, D-03e).
+    async fn get_recipient_pubkey_pins(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<Vec<u8>>, RotationError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,6 +187,16 @@ pub struct FuseRotationDeps<T: RotationTransport> {
     /// Combined per-nodeId sidecar (Plan 70.1-03) backing
     /// `persist_wrapped_key`/`get_wrapped_key`/`delete_wrapped_key`.
     floor_store: JsonSidecarFloorStore,
+    /// D-02 job-scoped cache of `GET /shares/sent`. `query_grants_rooted_at` is
+    /// called once per rotated node during re-mint; without this each call
+    /// re-fetches the full sent-share list (O(nodes × shares), 607×/run
+    /// observed). This `FuseRotationDeps` is constructed ONCE per rotation job
+    /// (grant_scope.rs:488) and walked via `&deps`, so an interior-mutable
+    /// `OnceCell` (populated on the first query, reused thereafter) bounds the
+    /// fetch to `<= 1` per job — job-scoped, not static/global. `OnceCell`
+    /// (not `RefCell`) because the fetch is `async` and must not hold a borrow
+    /// across the `.await`.
+    sent_shares_cache: tokio::sync::OnceCell<Vec<SentShareResponse>>,
 }
 
 impl<T: RotationTransport> FuseRotationDeps<T> {
@@ -186,6 +211,7 @@ impl<T: RotationTransport> FuseRotationDeps<T> {
             owner_public_key,
             owner_private_key: Zeroizing::new(owner_private_key),
             floor_store,
+            sent_shares_cache: tokio::sync::OnceCell::new(),
         }
     }
 }
@@ -262,9 +288,16 @@ impl<T: RotationTransport> RotationDeps for FuseRotationDeps<T> {
     /// they never appear in this query result (Pitfall 2 / T-74-14 — a
     /// revoked recipient is cut by ABSENCE, not a flag).
     async fn query_grants_rooted_at(&self, node_id: &str) -> Result<Vec<GrantRow>, RotationError> {
-        let shares = self.transport.collect_sent_shares().await?;
+        // D-02: fetch `GET /shares/sent` once per rotation job, then filter the
+        // cached rows by `root_node_id` on every subsequent node. The per-share
+        // 0x-strip/hex-decode + per-share RotateFailed error path below is
+        // unchanged — only the source (cached slice) differs.
+        let shares = self
+            .sent_shares_cache
+            .get_or_try_init(|| self.transport.collect_sent_shares())
+            .await?;
         shares
-            .into_iter()
+            .iter()
             .filter(|s| s.root_node_id == node_id)
             .map(|s| {
                 let recipient_public_key = cipherbox_crypto::utils::hex_to_bytes(
@@ -277,7 +310,7 @@ impl<T: RotationTransport> RotationDeps for FuseRotationDeps<T> {
                     ))
                 })?;
                 Ok(GrantRow {
-                    share_id: s.share_id,
+                    share_id: s.share_id.clone(),
                     recipient_public_key,
                     is_revoked: false,
                 })
@@ -307,6 +340,19 @@ impl<T: RotationTransport> RotationDeps for FuseRotationDeps<T> {
     /// for engine-contract completeness.
     async fn delete_grant(&self, share_id: &str) -> Result<(), RotationError> {
         self.transport.revoke_share(share_id).await
+    }
+
+    /// D-03d/D-03e (Plan 80-06): resolves the node's OWN owner-sealed recipient
+    /// pins OFFLINE via the transport seam (production: the `InodeTable` pin
+    /// cache surfaced in 80-05; no extra network fetch — D-03a). The engine's
+    /// `re_mint_grants_rooted_at` fails the node's re-mint closed if
+    /// `grant.recipient_public_key` is not among these pins (T-80-15) or the
+    /// list is empty (D-03e no-legacy, T-80-16).
+    async fn get_recipient_pubkey_pins(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<Vec<u8>>, RotationError> {
+        self.transport.get_recipient_pubkey_pins(node_id).await
     }
 
     /// D-01/D-03: ECIES-wraps `wrapped_b64`'s raw key material under the
@@ -431,6 +477,28 @@ impl RotationTransport for ApiClientTransport<'_> {
         })?;
         let seed_arr = to_key32(&signing_seed, "IPNS signing seed")?;
 
+        // D-01: the read-key rotation engine hands us a node with
+        // `write_sealed: None`. Reconstruct + inject the write-body from the
+        // locally-materialized InodeTable, re-sealed under the node's OWN write
+        // key at its NEW generation (ROLE_BODY 0x01) — restoring owned-walkability
+        // and `replay.rs` signing-seed durability. Fail-open to the unchanged
+        // (None) node for a non-materialized node (D-01b). Never rotates/mutates
+        // the write plane — the child write keys are copied verbatim.
+        let reconstructed_node;
+        let node = if node.write_sealed.is_none() {
+            match reconstruct_write_body(self.inodes, ipns_name, node.generation) {
+                Some(sealed) => {
+                    let mut cloned = node.clone();
+                    cloned.write_sealed = Some(STANDARD.encode(sealed));
+                    reconstructed_node = cloned;
+                    &reconstructed_node
+                }
+                None => node,
+            }
+        } else {
+            node
+        };
+
         let node_bytes = encode_published_node(node).map_err(|e| {
             RotationError::RotateFailed(format!(
                 "publish: encode_published_node failed for {ipns_name}: {e}"
@@ -532,6 +600,187 @@ impl RotationTransport for ApiClientTransport<'_> {
                 ))
             })
     }
+
+    /// D-03d/D-03e (Plan 80-06): reads the node's cached recipient pins OFFLINE
+    /// from the already-materialized `InodeTable` (80-05) — NO network fetch.
+    /// A node not locally materialized returns an empty list, so a later
+    /// re-mint fails closed (D-03e), rather than trusting the relay pubkey.
+    async fn get_recipient_pubkey_pins(
+        &self,
+        node_id: &str,
+    ) -> Result<Vec<Vec<u8>>, RotationError> {
+        Ok(find_recipient_pins(self.inodes, node_id))
+    }
+}
+
+/// Scans the locally-mounted `InodeTable` for the inode whose stable `node_id`
+/// matches, returning its cached (owner-sealed, surfaced in 80-05) recipient
+/// pin list — the D-03d authorization anchor for the re-mint wrap. Returns an
+/// empty list when the node is not locally materialized (fail-closed at the
+/// caller, D-03e). Mirrors `find_grant_root_state`'s `find_map` idiom, keyed on
+/// `node_id` (the value `re_mint_grants_rooted_at` passes) rather than
+/// `ipns_name`.
+fn find_recipient_pins(inodes: &InodeTable, node_id: &str) -> Vec<Vec<u8>> {
+    inodes
+        .inodes
+        .values()
+        .find_map(|inode| {
+            if inode.node_id != node_id {
+                return None;
+            }
+            let pins = match &inode.kind {
+                InodeKind::Root { recipient_pins, .. } => recipient_pins,
+                InodeKind::Folder { recipient_pins, .. } => recipient_pins,
+                InodeKind::File { recipient_pins, .. } => recipient_pins,
+            };
+            Some(pins.clone())
+        })
+        .unwrap_or_default()
+}
+
+/// Refresh a grant root inode's cached `recipient_pins` from its CURRENT
+/// published write-body — the share→rotate race fix (D-03a/D-03d/D-03e).
+///
+/// The scope-exit re-mint (`re_mint_grants_rooted_at` → `get_recipient_pubkey_pins`
+/// → [`find_recipient_pins`]) AND the rotation republish ([`reconstruct_write_body`])
+/// both read the grant root's owner-sealed recipient pins from THIS mount's
+/// in-memory inode cache. That cache is materialized lazily (mount init / the
+/// periodic metadata refresh), so a pin written OUT OF BAND — e.g. the owner
+/// sharing the folder from the web client, which reseals the folder write-body
+/// with the new pin and bumps its IPNS record — may not yet be reflected here
+/// when the owner immediately deletes inside that folder on their desktop mount.
+///
+/// Reading the STALE (empty) cache then does two harmful things: (a) the retained
+/// recipient's re-mint fails closed ("0 pinned", D-03e), and (b) the rotation
+/// republishes the node PIN-LESS (`reconstruct_write_body` reseals the empty
+/// cache), clobbering the real published pin. The rotation then aborts mid-flight
+/// and every later metadata refresh AES-GCM-fails against the new-generation
+/// record (the mount's stale read key cannot open it) — the exact macOS/WinFsp
+/// desktop-e2e cascade this closes.
+///
+/// This resolves + unseals the grant root's OWN write-body ONCE (under its
+/// unchanged write key — write keys never rotate, only the read plane does) and
+/// overwrites the inode's cached pins with the authoritative published list
+/// BEFORE the rotation reads them, closing the race deterministically for BOTH
+/// the product (share-then-rotate) and the desktop e2e. Best-effort: a
+/// resolve/fetch/unseal failure leaves the cache untouched and returns `Ok` (the
+/// rotation then proceeds on the cached pins — this refresh must never itself be
+/// the thing that fails a rotation that would otherwise have had fresh pins).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub(crate) async fn refresh_grant_root_recipient_pins(
+    fs: &mut crate::CipherBoxFS,
+    grant_root_ipns_name: &str,
+) {
+    // Snapshot the grant root's identity + write key from the inode. The
+    // immutable borrow is dropped before the network round trip below.
+    let Some((ino, node_id, node_kind, write_key)) =
+        fs.inodes.inodes.iter().find_map(|(ino, inode)| {
+            let (candidate, kind, write_key) = match &inode.kind {
+                InodeKind::Root {
+                    ipns_name,
+                    write_key,
+                    ..
+                } => (ipns_name, NodeKind::Root, write_key),
+                InodeKind::Folder {
+                    ipns_name,
+                    write_key,
+                    ..
+                } => (ipns_name, NodeKind::Folder, write_key),
+                InodeKind::File {
+                    ipns_name,
+                    write_key,
+                    ..
+                } => (ipns_name, NodeKind::File, write_key),
+            };
+            (candidate == grant_root_ipns_name)
+                .then(|| (*ino, inode.node_id.clone(), kind, Zeroizing::new(**write_key)))
+        })
+    else {
+        return; // not locally materialized — nothing to refresh
+    };
+
+    // Resolve + fetch + unseal the CURRENT published write-body (network; no
+    // inode borrow held). Any failure is swallowed to a warn — see the
+    // best-effort contract in the doc comment.
+    let api = fs.api.clone();
+    let fresh_pins = match refresh_pins_inner(&api, grant_root_ipns_name, &node_id, node_kind, &write_key)
+        .await
+    {
+        Ok(Some(pins)) => pins,
+        Ok(None) => return, // no write-body published — leave the cache as-is
+        Err(e) => {
+            log::warn!(
+                "refresh_grant_root_recipient_pins: could not refresh pins for {grant_root_ipns_name} \
+                 (proceeding with cached pins): {e}"
+            );
+            return;
+        }
+    };
+
+    // Overwrite the cached pins (mut borrow, no network held).
+    if let Some(inode) = fs.inodes.get_mut(ino) {
+        match &mut inode.kind {
+            InodeKind::Root { recipient_pins, .. }
+            | InodeKind::Folder { recipient_pins, .. }
+            | InodeKind::File { recipient_pins, .. } => {
+                *recipient_pins = fresh_pins;
+            }
+        }
+    }
+}
+
+/// Network + crypto half of [`refresh_grant_root_recipient_pins`], split out so
+/// the caller holds NO inode borrow across the `.await`. Returns `Ok(None)` when
+/// the published node carries no write-body (nothing to refresh from).
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+async fn refresh_pins_inner(
+    api: &ApiClient,
+    ipns_name: &str,
+    node_id: &str,
+    node_kind: NodeKind,
+    write_key: &[u8; 32],
+) -> Result<Option<Vec<Vec<u8>>>, RotationError> {
+    // sc6-allow: verified fail-closed resolve chokepoint (D-08), not a read-plane bypass.
+    let resolved = resolve_ipns_verified(api, ipns_name).await.map_err(|e| {
+        RotationError::RotateFailed(format!("refresh_pins_inner: resolve failed for {ipns_name}: {e}"))
+    })?;
+    let bytes = cipherbox_api_client::ipfs::fetch_content(api, &resolved.cid)
+        .await
+        .map_err(|e| {
+            RotationError::RotateFailed(format!(
+                "refresh_pins_inner: fetch_content failed for {ipns_name}: {e}"
+            ))
+        })?;
+    let published = decode_published_node(&bytes).map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "refresh_pins_inner: decode_published_node failed for {ipns_name}: {e}"
+        ))
+    })?;
+    let Some(write_sealed_b64) = published.write_sealed.as_ref() else {
+        return Ok(None);
+    };
+    let write_sealed = STANDARD.decode(write_sealed_b64).map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "refresh_pins_inner: base64 decode failed for {ipns_name}: {e}"
+        ))
+    })?;
+    // The write-body is sealed under the node's OWN write key at its published
+    // generation (ROLE_BODY 0x01) — the exact AAD `list_folder_owned` unseals with.
+    let wb_bytes = Zeroizing::new(
+        unseal_node(&write_sealed, write_key, node_id, node_kind, published.generation).map_err(
+            |e| {
+                RotationError::RotateFailed(format!(
+                    "refresh_pins_inner: unseal_node failed for {ipns_name}: {e}"
+                ))
+            },
+        )?,
+    );
+    let write_body = decode_write_body(&wb_bytes).map_err(|e| {
+        RotationError::RotateFailed(format!(
+            "refresh_pins_inner: decode_write_body failed for {ipns_name}: {e}"
+        ))
+    })?;
+    Ok(Some(write_body.recipient_pins))
 }
 
 // ---------------------------------------------------------------------------
@@ -573,6 +822,161 @@ fn find_ipns_private_key(inodes: &InodeTable, ipns_name: &str) -> Option<Zeroizi
         };
         (candidate_name == ipns_name && !key.is_empty()).then(|| Zeroizing::new(key.to_vec()))
     })
+}
+
+/// Reconstruct a node's write-body from the locally-mounted `InodeTable` and
+/// re-seal it under the node's OWN write key at `new_generation` (ROLE_BODY
+/// 0x01 AAD), returning the sealed write-body bytes.
+///
+/// D-01: a scope-exit read-key rotation republish otherwise emits
+/// `write_sealed: None` (the read-key rotation engine never populates it, and
+/// this FUSE adapter — a Phase-72 deferral — never reconstructed it). That
+/// floods `list_folder_owned` with "owned child has no write_sealed body" AND
+/// is a durability hole (`replay.rs::recover_signing_seed` cannot recover the
+/// node's signing seed after rotation+remount). This rebuilds the write plane
+/// from the in-memory `InodeTable` (the node's own stable write key +
+/// `ipns_private_key` + child `WriteChildRef`s rebuilt from child inodes' write
+/// keys — all read-key-rotation-independent) and re-seals via `seal_node` at
+/// the node's NEW generation.
+///
+/// Fail-open to `None` (D-01b, mirroring `find_ipns_private_key`) when the node
+/// is NOT locally materialized. NEVER rotates or mutates the write plane — the
+/// child write keys are copied verbatim from the child inodes.
+///
+/// Child `WriteChildRef.write_key_sealed` is sealed under THIS node's write key
+/// at AAD generation `0` — the `build_folder_metadata` / `build_child_refs`
+/// write-splice convention (the child write plane is not rotated here; only the
+/// node's OWN write-body ROLE_BODY seal uses `new_generation`).
+///
+/// D-03a/D-01↔D-03e (80-05): the node's CACHED recipient pins (surfaced onto the
+/// inode from the unsealed write-body at materialization) are carried verbatim
+/// into the reconstructed `NodeWriteBody`, so a scope-exit rotation republish
+/// PRESERVES them. Recipient pins are issuance data (public ECIES keys) that are
+/// NOT derivable from InodeTable key material — dropping them here would republish
+/// the node WITHOUT pins, hard-failing a later re-mint after re-materialize
+/// (D-03e). Pins are copied, never rotated.
+#[cfg(any(feature = "fuse", feature = "winfsp"))]
+pub(crate) fn reconstruct_write_body(
+    inodes: &InodeTable,
+    ipns_name: &str,
+    new_generation: u32,
+) -> Option<Vec<u8>> {
+    use zeroize::Zeroize as _;
+
+    // Locate the node by its OWN ipns_name (mirrors `find_ipns_private_key`),
+    // pulling its stable node_id, kind, write key, signing seed, cached
+    // recipient pins (D-03a), and child inos.
+    let (node_id, node_kind, node_write_key, ipns_private_key, recipient_pins, child_inos) =
+        inodes.inodes.values().find_map(|inode| {
+            let (candidate_name, kind, write_key, ipns_priv, pins) = match &inode.kind {
+                InodeKind::Root {
+                    ipns_name,
+                    write_key,
+                    ipns_private_key,
+                    recipient_pins,
+                    ..
+                } => (
+                    ipns_name,
+                    NodeKind::Root,
+                    write_key,
+                    ipns_private_key,
+                    recipient_pins,
+                ),
+                InodeKind::Folder {
+                    ipns_name,
+                    write_key,
+                    ipns_private_key,
+                    recipient_pins,
+                    ..
+                } => (
+                    ipns_name,
+                    NodeKind::Folder,
+                    write_key,
+                    ipns_private_key,
+                    recipient_pins,
+                ),
+                InodeKind::File {
+                    ipns_name,
+                    write_key,
+                    ipns_private_key,
+                    recipient_pins,
+                    ..
+                } => (
+                    ipns_name,
+                    NodeKind::File,
+                    write_key,
+                    ipns_private_key,
+                    recipient_pins,
+                ),
+            };
+            (candidate_name == ipns_name && !ipns_priv.is_empty()).then(|| {
+                (
+                    inode.node_id.clone(),
+                    kind,
+                    Zeroizing::new(**write_key),
+                    Zeroizing::new(ipns_priv.to_vec()),
+                    pins.clone(),
+                    inode.children.clone().unwrap_or_default(),
+                )
+            })
+        })?;
+
+    // Rebuild the child write-chain from each child inode's OWN write key —
+    // read-key-rotation-independent, copied verbatim (never re-derived/rotated).
+    // Children with no IPNS identity yet (freshly created, never published) are
+    // skipped, mirroring `build_folder_metadata`.
+    let mut write_children: Vec<WriteChildRef> = Vec::new();
+    for child_ino in child_inos {
+        let Some(child) = inodes.inodes.get(&child_ino) else {
+            continue;
+        };
+        let (child_kind, child_ipns, child_write_key) = match &child.kind {
+            InodeKind::Folder {
+                ipns_name,
+                write_key,
+                ..
+            } => (NodeKind::Folder, ipns_name, Zeroizing::new(**write_key)),
+            InodeKind::File {
+                ipns_name,
+                write_key,
+                ..
+            } => (NodeKind::File, ipns_name, Zeroizing::new(**write_key)),
+            InodeKind::Root { .. } => continue,
+        };
+        if child_ipns.is_empty() {
+            continue;
+        }
+        let sealed = seal_child_write_key(
+            &child_write_key,
+            &node_write_key,
+            &child.node_id,
+            child_kind,
+            0,
+        )
+        .ok()?;
+        write_children.push(WriteChildRef {
+            child_id: child.node_id.clone(),
+            write_key_sealed: STANDARD.encode(sealed),
+        });
+    }
+
+    // Assemble + seal the write-body under the node's OWN write key at the NEW
+    // generation (ROLE_BODY 0x01) — the exact AAD `recover_signing_seed` rebuilds.
+    // D-01↔D-03e: carry the node's CACHED recipient pins verbatim so a rotation
+    // republish PRESERVES them (recipient pins are issuance data, not derivable
+    // from InodeTable material — dropping them here would hard-fail a later
+    // re-mint after re-materialize). Pins are PUBLIC keys, copied not rotated.
+    let mut write_body = NodeWriteBody {
+        ipns_private_key: ipns_private_key.to_vec(),
+        write_children,
+        recipient_pins,
+    };
+    let wb_bytes = encode_write_body(&write_body).ok()?;
+    // Scrub the bare signing-seed copy inside the (non-Zeroizing) write body once
+    // it has been encoded (crypto rule #6; mirrors `build_folder_metadata`).
+    write_body.ipns_private_key.zeroize();
+
+    seal_node(&wb_bytes, &node_write_key, &node_id, node_kind, new_generation).ok()
 }
 
 /// Scans the locally-mounted `InodeTable` for the grant-root inode matching
@@ -635,6 +1039,11 @@ mod tests {
         /// In-memory `GET /shares/sent` fixture rows (Task 1: grant-seam
         /// tests), consumed verbatim by `collect_sent_shares`.
         sent_shares: Vec<SentShareResponse>,
+        /// D-02 call-counter: how many times `collect_sent_shares` has been
+        /// invoked. A job-scoped cache bounds this to `<= 1` per rotation walk,
+        /// regardless of the number of rotated nodes (mirrors the
+        /// `publish_log`/`publish_count_for` pattern).
+        collect_sent_shares_calls: usize,
         /// Ordered log of every `update_grant` call:
         /// `(share_id, encrypted_read_key, new_generation)`.
         updated_grants: Vec<(String, String, u32)>,
@@ -646,6 +1055,11 @@ mod tests {
         /// If set, the NEXT `revoke_share` call returns this error message
         /// wrapped in `RotationError::RotateFailed`, then clears.
         fail_next_revoke_share: Option<String>,
+        /// node_id -> the node's owner-sealed recipient pin list (raw ECIES
+        /// pubkey bytes), returned verbatim by `get_recipient_pubkey_pins`
+        /// (Plan 80-06, D-03d/D-03e). An absent entry yields an empty list —
+        /// the pin-absent hard fail-closed case (D-03e).
+        pins_by_node: HashMap<String, Vec<Vec<u8>>>,
     }
 
     /// In-memory `RotationTransport` fake — no live IPNS/IPFS round trip.
@@ -685,6 +1099,12 @@ mod tests {
             self.0.lock().unwrap().sent_shares = shares;
         }
 
+        /// How many times `collect_sent_shares` has been called so far (D-02
+        /// call-count assertion — a job-scoped cache must keep this `<= 1`).
+        fn collect_sent_shares_count(&self) -> usize {
+            self.0.lock().unwrap().collect_sent_shares_calls
+        }
+
         /// Every `update_grant` call captured so far, in order.
         fn updated_grants(&self) -> Vec<(String, String, u32)> {
             self.0.lock().unwrap().updated_grants.clone()
@@ -703,6 +1123,17 @@ mod tests {
         /// The NEXT `revoke_share` call fails with `RotationError::RotateFailed(message)`.
         fn fail_next_revoke_share(&self, message: &str) {
             self.0.lock().unwrap().fail_next_revoke_share = Some(message.to_string());
+        }
+
+        /// Seeds the owner-sealed recipient pin list returned by
+        /// `get_recipient_pubkey_pins` for `node_id` (Plan 80-06). Not seeding
+        /// a node leaves its pin list empty (the D-03e pin-absent case).
+        fn seed_pins(&self, node_id: &str, pins: Vec<Vec<u8>>) {
+            self.0
+                .lock()
+                .unwrap()
+                .pins_by_node
+                .insert(node_id.to_string(), pins);
         }
     }
 
@@ -760,7 +1191,9 @@ mod tests {
         }
 
         async fn collect_sent_shares(&self) -> Result<Vec<SentShareResponse>, RotationError> {
-            Ok(self.0.lock().unwrap().sent_shares.clone())
+            let mut inner = self.0.lock().unwrap();
+            inner.collect_sent_shares_calls += 1;
+            Ok(inner.sent_shares.clone())
         }
 
         async fn update_grant(
@@ -788,6 +1221,20 @@ mod tests {
             }
             inner.revoked_shares.push(share_id.to_string());
             Ok(())
+        }
+
+        async fn get_recipient_pubkey_pins(
+            &self,
+            node_id: &str,
+        ) -> Result<Vec<Vec<u8>>, RotationError> {
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .pins_by_node
+                .get(node_id)
+                .cloned()
+                .unwrap_or_default())
         }
     }
 
@@ -1266,5 +1713,446 @@ mod tests {
             .await
             .expect_err("a transport failure must surface as an error");
         assert!(matches!(err, RotationError::RotateFailed(_)));
+    }
+
+    // -----------------------------------------------------------------------
+    // D-01 reconstruction + D-02 sent-shares cache (Plan 80-02)
+    // -----------------------------------------------------------------------
+
+    const RECON_FOLDER_NODE_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const RECON_CHILD_NODE_ID: &str = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+    /// Minimal directory `FileAttrs` for a test inode.
+    fn recon_dir_attrs(ino: u64) -> crate::inode::FileAttrs {
+        let now = std::time::SystemTime::now();
+        crate::inode::FileAttrs {
+            ino,
+            size: 0,
+            blocks: 0,
+            atime: now,
+            mtime: now,
+            ctime: now,
+            crtime: now,
+            is_dir: true,
+            perm: 0o755,
+            nlink: 2,
+        }
+    }
+
+    /// Build an `InodeTable` with a materialized Folder node (own write_key +
+    /// ipns_private_key) holding one materialized child folder (own write_key).
+    /// Returns `(table, folder_ipns, folder_write_key, folder_ipns_private_key,
+    /// child_write_key)`.
+    fn table_with_materialized_folder() -> (InodeTable, String, [u8; 32], Vec<u8>, [u8; 32]) {
+        use crate::inode::{InodeData, ROOT_INO};
+
+        let mut table = InodeTable::new();
+        let folder_ino = table.allocate_ino();
+        let child_ino = table.allocate_ino();
+
+        let folder_write_key = [21u8; 32];
+        let folder_ipns_private_key = vec![31u8; 32];
+        let child_write_key = [22u8; 32];
+
+        table.insert(InodeData {
+            ino: folder_ino,
+            node_id: RECON_FOLDER_NODE_ID.to_string(),
+            parent_ino: ROOT_INO,
+            name: "folder".to_string(),
+            kind: InodeKind::Folder {
+                ipns_name: "k51recon-folder".to_string(),
+                read_key: Zeroizing::new([11u8; 32]),
+                write_key: Zeroizing::new(folder_write_key),
+                ipns_private_key: Zeroizing::new(folder_ipns_private_key.clone()),
+                recipient_pins: Vec::new(),
+                children_loaded: true,
+            },
+            attr: recon_dir_attrs(folder_ino),
+            children: Some(vec![child_ino]),
+            write_generation: 0,
+        });
+        table.insert(InodeData {
+            ino: child_ino,
+            node_id: RECON_CHILD_NODE_ID.to_string(),
+            parent_ino: folder_ino,
+            name: "child".to_string(),
+            kind: InodeKind::Folder {
+                ipns_name: "k51recon-child".to_string(),
+                read_key: Zeroizing::new([12u8; 32]),
+                write_key: Zeroizing::new(child_write_key),
+                ipns_private_key: Zeroizing::new(vec![32u8; 32]),
+                recipient_pins: Vec::new(),
+                children_loaded: true,
+            },
+            attr: recon_dir_attrs(child_ino),
+            children: Some(vec![]),
+            write_generation: 0,
+        });
+
+        (
+            table,
+            "k51recon-folder".to_string(),
+            folder_write_key,
+            folder_ipns_private_key,
+            child_write_key,
+        )
+    }
+
+    /// Test A (D-01): `reconstruct_write_body` for a materialized folder returns
+    /// a write-body that `unseal_node` (under the node's OWN write key, at the
+    /// NEW generation, ROLE_BODY 0x01) decodes back to a `NodeWriteBody` whose
+    /// `ipns_private_key` and child `WriteChildRef`(s) match the InodeTable
+    /// inputs — and whose child write key is copied verbatim (no rotation).
+    #[test]
+    fn reconstruct_write_body_round_trips_ipns_key_and_child_write_refs() {
+        use cipherbox_core::node::seal::{unseal_child_write_key, unseal_node};
+        use cipherbox_core::node::{decode_write_body, NodeKind};
+
+        let (table, folder_ipns, folder_write_key, folder_ipns_private_key, child_write_key) =
+            table_with_materialized_folder();
+        let new_generation = 7u32;
+
+        let sealed = reconstruct_write_body(&table, &folder_ipns, new_generation)
+            .expect("a materialized node reconstructs Some");
+
+        let wb_bytes = unseal_node(
+            &sealed,
+            &folder_write_key,
+            RECON_FOLDER_NODE_ID,
+            NodeKind::Folder,
+            new_generation,
+        )
+        .expect("unseal the reconstructed write-body under the node write key at the new generation");
+        let wb = decode_write_body(&wb_bytes).expect("decode the reconstructed write-body");
+
+        assert_eq!(
+            wb.ipns_private_key, folder_ipns_private_key,
+            "the reconstructed write-body carries the node's own signing seed"
+        );
+        assert_eq!(
+            wb.write_children.len(),
+            1,
+            "one materialized child -> exactly one WriteChildRef"
+        );
+        let wcr = &wb.write_children[0];
+        assert_eq!(
+            wcr.child_id, RECON_CHILD_NODE_ID,
+            "the WriteChildRef is keyed by the child's stable node_id"
+        );
+
+        let sealed_child = STANDARD
+            .decode(&wcr.write_key_sealed)
+            .expect("child write_key_sealed is valid base64");
+        let recovered_child_write_key = unseal_child_write_key(
+            &sealed_child,
+            &folder_write_key,
+            RECON_CHILD_NODE_ID,
+            NodeKind::Folder,
+            0,
+        )
+        .expect("unseal the child write key under the parent write key");
+        assert_eq!(
+            recovered_child_write_key,
+            child_write_key.to_vec(),
+            "the child write key is copied verbatim (read-key-rotation-independent, never rotated)"
+        );
+    }
+
+    /// Test B (D-03a/D-01↔D-03e, 80-05): `reconstruct_write_body` carries the
+    /// node's CACHED recipient pins into the resealed write-body, so a rotation
+    /// republish PRESERVES them (a subsequent re-materialize + re-mint still
+    /// finds the pins). The reconstructed body must round-trip BOTH the pins
+    /// AND the keys/children (no regression of 80-02's reconstruction contract).
+    #[test]
+    fn reconstruct_write_body_preserves_cached_recipient_pins() {
+        use cipherbox_core::node::seal::unseal_node;
+        use cipherbox_core::node::{decode_write_body, NodeKind};
+
+        let (mut table, folder_ipns, folder_write_key, folder_ipns_private_key, _child_write_key) =
+            table_with_materialized_folder();
+        let new_generation = 7u32;
+        let pins = vec![vec![0x04u8; 33], vec![0x04u8, 0x11, 0x22, 0x33]];
+
+        // Cache recipient pins on the materialized folder inode (D-03a).
+        let folder_ino = table
+            .find_child(crate::inode::ROOT_INO, "folder")
+            .expect("materialized folder linked under root");
+        match &mut table.get_mut(folder_ino).unwrap().kind {
+            InodeKind::Folder { recipient_pins, .. } => *recipient_pins = pins.clone(),
+            other => panic!("expected Folder, got {:?}", other),
+        }
+
+        let sealed = reconstruct_write_body(&table, &folder_ipns, new_generation)
+            .expect("a materialized node reconstructs Some");
+        let wb_bytes = unseal_node(
+            &sealed,
+            &folder_write_key,
+            RECON_FOLDER_NODE_ID,
+            NodeKind::Folder,
+            new_generation,
+        )
+        .expect("unseal the reconstructed write-body under the node write key");
+        let wb = decode_write_body(&wb_bytes).expect("decode the reconstructed write-body");
+
+        assert_eq!(
+            wb.recipient_pins, pins,
+            "reconstruction MUST preserve the cached recipient pins (D-01↔D-03e durability)"
+        );
+        // 80-02 contract intact: keys + children still round-trip.
+        assert_eq!(
+            wb.ipns_private_key, folder_ipns_private_key,
+            "the reconstructed write-body still carries the node's own signing seed"
+        );
+        assert_eq!(
+            wb.write_children.len(),
+            1,
+            "one materialized child -> exactly one WriteChildRef"
+        );
+        assert_eq!(
+            wb.write_children[0].child_id, RECON_CHILD_NODE_ID,
+            "the WriteChildRef is still keyed by the child's stable node_id"
+        );
+    }
+
+    /// Test B (D-01b): a node NOT present in the InodeTable fails open to
+    /// `None` (never a panic/Err), mirroring `find_ipns_private_key`.
+    #[test]
+    fn reconstruct_write_body_fails_open_to_none_for_a_non_materialized_node() {
+        let table = InodeTable::new();
+        assert!(
+            reconstruct_write_body(&table, "k51-not-materialized", 3).is_none(),
+            "a non-materialized node must fail open to None, not hard-error"
+        );
+    }
+
+    /// Test C (D-02): a rotation walk that queries grants once per rotated node
+    /// (>= 3 nodes here) fetches `GET /shares/sent` at most once, while the
+    /// per-node `root_node_id` filter still returns exactly the in-scope grant.
+    #[tokio::test]
+    async fn rotation_walk_fetches_sent_shares_at_most_once() {
+        const OTHER_NODE_ID: &str = "33333333-3333-3333-3333-333333333333";
+        let transport = FakeTransport::default();
+        transport.seed_sent_shares(vec![
+            sent_share_fixture(
+                "share-in-scope",
+                ROOT_ID,
+                "0x04aabbccdd00112233445566778899aabbccddeeff001122334455667788990011",
+            ),
+            sent_share_fixture("share-other-root", OTHER_NODE_ID, "0x04ff"),
+        ]);
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+
+        for _ in 0..4 {
+            let rows = deps
+                .query_grants_rooted_at(ROOT_ID)
+                .await
+                .expect("query_grants_rooted_at must succeed");
+            assert_eq!(
+                rows.len(),
+                1,
+                "the root_node_id filter still returns exactly the in-scope grant per node"
+            );
+            assert_eq!(rows[0].share_id, "share-in-scope");
+        }
+
+        assert!(
+            transport.collect_sent_shares_count() <= 1,
+            "a rotation job must fetch GET /shares/sent at most once (got {})",
+            transport.collect_sent_shares_count()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // D-03d / D-03e (Plan 80-06): fail-closed recipient-pin binding at re-mint
+    //
+    // A compromised relay could substitute the `recipient_public_key` that
+    // round-trips through `GET /shares/sent`, causing the owner to ECIES-wrap
+    // the fresh post-rotation read key TO THE ATTACKER. Before every wrap,
+    // `re_mint_grants_rooted_at` must verify the recipient is a member of the
+    // node's OWN owner-sealed `recipient_pins` (read offline from the InodeTable
+    // cache) and fail the WHOLE node's re-mint closed on a non-member (D-03d) OR
+    // an absent/empty pin list (D-03e no-legacy) — never a per-grant skip.
+    // -----------------------------------------------------------------------
+
+    /// Wires a childless grant-root at seq 1 plus a single NON-revoked grant
+    /// rooted at `ROOT_ID` whose recipient is `recipient_pub`, so a
+    /// `rotate_read_from_node` walk reaches the re-mint wrap for that recipient.
+    fn seed_remint_pin_harness(transport: &FakeTransport, recipient_pub: &[u8]) {
+        let read_key = [7u8; 32];
+        transport.seed(
+            "k51root",
+            "cid-root-v1",
+            1,
+            seal_for_seed(&folder_fixture(0), &read_key),
+        );
+        transport.seed_sent_shares(vec![sent_share_fixture(
+            "share-active",
+            ROOT_ID,
+            &format!(
+                "0x{}",
+                cipherbox_crypto::utils::bytes_to_hex(recipient_pub)
+            ),
+        )]);
+    }
+
+    /// Test A (D-03d mismatch): the grant's recipient is NOT among the node's
+    /// owner-sealed pins (a relay-substituted pubkey) — the node's re-mint
+    /// fails closed and NO grant is wrapped/updated.
+    #[tokio::test]
+    async fn re_mint_fails_closed_when_recipient_is_not_pinned() {
+        let transport = FakeTransport::default();
+        let (_sk, pk) = ecies::utils::generate_keypair();
+        seed_remint_pin_harness(&transport, &pk.serialize());
+
+        // Pin a DIFFERENT recipient — the grant's recipient is not a member.
+        let (_other_sk, other_pk) = ecies::utils::generate_keypair();
+        transport.seed_pins(ROOT_ID, vec![other_pk.serialize().to_vec()]);
+
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+        let read_key = [7u8; 32];
+        let mut job = RotationJobRecord::new(ROOT_ID);
+
+        let result =
+            cipherbox_sdk::rotate_read_from_node(&deps, ROOT_ID, "k51root", &read_key, &mut job)
+                .await;
+
+        assert!(
+            result.is_err(),
+            "a relay-substituted (unpinned) recipient must fail the node's re-mint closed (D-03d), got {result:?}"
+        );
+        assert!(
+            transport.updated_grants().is_empty(),
+            "no grant may be re-minted/wrapped on the fail-closed path, got {:?}",
+            transport.updated_grants()
+        );
+    }
+
+    /// Test B (D-03e absent): the node has an EMPTY pin list at re-mint — a
+    /// hard fail-closed (no-legacy, no-TOFU), NOT a silent skip. No grant is
+    /// wrapped/updated.
+    #[tokio::test]
+    async fn re_mint_fails_closed_when_pin_list_is_empty() {
+        let transport = FakeTransport::default();
+        let (_sk, pk) = ecies::utils::generate_keypair();
+        seed_remint_pin_harness(&transport, &pk.serialize());
+        // No pins seeded for ROOT_ID -> empty/absent pin list (D-03e).
+
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+        let read_key = [7u8; 32];
+        let mut job = RotationJobRecord::new(ROOT_ID);
+
+        let result =
+            cipherbox_sdk::rotate_read_from_node(&deps, ROOT_ID, "k51root", &read_key, &mut job)
+                .await;
+
+        assert!(
+            result.is_err(),
+            "an absent/empty pin list at re-mint is a hard fail-closed (D-03e), got {result:?}"
+        );
+        assert!(
+            transport.updated_grants().is_empty(),
+            "no grant may be re-minted on the pin-absent path, got {:?}",
+            transport.updated_grants()
+        );
+    }
+
+    /// Test C (match): the grant's recipient IS pinned — the node re-mints
+    /// exactly that recipient (the pre-80-06 success path is preserved).
+    #[tokio::test]
+    async fn re_mint_succeeds_when_recipient_is_pinned() {
+        let transport = FakeTransport::default();
+        let (_sk, pk) = ecies::utils::generate_keypair();
+        let recipient_pub = pk.serialize().to_vec();
+        seed_remint_pin_harness(&transport, &recipient_pub);
+        transport.seed_pins(ROOT_ID, vec![recipient_pub.clone()]);
+
+        let (owner_pub, owner_priv) = owner_keypair();
+        let deps =
+            FuseRotationDeps::new(transport.clone(), owner_pub, owner_priv, temp_floor_store());
+        let read_key = [7u8; 32];
+        let mut job = RotationJobRecord::new(ROOT_ID);
+
+        let result =
+            cipherbox_sdk::rotate_read_from_node(&deps, ROOT_ID, "k51root", &read_key, &mut job)
+                .await;
+
+        assert!(
+            result.is_ok(),
+            "a pinned recipient must re-mint successfully: {:?}",
+            result.err()
+        );
+        let updated = transport.updated_grants();
+        assert_eq!(
+            updated.len(),
+            1,
+            "exactly the pinned recipient is re-minted, got {updated:?}"
+        );
+        assert_eq!(updated[0].0, "share-active");
+    }
+
+    /// Best-effort contract of [`refresh_grant_root_recipient_pins`]: when the
+    /// grant root cannot be resolved/fetched (here: `make_test_fs`'s dead
+    /// `127.0.0.1:1` API endpoint), the refresh must NOT panic and must leave
+    /// the inode's cached pins UNTOUCHED — the rotation then proceeds on the
+    /// cached pins rather than the refresh becoming the thing that fails a
+    /// rotation. A missing/unmaterialized grant root is likewise a no-op.
+    #[tokio::test]
+    async fn refresh_grant_root_recipient_pins_is_a_noop_on_resolve_failure() {
+        use crate::inode::{FileAttrs, InodeData, InodeKind, ROOT_INO};
+        use crate::test_support::make_test_fs;
+        use std::time::SystemTime;
+
+        let mut fs = make_test_fs();
+        let folder_ino = fs.inodes.allocate_ino();
+        let cached_pins = vec![vec![0x02u8; 33], vec![0x03u8, 0x11, 0x22]];
+        let now = SystemTime::now();
+        fs.inodes.insert(InodeData {
+            ino: folder_ino,
+            node_id: "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_string(),
+            parent_ino: ROOT_INO,
+            name: "shared".to_string(),
+            kind: InodeKind::Folder {
+                ipns_name: "k51-refresh-target".to_string(),
+                read_key: Zeroizing::new([11u8; 32]),
+                write_key: Zeroizing::new([22u8; 32]),
+                ipns_private_key: Zeroizing::new(vec![5u8; 32]),
+                recipient_pins: cached_pins.clone(),
+                children_loaded: true,
+            },
+            attr: FileAttrs {
+                ino: folder_ino,
+                size: 0,
+                blocks: 0,
+                atime: now,
+                mtime: now,
+                ctime: now,
+                crtime: now,
+                is_dir: true,
+                perm: 0o755,
+                nlink: 2,
+            },
+            children: Some(vec![]),
+            write_generation: 0,
+        });
+
+        // Resolve hits the dead endpoint and fails; the refresh swallows it.
+        refresh_grant_root_recipient_pins(&mut fs, "k51-refresh-target").await;
+        let pins_after = match &fs.inodes.get(folder_ino).unwrap().kind {
+            InodeKind::Folder { recipient_pins, .. } => recipient_pins.clone(),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            pins_after, cached_pins,
+            "a resolve failure must leave the cached pins untouched (best-effort, never clobbers)"
+        );
+
+        // A grant root not present in the inode table is a silent no-op.
+        refresh_grant_root_recipient_pins(&mut fs, "k51-does-not-exist").await;
     }
 }

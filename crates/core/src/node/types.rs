@@ -142,6 +142,17 @@ pub struct NodeWriteBody {
     pub ipns_private_key: Vec<u8>,
     /// Write chain to child nodes; mirrors the read chain in `SealedChildRef`.
     pub write_children: Vec<WriteChildRef>,
+    /// Recipient-pubkey pins bound at share/re-mint (D-03b) — each entry a raw
+    /// compressed secp256k1 public key, base64-encoded on the wire.
+    ///
+    /// Additive optional field (METADATA_EVOLUTION_PROTOCOL §3.1): omitted from
+    /// the wire when empty (`skip_serializing_if`) so the frozen empty-pin KAT
+    /// (`seal_vectors[0]`) is preserved byte-for-byte, and defaulted to empty
+    /// on decode so older/newer readers never fail-closed on it. Note the
+    /// enclosing struct intentionally carries NO `deny_unknown_fields` (forward
+    /// tolerance, unlike `SealedChildRef`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty", with = "base64_key_list")]
+    pub recipient_pins: Vec<Vec<u8>>,
 }
 
 /// The unified in-memory Node shape (decrypted, plaintext). Mirrors TS `Node`.
@@ -247,6 +258,36 @@ mod base64_key {
         base64::engine::general_purpose::STANDARD
             .decode(&raw)
             .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Base64 (standard alphabet) serde helper for a LIST of raw key/pubkey byte
+/// vectors on the JSON wire (each element base64, the outer value a JSON array).
+///
+/// Used by `NodeWriteBody.recipient_pins`; mirrors the TS `string[]` (base64)
+/// wire convention so the two codecs are byte-identical (D-03b).
+mod base64_key_list {
+    use base64::Engine as _;
+    use serde::ser::SerializeSeq;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(items: &[Vec<u8>], s: S) -> Result<S::Ok, S::Error> {
+        let mut seq = s.serialize_seq(Some(items.len()))?;
+        for item in items {
+            seq.serialize_element(&base64::engine::general_purpose::STANDARD.encode(item))?;
+        }
+        seq.end()
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<u8>>, D::Error> {
+        let raw = Vec::<String>::deserialize(d)?;
+        raw.into_iter()
+            .map(|s| {
+                base64::engine::general_purpose::STANDARD
+                    .decode(&s)
+                    .map_err(serde::de::Error::custom)
+            })
+            .collect()
     }
 }
 

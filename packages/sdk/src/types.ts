@@ -11,6 +11,7 @@ import type {
   ExternalProviderConfig,
   RotationJobRecord,
   KeyCheckpointCallbacks,
+  reMintGrantsRootedAt,
 } from '@cipherbox/sdk-core';
 import type { AxiosInstance } from '@cipherbox/api-client';
 import type { SealedChildRef, Node, PublishedNode } from '@cipherbox/core';
@@ -33,6 +34,29 @@ export type PinningConfig = {
  */
 export type LocalGrantRecord = {
   shareRootIpnsName: string;
+};
+
+/**
+ * The `reMintGrantsRootedAt` callbacks shape, derived structurally from
+ * sdk-core's exported function signature (the `GrantRemintCallbacks` type is
+ * not on the sdk-core public barrel — only the `.` export path is published —
+ * so we derive it rather than adding a new sdk-core export surface, mirroring
+ * `share/owner-reconcile.ts`).
+ */
+type GrantRemintCallbacks = NonNullable<Parameters<typeof reMintGrantsRootedAt>[5]>;
+
+/**
+ * Resolved inputs for `rotateReadFromNode`'s INLINE per-node grant re-mint seam
+ * (`innerGrants` + `grantCallbacks`), supplied by the host for the folder about
+ * to be scope-exit rotated.
+ *
+ * `innerGrants` is only a non-empty ENABLE gate for the seam (sdk-core
+ * `rotateOne` fires the re-mint iff `innerGrants.length > 0`); the actual
+ * per-node grant set is resolved by `grantCallbacks.queryGrantsFn(nodeId)`.
+ */
+export type InlineGrantRemint = {
+  innerGrants: ReadonlyArray<unknown>;
+  grantCallbacks: GrantRemintCallbacks;
 };
 
 /**
@@ -64,6 +88,26 @@ export type RotationClientCallbacks = {
    * identical to pre-Plan-70.1-05 behavior.
    */
   keyCheckpoint?: KeyCheckpointCallbacks;
+  /**
+   * Optional injection seam for INLINE grant re-mint during scope-exit rotation
+   * (recipient-pin-lifecycle §5 — web file-grant re-mint gap). When supplied,
+   * `performScopeExitRotation` resolves it for the rotation root and threads the
+   * returned `innerGrants`/`grantCallbacks` into `rotateReadFromNode` so the
+   * per-node seam re-mints surviving grants under each node's rotated read key
+   * as the walk descends — INCLUDING separately-shared FILE leaves the
+   * login/opportunistic reconcile sweep can never reach (a file has no
+   * `FolderTree` entry, so the sweep skips it and its recipient would otherwise
+   * keep a stale key after the owner rotates the containing folder). Desktop
+   * (Rust) already wires this inline path; this closes the web parity gap.
+   *
+   * Returns `undefined` when the root has no active sent grants → the seam
+   * stays disabled and behavior is identical to the sweep-only default. Omitted
+   * entirely → unchanged pre-fix behavior (matches the NOOP default).
+   */
+  resolveInlineGrantRemint?: (
+    rootNodeIpnsName: string,
+    rootNodeId: string
+  ) => Promise<InlineGrantRemint | undefined>;
 };
 
 /**

@@ -116,6 +116,9 @@ mod mount_impl {
                 read_key: root_read_key.clone(),
                 write_key: root_write_key.clone(),
                 ipns_private_key: Zeroizing::new(root_ipns_private_key.clone().unwrap_or_default()),
+                // Fresh root inode at mount; recipient pins (D-03) are surfaced
+                // onto inodes later during owned-listing materialization.
+                recipient_pins: Vec::new(),
             };
         }
 

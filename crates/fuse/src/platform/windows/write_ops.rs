@@ -125,6 +125,8 @@ pub mod implementation {
                         read_key: zeroize::Zeroizing::new(read_key),
                         write_key: zeroize::Zeroizing::new(write_key),
                         ipns_private_key: zeroize::Zeroizing::new(ipns_private_key.to_vec()),
+                        // Freshly created node: no share grants yet, no recipient pins.
+                        recipient_pins: Vec::new(),
                         children_loaded: true,
                     },
                     attr: attr.clone(),
@@ -362,6 +364,8 @@ pub mod implementation {
                     read_key: zeroize::Zeroizing::new(read_key),
                     write_key: zeroize::Zeroizing::new(write_key),
                     ipns_private_key: zeroize::Zeroizing::new(file_ipns_private_key),
+                    // Freshly created node: no share grants yet, no recipient pins.
+                    recipient_pins: Vec::new(),
                 },
                 attr: attr.clone(),
                 children: None,
@@ -964,6 +968,21 @@ pub mod implementation {
                             .get(ino)
                             .map(|i| i.node_id.clone())
                             .unwrap_or_else(|| crate::fs::uuid_from_ino(ino));
+                        // D-03 (Plan 80): source the file's CACHED owner-sealed
+                        // recipient pins from the inode so a routine overwrite
+                        // re-publish PRESERVES them (a shared file republished
+                        // pin-less would hard-fail a later re-mint, D-03e). Pins
+                        // are public ECIES keys — copied verbatim, never rotated.
+                        let file_recipient_pins = fs
+                            .inodes
+                            .get(ino)
+                            .map(|i| match &i.kind {
+                                crate::inode::InodeKind::File { recipient_pins, .. } => {
+                                    recipient_pins.clone()
+                                }
+                                _ => Vec::new(),
+                            })
+                            .unwrap_or_default();
 
                         let crate::journal_helpers::UploadJournalResult {
                             ciphertext,
@@ -1035,6 +1054,7 @@ pub mod implementation {
                                         &file_read_key,
                                         &file_write_key,
                                         &file_ipns_private_key,
+                                        &file_recipient_pins,
                                         &coordinator,
                                         encrypted_ipns_for_tee.as_deref(),
                                         tee_key_epoch,
@@ -1469,6 +1489,7 @@ pub mod implementation {
                     read_key: Zeroizing::new([1u8; 32]),
                     write_key: Zeroizing::new([6u8; 32]),
                     ipns_private_key: Zeroizing::new(vec![5u8; 32]),
+                    recipient_pins: Vec::new(),
                     children_loaded: true,
                 },
                 attr: FileAttrs {
@@ -1528,6 +1549,7 @@ pub mod implementation {
                     read_key: Zeroizing::new([2u8; 32]),
                     write_key: Zeroizing::new([4u8; 32]),
                     ipns_private_key: Zeroizing::new(vec![3u8; 32]),
+                    recipient_pins: Vec::new(),
                 },
                 attr: FileAttrs {
                     ino,
@@ -1745,6 +1767,7 @@ pub mod implementation {
             let write_body = NodeWriteBody {
                 ipns_private_key: vec![0u8; 32],
                 write_children: vec![write_child_ref.clone()],
+                recipient_pins: Vec::new(),
             };
             let published = seal_published_node(
                 &parent_node,

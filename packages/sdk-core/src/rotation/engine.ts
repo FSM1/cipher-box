@@ -40,6 +40,7 @@ import {
   generateEd25519Keypair,
   deriveIpnsName,
   bytesToBase64,
+  bytesToHex,
   base64ToBytes,
 } from '@cipherbox/crypto';
 import { publishWithCas } from '../cas';
@@ -48,6 +49,7 @@ import { fetchFromIpfs, addToIpfs } from '../ipfs';
 import type { SdkContext } from '../types';
 import { updateFolderMetadataAndPublish } from '../folder/registration';
 import { mergeRotatedChildren } from './merge';
+import { assertRecipientPinned } from '../share/recipient-pins';
 
 // ---------------------------------------------------------------------------
 // Types — string-literal unions, never TypeScript enums (project convention)
@@ -64,6 +66,16 @@ import { mergeRotatedChildren } from './merge';
  *   - `updateGrantFn(shareId, encryptedReadKey, newGeneration)` — persists the
  *     re-minted ECIES-wrapped encrypted key for a non-revoked recipient.
  *   - `deleteGrantFn(shareId)` — removes a revoked recipient's grant row.
+ *   - `getPinsFn(nodeId)` — resolves the node's owner-sealed `recipientPins`
+ *     (raw pubkey bytes or base64 strings) used to fail-closed verify each
+ *     surviving grant's recipient before wrapping (D-03d consumer 2 / T-80-18).
+ *
+ * @security
+ *   `getPinsFn` is a REQUIRED seam on the enforced re-mint path: the
+ *   `recipientPublicKey` on each grant round-trips through the untrusted relay
+ *   (via `listSentGrants`), so it MUST NOT be trusted as the wrap target. The
+ *   pin list is the owner-sealed authority. A missing `getPinsFn` OR an empty
+ *   pin list is a HARD fail-closed error (D-03e no-legacy) — never a skip.
  */
 export type GrantRemintCallbacks = {
   queryGrantsFn: (
@@ -77,6 +89,7 @@ export type GrantRemintCallbacks = {
     newGeneration: number
   ) => Promise<void>;
   deleteGrantFn: (shareId: string) => Promise<void>;
+  getPinsFn?: (nodeId: string) => Promise<Uint8Array[] | string[]>;
 };
 
 /**
@@ -556,6 +569,17 @@ export async function mintFileKeyOnRotate(node: Node, _job: RotationJobRecord): 
  * Invoked ONLY when `innerGrants` is non-empty (conditional — D-01).
  * When `callbacks` is absent the function is a clean no-op (D-04 seam).
  *
+ * FILE-ROOTED GRANTS ARE EXEMPT from the D-03d/D-03e pin check (Plan 80
+ * file-share carve-out, twin of the Rust `re_mint_grants_rooted_at`): a FILE
+ * node structurally cannot carry an owner-sealed recipient pin (the pin lives
+ * in `NodeWriteBody.recipientPins`, and only folder/root shares reseal a
+ * write-body at issuance). Enforcing the "empty pins is a hard fail" rule on a
+ * file would fail-close EVERY rotation of a folder that merely CONTAINS a
+ * separately-shared file — aborting the whole rotation. So `nodeKind === 'file'`
+ * re-mints WITHOUT the pin check (the accepted, pre-existing file-share
+ * recipient-substitution limitation), while folder/root grants stay fully
+ * fail-closed. `nodeKind` is optional and defaults to the enforced path.
+ *
  * @security
  *   Uses ECIES `wrapKey` (from `@cipherbox/crypto`) — never hand-roll key
  *   wrapping. Does NOT zero `newReadKey` — caller is terminal owner (D-09).
@@ -566,7 +590,8 @@ export async function reMintGrantsRootedAt(
   newGeneration: number,
   _job: RotationJobRecord,
   _ctx: SdkContext,
-  callbacks?: GrantRemintCallbacks
+  callbacks?: GrantRemintCallbacks,
+  nodeKind?: NodeKind
 ): Promise<void> {
   // D-04 transport seam: when no callbacks are supplied the function is a clean
   // no-op. This preserves the D-01 conditional-invocation contract — the clean
@@ -575,17 +600,61 @@ export async function reMintGrantsRootedAt(
 
   const grants = await callbacks.queryGrantsFn(nodeId);
 
+  // D-03d consumer 2 (T-80-18/T-80-19): fetch the node's owner-sealed pin list
+  // ONCE for the whole node before wrapping any surviving grant. The pin list —
+  // not the relay-fed `grant.recipientPublicKey` — authorizes the wrap. Only the
+  // enforced (surviving-grant) path needs pins; an all-revoked node performs no
+  // wrap, so it does not require the seam.
+  // File-share carve-out (see the doc comment): a file node can never carry an
+  // owner-sealed pin, so its re-mint is exempt from the pin check entirely — do
+  // not fetch pins for it (the seam would resolve a folder write-body and error
+  // on a leaf) and do not enforce below.
+  const isFile = nodeKind === 'file';
+  let recipientPins: string[] = [];
+  if (!isFile && grants.some((grant) => !grant.isRevoked)) {
+    if (!callbacks.getPinsFn) {
+      // Fail-closed (D-03e no-legacy): the enforced path requires a real pin
+      // source. A missing seam is a hard invariant violation, never a TOFU pass.
+      throw new Error(
+        'reMintGrantsRootedAt: getPinsFn seam is required to verify recipient pins before re-mint — refusing (D-03d/D-03e)'
+      );
+    }
+    const rawPins = await callbacks.getPinsFn(nodeId);
+    // Normalize to base64 for `assertRecipientPinned` (its stored-pin encoding).
+    recipientPins = rawPins.map((pin) => (pin instanceof Uint8Array ? bytesToBase64(pin) : pin));
+  }
+
   for (const grant of grants) {
     if (grant.isRevoked) {
       // Revoked recipient: delete the grant row. Do NOT re-mint an encrypted key.
       // T-64-04b: re-minting for a revoked recipient defeats revocation.
       await callbacks.deleteGrantFn(grant.shareId);
     } else {
-      // Non-revoked recipient: ECIES-wrap the new readKey under their public key.
+      // Fail-closed recipient verification (D-03d consumer 2 / T-80-18): the
+      // relay may have substituted `grant.recipientPublicKey`, so assert it is
+      // pinned in the owner-sealed list BEFORE wrapping. A mismatch or an
+      // absent/empty pin list throws — aborting the node's re-mint (D-03e). This
+      // is a HARD fail, deliberately NOT a per-grant skip like the isRevoked
+      // branch (Pitfall 5). Reuses the shared sdk-core helper (80-04); the web
+      // consumer (80-08) reuses the same compare. File-rooted grants are exempt
+      // (see the file-share carve-out in the doc comment) — a file has no pin.
+      if (!isFile) {
+        assertRecipientPinned(grant.recipientPublicKey, recipientPins);
+      }
+
+      // Non-revoked + pinned recipient: ECIES-wrap the new readKey under their key.
       // T-64-04c: always use wrapKey — never hand-roll key wrapping.
       // Do NOT zero newReadKey here — caller is terminal owner (D-09).
       const wrappedBytes = await wrapKey(newReadKey, grant.recipientPublicKey);
-      const encryptedReadKey = bytesToBase64(wrappedBytes);
+      // Encode as HEX — `PATCH /shares/:id/grant` (UpdateGrantDto.encryptedReadKey)
+      // validates even-length hex (`/^(?:[0-9a-fA-F]{2})+$/`) and decodes via
+      // `Buffer.from(.., 'hex')`, exactly like the share-CREATE path
+      // (share/index.ts `bytesToHex`) and the Rust re-mint twin
+      // (crates/sdk/src/rotation/engine.rs `hex::encode`). base64 here 400s every
+      // re-mint PATCH (folder sweep AND file inline) — the recipient also decodes
+      // it as hex, so base64 would be double-wrong. (Distinct from the owner-only
+      // ECIES key-checkpoint at ~:1152, which stays base64 to match Rust.)
+      const encryptedReadKey = bytesToHex(wrappedBytes);
       await callbacks.updateGrantFn(grant.shareId, encryptedReadKey, newGeneration);
     }
   }
@@ -1185,7 +1254,8 @@ export async function rotateOne(
         generationPrime,
         jobRecord,
         ctx,
-        grantCallbacks
+        grantCallbacks,
+        node.kind
       );
     }
 
@@ -2052,9 +2122,12 @@ export async function rotateReadFromNode(
     // Plan 74-02 (SC1): surface the root's own post-rotation key into the
     // per-node map, keyed by ipnsName — mirrors the Rust root commit branch
     // (crates/sdk/src/rotation/engine.rs, 74-01).
+    // `readKey` is a defensive COPY owned by this collection, safe from a
+    // future zero-on-drop of the aliased `parentNewReadKey: rootResult.childReadKey`
+    // below — mirrors Rust's `Zeroizing<[u8;32]>` clone (D-04, T-80-08).
     rotatedNodes.set(rootNodeIpnsName, {
       ipnsName: rootNodeIpnsName,
-      readKey: rootResult.childReadKey,
+      readKey: new Uint8Array(rootResult.childReadKey),
       generation: rootResult.newGeneration,
       sequenceNumber: rootResult.newSequenceNumber,
     });
@@ -2223,9 +2296,12 @@ export async function rotateReadFromNode(
         // Plan 74-02 (SC1): surface this child's post-rotation key into the
         // per-node map, keyed by its ipnsName — mirrors the Rust BFS child
         // commit branch (crates/sdk/src/rotation/engine.rs, 74-01).
+        // `readKey` is a defensive COPY owned by this collection, safe from a
+        // future zero-on-drop of the aliased `parentNewReadKey: result.childReadKey`
+        // below — mirrors Rust's `Zeroizing<[u8;32]>` clone (D-04, T-80-08).
         rotatedNodes.set(item.childRef.ipnsName, {
           ipnsName: item.childRef.ipnsName,
-          readKey: result.childReadKey,
+          readKey: new Uint8Array(result.childReadKey),
           generation: result.newGeneration,
           sequenceNumber: result.newSequenceNumber,
         });

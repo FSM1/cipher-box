@@ -297,6 +297,7 @@ describe('updateFolderMetadataAndPublish — base-aware write-body CAS-merge (SC
       readKey: READ_KEY,
       writeKey: WRITE_KEY,
       writeChildren: localWriteChildren,
+      recipientPins: [],
       baseWriteChildren,
       ipnsPrivateKey: IPNS_PRIVATE_KEY,
       ipnsName: 'k51-write-merge-a',
@@ -345,6 +346,7 @@ describe('updateFolderMetadataAndPublish — base-aware write-body CAS-merge (SC
       readKey: READ_KEY,
       writeKey: WRITE_KEY,
       writeChildren: localWriteChildren,
+      recipientPins: [],
       baseWriteChildren,
       ipnsPrivateKey: IPNS_PRIVATE_KEY,
       ipnsName: 'k51-write-merge-b',
@@ -393,6 +395,7 @@ describe('updateFolderMetadataAndPublish — base-aware write-body CAS-merge (SC
       readKey: READ_KEY,
       writeKey: WRITE_KEY,
       writeChildren: localWriteChildren,
+      recipientPins: [],
       baseWriteChildren,
       ipnsPrivateKey: IPNS_PRIVATE_KEY,
       ipnsName: 'k51-write-merge-c',
@@ -444,6 +447,7 @@ describe('updateFolderMetadataAndPublish — base-aware write-body CAS-merge (SC
       readKey: READ_KEY,
       writeKey: WRITE_KEY,
       writeChildren: localWriteChildren,
+      recipientPins: [],
       baseWriteChildren,
       ipnsPrivateKey: IPNS_PRIVATE_KEY,
       ipnsName: 'k51-write-merge-d',
@@ -457,5 +461,95 @@ describe('updateFolderMetadataAndPublish — base-aware write-body CAS-merge (SC
     // write-body is exactly {Z}, X is NOT resurrected by local's untouched
     // (now-stale) copy.
     expect(publishedWriteChildren).toEqual([{ childId: 'Z', writeKeySealed: 'seal-z' }]);
+  });
+});
+
+describe('updateFolderMetadataAndPublish — recipient-pin snapshot fail-closed (thread-80-4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFns.addToIpfs.mockImplementation(async (_ctx: unknown, data: Uint8Array) => ({
+      cid: 'QmPinCid',
+      size: data.length,
+      recorded: true,
+    }));
+  });
+
+  it('rejects an OMITTED recipientPins snapshot when a write-body is sealed (writeKey present)', async () => {
+    const ctx = createMockContext();
+    mockFns.createAndPublishIpnsRecord.mockResolvedValue({ success: true, sequenceNumber: 2n });
+
+    await expect(
+      updateFolderMetadataAndPublish({
+        children: [],
+        readKey: READ_KEY,
+        writeKey: WRITE_KEY,
+        writeChildren: [],
+        // recipientPins deliberately OMITTED — must fail closed, not silently
+        // seal [] and erase existing owner-sealed pins on a clean publish.
+        ipnsPrivateKey: IPNS_PRIVATE_KEY,
+        ipnsName: 'k51-pin-omitted',
+        sequenceNumber: 1n,
+        ctx,
+        nodeId: NODE_ID,
+        nodeGeneration: 0,
+      })
+    ).rejects.toThrow(/recipientPins snapshot is required/);
+
+    // Fail-closed BEFORE any upload/publish I/O.
+    expect(mockFns.addToIpfs).not.toHaveBeenCalled();
+    expect(mockFns.createAndPublishIpnsRecord).not.toHaveBeenCalled();
+  });
+
+  it('preserves an explicit recipientPins snapshot into the sealed write-body on a clean (no-409) publish', async () => {
+    const ctx = createMockContext();
+    let capturedNode: PublishedNode | undefined;
+    mockFns.addToIpfs.mockImplementation(async (_ctx: unknown, data: Uint8Array) => {
+      capturedNode = JSON.parse(new TextDecoder().decode(data)) as PublishedNode;
+      return { cid: 'QmPinCid', size: data.length, recorded: true };
+    });
+    mockFns.createAndPublishIpnsRecord.mockResolvedValue({ success: true, sequenceNumber: 2n });
+
+    const pins = ['cGluLWE=', 'cGluLWI=']; // two base64 pins
+
+    await updateFolderMetadataAndPublish({
+      children: [],
+      readKey: READ_KEY,
+      writeKey: WRITE_KEY,
+      writeChildren: [],
+      recipientPins: pins,
+      ipnsPrivateKey: IPNS_PRIVATE_KEY,
+      ipnsName: 'k51-pin-preserve',
+      sequenceNumber: 1n,
+      ctx,
+      nodeId: NODE_ID,
+      nodeGeneration: 0,
+    });
+
+    expect(capturedNode).toBeDefined();
+    // Unseal the write-body under the write key and assert the pins survived the
+    // clean publish (no CAS-409 union ran — this is the routine happy path).
+    const unsealed = await unsealNode(capturedNode!, READ_KEY, WRITE_KEY);
+    expect(unsealed.writeBody?.recipientPins).toEqual(pins);
+  });
+
+  it('allows an explicit empty [] snapshot for a genuinely unpinned node', async () => {
+    const ctx = createMockContext();
+    mockFns.createAndPublishIpnsRecord.mockResolvedValue({ success: true, sequenceNumber: 2n });
+
+    await expect(
+      updateFolderMetadataAndPublish({
+        children: [],
+        readKey: READ_KEY,
+        writeKey: WRITE_KEY,
+        writeChildren: [],
+        recipientPins: [],
+        ipnsPrivateKey: IPNS_PRIVATE_KEY,
+        ipnsName: 'k51-pin-empty-ok',
+        sequenceNumber: 1n,
+        ctx,
+        nodeId: NODE_ID,
+        nodeGeneration: 0,
+      })
+    ).resolves.toBeDefined();
   });
 });

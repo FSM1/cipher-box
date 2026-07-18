@@ -53,6 +53,16 @@ export type OwnerReconcileTransport = {
   updateGrant: (shareId: string, encryptedReadKey: string, generation: number) => Promise<void>;
   /** Removes a revoked recipient's grant row. */
   deleteGrant: (shareId: string) => Promise<void>;
+  /**
+   * Resolves the node's owner-sealed `recipientPins` (raw pubkey bytes) via the
+   * client read path (`client.getRecipientPubkeyPins`) so the re-mint can
+   * fail-closed verify each grant's recipient before wrapping (D-03d consumer 2).
+   *
+   * Optional on the transport type so the concrete web wrapper (80-08) can wire
+   * it separately; when absent the re-mint fails CLOSED (the enforced path
+   * throws rather than trusting the relay-fed recipient).
+   */
+  getRecipientPubkeyPins?: (nodeId: string) => Promise<Uint8Array[]>;
 };
 
 /**
@@ -66,9 +76,17 @@ export type OwnerReconcileTransport = {
 export function buildGrantRemintCallbacks(
   transport: OwnerReconcileTransport
 ): GrantRemintCallbacks {
+  // D-02 (TS mirror): memoize the sent-grants fetch for the lifetime of this
+  // callbacks bundle (one runOwnerReconcile pass). `queryGrantsFn(nodeId)` is
+  // invoked once per rotated node, so an un-cached `listSentGrants()` fans out
+  // to O(nodes × shares) relay fetches. The memo is closure-scoped (NOT
+  // global/static) so it never leaks state across reconcile passes; the
+  // per-node `rootNodeId` filter stays applied on each call.
+  let cachedGrants: Promise<GrantRow[]> | undefined;
   return {
     queryGrantsFn: async (nodeId: string) => {
-      const grants = await transport.listSentGrants();
+      cachedGrants ??= transport.listSentGrants();
+      const grants = await cachedGrants;
       return grants
         .filter((grant) => grant.rootNodeId === nodeId)
         .map((grant) => ({
@@ -80,6 +98,20 @@ export function buildGrantRemintCallbacks(
     updateGrantFn: (shareId, encryptedReadKey, newGeneration) =>
       transport.updateGrant(shareId, encryptedReadKey, newGeneration),
     deleteGrantFn: (shareId) => transport.deleteGrant(shareId),
+    // D-03d consumer 2 seam: resolve the node's owner-sealed recipientPins via
+    // the client read path so sdk-core's reMintGrantsRootedAt can fail-closed
+    // verify each surviving grant's recipient against the pin list BEFORE
+    // wrapping. Sources the pins from `getRecipientPubkeyPins` (80-04), NOT the
+    // relay-fed `/shares/sent` recipientPublicKey. Absent transport method →
+    // throw (fail-closed): the enforced path never trusts the relay recipient.
+    getPinsFn: (nodeId: string) => {
+      if (!transport.getRecipientPubkeyPins) {
+        throw new Error(
+          'buildGrantRemintCallbacks: transport.getRecipientPubkeyPins is required to verify recipient pins before re-mint — refusing (D-03d/D-03e)'
+        );
+      }
+      return transport.getRecipientPubkeyPins(nodeId);
+    },
   };
 }
 

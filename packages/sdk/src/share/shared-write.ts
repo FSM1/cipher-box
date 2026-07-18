@@ -250,6 +250,18 @@ async function resealAndPublishParent(
     writeBody: {
       ipnsPrivateKey,
       writeChildren,
+      // D-03 (Plan 80): preserve the parent's owner-sealed recipient pins
+      // VERBATIM across every shared-write reseal. This is the single
+      // chokepoint all shared-write ops route through; rebuilding the
+      // write-body WITHOUT recipientPins republishes the shared folder root
+      // pin-less, erasing the owner's pin on the wire — so the owner's next
+      // re-resolve reads empty pins and a later upgrade/re-mint hard fails
+      // closed (D-03e). Pins are public ECIES keys, copied never rotated
+      // (mirrors the six owned client.ts sites + Rust build_folder_metadata,
+      // which commit ddb7082e6 fixed but missed this shared-write module).
+      ...(parentNode.writeBody?.recipientPins
+        ? { recipientPins: parentNode.writeBody.recipientPins }
+        : {}),
     },
   };
   const newParentPublished = await sealNode(updatedParent, swCtx.readKey, swCtx.writeKey);

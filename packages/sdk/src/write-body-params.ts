@@ -65,13 +65,23 @@ export function hasRealWriteKey(wk: Uint8Array | null | undefined): boolean {
 export async function getWriteBodyParams(
   folder: FolderState,
   ctx: SdkContext
-): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[] }> {
+): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[]; recipientPins?: string[] }> {
   const wk = folder.writeKey;
   if (!hasRealWriteKey(wk)) {
     return {};
   }
   if (folder.metadata?.writeBody) {
-    return { writeKey: wk, writeChildren: folder.metadata.writeBody.writeChildren };
+    // Surface the recipient pins alongside the write chain (D-03a) so a folder
+    // republish preserves them and pin issuance can read the current list
+    // without a second resolve.
+    return {
+      writeKey: wk,
+      writeChildren: folder.metadata.writeBody.writeChildren,
+      // Always a concrete array when a writeKey is present: updateFolderMetadataAndPublish
+      // fail-closes on an OMITTED pin snapshot (it would erase existing pins), so
+      // an unpinned folder must thread `[]`, never `undefined`.
+      recipientPins: folder.metadata.writeBody.recipientPins ?? [],
+    };
   }
   const resolved = await sdkCore.resolveIpnsRecord(folder.ipnsName, ctx);
   if (!resolved) {
@@ -81,10 +91,16 @@ export async function getWriteBodyParams(
   }
   const raw = await sdkCore.fetchFromIpfs(ctx, resolved.cid);
   const published = JSON.parse(new TextDecoder().decode(raw)) as PublishedNode;
-  if (!published.writeSealed) return { writeKey: wk, writeChildren: [] };
+  // writeKey present but no on-wire write-body yet (pre-D-03 record): seal a fresh
+  // write-body going forward with an explicit empty pin list (never `undefined`).
+  if (!published.writeSealed) return { writeKey: wk, writeChildren: [], recipientPins: [] };
   const node = await unsealNode(published, folder.folderKey, wk);
   try {
-    return { writeKey: wk, writeChildren: node.writeBody?.writeChildren ?? [] };
+    return {
+      writeKey: wk,
+      writeChildren: node.writeBody?.writeChildren ?? [],
+      recipientPins: node.writeBody?.recipientPins ?? [],
+    };
   } finally {
     // D-09: unsealNode just materialized a transient IPNS private key
     // (node.writeBody.ipnsPrivateKey) purely to let us read writeChildren.
@@ -113,7 +129,8 @@ export function adoptPublishedFolderState(
   folder: FolderState,
   publishedChildren: SealedChildRef[],
   newSequenceNumber: bigint,
-  publishedWriteChildren?: WriteChildRef[]
+  publishedWriteChildren?: WriteChildRef[],
+  publishedRecipientPins?: string[]
 ): void {
   folder.children = publishedChildren;
   folder.sequenceNumber = newSequenceNumber;
@@ -123,6 +140,14 @@ export function adoptPublishedFolderState(
     if (publishedWriteChildren) {
       if (folder.metadata.writeBody) {
         folder.metadata.writeBody.writeChildren = publishedWriteChildren;
+        // D-03 (Plan 80): keep the mirror's recipient pins in sync with what was
+        // just published so the NEXT getWriteBodyParams (which prefers this
+        // mirror) threads the pins forward instead of re-sealing pin-less. Pins
+        // are PUBLIC ECIES keys, copied verbatim. Only overwrite when the caller
+        // resolved a pin list to publish; leave the existing pins otherwise.
+        if (publishedRecipientPins !== undefined) {
+          folder.metadata.writeBody.recipientPins = publishedRecipientPins;
+        }
       } else {
         // 68.1-29: the folder carried a read-only metadata mirror (no
         // write-body -- e.g. loaded via loadFolder, or getWriteBodyParams
@@ -131,9 +156,13 @@ export function adoptPublishedFolderState(
         // next getWriteBodyParams (prefers metadata.writeBody) and DFS descent
         // (walks metadata.writeBody.writeChildren) see the new WriteChildRefs
         // instead of the absent-mirror fallback that dropped them.
+        // D-03 (Plan 80): seed the recipient pins too, or the next mutation reads
+        // `metadata.writeBody.recipientPins === undefined` and republishes the
+        // shared folder pin-less (hard-failing a later re-mint, D-03e).
         folder.metadata.writeBody = {
           ipnsPrivateKey: new Uint8Array(folder.ipnsKeypair.privateKey),
           writeChildren: publishedWriteChildren,
+          recipientPins: publishedRecipientPins,
         };
       }
     }

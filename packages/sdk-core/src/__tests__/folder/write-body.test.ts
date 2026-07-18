@@ -80,6 +80,7 @@ describe('owned write-body model (D-03)', () => {
         readKey: READ_KEY,
         writeKey: WRITE_KEY,
         writeChildren,
+        recipientPins: [],
         ipnsPrivateKey: IPNS_PRIVATE_KEY,
         ipnsName: 'k51-write-body',
         sequenceNumber: 1n,

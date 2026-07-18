@@ -137,6 +137,22 @@ export type NodeWriteBody = {
   ipnsPrivateKey: Uint8Array;
   /** Write chain to child nodes; mirrors the read chain in SealedChildRef. */
   writeChildren: WriteChildRef[];
+  /**
+   * Recipient-pubkey pins bound at share/re-mint (D-03b) — each entry the raw
+   * secp256k1 public-key bytes as issued by the owner (currently the 65-byte
+   * uncompressed `0x04` form; compared as raw bytes, so the encoding is not
+   * normalized), base64-encoded on the wire.
+   *
+   * Additive OPTIONAL field (METADATA_EVOLUTION_PROTOCOL §3.1): omitted from the
+   * wire when absent or empty so the frozen empty-pin KAT (seal_vectors[0]) is
+   * preserved byte-for-byte. On decode the field is LEFT ABSENT (`undefined`),
+   * not normalized to `[]` — the property is optional and every consumer treats
+   * `undefined` and `[]` equivalently (an empty/absent pin list). Twin of the
+   * Rust `NodeWriteBody.recipient_pins` (`Vec<Vec<u8>>`, base64 `recipientPins`
+   * wire), which materializes an empty `Vec` on decode; the wire bytes are
+   * identical (empty omitted) so the two codecs stay byte-compatible.
+   */
+  recipientPins?: string[];
 };
 
 // ---------------------------------------------------------------------------

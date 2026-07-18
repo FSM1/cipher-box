@@ -588,6 +588,7 @@ mod tests {
                 read_key: Zeroizing::new([2u8; 32]),
                 write_key: Zeroizing::new([4u8; 32]),
                 ipns_private_key: Zeroizing::new(vec![3u8; 32]),
+                recipient_pins: Vec::new(),
             },
             attr: FileAttrs {
                 ino,
@@ -624,6 +625,7 @@ mod tests {
                 read_key: Zeroizing::new([1u8; 32]),
                 write_key: Zeroizing::new([6u8; 32]),
                 ipns_private_key: Zeroizing::new(vec![5u8; 32]),
+                recipient_pins: Vec::new(),
                 children_loaded: true,
             },
             attr: FileAttrs {
@@ -889,6 +891,7 @@ mod tests {
                 read_key: Zeroizing::new(root_read_key),
                 write_key: Zeroizing::new([0u8; 32]),
                 ipns_private_key: root_priv.clone(),
+                recipient_pins: Vec::new(),
             };
         }
 
@@ -1061,6 +1064,7 @@ mod tests {
         let write_body = NodeWriteBody {
             ipns_private_key: vec![0u8; 32],
             write_children: vec![write_child_ref.clone()],
+            recipient_pins: Vec::new(),
         };
         let published = seal_published_node(
             &parent_node,

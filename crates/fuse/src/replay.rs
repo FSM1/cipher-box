@@ -494,14 +494,19 @@ where
             )
         })?,
     );
-    let mut write_children = decode_write_body(&write_body_bytes)
-        .map_err(|e| {
-            format!(
-                "decode parent write-body {}: {} — retaining entry",
-                parent_ipns_name, e
-            )
-        })?
-        .write_children;
+    // Preserve the parent's OWN owner-sealed recipient pins (D-03) verbatim: a
+    // parent folder/root with active shares carries pins in its write-body, and
+    // a re-splice must NOT drop them, or a later re-mint would read empty pins
+    // from the remounted InodeTable and hard fail-closed (D-03e). Only the
+    // write-children plane changes on this path; pins pass through unchanged.
+    let decoded_write_body = decode_write_body(&write_body_bytes).map_err(|e| {
+        format!(
+            "decode parent write-body {}: {} — retaining entry",
+            parent_ipns_name, e
+        )
+    })?;
+    let parent_recipient_pins = decoded_write_body.recipient_pins;
+    let mut write_children = decoded_write_body.write_children;
 
     // Extract read-plane children + node identity, preserving the variant.
     let (id, generation, created_at, modified_at, mut children, is_root) = match node {
@@ -575,6 +580,7 @@ where
     let new_write_body = NodeWriteBody {
         ipns_private_key: parent_signing_seed.to_vec(),
         write_children,
+        recipient_pins: parent_recipient_pins,
     };
     let new_published = seal_published_node(
         &new_node,
@@ -1104,9 +1110,16 @@ where
         modified_at,
         content,
     };
+    // D-03: empty recipient pins is CORRECT here. This re-seals a JOURNALED file
+    // PLACEHOLDER (child_published_node_b64), which `build_upload_journal_entry`
+    // always seals with no pins (journal_helpers.rs), and replay has no InodeTable
+    // to source pins from — there is nothing to preserve at this site. Contrast
+    // the parent re-splice (`fetch_splice_publish_parent`), which DECODES and
+    // preserves the parent's existing `recipient_pins` from its current write-body.
     let write_body = NodeWriteBody {
         ipns_private_key: file_signing_seed.to_vec(),
         write_children: Vec::new(),
+        recipient_pins: Vec::new(),
     };
     let resealed_published = seal_published_node(
         &resealed_node,
@@ -1451,5 +1464,82 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // D-01 durability regression (Plan 80-02): after a scope-exit read-key
+    // rotation reconstructs a rotated node's `write_sealed` from the local
+    // InodeTable (via the FUSE rotation adapter's `reconstruct_write_body`),
+    // `recover_signing_seed` on that PublishedNode succeeds — the "no
+    // write_sealed body — cannot recover signing seed" fail path no longer
+    // fires for a materialized rotated node (T-80-04).
+    #[cfg(any(feature = "fuse", feature = "winfsp"))]
+    #[test]
+    fn rotation_reconstructed_write_sealed_recovers_signing_seed() {
+        use crate::inode::{FileAttrs, InodeData, InodeKind, InodeTable, ROOT_INO};
+        use crate::write_ops::rotation_deps::reconstruct_write_body;
+        use base64::Engine as _;
+        use cipherbox_core::node::{NodeKind, PublishedNode};
+        use zeroize::Zeroizing;
+
+        const NODE_ID: &str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+        let ipns_name = "k51replayrecon";
+        let node_write_key = [44u8; 32];
+        let node_ipns_private_key = vec![55u8; 32];
+        let new_generation = 9u32;
+
+        // A materialized rotated folder node in the local inode table.
+        let mut table = InodeTable::new();
+        let ino = table.allocate_ino();
+        let now = std::time::SystemTime::now();
+        table.insert(InodeData {
+            ino,
+            node_id: NODE_ID.to_string(),
+            parent_ino: ROOT_INO,
+            name: "rotated".to_string(),
+            kind: InodeKind::Folder {
+                ipns_name: ipns_name.to_string(),
+                read_key: Zeroizing::new([1u8; 32]),
+                write_key: Zeroizing::new(node_write_key),
+                ipns_private_key: Zeroizing::new(node_ipns_private_key.clone()),
+                recipient_pins: Vec::new(),
+                children_loaded: true,
+            },
+            attr: FileAttrs {
+                ino,
+                size: 0,
+                blocks: 0,
+                atime: now,
+                mtime: now,
+                ctime: now,
+                crtime: now,
+                is_dir: true,
+                perm: 0o755,
+                nlink: 2,
+            },
+            children: Some(vec![]),
+            write_generation: 0,
+        });
+
+        // The rotation republish reconstructs the write plane at the NEW generation.
+        let sealed = reconstruct_write_body(&table, ipns_name, new_generation)
+            .expect("a materialized rotated node reconstructs a write-body");
+
+        let published = PublishedNode {
+            schema: "node/v3".to_string(),
+            kind: "folder".to_string(),
+            id: NODE_ID.to_string(),
+            generation: new_generation,
+            aead_version: 1,
+            read_sealed: String::new(),
+            write_sealed: Some(base64::engine::general_purpose::STANDARD.encode(&sealed)),
+        };
+
+        let seed = super::recover_signing_seed(&published, &node_write_key, NodeKind::Folder)
+            .expect("recover_signing_seed must succeed on a reconstructed write_sealed");
+        assert_eq!(
+            seed.to_vec(),
+            node_ipns_private_key,
+            "the recovered signing seed matches the rotated node's ipns_private_key"
+        );
     }
 }

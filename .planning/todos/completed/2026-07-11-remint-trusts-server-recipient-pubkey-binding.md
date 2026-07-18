@@ -49,3 +49,7 @@ Either (a) re-mint compares the server-returned recipient pubkey against a
 client-pinned value and fails closed on mismatch, or (b) the sharing threat
 model documents server-trusted recipient-identity binding as an accepted risk
 with rationale.
+
+## Resolution
+
+Resolved by Phase 80 (rotation-write-plane-and-re-mint-durability), shipped on branch `feat/rotation-write-plane-and-re-mint-durability`. D-01/D-02/D-03/D-04 implemented and verified (SDK-E2E 106/106, fuse 130).

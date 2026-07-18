@@ -237,6 +237,8 @@ pub fn handle_create(
             read_key: zeroize::Zeroizing::new(read_key),
             write_key: zeroize::Zeroizing::new(write_key),
             ipns_private_key: zeroize::Zeroizing::new(file_ipns_private_key),
+            // Freshly created node: no share grants yet, so no recipient pins.
+            recipient_pins: Vec::new(),
         },
         attr,
         children: None,
@@ -340,6 +342,7 @@ mod tests {
                 read_key: zeroize::Zeroizing::new([0u8; 32]),
                 write_key: zeroize::Zeroizing::new([0u8; 32]),
                 ipns_private_key: zeroize::Zeroizing::new(vec![0u8; 32]),
+                recipient_pins: Vec::new(),
                 children_loaded: false,
             },
             attr,

@@ -30,6 +30,7 @@ import {
   wrapKey,
   hexToBytes,
   bytesToHex,
+  base64ToBytes,
   deriveEd25519PublicKey,
   generateEd25519Keypair,
   generateRandomBytes,
@@ -1345,7 +1346,7 @@ export class CipherBoxClient {
    */
   private async getWriteBodyParams(
     folder: FolderState
-  ): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[] }> {
+  ): Promise<{ writeKey?: Uint8Array; writeChildren?: WriteChildRef[]; recipientPins?: string[] }> {
     return getWriteBodyParamsShared(folder, this.ctx);
   }
 
@@ -1363,14 +1364,16 @@ export class CipherBoxClient {
     folder: FolderState,
     publishedChildren: SealedChildRef[],
     newSequenceNumber: bigint,
-    publishedWriteChildren?: WriteChildRef[]
+    publishedWriteChildren?: WriteChildRef[],
+    publishedRecipientPins?: string[]
   ): void {
     adoptPublishedFolderStateShared(
       this.folderTree,
       folder,
       publishedChildren,
       newSequenceNumber,
-      publishedWriteChildren
+      publishedWriteChildren,
+      publishedRecipientPins
     );
   }
 
@@ -2092,6 +2095,18 @@ export class CipherBoxClient {
             frontier: [],
             persistCallback: callbacks.persistJob,
           };
+          // recipient-pin-lifecycle §5: resolve the INLINE grant-remint seam for
+          // this rotation root (only now that rotation is actually covered, so an
+          // uncovered mutation never pays the sent-grants fetch). When the host
+          // supplies it and the owner has active sent grants, the returned
+          // innerGrants/grantCallbacks enable rotateReadFromNode's per-node
+          // re-mint — re-minting FILE grants the reconcile sweep can't reach
+          // (no FolderTree entry) under each file's rotated read key. Undefined
+          // (no seam, or no active grants) → unchanged sweep-only behavior.
+          const inlineGrantRemint = await callbacks.resolveInlineGrantRemint?.(
+            params.rootNodeIpnsName,
+            params.rootNodeId
+          );
           try {
             rotationResult = await sdkCore.rotateReadFromNode({
               rootNodeId: params.rootNodeId,
@@ -2118,14 +2133,15 @@ export class CipherBoxClient {
                   writeKey: folder.writeKey,
                 };
               },
-              // SC#4 (Plan 70-06) seam plumbing: no CipherBoxClientConfig seam
-              // supplies grant-remint callbacks/inner-grants today (Phase 66
-              // is the host-wiring follow-up per RESEARCH) -- threading the
-              // fields here (currently always undefined) makes them
-              // structurally reachable from the real walk without requiring
-              // a new config surface in this plan.
-              innerGrants: undefined,
-              grantCallbacks: undefined,
+              // SC#4 (Plan 70-06) seam plumbing, now LIVE-WIRED for web
+              // (recipient-pin-lifecycle §5): the host's rotationCallbacks
+              // `resolveInlineGrantRemint` supplies the per-node re-mint inputs
+              // when the owner has active sent grants, so the walk re-mints
+              // surviving grants inline — closing the file-share re-mint gap the
+              // reconcile sweep cannot reach. Both undefined (no seam / no active
+              // grants) → sdk-core no-ops the seam, unchanged prior behavior.
+              innerGrants: inlineGrantRemint?.innerGrants,
+              grantCallbacks: inlineGrantRemint?.grantCallbacks,
               // SC#3 (Plan 70.1-05 / D-01..D-05): the owner's OWN vault
               // keypair wraps/unwraps the ECIES key-checkpoint. keyCheckpoint
               // is the seam Plan 70.1-05 added to RotationClientCallbacks --
@@ -2544,6 +2560,11 @@ export class CipherBoxClient {
             folderKey: parent.folderKey,
             writeKey: parentWriteKey,
             writeChildren: updatedWriteChildren,
+            // D-03 (Plan 80): thread the parent's existing recipient pins so a
+            // shared parent republished on child-create stays pinned (a pin-less
+            // republish hard-fails a later re-mint, D-03e). Pins are copied, never
+            // rotated.
+            recipientPins: parentWriteBodyParams.recipientPins,
             ipnsPrivateKey: parent.ipnsKeypair.privateKey,
             ipnsName: parentIpnsName,
             sequenceNumber: parent.sequenceNumber,
@@ -2556,7 +2577,8 @@ export class CipherBoxClient {
           parent,
           publishedChildren,
           newSequenceNumber,
-          publishedWriteChildren ?? updatedWriteChildren
+          publishedWriteChildren ?? updatedWriteChildren,
+          parentWriteBodyParams.recipientPins
         );
 
         // Register the new child so it is immediately usable (upload/rename/etc.)
@@ -2672,7 +2694,8 @@ export class CipherBoxClient {
         folder,
         publishedChildren,
         newSequenceNumber,
-        publishedWriteChildren ?? writeBodyParams.writeChildren
+        publishedWriteChildren ?? writeBodyParams.writeChildren,
+        writeBodyParams.recipientPins
       );
 
       // 4. Emit update event
@@ -2904,6 +2927,9 @@ export class CipherBoxClient {
         readKey: destFolder.folderKey,
         writeKey: destWriteBodyParams.writeKey,
         writeChildren: rehomedDestWriteChildren,
+        // D-03 (Plan 80): preserve the destination folder's recipient pins on the
+        // move republish (a pin-less republish hard-fails a later re-mint, D-03e).
+        recipientPins: destWriteBodyParams.recipientPins,
         ipnsPrivateKey: destFolder.ipnsKeypair.privateKey,
         ipnsName: destIpnsName,
         sequenceNumber: destFolder.sequenceNumber,
@@ -2916,7 +2942,8 @@ export class CipherBoxClient {
         destFolder,
         dstChildren,
         dstSeq,
-        dstPublishedWriteChildren ?? rehomedDestWriteChildren
+        dstPublishedWriteChildren ?? rehomedDestWriteChildren,
+        destWriteBodyParams.recipientPins
       );
       this.emitter.emit({
         type: 'folder:updated',
@@ -2943,6 +2970,9 @@ export class CipherBoxClient {
         writeKey: sourceWriteBodyParams.writeKey,
         writeChildren: rehomedSourceWriteChildren,
         baseWriteChildren: sourceBaseWriteChildren,
+        // D-03 (Plan 80): preserve the source folder's recipient pins on the move
+        // republish (a pin-less republish hard-fails a later re-mint, D-03e).
+        recipientPins: sourceWriteBodyParams.recipientPins,
         ipnsPrivateKey: sourceFolder.ipnsKeypair.privateKey,
         ipnsName: sourceIpnsName,
         sequenceNumber: sourceFolder.sequenceNumber,
@@ -2955,7 +2985,8 @@ export class CipherBoxClient {
         sourceFolder,
         srcChildren,
         srcSeq,
-        srcPublishedWriteChildren ?? rehomedSourceWriteChildren
+        srcPublishedWriteChildren ?? rehomedSourceWriteChildren,
+        sourceWriteBodyParams.recipientPins
       );
       this.emitter.emit({
         type: 'folder:updated',
@@ -3060,6 +3091,9 @@ export class CipherBoxClient {
           writeKey: writeBodyParams.writeKey,
           writeChildren: trimmedWriteChildren,
           baseWriteChildren,
+          // D-03 (Plan 80): preserve the folder's recipient pins on the delete
+          // republish (a pin-less republish hard-fails a later re-mint, D-03e).
+          recipientPins: writeBodyParams.recipientPins,
           ipnsPrivateKey: folder.ipnsKeypair.privateKey,
           ipnsName: folderIpnsName,
           sequenceNumber: folder.sequenceNumber,
@@ -3073,7 +3107,8 @@ export class CipherBoxClient {
         folder,
         publishedChildren,
         newSequenceNumber,
-        publishedWriteChildren ?? trimmedWriteChildren
+        publishedWriteChildren ?? trimmedWriteChildren,
+        writeBodyParams.recipientPins
       );
 
       // 4. Emit update event
@@ -3223,6 +3258,9 @@ export class CipherBoxClient {
             folderKey: folder.folderKey,
             writeKey: writeBodyParams.writeKey,
             writeChildren: updatedWriteChildren,
+            // D-03 (Plan 80): preserve the folder's recipient pins on the upload
+            // republish (a pin-less republish hard-fails a later re-mint, D-03e).
+            recipientPins: writeBodyParams.recipientPins,
             ipnsPrivateKey: folder.ipnsKeypair.privateKey,
             ipnsName: folderIpnsName,
             sequenceNumber: folder.sequenceNumber,
@@ -3278,7 +3316,8 @@ export class CipherBoxClient {
           folder,
           publishedChildren,
           newSequenceNumber,
-          publishedWriteChildren ?? updatedWriteChildren
+          publishedWriteChildren ?? updatedWriteChildren,
+          writeBodyParams.recipientPins
         );
 
         // 5. Emit events
@@ -3542,6 +3581,9 @@ export class CipherBoxClient {
             folderKey: folder.folderKey,
             writeKey: writeBodyParams.writeKey,
             writeChildren: updatedWriteChildren,
+            // D-03 (Plan 80): preserve the folder's recipient pins on the batch
+            // add republish (a pin-less republish hard-fails a later re-mint, D-03e).
+            recipientPins: writeBodyParams.recipientPins,
             ipnsPrivateKey: folder.ipnsKeypair.privateKey,
             ipnsName: folderIpnsName,
             sequenceNumber: freshSeq,
@@ -3593,7 +3635,8 @@ export class CipherBoxClient {
           folder,
           publishedChildren,
           newSequenceNumber,
-          publishedWriteChildren ?? updatedWriteChildren
+          publishedWriteChildren ?? updatedWriteChildren,
+          writeBodyParams.recipientPins
         );
 
         // Emit events
@@ -3899,6 +3942,105 @@ export class CipherBoxClient {
   }
 
   /**
+   * Append a recipient's issuance-time pubkey to a shared item's owner-sealed
+   * write-body pin list and republish (D-03a/c).
+   *
+   * The `NodeWriteBody.recipientPins` list is the server-opaque, cross-device
+   * trust anchor that all re-mint enforcement (80-06/07/08) verifies against.
+   * This is the issuance WRITE path — distinct from
+   * {@link resolveShareEncryptedWriteKey}, which only DERIVES a writeKey and
+   * never writes back a write-body (Pitfall 4).
+   *
+   * Reads the item's CURRENT pins (via {@link getWriteBodyParams}), appends the
+   * recipient (dedup by raw bytes), and CAS-republishes via
+   * `updateFolderMetadataAndPublish` — the node's generation is UNCHANGED (the
+   * pin rides inside the existing role-0x01 write-body seal at the current
+   * generation); only the IPNS `sequenceNumber` advances. Read-body content is
+   * untouched.
+   *
+   * `itemIpnsName` must be a folder the client tracks in its folder tree (its
+   * own `FolderState` carries the writeKey + IPNS signing key needed to seal its
+   * write-body). Fails closed if the item has no write-capable writeKey.
+   *
+   * @param itemIpnsName - IPNS name of the shared root item (owned by this client)
+   * @param recipientPublicKey - recipient's raw secp256k1 public key bytes
+   * @security Does NOT zero `recipientPublicKey` — the caller is its terminal owner (D-09).
+   */
+  async addRecipientPubkeyPin(itemIpnsName: string, recipientPublicKey: Uint8Array): Promise<void> {
+    return this.withOperation('addRecipientPubkeyPin', async () => {
+      const folder = await this.requireFolder(itemIpnsName, 'Shared item');
+
+      const writeBodyParams = await this.getWriteBodyParams(folder);
+      if (!writeBodyParams.writeKey) {
+        throw new Error(
+          `addRecipientPubkeyPin: item ${itemIpnsName} has no writeKey — cannot pin a recipient on a non-write-capable node`
+        );
+      }
+
+      // Reconcile-before-publish (ROT-07 durable anti-rollback): defer on any
+      // sequence mismatch and gate through the durable floor when configured —
+      // mirrors every other publish path in this file (createFolder/renameItem/
+      // moveItem/deleteItem). The pin-issuance publish must not skip it.
+      await this.reconcileFolderSequence(itemIpnsName, folder.sequenceNumber, folder.folderKey);
+
+      const nextPins = sdkCore.appendRecipientPin(
+        writeBodyParams.recipientPins ?? [],
+        recipientPublicKey
+      );
+
+      const baseChildren = [...folder.children];
+      const { newSequenceNumber, publishedChildren, publishedWriteChildren } =
+        await sdkCore.updateFolderMetadataAndPublish({
+          children: folder.children,
+          baseChildren,
+          folderKey: folder.folderKey,
+          ...writeBodyParams,
+          // Override the spread `recipientPins` with the appended union — the
+          // seal + CAS-409 merge preserves/unions these (T-80-11).
+          recipientPins: nextPins,
+          ipnsPrivateKey: folder.ipnsKeypair.privateKey,
+          ipnsName: itemIpnsName,
+          sequenceNumber: folder.sequenceNumber,
+          ctx: this.ctx,
+          nodeId: folder.nodeId,
+          nodeGeneration: folder.nodeGeneration,
+        });
+
+      this.adoptPublishedFolderState(
+        folder,
+        publishedChildren,
+        newSequenceNumber,
+        publishedWriteChildren ?? writeBodyParams.writeChildren,
+        nextPins
+      );
+      // Keep the in-memory write-body mirror's pin list in sync so a follow-up
+      // getRecipientPubkeyPins in the same session reflects the new pin.
+      if (folder.metadata?.writeBody) {
+        folder.metadata.writeBody.recipientPins = nextPins;
+      }
+    });
+  }
+
+  /**
+   * Read a shared item's owner-sealed recipient-pubkey pin list (D-03a) for
+   * re-mint enforcement.
+   *
+   * Resolves + unseals the item's write-body and returns its `recipientPins` as
+   * raw pubkey bytes. Returns `[]` when the node carries no pins.
+   *
+   * @param itemIpnsName - IPNS name of the shared root item (owned by this client)
+   * @returns the pinned recipient pubkeys as raw byte arrays
+   */
+  async getRecipientPubkeyPins(itemIpnsName: string): Promise<Uint8Array[]> {
+    return this.withOperation('getRecipientPubkeyPins', async () => {
+      const folder = await this.requireFolder(itemIpnsName, 'Shared item');
+      const writeBodyParams = await this.getWriteBodyParams(folder);
+      const pinsB64 = writeBodyParams.recipientPins ?? [];
+      return pinsB64.map((p) => base64ToBytes(p));
+    });
+  }
+
+  /**
    * Conditional folder re-publish for lazy IPNS-key migration (TEE key-epoch
    * rotation).
    *
@@ -3947,7 +4089,8 @@ export class CipherBoxClient {
         folder,
         publishedChildren,
         newSequenceNumber,
-        publishedWriteChildren ?? writeBodyParams.writeChildren
+        publishedWriteChildren ?? writeBodyParams.writeChildren,
+        writeBodyParams.recipientPins
       );
     }
 

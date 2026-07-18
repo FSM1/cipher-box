@@ -143,13 +143,26 @@ export function encodeWriteBody(node: Node): Uint8Array {
   }
 
   const wb: NodeWriteBody = node.writeBody;
-  const wireBody = {
+  // FIXED field order (ipnsPrivateKey, writeChildren, then recipientPins) so the
+  // JSON bytes are byte-identical to the Rust serde field order (D-03b). The
+  // recipientPins key is emitted ONLY when the list is present and non-empty —
+  // mirroring the Rust `skip_serializing_if = "Vec::is_empty"` so the frozen
+  // empty-pin KAT (seal_vectors[0]) is preserved byte-for-byte (Pitfall 1).
+  const wireBody: {
+    ipnsPrivateKey: string;
+    writeChildren: { childId: string; writeKeySealed: string }[];
+    recipientPins?: string[];
+  } = {
     ipnsPrivateKey: bytesToBase64(wb.ipnsPrivateKey),
     writeChildren: wb.writeChildren.map((wc) => ({
       childId: wc.childId,
       writeKeySealed: wc.writeKeySealed,
     })),
   };
+
+  if (wb.recipientPins && wb.recipientPins.length > 0) {
+    wireBody.recipientPins = wb.recipientPins;
+  }
 
   return new TextEncoder().encode(JSON.stringify(wireBody));
 }

@@ -88,6 +88,8 @@ pub fn handle_mkdir(fs: &mut CipherBoxFS, parent: u64, name: &OsStr, reply: Repl
                 read_key: zeroize::Zeroizing::new(read_key),
                 write_key: zeroize::Zeroizing::new(write_key),
                 ipns_private_key: zeroize::Zeroizing::new(ipns_private_key.to_vec()),
+                // Freshly created node: no share grants yet, so no recipient pins.
+                recipient_pins: Vec::new(),
                 children_loaded: true,
             },
             attr,

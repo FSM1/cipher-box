@@ -133,6 +133,11 @@ pub enum InodeKind {
         /// Decrypted Ed25519 IPNS private key (signing seed) for this folder.
         /// Wrapped in `Zeroizing` for automatic zeroization on drop.
         ipns_private_key: Zeroizing<Vec<u8>>,
+        /// D-03a: the node's owner-sealed recipient pins (PUBLIC ECIES keys),
+        /// cached from the unsealed write-body at materialization so the Rust
+        /// re-mint (80-06) can verify them offline and a rotation republish can
+        /// PRESERVE them (D-01↔D-03e). Not secret material — never redacted.
+        recipient_pins: Vec<Vec<u8>>,
     },
 
     /// Subfolder within the vault.
@@ -146,6 +151,11 @@ pub enum InodeKind {
         /// Decrypted Ed25519 IPNS private key for signing this folder's records.
         /// Wrapped in `Zeroizing` for automatic zeroization on drop.
         ipns_private_key: Zeroizing<Vec<u8>>,
+        /// D-03a: the node's owner-sealed recipient pins (PUBLIC ECIES keys),
+        /// cached from the unsealed write-body at materialization so the Rust
+        /// re-mint (80-06) can verify them offline and a rotation republish can
+        /// PRESERVE them (D-01↔D-03e). Not secret material — never redacted.
+        recipient_pins: Vec<Vec<u8>>,
         /// Whether children have been loaded from node/v3 metadata.
         children_loaded: bool,
     },
@@ -169,6 +179,11 @@ pub enum InodeKind {
         /// Decrypted Ed25519 IPNS private key for signing this file's record.
         /// Wrapped in `Zeroizing` for automatic zeroization on drop.
         ipns_private_key: Zeroizing<Vec<u8>>,
+        /// D-03a: the node's owner-sealed recipient pins (PUBLIC ECIES keys),
+        /// cached from the unsealed write-body at materialization so the Rust
+        /// re-mint (80-06) can verify them offline and a rotation republish can
+        /// PRESERVE them (D-01↔D-03e). Not secret material — never redacted.
+        recipient_pins: Vec<Vec<u8>>,
     },
 }
 
@@ -178,16 +193,24 @@ impl std::fmt::Debug for InodeKind {
     /// material can never reach logs or panic output (crypto rule #2).
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            InodeKind::Root { ipns_name, .. } => f
+            InodeKind::Root {
+                ipns_name,
+                recipient_pins,
+                ..
+            } => f
                 .debug_struct("Root")
                 .field("ipns_name", ipns_name)
                 .field("read_key", &"<redacted>")
                 .field("write_key", &"<redacted>")
                 .field("ipns_private_key", &"<redacted>")
+                // Recipient pins are PUBLIC keys, not secret material -- shown
+                // as a count (non-secret) while key material stays redacted.
+                .field("recipient_pins_count", &recipient_pins.len())
                 .finish(),
             InodeKind::Folder {
                 ipns_name,
                 children_loaded,
+                recipient_pins,
                 ..
             } => f
                 .debug_struct("Folder")
@@ -196,6 +219,7 @@ impl std::fmt::Debug for InodeKind {
                 .field("read_key", &"<redacted>")
                 .field("write_key", &"<redacted>")
                 .field("ipns_private_key", &"<redacted>")
+                .field("recipient_pins_count", &recipient_pins.len())
                 .finish(),
             InodeKind::File {
                 ipns_name,
@@ -203,6 +227,7 @@ impl std::fmt::Debug for InodeKind {
                 size,
                 encryption_mode,
                 iv,
+                recipient_pins,
                 ..
             } => f
                 .debug_struct("File")
@@ -214,6 +239,7 @@ impl std::fmt::Debug for InodeKind {
                 .field("read_key", &"<redacted>")
                 .field("write_key", &"<redacted>")
                 .field("ipns_private_key", &"<redacted>")
+                .field("recipient_pins_count", &recipient_pins.len())
                 .finish(),
         }
     }
@@ -301,6 +327,7 @@ impl InodeTable {
                 read_key: Zeroizing::new([0u8; 32]),
                 write_key: Zeroizing::new([0u8; 32]),
                 ipns_private_key: Zeroizing::new(Vec::new()),
+                recipient_pins: Vec::new(),
             },
             attr: root_attr,
             children: Some(vec![]),
@@ -499,6 +526,7 @@ impl InodeTable {
                 read_key,
                 write_key,
                 ipns_private_key,
+                recipient_pins,
             } = owned;
 
             // Reuse existing ino: prefer stable ipns_name, fall back to display name.
@@ -582,6 +610,9 @@ impl InodeTable {
                             read_key,
                             write_key,
                             ipns_private_key,
+                            // D-03a: cache the node's owner-sealed recipient pins
+                            // for offline re-mint + rotation preservation.
+                            recipient_pins,
                             children_loaded: was_loaded,
                         },
                         attr,
@@ -625,6 +656,9 @@ impl InodeTable {
                             read_key,
                             write_key,
                             ipns_private_key,
+                            // D-03a: cache the node's owner-sealed recipient pins
+                            // for offline re-mint + rotation preservation.
+                            recipient_pins,
                         },
                         attr,
                         children: None,
@@ -849,6 +883,7 @@ mod tests {
             read_key: Zeroizing::new([0x11u8; 32]),
             write_key: Zeroizing::new([0x22u8; 32]),
             ipns_private_key: Zeroizing::new(vec![0x33u8; 32]),
+            recipient_pins: Vec::new(),
         }
     }
 
@@ -866,6 +901,7 @@ mod tests {
                 read_key: Zeroizing::new([0u8; 32]),
                 write_key: Zeroizing::new([0u8; 32]),
                 ipns_private_key: Zeroizing::new(vec![0u8; 32]),
+                recipient_pins: Vec::new(),
                 children_loaded: false,
             },
             attr: FileAttrs {
@@ -1022,6 +1058,49 @@ mod tests {
         let unresolved = table.get_unresolved_file_pointers_for_parent(ROOT_INO);
         assert_eq!(unresolved.len(), 1);
         assert_eq!(unresolved[0].0, file_ino);
+    }
+
+    // D-03a (80-05): a materialized owned node's recipient pins (from its
+    // unsealed write-body) are cached on the inode so the Rust re-mint (80-06)
+    // can verify them offline and reconstruction (rotation republish) preserves
+    // them.
+    #[test]
+    fn apply_owned_children_caches_recipient_pins_on_the_inode() {
+        let mut table = InodeTable::new();
+        let pins = vec![vec![0x04u8; 33], vec![0x04u8, 0x99, 0xAB]];
+
+        let mut folder_child = owned_child("k51pinnedfolder", "pinnedfolder", NodeKind::Folder, None);
+        folder_child.recipient_pins = pins.clone();
+        let mut file_child = owned_child("k51pinnedfile", "pinned.txt", NodeKind::File, Some(7));
+        file_child.recipient_pins = pins.clone();
+
+        table.apply_owned_children(ROOT_INO, vec![folder_child, file_child], false);
+
+        let folder_ino = table
+            .find_child(ROOT_INO, "pinnedfolder")
+            .expect("folder linked");
+        match &table.get(folder_ino).unwrap().kind {
+            InodeKind::Folder { recipient_pins, .. } => {
+                assert_eq!(
+                    *recipient_pins, pins,
+                    "the folder inode caches the write-body recipient pins"
+                );
+            }
+            other => panic!("expected Folder, got {:?}", other),
+        }
+
+        let file_ino = table
+            .find_child(ROOT_INO, "pinned.txt")
+            .expect("file linked");
+        match &table.get(file_ino).unwrap().kind {
+            InodeKind::File { recipient_pins, .. } => {
+                assert_eq!(
+                    *recipient_pins, pins,
+                    "the file inode caches the write-body recipient pins"
+                );
+            }
+            other => panic!("expected File, got {:?}", other),
+        }
     }
 
     #[test]

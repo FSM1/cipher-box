@@ -305,6 +305,114 @@ describe('CipherBoxClient — scope-exit rotation wiring (SC#2 / SC#4, Task 2)',
     expect(sdkCore.rotateReadFromNode).toHaveBeenCalledTimes(1);
   });
 
+  // ── recipient-pin-lifecycle §5: inline grant-remint seam threading ──────
+  // The web file-grant re-mint gap is closed by supplying rotateReadFromNode's
+  // per-node re-mint inputs (innerGrants + grantCallbacks) from the host's
+  // rotationCallbacks.resolveInlineGrantRemint. These tests pin the wiring at
+  // the SDK chokepoint (the concrete web transport is thin untested glue).
+
+  it('threads resolveInlineGrantRemint innerGrants/grantCallbacks into rotateReadFromNode when covered', async () => {
+    const innerGrants = [{ shareId: 's1' }]; // non-empty ENABLE gate sentinel
+    const grantCallbacks = {
+      queryGrantsFn: vi.fn(),
+      updateGrantFn: vi.fn(),
+      deleteGrantFn: vi.fn(),
+      getPinsFn: vi.fn(),
+    };
+    const resolveInlineGrantRemint = vi.fn().mockResolvedValue({ innerGrants, grantCallbacks });
+    const client = new CipherBoxClient(
+      createTestConfig({
+        rotationCallbacks: {
+          getActiveGrantRootIpnsNames: async () => new Set([FOLDER_IPNS]),
+          getLocalGrantRecord: () => null,
+          persistJob: vi.fn(),
+          resolveInlineGrantRemint,
+        },
+      })
+    );
+    setupFolder(client, FOLDER_IPNS); // folder nodeId: 'test-node-id'
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+    vi.mocked(sdkCore.rotateReadFromNode).mockResolvedValue(undefined);
+
+    await client.renameItem(FOLDER_IPNS, 'file1', 'new.txt');
+
+    // Resolved once for the rotation root (its IPNS name + own node id), and the
+    // resolved bundle handed verbatim to rotateReadFromNode's per-node seam.
+    expect(resolveInlineGrantRemint).toHaveBeenCalledWith(FOLDER_IPNS, 'test-node-id');
+    const rotateArgs = vi.mocked(sdkCore.rotateReadFromNode).mock.calls[0][0];
+    expect(rotateArgs.innerGrants).toBe(innerGrants);
+    expect(rotateArgs.grantCallbacks).toBe(grantCallbacks);
+  });
+
+  it('leaves innerGrants/grantCallbacks undefined when resolveInlineGrantRemint is omitted (unchanged sweep-only default)', async () => {
+    const client = new CipherBoxClient(
+      createTestConfig({
+        rotationCallbacks: {
+          getActiveGrantRootIpnsNames: async () => new Set([FOLDER_IPNS]),
+          getLocalGrantRecord: () => null,
+          persistJob: vi.fn(),
+        },
+      })
+    );
+    setupFolder(client, FOLDER_IPNS);
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+    vi.mocked(sdkCore.rotateReadFromNode).mockResolvedValue(undefined);
+
+    await client.renameItem(FOLDER_IPNS, 'file1', 'new.txt');
+
+    const rotateArgs = vi.mocked(sdkCore.rotateReadFromNode).mock.calls[0][0];
+    expect(rotateArgs.innerGrants).toBeUndefined();
+    expect(rotateArgs.grantCallbacks).toBeUndefined();
+  });
+
+  it('leaves the seam disabled when resolveInlineGrantRemint resolves undefined (no active grants)', async () => {
+    const resolveInlineGrantRemint = vi.fn().mockResolvedValue(undefined);
+    const client = new CipherBoxClient(
+      createTestConfig({
+        rotationCallbacks: {
+          getActiveGrantRootIpnsNames: async () => new Set([FOLDER_IPNS]),
+          getLocalGrantRecord: () => null,
+          persistJob: vi.fn(),
+          resolveInlineGrantRemint,
+        },
+      })
+    );
+    setupFolder(client, FOLDER_IPNS);
+    vi.mocked(sdkCore.renameInFolder).mockReturnValue({
+      updatedChildren: [],
+      renamedChild: {} as never,
+    });
+    vi.mocked(sdkCore.updateFolderMetadataAndPublish).mockResolvedValue({
+      cid: 'bafynew',
+      newSequenceNumber: 2n,
+      publishedChildren: [],
+    });
+    vi.mocked(sdkCore.rotateReadFromNode).mockResolvedValue(undefined);
+
+    await client.renameItem(FOLDER_IPNS, 'file1', 'new.txt');
+
+    expect(resolveInlineGrantRemint).toHaveBeenCalledTimes(1);
+    const rotateArgs = vi.mocked(sdkCore.rotateReadFromNode).mock.calls[0][0];
+    expect(rotateArgs.innerGrants).toBeUndefined();
+    expect(rotateArgs.grantCallbacks).toBeUndefined();
+  });
+
   it('renameItem performs zero rotation when uncovered (default no-op callbacks)', async () => {
     const client = new CipherBoxClient(createTestConfig());
     setupFolder(client, FOLDER_IPNS);

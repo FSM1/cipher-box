@@ -7,7 +7,8 @@ import {
   sharesControllerGetSentShares,
   sharesControllerUpdateGrant,
 } from '@cipherbox/api-client';
-import { wrapKey, hexToBytes, bytesToHex } from '@cipherbox/crypto';
+import { wrapKey, hexToBytes, bytesToHex, bytesToBase64 } from '@cipherbox/crypto';
+import { assertRecipientPinned } from '@cipherbox/sdk';
 import { useShareStore } from '../../stores/share.store';
 import type { SentShare } from '../../stores/share.store';
 import { resolveChildNodeIdentity } from '../../lib/crypto/key-wrapping';
@@ -207,6 +208,38 @@ export function ShareDialog({
         logger.warn('[Share] Failed to wrap item name, continuing without it:', err);
       }
 
+      // D-03c issuance write (pin-FIRST for atomicity, FOLDER shares only):
+      // commit the pasted recipient pubkey to the shared node's owner-sealed
+      // write-body pin list BEFORE creating the server grant. Ordering is
+      // load-bearing — a partial failure must never strand a server grant with no
+      // owner-sealed pin, or the D-03d fail-closed checks would permanently block
+      // re-mint/upgrade for the whole share root (a revocation-liveness foot-gun).
+      // Pin-first inverts the failure mode: if the grant create below fails, at
+      // most a HARMLESS orphan pin remains — a pin grants nothing without a
+      // matching server grant, and the append is idempotent on retry. This is
+      // where the pin is FIRST written, so the issuance wraps above (:184/:205)
+      // stay exempt from a pin compare; later re-mint/upgrade paths (D-03d) verify
+      // the server-fed recipient against this pin. A failure here throws into the
+      // shared catch below (surfaced to the user) rather than creating an
+      // un-pinnable grant.
+      //
+      // FOLDERS only: addRecipientPubkeyPin reseals the shared node's OWN folder
+      // write-body via requireFolder, so a FILE item (a leaf child, not a
+      // folder-tree entry) would throw "not loaded" and block the share entirely.
+      // File-share recipient pinning is not yet wired (tracked in the
+      // recipient-pin-lifecycle todo); skip the pin for files and create the grant
+      // as before, preserving file sharing without regressing the folder path.
+      //
+      // Gate on identity.kind (the child's own PublishedNode envelope, unsealed
+      // above) — NOT the `kind` prop: the prop falls back to 'folder' when the
+      // browser's resolvedByIpnsName listing hasn't caught up yet, which would
+      // route a real FILE into requireFolder and fail the whole share. Skipping
+      // the pin on an unknown kind instead is NOT safe — an unpinned folder
+      // grant would be permanently blocked by the D-03d fail-closed checks.
+      if (identity.kind === 'folder') {
+        await getSdkClient().addRecipientPubkeyPin(item.ipnsName, recipientPublicKey);
+      }
+
       const result = await sharesControllerCreateShare({
         recipientPublicKey: trimmed.startsWith('0x') ? trimmed : `0x${trimmed}`,
         encryptedReadKey,
@@ -299,6 +332,38 @@ export function ShareDialog({
           : share.recipientPublicKey;
         recipientPublicKey = hexToBytes(bareHex);
 
+        // D-03d consumer 3 (fail-closed): the recipientPublicKey above comes
+        // from the server-fed sent-share store and MUST NOT be trusted for the
+        // re-wrap. Verify it against the node's owner-sealed recipientPins
+        // (D-03c issuance write) BEFORE re-wrapping. `getRecipientPubkeyPins`
+        // returns raw pubkey bytes; normalize to base64 for the shared sdk-core
+        // helper (its stored-pin encoding). A mismatch or absent/empty pin list
+        // throws — aborting the upgrade before resolveShareEncryptedWriteKey
+        // (D-03e no-legacy hard fail); the compare is NOT reimplemented here.
+        //
+        // FOLDERS only (symmetric with the issuance gate in handleShare): the pin
+        // READER `getRecipientPubkeyPins` -> requireFolder resolves the shared
+        // node's OWN folder write-body, so a FILE item (a leaf child, not a
+        // folder-tree entry) would throw "not loaded" and block the upgrade
+        // entirely (greptile P1). File-share recipient pinning is not yet wired
+        // (tracked in the recipient-pin-lifecycle todo), so a file share carries
+        // no owner-sealed pin to verify against; skip the pin enforce for files,
+        // mirroring the write path, rather than fail-closing an unpinnable file
+        // upgrade.
+        //
+        // Gate on the child's own unsealed envelope kind, NOT the `kind` prop —
+        // the prop falls back to 'folder' while the browser's listing is still
+        // resolving, which would over-enforce the pin check for a real FILE and
+        // fail the upgrade until the dialog is reopened. The transient readKey
+        // from the identity resolve is zeroed immediately (D-09).
+        const identity = await resolveChildNodeIdentity(item, folderKey);
+        const itemKind = identity.kind;
+        identity.readKey.fill(0);
+        if (itemKind === 'folder') {
+          const pins = await getSdkClient().getRecipientPubkeyPins(item.ipnsName);
+          assertRecipientPinned(recipientPublicKey, pins.map(bytesToBase64));
+        }
+
         const parentIpnsName = resolveParentIpnsName(parentFolderId);
         const encryptedWriteKey = await getSdkClient().resolveShareEncryptedWriteKey(
           parentIpnsName,
@@ -327,7 +392,7 @@ export function ShareDialog({
         recipientPublicKey?.fill(0);
       }
     },
-    [item, parentFolderId]
+    [item, folderKey, parentFolderId]
   );
 
   const handleDowngradeConfirm = useCallback(async (share: SentShare) => {

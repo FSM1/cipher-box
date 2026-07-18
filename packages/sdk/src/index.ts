@@ -44,6 +44,7 @@ export type {
   PinningConfig,
   RotationClientCallbacks,
   LocalGrantRecord,
+  InlineGrantRemint,
 } from './types';
 
 // SDK-owned resolved folder listings (SDK-READ-02, D-02) -- the single
@@ -126,6 +127,11 @@ export {
   type TreeNode,
 } from '@cipherbox/sdk-core';
 export { selectEncryptionMode } from '@cipherbox/sdk-core';
+// Pure recipient-pin compare (80-04, D-03d) -- no crypto/IO beyond byte
+// normalization; re-exported so ShareDialog's upgrade path (80-08 consumer 3)
+// verifies the server-fed recipient against the node's owner-sealed pin list
+// via the facade instead of importing @cipherbox/sdk-core directly (D-07).
+export { assertRecipientPinned } from '@cipherbox/sdk-core';
 
 // D-07 full-boundary facade types (68.2-04) -- the web consumes these to call
 // client.bootstrapVaultKeys/serializeVault/deserializeVault (vault-bootstrap)

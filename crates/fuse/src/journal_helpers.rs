@@ -325,6 +325,7 @@ impl crate::CipherBoxFS {
         let write_body = NodeWriteBody {
             ipns_private_key: file_ipns_private_key.to_vec(),
             write_children: Vec::new(),
+            recipient_pins: Vec::new(),
         };
         let published = seal_published_node(
             &file_node,
@@ -452,6 +453,7 @@ impl crate::CipherBoxFS {
         let child_write_body = NodeWriteBody {
             ipns_private_key: child_ipns_private_key.to_vec(),
             write_children: Vec::new(),
+            recipient_pins: Vec::new(),
         };
         let child_published = seal_published_node(
             &child_node,

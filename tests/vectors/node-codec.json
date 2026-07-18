@@ -110,6 +110,29 @@
         "readSealed": "AAECAwQFBgcICQoLwITmRUibaxjcUMWqTw2tjNj1SSbX+ixuFegCosfoUdY3ofiIU6p2ijB1MaDBZbi3Zsd9QnSaFajwzr407Dc6k20iy/2brlsHQrBPHgE1QtUoHhSKkdac1i73uslcNMd0MNul+TgrttrE7fDzW4rWY4/XGhbDo4yn/0FxCUZ5u3mnTvloLy1Pu0C0ffZNS0m/IeTSRZ1/ZTr27nVCmAM5KC7eZKEId/nEPZCIMv0bNpuEKw==",
         "writeSealed": "AAECAwQFBgcICQoLMiqLir863DZC/iFi+/UAgnEE4p5WSNGLPyIq3dVDV8eiQyx0AcgspiL1XzS5TmKOR0UmOc0ejtOssjD1L7culRzR0PXsJpMYW6fjv7gF4QDD8vk3jr6tMUkL9Rz0slANjNGiCA=="
       }
+    },
+    {
+      "description": "folder node FULL-SEAL LOCK with non-empty recipientPins (fixed key + fixed IV, D-03b) — locks the write-body pin path byte-for-byte across Rust/TS",
+      "node_id": "550e8400-e29b-41d4-a716-446655440000",
+      "kind": 1,
+      "generation": 0,
+      "read_key": "0101010101010101010101010101010101010101010101010101010101010101",
+      "write_key": "0202020202020202020202020202020202020202020202020202020202020202",
+      "ipns_private_key_hex": "4444444444444444444444444444444444444444444444444444444444444444",
+      "fixed_iv": "000102030405060708090a0b",
+      "recipient_pins": [
+        "AhERERERERERERERERERERERERERERERERERERERERER",
+        "AyIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi"
+      ],
+      "expected_published_node": {
+        "schema": "node/v3",
+        "kind": "folder",
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "generation": 0,
+        "aeadVersion": 1,
+        "readSealed": "AAECAwQFBgcICQoLwITmRUibaxjcUMWqTw2tjNj1SSbX+ixuFegCosfoUdY3ofiIU6p2ijB1MaDBZbi3Zsd9QnSaFajwzr407Dc6k20iy/2brlsHQrBPHgE1QtUoHhSKkdac1i73uslcNMd0MNul+TgrttrE7fDzW4rWY4/XGhbDo4yn/0FxCUZ5u3mnTvloLy1Pu0C0ffZNS0m/IeTSRZ1/ZTr27nVCmAM5KC7eZKEId/nEPZCIMv0bNpuEKw==",
+        "writeSealed": "AAECAwQFBgcICQoLMiqLir863DZC/iFi+/UAgnEE4p5WSNGLPyIq3dVDV8eiQyx0AcgspiL1XzS5TmKOR0UmOc0ejtOssjD1L7culRzR0PXsJpMYW6fjv7gF4QDD8vlmQfrucBZNcxNp8J97YOz0aURHkM/jrVVq3sESeTlglv4UQSMtfL/zeer6pc9G9nOmPhfa8f6D77JN3I3J6f9FTzOz8svArbrFdTm4+4OTnziF5TDmvA75kJriJB5JrZrFgA573h3xhlKofu6wJT2jMW9rIcQbqIBJqoaGv8wDVsQ="
+      }
     }
   ]
 }

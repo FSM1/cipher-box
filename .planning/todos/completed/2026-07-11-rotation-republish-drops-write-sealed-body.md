@@ -48,3 +48,7 @@ Verified locally: the "no write_sealed body" flood drops 607→0.
 Write-key *rotation* remains a separate Phase-72 concern; this only re-seals the
 UNCHANGED write plane at the bumped generation. Add unit tests for the
 reconstruction round-trip + the None fallback (were written in the prototype).
+
+## Resolution
+
+Resolved by Phase 80 (rotation-write-plane-and-re-mint-durability), shipped on branch `feat/rotation-write-plane-and-re-mint-durability`. D-01/D-02/D-03/D-04 implemented and verified (SDK-E2E 106/106, fuse 130).

@@ -73,6 +73,10 @@ export {
   issueReadGrant,
   claimInviteReadKey,
   type ReadGrantPayload,
+  assertRecipientPinned,
+  appendRecipientPin,
+  extractRecipientPins,
+  type RecipientPubkey,
 } from './share';
 
 // Rotation engine + scope-exit predicate

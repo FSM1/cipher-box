@@ -137,6 +137,7 @@ mod write_body_tests {
                 child_id: "660e8400-e29b-41d4-a716-446655440001".to_string(),
                 write_key_sealed: "c2VhbGVkLXdyaXRlLWtleQ==".to_string(),
             }],
+            recipient_pins: vec![],
         };
 
         let encoded = encode_write_body(&wb).expect("encode ok");
@@ -149,16 +150,54 @@ mod write_body_tests {
         let wb = NodeWriteBody {
             ipns_private_key: vec![0x11u8; 32],
             write_children: vec![],
+            recipient_pins: vec![],
         };
 
         let encoded = encode_write_body(&wb).expect("encode ok");
-        // FIXED field order: ipnsPrivateKey then writeChildren.
+        // FIXED field order: ipnsPrivateKey then writeChildren. An EMPTY
+        // recipient_pins is omitted from the wire (skip_serializing_if), so the
+        // encoded bytes are byte-identical to the pre-D-03b output — this is the
+        // seal_vectors[0] preservation guarantee (D-03b, Pitfall 1).
         let text = std::str::from_utf8(&encoded).unwrap();
         assert!(text.starts_with(r#"{"ipnsPrivateKey":"#));
         assert!(text.ends_with(r#""writeChildren":[]}"#));
+        assert!(!text.contains("recipientPins"));
 
         let decoded = decode_write_body(&encoded).expect("decode ok");
         assert_eq!(decoded, wb);
+    }
+
+    #[test]
+    fn write_body_round_trip_with_recipient_pins() {
+        // Two raw compressed secp256k1 pubkeys (33 bytes each).
+        let mut pin1 = vec![0x02u8];
+        pin1.extend_from_slice(&[0x11u8; 32]);
+        let mut pin2 = vec![0x03u8];
+        pin2.extend_from_slice(&[0x22u8; 32]);
+
+        let wb = NodeWriteBody {
+            ipns_private_key: vec![0x44u8; 32],
+            write_children: vec![],
+            recipient_pins: vec![pin1, pin2],
+        };
+
+        let encoded = encode_write_body(&wb).expect("encode ok");
+        // FIXED field order: ipnsPrivateKey, writeChildren, then recipientPins
+        // (matches the TS encodeWriteBody order for cross-language byte parity).
+        let text = std::str::from_utf8(&encoded).unwrap();
+        assert!(text.contains(r#""writeChildren":[],"recipientPins":["#));
+
+        let decoded = decode_write_body(&encoded).expect("decode ok");
+        assert_eq!(decoded, wb);
+    }
+
+    #[test]
+    fn decode_write_body_defaults_missing_recipient_pins_to_empty() {
+        // Old-format JSON with no recipientPins field must decode to an empty
+        // list (serde default) and NEVER error (forward tolerance, D-03b).
+        let old_format = br#"{"ipnsPrivateKey":"ERERERERERERERERERERERERERERERERERERERERERE=","writeChildren":[]}"#;
+        let decoded = decode_write_body(old_format).expect("decode ok");
+        assert!(decoded.recipient_pins.is_empty());
     }
 
     #[test]
