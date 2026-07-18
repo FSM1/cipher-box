@@ -1217,3 +1217,7 @@ yeah please go through the mutation and rotation flows on top of this
 ---
 
 I think that this all needs a lot more research and prototying before deciding - can you create a research goals document, which will be used to power a research/prototyping sprint to discover the best approach to handling these complex interactions?
+
+---
+
+the research can be committed on the same branch, keep gap c, pull back the inline-seam wiring and keep the skipped e2e
