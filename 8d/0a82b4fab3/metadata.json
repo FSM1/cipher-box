@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8d0a82b4fab3",
+  "strategy": "manual-commit",
+  "branch": "feat/rotation-write-plane-and-re-mint-durability",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/components/file-browser/ShareDialog.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8d/0a82b4fab3/0/metadata.json",
+      "transcript": "/8d/0a82b4fab3/0/full.jsonl",
+      "compact_transcript": "/8d/0a82b4fab3/0/transcript.jsonl",
+      "content_hash": "/8d/0a82b4fab3/0/content_hash.txt",
+      "prompt": "/8d/0a82b4fab3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 31,
+    "cache_creation_tokens": 29124,
+    "cache_read_tokens": 1945719,
+    "output_tokens": 8371,
+    "api_call_count": 16
+  }
+}
