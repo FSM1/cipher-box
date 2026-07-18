@@ -229,7 +229,14 @@ export function ShareDialog({
       // File-share recipient pinning is not yet wired (tracked in the
       // recipient-pin-lifecycle todo); skip the pin for files and create the grant
       // as before, preserving file sharing without regressing the folder path.
-      if (kind === 'folder') {
+      //
+      // Gate on identity.kind (the child's own PublishedNode envelope, unsealed
+      // above) — NOT the `kind` prop: the prop falls back to 'folder' when the
+      // browser's resolvedByIpnsName listing hasn't caught up yet, which would
+      // route a real FILE into requireFolder and fail the whole share. Skipping
+      // the pin on an unknown kind instead is NOT safe — an unpinned folder
+      // grant would be permanently blocked by the D-03d fail-closed checks.
+      if (identity.kind === 'folder') {
         await getSdkClient().addRecipientPubkeyPin(item.ipnsName, recipientPublicKey);
       }
 
@@ -281,7 +288,7 @@ export function ShareDialog({
       setIsSharing(false);
       itemReadKey?.fill(0);
     }
-  }, [pubKeyInput, item, folderKey, permission, parentFolderId, kind]);
+  }, [pubKeyInput, item, folderKey, permission, parentFolderId]);
 
   const handleRevoke = useCallback(async (shareId: string) => {
     setRevokingId(shareId);
