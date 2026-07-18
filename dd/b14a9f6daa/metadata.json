@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "ddb14a9f6daa",
+  "strategy": "manual-commit",
+  "branch": "feat/rotation-write-plane-and-re-mint-durability",
+  "checkpoints_count": 9,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/dd/b14a9f6daa/0/metadata.json",
+      "transcript": "/dd/b14a9f6daa/0/full.jsonl",
+      "compact_transcript": "/dd/b14a9f6daa/0/transcript.jsonl",
+      "content_hash": "/dd/b14a9f6daa/0/content_hash.txt",
+      "prompt": "/dd/b14a9f6daa/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 28631,
+    "cache_creation_tokens": 3317709,
+    "cache_read_tokens": 104054718,
+    "output_tokens": 700653,
+    "api_call_count": 459
+  }
+}
