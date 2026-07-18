@@ -1,0 +1,151 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "dedba4f60096",
+  "session_id": "23ef2c57-3ce7-4145-82fd-b74e01d6599a",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-18T17:37:17.65693Z",
+  "branch": "feat/rotation-write-plane-and-re-mint-durability",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/web/src/components/file-browser/ShareDialog.tsx"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "9dd6487409ab",
+  "checkpoint_transcript_start": 399,
+  "transcript_lines_at_start": 399,
+  "compact_transcript_start": 85,
+  "token_usage": {
+    "input_tokens": 11,
+    "cache_creation_tokens": 7633,
+    "cache_read_tokens": 841928,
+    "output_tokens": 4275,
+    "api_call_count": 6
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-resolve-pr-reviews-2026-07-18T17:13:38.388998Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "846cf8cff6a2",
+      "timestamp": "2026-07-18T17:13:38.388998Z",
+      "native": {
+        "command": "/resolve-pr-reviews"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-resolve-pr-reviews-2026-07-18T17:24:22.26252Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "d79d8db56390",
+      "timestamp": "2026-07-18T17:24:22.26252Z",
+      "native": {
+        "command": "/resolve-pr-reviews"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "prompt-skill-claude-code-resolve-pr-reviews-2026-07-18T17:35:51.002453Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "resolve-pr-reviews"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "9dd6487409ab",
+      "timestamp": "2026-07-18T17:35:51.002453Z",
+      "native": {
+        "command": "/resolve-pr-reviews"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/resolve-pr-reviews",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Re-sweep PR #615 on CipherBox for new unresolved automated/human review threads and fix any valid issues found, per the standard resolve-pr-reviews workflow.",
+    "outcome": "Found and fixed issue(s) in ShareDialog.tsx, verified with typecheck and lint, then committed a fix described as an 'upgrade-gate fix' and pushed.",
+    "learnings": {
+      "repo": [],
+      "code": [
+        {
+          "path": "apps/web/src/components/file-browser/ShareDialog.tsx",
+          "finding": "Contains upgrade-gate logic that was flagged in PR review and required a fix; edited twice in this pass."
+        }
+      ],
+      "workflow": [
+        "The resolve-pr-reviews workflow supports incremental re-sweeps of a PR (fetching only newly unresolved threads) rather than always processing the full thread list from scratch."
+      ]
+    },
+    "friction": [],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-18T17:37:09.423677Z",
+    "agent_lines": 20,
+    "agent_removed": 10,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 20,
+    "total_lines_changed": 30,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1062,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1,
+        ".planning/phases/06.1-webapp-automation-testing/06.1-03-SUMMARY.md": 351,
+        "tests/e2e/.env.example": 12,
+        "tests/e2e/.gitignore": 6,
+        "tests/e2e/README.md": 142,
+        "tests/e2e/fixtures/auth.fixture.ts": 84,
+        "tests/e2e/package.json": 17,
+        "tests/e2e/playwright.config.ts": 41,
+        "tests/e2e/tests/auth/login.spec.ts": 90,
+        "tests/e2e/tests/auth/logout.spec.ts": 104,
+        "tests/e2e/tests/auth/session.spec.ts": 118,
+        "tests/e2e/tsconfig.json": 17,
+        "tests/e2e/utils/web3auth-helpers.ts": 79
+      }
+    }
+  ]
+}
