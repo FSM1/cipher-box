@@ -341,15 +341,25 @@ export function ShareDialog({
         // throws — aborting the upgrade before resolveShareEncryptedWriteKey
         // (D-03e no-legacy hard fail); the compare is NOT reimplemented here.
         //
-        // FOLDERS only (symmetric with the issuance gate at :232): the pin READER
-        // `getRecipientPubkeyPins` -> requireFolder resolves the shared node's OWN
-        // folder write-body, so a FILE item (a leaf child, not a folder-tree entry)
-        // would throw "not loaded" and block the upgrade entirely (greptile P1).
-        // File-share recipient pinning is not yet wired (tracked in the
-        // recipient-pin-lifecycle todo), so a file share carries no owner-sealed
-        // pin to verify against; skip the pin enforce for files, mirroring the
-        // write path, rather than fail-closing an unpinnable file upgrade.
-        if (kind === 'folder') {
+        // FOLDERS only (symmetric with the issuance gate in handleShare): the pin
+        // READER `getRecipientPubkeyPins` -> requireFolder resolves the shared
+        // node's OWN folder write-body, so a FILE item (a leaf child, not a
+        // folder-tree entry) would throw "not loaded" and block the upgrade
+        // entirely (greptile P1). File-share recipient pinning is not yet wired
+        // (tracked in the recipient-pin-lifecycle todo), so a file share carries
+        // no owner-sealed pin to verify against; skip the pin enforce for files,
+        // mirroring the write path, rather than fail-closing an unpinnable file
+        // upgrade.
+        //
+        // Gate on the child's own unsealed envelope kind, NOT the `kind` prop —
+        // the prop falls back to 'folder' while the browser's listing is still
+        // resolving, which would over-enforce the pin check for a real FILE and
+        // fail the upgrade until the dialog is reopened. The transient readKey
+        // from the identity resolve is zeroed immediately (D-09).
+        const identity = await resolveChildNodeIdentity(item, folderKey);
+        const itemKind = identity.kind;
+        identity.readKey.fill(0);
+        if (itemKind === 'folder') {
           const pins = await getSdkClient().getRecipientPubkeyPins(item.ipnsName);
           assertRecipientPinned(recipientPublicKey, pins.map(bytesToBase64));
         }
@@ -382,7 +392,7 @@ export function ShareDialog({
         recipientPublicKey?.fill(0);
       }
     },
-    [item, parentFolderId, kind]
+    [item, folderKey, parentFolderId]
   );
 
   const handleDowngradeConfirm = useCallback(async (share: SentShare) => {
