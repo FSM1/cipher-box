@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.37.0](https://github.com/FSM1/cipher-box/compare/cipherbox-api-client-v0.36.1...cipherbox-api-client-v0.37.0) (2026-07-18)
+
+
+### Features
+
+* enforce share-invite authorization and IPNS data-integrity in the API ([#599](https://github.com/FSM1/cipher-box/issues/599)) ([703bc00](https://github.com/FSM1/cipher-box/commit/703bc0083d42547cd2c0e747d79be82a0c318e78))
+* FUSE and WinFsp Rust integration with grant-root awareness and SDK-owned read chain ([#594](https://github.com/FSM1/cipher-box/issues/594)) ([4b96aa9](https://github.com/FSM1/cipher-box/commit/4b96aa950b19591331445d65dfa81b6bc25d90b2))
+
+
+### Bug Fixes
+
+* close rust and fuse scope-exit read-revocation bypasses ([#607](https://github.com/FSM1/cipher-box/issues/607)) ([2917c85](https://github.com/FSM1/cipher-box/commit/2917c853937ddc20e67a4149f9fc4d868f130c68))
+* cross-language IPNS and node-codec verification parity ([#608](https://github.com/FSM1/cipher-box/issues/608)) ([77e52cb](https://github.com/FSM1/cipher-box/commit/77e52cb8dc65788f7df7cd1ffbe9cf7384ac3e21))
+
 ## [0.36.1](https://github.com/FSM1/cipher-box/compare/cipherbox-api-client-v0.36.0...cipherbox-api-client-v0.36.1) (2026-06-26)
 
 

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.34.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.33.1...@cipherbox/crypto-v0.34.0) (2026-07-18)
+
+
+### Features
+
+* add AAD-bound AES-256-GCM node-seal primitive with cross-language KAT ([#576](https://github.com/FSM1/cipher-box/issues/576)) ([65237ac](https://github.com/FSM1/cipher-box/commit/65237ac18b2ae2534304d57e0d08dec52a263d04))
+* recovery tool v3, vault-load guards, web UX and CI boundary guards ([#613](https://github.com/FSM1/cipher-box/issues/613)) ([cba7857](https://github.com/FSM1/cipher-box/commit/cba7857187d8aa6f92b02a0d4d88269f71f770ec))
+
+
+### Bug Fixes
+
+* cross-language IPNS and node-codec verification parity ([#608](https://github.com/FSM1/cipher-box/issues/608)) ([77e52cb](https://github.com/FSM1/cipher-box/commit/77e52cb8dc65788f7df7cd1ffbe9cf7384ac3e21))
+* harden FUSE publish and TEE write paths against partial-failure states ([#610](https://github.com/FSM1/cipher-box/issues/610)) ([02efe51](https://github.com/FSM1/cipher-box/commit/02efe51bbc1930b02857b081b41404ae0ed9605c))
+* harden SDK write-plane durability and correctness ([#602](https://github.com/FSM1/cipher-box/issues/602)) ([c21f896](https://github.com/FSM1/cipher-box/commit/c21f896b6839b5791ff0c8bd4c5985afef8c6a48))
+
 ## [0.33.1](https://github.com/FSM1/cipher-box/compare/@cipherbox/crypto-v0.33.0...@cipherbox/crypto-v0.33.1) (2026-06-25)
 
 

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.47.0](https://github.com/FSM1/cipher-box/compare/cipherbox-desktop-v0.46.0...cipherbox-desktop-v0.47.0) (2026-07-18)
+
+
+### Features
+
+* FUSE and WinFsp Rust integration with grant-root awareness and SDK-owned read chain ([#594](https://github.com/FSM1/cipher-box/issues/594)) ([4b96aa9](https://github.com/FSM1/cipher-box/commit/4b96aa950b19591331445d65dfa81b6bc25d90b2))
+* rotation write-plane and re-mint durability with recipient-pubkey pinning ([#615](https://github.com/FSM1/cipher-box/issues/615)) ([27c4abe](https://github.com/FSM1/cipher-box/commit/27c4abec52ed7cdf0ce9d7147685b2bae97e16b5))
+
+
+### Bug Fixes
+
+* harden FUSE publish and TEE write paths against partial-failure states ([#610](https://github.com/FSM1/cipher-box/issues/610)) ([02efe51](https://github.com/FSM1/cipher-box/commit/02efe51bbc1930b02857b081b41404ae0ed9605c))
+* harden rotation read-plane durability and deep crash-resume soundness ([#598](https://github.com/FSM1/cipher-box/issues/598)) ([d5486e5](https://github.com/FSM1/cipher-box/commit/d5486e586ab0d30113ca167819d6e053bb2ec3a3))
+
 ## [0.46.0](https://github.com/FSM1/cipher-box/compare/cipherbox-desktop-v0.45.0...cipherbox-desktop-v0.46.0) (2026-06-26)
 
 

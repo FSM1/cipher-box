@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.45.0](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-v0.44.1...@cipherbox/api-v0.45.0) (2026-07-18)
+
+
+### Features
+
+* atomic IPNS publish-gate, tombstone, and share schema cutover ([#584](https://github.com/FSM1/cipher-box/issues/584)) ([a036a84](https://github.com/FSM1/cipher-box/commit/a036a84d4477937ee4a59e2c70c0673c5142edc8))
+* enforce share-invite authorization and IPNS data-integrity in the API ([#599](https://github.com/FSM1/cipher-box/issues/599)) ([703bc00](https://github.com/FSM1/cipher-box/commit/703bc0083d42547cd2c0e747d79be82a0c318e78))
+* integrate web client with node/v3 read and write runtime ([#588](https://github.com/FSM1/cipher-box/issues/588)) ([1fb8996](https://github.com/FSM1/cipher-box/commit/1fb8996a25947a0964b286ac44864f3e5e84e33c))
+* rewrite TEE republish as a verify-in-enclave lease renewer ([#585](https://github.com/FSM1/cipher-box/issues/585)) ([ab209a9](https://github.com/FSM1/cipher-box/commit/ab209a9251752e1c317b9534c0c32fb465defd62))
+* web rotation UX and durable anti-rollback client state ([#587](https://github.com/FSM1/cipher-box/issues/587)) ([1b4f68b](https://github.com/FSM1/cipher-box/commit/1b4f68b588f0bb51bec2267f6e742ccaa3b76426))
+
+
+### Bug Fixes
+
+* close rust and fuse scope-exit read-revocation bypasses ([#607](https://github.com/FSM1/cipher-box/issues/607)) ([2917c85](https://github.com/FSM1/cipher-box/commit/2917c853937ddc20e67a4149f9fc4d868f130c68))
+* harden FUSE publish and TEE write paths against partial-failure states ([#610](https://github.com/FSM1/cipher-box/issues/610)) ([02efe51](https://github.com/FSM1/cipher-box/commit/02efe51bbc1930b02857b081b41404ae0ed9605c))
+
 ## [0.44.1](https://github.com/FSM1/cipher-box/compare/@cipherbox/api-v0.44.0...@cipherbox/api-v0.44.1) (2026-06-26)
 
 

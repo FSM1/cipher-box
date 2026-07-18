@@ -1,6 +1,6 @@
 [package]
 name = "cipherbox-fuse"
-version = "0.10.1"
+version = "0.11.0"
 edition = "2021"
 description = "CipherBox FUSE filesystem with platform-specific mount implementations"
 

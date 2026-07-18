@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.0](https://github.com/FSM1/cipher-box/compare/cipherbox-crypto-v0.5.0...cipherbox-crypto-v0.6.0) (2026-07-18)
+
+
+### Features
+
+* add AAD-bound AES-256-GCM node-seal primitive with cross-language KAT ([#576](https://github.com/FSM1/cipher-box/issues/576)) ([65237ac](https://github.com/FSM1/cipher-box/commit/65237ac18b2ae2534304d57e0d08dec52a263d04))
+
+
+### Bug Fixes
+
+* cross-language IPNS and node-codec verification parity ([#608](https://github.com/FSM1/cipher-box/issues/608)) ([77e52cb](https://github.com/FSM1/cipher-box/commit/77e52cb8dc65788f7df7cd1ffbe9cf7384ac3e21))
+
 ## [0.5.0](https://github.com/FSM1/cipher-box/compare/cipherbox-crypto-v0.4.0...cipherbox-crypto-v0.5.0) (2026-03-31)
 
 

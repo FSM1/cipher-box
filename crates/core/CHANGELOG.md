@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.0](https://github.com/FSM1/cipher-box/compare/cipherbox-core-v0.7.0...cipherbox-core-v0.8.0) (2026-07-18)
+
+
+### Features
+
+* FUSE and WinFsp Rust integration with grant-root awareness and SDK-owned read chain ([#594](https://github.com/FSM1/cipher-box/issues/594)) ([4b96aa9](https://github.com/FSM1/cipher-box/commit/4b96aa950b19591331445d65dfa81b6bc25d90b2))
+* rotation write-plane and re-mint durability with recipient-pubkey pinning ([#615](https://github.com/FSM1/cipher-box/issues/615)) ([27c4abe](https://github.com/FSM1/cipher-box/commit/27c4abec52ed7cdf0ce9d7147685b2bae97e16b5))
+
+
+### Bug Fixes
+
+* cross-language IPNS and node-codec verification parity ([#608](https://github.com/FSM1/cipher-box/issues/608)) ([77e52cb](https://github.com/FSM1/cipher-box/commit/77e52cb8dc65788f7df7cd1ffbe9cf7384ac3e21))
+
 ## [0.7.0](https://github.com/FSM1/cipher-box/compare/cipherbox-core-v0.6.0...cipherbox-core-v0.7.0) (2026-06-25)
 
 
