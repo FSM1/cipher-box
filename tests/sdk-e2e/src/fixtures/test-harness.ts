@@ -16,7 +16,7 @@ import {
   type GrantRow,
 } from '@cipherbox/sdk';
 import { initializeVault } from '@cipherbox/core';
-import { hexToBytes, bytesToHex, base64ToBytes } from '@cipherbox/crypto';
+import { hexToBytes, bytesToHex } from '@cipherbox/crypto';
 import { publishVaultKeyBlob, publishEmptyRootNode } from '@cipherbox/sdk-core';
 import type { SdkContext } from '@cipherbox/sdk-core';
 import { createAxiosInstance } from '@cipherbox/api-client';
@@ -84,39 +84,28 @@ function buildInlineGrantRemintCallbacks(
     return data.shares;
   }
 
-  const listSentGrants = async (): Promise<GrantRow[]> => {
-    const shares = await fetchSentShares();
-    return shares.map((s) => ({
-      shareId: s.shareId,
-      recipientPublicKey: hexToBytes(
-        s.recipientPublicKey.startsWith('0x') ? s.recipientPublicKey.slice(2) : s.recipientPublicKey
-      ),
-      isRevoked: false,
-      rootNodeId: s.rootNodeId,
-    }));
-  };
+  const toGrantRow = (s: SentShareRow): GrantRow => ({
+    shareId: s.shareId,
+    recipientPublicKey: hexToBytes(
+      s.recipientPublicKey.startsWith('0x') ? s.recipientPublicKey.slice(2) : s.recipientPublicKey
+    ),
+    isRevoked: false,
+    rootNodeId: s.rootNodeId,
+  });
+
+  const listSentGrants = async (): Promise<GrantRow[]> => (await fetchSentShares()).map(toGrantRow);
 
   const updateGrant = async (
     shareId: string,
     encryptedReadKey: string,
     generation: number
   ): Promise<void> => {
-    // sdk-core `reMintGrantsRootedAt` hands `encryptedReadKey` as BASE64
-    // (engine.ts:648 bytesToBase64), but PATCH /shares/:id/grant requires even-
-    // length HEX (like the share-create DTO + the SDK's own share-create path).
-    // This mismatch (a genuine product bug that also affects the web
-    // owner-reconcile path) makes every re-mint PATCH 400. The `E2E_REMINT_HEX=1`
-    // opt-in converts base64→hex so the file-share-rotation-remint reproduction
-    // can reach the deeper file-key gap. It is a DIAGNOSTIC, not a fix, and
-    // defaults OFF so the harness stays a faithful mirror of web.
-    const encHex =
-      process.env.E2E_REMINT_HEX === '1'
-        ? bytesToHex(base64ToBytes(encryptedReadKey))
-        : encryptedReadKey;
+    // sdk-core `reMintGrantsRootedAt` hands `encryptedReadKey` as even-length
+    // HEX (Gap C fix), matching PATCH /shares/:id/grant — forward it verbatim.
     const res = await testFetch(`${apiUrl}/shares/${shareId}/grant`, {
       method: 'PATCH',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ encryptedReadKey: encHex, rootGeneration: String(generation) }),
+      body: JSON.stringify({ encryptedReadKey, rootGeneration: String(generation) }),
     });
     if (!res.ok) {
       throw new Error(`PATCH /shares/${shareId}/grant failed (${res.status}): ${await res.text()}`);
@@ -153,7 +142,9 @@ function buildInlineGrantRemintCallbacks(
         }
       }
 
-      const grants = await listSentGrants();
+      // Derive grants from the SAME snapshot as nodeIdToIpnsName — a second
+      // /shares/sent fetch could observe different rows and desync the two.
+      const grants = shares.map(toGrantRow);
 
       const transport: OwnerReconcileTransport = {
         listSentGrants,

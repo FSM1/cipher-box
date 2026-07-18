@@ -17,10 +17,10 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * STATUS: describe.skip — this suite is a live-stack REPRODUCTION, not a passing
  * gate. Run against a local stack (see repo docs) to reproduce. It surfaced
- * three genuine gaps that stop the just-committed fix (04198f81e) from re-minting
- * a file grant end-to-end. Two of them are product bugs OUTSIDE tests/sdk-e2e and
- * were therefore left unfixed here (this task is test-only). Un-skip once B and C
- * below are fixed.
+ * three genuine gaps that stopped the original fix (04198f81e) from re-minting
+ * a file grant end-to-end: Gap A is a harness artifact (worked around below),
+ * Gap C has since been FIXED (4b1b00d4f — engine.ts emits hex), and Gap B
+ * remains a real product gap. Un-skip once B is fixed.
  *
  *   Gap A (harness artifact, worked around):
  *     `client.getRecipientPubkeyPins(D)` slow-paths through
@@ -35,21 +35,13 @@
  *     ensureFolderLoaded (mirrors a cold navigation). It COULD still bite a
  *     same-session create+share+rotate web flow.
  *
- *   Gap C (REAL product bug — blocks ALL re-mints, folder AND file):
- *     sdk-core `reMintGrantsRootedAt` encodes the re-wrapped key as BASE64
- *     (`bytesToBase64`, packages/sdk-core/src/rotation/engine.ts:648) and hands it
- *     to the host `updateGrantFn`. But `PATCH /shares/:id/grant`
- *     (UpdateGrantDto.encryptedReadKey) — like the share-CREATE DTO and the SDK's
- *     own share-create path (share/index.ts:71 bytesToHex) — requires even-length
- *     HEX. So every re-mint PATCH is rejected:
- *       "encryptedReadKey must be an even-length hex string" (400).
- *     This affects the WEB owner-reconcile path too (owner-reconcile.service.ts
- *     updateGrant passes the base64 verbatim to sharesControllerUpdateGrant). No
- *     existing sdk-e2e exercised a real re-mint PATCH, so it was uncaught. Fix:
- *     engine.ts:648 should emit `bytesToHex`, or the API/host must agree on
- *     base64. The harness exposes an OPT-IN diagnostic (`E2E_REMINT_HEX=1`) that
- *     converts base64→hex before the PATCH so this suite can reach Gap B; it is a
- *     diagnostic, NOT a fix, and defaults OFF (faithful to web).
+ *   Gap C (product bug — FIXED in 4b1b00d4f):
+ *     sdk-core `reMintGrantsRootedAt` used to encode the re-wrapped key as
+ *     BASE64 while `PATCH /shares/:id/grant` (UpdateGrantDto.encryptedReadKey)
+ *     requires even-length HEX, so every re-mint PATCH 400'd. Fixed: the
+ *     read-plane re-mint path (engine.ts `bytesToHex`) now matches the API, and
+ *     the harness forwards `encryptedReadKey` verbatim (the old
+ *     `E2E_REMINT_HEX=1` diagnostic is removed).
  *
  *   Gap B (REAL product gap — the pitfall this e2e was built to find):
  *     Re-minting carol's FILE grant requires the file node F to be rotated (its
@@ -95,8 +87,8 @@ async function getSentShare(accessToken: string, shareId: string): Promise<SentS
   return share;
 }
 
-// SKIPPED: live-stack reproduction of a blocked fix — see the file header for the
-// three gaps (A worked-around, B + C real product bugs outside tests/sdk-e2e).
+// SKIPPED: live-stack reproduction of a blocked fix — see the file header
+// (Gap A worked-around, Gap C fixed, Gap B still blocks the file re-mint).
 describe.skip('File-Share Grant Re-Mint on Scope-Exit Rotation', () => {
   let fixture: MultiAccountFixture;
 
@@ -228,9 +220,8 @@ describe.skip('File-Share Grant Re-Mint on Scope-Exit Rotation', () => {
     // renameItem's `childId` param is the child's ipnsName (renameInFolder keys
     // on ipnsName, not display name).
     //
-    // NOTE: with the fix wired this currently THROWS — Gap C (base64/hex) on the
-    // folder re-mint PATCH, or with E2E_REMINT_HEX=1, Gap B (no file IPNS key)
-    // when the walk reaches file F. See the file header.
+    // NOTE: with the fix wired this currently THROWS — Gap B (no file IPNS key)
+    // when the rotation walk reaches file F. See the file header.
     await alice.client.renameItem(D.ipnsName, gIpnsName, 'other2.txt');
   });
 
