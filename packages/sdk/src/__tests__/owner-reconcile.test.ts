@@ -34,7 +34,7 @@ const mockFns = vi.hoisted(() => ({
 // sdk-core's assertRecipientPinned (80-04) decodes the pin list with them when
 // verifying each surviving grant's recipient before wrapKey (D-03d consumer 2).
 // Only the ECIES/randomness surface is stubbed; bytesToBase64 keeps its
-// deterministic btoa form so EXPECTED_ENCRYPTED_KEY stays stable.
+// deterministic btoa form for the recipient pin list.
 vi.mock('@cipherbox/crypto', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cipherbox/crypto')>();
   return {
@@ -57,7 +57,9 @@ const NEW_READ_KEY = new Uint8Array(32).fill(0xab);
 const NEW_GENERATION = 3;
 
 const MOCK_WRAPPED_BYTES = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
-const EXPECTED_ENCRYPTED_KEY = btoa(String.fromCharCode(0xde, 0xad, 0xbe, 0xef));
+// Hex, not base64 — reMintGrantsRootedAt encodes the wrapped read key with
+// bytesToHex to match the grant API (Gap C fix).
+const EXPECTED_ENCRYPTED_KEY = 'deadbeef';
 
 const SHARE_ID_SURVIVING = 'share-survive-1111';
 const SHARE_ID_REVOKED = 'share-revoked-2222';
