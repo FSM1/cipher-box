@@ -1,0 +1,29 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "761d9bd81ec6",
+  "strategy": "manual-commit",
+  "branch": "feat/rotation-write-plane-and-re-mint-durability",
+  "checkpoints_count": 9,
+  "files_touched": [
+    "apps/web/src/services/owner-reconcile.service.ts",
+    "apps/web/src/services/rotation-driver.service.ts",
+    "packages/sdk-core/src/__tests__/rotation/grant-remint.test.ts",
+    "packages/sdk-core/src/rotation/engine.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/76/1d9bd81ec6/0/metadata.json",
+      "transcript": "/76/1d9bd81ec6/0/full.jsonl",
+      "compact_transcript": "/76/1d9bd81ec6/0/transcript.jsonl",
+      "content_hash": "/76/1d9bd81ec6/0/content_hash.txt",
+      "prompt": "/76/1d9bd81ec6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 160,
+    "cache_creation_tokens": 1209012,
+    "cache_read_tokens": 19395887,
+    "output_tokens": 165607,
+    "api_call_count": 80
+  }
+}
