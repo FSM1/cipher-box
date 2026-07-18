@@ -38,7 +38,6 @@ import { useShareStore } from '../stores/share.store';
 import { useRotationStore } from '../stores/rotation.store';
 import { withTailWalkLeader } from '../lib/multi-tab-lock';
 import { logger } from '../lib/logger';
-import { resolveInlineGrantRemint } from './owner-reconcile.service';
 
 // ---------------------------------------------------------------------------
 // Durable job checkpoint (metadata-only — never key material, Pitfall 4)
@@ -288,10 +287,6 @@ export function buildRotationClientCallbacks(): RotationClientCallbacks {
     getLocalGrantRecord,
     persistJob,
     progress,
-    // recipient-pin-lifecycle §5: enable INLINE per-node grant re-mint during
-    // scope-exit rotation so separately-shared FILE leaves (which the reconcile
-    // sweep skips — no FolderTree entry) get re-minted under their rotated key.
-    resolveInlineGrantRemint: (rootNodeIpnsName) => resolveInlineGrantRemint(rootNodeIpnsName),
   };
 }
 
