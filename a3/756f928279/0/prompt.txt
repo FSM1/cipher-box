@@ -1,0 +1,1 @@
+also please go through @README.md to clean up any of the unnecessary v1 details and generally reword it for use by humans building or researching the system
