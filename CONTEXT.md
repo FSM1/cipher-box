@@ -1,65 +1,77 @@
-# CipherBox
+# CipherBox v2 — Ubiquitous Language
 
-A zero-knowledge encrypted IPFS/IPNS vault. The server is an untrusted relay that never sees plaintext or any unwrapped key. This glossary pins the vocabulary for the metadata, key-chaining, and sharing model (the `node/v3` design). It complements — does not replace — the terminology table in `CLAUDE.md`.
+Glossary only. Design detail lives in `blueprint/`; the as-built v1 spec corpus, ADRs, and decision history live in [FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next).
 
-## Keys
+## Read-plane key model (seeded derivation)
 
-**readKey**:
-A per-node 32-byte AES key that seals a node's read-body (its children and, for a file, its content). Chained parent-to-child: a parent seals each child's `readKey` under its own. Holding a node's `readKey` unwraps its whole subtree with symmetric AES.
-_Avoid_: folderKey, fileKey, rootFolderKey, nodeKey
+- **Node seed** — the per-node secret from which a node's keys derive, flat within a scope: `nodeSeed(X) = KDF(scopeSeed, X.id)`. Location-independent, so intra-scope moves are pure relinks; membership is the envelope's epoch tag.
+- **Scope** — a derivation domain: the set of nodes keyed from one random scope seed. The vault root is the initial scope; every grant on an interior folder and every rotation creates or re-seeds one.
+- **Scope root** — the node a scope is anchored at, carrying its grant blobs, owner blob, ascent link, and history links. Granting an interior folder makes it a scope root (with a subtree sweep into the new scope).
+- **Content key** — a random per-version key stored inline in the sealed read-body. Rotation re-wraps it for free via the metadata re-seal and never re-encrypts content bytes; the next version is fresh-keyed. There is no pending-re-key state.
+- **Cross-scope move** — moving a node between scopes re-seals the moved subtree at the destination scope's epoch (and is a scope exit for the source when the source is granted).
+- **Override seed** — the fresh random seed minted at a scope root by a rotation, replacing its derived (or prior override) seed and starting a new epoch.
+- **Epoch** — a scope-relative rotation counter. Every sealed body carries a plaintext, AAD-bound **epoch tag** `{scope, epoch}`.
+- **Ascent link** — the current override seed sealed to an asymmetric keypair derived from the _parent's_ node seed (never the child's own): the public half rides plaintext in the scope root's envelope so any writer can re-seal the link; unsealing requires the parent seed, so only ancestor-scope readers descend. Ancestor readers re-derive the expected keypair and reject a mismatched public half. Deliberately unreadable to holders of the scope's own prior seed.
+- **Owner blob** — the current override seed ECIES-wrapped to the vault owner's identity key, present at every scope root and maintained by whoever rotates. The owner is an implicit, permanent, unrevokable grantee of every scope. An accelerator for owner entry — the canonical path is the owner seed cache; cross-checked against the ascent link and actual unseals, with disagreement raised as attributable abuse.
+- **Owner seed cache** — the owner's self-authored `{seed, epoch}` per granted scope, kept in the owner's own vault share list and refreshed on every confirmed owner read. The canonical owner entry into any scope; a rogue rotator can withhold at most the epochs minted since the owner's last visit.
+- **History link** — the previous epoch's seed sealed under the current one; the key-regression ratchet. Current-seed holders walk backward to read not-yet-resealed nodes; old-seed holders can never walk forward.
+- **Lazy wave** — post-rotation re-sealing of a scope's descendants at the new epoch, carried by ordinary writes and/or a background sweep rather than an eager cascade.
+- **Epoch lag** — a node whose envelope epoch is behind its scope's current epoch; readable via history links, queued for the lazy wave. Replaces v1's "dirty edge".
+- **Eager set** — the nodes a revocation rotation must republish before it counts as cut: the rotated scope root plus every transitively-reachable descendant scope root, each fully rotated — the live-grant qualifier is retired, since a revokee may hold cached descendant seeds (grant-less scopes are cheap: an empty blob set). A grantee scope-exit rotation revokes nobody and stays flat. Interior nodes ride the lazy wave.
+- **Epoch-converged** — a subtree with no epoch-lagged nodes. Granting a subtree requires converging it first (a new grantee cannot regress through an ancestor scope's history).
 
-**writeKey**:
-A per-node 32-byte AES key that seals a node's write-body (the Ed25519 signing material). A read grant never conveys it, so a read-only holder can never reach a signing key.
-_Avoid_: (none)
+## Write-plane key model
 
-## Counters
+- **Write seed** — the write plane's parallel derivation, flat within a write scope: `writeSeed(X) = KDF(writeScopeSeed, X.id)`. A node's Ed25519 IPNS keypair, its `ipnsName`, and its `writeKey` all derive from its write seed. Read grants carry read seeds only; write grants carry both.
+- **Write-scope cut** — granting write on an interior folder anchors a fresh write scope there: flat derivation means one node's write seed cannot derive its children's, so the grant mints a write scope seed and runs a name wave over the subtree.
+- **Name wave** — the background, child-first republish of a write-rotated scope under freshly derived names, root re-pointed last. Survivor write-grantees derive new names locally; read-only survivors follow republished mirrors (root re-point via the scope pointer; mailbox and old-name tombstone as accelerators).
+- **Forgery window** — accepted residual: during the name wave a revoked writer can still seal plausible old-epoch records at not-yet-rotated old names. Wave-bounded for write-grantee survivors (they derive every new name locally); for read-only survivors, at most ~one pointer-consult interval past the re-point publish (a sync-timing-profile constant). Old names retire from the republisher inventory (tombstones advisory only).
 
-Three distinct clocks; never conflate them.
+## Envelope and grants
 
-**generation**:
-A per-node `u32` that bumps only on a read-key rotation (revocation / scope exit). It is the AAD epoch and the rotation convergence witness; authoritative only on the child's own published envelope.
-_Avoid_: epoch, version (for this concept)
+- **Envelope** — the published plaintext wrapper of a node: format version, node id, epoch tag, the sealed bodies, and (at scope roots only) the grant section. Kind-uniform: whether a node is a file or a folder is sealed inside the read-body.
+- **Write-body** — the sealed write-plane payload, present only at scope roots: the grant ledger plus the write-plane history link. Interior nodes publish none; all their write material is derived.
+- **Blinded tag** — the opaque per-pair label a grant blob is keyed by, derived from an owner–recipient shared secret and the scope root's name. Observers learn only blob count; the recipient self-locates their blob.
+- **Grant blob** — a scope's current seed(s) sealed to one recipient and keyed by their blinded tag, carried in the scope root's envelope. Read grants carry the read seed; write grants carry both seeds.
+- **Grant ledger** — the authoritative record of a scope's grants, `(recipient, permission, tag)`, sealed in the scope root's write-body. Writers re-wrap blobs for the recorded set during re-seals but cannot change the set; grant changes are owner-only.
+- **Grant-set commitment** — the owner-signed `(tag, permission, pseudonymPk)` list in the scope root's envelope, plus the owner's own pseudonym key. Recipients verify their tag is committed before trusting a grant. Binds tag membership and writer pseudonyms only — never blob contents. Deliberately epoch-free, so grantee-triggered rotation needs no owner signature.
+- **Writer pseudonym** — the per-(scope, writer) signing keypair derived from the same pairwise ECDH secret as the blinded tag; its public key rides the grant-set commitment. Any envelope holder verifies committed-write authorship; only ledger readers map a pseudonym to an identity; observers see nothing linkable across scopes.
+- **Structure signature** — the rotator's detached pseudonym signature over a seed-bearing structure's ciphertext and context `{scope, epoch, structure tag, recipient tag}`, carried by grant blobs, the owner blob, ascent and history links, and the write-body. A missing or invalid signature is a whole-record trust violation at the adoption gate.
+- **Encryption subkey** — the sealing key each user derives from their login secret, published signed by their identity key. The identity key only signs; the subkey only seals.
+- **Scope pointer** — the owner-keyed stable IPNS name every shared scope carries, `pointerKey(scope) = KDF(ownerPointerSeed, scope.id)`. Its record holds the re-point object; consulted on the sync tick for open shared scopes, on access for cached ones, and first on cold start.
+- **Re-point object** — the owner-identity-signed `{scopeId, currentRootName, writeEpoch, minReadEpoch, prevRootName}` payload, published at the scope pointer (canonical) and mirrored to the mailbox and the old name's tombstone as accelerators. The cold-start floor anchor: `minReadEpoch` is bumped only by owner-triggered read rotations, so grantee rotations need no owner signature yet revocation boundaries cannot be rolled back.
+- **Floor law** — floors advance only on an AAD-confirmed unseal and cold-seed from the re-point object's owner-vouched epochs, never from a raw blob field; a grant blob's epoch field is an advisory routing hint.
+- **Vault pointer** — the indexed IPNS name chain derived from the owner's login secret, `pointerKey_i = KDF(secret, "vault-pointer" ‖ i)`, index 0 default; its record carries the root scope's re-point object. The cold-boot entry point; root write rotation re-points it. Clients probe one index past the highest known and adopt the highest valid owner-signed payload; an owner-side index bump is the pointer-key-compromise recovery.
 
-**keyEpoch**:
-The TEE public-key rotation counter (write-plane). Unrelated to read-key rotation.
-_Avoid_: generation, bare "epoch"
+## Sync and refresh
 
-**sequenceNumber**:
-The IPNS record counter that bumps on every publish; enforced forward-only by the relay's CAS gate.
-_Avoid_: generation, "seq" in prose
+- **Sync timing profile** — the environment-scoped bundle of sync timing policy: record TTL, poll cadence, staleness thresholds, offline staging budget, escalation window. Records always set TTL explicitly; TTL is independent of EOL.
+- **Focus window** — the set a poll tick refreshes: the vault pointer, the open folder, and its ancestor chain to root. Everything else refreshes on access.
+- **Pending-op overlay** — the client state law: rendered state is the last-known-good remote snapshot with queued ops applied on top; the op queue is the only local divergence.
+- **Op queue** — the durable FIFO journal of intent ops every mutation rides. Offline replay and online CAS rebase re-apply ops through the same path.
+- **Adoption gate** — the trust pipeline every resolved record passes before adoption: signature verify, commitment verify, structure signatures against committed write pseudonyms (scope roots), strictly-newer sequence vs floor, epoch at or above the scope floor, unseal success. A failure is a fail-closed trust violation, never mere staleness.
+- **Conditional delete** — a delete op snapshots its target's own record sequence; on rebase it is dropped if the target advanced. Edit wins in both directions: a rebased edit resurrects a concurrently deleted node.
+- **Observed repair** — cleanup of an invariant violation noticed at read time by any write-capable client, e.g. removing the losing link of a dual-linked child.
+- **Dual-link** — one child linked in two parents, the benign crash residue of a dest-first move; repaired deterministically via the child ref's monotonic link counter.
+- **Dead-letter** — a queued op that terminally fails rebase, surfaced to the user with any staged content preserved rather than silently dropped.
+- **Withheld-update escalation** — the shared-scope warning raised when a name stays pinned past a profile window while other resolves succeed; the reader-side signal for a stale-view pin.
 
-## Metadata model
+## Core crate
 
-**Node**:
-The single metadata object for a folder, file, or vault root, discriminated by `kind`. Carries an independently sealed read-body and write-body.
-_Avoid_: FolderMetadata, FileMetadata, FilePointer, FolderEntry (all v2-legacy, retired)
+- **KDF edge catalog** — the frozen enumeration of every key-derivation edge (context string + input layout) in `crates/core`; nothing derives a key outside it. Per-node material is `keyed_hash(key = derive_key("<edge context>", seed), message = id16)` — ids are fixed-length message input, never variable context.
+- **Structure tag** — the domain-separation registry entry naming each sealed/signed structure (read-body, write-body, grant-blob, owner-blob, ascent-link, history-link, pointer-payload, mailbox-payload); bound into the AAD and the structure-signature preimage.
+- **KAT manifest** — the machine-checked enumeration of every frozen encoding and the vector files locking each; tests and CI consume it, so the KAT'd surface is auditable rather than folklore.
+- **Acceptance domain** — the part of the frozen contract covering what a codec rejects: reject-vectors (duplicate keys, non-canonical encodings, transplants, bad signatures) ship alongside accept-vectors from day one.
+- **Separation KAT** — the mechanical assertion that no two KDF edges produce equal output for equal inputs, run over the whole edge table.
 
-**SealedChildRef**:
-A parent's link to one child, living inside the parent's read-body: the child's name, `ipnsName`, `generation` mirror, and the child's `readKey` sealed under the parent's `readKey`.
-_Avoid_: FolderChild, FolderEntry
+## API residual surface
 
-**ipnsRecord**:
-The signed IPNS data structure (name to CID, sequence, signature) and the row that stores it.
-_Avoid_: "IPNS entry"; the table is `ipns_records`, not `folder_ipns`
-
-## Sharing
-
-**grant**:
-One row in the `shares` table conveying read or write access to a share-root node — the wrapped key(s) for a single recipient. The only data-plane DB residue of a share.
-_Avoid_: ShareGrant (type name), share_keys (the deleted per-item table)
-
-**readDescriptorRef / writeDescriptorRef**:
-The ECIES-wrapped `readKey` / `writeKey` on a grant row, sealed to the recipient's secp256k1 public key.
-_Avoid_: readKeyEcies, encryptedKey
-
-**scope exit**:
-The condition where a node leaves the reachable scope of an active grantee. The only trigger for a read-key rotation; a node with no covering grant rotates never.
-_Avoid_: (none)
-
-**bin**:
-The owner's recoverable-delete space. A deleted node is re-linked into it as a `BinEntry` sealed under the bin's own `readKey`, rather than purged.
-_Avoid_: trash, recycle bin (in code identifiers)
-
-**invite**:
-A claimable share to an as-yet-unknown recipient: the share-root `readKey` wrapped to an ephemeral key whose private half travels in the link, re-wrapped to the claimer's key on claim.
-_Avoid_: "link share" (in code identifiers — use invite)
+- **Name inventory** — the per-account `(account, ipnsName)` registry feeding the republisher. Membership derives from pin registration on the publish path, never from a side-channel.
+- **Register-first** — the fail-closed ordering law: a name/CID batch registers before its first publish, and publish blocks on it. Live-but-uninventoried is structurally impossible; the residual failure is a registered-never-published orphan, alert-GC'd.
+- **Union liveness** — a name stays in the republish inventory while any account holds a row for it; it leaves when the last row retires. Physical unpin fires at global refcount zero.
+- **Advisory pin row** — a BYO account's registration: counted for union liveness and the inventory, never quota-enforced; the bytes live on the user's own provider.
+- **Root linger** — after a write rotation, the old scope-root name stays registered serving the owner-signed `movedTo` record until the migration window closes; interior old names retire at wave completion.
+- **Read accelerator** — CipherBox's token-authed Kubo trustless gateway. A member convenience on the read path; any public trustless gateway is the no-auth fallback.
+- **Recovery endpoint** — authenticated fetch of non-canonical cached record bytes by name; the revival aid after a >EOL liveness lapse, on no client resolve path.
+- **Contact code** — the self-authenticating bundle `{identityPk, encSubkey, bindingSig}` exchanged out-of-band (QR/URL); binding verification at import is mandatory and fail-closed. Replaces any people directory.
+- **Mailbox** — the API's integrity-untrusted sealed-pointer transport: post to a recipient pubkey, poll, ack-deletes; bounded until-acked retention. Every payload is sender-identity-signed inside the seal, verified against the contact-code-anchored key; unauthenticated items are dropped. Carries discovery and courtesy traffic only, nothing load-bearing for safety.

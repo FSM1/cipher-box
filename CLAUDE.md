@@ -2,99 +2,66 @@
 
 ## Project Context
 
-CipherBox is a privacy-first encrypted cloud storage system using IPFS/IPNS and Web3Auth.
+CipherBox is a privacy-first, zero-knowledge E2EE personal cloud storage system on IPFS/IPNS. The repo is mid-rewrite: **v2 is being built on `main`** against the blueprint corpus below; v1 is frozen on branch `v1` (tag `v1-freeze`) and receives no changes.
 
 ## Documentation Structure
 
-The single source of truth for project documentation is the `docs/` folder:
+The normative source of truth for the v2 build:
 
-| Document                              | Purpose                                  |
-| ------------------------------------- | ---------------------------------------- |
-| `docs/ARCHITECTURE.md`                | System architecture and design           |
-| `docs/AUTHENTICATION_ARCHITECTURE.md` | Auth flow, Web3Auth integration          |
-| `docs/FILESYSTEM_SPECIFICATION.md`    | Encrypted filesystem, IPFS/IPNS metadata |
-| `docs/DATABASE_EVOLUTION_PROTOCOL.md` | Migration discipline, TypeORM rules      |
-| `docs/METADATA_SCHEMAS.md`            | All metadata object schemas              |
-| `docs/METADATA_EVOLUTION_PROTOCOL.md` | Metadata versioning and migration        |
-| `docs/CAPACITY.md`                    | Storage limits and capacity planning     |
-| `docs/VAULT_EXPORT_FORMAT.md`         | Vault export/import format specification |
-| `docs/DEVELOPMENT.md`                 | Local dev setup, environment, workflow   |
+| Document                  | Purpose                                                       |
+| ------------------------- | ------------------------------------------------------------- |
+| `CONTEXT.md`              | The v2 ubiquitous language — use these terms, exactly         |
+| `blueprint/core.md`       | `crates/core` — wire formats, crypto, KDF catalog, KAT regime |
+| `blueprint/engine.md`     | `crates/engine` — the one stateful brain, seam traits, gates  |
+| `blueprint/api.md`        | API residual surface, registry, mailbox, republisher          |
+| `blueprint/web-client.md` | WASM hosting, tab leadership, `packages/client`, `apps/web`   |
+| `blueprint/desktop.md`    | FS projection, host adapters, Tauri shell                     |
+| `blueprint/testing.md`    | Suite map, CI gates, coverage policy                          |
+| `blueprint/deploy.md`     | Freeze mechanics, release management, staging pipeline        |
+
+The as-built v1 spec corpus, ADRs, and all design-decision history live in [FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next) (wayfinder map issue 1 indexes every decision). The `docs/` folder is v1 legacy — being rewritten during the build; trust `blueprint/` when they conflict.
 
 ## Terminology Standards
 
-Always use consistent terminology:
-
-| Correct                   | Avoid                                              |
-| ------------------------- | -------------------------------------------------- |
-| `publicKey`               | `pubkey`, `user_pubkey`, `ownerPublicKey`          |
-| `privateKey`              | `privkey`, `user_private_key`                      |
-| `rootFolderKey`           | `rootKey`, `root_folder_key`                       |
-| `ipnsName`                | IPNS entry (for identifier)                        |
-| `ipnsRecord`              | IPNS entry (for data structure)                    |
-| `folderKey`               | `subfolderKey` (unless specifically for subfolder) |
-| `fileKey`                 | `file_key`                                         |
-| `keyEpoch`                | `epoch`, `key_epoch`                               |
-| `encryptedIpnsPrivateKey` | `encrypted_ipns_key`, `ipns_key_encrypted`         |
-| `teePublicKey`            | `tee_pubkey`, `TEE_public_key`                     |
+Use the v2 ubiquitous language defined in `CONTEXT.md` — every domain term (scope, epoch, ascent link, grant blob, adoption gate, floor law, eager set, …) has exactly one name there. General conventions: `publicKey`/`privateKey`/`ipnsName`/`ipnsRecord` spelled out in full camelCase for API fields, snake_case for database columns.
 
 ## Critical Security Rules
 
-1. **Never** suggest storing `privateKey` in localStorage/sessionStorage
-2. **Never** suggest logging sensitive keys
-3. **Never** suggest sending unencrypted keys to server
-4. **Always** use ECIES for key wrapping
-5. **Always** use AES-256-GCM for content encryption
-6. The server NEVER has access to plaintext or unencrypted keys
-7. **Always** encrypt `ipnsPrivateKey` with TEE public key before sending for republishing
-8. TEE decrypts IPNS keys in hardware only, signs, and immediately discards
+1. **Never** store `privateKey` or any seed in localStorage/sessionStorage
+2. **Never** log sensitive keys or seeds
+3. **Never** send unencrypted keys to the server — the server is zero-knowledge and NEVER sees plaintext or unencrypted keys
+4. **All crypto lives in `crates/core`** — TypeScript has no codec or crypto of its own; never implement crypto in TS
+5. Primitives are fixed by `blueprint/core.md`: XChaCha20-Poly1305 sealing, BLAKE3 tree KDF, X25519 + HPKE key wrapping, Ed25519/secp256k1 signing — no key derives outside the frozen KDF edge catalog
+6. Every resolved record passes the adoption gate; a failure is a fail-closed trust violation, never mere staleness
+7. Clear sensitive material from memory after use (zeroize at the terminal owner only — a callee must not zero caller-owned buffers)
 
-## API Development Workflow
+## API Contract and Clients
 
-When working on `apps/api` code:
-
-1. **After modifying API endpoints, DTOs, or controllers**, regenerate the API client to keep the web app in sync:
-
-   ```bash
-   pnpm api:generate
-   ```
-
-   This command generates the OpenAPI spec from the API, regenerates the typed client in `@cipherbox/api-client`, builds the package, and runs lint fixes.
-
-2. **Always run `pnpm api:generate` before completing a feature** that touches the API to ensure type safety across the monorepo.
-
-3. **Commit the regenerated client files** (`packages/api-client/src/generated/`, `packages/api-client/src/models/`, and `packages/api-client/openapi.json`) along with your API changes — a pre-commit hook (`scripts/check-api-client.sh`) verifies they are staged alongside API changes.
+There are **no generated API clients** and no codegen loop. The engine contains the single hand-written Rust API client; the NestJS API's OpenAPI document is a committed docs artifact, not a build input. The contract is enforced by the live contract-test suite (the sdk-e2e descendant) running the real client against a real API instance on every PR — see `blueprint/testing.md`.
 
 ## Code Generation Guidelines
 
-When generating code for CipherBox:
+1. All engine, codec, and crypto logic is Rust (`crates/core`, `crates/engine`); TypeScript exists only in `packages/client` (WASM wrapper, browser seams) and `apps/web` (React UI)
+2. Use `Uint8Array`/`Vec<u8>` for binary data, not strings
+3. Use camelCase for API fields, snake_case for database columns
+4. Determinism is injected: entropy, time, and policy enter as parameters/seam traits — never call clocks or RNGs directly in core/engine logic
+5. Every suite must block a merge in a named CI gate the day it lands (`blueprint/testing.md` law 1); assert behavior, never source text
 
-1. Use TypeScript for all JavaScript code
-2. Use `Uint8Array` for binary data, not strings
-3. Use Web Crypto API for browser encryption
-4. Use camelCase for API fields, snake_case for database columns
-5. Include proper error handling for crypto operations
-6. Clear sensitive data from memory after use
+## Architecture Pillars
 
-## Architecture Decisions
-
-- **Auth:** Web3Auth for key derivation, CipherBox backend for tokens
-- **Storage:** IPFS via Kubo for files, IPNS for metadata (all relayed via CipherBox API)
-- **Encryption:** Client-side only, server is zero-knowledge
-- **Sync:** IPNS polling (30s interval), no push infrastructure
-- **Desktop:** Tauri app with mounted virtual filesystem for transparent file access (FUSE via `fuser` on macOS/Linux, WinFsp on Windows)
-- **TEE Republishing:** TEE worker republishes IPNS every 6 hours — Phala Cloud CVM in production, local Docker (simulator mode) in staging
-- **Key Epochs:** TEE public keys rotate with 4-week grace period for seamless migration
+- **Auth:** Web3Auth key derivation; challenge-signature login; short-lived JWT + rotating refresh
+- **Storage:** IPFS content, IPNS metadata — the network is canonical; clients verify records cryptographically; CipherBox infra (Kubo, someguy) is accelerator-only and the API never serves records
+- **Keys:** seeded per-scope derivation with key-regression epochs; rotation = O(1) root cut + lazy wave (`CONTEXT.md`)
+- **One Rust core:** desktop links it natively, web loads it as WASM in a worker; one implementation, one KAT set
+- **Sync:** pull-only focus-window polling, cache-first, offline op queue; no push in v2.0 (seam ready)
+- **Desktop:** Tauri + FUSE mount (FUSE-T SMB on macOS, libfuse3 on Linux, WinFsp on Windows)
+- **No TEE:** the republisher is a keyless re-PUT module inside the API; client-signed 90-day EOLs
 
 ## Out of Scope
 
-Do not implement or suggest implementations for (deferred to Milestone 4 / v2.0+):
-
-- Billing/payments
-- Mobile apps (iOS/Android)
-- Real-time collaborative editing
-- Team accounts
-
-Note: file versioning, file/folder sharing (user-to-user and link sharing), and client-side search are implemented v1.0 features — they are in scope.
+- Billing/payments, mobile apps, real-time collaborative editing, team accounts
+- Vault import (cut in v2), client-side search (deferred, designed-for)
+- Executing anything against the frozen `v1` branch
 
 ## Verification with MCP Tools
 
@@ -108,7 +75,6 @@ Note: file versioning, file/folder sharing (user-to-user and link sharing), and 
 - After modifying styles or layouts
 - After adding new pages or routes
 - After any user-facing changes
-- During GSD verification phase
 
 **Verification workflow:**
 

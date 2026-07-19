@@ -1,0 +1,509 @@
+# crates/engine — v2 blueprint
+
+Resolved by [Blueprint: engine](https://github.com/FSM1/cipher-box-next/issues/44).
+Normative for the v2 build. Upstream inputs: the
+[resolution/publish](https://github.com/FSM1/cipher-box-next/issues/23),
+[record liveness](https://github.com/FSM1/cipher-box-next/issues/24),
+[sharing](https://github.com/FSM1/cipher-box-next/issues/25),
+[rotation](https://github.com/FSM1/cipher-box-next/issues/26),
+[sync/refresh](https://github.com/FSM1/cipher-box-next/issues/33),
+[API residual role](https://github.com/FSM1/cipher-box-next/issues/34),
+[rotation completeness](https://github.com/FSM1/cipher-box-next/issues/38), and
+[seal authentication](https://github.com/FSM1/cipher-box-next/issues/39) designs,
+scoped by the [component decomposition](https://github.com/FSM1/cipher-box-next/issues/28)
+(D1–D5). Where an earlier resolution was amended (#26 by #38/#39, #25's
+directory and canonical re-point channel by #34/#38, #23's per-host library
+picks by #28), the **amended** form is what appears below. The engine sits on
+[`blueprint/core.md`](core.md) — everything core owns (codecs, crypto suite,
+KDF catalog, record create/sign/verify, KATs) is referenced here, never
+re-specified.
+
+## Doctrine
+
+`crates/engine` is the **single stateful brain**: every decision between core's
+pure functions and a host surface — trust (the adoption gate and floors), state
+(snapshot cache, op queue, floors), scheduling, and side effects (publish, API
+traffic, mailbox) — implemented once in Rust, linked natively by the desktop
+app and loaded as a worker-hosted WASM instance on web (#28 D1/D4). TS keeps no
+engine logic. The engine owns IPNS end-to-end over dumb `/routing/v1`
+transports (#28 D2) and contains the single hand-written API client (#28 D5).
+Hosts inject every capability as a constructor seam trait; a missing seam is a
+compile error, not a silent behavior gap (#26 D8).
+
+What dies relative to v1 — with the design that killed it:
+
+| Gone                                                                             | Killed by                                                    |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Twin TS/Rust engines (`sdk-core`/`sdk` + `crates/sdk`), 13 ungated resolve sites | #28 D1 — one Rust engine, both hosts                         |
+| `@helia/ipns` and per-host IPNS stack picks                                      | #28 D2 — core records + dumb transports                      |
+| Generated `api-client` packages, codegen loop                                    | #28 D5/D6 — one hand-written client, live contract tests     |
+| Optional floor injection (omit `rotationHighWater`, get nothing)                 | #26 D4 / #33 D7 — floors are a required constructor argument |
+| Rotation job records, checkpoints, recovery machinery                            | #26 D8 — published records are the sole source of truth      |
+| `nodeKeySource` and Gap-B host divergence in key sourcing                        | #26 D1/D3 — every key derived in-engine from seeds           |
+| Grant re-mint as a separate relay step (the Gap B/C class)                       | #25 D1 — grant re-seal rides the republish                   |
+| Republish enrollment side-car (`requiresReEnroll`, `'stale'` rows)               | #24 D6 — register-first on the publish path                  |
+| TEE enrollment client, key epochs, grace-window machinery                        | #24 D4 — TEE dropped, designed-for re-signer seam only       |
+| Two-plane store/tree state desync                                                | #33 D6 — snapshot ⊕ pending-op overlay, single owner         |
+| mkdir+uploads-only offline journal                                               | #33 D6 — every mutation rides the durable op queue           |
+| State-union merge and the delete-resurrection class                              | #33 D5 — op-rebase, uniformly                                |
+| Web one-level scope-exit coverage hole                                           | #26 D7 — full-depth detection, one implementation            |
+
+## Module map
+
+Functional decomposition, not final file layout:
+
+- **gate** — the adoption pipeline, durable floors, trust-violation policy.
+- **sync** — focus-window scheduler, staleness ladder, op queue, rebase.
+- **rotation** — the three primitives and the sweep work-list.
+- **grants** — ledger, commitment, pseudonyms, invites, share lists, contact
+  import.
+- **pointer** — scope pointers and the vault pointer chain.
+- **mailbox** — sealed-pointer traffic over the mailbox seam.
+- **net** — resolve/publish pipeline, CAS, fan-out, liveness jobs.
+- **content** — chunk framing, staging, the pin-provider layer.
+- **api** — the hand-written API client and token lifecycle.
+- **seams** — the host trait definitions below.
+
+## Host seams
+
+The constructor takes the seam set whole; the six load-bearing seams are fixed
+by the decomposition (#28 D3) and the rotation design's mandatory-seam rule
+(#26 D8). Traits move opaque bytes and events — no seam holds logic.
+
+| Seam                  | Contract                                                                                                  | Web (`packages/client`)                      | Desktop                       |
+| --------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------- | ----------------------------- |
+| **FloorStore**        | Durable monotonic-max per-scope epoch floors and per-name sequence floors; regression rejects fail-closed | IndexedDB                                    | Local journal                 |
+| **RecordTransport**   | Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes against a configured endpoint set    | `fetch`                                      | `reqwest`                     |
+| **Http**              | Plain HTTP for the API client, trustless gateway, and BYO providers                                       | `fetch`                                      | `reqwest`                     |
+| **Mailbox**           | Post/poll/ack of sealed blobs to/from a recipient pubkey                                                  | API mailbox via the engine's own API client  | Same                          |
+| **RefreshHintSource** | Host-event stream that forces an immediate tick                                                           | Navigation, tab-visibility regain, reconnect | FUSE-op TTL checks, reconnect |
+| **Scheduler**         | Jittered timers, background task execution, wall clock                                                    | Worker timers                                | Tokio                         |
+| **StagingStore**      | Durable op queue + staged upload bytes (profile-scoped budget)                                            | IndexedDB + OPFS                             | Local journal                 |
+| **SnapshotCache**     | Durable last-known-good record/metadata cache backing cache-first reads                                   | IndexedDB                                    | Local store                   |
+| **CredentialStore**   | Refresh-token persistence                                                                                 | No-op (HTTP-only cookie rides the Http seam) | OS keychain                   |
+
+Notes:
+
+- The transport endpoint set is CipherBox someguy plus at least one independent
+  public `/routing/v1` endpoint; nothing breaks if CipherBox infra vanishes
+  (#23 D1). A desktop embedded rust-libp2p kad backend is designed-for behind
+  `RecordTransport` (#23 D2). The `Mailbox` trait keeps a decentralized inbox
+  swappable behind the same abstraction (#25 D2).
+- Entropy and timestamps are engine inputs to core's pure functions: the clock
+  comes from `Scheduler`, entropy from per-target `getrandom` wiring (core.md).
+- `SnapshotCache` as a distinct seam, and the exact `CredentialStore` split,
+  are engineering judgment — implied by #33 D4's indefinitely-usable cached
+  views and #34's per-platform token storage, but not named by any resolution.
+- There is deliberately **no** tab-leadership seam: the engine assumes it is
+  the single writer. Leader election and the RPC facade belong to
+  `packages/client` (#28 D4); the engine's side of that contract is the facade
+  section below.
+
+## Resolve/publish pipeline
+
+The engine owns IPNS end-to-end; core signs and verifies, transports move
+bytes (#28 D2).
+
+- **Resolve**: cache-first — the UI never blocks on network resolution;
+  last-known-good renders immediately and resolves reconcile in the background
+  (#23 D5). Fan-out GET across the endpoint set, core record verify, then the
+  adoption gate; only gate-passing records touch the snapshot. Cold-resolve
+  tails (~11 s median, up to ~60 s) are tolerated as background reconciliation.
+- **Publish**: register-first, fail-closed — the API registration call
+  precedes a name's first publish and publish blocks on it; ordinary writes
+  send single-item batches, name waves and sweeps send bulk (#34 D2). Core
+  signs (first publish embeds sequence 1; CAS publishes embed the exact
+  expected sequence), then parallel PUT to all endpoints; success = any ack,
+  remaining PUTs retry in the background; confirm by re-resolve; a lost race
+  re-resolves and rebases (#23 D3/D4).
+- **TTL/EOL**: every record sets TTL explicitly from the sync timing profile
+  (production 1 minute; dev/CI 1–5 s; never a library default) and a 90-day
+  client-signed EOL; TTL and EOL are independent (#33 D3, #24 D1).
+- **Liveness — the engine's half of the two re-PUT layers** (#24 D2/D5): an
+  ~hourly Scheduler job keyless-re-PUTs every record the session holds, so
+  actively used vaults keep themselves alive; on session start and
+  periodically, the engine checks the EOLs of names it holds keys for and
+  below ~30 days remaining republishes the same CID at seq+1 through the
+  normal CAS path. The API republisher (~12 h inventory walk) backstops
+  dormant vaults only — no client depends on the background re-PUT loop, and
+  no client resolve path ever touches the API's record cache (#24 D3).
+- **Revival**: after a >EOL lapse, a key-holding session fetches cached bytes
+  from the authenticated recovery endpoint and extracts the last-known CID —
+  or recovers it from the pin set's name→CID mapping — then mints a fresh
+  record with a fresh signature; lapse is an availability event, never loss
+  (#24 lapse semantics).
+- **Retirement**: retire = remove my registry rows; timing is engine policy
+  (#34 D4). Interior old names batch-retire at name-wave completion; the old
+  scope-root name lingers serving the tombstone until the migration window
+  closes (open edge below).
+
+## Adoption gate and floors
+
+The gate runs on every resolve, no exceptions (#33 D7). Stage order composes
+the #33 pipeline with the #39 D3 seal-auth stage and the D4 floor law:
+
+1. **Record verify** — core's full chain: Ed25519 pubkey from the name itself,
+   `signatureV2`, data-field/Value consistency, EOL/sequence extraction.
+2. **Commitment verify** (scope roots) — the owner-signed grant-set commitment
+   against the contact-code-anchored owner identity (#34 D6, #39 D1).
+3. **Grant-section authentication** (scope roots) — every seed-bearing
+   structure (grant blobs, owner blob, ascent link, history links, write-body)
+   verifies under a committed write-capable pseudonym via core's pure
+   per-structure checks; any failure rejects the **whole record** as a trust
+   violation (#39 D3).
+4. **Sequence** — strictly newer than the durable per-name floor.
+5. **Epoch** — epoch tag at or above the scope's durable epoch floor.
+6. **Unseal** — success required; core's trust-violation error class carries
+   through fail-closed.
+
+A gate failure is never mere staleness: the engine pins last-known-good,
+raises the withheld-update escalation where applicable, and never renders the
+rejected record. Duplicate `id`s and duplicate `ipnsName`s within a scope
+reject at decode in core (#39 D7); the gate surfaces them as trust violations.
+
+The **floor law** (#39 D4, superseding #26 D4's blob-seeded floors): floors
+advance only on an AAD-confirmed unseal and cold-seed from the re-point
+object's owner-vouched epochs (`writeEpoch`, `minReadEpoch`); a grant blob's
+epoch field is an advisory routing hint. Additionally, a pointer `writeEpoch`
+above the durable floor advances it the moment it is seen (#38 D4) — from that
+instant every old-epoch record at the old name fails the gate. `FloorStore` is
+a required constructor argument, fail-closed on regression.
+
+**Cold start adopts nothing** until the floor store seeds from the
+owner-signed anchor. The sequence is non-circular by construction (#38 D3):
+own vault → scope/vault pointer (first act) → floors seeded → current root
+name → envelope grant blob → seeds → render. Residual, honestly scoped
+(#39 D4): a cold device can be shown a view missing at most grantee-triggered
+epochs (which revoke nobody — pure staleness) plus within-epoch staleness;
+revocation boundaries cannot be rolled back.
+
+## Sync core
+
+One model, two trigger sources (#33 D2): web drives it from navigation and the
+poll timer, desktop from FUSE-op TTL checks — the core is identical.
+
+- **State law**: rendered state = last-known-good remote snapshot ⊕
+  pending-op overlay, single owner; the op queue is the only local divergence
+  (#33 D6).
+- **Focus-window tick**, 30 s with jitter: refresh the vault pointer, the open
+  folder, and its full ancestor chain to root; the scope-pointer resolves for
+  open shared scopes (#38 D4) and the mailbox poll (#34 D5) ride the same
+  tick. Immediate ticks on `RefreshHintSource` events. Any other cached folder
+  refreshes on access past the staleness threshold — no background churn over
+  the whole tree; cached shared scopes consult their scope pointer on access.
+- **Sync timing profile** (environment-scoped): record TTL, poll cadence,
+  staleness thresholds, offline staging budget, escalation window, and the
+  pointer-consult interval that bounds the read-only-survivor residual
+  (#38 residuals). The profile is the CI-DX hook — dev/CI values make
+  cross-client e2e flows testable at speed (#33 D3).
+- **Staleness ladder** (#33 D4): fresh → reconciling (quiet indicator) →
+  stale (badge + "last synced X ago" after ~3 missed cycles) → offline banner.
+  Availability staleness keeps cached views usable indefinitely. Errors are
+  exactly two things: trust violations and an empty-cache cold start. Manual
+  refresh resolves with nocache semantics everywhere.
+- **Ops**: every mutation is an intent op — `create`, `delete`, `rename`,
+  `relink`, `updateContent` — carrying its base sequence, journaled FIFO in
+  the durable op queue (all mutations, both platforms). An intra-scope
+  `relink` is a pure relink; a cross-scope `relink` re-seals the moved subtree
+  at the destination scope's epoch, and one that leaves a granted source scope
+  is a scope-exit rotation trigger for the source (#26 D1/D7). Replay is FIFO
+  in performed order through the standard rebase, and rebases only onto
+  gate-passing state (#33 D5–D7).
+- **Withheld-update escalation**: shared scopes only — a name pinned past a
+  profile window while other resolves succeed raises the stronger warning
+  (#33 D7); it also covers the network-suppression residual on the pointer
+  plane (#38 D2).
+
+Per-op rebase rules (#33 D5):
+
+| Race                        | Rule                                                                                                                                                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Delete vs concurrent edit   | **Conditional delete**: the op snapshots the target's own record sequence; if the target advanced by rebase time, the delete is dropped — edit wins in both directions (a rebased edit resurrects a concurrently deleted node) |
+| Rename vs rename            | Serialized by the parent CAS; last writer at higher sequence wins                                                                                                                                                              |
+| Add vs add (name collision) | Always visible; the rebasing loser auto-suffixes (`name (2).ext`). Uniqueness = one strict comparator everywhere — NFC-normalized + case-folded, identical at create and merge on all platforms, names stored as-entered       |
+| Move                        | Dest-first publish, then a presence-conditional source-remove — orphans structurally impossible; a race loser compensates by undoing its dest-add                                                                              |
+| Dual-link (crash residue)   | **Observed repair**: any write-capable client seeing one child id in two loaded parents publishes the fix; the child ref's monotonic link counter picks the deterministic loser                                                |
+
+Terminally unrebasable ops (e.g. access revoked while offline) **dead-letter**
+with a visible notice and staged bytes preserved; nothing is silently dropped
+(#33 D6). Web reaches full offline parity: uploads stage into OPFS/IndexedDB
+behind the profile budget (past it, only new uploads fail fast; metadata ops
+queue unbounded).
+
+## Rotation primitives
+
+Three primitives, no recovery machinery (#26 D8): no job records, no
+checkpoints — published records are the sole source of truth. A pre-publish
+crash changed nothing durable; a post-publish crash recovers the override seed
+from the published root itself; a resumed name wave enumerates old names via
+the write-plane history link.
+
+### rotateScope
+
+Read-plane rotation: mint a random override seed at the scope root, republish
+the eager set, enqueue the sweep. The **eager set law** (#26 D2 as amended
+by #38 D5):
+
+- **Owner revocation rotations**: the rotated scope root plus **every
+  transitively-reachable descendant scope root**, each **fully rotated** —
+  fresh override seed, grant blobs re-sealed for the committed set (empty and
+  cheap for grant-less scopes), owner blob, history link, ascent link under
+  the parent's new derivation. Cached descendant seeds are why ascent-re-seal
+  alone is insufficient. Cost: O(descendant scope count), never tree size.
+- **Grantee scope-exit rotations**: flat, self-contained, offline — every
+  old-seed holder is a live grantee who receives the new seed, so no cascade;
+  the single root still republishes the full per-scope-root list — blobs
+  re-wrapped for the committed set verbatim, ascent link re-sealed to its
+  public half, owner blob and history link refreshed (#26 D5, preserved by
+  #38 D5).
+
+Enumeration walks the write-body's **direct-child-scope index** (#38 D6),
+maintained by the ops that change scope parentage (grant, scope dissolution,
+cross-scope moves of a scope root) under the same dest-first + observed-repair
+semantics as any move. The rotator detached-signs every seed-bearing structure
+it re-seals with its writer pseudonym (#39 D2); a grantee re-wraps blobs for
+the committed tag set verbatim and can neither extend nor shrink it (#26 D5).
+
+### sweep
+
+Idempotent lazy-wave advancement: the work-list is the epoch-lag predicate,
+runnable by any write-capable client; ordinary writes advance it for free
+(#26 D2). It also converges a subtree before a grant (the epoch-converged
+requirement) and self-heals the direct-child-scope index — a scope root
+encountered but missing from its parent's index is repaired and flagged
+(#38 D6). Sweeps re-seal metadata only; content bytes are never re-encrypted
+by any rotation path (#26 D6). Scheduling is engineering judgment (#26 handed
+it to #33, which did not fix it): the sweep runs as an idle-cadence Scheduler
+job; idempotence plus CAS make concurrent sweepers safe — a lost race drops
+that node from the work-list on re-resolve.
+
+### rotateScopeWrite
+
+Owner-only write rotation: commitment re-sign, fresh write override seed, a
+background, parallel, **child-first name wave** republishing the subtree under
+freshly derived names, root re-pointed last (#26 D3). Surviving
+write-grantees derive every new name locally — zero re-discovery; read-only
+survivors follow the owner-signed re-point object. The re-point publishes to
+three channels (#38 D3): the scope pointer record (canonical), the mailbox
+(accelerator, verifiable), and the old root name's final tombstone
+(accelerator, feeding #33's silent depth-guarded `movedTo` chase). Inventory
+swap rides the normal paths: wave publishes enroll new names via
+register-first; interior old names batch-retire at completion; the old root
+lingers until the migration window closes (#34 D4).
+
+### Triggers
+
+Per #26 D7:
+
+| Trigger                                                                                                                                | Action                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| Scope exit — full-depth coverage detection, both hosts, one engine; includes a cross-scope move out of a granted source scope (#26 D1) | `rotateScope` (grantee-triggered, flat)                                                                                           |
+| Read revoke                                                                                                                            | Immediate revoking rekey: blob + ledger + commitment entry removed, `rotateScope` with the full cascade — one atomic owner action |
+| Write revoke / downgrade                                                                                                               | `rotateScopeWrite`; plus read rotation on full revoke                                                                             |
+| Discovered link expiry                                                                                                                 | Expiry is a ledger field; the next owner session observing it acts — no scheduler                                                 |
+| Manual hygiene rotate-now                                                                                                              | Per scope, same primitives                                                                                                        |
+
+Non-triggers: intra-scope rename/move, content writes, adding a grant to an
+existing scope root. Scheduled hygiene is deferred, designed-for — the same
+primitive on a timer.
+
+### Residuals (as amended by #38)
+
+- Write-grantee survivors: the forgery window stays wave-bounded.
+- Read-only survivors: a revokee can pin their view for at most ~one
+  pointer-consult interval after the re-point publish — "bounded by wave
+  duration" was wrong and is retired.
+- Revoked readers: stale interior metadata for a sweep-length window, never a
+  live grant, never anything sealed after the cut.
+
+## Pointer planes
+
+The three-plane model (#38 D1): owner plane (stable pointer names, owner-only
+keys), write plane (rotating derived names), read plane (seeds). The engine
+publishes to the owner plane **only in owner sessions**.
+
+- **Scope pointer** — one per shared scope, keyed from `ownerPointerSeed` via
+  the core catalog; its record carries the owner-identity-signed **re-point
+  object** `{scopeId, currentRootName, writeEpoch, minReadEpoch,
+prevRootName}` sealed under the scope's stable `pointerReadKey` (carried in
+  grant blobs and persisted in each grantee's vault share list) — cold start
+  is non-circular and public observers cannot link old↔new roots; revokee
+  readability is accepted (#38 D3, #39 D4). `writeEpoch` moves on owner-only
+  write rotation; `minReadEpoch` bumps only on owner-triggered read rotations,
+  so grantee rotations need no owner signature and each plane's clock is
+  authored by the authority that owns it.
+- **Consult discipline: polled, not fallback** (#38 D4). A revokee's forged
+  old-epoch records pass every other gate stage — valid old-key signature,
+  fresh sequence, floor-level epoch, old-seed unseal — so staleness never
+  fires and a fallback-only pointer is never consulted. Therefore the pointer
+  resolve joins the focus-window tick for open shared scopes, runs on access
+  for cached ones, and is the first act on cold start.
+- **Vault pointer** — the same re-point object for the root scope, on an
+  indexed key chain from day one: `pointerKey_i = KDF(secret,
+"vault-pointer" ‖ i)`, index 0 default. Clients probe one index past the
+  highest known, adopt the highest index bearing a valid owner-signed payload,
+  and stop at the first unresolvable index — which only the owner can extend;
+  an owner-side index bump is the pointer-key-compromise recovery. Cost: one
+  extra resolve on cold start and per tick (#39 D5).
+- Pointer names ride pin registration into the republisher inventory and get
+  the same 90-day EOL + lease renewal as every name (#24 as amended by #38).
+
+## Grants and ledger
+
+Grants-in-metadata (#25 D1): key material lives in the published scope root —
+grant blobs keyed by blinded tags, the authoritative ledger
+`(recipientIdentityPk, recipientEncPk, permission, tag)` in the write-body,
+and the epoch-free owner-signed grant-set commitment. The engine maintains all
+three plus the per-(scope, writer) pseudonyms; re-mint does not exist as a
+separate step — every rekey re-seals surviving committed grants uniformly in
+the republish it already does.
+
+- **Authority** (#25 D7, #26 D5): sharing, revoking, and every commitment
+  change are owner-only. Write-grantees write content and re-wrap blobs for
+  committed tags during re-seals but cannot change the set — tags are
+  name-bound, so read rotation leaves the commitment untouched.
+- **Contact import** (#34 D6): the engine verifies a contact code's binding
+  signature against the carried identity key at import — mandatory,
+  fail-closed. Identity keys only ever arrive out-of-band; there is no
+  directory. Fingerprint comparison stays optional host UX.
+- **Grant creation**: converge the subtree (sweep) → mint the scope (fresh
+  random seed, epoch 1, subtree swept in — the new grantee needs no history) →
+  for write grants, the write-scope cut (fresh write scope seed + name wave
+  over the subtree) → update the parent scope's direct-child-scope index →
+  publish → post the sealed share pointer to the recipient's mailbox.
+- **Accept flow**: mailbox pointer (sender-signature verified inside the seal,
+  #39 D9) → resolve the name → gate (commitment verified against the
+  contact-anchored owner identity) → self-locate the blob by blinded tag →
+  unseal seeds → append `{name, sharerPub, displayName, permission}` to the
+  sealed received-shares list in the recipient's own vault, persisting the
+  `pointerReadKey`; the owner keeps a denormalized sent-index in theirs. Both
+  lists are self-healing bookmarks — the metadata is the authority (#25 D3).
+- **Revocation is discovered, not delivered** (#25 D3/D4): a fresh
+  owner-signed record with no blob at your tag is the definitive revocation
+  signal; an unresolvable name is merely unknown/stale. The engine classifies
+  revocation-signal vs unresolvable vs epoch-lag and surfaces the distinction
+  to hosts. Read revoke = the immediate-cut trigger above; the promise is
+  "they keep what they saw; they lose everything new, now." Write
+  revoke/downgrade = write rotation; old names are hijackable by the revokee
+  and therefore dead to survivors — tombstones advisory only.
+- **Invites** (#25 D6): a grant blob wrapped to an ephemeral keypair, placed
+  in the envelope and ledger-tracked; the URL fragment carries the ephemeral
+  private key and the owner's contact bundle. Links are honestly bearer and
+  multi-claim; claim = a sealed, ephemeral-key-signed mailbox request the
+  owner converts to a personal grant (upgradeable to write). Expiry is a
+  ledger field, lazily pruned via the discovered-expiry trigger. Write links
+  carry extractable subtree signing keys: revoking or expiring one is only
+  real via write rotation — which is why cheap, routinely-runnable write
+  rotation is a hard requirement the primitives above satisfy — and the
+  engine flags write links as bearer capabilities for host UI.
+- **Files are first-class grant targets** (#25 D5): envelope blobs +
+  write-body ledger like any node; ancestor rotations re-seal
+  independently-shared descendants' grants as part of republishing them.
+- **Owner entry** (#39 D6): the own-vault **owner seed cache** — the
+  last-confirmed `{seed, epoch}` per granted scope, refreshed on every
+  confirmed owner read — is canonical; the grantee-maintained owner blob is an
+  accelerator. Ancestor readers derive the expected ascent keypair from the
+  parent node seed and reject a mismatched plaintext half. Cross-check
+  discipline: owner-blob seed vs ascent-link seed vs actual unseal — any
+  disagreement is an attributable abuse event surfaced to the host, never a
+  silent failure. Residual, documented: content sealed only under a
+  rogue-withheld epoch is recoverable only from a valid-seed holder —
+  equivalent to the destructive power a write-grantee already holds; the
+  guarantee is that a write-grantee can never lock the owner out of content
+  the owner could already reach, and can never act deniably.
+
+## Mailbox logic
+
+The mailbox carries discovery and courtesy traffic only — share pointers,
+write-rotation re-point accelerators, invite claims, courtesy notifications.
+Nothing on it is load-bearing for safety: root migration has the pointer
+plane, revocation is discovered in metadata (#34 D5, #38 D3).
+
+- **Sender authentication** (#39 D9): every payload carries a sender-identity
+  signature inside the HPKE seal, verified against the contact-code-anchored
+  key; unauthenticated items are dropped before a wasted resolve.
+- **Lifecycle**: post via the API client with a sender-supplied idempotency
+  key (≤ ~8 KB); poll rides the sync tick; ack = delete. The engine acks only
+  after the pointed-at fact is durably recorded (share appended to the vault
+  list, re-point applied) — an engineering judgment consistent with
+  until-acked retention. Re-point mailbox items are verifiable accelerators:
+  the same owner-signed re-point object as the pointer record, applied through
+  the same floor law.
+- Server-side caps, the 90-day unacked TTL, and rate limits are API territory
+  (api.md); the engine surfaces a reject-new mailbox as a sender-visible
+  failure.
+
+## API client
+
+One hand-written Rust client, inside the engine, over the Http seam — shared
+by web and desktop; no generated clients anywhere (#28 D5). The NestJS API
+keeps emitting its OpenAPI spec as a docs artifact; enforcement is the live
+contract-test suite owned by the testing-strategy blueprint (#28 D6).
+
+- **Token lifecycle** lives here; the web app never touches tokens.
+  Challenge-signature login with the identity key is engine-native; SIWE stays
+  a secondary method — the host supplies the wallet signature through the
+  facade and the engine exchanges it (engineering judgment on the plumbing;
+  the method set is #34's). The short-lived access JWT is held in engine
+  memory; the rotating refresh token persists per platform via
+  `CredentialStore` (HTTP-only cookie on web, OS keychain on desktop, #34).
+  Refresh is single-flight with one retry-then-fail on 401 (judgment).
+- **Surface consumed** (mirrors api.md): auth/refresh (+ staging-only
+  test-login), batch register `[{ipnsName, headCid?, contentCids[]}]` and
+  batch retire, quota query (`advisory: true` for BYO), hosted upload, mailbox
+  post/poll/ack, recovery fetch, the account BYO toggle, account hard-delete.
+- Register-first ordering is built into the publish pipeline, not left to
+  callers. Quota enforcement lives on the API upload endpoint (#34 D1); a
+  pre-flight quota-query check to fail fast before bytes move is judgment.
+
+## Content plane
+
+- **Pin-provider layer** (#34 D1): hosted (default), external (own
+  Kubo/PSA/Pinata endpoint), or dual — the engine decides where bytes go;
+  every mode's publish flow still traverses registration. `ByoIpfsConfig`
+  stays sealed in vault settings; provider connection testing is engine-side
+  over the Http seam (the TEE tester is gone).
+- **Reads**: the token-authed trustless gateway is a member accelerator; any
+  public trustless gateway is the no-auth fallback. The engine verifies CIDs
+  client-side via core on every block/CAR response; media uses ranged fetches
+  (the service-worker decryption layer is web-blueprint territory) (#34 D7).
+- **Chunking and retention** — owned here per core.md's hand-off, resolved as
+  engineering judgment: the engine frames content into fixed-size chunks,
+  seals each with core's content-seal primitive (fresh random per-version
+  content key, #26 D6), and assembles a DAG addressed by the version's
+  `contentCid`, shaped so ranged block/CAR fetches map chunk-aligned.
+  Retention default: keep all versions within quota, with an explicit
+  user-initiated prune op. Exact chunk size and retention knobs are open edges
+  below.
+
+## Facade
+
+The engine exposes one async command-and-event surface, designed to be
+wrapped, not extended: commands (the intent ops, grant/rotation/share actions,
+auth, manual refresh) and an event stream out (snapshot updates, staleness
+transitions, withheld-update escalations, dead-letters, attributable abuse
+events). Desktop calls it directly in the Tauri process; web wraps it via
+`crates/wasm` bindings inside a dedicated worker, with the RPC facade and tab
+leadership owned by `packages/client` (#28 D3/D4). The engine's contract is
+only this: one live instance is the single writer, and every trust decision
+already happened below the facade — hosts render, they never decide.
+
+## Open edges
+
+- **Migration-window closure** — how long the old scope-root name lingers
+  serving the tombstone before retire. #38 fixed the channel architecture but
+  not the window; proposed as a sync-timing-profile constant, to settle with
+  the testing-strategy blueprint's e2e work.
+- **Chunk size, DAG shape, retention defaults** — the judgment above needs
+  numbers; freeze alongside the KAT manifest and testing strategy.
+- **Sweep cadence** — the idle-cadence value joins the sync timing profile.
+- **Designed-for seams, deliberately unbuilt in v2.0**: push overlay (API
+  WebSocket hints or desktop PubSub) behind `RefreshHintSource` (#33 D1);
+  desktop embedded DHT behind `RecordTransport` (#23 D2); decentralized inbox
+  behind `Mailbox` (#25 D2); the re-signer wrapped-key enrollment channel
+  (#24 D4); scheduled hygiene rotation (#26 D7).
+- **Worker packaging, RPC facade, tab leadership** →
+  [web client blueprint](https://github.com/FSM1/cipher-box-next/issues/45);
+  FUSE adapter over the facade → desktop blueprint; contract tests and the
+  live-API suite → testing strategy
+  ([#47](https://github.com/FSM1/cipher-box-next/issues/47)).
