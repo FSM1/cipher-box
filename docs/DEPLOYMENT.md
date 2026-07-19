@@ -2,6 +2,8 @@
 
 # Deployment
 
+> **v1 document — partially superseded.** This describes the v1 pipeline as of the freeze (`v1-freeze`, branch `v1`). The v2 scheme is normative in `blueprint/deploy.md` ([FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next)): single product version, single-component release-please (dormant, dispatch-only during the build); `pr-release-preview.yml`, `release-gate.yml`, and `cargo-lock-release-sync.yml` are deleted. The staging-tag flow and VPS mechanics below still describe the live setup until the v2 cutover; this document will be rewritten during the v2 build.
+
 This document covers the release pipeline, staging deployment, TEE worker deployment, desktop app packaging, and landing page deployment for CipherBox.
 
 ## Release Pipeline (Release Please)

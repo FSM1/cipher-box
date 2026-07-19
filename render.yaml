@@ -2,7 +2,7 @@ services:
   - type: web
     runtime: static
     name: cipherbox-landing
-    buildCommand: cd landing && npm install && npm run build
+    buildCommand: cd landing && corepack enable && pnpm install --ignore-workspace --frozen-lockfile && pnpm run build
     staticPublishPath: landing/dist
     pullRequestPreviewsEnabled: true
     headers:

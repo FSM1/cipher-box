@@ -55,7 +55,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '22'
+          node-version-file: 'package.json'
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -78,7 +78,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '22'
+          node-version-file: 'package.json'
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -126,7 +126,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '22'
+          node-version-file: 'package.json'
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -202,7 +202,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '22'
+          node-version-file: 'package.json'
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -302,7 +302,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '22'
+          node-version-file: 'package.json'
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -421,7 +421,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '22'
+          node-version-file: 'package.json'
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -574,7 +574,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '22'
+          node-version-file: 'package.json'
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -617,9 +617,6 @@ jobs:
         shell: powershell
         run: New-Item -ItemType File -Force -Path "apps/desktop/src-tauri/resources/winfsp-placeholder.msi"
 
-      - name: Install Rust toolchain
-        run: rustup default stable
-
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -661,9 +658,6 @@ jobs:
           fi
           sudo cp "$FUSE_T_PC" /usr/local/lib/pkgconfig/fuse.pc
           sudo sed -i '' 's/^Version:.*/Version: 2.9.9/' /usr/local/lib/pkgconfig/fuse.pc
-
-      - name: Install Rust toolchain
-        run: rustup default stable
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -708,9 +702,6 @@ jobs:
             libfuse3-dev \
             pkg-config \
             build-essential
-
-      - name: Install Rust toolchain
-        run: rustup default stable
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -822,13 +813,10 @@ jobs:
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
             libssl-dev libxdo-dev
 
-      - name: Install Rust toolchain
-        run: rustup default stable
-
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 22
+          node-version-file: 'package.json'
 
       - name: Install pnpm
         uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9

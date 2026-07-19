@@ -103,7 +103,7 @@ jobs:
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '22'
+          node-version-file: 'package.json'
           cache: 'pnpm'
 
       - name: Install dependencies
@@ -125,9 +125,6 @@ jobs:
           VITE_TEST_LOGIN_SECRET: e2e-test-secret-ci-only
 
       # --- Build debug binary ---
-
-      - name: Install Rust toolchain
-        run: rustup default stable
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
