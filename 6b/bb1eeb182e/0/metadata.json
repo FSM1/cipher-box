@@ -1,0 +1,77 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "6bbb1eeb182e",
+  "session_id": "7500f1a6-27cc-4e96-bb34-e849cae7bfcd",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-19T23:02:54.722175Z",
+  "branch": "chore/v2-freeze-handover",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "CLAUDE.md"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "ffd4bd673276",
+  "checkpoint_transcript_start": 713,
+  "transcript_lines_at_start": 713,
+  "compact_transcript_start": 138,
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 54344,
+    "cache_read_tokens": 1388925,
+    "output_tokens": 9674,
+    "api_call_count": 21
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-wayfinder-2026-07-19T17:33:19.630884Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "wayfinder"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "9507ed3430b9",
+      "timestamp": "2026-07-19T17:33:19.630884Z",
+      "native": {
+        "command": "/wayfinder"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/wayfinder",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-19T23:02:40.682255Z",
+    "agent_lines": 1,
+    "agent_removed": 186,
+    "human_added": 159,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 160,
+    "total_lines_changed": 467,
+    "agent_percentage": 40.04282655246253,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

@@ -1,0 +1,1 @@
+I also like the approach taken in the cipher-box-next repo, with the claude.md just pointing at agents.md and agents.md being the source of truth for the repo, allowing the use of other harnesses
