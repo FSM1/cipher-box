@@ -12,7 +12,6 @@ rules:
   artipacked:
     # checkout persist-credentials hygiene — broad pre-existing finding (e.g. release-please.yml needs persist-credentials to push). Deferred: not in Phase 53 scope (supply-chain pinning + least-privilege only).
     ignore:
-      - cargo-lock-release-sync.yml
       - ci-e2e.yml
       - ci.yml
       - codecov-base.yml
@@ -21,9 +20,7 @@ rules:
       - desktop-e2e.yml
       - desktop-staging-release.yml
       - load-test.yml
-      - pr-release-preview.yml
       - pr-title.yml
-      - release-gate.yml
       - release-please.yml
       - tag-staging.yml
       - web-e2e.yml
@@ -39,9 +36,7 @@ rules:
       - desktop-e2e.yml
       - desktop-staging-release.yml
       - load-test.yml
-      - pr-release-preview.yml
       - pr-title.yml
-      - release-gate.yml
       - release-please.yml
       - tag-staging.yml
       - web-e2e.yml
@@ -57,9 +52,7 @@ rules:
       - desktop-e2e.yml
       - desktop-staging-release.yml
       - load-test.yml
-      - pr-release-preview.yml
       - pr-title.yml
-      - release-gate.yml
       - release-please.yml
       - tag-staging.yml
       - web-e2e.yml
@@ -75,9 +68,7 @@ rules:
       - desktop-e2e.yml
       - desktop-staging-release.yml
       - load-test.yml
-      - pr-release-preview.yml
       - pr-title.yml
-      - release-gate.yml
       - release-please.yml
       - tag-staging.yml
       - web-e2e.yml
@@ -93,9 +84,7 @@ rules:
       - desktop-e2e.yml
       - desktop-staging-release.yml
       - load-test.yml
-      - pr-release-preview.yml
       - pr-title.yml
-      - release-gate.yml
       - release-please.yml
       - tag-staging.yml
       - web-e2e.yml
