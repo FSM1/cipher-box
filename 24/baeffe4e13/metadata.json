@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "24baeffe4e13",
+  "strategy": "manual-commit",
+  "branch": "chore/v2-freeze-handover",
+  "checkpoints_count": 7,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/deploy-landing.yml",
+    ".github/workflows/deploy-staging.yml",
+    ".github/workflows/desktop-e2e.yml",
+    ".github/workflows/desktop-staging-release.yml",
+    ".github/workflows/load-test.yml",
+    ".github/workflows/web-e2e.yml",
+    "apps/desktop/src-tauri/rust-toolchain.toml",
+    "package.json",
+    "rust-toolchain.toml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/24/baeffe4e13/0/metadata.json",
+      "transcript": "/24/baeffe4e13/0/full.jsonl",
+      "compact_transcript": "/24/baeffe4e13/0/transcript.jsonl",
+      "content_hash": "/24/baeffe4e13/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2,
+    "cache_creation_tokens": 1101,
+    "cache_read_tokens": 211589,
+    "output_tokens": 2560,
+    "api_call_count": 1
+  }
+}
