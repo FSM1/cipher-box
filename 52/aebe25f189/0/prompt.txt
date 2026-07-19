@@ -1,0 +1,11 @@
+<task-notification>
+<task-id>bppkky0u9</task-id>
+<tool-use-id>toolu_01Bet7WPJ8WrX6QueVbbXa6p</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/bppkky0u9.output</output-file>
+<status>completed</status>
+<summary>Background command "Check CI status on PR 616" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+nuke the .claude/ gsd installation if it is not being utilized.
