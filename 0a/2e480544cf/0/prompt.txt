@@ -1,0 +1,1 @@
+hmmm, ship-phase is actually not GSD specific (though it does contain a bunch of gsd specific commands) and could be adapted to the new skills workflow rather than being nuked outright.

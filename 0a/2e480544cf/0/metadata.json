@@ -1,0 +1,94 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "0a2e480544cf",
+  "session_id": "7500f1a6-27cc-4e96-bb34-e849cae7bfcd",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-19T22:53:00.358438Z",
+  "branch": "chore/v2-freeze-handover",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".claude/commands/ship.md"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "8ec5d60da824",
+  "checkpoint_transcript_start": 681,
+  "transcript_lines_at_start": 681,
+  "compact_transcript_start": 133,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 12855,
+    "cache_read_tokens": 783294,
+    "output_tokens": 7491,
+    "api_call_count": 3
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-wayfinder-2026-07-19T17:33:19.630884Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "wayfinder"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "9507ed3430b9",
+      "timestamp": "2026-07-19T17:33:19.630884Z",
+      "native": {
+        "command": "/wayfinder"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/wayfinder",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 10
+  },
+  "summary": {
+    "intent": "Recover the original ship-phase command content and adapt it to the new v2 skills workflow instead of deleting it outright, since its verify → review → ship → resolve-reviews pipeline shape is workflow-agnostic despite containing GSD-specific commands.",
+    "outcome": "Recovered the original ship-phase.md content, rewrote it as .claude/commands/ship.md adapted for the skills workflow, then committed and pushed the change.",
+    "learnings": {
+      "repo": [
+        "cipher-box's ship-phase command pipeline (verify → review → ship → resolve reviews) is workflow-agnostic and was migrated to .claude/commands/ship.md to work with the new v2 skills workflow rather than being GSD-specific."
+      ],
+      "code": [],
+      "workflow": [
+        "When migrating away from an old workflow (e.g. GSD), recover and adapt existing pipeline commands via git history rather than nuking them outright if their core logic is reusable across workflows."
+      ]
+    },
+    "friction": [],
+    "open_items": [
+      "Adapted .claude/commands/ship.md has not been exercised end-to-end against the new skills workflow to confirm it behaves correctly."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-19T22:52:49.542352Z",
+    "agent_lines": 88,
+    "agent_removed": 0,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 88,
+    "total_lines_changed": 88,
+    "agent_percentage": 100,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
