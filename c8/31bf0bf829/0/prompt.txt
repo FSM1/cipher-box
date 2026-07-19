@@ -1,0 +1,359 @@
+/wayfinder
+
+---
+
+<task-notification>
+<task-id>a8992e054a39e564d</task-id>
+<tool-use-id>toolu_01NjjzcokuXn3Pk6DLxs3d3v</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/a8992e054a39e564d.output</output-file>
+<status>completed</status>
+<summary>Agent "Inventory v1 CI/CD infra" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I have everything needed. Here is the complete reference document.
+
+---
+
+# CipherBox CI/CD &amp; Deployment Infrastructure Inventory
+
+Repo: `/Users/myankelev/Code/random/cipher-box` (GitHub: `FSM1/cipher-box`). Monorepo, pnpm + Cargo workspaces. Root `package.json` version `0.45.2`, packageManager `pnpm@10.33.0`.
+
+---
+
+## 1. GitHub Workflows
+
+All workflow files live in `/Users/myankelev/Code/random/cipher-box/.github/workflows/`. Every third-party action is SHA-pinned (enforced by zizmor). All checkouts use `actions/checkout@9c091bb…` (v7.0.0), Node setup `actions/setup-node@48b55a…` (v6.4.0) with `node-version: '22'`, pnpm `pnpm/action-setup@0ebf47…` (v6.0.9).
+
+### 1.1 `ci.yml` — "CI"
+- **Trigger:** `pull_request` → `branches: [main]` only. No concurrency block. Top-level `permissions: {}` (each job grants its own, mostly `contents: read`).
+- **Jobs &amp; gating (all PR-blocking on PRs to main):**
+  - `changes` (Detect Changes): `dorny/paths-filter@7b450f…` computes two outputs — `src` (apps/**, packages/**, tests/**, .github/**, lockfiles, tsconfig*, biome.json) and `desktop` (apps/desktop/src-tauri src/vendor/Cargo.toml/build.rs/rust-toolchain, crates/**, Cargo.toml/lock, tests/vectors/**, .github/workflows/ci.yml). Gates the rest.
+  - `lint` (ESLint via `pnpm lint`) — always runs; every downstream job `needs: [changes, lint]`.
+  - `typecheck` — `if src==true`. Runs `pnpm typecheck`.
+  - `api-spec` (Verify API Spec &amp; Client) — `if src==true`. Services: postgres:16-alpine + ipfs/kubo:v0.42.0. Runs `pnpm api:generate` and fails if generated OpenAPI/client drifts (semantic JSON compare, ignoring `info.version`).
+  - `migration-check` (Migration Drift Check) — `if src==true`. Service: postgres. Runs migrations then `typeorm migration:generate DriftCheck`; fails only on structural drift (CREATE/DROP TABLE, ADD/DROP COLUMN, ALTER TYPE, RENAME COLUMN).
+  - `test` — `if src==true`. Services: postgres + ipfs. Runs coverage for api, crypto, core, sdk-core, sdk, api-client + tee-worker tests. Uploads to Codecov (flags api,crypto,core,sdk-core,sdk,api-client) and caches `coverage-lcov` artifact (7 days) for `codecov-base.yml`.
+  - `sdk-e2e` (SDK E2E Tests) — `if src==true`, timeout 15m. Services: postgres + ipfs + redis:7-alpine. Boots mock-ipns-routing (:3001), TEE worker simulator (:3002), API (:3000); runs `pnpm --filter @cipherbox/sdk-e2e test`. This is the SDK E2E harness inside PR CI.
+  - `build` — `if src==true`. Builds all packages incl. web (excludes desktop).
+  - `cargo-windows`, `cargo-macos`, `cargo-linux` (Cargo Check &amp; Test) — `if desktop==true`. Per-OS Rust build/test. macOS installs FUSE-T, Windows installs WinFsp (pinned MSI, SHA256-verified), Linux installs libfuse3 etc. Each uses `actions/cache@55cc83…` keyed on `Cargo.lock`. `cargo-linux` also runs two repo-specific grep gates — **SC#6 single-gated-read** and **SC#2 re-encrypt-on-move deletion** over `crates/fuse/src` — plus `cargo-llvm-cov` coverage uploaded to Codecov under `desktop` and `rust` flags. All use `rustup default stable` (NOT the pinned toolchain).
+  - `vector-parity` (Cross-Language Vector Parity) — `needs: [changes, cargo-linux, test]`, `if desktop||src`. Runs Rust + TS crypto vector tests then `scripts/check-vector-parity.sh`.
+
+### 1.2 `ci-e2e.yml` — "CI E2E Tests"
+- **Trigger:** `push` → `branches: [main]` + `workflow_dispatch`. `permissions: {}`.
+- **Jobs:** `detect-changes` (paths-filter with web/desktop filters; on dispatch forces both true) → `web-e2e` (**workflow_call → `web-e2e.yml`**, `if web==true || dispatch`) and `desktop-e2e` (**workflow_call → `desktop-e2e.yml`**, `if desktop==true || dispatch`), both `secrets: inherit`. Final `retrigger-release-gate` (`if always() &amp;&amp; (push||dispatch)`, perms `actions: write`) re-runs the latest completed `release-gate.yml` run on any open `release-please` PR so the gate re-checks E2E against fresh main. **Main-only orchestrator** (not PR-blocking).
+
+### 1.3 `web-e2e.yml` — "Web E2E Tests" (reusable)
+- **Trigger:** `workflow_dispatch` + `workflow_call` (input `ref`). `permissions: {}`. Single job, timeout 20m. Services: postgres + ipfs + redis. Installs Playwright chromium, mock-ipns-routing, configures Kubo CORS, builds packages+web+api, runs `pnpm --filter @cipherbox/web-e2e test`. Uploads playwright-report on failure. **Invoked by** `ci-e2e.yml` and `tag-staging.yml`.
+
+### 1.4 `desktop-e2e.yml` — "Desktop E2E Tests" (reusable)
+- **Trigger:** `workflow_dispatch` + `workflow_call` (input `ref`). `permissions: {}`. Matrix `fail-fast: false`: macOS (fuse, FUSE-T), Windows (winfsp, Memurai for redis), Linux (fuse, Xvfb). Timeout 45m. Installs FUSE driver + Postgres (`ikalnytskyi/action-setup-postgres@c4dda3…`) + Kubo + Redis per OS, builds desktop frontend + debug binary (`cargo build -p cipherbox-desktop`), boots API/mock-ipns, launches binary with `--dev-key`, runs `tests/desktop-e2e/scripts/run-all.sh` (or `run-all.ps1` on Windows). Uploads failure logs. **Invoked by** `ci-e2e.yml` and `tag-staging.yml`.
+
+### 1.5 `release-please.yml` — "Release Please" (see §2)
+- **Trigger:** `push` → `branches: [main]`. `permissions: contents: write, pull-requests: write`. **Main-only.**
+
+### 1.6 `pr-release-preview.yml` — "PR Release Preview" (see §2)
+- **Trigger:** `pull_request` → main, types `[opened, synchronize, reopened, labeled, unlabeled]`. **Concurrency:** `group: release-preview-${{ pr.number }}`, `cancel-in-progress: false` (deliberate self-heal backstop). `permissions: contents: write, pull-requests: write`. Skips `release-please--*` branches. **PR-run, writes a bot commit to the PR branch.**
+
+### 1.7 `release-gate.yml` — "Release Gate" (see §2/§8)
+- **Trigger:** `pull_request` → main, types `[opened, synchronize, reopened]`. `permissions: {}`. Only acts on `release-please--*` head branches. `detect-changes` diffs `prev_tag..origin/main` to decide if web/desktop E2E must be verified; `verify-e2e` (timeout 60m, `actions: read`) polls `ci-e2e.yml` runs on main and asserts the Web/Desktop E2E jobs passed at HEAD. **PR-blocking, but only for release PRs.**
+
+### 1.8 `cargo-lock-release-sync.yml` — "Cargo.lock Release Sync" (see §2/§9)
+- **Trigger:** `pull_request` → main, types `[opened, synchronize, reopened]`. **Concurrency:** `group: cargo-lock-sync-${{ pr.number }}`, `cancel-in-progress: true`. `permissions: contents: read` (writes via scoped app token). Only `release-please--*` branches. Pins first-party crate versions in `Cargo.lock` on the release PR branch and pushes.
+
+### 1.9 `tag-staging.yml` — "Tag Staging Release" (see §2/§3)
+- **Trigger:** `workflow_dispatch` (input `description`). **Concurrency:** `group: tag-staging`, `cancel-in-progress: false`. `permissions: {}`. Chain: `resolve-main` (asserts main HEAD carries a release tag) → `web-e2e` (**call → web-e2e.yml**) + `desktop-e2e` (**call → desktop-e2e.yml**) → `tag-staging` (**environment: `staging-approval`** gate; mints `staging-YYYYMMDD-release-N`) → `deploy` (**call → deploy-staging.yml**). **Dispatch-gated + manual approval.**
+
+### 1.10 `deploy-staging.yml` — "Deploy Staging" (see §3)
+- **Trigger:** `push` → `tags: ['staging-*']` + `workflow_call` (input `staging_tag`). `permissions: {}`. **Tag-triggered or called by tag-staging.yml.**
+
+### 1.11 `desktop-staging-release.yml` — "Desktop Staging Release"
+- **Trigger:** `push` → `tags: ['cipherbox-desktop-v*']`. `permissions: {}`. Builds Tauri desktop for macOS/Windows/Linux (`environment: staging`), then `mark-latest` runs `gh release edit "$TAG" --latest` so `/releases/latest/` resolves to the desktop build (for the Tauri auto-updater). **Tag-triggered (release-please desktop tag).**
+
+### 1.12 `deploy-landing.yml` — "Deploy Landing Page to IPFS"
+- **Trigger:** `push` → main with `paths: ['landing/**', '.github/workflows/deploy-landing.yml']` + `workflow_dispatch`. `permissions: {}`, single job `environment: staging`. Builds `landing/`, scp's to VPS, `ipfs add -Qr --pin` inside the Kubo container, updates Cloudflare DNSLink TXT `_dnslink.cipherbox.cc`. **Main-only, path-filtered.** (Note: `render.yaml` also defines a Render.com static host for the landing page with PR previews — parallel path.)
+
+### 1.13 `load-test.yml` — "Load Tests"
+- **Trigger:** `workflow_dispatch` only (inputs: environment local/staging, client_count, scenario incl. `byo-*`, BYO endpoint/protocol/name). **Concurrency:** `group: load-test-${{ environment }}`, `cancel-in-progress: false`. `permissions: {}`, timeout 60m. `environment: staging` only when input==staging. Services postgres+ipfs+redis; runs `vitest run` in `tests/load`. **Dispatch-only.**
+
+### 1.14 `pr-title.yml` — "PR Title Lint"
+- **Trigger:** `pull_request` types `[opened, edited, synchronize]`. `permissions: {}` (job: `pull-requests: read`). Regex-checks Conventional Commits format AND rejects parenthesized text in the description (breaks release-please parsing). **PR-blocking.**
+
+### 1.15 `zizmor.yml` — "GitHub Actions Security Gate"
+- **Trigger:** `pull_request` → main + `push` → main. `permissions: {}` (job `contents: read`). `pip install zizmor==1.25.2` (pinned) and runs CLI (non-zero on findings). Scoped by `.github/zizmor.yml` to only `unpinned-uses` + `excessive-permissions` (all other audits deferred/ignored per-file). **PR-blocking + main.**
+
+### 1.16 `codecov-base.yml` — "Codecov Base Upload"
+- **Trigger:** `push` → main. `permissions: actions: read`. Downloads the `coverage-lcov` artifact from the latest successful `ci.yml` run and re-uploads to Codecov tagged to the main commit (so PR coverage diffs have a base). **Main-only.**
+
+### Workflow_call chain summary
+- `ci-e2e.yml` → `web-e2e.yml`, `desktop-e2e.yml`
+- `tag-staging.yml` → `web-e2e.yml`, `desktop-e2e.yml`, `deploy-staging.yml`
+- `deploy-staging.yml` is also directly `push tags: staging-*` triggerable.
+- `ci-e2e.yml`'s `retrigger-release-gate` re-runs `release-gate.yml` runs via `gh run rerun` (not a workflow_call).
+
+---
+
+## 2. Release Management
+
+Files: `/release-please-config.json`, `/.release-please-manifest.json`, workflows `release-please.yml`, `pr-release-preview.yml`, `release-gate.yml`, `cargo-lock-release-sync.yml`, `tag-staging.yml`, `desktop-staging-release.yml`.
+
+### 2.1 Config &amp; components (`release-please-config.json`)
+- Global: `separate-pull-requests: false` (one aggregated release PR), `pull-request-title-pattern: "chore: release v${version}"`, custom `changelog-sections` (feat/fix/build/perf/revert shown; docs/style/chore/refactor/test/ci hidden). All packages set `include-component-in-tag: true` and `bump-minor-pre-major: true`.
+- **16 components** (component name / release-type):
+  - Root `.` → `cipher-box` (node)
+  - `apps/api` → `@cipherbox/api` (node, `release-as: 0.45.0`)
+  - `apps/web` → `@cipherbox/web` (node, `release-as: 0.49.0`)
+  - `apps/desktop` → `cipherbox-desktop` (node, `release-as: 0.47.0`, **extra-files**)
+  - `apps/tee-worker` → `cipherbox-tee-worker` (node, `release-as: 0.32.0`)
+  - `packages/core` → `@cipherbox/core` (0.32.0), `packages/crypto` → `@cipherbox/crypto` (0.34.0), `packages/api-client` → `@cipherbox/api-client` (0.45.0), `packages/sdk-core` → `@cipherbox/sdk-core` (0.40.0), `packages/sdk` → `@cipherbox/sdk` (0.38.0) — all node
+  - `crates/crypto` → `cipherbox-crypto` (rust, 0.6.0), `crates/core` → `cipherbox-core` (rust, 0.8.0), `crates/api-client` → `cipherbox-api-client` (rust, 0.37.0), `crates/fuse` → `cipherbox-fuse` (rust, 0.11.0), `crates/sdk` → `cipherbox-sdk` (rust, 0.9.0)
+- **Current shipped versions** (`.release-please-manifest.json`): root 0.45.2; api 0.44.1; web 0.48.0; desktop 0.46.0; tee-worker 0.31.1; core 0.31.1; crypto 0.33.1; api-client 0.44.0; sdk-core 0.39.0; sdk 0.37.2; crates: crypto 0.5.0, core 0.7.0, api-client 0.36.1, fuse 0.10.1, sdk 0.8.0. (Every `release-as` in config is one minor above the manifest — i.e. active pins, not stale self-comparing loops.)
+- **Versioning scheme:** independent per-component SemVer; node components bump `package.json`, rust components bump `Cargo.toml`; pre-major minor bumps for breaking changes.
+- **Tag formats:** `include-component-in-tag: true` → `cipher-box-v X.Y.Z` (root), `@cipherbox/web-vX.Y.Z`, `cipherbox-desktop-vX.Y.Z`, `cipherbox-fuse-vX.Y.Z`, etc. Staging tags: `staging-YYYYMMDD-release-N`.
+
+### 2.2 `release-please.yml` mechanics
+- Uses a **GitHub App token** (`create-github-app-token`, app-id `vars.RELEASE_BOT_APP_ID`, key `secrets.RELEASE_BOT_PRIVATE_KEY`) so release-PR pushes re-trigger CI.
+- Runs `googleapis/release-please-action@45996e…` (v5) with the config+manifest.
+- Post-release steps (only when `releases_created==true`): (a) **un-marks all manifest releases as `--latest=false`** (with retry) so `/releases/latest/` resolves to the desktop release marked latest by `desktop-staging-release.yml`; (b) **Cargo.lock post-merge fallback** — if the pre-merge sync raced the merge, opens a `chore/cargo-lock-sync-&lt;sha7&gt;` follow-up PR (never pushes to protected main) and best-effort auto-merges.
+
+### 2.3 Per-PR release-target preview (bot commit mechanism)
+- `pr-release-preview.yml` runs on every non-release PR. `node .github/scripts/pr-release-preview.js` analyzes PR commits and writes computed `release-as` targets into `release-please-config.json`.
+- If config changed **and** the PR is same-repo (not a fork), the bot commits `chore(release): set release targets for PR #N` and `git push` onto the PR branch.
+- **This commit is load-bearing:** dropping it makes release-please miss the version bump on merge. `concurrency.cancel-in-progress: false` lets a queued recompute finish so a force-push-clobbered target self-heals.
+
+### 2.4 Tauri extra-files propagation
+- `apps/desktop` component has `extra-files: ["src-tauri/tauri.conf.json", "src-tauri/Cargo.toml"]` — release-please propagates the `cipherbox-desktop` version bump into both files in addition to `apps/desktop/package.json`.
+
+### 2.5 Cargo.lock sync (two-tier)
+- **Primary (pre-merge):** `cargo-lock-release-sync.yml` runs on the `release-please--*` PR branch (unprotected), pins first-party crates (`cipherbox-api-client/core/crypto/fuse/sdk/desktop`) via `cargo update -p … --precise`, commits `chore(ci): sync Cargo.lock for released crates`, soft-pushes (tolerates lost race). Rationale: native cargo-workspace plugin is deliberately disabled (googleapis/release-please#2517 skips Cargo.lock in monorepo mode).
+- **Fallback (post-merge):** the step inside `release-please.yml` (see 2.2).
+
+### 2.6 Staging tag minting (`tag-staging.yml`)
+- Manual dispatch → `resolve-main` verifies main HEAD carries a release tag (regex `^(cipher-box-v|cipherbox-.*-v|@cipherbox/)`), else fails ("Wait for release-please to merge"). → web-e2e + desktop-e2e gates run against that SHA. → `tag-staging` job requires **`staging-approval` environment** approval, computes `staging-${DATE}-release-${N}` where N is the per-day sequential counter (max existing +1), creates+pushes the tag. → `deploy` calls `deploy-staging.yml`. The `staging-` prefix avoids collision with release-please tag patterns.
+
+### 2.7 "Release Automation Rules" from CLAUDE.md (documented failure modes, verbatim-ish)
+From `/CLAUDE.md` §"Release Automation Rules":
+- The `pr-release-preview.yml` workflow computes per-PR release targets and the bot pushes a `chore(release): set release targets for PR #N` commit onto the PR branch. **That commit is load-bearing: if it is dropped, release-please misses the version bump when the PR merges.**
+- **"Never force-push over the bot `chore(release)` commit."** When updating an open PR branch, always `git fetch &amp;&amp; git rebase origin/&lt;branch&gt;` (or `git pull --rebase`) to preserve the bot commit — a `git push --force` clobbers it and silently drops the computed release targets.
+- The preview workflow uses `concurrency.cancel-in-progress: false` as a safety-net: a queued recompute is allowed to finish so targets self-heal even if a push raced the bot. This is a backstop, not a license to force-push.
+- **"Never leave a `release-as` pin in `release-please-config.json` equal to its `.release-please-manifest.json` version"** — that makes release-please re-release an already-shipped version (a self-comparing changelog loop). Remove the stale `release-as` key when this happens. **This is no longer CI-enforced, so check it manually.**
+
+Also from §"Releases &amp; Versioning": on push to main, `release-please.yml` creates/updates the release PR; every component gets its own tag; desktop propagates version via extra-files; staging deploys triggered by `staging-*` tags minted by `tag-staging.yml` (verify release tag → E2E gates → `staging-approval` → tag → deploy).
+
+Also §"Git Workflow" note: the husky `commit-msg` hook was replaced by an Entire CLI wrapper and **does not run commitlint locally**; PR titles are validated in CI by `pr-title.yml`.
+
+---
+
+## 3. Staging Deploy
+
+Primary file: `/.github/workflows/deploy-staging.yml`. Triggered by `push tags: staging-*` or `workflow_call` from `tag-staging.yml` (input `staging_tag`). `DEPLOY_TAG = inputs.staging_tag || github.ref_name`, `REGISTRY=ghcr.io`.
+
+### 3.1 Jobs / deployment mechanics
+- **`build-api`** (`packages: write`): builds `apps/api/Dockerfile` (context repo root) and pushes to `ghcr.io/&lt;owner-lc&gt;/cipherbox-api` tags `:&lt;api version&gt;`, `:latest-staging`, `:&lt;DEPLOY_TAG&gt;`. Login via `secrets.GITHUB_TOKEN`.
+- **`build-tee`** (`packages: write`): same for `ghcr.io/&lt;owner-lc&gt;/cipherbox-tee-worker` from `apps/tee-worker/Dockerfile`.
+- **`build-web`** (`environment: staging`): builds `@cipherbox/web` with staging Vite env (Web3Auth, `vars.STAGING_API_URL`, Faro/Grafana). Uploads `web-dist` artifact (1-day).
+- **`create-desktop-release`** → **`build-desktop`** (macOS), **`build-desktop-windows`**, **`build-desktop-linux`** (all `environment: staging`, `contents: write`): Tauri builds via `tauri-apps/tauri-action@1deb37…`, signed with `TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)`, `includeUpdaterJson: true`, `prerelease: false` (staging IS the "production" release channel for the auto-updater).
+- **`deploy-vps`** (`needs: [build-api, build-tee, build-web]`, `environment: staging`, `packages: read`): the actual VPS deploy.
+  - **How:** generates `.env.staging` from secrets/vars (heredoc), then **SSH/SCP via `appleboy/scp-action@ff8524…` and `appleboy/ssh-action@0ff420…`** to a single **staging VPS** (`vars.STAGING_HOST` / `vars.STAGING_USER` / `secrets.STAGING_SSH_KEY`).
+  - Copies `.env.staging`, `docker/docker-compose.staging.yml`, `docker/Caddyfile`, `docker/alloy-config.river`, `docker/ipfs-init/001-provide-strategy.sh` to `/opt/cipherbox`; arranges them under `/opt/cipherbox/docker`, `chmod 600` the env files, symlinks certs for Caddy.
+  - Deploys web dist to `/opt/cipherbox/web` (scp `rm: true`).
+  - On the VPS: `docker login ghcr.io`, `docker compose -f docker-compose.staging.yml pull`, runs migrations via `docker compose run --rm api node dist/run-migrations.js`, `docker compose up -d`, restarts Caddy, `docker image prune -f`. **Registry-based (GHCR pull), docker compose on the host.**
+- **`provision-dashboard`** (`needs: [deploy-vps]`, `environment: staging`): waits for Grafana Cloud health, then pushes `docker/grafana/dashboards/cipherbox-staging.json` to the Grafana API (rewrites datasource UIDs from `vars.GRAFANA_DS_METRICS_UID`/`GRAFANA_DS_LOGS_UID`).
+
+### 3.2 Approval gates / environments
+- `staging-approval` (manual approval) — gates the tag-creation step in `tag-staging.yml`.
+- `staging` environment — attached to all deploy/build jobs that need staging secrets/vars.
+- No `production` environment is referenced by any workflow (it exists in GitHub but is unused).
+
+### 3.3 Staging stack services (from `docker/docker-compose.staging.yml`, compose project `cipherbox-staging`)
+All bound to `127.0.0.1` except public swarm/HTTP ports:
+- `api` — `ghcr.io/&lt;owner&gt;/cipherbox-api:${TAG}`, `127.0.0.1:3000:3000`, `env_file .env.staging`, depends on healthy postgres+redis.
+- `postgres` — `postgres:16-alpine`, `127.0.0.1:5432`, volume `postgres_staging`, db `cipherbox_staging`.
+- `redis` — `redis:7-alpine`, `127.0.0.1:6379`, `--requirepass ${REDIS_PASSWORD}`, volume `redis_staging`.
+- `ipfs` — `ipfs/kubo:v0.42.0`, `4001` public (tcp/udp) + `127.0.0.1:5001/8080`, `IPFS_PROFILE=server,pebbleds`, volume `ipfs_staging`, `./ipfs-init` init scripts, CPU cap 1.5 / mem 3G.
+- `tee-worker` — `ghcr.io/&lt;owner&gt;/cipherbox-tee-worker:${TAG}`, `PORT=3001`, `TEE_MODE=simulator`, `CIPHERBOX_ENVIRONMENT=staging` (staging runs the **simulator**, not real CVM), mem 256M / cpu 0.5.
+- `someguy` — `ghcr.io/ipfs/someguy:v0.11.1` (delegated routing, accelerated DHT), swarm `4004`, mem 2G / cpu 1.0.
+- `caddy` — `caddy:2-alpine`, `:80/:443`, serves `/opt/cipherbox/web` + reverse proxy, `Caddyfile` + certs.
+- `alloy` — `grafana/alloy:v1.6.1`, ships logs/metrics to Grafana Cloud (Loki/Prometheus), mounts docker.sock.
+
+---
+
+## 4. Docker Stacks
+
+| Path | Context | Services (name / image / ports) |
+|---|---|---|
+| `/docker/docker-compose.yml` (project `cipherbox-infrastructure`) | **Local dev** | postgres (postgres:16-alpine, `${DB_PORT:-5432}:5432`); ipfs (ipfs/kubo:v0.42.0, 4001, 5001, 8080); redis (redis:7-alpine, `${REDIS_PORT:-6380}:6379`); someguy (ghcr.io/ipfs/someguy:v0.11.1, 8190, 4004); mock-ipns-routing (build ../tools/mock-ipns-routing, 127.0.0.1:3001:3001); tee-worker (build from repo root, TEE_MODE=simulator, 127.0.0.1:3002:3001) |
+| `/docker/docker-compose.staging.yml` (project `cipherbox-staging`) | **Staging VPS** | api, postgres, redis, ipfs, tee-worker (simulator), someguy, caddy, alloy (see §3.3) |
+| `/apps/tee-worker/docker-compose.yml` | **TEE (local CVM-mode test)** | tee-worker (`build: .`, mounts `/var/run/dstack.sock`, `3001:3001`, `TEE_MODE=cvm`, `NODE_ENV=production`) |
+| `/apps/tee-worker/docker-compose.phala.yml` | **TEE production (Phala Cloud CVM)** | tee-worker (`ghcr.io/&lt;owner&gt;/cipherbox-tee-worker:${TAG}`, mounts dstack.sock, `3001:3001`, `TEE_MODE=cvm`, `CIPHERBOX_ENVIRONMENT=staging`). Header note: always UPDATE the existing CVM by name — never delete/recreate (app_id change invalidates all epoch keys). Deploy: `phala deploy -c docker-compose.phala.yml -n cipherbox-tee-staging --wait`. |
+
+Dockerfiles:
+- `/apps/api/Dockerfile` — multi-stage node:22-alpine, pnpm@10, builds `@cipherbox/crypto` + `@cipherbox/api`, `pnpm deploy --prod --legacy`, runtime non-root `appuser`, EXPOSE 3000, `node dist/main.js`. Built in CI (`build-api`) and local compose.
+- `/apps/tee-worker/Dockerfile` — multi-stage **node:20-alpine**, builds crypto/core/api-client/sdk-core then tee-worker, non-root, EXPOSE 3001, `node dist/index.js`. Built in CI (`build-tee`), local compose, and Phala.
+- `/tools/mock-ipns-routing/Dockerfile` — node:22-alpine single-stage, `pnpm build`, EXPOSE 3001. Used by local `docker-compose.yml` (built), not in staging.
+
+`.dockerignore` exists at repo root.
+
+---
+
+## 5. Scripts (`/scripts/`)
+
+| File | Purpose (from header) | CI/hook wiring |
+|---|---|---|
+| `check-api-client.sh` | Pre-commit guard: if API DTO/controller/entity files are staged but regenerated api-client files are not, fail — forces `pnpm api:generate`. | **`.husky/pre-commit`** (`./scripts/check-api-client.sh` then `pnpm lint-staged`). Documented in CLAUDE.md. |
+| `check-vector-parity.sh` | Meta-check: verifies Rust + TS test suites load the same `tests/vectors` fixtures and are valid JSON. | **CI** `ci.yml` job `vector-parity`. |
+| `generate-test-vectors.ts` | Generates VAULT_EXPORT_FORMAT test vectors via `@cipherbox/crypto`. | Manual (`npx tsx`). Not in CI. |
+| `gen-ipns-verify-vectors.ts` | Generates `tests/vectors/ipns/verify.json` cross-language fixture (12 cases) for Rust + sdk-core suites. | Manual generator; output consumed by CI tests. |
+| `bench-ipns-verify.ts` | Benchmark: per-op IPNS Ed25519 verify cost vs cache hit. | Manual. |
+| `baseline-benchmark.sh` | Exercises staging API to generate Prometheus histogram observations; computes p50/p95/p99 for before/after comparison. | Manual (ops). |
+| `backfill-pinned-cids.ts` | One-shot data-repair: reconciles `pinned_cids` rows against live Kubo pin set for non-BYO users (quota fix). | Manual (ops). |
+
+Root `package.json` scripts wired to tooling: `prepare: husky`; lint-staged config runs eslint+prettier on JS/TS, prettier on json/yml/yaml, markdownlint+prettier on md (ignoring `.planning`).
+
+Husky hooks (`.husky/`): `pre-commit` (check-api-client.sh + lint-staged) is the only functional one; `commit-msg`, `post-commit`, `post-rewrite`, `pre-push`, `prepare-commit-msg` are all **Entire CLI wrappers** (no-op if `entire` not installed — commitlint is NOT run locally).
+
+---
+
+## 6. Secrets &amp; Environments
+
+### 6.1 GitHub Environments (from `gh api …/environments`)
+Persistent: **`production`** (no secrets/vars, unused by workflows), **`staging`**, **`staging-approval`** (no secrets/vars — approval gate only), **`copilot`**. Plus many ephemeral per-PR environments auto-created for agent PRs (e.g. `claude/…`, `feat/…`, `fix/…` — "cipher-box PR #NNN").
+
+### 6.2 Repo-level secrets (`…/actions/secrets`)
+`ANTHROPIC_API_KEY`, `CODECOV_TOKEN`, `GRAFANA_API_KEY`, `IDENTITY_JWT_PRIVATE_KEY`, `RELEASE_BOT_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, `VITE_WEB3AUTH_CLIENT_ID`, `WEB3AUTH_TEST_EMAIL`, `WEB3AUTH_TEST_OTP`.
+
+### 6.3 Repo-level variables (`…/actions/variables`)
+`GRAFANA_DS_LOGS_UID`, `GRAFANA_DS_METRICS_UID`, `GRAFANA_URL`, `RELEASE_BOT_APP_ID`, `VITE_WEB3AUTH_CLIENT_ID`.
+
+### 6.4 `staging` environment secrets
+`CLOUDFLARE_API_TOKEN`, `GRAFANA_LOKI_API_KEY`, `GRAFANA_PROMETHEUS_API_KEY`, `IDENTITY_JWT_PRIVATE_KEY`, `PHALA_CLOUD_API_KEY`, `PINATA_JWT`, `SENDGRID_API_KEY`, `STAGING_DB_PASSWORD`, `STAGING_JWT_SECRET`, `STAGING_REDIS_PASSWORD`, `STAGING_SSH_KEY`, `STAGING_TEE_WORKER_SECRET`, `STAGING_TEST_LOGIN_SECRET`, `STAGING_THROTTLE_BYPASS_SECRET`.
+
+### 6.5 `staging` environment variables
+`CLOUDFLARE_DNSLINK_RECORD_ID`, `CLOUDFLARE_ZONE_ID`, `CORS_ALLOWED_ORIGINS`, `GOOGLE_CLIENT_ID`, `GRAFANA_LOKI_URL`, `GRAFANA_LOKI_USERNAME`, `GRAFANA_PROMETHEUS_URL`, `GRAFANA_PROMETHEUS_USERNAME`, `PHALA_TEE_WORKER_URL`, `SENDGRID_FROM_EMAIL`.
+
+### 6.6 Distinct `secrets.*` references per workflow (grep)
+- `cargo-lock-release-sync.yml`: RELEASE_BOT_PRIVATE_KEY
+- `ci-e2e.yml`: GITHUB_TOKEN
+- `ci.yml`: CODECOV_TOKEN, IDENTITY_JWT_PRIVATE_KEY
+- `codecov-base.yml`: CODECOV_TOKEN, GITHUB_TOKEN
+- `deploy-landing.yml`: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID, DNSLINK_RECORD_ID, STAGING_SSH_KEY
+- `deploy-staging.yml`: GITHUB_TOKEN, GRAFANA_API_KEY, GRAFANA_FARO_API_KEY, GRAFANA_LOKI_API_KEY, GRAFANA_PROMETHEUS_API_KEY, IDENTITY_JWT_PRIVATE_KEY, SENDGRID_API_KEY, STAGING_DB_PASSWORD, STAGING_JWT_SECRET, STAGING_REDIS_PASSWORD, STAGING_SSH_KEY, STAGING_TEE_WORKER_SECRET, STAGING_TEST_LOGIN_SECRET, STAGING_THROTTLE_BYPASS_SECRET, TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+- `desktop-e2e.yml`: IDENTITY_JWT_PRIVATE_KEY
+- `desktop-staging-release.yml`: GITHUB_TOKEN, GRAFANA_FARO_API_KEY, TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+- `load-test.yml`: IDENTITY_JWT_PRIVATE_KEY, LOAD_TEST_BYO_AUTH_TOKEN, STAGING_TEST_LOGIN_SECRET, STAGING_THROTTLE_BYPASS_SECRET
+- `pr-release-preview.yml`, `release-gate.yml`, `zizmor.yml`: GITHUB_TOKEN
+- `release-please.yml`: RELEASE_BOT_PRIVATE_KEY
+- `web-e2e.yml`: IDENTITY_JWT_PRIVATE_KEY, WEB3AUTH_TEST_EMAIL, WEB3AUTH_TEST_OTP
+
+### 6.7 Distinct `vars.*` references per workflow (grep)
+- `cargo-lock-release-sync.yml` / `release-please.yml`: RELEASE_BOT_APP_ID
+- `deploy-landing.yml`: STAGING_HOST, STAGING_USER
+- `deploy-staging.yml`: CORS_ALLOWED_ORIGINS, GOOGLE_CLIENT_ID, GRAFANA_DS_LOGS_UID, GRAFANA_DS_METRICS_UID, GRAFANA_LOKI_URL, GRAFANA_LOKI_USERNAME, GRAFANA_PROMETHEUS_URL, GRAFANA_PROMETHEUS_USERNAME, GRAFANA_STACK_ID, GRAFANA_URL, SENDGRID_FROM_EMAIL, STAGING_API_URL, STAGING_DB_USERNAME, STAGING_HOST, STAGING_USER, VITE_FARO_URL, VITE_WEB3AUTH_CLIENT_ID
+- `desktop-staging-release.yml`: GOOGLE_CLIENT_ID, GRAFANA_STACK_ID, STAGING_API_URL, VITE_FARO_URL, VITE_WEB3AUTH_CLIENT_ID
+- `load-test.yml`: STAGING_API_URL
+- `web-e2e.yml`: VITE_WEB3AUTH_CLIENT_ID
+
+### 6.8 Factual discrepancies worth flagging for v2
+- Workflows reference `vars.STAGING_HOST`, `vars.STAGING_USER`, `vars.STAGING_API_URL`, `vars.VITE_FARO_URL`, `vars.GRAFANA_STACK_ID`, `vars.STAGING_DB_USERNAME` — none appear in the repo-level or `staging`-environment variable listings returned by the API (likely organization-level variables, or otherwise not enumerable here).
+- `deploy-landing.yml` reads `secrets.CLOUDFLARE_ZONE_ID` and `secrets.DNSLINK_RECORD_ID`, but the `staging` environment defines `CLOUDFLARE_ZONE_ID` and `CLOUDFLARE_DNSLINK_RECORD_ID` as **variables** (not secrets) with a name mismatch on the DNSLink one. (deploy-landing has no `environment:` set, so it can't read staging-env values anyway.)
+- Secrets used in workflows but NOT in the enumerated repo secrets (⇒ must be org-level or missing): `GRAFANA_FARO_API_KEY`, `SENDGRID_API_KEY`, `PINATA_JWT`(env), `LOAD_TEST_BYO_AUTH_TOKEN`, `GRAFANA_LOKI_API_KEY`/`GRAFANA_PROMETHEUS_API_KEY` (these two are staging-env secrets), `STAGING_*` (staging-env), `CLOUDFLARE_API_TOKEN`/`DNSLINK_RECORD_ID`.
+- `ANTHROPIC_API_KEY`, `PHALA_CLOUD_API_KEY`, `PINATA_JWT` exist as secrets but are not referenced by any workflow in `.github/workflows/` (likely used by agents / manual Phala deploys / BYO tests elsewhere).
+
+---
+
+## 7. Review-Bot Integration
+
+- **CodeRabbit:** config at `/.coderabbit.yaml`. Auto-review enabled on PRs to `main`, drafts skipped, `max_files_to_review: 300`, `profile: chill`, `request_changes_workflow: false`, high-level summary on, poem off. Path-scoped instructions for `apps/api/**`, `apps/web/**`, `packages/crypto/**`, `**/*.test.ts`, `**/*.md`, `.planning/**`, `.learnings/**`. `path_filters` ignore node_modules/dist/build/.next/coverage/pnpm-lock, generated dirs, `packages/api-client/**`, `apps/web/src/api/**`, `.claude/**`, `*.pen`. Chat auto_reply on. App-based (no workflow interaction).
+- **Greptile:** no config file in repo (`.greptile*` / any greptile file absent). Only mentioned inside `.planning/` and `.learnings/` markdown notes (developer references to past Greptile PR-review findings), not wired into any workflow — purely GitHub-App-based if active.
+- No workflow references CodeRabbit or Greptile (grep of `.github` returned nothing).
+
+---
+
+## 8. E2E Harnesses
+
+Suites live under `/tests/` (pnpm workspace member `tests/*`):
+
+| Suite | Location / package | Runs in | When | Infra spun up |
+|---|---|---|---|---|
+| **SDK E2E** | `tests/sdk-e2e` (`@cipherbox/sdk-e2e`) | `ci.yml` job `sdk-e2e` | **PR to main** (if `src` changed), 15m | postgres + ipfs/kubo + redis (GH services); boots mock-ipns-routing (:3001), TEE worker simulator (:3002), API (:3000). `tee-republish.test.ts` hits postgres+redis directly. |
+| **Web E2E** | `tests/web-e2e` (`@cipherbox/web-e2e`, Playwright/chromium) | `web-e2e.yml` (reusable) | **Not on PR CI directly.** Runs on **push to main** via `ci-e2e.yml` (if web paths changed), on **dispatch**, and inside **`tag-staging.yml`** gate. 20m | postgres + ipfs + redis; mock-ipns-routing; Kubo CORS reconfigured for recovery.html; builds web+api. |
+| **Desktop E2E** | `tests/desktop-e2e` (`@cipherbox/desktop-e2e`; bash `run-all.sh` / PowerShell `run-all.ps1` drivers) | `desktop-e2e.yml` (reusable) | Same triggers as web-e2e (push-main via ci-e2e if desktop paths changed, dispatch, tag-staging gate). 45m, 3-OS matrix | Per-OS: FUSE-T (mac) / WinFsp (win) / libfuse3+Xvfb (linux); local Postgres, Kubo daemon, Redis (Memurai on Windows); mock-ipns-routing; API; launches the desktop debug binary with `--dev-key`. |
+| **Load tests** | `tests/load` (`@cipherbox/load-tests`, vitest) | `load-test.yml` | **Dispatch only** (local or staging), 60m | local mode: postgres+ipfs+redis + API + mock-ipns; staging mode: targets `vars.STAGING_API_URL`. |
+| Legacy Playwright | `tests/e2e` (`@cipherbox/e2e`) + `tests/e2e-helpers` (`@cipherbox/e2e-helpers`) | — | **Not referenced by any workflow** | n/a |
+
+- Shared infra tool: `tools/mock-ipns-routing` (`@cipherbox/mock-ipns-routing`) — a mock delegated-routing service on `:3001` (`DELEGATED_ROUTING_URL`), built via `npm run build` in CI and used by sdk-e2e, web-e2e, desktop-e2e, and local docker-compose.
+- **Release-gate coupling:** `release-gate.yml` does not run E2E itself; it polls `ci-e2e.yml` main runs and asserts the Web/Desktop E2E jobs passed at current main HEAD before a release PR may merge. `ci-e2e.yml`'s `retrigger-release-gate` re-runs the gate after E2E completes. Change-detection for the gate mirrors `ci-e2e.yml`'s path filters, diffing `prev_tag..origin/main`.
+- Root scripts: `test:web-e2e` sets `DELEGATED_ROUTING_URL=http://localhost:3001` and filters `@cipherbox/web-e2e`.
+
+---
+
+## 9. Monorepo Build / Tooling
+
+### 9.1 pnpm workspace (`/pnpm-workspace.yaml`)
+Members: `apps/*`, `packages/*`, `tests/*`. (`tools/mock-ipns-routing` is a standalone npm project built with its own `npm install`/`npm run build`, plus `@cipherbox/mock-ipns-routing` name; `landing/` uses `npm ci` separately.)
+- **apps:** api (`@cipherbox/api`), web (`@cipherbox/web`), desktop (`@cipherbox/desktop`), tee-worker (`cipherbox-tee-worker`).
+- **packages:** api-client, core, crypto, sdk, sdk-core (all `@cipherbox/*`).
+- **tests:** desktop-e2e, e2e, e2e-helpers, load, sdk-e2e, web-e2e (+ `vectors/`, `TESTING_STRATEGY.md`).
+- No `turbo.json` and no `nx.json` — **no Turborepo/Nx.** Build orchestration is explicit `pnpm --filter … build` chains (crypto → core → api-client → sdk-core → sdk, then api/web) repeated across CI jobs and Dockerfiles. Root scripts: `build` = `pnpm -r run build`; `typecheck` is a hand-ordered filter chain; `test` = `pnpm --parallel -r run test`.
+
+### 9.2 Rust workspace (`/Cargo.toml`)
+`resolver = "2"`, members: `crates/crypto`, `crates/core`, `crates/api-client`, `crates/fuse`, `crates/sdk`, `apps/desktop/src-tauri`. Workspace deps centralize crypto/serde/tokio/reqwest etc. `[patch.crates-io]` vendors a patched `fuser` at `apps/desktop/src-tauri/vendor/fuser` (loop-read for FUSE-T socket). Root `Cargo.lock` is committed and load-bearing for release-please sync.
+
+### 9.3 Version pinning
+- **Node:** `node-version: '22'` hard-coded in every workflow (`ci.yml`, e2e, deploy, etc.). No `.nvmrc` and no `engines` field in any package.json. Dockerfiles: api `node:22-alpine`, tee-worker `node:20-alpine` (inconsistent), mock-ipns `node:22-alpine`.
+- **pnpm:** `packageManager: "pnpm@10.33.0"` in root package.json; `pnpm/action-setup@v6.0.9` (reads packageManager) in CI; Dockerfiles `corepack prepare pnpm@10` (api/tee) / `pnpm@latest` (mock-ipns).
+- **Rust:** `apps/desktop/src-tauri/rust-toolchain.toml` pins `channel = "1.88"`. **However every CI/deploy job installs `rustup default stable`** (ci.yml cargo-* jobs, desktop-e2e, deploy-staging, desktop-staging-release, cargo-lock-release-sync) — so CI effectively uses stable, not the pinned 1.88, except where cargo auto-reads the toolchain file. No root `rust-toolchain.toml`.
+
+### 9.4 Caching strategy in CI
+- **Node/pnpm:** `actions/setup-node` with `cache: 'pnpm'` (keyed on `pnpm-lock.yaml`) in all Node jobs; installs via `pnpm install --frozen-lockfile`. `landing` and `deploy-landing.yml` use `cache: 'npm'` with `cache-dependency-path: landing/package-lock.json`.
+- **Cargo:** `actions/cache@55cc83…` on `~/.cargo/registry`, `~/.cargo/git`, and a target dir. Keys are per-OS+`hashFiles('Cargo.lock')` (ci.yml, desktop-e2e use root `Cargo.lock` and `target/`) or per-OS+`hashFiles('apps/desktop/src-tauri/Cargo.lock')` with `apps/desktop/src-tauri/target` (deploy-staging, desktop-staging-release). `restore-keys` fall back to `&lt;os&gt;-cargo-`. `cargo-llvm-cov` is `cargo install --locked` (uncached) in `ci.yml` `cargo-linux`.
+- **Coverage artifact:** `ci.yml` `test` uploads `coverage-lcov` (7-day retention) consumed by `codecov-base.yml` on main.
+
+---
+
+## Key file path index
+- Workflows: `/.github/workflows/{ci,ci-e2e,web-e2e,desktop-e2e,release-please,pr-release-preview,release-gate,cargo-lock-release-sync,tag-staging,deploy-staging,desktop-staging-release,deploy-landing,load-test,pr-title,zizmor,codecov-base}.yml`
+- Release: `/release-please-config.json`, `/.release-please-manifest.json`, `/CLAUDE.md` (Release Automation Rules), `/.github/scripts/pr-release-preview.js` (referenced; not read here)
+- Docker: `/docker/docker-compose{,.staging}.yml`, `/docker/{Caddyfile,alloy-config.river}`, `/docker/ipfs-init/001-provide-strategy.sh`, `/docker/grafana/{dashboards,alerts,scripts}`, `/apps/{api,tee-worker}/Dockerfile`, `/apps/tee-worker/docker-compose{,.phala}.yml`, `/tools/mock-ipns-routing/Dockerfile`
+- Config: `/pnpm-workspace.yaml`, `/Cargo.toml`, `/package.json`, `/apps/desktop/src-tauri/rust-toolchain.toml`, `/.coderabbit.yaml`, `/.github/zizmor.yml`, `/commitlint.config.js`, `/render.yaml`, `/codecov.yml`
+- Scripts/hooks: `/scripts/*`, `/.husky/*`</result>
+<usage><subagent_tokens>136032</subagent_tokens><tool_uses>42</tool_uses><duration_ms>350039</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>byzksu6hw</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/byzksu6hw.output</output-file>
+<status>completed</status>
+<summary>Background command "Retry signed commit in background with longer timeout" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b9ksn85gv</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/b9ksn85gv.output</output-file>
+<status>completed</status>
+<summary>Background command "Retry signed commit with 300s window" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+I'm AFK, just commit with no-verify
+
+---
+
+great stuff - now how do we go about handling this whole thing? what are the steps to be taken to start implementing this plan?
+
+---
+
+main is currently unreleased and contains a bunch of v1.1+ code that will be superceded by the current v2 spec. the latest released code was commit https://github.com/FSM1/cipher-box/commit/07376d0b6378551814ab93d5bdb5a1c8730ec384
+
+The v1 branch can be created from that commit.
+
+Also, is there any benefit to utilizing GSD for the execution rather than leaning in to the current skills repo?
+
+---
+
+alright, you have my go-ahead for steps 0->1

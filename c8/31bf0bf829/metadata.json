@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "c831bf0bf829",
+  "strategy": "manual-commit",
+  "branch": "chore/v2-freeze-handover",
+  "checkpoints_count": 7,
+  "files_touched": [
+    ".github/scripts/pr-release-preview.js",
+    ".github/scripts/release-constants.js",
+    ".github/workflows/cargo-lock-release-sync.yml",
+    ".github/workflows/ci-e2e.yml",
+    ".github/workflows/pr-release-preview.yml",
+    ".github/workflows/release-gate.yml",
+    ".github/workflows/release-please.yml",
+    ".github/zizmor.yml",
+    ".release-please-manifest.json",
+    "CLAUDE.md",
+    "docs/DEPLOYMENT.md",
+    "release-please-config.json"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c8/31bf0bf829/0/metadata.json",
+      "transcript": "/c8/31bf0bf829/0/full.jsonl",
+      "compact_transcript": "/c8/31bf0bf829/0/transcript.jsonl",
+      "content_hash": "/c8/31bf0bf829/0/content_hash.txt",
+      "prompt": "/c8/31bf0bf829/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 156,
+    "cache_creation_tokens": 335016,
+    "cache_read_tokens": 11967933,
+    "output_tokens": 81376,
+    "api_call_count": 78
+  }
+}
