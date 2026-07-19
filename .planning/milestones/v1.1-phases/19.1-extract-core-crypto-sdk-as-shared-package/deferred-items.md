@@ -1,1 +1,0 @@
-- DTS circular build dependency: @cipherbox/crypto re-exports from @cipherbox/core, and core imports from crypto. When either package's dist/index.d.ts is missing, the entire DTS chain fails. Clean monorepo builds require a workaround (build crypto without DTS first, then core, then crypto with DTS). Not caused by Plan 04.
