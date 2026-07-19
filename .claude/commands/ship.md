@@ -71,7 +71,7 @@ Triage every finding with the three-way operating rule. Re-run until the in-scop
 ### 6. Ship
 
 - **Create the PR as a DRAFT** (`env -u GITHUB_TOKEN gh pr create --draft ...`) with a conventional, paren-free title. Drafting defers CodeRabbit's PR review until the branch is settled — mark ready only when you're done pushing.
-- Write the PR body to a temp file (escape `#NN`, end with the Claude Code attribution line) and set it at create time or via `gh api -X PATCH`.
+- Write the PR body to a temp file (escape `#NN`; **no** Claude session link or "Generated with Claude Code" footer) and set it at create time or via `gh api -X PATCH`.
 - Push with the sandbox disabled.
 - When the branch is settled: `env -u GITHUB_TOKEN gh pr ready <N>`.
 
