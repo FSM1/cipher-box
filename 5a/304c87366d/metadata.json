@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "5a304c87366d",
+  "strategy": "manual-commit",
+  "branch": "chore/v2-freeze-handover",
+  "checkpoints_count": 7,
+  "files_touched": [
+    "CLAUDE.md",
+    "CONTEXT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/5a/304c87366d/0/metadata.json",
+      "transcript": "/5a/304c87366d/0/full.jsonl",
+      "compact_transcript": "/5a/304c87366d/0/transcript.jsonl",
+      "content_hash": "/5a/304c87366d/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 16,
+    "cache_creation_tokens": 14797,
+    "cache_read_tokens": 1809977,
+    "output_tokens": 7254,
+    "api_call_count": 8
+  }
+}
