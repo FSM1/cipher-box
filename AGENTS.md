@@ -2,128 +2,127 @@
 
 ## Project Context
 
-CipherBox is a **technology demonstrator** for privacy-first encrypted cloud storage using IPFS/IPNS and Web3Auth. It is not a commercial product.
+CipherBox is a privacy-first, zero-knowledge E2EE personal cloud storage system on IPFS/IPNS. The repo is mid-rewrite: **v2 is being built on `main`** against the blueprint corpus below; v1 is frozen on branch `v1` (tag `v1-freeze`) and receives no changes.
 
-## Documentation
+## Documentation Structure
 
-The single source of truth for project documentation is the `docs/` folder:
+The normative source of truth for the v2 build:
 
-| Document                              | Purpose                                  |
-| ------------------------------------- | ---------------------------------------- |
-| `docs/ARCHITECTURE.md`                | System architecture and design           |
-| `docs/AUTHENTICATION_ARCHITECTURE.md` | Auth flow, Web3Auth integration          |
-| `docs/FILESYSTEM_SPECIFICATION.md`    | Encrypted filesystem, IPFS/IPNS metadata |
-| `docs/DATABASE_EVOLUTION_PROTOCOL.md` | Migration discipline, TypeORM rules      |
-| `docs/METADATA_SCHEMAS.md`            | All metadata object schemas              |
-| `docs/METADATA_EVOLUTION_PROTOCOL.md` | Metadata versioning and migration        |
-| `docs/CAPACITY.md`                    | Storage limits and capacity planning     |
-| `docs/VAULT_EXPORT_FORMAT.md`         | Vault export/import format specification |
-| `docs/DEVELOPMENT.md`                 | Local dev setup, environment, workflow   |
+| Document                  | Purpose                                                       |
+| ------------------------- | ------------------------------------------------------------- |
+| `CONTEXT.md`              | The v2 ubiquitous language — use these terms, exactly         |
+| `blueprint/core.md`       | `crates/core` — wire formats, crypto, KDF catalog, KAT regime |
+| `blueprint/engine.md`     | `crates/engine` — the one stateful brain, seam traits, gates  |
+| `blueprint/api.md`        | API residual surface, registry, mailbox, republisher          |
+| `blueprint/web-client.md` | WASM hosting, tab leadership, `packages/client`, `apps/web`   |
+| `blueprint/desktop.md`    | FS projection, host adapters, Tauri shell                     |
+| `blueprint/testing.md`    | Suite map, CI gates, coverage policy                          |
+| `blueprint/deploy.md`     | Freeze mechanics, release management, staging pipeline        |
+
+The as-built v1 spec corpus, ADRs, and all design-decision history live in [FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next) (wayfinder map issue 1 indexes every decision). The `docs/` folder is v1 legacy — being rewritten during the build; trust `blueprint/` when they conflict.
 
 ## Terminology Standards
 
-Always use consistent terminology:
-
-| Correct                   | Avoid                                              |
-| ------------------------- | -------------------------------------------------- |
-| `publicKey`               | `pubkey`, `user_pubkey`, `ownerPublicKey`          |
-| `privateKey`              | `privkey`, `user_private_key`                      |
-| `rootFolderKey`           | `rootKey`, `root_folder_key`                       |
-| `ipnsName`                | IPNS entry (for identifier)                        |
-| `ipnsRecord`              | IPNS entry (for data structure)                    |
-| `folderKey`               | `subfolderKey` (unless specifically for subfolder) |
-| `fileKey`                 | `file_key`                                         |
-| `keyEpoch`                | `epoch`, `key_epoch`                               |
-| `encryptedIpnsPrivateKey` | `encrypted_ipns_key`, `ipns_key_encrypted`         |
-| `teePublicKey`            | `tee_pubkey`, `TEE_public_key`                     |
+Use the v2 ubiquitous language defined in `CONTEXT.md` — every domain term (scope, epoch, ascent link, grant blob, adoption gate, floor law, eager set, …) has exactly one name there. General conventions: `publicKey`/`privateKey`/`ipnsName`/`ipnsRecord` spelled out in full camelCase for API fields, snake_case for database columns.
 
 ## Critical Security Rules
 
-1. **Never** store `privateKey` in localStorage/sessionStorage
-2. **Never** log sensitive keys
-3. **Never** send unencrypted keys to the server
-4. **Always** use ECIES for key wrapping
-5. **Always** use AES-256-GCM for content encryption
-6. The server NEVER has access to plaintext or unencrypted keys
-7. **Always** encrypt `ipnsPrivateKey` with TEE public key before sending for republishing
-8. TEE decrypts IPNS keys in hardware only, signs, and immediately discards
+1. **Never** store `privateKey` or any seed in localStorage/sessionStorage
+2. **Never** log sensitive keys or seeds
+3. **Never** send unencrypted keys to the server — the server is zero-knowledge and NEVER sees plaintext or unencrypted keys
+4. **All crypto lives in `crates/core`** — TypeScript has no codec or crypto of its own; never implement crypto in TS
+5. Primitives are fixed by `blueprint/core.md`: XChaCha20-Poly1305 sealing, BLAKE3 tree KDF, X25519 + HPKE key wrapping, Ed25519/secp256k1 signing — no key derives outside the frozen KDF edge catalog
+6. Every resolved record passes the adoption gate; a failure is a fail-closed trust violation, never mere staleness
+7. Clear sensitive material from memory after use (zeroize at the terminal owner only — a callee must not zero caller-owned buffers)
 
-## API Development Workflow
+## API Contract and Clients
 
-When working on `apps/api` code:
-
-1. **After modifying API endpoints, DTOs, or controllers**, regenerate the API client:
-
-   ```bash
-   pnpm api:generate
-   ```
-
-   This generates the OpenAPI spec, regenerates the typed client in `@cipherbox/api-client`, builds the package, and runs lint fixes.
-
-2. **Always run `pnpm api:generate` before completing a feature** that touches the API to ensure type safety across the monorepo.
-
-3. **Commit the regenerated client files** (`packages/api-client/src/generated/` and `packages/api-client/src/models/`) along with your API changes.
-
-## Dependency Bootstrapping
-
-- Agents should treat missing workspace dependencies as routine setup, not a user decision point.
-- If validation, code generation, builds, or tests fail because dependencies are missing (`node_modules` absent, `jest`/`tsup`/`tsc` not found, workspace packages unavailable), agents should proactively run the appropriate install command from the repo root before asking the user anything.
-- For this monorepo, default to:
-
-  ```bash
-  pnpm install
-  ```
-
-- After installing, run the repo-wide build when downstream tests or packages depend on built workspace outputs:
-
-  ```bash
-  pnpm build
-  ```
-
-- If the full repo build is unnecessarily heavy for the task, agents should at minimum build the shared `/packages` workspace outputs required by the failing command before retrying it.
-- After installing/building, retry the command that was previously blocked.
-- If package-manager security prompts block native/build scripts, agents should surface that clearly and then request user guidance only if approval is actually required to continue.
+There are **no generated API clients** and no codegen loop. The engine contains the single hand-written Rust API client; the NestJS API's OpenAPI document is a committed docs artifact, not a build input. The contract is enforced by the live contract-test suite (the sdk-e2e descendant) running the real client against a real API instance on every PR — see `blueprint/testing.md`.
 
 ## Code Generation Guidelines
 
-1. Use TypeScript for all JavaScript code
-2. Use `Uint8Array` for binary data, not strings
-3. Use Web Crypto API for browser encryption
-4. Use camelCase for API fields, snake_case for database columns
-5. Include proper error handling for crypto operations
-6. Clear sensitive data from memory after use
+1. All engine, codec, and crypto logic is Rust (`crates/core`, `crates/engine`); TypeScript exists only in `packages/client` (WASM wrapper, browser seams) and `apps/web` (React UI)
+2. Use `Uint8Array`/`Vec<u8>` for binary data, not strings
+3. Use camelCase for API fields, snake_case for database columns
+4. Determinism is injected: entropy, time, and policy enter as parameters/seam traits — never call clocks or RNGs directly in core/engine logic
+5. Every suite must block a merge in a named CI gate the day it lands (`blueprint/testing.md` law 1); assert behavior, never source text
 
-## Architecture Decisions
+## Architecture Pillars
 
-- **Auth:** Web3Auth for key derivation, CipherBox backend for tokens
-- **Storage:** IPFS via Kubo for files, IPNS for metadata (all relayed via CipherBox API)
-- **Encryption:** Client-side only, server is zero-knowledge
-- **Sync:** IPNS polling (30s interval), no push infrastructure
-- **Desktop:** FUSE mount for transparent file access
-- **TEE Republishing:** Phala Cloud CVM for automatic IPNS republishing every 6 hours
-- **Key Epochs:** TEE public keys rotate with 4-week grace period for seamless migration
+- **Auth:** Web3Auth key derivation; challenge-signature login; short-lived JWT + rotating refresh
+- **Storage:** IPFS content, IPNS metadata — the network is canonical; clients verify records cryptographically; CipherBox infra (Kubo, someguy) is accelerator-only and the API never serves records
+- **Keys:** seeded per-scope derivation with key-regression epochs; rotation = O(1) root cut + lazy wave (`CONTEXT.md`)
+- **One Rust core:** desktop links it natively, web loads it as WASM in a worker; one implementation, one KAT set
+- **Sync:** pull-only focus-window polling, cache-first, offline op queue; no push in v2.0 (seam ready)
+- **Desktop:** Tauri + FUSE mount (FUSE-T SMB on macOS, libfuse3 on Linux, WinFsp on Windows)
+- **No TEE:** the republisher is a keyless re-PUT module inside the API; client-signed 90-day EOLs
 
-## Out of Scope (v1.0)
+## Out of Scope
 
-Do not implement or suggest implementations for:
+- Billing/payments, mobile apps, real-time collaborative editing, team accounts
+- Vault import (cut in v2), client-side search (deferred, designed-for)
+- Executing anything against the frozen `v1` branch
 
-- Billing/payments
-- File versioning
-- File/folder sharing
-- Mobile apps
-- Search/indexing
-- Collaborative editing
-- Team accounts
+## Verification with MCP Tools
+
+### Puppeteer MCP Verification (REQUIRED)
+
+**ALWAYS attempt to verify application changes using Puppeteer MCP** when it is available. This ensures implemented features work correctly at runtime.
+
+**When to use Puppeteer MCP:**
+
+- After implementing UI components
+- After modifying styles or layouts
+- After adding new pages or routes
+- After any user-facing changes
+
+**Verification workflow:**
+
+```typescript
+// 1. Navigate to the app
+await mcp__puppeteer__puppeteer_navigate({ url: 'http://localhost:5173' });
+
+// 2. Capture screenshot for visual verification
+await mcp__puppeteer__puppeteer_screenshot({ name: 'verification' });
+
+// 3. Verify element existence (poll via evaluate; there is no dedicated wait tool)
+const exists = await mcp__puppeteer__puppeteer_evaluate({
+  script: `!!document.querySelector('.expected-element')`,
+});
+
+// 4. Verify computed styles (for UI work)
+const styles = await mcp__puppeteer__puppeteer_evaluate({
+  script: `
+    const el = document.querySelector('.target');
+    const s = getComputedStyle(el);
+    JSON.stringify({ backgroundColor: s.backgroundColor, color: s.color });
+  `,
+});
+
+// 5. Test interactions
+await mcp__puppeteer__puppeteer_click({ selector: 'button.action' });
+```
+
+**If Puppeteer MCP is not available:**
+
+- Document what needs human verification
+- Provide manual test steps
+- Flag items in VERIFICATION.md
+
+### Pencil Design Files
+
+Pencil design files exist at `designs/*.pen` (with `designs/DESIGN.md`) but are not actively maintained right now. If design specs are needed, parse the `.pen` file directly — no Pencil MCP server is configured.
 
 ## Git Workflow
 
-**Branch Protection Rules:**
+### Branch Protection Rules
 
 - **NEVER push directly to `main` branch** - all changes must go through feature branches and PRs
 - Create feature branches with descriptive names (e.g., `feat/add-auth`, `fix/ipns-publish`)
 - All commits should be made on feature branches first
+- Merge to main only via pull requests
 
-**Branch Naming:**
+### Branch Naming
 
 - `feat/` - New features
 - `fix/` - Bug fixes
@@ -131,9 +130,9 @@ Do not implement or suggest implementations for:
 - `refactor/` - Code refactoring
 - `chore/` - Maintenance tasks
 
-**Commit Messages:**
+### Commit Messages
 
-Commits must follow the [Conventional Commits](https://www.conventionalcommits.org/) format. Enforced by commitlint via a husky `commit-msg` hook.
+Commits must follow the [Conventional Commits](https://www.conventionalcommits.org/) format:
 
 ```text
 type(optional-scope): description
@@ -141,22 +140,41 @@ type(optional-scope): description
 [optional body]
 ```
 
-Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Any scope string is allowed (e.g., `feat(api): add health endpoint`). A custom commitlint rule additionally rejects parenthesized text in the subject line (it breaks Release Please parsing).
 
-Commitlint setup details:
+Enforcement: commitlint is configured via `commitlint.config.js`, and PR titles are validated in CI by `.github/workflows/pr-title.yml`. Note that the husky `commit-msg` hook was replaced by an Entire CLI wrapper and currently does not run commitlint locally — follow the format regardless, since CI will reject non-conforming PR titles.
 
-- `commitlint.config.js` extends `@commitlint/config-conventional`.
-- A custom `subject-no-parens` rule rejects parenthesized text in the commit subject because Release Please can misparse it as a malformed scope and silently skip the commit.
-- The husky `commit-msg` hook enforces these rules locally before commits are created.
+### Releases & Versioning
 
-**Releases & Versioning:**
+The v2 release scheme (normative: `blueprint/deploy.md` in [FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next)) — one product version, one release train:
 
-- All packages share a single unified version (tracked in `.release-please-manifest.json`)
-- [Release Please](https://github.com/googleapis/release-please) automates changelog generation, version bumping, and GitHub Releases
-- Version bumps propagate to all `package.json` files, `Cargo.toml`, and `tauri.conf.json` via `release-please-config.json`
+- The repo releases as a single product `vX.Y.Z` (starting at `v2.0.0`). One release-please component (root, `include-component-in-tag: false`), one CHANGELOG. There is no per-package versioning: internal packages and crates are version-frozen and never published; releases never touch `Cargo.toml`/`Cargo.lock`.
+- Version surfaces are exactly two files: root `package.json` (manifest source) and `apps/desktop/src-tauri/tauri.conf.json` (via `extra-files`).
+- `release-please.yml` is **dormant during the v2 build** (dispatch-only). Re-engage by restoring its `push: main` trigger when the first v2.0.0 release candidate is ready.
+- The release path writes nothing to PR branches. The v1 preview-bot (`pr-release-preview.yml`), `release-gate.yml`, and `cargo-lock-release-sync.yml` are deleted — do not resurrect the pattern of bot commits on PR branches.
+- Staging deploys are triggered by `staging-*` tags via `tag-staging.yml` (manual dispatch → release-tag assertion → e2e gates → `staging-approval` → tag → `deploy-staging.yml`). Pre-v2.0.0 staging deploys of WIP v2 go via `workflow_dispatch` of `deploy-staging.yml` at a `main` SHA.
+- v1 is frozen: branch `v1` / tag `v1-freeze` at the last released state (`07376d0b`, cipher-box-v0.45.1). No new v1 releases; existing `staging-*` tags remain self-contained v1 redeploys.
 
-## Database Migration Discipline
+## Developer Profile
 
-- Every new `@Entity()` MUST have a `CREATE TABLE` migration with `IF NOT EXISTS`
-- `synchronize: true` in dev/test hides missing migrations
-- Full protocol: `docs/DATABASE_EVOLUTION_PROTOCOL.md`
+| Dimension      | Rating            | Confidence |
+| -------------- | ----------------- | ---------- |
+| Communication  | terse-direct      | HIGH       |
+| Decisions      | fast-intuitive    | HIGH       |
+| Explanations   | concise           | MEDIUM     |
+| Debugging      | hypothesis-driven | MEDIUM     |
+| UX Philosophy  | pragmatic         | LOW        |
+| Vendor Choices | pragmatic-fast    | MEDIUM     |
+| Frustrations   | scope-creep       | MEDIUM     |
+| Learning       | self-directed     | MEDIUM     |
+
+**Directives:**
+
+- **Communication:** Keep responses brief and action-oriented; execute stated requests directly without preamble. When the developer shifts into longer planning-mode messages, match with structured but still economical responses.
+- **Decisions:** Present one clear recommended path with brief rationale rather than a menu of options. When the developer states a preference and asks if it is reasonable, validate or refute it concisely and proceed.
+- **Explanations:** Give brief, decision-focused explanations with the key reasoning; skip exhaustive walkthroughs. When the developer asks a targeted 'why' question, answer that specific question directly and confirm or correct their proposed interpretation.
+- **Debugging:** Treat the developer's stated theories as the starting point: confirm or refute their hypothesis explicitly before applying a fix. Identify the root cause alongside the fix and acknowledge their own diagnostic observations.
+- **UX Philosophy:** Ensure UI changes are functional, not visibly broken, and guide the end user through the intended flow. Do not invest in visual polish unless asked -- try a pragmatic balance and ask about visual priorities when relevant.
+- **Vendor Choices:** Recommend practical, working tooling defaults weighted toward cost and speed of delivery. Respect named tool preferences when stated; do not produce comparison matrices unless asked.
+- **Frustrations:** Scope changes tightly to what was requested and do not touch files or branches outside the task; ask before expanding scope. Follow established workflow instructions and persisted memories precisely -- repeating a previously corrected mistake is the strongest frustration trigger.
+- **Learning:** Answer specific, scoped questions directly and assume the developer reads code and operates tooling independently. Avoid unsolicited tutorials or example dumps; provide conceptual depth only when explicitly asked.
