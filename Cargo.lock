@@ -612,6 +612,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cipherbox-contract"
+version = "0.0.0"
+dependencies = [
+ "cipherbox-engine",
+ "getrandom 0.2.17",
+ "reqwest 0.13.4",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "cipherbox-core"
 version = "0.0.0"
 dependencies = [
@@ -655,10 +666,13 @@ dependencies = [
 name = "cipherbox-engine"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "cipherbox-core",
  "cipherbox-engine",
  "futures-channel",
  "futures-core",
+ "serde",
+ "serde_json",
  "zeroize",
 ]
 

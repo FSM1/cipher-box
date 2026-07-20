@@ -15,9 +15,12 @@ publish.workspace = true
 test-kit = []
 
 [dependencies]
+base64.workspace = true
 cipherbox-core.workspace = true
 futures-channel.workspace = true
 futures-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]

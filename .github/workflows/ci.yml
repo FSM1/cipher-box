@@ -1,9 +1,9 @@
 # v2 PR gate (blueprint/testing.md). Jobs cover what exists: the cargo
-# workspace (incl. the core KAT manifest job, native + WASM) and the TS
-# workspace stubs. The remaining PR-gate suites (packages/client browser
-# suite, contract suite, Windows adapter tests, migration drift, e2e smoke
-# slice) land with their code and must block merges in a named job the day
-# they land (law 1).
+# workspace (incl. the core KAT manifest job, native + WASM), the TS
+# workspace stubs, and the live contract suite against the CI stack. The
+# remaining PR-gate suites (packages/client browser suite, Windows adapter
+# tests, e2e smoke slice) land with their code and must block merges in a
+# named job the day they land (law 1).
 name: CI
 
 on:
@@ -288,12 +288,14 @@ jobs:
 
       # The desktop shell is excluded from the workspace-wide jobs: compiling
       # Tauri needs webkit2gtk system deps on Linux, and the desktop-build job
-      # owns its check/clippy/build on all three platforms.
+      # owns its check/clippy/build on all three platforms. The contract crate
+      # is excluded from the test run below (its tests need the live API stack)
+      # and owns its own lint in the contract-suite job.
       - name: Cargo clippy
-        run: cargo clippy --workspace --exclude cipherbox-desktop --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets -- -D warnings
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop
+        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract
 
   engine:
     name: Engine Tests
@@ -431,10 +433,10 @@ jobs:
           restore-keys: macos-cargo-
 
       - name: Cargo check (workspace)
-        run: cargo check --workspace --exclude cipherbox-desktop --all-targets
+        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop
+        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract
 
   cargo-windows:
     name: Cargo Check & Test (Windows)
@@ -458,10 +460,145 @@ jobs:
           restore-keys: windows-cargo-
 
       - name: Cargo check (workspace)
-        run: cargo check --workspace --exclude cipherbox-desktop --all-targets
+        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop
+        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract
+
+  # The live contract suite (blueprint/testing.md "The contract suite"): the
+  # sdk-e2e descendant and the sole contract enforcement. It stands up the CI
+  # stack — Postgres, Kubo, the promoted mock-ipns-routing /routing/v1 store,
+  # and the real NestJS API (a second instance in production mode to assert
+  # test-login is hard-blocked) — then runs the engine's hand-written API
+  # client against it. Contract drift fails a test run, not a grep. Runs
+  # whenever Rust or TS changed (the client is Rust, the API is TS).
+  contract-suite:
+    name: Contract Suite
+    needs: [changes, lint]
+    if: |
+      !failure() && !cancelled() &&
+      (needs.changes.outputs.rust == 'true' || needs.changes.outputs.ts == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: cipherbox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      ipfs:
+        image: ipfs/kubo:v0.42.0
+        ports:
+          - 5001:5001
+          - 8080:8080
+        options: >-
+          --health-cmd "ipfs id"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 30s
+    env:
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: cipherbox_test
+      NODE_ENV: test
+      JWT_SECRET: contract-suite-jwt-secret
+      # The client-presented secret must equal the API's TEST_LOGIN_SECRET.
+      TEST_LOGIN_SECRET: contract-suite-secret
+      CONTRACT_API_URL: http://localhost:3000
+      CONTRACT_API_PROD_URL: http://localhost:3100
+      CONTRACT_TEST_LOGIN_SECRET: contract-suite-secret
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: linux-cargo-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The contract crate is excluded from the general cargo jobs, so lint it
+      # here.
+      - name: Cargo fmt and clippy (contract crate)
+        run: |
+          cargo fmt -p cipherbox-contract --check
+          cargo clippy -p cipherbox-contract --all-targets -- -D warnings
+
+      # The promoted mock-ipns-routing tool is the hermetic /routing/v1 record
+      # store (blueprint/testing.md). It is not a pnpm workspace member, so it
+      # installs and builds with its own npm.
+      - name: Start the mock /routing/v1 record store
+        run: |
+          cd tools/mock-ipns-routing
+          npm ci
+          npm run build
+          node dist/index.js > /tmp/mock-ipns-routing.log 2>&1 &
+          curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://localhost:3001/health \
+            || { echo '--- mock-ipns-routing log ---'; cat /tmp/mock-ipns-routing.log; exit 1; }
+
+      - name: Apply migrations to a fresh database
+        run: pnpm --filter @cipherbox/api migration:run
+
+      - name: Build the API
+        run: pnpm --filter @cipherbox/api build
+
+      - name: Boot the API in test and production modes
+        run: |
+          node apps/api/dist/main.js > /tmp/api-test.log 2>&1 &
+          NODE_ENV=production PORT=3100 node apps/api/dist/main.js > /tmp/api-prod.log 2>&1 &
+          curl -fsS --retry 60 --retry-connrefused --retry-delay 1 http://localhost:3000/health \
+            || { echo '--- test-mode API log ---'; cat /tmp/api-test.log; exit 1; }
+          curl -fsS --retry 60 --retry-connrefused --retry-delay 1 http://localhost:3100/health \
+            || { echo '--- production-mode API log ---'; cat /tmp/api-prod.log; exit 1; }
+
+      - name: Run the live contract suite
+        run: cargo test -p cipherbox-contract
+
+  # Single always-reporting gate for the contract suite, mirroring
+  # desktop-build-result: branch protection requires this stable context so a
+  # PR that touches neither Rust nor TS (the suite is skipped) is not blocked
+  # forever, while a real contract-suite failure fails this gate.
+  contract-suite-result:
+    name: Contract Suite Result
+    needs: contract-suite
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require the contract suite to pass or be skipped
+        env:
+          CONTRACT_SUITE_RESULT: ${{ needs.contract-suite.result }}
+        run: |
+          echo "contract-suite result: ${CONTRACT_SUITE_RESULT}"
+          if [ "${CONTRACT_SUITE_RESULT}" = 'failure' ] || [ "${CONTRACT_SUITE_RESULT}" = 'cancelled' ]; then
+            echo "::error::contract-suite ${CONTRACT_SUITE_RESULT}"
+            exit 1
+          fi
 
   desktop-build:
     name: Desktop Build
