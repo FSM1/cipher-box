@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "e11506887da6",
+  "strategy": "manual-commit",
+  "branch": "chore/v2-workspace-scaffold",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".husky/pre-commit"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e1/1506887da6/0/metadata.json",
+      "transcript": "/e1/1506887da6/0/full.jsonl",
+      "compact_transcript": "/e1/1506887da6/0/transcript.jsonl",
+      "content_hash": "/e1/1506887da6/0/content_hash.txt",
+      "prompt": "/e1/1506887da6/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 404,
+    "cache_creation_tokens": 664708,
+    "cache_read_tokens": 30665088,
+    "output_tokens": 178290,
+    "api_call_count": 202
+  }
+}

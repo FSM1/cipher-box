@@ -1,0 +1,102 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "e11506887da6",
+  "session_id": "7500f1a6-27cc-4e96-bb34-e849cae7bfcd",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-20T00:03:17.992547Z",
+  "branch": "chore/v2-workspace-scaffold",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".husky/pre-commit"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "a0aa6b20631c",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 404,
+    "cache_creation_tokens": 664708,
+    "cache_read_tokens": 30665088,
+    "output_tokens": 178290,
+    "api_call_count": 202
+  },
+  "session_metrics": {
+    "turn_count": 2
+  },
+  "summary": {
+    "intent": "Continue the CipherBox v2 wayfinder effort: close out the final blueprint ticket (deployment/infra), then use the resulting doctrine to execute the v1 freeze, decide GSD-vs-skills for the rewrite, clean up dead tooling, adopt an AGENTS.md source-of-truth pattern, rewrite the README for v2, and finally scaffold the v2 workspace by removing v1 code per the blueprint's disposition tables.",
+    "outcome": "Merged PR #616 in cipher-box carrying the v1 freeze handover (dead release automation removed, toolchain single-sourced, GSD artifacts and .claude GSD install removed with /ship adapted and kept, blueprint corpus adopted, AGENTS.md made source of truth, README rewritten, landing site converted npm→pnpm), unblocked merge by removing two stale required status checks from main branch protection, and began v2 workspace scaffolding by deleting v1 code per deploy.md's disposition tables (commit in progress at transcript end).",
+    "learnings": {
+      "repo": [
+        "cipher-box release doctrine for v2: single product version vX.Y.Z from 2.0.0, single-component release-please, crates version-frozen at 0.0.0 so releases never touch Cargo.lock, and the release path must never write bot commits to PR branches again",
+        "v1 freeze mechanics: branch `v1` + tag `v1-freeze` cut from the last *released* commit (07376d0b), not main HEAD, since main carried 45 unreleased v1.1+ commits that get discarded entirely",
+        "main's branch protection had required status checks (`Release Preview`, `Verify E2E Passed`) tied to workflows (`pr-release-preview.yml`, `release-gate.yml`) that PR #616 deletes — these must be removed from required checks or PRs hang forever on 'expected — waiting for status update'",
+        "landing/ was genuinely npm-managed (own package-lock.json, deploy-landing.yml ran npm ci) despite render.yaml suggesting otherwise — full conversion to pnpm required `--ignore-workspace` since landing isn't a pnpm workspace member",
+        "repo-local .claude/ GSD install mixes GSD-specific and non-GSD pieces (crypto-privacy-reviewer, resolve-pr-reviews, statusline.cjs, Entire CLI hooks in settings.json are NOT GSD and must be preserved when nuking GSD)",
+        "AGENTS.md source-of-truth pattern: CLAUDE.md becomes just `@AGENTS.md`, letting other harnesses read the same instructions; mirrored from yankey-beats repo (cipher-box-next itself doesn't use this pattern)"
+      ],
+      "code": [
+        {
+          "path": ".github/workflows/release-please.yml",
+          "line": 1,
+          "finding": "Rewritten to be workflow_dispatch-only with a dormancy header comment for the v2 freeze period; kept only app-token, action, and summary steps"
+        },
+        {
+          "path": "release-please-config.json",
+          "line": 1,
+          "finding": "Bootstrapped for dormant v2 single-component mode: manifest version 1.0.0 with release-as pinned to 2.0.0 (safe per the 'never leave release-as equal to manifest version' rule) until first v2.0.0 RC"
+        },
+        {
+          "path": ".github/workflows/deploy-landing.yml",
+          "line": 1,
+          "finding": "Needed conversion from npm ci/npm cache to the repo's standard SHA-pinned pnpm/action-setup + pnpm cache pattern when landing site moved off npm"
+        }
+      ],
+      "workflow": [
+        "When killing a background retry loop to honor a user's 'AFK, just bypass X' instruction, scope the bypass precisely (--no-gpg-sign for signing, but --no-verify only if hooks are also actually the blocker) and explain the distinction back to the user",
+        "Before deleting a tracked file that 'looks GSD-specific,' recover and inspect it (git show HEAD~1:path) since it may contain workflow-agnostic logic worth adapting rather than discarding — user caught this with ship-phase.md",
+        "Validate YAML across many edited workflow files with a Ruby YAML.load fallback when python's yaml module is unavailable and ruby's unsafe_load_file/aliases aren't supported",
+        "zsh aborts an entire compound command on a single unmatched glob (e.g. one rm pattern with no matches) — split glob-bearing commands so partial failures don't kill unrelated cleanup steps in the same line",
+        "When adopting a new doc convention (AGENTS.md as source of truth), grep the whole repo for existing references to the old file before finishing, since stale pointers in live workflow commands (not just docs) can silently keep reading the deprecated path"
+      ]
+    },
+    "friction": [
+      "1Password SSH commit signing repeatedly hung or failed ('failed to fill whole buffer') across multiple retries, forcing background retry loops and eventually an explicit user-authorized --no-gpg-sign bypass",
+      "Stale required GitHub branch-protection status checks (tied to workflows deleted by the very PR under review) blocked merge with an indefinite 'waiting for status update' state, requiring manual protection-rule surgery to unblock",
+      "gh issue view --comments failed due to Projects-classic GraphQL deprecation, requiring a REST API fallback",
+      "Write tool repeatedly errored with 'File has not been read yet' on files being rewritten (release-please.yml, DEPLOYMENT.md, CONTEXT.md), requiring a Read-first workaround",
+      "pnpm import of landing's package-lock.json initially failed against the root workspace and required --ignore-workspace plus a revert of an accidental root lockfile change"
+    ],
+    "open_items": [
+      "Merge decision on PR #616 belonged to the user and CI needed final confirmation before v2 scaffolding could safely begin (resolved during this session — merged)",
+      "Post-merge: scaffold Cargo workspace (workspace.package 0.0.0, publish=false) with stub crates cipherbox-{core,engine,wasm,fuse}, packages/client, apps/api (NestJS stub), apps/web (Vite React stub) — tracked as in-progress tasks at transcript end",
+      "ci.yml needs rewriting into the day-one v2 PR gate (Lint/Typecheck/Test/Build/Cargo×3), retiring dead jobs (api-spec, sdk-e2e, vector-parity, migration-check), and putting e2e/desktop/load workflows dormant; docker compose needs redis/tee-worker dropped; codecov/coderabbit/husky configs need pruning",
+      "After scaffolding: build tracker to be seeded as GitHub issues in a v2 milestone (one issue per PR-sized blueprint slice), build starting with crates/core in dependency order, with FUSE-T hardware gates run early in parallel",
+      "Local .env files were backed up to scratchpad before clearing v1 leftover directories — verify these are still needed/restored appropriately once v2 env conventions are established"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-20T00:02:45.870389Z",
+    "agent_lines": 0,
+    "agent_removed": 1,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 0,
+    "total_lines_changed": 247548,
+    "agent_percentage": 0.00040396205988333576,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 1,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
