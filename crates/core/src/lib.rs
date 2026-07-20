@@ -5,13 +5,5 @@
 
 #![forbid(unsafe_code)]
 
-/// Placeholder identity item; real wire formats and crypto land in later PRs.
-pub const CRATE: &str = "cipherbox-core";
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_name() {
-        assert_eq!(super::CRATE, "cipherbox-core");
-    }
-}
+pub mod codec;
+pub mod error;

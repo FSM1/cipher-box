@@ -1,0 +1,212 @@
+[
+  {
+    "name": "uint-23-in-8bit-form",
+    "hex": "1817",
+    "check": "non-canonical-uint",
+    "class": "trust"
+  },
+  {
+    "name": "uint-255-in-16bit-form",
+    "hex": "1900ff",
+    "check": "non-canonical-uint",
+    "class": "trust"
+  },
+  {
+    "name": "uint-65535-in-32bit-form",
+    "hex": "1a0000ffff",
+    "check": "non-canonical-uint",
+    "class": "trust"
+  },
+  {
+    "name": "uint-4294967295-in-64bit-form",
+    "hex": "1b00000000ffffffff",
+    "check": "non-canonical-uint",
+    "class": "trust"
+  },
+  {
+    "name": "negint-minus-24-in-8bit-form",
+    "hex": "3817",
+    "check": "non-canonical-uint",
+    "class": "trust"
+  },
+  {
+    "name": "bytes-len-3-in-8bit-form",
+    "hex": "5803aabbcc",
+    "check": "non-canonical-length",
+    "class": "trust"
+  },
+  {
+    "name": "text-len-1-in-8bit-form",
+    "hex": "780161",
+    "check": "non-canonical-length",
+    "class": "trust"
+  },
+  {
+    "name": "array-len-3-in-8bit-form",
+    "hex": "9803010203",
+    "check": "non-canonical-length",
+    "class": "trust"
+  },
+  {
+    "name": "map-len-1-in-8bit-form",
+    "hex": "b801616101",
+    "check": "non-canonical-length",
+    "class": "trust"
+  },
+  {
+    "name": "indefinite-bytes",
+    "hex": "5f41aaff",
+    "check": "indefinite-length",
+    "class": "trust"
+  },
+  {
+    "name": "indefinite-text",
+    "hex": "7f6161ff",
+    "check": "indefinite-length",
+    "class": "trust"
+  },
+  {
+    "name": "indefinite-array",
+    "hex": "9f01ff",
+    "check": "indefinite-length",
+    "class": "trust"
+  },
+  {
+    "name": "indefinite-map",
+    "hex": "bf616101ff",
+    "check": "indefinite-length",
+    "class": "trust"
+  },
+  {
+    "name": "map-keys-bytewise-out-of-order",
+    "hex": "a2616201616102",
+    "check": "unsorted-map-keys",
+    "class": "trust"
+  },
+  {
+    "name": "map-keys-length-order-violation",
+    "hex": "a262616101616202",
+    "check": "unsorted-map-keys",
+    "class": "trust"
+  },
+  {
+    "name": "map-duplicate-key",
+    "hex": "a2616101616102",
+    "check": "duplicate-map-key",
+    "class": "trust"
+  },
+  {
+    "name": "empty-input",
+    "hex": "",
+    "check": "truncated",
+    "class": "malformed"
+  },
+  {
+    "name": "uint-head-missing-argument",
+    "hex": "18",
+    "check": "truncated",
+    "class": "malformed"
+  },
+  {
+    "name": "bytes-shorter-than-length",
+    "hex": "44aabb",
+    "check": "truncated",
+    "class": "malformed"
+  },
+  {
+    "name": "array-missing-element",
+    "hex": "8201",
+    "check": "truncated",
+    "class": "malformed"
+  },
+  {
+    "name": "trailing-byte-after-item",
+    "hex": "0100",
+    "check": "trailing-bytes",
+    "class": "malformed"
+  },
+  {
+    "name": "text-invalid-utf8",
+    "hex": "62fffe",
+    "check": "invalid-utf8",
+    "class": "malformed"
+  },
+  {
+    "name": "map-key-unsigned",
+    "hex": "a10102",
+    "check": "invalid-map-key-type",
+    "class": "malformed"
+  },
+  {
+    "name": "tag-42-dag-cbor-cid-link",
+    "hex": "d82a4500010203aa",
+    "check": "tag-forbidden",
+    "class": "malformed"
+  },
+  {
+    "name": "tag-0-datetime",
+    "hex": "c000",
+    "check": "tag-forbidden",
+    "class": "malformed"
+  },
+  {
+    "name": "half-float-aliasing-simple-false",
+    "hex": "f90014",
+    "check": "float-forbidden",
+    "class": "malformed"
+  },
+  {
+    "name": "float32",
+    "hex": "fa47c35000",
+    "check": "float-forbidden",
+    "class": "malformed"
+  },
+  {
+    "name": "float64",
+    "hex": "fb3ff199999999999a",
+    "check": "float-forbidden",
+    "class": "malformed"
+  },
+  {
+    "name": "two-byte-simple-20-not-false",
+    "hex": "f814",
+    "check": "simple-value-forbidden",
+    "class": "malformed"
+  },
+  {
+    "name": "simple-undefined",
+    "hex": "f7",
+    "check": "simple-value-forbidden",
+    "class": "malformed"
+  },
+  {
+    "name": "simple-16-unassigned",
+    "hex": "f0",
+    "check": "simple-value-forbidden",
+    "class": "malformed"
+  },
+  {
+    "name": "uint-ai-28-reserved",
+    "hex": "1c",
+    "check": "reserved-additional-info",
+    "class": "malformed"
+  },
+  {
+    "name": "uint-ai-31-reserved",
+    "hex": "1f",
+    "check": "reserved-additional-info",
+    "class": "malformed"
+  },
+  {
+    "name": "bare-break",
+    "hex": "ff",
+    "check": "unexpected-break",
+    "class": "malformed"
+  },
+  {
+    "name": "array-nesting-129-levels",
+    "hex": "818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818180",
+    "check": "depth-exceeded",
+    "class": "malformed"
+  }
+]

@@ -1,8 +1,9 @@
-# v2 PR gate (blueprint/testing.md). Day-one jobs cover what exists: the
-# stub cargo workspace and the TS workspace stubs. The remaining PR-gate
-# suites (WASM KAT run, packages/client browser suite, contract suite,
-# Windows adapter tests, migration drift, e2e smoke slice) land with their
-# code and must block merges in a named job the day they land (law 1).
+# v2 PR gate (blueprint/testing.md). Jobs cover what exists: the cargo
+# workspace (incl. the core KAT manifest job, native + WASM) and the TS
+# workspace stubs. The remaining PR-gate suites (packages/client browser
+# suite, contract suite, Windows adapter tests, migration drift, e2e smoke
+# slice) land with their code and must block merges in a named job the day
+# they land (law 1).
 name: CI
 
 on:
@@ -161,6 +162,43 @@ jobs:
 
       - name: Cargo test (workspace)
         run: cargo test --workspace
+
+  core-kats:
+    name: Core KATs (native + WASM)
+    needs: [changes, lint]
+    if: |
+      !failure() && !cancelled() &&
+      needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: core-kats-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: core-kats-cargo-
+
+      - name: Add wasm32-wasip1 target
+        run: rustup target add wasm32-wasip1
+
+      - uses: bytecodealliance/actions/wasmtime/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1.1.3
+
+      - name: KAT vectors fresh (committed generator is the only writer)
+        run: |
+          cargo run -p cipherbox-core --example kat_gen
+          git diff --exit-code -- crates/core/kat
+
+      - name: Core suite (native)
+        run: cargo test -p cipherbox-core
+
+      - name: Core suite (WASM, wasm32-wasip1 under wasmtime)
+        run: cargo test -p cipherbox-core --target wasm32-wasip1
 
   cargo-macos:
     name: Cargo Check & Test (macOS)

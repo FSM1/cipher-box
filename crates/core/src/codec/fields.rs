@@ -1,0 +1,189 @@
+//! Unknown-field tolerance (blueprint/core.md, #27 D10): the single decode
+//! tolerance in the profile. Fields a schema does not know are accepted,
+//! ignored for logic, preserved byte-stable, and re-emitted canonically on
+//! rewrite — an old client rewriting under shared write never strips newer
+//! fields.
+//!
+//! Because the decoder admits canonical input only, a preserved raw slice is
+//! canonical by construction, so re-emitting it verbatim keeps the whole
+//! rewrite canonical.
+
+use super::decode::Decoder;
+use super::encode::{MAJOR_MAP, write_head, write_text, write_value};
+use super::value::{Map, canonical_key_cmp};
+use crate::error::{CodecError, Malformed};
+
+/// Fields preserved through a decode the caller's schema did not recognize:
+/// key plus the exact canonical bytes of the value. Ordered canonically.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct UnknownFields {
+    entries: Vec<(String, Vec<u8>)>,
+}
+
+impl UnknownFields {
+    /// Preserved entries in canonical key order.
+    pub fn entries(&self) -> &[(String, Vec<u8>)] {
+        &self.entries
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// Decode a top-level map, splitting entries into known fields (decoded
+/// values, selected by `is_known`) and unknown fields (raw canonical bytes).
+/// Every entry — known or not — passes the full strict profile.
+pub fn decode_map_partial(
+    bytes: &[u8],
+    is_known: impl Fn(&str) -> bool,
+) -> Result<(Map, UnknownFields), CodecError> {
+    let mut d = Decoder::new(bytes);
+    let head = d.read_head()?;
+    if head.major != MAJOR_MAP {
+        return Err(Malformed::UnexpectedType {
+            expected: "map",
+            found: "non-map item",
+        }
+        .into());
+    }
+
+    let mut known = Vec::new();
+    let mut unknown = Vec::new();
+    let mut prev: Option<String> = None;
+    for _ in 0..head.arg {
+        let key = d.read_map_key(prev.as_deref())?;
+        let start = d.pos();
+        // Depth 1: the top-level map is the enclosing item.
+        let value = d.read_value(1)?;
+        if is_known(&key) {
+            known.push((key.clone(), value));
+        } else {
+            unknown.push((key.clone(), bytes[start..d.pos()].to_vec()));
+        }
+        prev = Some(key);
+    }
+    d.expect_end()?;
+    Ok((
+        known.into_iter().collect(),
+        UnknownFields { entries: unknown },
+    ))
+}
+
+/// Canonically re-encode a map from re-built known fields plus preserved
+/// unknown fields: one merged map in canonical key order, unknown values
+/// emitted byte-stable. A key present on both sides is a caller bug and
+/// rejects fail-closed.
+pub fn encode_map_partial(known: &Map, unknown: &UnknownFields) -> Result<Vec<u8>, CodecError> {
+    let mut out = Vec::new();
+    let total = known.len() + unknown.len();
+    write_head(&mut out, MAJOR_MAP, total as u64);
+
+    let mut k = known.entries().iter().peekable();
+    let mut u = unknown.entries.iter().peekable();
+    loop {
+        let take_known = match (k.peek(), u.peek()) {
+            (Some((kk, _)), Some((uk, _))) => match canonical_key_cmp(kk, uk) {
+                core::cmp::Ordering::Less => true,
+                core::cmp::Ordering::Greater => false,
+                core::cmp::Ordering::Equal => {
+                    return Err(Malformed::UnknownFieldCollision { key: kk.clone() }.into());
+                }
+            },
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => break,
+        };
+        if take_known {
+            let (key, value) = k.next().expect("peeked");
+            write_text(&mut out, key);
+            write_value(&mut out, value);
+        } else {
+            let (key, raw) = u.next().expect("peeked");
+            write_text(&mut out, key);
+            out.extend_from_slice(raw);
+        }
+    }
+    Ok(out)
+}
+
+/// Convenience for schema codecs: `true` when `key` is in `known`.
+pub fn known_key_set(known: &'static [&'static str]) -> impl Fn(&str) -> bool {
+    move |key| known.contains(&key)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::{Value, decode, encode};
+
+    fn sample_map() -> Map {
+        let mut m = Map::new();
+        m.insert("v", Value::Unsigned(2));
+        m.insert("id", Value::Bytes(vec![0xaa; 4]));
+        m.insert(
+            "future",
+            Value::Array(vec![Value::Unsigned(1), Value::Null]),
+        );
+        m.insert("zz-later", Value::Text("kept".into()));
+        m
+    }
+
+    #[test]
+    fn unknown_fields_round_trip_byte_stable() {
+        let original = encode(&Value::Map(sample_map()));
+        let (known, unknown) = decode_map_partial(&original, known_key_set(&["v", "id"])).unwrap();
+        assert_eq!(known.len(), 2);
+        assert_eq!(unknown.len(), 2);
+        let reencoded = encode_map_partial(&known, &unknown).unwrap();
+        assert_eq!(reencoded, original, "rewrite must be byte-stable");
+    }
+
+    #[test]
+    fn rewrite_of_known_field_keeps_unknowns_and_canonical_order() {
+        let original = encode(&Value::Map(sample_map()));
+        let (mut known, unknown) =
+            decode_map_partial(&original, known_key_set(&["v", "id"])).unwrap();
+        known.insert("v", Value::Unsigned(3));
+        let rewritten = encode_map_partial(&known, &unknown).unwrap();
+
+        let mut expected = sample_map();
+        expected.insert("v", Value::Unsigned(3));
+        assert_eq!(rewritten, encode(&Value::Map(expected)));
+        // Still strict-profile decodable with everything present.
+        let full = decode(&rewritten).unwrap();
+        let m = full.as_map().unwrap();
+        assert_eq!(m.get("v"), Some(&Value::Unsigned(3)));
+        assert!(m.contains_key("future"));
+        assert!(m.contains_key("zz-later"));
+    }
+
+    #[test]
+    fn collision_between_known_and_unknown_rejects() {
+        let original = encode(&Value::Map(sample_map()));
+        let (mut known, unknown) =
+            decode_map_partial(&original, known_key_set(&["v", "id"])).unwrap();
+        known.insert("future", Value::Unsigned(0));
+        let err = encode_map_partial(&known, &unknown).unwrap_err();
+        assert_eq!(err.check(), "unknown-field-collision");
+    }
+
+    #[test]
+    fn non_map_top_level_rejects() {
+        let bytes = encode(&Value::Unsigned(1));
+        let err = decode_map_partial(&bytes, |_| true).unwrap_err();
+        assert_eq!(err.check(), "unexpected-type");
+    }
+
+    #[test]
+    fn strictness_applies_inside_unknown_values() {
+        // {"a": <non-shortest-form 1>} — the unknown value must still reject.
+        let bytes = [0xa1, 0x61, b'a', 0x18, 0x01];
+        let err = decode_map_partial(&bytes, |_| false).unwrap_err();
+        assert_eq!(err.check(), "non-canonical-uint");
+    }
+}

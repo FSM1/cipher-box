@@ -17,6 +17,8 @@ mod tests {
 
     #[test]
     fn depends_on_core() {
-        assert_eq!(cipherbox_core::CRATE, "cipherbox-core");
+        use cipherbox_core::codec::{Value, decode, encode};
+        let bytes = encode(&Value::Unsigned(1));
+        assert_eq!(decode(&bytes).unwrap(), Value::Unsigned(1));
     }
 }

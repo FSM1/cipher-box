@@ -1,0 +1,48 @@
+[
+  {
+    "name": "all-known",
+    "hex": "a2616101616202",
+    "knownKeys": [
+      "a",
+      "b"
+    ],
+    "expectUnknownCount": 0
+  },
+  {
+    "name": "none-known",
+    "hex": "a2616101616202",
+    "knownKeys": [],
+    "expectUnknownCount": 2
+  },
+  {
+    "name": "interleaved-known-unknown",
+    "hex": "a4616101616241ff6261616178627a7af6",
+    "knownKeys": [
+      "a",
+      "aa"
+    ],
+    "expectUnknownCount": 2
+  },
+  {
+    "name": "unknown-value-nested-map",
+    "hex": "a262696407646d657461a261788201026179617a",
+    "knownKeys": [
+      "id"
+    ],
+    "expectUnknownCount": 1
+  },
+  {
+    "name": "unknown-value-nested-array",
+    "hex": "a2616bf5646c69737483018102f6",
+    "knownKeys": [
+      "k"
+    ],
+    "expectUnknownCount": 1
+  },
+  {
+    "name": "empty-map",
+    "hex": "a0",
+    "knownKeys": [],
+    "expectUnknownCount": 0
+  }
+]
