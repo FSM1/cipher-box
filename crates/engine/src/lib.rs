@@ -30,7 +30,7 @@ pub mod seams;
 #[cfg(feature = "test-kit")]
 pub mod testkit;
 
-pub use entropy::Entropy;
+pub use entropy::{Entropy, EntropyError};
 pub use facade::{
     Command, Engine, EngineError, Event, EventStream, LoginSecret, NodeId, NodeKind, Permission,
     PlaintextContent, Staleness,

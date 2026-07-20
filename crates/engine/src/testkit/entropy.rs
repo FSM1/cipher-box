@@ -1,6 +1,6 @@
 //! Seeded, deterministic entropy for tests.
 
-use crate::entropy::Entropy;
+use crate::entropy::{Entropy, EntropyError};
 
 /// Deterministic entropy from a 64-bit seed (SplitMix64 stream).
 ///
@@ -28,11 +28,12 @@ impl SeededEntropy {
 }
 
 impl Entropy for SeededEntropy {
-    fn fill(&mut self, dest: &mut [u8]) {
+    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
         for chunk in dest.chunks_mut(8) {
             let bytes = self.next_u64().to_le_bytes();
             chunk.copy_from_slice(&bytes[..chunk.len()]);
         }
+        Ok(())
     }
 }
 
@@ -45,8 +46,8 @@ mod tests {
         let mut a = SeededEntropy::new(7);
         let mut b = SeededEntropy::new(7);
         let (mut buf_a, mut buf_b) = ([0u8; 33], [0u8; 33]);
-        a.fill(&mut buf_a);
-        b.fill(&mut buf_b);
+        a.fill(&mut buf_a).expect("seeded entropy never fails");
+        b.fill(&mut buf_b).expect("seeded entropy never fails");
         assert_eq!(buf_a, buf_b);
     }
 
@@ -55,8 +56,8 @@ mod tests {
         let mut a = SeededEntropy::new(1);
         let mut b = SeededEntropy::new(2);
         let (mut buf_a, mut buf_b) = ([0u8; 32], [0u8; 32]);
-        a.fill(&mut buf_a);
-        b.fill(&mut buf_b);
+        a.fill(&mut buf_a).expect("seeded entropy never fails");
+        b.fill(&mut buf_b).expect("seeded entropy never fails");
         assert_ne!(buf_a, buf_b);
     }
 
@@ -64,7 +65,7 @@ mod tests {
     fn fills_non_multiple_of_eight_lengths() {
         let mut e = SeededEntropy::new(9);
         let mut buf = [0u8; 5];
-        e.fill(&mut buf);
+        e.fill(&mut buf).expect("seeded entropy never fails");
         assert_ne!(buf, [0u8; 5], "five bytes should be written");
     }
 }

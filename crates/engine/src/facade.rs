@@ -111,7 +111,11 @@ impl fmt::Debug for LoginSecret {
 /// Payload shapes are scaffold-minimal: opaque byte payloads harden into
 /// typed forms as the owning pipeline slices land, but the variant set is
 /// the surface hosts build against.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is hand-written and prints only the variant name: payloads
+/// carry private user data (plaintext content, names, contact bundles),
+/// and a derived `{:?}` at any diagnostic site would leak it into logs.
+#[derive(Clone, PartialEq, Eq)]
 pub enum Command {
     // --- intent ops (#33 D6: every mutation rides the durable op queue) ---
     /// Create a node under a parent.
@@ -250,6 +254,12 @@ impl Command {
             Command::SiweLogin { .. } => "siweLogin",
             Command::Logout => "logout",
         }
+    }
+}
+
+impl fmt::Debug for Command {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Command({})", self.name())
     }
 }
 
@@ -437,19 +447,21 @@ mod tests {
     }
 
     #[test]
-    fn command_debug_redacts_plaintext_content() {
+    fn command_debug_prints_only_the_variant_name() {
         let command = Command::Create {
             parent: NodeId([0; 16]),
-            name: "notes.txt".into(),
+            name: "vacation-plans.txt".into(),
             kind: NodeKind::File,
             content: Some(PlaintextContent(b"top-secret-plaintext".to_vec())),
         };
         let debug = format!("{command:?}");
-        assert!(
-            !debug.contains("top-secret-plaintext") && !debug.contains("116"),
-            "plaintext bytes must not leak through Debug: {debug}"
-        );
-        assert!(debug.contains("PlaintextContent(<20 bytes>)"));
+        assert_eq!(debug, "Command(create)", "payloads must never leak");
+    }
+
+    #[test]
+    fn plaintext_content_debug_is_redacted() {
+        let content = PlaintextContent(b"top-secret-plaintext".to_vec());
+        assert_eq!(format!("{content:?}"), "PlaintextContent(<20 bytes>)");
     }
 
     #[test]

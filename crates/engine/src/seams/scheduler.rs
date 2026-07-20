@@ -11,8 +11,10 @@ pub struct UnixMillis(pub u64);
 
 impl UnixMillis {
     /// This instant advanced by `duration`, saturating at the maximum.
+    /// Sub-millisecond remainders round **up**, so a non-zero duration
+    /// always advances the instant (a deadline never truncates to "now").
     pub fn saturating_add(self, duration: Duration) -> Self {
-        let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+        let millis = u64::try_from(duration.as_nanos().div_ceil(1_000_000)).unwrap_or(u64::MAX);
         Self(self.0.saturating_add(millis))
     }
 }
@@ -44,4 +46,28 @@ pub trait Scheduler {
     /// context. Fire-and-forget: completion is observed only through the
     /// task's own effects.
     fn spawn(&self, task: BoxedTask);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saturating_add_rounds_sub_millisecond_durations_up() {
+        let base = UnixMillis(10);
+        assert_eq!(base.saturating_add(Duration::ZERO), UnixMillis(10));
+        assert_eq!(
+            base.saturating_add(Duration::from_micros(1)),
+            UnixMillis(11),
+            "a non-zero duration must advance the instant"
+        );
+        assert_eq!(
+            base.saturating_add(Duration::from_micros(1_500)),
+            UnixMillis(12)
+        );
+        assert_eq!(
+            UnixMillis(u64::MAX).saturating_add(Duration::from_secs(1)),
+            UnixMillis(u64::MAX)
+        );
+    }
 }
