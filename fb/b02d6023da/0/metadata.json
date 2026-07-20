@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "fbb02d6023da",
+  "session_id": "7500f1a6-27cc-4e96-bb34-e849cae7bfcd",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-20T00:31:46.133144Z",
+  "branch": "chore/v2-workspace-scaffold",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "83203b001cf7",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 546,
+    "cache_creation_tokens": 742528,
+    "cache_read_tokens": 46968967,
+    "output_tokens": 216496,
+    "api_call_count": 273
+  },
+  "session_metrics": {
+    "turn_count": 5
+  },
+  "summary": {
+    "intent": "Finish the CipherBox v2 wayfinder map (final ticket: deploy/CI/release blueprint), then plan and execute the v1 freeze and kickoff of the v2 rewrite in the cipher-box repo — including cleaning up v1 artifacts, adopting the AGENTS.md pattern, rewriting docs, and scaffolding the v2 workspace with day-one CI gates.",
+    "outcome": "Ticket #48 and the wayfinder map were closed with blueprint/deploy.md merged; v1 was frozen at branch `v1`/tag `v1-freeze`; handover PR #616 (GSD removal, AGENTS.md source-of-truth, README/SECURITY.md rewrite, landing npm→pnpm) merged after fixing stale required-status-check blockers; v2 workspace scaffold PR #617 was opened with cargo+TS workspaces green, and CI fixes (rust-toolchain components, zizmor offline flag) were being pushed when the transcript ends.",
+    "learnings": {
+      "repo": [
+        "cipher-box uses 1Password SSH commit signing (gpg.format=ssh, op-ssh-sign) which intermittently hangs/wedges — always timeout-guard signed commits and verify landing via `git log` before retrying rather than assuming failure.",
+        "Never use `--no-gpg-sign`/`--no-verify` unless the user explicitly authorizes it in the moment (e.g. while AFK); it's not a standing permission.",
+        "GitHub branch protection can hold stale required status-check contexts referencing workflows that were deleted — these block merges forever with 'expected — waiting for status update' and must be removed from the ruleset once their producing workflow is gone.",
+        "release-please rule: never leave a `release-as` pin equal to its `.release-please-manifest.json` version — causes a self-comparing re-release loop; no longer CI-enforced so must be checked manually.",
+        "rust-toolchain.toml must explicitly declare `components = [\"rustfmt\", \"clippy\"]` — otherwise CI resolves a minimal profile lacking them, breaking lint/fmt gates.",
+        "The `landing/` app (Astro) sits outside the pnpm workspace; `pnpm install`/`build` there requires `--ignore-workspace`, otherwise pnpm silently operates against the repo root instead.",
+        "zsh aborts an entire compound command (not just the failing segment) on an unmatched glob — split glob-bearing commands out separately.",
+        "`gh pr edit` fails on this repo due to Projects-classic GraphQL deprecation; use `gh api -X PATCH ... -F body=@file` instead.",
+        "`gh issue view --comments` also fails via GraphQL; use REST (`gh api repos/.../issues/N/comments`) instead.",
+        "zizmor CI failures can be either a transient GitHub API 503 on the advisories endpoint or a real finding — distinguish by re-fetching the log/rerunning before treating as a flake."
+      ],
+      "code": [
+        {
+          "path": "rust-toolchain.toml",
+          "finding": "Needed `components = [\"rustfmt\", \"clippy\"]` added — CI's default toolchain resolution otherwise omits these and fails the Cargo Linux job."
+        },
+        {
+          "path": ".github/workflows/zizmor.yml",
+          "finding": "Fixed to pass an offline-audits flag after a repeat non-503 failure, verified locally against zizmor before pushing."
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "finding": "Rewritten as the day-one v2 PR gate (Lint/Typecheck/Test/Build/Cargo x3); dropped api-spec, sdk-e2e, migration-check, and vector-parity jobs which depended on now-deleted v1 apps/packages."
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "finding": "build-tee job and tee/redis/SendGrid env plumbing removed as part of the v2 staging simplification (redis + tee-worker leave the stack per blueprint/deploy.md)."
+        },
+        {
+          "path": "docker/docker-compose.yml",
+          "finding": "redis and tee-worker services removed from local dev compose to match the v2 stack shape."
+        }
+      ],
+      "workflow": [
+        "For structural doc migrations (CLAUDE.md → AGENTS.md), grep the whole repo for references to the old file afterward, but skip hits inside code slated for demolition — only fix live/tooling references.",
+        "When deleting large tracked trees (e.g. .planning/, GSD install), verify nothing untracked/live depends on them (statusline scripts, hook wiring) before nuking, and check for hook/permission entries in settings.local.json that reference the deleted tooling.",
+        "When a user corrects an over-aggressive deletion (ship-phase.md), recover the original via `git show HEAD~N:path` rather than reconstructing from memory, then adapt rather than restore verbatim.",
+        "Distinguish infra flakes from real CI failures before spending effort investigating: retry/refetch the log first.",
+        "Background watcher tasks for long CI runs are useful but must be re-kicked against each new HEAD after a push, and can get silently 'stopped' across session boundaries — check for a completion record and inspect the output file for partial results before assuming success."
+      ]
+    },
+    "friction": [
+      "1Password SSH signing hung/failed multiple times, requiring several retries with increasing timeouts and eventually a background retry loop before the user authorized an unsigned commit.",
+      "GitHub API 503s intermittently blocked fetching CI failure logs, requiring repeated retries.",
+      "A zsh unmatched-glob pattern silently aborted an entire compound rm command mid-cleanup.",
+      "python's yaml module and ruby's `safe_load`/`aliases:` were unavailable/unsupported for validating workflow YAML, requiring a fallback to plain `YAML.load`.",
+      "Injected a duplicate `name:` line into deploy-staging.yml from a bad assumption about workflow name matching, requiring a follow-up fix.",
+      "Stale required status checks in main's branch protection ('Release Preview', 'Verify E2E Passed') blocked the PR #616 merge despite all real CI being green — root cause was non-obvious to the user until investigated.",
+      "First scaffold CI run on PR #617 had two failures (Cargo Linux toolchain components, zizmor) requiring two more push/verify cycles."
+    ],
+    "open_items": [
+      "PR #617 (v2 workspace scaffold) still has CI issues being resolved (zizmor offline-audits fix just pushed, not yet confirmed green) — merge and required-checks re-pointing still pending.",
+      "PR #617 was opened as draft; needs to be marked ready and branch protection updated to the new v2 job set once fully green.",
+      "Step 2/3 of the v2 kickoff (seed GitHub-issues build tracker with a v2 milestone, begin build in dependency order starting with crates/core) not yet started — deferred until scaffold PR lands.",
+      "Hardware gates for crates/fuse (FUSE-T ≥1.2.7 invalidation round-trip, overwrite-rename atomicity, license terms) flagged as cheap to kick off early in parallel but not yet started.",
+      "v1 branch retains 2,205 files of removed .planning/.learnings and full v1 app code for reference/rollback."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

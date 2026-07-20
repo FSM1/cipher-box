@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "fbb02d6023da",
+  "strategy": "manual-commit",
+  "branch": "chore/v2-workspace-scaffold",
+  "checkpoints_count": 1,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/fb/b02d6023da/0/metadata.json",
+      "transcript": "/fb/b02d6023da/0/full.jsonl",
+      "compact_transcript": "/fb/b02d6023da/0/transcript.jsonl",
+      "content_hash": "/fb/b02d6023da/0/content_hash.txt",
+      "prompt": "/fb/b02d6023da/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 546,
+    "cache_creation_tokens": 742528,
+    "cache_read_tokens": 46968967,
+    "output_tokens": 216496,
+    "api_call_count": 273
+  }
+}
