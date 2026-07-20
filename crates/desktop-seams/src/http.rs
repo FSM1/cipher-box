@@ -1,5 +1,7 @@
 //! Desktop [`Http`]: a `reqwest` byte mover.
 
+use core::time::Duration;
+
 use cipherbox_engine::seams::{Http, HttpMethod, HttpRequest, HttpResponse, SeamError, SeamResult};
 
 /// Plain HTTP for the hand-written API client, the trustless gateway read
@@ -18,8 +20,16 @@ pub struct ReqwestHttp {
 
 impl ReqwestHttp {
     /// Builds an HTTP seam over a fresh `reqwest` client.
+    ///
+    /// A connect timeout bounds the handshake, so a dead or black-hole host
+    /// fails fast instead of hanging the engine task forever. No total
+    /// request timeout is imposed here: the Http seam also carries
+    /// content-chunk bodies that can legitimately be large and slow, so a
+    /// host that needs a bounded whole-request timeout supplies its own
+    /// client via [`with_client`](Self::with_client).
     pub fn new() -> SeamResult<Self> {
         let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
             .build()
             .map_err(|err| SeamError::new(format!("http client build: {err}")))?;
         Ok(Self { client })

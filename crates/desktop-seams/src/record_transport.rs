@@ -1,5 +1,7 @@
 //! Desktop [`RecordTransport`]: a `reqwest` `/routing/v1` byte mover.
 
+use core::time::Duration;
+
 use cipherbox_engine::seams::{EndpointId, RecordTransport, SeamError, SeamResult};
 
 /// IPFS delegated-routing content type for a signed IPNS record.
@@ -35,7 +37,15 @@ impl ReqwestRecordTransport {
             !endpoints.is_empty(),
             "RecordTransport endpoint set must not be empty"
         );
+        // `/routing/v1` records are small and directly addressed: bound both
+        // the handshake and the whole request so a stalled public endpoint
+        // cannot hang fan-out, and follow no redirects — direct addressing
+        // needs none, and refusing them closes an SSRF-shaped vector from an
+        // untrusted public endpoint. `with_client` callers own their policy.
         let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|err| SeamError::new(format!("record_transport client build: {err}")))?;
         Ok(Self { client, endpoints })
