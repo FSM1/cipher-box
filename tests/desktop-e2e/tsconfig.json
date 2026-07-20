@@ -1,9 +1,0 @@
-{
-  "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "noEmit": true,
-    "moduleResolution": "bundler"
-  },
-  "include": ["scripts/**/*.ts", "scripts/**/*.mts", "../e2e-helpers/**/*.ts"],
-  "exclude": ["node_modules"]
-}

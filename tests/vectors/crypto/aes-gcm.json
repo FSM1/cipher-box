@@ -1,9 +1,0 @@
-[
-  {
-    "description": "AES-256-GCM encrypt/decrypt with fixed key and IV (from TypeScript test vector generation)",
-    "key": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-    "iv": "aabbccddeeff00112233aabb",
-    "plaintext": "48656c6c6f2c20436970686572426f7821",
-    "ciphertext": "196a1416ae4cf2abbd0bb8bdd7dd16be5527207b3c04f9e0a0acf4274fdccbdd5e"
-  }
-]
