@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "aae39d6732c9",
+  "strategy": "manual-commit",
+  "branch": "feat/core-det-cbor-kat-spine",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/core/src/codec/decode.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/aa/e39d6732c9/0/metadata.json",
+      "transcript": "/aa/e39d6732c9/0/full.jsonl",
+      "compact_transcript": "/aa/e39d6732c9/0/transcript.jsonl",
+      "content_hash": "/aa/e39d6732c9/0/content_hash.txt",
+      "prompt": "/aa/e39d6732c9/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 272,
+    "cache_creation_tokens": 269346,
+    "cache_read_tokens": 26262533,
+    "output_tokens": 133930,
+    "api_call_count": 136
+  }
+}
