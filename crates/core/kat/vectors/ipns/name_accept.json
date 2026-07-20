@@ -1,0 +1,22 @@
+[
+  {
+    "name": "seed-1",
+    "signerSeed": "0101010101010101010101010101010101010101010101010101010101010101",
+    "ipnsName": "k51qzi5uqu5djmw2yvf8kk5cdjc1ddc00o4d5sjwi6f79xzcay9j3gkddw5uu4"
+  },
+  {
+    "name": "seed-2",
+    "signerSeed": "0202020202020202020202020202020202020202020202020202020202020202",
+    "ipnsName": "k51qzi5uqu5djejcj9das04p3wen7mowcz0z5iq3tw0yxaa8ko01odjley7fdg"
+  },
+  {
+    "name": "seed-7",
+    "signerSeed": "0707070707070707070707070707070707070707070707070707070707070707",
+    "ipnsName": "k51qzi5uqu5dm0t4vbwri4lkg76q03b4x9tsvekgvbu4zli6454ff7w8wdosa4"
+  },
+  {
+    "name": "seed-42",
+    "signerSeed": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+    "ipnsName": "k51qzi5uqu5dgtgtu4q6glho451dtw7ty67h3e0ov4bhe44yojukcnh44rpzz5"
+  }
+]

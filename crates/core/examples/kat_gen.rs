@@ -23,15 +23,19 @@ use cipherbox_core::codec::{
     MAX_DEPTH, Map, Value, decode, decode_map_partial, encode, encode_map_partial,
 };
 use cipherbox_core::error::{Malformed, TrustViolation};
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
+use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
+use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, ChildRef, NodeKind, ReadBody, STRUCT_TAG_READ_BODY,
-    STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, Version, build_aad, decode_envelope, decode_read_body,
-    encode_envelope, encode_read_body, open_read_body, seal_read_body,
+    self, AAD_DOMAIN, AadContext, ChildRef, NodeKind, ReadBody, STRUCT_TAG_MAILBOX_PAYLOAD,
+    STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, Version, build_aad, decode_envelope,
+    decode_read_body, encode_envelope, encode_read_body, open_read_body, seal_read_body,
 };
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::hpke::{self, hpke_open, hpke_seal};
 use cipherbox_core::suite::x25519::X25519Secret;
 use serde::Serialize;
@@ -146,6 +150,8 @@ struct Manifest {
     kdf: KdfSection,
     suite: SuiteSection,
     seal: SealSection,
+    ipns: IpnsSection,
+    payload: PayloadSection,
 }
 
 #[derive(Serialize)]
@@ -207,6 +213,131 @@ struct EnvelopeAcceptVector {
     key: String,
     envelope: String,
     read_body: String,
+}
+
+// --- IPNS records + name codec (ticket #622) --------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IpnsSection {
+    name_accept: FileCount,
+    name_reject: RejectSection,
+    record_accept: FileCount,
+    record_reject: RejectSection,
+    record_reput: FileCount,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NameAcceptVector {
+    name: String,
+    signer_seed: String,
+    ipns_name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TextRejectVector {
+    name: String,
+    text: String,
+    check: String,
+    class: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordAcceptVector {
+    name: String,
+    signer_seed: String,
+    ipns_name: String,
+    value: String,
+    sequence: u64,
+    ttl: u64,
+    validity: String,
+    record: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordRejectVector {
+    name: String,
+    ipns_name: String,
+    record: String,
+    check: String,
+    class: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RecordReputVector {
+    name: String,
+    ipns_name: String,
+    record: String,
+}
+
+// --- Pointer + mailbox payloads (ticket #622) -------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PayloadSection {
+    pointer_accept: FileCount,
+    pointer_reject: RejectSection,
+    mailbox_accept: FileCount,
+    mailbox_reject: RejectSection,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PointerAcceptVector {
+    name: String,
+    pointer_read_key: String,
+    nonce: String,
+    v: u64,
+    owner_scalar: String,
+    scope_id: String,
+    current_root_name: String,
+    write_epoch: u64,
+    min_read_epoch: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prev_root_name: Option<String>,
+    sealed: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PointerRejectVector {
+    name: String,
+    pointer_read_key: String,
+    v: u64,
+    scope_id: String,
+    owner_scalar: String,
+    sealed: String,
+    check: String,
+    class: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MailboxAcceptVector {
+    name: String,
+    recipient_secret: String,
+    recipient_public: String,
+    ephemeral_scalar: String,
+    v: u64,
+    sender_scalar: String,
+    payload: String,
+    block: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MailboxRejectVector {
+    name: String,
+    recipient_secret: String,
+    v: u64,
+    block: String,
+    check: String,
+    class: String,
 }
 
 #[derive(Serialize)]
@@ -298,7 +429,17 @@ fn main() {
     let hpke_dir = vectors_dir.join("hpke");
     let contact_dir = vectors_dir.join("contact");
     let seal_dir = vectors_dir.join("seal");
-    for dir in [&codec_dir, &kdf_dir, &hpke_dir, &contact_dir, &seal_dir] {
+    let ipns_dir = vectors_dir.join("ipns");
+    let payload_dir = vectors_dir.join("payload");
+    for dir in [
+        &codec_dir,
+        &kdf_dir,
+        &hpke_dir,
+        &contact_dir,
+        &seal_dir,
+        &ipns_dir,
+        &payload_dir,
+    ] {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
     }
 
@@ -336,6 +477,28 @@ fn main() {
     write_pretty(&seal_dir.join("envelope_accept.json"), &envelope_accept);
     write_pretty(&seal_dir.join("envelope_reject.json"), &envelope_reject);
 
+    let name_accept = build_ipns_name_accept();
+    let name_reject = build_ipns_name_reject();
+    let record_accept = build_ipns_record_accept();
+    let record_reject = build_ipns_record_reject();
+    let record_reput = build_ipns_record_reput();
+
+    write_pretty(&ipns_dir.join("name_accept.json"), &name_accept);
+    write_pretty(&ipns_dir.join("name_reject.json"), &name_reject);
+    write_pretty(&ipns_dir.join("record_accept.json"), &record_accept);
+    write_pretty(&ipns_dir.join("record_reject.json"), &record_reject);
+    write_pretty(&ipns_dir.join("record_reput.json"), &record_reput);
+
+    let pointer_accept = build_pointer_accept();
+    let pointer_reject = build_pointer_reject();
+    let mailbox_accept = build_mailbox_accept();
+    let mailbox_reject = build_mailbox_reject();
+
+    write_pretty(&payload_dir.join("pointer_accept.json"), &pointer_accept);
+    write_pretty(&payload_dir.join("pointer_reject.json"), &pointer_reject);
+    write_pretty(&payload_dir.join("mailbox_accept.json"), &mailbox_accept);
+    write_pretty(&payload_dir.join("mailbox_reject.json"), &mailbox_reject);
+
     let manifest = build_manifest(ManifestInputs {
         accept: &accept,
         reject: &reject,
@@ -351,13 +514,24 @@ fn main() {
         read_body_reject: &read_body_reject,
         envelope_accept: &envelope_accept,
         envelope_reject: &envelope_reject,
+        name_accept: &name_accept,
+        name_reject: &name_reject,
+        record_accept: &record_accept,
+        record_reject: &record_reject,
+        record_reput: &record_reput,
+        pointer_accept: &pointer_accept,
+        pointer_reject: &pointer_reject,
+        mailbox_accept: &mailbox_accept,
+        mailbox_reject: &mailbox_reject,
     });
     write_pretty(&kat_dir.join("manifest.json"), &manifest);
 
     println!(
         "kat_gen: wrote {} accept, {} reject, {} unknown-field, {} kdf-edge, {} hpke-seal, \
          {} hpke-open-reject, {} contact-accept, {} contact-reject, {} seal, {} seal-open-reject, \
-         {} read-body-accept, {} read-body-reject, {} envelope-accept, {} envelope-reject vectors \
+         {} read-body-accept, {} read-body-reject, {} envelope-accept, {} envelope-reject, \
+         {} name-accept, {} name-reject, {} record-accept, {} record-reject, {} record-reput, \
+         {} pointer-accept, {} pointer-reject, {} mailbox-accept, {} mailbox-reject vectors \
          + manifest.json",
         accept.len(),
         reject.len(),
@@ -373,6 +547,15 @@ fn main() {
         read_body_reject.len(),
         envelope_accept.len(),
         envelope_reject.len(),
+        name_accept.len(),
+        name_reject.len(),
+        record_accept.len(),
+        record_reject.len(),
+        record_reput.len(),
+        pointer_accept.len(),
+        pointer_reject.len(),
+        mailbox_accept.len(),
+        mailbox_reject.len(),
     );
 }
 
@@ -1113,6 +1296,15 @@ struct ManifestInputs<'a> {
     read_body_reject: &'a [RejectVector],
     envelope_accept: &'a [EnvelopeAcceptVector],
     envelope_reject: &'a [RejectVector],
+    name_accept: &'a [NameAcceptVector],
+    name_reject: &'a [TextRejectVector],
+    record_accept: &'a [RecordAcceptVector],
+    record_reject: &'a [RecordRejectVector],
+    record_reput: &'a [RecordReputVector],
+    pointer_accept: &'a [PointerAcceptVector],
+    pointer_reject: &'a [PointerRejectVector],
+    mailbox_accept: &'a [MailboxAcceptVector],
+    mailbox_reject: &'a [MailboxRejectVector],
 }
 
 fn build_manifest(m: ManifestInputs) -> Manifest {
@@ -1236,6 +1428,58 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
                 file: "vectors/seal/envelope_reject.json".to_string(),
                 count: m.envelope_reject.len(),
                 checks: checks_in_surface_order(m.envelope_reject),
+            },
+        },
+        ipns: IpnsSection {
+            name_accept: FileCount {
+                file: "vectors/ipns/name_accept.json".to_string(),
+                count: m.name_accept.len(),
+            },
+            name_reject: RejectSection {
+                file: "vectors/ipns/name_reject.json".to_string(),
+                count: m.name_reject.len(),
+                checks: checks_surface_ordered(
+                    &m.name_reject.iter().map(|v| v.check.as_str()).collect(),
+                ),
+            },
+            record_accept: FileCount {
+                file: "vectors/ipns/record_accept.json".to_string(),
+                count: m.record_accept.len(),
+            },
+            record_reject: RejectSection {
+                file: "vectors/ipns/record_reject.json".to_string(),
+                count: m.record_reject.len(),
+                checks: checks_surface_ordered(
+                    &m.record_reject.iter().map(|v| v.check.as_str()).collect(),
+                ),
+            },
+            record_reput: FileCount {
+                file: "vectors/ipns/record_reput.json".to_string(),
+                count: m.record_reput.len(),
+            },
+        },
+        payload: PayloadSection {
+            pointer_accept: FileCount {
+                file: "vectors/payload/pointer_accept.json".to_string(),
+                count: m.pointer_accept.len(),
+            },
+            pointer_reject: RejectSection {
+                file: "vectors/payload/pointer_reject.json".to_string(),
+                count: m.pointer_reject.len(),
+                checks: checks_surface_ordered(
+                    &m.pointer_reject.iter().map(|v| v.check.as_str()).collect(),
+                ),
+            },
+            mailbox_accept: FileCount {
+                file: "vectors/payload/mailbox_accept.json".to_string(),
+                count: m.mailbox_accept.len(),
+            },
+            mailbox_reject: RejectSection {
+                file: "vectors/payload/mailbox_reject.json".to_string(),
+                count: m.mailbox_reject.len(),
+                checks: checks_surface_ordered(
+                    &m.mailbox_reject.iter().map(|v| v.check.as_str()).collect(),
+                ),
             },
         },
     }
@@ -2163,6 +2407,640 @@ fn build_contact_reject() -> Vec<RejectVector> {
             hex: hexstr(&bytes),
             check: check.to_string(),
             class: class.to_string(),
+        });
+    }
+    out
+}
+
+// ===========================================================================
+// IPNS records + name codec (ticket #622). Accept vectors come from the live
+// codec/signer; reject and re-PUT vectors are hand-built protobuf so the frozen
+// wire structure is pinned independently. Every vector self-checks against the
+// live IPNS module before it is written.
+// ===========================================================================
+
+/// The `signatureV2` domain prefix, mirrored here so the generator builds the
+/// signed preimage independently of `crate::ipns`.
+const IPNS_SIG_DOMAIN: &[u8] = b"ipns-signature:";
+
+/// A record-accept case: (name, signer seed, value, sequence, ttl, EOL).
+type RecordAcceptCase = (&'static str, u8, &'static [u8], u64, u64, &'static str);
+/// A pointer-reject case: (name, v, scope id, owner scalar, sealed, check).
+type PointerRejectCase = (&'static str, u64, [u8; 16], [u8; 32], Vec<u8>, &'static str);
+/// A mailbox-reject case: (name, recipient secret, v, block, check).
+type MailboxRejectCase = (&'static str, [u8; 32], u64, Vec<u8>, &'static str);
+
+fn ed_signer(seed: u8) -> Ed25519Signer {
+    Ed25519Signer::from_seed([seed; 32])
+}
+
+fn ipns_name_of(seed: u8) -> IpnsName {
+    IpnsName::from_public_key(&ed_signer(seed).verifying_key())
+}
+
+fn build_ipns_name_accept() -> Vec<NameAcceptVector> {
+    let mut names = BTreeSet::new();
+    let mut out = Vec::new();
+    for seed in [1u8, 2, 7, 42] {
+        let name = format!("seed-{seed}");
+        assert!(names.insert(name.clone()), "duplicate name-accept {name}");
+        let ipns = ipns_name_of(seed);
+        // Self-check: the name parses back to the same key, byte-stable.
+        let parsed = IpnsName::parse(ipns.as_str()).expect("own name parses");
+        assert_eq!(parsed.public_key(), ed_signer(seed).verifying_key());
+        assert_eq!(parsed.as_str(), ipns.as_str());
+        out.push(NameAcceptVector {
+            name,
+            signer_seed: hexstr(&[seed; 32]),
+            ipns_name: ipns.as_str().to_string(),
+        });
+    }
+    out
+}
+
+fn build_ipns_name_reject() -> Vec<TextRejectVector> {
+    // Off-curve and wrong-multicodec names are precomputed (their base36 bodies
+    // encode non-key CID bytes); the rest are literal structural defects.
+    let cases: Vec<(&str, &str)> = vec![
+        ("wrong-multibase-prefix", "bxyz"),
+        ("empty", ""),
+        ("prefix-only", "k"),
+        ("uppercase-not-base36", "kABC"),
+        ("wrong-cid-length", "k0"),
+        (
+            "wrong-multicodec-dag-cbor",
+            "k519aw276bkyh20qga910ek5zwiz9nlb329bkgak2epd50bejiw383bj8o7exo",
+        ),
+        (
+            "off-curve-pubkey",
+            "k51qzi5uqu5dg8dthom0e9mburtjey6kg9yav7ccp56wlnw1r89f0ny9l0ixvk",
+        ),
+    ];
+    let mut names = BTreeSet::new();
+    let mut out = Vec::new();
+    for (name, text) in cases {
+        assert!(names.insert(name), "duplicate name-reject {name}");
+        let err = IpnsName::parse(text).expect_err("name-reject must fail");
+        assert_eq!(err.check(), "ipns-name-malformed", "name-reject {name}");
+        assert_eq!(err.class(), "malformed", "name-reject {name}");
+        out.push(TextRejectVector {
+            name: name.to_string(),
+            text: text.to_string(),
+            check: err.check().to_string(),
+            class: err.class().to_string(),
+        });
+    }
+    out
+}
+
+fn build_ipns_record_accept() -> Vec<RecordAcceptVector> {
+    // (name, seed, value, sequence, ttl-nanos, RFC3339 EOL).
+    let cases: Vec<RecordAcceptCase> = vec![
+        (
+            "first-publish-seq-1",
+            3,
+            b"/ipfs/bafyfirstpublish",
+            1,
+            3_600_000_000_000,
+            "2026-10-18T00:00:00.000000000Z",
+        ),
+        (
+            "cas-publish-seq-42",
+            4,
+            b"/ipfs/bafycasrepublish",
+            42,
+            86_400_000_000_000,
+            "2026-12-31T23:59:59.000000000Z",
+        ),
+    ];
+    let mut names = BTreeSet::new();
+    let mut out = Vec::new();
+    for (name, seed, value, sequence, ttl, validity) in cases {
+        assert!(names.insert(name), "duplicate record-accept {name}");
+        let signer = ed_signer(seed);
+        let ipns = ipns_name_of(seed);
+        let record = IpnsRecord::create_v2(&signer, value, sequence, ttl, validity).marshal();
+
+        // Self-checks: byte-stable keyless re-PUT, and the verify chain extracts
+        // the injected fields under the name's key.
+        let reparsed = IpnsRecord::unmarshal(&record).expect("own record unmarshals");
+        assert_eq!(reparsed.marshal(), record, "record-accept {name}: re-PUT");
+        let verified = reparsed.verify(&ipns).expect("own record verifies");
+        assert_eq!(verified.value, value, "record-accept {name}: value");
+        assert_eq!(
+            verified.sequence, sequence,
+            "record-accept {name}: sequence"
+        );
+        assert_eq!(verified.ttl, ttl, "record-accept {name}: ttl");
+        assert_eq!(
+            verified.validity,
+            validity.as_bytes(),
+            "record-accept {name}: validity"
+        );
+
+        out.push(RecordAcceptVector {
+            name: name.to_string(),
+            signer_seed: hexstr(&[seed; 32]),
+            ipns_name: ipns.as_str().to_string(),
+            value: hexstr(value),
+            sequence,
+            ttl,
+            validity: validity.to_string(),
+            record: hexstr(&record),
+        });
+    }
+    out
+}
+
+// --- hand-built IPNS protobuf, for the reject / re-PUT families -------------
+
+fn pb_write_varint(mut v: u64, out: &mut Vec<u8>) {
+    loop {
+        let byte = (v & 0x7f) as u8;
+        v >>= 7;
+        if v != 0 {
+            out.push(byte | 0x80);
+        } else {
+            out.push(byte);
+            return;
+        }
+    }
+}
+
+fn pb_len_field(number: u64, payload: &[u8], out: &mut Vec<u8>) {
+    pb_write_varint((number << 3) | 2, out);
+    pb_write_varint(payload.len() as u64, out);
+    out.extend_from_slice(payload);
+}
+
+fn pb_varint_field(number: u64, value: u64, out: &mut Vec<u8>) {
+    // Tag: field number, wire type 0 (varint).
+    pb_write_varint(number << 3, out);
+    pb_write_varint(value, out);
+}
+
+/// The signed `data` field, built independently of `crate::ipns`.
+fn ipns_data_cbor(
+    value: &[u8],
+    validity: &[u8],
+    validity_type: u64,
+    sequence: u64,
+    ttl: u64,
+) -> Vec<u8> {
+    let mut m = Map::new();
+    m.insert("TTL", Value::Unsigned(ttl));
+    m.insert("Value", Value::Bytes(value.to_vec()));
+    m.insert("Sequence", Value::Unsigned(sequence));
+    m.insert("Validity", Value::Bytes(validity.to_vec()));
+    m.insert("ValidityType", Value::Unsigned(validity_type));
+    encode(&Value::Map(m))
+}
+
+fn ipns_sign(signer: &Ed25519Signer, data: &[u8]) -> [u8; 64] {
+    let mut preimage = IPNS_SIG_DOMAIN.to_vec();
+    preimage.extend_from_slice(data);
+    signer.sign(&preimage).to_bytes()
+}
+
+fn build_ipns_record_reject() -> Vec<RecordRejectVector> {
+    let seed = 5u8;
+    let signer = ed_signer(seed);
+    let ipns = ipns_name_of(seed);
+    let value: &[u8] = b"/ipfs/bafybaserecord";
+    let validity = "2026-01-01T00:00:00.000000000Z";
+    let seq = 1u64;
+    let ttl = 60_000_000_000u64;
+
+    // A base valid record, then a single-defect data tamper.
+    let base = IpnsRecord::create_v2(&signer, value, seq, ttl, validity).marshal();
+    let mut tampered = base.clone();
+    let last = tampered.len() - 1;
+    tampered[last] ^= 0x01;
+
+    // A record whose signed data.Value disagrees with the top-level value field.
+    let data = ipns_data_cbor(value, validity.as_bytes(), 0, seq, ttl);
+    let sig = ipns_sign(&signer, &data);
+    let mut value_mismatch = Vec::new();
+    pb_len_field(1, b"/ipfs/bafyDIFFERENTvalue", &mut value_mismatch);
+    pb_varint_field(3, 0, &mut value_mismatch);
+    pb_len_field(4, validity.as_bytes(), &mut value_mismatch);
+    pb_varint_field(5, seq, &mut value_mismatch);
+    pb_varint_field(6, ttl, &mut value_mismatch);
+    pb_len_field(8, &sig, &mut value_mismatch);
+    pb_len_field(9, &data, &mut value_mismatch);
+
+    // A record missing signatureV2 (field 8) entirely.
+    let mut missing_sig = Vec::new();
+    pb_len_field(1, value, &mut missing_sig);
+    pb_varint_field(3, 0, &mut missing_sig);
+    pb_len_field(4, validity.as_bytes(), &mut missing_sig);
+    pb_varint_field(5, seq, &mut missing_sig);
+    pb_varint_field(6, ttl, &mut missing_sig);
+    pb_len_field(9, &data, &mut missing_sig);
+
+    // A record with a validly-signed but unsupported validity type (not EOL).
+    let data_bad_vt = ipns_data_cbor(value, validity.as_bytes(), 1, seq, ttl);
+    let sig_bad_vt = ipns_sign(&signer, &data_bad_vt);
+    let mut bad_validity_type = Vec::new();
+    pb_len_field(1, value, &mut bad_validity_type);
+    pb_varint_field(3, 1, &mut bad_validity_type);
+    pb_len_field(4, validity.as_bytes(), &mut bad_validity_type);
+    pb_varint_field(5, seq, &mut bad_validity_type);
+    pb_varint_field(6, ttl, &mut bad_validity_type);
+    pb_len_field(8, &sig_bad_vt, &mut bad_validity_type);
+    pb_len_field(9, &data_bad_vt, &mut bad_validity_type);
+
+    let cases: Vec<(&str, Vec<u8>, &str, &str)> = vec![
+        (
+            "tampered-data-signature",
+            tampered,
+            "ipns-signature-invalid",
+            "trust",
+        ),
+        (
+            "value-mismatch",
+            value_mismatch,
+            "ipns-value-mismatch",
+            "trust",
+        ),
+        (
+            "missing-signature-v2",
+            missing_sig,
+            "ipns-record-malformed",
+            "malformed",
+        ),
+        (
+            "unsupported-validity-type",
+            bad_validity_type,
+            "ipns-record-malformed",
+            "malformed",
+        ),
+        (
+            "garbage-protobuf",
+            vec![0xff],
+            "ipns-record-malformed",
+            "malformed",
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::new();
+    for (name, record, check, class) in cases {
+        assert!(names.insert(name), "duplicate record-reject {name}");
+        let err = IpnsRecord::unmarshal(&record)
+            .and_then(|r| r.verify(&ipns))
+            .expect_err("record-reject must fail");
+        assert_eq!(err.check(), check, "record-reject {name}: check ({err})");
+        assert_eq!(err.class(), class, "record-reject {name}: class ({err})");
+        out.push(RecordRejectVector {
+            name: name.to_string(),
+            ipns_name: ipns.as_str().to_string(),
+            record: hexstr(&record),
+            check: check.to_string(),
+            class: class.to_string(),
+        });
+    }
+    out
+}
+
+fn build_ipns_record_reput() -> Vec<RecordReputVector> {
+    // A foreign record carrying fields this codec does not model — a legacy
+    // signatureV1 (field 2) and an inline pubKey (field 7) — in ascending field
+    // order. Keyless re-PUT must reproduce it byte-for-byte, and verify (which
+    // reads only signatureV2 over data) must still accept it.
+    let seed = 6u8;
+    let signer = ed_signer(seed);
+    let ipns = ipns_name_of(seed);
+    let value: &[u8] = b"/ipfs/bafyforeignrecord";
+    let validity = "2026-06-30T12:00:00.000000000Z";
+    let seq = 9u64;
+    let ttl = 120_000_000_000u64;
+
+    let data = ipns_data_cbor(value, validity.as_bytes(), 0, seq, ttl);
+    let sig = ipns_sign(&signer, &data);
+
+    let mut record = Vec::new();
+    pb_len_field(1, value, &mut record);
+    pb_len_field(2, b"legacy-v1-signature", &mut record);
+    pb_varint_field(3, 0, &mut record);
+    pb_len_field(4, validity.as_bytes(), &mut record);
+    pb_varint_field(5, seq, &mut record);
+    pb_varint_field(6, ttl, &mut record);
+    pb_len_field(7, b"legacy-inline-pubkey", &mut record);
+    pb_len_field(8, &sig, &mut record);
+    pb_len_field(9, &data, &mut record);
+
+    // Self-checks: byte-stable re-PUT preserves the unknown fields, and verify
+    // still accepts (signatureV2 covers only data).
+    let parsed = IpnsRecord::unmarshal(&record).expect("foreign record unmarshals");
+    assert_eq!(
+        parsed.marshal(),
+        record,
+        "re-PUT must preserve unknown fields"
+    );
+    let verified = parsed.verify(&ipns).expect("foreign record verifies");
+    assert_eq!(verified.sequence, seq);
+
+    vec![RecordReputVector {
+        name: "with-legacy-v1-and-pubkey".to_string(),
+        ipns_name: ipns.as_str().to_string(),
+        record: hexstr(&record),
+    }]
+}
+
+// ===========================================================================
+// Pointer + mailbox payloads (ticket #622). Accept vectors freeze the sealed
+// bytes under fixed keys/nonces/ephemerals; reject vectors pin the fail-closed
+// checks. Each self-checks against the live payload module.
+// ===========================================================================
+
+fn build_pointer_accept() -> Vec<PointerAcceptVector> {
+    let key = [0x33u8; KEY_LEN];
+    let nonce = [0x44u8; NONCE_LEN];
+    let v = 2u64;
+    let owner_scalar = [0x21u8; 32];
+    let owner = EcdsaSigner::from_scalar(&owner_scalar).expect("valid owner scalar");
+    let scope_id = [0x07u8; 16];
+
+    let cases: Vec<(&str, RepointObject)> = vec![
+        (
+            "with-prev-root",
+            RepointObject {
+                scope_id,
+                current_root: ipns_name_of(1),
+                write_epoch: 4,
+                min_read_epoch: 2,
+                prev_root: Some(ipns_name_of(2)),
+            },
+        ),
+        (
+            "first-publish-no-prev-root",
+            RepointObject {
+                scope_id,
+                current_root: ipns_name_of(3),
+                write_epoch: 1,
+                min_read_epoch: 0,
+                prev_root: None,
+            },
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::new();
+    for (name, object) in cases {
+        assert!(names.insert(name), "duplicate pointer-accept {name}");
+        let sealed = seal_pointer_payload(&key, &nonce, v, &owner, &object);
+        // Determinism + round-trip under the live module.
+        assert_eq!(
+            seal_pointer_payload(&key, &nonce, v, &owner, &object),
+            sealed,
+            "pointer-accept {name}: not deterministic"
+        );
+        let opened =
+            open_pointer_payload(&key, v, &scope_id, &owner.verifying_key(), &sealed).unwrap();
+        assert_eq!(opened, object, "pointer-accept {name}: round-trip");
+        out.push(PointerAcceptVector {
+            name: name.to_string(),
+            pointer_read_key: hexstr(&key),
+            nonce: hexstr(&nonce),
+            v,
+            owner_scalar: hexstr(&owner_scalar),
+            scope_id: hexstr(&scope_id),
+            current_root_name: object.current_root.as_str().to_string(),
+            write_epoch: object.write_epoch,
+            min_read_epoch: object.min_read_epoch,
+            prev_root_name: object.prev_root.as_ref().map(|n| n.as_str().to_string()),
+            sealed: hexstr(&sealed),
+        });
+    }
+    out
+}
+
+fn build_pointer_reject() -> Vec<PointerRejectVector> {
+    let key = [0x33u8; KEY_LEN];
+    let nonce = [0x44u8; NONCE_LEN];
+    let v = 2u64;
+    let owner_scalar = [0x21u8; 32];
+    let owner = EcdsaSigner::from_scalar(&owner_scalar).expect("valid owner scalar");
+    let wrong_owner_scalar = [0x31u8; 32];
+    let scope_id = [0x07u8; 16];
+    let object = RepointObject {
+        scope_id,
+        current_root: ipns_name_of(1),
+        write_epoch: 4,
+        min_read_epoch: 2,
+        prev_root: Some(ipns_name_of(2)),
+    };
+    let sealed = seal_pointer_payload(&key, &nonce, v, &owner, &object);
+
+    let mut tampered = sealed.clone();
+    let last = tampered.len() - 1;
+    tampered[last] ^= 0x01;
+
+    // (name, v, scope_id, owner_scalar, sealed, check).
+    let cases: Vec<PointerRejectCase> = vec![
+        (
+            "tampered-sealed",
+            v,
+            scope_id,
+            owner_scalar,
+            tampered,
+            "seal-open-failed",
+        ),
+        (
+            "scope-transplant",
+            v,
+            [0x08u8; 16],
+            owner_scalar,
+            sealed.clone(),
+            "seal-open-failed",
+        ),
+        (
+            "version-downgrade",
+            1,
+            scope_id,
+            owner_scalar,
+            sealed.clone(),
+            "seal-open-failed",
+        ),
+        (
+            "wrong-owner-key",
+            v,
+            scope_id,
+            wrong_owner_scalar,
+            sealed.clone(),
+            "identity-signature-invalid",
+        ),
+        (
+            "truncated-sealed",
+            v,
+            scope_id,
+            owner_scalar,
+            sealed[..NONCE_LEN + TAG_LEN - 1].to_vec(),
+            "truncated",
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::new();
+    for (name, ver, scope, owner_scalar, blob, check) in cases {
+        assert!(names.insert(name), "duplicate pointer-reject {name}");
+        let verifier = EcdsaSigner::from_scalar(&owner_scalar)
+            .expect("valid scalar")
+            .verifying_key();
+        let err = open_pointer_payload(&key, ver, &scope, &verifier, &blob)
+            .expect_err("pointer-reject must fail");
+        assert_eq!(err.check(), check, "pointer-reject {name}: check ({err})");
+        out.push(PointerRejectVector {
+            name: name.to_string(),
+            pointer_read_key: hexstr(&key),
+            v: ver,
+            scope_id: hexstr(&scope),
+            owner_scalar: hexstr(&owner_scalar),
+            sealed: hexstr(&blob),
+            check: err.check().to_string(),
+            class: err.class().to_string(),
+        });
+    }
+    out
+}
+
+fn build_mailbox_accept() -> Vec<MailboxAcceptVector> {
+    let recipient_scalar = [0x40u8; 32];
+    let recipient = X25519Secret::from_scalar(recipient_scalar);
+    let recipient_public = recipient.public();
+    let eph = [0x51u8; 32];
+    let v = 2u64;
+    let sender_scalar = [0x22u8; 32];
+    let sender = EcdsaSigner::from_scalar(&sender_scalar).expect("valid sender scalar");
+
+    let cases: Vec<(&str, &[u8])> = vec![
+        ("discovery-ping", b"discovery ping payload"),
+        ("empty-payload", b""),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::new();
+    for (name, payload) in cases {
+        assert!(names.insert(name), "duplicate mailbox-accept {name}");
+        let block = seal_mailbox_payload(&recipient_public, &eph, v, &sender, payload);
+        assert_eq!(
+            seal_mailbox_payload(&recipient_public, &eph, v, &sender, payload),
+            block,
+            "mailbox-accept {name}: not deterministic"
+        );
+        let item = open_mailbox_payload(&recipient, v, &block).unwrap();
+        assert_eq!(item.payload, payload, "mailbox-accept {name}: payload");
+        assert_eq!(
+            item.sender_identity,
+            sender.verifying_key(),
+            "mailbox-accept {name}: sender"
+        );
+        out.push(MailboxAcceptVector {
+            name: name.to_string(),
+            recipient_secret: hexstr(&recipient_scalar),
+            recipient_public: hexstr(&recipient_public.to_bytes()),
+            ephemeral_scalar: hexstr(&eph),
+            v,
+            sender_scalar: hexstr(&sender_scalar),
+            payload: hexstr(payload),
+            block: hexstr(&block),
+        });
+    }
+    out
+}
+
+fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
+    let recipient_scalar = [0x40u8; 32];
+    let recipient = X25519Secret::from_scalar(recipient_scalar);
+    let eph = [0x51u8; 32];
+    let v = 2u64;
+    let sender = EcdsaSigner::from_scalar(&[0x22u8; 32]).expect("valid sender scalar");
+    let block = seal_mailbox_payload(&recipient.public(), &eph, v, &sender, b"authentic");
+
+    // Tamper the ciphertext inside the block and re-encode.
+    let mut m = decode(&block).unwrap().as_map().unwrap().clone();
+    let mut ct = m.get("ct").unwrap().as_bytes().unwrap().to_vec();
+    ct[0] ^= 0x01;
+    m.insert("ct", Value::Bytes(ct));
+    let tampered_block = encode(&Value::Map(m));
+
+    // A block that opens (anyone can HPKE-seal) but whose sender signature does
+    // not verify: build the inner with a wrong signature and seal it.
+    let sender_pk = sender.verifying_key().to_sec1();
+    let mut inner = Map::new();
+    inner.insert("payload", Value::Bytes(b"forged".to_vec()));
+    inner.insert("senderIdentityPk", Value::Bytes(sender_pk.to_vec()));
+    inner.insert(
+        "senderSig",
+        Value::Bytes(
+            sender
+                .sign_detcbor(b"not the preimage")
+                .to_compact()
+                .to_vec(),
+        ),
+    );
+    let inner_bytes = encode(&Value::Map(inner));
+    let info = build_aad(&AadContext {
+        v,
+        id: [0; 16],
+        scope: [0; 16],
+        epoch: 0,
+        struct_tag: STRUCT_TAG_MAILBOX_PAYLOAD,
+    });
+    let sealed = hpke_seal(&recipient.public(), &eph, &info, &[], &inner_bytes);
+    let mut forged = Map::new();
+    forged.insert("ct", Value::Bytes(sealed.ciphertext));
+    forged.insert("enc", Value::Bytes(sealed.enc.to_vec()));
+    let forged_block = encode(&Value::Map(forged));
+
+    // (name, recipient_secret, v, block, check).
+    let wrong_recipient = [0x41u8; 32];
+    let cases: Vec<MailboxRejectCase> = vec![
+        (
+            "tampered-ciphertext",
+            recipient_scalar,
+            v,
+            tampered_block,
+            "hpke-open-failed",
+        ),
+        (
+            "version-downgrade",
+            recipient_scalar,
+            1,
+            block.clone(),
+            "hpke-open-failed",
+        ),
+        (
+            "wrong-recipient",
+            wrong_recipient,
+            v,
+            block.clone(),
+            "hpke-open-failed",
+        ),
+        (
+            "forged-sender-signature",
+            recipient_scalar,
+            v,
+            forged_block,
+            "identity-signature-invalid",
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::new();
+    for (name, secret, ver, blob, check) in cases {
+        assert!(names.insert(name), "duplicate mailbox-reject {name}");
+        let err = open_mailbox_payload(&X25519Secret::from_scalar(secret), ver, &blob)
+            .expect_err("mailbox-reject must fail");
+        assert_eq!(err.check(), check, "mailbox-reject {name}: check ({err})");
+        out.push(MailboxRejectVector {
+            name: name.to_string(),
+            recipient_secret: hexstr(&secret),
+            v: ver,
+            block: hexstr(&blob),
+            check: err.check().to_string(),
+            class: err.class().to_string(),
         });
     }
     out

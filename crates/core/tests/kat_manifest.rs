@@ -18,13 +18,18 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 
 use cipherbox_core::codec::{decode, decode_map_partial, encode, encode_map_partial};
 use cipherbox_core::error::{Malformed, TrustViolation};
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
+use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
+use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, NodeKind, STRUCT_TAG_READ_BODY, STRUCT_TAGS, build_aad,
     decode_envelope, decode_read_body, encode_envelope, encode_read_body, open_read_body,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
+use cipherbox_core::suite::ecdsa::EcdsaSigner;
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::hpke::{hpke_open, hpke_seal};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use serde::Deserialize;
@@ -90,6 +95,42 @@ const FIXTURES: &[(&str, &str)] = &[
         "vectors/seal/envelope_reject.json",
         include_str!("../kat/vectors/seal/envelope_reject.json"),
     ),
+    (
+        "vectors/ipns/name_accept.json",
+        include_str!("../kat/vectors/ipns/name_accept.json"),
+    ),
+    (
+        "vectors/ipns/name_reject.json",
+        include_str!("../kat/vectors/ipns/name_reject.json"),
+    ),
+    (
+        "vectors/ipns/record_accept.json",
+        include_str!("../kat/vectors/ipns/record_accept.json"),
+    ),
+    (
+        "vectors/ipns/record_reject.json",
+        include_str!("../kat/vectors/ipns/record_reject.json"),
+    ),
+    (
+        "vectors/ipns/record_reput.json",
+        include_str!("../kat/vectors/ipns/record_reput.json"),
+    ),
+    (
+        "vectors/payload/pointer_accept.json",
+        include_str!("../kat/vectors/payload/pointer_accept.json"),
+    ),
+    (
+        "vectors/payload/pointer_reject.json",
+        include_str!("../kat/vectors/payload/pointer_reject.json"),
+    ),
+    (
+        "vectors/payload/mailbox_accept.json",
+        include_str!("../kat/vectors/payload/mailbox_accept.json"),
+    ),
+    (
+        "vectors/payload/mailbox_reject.json",
+        include_str!("../kat/vectors/payload/mailbox_reject.json"),
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -107,6 +148,129 @@ struct Manifest {
     kdf: KdfSection,
     suite: SuiteSection,
     seal: SealManifest,
+    ipns: IpnsManifest,
+    payload: PayloadManifest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct IpnsManifest {
+    name_accept: FileCount,
+    name_reject: RejectSection,
+    record_accept: FileCount,
+    record_reject: RejectSection,
+    record_reput: FileCount,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PayloadManifest {
+    pointer_accept: FileCount,
+    pointer_reject: RejectSection,
+    mailbox_accept: FileCount,
+    mailbox_reject: RejectSection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct NameAcceptVector {
+    name: String,
+    signer_seed: String,
+    ipns_name: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct TextRejectVector {
+    name: String,
+    text: String,
+    check: String,
+    class: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecordAcceptVector {
+    name: String,
+    signer_seed: String,
+    ipns_name: String,
+    value: String,
+    sequence: u64,
+    ttl: u64,
+    validity: String,
+    record: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecordRejectVector {
+    name: String,
+    ipns_name: String,
+    record: String,
+    check: String,
+    class: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RecordReputVector {
+    name: String,
+    ipns_name: String,
+    record: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PointerAcceptVector {
+    name: String,
+    pointer_read_key: String,
+    nonce: String,
+    v: u64,
+    owner_scalar: String,
+    scope_id: String,
+    current_root_name: String,
+    write_epoch: u64,
+    min_read_epoch: u64,
+    #[serde(default)]
+    prev_root_name: Option<String>,
+    sealed: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PointerRejectVector {
+    name: String,
+    pointer_read_key: String,
+    v: u64,
+    scope_id: String,
+    owner_scalar: String,
+    sealed: String,
+    check: String,
+    class: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MailboxAcceptVector {
+    name: String,
+    recipient_secret: String,
+    recipient_public: String,
+    ephemeral_scalar: String,
+    v: u64,
+    sender_scalar: String,
+    payload: String,
+    block: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct MailboxRejectVector {
+    name: String,
+    recipient_secret: String,
+    v: u64,
+    block: String,
+    check: String,
+    class: String,
 }
 
 #[derive(Deserialize)]
@@ -484,6 +648,15 @@ fn fixture_table_matches_manifest_files() {
         m.seal.read_body_reject.file.as_str(),
         m.seal.envelope_accept.file.as_str(),
         m.seal.envelope_reject.file.as_str(),
+        m.ipns.name_accept.file.as_str(),
+        m.ipns.name_reject.file.as_str(),
+        m.ipns.record_accept.file.as_str(),
+        m.ipns.record_reject.file.as_str(),
+        m.ipns.record_reput.file.as_str(),
+        m.payload.pointer_accept.file.as_str(),
+        m.payload.pointer_reject.file.as_str(),
+        m.payload.mailbox_accept.file.as_str(),
+        m.payload.mailbox_reject.file.as_str(),
     ];
     let referenced_set: BTreeSet<&str> = referenced.iter().copied().collect();
     assert_eq!(
@@ -625,7 +798,7 @@ fn reject_checks_list_matches_vectors_and_error_surface() {
 /// suite decoders can never emit: `unknown-field-collision` (an
 /// `encode_map_partial` caller bug), which stays unit-test-pinned in
 /// src/codec/fields.rs. This is the crate-wide extension of the reject-coverage
-/// law across the codec, contact, hpke, and seal families.
+/// law across the codec, contact, hpke, seal, ipns, and payload families.
 #[test]
 fn every_crate_check_is_pinned_by_a_vector_family() {
     let m = manifest();
@@ -636,6 +809,10 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
     covered.extend(seal_open_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(read_body_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(envelope_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(name_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(record_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(pointer_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(mailbox_reject_vectors(&m).into_iter().map(|v| v.check));
 
     let surface: BTreeSet<String> = TrustViolation::CHECKS
         .iter()
@@ -1550,6 +1727,523 @@ fn contact_reject_family_covers_the_binding_checks() {
         assert!(
             listed.contains(required),
             "contact rejects must cover {required}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// IPNS records + name codec, and pointer + mailbox payloads (ticket #622). The
+// name codec, the fixed-key injected-timestamp full-record KATs, the keyless
+// byte-stable re-PUT, and the pointer/mailbox accept+reject vectors — all
+// consumed from the manifest and asserted against the live modules.
+// ---------------------------------------------------------------------------
+
+fn name_accept_vectors(m: &Manifest) -> Vec<NameAcceptVector> {
+    serde_json::from_str(fixture(&m.ipns.name_accept.file)).expect("name_accept.json shape")
+}
+
+fn name_reject_vectors(m: &Manifest) -> Vec<TextRejectVector> {
+    serde_json::from_str(fixture(&m.ipns.name_reject.file)).expect("name_reject.json shape")
+}
+
+fn record_accept_vectors(m: &Manifest) -> Vec<RecordAcceptVector> {
+    serde_json::from_str(fixture(&m.ipns.record_accept.file)).expect("record_accept.json shape")
+}
+
+fn record_reject_vectors(m: &Manifest) -> Vec<RecordRejectVector> {
+    serde_json::from_str(fixture(&m.ipns.record_reject.file)).expect("record_reject.json shape")
+}
+
+fn record_reput_vectors(m: &Manifest) -> Vec<RecordReputVector> {
+    serde_json::from_str(fixture(&m.ipns.record_reput.file)).expect("record_reput.json shape")
+}
+
+fn pointer_accept_vectors(m: &Manifest) -> Vec<PointerAcceptVector> {
+    serde_json::from_str(fixture(&m.payload.pointer_accept.file))
+        .expect("pointer_accept.json shape")
+}
+
+fn pointer_reject_vectors(m: &Manifest) -> Vec<PointerRejectVector> {
+    serde_json::from_str(fixture(&m.payload.pointer_reject.file))
+        .expect("pointer_reject.json shape")
+}
+
+fn mailbox_accept_vectors(m: &Manifest) -> Vec<MailboxAcceptVector> {
+    serde_json::from_str(fixture(&m.payload.mailbox_accept.file))
+        .expect("mailbox_accept.json shape")
+}
+
+fn mailbox_reject_vectors(m: &Manifest) -> Vec<MailboxRejectVector> {
+    serde_json::from_str(fixture(&m.payload.mailbox_reject.file))
+        .expect("mailbox_reject.json shape")
+}
+
+#[test]
+fn ipns_name_accept_vectors_encode_and_parse() {
+    let m = manifest();
+    let vectors = name_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.ipns.name_accept.count,
+        "name-accept count drift"
+    );
+    assert!(!vectors.is_empty(), "name-accept family must not be empty");
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate name-accept {}",
+            v.name
+        );
+        let key = Ed25519Signer::from_seed(unhex32(&v.name, &v.signer_seed)).verifying_key();
+        // Encode: the frozen name is the key's one canonical name.
+        assert_eq!(
+            IpnsName::from_public_key(&key).as_str(),
+            v.ipns_name,
+            "name-accept {}: encode drift",
+            v.name
+        );
+        // Strict decode: the pubkey comes from the name itself, byte-stable.
+        let parsed = IpnsName::parse(&v.ipns_name)
+            .unwrap_or_else(|e| panic!("name-accept {}: parse rejected: {e}", v.name));
+        assert_eq!(
+            parsed.public_key(),
+            key,
+            "name-accept {}: pubkey from name",
+            v.name
+        );
+        assert_eq!(
+            parsed.as_str(),
+            v.ipns_name,
+            "name-accept {}: byte-stable",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn ipns_name_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = name_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.ipns.name_reject.count,
+        "name-reject count drift"
+    );
+
+    let listed: BTreeSet<&str> = m
+        .ipns
+        .name_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(listed, in_vectors, "manifest checks vs name_reject.json");
+    assert!(
+        listed.contains("ipns-name-malformed"),
+        "name-reject covers ipns-name-malformed"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate name-reject {}",
+            v.name
+        );
+        let err = IpnsName::parse(&v.text).expect_err("name-reject must fail closed");
+        assert_eq!(
+            err.check(),
+            v.check,
+            "name-reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "name-reject {}: class ({err})",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn ipns_record_accept_vectors_are_frozen_and_verify() {
+    let m = manifest();
+    let vectors = record_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.ipns.record_accept.count,
+        "record-accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "record-accept family must not be empty"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate record-accept {}",
+            v.name
+        );
+        let signer = Ed25519Signer::from_seed(unhex32(&v.name, &v.signer_seed));
+        let value = unhex(&v.name, &v.value);
+        // Fixed key + injected timestamp: the full record bytes are frozen.
+        let record =
+            IpnsRecord::create_v2(&signer, &value, v.sequence, v.ttl, &v.validity).marshal();
+        assert_eq!(
+            hex::encode(&record),
+            v.record,
+            "record-accept {}: record bytes drift",
+            v.name
+        );
+        // Keyless re-PUT is byte-stable.
+        let reparsed = IpnsRecord::unmarshal(&record)
+            .unwrap_or_else(|e| panic!("record-accept {}: unmarshal: {e}", v.name));
+        assert_eq!(
+            reparsed.marshal(),
+            record,
+            "record-accept {}: re-PUT byte-stable",
+            v.name
+        );
+        // Verify under the name's key extracts the injected fields.
+        let name = IpnsName::parse(&v.ipns_name).expect("record-accept name parses");
+        let verified = reparsed
+            .verify(&name)
+            .unwrap_or_else(|e| panic!("record-accept {}: verify: {e}", v.name));
+        assert_eq!(verified.value, value, "record-accept {}: value", v.name);
+        assert_eq!(
+            verified.sequence, v.sequence,
+            "record-accept {}: sequence",
+            v.name
+        );
+        assert_eq!(verified.ttl, v.ttl, "record-accept {}: ttl", v.name);
+        assert_eq!(
+            verified.validity,
+            v.validity.as_bytes(),
+            "record-accept {}: validity",
+            v.name
+        );
+    }
+    // Anti-vacuity: a first-publish (sequence 1) record is frozen.
+    assert!(
+        vectors.iter().any(|v| v.sequence == 1),
+        "a first-publish seq-1 record must be pinned"
+    );
+}
+
+#[test]
+fn ipns_record_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = record_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.ipns.record_reject.count,
+        "record-reject count drift"
+    );
+
+    let listed: BTreeSet<&str> = m
+        .ipns
+        .record_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(listed, in_vectors, "manifest checks vs record_reject.json");
+    for required in [
+        "ipns-signature-invalid",
+        "ipns-value-mismatch",
+        "ipns-record-malformed",
+    ] {
+        assert!(
+            listed.contains(required),
+            "record-reject must cover {required}"
+        );
+    }
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate record-reject {}",
+            v.name
+        );
+        let name = IpnsName::parse(&v.ipns_name).expect("record-reject name parses");
+        let record = unhex(&v.name, &v.record);
+        let err = IpnsRecord::unmarshal(&record)
+            .and_then(|r| r.verify(&name))
+            .expect_err("record-reject must fail closed");
+        assert_eq!(
+            err.check(),
+            v.check,
+            "record-reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "record-reject {}: class ({err})",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn ipns_record_reput_vectors_are_byte_stable_and_verify() {
+    let m = manifest();
+    let vectors = record_reput_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.ipns.record_reput.count,
+        "record-reput count drift"
+    );
+    assert!(!vectors.is_empty(), "record-reput family must not be empty");
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate record-reput {}",
+            v.name
+        );
+        let name = IpnsName::parse(&v.ipns_name).expect("record-reput name parses");
+        let bytes = unhex(&v.name, &v.record);
+        // Keyless re-PUT: unmarshal→marshal reproduces the foreign record
+        // byte-for-byte, unknown protobuf fields (signatureV1, pubKey) included.
+        let parsed = IpnsRecord::unmarshal(&bytes)
+            .unwrap_or_else(|e| panic!("record-reput {}: unmarshal: {e}", v.name));
+        assert_eq!(
+            hex::encode(parsed.marshal()),
+            v.record,
+            "record-reput {}: not byte-stable",
+            v.name
+        );
+        // And the record still verifies (signatureV2 covers only data).
+        parsed
+            .verify(&name)
+            .unwrap_or_else(|e| panic!("record-reput {}: verify: {e}", v.name));
+    }
+}
+
+#[test]
+fn pointer_accept_vectors_are_frozen_and_open() {
+    let m = manifest();
+    let vectors = pointer_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.payload.pointer_accept.count,
+        "pointer-accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "pointer-accept family must not be empty"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate pointer-accept {}",
+            v.name
+        );
+        let key = unhex32(&v.name, &v.pointer_read_key);
+        let nonce = unhex_n::<NONCE_LEN>(&v.name, &v.nonce);
+        let owner =
+            EcdsaSigner::from_scalar(&unhex32(&v.name, &v.owner_scalar)).expect("owner scalar");
+        let scope_id = unhex_n::<16>(&v.name, &v.scope_id);
+        let object = RepointObject {
+            scope_id,
+            current_root: IpnsName::parse(&v.current_root_name).expect("current root parses"),
+            write_epoch: v.write_epoch,
+            min_read_epoch: v.min_read_epoch,
+            prev_root: v
+                .prev_root_name
+                .as_ref()
+                .map(|n| IpnsName::parse(n).expect("prev root parses")),
+        };
+        // Fixed key + nonce reproduce the sealed blob byte-for-byte.
+        let sealed = seal_pointer_payload(&key, &nonce, v.v, &owner, &object);
+        assert_eq!(
+            hex::encode(&sealed),
+            v.sealed,
+            "pointer-accept {}: sealed drift",
+            v.name
+        );
+        // And it opens back to the object under the owner's identity key.
+        let opened = open_pointer_payload(
+            &key,
+            v.v,
+            &scope_id,
+            &owner.verifying_key(),
+            &unhex(&v.name, &v.sealed),
+        )
+        .unwrap_or_else(|e| panic!("pointer-accept {}: open: {e}", v.name));
+        assert_eq!(opened, object, "pointer-accept {}: round-trip", v.name);
+    }
+    // Anti-vacuity: both a with-prev and a first-publish (no-prev) object exist.
+    assert!(vectors.iter().any(|v| v.prev_root_name.is_some()));
+    assert!(vectors.iter().any(|v| v.prev_root_name.is_none()));
+}
+
+#[test]
+fn pointer_reject_vectors_fail_closed() {
+    let m = manifest();
+    let vectors = pointer_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.payload.pointer_reject.count,
+        "pointer-reject count drift"
+    );
+
+    let listed: BTreeSet<&str> = m
+        .payload
+        .pointer_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(listed, in_vectors, "manifest checks vs pointer_reject.json");
+    for required in [
+        "seal-open-failed",
+        "identity-signature-invalid",
+        "truncated",
+    ] {
+        assert!(
+            listed.contains(required),
+            "pointer-reject must cover {required}"
+        );
+    }
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate pointer-reject {}",
+            v.name
+        );
+        let key = unhex32(&v.name, &v.pointer_read_key);
+        let scope_id = unhex_n::<16>(&v.name, &v.scope_id);
+        let verifier = EcdsaSigner::from_scalar(&unhex32(&v.name, &v.owner_scalar))
+            .expect("owner scalar")
+            .verifying_key();
+        let err = open_pointer_payload(&key, v.v, &scope_id, &verifier, &unhex(&v.name, &v.sealed))
+            .expect_err("pointer-reject must fail closed");
+        assert_eq!(
+            err.check(),
+            v.check,
+            "pointer-reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "pointer-reject {}: class ({err})",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn mailbox_accept_vectors_are_frozen_and_open() {
+    let m = manifest();
+    let vectors = mailbox_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.payload.mailbox_accept.count,
+        "mailbox-accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "mailbox-accept family must not be empty"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate mailbox-accept {}",
+            v.name
+        );
+        let recipient = X25519Secret::from_scalar(unhex32(&v.name, &v.recipient_secret));
+        let recipient_public = X25519Public::from_bytes(unhex32(&v.name, &v.recipient_public));
+        let eph = unhex32(&v.name, &v.ephemeral_scalar);
+        let sender =
+            EcdsaSigner::from_scalar(&unhex32(&v.name, &v.sender_scalar)).expect("sender scalar");
+        let payload = unhex(&v.name, &v.payload);
+        // Fixed ephemeral reproduces the whole block byte-for-byte.
+        let block = seal_mailbox_payload(&recipient_public, &eph, v.v, &sender, &payload);
+        assert_eq!(
+            hex::encode(&block),
+            v.block,
+            "mailbox-accept {}: block drift",
+            v.name
+        );
+        // The recipient opens and the sender identity verifies.
+        let item = open_mailbox_payload(&recipient, v.v, &unhex(&v.name, &v.block))
+            .unwrap_or_else(|e| panic!("mailbox-accept {}: open: {e}", v.name));
+        assert_eq!(item.payload, payload, "mailbox-accept {}: payload", v.name);
+        assert_eq!(
+            item.sender_identity,
+            sender.verifying_key(),
+            "mailbox-accept {}: sender identity",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn mailbox_reject_vectors_fail_closed() {
+    let m = manifest();
+    let vectors = mailbox_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.payload.mailbox_reject.count,
+        "mailbox-reject count drift"
+    );
+
+    let listed: BTreeSet<&str> = m
+        .payload
+        .mailbox_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(listed, in_vectors, "manifest checks vs mailbox_reject.json");
+    for required in ["hpke-open-failed", "identity-signature-invalid"] {
+        assert!(
+            listed.contains(required),
+            "mailbox-reject must cover {required}"
+        );
+    }
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate mailbox-reject {}",
+            v.name
+        );
+        let recipient = X25519Secret::from_scalar(unhex32(&v.name, &v.recipient_secret));
+        let err = open_mailbox_payload(&recipient, v.v, &unhex(&v.name, &v.block))
+            .expect_err("mailbox-reject must fail closed");
+        assert_eq!(
+            err.check(),
+            v.check,
+            "mailbox-reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "mailbox-reject {}: class ({err})",
+            v.name
         );
     }
 }

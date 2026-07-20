@@ -73,6 +73,23 @@ pub enum TrustViolation {
     /// scope's child listing is the transplant closure the AAD deliberately
     /// leaves the name out for — rejected here instead of by the tag.
     DuplicateIpnsName,
+    /// An IPNS record's `signatureV2` did not verify over
+    /// `"ipns-signature:" || data` under the Ed25519 key **extracted from the
+    /// name itself** (#24). *Trust*: the record is structurally a well-formed
+    /// IPNS V2 record, yet the named key did not author this data — the forgery
+    /// the pure verify chain exists to reject fail-closed, never staleness.
+    IpnsSignatureInvalid,
+    /// An IPNS record's signed `data.Value` did not equal its top-level `value`
+    /// field. *Trust*: `signatureV2` covers only `data`, so a disagreeing
+    /// unsigned top-level `value` is evidence the envelope was tampered after
+    /// signing — the data/Value consistency check the gate depends on.
+    IpnsValueMismatch,
+    /// An owner/sender secp256k1 **identity** signature did not verify over its
+    /// det-CBOR preimage: the re-point object's owner signature or a mailbox
+    /// item's sender signature (blueprint/core.md "Crypto suite": identity
+    /// signing). *Trust*: the structure decoded and the signature is a valid
+    /// ECDSA encoding, yet the claimed identity did not author it.
+    IdentitySignatureInvalid,
 }
 
 impl TrustViolation {
@@ -89,6 +106,9 @@ impl TrustViolation {
         "seal-open-failed",
         "duplicate-id",
         "duplicate-ipns-name",
+        "ipns-signature-invalid",
+        "ipns-value-mismatch",
+        "identity-signature-invalid",
     ];
 
     /// The stable name of the check that fired.
@@ -104,6 +124,9 @@ impl TrustViolation {
             Self::SealOpenFailed => "seal-open-failed",
             Self::DuplicateId => "duplicate-id",
             Self::DuplicateIpnsName => "duplicate-ipns-name",
+            Self::IpnsSignatureInvalid => "ipns-signature-invalid",
+            Self::IpnsValueMismatch => "ipns-value-mismatch",
+            Self::IdentitySignatureInvalid => "identity-signature-invalid",
         }
     }
 }
@@ -130,7 +153,10 @@ impl fmt::Display for TrustViolation {
             | Self::HpkeOpenFailed
             | Self::SealOpenFailed
             | Self::DuplicateId
-            | Self::DuplicateIpnsName => {
+            | Self::DuplicateIpnsName
+            | Self::IpnsSignatureInvalid
+            | Self::IpnsValueMismatch
+            | Self::IdentitySignatureInvalid => {
                 write!(f, "trust violation [{}]", self.check())
             }
         }
@@ -225,6 +251,20 @@ pub enum Malformed {
         expected: usize,
         found: usize,
     },
+    /// An `ipnsName` string was not the one canonical base36 CIDv1 libp2p-key
+    /// encoding of a valid Ed25519 public key: wrong multibase prefix, non-base36
+    /// characters, a wrong CID/multihash/protobuf layout, or a digest that is not
+    /// a valid compressed Edwards point. *Malformed*: foreign bytes in a name
+    /// slot, not a non-canonical encoding of a real name (the strict decode keeps
+    /// the Rust side fail-closed).
+    IpnsNameMalformed,
+    /// An IPNS record's protobuf could not be parsed, or it was missing a field
+    /// the V2 verify chain requires (`value`, `signatureV2`, or `data`), or its
+    /// `data` field was not the frozen det-CBOR shape. *Malformed*: structurally
+    /// incomplete or foreign input, not evidence a canonical form was tampered —
+    /// the signature check (a *trust* check) never runs on a record that cannot
+    /// be parsed.
+    IpnsRecordMalformed,
 }
 
 impl Malformed {
@@ -249,6 +289,8 @@ impl Malformed {
         "invalid-binding-sig-encoding",
         "invalid-node-kind",
         "invalid-field-length",
+        "ipns-name-malformed",
+        "ipns-record-malformed",
     ];
 
     /// The stable name of the check that fired.
@@ -272,6 +314,8 @@ impl Malformed {
             Self::InvalidBindingSigEncoding => "invalid-binding-sig-encoding",
             Self::InvalidNodeKind => "invalid-node-kind",
             Self::InvalidFieldLength { .. } => "invalid-field-length",
+            Self::IpnsNameMalformed => "ipns-name-malformed",
+            Self::IpnsRecordMalformed => "ipns-record-malformed",
         }
     }
 }
@@ -305,7 +349,9 @@ impl fmt::Display for Malformed {
             Self::InvalidIdentityKey
             | Self::InvalidEncSubkey
             | Self::InvalidBindingSigEncoding
-            | Self::InvalidNodeKind => Ok(()),
+            | Self::InvalidNodeKind
+            | Self::IpnsNameMalformed
+            | Self::IpnsRecordMalformed => Ok(()),
         }
     }
 }

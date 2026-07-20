@@ -7,6 +7,8 @@
 
 pub mod codec;
 pub mod error;
+pub mod ipns;
 pub mod kdf;
+pub mod payload;
 pub mod seal;
 pub mod suite;

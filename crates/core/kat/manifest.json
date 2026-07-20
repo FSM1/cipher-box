@@ -204,5 +204,62 @@
         "invalid-field-length"
       ]
     }
+  },
+  "ipns": {
+    "nameAccept": {
+      "file": "vectors/ipns/name_accept.json",
+      "count": 4
+    },
+    "nameReject": {
+      "file": "vectors/ipns/name_reject.json",
+      "count": 7,
+      "checks": [
+        "ipns-name-malformed"
+      ]
+    },
+    "recordAccept": {
+      "file": "vectors/ipns/record_accept.json",
+      "count": 2
+    },
+    "recordReject": {
+      "file": "vectors/ipns/record_reject.json",
+      "count": 5,
+      "checks": [
+        "ipns-signature-invalid",
+        "ipns-value-mismatch",
+        "ipns-record-malformed"
+      ]
+    },
+    "recordReput": {
+      "file": "vectors/ipns/record_reput.json",
+      "count": 1
+    }
+  },
+  "payload": {
+    "pointerAccept": {
+      "file": "vectors/payload/pointer_accept.json",
+      "count": 2
+    },
+    "pointerReject": {
+      "file": "vectors/payload/pointer_reject.json",
+      "count": 5,
+      "checks": [
+        "seal-open-failed",
+        "identity-signature-invalid",
+        "truncated"
+      ]
+    },
+    "mailboxAccept": {
+      "file": "vectors/payload/mailbox_accept.json",
+      "count": 2
+    },
+    "mailboxReject": {
+      "file": "vectors/payload/mailbox_reject.json",
+      "count": 4,
+      "checks": [
+        "hpke-open-failed",
+        "identity-signature-invalid"
+      ]
+    }
   }
 }
