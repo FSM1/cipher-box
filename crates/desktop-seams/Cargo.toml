@@ -31,12 +31,18 @@ cipherbox-engine.workspace = true
 reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls-webpki-roots",
 ] }
-# OS keyring: Apple Keychain / Windows Credential Manager / Secret Service
-# (crypto-rust keeps the Linux transport encryption pure Rust — no OpenSSL).
+# OS keyring: Apple Keychain / Windows Credential Manager / Secret Service.
+# The Linux backend is the *async* Secret Service over zbus + async-io +
+# crypto-rust — pure Rust end to end (no OpenSSL, and crucially no libdbus C
+# dependency, which `sync-secret-service` would drag in via libdbus-sys and
+# break hard constraint 6 / the no-cmake, no-C-toolchain rule). async-io (not
+# the tokio runtime feature) does the internal block-on, so the sync keyring
+# API stays callable without nesting inside the engine's own Tokio runtime.
 keyring = { version = "3", features = [
     "apple-native",
     "windows-native",
-    "sync-secret-service",
+    "async-secret-service",
+    "async-io",
     "crypto-rust",
 ] }
 # Tokio backs the Scheduler seam (timers, background tasks, wall clock).
