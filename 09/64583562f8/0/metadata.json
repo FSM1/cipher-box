@@ -1,0 +1,64 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "0964583562f8",
+  "session_id": "7500f1a6-27cc-4e96-bb34-e849cae7bfcd",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-20T00:14:20.175255Z",
+  "branch": "chore/v2-workspace-scaffold",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "4b96bb1409ef",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 488,
+    "cache_creation_tokens": 718068,
+    "cache_read_tokens": 39700563,
+    "output_tokens": 205011,
+    "api_call_count": 244
+  },
+  "session_metrics": {
+    "turn_count": 3
+  },
+  "summary": {
+    "intent": "Execute the CipherBox v2 rewrite kickoff: close out the wayfinder blueprint effort, freeze the v1 codebase in cipher-box, retire v1 release/CI automation, remove GSD tooling in favor of a skills-based workflow, adopt the AGENTS.md-as-source-of-truth pattern, rewrite core docs (README, SECURITY.md) for v2, and scaffold the new v2 workspace (Rust + TS).",
+    "outcome": "Wayfinder map and final ticket #48 closed with blueprint/deploy.md merged; v1 branch/tag frozen at 07376d0b; PR #616 landed the v1 demolition, toolchain single-sourcing, GSD removal (with /ship adapted rather than deleted), AGENTS.md adoption, README/landing pnpm conversion, and stale required-check cleanup; PR merged and v2 workspace scaffold (Cargo + pnpm/TS skeletons, restructured ci.yml, SECURITY.md rewrite) committed with all local gates green.",
+    "learnings": {
+      "repo": [
+        "cipher-box uses 1Password SSH commit signing (gpg.format=ssh, op-ssh-sign) which intermittently hangs/wedges — always timeout-guard signed commits and verify success via git log before retrying, rather than assuming failure",
+        "zsh aborts the entire compound command (not just the failing glob) when a glob pattern matches nothing — split risky glob-using rm/mv commands from the rest of the pipeline",
+        "gh pr edit fails on this repo due to Projects-classic GraphQL deprecation; use gh api -X PATCH ... -F body=@file instead",
+        "Landing site (landing/) is npm-managed and NOT part of the pnpm workspace — pnpm commands there require --ignore-workspace or they silently operate on repo root",
+        "release-please-config.json must never have release-as equal to the manifest version for the same component — creates a self-comparing changelog loop; this was previously CI-enforced but is no longer, so must be checked manually",
+        "Required status checks in GitHub branch protection can reference workflows that get deleted, leaving PRs permanently stuck on 'waiting for status update' — must be removed from branch protection settings, not just from the workflow files",
+        "desktop app version propagates via release-please extra-files into both tauri.conf.json and Cargo.toml, not just package.json"
+      ],
+      "code": [],
+      "workflow": [
+        "User confirmed strong preference: skip GSD's planning/verification layers in favor of a canonical blueprint corpus + CI-native gates + skills flow (/tdd, /verify, /code-review, /ship) — GSD had ~20 documented failure modes and produces a drift-prone intermediate representation when a higher-fidelity spec already exists",
+        "Before deleting tooling wholesale (GSD .claude/ install), inventory what's actually load-bearing vs. dead — settings.local.json had live hook wiring that needed stripping separately from file deletion to avoid failing hook spawns next session",
+        "When a user says a component 'isn't fully X-specific,' don't just fix going forward — recover and adapt the deleted artifact (git show HEAD~1:path) rather than treating the correction as prospective only",
+        "CLAUDE.md → AGENTS.md pattern: retitle content generically, drop tool-specific profile markers, and point CLAUDE.md at AGENTS.md via a single @AGENTS.md include so other harnesses can consume the same source of truth",
+        "User does not want Claude/session attribution footers in PR bodies (commit trailers are fine) — saved as standing memory rule feedback-no-claude-attribution-in-pr-bodies.md",
+        "Adversarially re-verify subagent-reported 'all green' scaffold results with your own gate runs before committing, rather than trusting the agent's summary at face value"
+      ]
+    },
+    "friction": [
+      "Repeated 1Password SSH signing failures forced multiple background retry loops with increasing timeouts before eventually working again later in the session",
+      "python yaml module missing and ruby YAML.load_file/aliases unsupported forced fallback to plain ruby YAML.load(File.read()) for workflow validation",
+      "Write tool repeatedly required a prior Read before editing already-known files, adding extra round-trips",
+      "Two stale required status checks (release preview, verify e2e) from deleted workflows blocked PR merge until branch protection was manually edited",
+      "Injected a duplicate `name:` line into deploy-staging.yml due to an incorrect assumption about workflow name matching, requiring a follow-up fix",
+      "CI reruns kept restarting under a live watcher as more commits were pushed to PR #616, causing repeated watcher re-kicks"
+    ],
+    "open_items": [
+      "v2 workspace scaffold (Cargo + TS) committed but PR not yet opened/shipped as of end of transcript — SECURITY.md rewrite just committed",
+      "Remaining v2 scaffold steps per task list: full local verify, PR draft→ready, CI green, then update main's required checks to the new v2 job set before merge",
+      "Build tracker not yet created: GitHub v2 milestone with one issue per PR-sized slice from blueprint docs, to be worked in dependency order (crates/core first)",
+      "FUSE-T hardware gates (≥1.2.7 invalidation round-trip, overwrite-rename atomicity, license terms) flagged as cheap-to-start-early but not yet kicked off",
+      "Staging destructive cutover redeploy still pending, gated on contract suite + smoke tests green on a VPS dry-run"
+    ]
+  }
+}
