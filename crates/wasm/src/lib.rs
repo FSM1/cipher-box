@@ -382,9 +382,13 @@ impl Event {
 // Native-only conversion tests. The browser-shaped boundary behaviour lives in
 // `tests/boundary.rs` under wasm-bindgen-test; these host tests guard the
 // facade<->binding mapping (a new engine variant breaks an exhaustive match).
+//
+// Gated off wasm32-unknown-unknown (the exact complement of `boundary.rs`):
+// that target has no libtest harness, so a plain `#[test]` there compiles to a
+// silent no-op. Native and wasm32-wasip1 run these unchanged.
 // ---------------------------------------------------------------------------
 
-#[cfg(test)]
+#[cfg(all(test, not(all(target_family = "wasm", target_os = "unknown"))))]
 mod tests {
     use super::*;
     use cipherbox_engine::seams::OpId;
