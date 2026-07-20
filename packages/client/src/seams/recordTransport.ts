@@ -6,7 +6,7 @@
  * (CipherBox someguy plus at least one independent public endpoint). The engine
  * owns IPNS end-to-end — signing, verification, CAS, fan-out, and every trust
  * decision — so this seam never inspects, caches, or reorders records; it only
- * addresses `routing_key` and moves bytes. Absence is `null`, never an error;
+ * addresses `routingKey` and moves bytes. Absence is `null`, never an error;
  * a rejected promise is reserved for transport-level failure.
  */
 

@@ -42,6 +42,11 @@ export class IdbFloorStore implements FloorStoreSeam {
   }
 
   private async raise(store: string, key: Uint8Array, value: number): Promise<number> {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new RangeError(
+        `FloorStore: floor value must be a non-negative safe integer, got ${value}`
+      );
+    }
     const db = await this.open();
     const tx = db.transaction(store, 'readwrite');
     const objectStore = tx.objectStore(store);

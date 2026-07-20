@@ -20,6 +20,12 @@ export function toHex(bytes: Uint8Array): string {
 
 /** Inverse of {@link toHex}; `''` maps to an empty byte string. */
 export function fromHex(hex: string): Uint8Array {
+  if (hex.length % 2 !== 0) {
+    throw new TypeError('fromHex: hex string must have an even length');
+  }
+  if (!/^[0-9a-fA-F]*$/.test(hex)) {
+    throw new TypeError('fromHex: hex string contains a non-hex character');
+  }
   const out = new Uint8Array(hex.length / 2);
   for (let i = 0; i < out.length; i += 1) {
     out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);

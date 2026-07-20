@@ -60,6 +60,6 @@ export function deleteDatabase(name: string): Promise<void> {
     const request = indexedDB.deleteDatabase(name);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error ?? new Error('IndexedDB delete failed'));
-    request.onblocked = () => resolve();
+    request.onblocked = () => reject(new Error(`IndexedDB delete blocked for "${name}"`));
   });
 }
