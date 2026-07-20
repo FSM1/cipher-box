@@ -13,9 +13,28 @@ publish.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# Test-only: compiles the browser seam conformance bridge (`src/conformance.rs`),
+# which adapts JS seam objects to the engine seam traits and re-exports the
+# engine's per-seam conformance kits (via `cipherbox-engine/test-kit`) as
+# wasm-bindgen runners. The `packages/client` browser suite builds the WASM
+# module with this feature; the production artifact (built without it) never
+# pulls the test kit or these deps.
+conformance = [
+    "dep:js-sys",
+    "dep:wasm-bindgen-futures",
+    "dep:console_error_panic_hook",
+    "cipherbox-engine/test-kit",
+]
+
 [dependencies]
 cipherbox-engine.workspace = true
 wasm-bindgen = "0.2"
+
+# Conformance-bridge deps (feature `conformance` only; inert otherwise).
+js-sys = { version = "0.3", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
 
 # Browser-shaped test deps only (wasm32-unknown-unknown): the boundary tests
 # run under wasm-bindgen-test-runner, and getrandom's `wasm_js` backend proves
