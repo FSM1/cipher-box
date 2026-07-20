@@ -1,0 +1,59 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "1bbea77e6169",
+  "strategy": "manual-commit",
+  "branch": "chore/v2-workspace-scaffold",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/scripts/create-release-labels.sh",
+    "Cargo.lock",
+    "Cargo.toml",
+    "README.md",
+    "apps/api/package.json",
+    "apps/api/src/app.module.ts",
+    "apps/api/src/health/health.controller.test.ts",
+    "apps/api/src/health/health.controller.ts",
+    "apps/api/src/main.ts",
+    "apps/api/tsconfig.build.json",
+    "apps/api/tsconfig.json",
+    "apps/web/index.html",
+    "apps/web/package.json",
+    "apps/web/src/App.tsx",
+    "apps/web/src/main.tsx",
+    "apps/web/tsconfig.json",
+    "apps/web/vite.config.ts",
+    "crates/core/Cargo.toml",
+    "crates/core/src/lib.rs",
+    "crates/engine/Cargo.toml",
+    "crates/engine/src/lib.rs",
+    "crates/fuse/Cargo.toml",
+    "crates/fuse/src/lib.rs",
+    "crates/wasm/Cargo.toml",
+    "crates/wasm/src/lib.rs",
+    "eslint.config.js",
+    "package.json",
+    "packages/client/package.json",
+    "packages/client/src/index.test.ts",
+    "packages/client/src/index.ts",
+    "packages/client/tsconfig.build.json",
+    "packages/client/tsconfig.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1b/bea77e6169/0/metadata.json",
+      "transcript": "/1b/bea77e6169/0/full.jsonl",
+      "compact_transcript": "/1b/bea77e6169/0/transcript.jsonl",
+      "content_hash": "/1b/bea77e6169/0/content_hash.txt",
+      "prompt": "/1b/bea77e6169/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 482,
+    "cache_creation_tokens": 713490,
+    "cache_read_tokens": 38994134,
+    "output_tokens": 202912,
+    "api_call_count": 241
+  }
+}
