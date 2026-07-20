@@ -111,7 +111,7 @@ fn main() {
     write_pretty(&codec_dir.join("reject.json"), &reject);
     write_pretty(&codec_dir.join("unknown_fields.json"), &unknown);
 
-    let manifest = build_manifest(&kat_dir, &accept, &reject, &unknown);
+    let manifest = build_manifest(&accept, &reject, &unknown);
     write_pretty(&kat_dir.join("manifest.json"), &manifest);
 
     println!(
@@ -727,13 +727,13 @@ fn build_unknown_field_vectors() -> Vec<UnknownVector> {
 }
 
 // ---------------------------------------------------------------------------
-// Manifest: counts/checks/requiredKinds rewritten from the generated data;
-// manifestVersion/profile/structureTags/kdfEdges preserved from the existing
-// file (later spine slices extend the empty sections).
+// Manifest: every byte comes from this generator — header constants and
+// counts/checks/requiredKinds from the generated data. The empty
+// structureTags/kdfEdges sections are extended by extending this generator
+// when those spine slices land, never by hand-editing the JSON.
 // ---------------------------------------------------------------------------
 
 fn build_manifest(
-    kat_dir: &Path,
     accept: &[AcceptVector],
     reject: &[RejectVector],
     unknown: &[UnknownVector],
@@ -764,37 +764,9 @@ fn build_manifest(
         "every reject-vector check must come from the error surface"
     );
 
-    let (manifest_version, profile, structure_tags, kdf_edges) =
-        match fs::read_to_string(kat_dir.join("manifest.json")) {
-            Ok(text) => {
-                let existing: serde_json::Value =
-                    serde_json::from_str(&text).expect("existing manifest.json must parse");
-                (
-                    existing
-                        .get("manifestVersion")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or(1),
-                    existing
-                        .get("profile")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or(PROFILE)
-                        .to_string(),
-                    existing
-                        .get("structureTags")
-                        .cloned()
-                        .unwrap_or_else(|| json!({})),
-                    existing
-                        .get("kdfEdges")
-                        .cloned()
-                        .unwrap_or_else(|| json!({})),
-                )
-            }
-            Err(_) => (1, PROFILE.to_string(), json!({}), json!({})),
-        };
-
     Manifest {
-        manifest_version,
-        profile,
+        manifest_version: 1,
+        profile: PROFILE.to_string(),
         codecs: Codecs {
             det_cbor: DetCbor {
                 accept: AcceptSection {
@@ -813,7 +785,7 @@ fn build_manifest(
                 },
             },
         },
-        structure_tags,
-        kdf_edges,
+        structure_tags: json!({}),
+        kdf_edges: json!({}),
     }
 }

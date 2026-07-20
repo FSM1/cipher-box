@@ -13,6 +13,15 @@ use core::fmt;
 /// A fail-closed trust violation: the input is well-formed enough to prove a
 /// writer did not follow the deterministic profile (or, in later slices,
 /// failed a cryptographic check). Never mere staleness, never retried.
+///
+/// The codec-layer boundary between the classes, frozen by the KAT reject
+/// vectors: a violation is *trust* when a canonical encoding of the same data
+/// exists and the writer emitted a different one (non-shortest forms,
+/// indefinite lengths, unsorted or duplicate keys) — the signature of a
+/// tampering or non-conforming re-encode. Shapes the profile has no
+/// representation for at all (tags, floats, extra simple values, non-text
+/// keys) are [`Malformed`]: foreign data, not a non-canonical form of valid
+/// data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrustViolation {
     /// An integer (major type 0/1) used a longer encoding than the shortest
