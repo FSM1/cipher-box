@@ -429,6 +429,7 @@
             "application/json": {
               "schema": {
                 "type": "array",
+                "maxItems": 1000,
                 "items": {
                   "$ref": "#/components/schemas/RegisterEntryDto"
                 }
@@ -478,8 +479,10 @@
             "application/json": {
               "schema": {
                 "type": "array",
+                "maxItems": 1000,
                 "items": {
-                  "type": "string"
+                  "type": "string",
+                  "maxLength": 256
                 }
               }
             }

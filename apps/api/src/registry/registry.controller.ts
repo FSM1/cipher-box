@@ -3,14 +3,22 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiCreatedResponse,
+  ApiExtraModels,
   ApiOperation,
   ApiResponse,
   ApiTags,
+  getSchemaPath,
 } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthenticatedRequest, JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { THROTTLE_SURFACES } from '../ops/throttling';
-import { RegisterEntryDto, RegisterResponseDto, RetireResponseDto } from './dto/registry.dto';
+import {
+  MAX_BATCH,
+  RegisterEntryDto,
+  RegisterResponseDto,
+  RETIRE_TARGET_MAX_LENGTH,
+  RetireResponseDto,
+} from './dto/registry.dto';
 import { registerBodyPipes, retireBodyPipes } from './registry.pipes';
 import { RegistryService } from './services/registry.service';
 
@@ -23,6 +31,7 @@ import { RegistryService } from './services/registry.service';
  */
 @ApiTags('Registry')
 @ApiBearerAuth()
+@ApiExtraModels(RegisterEntryDto)
 @UseGuards(JwtAuthGuard)
 @Controller('registry')
 export class RegistryController {
@@ -34,7 +43,13 @@ export class RegistryController {
     summary:
       'Batch register [{ipnsName, headCid?, contentCids[]}] under the caller account; register-first, idempotent upserts',
   })
-  @ApiBody({ type: RegisterEntryDto, isArray: true })
+  @ApiBody({
+    schema: {
+      type: 'array',
+      maxItems: MAX_BATCH,
+      items: { $ref: getSchemaPath(RegisterEntryDto) },
+    },
+  })
   @ApiCreatedResponse({ type: RegisterResponseDto })
   @ApiResponse({ status: 400, description: 'Malformed batch (invalid entry, name, or CID)' })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
@@ -52,7 +67,13 @@ export class RegistryController {
     summary:
       'Batch retire [ipnsName | cid] for the caller account; union liveness, refcounted physical unpin at global zero',
   })
-  @ApiBody({ type: String, isArray: true })
+  @ApiBody({
+    schema: {
+      type: 'array',
+      maxItems: MAX_BATCH,
+      items: { type: 'string', maxLength: RETIRE_TARGET_MAX_LENGTH },
+    },
+  })
   @ApiCreatedResponse({ type: RetireResponseDto })
   @ApiResponse({ status: 400, description: 'Malformed batch' })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })

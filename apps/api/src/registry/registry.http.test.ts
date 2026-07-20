@@ -92,7 +92,10 @@ function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {
   const byEntity = new Map(repos);
   return {
     transaction: (runInTransaction: (manager: unknown) => unknown) =>
-      runInTransaction({ getRepository: (entity: unknown) => byEntity.get(entity) }),
+      runInTransaction({
+        getRepository: (entity: unknown) => byEntity.get(entity),
+        query: async () => [],
+      }),
   } as unknown as DataSource;
 }
 
@@ -161,10 +164,14 @@ describe('registry HTTP surface', () => {
   /** Seed an account and mint a valid access token for it. */
   async function account(overrides: Partial<User> = {}): Promise<{ id: string; token: string }> {
     const priv = secp256k1.utils.randomPrivateKey();
-    const publicKey = Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
-    const user = await userRepo.save({ publicKey, byo: false, ...overrides } as never);
-    const token = await jwt.signAsync({ sub: user.id, publicKey }, { secret: SECRET });
-    return { id: user.id, token };
+    try {
+      const publicKey = Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
+      const user = await userRepo.save({ publicKey, byo: false, ...overrides } as never);
+      const token = await jwt.signAsync({ sub: user.id, publicKey }, { secret: SECRET });
+      return { id: user.id, token };
+    } finally {
+      priv.fill(0);
+    }
   }
 
   describe('register — register-first, idempotency', () => {

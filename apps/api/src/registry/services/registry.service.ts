@@ -1,7 +1,8 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { DataSource, In, Repository } from 'typeorm';
+import { createHash } from 'node:crypto';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 import { NameInventory } from '../entities/name-inventory.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
@@ -9,6 +10,25 @@ import { PinStore } from '../pin-store';
 
 /** Default per-account quota when neither an override nor `QUOTA_DEFAULT_BYTES` is set: 10 GiB. */
 const DEFAULT_QUOTA_BYTES = 10 * 1024 * 1024 * 1024;
+
+/** Stable 64-bit advisory-lock key for a token: first 8 bytes of its sha256. */
+function lockKey(token: string): bigint {
+  return createHash('sha256').update(token).digest().readBigInt64BE(0);
+}
+
+/**
+ * Serialize every refcount/inventory mutation for each token by taking a
+ * transaction-scoped advisory lock. Row locks can't see an unborn INSERT, so
+ * only a per-token lock closes the register/retire phantom race and concurrent
+ * duplicate inserts. Keys are acquired in sorted order so overlapping batches
+ * cannot deadlock; the lock auto-releases at commit or rollback.
+ */
+async function lockTokens(manager: EntityManager, tokens: string[]): Promise<void> {
+  const keys = [...new Set(tokens.map(lockKey))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const key of keys) {
+    await manager.query('SELECT pg_advisory_xact_lock($1::bigint)', [key.toString()]);
+  }
+}
 
 export interface RegisterEntry {
   ipnsName: string;
@@ -108,6 +128,11 @@ export class RegistryService {
     // leave no partial state behind.
     if (nameOrder.length > 0 || cidOrder.length > 0) {
       await this.dataSource.transaction(async (manager) => {
+        // Serialize per token before any read/write: register and retire
+        // contend on the same keys, closing the phantom-INSERT race and
+        // concurrent-duplicate inserts.
+        await lockTokens(manager, [...nameOrder, ...cidOrder]);
+
         const nameRepo = manager.getRepository(NameInventory);
         const pinRepo = manager.getRepository(PinnedCid);
 
@@ -148,7 +173,9 @@ export class RegistryService {
       });
     }
 
-    return { names: entries.length, cids: cids.size };
+    // `names` is the distinct-name count (the DTO contract), not the raw batch
+    // length, which double-counts a name repeated across entries.
+    return { names: nameOrder.length, cids: cids.size };
   }
 
   /**
@@ -163,20 +190,17 @@ export class RegistryService {
       return { retired: 0, unpinned: 0 };
     }
 
-    // All-or-nothing, and serialized against concurrent same-CID retires: a
-    // pessimistic-write lock on every target row makes the delete → survivor
-    // check atomic so physical unpin fires exactly at global refcount zero.
+    // All-or-nothing, and serialized per CID against concurrent register and
+    // retire: the advisory lock (not a row lock, which can't see an unborn
+    // INSERT) makes the delete → survivor check the authority for unpinning.
     const { retired, unpinCids } = await this.dataSource.transaction(async (manager) => {
+      await lockTokens(manager, targets);
+
       const nameRepo = manager.getRepository(NameInventory);
       const pinRepo = manager.getRepository(PinnedCid);
 
-      const locked = await pinRepo.find({
-        where: { cid: In(targets) },
-        lock: { mode: 'pessimistic_write' },
-      });
-      const heldByCaller = new Set(
-        locked.filter((row) => row.accountId === accountId).map((row) => row.cid)
-      );
+      const held = await pinRepo.find({ where: { accountId, cid: In(targets) } });
+      const heldByCaller = new Set(held.map((row) => row.cid));
       const heldCids = targets.filter(
         (target, index) => targets.indexOf(target) === index && heldByCaller.has(target)
       );

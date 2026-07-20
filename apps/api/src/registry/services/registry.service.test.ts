@@ -80,7 +80,10 @@ function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {
   const byEntity = new Map(repos);
   return {
     transaction: (runInTransaction: (manager: unknown) => unknown) =>
-      runInTransaction({ getRepository: (entity: unknown) => byEntity.get(entity) }),
+      runInTransaction({
+        getRepository: (entity: unknown) => byEntity.get(entity),
+        query: async () => [],
+      }),
   } as unknown as DataSource;
 }
 
@@ -151,6 +154,18 @@ describe('RegistryService', () => {
       expect(result).toEqual({ names: 1, cids: 0 });
       expect(names.rows).toHaveLength(1);
       expect(pins.rows).toHaveLength(0);
+    });
+
+    it('reports the DISTINCT name count, not the raw batch length', async () => {
+      const acct = await account();
+      // The same name appears in two entries; the last-provided head wins.
+      const result = await service.register(acct, [
+        { ipnsName: 'dup', headCid: 'bafyH1', contentCids: ['bafyA'] },
+        { ipnsName: 'dup', headCid: 'bafyH2', contentCids: ['bafyB'] },
+      ]);
+      expect(result).toEqual({ names: 1, cids: 4 });
+      expect(names.rows).toHaveLength(1);
+      expect(names.rows[0].headCid).toBe('bafyH2');
     });
 
     it('is idempotent: replaying the same batch adds no duplicate rows', async () => {
