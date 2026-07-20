@@ -19,7 +19,7 @@
 
 use hkdf::Hkdf;
 use sha2::Sha256;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::aead;
 use super::secret::SecretBytes;
@@ -146,6 +146,10 @@ fn labeled_extract(salt: &[u8], suite_id: &[u8], label: &[u8], ikm: &[u8]) -> [u
     labeled_ikm.extend_from_slice(label);
     labeled_ikm.extend_from_slice(ikm);
     let (prk, _) = Hkdf::<Sha256>::extract(Some(salt), &labeled_ikm);
+    // The scratch buffer copies `ikm` verbatim — in the KEM path that is the DH
+    // shared secret. Wipe it before it drops; the derived PRK is kept in the
+    // caller's `Zeroizing` binding when it is secret.
+    labeled_ikm.zeroize();
     prk.into()
 }
 
@@ -173,7 +177,8 @@ fn labeled_expand(
 /// DHKEM `ExtractAndExpand(dh, kem_context)`.
 fn extract_and_expand(dh: &[u8], kem_context: &[u8]) -> SecretBytes {
     let suite = kem_suite_id();
-    let eae_prk = labeled_extract(b"", &suite, b"eae_prk", dh);
+    // The PRK recovers the DH shared secret, so keep it in a zeroizing binding.
+    let eae_prk = Zeroizing::new(labeled_extract(b"", &suite, b"eae_prk", dh));
     let shared = labeled_expand(&eae_prk, &suite, b"shared_secret", kem_context, NSECRET);
     SecretBytes::new(shared.try_into().expect("Nsecret == SECRET_LEN"))
 }
@@ -233,7 +238,9 @@ pub(crate) fn key_schedule_base(
     ksc.extend_from_slice(&psk_id_hash);
     ksc.extend_from_slice(&info_hash);
 
-    let secret = labeled_extract(shared_secret, &suite, b"secret", b"");
+    // `secret` is the parent of the AEAD key and the exporter secret, so it is
+    // as sensitive as they are — keep it zeroized for its whole lifetime.
+    let secret = Zeroizing::new(labeled_extract(shared_secret, &suite, b"secret", b""));
     KeySchedule {
         key: Zeroizing::new(labeled_expand(&secret, &suite, b"key", &ksc, nk)),
         base_nonce: labeled_expand(&secret, &suite, b"base_nonce", &ksc, nn),
