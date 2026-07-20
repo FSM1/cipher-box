@@ -11,4 +11,14 @@ export const THROTTLE_SURFACES = {
   auth: { default: { limit: 10, ttl: 60_000 } },
   /** Refresh rotation: chattier than login, still bounded. */
   refresh: { default: { limit: 30, ttl: 60_000 } },
+  /**
+   * Mailbox post: per SENDER account (AccountThrottlerGuard keys by the
+   * authenticated account). This same bucket rate-limits the unknown-recipient
+   * existence oracle — an account can only probe pubkeys at the post rate.
+   */
+  mailboxPost: { default: { limit: 30, ttl: 60_000 } },
+  /** Mailbox poll: per RECIPIENT mailbox; chattier on the sync cadence. */
+  mailboxPoll: { default: { limit: 60, ttl: 60_000 } },
+  /** Mailbox ack: per RECIPIENT mailbox; one delete per delivered message. */
+  mailboxAck: { default: { limit: 120, ttl: 60_000 } },
 } as const;
