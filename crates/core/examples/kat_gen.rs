@@ -1660,7 +1660,8 @@ fn build_envelope_accept() -> Vec<EnvelopeAcceptVector> {
             names.insert(name.to_string()),
             "duplicate envelope accept {name}"
         );
-        let env = seal_read_body(&p.key, &p.nonce, p.v, p.id, p.scope, p.epoch, &body);
+        let env = seal_read_body(&p.key, &p.nonce, p.v, p.id, p.scope, p.epoch, &body)
+            .expect("sample bodies are valid");
         let envelope_hex = envelope_accept_self_check(name, &env, &body, &p.key);
         out.push(EnvelopeAcceptVector {
             name: name.to_string(),
@@ -1673,7 +1674,8 @@ fn build_envelope_accept() -> Vec<EnvelopeAcceptVector> {
     // An envelope carrying a future top-level field (writeSealed stand-in): it
     // must round-trip byte-stable and still open.
     let body = sample_folder();
-    let env = seal_read_body(&p.key, &p.nonce, p.v, p.id, p.scope, p.epoch, &body);
+    let env = seal_read_body(&p.key, &p.nonce, p.v, p.id, p.scope, p.epoch, &body)
+        .expect("sample folder is valid");
     let mut m = decode(&encode_envelope(&env))
         .unwrap()
         .as_map()
@@ -1747,7 +1749,8 @@ fn build_envelope_reject() -> Vec<RejectVector> {
         p.scope,
         p.epoch,
         &sample_folder(),
-    );
+    )
+    .expect("sample folder is valid");
     let base = decode(&encode_envelope(&env))
         .unwrap()
         .as_map()

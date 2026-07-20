@@ -149,7 +149,10 @@ proptest! {
         scope in prop::array::uniform16(any::<u8>()),
         epoch in any::<u64>(),
     ) {
-        let env = seal_read_body(&key, &nonce, v, id, scope, epoch, &body);
+        // `arb_read_body` only yields uniqueness-valid folders, so the seal
+        // never rejects.
+        let env = seal_read_body(&key, &nonce, v, id, scope, epoch, &body)
+            .expect("a valid read-body must seal");
         // Envelope codec identity + byte stability.
         let bytes = encode_envelope(&env);
         let decoded = decode_envelope(&bytes).expect("own envelope must decode");

@@ -262,6 +262,17 @@ impl ReadBody {
             Self::File { .. } => NodeKind::File,
         }
     }
+
+    /// Check the decode-time invariants a *constructed* body must also satisfy
+    /// before it is sealed and persisted: a folder's children carry
+    /// pairwise-unique ids and pairwise-unique ipnsNames (#39 D7). The seal path
+    /// runs this so it never persists a body that decode would refuse to reopen.
+    pub fn validate(&self) -> Result<(), CodecError> {
+        match self {
+            Self::Folder { children, .. } => assert_children_unique(children),
+            Self::File { .. } => Ok(()),
+        }
+    }
 }
 
 /// The strict name comparator: a platform-stable total order over opaque
@@ -316,7 +327,22 @@ pub fn decode_read_body(bytes: &[u8]) -> Result<ReadBody, CodecError> {
 }
 
 /// Encode a read-body to its canonical det-CBOR plaintext.
+///
+/// The returned buffer carries any inline **content-key** material verbatim, so
+/// its caller is the terminal owner and must zeroize it after use (the seal
+/// path, [`seal_read_body`](super::seal_read_body), does exactly this).
+///
+/// Encoding is infallible and does *not* re-check uniqueness — mirroring the
+/// codec's `encode`/`MAX_DEPTH` contract, a caller-built folder with duplicate
+/// child ids/ipnsNames still encodes but its bytes reject on decode. Callers
+/// that *persist* a body must go through [`seal_read_body`](super::seal_read_body)
+/// (or call [`ReadBody::validate`] first), which refuses to seal a body that
+/// would not reopen; a `debug_assert` catches the divergence early in tests.
 pub fn encode_read_body(body: &ReadBody) -> Vec<u8> {
+    debug_assert!(
+        body.validate().is_ok(),
+        "encoding a read-body that violates child uniqueness; its bytes would reject on decode"
+    );
     let mut m = Map::new();
     match body {
         ReadBody::Folder {
@@ -410,12 +436,18 @@ pub(super) fn collect_unknown(map: &Map, known: &[&str]) -> Vec<(String, Value)>
         .collect()
 }
 
-/// Merge preserved unknown fields into a typed map. Decode guarantees the
-/// unknown keys never overlap the typed ones, so this cannot collide on the
-/// round-trip path; `Map::insert` re-imposes canonical order.
+/// Merge preserved unknown fields into a typed map, **typed fields taking
+/// precedence**. Decode guarantees the unknown keys never overlap the typed
+/// ones (they were partitioned by [`collect_unknown`]), so the round-trip path
+/// never collides and stays byte-stable. The skip-on-collision guard hardens
+/// the *construction* path: a caller-built struct whose public `unknown` list
+/// happens to carry a schema key can never overwrite the typed value and forge
+/// bytes that disagree with it. `Map::insert` re-imposes canonical order.
 pub(super) fn merge_unknown(map: &mut Map, unknown: &[(String, Value)]) {
     for (k, v) in unknown {
-        map.insert(k.clone(), v.clone());
+        if !map.contains_key(k) {
+            map.insert(k.clone(), v.clone());
+        }
     }
 }
 
@@ -441,6 +473,21 @@ mod tests {
             children,
             unknown: Vec::new(),
         }
+    }
+
+    /// Encode a folder read-body directly through the codec, bypassing
+    /// `encode_read_body`'s uniqueness debug-assert — the way a hostile or buggy
+    /// peer's bytes arrive, so decode-side uniqueness rejection can be tested.
+    fn raw_folder_bytes(children: &[ChildRef]) -> Vec<u8> {
+        let mut m = Map::new();
+        m.insert("kind", Value::Text("folder".into()));
+        m.insert(
+            "children",
+            Value::Array(children.iter().map(ChildRef::to_value).collect()),
+        );
+        m.insert("createdAt", Value::Unsigned(100));
+        m.insert("modifiedAt", Value::Unsigned(200));
+        encode(&Value::Map(m))
     }
 
     #[test]
@@ -479,8 +526,7 @@ mod tests {
 
     #[test]
     fn duplicate_child_id_rejects() {
-        let body = folder(vec![child(1, "a", b"name-1"), child(1, "b", b"name-2")]);
-        let bytes = encode_read_body(&body);
+        let bytes = raw_folder_bytes(&[child(1, "a", b"name-1"), child(1, "b", b"name-2")]);
         assert_eq!(
             decode_read_body(&bytes).unwrap_err().check(),
             "duplicate-id"
@@ -489,11 +535,7 @@ mod tests {
 
     #[test]
     fn duplicate_child_ipns_name_rejects() {
-        let body = folder(vec![
-            child(1, "a", b"same-name"),
-            child(2, "b", b"same-name"),
-        ]);
-        let bytes = encode_read_body(&body);
+        let bytes = raw_folder_bytes(&[child(1, "a", b"same-name"), child(2, "b", b"same-name")]);
         assert_eq!(
             decode_read_body(&bytes).unwrap_err().check(),
             "duplicate-ipns-name"
@@ -575,5 +617,39 @@ mod tests {
         assert_eq!(name_cmp(b"b", b"a"), Ordering::Greater);
         // Bytewise, not length-first: "aa" < "b".
         assert_eq!(name_cmp(b"aa", b"b"), Ordering::Less);
+    }
+
+    #[test]
+    fn constructed_unknown_cannot_overwrite_typed_field() {
+        // A folder whose public `unknown` list carries a key that collides with
+        // a schema field must NOT overwrite the typed value on encode: typed
+        // wins, so the bytes still decode as a folder.
+        let body = ReadBody::Folder {
+            created_at: 1,
+            modified_at: 2,
+            children: Vec::new(),
+            unknown: vec![("kind".to_string(), Value::Text("file".into()))],
+        };
+        let bytes = encode_read_body(&body);
+        let decoded = decode_read_body(&bytes).expect("decodes");
+        assert_eq!(
+            decoded.kind(),
+            NodeKind::Folder,
+            "typed kind wins over unknown"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_duplicate_children() {
+        let dup = folder(vec![child(1, "a", b"ipns-a"), child(1, "b", b"ipns-b")]);
+        assert_eq!(dup.validate().unwrap_err().check(), "duplicate-id");
+        // A file (no children) always validates.
+        let file = ReadBody::File {
+            created_at: 1,
+            modified_at: 2,
+            versions: vec![Version::new(b"c".to_vec(), [0; 32], 1, 1)],
+            unknown: Vec::new(),
+        };
+        assert!(file.validate().is_ok());
     }
 }

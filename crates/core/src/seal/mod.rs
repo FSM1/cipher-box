@@ -34,9 +34,12 @@ use crate::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
 /// Seal `plaintext` under `key`/`nonce` with the structured AAD for `ctx`.
 /// Returns the wire sealed blob `nonce(24) || ciphertext||tag`.
 ///
-/// `nonce` is caller-injected entropy (KATs pin it); it is prefixed so
-/// [`unseal`] can recover it and is authenticated by the AEAD rather than by
-/// the AAD (#39 D7). The caller owns `plaintext` and is its terminal owner for
+/// `nonce` **must be unique for every seal performed with a given `key`**:
+/// XChaCha20-Poly1305 nonce reuse under one key is a confidentiality and
+/// integrity break. It is caller-injected entropy (KATs pin it; production
+/// callers source it from their injected entropy seam), prefixed so [`unseal`]
+/// can recover it, and authenticated by the AEAD rather than by the AAD
+/// (#39 D7). The caller owns `plaintext` and is its terminal owner for
 /// zeroization (a callee never zeroizes a caller-owned buffer).
 pub fn seal(
     key: &[u8; KEY_LEN],

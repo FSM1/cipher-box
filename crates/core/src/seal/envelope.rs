@@ -90,9 +90,16 @@ pub fn encode_envelope(env: &Envelope) -> Vec<u8> {
 }
 
 /// Seal a read-body into a fresh envelope under the read key + injected nonce.
+///
 /// The struct tag is fixed to `read-body`; the AAD binds `(v, id, scope, epoch,
-/// read-body)`. The plaintext (which carries inline content keys) is zeroized
-/// here — this function is its terminal owner.
+/// read-body)`. `nonce` must be unique per `key` (XChaCha20-Poly1305 nonce
+/// reuse under one key is a break) and is caller-injected entropy the KATs pin.
+///
+/// The body is [`ReadBody::validate`]d first, so this never persists a folder
+/// with duplicate child ids/ipnsNames that decode would refuse to reopen —
+/// returning a [`TrustViolation`](crate::error::TrustViolation) if it would.
+/// The encoded plaintext (which carries inline content keys) is zeroized here —
+/// this function is its terminal owner.
 pub fn seal_read_body(
     key: &[u8; KEY_LEN],
     nonce: &[u8; NONCE_LEN],
@@ -101,7 +108,8 @@ pub fn seal_read_body(
     scope: [u8; 16],
     epoch: u64,
     body: &ReadBody,
-) -> Envelope {
+) -> Result<Envelope, CodecError> {
+    body.validate()?;
     let mut plaintext = encode_read_body(body);
     let ctx = AadContext {
         v,
@@ -112,7 +120,7 @@ pub fn seal_read_body(
     };
     let read_sealed = super::seal(key, nonce, &ctx, &plaintext);
     plaintext.zeroize();
-    Envelope {
+    Ok(Envelope {
         v,
         id,
         scope,
@@ -120,7 +128,7 @@ pub fn seal_read_body(
         read_sealed,
         unknown: Vec::new(),
         epoch_tag_unknown: Vec::new(),
-    }
+    })
 }
 
 /// Open and decode an envelope's read-body under the read key. Rebuilds the
@@ -169,7 +177,7 @@ mod tests {
         let key = [3u8; KEY_LEN];
         let nonce = [4u8; NONCE_LEN];
         let body = folder();
-        let env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &body);
+        let env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &body).unwrap();
         assert_eq!(
             env.read_sealed.len(),
             NONCE_LEN + encode_read_body(&body).len() + 16
@@ -182,7 +190,7 @@ mod tests {
     fn envelope_round_trips_byte_stable() {
         let key = [3u8; KEY_LEN];
         let nonce = [4u8; NONCE_LEN];
-        let env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder());
+        let env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
         let bytes = encode_envelope(&env);
         let decoded = decode_envelope(&bytes).expect("decodes");
         assert_eq!(decoded, env);
@@ -193,7 +201,7 @@ mod tests {
     fn downgrade_v_fails_the_tag() {
         let key = [3u8; KEY_LEN];
         let nonce = [4u8; NONCE_LEN];
-        let mut env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder());
+        let mut env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
         // Roll the plaintext version back to 1: the AAD recomputes with v=1 and
         // the tag fails (the downgrade defence).
         env.v = 1;
@@ -207,7 +215,7 @@ mod tests {
     fn scope_transplant_fails_the_tag() {
         let key = [3u8; KEY_LEN];
         let nonce = [4u8; NONCE_LEN];
-        let mut env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder());
+        let mut env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
         env.scope[0] ^= 0x01;
         assert_eq!(
             open_read_body(&env, &key).unwrap_err().check(),
@@ -221,7 +229,7 @@ mod tests {
         // decode preserves it, rewrite is byte-stable, and open still works.
         let key = [3u8; KEY_LEN];
         let nonce = [4u8; NONCE_LEN];
-        let env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder());
+        let env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
         let mut m = decode(&encode_envelope(&env))
             .unwrap()
             .as_map()
@@ -242,7 +250,7 @@ mod tests {
     fn missing_v_rejects() {
         let key = [3u8; KEY_LEN];
         let nonce = [4u8; NONCE_LEN];
-        let env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder());
+        let env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
         let mut m = decode(&encode_envelope(&env))
             .unwrap()
             .as_map()
@@ -253,6 +261,43 @@ mod tests {
         assert_eq!(
             decode_envelope(&bytes).unwrap_err().check(),
             "missing-field"
+        );
+    }
+
+    #[test]
+    fn seal_refuses_a_body_that_would_not_reopen() {
+        // A folder with duplicate child ids must never be sealed: decode would
+        // refuse to reopen it, so seal_read_body rejects it up front.
+        let key = [3u8; KEY_LEN];
+        let nonce = [4u8; NONCE_LEN];
+        let dup = ReadBody::Folder {
+            created_at: 1,
+            modified_at: 2,
+            children: vec![
+                ChildRef {
+                    id: [9; 16],
+                    name: "a".into(),
+                    ipns_name: b"x".to_vec(),
+                    kind: NodeKind::File,
+                    link_counter: 0,
+                    unknown: Vec::new(),
+                },
+                ChildRef {
+                    id: [9; 16],
+                    name: "b".into(),
+                    ipns_name: b"y".to_vec(),
+                    kind: NodeKind::File,
+                    link_counter: 0,
+                    unknown: Vec::new(),
+                },
+            ],
+            unknown: Vec::new(),
+        };
+        assert_eq!(
+            seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &dup)
+                .unwrap_err()
+                .check(),
+            "duplicate-id"
         );
     }
 }
