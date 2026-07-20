@@ -26,8 +26,8 @@ The system is mid-rewrite. **v2 is being built on `main`** against the blueprint
 [`blueprint/`](blueprint/); v1 is frozen on branch `v1` (tag `v1-freeze`) and receives no
 changes. v1 was a working technology demonstrator (staging-only, never in production) whose
 TypeScript/Rust twin-engine architecture and TEE-based republishing are replaced wholesale in
-v2. Until the v2 workspace fully lands, `main` still carries pre-rewrite code alongside the
-blueprints that supersede it — when they disagree, the blueprints win.
+v2. `main` now carries the v2 workspace skeleton, filled in slice by slice against the
+blueprints — when code and blueprint disagree, the blueprints win.
 
 ## Design at a glance
 
@@ -85,7 +85,7 @@ legacy and is being rewritten during the build.
 
 ## Repository layout
 
-The v2 target workspace (see the blueprints; parts of the v1 tree remain until demolished):
+The v2 workspace (see the blueprints; `apps/desktop` and `tests/` land with their build phases):
 
 ```text
 cipher-box/
@@ -127,9 +127,9 @@ pnpm dev
 - API: <http://localhost:3000>
 - Web: <http://localhost:5173>
 
-Note that during the rewrite this boots the pre-v2 stack; see
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for full setup including the desktop app and
-testing.
+Note that during the rewrite this boots the v2 skeleton (a stub API and web shell); the
+legacy [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) still describes the v1 setup and is being
+rewritten during the build.
 
 ## Security model
 

@@ -1,0 +1,19 @@
+# CipherBox v2 Rust workspace.
+# All crates are unpublished implementation detail, version-frozen at 0.0.0
+# per blueprint/deploy.md — releases never touch Cargo.toml/Cargo.lock.
+
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/engine", "crates/wasm", "crates/fuse"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/FSM1/cipher-box"
+rust-version = "1.88"
+publish = false
+
+[workspace.dependencies]
+cipherbox-core = { path = "crates/core" }
+cipherbox-engine = { path = "crates/engine" }

@@ -14,19 +14,14 @@
     "lint:fix": "eslint . --fix",
     "lint:md": "markdownlint '**/*.md' --ignore node_modules --ignore '**/node_modules/**'",
     "lint:md:fix": "markdownlint '**/*.md' --ignore node_modules --ignore '**/node_modules/**' --fix",
-    "typecheck": "pnpm --filter @cipherbox/crypto build && pnpm --filter @cipherbox/core build && pnpm --filter @cipherbox/api-client build && pnpm --filter @cipherbox/sdk-core build && pnpm --filter @cipherbox/sdk build && pnpm --filter @cipherbox/web exec tsc -b && tsc -p tsconfig.scripts.json --noEmit && pnpm --filter @cipherbox/crypto run typecheck && pnpm --filter @cipherbox/core run typecheck && pnpm --filter @cipherbox/api-client run typecheck && pnpm --filter @cipherbox/sdk-core run typecheck && pnpm --filter @cipherbox/sdk run typecheck",
-    "test": "pnpm --parallel -r run test",
-    "test:web-e2e": "DELEGATED_ROUTING_URL=http://localhost:3001 pnpm --filter @cipherbox/web-e2e test",
-    "test:web-e2e:headed": "DELEGATED_ROUTING_URL=http://localhost:3001 pnpm --filter @cipherbox/web-e2e test:headed",
-    "openapi:generate": "pnpm --filter @cipherbox/api openapi:generate",
-    "api:generate": "pnpm openapi:generate && pnpm --filter @cipherbox/api-client generate && pnpm --filter @cipherbox/api-client build && pnpm lint:fix",
+    "typecheck": "pnpm -r run typecheck",
+    "test": "pnpm -r --if-present run test",
     "prepare": "husky"
   },
   "devDependencies": {
     "@commitlint/cli": "^20.4.1",
     "@commitlint/config-conventional": "^20.4.1",
     "@eslint/js": "^9.18.0",
-    "@noble/secp256k1": "^3.0.0",
     "@types/node": "^22.19.7",
     "concurrently": "^9.2.1",
     "eslint": "^9.18.0",
@@ -37,20 +32,13 @@
     "lint-staged": "^15.4.3",
     "markdownlint-cli": "^0.47.0",
     "prettier": "^3.4.2",
-    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.21.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
       "@nestjs/core",
-      "@scarf/scarf",
-      "argon2",
-      "bufferutil",
-      "esbuild",
-      "msgpackr-extract",
-      "protobufjs",
-      "utf-8-validate"
+      "esbuild"
     ]
   },
   "lint-staged": {
