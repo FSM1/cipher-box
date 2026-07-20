@@ -69,7 +69,6 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
 
     TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
-        .show_menu_on_left_click(true)
         .tooltip("CipherBox")
         .icon(tray_icon()?)
         .icon_as_template(cfg!(target_os = "macos"))
