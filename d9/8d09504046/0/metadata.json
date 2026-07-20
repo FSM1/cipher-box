@@ -1,0 +1,78 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "d98d09504046",
+  "session_id": "7500f1a6-27cc-4e96-bb34-e849cae7bfcd",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-20T00:23:04.242304Z",
+  "branch": "chore/v2-workspace-scaffold",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "c871ea2a59d0",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 522,
+    "cache_creation_tokens": 732738,
+    "cache_read_tokens": 43873244,
+    "output_tokens": 210974,
+    "api_call_count": 261
+  },
+  "session_metrics": {
+    "turn_count": 4
+  },
+  "summary": {
+    "intent": "Continue driving the CipherBox v2 rewrite kickoff: adopt the AGENTS.md-as-source-of-truth pattern in cipher-box, rewrite README/SECURITY.md for v2, land PR #616 (v1 freeze handover), then scaffold the actual v2 workspace (Rust + TS) and its CI gate in PR #617.",
+    "outcome": "PR #616 merged after removing two stale required-status-check contexts from main branch protection; v2 workspace scaffold (Cargo + pnpm workspaces, NestJS api stub, Vite web stub, restructured ci.yml, dormant satellite workflows, rewritten SECURITY.md) landed as draft PR #617 with all local gates green, but CI on #617 failed on Cargo Linux and zizmor, prompting a rust-toolchain.toml component fix mid-session.",
+    "learnings": {
+      "repo": [
+        "cipher-box: AGENTS.md is now the source of truth for repo/agent instructions; CLAUDE.md is just `@AGENTS.md` — mirrors the yankey-beats pattern (cipher-box-next itself has no CLAUDE.md/AGENTS.md)",
+        "cipher-box: main branch protection had required status checks ('Release Preview', 'Verify E2E Passed') tied to workflows (pr-release-preview.yml, release-gate.yml) that were deleted in the v2 freeze — these must be manually removed from branch protection or PRs hang forever on 'expected — waiting for status update'",
+        "cipher-box: landing/ was genuinely npm-managed (own package-lock.json), not just mislabeled; deploy-landing.yml also ran npm ci — converting to pnpm requires `--ignore-workspace` since landing isn't a pnpm-workspace member, otherwise pnpm silently operates on repo root",
+        "cipher-box: root rust-toolchain.toml needs an explicit toolchain component list — a bare channel pin caused Cargo Linux CI failure post-scaffold",
+        "v1 disposition per blueprint/deploy.md: redis and tee-worker leave the staging stack and local docker-compose entirely in v2; SendGrid/tee env plumbing also removed from deploy-staging.yml",
+        "cipher-box CI restructure for v2 day one: ci.yml keeps Lint/Typecheck/Test/Build/Cargo×3 only — api-spec, sdk-e2e, migration-drift, vector-parity jobs all removed (no api-client generation, no SDK/migrations yet)"
+      ],
+      "code": [
+        {
+          "path": ".github/workflows/release-please.yml",
+          "finding": "Rewritten to workflow_dispatch-only with a dormancy header comment; kept app-token + release-please action + summary steps only, single-component config (release-as 2.0.0, manifest 1.0.0)"
+        },
+        {
+          "path": "release-please-config.json",
+          "finding": "v2 config is single-component at root: release-type node, component cipher-box, include-component-in-tag false, release-as 2.0.0, extra-files propagates version into apps/desktop/src-tauri/tauri.conf.json"
+        },
+        {
+          "path": ".claude/commands/ship.md",
+          "finding": "Adapted from GSD's ship-phase.md — GSD sub-commands mapped to /verify, /security-review, conditional /crypto-privacy-review (v2 grep signal: seal|unseal|kdf|derive|epoch|grant|hpke|xchacha|blake3|ed25519|secp256k1), /simplify; todos become gh issue create with dedupe; draft-PR flow without the deleted release-bot wait"
+        },
+        {
+          "path": "rust-toolchain.toml",
+          "finding": "Root file created during toolchain single-sourcing (channel 1.88) but initially missing needed components, causing Cargo Linux CI failure on the scaffold PR — fixed mid-session"
+        }
+      ],
+      "workflow": [
+        "Timeout-guarded signed commits + `git log` verification after each attempt is the standing pattern for surviving 1Password SSH-signing hangs, rather than defaulting to --no-gpg-sign",
+        "When deleting workflow files that back required branch-protection status checks, proactively check `gh api .../branches/main/protection` for now-orphaned contexts rather than waiting for the user to hit a stuck merge button",
+        "Background CI watchers (`gh pr checks --watch`) can be silently stopped/lost across session boundaries (TaskStop, teardown) with no completion record — always re-verify live check status via `gh api` rather than trusting a prior watcher's last known state",
+        "Use `env -u GITHUB_TOKEN gh` prefix consistently for gh CLI calls in this environment to avoid auth conflicts",
+        "zsh aborts an entire compound command on an unmatched glob (e.g. `rm foo-*.json` with no matches) — split risky glob deletions into separate commands"
+      ]
+    },
+    "friction": null,
+    "open_items": null
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}
