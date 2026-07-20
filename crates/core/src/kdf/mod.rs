@@ -19,6 +19,8 @@
 //! (random per version), scope override seeds (random at rotation), and scope
 //! seeds at grant cuts (random) — none derive through here.
 
+use zeroize::Zeroize;
+
 use crate::suite::ed25519::Ed25519Signer;
 use crate::suite::hash::{derive_key, keyed_hash};
 use crate::suite::secret::{SECRET_LEN, SecretBytes};
@@ -177,14 +179,18 @@ fn blinded_tag_bytes(ecdh_shared: &[u8; SECRET_LEN], scope_root_ipns_name: &[u8]
     let mut ikm = Vec::with_capacity(SECRET_LEN + scope_root_ipns_name.len());
     ikm.extend_from_slice(ecdh_shared);
     ikm.extend_from_slice(scope_root_ipns_name);
-    derive_key(CTX_BLINDED_TAG, &ikm)
+    let out = derive_key(CTX_BLINDED_TAG, &ikm);
+    ikm.zeroize();
+    out
 }
 
 fn pseudonym_sign_bytes(pairwise_material: &[u8; SECRET_LEN], scope_id: &[u8; 16]) -> SecretBytes {
     let mut ikm = Vec::with_capacity(SECRET_LEN + 16);
     ikm.extend_from_slice(pairwise_material);
     ikm.extend_from_slice(scope_id);
-    derive_key(CTX_PSEUDONYM_SIGN, &ikm)
+    let out = derive_key(CTX_PSEUDONYM_SIGN, &ikm);
+    ikm.zeroize();
+    out
 }
 
 fn owner_pointer_seed_bytes(login_secret: &[u8]) -> SecretBytes {

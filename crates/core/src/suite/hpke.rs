@@ -179,8 +179,14 @@ fn extract_and_expand(dh: &[u8], kem_context: &[u8]) -> SecretBytes {
     let suite = kem_suite_id();
     // The PRK recovers the DH shared secret, so keep it in a zeroizing binding.
     let eae_prk = Zeroizing::new(labeled_extract(b"", &suite, b"eae_prk", dh));
-    let shared = labeled_expand(&eae_prk, &suite, b"shared_secret", kem_context, NSECRET);
-    SecretBytes::new(shared.try_into().expect("Nsecret == SECRET_LEN"))
+    let shared = Zeroizing::new(labeled_expand(
+        &eae_prk,
+        &suite,
+        b"shared_secret",
+        kem_context,
+        NSECRET,
+    ));
+    SecretBytes::new(shared[..].try_into().expect("Nsecret == SECRET_LEN"))
 }
 
 /// DHKEM `Encap(pkR)` with an injected ephemeral scalar.
