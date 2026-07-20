@@ -386,8 +386,13 @@ impl Drop for IpnsRecord {
     fn drop(&mut self) {
         // Records carry no secret key material (signatures/values are public),
         // but wiping the buffers on drop keeps published bytes from lingering.
+        // `raw` and the decoded `Bytes` view are separate allocations, so wipe
+        // both to honor the contract fully.
         for f in &mut self.fields {
             f.raw.zeroize();
+            if let FieldValue::Bytes(b) = &mut f.value {
+                b.zeroize();
+            }
         }
     }
 }
