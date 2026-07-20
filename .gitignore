@@ -31,6 +31,9 @@ yarn-error.log*
 coverage/
 
 # Playwright test results
+packages/client/test/browser/pkg/
+packages/client/playwright-report/
+packages/client/test-results/
 
 # Playwright screenshots
 .playwright-mcp/*.png

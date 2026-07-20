@@ -14,10 +14,14 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build:wasm-conformance": "node test/browser/build-wasm.mjs",
+    "test:browser": "node test/browser/build-wasm.mjs && playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.0",
     "typescript": "^5.9.3",
+    "vite": "^8.1.5",
     "vitest": "^4.1.10"
   }
 }
