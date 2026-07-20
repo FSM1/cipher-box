@@ -22,3 +22,8 @@ crates/core/kat/
 # Generated OpenAPI docs artifact - byte-stability is owned by the generator
 # (CI openapi-freshness diffs a regeneration against the committed file)
 apps/api/openapi.json
+
+# Generated wasm-bindgen glue + Playwright output for the browser suite
+packages/client/test/browser/pkg/
+packages/client/playwright-report/
+packages/client/test-results/
