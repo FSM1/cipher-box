@@ -64,7 +64,10 @@ pub fn seal(
 /// a silent degrade.
 pub fn unseal(key: &[u8; KEY_LEN], ctx: &AadContext, sealed: &[u8]) -> Result<Vec<u8>, CodecError> {
     if sealed.len() < NONCE_LEN + TAG_LEN {
-        return Err(Malformed::Truncated { offset: 0 }.into());
+        return Err(Malformed::Truncated {
+            offset: sealed.len(),
+        }
+        .into());
     }
     let (nonce, ciphertext) = sealed.split_at(NONCE_LEN);
     let nonce: &[u8; NONCE_LEN] = nonce.try_into().expect("split_at NONCE_LEN");
