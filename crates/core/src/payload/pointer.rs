@@ -106,8 +106,9 @@ pub fn seal_pointer_payload(
     object: &RepointObject,
 ) -> Vec<u8> {
     let object_value = object.to_value();
-    let object_bytes = encode(&object_value);
+    let mut object_bytes = encode(&object_value);
     let owner_sig = owner_signer.sign_detcbor(&object_bytes);
+    object_bytes.zeroize();
 
     let mut m = Map::new();
     m.insert("object", object_value);
@@ -167,8 +168,10 @@ fn decode_and_verify(
 
     // The object bytes the owner signed are the verbatim canonical re-encoding
     // of the decoded (canonical) `object` value.
-    let object_bytes = encode(object_value);
-    if !owner_identity.verify_detcbor(&object_bytes, &sig) {
+    let mut object_bytes = encode(object_value);
+    let verified = owner_identity.verify_detcbor(&object_bytes, &sig);
+    object_bytes.zeroize();
+    if !verified {
         return Err(TrustViolation::IdentitySignatureInvalid.into());
     }
     RepointObject::from_value(object_value)

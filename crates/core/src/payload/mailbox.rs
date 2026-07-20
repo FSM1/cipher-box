@@ -79,7 +79,9 @@ pub fn seal_mailbox_payload(
     payload: &[u8],
 ) -> Vec<u8> {
     let sender_pk = sender_signer.verifying_key().to_sec1();
-    let sender_sig = sender_signer.sign_detcbor(&sig_preimage(v, &sender_pk, payload));
+    let mut preimage = sig_preimage(v, &sender_pk, payload);
+    let sender_sig = sender_signer.sign_detcbor(&preimage);
+    preimage.zeroize();
 
     let mut inner_map = Map::new();
     inner_map.insert("payload", Value::Bytes(payload.to_vec()));
@@ -133,7 +135,10 @@ fn verify_inner(inner: &[u8], v: u64) -> Result<MailboxItem, CodecError> {
         EcdsaVerifier::from_sec1(sender_pk).ok_or(TrustViolation::IdentitySignatureInvalid)?;
     let sig =
         EcdsaSignature::from_compact(sig_bytes).ok_or(TrustViolation::IdentitySignatureInvalid)?;
-    if !sender_identity.verify_detcbor(&sig_preimage(v, sender_pk, &payload), &sig) {
+    let mut preimage = sig_preimage(v, sender_pk, &payload);
+    let verified = sender_identity.verify_detcbor(&preimage, &sig);
+    preimage.zeroize();
+    if !verified {
         return Err(TrustViolation::IdentitySignatureInvalid.into());
     }
     Ok(MailboxItem {
