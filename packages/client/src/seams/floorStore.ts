@@ -18,19 +18,23 @@ const SEQUENCE_STORE = 'sequence';
 
 export class IdbFloorStore implements FloorStoreSeam {
   private readonly dbName: string;
-  private db: IDBDatabase | null = null;
+  private dbPromise: Promise<IDBDatabase> | null = null;
 
   constructor(dbName = 'cipherbox-floors') {
     this.dbName = dbName;
   }
 
-  private async open(): Promise<IDBDatabase> {
-    if (this.db) return this.db;
-    this.db = await openDatabase(this.dbName, 1, (db) => {
+  private open(): Promise<IDBDatabase> {
+    // Memoize the in-flight open, not just the resolved handle: concurrent
+    // callers before the first open resolves must share one connection. A
+    // failed open clears the memo so the next call can re-open.
+    return (this.dbPromise ??= openDatabase(this.dbName, 1, (db) => {
       db.createObjectStore(EPOCH_STORE);
       db.createObjectStore(SEQUENCE_STORE);
-    });
-    return this.db;
+    }).catch((error: unknown) => {
+      this.dbPromise = null;
+      throw error;
+    }));
   }
 
   private async floor(store: string, key: Uint8Array): Promise<number | null> {

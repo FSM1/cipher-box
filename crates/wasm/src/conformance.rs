@@ -41,11 +41,14 @@ use wasm_bindgen_futures::JsFuture;
 /// Maps a rejected JS seam call to an opaque [`SeamError`] (diagnostics only —
 /// a seam failure is host I/O, never a trust decision).
 fn seam_error(value: JsValue) -> SeamError {
-    SeamError::new(
+    // Preserve the message of a thrown `Error` (its `.message`, which
+    // `as_string` does not see); fall back to a plain string, then a generic.
+    let message = value.as_string().or_else(|| {
         value
-            .as_string()
-            .unwrap_or_else(|| "browser seam rejected".to_string()),
-    )
+            .dyn_ref::<js_sys::Error>()
+            .map(|error| String::from(error.message()))
+    });
+    SeamError::new(message.unwrap_or_else(|| "browser seam rejected".to_string()))
 }
 
 /// `number | null | undefined` → `Option<u64>`.

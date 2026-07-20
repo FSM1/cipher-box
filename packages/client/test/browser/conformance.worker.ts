@@ -47,8 +47,11 @@ async function clearOpfsDir(name: string): Promise<void> {
   const root = await navigator.storage.getDirectory();
   try {
     await root.removeEntry(name, { recursive: true });
-  } catch {
-    // Absent directory is the desired empty start state.
+  } catch (error) {
+    // Absent directory is the desired empty start state; any other failure is
+    // a real cleanup problem and must surface rather than be swallowed.
+    if (error instanceof DOMException && error.name === 'NotFoundError') return;
+    throw error;
   }
 }
 

@@ -21,21 +21,25 @@ const OPS_STORE = 'ops';
 export class OpfsStagingStore implements StagingStoreSeam {
   private readonly dbName: string;
   private readonly dirName: string;
-  private db: IDBDatabase | null = null;
+  private dbPromise: Promise<IDBDatabase> | null = null;
 
   constructor(name = 'cipherbox-staging') {
     this.dbName = name;
     this.dirName = `${name}-staged`;
   }
 
-  private async open(): Promise<IDBDatabase> {
-    if (this.db) return this.db;
-    this.db = await openDatabase(this.dbName, 1, (db) => {
+  private open(): Promise<IDBDatabase> {
+    // Memoize the in-flight open, not just the resolved handle: concurrent
+    // callers before the first open resolves must share one connection. A
+    // failed open clears the memo so the next call can re-open.
+    return (this.dbPromise ??= openDatabase(this.dbName, 1, (db) => {
       // Out-of-line auto-incrementing keys are the OpId source: strictly
       // increasing, never reused, durable across reopen.
       db.createObjectStore(OPS_STORE, { autoIncrement: true });
-    });
-    return this.db;
+    }).catch((error: unknown) => {
+      this.dbPromise = null;
+      throw error;
+    }));
   }
 
   private async stagedDir(): Promise<FileSystemDirectoryHandle> {

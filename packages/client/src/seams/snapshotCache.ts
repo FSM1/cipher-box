@@ -17,18 +17,22 @@ const STORE = 'entries';
 
 export class IdbSnapshotCache implements SnapshotCacheSeam {
   private readonly dbName: string;
-  private db: IDBDatabase | null = null;
+  private dbPromise: Promise<IDBDatabase> | null = null;
 
   constructor(dbName = 'cipherbox-snapshot-cache') {
     this.dbName = dbName;
   }
 
-  private async open(): Promise<IDBDatabase> {
-    if (this.db) return this.db;
-    this.db = await openDatabase(this.dbName, 1, (db) => {
+  private open(): Promise<IDBDatabase> {
+    // Memoize the in-flight open, not just the resolved handle: concurrent
+    // callers before the first open resolves must share one connection. A
+    // failed open clears the memo so the next call can re-open.
+    return (this.dbPromise ??= openDatabase(this.dbName, 1, (db) => {
       db.createObjectStore(STORE);
-    });
-    return this.db;
+    }).catch((error: unknown) => {
+      this.dbPromise = null;
+      throw error;
+    }));
   }
 
   async put(cacheKey: Uint8Array, ciphertext: Uint8Array): Promise<void> {
