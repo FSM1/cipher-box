@@ -18,3 +18,7 @@
 # (cargo run -p cipherbox-core --example kat_gen); the CI freshness gate
 # diffs them byte-for-byte against generator output
 crates/core/kat/
+
+# Generated OpenAPI docs artifact - byte-stability is owned by the generator
+# (CI openapi-freshness diffs a regeneration against the committed file)
+apps/api/openapi.json

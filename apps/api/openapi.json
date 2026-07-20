@@ -1,0 +1,510 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "HealthController_getHealth",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Liveness check",
+        "tags": [
+          "Ops"
+        ]
+      }
+    },
+    "/metrics": {
+      "get": {
+        "operationId": "MetricsController_getMetrics",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Prometheus text exposition format",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Prometheus metrics in text exposition format",
+        "tags": [
+          "Ops"
+        ]
+      }
+    },
+    "/auth/challenge": {
+      "post": {
+        "operationId": "AuthController_challenge",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChallengeRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChallengeResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Issue a single-use login challenge bound to an identity publicKey",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/login": {
+      "post": {
+        "operationId": "AuthController_login",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Challenge-signature login against the secp256k1 identity key; creates the account implicitly at first login",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/siwe/challenge": {
+      "post": {
+        "operationId": "AuthController_siweChallenge",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiweChallengeResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Issue a single-use SIWE nonce",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/siwe/login": {
+      "post": {
+        "operationId": "AuthController_siweLogin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiweLoginRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "SIWE wallet login (secondary method; the wallet must already be linked)",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/siwe/link": {
+      "post": {
+        "operationId": "AuthController_siweLink",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SiweLoginRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Link a SIWE wallet to the authenticated account",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/refresh": {
+      "post": {
+        "operationId": "AuthController_refresh",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Rotate the refresh token (one-time-use; reuse revokes the whole family)",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/logout": {
+      "post": {
+        "operationId": "AuthController_logout",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogoutResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Revoke every refresh token for the account (hard delete)",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/test-login": {
+      "post": {
+        "operationId": "AuthController_testLogin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestLoginRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestLoginResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Staging-gated deterministic login for e2e (hard-blocked in production)",
+        "tags": [
+          "Auth"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "CipherBox API",
+    "description": "Zero-knowledge bookkeeping and accelerator service. The API never sees plaintext or unencrypted keys.",
+    "version": "2.0.0",
+    "contact": {}
+  },
+  "tags": [
+    {
+      "name": "Ops",
+      "description": "Health and metrics"
+    },
+    {
+      "name": "Auth",
+      "description": "Identity auth, SIWE secondary, refresh rotation"
+    }
+  ],
+  "servers": [],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http"
+      }
+    },
+    "schemas": {
+      "HealthResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "example": "ok"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "ChallengeRequestDto": {
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string",
+            "description": "secp256k1 identity publicKey, hex (compressed 33-byte or uncompressed 65-byte)",
+            "example": "02a1633cafcc01ebfb6d78e39f687a1f0995c62fc95f51ead10a02ee0be551b5dc"
+          }
+        },
+        "required": [
+          "publicKey"
+        ]
+      },
+      "ChallengeResponseDto": {
+        "type": "object",
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "description": "Server-issued challenge to sign with the identity key"
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "Challenge expiry, ISO 8601"
+          }
+        },
+        "required": [
+          "challenge",
+          "expiresAt"
+        ]
+      },
+      "LoginRequestDto": {
+        "type": "object",
+        "properties": {
+          "publicKey": {
+            "type": "string",
+            "description": "secp256k1 identity publicKey, hex"
+          },
+          "challenge": {
+            "type": "string",
+            "description": "The server-issued challenge, verbatim"
+          },
+          "signature": {
+            "type": "string",
+            "description": "Compact secp256k1 signature over sha256(challenge), 64 bytes hex"
+          }
+        },
+        "required": [
+          "publicKey",
+          "challenge",
+          "signature"
+        ]
+      },
+      "TokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "Short-lived access JWT"
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "Rotating refresh token (also set as an HTTP-only cookie for web; desktop stores it in the OS keychain)"
+          },
+          "isNewUser": {
+            "type": "boolean",
+            "description": "True when this login created the account implicitly"
+          }
+        },
+        "required": [
+          "accessToken",
+          "refreshToken"
+        ]
+      },
+      "SiweChallengeResponseDto": {
+        "type": "object",
+        "properties": {
+          "nonce": {
+            "type": "string",
+            "description": "Nonce to embed in the SIWE message"
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "Nonce expiry, ISO 8601"
+          }
+        },
+        "required": [
+          "nonce",
+          "expiresAt"
+        ]
+      },
+      "SiweLoginRequestDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "EIP-4361 message text"
+          },
+          "signature": {
+            "type": "string",
+            "description": "EIP-191 signature over the message, 0x-prefixed hex"
+          }
+        },
+        "required": [
+          "message",
+          "signature"
+        ]
+      },
+      "LogoutResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "RefreshRequestDto": {
+        "type": "object",
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "description": "Refresh token; falls back to the refreshToken cookie when omitted"
+          }
+        }
+      },
+      "TestLoginRequestDto": {
+        "type": "object",
+        "properties": {
+          "handle": {
+            "type": "string",
+            "description": "Stable test-account handle (e.g. an email-shaped string)"
+          },
+          "secret": {
+            "type": "string",
+            "description": "Must match TEST_LOGIN_SECRET"
+          }
+        },
+        "required": [
+          "handle",
+          "secret"
+        ]
+      },
+      "TestLoginResponseDto": {
+        "type": "object",
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "Short-lived access JWT"
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "Rotating refresh token (also set as an HTTP-only cookie for web; desktop stores it in the OS keychain)"
+          },
+          "isNewUser": {
+            "type": "boolean",
+            "description": "True when this login created the account implicitly"
+          },
+          "publicKey": {
+            "type": "string",
+            "description": "Deterministic secp256k1 publicKey, compressed hex"
+          },
+          "privateKey": {
+            "type": "string",
+            "description": "Deterministic secp256k1 privateKey, hex (test hook only)"
+          }
+        },
+        "required": [
+          "accessToken",
+          "refreshToken",
+          "publicKey",
+          "privateKey"
+        ]
+      }
+    }
+  }
+}
