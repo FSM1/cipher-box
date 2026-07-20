@@ -23,3 +23,6 @@ publish = false
 [workspace.dependencies]
 cipherbox-core = { path = "crates/core" }
 cipherbox-engine = { path = "crates/engine" }
+futures-channel = "0.3"
+futures-core = "0.3"
+zeroize = "1"

@@ -7,5 +7,20 @@ repository.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# Compiles the `testkit` module: in-memory seam fakes, seeded entropy, the
+# virtual-clock scheduler, and the per-seam conformance kits. Host crates
+# enable it from dev-dependencies to run the kits against their real seam
+# implementations; production builds never compile it.
+test-kit = []
+
 [dependencies]
 cipherbox-core.workspace = true
+futures-channel.workspace = true
+futures-core.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+# Self dev-dependency: enables `test-kit` for this crate's own tests (unit,
+# integration, doc) without leaking it into downstream production builds.
+cipherbox-engine = { workspace = true, features = ["test-kit"] }
