@@ -61,6 +61,7 @@ export function buildOpenApiDocument(app: INestApplication): OpenAPIObject {
     .addBearerAuth()
     .addTag('Ops', 'Health and metrics')
     .addTag('Auth', 'Identity auth, SIWE secondary, refresh rotation')
+    .addTag('Mailbox', 'Integrity-untrusted sealed-pointer transport: post, poll, ack')
     .build();
   return SwaggerModule.createDocument(app, config);
 }

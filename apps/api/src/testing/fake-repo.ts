@@ -30,6 +30,36 @@ export class FakeRepository<T extends { id: string }> {
     return this.rows.find((row) => matches(row as Record<string, unknown>, options.where)) ?? null;
   }
 
+  async find(options: {
+    where?: Where;
+    order?: Record<string, 'ASC' | 'DESC'>;
+    take?: number;
+  }): Promise<T[]> {
+    let result = options.where
+      ? this.rows.filter((row) => matches(row as Record<string, unknown>, options.where as Where))
+      : [...this.rows];
+    const order = options.order;
+    if (order) {
+      const [[key, direction]] = Object.entries(order);
+      result = [...result].sort((a, b) => {
+        const av = (a as Record<string, unknown>)[key] as Date | number | string;
+        const bv = (b as Record<string, unknown>)[key] as Date | number | string;
+        const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+        return direction === 'DESC' ? -cmp : cmp;
+      });
+    }
+    return options.take != null ? result.slice(0, options.take) : result;
+  }
+
+  async count(options: { where?: Where } = {}): Promise<number> {
+    if (!options.where) {
+      return this.rows.length;
+    }
+    return this.rows.filter((row) =>
+      matches(row as Record<string, unknown>, options.where as Where)
+    ).length;
+  }
+
   async save(partial: Partial<T>): Promise<T> {
     if (partial.id) {
       const existing = this.rows.find((row) => row.id === partial.id);

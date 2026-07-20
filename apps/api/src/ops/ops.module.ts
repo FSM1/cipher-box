@@ -1,8 +1,9 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { HealthController } from '../health/health.controller';
+import { AccountThrottlerGuard } from './account-throttler.guard';
 import { MetricsController } from './metrics.controller';
 import { MetricsInterceptor } from './metrics.interceptor';
 import { MetricsService } from './metrics.service';
@@ -13,6 +14,10 @@ import { MetricsService } from './metrics.service';
  * any app importing this module is rate-limited by the global default, with
  * per-surface tightening via @Throttle and explicit @SkipThrottle opt-outs
  * (health, metrics). v1's defect was decorators without an active guard.
+ *
+ * The guard is account-aware (AccountThrottlerGuard): authenticated routes
+ * are keyed by the account so the mailbox's per-sender / per-recipient limits
+ * are literal, while unauthenticated routes keep the IP tracker.
  */
 @Module({
   imports: [
@@ -30,7 +35,7 @@ import { MetricsService } from './metrics.service';
   controllers: [HealthController, MetricsController],
   providers: [
     MetricsService,
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_GUARD, useClass: AccountThrottlerGuard },
     { provide: APP_INTERCEPTOR, useClass: MetricsInterceptor },
   ],
   exports: [MetricsService],

@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from './auth/auth.module';
 import { RuntimeModule } from './common/runtime.module';
+import { MailboxModule } from './mailbox/mailbox.module';
 import { OpsModule } from './ops/ops.module';
 
 @Module({
@@ -26,6 +27,7 @@ import { OpsModule } from './ops/ops.module';
     RuntimeModule,
     OpsModule,
     AuthModule,
+    MailboxModule,
   ],
 })
 export class AppModule {}
