@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { Test } from '@nestjs/testing';
-import { getRepositoryToken } from '@nestjs/typeorm';
+import { getDataSourceToken, getRepositoryToken } from '@nestjs/typeorm';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -13,6 +13,7 @@ import { IdentityService } from '../auth/services/identity.service';
 import { Clock, SystemClock } from '../common/clock';
 import { OpsModule } from '../ops/ops.module';
 import { THROTTLE_SURFACES } from '../ops/throttling';
+import { FakeDataSource } from '../testing/fake-data-source';
 import { FakeRepository } from '../testing/fake-repo';
 import { fakeConfig } from '../testing/fakes';
 import { MailboxController } from './mailbox.controller';
@@ -62,6 +63,7 @@ describe('mailbox HTTP surface', () => {
         },
         { provide: getRepositoryToken(User), useValue: userRepo },
         { provide: getRepositoryToken(MailboxMessage), useValue: messageRepo },
+        { provide: getDataSourceToken(), useValue: new FakeDataSource(messageRepo as never) },
       ],
     }).compile();
 
