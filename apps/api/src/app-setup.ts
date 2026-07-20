@@ -62,6 +62,8 @@ export function buildOpenApiDocument(app: INestApplication): OpenAPIObject {
     .addTag('Ops', 'Health and metrics')
     .addTag('Auth', 'Identity auth, SIWE secondary, refresh rotation')
     .addTag('Mailbox', 'Integrity-untrusted sealed-pointer transport: post, poll, ack')
+    .addTag('Registry', 'Pin/name registry: batch register/retire, union liveness')
+    .addTag('Account', 'Per-account quota and the BYO-IPFS toggle')
     .build();
   return SwaggerModule.createDocument(app, config);
 }

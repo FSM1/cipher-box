@@ -21,4 +21,12 @@ export const THROTTLE_SURFACES = {
   mailboxPoll: { default: { limit: 60, ttl: 60_000 } },
   /** Mailbox ack: per RECIPIENT mailbox; one delete per delivered message. */
   mailboxAck: { default: { limit: 120, ttl: 60_000 } },
+  /**
+   * Registry register/retire: per account. Ordinary writes send single-item
+   * batches; name waves and sweeps send a few bulk batches — so the cap is on
+   * request count, not item count, and sits well above the sync cadence.
+   */
+  registry: { default: { limit: 120, ttl: 60_000 } },
+  /** Account quota/BYO: per account; quota is polled on the statfs path. */
+  account: { default: { limit: 120, ttl: 60_000 } },
 } as const;

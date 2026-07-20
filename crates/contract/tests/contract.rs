@@ -15,7 +15,7 @@ use cipherbox_contract::{
     MemoryCredentialStore, ReqwestHttp, api_url, hex_to_scalar, prod_api_url,
     random_identity_signer, test_login_secret,
 };
-use cipherbox_engine::api::{ApiClient, ApiError, IdentityChallengeSigner};
+use cipherbox_engine::api::{ApiClient, ApiError, IdentityChallengeSigner, NameRegistration};
 use cipherbox_engine::seams::{CredentialStore, Http, HttpMethod, HttpRequest};
 
 type Client = ApiClient<ReqwestHttp, MemoryCredentialStore>;
@@ -37,6 +37,20 @@ async fn client_seeded_with(base: &str, refresh_token: &[u8]) -> Client {
         .await
         .expect("seed the store");
     ApiClient::new(ReqwestHttp::new(), store, base)
+}
+
+/// A fresh account: a new client logged in with a random identity key, which
+/// implicitly creates the account (challenge-signature first login). Every
+/// contract run mints a brand-new account, so fixed name/CID strings below are
+/// always a fresh `(account, ...)` pair — no cross-run collision on the shared
+/// CI database.
+async fn fresh_account(base: &str) -> Client {
+    let client = new_client(base);
+    client
+        .login_identity(&random_identity_signer())
+        .await
+        .expect("identity login creates the account");
+    client
 }
 
 macro_rules! require_stack {
@@ -254,5 +268,161 @@ async fn logout_revokes_the_refresh_token_server_side() {
     assert!(
         matches!(replay.refresh().await, Err(ApiError::Unauthorized)),
         "logout revoked the refresh token server-side"
+    );
+}
+
+// --- pin/name registry and quota (blueprint/api.md; #627) -------------------
+
+/// Register-first, fail-closed (blueprint/api.md): the register call is the one
+/// mandatory gate — content enters the inventory only through a valid
+/// registration, and a malformed one is refused wholesale, never partially
+/// accepted. (End-to-end "publishing an unregistered name is refused" is the
+/// engine publish pipeline's ordering law; the API's half is that the gate
+/// exists and fails closed.)
+#[tokio::test]
+async fn register_first_gate_accepts_valid_and_refuses_malformed() {
+    let base = require_stack!("register_first_gate_accepts_valid_and_refuses_malformed");
+    let client = fresh_account(&base).await;
+
+    // A well-formed registration opens the gate.
+    let valid = vec![NameRegistration {
+        ipns_name: "k51contractRegisterFirst".into(),
+        head_cid: Some("bafyContractHead".into()),
+        content_cids: vec!["bafyContractC1".into(), "bafyContractC2".into()],
+    }];
+    client
+        .register(&valid)
+        .await
+        .expect("valid register accepted");
+
+    // A structurally invalid name is refused (the batch is rejected wholesale,
+    // so no content rides in behind an unregisterable name).
+    let malformed = vec![NameRegistration {
+        ipns_name: "not a valid ipns name!!".into(),
+        head_cid: None,
+        content_cids: vec!["bafyContractC3".into()],
+    }];
+    let error = client
+        .register(&malformed)
+        .await
+        .expect_err("a malformed registration must be refused");
+    assert!(
+        matches!(error, ApiError::Status { status: 400, .. }),
+        "register-first is fail-closed: a malformed batch is a 400, got {error:?}"
+    );
+}
+
+/// Batch register/retire idempotency (blueprint/api.md): every upsert is
+/// idempotent, so a replayed batch — the shape a resumed name wave or a retried
+/// write sends — changes nothing and never errors.
+#[tokio::test]
+async fn batch_register_and_retire_are_idempotent() {
+    let base = require_stack!("batch_register_and_retire_are_idempotent");
+    let client = fresh_account(&base).await;
+
+    let batch = vec![NameRegistration {
+        ipns_name: "k51contractIdem".into(),
+        head_cid: Some("bafyContractIdemHead".into()),
+        content_cids: vec!["bafyContractIdemC".into()],
+    }];
+
+    // Replaying the same register batch is accepted both times.
+    client.register(&batch).await.expect("first register");
+    client.register(&batch).await.expect("replayed register");
+
+    // Register carries no byte sizes (those come from the hosted upload path),
+    // so a register-only account still reports zero used bytes — a durable,
+    // idempotent invariant regardless of replay count.
+    let quota = client.quota().await.expect("quota");
+    assert_eq!(
+        quota.used_bytes, 0,
+        "register records membership, not bytes"
+    );
+
+    // Retiring the same targets twice is accepted both times (the second is a
+    // no-op removal).
+    let targets = vec!["k51contractIdem".to_owned(), "bafyContractIdemC".to_owned()];
+    client.retire(&targets).await.expect("first retire");
+    client
+        .retire(&targets)
+        .await
+        .expect("replayed retire is a no-op");
+}
+
+/// Union liveness (blueprint/api.md): inventory rows are per account and the
+/// server authorizes nothing across accounts, so two accounts independently
+/// hold rows for the same shared CID and each retires its own permissionlessly
+/// — the self-healing shared-scope path. (Physical unpin fires only at GLOBAL
+/// refcount zero; that decision is exercised by the api-unit refcounting suite
+/// via the PinStore seam, as it is not observable through the client surface.)
+#[tokio::test]
+async fn union_liveness_is_per_account_and_permissionless() {
+    let base = require_stack!("union_liveness_is_per_account_and_permissionless");
+    let alice = fresh_account(&base).await;
+    let bob = fresh_account(&base).await;
+
+    let shared = "bafyContractUnionShared".to_owned();
+    alice
+        .register(&[NameRegistration {
+            ipns_name: "k51contractUnionAlice".into(),
+            head_cid: None,
+            content_cids: vec![shared.clone()],
+        }])
+        .await
+        .expect("alice registers the shared CID under her account");
+    bob.register(&[NameRegistration {
+        ipns_name: "k51contractUnionBob".into(),
+        head_cid: None,
+        content_cids: vec![shared.clone()],
+    }])
+    .await
+    .expect("bob co-registers the same CID under his own account");
+
+    // Each account retires only its own row; neither call authorizes or touches
+    // the other account's inventory, and both succeed.
+    alice
+        .retire(&[shared.clone()])
+        .await
+        .expect("alice retires her row while bob still references the CID");
+    bob.retire(&[shared])
+        .await
+        .expect("bob retires the last row");
+}
+
+/// Quota (blueprint/api.md): hosted accounts are authoritative (`advisory:
+/// false`) with a positive limit; a BYO account's rows are advisory
+/// (`advisory: true`, quota always allows). The flag flips live with the BYO
+/// toggle.
+#[tokio::test]
+async fn quota_is_hosted_authoritative_and_byo_advisory() {
+    let base = require_stack!("quota_is_hosted_authoritative_and_byo_advisory");
+    let client = fresh_account(&base).await;
+
+    // A fresh account is hosted: quota is authoritative and carries a limit.
+    let hosted = client.quota().await.expect("hosted quota");
+    assert!(
+        !hosted.advisory,
+        "a hosted account's quota is authoritative"
+    );
+    assert!(
+        hosted.limit_bytes > 0,
+        "a hosted account has a positive limit"
+    );
+
+    // Enabling BYO makes the account's rows advisory: quota always allows.
+    client.set_byo(true).await.expect("enable BYO");
+    let byo = client.quota().await.expect("byo quota");
+    assert!(byo.advisory, "a BYO account's quota is advisory");
+    assert_eq!(
+        byo.limit_bytes, hosted.limit_bytes,
+        "the limit is unchanged"
+    );
+
+    // Toggling BYO back restores the authoritative posture.
+    client.set_byo(false).await.expect("disable BYO");
+    let restored = client.quota().await.expect("restored quota");
+    assert!(
+        !restored.advisory,
+        "clearing BYO restores authoritative quota"
     );
 }

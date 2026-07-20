@@ -25,15 +25,26 @@ import { MailboxController } from '../src/mailbox/mailbox.controller';
 import { MailboxService } from '../src/mailbox/services/mailbox.service';
 import { MetricsController } from '../src/ops/metrics.controller';
 import { MetricsService } from '../src/ops/metrics.service';
+import { AccountController } from '../src/registry/account.controller';
+import { RegistryController } from '../src/registry/registry.controller';
+import { RegistryService } from '../src/registry/services/registry.service';
 
 @Module({
-  controllers: [HealthController, MetricsController, AuthController, MailboxController],
+  controllers: [
+    HealthController,
+    MetricsController,
+    AuthController,
+    MailboxController,
+    RegistryController,
+    AccountController,
+  ],
   providers: [
     { provide: AuthService, useValue: {} },
     { provide: TestAuthService, useValue: {} },
     { provide: TokenService, useValue: {} },
     { provide: MailboxService, useValue: {} },
     { provide: MetricsService, useValue: {} },
+    { provide: RegistryService, useValue: {} },
     { provide: JwtService, useValue: {} },
     { provide: ConfigService, useValue: new ConfigService() },
   ],
