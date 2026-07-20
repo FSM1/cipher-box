@@ -20,3 +20,13 @@ proptest = "1"
 
 [target.'cfg(target_family = "wasm")'.dev-dependencies]
 proptest = { version = "1", default-features = false, features = ["std"] }
+
+# The browser-shaped WASM leg (wasm32-unknown-unknown). Unlike wasm32-wasip1,
+# it lacks a native libtest harness, so the KAT + property tests run under
+# wasm-bindgen-test (see the `#[test]` shadow in the test files). getrandom's
+# `wasm_js` backend gives proptest's RNG `crypto.getRandomValues` — the
+# getrandom parity surface (blueprint/core.md); the backend is selected by the
+# `getrandom_backend="wasm_js"` cfg in `.cargo/config.toml`.
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+getrandom = { version = "0.3", features = ["wasm_js"] }
