@@ -376,7 +376,17 @@ pub fn encode_read_body(body: &ReadBody) -> Vec<u8> {
             merge_unknown(&mut m, unknown);
         }
     }
-    encode(&Value::Map(m))
+    // The transient `Value` tree just built carries a verbatim copy of every
+    // inline content key (one `Value::Bytes` per file version, produced by
+    // `Version::to_value`). We own that tree, so we are its terminal owner:
+    // encode it, then wipe its byte buffers before it drops, so no
+    // freed-but-uncleared copy of key material lingers on the heap. The
+    // returned plaintext buffer carries the same key bytes and is the seal
+    // path's ([`seal_read_body`](super::seal_read_body)) to zeroize — it does.
+    let mut value = Value::Map(m);
+    let out = encode(&value);
+    value.zeroize_bytes();
+    out
 }
 
 /// Fail-closed uniqueness over one folder's child listing (#39 D7).
