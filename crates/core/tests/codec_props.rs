@@ -8,6 +8,14 @@
 
 mod common;
 
+// The browser-shaped KAT leg (wasm32-unknown-unknown) has no libtest harness;
+// shadowing `test` routes the proptest-generated `#[test]` cases through
+// wasm-bindgen-test-runner, exercising getrandom's `crypto.getRandomValues`
+// backend (the getrandom parity surface). Native and wasm32-wasip1 are
+// untouched.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+use wasm_bindgen_test::wasm_bindgen_test as test;
+
 use core::cmp::Ordering;
 use std::collections::HashMap;
 

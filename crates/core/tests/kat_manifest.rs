@@ -9,6 +9,13 @@
 
 use std::collections::BTreeSet;
 
+// On wasm32-unknown-unknown (the browser-shaped KAT leg) there is no libtest
+// harness; wasm-bindgen-test provides one. Shadowing `test` with its attribute
+// runs every `#[test]` below under wasm-bindgen-test-runner unchanged, while
+// native and wasm32-wasip1 keep the built-in `#[test]`.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+use wasm_bindgen_test::wasm_bindgen_test as test;
+
 use cipherbox_core::codec::{decode, decode_map_partial, encode, encode_map_partial};
 use cipherbox_core::error::{Malformed, TrustViolation};
 use serde::Deserialize;

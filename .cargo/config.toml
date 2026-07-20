@@ -1,4 +1,15 @@
 # Run wasm test binaries under wasmtime: `cargo test -p cipherbox-core
-# --target wasm32-wasip1` is the KAT gate's WASM leg (blueprint/testing.md).
+# --target wasm32-wasip1` is one KAT gate WASM leg (blueprint/testing.md).
 [target.wasm32-wasip1]
 runner = "wasmtime"
+
+# The browser-shaped WASM leg: `cargo test --target wasm32-unknown-unknown`
+# runs the core KAT + property suite (and the crates/wasm boundary tests)
+# through wasm-bindgen-test-runner, which drives Node.js headlessly — the
+# residual u64/BigInt and getrandom parity surface (blueprint/web-client.md,
+# blueprint/core.md). `getrandom_backend="wasm_js"` selects getrandom's
+# `crypto.getRandomValues` backend for this target, matching the worker-scope
+# wiring; it is inert for crates that pull no getrandom.
+[target.wasm32-unknown-unknown]
+runner = "wasm-bindgen-test-runner"
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

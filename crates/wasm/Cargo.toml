@@ -7,5 +7,22 @@ repository.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+# cdylib is the wasm-bindgen artifact loaded in the engine worker; rlib lets
+# the crate link into native builds (workspace `cargo test`/`clippy`) and its
+# own integration tests.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 cipherbox-engine.workspace = true
+wasm-bindgen = "0.2"
+
+# Browser-shaped test deps only (wasm32-unknown-unknown): the boundary tests
+# run under wasm-bindgen-test-runner, and getrandom's `wasm_js` backend proves
+# the `crypto.getRandomValues` worker-scope wiring. No production getrandom use
+# yet — the engine takes injected entropy; the entropy seam impl lands with the
+# worker-hosting slice. The `getrandom_backend="wasm_js"` cfg is in
+# `.cargo/config.toml`.
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "0.3"
+getrandom = { version = "0.3", features = ["wasm_js"] }
