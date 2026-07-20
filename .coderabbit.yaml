@@ -44,18 +44,20 @@ reviews:
 
     - path: 'apps/web/**'
       instructions: |
-        This is the React/Next.js frontend. Focus on:
+        This is the React frontend. Focus on:
         - Component reusability and React best practices
         - Accessibility (a11y) concerns
         - Performance optimizations
         - Type safety with TypeScript
 
-    - path: 'packages/crypto/**'
+    - path: 'crates/**'
       instructions: |
-        This is a cryptography library. Focus on:
+        Rust core: all codec, crypto, and engine logic lives here (the
+        blueprint corpus in blueprint/ is normative). Focus on:
         - Security best practices for cryptographic operations
-        - Proper key handling and memory management
-        - Algorithm correctness and standard compliance
+        - Proper key handling, zeroization at the terminal owner only
+        - Determinism: entropy/time/policy must enter via parameters or
+          seam traits, never direct clock/RNG calls
 
     - path: '**/*.test.ts'
       instructions: |

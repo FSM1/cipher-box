@@ -1,114 +1,19 @@
+# v2 coverage policy (blueprint/testing.md): no line-coverage thresholds as
+# merge gates — codecov is informational reporting only. The structural merge
+# gates live in named CI jobs instead. Flags return as the v2 suites land
+# and start uploading.
 coverage:
   status:
     project:
       default:
         target: auto
-        threshold: 6%
-        flags:
-          - api
-          - crypto
-          - core
-          - api-client
-          - sdk-core
-          - sdk
-      api:
-        paths:
-          - apps/api/src/**
-        target: 85%
-        threshold: 2%
-        flags:
-          - api
-      crypto:
-        paths:
-          - packages/crypto/src/**
-        target: 80%
-        threshold: 2%
-        flags:
-          - crypto
-      core:
-        paths:
-          - packages/core/src/**
-        target: 75%
-        threshold: 3%
-        flags:
-          - core
-      api-client:
-        paths:
-          - packages/api-client/src/**
-        target: 70%
-        threshold: 5%
+        threshold: 100%
         informational: true
-        flags:
-          - api-client
-      sdk-core:
-        paths:
-          - packages/sdk-core/src/**
-        target: 80%
-        threshold: 2%
-        flags:
-          - sdk-core
-      sdk:
-        paths:
-          - packages/sdk/src/**
-        target: 68%
-        threshold: 3%
-        flags:
-          - sdk
-      desktop:
-        paths:
-          - apps/desktop/src-tauri/src/**
-        target: auto
-        threshold: 5%
-        informational: true
-        flags:
-          - desktop
-      rust:
-        paths:
-          - crates/**
-        target: auto
-        threshold: 5%
-        informational: true
-        flags:
-          - rust
     patch:
       default:
-        target: 80%
-        threshold: 5%
+        target: auto
+        threshold: 100%
         informational: true
-
-flags:
-  api:
-    paths:
-      - apps/api/src/**
-    carryforward: true
-  crypto:
-    paths:
-      - packages/crypto/src/**
-    carryforward: true
-  core:
-    paths:
-      - packages/core/src/**
-    carryforward: true
-  api-client:
-    paths:
-      - packages/api-client/src/**
-    carryforward: true
-  sdk-core:
-    paths:
-      - packages/sdk-core/src/**
-    carryforward: true
-  sdk:
-    paths:
-      - packages/sdk/src/**
-    carryforward: true
-  desktop:
-    paths:
-      - apps/desktop/src-tauri/src/**
-    carryforward: true
-  rust:
-    paths:
-      - crates/**
-    carryforward: true
 
 comment:
   layout: 'reach,diff,flags,files'

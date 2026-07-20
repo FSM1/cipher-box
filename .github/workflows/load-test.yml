@@ -1,3 +1,5 @@
+# DORMANT during the v2 build: tests/load was demolished with the v1 layout;
+# the load harness ports back per blueprint/testing.md (dispatch tier).
 name: Load Tests
 
 on:

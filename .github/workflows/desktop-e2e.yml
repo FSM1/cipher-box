@@ -1,3 +1,6 @@
+# DORMANT during the v2 build: tests/desktop-e2e was demolished with the v1
+# layout; the v2 mounted-desktop matrix lands per blueprint/testing.md and
+# this reusable workflow gets rewired to it then.
 name: Desktop E2E Tests
 
 on:

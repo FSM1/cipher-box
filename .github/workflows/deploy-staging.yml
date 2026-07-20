@@ -1,3 +1,7 @@
+# Partially edited for v2 (blueprint/deploy.md): the tee-worker image build,
+# redis, and SendGrid plumbing are gone with the v1 layout. The full v2 edit
+# (gateway forward_auth wiring, volume-wipe cutover support) lands with the
+# staging cutover; until then WIP v2 deploys go via workflow_dispatch.
 name: Deploy Staging
 
 on:
@@ -53,42 +57,6 @@ jobs:
             ${{ env.API_IMAGE }}:${{ steps.versions.outputs.api }}
             ${{ env.API_IMAGE }}:latest-staging
             ${{ env.API_IMAGE }}:${{ env.DEPLOY_TAG }}
-
-  build-tee:
-    name: Build & Push TEE Worker Image
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ inputs.staging_tag || github.ref_name }}
-
-      - name: Set lowercase image name
-        run: echo "TEE_IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/cipherbox-tee-worker" >> "$GITHUB_ENV"
-
-      - name: Extract component versions
-        id: versions
-        run: |
-          TEE_VERSION=$(node -e "console.log(require('./apps/tee-worker/package.json').version)")
-          echo "tee=${TEE_VERSION}" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
-        with:
-          context: .
-          file: apps/tee-worker/Dockerfile
-          push: true
-          tags: |
-            ${{ env.TEE_IMAGE }}:${{ steps.versions.outputs.tee }}
-            ${{ env.TEE_IMAGE }}:latest-staging
-            ${{ env.TEE_IMAGE }}:${{ env.DEPLOY_TAG }}
 
   build-web:
     name: Build Web App
@@ -387,7 +355,7 @@ jobs:
 
   deploy-vps:
     name: Deploy to Staging VPS
-    needs: [build-api, build-tee, build-web]
+    needs: [build-api, build-web]
     runs-on: ubuntu-latest
     environment: staging
     permissions:
@@ -424,19 +392,12 @@ jobs:
           DELEGATED_ROUTING_URL=http://someguy:8190
           DELEGATED_ROUTING_FALLBACK_URL=https://delegated-ipfs.dev
           THROTTLE_BYPASS_SECRET=${{ secrets.STAGING_THROTTLE_BYPASS_SECRET }}
-          REDIS_HOST=redis
-          REDIS_PORT=6379
-          TEE_WORKER_URL=http://tee-worker:3001
-          TEE_WORKER_SECRET=${{ secrets.STAGING_TEE_WORKER_SECRET }}
-          REDIS_PASSWORD=${{ secrets.STAGING_REDIS_PASSWORD }}
           GRAFANA_LOKI_URL=${{ vars.GRAFANA_LOKI_URL }}
           GRAFANA_LOKI_USERNAME=${{ vars.GRAFANA_LOKI_USERNAME }}
           GRAFANA_LOKI_API_KEY=${{ secrets.GRAFANA_LOKI_API_KEY }}
           GRAFANA_PROMETHEUS_URL=${{ vars.GRAFANA_PROMETHEUS_URL }}
           GRAFANA_PROMETHEUS_USERNAME=${{ vars.GRAFANA_PROMETHEUS_USERNAME }}
           GRAFANA_PROMETHEUS_API_KEY=${{ secrets.GRAFANA_PROMETHEUS_API_KEY }}
-          SENDGRID_API_KEY=${{ secrets.SENDGRID_API_KEY }}
-          SENDGRID_FROM_EMAIL=${{ vars.SENDGRID_FROM_EMAIL }}
           GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
           IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}
           ENVEOF
@@ -445,9 +406,7 @@ jobs:
           echo "GITHUB_REPOSITORY_OWNER=${OWNER,,}" >> .env.staging
           echo "TAG=${{ env.DEPLOY_TAG }}" >> .env.staging
           API_VER=$(node -e "console.log(require('./apps/api/package.json').version)")
-          TEE_VER=$(node -e "console.log(require('./apps/tee-worker/package.json').version)")
           echo "API_VERSION=${API_VER}" >> .env.staging
-          echo "TEE_VERSION=${TEE_VER}" >> .env.staging
 
       - name: Copy files to VPS
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0

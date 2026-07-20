@@ -52,6 +52,8 @@ jobs:
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: apps/api/coverage/lcov.info,packages/crypto/coverage/lcov.info,packages/core/coverage/lcov.info,packages/sdk-core/coverage/lcov.info,packages/sdk/coverage/lcov.info,packages/api-client/coverage/lcov.info
-          flags: api,crypto,core,sdk-core,sdk,api-client
+          # v2: informational only (blueprint/testing.md); file list rewires
+          # as the v2 suites land and start emitting lcov artifacts.
+          files: apps/api/coverage/lcov.info,packages/client/coverage/lcov.info
+          flags: api,client
           fail_ci_if_error: false
