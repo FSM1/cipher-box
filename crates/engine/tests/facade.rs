@@ -4,7 +4,7 @@
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     Command, Engine, EngineError, EventStream, LoginSecret, NodeId, NodeKind, Permission,
-    SyncTimingProfile,
+    PlaintextContent, SyncTimingProfile,
 };
 
 fn new_engine(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
@@ -28,7 +28,7 @@ fn all_commands() -> Vec<(Command, &'static str)> {
                 parent,
                 name: "notes.txt".into(),
                 kind: NodeKind::File,
-                content: Some(b"hello".to_vec()),
+                content: Some(PlaintextContent(b"hello".to_vec())),
             },
             "create",
         ),
@@ -50,7 +50,7 @@ fn all_commands() -> Vec<(Command, &'static str)> {
         (
             Command::UpdateContent {
                 node,
-                content: b"v2".to_vec(),
+                content: PlaintextContent(b"v2".to_vec()),
             },
             "updateContent",
         ),

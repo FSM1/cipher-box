@@ -33,7 +33,7 @@ pub mod testkit;
 pub use entropy::Entropy;
 pub use facade::{
     Command, Engine, EngineError, Event, EventStream, LoginSecret, NodeId, NodeKind, Permission,
-    Staleness,
+    PlaintextContent, Staleness,
 };
 pub use profile::SyncTimingProfile;
 pub use seams::{SeamError, SeamResult, SeamSet, SeamTypes};

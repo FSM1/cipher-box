@@ -31,6 +31,20 @@ use crate::seams::{OpId, SeamSet, SeamTypes};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub [u8; 16]);
 
+/// Plaintext file content crossing the facade.
+///
+/// A newtype rather than bare `Vec<u8>` so `Debug` is structurally
+/// redacted: plaintext user bytes must never reach a log site (security
+/// rule 2), including through a derived `{:?}` on a containing [`Command`].
+#[derive(Clone, PartialEq, Eq)]
+pub struct PlaintextContent(pub Vec<u8>);
+
+impl fmt::Debug for PlaintextContent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PlaintextContent(<{} bytes>)", self.0.len())
+    }
+}
+
 /// What a created node is. Kind is sealed inside the read-body on the wire;
 /// at the facade it is plain intent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,7 +123,7 @@ pub enum Command {
         /// File or folder.
         kind: NodeKind,
         /// Initial content for file creates.
-        content: Option<Vec<u8>>,
+        content: Option<PlaintextContent>,
     },
     /// Delete a node (conditional delete semantics on rebase).
     Delete {
@@ -137,7 +151,7 @@ pub enum Command {
         /// Target file node.
         node: NodeId,
         /// New content bytes.
-        content: Vec<u8>,
+        content: PlaintextContent,
     },
 
     // --- focus and refresh ---
@@ -420,6 +434,22 @@ mod tests {
             .name(),
             "delete"
         );
+    }
+
+    #[test]
+    fn command_debug_redacts_plaintext_content() {
+        let command = Command::Create {
+            parent: NodeId([0; 16]),
+            name: "notes.txt".into(),
+            kind: NodeKind::File,
+            content: Some(PlaintextContent(b"top-secret-plaintext".to_vec())),
+        };
+        let debug = format!("{command:?}");
+        assert!(
+            !debug.contains("top-secret-plaintext") && !debug.contains("116"),
+            "plaintext bytes must not leak through Debug: {debug}"
+        );
+        assert!(debug.contains("PlaintextContent(<20 bytes>)"));
     }
 
     #[test]
