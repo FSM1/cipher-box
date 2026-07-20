@@ -31,6 +31,12 @@
 use cipherbox_engine::facade;
 use wasm_bindgen::prelude::*;
 
+// Test-only browser seam conformance bridge. Compiled only for the browser
+// suite's WASM build (`--features conformance` on the wasm target); the
+// production artifact never pulls the engine test kit or these bindings.
+#[cfg(all(feature = "conformance", target_family = "wasm"))]
+mod conformance;
+
 // ---------------------------------------------------------------------------
 // Boundary value types.
 // ---------------------------------------------------------------------------

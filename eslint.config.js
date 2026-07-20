@@ -15,6 +15,10 @@ export default [
       '**/.learnings/**',
       '**/src-tauri/target/**',
       'target/**',
+      // Generated wasm-bindgen glue + Playwright output for the browser suite.
+      '**/test/browser/pkg/**',
+      '**/playwright-report/**',
+      '**/test-results/**',
       // Astro build output in the standalone landing site (git-ignored, generated).
       '**/.astro/**',
     ],
