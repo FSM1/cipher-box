@@ -1,0 +1,342 @@
+<task-notification>
+<task-id>aced63c195b476e80</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/aced63c195b476e80.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement #624 API auth slice" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Everything verified green. Final report:
+
+## Report
+
+**Branch:** `feat/api-identity-auth-ops-baseline`
+**Worktree:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aced63c195b476e80`
+**Commits:**
+- `4c1501070` — `feat(api): identity auth, refresh rotation, and the ops baseline`
+- `589a3088b` — `ci: add api-unit, migration-drift, and openapi-freshness PR gates`
+
+### What landed
+
+- **Migration** `apps/api/src/migrations/1784513040045-InitAuthSchema.ts` — `users` (keyed by `public_key`, carries `quota_limit_override` + `byo` per blueprint), `auth_methods` (unique `(kind, identifier_hash)`, hashed identifiers only), `refresh_tokens` (unique `token_hash`, `family_id`, `used_at`). snake_case columns, `gen_random_uuid()`, cascade FKs. Generated via `migration:generate` so the drift check is strict (no cosmetic-rename grep filter).
+- **Identity auth** — `POST /auth/challenge` (single-use, publicKey-bound, TTL'd, in-memory per the fixed data model) + `POST /auth/login` verifying a compact secp256k1 signature over `sha256(challenge)` (@noble/curves); publicKeys canonicalized to compressed hex; implicit account creation at first login.
+- **Refresh rotation** — opaque 32-byte token, SHA-256-hashed at rest, one-time-use with atomic claim; rotation issues a same-family successor; **reuse hard-deletes the whole family**; logout hard-deletes all rows (repo convention: revoke = DELETE, never soft flags). Access JWT 15 min HS256; refresh also set as HTTP-only `SameSite=Strict` cookie (web) and returned in body (desktop keychain).
+- **SIWE secondary** — nonce → login for already-linked wallets; `POST /auth/siwe/link` (JWT-authed) binds a wallet; 409 if bound elsewhere.
+- **Test-login** — v1 pattern ported: `NODE_ENV=production` hard-block, timing-safe `TEST_LOGIN_SECRET`, deterministic secp256k1 keypair (compressed).
+- **Ops** — global `ThrottlerGuard` as `APP_GUARD` with env default + per-surface `@Throttle` limits (`src/ops/throttling.ts`), `@SkipThrottle` on health/metrics; prom-client `/metrics` (default metrics + `http_requests_total` + duration histogram via global interceptor); health stub kept.
+- **OpenAPI** — emitted from decorators to committed `apps/api/openapi.json` (10 paths), deterministic regeneration; added to `.prettierignore` so the generator alone owns its bytes (lint-staged prettier was reformatting it and would have broken the freshness diff).
+- **CI** — three named merge-blocking jobs in `ci.yml`: `api-unit` (vitest suite), `migration-drift` (postgres service container, run migrations, assert `migration:generate` finds no changes), `openapi-freshness` (regenerate + `git diff --exit-code`). Same pinned action SHAs/style as existing jobs; YAML validated.
+- **Determinism** — injectable `Clock`/`Entropy` abstract classes; expiry/rotation tests run on a fake clock. Vitest compiles through SWC (`unplugin-swc`) because esbuild can't emit decorator metadata; dev/CLI scripts run via ts-node (tsx would silently break Nest DI).
+
+### Test results
+
+- 38 tests / 5 files green, including: **throttler asserted effective** via supertest against the real Nest app with the real `OpsModule` guard (real 429s + `Retry-After`, per-surface bucket independence, SkipThrottle exemption), full identity/SIWE/refresh/test-login HTTP flows, reuse-detection family kill, challenge replay/cross-key rejection.
+- **Live smoke against real postgres**: booted the real app, drove challenge→login→refresh→reuse-detection→family-kill and live 429s successfully.
+- Root `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all green; migration runs cleanly on a fresh DB and both drift + freshness checks pass locally exactly as CI runs them.
+
+### Conscious deviations / notes
+
+1. **SIWE is link-then-login — no implicit account creation via SIWE.** A bare wallet signature can't prove possession of an identity publicKey; letting SIWE create accounts would allow squatting a victim's publicKey before their first login (account-takeover vector). Blueprint says implicit creation happens "at first login" and SIWE "stays as a secondary auth method" — I read secondary as linked-method; flag if you want a different shape.
+2. **Reuse-detection keeps used-token rows** (`used_at`) until family expiry — required fuel for detecting replay; actual revocation is hard-delete, honoring the "revoke = DELETE" convention.
+3. **OpenAPI doc version pinned to `2.0.0`** (not npm_package_version) so releases never churn the freshness artifact.
+4. **No per-package lint script** — repo convention is root `eslint .` only (no sibling package has one); the verification bar's `--filter api lint` is covered by root lint.
+5. API tests run in both the existing `Test` job (recursive) and `api-unit` — harmless duplication; the named gate is what law 1 requires.
+6. Root files touched beyond apps/api + ci.yml: `pnpm-lock.yaml` (install) and `.prettierignore` (4-line artifact exclusion) — both strictly required.
+
+Not built (per scope): deletion cascade, quota, pin/name surface, contract suite. Docker stack left running; scratch drift DB dropped; not pushed, no PR.</result>
+<usage><subagent_tokens>221623</subagent_tokens><tool_uses>108</tool_uses><duration_ms>1493001</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aced63c195b476e80</worktreePath><worktreeBranch>worktree-agent-aced63c195b476e80</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6e71b3d70d82719c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/a6e71b3d70d82719c.output</output-file>
+<status>completed</status>
+<summary>Agent "Standards review of #618 diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Standards review — feat/core-det-cbor-kat-spine
+
+**Documented-standard checks: no hard violations found.** Doctrine (no I/O/clock/RNG in `crates/core/src`), disjoint two-class errors with unique named checks, accept+reject vectors, anti-vacuity counts, committed generator, native+WASM legs, commit format (no parens in subject) — all satisfied. `kat_gen` doing file I/O is an example binary, not core.
+
+**Near-misses on documented standards (verify/soft):**
+
+1. `.github/workflows/ci.yml:39-44` — `.cargo/config.toml` is absent from the `rust` path filter, so a change to the wasmtime runner config skips `core-kats`. Soft breach of testing.md law 1's spirit (the gate must fire when its inputs change). Also: the job is named, but merge-blocking lives in branch protection — confirm "Core KATs (native + WASM)" is a required check.
+2. `crates/core/src/error.rs` — the trust/malformed boundary (indefinite-length = trust; tags/floats/oversize simple values = malformed) isn't derivable from blueprint/core.md's "canonicality failures" list; all equally prove a writer broke the profile. The KAT `class` field freezes this choice — deserves an explicit sign-off, since re-classing later is a vector-breaking change. Judgement call.
+3. `crates/core/examples/kat_gen.rs` `build_manifest` — preserves `manifestVersion`/`profile`/`structureTags`/`kdfEdges` from the *existing file*, so a hand-edit to those fields survives regeneration and the CI freshness diff, weakening the "committed generator is the only writer" claim (CI step name, `.prettierignore`). Backstopped today by `manifest_header_is_pinned` and the empty-sections test, but the backstop lives in a different file. Judgement call.
+
+**Baseline smells (all judgement calls):**
+
+- **Duplicated Code / Shotgun Surgery** — the manifest schema structs exist twice (`tests/kat_manifest.rs` Deserialize, `examples/kat_gen.rs` Serialize), and the expected-absent list `["unexpected-type", "unknown-field-collision"]` appears in both `build_reject_vectors` and `reject_checks_list_matches_vectors_and_error_surface`. A new manifest field or non-decode-reachable check forces paired edits; a shared test-support module would gather them.
+- **Duplicated Code (accepted)** — `write_head`/`write_text` in `tests/common/mod.rs` mirror `src/codec/encode.rs`; deliberate oracle independence, documented in the module doc. Fine as-is.
+- **Repeated Switches / Primitive Obsession** — each check name is spelled twice per variant (`CHECKS` const + `check()` match) in `error.rs`; a one-table macro would collapse it. The uniqueness test backstops drift.
+- **Speculative Generality (mild)** — `known_key_set`, `Value::remove/as_bool/as_i64/from_i64` have no non-test consumers yet; defensible given the declared "later slices" plan.
+
+Files: `/Users/myankelev/Code/random/cipher-box/crates/core/src/error.rs`, `.../examples/kat_gen.rs`, `.../tests/kat_manifest.rs`, `.../tests/common/mod.rs`, `/Users/myankelev/Code/random/cipher-box/.github/workflows/ci.yml`.</result>
+<usage><subagent_tokens>106306</subagent_tokens><tool_uses>13</tool_uses><duration_ms>144698</duration_ms></usage>
+</task-notification>
+
+---
+
+please run /crypto-privacy-review on PR #659
+
+---
+
+<task-notification>
+<task-id>bvc71zysp</task-id>
+<summary>Monitor event: "PR 659 CI checks as they settle"</summary>
+<event>CodeRabbit: pass
+lint-pr-title: pass
+zizmor static audit: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+seems like a bunch of github actions are stuck again
+
+---
+
+<task-notification>
+<task-id>bvc71zysp</task-id>
+<summary>Monitor event: "PR 659 CI checks as they settle"</summary>
+<event>Detect Changes: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bvc71zysp</task-id>
+<summary>Monitor event: "PR 659 CI checks as they settle"</summary>
+<event>Lint: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bvc71zysp</task-id>
+<summary>Monitor event: "PR 659 CI checks as they settle"</summary>
+<event>Build: pass
+Test: pass
+Typecheck: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bvc71zysp</task-id>
+<summary>Monitor event: "PR 659 CI checks as they settle"</summary>
+<event>Build: pass
+Cargo Check &amp; Test (Linux): pass
+Cargo Check &amp; Test (macOS): pass
+Cargo Check &amp; Test (Windows): pass
+CodeRabbit: pass
+Core KATs (native + WASM): pass
+Detect Changes: pass
+lint-pr-title: pass
+Lint: pass
+Test: pass
+Typecheck: pass
+zizmor static audit: pass</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+ok pr #659 is merged, i think all 3 branches can be rebased, and then run /ship on each of them
+
+---
+
+<task-notification>
+<task-id>a084defcb02375ed8</task-id>
+<tool-use-id>toolu_01R5PZKr6fpHoAoofMzZZiqs</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/a084defcb02375ed8.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship wasm facade 637" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>I'll stop here and await the background task notification. The poll `b1nst686f` will re-invoke me when CodeRabbit, Greptile, and Core KATs all reach terminal state, at which point I'll fetch every review thread (GraphQL, no author filter), triage, reply, and resolve, then confirm final CI status.</result>
+<usage><subagent_tokens>119505</subagent_tokens><tool_uses>51</tool_uses><duration_ms>934590</duration_ms></usage>
+</task-notification>
+
+---
+
+no need to post https://github.com/FSM1/cipher-box/pull/663#issuecomment-5021437972 on the fresh PR threads - coderabbit will review automatically if the quota has not been exhausted.
+
+when shipping multiple PRs at the same time, coderabbit web reviews will need to be staggered. only 1 review per hour is available. only if coderabbit posts a comment that that quota has been depleted, then the review should be manually requested.
+
+---
+
+<task-notification>
+<task-id>af90976a0d76149ac</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/af90976a0d76149ac.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship core crypto suite 619" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>CI is re-running the full suite on `ee5cd0918` (all Cargo/Desktop/Core-KATs/Engine/Greptile checks restarted). The three prior commits' checks were all green, and this commit is a docs-only `#[doc(hidden)]` addition with byte-identical KATs, so I expect it to pass identically. I'll pause here and resume when the background CI-settle task (`beh1v7g5v`) notifies me on completion, then do the final Greptile re-sweep and report.</result>
+<usage><subagent_tokens>233488</subagent_tokens><tool_uses>92</tool_uses><duration_ms>1949763</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af90976a0d76149ac</task-id>
+<tool-use-id>toolu_01NQQQZdSokk74EdUxhfdkDn</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/af90976a0d76149ac.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship core crypto suite 619" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>The ship loop is complete. Everything is in sync (local HEAD == origin tip == `ee5cd0918`), PR #664 is ready and MERGEABLE, all CI green, 0 unresolved threads. Per instructions, I am not merging (that's the orchestrator's/user's job).
+
+---
+
+## Final report — PR #664 (issue #619 core crypto suite + KDF catalog)
+
+**PR:** #664 — https://github.com/FSM1/cipher-box/pull/664 (OPEN, ready, MERGEABLE, "Closes #619" in body)
+**Final commit SHA:** `ee5cd0918` (branch `feat/core-crypto-suite-kdf-catalog`, 4 commits ahead of main)
+
+**CI status: ALL GREEN.** 14/14 non-skipped checks pass, 0 failures — including Core KATs (native + WASM), Cargo Check &amp; Test on Linux/Windows/macOS, Engine Tests, all 3 Desktop Builds, Greptile Review, Lint, lint-pr-title, zizmor. The 6 skipped jobs (Typecheck/Test/Build/API Unit/Migration Drift/OpenAPI Freshness) are path-filtered for this Rust-only PR = expected pass. CodeRabbit's check shows pass but it did **not** actually review — org-wide rate-limit (1/hr, other PRs queued ahead); per direction I did not manually re-trigger and deleted the earlier manual `@coderabbitai review` comment.
+
+**Local gates (quoted, all green):** `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo test -p cipherbox-core` = 43 lib + 5 codec-props + 20 kat-manifest + 2 kdf-props (exactly as expected); `cargo test --workspace` green; WASM `wasm32-wasip1` under wasmtime = 43+5+20+2; KAT freshness — `kat_gen` leaves the tree byte-identical, no untracked files.
+
+**Threads resolved: 1/1.** One Greptile P2 (KDF probe surface is `pub` and returns raw key bytes). Greptile's re-review of my fix commit added no new threads; CodeRabbit posted none.
+
+**Triage tally: 2 fixed / 0 filed / ~5 discarded.**
+- **Fixed** (`dae51da3c`): HPKE key-schedule zeroization gap — the KEM `eae_prk` and base-mode `secret` PRKs (and the `labeled_ikm` scratch copying the DH shared secret) were bare while the final key was `Zeroizing`; now all key-material intermediates are zeroized. Byte-identical KATs.
+- **Fixed** (`ee5cd0918`): marked `edge_probe_outputs`/`EdgeProbe`/`EdgeProbeOutput` `#[doc(hidden)]` (Greptile P2) — `pub` must stay (cross-crate KAT tests + example), so `#[doc(hidden)]` removes the raw-key surface from the supported API at zero risk to tests/KATs. A feature-gate alternative was rejected as too invasive (Cargo.toml + every CI invocation).
+- **Discarded** (non-material, acknowledged in PR): HPKE no low-order/zero-DH check in decap (RFC 9180 doesn't mandate for X25519; base mode is unauthenticated by design); `blinded-tag` all-zero-ECDH degeneracy (documented; tag is a public index, seed is HPKE-sealed); unbounded `Debug` on codec map-key error fields (pre-existing, `Display` truncates); triplicated 7-line `hex_lower` Debug helper (dev-only `hex` crate can't be shared into production Debug — not worth a 3-file refactor). **0 issues filed.**
+
+**Crypto-review outcome:** An independent adversarial crypto review (plus the prior on-branch review) confirmed all four earlier fixes hold in the tree (high-S ECDSA rejection at parse + verify, Ed25519 `verify_strict`, redacted `Debug` on every secret type, private `ContactCode` fields). Verified against `blueprint/core.md`: all 14 KDF edges present with exact `cipherbox/v2/&lt;edge&gt;` contexts and frozen layouts; composite edges concatenate fixed-width prefixes (unambiguous); HPKE RFC 9180 base-mode construction correct and pinned to Appendix A.1 byte-for-byte; fail-closed everywhere; two-class error surface disjoint. One LOW finding (zeroization) surfaced and fixed. No new material crypto/privacy issues.
+
+**Blueprint judgments I had to make:** (1) The blueprint's "ids are fixed-length message input, never variable context" rule — I judged the two composite edges (`blinded-tag` = `ecdh[32] ‖ ipnsName[var]`, `pseudonym-sign` = `pairwise[32] ‖ scopeId[16]`) compliant because variable data enters the `derive_key` **ikm** (not a context string) behind a fixed-width prefix, so the split is unambiguous — this matches the blueprint's own `‖`-concatenation notation for those edges. (2) HPKE base-mode's lack of sender authentication and the public `blinded-tag`'s low-order degeneracy are blueprint-permitted, since the blueprint layers authenticity via separate structure signatures / mailbox sender signatures and treats the tag as a public index.</result>
+<usage><subagent_tokens>228980</subagent_tokens><tool_uses>95</tool_uses><duration_ms>2423105</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a084defcb02375ed8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/a084defcb02375ed8.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship wasm facade 637" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 20 checks pass, 0 non-pass, 3/3 threads resolved (no new threads from re-review), PR #663 is MERGEABLE. The ship loop is complete. Final report below.
+
+---
+
+## Ship report — PR #663 (`feat/wasm-facade-bindings`, issue #637)
+
+**PR:** #663 — https://github.com/FSM1/cipher-box/pull/663 (OPEN, ready, `MERGEABLE`)
+**Final commit:** `470dfcb52ae718bb24c3ecf35a850794d861baaf`
+**CI:** All 20 checks green, 0 failing. The workflow **STARTED cleanly on every push — not `startup_failure`** (verified jobs present each run: full matrix including "Core KATs (native + WASM)", zizmor static audit, lint-pr-title, Cargo Check Linux/macOS/Windows, Desktop ubuntu/macOS/windows, CodeRabbit, Greptile).
+
+**Allowlist — no action needed.** Verified `git diff origin/main -- .github/`: the only `uses:` added are `actions/setup-node@48b55a0…` (covered by `actions/*`, already used in 20+ places at the identical pinned SHA) and `bytecodealliance/actions/wasmtime` (already present). `wasm-bindgen-cli` comes via `cargo install`, not an action. **No new third-party action was introduced.**
+
+**Merge-blocking bug I found and fixed (in this slice's own CI step).** The first post-ready run failed Core KATs at the `Install wasm-bindgen-cli` step with `error: binary 'wasm-bindgen' already exists in destination` (exit 101). Root cause: the step added `~/.cargo/bin` to the cache but ran a bare `cargo install` — which errors once the cache restores a bin-populated `~/.cargo/bin` (the comment claimed "no-op on a cache hit"; it wasn't). Deterministic, not a flake — prior runs passed only because they *seeded* the cache. Fixed in `470dfcb52` with a version-guarded skip + `--force` fallback; re-run confirmed the install step succeeds and Core KATs is green.
+
+**Threads resolved: 3/3** (0 unresolved, no duplicate replies; CodeRabbit even confirmed my test-gating fix as "the correct complement").
+
+**Triage tally — fixed 3 / filed 0 / discarded 4:**
+- Fixed: doc-precision on the public-key crossing (`0f9c4834c`); gate host tests off `wasm32-unknown-unknown` where plain `#[test]` is a silent no-op (`e423c8272`); the CI install idempotency bug (`470dfcb52`).
+- Discarded: CodeRabbit's "add JS-side ES-module integration tests" (the `wasm-bindgen-test` leg already runs on the real wasm target under Node; JS module-loading belongs with worker-hosting slice #639) and camelCase-param nit (positional TS params, zero caller impact); Greptile's `match self`/`match &amp;self` consistency nit (code is correct) and folder+content boundary-validation (binding must not extend the facade — engine.md facade law).
+- **Issues filed: none.**
+
+**Crypto/privacy review: CLEAN** (judged against `blueprint/web-client.md` §"WASM packaging and the type boundary" §60-78 + `CONTEXT.md`; the code matches the normative contract exactly):
+- The wasm crate imports **only** `cipherbox_engine::facade` — nothing from `cipherbox-core` is re-exported to JS; all crypto/codec stays behind the facade.
+- Redaction survives the boundary: `Command` exposes only its variant `name` (no payload readback getters — confirmed in generated glue), mirroring the facade's hand-written redacting `Debug`. `Event` getters are key-free.
+- `getrandom`→`crypto.getRandomValues` is a browser-**test**-only dev-dependency; production engine takes injected entropy — no nondeterminism smuggled into core/engine.
+- No secret key material crosses. One judged blueprint ambiguity: the blueprint's "nothing key-shaped crosses the facade" refers to *secret* key bytes (adjacent `Zeroizing`/key-bytes context) — a grant carries the recipient's *public* identity key inward as intent, which is legitimate. I sharpened the module doc to say "no secret key material crosses" and name the public-key exception, aligning code with blueprint intent rather than overclaiming.
+
+**KAT parity (native vs wasm):** native `kat_manifest`=11 + `codec_props`=5 = **16**; `wasm32-unknown-unknown` under `wasm-bindgen-test`→Node = 11 + 5 = **16 (exact match)**; plus the **5** `crates/wasm` boundary tests green on wasm. All local gates quoted from real output: `cargo fmt --check` clean; clippy clean on native workspace + `-p cipherbox-wasm`/`-p cipherbox-core` on `--target wasm32-unknown-unknown`; `cargo test --workspace --exclude cipherbox-desktop` all green; ES-module + `.d.ts` built with the exact CI command.
+
+**Exported `.d.ts` boundary surface** (the generated contract — only these six symbols cross, no core types):
+- `class Command` — 16 static builders (`create`, `delete`, `rename`, `relink`, `updateContent`, `setFocus`, `manualRefresh`, `importContact`, `grant`, `revoke`, `downgrade`, `createInviteLink`, `acceptShare`, `rotateNow`, `siweLogin`, `logout`) + `readonly name: string`; binary args as `Uint8Array`.
+- `class Event` — `readonly kind: string`, `staleness: Staleness | undefined`, `ipnsName: Uint8Array | undefined`, `opId: bigint | undefined`, `description: string | undefined`.
+- `class NodeId` — `static fromBytes(Uint8Array): NodeId` (throws on ≠16 bytes), `readonly bytes: Uint8Array`.
+- `enum NodeKind` / `enum Permission` / `enum Staleness`.
+
+**Scope deviation flagged in the PR body:** this lands the facade **type surface only**, not a live engine handle — `start`/`command`/event-stream + `LoginSecret` ingress need the host seams + worker transport, out of scope → next slice #639. No secret crosses the boundary in this slice.
+
+Branch now has 6 commits (3 original + 3 review-driven fixes). Required checks and final merge left to you.</result>
+<usage><subagent_tokens>159133</subagent_tokens><tool_uses>80</tool_uses><duration_ms>2475656</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>af672ff3583b505ea</task-id>
+<tool-use-id>toolu_01YcNZxLRQR2obTpbigLNM38</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/af672ff3583b505ea.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship desktop seams 646" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All green. Final state confirmed: **14 checks pass, 6 skipping, 0 failing/pending; mergeStateStatus CLEAN; PR ready (not draft).** The merge is the orchestrator's job, so I'll stop here.
+
+---
+
+## Ship report — PR #666 (issue #646, desktop seam set)
+
+**PR:** #666 — https://github.com/FSM1/cipher-box/pull/666 (ready, `Closes #646` linked)
+**Final commit:** `47d44f1f622176294e30b9bd87cc5c0828706e78` (`47d44f1f6`)
+**CI status:** all green — 14 pass / 6 skipping / 0 fail / 0 pending; merge state CLEAN. Includes Cargo Check &amp; Test on Linux + macOS + Windows, all three Desktop Builds, Core KATs, Engine Tests, Lint, lint-pr-title, zizmor, Greptile.
+**Threads resolved:** 1/1 (0 unresolved).
+
+**Local gates (quoted, final state):**
+- `cargo fmt --all --check` — clean (exit 0)
+- `cargo clippy --workspace --exclude cipherbox-desktop --all-targets -- -D warnings` — clean, no warnings
+- `cargo test --workspace --exclude cipherbox-desktop` — `0 failed` across all suites; desktop-seams = 7 unit + 13 conformance passing, 2 keyring `#[ignore]`d. (CI re-ran the full workspace on all 3 OSes — authoritative, all pass.)
+- **Real macOS Keychain** `cargo test -p cipherbox-desktop-seams --test conformance -- --ignored` → `2 passed; 0 failed` (both `real_keyring_*` tests round-trip the refresh token + last-account id through the live Apple Keychain).
+- **Kill-point verify:** the StagingStore crash-ordering test drives the real `FileStagingStore` on a real tempdir (enqueue → stage → `remove_op` → "crash" → reopen) and asserts the op is durably gone while the sidecar survives as a reclaimable orphan — passes. Honest scope: it proves op-record-before-sidecar ordering + reopen recovery against the real fsync barriers, not power-loss fault injection.
+
+**Crypto/privacy review (step 2b) — all five required properties PASS:** ciphertext-only at rest, CredentialStore holds only refresh-token + last-account-id, Debug redaction (no credential-bearing type leaks), zeroize-at-terminal-owner (correct pass-through, no lingering secret copies, no zeroing of caller buffers), and Unix crash-ordering durability. Independent adversarial agent + manual sweep both clean; no material findings.
+
+**Triage tally — 5 fixed / 1 filed / ~5 discarded:**
+- Fixed: (1) StagingStore root temp-debris now swept on reopen (self-found); (2) `account_data_dir` rejects non-single-component `account_id` — path-traversal, flagged by both reviewers; (3) Http/RecordTransport connect timeouts + RecordTransport whole-request timeout + `redirect(none)` — no-hang + SSRF hardening, CodeRabbit + crypto reviewer; (4) **pure-Rust Linux keyring** (`async-secret-service`/zbus/async-io instead of `sync-secret-service`/libdbus) — this was the real Linux CI failure AND a silent hard-constraint-6 violation the original manifest introduced; (5) `staged_bytes_total` aligned with the `staged_keys` hex filter + graceful `NotFound` — Greptile P2. Each has a regression test.
+- Filed: **#665** — harden StagingStore unlink-ordering durability on Windows (`fsync_dir` is a no-op there; NTFS journaling gives consistency but not app-visible unlink ordering). Low severity today (Windows not a current target) but a real durability gap.
+- Discarded (by-contract/speculative, noted in PR): routing_key percent-encoding (restricted-alphabet IPNS CIDs, safe by contract); Http redirect policy (engine owns API semantics; reqwest strips standard sensitive headers); a CI guard against `test-support` in prod (dev-deps don't propagate — already contained); kill-point-not-power-loss (infeasible portably); FloorStore-plaintext-counters vs "ciphertext-only" doc nuance (public metadata, within the law).
+
+**CodeRabbit note:** the org-wide CodeRabbit quota (1 review/hour, shared across the 4 in-flight PRs) was depleted — CodeRabbit itself posted a "review limit reached, next in 52 min" comment, so the automatic web review could not run. Per the coordinator's correction I did **not** re-request `@coderabbitai review` (and deleted the one manual request I'd posted before the correction arrived). The CodeRabbit **CLI** pass stands in — it surfaced 3 findings, all fixed above. The web review is quota-deferred to the coordinator.
+
+**Blueprint ambiguity judged:** (a) "ciphertext-only at rest" vs FloorStore's plaintext u64 floors — judged floors are public epoch/sequence metadata (already in IPNS records), so within the law's intent; kept. (b) New `crates/desktop-seams` crate — the only home satisfying both "kits run in the cargo gate" and "`apps/desktop` stays Tauri-gated out." (c) The reqwest-0.12/ring choice (constraint 6, no cmake) extends to the keyring: `sync-secret-service` silently pulled libdbus (C) — corrected to the zbus/async-io backend to actually deliver the pure-Rust promise.
+
+Deviations (new crate, reqwest 0.12/ring, file-double keyring CI story) are all flagged in the PR body. Merge left to you.</result>
+<usage><subagent_tokens>222669</subagent_tokens><tool_uses>108</tool_uses><duration_ms>2562436</duration_ms></usage>
+</task-notification>
+
+---
+
+I think that we will be forced to wait for coderabbit quotas to reset - https://github.com/FSM1/cipher-box/pull/664#issuecomment-5021463802. next coderabbit review will be available in ~35 minutes.
+
+In terms of priorities, I think that having coderabbit review PR #664 is the highest priority, followed by the desktop seams
+
+---
+
+#663 has already received it's coderabbit review and the review findings have already been addressed. I think that one is good to be merged.
+
+---
+
+<task-notification>
+<task-id>bf8torz00</task-id>
+<summary>Monitor event: "Re-request CodeRabbit review on #664 after quota actually resets"</summary>
+<event>REQUESTED-664-v2: posted @coderabbitai review at 11:56Z</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bf8torz00</task-id>
+<tool-use-id>toolu_016wdcafB3757svf7dh3YmoV</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/bf8torz00.output</output-file>
+<status>completed</status>
+<summary>Monitor "Re-request CodeRabbit review on #664 after quota actually resets" stream ended</summary>
+</task-notification>
+
+---
+
+also marked #669 as ready - waiting on greptile review
