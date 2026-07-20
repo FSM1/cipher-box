@@ -1,0 +1,86 @@
+[
+  {
+    "name": "downgrade-v",
+    "key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "sealed": "101112131415161718191a1b1c1d1e1f2021222324252627333e9d2b64923a4b3f513e5d402c2e3484dc5ca13abaa3c18d81861c04bd",
+    "v": 1,
+    "id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "scope": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "epoch": 5,
+    "structTag": 1,
+    "check": "seal-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "id-transplant",
+    "key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "sealed": "101112131415161718191a1b1c1d1e1f2021222324252627333e9d2b64923a4b3f513e5d402c2e3484dc5ca13abaa3c18d81861c04bd",
+    "v": 2,
+    "id": "a1a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "scope": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "epoch": 5,
+    "structTag": 1,
+    "check": "seal-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "scope-transplant",
+    "key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "sealed": "101112131415161718191a1b1c1d1e1f2021222324252627333e9d2b64923a4b3f513e5d402c2e3484dc5ca13abaa3c18d81861c04bd",
+    "v": 2,
+    "id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "scope": "b1b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "epoch": 5,
+    "structTag": 1,
+    "check": "seal-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "epoch-transplant",
+    "key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "sealed": "101112131415161718191a1b1c1d1e1f2021222324252627333e9d2b64923a4b3f513e5d402c2e3484dc5ca13abaa3c18d81861c04bd",
+    "v": 2,
+    "id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "scope": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "epoch": 6,
+    "structTag": 1,
+    "check": "seal-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "struct-tag-transplant",
+    "key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "sealed": "101112131415161718191a1b1c1d1e1f2021222324252627333e9d2b64923a4b3f513e5d402c2e3484dc5ca13abaa3c18d81861c04bd",
+    "v": 2,
+    "id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "scope": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "epoch": 5,
+    "structTag": 2,
+    "check": "seal-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "tampered-ciphertext",
+    "key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "sealed": "101112131415161718191a1b1c1d1e1f2021222324252627333e9d2b64923a4b3f513e5d402c2e3484dc5ca13abaa3c18d81861c04bc",
+    "v": 2,
+    "id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "scope": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "epoch": 5,
+    "structTag": 1,
+    "check": "seal-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "truncated-below-nonce-tag",
+    "key": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+    "sealed": "101112131415161718191a1b1c1d1e1f2021222324252627333e9d2b64923a4b3f513e5d402c2e",
+    "v": 2,
+    "id": "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+    "scope": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+    "epoch": 5,
+    "structTag": 1,
+    "check": "truncated",
+    "class": "malformed"
+  }
+]

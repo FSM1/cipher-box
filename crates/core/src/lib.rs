@@ -8,4 +8,5 @@
 pub mod codec;
 pub mod error;
 pub mod kdf;
+pub mod seal;
 pub mod suite;

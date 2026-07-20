@@ -391,7 +391,7 @@ jobs:
       # wasm-bindgen-test. Count parity with the native run is the anti-vacuity
       # backstop (the test-file `#[test]` shadow routes both to this harness).
       - name: Core KAT + property suite (WASM, wasm32-unknown-unknown)
-        run: cargo test -p cipherbox-core --target wasm32-unknown-unknown --test kat_manifest --test codec_props
+        run: cargo test -p cipherbox-core --target wasm32-unknown-unknown --test kat_manifest --test codec_props --test seal_props
 
       # The crates/wasm facade boundary tests (u64/BigInt, getrandom wiring,
       # command/event shapes) run under the same Node harness.

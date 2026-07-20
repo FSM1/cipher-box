@@ -55,6 +55,24 @@ pub enum TrustViolation {
     /// signature of tampering or an AAD/enc transplant, not a retryable fetch
     /// error.
     HpkeOpenFailed,
+    /// A symmetric sealed body failed to open: the XChaCha20-Poly1305 tag did
+    /// not verify under the read/structure key and the structured AAD
+    /// `(v, id, scope, epoch, structTag)`. *Trust*, not availability — the
+    /// signature of tampering, an AAD transplant (a body re-hung under a
+    /// different id/scope/epoch/tag), or a version downgrade (`v` is bound into
+    /// the AAD, so a rolled-back `v` fails the tag). Unseal never silently
+    /// degrades to staleness.
+    SealOpenFailed,
+    /// Two child refs in one folder read-body carried the same `id`. Uniqueness
+    /// is fail-closed at decode (#39 D7): duplicate ids anywhere are a trust
+    /// violation, never tolerated — a location-independent node id must name at
+    /// most one child.
+    DuplicateId,
+    /// Two child refs in one folder read-body carried the same `ipnsName`.
+    /// Uniqueness is fail-closed at decode (#39 D7): a duplicate name within a
+    /// scope's child listing is the transplant closure the AAD deliberately
+    /// leaves the name out for — rejected here instead of by the tag.
+    DuplicateIpnsName,
 }
 
 impl TrustViolation {
@@ -68,6 +86,9 @@ impl TrustViolation {
         "duplicate-map-key",
         "subkey-binding-invalid",
         "hpke-open-failed",
+        "seal-open-failed",
+        "duplicate-id",
+        "duplicate-ipns-name",
     ];
 
     /// The stable name of the check that fired.
@@ -80,6 +101,9 @@ impl TrustViolation {
             Self::DuplicateMapKey { .. } => "duplicate-map-key",
             Self::SubkeyBindingInvalid => "subkey-binding-invalid",
             Self::HpkeOpenFailed => "hpke-open-failed",
+            Self::SealOpenFailed => "seal-open-failed",
+            Self::DuplicateId => "duplicate-id",
+            Self::DuplicateIpnsName => "duplicate-ipns-name",
         }
     }
 }
@@ -99,9 +123,14 @@ impl fmt::Display for TrustViolation {
                 self.check(),
                 DisplayKey(key)
             ),
-            // Cryptographic checks carry no byte offset: they fire on a
-            // decoded structure, not a position in the encoded stream.
-            Self::SubkeyBindingInvalid | Self::HpkeOpenFailed => {
+            // Cryptographic and post-decode structural checks carry no byte
+            // offset: they fire on a decoded structure (or a whole ciphertext),
+            // not a position in the encoded stream.
+            Self::SubkeyBindingInvalid
+            | Self::HpkeOpenFailed
+            | Self::SealOpenFailed
+            | Self::DuplicateId
+            | Self::DuplicateIpnsName => {
                 write!(f, "trust violation [{}]", self.check())
             }
         }
@@ -182,6 +211,20 @@ pub enum Malformed {
     /// a parseable signature that fails to verify — the latter is the *trust*
     /// check [`TrustViolation::SubkeyBindingInvalid`].
     InvalidBindingSigEncoding,
+    /// A read-body's `kind` discriminant was a text string other than
+    /// `"folder"`/`"file"`. *Malformed*: an unrecognized kind is foreign data
+    /// in the tagged-union tag slot, not a non-canonical encoding of a known
+    /// kind.
+    InvalidNodeKind,
+    /// A fixed-length byte field (a node `id`/`scope` at 16 bytes, a version
+    /// `contentKey` at 32) carried the wrong number of bytes. *Malformed*: a
+    /// length-wrong id/key slot is structurally invalid input, the same class
+    /// as a truncation, not evidence a canonical form was tampered.
+    InvalidFieldLength {
+        field: &'static str,
+        expected: usize,
+        found: usize,
+    },
 }
 
 impl Malformed {
@@ -204,6 +247,8 @@ impl Malformed {
         "invalid-identity-key",
         "invalid-enc-subkey",
         "invalid-binding-sig-encoding",
+        "invalid-node-kind",
+        "invalid-field-length",
     ];
 
     /// The stable name of the check that fired.
@@ -225,6 +270,8 @@ impl Malformed {
             Self::InvalidIdentityKey => "invalid-identity-key",
             Self::InvalidEncSubkey => "invalid-enc-subkey",
             Self::InvalidBindingSigEncoding => "invalid-binding-sig-encoding",
+            Self::InvalidNodeKind => "invalid-node-kind",
+            Self::InvalidFieldLength { .. } => "invalid-field-length",
         }
     }
 }
@@ -250,9 +297,15 @@ impl fmt::Display for Malformed {
                 write!(f, " (key {:?})", DisplayKey(key))
             }
             Self::MissingField { field } => write!(f, " (field {field})"),
-            Self::InvalidIdentityKey | Self::InvalidEncSubkey | Self::InvalidBindingSigEncoding => {
-                Ok(())
-            }
+            Self::InvalidFieldLength {
+                field,
+                expected,
+                found,
+            } => write!(f, " (field {field}: expected {expected}, found {found})"),
+            Self::InvalidIdentityKey
+            | Self::InvalidEncSubkey
+            | Self::InvalidBindingSigEncoding
+            | Self::InvalidNodeKind => Ok(()),
         }
     }
 }

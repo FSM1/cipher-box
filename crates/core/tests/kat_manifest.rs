@@ -19,6 +19,11 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 use cipherbox_core::codec::{decode, decode_map_partial, encode, encode_map_partial};
 use cipherbox_core::error::{Malformed, TrustViolation};
 use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
+use cipherbox_core::seal::{
+    self, AAD_DOMAIN, AadContext, NodeKind, STRUCT_TAG_READ_BODY, STRUCT_TAGS, build_aad,
+    decode_envelope, decode_read_body, encode_envelope, encode_read_body, open_read_body,
+};
+use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
 use cipherbox_core::suite::hpke::{hpke_open, hpke_seal};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
@@ -61,6 +66,30 @@ const FIXTURES: &[(&str, &str)] = &[
         "vectors/contact/reject.json",
         include_str!("../kat/vectors/contact/reject.json"),
     ),
+    (
+        "vectors/seal/seal.json",
+        include_str!("../kat/vectors/seal/seal.json"),
+    ),
+    (
+        "vectors/seal/open_reject.json",
+        include_str!("../kat/vectors/seal/open_reject.json"),
+    ),
+    (
+        "vectors/seal/read_body_accept.json",
+        include_str!("../kat/vectors/seal/read_body_accept.json"),
+    ),
+    (
+        "vectors/seal/read_body_reject.json",
+        include_str!("../kat/vectors/seal/read_body_reject.json"),
+    ),
+    (
+        "vectors/seal/envelope_accept.json",
+        include_str!("../kat/vectors/seal/envelope_accept.json"),
+    ),
+    (
+        "vectors/seal/envelope_reject.json",
+        include_str!("../kat/vectors/seal/envelope_reject.json"),
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -77,6 +106,68 @@ struct Manifest {
     structure_tags: serde_json::Map<String, serde_json::Value>,
     kdf: KdfSection,
     suite: SuiteSection,
+    seal: SealManifest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SealManifest {
+    aad_domain: String,
+    read_body_struct_tag: u8,
+    seal: FileCount,
+    open_reject: RejectSection,
+    read_body_accept: FileCount,
+    read_body_reject: RejectSection,
+    envelope_accept: FileCount,
+    envelope_reject: RejectSection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SealVector {
+    name: String,
+    key: String,
+    nonce: String,
+    v: u64,
+    id: String,
+    scope: String,
+    epoch: u64,
+    struct_tag: u8,
+    plaintext: String,
+    aad: String,
+    sealed: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SealOpenRejectVector {
+    name: String,
+    key: String,
+    sealed: String,
+    v: u64,
+    id: String,
+    scope: String,
+    epoch: u64,
+    struct_tag: u8,
+    check: String,
+    class: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReadBodyAcceptVector {
+    name: String,
+    hex: String,
+    kind: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct EnvelopeAcceptVector {
+    name: String,
+    key: String,
+    envelope: String,
+    read_body: String,
 }
 
 #[derive(Deserialize)]
@@ -306,6 +397,32 @@ fn contact_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
     serde_json::from_str(fixture(&m.suite.contact.reject.file)).expect("contact reject.json shape")
 }
 
+fn seal_vectors(m: &Manifest) -> Vec<SealVector> {
+    serde_json::from_str(fixture(&m.seal.seal.file)).expect("seal.json shape")
+}
+
+fn seal_open_reject_vectors(m: &Manifest) -> Vec<SealOpenRejectVector> {
+    serde_json::from_str(fixture(&m.seal.open_reject.file)).expect("seal open_reject.json shape")
+}
+
+fn read_body_accept_vectors(m: &Manifest) -> Vec<ReadBodyAcceptVector> {
+    serde_json::from_str(fixture(&m.seal.read_body_accept.file))
+        .expect("read_body_accept.json shape")
+}
+
+fn read_body_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
+    serde_json::from_str(fixture(&m.seal.read_body_reject.file))
+        .expect("read_body_reject.json shape")
+}
+
+fn envelope_accept_vectors(m: &Manifest) -> Vec<EnvelopeAcceptVector> {
+    serde_json::from_str(fixture(&m.seal.envelope_accept.file)).expect("envelope_accept.json shape")
+}
+
+fn envelope_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
+    serde_json::from_str(fixture(&m.seal.envelope_reject.file)).expect("envelope_reject.json shape")
+}
+
 fn unhex(name: &str, hex: &str) -> Vec<u8> {
     let bytes = hex::decode(hex).unwrap_or_else(|e| panic!("vector {name}: bad hex: {e}"));
     // Lowercase hex is part of the fixture contract.
@@ -317,10 +434,25 @@ fn unhex(name: &str, hex: &str) -> Vec<u8> {
     bytes
 }
 
-fn unhex32(name: &str, hex: &str) -> [u8; 32] {
+fn unhex_n<const N: usize>(name: &str, hex: &str) -> [u8; N] {
     unhex(name, hex)
         .try_into()
-        .unwrap_or_else(|_| panic!("vector {name}: expected 32 bytes"))
+        .unwrap_or_else(|_| panic!("vector {name}: expected {N} bytes"))
+}
+
+fn unhex32(name: &str, hex: &str) -> [u8; 32] {
+    unhex_n::<32>(name, hex)
+}
+
+/// Rebuild an [`AadContext`] from a seal-vector's fields.
+fn seal_ctx(name: &str, v: u64, id: &str, scope: &str, epoch: u64, struct_tag: u8) -> AadContext {
+    AadContext {
+        v,
+        id: unhex_n::<16>(name, id),
+        scope: unhex_n::<16>(name, scope),
+        epoch,
+        struct_tag,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +478,12 @@ fn fixture_table_matches_manifest_files() {
         m.suite.hpke.open_reject_file.as_str(),
         m.suite.contact.accept.file.as_str(),
         m.suite.contact.reject.file.as_str(),
+        m.seal.seal.file.as_str(),
+        m.seal.open_reject.file.as_str(),
+        m.seal.read_body_accept.file.as_str(),
+        m.seal.read_body_reject.file.as_str(),
+        m.seal.envelope_accept.file.as_str(),
+        m.seal.envelope_reject.file.as_str(),
     ];
     let referenced_set: BTreeSet<&str> = referenced.iter().copied().collect();
     assert_eq!(
@@ -487,7 +625,7 @@ fn reject_checks_list_matches_vectors_and_error_surface() {
 /// suite decoders can never emit: `unknown-field-collision` (an
 /// `encode_map_partial` caller bug), which stays unit-test-pinned in
 /// src/codec/fields.rs. This is the crate-wide extension of the reject-coverage
-/// law across the codec, contact, and hpke families.
+/// law across the codec, contact, hpke, and seal families.
 #[test]
 fn every_crate_check_is_pinned_by_a_vector_family() {
     let m = manifest();
@@ -495,6 +633,9 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
     covered.extend(reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(contact_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(hpke_open_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(seal_open_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(read_body_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(envelope_reject_vectors(&m).into_iter().map(|v| v.check));
 
     let surface: BTreeSet<String> = TrustViolation::CHECKS
         .iter()
@@ -682,16 +823,397 @@ fn unknown_field_vectors_round_trip_byte_stable() {
     }
 }
 
+/// The canonical structure-tag name→byte registry, fixed HERE independent of
+/// the crate's `STRUCT_TAGS` const and the generator — the anti-vacuity anchor
+/// for the domain-separation registry (mirrors ALL_EDGE_NAMES for the KDF
+/// catalog). Adding, renaming, or re-numbering a tag must fail a test, never
+/// silently shift the byte-space.
+const ALL_STRUCT_TAGS: &[(&str, u8)] = &[
+    ("read-body", 1),
+    ("write-body", 2),
+    ("grant-blob", 3),
+    ("owner-blob", 4),
+    ("ascent-link", 5),
+    ("history-link", 6),
+    ("pointer-payload", 7),
+    ("mailbox-payload", 8),
+];
+
 #[test]
-fn structure_tags_section_exists_and_is_empty() {
-    // Present-and-empty by design: the structure-tag registry lands with the
-    // seal/structure-signature slice, replacing this with its completeness
-    // check. (The KDF catalog is no longer empty — see the kdf_* tests.)
+fn structure_tag_registry_is_complete_and_frozen() {
     let m = manifest();
-    assert!(
-        m.structure_tags.is_empty(),
-        "structureTags gains entries only with its completeness machinery"
+
+    // The crate STRUCT_TABLE, the canonical anchor, and the manifest all agree
+    // name-for-byte, and the byte-space is exactly the eight frozen tags.
+    assert_eq!(
+        STRUCT_TAGS.len(),
+        ALL_STRUCT_TAGS.len(),
+        "crate STRUCT_TAGS count drift"
     );
+    assert_eq!(
+        m.structure_tags.len(),
+        ALL_STRUCT_TAGS.len(),
+        "manifest structureTags count drift"
+    );
+    for (i, (name, tag)) in ALL_STRUCT_TAGS.iter().enumerate() {
+        let crate_spec = &STRUCT_TAGS[i];
+        assert_eq!(crate_spec.name, *name, "crate STRUCT_TAGS {i} name");
+        assert_eq!(crate_spec.tag, *tag, "crate STRUCT_TAGS {name} byte");
+        let manifest_tag = m
+            .structure_tags
+            .get(*name)
+            .unwrap_or_else(|| panic!("manifest structureTags missing {name}"))
+            .as_u64()
+            .expect("tag byte is a number");
+        assert_eq!(
+            manifest_tag,
+            u64::from(*tag),
+            "manifest tag byte for {name}"
+        );
+    }
+
+    // read-body is the tag this slice exercises with vectors.
+    assert_eq!(
+        m.seal.read_body_struct_tag, STRUCT_TAG_READ_BODY,
+        "manifest readBodyStructTag must be the crate constant"
+    );
+    assert_eq!(STRUCT_TAG_READ_BODY, 1, "read-body is byte 1");
+}
+
+// ---------------------------------------------------------------------------
+// Seal: the AAD domain, the full-envelope symmetric-seal KATs, the accept /
+// reject vectors (AAD transplants, downgrade, truncation, duplicate-id /
+// -ipnsName), and the read-body + envelope codecs.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn seal_aad_domain_is_frozen() {
+    let m = manifest();
+    assert_eq!(m.seal.aad_domain, AAD_DOMAIN, "AAD domain separator drift");
+    assert_eq!(
+        AAD_DOMAIN, "cipherbox/v2/aad",
+        "AAD domain string is frozen"
+    );
+}
+
+#[test]
+fn seal_vectors_are_frozen_and_round_trip() {
+    let m = manifest();
+    let vectors = seal_vectors(&m);
+    assert_eq!(vectors.len(), m.seal.seal.count, "seal count drift");
+    assert!(!vectors.is_empty(), "seal family must not be empty");
+
+    let mut names = BTreeSet::new();
+    let mut saw_read_body = false;
+    for v in &vectors {
+        assert!(names.insert(v.name.clone()), "duplicate seal {}", v.name);
+        let key = unhex32(&v.name, &v.key);
+        let nonce = unhex_n::<NONCE_LEN>(&v.name, &v.nonce);
+        let ctx = seal_ctx(&v.name, v.v, &v.id, &v.scope, v.epoch, v.struct_tag);
+        let plaintext = unhex(&v.name, &v.plaintext);
+
+        // The AAD layout is frozen, and the fixed key + nonce reproduce the
+        // sealed blob byte-for-byte (blueprint/core.md fixed-parameter KAT).
+        assert_eq!(
+            hex::encode(build_aad(&ctx)),
+            v.aad,
+            "seal {}: aad drift",
+            v.name
+        );
+        let sealed = seal::seal(&key, &nonce, &ctx, &plaintext);
+        assert_eq!(
+            hex::encode(&sealed),
+            v.sealed,
+            "seal {}: sealed drift",
+            v.name
+        );
+        // The nonce is prefixed, and the recipient recovers the plaintext.
+        assert_eq!(
+            &sealed[..NONCE_LEN],
+            &nonce,
+            "seal {}: nonce prefix",
+            v.name
+        );
+        let opened = seal::unseal(&key, &ctx, &unhex(&v.name, &v.sealed))
+            .unwrap_or_else(|e| panic!("seal {}: unseal must recover: {e}", v.name));
+        assert_eq!(opened, plaintext, "seal {}: plaintext", v.name);
+
+        if v.struct_tag == STRUCT_TAG_READ_BODY && !plaintext.is_empty() {
+            // The read-body-tag plaintext is a decodable read-body.
+            saw_read_body = true;
+            let body = decode_read_body(&plaintext)
+                .unwrap_or_else(|e| panic!("seal {}: read-body must decode: {e}", v.name));
+            assert_eq!(
+                encode_read_body(&body),
+                plaintext,
+                "seal {}: read-body stable",
+                v.name
+            );
+        }
+    }
+    assert!(
+        saw_read_body,
+        "at least one seal vector exercises a read-body plaintext"
+    );
+}
+
+#[test]
+fn seal_open_reject_vectors_fail_closed() {
+    let m = manifest();
+    let vectors = seal_open_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.seal.open_reject.count,
+        "seal open-reject count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "seal open-reject family must not be empty"
+    );
+
+    // The manifest checks list is exactly the distinct checks in the file.
+    let listed: BTreeSet<&str> = m
+        .seal
+        .open_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs seal open_reject.json"
+    );
+    // Anti-vacuity: the transplant/downgrade defence (seal-open-failed) and the
+    // structural floor (truncated) are both covered.
+    for required in ["seal-open-failed", "truncated"] {
+        assert!(
+            listed.contains(required),
+            "seal open-reject must cover {required}"
+        );
+    }
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate seal open-reject {}",
+            v.name
+        );
+        let key = unhex32(&v.name, &v.key);
+        let ctx = seal_ctx(&v.name, v.v, &v.id, &v.scope, v.epoch, v.struct_tag);
+        let err = seal::unseal(&key, &ctx, &unhex(&v.name, &v.sealed))
+            .expect_err("seal open-reject must fail closed");
+        assert_eq!(
+            err.check(),
+            v.check,
+            "seal open-reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "seal open-reject {}: class ({err})",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn read_body_accept_vectors_decode_and_round_trip() {
+    let m = manifest();
+    let vectors = read_body_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.seal.read_body_accept.count,
+        "read-body accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "read-body accept family must not be empty"
+    );
+
+    let mut names = BTreeSet::new();
+    let mut kinds = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate read-body accept {}",
+            v.name
+        );
+        let bytes = unhex(&v.name, &v.hex);
+        let body = decode_read_body(&bytes)
+            .unwrap_or_else(|e| panic!("read-body accept {}: rejected: {e}", v.name));
+        assert_eq!(
+            hex::encode(encode_read_body(&body)),
+            v.hex,
+            "read-body accept {}: re-encode must be byte-identical",
+            v.name
+        );
+        let expected = match v.kind.as_str() {
+            "folder" => NodeKind::Folder,
+            "file" => NodeKind::File,
+            other => panic!("read-body accept {}: bad kind {other}", v.name),
+        };
+        assert_eq!(body.kind(), expected, "read-body accept {}: kind", v.name);
+        kinds.insert(v.kind.clone());
+    }
+    // Both kinds are exercised.
+    assert!(
+        kinds.contains("folder") && kinds.contains("file"),
+        "both kinds covered"
+    );
+}
+
+#[test]
+fn read_body_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = read_body_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.seal.read_body_reject.count,
+        "read-body reject count drift"
+    );
+
+    let listed: BTreeSet<&str> = m
+        .seal
+        .read_body_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs read_body_reject.json"
+    );
+    // The uniqueness trust checks (#39 D7) and the structural checks are covered.
+    for required in ["duplicate-id", "duplicate-ipns-name", "invalid-node-kind"] {
+        assert!(
+            listed.contains(required),
+            "read-body reject must cover {required}"
+        );
+    }
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate read-body reject {}",
+            v.name
+        );
+        let bytes = unhex(&v.name, &v.hex);
+        let err = match decode_read_body(&bytes) {
+            Err(e) => e,
+            Ok(_) => panic!("read-body reject {}: decoder accepted it", v.name),
+        };
+        assert_eq!(
+            err.check(),
+            v.check,
+            "read-body reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "read-body reject {}: class ({err})",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn envelope_accept_vectors_decode_open_and_round_trip() {
+    let m = manifest();
+    let vectors = envelope_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.seal.envelope_accept.count,
+        "envelope accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "envelope accept family must not be empty"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate envelope accept {}",
+            v.name
+        );
+        let key = unhex32(&v.name, &v.key);
+        let bytes = unhex(&v.name, &v.envelope);
+        let env = decode_envelope(&bytes)
+            .unwrap_or_else(|e| panic!("envelope accept {}: rejected: {e}", v.name));
+        assert_eq!(
+            hex::encode(encode_envelope(&env)),
+            v.envelope,
+            "envelope accept {}: re-encode must be byte-identical",
+            v.name
+        );
+        // The read-body opens under the frozen key and equals the frozen
+        // plaintext (the full symmetric-seal path).
+        let body = open_read_body(&env, &key)
+            .unwrap_or_else(|e| panic!("envelope accept {}: open: {e}", v.name));
+        assert_eq!(
+            hex::encode(encode_read_body(&body)),
+            v.read_body,
+            "envelope accept {}: opened read-body drift",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn envelope_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = envelope_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.seal.envelope_reject.count,
+        "envelope reject count drift"
+    );
+
+    let listed: BTreeSet<&str> = m
+        .seal
+        .envelope_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs envelope_reject.json"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate envelope reject {}",
+            v.name
+        );
+        let bytes = unhex(&v.name, &v.hex);
+        let err = match decode_envelope(&bytes) {
+            Err(e) => e,
+            Ok(_) => panic!("envelope reject {}: decoder accepted it", v.name),
+        };
+        assert_eq!(
+            err.check(),
+            v.check,
+            "envelope reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "envelope reject {}: class ({err})",
+            v.name
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
