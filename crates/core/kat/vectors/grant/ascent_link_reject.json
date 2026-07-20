@@ -1,0 +1,26 @@
+[
+  {
+    "name": "mismatched-public-half",
+    "parentNodeSeed": "12131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f3031",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 4,
+    "structTag": 5,
+    "container": "a363656e6358207ea13ddfcbacd8a13542dece890886486fb8024d0d3cc7f95ed8bb4efad66b736a63697068657274657874584751928f6d2b04c98f2cb8c4dfd0f0e40616c33988cba6a4bdb563d396bb42dc8996746b80470c7ce2515ab46d2ac3e32c810339aa3e884bba69dc27cec60cff0834bbd918a081a76c617363656e745075626c6963582062b8db0111933348466eabb49648147b8389dda59ba46fbe83f7dcec9629b416",
+    "check": "ascent-link-mismatch",
+    "class": "trust"
+  },
+  {
+    "name": "tampered-ciphertext",
+    "parentNodeSeed": "12131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f3031",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 4,
+    "structTag": 5,
+    "container": "a363656e6358207ea13ddfcbacd8a13542dece890886486fb8024d0d3cc7f95ed8bb4efad66b736a63697068657274657874584751928f6d2b04c98f2cb8c4dfd0f0e40616c33988cba6a4bdb563d396bb42dc8996746b80470c7ce2515ab46d2ac3e32c810339aa3e884bba69dc27cec60cff0834bbd918a081a66c617363656e745075626c6963582063b8db0111933348466eabb49648147b8389dda59ba46fbe83f7dcec9629b416",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  }
+]

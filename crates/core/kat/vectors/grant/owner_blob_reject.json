@@ -1,0 +1,14 @@
+[
+  {
+    "name": "override-seed-wrong-length",
+    "hex": "a26565706f6368046c6f7665727269646553656564581f77777777777777777777777777777777777777777777777777777777777777",
+    "check": "invalid-field-length",
+    "class": "malformed"
+  },
+  {
+    "name": "missing-epoch",
+    "hex": "a16c6f766572726964655365656458207777777777777777777777777777777777777777777777777777777777777777",
+    "check": "missing-field",
+    "class": "malformed"
+  }
+]

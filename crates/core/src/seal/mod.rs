@@ -17,6 +17,9 @@
 pub mod aad;
 pub mod body;
 pub mod envelope;
+pub mod grant;
+pub mod structure;
+pub mod write_body;
 
 pub use aad::{
     AAD_DOMAIN, AadContext, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
@@ -27,6 +30,19 @@ pub use body::{
     ChildRef, NodeKind, ReadBody, Version, decode_read_body, encode_read_body, name_cmp,
 };
 pub use envelope::{Envelope, decode_envelope, encode_envelope, open_read_body, seal_read_body};
+pub use grant::{
+    AscentLink, GrantBlobPayload, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload,
+    OverrideSeedPayload, Permission, decode_ascent_link, decode_grant_blob_payload,
+    decode_grant_set_commitment, decode_history_link_payload, decode_override_seed_payload,
+    encode_ascent_link, encode_grant_blob_payload, encode_grant_set_commitment,
+    encode_history_link_payload, encode_override_seed_payload, open_ascent_link, open_grant_blob,
+    open_history_link, open_owner_blob, seal_ascent_link, seal_grant_blob, seal_history_link,
+    seal_owner_blob, sign_grant_set, verify_grant_set,
+};
+pub use structure::{StructureSigInput, sign_structure, structure_sig_preimage, verify_structure};
+pub use write_body::{
+    ChildScopeRef, GrantLedgerEntry, WriteBody, decode_write_body, encode_write_body,
+};
 
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};

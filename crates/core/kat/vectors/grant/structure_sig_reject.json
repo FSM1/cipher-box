@@ -1,0 +1,38 @@
+[
+  {
+    "name": "bad-signature",
+    "verifierPk": "00d05a1d1ea251396d557afbd4588b3c6d99dbeb972fed10a32562ea26dcdcfa",
+    "scopeId": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 5,
+    "structTag": 3,
+    "recipientTag": "0101010101010101010101010101010101010101010101010101010101010101",
+    "ciphertextHash": "a3478bc675c3a3f093f125aa5164f50904775f05e37b8656254265f22fc8b53d",
+    "signature": "326a8b471ee710d38a85567cce12aa480d3379089acc201e50acd8a66ecd94c800949b1769da50dd3df36ee056b64bcaff77263b28b3991f86586f5fc91f410c",
+    "check": "structure-signature-invalid",
+    "class": "trust"
+  },
+  {
+    "name": "wrong-tag",
+    "verifierPk": "00d05a1d1ea251396d557afbd4588b3c6d99dbeb972fed10a32562ea26dcdcfa",
+    "scopeId": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 5,
+    "structTag": 4,
+    "recipientTag": "0101010101010101010101010101010101010101010101010101010101010101",
+    "ciphertextHash": "a3478bc675c3a3f093f125aa5164f50904775f05e37b8656254265f22fc8b53d",
+    "signature": "336a8b471ee710d38a85567cce12aa480d3379089acc201e50acd8a66ecd94c800949b1769da50dd3df36ee056b64bcaff77263b28b3991f86586f5fc91f410c",
+    "check": "structure-signature-invalid",
+    "class": "trust"
+  },
+  {
+    "name": "recipient-tag-transplant",
+    "verifierPk": "00d05a1d1ea251396d557afbd4588b3c6d99dbeb972fed10a32562ea26dcdcfa",
+    "scopeId": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 5,
+    "structTag": 3,
+    "recipientTag": "0202020202020202020202020202020202020202020202020202020202020202",
+    "ciphertextHash": "a3478bc675c3a3f093f125aa5164f50904775f05e37b8656254265f22fc8b53d",
+    "signature": "336a8b471ee710d38a85567cce12aa480d3379089acc201e50acd8a66ecd94c800949b1769da50dd3df36ee056b64bcaff77263b28b3991f86586f5fc91f410c",
+    "check": "structure-signature-invalid",
+    "class": "trust"
+  }
+]

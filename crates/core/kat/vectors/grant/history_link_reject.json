@@ -1,0 +1,14 @@
+[
+  {
+    "name": "prev-seed-wrong-length",
+    "hex": "a2687072657653656564581f99999999999999999999999999999999999999999999999999999999999999697072657645706f636803",
+    "check": "invalid-field-length",
+    "class": "malformed"
+  },
+  {
+    "name": "missing-prev-epoch",
+    "hex": "a168707265765365656458209999999999999999999999999999999999999999999999999999999999999999",
+    "check": "missing-field",
+    "class": "malformed"
+  }
+]
