@@ -316,6 +316,11 @@ pub fn vault_pointer_index(login_secret: &[u8], index: u64) -> Ed25519Signer {
 /// the mechanical separation KAT asserts.
 ///
 /// `seed` is caller key material, so `Debug` is redacted.
+///
+/// `#[doc(hidden)]`: `pub` only so the KAT integration tests and the `kat_gen`
+/// example (separate crates) can drive the separation surface. Not part of the
+/// supported API — production derives keys through the typed edge functions.
+#[doc(hidden)]
 #[derive(Clone, Copy)]
 pub struct EdgeProbe<'a> {
     /// Fills every 32-byte seed / ECDH / material / login-secret slot.
@@ -346,6 +351,9 @@ impl core::fmt::Debug for EdgeProbe<'_> {
 /// material, so `Debug` is redacted; `PartialEq` compares the frozen KAT
 /// outputs (test inputs, not attacker-controlled secrets) so it needs no
 /// constant-time guarantee.
+///
+/// `#[doc(hidden)]`: see [`EdgeProbe`] — a test/KAT surface, not supported API.
+#[doc(hidden)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct EdgeProbeOutput {
     pub name: &'static str,
@@ -370,6 +378,11 @@ impl core::fmt::Debug for EdgeProbeOutput {
 /// (redacted `Debug` notwithstanding). Production code derives keys through the
 /// typed edge functions above ([`node_seed`], [`read_key`], …), which return
 /// zeroizing owning types. Do not feed production seeds through this function.
+///
+/// `#[doc(hidden)]`: `pub` exists only for the cross-crate KAT tests and the
+/// `kat_gen` example; it is not part of the crate's supported surface and the
+/// engine must never call it.
+#[doc(hidden)]
 pub fn edge_probe_outputs(probe: &EdgeProbe) -> Vec<EdgeProbeOutput> {
     let b = |s: SecretBytes| *s.as_bytes();
     vec![
