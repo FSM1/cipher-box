@@ -1,0 +1,55 @@
+/**
+ * Emit the OpenAPI document from decorators to apps/api/openapi.json.
+ *
+ * The document is a committed docs artifact (blueprint/api.md, Contract and
+ * clients) — never a build input, never fed to a client generator. CI's
+ * openapi-freshness job regenerates it and fails on drift.
+ *
+ * A stub module (controllers real, providers inert) is enough: swagger
+ * scans decorators and never invokes handlers, so no database is needed.
+ */
+import 'reflect-metadata';
+import { Module } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { NestFactory } from '@nestjs/core';
+import { JwtService } from '@nestjs/jwt';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { buildOpenApiDocument } from '../src/app-setup';
+import { AuthController } from '../src/auth/auth.controller';
+import { AuthService } from '../src/auth/services/auth.service';
+import { TestAuthService } from '../src/auth/services/test-auth.service';
+import { TokenService } from '../src/auth/services/token.service';
+import { HealthController } from '../src/health/health.controller';
+import { MetricsController } from '../src/ops/metrics.controller';
+import { MetricsService } from '../src/ops/metrics.service';
+
+@Module({
+  controllers: [HealthController, MetricsController, AuthController],
+  providers: [
+    { provide: AuthService, useValue: {} },
+    { provide: TestAuthService, useValue: {} },
+    { provide: TokenService, useValue: {} },
+    { provide: MetricsService, useValue: {} },
+    { provide: JwtService, useValue: {} },
+    { provide: ConfigService, useValue: new ConfigService() },
+  ],
+})
+class OpenApiStubModule {}
+
+async function generate(): Promise<void> {
+  const app = await NestFactory.create(OpenApiStubModule, { logger: false });
+  const document = buildOpenApiDocument(app);
+
+  const outputPath = join(__dirname, '..', 'openapi.json');
+  writeFileSync(outputPath, JSON.stringify(document, null, 2) + '\n');
+
+  console.log(`OpenAPI document written to ${outputPath}`);
+
+  await app.close();
+}
+
+generate().catch((error) => {
+  console.error('Failed to generate OpenAPI document:', error);
+  process.exitCode = 1;
+});

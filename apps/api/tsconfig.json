@@ -5,8 +5,8 @@
     "moduleResolution": "Node",
     "experimentalDecorators": true,
     "emitDecoratorMetadata": true,
-    "rootDir": "src",
-    "outDir": "dist"
+    "useDefineForClassFields": false,
+    "strictPropertyInitialization": false
   },
-  "include": ["src"]
+  "include": ["src", "scripts"]
 }
