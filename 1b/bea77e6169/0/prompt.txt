@@ -22,3 +22,51 @@ there are 2 pending checks on the PR that are preventing me from merging - relea
 ---
 
 ok pr is merged - lets scaffold the v2 workspace as planned.
+
+---
+
+<task-notification>
+<task-id>a598f92150e1f72ae</task-id>
+<tool-use-id>toolu_019LoEt1F4hXCx2zJPr5Arc5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/a598f92150e1f72ae.output</output-file>
+<status>completed</status>
+<summary>Agent "Scaffold v2 TS workspace" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Scaffold complete. All verification gates pass.
+
+## Files created
+
+- `/Users/myankelev/Code/random/cipher-box/packages/client/` — `package.json`, `tsconfig.json`, `tsconfig.build.json`, `src/index.ts` (doc comment pointing at blueprint/web-client.md + `CLIENT_PACKAGE` export), `src/index.test.ts`
+- `/Users/myankelev/Code/random/cipher-box/apps/api/` — `package.json` (CommonJS, NestJS ^11.1.28), `tsconfig.json` (experimentalDecorators + emitDecoratorMetadata, module CommonJS), `tsconfig.build.json`, `src/main.ts` (bootstrap, `PORT` env respected), `src/app.module.ts`, `src/health/health.controller.ts`, `src/health/health.controller.test.ts` (direct instantiation, no @nestjs/testing)
+- `/Users/myankelev/Code/random/cipher-box/apps/web/` — `package.json` (react ^19.2.7, vite ^8.1.5, @vitejs/plugin-react ^6.0.3 — peer-verified against vite 8), `tsconfig.json` (noEmit, jsx react-jsx), `vite.config.ts`, `index.html`, `src/main.tsx`, `src/App.tsx` ("CipherBox" / "v2 build in progress")
+
+## Files modified
+
+- `pnpm-workspace.yaml` — dropped `tests/*`
+- `package.json` (root) — rewritten per spec: kept name/0.45.2/packageManager/engines/lint-staged/prepare + eslint/prettier/husky/commitlint/markdownlint/typescript/@types/node/concurrently devDeps; dropped `@noble/secp256k1` and `tsx`; scripts now `typecheck: pnpm -r run typecheck`, `test: pnpm -r --if-present run test`; removed web-e2e/openapi/api:generate; `onlyBuiltDependencies` pruned to `@nestjs/core`, `esbuild`
+- `eslint.config.js` — removed the D-07 boundary block (referenced deleted `@cipherbox/sdk-core`/`@cipherbox/core`); added `**/.astro/**` to ignores (landing's git-ignored Astro build output was failing `eslint .` — 176 of the 177 errors were there, pre-existing)
+- `pnpm-lock.yaml` — regenerated fresh (deleted old, `pnpm install`)
+- `tsconfig.base.json` and `.gitignore` — checked, no changes needed (base has no package references; dist/node_modules/tsbuildinfo already ignored). Only reference to deleted `tsconfig.scripts.json` was the old root typecheck script, now gone. `scripts/` contains only a `.sh` file.
+
+## Verification (real output, from repo root)
+
+- `pnpm install`: `Packages: +42 -1172` ... `Done in 7.8s using pnpm v10.33.0`
+- `pnpm lint`: `&gt; eslint .` — clean exit, zero findings
+- `pnpm typecheck`: all three `Done` (`apps/api tsc --noEmit`, `apps/web tsc -b --noEmit`, `packages/client tsc --noEmit`)
+- `pnpm test`: `packages/client: Tests 1 passed (1)`, `apps/api: Tests 1 passed (1)` — vitest v4.1.10
+- `pnpm build`: all three `Done`; vite output `dist/index.html 0.32 kB`, `dist/assets/index-CpN5ZoXd.js 190.60 kB │ gzip: 60.05 kB`
+- Web build artifact confirmed on disk: `apps/web/dist/index.html` (320 bytes)
+
+## Health smoke
+
+Port 3000 was free; ran the built output (`node apps/api/dist/main.js`):
+
+```
+HEALTH RESPONSE: {"status":"ok"}
+HTTP CODE: 200
+killed api pid 6913
+```
+
+Note: the working tree on this shared branch had unrelated in-flight modifications (`.github/`, `docker/`, `README.md`, `Cargo.toml`, `crates/`, `.coderabbit.yaml`, `codecov.yml`) before I started — untouched by me. Nothing committed or pushed, per instructions.</result>
+<usage><subagent_tokens>62366</subagent_tokens><tool_uses>45</tool_uses><duration_ms>386018</duration_ms></usage>
+</task-notification>
