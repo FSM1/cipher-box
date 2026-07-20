@@ -15,6 +15,21 @@ struct Inner {
     tasks: Vec<BoxedTask>,
 }
 
+impl Inner {
+    /// Moves the clock to `target` (never backwards) and takes the wakers
+    /// of every sleep whose deadline has been reached. The caller wakes
+    /// them outside the lock.
+    fn advance_and_take_due(&mut self, target: UnixMillis) -> Vec<Waker> {
+        self.now = self.now.max(target);
+        let now = self.now;
+        let (due, pending): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sleepers)
+            .into_iter()
+            .partition(|(deadline, _)| *deadline <= now);
+        self.sleepers = pending;
+        due.into_iter().map(|(_, waker)| waker).collect()
+    }
+}
+
 /// A deterministic virtual clock: time moves only when a test advances it.
 ///
 /// Clones share the same clock, so every device in a [`super::super::FakeWorld`]
@@ -75,16 +90,11 @@ impl VirtualScheduler {
     /// Moves virtual time to `instant` (never backwards), waking every
     /// sleep whose deadline is reached.
     pub fn advance_to(&self, instant: UnixMillis) {
-        let woken: Vec<Waker> = {
-            let mut inner = self.inner.lock().expect("lock");
-            inner.now = inner.now.max(instant);
-            let now = inner.now;
-            let (due, pending) = std::mem::take(&mut inner.sleepers)
-                .into_iter()
-                .partition(|(deadline, _)| *deadline <= now);
-            inner.sleepers = pending;
-            due.into_iter().map(|(_, waker)| waker).collect()
-        };
+        let woken = self
+            .inner
+            .lock()
+            .expect("lock")
+            .advance_and_take_due(instant);
         for waker in woken {
             waker.wake();
         }
@@ -124,13 +134,7 @@ impl Future for SleepFuture {
                 woken = Vec::new();
                 Poll::Ready(())
             } else if inner.auto_advance {
-                inner.now = self.deadline;
-                let now = inner.now;
-                let (due, pending) = std::mem::take(&mut inner.sleepers)
-                    .into_iter()
-                    .partition(|(deadline, _)| *deadline <= now);
-                inner.sleepers = pending;
-                woken = due.into_iter().map(|(_, waker)| waker).collect();
+                woken = inner.advance_and_take_due(self.deadline);
                 Poll::Ready(())
             } else {
                 inner.sleepers.push((self.deadline, cx.waker().clone()));

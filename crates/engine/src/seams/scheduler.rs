@@ -15,11 +15,6 @@ impl UnixMillis {
         let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
         Self(self.0.saturating_add(millis))
     }
-
-    /// The duration elapsed since `earlier`; zero if `earlier` is later.
-    pub fn saturating_since(self, earlier: Self) -> Duration {
-        Duration::from_millis(self.0.saturating_sub(earlier.0))
-    }
 }
 
 /// A boxed background task handed to [`Scheduler::spawn`].
