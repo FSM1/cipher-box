@@ -97,7 +97,11 @@ fn tray_icon() -> tauri::Result<tauri::image::Image<'static>> {
 /// Show and focus the main window from the tray.
 fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
-        let _ = window.show();
-        let _ = window.set_focus();
+        if let Err(error) = window.show() {
+            eprintln!("failed to show the main window: {error}");
+        }
+        if let Err(error) = window.set_focus() {
+            eprintln!("failed to focus the main window: {error}");
+        }
     }
 }
