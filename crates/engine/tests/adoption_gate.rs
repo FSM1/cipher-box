@@ -286,14 +286,16 @@ impl Fixture {
             owner_identity: &self.owner_identity_verifier,
             scope_id: self.scope_id,
             read_key: &self.read_key,
+            parent_node_seed: None,
             seed_blob: Some(self.owner_seed_blob(false)),
         }
     }
 
-    /// An ascent link whose plaintext public half is corrupted, so an ancestor
-    /// reader's derive-and-verify fails `ascent-link-mismatch`.
-    fn tampered_ascent(&self) -> AscentCheck {
-        let parent_node_seed = [0x99; 32];
+    /// A well-formed ascent link sealed under `parent_node_seed` (uncorrupted
+    /// public half). The stage-3 verdict now hinges on whether the *reader's*
+    /// `parent_node_seed` re-derives this keypair — a mismatched reader seed is
+    /// a natural `ascent-link-mismatch`, no hand-corruption needed.
+    fn ascent_link_under(&self, parent_node_seed: &[u8; 32]) -> AscentCheck {
         let payload = OverrideSeedPayload::new(self.scope_seed, self.epoch);
         let aad = AadContext {
             v: V,
@@ -302,12 +304,39 @@ impl Fixture {
             epoch: self.epoch,
             struct_tag: STRUCT_TAG_ASCENT_LINK,
         };
-        let mut link = seal_ascent_link(&parent_node_seed, &EPH_ASCENT, &aad, &payload);
-        link.ascent_public[0] ^= 0xFF;
-        AscentCheck {
-            link,
-            parent_node_seed,
+        let link = seal_ascent_link(parent_node_seed, &EPH_ASCENT, &aad, &payload);
+        AscentCheck { link, aad }
+    }
+
+    /// An owner seed blob whose sealed AAD is overridden (e.g. a foreign scope)
+    /// while still HPKE-wrapped to the reader's real enc subkey — a transplant
+    /// that opens but must fail the envelope cross-check.
+    fn owner_seed_blob_with_aad(&self, aad: AadContext) -> SeedBlob<'_> {
+        let payload = OverrideSeedPayload::new(self.scope_seed, self.epoch);
+        let blob = seal_owner_blob(&self.owner_enc.public(), &EPH_OWNER, &aad, &payload);
+        SeedBlob::Owner {
+            enc_secret: &self.owner_enc,
+            enc: blob.enc,
+            ciphertext: blob.ciphertext,
             aad,
+        }
+    }
+
+    /// An owner seed blob carrying a *wrong* scope seed: it opens cleanly (real
+    /// AAD, real enc subkey) yet cannot derive the reader's read key.
+    fn owner_seed_blob_wrong_seed(&self, wrong_seed: [u8; 32]) -> SeedBlob<'_> {
+        let payload = OverrideSeedPayload::new(wrong_seed, self.epoch);
+        let blob = seal_owner_blob(
+            &self.owner_enc.public(),
+            &EPH_OWNER,
+            &self.owner_blob_aad,
+            &payload,
+        );
+        SeedBlob::Owner {
+            enc_secret: &self.owner_enc,
+            enc: blob.enc,
+            ciphertext: blob.ciphertext,
+            aad: self.owner_blob_aad,
         }
     }
 }
@@ -446,6 +475,7 @@ fn run_matrix_case(name: &str) -> Result<Adopted, GateError> {
     let floors = InMemoryFloorStore::default();
     let mut candidate = fx.candidate(1);
     let mut tamper_seed_blob = false;
+    let mut reader_parent_seed: Option<[u8; 32]> = None;
 
     match name {
         "accept" => {}
@@ -466,7 +496,11 @@ fn run_matrix_case(name: &str) -> Result<Adopted, GateError> {
             candidate.structures[0].signature = Ed25519Signature::from_bytes(sig);
         }
         "grant-section:ascent-link-mismatch" => {
-            candidate.ascent = Some(fx.tampered_ascent());
+            // The link is sealed under one parent seed; the reader supplies a
+            // DIFFERENT real ancestor seed, so the reader-derived keypair
+            // mismatches the link's public half — a natural ascent-link-mismatch.
+            candidate.ascent = Some(fx.ascent_link_under(&[0xA1; 32]));
+            reader_parent_seed = Some([0xB2; 32]);
         }
         "sequence:sequence-not-newer" => {
             block_on(floors.raise_sequence_floor(fx.name.as_str().as_bytes(), 5)).unwrap();
@@ -497,6 +531,7 @@ fn run_matrix_case(name: &str) -> Result<Adopted, GateError> {
         owner_identity: &fx.owner_identity_verifier,
         scope_id: fx.scope_id,
         read_key: &fx.read_key,
+        parent_node_seed: reader_parent_seed,
         seed_blob: Some(fx.owner_seed_blob(tamper_seed_blob)),
     };
     block_on(adopt(&floors, &reader, &candidate))
@@ -925,4 +960,142 @@ fn simulation_n_engines_one_record_store_adversarial() {
         "structure-signature-invalid",
         "a transplanted structure signature is rejected by core's tag-bound preimage"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Trust-boundary hardening: ascent authority, cross-epoch structure replay, and
+// seed-blob envelope binding + read-key cross-check (blueprint/engine.md §405-408).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ascent_authority_is_reader_derived_not_candidate_supplied() {
+    // The attacker seals a well-formed ascent link from a seed IT chose; the
+    // reader's real ancestor seed is different. The gate re-derives the expected
+    // keypair from reader state (not the candidate), so the check mismatches —
+    // the vacuous "producer picks its own seed and passes" is closed.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let mut candidate = fx.candidate(1);
+    candidate.ascent = Some(fx.ascent_link_under(&[0xAB; 32]));
+    let mut reader = fx.reader();
+    reader.parent_node_seed = Some([0xCD; 32]);
+    let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "ascent-link-mismatch");
+}
+
+#[test]
+fn ascent_present_without_reader_seed_fails_closed() {
+    // An ascent link present with no reader ancestor seed cannot be verified —
+    // fail closed, never adopt on an unverifiable link.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let mut candidate = fx.candidate(1);
+    candidate.ascent = Some(fx.ascent_link_under(&[0xAB; 32]));
+    let reader = fx.reader();
+    let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "ascent-link-mismatch");
+}
+
+#[test]
+fn ascent_adopts_when_reader_seed_matches_sealed_link() {
+    // Positive: the reader's ancestor seed re-derives the sealed keypair, so the
+    // link verifies and the record adopts.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let parent_seed = [0xAB; 32];
+    let mut candidate = fx.candidate(1);
+    candidate.ascent = Some(fx.ascent_link_under(&parent_seed));
+    let mut reader = fx.reader();
+    reader.parent_node_seed = Some(parent_seed);
+    let adopted = block_on(adopt(&floors, &reader, &candidate)).expect("valid ascent adopts");
+    assert_eq!(adopted.sequence, 1);
+}
+
+#[test]
+fn cross_epoch_structure_replay_rejected_at_grant_section() {
+    // A new record at epoch 2 carrying an authentic owner-signed structure from
+    // the OLD epoch 1 (same scope, same pseudonym): the signature verifies, so
+    // only the envelope-binding cross-check rejects the cross-epoch replay.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let folder = ReadBody::Folder {
+        created_at: 0,
+        modified_at: 0,
+        children: Vec::new(),
+        unknown: Vec::new(),
+    };
+    let envelope_e2 = seal_read_body(
+        &fx.read_key,
+        &NONCE_READ_BODY,
+        V,
+        fx.root_id,
+        fx.scope_id,
+        2,
+        &folder,
+    )
+    .expect("epoch-2 folder seals");
+    let mut candidate = fx.candidate(1);
+    candidate.envelope = envelope_e2;
+    // The old-epoch owner-blob structure is validly signed (epoch 1 != 2).
+    candidate.structures = vec![fx.structures[0].clone()];
+    assert_eq!(candidate.structures[0].input.scope_id, fx.scope_id);
+    assert_eq!(candidate.structures[0].input.epoch, 1);
+    let err = block_on(adopt(&floors, &fx.reader(), &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "structure-signature-invalid");
+}
+
+#[test]
+fn seed_blob_foreign_scope_aad_rejected_at_unseal() {
+    // The seed blob is HPKE-wrapped to the reader's real enc subkey but sealed
+    // under a foreign scope AAD — it would open, yet it is not this envelope's
+    // seed source. Fail closed on the AAD cross-check.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let foreign_aad = AadContext {
+        v: V,
+        id: fx.root_id,
+        scope: [0xEE; 16],
+        epoch: fx.epoch,
+        struct_tag: STRUCT_TAG_OWNER_BLOB,
+    };
+    let mut reader = fx.reader();
+    reader.seed_blob = Some(fx.owner_seed_blob_with_aad(foreign_aad));
+    let candidate = fx.candidate(1);
+    let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::Unseal);
+    assert_eq!(rej.check(), "hpke-open-failed");
+}
+
+#[test]
+fn seed_blob_wrong_seed_fails_read_key_cross_check() {
+    // The blob opens cleanly (real AAD, real enc subkey) but carries a wrong
+    // scope seed that does not derive the reader's read key — an attributable
+    // seed disagreement, not silent staleness.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let mut reader = fx.reader();
+    reader.seed_blob = Some(fx.owner_seed_blob_wrong_seed([0xAB; 32]));
+    let candidate = fx.candidate(1);
+    let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::Unseal);
+    assert_eq!(rej.check(), "seal-open-failed");
+}
+
+#[test]
+fn seed_blob_correct_seed_derives_read_key_and_adopts() {
+    // Positive: the default owner blob carries the real scope seed under the real
+    // scope/epoch/v AAD — the cross-check passes and the record adopts.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let adopted = block_on(adopt(&floors, &fx.reader(), &fx.candidate(1))).expect("adopts");
+    assert_eq!(adopted.sequence, 1);
+    assert_eq!(adopted.epoch, 1);
 }

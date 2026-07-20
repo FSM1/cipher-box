@@ -40,6 +40,7 @@ use core::fmt;
 
 use cipherbox_core::error::{CodecError, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, AscentLink, Envelope, GrantSetCommitment, Permission, ReadBody, StructureSigInput,
     open_ascent_link, open_grant_blob, open_owner_blob, open_read_body, verify_grant_set,
@@ -47,6 +48,7 @@ use cipherbox_core::seal::{
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
+use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use crate::gate::floor;
@@ -212,16 +214,18 @@ pub struct SignedStructure {
     pub signature: Ed25519Signature,
 }
 
-/// An ascent link plus the parent node seed an ancestor reader derives-and-
-/// verifies it under (stage 3, `ascent-link-mismatch`). Present only when the
-/// reader descends through the link from an ancestor scope; a same-scope
-/// holder passes `None`.
+/// A network-supplied ascent link presented for the stage-3 derive-and-verify
+/// (`ascent-link-mismatch`). Present only when the reader descends through the
+/// link from an ancestor scope; a same-scope holder passes `None`. The seed the
+/// expected keypair re-derives from is **reader state**
+/// ([`ReaderContext::parent_node_seed`]), never carried here — the candidate
+/// producer must not supply its own verification key (blueprint/engine.md:
+/// "Ancestor readers derive the expected ascent keypair from the parent node
+/// seed").
 #[derive(Clone)]
 pub struct AscentCheck {
     /// The published ascent link (plaintext public half + HPKE-sealed seed).
     pub link: AscentLink,
-    /// The parent node seed the expected keypair re-derives from.
-    pub parent_node_seed: [u8; 32],
     /// The structured AAD the link was sealed under.
     pub aad: AadContext,
 }
@@ -289,6 +293,11 @@ pub struct ReaderContext<'a> {
     pub scope_id: [u8; 16],
     /// The reader's own derived scope read key for the read-body unseal.
     pub read_key: &'a [u8; 32],
+    /// The reader's cached ancestor node seed — the trusted secret the expected
+    /// ascent keypair re-derives from. Required whenever `candidate.ascent` is
+    /// `Some`; a `None` here against a present ascent link is fail-closed
+    /// (cannot verify).
+    pub parent_node_seed: Option<[u8; 32]>,
     /// The reader's HPKE seed source, opened at the unseal stage; `None` for a
     /// holder that already possesses the read key.
     pub seed_blob: Option<SeedBlob<'a>>,
@@ -340,24 +349,51 @@ fn authenticate_structure(
     Err(TrustViolation::StructureSignatureInvalid.into())
 }
 
-/// Open the reader's HPKE seed source to confirm the reader can obtain the
-/// scope seed. The opened payload is dropped immediately (zeroized by core's
-/// owning types); the gate only needs the unseal-success verdict here.
-fn open_seed_blob(blob: &SeedBlob<'_>) -> Result<(), CodecError> {
+impl SeedBlob<'_> {
+    /// The structured AAD the blob claims to be sealed under — cross-checked
+    /// against the envelope before it is trusted.
+    fn aad(&self) -> &AadContext {
+        match self {
+            SeedBlob::Owner { aad, .. } | SeedBlob::Grantee { aad, .. } => aad,
+        }
+    }
+}
+
+/// Open the reader's HPKE seed source, returning the recovered scope seed so the
+/// gate can cross-check it derives the reader's read key. The returned
+/// [`SecretBytes`] zeroizes on drop at the gate (the terminal owner).
+fn open_seed_blob(blob: &SeedBlob<'_>) -> Result<SecretBytes, CodecError> {
     match blob {
         SeedBlob::Owner {
             enc_secret,
             enc,
             ciphertext,
             aad,
-        } => open_owner_blob(enc_secret, enc, aad, ciphertext).map(drop),
+        } => {
+            let payload = open_owner_blob(enc_secret, enc, aad, ciphertext)?;
+            Ok(SecretBytes::new(*payload.override_seed()))
+        }
         SeedBlob::Grantee {
             enc_secret,
             enc,
             ciphertext,
             aad,
-        } => open_grant_blob(enc_secret, enc, aad, ciphertext).map(drop),
+        } => {
+            let payload = open_grant_blob(enc_secret, enc, aad, ciphertext)?;
+            Ok(SecretBytes::new(*payload.read_scope_seed()))
+        }
     }
+}
+
+/// Constant-time 32-byte equality: no data-dependent early exit, so a mismatch
+/// between a candidate-derived key and the caller-owned read key is never a
+/// timing oracle over the reader's secret.
+fn ct_eq_secret(a: &[u8; 32], b: &[u8; 32]) -> bool {
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    core::hint::black_box(diff) == 0
 }
 
 /// Run the adoption gate over one hand-fed [`Candidate`] for one
@@ -394,11 +430,35 @@ pub async fn adopt<F: FloorStore>(
     // Stage 3 — grant-section authentication under committed write pseudonyms.
     let committed = committed_write_pseudonyms(&candidate.commitment);
     for structure in &candidate.structures {
+        // Bind every structure to THIS envelope: an authentically-signed
+        // structure from another scope/epoch is a cross-epoch replay, not
+        // adoption material, and any grant-section failure rejects the whole
+        // record (blueprint/engine.md §"Adoption gate and floors", #39 D3).
+        // TODO(grant-section): recompute ciphertext_hash from record bytes, don't trust structure.input
+        if structure.input.scope_id != candidate.envelope.scope
+            || structure.input.epoch != candidate.envelope.epoch
+        {
+            return Err(reject(
+                GateStage::GrantSection,
+                RejectionReason::Trust(TrustViolation::StructureSignatureInvalid.into()),
+            ));
+        }
         authenticate_structure(&committed, structure)
             .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
     }
     if let Some(ascent) = &candidate.ascent {
-        open_ascent_link(&ascent.parent_node_seed, &ascent.aad, &ascent.link)
+        // Ascent authority is reader-derived: the expected keypair comes from
+        // the reader's cached ancestor node seed, never the network-supplied
+        // candidate (blueprint/engine.md: "Ancestor readers derive the expected
+        // ascent keypair from the parent node seed"). No reader seed ⇒ cannot
+        // verify ⇒ fail closed.
+        let parent_node_seed = reader.parent_node_seed.ok_or_else(|| {
+            reject(
+                GateStage::GrantSection,
+                RejectionReason::Trust(TrustViolation::AscentLinkMismatch.into()),
+            )
+        })?;
+        open_ascent_link(&parent_node_seed, &ascent.aad, &ascent.link)
             .map(drop)
             .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
     }
@@ -440,7 +500,34 @@ pub async fn adopt<F: FloorStore>(
     // (if any) opens first, then the symmetric read-body; the read-body decode
     // enforces child id/ipnsName uniqueness fail-closed.
     if let Some(blob) = &reader.seed_blob {
-        open_seed_blob(blob).map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
+        // Bind the blob to THIS envelope: a seed blob sealed under a different
+        // scope/epoch/version is a transplant, not this record's seed source.
+        // Fail closed before opening (blueprint/engine.md cross-check discipline).
+        let aad = blob.aad();
+        if aad.scope != reader.scope_id
+            || aad.epoch != candidate.envelope.epoch
+            || aad.v != candidate.envelope.v
+        {
+            return Err(reject(
+                GateStage::Unseal,
+                RejectionReason::Trust(TrustViolation::HpkeOpenFailed.into()),
+            ));
+        }
+        // Cross-check: the recovered seed must derive the reader's read key, or
+        // the blob-seed and the actual-unseal key disagree — an attributable
+        // abuse event (blueprint/engine.md), never a silent staleness. The
+        // derived `SecretBytes` are gate-owned and zeroize on drop here;
+        // `reader.read_key` is caller-owned and never zeroized.
+        let seed = open_seed_blob(blob)
+            .map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
+        let node_seed = kdf::node_seed(seed.as_bytes(), &candidate.envelope.id);
+        let derived_read_key = kdf::read_key(node_seed.as_bytes());
+        if !ct_eq_secret(derived_read_key.as_bytes(), reader.read_key) {
+            return Err(reject(
+                GateStage::Unseal,
+                RejectionReason::Trust(TrustViolation::SealOpenFailed.into()),
+            ));
+        }
     }
     let read_body = open_read_body(&candidate.envelope, reader.read_key)
         .map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
