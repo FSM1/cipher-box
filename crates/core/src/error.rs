@@ -1,12 +1,17 @@
 //! The two-class error surface (blueprint/core.md "Error surface").
 //!
 //! Two classes, disjoint types, no reused codes: [`TrustViolation`] for
-//! failures the engine treats fail-closed (canonicality, uniqueness — and in
-//! later slices signature, commitment, AAD), and [`Malformed`] for
-//! structurally invalid or unsupported input. Every rejection names the check
-//! that fired via [`TrustViolation::check`] / [`Malformed::check`]; the check
-//! names are part of the frozen contract and are pinned by the KAT reject
-//! vectors.
+//! failures the engine treats fail-closed (canonicality, uniqueness, and the
+//! cryptographic checks the suite layer contributes — subkey-binding verify,
+//! HPKE open — with signature/commitment/AAD following in later slices) and
+//! [`Malformed`] for structurally invalid or unsupported input. Every
+//! rejection names the check that fired via [`TrustViolation::check`] /
+//! [`Malformed::check`]; the check names are part of the frozen contract and
+//! are pinned by the KAT reject vectors.
+//!
+//! The surface is crate-wide, not codec-only: the codec, the KDF catalog, and
+//! the crypto suite all name their checks here so the two-class boundary and
+//! the "no reused codes" law hold across the whole of `crates/core`.
 
 use core::fmt;
 
@@ -37,6 +42,19 @@ pub enum TrustViolation {
     UnsortedMapKeys { offset: usize },
     /// The same key encoded twice in one map.
     DuplicateMapKey { offset: usize, key: String },
+    /// A subkey binding signature did not verify over the det-CBOR
+    /// `{encSubkey, identityPk}` preimage. This is *trust*, never mere
+    /// malformation: the contact code is structurally well-formed (both keys
+    /// decode, the signature is a valid ECDSA encoding), yet the identity did
+    /// not attest this encryption subkey — the exact forgery the mandatory
+    /// import-time verify exists to reject fail-closed.
+    SubkeyBindingInvalid,
+    /// An HPKE ciphertext failed to open: the AEAD authentication tag did not
+    /// verify under the derived key and AAD. *Trust*, not availability —
+    /// unseal failure never silently degrades, and a tag mismatch is the
+    /// signature of tampering or an AAD/enc transplant, not a retryable fetch
+    /// error.
+    HpkeOpenFailed,
 }
 
 impl TrustViolation {
@@ -48,6 +66,8 @@ impl TrustViolation {
         "indefinite-length",
         "unsorted-map-keys",
         "duplicate-map-key",
+        "subkey-binding-invalid",
+        "hpke-open-failed",
     ];
 
     /// The stable name of the check that fired.
@@ -58,32 +78,33 @@ impl TrustViolation {
             Self::IndefiniteLength { .. } => "indefinite-length",
             Self::UnsortedMapKeys { .. } => "unsorted-map-keys",
             Self::DuplicateMapKey { .. } => "duplicate-map-key",
-        }
-    }
-
-    fn offset(&self) -> usize {
-        match self {
-            Self::NonCanonicalUint { offset }
-            | Self::NonCanonicalLength { offset }
-            | Self::IndefiniteLength { offset }
-            | Self::UnsortedMapKeys { offset }
-            | Self::DuplicateMapKey { offset, .. } => *offset,
+            Self::SubkeyBindingInvalid => "subkey-binding-invalid",
+            Self::HpkeOpenFailed => "hpke-open-failed",
         }
     }
 }
 
 impl fmt::Display for TrustViolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "trust violation [{}] at byte {}",
-            self.check(),
-            self.offset()
-        )?;
-        if let Self::DuplicateMapKey { key, .. } = self {
-            write!(f, " (key {:?})", DisplayKey(key))?;
+        match self {
+            Self::NonCanonicalUint { offset }
+            | Self::NonCanonicalLength { offset }
+            | Self::IndefiniteLength { offset }
+            | Self::UnsortedMapKeys { offset } => {
+                write!(f, "trust violation [{}] at byte {offset}", self.check())
+            }
+            Self::DuplicateMapKey { offset, key } => write!(
+                f,
+                "trust violation [{}] at byte {offset} (key {:?})",
+                self.check(),
+                DisplayKey(key)
+            ),
+            // Cryptographic checks carry no byte offset: they fire on a
+            // decoded structure, not a position in the encoded stream.
+            Self::SubkeyBindingInvalid | Self::HpkeOpenFailed => {
+                write!(f, "trust violation [{}]", self.check())
+            }
         }
-        Ok(())
     }
 }
 
@@ -140,6 +161,27 @@ pub enum Malformed {
     /// A rewrite supplied a known field that collides with a preserved
     /// unknown field of the same key (caller bug; rejected fail-closed).
     UnknownFieldCollision { key: String },
+    /// A schema decode required a field that the map did not carry. *Malformed*,
+    /// not trust: an absent field is structurally incomplete input, carrying no
+    /// evidence a canonical form was tampered — the same class as a truncation.
+    MissingField { field: &'static str },
+    /// A contact code's `identityPk` field is not a valid compressed secp256k1
+    /// point (wrong length, or not on the curve). *Malformed*: it is foreign
+    /// bytes in an identity-key slot, not a non-canonical encoding of a real
+    /// key — the class boundary the codec draws for shapes the profile cannot
+    /// represent. Verify (a *trust* check) never runs on a key that cannot be
+    /// parsed.
+    InvalidIdentityKey,
+    /// A contact code's `encSubkey` field is not a 32-byte X25519 public key.
+    /// *Malformed* for the same reason as [`Self::InvalidIdentityKey`]: a
+    /// length-wrong key slot is structurally invalid input, not tampering.
+    InvalidEncSubkey,
+    /// A contact code's `bindingSig` field is not a well-formed 64-byte compact
+    /// ECDSA signature (wrong length, or `r`/`s` out of range). *Malformed*:
+    /// the bytes cannot be parsed as a signature at all, which is distinct from
+    /// a parseable signature that fails to verify — the latter is the *trust*
+    /// check [`TrustViolation::SubkeyBindingInvalid`].
+    InvalidBindingSigEncoding,
 }
 
 impl Malformed {
@@ -158,6 +200,10 @@ impl Malformed {
         "depth-exceeded",
         "unexpected-type",
         "unknown-field-collision",
+        "missing-field",
+        "invalid-identity-key",
+        "invalid-enc-subkey",
+        "invalid-binding-sig-encoding",
     ];
 
     /// The stable name of the check that fired.
@@ -175,6 +221,10 @@ impl Malformed {
             Self::DepthExceeded { .. } => "depth-exceeded",
             Self::UnexpectedType { .. } => "unexpected-type",
             Self::UnknownFieldCollision { .. } => "unknown-field-collision",
+            Self::MissingField { .. } => "missing-field",
+            Self::InvalidIdentityKey => "invalid-identity-key",
+            Self::InvalidEncSubkey => "invalid-enc-subkey",
+            Self::InvalidBindingSigEncoding => "invalid-binding-sig-encoding",
         }
     }
 }
@@ -199,13 +249,21 @@ impl fmt::Display for Malformed {
             Self::UnknownFieldCollision { key } => {
                 write!(f, " (key {:?})", DisplayKey(key))
             }
+            Self::MissingField { field } => write!(f, " (field {field})"),
+            Self::InvalidIdentityKey | Self::InvalidEncSubkey | Self::InvalidBindingSigEncoding => {
+                Ok(())
+            }
         }
     }
 }
 
 impl std::error::Error for Malformed {}
 
-/// A codec failure: exactly one of the two disjoint classes.
+/// A two-class failure: exactly one of the disjoint [`TrustViolation`] /
+/// [`Malformed`] classes. Returned by the codec and by suite decoders that
+/// can fail on either axis (contact-code import: structural `Malformed`
+/// defects and the `SubkeyBindingInvalid` trust check share this union so a
+/// single `.check()` / `.class()` pair describes every rejection).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodecError {
     Trust(TrustViolation),

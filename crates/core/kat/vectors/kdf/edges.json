@@ -1,0 +1,95 @@
+{
+  "probe": {
+    "seed": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+    "id": "404142434445464748494a4b4c4d4e4f",
+    "structTag": 1,
+    "index": 0,
+    "ipnsName": "636970686572626f782f76322f73636f70652d726f6f74"
+  },
+  "edges": [
+    {
+      "name": "node-seed",
+      "context": "cipherbox/v2/node-seed",
+      "inputLayout": "keyed_hash(derive_key(ctx, scopeSeed[32]), nodeId[16])",
+      "output": "48ca90f91277d61eff1eb98ec18a04c27cf6d8418d5169319a63ce4f53659d71"
+    },
+    {
+      "name": "read-key",
+      "context": "cipherbox/v2/read-key",
+      "inputLayout": "derive_key(ctx, nodeSeed[32])",
+      "output": "afe31fd173dae02bd08afff7b3f18cc593161e01a866e08c9a0aa279e2c2415e"
+    },
+    {
+      "name": "structure-key",
+      "context": "cipherbox/v2/structure-key",
+      "inputLayout": "keyed_hash(derive_key(ctx, seed[32]), structTag[1])",
+      "output": "d0221ab1dbe250d5f37cffba20910e05d35c2ce74869c30befeba73d4aac12af"
+    },
+    {
+      "name": "write-seed",
+      "context": "cipherbox/v2/write-seed",
+      "inputLayout": "keyed_hash(derive_key(ctx, writeScopeSeed[32]), nodeId[16])",
+      "output": "815cdd8f105dd9e50b0edced0a86ee286c25266063429092c3c3181bb711fb73"
+    },
+    {
+      "name": "write-key",
+      "context": "cipherbox/v2/write-key",
+      "inputLayout": "derive_key(ctx, writeSeed[32])",
+      "output": "25d49eaf8488b3cd6d83d972b187db4f32f9281c49545bbe4b693438d95e9194"
+    },
+    {
+      "name": "ipns-keypair",
+      "context": "cipherbox/v2/ipns-keypair",
+      "inputLayout": "ed25519_from_seed(derive_key(ctx, writeSeed[32]))",
+      "output": "e321b5f5b891fd8fd07b67fa1ba29f94e2795a01c8046686571cc9de7e9d30b1"
+    },
+    {
+      "name": "ascent-keypair",
+      "context": "cipherbox/v2/ascent-keypair",
+      "inputLayout": "x25519_from_scalar(derive_key(ctx, parentNodeSeed[32]))",
+      "output": "c0847b86524d256d300e7e33f1de61430ffbf05826716c74ddc62573dbef4810"
+    },
+    {
+      "name": "enc-subkey",
+      "context": "cipherbox/v2/enc-subkey",
+      "inputLayout": "x25519_from_scalar(derive_key(ctx, loginSecret[var]))",
+      "output": "0155155f1a58b48a542c3c4677a4ac347d79c009ea8530707b3192c8d604e9f9"
+    },
+    {
+      "name": "blinded-tag",
+      "context": "cipherbox/v2/blinded-tag",
+      "inputLayout": "derive_key(ctx, ecdh[32] || scopeRootIpnsName[var])",
+      "output": "58e8260d6f6afeff70a83b907cf63010fd815f0a760f29a7417e9bd1044667e9"
+    },
+    {
+      "name": "pseudonym-sign",
+      "context": "cipherbox/v2/pseudonym-sign",
+      "inputLayout": "ed25519_from_seed(derive_key(ctx, pairwiseMaterial[32] || scopeId[16]))",
+      "output": "f7f22cd795ee64e1ed59e51b10d8b035cf86ab647551f0ddad655097add50150"
+    },
+    {
+      "name": "owner-pointer-seed",
+      "context": "cipherbox/v2/owner-pointer-seed",
+      "inputLayout": "derive_key(ctx, loginSecret[var])",
+      "output": "79eff3e4fa5dd6c2c813d33e2ea752860598406312a5c61905e9ce23260f9583"
+    },
+    {
+      "name": "scope-pointer",
+      "context": "cipherbox/v2/scope-pointer",
+      "inputLayout": "ed25519_from_seed(keyed_hash(derive_key(ctx, ownerPointerSeed[32]), scopeId[16]))",
+      "output": "291f71d8f1e25b8b97482320a064bf4a83fa3da4e96d1f6c8def93e54d1336aa"
+    },
+    {
+      "name": "pointer-read-key",
+      "context": "cipherbox/v2/pointer-read-key",
+      "inputLayout": "keyed_hash(derive_key(ctx, ownerPointerSeed[32]), scopeId[16])",
+      "output": "149b39d4d9de234f142ea6c7651c7f4a910f77bcde373975e627e7ffd903c89d"
+    },
+    {
+      "name": "vault-pointer-index",
+      "context": "cipherbox/v2/vault-pointer-index",
+      "inputLayout": "ed25519_from_seed(keyed_hash(derive_key(ctx, loginSecret[var]), index[8 BE]))",
+      "output": "edc7d34844be81ebaecaa1733024479de5708f855d72802a8a5461f95cb23340"
+    }
+  ]
+}

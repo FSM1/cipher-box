@@ -46,5 +46,109 @@
     }
   },
   "structureTags": {},
-  "kdfEdges": {}
+  "kdf": {
+    "file": "vectors/kdf/edges.json",
+    "count": 14,
+    "edges": [
+      {
+        "name": "node-seed",
+        "context": "cipherbox/v2/node-seed",
+        "inputLayout": "keyed_hash(derive_key(ctx, scopeSeed[32]), nodeId[16])"
+      },
+      {
+        "name": "read-key",
+        "context": "cipherbox/v2/read-key",
+        "inputLayout": "derive_key(ctx, nodeSeed[32])"
+      },
+      {
+        "name": "structure-key",
+        "context": "cipherbox/v2/structure-key",
+        "inputLayout": "keyed_hash(derive_key(ctx, seed[32]), structTag[1])"
+      },
+      {
+        "name": "write-seed",
+        "context": "cipherbox/v2/write-seed",
+        "inputLayout": "keyed_hash(derive_key(ctx, writeScopeSeed[32]), nodeId[16])"
+      },
+      {
+        "name": "write-key",
+        "context": "cipherbox/v2/write-key",
+        "inputLayout": "derive_key(ctx, writeSeed[32])"
+      },
+      {
+        "name": "ipns-keypair",
+        "context": "cipherbox/v2/ipns-keypair",
+        "inputLayout": "ed25519_from_seed(derive_key(ctx, writeSeed[32]))"
+      },
+      {
+        "name": "ascent-keypair",
+        "context": "cipherbox/v2/ascent-keypair",
+        "inputLayout": "x25519_from_scalar(derive_key(ctx, parentNodeSeed[32]))"
+      },
+      {
+        "name": "enc-subkey",
+        "context": "cipherbox/v2/enc-subkey",
+        "inputLayout": "x25519_from_scalar(derive_key(ctx, loginSecret[var]))"
+      },
+      {
+        "name": "blinded-tag",
+        "context": "cipherbox/v2/blinded-tag",
+        "inputLayout": "derive_key(ctx, ecdh[32] || scopeRootIpnsName[var])"
+      },
+      {
+        "name": "pseudonym-sign",
+        "context": "cipherbox/v2/pseudonym-sign",
+        "inputLayout": "ed25519_from_seed(derive_key(ctx, pairwiseMaterial[32] || scopeId[16]))"
+      },
+      {
+        "name": "owner-pointer-seed",
+        "context": "cipherbox/v2/owner-pointer-seed",
+        "inputLayout": "derive_key(ctx, loginSecret[var])"
+      },
+      {
+        "name": "scope-pointer",
+        "context": "cipherbox/v2/scope-pointer",
+        "inputLayout": "ed25519_from_seed(keyed_hash(derive_key(ctx, ownerPointerSeed[32]), scopeId[16]))"
+      },
+      {
+        "name": "pointer-read-key",
+        "context": "cipherbox/v2/pointer-read-key",
+        "inputLayout": "keyed_hash(derive_key(ctx, ownerPointerSeed[32]), scopeId[16])"
+      },
+      {
+        "name": "vault-pointer-index",
+        "context": "cipherbox/v2/vault-pointer-index",
+        "inputLayout": "ed25519_from_seed(keyed_hash(derive_key(ctx, loginSecret[var]), index[8 BE]))"
+      }
+    ]
+  },
+  "suite": {
+    "hpke": {
+      "kemId": "0x0020",
+      "kdfId": "0x0001",
+      "aeadId": "0x8000",
+      "sealFile": "vectors/hpke/seal.json",
+      "sealCount": 3,
+      "openRejectFile": "vectors/hpke/open_reject.json",
+      "openRejectCount": 2
+    },
+    "contact": {
+      "accept": {
+        "file": "vectors/contact/accept.json",
+        "count": 2
+      },
+      "reject": {
+        "file": "vectors/contact/reject.json",
+        "count": 7,
+        "checks": [
+          "subkey-binding-invalid",
+          "unexpected-type",
+          "missing-field",
+          "invalid-identity-key",
+          "invalid-enc-subkey",
+          "invalid-binding-sig-encoding"
+        ]
+      }
+    }
+  }
 }
