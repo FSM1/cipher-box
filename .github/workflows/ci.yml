@@ -361,13 +361,19 @@ jobs:
 
       # wasm-bindgen-test-runner drives the wasm32-unknown-unknown tests in
       # Node and must match the locked wasm-bindgen version exactly (a schema
-      # mismatch fails the run); derive the version from Cargo.lock. Cached in
-      # ~/.cargo/bin, so this is a no-op on a cache hit.
+      # mismatch fails the run); derive the version from Cargo.lock. The binary
+      # is cached in ~/.cargo/bin: skip the install when the cached binary
+      # already matches (a bare `cargo install` errors "already exists" on a
+      # cache hit), otherwise install with --force to overwrite a stale one.
       - name: Install wasm-bindgen-cli (matching Cargo.lock)
         run: |
           WB_VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "wasm-bindgen ${WB_VERSION}"
-          cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked
+          if wasm-bindgen --version 2>/dev/null | grep -qw "${WB_VERSION}"; then
+            echo "wasm-bindgen-cli ${WB_VERSION} already present (cache hit); skipping install"
+          else
+            cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked --force
+          fi
 
       - name: KAT vectors fresh (committed generator is the only writer)
         run: |
