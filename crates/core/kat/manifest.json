@@ -1,0 +1,50 @@
+{
+  "manifestVersion": 1,
+  "profile": "cipherbox/v2 det-cbor",
+  "codecs": {
+    "det-cbor": {
+      "accept": {
+        "file": "vectors/codec/accept.json",
+        "count": 32,
+        "requiredKinds": [
+          "uint",
+          "negint",
+          "bytes",
+          "text",
+          "array",
+          "map",
+          "bool",
+          "null",
+          "depth-limit"
+        ]
+      },
+      "reject": {
+        "file": "vectors/codec/reject.json",
+        "count": 43,
+        "checks": [
+          "non-canonical-uint",
+          "non-canonical-length",
+          "indefinite-length",
+          "unsorted-map-keys",
+          "duplicate-map-key",
+          "truncated",
+          "trailing-bytes",
+          "invalid-utf8",
+          "invalid-map-key-type",
+          "tag-forbidden",
+          "float-forbidden",
+          "simple-value-forbidden",
+          "reserved-additional-info",
+          "unexpected-break",
+          "depth-exceeded"
+        ]
+      },
+      "unknownFields": {
+        "file": "vectors/codec/unknown_fields.json",
+        "count": 6
+      }
+    }
+  },
+  "structureTags": {},
+  "kdfEdges": {}
+}

@@ -1,0 +1,4 @@
+# Run wasm test binaries under wasmtime: `cargo test -p cipherbox-core
+# --target wasm32-wasip1` is the KAT gate's WASM leg (blueprint/testing.md).
+[target.wasm32-wasip1]
+runner = "wasmtime"

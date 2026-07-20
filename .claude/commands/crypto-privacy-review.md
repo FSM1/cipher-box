@@ -26,8 +26,13 @@ Review produced code through the lens of a cryptography and security testing exp
 
 **Creates:**
 
-- `.planning/security/REVIEW-[timestamp].md` — Security review report
-- Test case suggestions (inline or as file)
+- A review report returned directly to the caller (orchestrator) — inline in
+  context, or as a temporary file under the session scratchpad when it is too
+  large to inline
+- Test case suggestions (inline)
+
+Review reports are working artifacts, never repo content: do NOT write them
+into the repository tree and do NOT commit them.
 
 </objective>
 
@@ -177,13 +182,13 @@ For each crypto operation found, generate test cases:
 
 ## Phase 5: Generate Report
 
-Create `.planning/security/` directory if needed:
+Return the report to the caller (orchestrator). Prefer presenting it directly
+in context; if it is too large to inline, write it to a temporary file under
+the session scratchpad (e.g. `<scratchpad>/security-review-[timestamp].md`)
+and reference that path. Never write the report into the repository tree
+(`.planning/` no longer exists) and never commit it.
 
-```bash
-mkdir -p .planning/security
-```
-
-Write the review report to a scratch file, e.g. `<scratchpad>/security-review-[timestamp].md`:
+Report template:
 
 ````markdown
 # Security Review Report
@@ -348,7 +353,7 @@ Display summary inline:
 
 [n] test case suggestions across [m] categories
 
-**Full report:** [path to report file]
+**Full report:** [inline above, or scratchpad path if it was too large to inline]
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
@@ -430,7 +435,7 @@ crypto.getRandomValues();
 - [ ] Each operation checked against security criteria
 - [ ] Issues categorized by severity
 - [ ] Test cases generated for each crypto operation
-- [ ] Report written to `.planning/security/`
+- [ ] Report returned to the caller (inline, or scratchpad temp file) — never written to the repo or committed
 - [ ] Summary presented to user
 - [ ] Next steps offered
 

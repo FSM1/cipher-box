@@ -13,3 +13,8 @@
 
 # Finalized specifications - do not modify
 00-Preliminary-R&D/
+
+# KAT manifest and vector fixtures - written only by the committed generator
+# (cargo run -p cipherbox-core --example kat_gen); the CI freshness gate
+# diffs them byte-for-byte against generator output
+crates/core/kat/

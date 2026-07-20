@@ -1,0 +1,259 @@
+[
+  {
+    "name": "uint-0",
+    "hex": "00",
+    "diag": "0",
+    "kinds": [
+      "uint"
+    ]
+  },
+  {
+    "name": "uint-23-max-immediate",
+    "hex": "17",
+    "diag": "23",
+    "kinds": [
+      "uint"
+    ]
+  },
+  {
+    "name": "uint-24-min-8bit",
+    "hex": "1818",
+    "diag": "24",
+    "kinds": [
+      "uint"
+    ]
+  },
+  {
+    "name": "uint-255-max-8bit",
+    "hex": "18ff",
+    "diag": "255",
+    "kinds": [
+      "uint"
+    ]
+  },
+  {
+    "name": "uint-256-min-16bit",
+    "hex": "190100",
+    "diag": "256",
+    "kinds": [
+      "uint"
+    ]
+  },
+  {
+    "name": "uint-65535-max-16bit",
+    "hex": "19ffff",
+    "diag": "65535",
+    "kinds": [
+      "uint"
+    ]
+  },
+  {
+    "name": "uint-65536-min-32bit",
+    "hex": "1a00010000",
+    "diag": "65536",
+    "kinds": [
+      "uint"
+    ]
+  },
+  {
+    "name": "uint-4294967295-max-32bit",
+    "hex": "1affffffff",
+    "diag": "4294967295",
+    "kinds": [
+      "uint"
+    ]
+  },
+  {
+    "name": "uint-4294967296-min-64bit",
+    "hex": "1b0000000100000000",
+    "diag": "4294967296",
+    "kinds": [
+      "uint"
+    ]
+  },
+  {
+    "name": "uint-u64-max",
+    "hex": "1bffffffffffffffff",
+    "diag": "18446744073709551615",
+    "kinds": [
+      "uint"
+    ]
+  },
+  {
+    "name": "negint-minus-1",
+    "hex": "20",
+    "diag": "-1",
+    "kinds": [
+      "negint"
+    ]
+  },
+  {
+    "name": "negint-minus-24-max-immediate",
+    "hex": "37",
+    "diag": "-24",
+    "kinds": [
+      "negint"
+    ]
+  },
+  {
+    "name": "negint-minus-25-min-8bit",
+    "hex": "3818",
+    "diag": "-25",
+    "kinds": [
+      "negint"
+    ]
+  },
+  {
+    "name": "negint-minus-2-pow-64",
+    "hex": "3bffffffffffffffff",
+    "diag": "-18446744073709551616",
+    "kinds": [
+      "negint"
+    ]
+  },
+  {
+    "name": "bytes-empty",
+    "hex": "40",
+    "diag": "h''",
+    "kinds": [
+      "bytes"
+    ]
+  },
+  {
+    "name": "bytes-short",
+    "hex": "43010203",
+    "diag": "h'010203'",
+    "kinds": [
+      "bytes"
+    ]
+  },
+  {
+    "name": "bytes-len-24-8bit-length-header",
+    "hex": "5818000102030405060708090a0b0c0d0e0f1011121314151617",
+    "diag": "h'000102030405060708090a0b0c0d0e0f1011121314151617'",
+    "kinds": [
+      "bytes"
+    ]
+  },
+  {
+    "name": "text-empty",
+    "hex": "60",
+    "diag": "\"\"",
+    "kinds": [
+      "text"
+    ]
+  },
+  {
+    "name": "text-ascii",
+    "hex": "6568656c6c6f",
+    "diag": "\"hello\"",
+    "kinds": [
+      "text"
+    ]
+  },
+  {
+    "name": "text-multibyte-unicode",
+    "hex": "781968c3a96c6c6f2077c3b6726c6420e2809420e29c93f09f9a80",
+    "diag": "\"héllo wörld — ✓🚀\"",
+    "kinds": [
+      "text"
+    ]
+  },
+  {
+    "name": "text-len-26-8bit-length-header",
+    "hex": "781a6162636465666768696a6b6c6d6e6f707172737475767778797a",
+    "diag": "\"abcdefghijklmnopqrstuvwxyz\"",
+    "kinds": [
+      "text"
+    ]
+  },
+  {
+    "name": "array-empty",
+    "hex": "80",
+    "diag": "[]",
+    "kinds": [
+      "array"
+    ]
+  },
+  {
+    "name": "array-nested",
+    "hex": "820182028103",
+    "diag": "[1, [2, [3]]]",
+    "kinds": [
+      "array"
+    ]
+  },
+  {
+    "name": "array-heterogeneous",
+    "hex": "88012141ff656d69786564f5f680a0",
+    "diag": "[1, -2, h'ff', \"mixed\", true, null, [], {}]",
+    "kinds": [
+      "array"
+    ]
+  },
+  {
+    "name": "map-empty",
+    "hex": "a0",
+    "diag": "{}",
+    "kinds": [
+      "map"
+    ]
+  },
+  {
+    "name": "map-canonical-key-order-length-first",
+    "hex": "a361610161620262616103",
+    "diag": "{\"a\": 1, \"b\": 2, \"aa\": 3}",
+    "kinds": [
+      "map"
+    ]
+  },
+  {
+    "name": "map-nested",
+    "hex": "a2616ba1666e6573746564f5617a81f6",
+    "diag": "{\"k\": {\"nested\": true}, \"z\": [null]}",
+    "kinds": [
+      "map"
+    ]
+  },
+  {
+    "name": "map-keys-length-class-boundary",
+    "hex": "a277616161616161616161616161616161616161616161616100781862626262626262626262626262626262626262626262626201",
+    "diag": "{\"aaaaaaaaaaaaaaaaaaaaaaa\": 0, \"bbbbbbbbbbbbbbbbbbbbbbbb\": 1}",
+    "kinds": [
+      "map"
+    ]
+  },
+  {
+    "name": "bool-true",
+    "hex": "f5",
+    "diag": "true",
+    "kinds": [
+      "bool"
+    ]
+  },
+  {
+    "name": "bool-false",
+    "hex": "f4",
+    "diag": "false",
+    "kinds": [
+      "bool"
+    ]
+  },
+  {
+    "name": "null",
+    "hex": "f6",
+    "diag": "null",
+    "kinds": [
+      "null"
+    ]
+  },
+  {
+    "name": "array-nested-at-depth-limit-128",
+    "hex": "8181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818180",
+    "diag": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+    "kinds": [
+      "array",
+      "depth-limit"
+    ]
+  }
+]
