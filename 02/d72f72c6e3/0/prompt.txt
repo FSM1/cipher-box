@@ -1,0 +1,82 @@
+<task-notification>
+<task-id>aced63c195b476e80</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/aced63c195b476e80.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement #624 API auth slice" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Everything verified green. Final report:
+
+## Report
+
+**Branch:** `feat/api-identity-auth-ops-baseline`
+**Worktree:** `/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aced63c195b476e80`
+**Commits:**
+- `4c1501070` — `feat(api): identity auth, refresh rotation, and the ops baseline`
+- `589a3088b` — `ci: add api-unit, migration-drift, and openapi-freshness PR gates`
+
+### What landed
+
+- **Migration** `apps/api/src/migrations/1784513040045-InitAuthSchema.ts` — `users` (keyed by `public_key`, carries `quota_limit_override` + `byo` per blueprint), `auth_methods` (unique `(kind, identifier_hash)`, hashed identifiers only), `refresh_tokens` (unique `token_hash`, `family_id`, `used_at`). snake_case columns, `gen_random_uuid()`, cascade FKs. Generated via `migration:generate` so the drift check is strict (no cosmetic-rename grep filter).
+- **Identity auth** — `POST /auth/challenge` (single-use, publicKey-bound, TTL'd, in-memory per the fixed data model) + `POST /auth/login` verifying a compact secp256k1 signature over `sha256(challenge)` (@noble/curves); publicKeys canonicalized to compressed hex; implicit account creation at first login.
+- **Refresh rotation** — opaque 32-byte token, SHA-256-hashed at rest, one-time-use with atomic claim; rotation issues a same-family successor; **reuse hard-deletes the whole family**; logout hard-deletes all rows (repo convention: revoke = DELETE, never soft flags). Access JWT 15 min HS256; refresh also set as HTTP-only `SameSite=Strict` cookie (web) and returned in body (desktop keychain).
+- **SIWE secondary** — nonce → login for already-linked wallets; `POST /auth/siwe/link` (JWT-authed) binds a wallet; 409 if bound elsewhere.
+- **Test-login** — v1 pattern ported: `NODE_ENV=production` hard-block, timing-safe `TEST_LOGIN_SECRET`, deterministic secp256k1 keypair (compressed).
+- **Ops** — global `ThrottlerGuard` as `APP_GUARD` with env default + per-surface `@Throttle` limits (`src/ops/throttling.ts`), `@SkipThrottle` on health/metrics; prom-client `/metrics` (default metrics + `http_requests_total` + duration histogram via global interceptor); health stub kept.
+- **OpenAPI** — emitted from decorators to committed `apps/api/openapi.json` (10 paths), deterministic regeneration; added to `.prettierignore` so the generator alone owns its bytes (lint-staged prettier was reformatting it and would have broken the freshness diff).
+- **CI** — three named merge-blocking jobs in `ci.yml`: `api-unit` (vitest suite), `migration-drift` (postgres service container, run migrations, assert `migration:generate` finds no changes), `openapi-freshness` (regenerate + `git diff --exit-code`). Same pinned action SHAs/style as existing jobs; YAML validated.
+- **Determinism** — injectable `Clock`/`Entropy` abstract classes; expiry/rotation tests run on a fake clock. Vitest compiles through SWC (`unplugin-swc`) because esbuild can't emit decorator metadata; dev/CLI scripts run via ts-node (tsx would silently break Nest DI).
+
+### Test results
+
+- 38 tests / 5 files green, including: **throttler asserted effective** via supertest against the real Nest app with the real `OpsModule` guard (real 429s + `Retry-After`, per-surface bucket independence, SkipThrottle exemption), full identity/SIWE/refresh/test-login HTTP flows, reuse-detection family kill, challenge replay/cross-key rejection.
+- **Live smoke against real postgres**: booted the real app, drove challenge→login→refresh→reuse-detection→family-kill and live 429s successfully.
+- Root `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm build` all green; migration runs cleanly on a fresh DB and both drift + freshness checks pass locally exactly as CI runs them.
+
+### Conscious deviations / notes
+
+1. **SIWE is link-then-login — no implicit account creation via SIWE.** A bare wallet signature can't prove possession of an identity publicKey; letting SIWE create accounts would allow squatting a victim's publicKey before their first login (account-takeover vector). Blueprint says implicit creation happens "at first login" and SIWE "stays as a secondary auth method" — I read secondary as linked-method; flag if you want a different shape.
+2. **Reuse-detection keeps used-token rows** (`used_at`) until family expiry — required fuel for detecting replay; actual revocation is hard-delete, honoring the "revoke = DELETE" convention.
+3. **OpenAPI doc version pinned to `2.0.0`** (not npm_package_version) so releases never churn the freshness artifact.
+4. **No per-package lint script** — repo convention is root `eslint .` only (no sibling package has one); the verification bar's `--filter api lint` is covered by root lint.
+5. API tests run in both the existing `Test` job (recursive) and `api-unit` — harmless duplication; the named gate is what law 1 requires.
+6. Root files touched beyond apps/api + ci.yml: `pnpm-lock.yaml` (install) and `.prettierignore` (4-line artifact exclusion) — both strictly required.
+
+Not built (per scope): deletion cascade, quota, pin/name surface, contract suite. Docker stack left running; scratch drift DB dropped; not pushed, no PR.</result>
+<usage><subagent_tokens>221623</subagent_tokens><tool_uses>108</tool_uses><duration_ms>1493001</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aced63c195b476e80</worktreePath><worktreeBranch>worktree-agent-aced63c195b476e80</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a6e71b3d70d82719c</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/a6e71b3d70d82719c.output</output-file>
+<status>completed</status>
+<summary>Agent "Standards review of #618 diff" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Standards review — feat/core-det-cbor-kat-spine
+
+**Documented-standard checks: no hard violations found.** Doctrine (no I/O/clock/RNG in `crates/core/src`), disjoint two-class errors with unique named checks, accept+reject vectors, anti-vacuity counts, committed generator, native+WASM legs, commit format (no parens in subject) — all satisfied. `kat_gen` doing file I/O is an example binary, not core.
+
+**Near-misses on documented standards (verify/soft):**
+
+1. `.github/workflows/ci.yml:39-44` — `.cargo/config.toml` is absent from the `rust` path filter, so a change to the wasmtime runner config skips `core-kats`. Soft breach of testing.md law 1's spirit (the gate must fire when its inputs change). Also: the job is named, but merge-blocking lives in branch protection — confirm "Core KATs (native + WASM)" is a required check.
+2. `crates/core/src/error.rs` — the trust/malformed boundary (indefinite-length = trust; tags/floats/oversize simple values = malformed) isn't derivable from blueprint/core.md's "canonicality failures" list; all equally prove a writer broke the profile. The KAT `class` field freezes this choice — deserves an explicit sign-off, since re-classing later is a vector-breaking change. Judgement call.
+3. `crates/core/examples/kat_gen.rs` `build_manifest` — preserves `manifestVersion`/`profile`/`structureTags`/`kdfEdges` from the *existing file*, so a hand-edit to those fields survives regeneration and the CI freshness diff, weakening the "committed generator is the only writer" claim (CI step name, `.prettierignore`). Backstopped today by `manifest_header_is_pinned` and the empty-sections test, but the backstop lives in a different file. Judgement call.
+
+**Baseline smells (all judgement calls):**
+
+- **Duplicated Code / Shotgun Surgery** — the manifest schema structs exist twice (`tests/kat_manifest.rs` Deserialize, `examples/kat_gen.rs` Serialize), and the expected-absent list `["unexpected-type", "unknown-field-collision"]` appears in both `build_reject_vectors` and `reject_checks_list_matches_vectors_and_error_surface`. A new manifest field or non-decode-reachable check forces paired edits; a shared test-support module would gather them.
+- **Duplicated Code (accepted)** — `write_head`/`write_text` in `tests/common/mod.rs` mirror `src/codec/encode.rs`; deliberate oracle independence, documented in the module doc. Fine as-is.
+- **Repeated Switches / Primitive Obsession** — each check name is spelled twice per variant (`CHECKS` const + `check()` match) in `error.rs`; a one-table macro would collapse it. The uniqueness test backstops drift.
+- **Speculative Generality (mild)** — `known_key_set`, `Value::remove/as_bool/as_i64/from_i64` have no non-test consumers yet; defensible given the declared "later slices" plan.
+
+Files: `/Users/myankelev/Code/random/cipher-box/crates/core/src/error.rs`, `.../examples/kat_gen.rs`, `.../tests/kat_manifest.rs`, `.../tests/common/mod.rs`, `/Users/myankelev/Code/random/cipher-box/.github/workflows/ci.yml`.</result>
+<usage><subagent_tokens>106306</subagent_tokens><tool_uses>13</tool_uses><duration_ms>144698</duration_ms></usage>
+</task-notification>
+
+---
+
+please run /crypto-privacy-review on PR #659
