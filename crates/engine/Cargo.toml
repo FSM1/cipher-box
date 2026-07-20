@@ -27,3 +27,7 @@ zeroize.workspace = true
 # Self dev-dependency: enables `test-kit` for this crate's own tests (unit,
 # integration, doc) without leaking it into downstream production builds.
 cipherbox-engine = { workspace = true, features = ["test-kit"] }
+# Integration tests construct real signed/sealed records with core's crypto to
+# hand-feed the adoption-gate simulation harness (core is already a normal
+# dependency; this line makes it addressable from `tests/`).
+cipherbox-core.workspace = true
