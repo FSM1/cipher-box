@@ -45,7 +45,16 @@
       }
     }
   },
-  "structureTags": {},
+  "structureTags": {
+    "ascent-link": 5,
+    "grant-blob": 3,
+    "history-link": 6,
+    "mailbox-payload": 8,
+    "owner-blob": 4,
+    "pointer-payload": 7,
+    "read-body": 1,
+    "write-body": 2
+  },
   "kdf": {
     "file": "vectors/kdf/edges.json",
     "count": 14,
@@ -149,6 +158,51 @@
           "invalid-binding-sig-encoding"
         ]
       }
+    }
+  },
+  "seal": {
+    "aadDomain": "cipherbox/v2/aad",
+    "readBodyStructTag": 1,
+    "seal": {
+      "file": "vectors/seal/seal.json",
+      "count": 3
+    },
+    "openReject": {
+      "file": "vectors/seal/open_reject.json",
+      "count": 7,
+      "checks": [
+        "seal-open-failed",
+        "truncated"
+      ]
+    },
+    "readBodyAccept": {
+      "file": "vectors/seal/read_body_accept.json",
+      "count": 4
+    },
+    "readBodyReject": {
+      "file": "vectors/seal/read_body_reject.json",
+      "count": 6,
+      "checks": [
+        "duplicate-id",
+        "duplicate-ipns-name",
+        "unexpected-type",
+        "missing-field",
+        "invalid-node-kind",
+        "invalid-field-length"
+      ]
+    },
+    "envelopeAccept": {
+      "file": "vectors/seal/envelope_accept.json",
+      "count": 3
+    },
+    "envelopeReject": {
+      "file": "vectors/seal/envelope_reject.json",
+      "count": 4,
+      "checks": [
+        "unexpected-type",
+        "missing-field",
+        "invalid-field-length"
+      ]
     }
   }
 }
