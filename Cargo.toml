@@ -9,6 +9,7 @@ members = [
     "crates/engine",
     "crates/wasm",
     "crates/fuse",
+    "crates/desktop-seams",
     "apps/desktop/src-tauri",
 ]
 
