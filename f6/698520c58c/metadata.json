@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f6698520c58c",
+  "strategy": "manual-commit",
+  "branch": "feat/core-det-cbor-kat-spine",
+  "checkpoints_count": 2,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    "crates/core/src/error.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f6/698520c58c/0/metadata.json",
+      "transcript": "/f6/698520c58c/0/full.jsonl",
+      "compact_transcript": "/f6/698520c58c/0/transcript.jsonl",
+      "content_hash": "/f6/698520c58c/0/content_hash.txt",
+      "prompt": "/f6/698520c58c/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 42,
+    "cache_creation_tokens": 24258,
+    "cache_read_tokens": 4447491,
+    "output_tokens": 10710,
+    "api_call_count": 21
+  }
+}
