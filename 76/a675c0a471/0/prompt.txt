@@ -1,0 +1,9 @@
+/implement #618
+
+---
+
+any other issues that can be built in parallel with the currently in-flight work?
+
+---
+
+ok, kick off both in separate worktrees

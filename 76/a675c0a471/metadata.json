@@ -1,0 +1,43 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "76a675c0a471",
+  "strategy": "manual-commit",
+  "branch": "feat/core-det-cbor-kat-spine",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".cargo/config.toml",
+    ".github/workflows/ci.yml",
+    ".prettierignore",
+    "Cargo.lock",
+    "crates/core/Cargo.toml",
+    "crates/core/kat/manifest.json",
+    "crates/core/kat/vectors/codec/accept.json",
+    "crates/core/kat/vectors/codec/reject.json",
+    "crates/core/kat/vectors/codec/unknown_fields.json",
+    "crates/core/src/codec/decode.rs",
+    "crates/core/src/codec/encode.rs",
+    "crates/core/src/codec/fields.rs",
+    "crates/core/src/codec/mod.rs",
+    "crates/core/src/codec/value.rs",
+    "crates/core/src/error.rs",
+    "crates/core/src/lib.rs",
+    "crates/core/tests/kat_manifest.rs",
+    "crates/engine/src/lib.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/76/a675c0a471/0/metadata.json",
+      "transcript": "/76/a675c0a471/0/full.jsonl",
+      "compact_transcript": "/76/a675c0a471/0/transcript.jsonl",
+      "content_hash": "/76/a675c0a471/0/content_hash.txt",
+      "prompt": "/76/a675c0a471/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 128,
+    "cache_creation_tokens": 177973,
+    "cache_read_tokens": 8490934,
+    "output_tokens": 86170,
+    "api_call_count": 64
+  }
+}
