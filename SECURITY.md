@@ -1,30 +1,19 @@
-<!-- generated-by: gsd-doc-writer -->
-
 # Security Policy
 
 ## Supported Versions
 
-CipherBox follows independent per-package versioning managed by Release Please.
-The table below lists the **current released versions** derived from `.release-please-manifest.json`.
-Only the latest release of each component receives security fixes.
-
-| Component             | Current Version | Supported |
-| --------------------- | --------------- | --------- |
-| cipher-box (root)     | 0.38.6          | Yes       |
-| apps/api              | 0.37.1          | Yes       |
-| apps/web              | 0.41.0          | Yes       |
-| apps/desktop          | 0.41.0          | Yes       |
-| apps/tee-worker       | 0.31.1          | Yes       |
-| packages/crypto       | 0.31.0          | Yes       |
-| packages/core         | 0.30.0          | Yes       |
-| All previous releases | —               | No        |
+CipherBox releases as a single product version (`vX.Y.Z`). The repo is
+mid-rewrite: **no supported release currently exists**. v1 is frozen on the
+`v1` branch (tag `v1-freeze`), was staging-only, and receives no fixes; v2 is
+being built on `main` and starts releasing at `v2.0.0`. From then on, only
+the latest release receives security fixes.
 
 ## Reporting a Vulnerability
 
 **Please do not open a public GitHub issue for security vulnerabilities.**
 
 Use [GitHub Private Vulnerability Reporting](https://github.com/FSM1/cipher-box/security/advisories/new)
-to submit a report confidentially. <!-- VERIFY: private vulnerability reporting is enabled for this repository -->
+to submit a report confidentially.
 
 Include as much of the following as is available:
 
@@ -33,9 +22,7 @@ Include as much of the following as is available:
 - Affected component(s) and version(s)
 - Any suggested mitigations
 
-<!-- VERIFY: response SLA — the following timeline is a best-effort target, not a contractual commitment -->
-
-**Response expectations:**
+**Response expectations** (best-effort targets, not contractual commitments):
 
 - Acknowledgement within 5 business days
 - Initial triage and severity assessment within 10 business days
@@ -43,31 +30,36 @@ Include as much of the following as is available:
 
 ## Security Model and Scope
 
-CipherBox is an end-to-end encrypted storage system. A brief summary of the threat model:
+CipherBox is an end-to-end encrypted storage system. A brief summary of the v2 threat model:
 
-- **Client-side encryption only.** Files and metadata are encrypted in the browser or desktop app
-  before leaving the device. The server stores and relays only ciphertext.
-- **Zero-knowledge server.** The API never receives plaintext file contents, file names, or unencrypted
-  keys. It cannot decrypt user data.
-- **TEE republishing.** IPNS record republishing is performed inside a Trusted Execution Environment
-  (TEE). The TEE decrypts the IPNS private key in hardware for the duration of a single signing
-  operation and immediately discards it.
-- **Key wrapping.** All sensitive keys are wrapped with ECIES before leaving the client. Content is
-  encrypted with AES-256-GCM.
+- **Client-side encryption only.** Files and metadata are encrypted on the client before leaving
+  the device. The server stores and relays only ciphertext.
+- **Zero-knowledge server.** The API never receives plaintext file contents, file names, or
+  unencrypted keys, and never serves IPNS records — clients resolve and verify records against
+  the network.
+- **One crypto implementation.** All cryptography lives in `crates/core`: XChaCha20-Poly1305
+  sealing, BLAKE3 tree KDF, X25519 + HPKE key wrapping, Ed25519/secp256k1 signing. Key
+  derivation is restricted to a frozen KDF catalog.
+- **Fail-closed verification.** Every resolved record must pass the adoption gate (signature,
+  epoch, and structure checks); a failure is treated as a trust violation, never as staleness.
+- **Keyless republishing.** IPNS records are re-published by a keyless module inside the API
+  from client-signed records — the server never holds signing keys.
 
-For the full architecture, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+For the full design, see [`blueprint/core.md`](blueprint/core.md) (primitives, wire formats)
+and [`blueprint/engine.md`](blueprint/engine.md) (trust model).
 
 ### In scope
 
 - Vulnerabilities that could expose plaintext user data or private keys
 - Authentication or authorization bypasses in the API
-- Cryptographic weaknesses in key derivation, wrapping, or content encryption
-- TEE isolation failures that could allow key extraction
-- Vulnerabilities in the Tauri desktop app (FUSE layer, IPC, OAuth redirect handling)
+- Cryptographic weaknesses in key derivation, wrapping, sealing, or signing
+- Adoption-gate bypasses (accepting a record that should fail verification)
+- Vulnerabilities in the desktop app (FUSE layer, IPC, OAuth redirect handling)
 
 ### Out of scope
 
 - Denial-of-service attacks against public infrastructure
 - Social engineering of maintainers
 - Vulnerabilities in third-party dependencies (report those upstream; mention them here if they affect CipherBox directly)
-- Issues in deferred features (billing, mobile apps) that are not yet implemented
+- The frozen v1 branch
+- Issues in deferred features (billing, mobile apps) that are not implemented
