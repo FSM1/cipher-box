@@ -446,6 +446,13 @@ pub async fn adopt<F: FloorStore>(
         .map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
 
     // Floor law — advance ONLY now, after the AAD-confirmed unseal.
+    //
+    // The stage-4/5 reads above and this advance are not a CAS pair, and they
+    // do not need to be: the engine is the single writer (blueprint/engine.md
+    // "Facade" — one live instance), so no concurrent adopt races this device's
+    // floors between the read and the advance. Cross-writer contention is
+    // resolved on the publish/RecordTransport plane (CAS), never on the local
+    // floor read. `advance_on_unseal` itself orders its two raises fail-safe.
     floor::advance_on_unseal(
         floors,
         &reader.scope_id,
