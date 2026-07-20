@@ -290,6 +290,134 @@
           "Auth"
         ]
       }
+    },
+    "/mailbox/messages": {
+      "post": {
+        "operationId": "MailboxController_post",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PostMessageDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostMessageResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body (invalid publicKey, blob, or key)"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "Unknown recipient (rate-limited existence oracle)"
+          },
+          "409": {
+            "description": "Recipient mailbox is full (per-recipient pending cap)"
+          },
+          "413": {
+            "description": "Sealed blob exceeds 8 KiB"
+          },
+          "429": {
+            "description": "Per-sender post rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Post an HPKE-sealed blob to a recipient identity publicKey; unknown recipients are rejected (rate-limited existence oracle)",
+        "tags": [
+          "Mailbox"
+        ]
+      },
+      "get": {
+        "operationId": "MailboxController_poll",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PollResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "429": {
+            "description": "Per-recipient poll rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Poll the authenticated mailbox; returns sealed blobs with no sender metadata in the clear",
+        "tags": [
+          "Mailbox"
+        ]
+      }
+    },
+    "/mailbox/messages/{id}": {
+      "delete": {
+        "operationId": "MailboxController_ack",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AckResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "429": {
+            "description": "Per-recipient ack rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Ack a message: hard delete by id, scoped to the caller mailbox",
+        "tags": [
+          "Mailbox"
+        ]
+      }
     }
   },
   "info": {
@@ -306,6 +434,10 @@
     {
       "name": "Auth",
       "description": "Identity auth, SIWE secondary, refresh rotation"
+    },
+    {
+      "name": "Mailbox",
+      "description": "Integrity-untrusted sealed-pointer transport: post, poll, ack"
     }
   ],
   "servers": [],
@@ -503,6 +635,89 @@
           "refreshToken",
           "publicKey",
           "privateKey"
+        ]
+      },
+      "PostMessageDto": {
+        "type": "object",
+        "properties": {
+          "recipientPublicKey": {
+            "type": "string",
+            "description": "Recipient identity publicKey, hex secp256k1 (compressed or uncompressed)",
+            "example": "02a1633cafcc01ebfb6d78e39f687a1f0995c62fc95f51ead10a02ee0be551b5dc"
+          },
+          "blob": {
+            "type": "string",
+            "description": "HPKE-sealed opaque payload, base64 (decodes to <= 8 KiB). Never inspected server-side."
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "description": "Sender-supplied idempotency key; a replay returns the original message id. MUST be a high-entropy per-message random value: it is blended into a one-way sender digest, and a low-entropy key would let a server-side observer brute-force the sender→recipient edge."
+          }
+        },
+        "required": [
+          "recipientPublicKey",
+          "blob",
+          "idempotencyKey"
+        ]
+      },
+      "PostMessageResponseDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Server-assigned message id"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "MailboxMessageDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Message id; ack deletes by this id"
+          },
+          "receivedAt": {
+            "type": "string",
+            "description": "Post time, ISO 8601"
+          },
+          "blob": {
+            "type": "string",
+            "description": "HPKE-sealed opaque payload, base64 (owner-signed inside the seal)"
+          }
+        },
+        "required": [
+          "id",
+          "receivedAt",
+          "blob"
+        ]
+      },
+      "PollResponseDto": {
+        "type": "object",
+        "properties": {
+          "messages": {
+            "description": "Pending messages, oldest first",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MailboxMessageDto"
+            }
+          }
+        },
+        "required": [
+          "messages"
+        ]
+      },
+      "AckResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "success"
         ]
       }
     }

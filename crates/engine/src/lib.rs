@@ -7,9 +7,10 @@
 //! and the whole-set constructor bundle ([`seams`]), injected entropy
 //! ([`entropy`]), the environment-scoped sync timing profile ([`profile`]),
 //! and the facade skeleton ([`facade`]) — one async command-and-event
-//! surface with start of secret. Pipeline logic (gate, sync, rotation,
-//! grants, pointer, mailbox, net, content, api) lands in later slices
-//! behind this exact surface.
+//! surface with start of secret. The [`api`] module lands the single
+//! hand-written API client and token lifecycle. The rest of the pipeline
+//! (gate, sync, rotation, grants, pointer, mailbox, net, content) lands in
+//! later slices behind this exact surface.
 //!
 //! The `test-kit` feature adds [`testkit`]: in-memory fakes for every seam,
 //! a virtual-clock scheduler, seeded entropy, and the reusable per-seam
@@ -23,6 +24,7 @@
 // so no auto-trait bound flexibility is lost.
 #![allow(async_fn_in_trait)]
 
+pub mod api;
 pub mod entropy;
 pub mod facade;
 pub mod profile;
@@ -30,6 +32,10 @@ pub mod seams;
 #[cfg(feature = "test-kit")]
 pub mod testkit;
 
+pub use api::{
+    ApiClient, ApiError, ChallengeSigner, IdentityChallengeSigner, LoginOutcome, MailboxItem,
+    NameRegistration, Quota, SiweNonce, TestLoginOutcome, UploadResult,
+};
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{
     Command, Engine, EngineError, Event, EventStream, LoginSecret, NodeId, NodeKind, Permission,
