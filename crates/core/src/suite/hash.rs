@@ -25,6 +25,16 @@ pub fn keyed_hash(key: &[u8; SECRET_LEN], message: &[u8]) -> SecretBytes {
     SecretBytes::new(*blake3::keyed_hash(key, message).as_bytes())
 }
 
+/// BLAKE3 unkeyed hash: a 32-byte digest of `bytes`. This is **not** a key
+/// derivation — it is the public `H(ciphertext)` term bound into a
+/// structure-signature preimage (blueprint/core.md "Structure signatures"). The
+/// input is a ciphertext and the output is a public digest, so the plain
+/// `[u8; SECRET_LEN]` is returned rather than a [`SecretBytes`]; no key material
+/// flows through here.
+pub fn hash(bytes: &[u8]) -> [u8; SECRET_LEN] {
+    *blake3::hash(bytes).as_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,5 +63,13 @@ mod tests {
             keyed_hash(&key, msg).as_bytes(),
             blake3::keyed_hash(&key, msg).as_bytes()
         );
+    }
+
+    #[test]
+    fn hash_matches_blake3_reference_and_is_deterministic() {
+        let msg = b"structure ciphertext";
+        assert_eq!(&hash(msg), blake3::hash(msg).as_bytes());
+        assert_eq!(hash(msg), hash(msg), "unkeyed hash is deterministic");
+        assert_ne!(hash(b"a"), hash(b"b"), "distinct inputs separate");
     }
 }

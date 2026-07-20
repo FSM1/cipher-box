@@ -20,11 +20,20 @@ use cipherbox_core::codec::{decode, decode_map_partial, encode, encode_map_parti
 use cipherbox_core::error::{Malformed, TrustViolation};
 use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, NodeKind, STRUCT_TAG_READ_BODY, STRUCT_TAGS, build_aad,
-    decode_envelope, decode_read_body, encode_envelope, encode_read_body, open_read_body,
+    self, AAD_DOMAIN, AadContext, NodeKind, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY,
+    STRUCT_TAGS, StructureSigInput, build_aad, decode_ascent_link, decode_envelope,
+    decode_grant_blob_payload, decode_grant_set_commitment, decode_history_link_payload,
+    decode_override_seed_payload, decode_read_body, decode_write_body, encode_ascent_link,
+    encode_envelope, encode_grant_set_commitment, encode_override_seed_payload, encode_read_body,
+    encode_write_body, open_ascent_link, open_read_body, structure_sig_preimage, verify_grant_set,
+    verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
+use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
+use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer, Ed25519Verifier};
+use cipherbox_core::suite::hash::hash;
 use cipherbox_core::suite::hpke::{hpke_open, hpke_seal};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use serde::Deserialize;
@@ -90,6 +99,62 @@ const FIXTURES: &[(&str, &str)] = &[
         "vectors/seal/envelope_reject.json",
         include_str!("../kat/vectors/seal/envelope_reject.json"),
     ),
+    (
+        "vectors/grant/write_body_accept.json",
+        include_str!("../kat/vectors/grant/write_body_accept.json"),
+    ),
+    (
+        "vectors/grant/write_body_reject.json",
+        include_str!("../kat/vectors/grant/write_body_reject.json"),
+    ),
+    (
+        "vectors/grant/grant_blob_accept.json",
+        include_str!("../kat/vectors/grant/grant_blob_accept.json"),
+    ),
+    (
+        "vectors/grant/grant_blob_reject.json",
+        include_str!("../kat/vectors/grant/grant_blob_reject.json"),
+    ),
+    (
+        "vectors/grant/owner_blob_accept.json",
+        include_str!("../kat/vectors/grant/owner_blob_accept.json"),
+    ),
+    (
+        "vectors/grant/owner_blob_reject.json",
+        include_str!("../kat/vectors/grant/owner_blob_reject.json"),
+    ),
+    (
+        "vectors/grant/ascent_link_accept.json",
+        include_str!("../kat/vectors/grant/ascent_link_accept.json"),
+    ),
+    (
+        "vectors/grant/ascent_link_reject.json",
+        include_str!("../kat/vectors/grant/ascent_link_reject.json"),
+    ),
+    (
+        "vectors/grant/history_link_accept.json",
+        include_str!("../kat/vectors/grant/history_link_accept.json"),
+    ),
+    (
+        "vectors/grant/history_link_reject.json",
+        include_str!("../kat/vectors/grant/history_link_reject.json"),
+    ),
+    (
+        "vectors/grant/structure_sig_accept.json",
+        include_str!("../kat/vectors/grant/structure_sig_accept.json"),
+    ),
+    (
+        "vectors/grant/structure_sig_reject.json",
+        include_str!("../kat/vectors/grant/structure_sig_reject.json"),
+    ),
+    (
+        "vectors/grant/grant_set_accept.json",
+        include_str!("../kat/vectors/grant/grant_set_accept.json"),
+    ),
+    (
+        "vectors/grant/grant_set_reject.json",
+        include_str!("../kat/vectors/grant/grant_set_reject.json"),
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -107,6 +172,159 @@ struct Manifest {
     kdf: KdfSection,
     suite: SuiteSection,
     seal: SealManifest,
+    grant: GrantManifest,
+}
+
+// --- Grant section (ticket #621) schema ------------------------------------
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GrantManifest {
+    write_body_struct_tag: u8,
+    grant_blob_struct_tag: u8,
+    owner_blob_struct_tag: u8,
+    ascent_link_struct_tag: u8,
+    history_link_struct_tag: u8,
+    write_body_accept: FileCount,
+    write_body_reject: RejectSection,
+    grant_blob_accept: FileCount,
+    grant_blob_reject: RejectSection,
+    owner_blob_accept: FileCount,
+    owner_blob_reject: RejectSection,
+    ascent_link_accept: FileCount,
+    ascent_link_reject: RejectSection,
+    history_link_accept: FileCount,
+    history_link_reject: RejectSection,
+    structure_sig_accept: FileCount,
+    structure_sig_reject: RejectSection,
+    grant_set_accept: FileCount,
+    grant_set_reject: RejectSection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct WriteBodyAcceptVector {
+    name: String,
+    hex: String,
+    ledger_count: usize,
+    child_scope_count: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HpkeStructureVector {
+    name: String,
+    recipient_secret: String,
+    recipient_public: String,
+    ephemeral_scalar: String,
+    v: u64,
+    id: String,
+    scope: String,
+    epoch: u64,
+    struct_tag: u8,
+    aad: String,
+    plaintext: String,
+    enc: String,
+    ciphertext: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AscentLinkAcceptVector {
+    name: String,
+    parent_node_seed: String,
+    ephemeral_scalar: String,
+    v: u64,
+    id: String,
+    scope: String,
+    epoch: u64,
+    struct_tag: u8,
+    aad: String,
+    plaintext: String,
+    ascent_public: String,
+    container: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AscentLinkRejectVector {
+    name: String,
+    parent_node_seed: String,
+    v: u64,
+    id: String,
+    scope: String,
+    epoch: u64,
+    struct_tag: u8,
+    container: String,
+    check: String,
+    class: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct HistoryLinkAcceptVector {
+    name: String,
+    key: String,
+    nonce: String,
+    v: u64,
+    id: String,
+    scope: String,
+    epoch: u64,
+    struct_tag: u8,
+    aad: String,
+    plaintext: String,
+    sealed: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StructureSigAcceptVector {
+    name: String,
+    signer_seed: String,
+    verifier_pk: String,
+    scope_id: String,
+    epoch: u64,
+    struct_tag: u8,
+    recipient_tag: String,
+    ciphertext: String,
+    ciphertext_hash: String,
+    preimage: String,
+    signature: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StructureSigRejectVector {
+    name: String,
+    verifier_pk: String,
+    scope_id: String,
+    epoch: u64,
+    struct_tag: u8,
+    recipient_tag: String,
+    ciphertext_hash: String,
+    signature: String,
+    check: String,
+    class: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GrantSetAcceptVector {
+    name: String,
+    owner_identity_pk: String,
+    commitment: String,
+    signature: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct GrantSetRejectVector {
+    name: String,
+    owner_identity_pk: String,
+    commitment: String,
+    signature: String,
+    check: String,
+    class: String,
 }
 
 #[derive(Deserialize)]
@@ -423,6 +641,68 @@ fn envelope_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
     serde_json::from_str(fixture(&m.seal.envelope_reject.file)).expect("envelope_reject.json shape")
 }
 
+fn write_body_accept_vectors(m: &Manifest) -> Vec<WriteBodyAcceptVector> {
+    serde_json::from_str(fixture(&m.grant.write_body_accept.file)).expect("write_body_accept shape")
+}
+
+fn write_body_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
+    serde_json::from_str(fixture(&m.grant.write_body_reject.file)).expect("write_body_reject shape")
+}
+
+fn grant_blob_accept_vectors(m: &Manifest) -> Vec<HpkeStructureVector> {
+    serde_json::from_str(fixture(&m.grant.grant_blob_accept.file)).expect("grant_blob_accept shape")
+}
+
+fn grant_blob_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
+    serde_json::from_str(fixture(&m.grant.grant_blob_reject.file)).expect("grant_blob_reject shape")
+}
+
+fn owner_blob_accept_vectors(m: &Manifest) -> Vec<HpkeStructureVector> {
+    serde_json::from_str(fixture(&m.grant.owner_blob_accept.file)).expect("owner_blob_accept shape")
+}
+
+fn owner_blob_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
+    serde_json::from_str(fixture(&m.grant.owner_blob_reject.file)).expect("owner_blob_reject shape")
+}
+
+fn ascent_link_accept_vectors(m: &Manifest) -> Vec<AscentLinkAcceptVector> {
+    serde_json::from_str(fixture(&m.grant.ascent_link_accept.file))
+        .expect("ascent_link_accept shape")
+}
+
+fn ascent_link_reject_vectors(m: &Manifest) -> Vec<AscentLinkRejectVector> {
+    serde_json::from_str(fixture(&m.grant.ascent_link_reject.file))
+        .expect("ascent_link_reject shape")
+}
+
+fn history_link_accept_vectors(m: &Manifest) -> Vec<HistoryLinkAcceptVector> {
+    serde_json::from_str(fixture(&m.grant.history_link_accept.file))
+        .expect("history_link_accept shape")
+}
+
+fn history_link_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
+    serde_json::from_str(fixture(&m.grant.history_link_reject.file))
+        .expect("history_link_reject shape")
+}
+
+fn structure_sig_accept_vectors(m: &Manifest) -> Vec<StructureSigAcceptVector> {
+    serde_json::from_str(fixture(&m.grant.structure_sig_accept.file))
+        .expect("structure_sig_accept shape")
+}
+
+fn structure_sig_reject_vectors(m: &Manifest) -> Vec<StructureSigRejectVector> {
+    serde_json::from_str(fixture(&m.grant.structure_sig_reject.file))
+        .expect("structure_sig_reject shape")
+}
+
+fn grant_set_accept_vectors(m: &Manifest) -> Vec<GrantSetAcceptVector> {
+    serde_json::from_str(fixture(&m.grant.grant_set_accept.file)).expect("grant_set_accept shape")
+}
+
+fn grant_set_reject_vectors(m: &Manifest) -> Vec<GrantSetRejectVector> {
+    serde_json::from_str(fixture(&m.grant.grant_set_reject.file)).expect("grant_set_reject shape")
+}
+
 fn unhex(name: &str, hex: &str) -> Vec<u8> {
     let bytes = hex::decode(hex).unwrap_or_else(|e| panic!("vector {name}: bad hex: {e}"));
     // Lowercase hex is part of the fixture contract.
@@ -484,6 +764,20 @@ fn fixture_table_matches_manifest_files() {
         m.seal.read_body_reject.file.as_str(),
         m.seal.envelope_accept.file.as_str(),
         m.seal.envelope_reject.file.as_str(),
+        m.grant.write_body_accept.file.as_str(),
+        m.grant.write_body_reject.file.as_str(),
+        m.grant.grant_blob_accept.file.as_str(),
+        m.grant.grant_blob_reject.file.as_str(),
+        m.grant.owner_blob_accept.file.as_str(),
+        m.grant.owner_blob_reject.file.as_str(),
+        m.grant.ascent_link_accept.file.as_str(),
+        m.grant.ascent_link_reject.file.as_str(),
+        m.grant.history_link_accept.file.as_str(),
+        m.grant.history_link_reject.file.as_str(),
+        m.grant.structure_sig_accept.file.as_str(),
+        m.grant.structure_sig_reject.file.as_str(),
+        m.grant.grant_set_accept.file.as_str(),
+        m.grant.grant_set_reject.file.as_str(),
     ];
     let referenced_set: BTreeSet<&str> = referenced.iter().copied().collect();
     assert_eq!(
@@ -636,6 +930,18 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
     covered.extend(seal_open_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(read_body_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(envelope_reject_vectors(&m).into_iter().map(|v| v.check));
+    // Grant-family reject families (ticket #621).
+    covered.extend(write_body_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(grant_blob_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(owner_blob_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(history_link_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(ascent_link_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(
+        structure_sig_reject_vectors(&m)
+            .into_iter()
+            .map(|v| v.check),
+    );
+    covered.extend(grant_set_reject_vectors(&m).into_iter().map(|v| v.check));
 
     let surface: BTreeSet<String> = TrustViolation::CHECKS
         .iter()
@@ -1551,5 +1857,722 @@ fn contact_reject_family_covers_the_binding_checks() {
             listed.contains(required),
             "contact rejects must cover {required}"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Grant section (ticket #621): the write-body, the grant/owner blobs, the
+// ascent + history links, the structure signatures, and the grant-set
+// commitment. Each family's accept vectors round-trip / reproduce / verify
+// against the live code, and its reject vectors fire the named fail-closed
+// check.
+// ---------------------------------------------------------------------------
+
+/// An optional recipient tag: empty hex is `None`, else a 32-byte blinded tag.
+fn opt_tag(name: &str, hex: &str) -> Option<[u8; 32]> {
+    if hex.is_empty() {
+        None
+    } else {
+        Some(unhex32(name, hex))
+    }
+}
+
+/// The shared per-codec reject-family shape: exact count, the manifest checks
+/// list equals the distinct file checks, and every vector fires its named
+/// check + class through `decode_fn`.
+fn check_reject_family<T>(
+    label: &str,
+    vectors: &[RejectVector],
+    section: &RejectSection,
+    decode_fn: impl Fn(&[u8]) -> Result<T, cipherbox_core::error::CodecError>,
+) {
+    assert_eq!(vectors.len(), section.count, "{label} reject count drift");
+    let listed: BTreeSet<&str> = section.checks.iter().map(String::as_str).collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(listed, in_vectors, "manifest checks vs {label} reject.json");
+    let mut names = BTreeSet::new();
+    for v in vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate {label} reject {}",
+            v.name
+        );
+        let bytes = unhex(&v.name, &v.hex);
+        let err = match decode_fn(&bytes) {
+            Err(e) => e,
+            Ok(_) => panic!("{label} reject {}: decoder accepted it", v.name),
+        };
+        assert_eq!(
+            err.check(),
+            v.check,
+            "{label} reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "{label} reject {}: class ({err})",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn grant_struct_tags_are_frozen() {
+    let m = manifest();
+    assert_eq!(m.grant.write_body_struct_tag, STRUCT_TAG_WRITE_BODY);
+    assert_eq!(m.grant.grant_blob_struct_tag, STRUCT_TAG_GRANT_BLOB);
+    assert_eq!(m.grant.owner_blob_struct_tag, STRUCT_TAG_OWNER_BLOB);
+    assert_eq!(m.grant.ascent_link_struct_tag, STRUCT_TAG_ASCENT_LINK);
+    assert_eq!(m.grant.history_link_struct_tag, STRUCT_TAG_HISTORY_LINK);
+    // The frozen byte-space (mirrors ALL_STRUCT_TAGS).
+    assert_eq!(STRUCT_TAG_WRITE_BODY, 2);
+    assert_eq!(STRUCT_TAG_GRANT_BLOB, 3);
+    assert_eq!(STRUCT_TAG_OWNER_BLOB, 4);
+    assert_eq!(STRUCT_TAG_ASCENT_LINK, 5);
+    assert_eq!(STRUCT_TAG_HISTORY_LINK, 6);
+}
+
+#[test]
+fn write_body_accept_vectors_decode_and_round_trip() {
+    let m = manifest();
+    let vectors = write_body_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.write_body_accept.count,
+        "write-body accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "write-body accept family must not be empty"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate write-body accept {}",
+            v.name
+        );
+        let bytes = unhex(&v.name, &v.hex);
+        let body = decode_write_body(&bytes)
+            .unwrap_or_else(|e| panic!("write-body accept {}: rejected: {e}", v.name));
+        assert_eq!(
+            hex::encode(encode_write_body(&body)),
+            v.hex,
+            "write-body accept {}: re-encode must be byte-identical",
+            v.name
+        );
+        assert_eq!(
+            body.grant_ledger.len(),
+            v.ledger_count,
+            "write-body accept {}: ledger count",
+            v.name
+        );
+        assert_eq!(
+            body.direct_child_scope_index.len(),
+            v.child_scope_count,
+            "write-body accept {}: child-scope count",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn write_body_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = write_body_reject_vectors(&m);
+    check_reject_family(
+        "write-body",
+        &vectors,
+        &m.grant.write_body_reject,
+        decode_write_body,
+    );
+    assert!(
+        m.grant
+            .write_body_reject
+            .checks
+            .iter()
+            .any(|c| c == "invalid-permission"),
+        "write-body reject must cover the grant-permission check"
+    );
+}
+
+/// Reproduce a frozen HPKE-sealed structure (grant/owner blob) under its fixed
+/// ephemeral and recipient key, and open it — returning the recovered plaintext.
+fn hpke_structure_reproduce_and_open(v: &HpkeStructureVector) -> Vec<u8> {
+    let ctx = seal_ctx(&v.name, v.v, &v.id, &v.scope, v.epoch, v.struct_tag);
+    assert_eq!(
+        hex::encode(build_aad(&ctx)),
+        v.aad,
+        "hpke structure {}: aad drift",
+        v.name
+    );
+    let recipient_public = X25519Public::from_bytes(unhex32(&v.name, &v.recipient_public));
+    let eph = unhex32(&v.name, &v.ephemeral_scalar);
+    let plaintext = unhex(&v.name, &v.plaintext);
+    // The grant-section HPKE `info` is fixed empty; the structured AAD binds the
+    // context. Fixed ephemeral must reproduce the frozen enc + ciphertext.
+    let sealed = hpke_seal(&recipient_public, &eph, b"", &build_aad(&ctx), &plaintext);
+    assert_eq!(
+        hex::encode(sealed.enc),
+        v.enc,
+        "hpke structure {}: enc drift",
+        v.name
+    );
+    assert_eq!(
+        hex::encode(&sealed.ciphertext),
+        v.ciphertext,
+        "hpke structure {}: ciphertext drift",
+        v.name
+    );
+    let recipient = X25519Secret::from_scalar(unhex32(&v.name, &v.recipient_secret));
+    let enc = unhex32(&v.name, &v.enc);
+    let opened = hpke_open(
+        &recipient,
+        &enc,
+        b"",
+        &build_aad(&ctx),
+        &unhex(&v.name, &v.ciphertext),
+    )
+    .unwrap_or_else(|_| panic!("hpke structure {}: open must recover", v.name));
+    assert_eq!(
+        &opened[..],
+        &plaintext[..],
+        "hpke structure {}: plaintext",
+        v.name
+    );
+    plaintext
+}
+
+#[test]
+fn grant_blob_accept_vectors_seal_reproduce_open_and_decode() {
+    let m = manifest();
+    let vectors = grant_blob_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.grant_blob_accept.count,
+        "grant-blob accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "grant-blob accept family must not be empty"
+    );
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate grant-blob accept {}",
+            v.name
+        );
+        assert_eq!(
+            v.struct_tag, STRUCT_TAG_GRANT_BLOB,
+            "grant-blob accept {}: tag",
+            v.name
+        );
+        let plaintext = hpke_structure_reproduce_and_open(v);
+        assert!(
+            decode_grant_blob_payload(&plaintext).is_ok(),
+            "grant-blob accept {}: payload must decode",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn grant_blob_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = grant_blob_reject_vectors(&m);
+    check_reject_family(
+        "grant-blob",
+        &vectors,
+        &m.grant.grant_blob_reject,
+        decode_grant_blob_payload,
+    );
+    assert!(
+        m.grant
+            .grant_blob_reject
+            .checks
+            .iter()
+            .any(|c| c == "missing-field"),
+        "grant-blob reject must cover the missing-field check"
+    );
+}
+
+#[test]
+fn owner_blob_accept_vectors_seal_reproduce_open_and_decode() {
+    let m = manifest();
+    let vectors = owner_blob_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.owner_blob_accept.count,
+        "owner-blob accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "owner-blob accept family must not be empty"
+    );
+    for v in &vectors {
+        assert_eq!(
+            v.struct_tag, STRUCT_TAG_OWNER_BLOB,
+            "owner-blob accept {}: tag",
+            v.name
+        );
+        let plaintext = hpke_structure_reproduce_and_open(v);
+        assert!(
+            decode_override_seed_payload(&plaintext).is_ok(),
+            "owner-blob accept {}: payload must decode",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn owner_blob_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = owner_blob_reject_vectors(&m);
+    check_reject_family(
+        "owner-blob",
+        &vectors,
+        &m.grant.owner_blob_reject,
+        decode_override_seed_payload,
+    );
+    assert!(
+        m.grant
+            .owner_blob_reject
+            .checks
+            .iter()
+            .any(|c| c == "missing-field"),
+        "owner-blob reject must cover the missing-field check"
+    );
+}
+
+#[test]
+fn ascent_link_accept_vectors_derive_verify_and_open() {
+    let m = manifest();
+    let vectors = ascent_link_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.ascent_link_accept.count,
+        "ascent-link accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "ascent-link accept family must not be empty"
+    );
+    for v in &vectors {
+        assert_eq!(
+            v.struct_tag, STRUCT_TAG_ASCENT_LINK,
+            "ascent accept {}: tag",
+            v.name
+        );
+        let ctx = seal_ctx(&v.name, v.v, &v.id, &v.scope, v.epoch, v.struct_tag);
+        assert_eq!(
+            hex::encode(build_aad(&ctx)),
+            v.aad,
+            "ascent accept {}: aad",
+            v.name
+        );
+        let parent_seed = unhex32(&v.name, &v.parent_node_seed);
+        let container = unhex(&v.name, &v.container);
+        let link = decode_ascent_link(&container)
+            .unwrap_or_else(|e| panic!("ascent accept {}: container decode: {e}", v.name));
+        assert_eq!(
+            hex::encode(encode_ascent_link(&link)),
+            v.container,
+            "ascent accept {}: container re-encode",
+            v.name
+        );
+        assert_eq!(
+            hex::encode(link.ascent_public),
+            v.ascent_public,
+            "ascent accept {}: public half",
+            v.name
+        );
+        // Re-sealing to the plaintext public half under the fixed ephemeral
+        // reproduces the frozen HPKE envelope (any writer with the public half
+        // can re-seal).
+        let plaintext = unhex(&v.name, &v.plaintext);
+        let eph = unhex32(&v.name, &v.ephemeral_scalar);
+        let reproduced = hpke_seal(
+            &X25519Public::from_bytes(unhex32(&v.name, &v.ascent_public)),
+            &eph,
+            b"",
+            &build_aad(&ctx),
+            &plaintext,
+        );
+        assert_eq!(
+            reproduced.enc, link.enc,
+            "ascent accept {}: enc drift",
+            v.name
+        );
+        assert_eq!(
+            reproduced.ciphertext, link.ciphertext,
+            "ascent accept {}: ciphertext drift",
+            v.name
+        );
+        // The ancestor re-derives the keypair, matches the public half, opens.
+        let payload = open_ascent_link(&parent_seed, &ctx, &link)
+            .unwrap_or_else(|e| panic!("ascent accept {}: open: {e}", v.name));
+        assert_eq!(
+            hex::encode(encode_override_seed_payload(&payload)),
+            v.plaintext,
+            "ascent accept {}: opened plaintext drift",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn ascent_link_reject_vectors_fail_closed() {
+    let m = manifest();
+    let vectors = ascent_link_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.ascent_link_reject.count,
+        "ascent-link reject count drift"
+    );
+    let listed: BTreeSet<&str> = m
+        .grant
+        .ascent_link_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs ascent_link_reject.json"
+    );
+    assert!(
+        listed.contains("ascent-link-mismatch"),
+        "ascent-link reject must cover the derive-and-verify mismatch"
+    );
+    for v in &vectors {
+        assert_eq!(
+            v.struct_tag, STRUCT_TAG_ASCENT_LINK,
+            "ascent reject {}: tag",
+            v.name
+        );
+        let ctx = seal_ctx(&v.name, v.v, &v.id, &v.scope, v.epoch, v.struct_tag);
+        let parent_seed = unhex32(&v.name, &v.parent_node_seed);
+        let link = decode_ascent_link(&unhex(&v.name, &v.container))
+            .unwrap_or_else(|e| panic!("ascent reject {}: container decode: {e}", v.name));
+        let err = open_ascent_link(&parent_seed, &ctx, &link)
+            .expect_err("ascent-link reject must fail closed");
+        assert_eq!(
+            err.check(),
+            v.check,
+            "ascent reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "ascent reject {}: class ({err})",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn history_link_accept_vectors_seal_reproduce_and_open() {
+    let m = manifest();
+    let vectors = history_link_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.history_link_accept.count,
+        "history-link accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "history-link accept family must not be empty"
+    );
+    for v in &vectors {
+        assert_eq!(
+            v.struct_tag, STRUCT_TAG_HISTORY_LINK,
+            "history accept {}: tag",
+            v.name
+        );
+        let key = unhex32(&v.name, &v.key);
+        let nonce = unhex_n::<NONCE_LEN>(&v.name, &v.nonce);
+        let ctx = seal_ctx(&v.name, v.v, &v.id, &v.scope, v.epoch, v.struct_tag);
+        assert_eq!(
+            hex::encode(build_aad(&ctx)),
+            v.aad,
+            "history accept {}: aad",
+            v.name
+        );
+        let plaintext = unhex(&v.name, &v.plaintext);
+        // The fixed key + nonce reproduce the frozen sealed blob (the previous
+        // epoch's seed under the current one).
+        let sealed = seal::seal(&key, &nonce, &ctx, &plaintext);
+        assert_eq!(
+            hex::encode(&sealed),
+            v.sealed,
+            "history accept {}: sealed drift",
+            v.name
+        );
+        assert_eq!(
+            &sealed[..NONCE_LEN],
+            &nonce,
+            "history accept {}: nonce prefix",
+            v.name
+        );
+        let opened = seal::unseal(&key, &ctx, &unhex(&v.name, &v.sealed))
+            .unwrap_or_else(|e| panic!("history accept {}: unseal: {e}", v.name));
+        assert_eq!(opened, plaintext, "history accept {}: plaintext", v.name);
+        assert!(
+            decode_history_link_payload(&plaintext).is_ok(),
+            "history accept {}: payload must decode",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn history_link_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = history_link_reject_vectors(&m);
+    check_reject_family(
+        "history-link",
+        &vectors,
+        &m.grant.history_link_reject,
+        decode_history_link_payload,
+    );
+    assert!(
+        m.grant
+            .history_link_reject
+            .checks
+            .iter()
+            .any(|c| c == "missing-field"),
+        "history-link reject must cover the missing-field check"
+    );
+}
+
+#[test]
+fn structure_sig_accept_vectors_verify() {
+    let m = manifest();
+    let vectors = structure_sig_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.structure_sig_accept.count,
+        "structure-sig accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "structure-sig accept family must not be empty"
+    );
+    let mut saw_recipient_tag = false;
+    for v in &vectors {
+        let scope_id = unhex_n::<16>(&v.name, &v.scope_id);
+        let ciphertext = unhex(&v.name, &v.ciphertext);
+        // H(ciphertext) is the frozen BLAKE3 digest.
+        assert_eq!(
+            hex::encode(hash(&ciphertext)),
+            v.ciphertext_hash,
+            "structure-sig accept {}: ciphertext hash",
+            v.name
+        );
+        let recipient_tag = opt_tag(&v.name, &v.recipient_tag);
+        saw_recipient_tag |= recipient_tag.is_some();
+        let input = StructureSigInput::over_ciphertext(
+            scope_id,
+            v.epoch,
+            v.struct_tag,
+            recipient_tag,
+            &ciphertext,
+        );
+        // The preimage is frozen.
+        assert_eq!(
+            hex::encode(structure_sig_preimage(&input)),
+            v.preimage,
+            "structure-sig accept {}: preimage drift",
+            v.name
+        );
+        // The frozen verifier is exactly the pseudonym pk of the frozen signer
+        // seed, so freezing the seed freezes the accepting key.
+        let signer = Ed25519Signer::from_seed(unhex32(&v.name, &v.signer_seed));
+        assert_eq!(
+            hex::encode(signer.verifying_key().to_bytes()),
+            v.verifier_pk,
+            "structure-sig accept {}: verifier is the signer's pk",
+            v.name
+        );
+        let verifier = Ed25519Verifier::from_bytes(unhex32(&v.name, &v.verifier_pk))
+            .expect("valid pseudonym pk");
+        let sig = Ed25519Signature::from_bytes(unhex_n::<64>(&v.name, &v.signature));
+        assert!(
+            verify_structure(&verifier, &input, &sig).is_ok(),
+            "structure-sig accept {}: must verify",
+            v.name
+        );
+    }
+    assert!(
+        saw_recipient_tag,
+        "a grant-blob structure signature must carry a recipient tag"
+    );
+}
+
+#[test]
+fn structure_sig_reject_vectors_fail_closed() {
+    let m = manifest();
+    let vectors = structure_sig_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.structure_sig_reject.count,
+        "structure-sig reject count drift"
+    );
+    let listed: BTreeSet<&str> = m
+        .grant
+        .structure_sig_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs structure_sig_reject.json"
+    );
+    // Anti-vacuity: the forgery + two transplant cases are all present.
+    let names: BTreeSet<&str> = vectors.iter().map(|v| v.name.as_str()).collect();
+    for required in ["bad-signature", "wrong-tag", "recipient-tag-transplant"] {
+        assert!(
+            names.contains(required),
+            "structure-sig reject must cover {required}"
+        );
+    }
+    for v in &vectors {
+        // Rebuild the verify-side input directly (the frozen ciphertext hash and
+        // the transplanted tag/recipient-tag).
+        let input = StructureSigInput {
+            scope_id: unhex_n::<16>(&v.name, &v.scope_id),
+            epoch: v.epoch,
+            struct_tag: v.struct_tag,
+            recipient_tag: opt_tag(&v.name, &v.recipient_tag),
+            ciphertext_hash: unhex32(&v.name, &v.ciphertext_hash),
+        };
+        let verifier = Ed25519Verifier::from_bytes(unhex32(&v.name, &v.verifier_pk))
+            .expect("valid pseudonym pk");
+        let sig = Ed25519Signature::from_bytes(unhex_n::<64>(&v.name, &v.signature));
+        let err = verify_structure(&verifier, &input, &sig)
+            .expect_err("structure-sig reject must fail closed");
+        assert_eq!(
+            err.check(),
+            v.check,
+            "structure-sig reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "structure-sig reject {}: class",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn grant_set_accept_vectors_decode_and_verify() {
+    let m = manifest();
+    let vectors = grant_set_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.grant_set_accept.count,
+        "grant-set accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "grant-set accept family must not be empty"
+    );
+    for v in &vectors {
+        let bytes = unhex(&v.name, &v.commitment);
+        let c = decode_grant_set_commitment(&bytes)
+            .unwrap_or_else(|e| panic!("grant-set accept {}: decode: {e}", v.name));
+        assert_eq!(
+            hex::encode(encode_grant_set_commitment(&c)),
+            v.commitment,
+            "grant-set accept {}: re-encode must be byte-identical",
+            v.name
+        );
+        let verifier = EcdsaVerifier::from_sec1(&unhex(&v.name, &v.owner_identity_pk))
+            .expect("valid owner identity key");
+        let sig = EcdsaSignature::from_compact(&unhex(&v.name, &v.signature))
+            .expect("valid owner signature");
+        assert!(
+            verify_grant_set(&verifier, &c, &sig).is_ok(),
+            "grant-set accept {}: must verify",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn grant_set_reject_vectors_fail_closed() {
+    let m = manifest();
+    let vectors = grant_set_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.grant_set_reject.count,
+        "grant-set reject count drift"
+    );
+    let listed: BTreeSet<&str> = m
+        .grant
+        .grant_set_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs grant_set_reject.json"
+    );
+    assert!(
+        listed.contains("commitment-invalid"),
+        "grant-set reject must cover the owner-signature failure"
+    );
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate grant-set reject {}",
+            v.name
+        );
+        let bytes = unhex(&v.name, &v.commitment);
+        match decode_grant_set_commitment(&bytes) {
+            Err(e) => {
+                // A commitment-codec defect: no signature is exercised.
+                assert!(
+                    v.signature.is_empty(),
+                    "grant-set reject {}: a codec defect carries no signature",
+                    v.name
+                );
+                assert_eq!(
+                    e.check(),
+                    v.check,
+                    "grant-set reject {}: check ({e})",
+                    v.name
+                );
+                assert_eq!(e.class(), v.class, "grant-set reject {}: class", v.name);
+            }
+            Ok(c) => {
+                // The commitment decodes: the owner signature must fail to verify.
+                let verifier = EcdsaVerifier::from_sec1(&unhex(&v.name, &v.owner_identity_pk))
+                    .expect("valid owner identity key");
+                let sig = EcdsaSignature::from_compact(&unhex(&v.name, &v.signature))
+                    .expect("valid signature encoding");
+                let err = verify_grant_set(&verifier, &c, &sig)
+                    .expect_err("grant-set verify reject must fail closed");
+                assert_eq!(
+                    err.check(),
+                    v.check,
+                    "grant-set reject {}: check ({err})",
+                    v.name
+                );
+                assert_eq!(err.class(), v.class, "grant-set reject {}: class", v.name);
+            }
+        }
     }
 }
