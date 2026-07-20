@@ -4,7 +4,13 @@
 
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/engine", "crates/wasm", "crates/fuse"]
+members = [
+    "crates/core",
+    "crates/engine",
+    "crates/wasm",
+    "crates/fuse",
+    "apps/desktop/src-tauri",
+]
 
 [workspace.package]
 version = "0.0.0"
