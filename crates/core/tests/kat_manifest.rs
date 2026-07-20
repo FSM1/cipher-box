@@ -2089,6 +2089,14 @@ fn grant_blob_reject_vectors_fire_the_named_check() {
         &m.grant.grant_blob_reject,
         decode_grant_blob_payload,
     );
+    assert!(
+        m.grant
+            .grant_blob_reject
+            .checks
+            .iter()
+            .any(|c| c == "missing-field"),
+        "grant-blob reject must cover the missing-field check"
+    );
 }
 
 #[test]
@@ -2128,6 +2136,14 @@ fn owner_blob_reject_vectors_fire_the_named_check() {
         &vectors,
         &m.grant.owner_blob_reject,
         decode_override_seed_payload,
+    );
+    assert!(
+        m.grant
+            .owner_blob_reject
+            .checks
+            .iter()
+            .any(|c| c == "missing-field"),
+        "owner-blob reject must cover the missing-field check"
     );
 }
 
@@ -2323,6 +2339,14 @@ fn history_link_reject_vectors_fire_the_named_check() {
         &vectors,
         &m.grant.history_link_reject,
         decode_history_link_payload,
+    );
+    assert!(
+        m.grant
+            .history_link_reject
+            .checks
+            .iter()
+            .any(|c| c == "missing-field"),
+        "history-link reject must cover the missing-field check"
     );
 }
 

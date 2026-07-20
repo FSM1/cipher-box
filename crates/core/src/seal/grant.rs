@@ -50,6 +50,20 @@ use super::body::{bytes_fixed, collect_unknown, merge_unknown, req};
 /// needed; it is fixed empty and frozen by the KAT.
 const GRANT_HPKE_INFO: &[u8] = b"";
 
+/// Zeroize the temporary `Value::Bytes` seed copies an `encode_*` helper
+/// materialized under `secret_keys`. The encoder is the terminal owner of these
+/// intermediate heap copies, which the codec `Map` would otherwise free without
+/// wiping; the returned encoded buffer stays the seal path's to zeroize.
+fn zeroize_secret_bytes(value: Value, secret_keys: &[&str]) {
+    if let Value::Map(mut m) = value {
+        for key in secret_keys.iter().copied() {
+            if let Some(Value::Bytes(mut b)) = m.remove(key) {
+                b.zeroize();
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Permission — the grant-ledger / grant-set discriminant.
 // ---------------------------------------------------------------------------
@@ -212,7 +226,13 @@ pub fn encode_grant_blob_payload(payload: &GrantBlobPayload) -> Vec<u8> {
         m.insert("writeScopeSeed", Value::Bytes(w.as_bytes().to_vec()));
     }
     merge_unknown(&mut m, &payload.unknown);
-    encode(&Value::Map(m))
+    let value = Value::Map(m);
+    let out = encode(&value);
+    zeroize_secret_bytes(
+        value,
+        &["pointerReadKey", "readScopeSeed", "writeScopeSeed"],
+    );
+    out
 }
 
 /// HPKE-seal a grant blob to `recipient_pub` under the grant-blob AAD for `ctx`
@@ -246,6 +266,8 @@ pub fn open_grant_blob(
     ctx: &AadContext,
     ciphertext: &[u8],
 ) -> Result<GrantBlobPayload, CodecError> {
+    // `hpke_open` returns `Zeroizing<Vec<u8>>`, so this seed-bearing plaintext is
+    // wiped on drop — no explicit zeroize needed at this terminal owner.
     let plaintext = hpke::hpke_open(
         recipient_secret,
         enc,
@@ -334,7 +356,10 @@ pub fn encode_override_seed_payload(payload: &OverrideSeedPayload) -> Vec<u8> {
         Value::Bytes(payload.override_seed.as_bytes().to_vec()),
     );
     merge_unknown(&mut m, &payload.unknown);
-    encode(&Value::Map(m))
+    let value = Value::Map(m);
+    let out = encode(&value);
+    zeroize_secret_bytes(value, &["overrideSeed"]);
+    out
 }
 
 /// HPKE-seal an owner blob to the owner's encryption subkey under the owner-blob
@@ -366,6 +391,8 @@ pub fn open_owner_blob(
     ctx: &AadContext,
     ciphertext: &[u8],
 ) -> Result<OverrideSeedPayload, CodecError> {
+    // `hpke_open` returns `Zeroizing<Vec<u8>>`, so this seed-bearing plaintext is
+    // wiped on drop — no explicit zeroize needed at this terminal owner.
     let plaintext = hpke::hpke_open(
         owner_enc_secret,
         enc,
@@ -467,6 +494,8 @@ pub fn open_ascent_link(
     if ascent_secret.public().to_bytes() != link.ascent_public {
         return Err(TrustViolation::AscentLinkMismatch.into());
     }
+    // `hpke_open` returns `Zeroizing<Vec<u8>>`, so this seed-bearing plaintext is
+    // wiped on drop — no explicit zeroize needed at this terminal owner.
     let plaintext = hpke::hpke_open(
         &ascent_secret,
         &link.enc,
@@ -557,7 +586,10 @@ pub fn encode_history_link_payload(payload: &HistoryLinkPayload) -> Vec<u8> {
         Value::Bytes(payload.prev_seed.as_bytes().to_vec()),
     );
     merge_unknown(&mut m, &payload.unknown);
-    encode(&Value::Map(m))
+    let value = Value::Map(m);
+    let out = encode(&value);
+    zeroize_secret_bytes(value, &["prevSeed"]);
+    out
 }
 
 /// Symmetrically seal a history link under the current epoch's structure `key`
