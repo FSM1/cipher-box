@@ -256,6 +256,25 @@ describe('MailboxService', () => {
     });
   });
 
+  describe('configuration', () => {
+    it('falls back to safe finite bounds when the configured limits are garbage', async () => {
+      // A misconfigured limit must fail closed to the default, never to NaN:
+      // a NaN poll limit slices to [] (and a NaN pending cap fails open, since
+      // `pending >= NaN` is always false). The fallbacks keep both finite.
+      build({ MAILBOX_PENDING_CAP: 'not-a-number', MAILBOX_POLL_LIMIT: 'nope' });
+      await users.save({ publicKey: recipient } as never);
+      for (let i = 0; i < 3; i += 1) {
+        await service.post(sender, {
+          recipientPublicKey: recipient,
+          blob: base64Blob(10),
+          idempotencyKey: `k${i}`,
+        });
+      }
+      const { messages: out } = await service.poll(recipient);
+      expect(out).toHaveLength(3);
+    });
+  });
+
   describe('ack', () => {
     it('hard-deletes the message by id for its recipient', async () => {
       const { id } = await service.post(sender, {

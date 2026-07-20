@@ -13,9 +13,19 @@ import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
  * (poll routing + the accepted exact-pubkey existence oracle needs it), but
  * the sender is NOT persisted as a separable column. Per-sender idempotency
  * rides `idempotencyScope` = sha256(`${senderPublicKey}:${idempotencyKey}`),
- * which blends the sender into a one-way digest — so there is no durable,
- * pivotable sender→recipient graph, only the transient edge the blueprint
- * accepts (Mailbox: "never a durable graph, never key material").
+ * which blends the sender into a one-way digest — so the durable,
+ * server-pivotable sender→recipient graph the blueprint forbids ("never a
+ * durable graph, never key material") does not sit in the schema.
+ *
+ * That one-wayness is contingent on a CLIENT invariant: `idempotencyKey` must
+ * be a high-entropy per-message random value. The sender set is enumerable
+ * (account pubkeys, confirmable via the existence oracle), so a low-entropy
+ * key (a counter, a deterministic derivation) would let a server-side observer
+ * brute-force `sha256(senderPk:key)` and re-attribute a row's sender. A random
+ * key makes the digest a genuine one-way commitment; a per-row salt is NOT an
+ * option because it would break the (sender,key) determinism idempotency needs.
+ * The engine's mailbox client is responsible for drawing the key from its RNG
+ * seam (blueprint/engine.md); this boundary cannot enforce it.
  */
 @Entity('mailbox_messages')
 @Index('uq_mailbox_recipient_idempotency', ['recipientPublicKey', 'idempotencyScope'], {

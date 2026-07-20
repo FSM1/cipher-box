@@ -19,6 +19,17 @@ const MAX_BLOB_BYTES = 8192;
 /** 90-day unacked TTL, aligned with record EOLs (blueprint/api.md, Mailbox). */
 const TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
+/**
+ * Read a positive-integer bound from config, falling back to the default for
+ * an unset OR garbage value. Both bounds are DoS controls (the pending cap and
+ * the poll batch size), so a misconfigured env var must fail closed to the
+ * safe default, never silently to NaN (which would disable the cap entirely).
+ */
+function positiveIntConfig(raw: unknown, fallback: number): number {
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
 export interface PostMessageInput {
   recipientPublicKey: string;
   blob: string;
@@ -58,8 +69,8 @@ export class MailboxService {
     private readonly clock: Clock,
     configService: ConfigService
   ) {
-    this.pendingCap = Number(configService.get('MAILBOX_PENDING_CAP') ?? 1000);
-    this.pollLimit = Number(configService.get('MAILBOX_POLL_LIMIT') ?? 100);
+    this.pendingCap = positiveIntConfig(configService.get('MAILBOX_PENDING_CAP'), 1000);
+    this.pollLimit = positiveIntConfig(configService.get('MAILBOX_POLL_LIMIT'), 100);
   }
 
   /**

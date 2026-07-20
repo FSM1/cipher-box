@@ -32,8 +32,14 @@ describe('mailbox HTTP surface', () => {
   let userRepo: FakeRepository<User>;
   let messageRepo: FakeRepository<MailboxMessage>;
   let jwt: JwtService;
+  let priorJwtSecret: string | undefined;
 
   beforeAll(async () => {
+    // The account-keyed throttler only trusts a `sub` from a token it can
+    // verify; align its HS256 secret with the one these tokens are signed with.
+    priorJwtSecret = process.env.JWT_SECRET;
+    process.env.JWT_SECRET = SECRET;
+
     userRepo = new FakeRepository<User>();
     messageRepo = new FakeRepository<MailboxMessage>();
     jwt = new JwtService();
@@ -66,6 +72,11 @@ describe('mailbox HTTP surface', () => {
 
   afterAll(async () => {
     await app.close();
+    if (priorJwtSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = priorJwtSecret;
+    }
   });
 
   /** Seed a user account and mint a valid access token for it. */

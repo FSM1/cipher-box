@@ -30,7 +30,10 @@ export class PostMessageDto {
   blob!: string;
 
   @ApiProperty({
-    description: 'Sender-supplied idempotency key; a replay returns the original message id',
+    description:
+      'Sender-supplied idempotency key; a replay returns the original message id. MUST be a ' +
+      'high-entropy per-message random value: it is blended into a one-way sender digest, and a ' +
+      'low-entropy key would let a server-side observer brute-force the sender→recipient edge.',
   })
   @IsString()
   @Matches(IDEMPOTENCY_KEY, {
