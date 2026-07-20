@@ -113,6 +113,7 @@ describe('RegistryService', () => {
       pins as never,
       users as never,
       fakeDataSource([
+        [User, users],
         [NameInventory, names],
         [PinnedCid, pins],
       ]),

@@ -140,6 +140,7 @@ describe('registry HTTP surface', () => {
         {
           provide: DataSource,
           useValue: fakeDataSource([
+            [User, userRepo],
             [NameInventory, nameRepo],
             [PinnedCid, pinRepo],
           ]),

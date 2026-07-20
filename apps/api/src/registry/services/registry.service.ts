@@ -100,8 +100,6 @@ export class RegistryService {
    * waves re-reference the same CIDs) changes nothing.
    */
   async register(accountId: string, entries: RegisterEntry[]): Promise<RegisterResult> {
-    const advisory = await this.isByo(accountId);
-
     // Collapse the batch to its distinct writes; the last-provided head wins
     // per name, matching the sequential upsert semantics.
     const heads = new Map<string, string | undefined>();
@@ -132,6 +130,18 @@ export class RegistryService {
         // contend on the same keys, closing the phantom-INSERT race and
         // concurrent-duplicate inserts.
         await lockTokens(manager, [...nameOrder, ...cidOrder]);
+
+        // Read BYO under a users-row lock: register and setByo contend on the
+        // same existing row, so a row lock (not the token advisory lock) keeps
+        // a concurrent toggle from stamping new pins with a stale advisory flag.
+        const user = await manager.getRepository(User).findOne({
+          where: { id: accountId },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!user) {
+          throw new UnauthorizedException('Unknown account');
+        }
+        const advisory = user.byo;
 
         const nameRepo = manager.getRepository(NameInventory);
         const pinRepo = manager.getRepository(PinnedCid);
@@ -263,13 +273,5 @@ export class RegistryService {
       throw new UnauthorizedException('Unknown account');
     }
     return { byo };
-  }
-
-  private async isByo(accountId: string): Promise<boolean> {
-    const user = await this.userRepository.findOne({ where: { id: accountId } });
-    if (!user) {
-      throw new UnauthorizedException('Unknown account');
-    }
-    return user.byo;
   }
 }
