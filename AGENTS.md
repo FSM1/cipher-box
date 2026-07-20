@@ -47,6 +47,12 @@ There are **no generated API clients** and no codegen loop. The engine contains 
 4. Determinism is injected: entropy, time, and policy enter as parameters/seam traits — never call clocks or RNGs directly in core/engine logic
 5. Every suite must block a merge in a named CI gate the day it lands (`blueprint/testing.md` law 1); assert behavior, never source text
 
+## Code Style
+
+### Comments
+
+Comments explain *why*, not *what*, and stay short. **If you need a paragraph-long comment to justify why a workaround is OK, the code is wrong — fix the code.** A long apologia for a hack is a smell: rework the code so it no longer needs defending, rather than documenting the shortcut. Reserve multi-line comments for genuinely non-obvious domain rationale — a spec citation, a cryptographic invariant, a wire-format or fail-closed constraint — not for excusing a shortcut.
+
 ## Architecture Pillars
 
 - **Auth:** Web3Auth key derivation; challenge-signature login; short-lived JWT + rotating refresh
