@@ -1,32 +1,17 @@
-//! CipherBox domain types, metadata schemas, IPNS records, and vault blob.
+//! CipherBox core: wire formats, crypto primitives, and the frozen KDF edge
+//! catalog. Pure, deterministic, no I/O — entropy and time are injected.
 //!
-//! Contains everything that "knows about CipherBox's data model."
-//! Depends on cipherbox-crypto for cryptographic primitives.
-//! Mirrors @cipherbox/core TypeScript package.
+//! Normative design: blueprint/core.md
 
-pub mod bin;
-pub mod error;
-pub mod file;
-pub mod folder;
-pub mod ipns;
-pub mod node;
-pub mod registry;
-pub mod vault_blob;
-pub mod vault_settings;
+#![forbid(unsafe_code)]
 
-// Re-export primary types and functions
-pub use bin::{
-    decrypt_bin_metadata, empty_bin_metadata, encrypt_bin_metadata, BinEntry, BinItemType,
-    RecycleBinMetadata,
-};
-pub use error::CoreError;
-pub use folder::VersionEntry;
-pub use ipns::{create_ipns_record, marshal_ipns_record, IpnsRecord};
-pub use registry::{DeviceAuthStatus, DeviceEntry, DevicePlatform, DeviceRegistry};
-pub use vault_blob::{
-    deserialize_vault_blob_v2, deserialize_vault_blob_v3, detect_blob_version,
-    serialize_vault_blob_v2, serialize_vault_blob_v3, BLOB_V3_VERSION,
-};
-pub use vault_settings::{
-    default_vault_settings, validate_vault_settings, DeleteBehavior, VaultSettings,
-};
+/// Placeholder identity item; real wire formats and crypto land in later PRs.
+pub const CRATE: &str = "cipherbox-core";
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn crate_name() {
+        assert_eq!(super::CRATE, "cipherbox-core");
+    }
+}

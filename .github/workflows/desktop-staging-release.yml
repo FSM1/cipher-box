@@ -1,3 +1,7 @@
+# DORMANT: v1 mints no further releases, so the cipherbox-desktop-v* tag
+# trigger can never fire again. Per blueprint/deploy.md this becomes
+# desktop-release.yml (trigger v*, mark-latest deleted) when the v2 desktop
+# shell lands.
 name: Desktop Staging Release
 
 on:

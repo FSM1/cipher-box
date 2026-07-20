@@ -57,20 +57,6 @@ services:
           memory: 3G
           cpus: '1.5'
 
-  redis:
-    image: redis:7-alpine
-    container_name: cipherbox-redis
-    restart: unless-stopped
-    ports:
-      - '${REDIS_PORT:-6380}:6379'
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ['CMD', 'redis-cli', 'ping']
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   someguy:
     image: ghcr.io/ipfs/someguy:v0.11.1
     container_name: cipherbox-someguy
@@ -119,34 +105,6 @@ services:
       timeout: 5s
       retries: 5
 
-  tee-worker:
-    build:
-      # Dockerfile COPYs from monorepo root (pnpm-lock.yaml, packages/*) — context must be repo root
-      context: ..
-      dockerfile: apps/tee-worker/Dockerfile
-    container_name: cipherbox-tee-worker
-    restart: unless-stopped
-    environment:
-      PORT: 3001
-      TEE_MODE: simulator
-      CIPHERBOX_ENVIRONMENT: development
-      TEE_WORKER_SECRET: ${TEE_WORKER_SECRET:-dev-secret}
-    ports:
-      # Host 3001 is taken by mock-ipns-routing; tee-worker binds on host 3002
-      - '127.0.0.1:3002:3001'
-    healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://localhost:3001/health || exit 1']
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    deploy:
-      resources:
-        limits:
-          memory: 256M
-          cpus: '0.5'
-
 volumes:
   postgres_data:
   ipfs_data:
-  redis_data:

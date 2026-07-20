@@ -1,20 +1,8 @@
 [package]
 name = "cipherbox-core"
-version = "0.7.0"
-edition = "2021"
-description = "CipherBox domain types, metadata schemas, IPNS records, and vault blob"
-
-[dependencies]
-cipherbox-crypto = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-hex = { workspace = true }
-base64 = { workspace = true }
-prost = { workspace = true }
-ciborium = { workspace = true }
-zeroize = { workspace = true }
-thiserror = { workspace = true }
-log = { workspace = true }
-
-[dev-dependencies]
-ecies = { workspace = true }
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true

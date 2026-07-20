@@ -1,14 +1,8 @@
-import { FaroErrorBoundary } from '@grafana/faro-react';
-import { AppRoutes } from './routes';
-import { ErrorFallback } from './components/ErrorFallback';
-import './App.css';
-
-function App() {
+export function App() {
   return (
-    <FaroErrorBoundary fallback={<ErrorFallback />}>
-      <AppRoutes />
-    </FaroErrorBoundary>
+    <main>
+      <h1>CipherBox</h1>
+      <p>v2 build in progress</p>
+    </main>
   );
 }
-
-export default App;

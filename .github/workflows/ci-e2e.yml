@@ -1,8 +1,10 @@
+# DORMANT during the v2 build: the v1 e2e suites were demolished with the
+# v1 layout, and the v2 main-gate suites (full web-e2e, desktop mounted
+# matrix, cross-client matrix) land per blueprint/testing.md. Re-engage by
+# restoring the push->main trigger when those suites exist.
 name: CI E2E Tests
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions: {}

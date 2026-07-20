@@ -1,3 +1,8 @@
+# v2 PR gate (blueprint/testing.md). Day-one jobs cover what exists: the
+# stub cargo workspace and the TS workspace stubs. The remaining PR-gate
+# suites (WASM KAT run, packages/client browser suite, contract suite,
+# Windows adapter tests, migration drift, e2e smoke slice) land with their
+# code and must block merges in a named job the day they land (law 1).
 name: CI
 
 on:
@@ -14,33 +19,27 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      src: ${{ steps.filter.outputs.src }}
-      desktop: ${{ steps.filter.outputs.desktop }}
+      ts: ${{ steps.filter.outputs.ts }}
+      rust: ${{ steps.filter.outputs.rust }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
         id: filter
         with:
           filters: |
-            src:
+            ts:
               - 'apps/**'
               - 'packages/**'
-              - 'tests/**'
-              - '.github/**'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
+              - 'package.json'
               - 'tsconfig*.json'
-              - 'biome.json'
-            desktop:
-              - 'apps/desktop/src-tauri/src/**'
-              - 'apps/desktop/src-tauri/vendor/**'
-              - 'apps/desktop/src-tauri/Cargo.toml'
-              - 'apps/desktop/src-tauri/build.rs'
-              - 'apps/desktop/src-tauri/rust-toolchain.toml'
+              - '.github/workflows/ci.yml'
+            rust:
               - 'crates/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
-              - 'tests/vectors/**'
+              - 'rust-toolchain.toml'
               - '.github/workflows/ci.yml'
 
   lint:
@@ -67,7 +66,7 @@ jobs:
   typecheck:
     name: Typecheck
     needs: [changes, lint]
-    if: needs.changes.outputs.src == 'true'
+    if: needs.changes.outputs.ts == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -87,214 +86,13 @@ jobs:
       - name: Run type checker
         run: pnpm typecheck
 
-  api-spec:
-    name: Verify API Spec & Client
-    needs: [changes, lint]
-    if: needs.changes.outputs.src == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: cipherbox_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      ipfs:
-        image: ipfs/kubo:v0.42.0
-        ports:
-          - 5001:5001
-          - 8080:8080
-        options: >-
-          --health-cmd "ipfs id"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-          --health-start-period 30s
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version-file: 'package.json'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build packages (needed for API dependency on @cipherbox/crypto)
-        run: pnpm --filter @cipherbox/crypto build
-
-      - name: Generate OpenAPI spec and API client
-        run: pnpm api:generate
-        env:
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_USERNAME: postgres
-          DB_PASSWORD: postgres
-          DB_DATABASE: cipherbox_test
-          NODE_ENV: test
-          IPFS_PROVIDER: local
-          IPFS_LOCAL_API_URL: http://localhost:5001
-          IPFS_LOCAL_GATEWAY_URL: http://localhost:8080
-
-      - name: Format generated files
-        run: pnpm prettier --write packages/api-client/openapi.json
-
-      - name: Verify no uncommitted changes to generated files
-        run: |
-          # Compare openapi.json semantically (ignore formatting differences from prettier versions)
-          if ! node -e "
-            const fs = require('fs');
-            const {execSync} = require('child_process');
-            const committed = JSON.parse(execSync('git show HEAD:packages/api-client/openapi.json', {encoding:'utf8'}));
-            const generated = JSON.parse(fs.readFileSync('packages/api-client/openapi.json', 'utf8'));
-            // Exclude info.version — it's dynamic from package.json and differs on release PRs
-            if (committed.info) delete committed.info.version;
-            if (generated.info) delete generated.info.version;
-            if (JSON.stringify(committed) !== JSON.stringify(generated)) {
-              console.error('openapi.json schema has changed');
-              process.exit(1);
-            }
-          "; then
-            echo "Generated API client is out of date. Run 'pnpm api:generate' and commit changes."
-            exit 1
-          fi
-          # Compare generated TS files (ignore version comment — differs on release PRs)
-          git diff --exit-code -I '^ \* OpenAPI spec version: [0-9]' packages/api-client/src/generated/ packages/api-client/src/models/ \
-            || (echo "Generated API client is out of date. Run 'pnpm api:generate' and commit changes." && exit 1)
-
-  migration-check:
-    name: Migration Drift Check
-    needs: [changes, lint]
-    if: needs.changes.outputs.src == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: cipherbox_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version-file: 'package.json'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run existing migrations
-        run: pnpm --filter @cipherbox/api migration:run
-        env:
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_USERNAME: postgres
-          DB_PASSWORD: postgres
-          DB_DATABASE: cipherbox_test
-          NODE_ENV: test
-
-      - name: Check for entity/migration drift
-        working-directory: apps/api
-        run: |
-          set +e
-          OUTPUT="$(pnpm typeorm migration:generate src/migrations/DriftCheck -d src/data-source.ts 2>&1)"
-          STATUS=$?
-          set -e
-
-          # Check if migration:generate failed before inspecting output files
-          if [ "$STATUS" -ne 0 ]; then
-            if echo "$OUTPUT" | grep -q "No changes in database schema were found"; then
-              echo "No entity/migration drift detected."
-              exit 0
-            fi
-            echo "::error::migration:generate failed unexpectedly."
-            echo "$OUTPUT"
-            exit 1
-          fi
-
-          if ls src/migrations/*DriftCheck*.ts 1>/dev/null 2>&1; then
-            # Our hand-written migrations use explicit constraint/index names, but TypeORM
-            # expects auto-generated hash-based names. Filter out cosmetic renames and only
-            # fail on real structural drift (new/dropped tables, added/removed columns, type changes).
-            if grep -qE 'CREATE TABLE|DROP TABLE|ADD COLUMN|DROP COLUMN|ALTER.*TYPE|RENAME COLUMN' src/migrations/*DriftCheck*.ts; then
-              echo "::error::Entity/migration drift detected! Entities define schema changes not covered by migrations."
-              echo ""
-              echo "Generated migration contents:"
-              cat src/migrations/*DriftCheck*.ts
-              echo ""
-              echo "Fix: Run 'pnpm --filter @cipherbox/api typeorm migration:generate src/migrations/<Name> -d src/data-source.ts' and commit the result."
-              exit 1
-            else
-              echo "Only cosmetic constraint/index naming differences detected (not structural drift). OK."
-            fi
-          else
-            echo "No entity/migration drift detected."
-          fi
-        env:
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_USERNAME: postgres
-          DB_PASSWORD: postgres
-          DB_DATABASE: cipherbox_test
-          NODE_ENV: test
-
   test:
     name: Test
     needs: [changes, lint]
-    if: needs.changes.outputs.src == 'true'
+    if: needs.changes.outputs.ts == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: cipherbox_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-      ipfs:
-        image: ipfs/kubo:v0.42.0
-        ports:
-          - 5001:5001
-          - 8080:8080
-        options: >-
-          --health-cmd "ipfs id"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-          --health-start-period 30s
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -308,262 +106,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build packages (needed for cross-package imports in tests)
-        run: |
-          pnpm --filter @cipherbox/crypto build
-          pnpm --filter @cipherbox/core build
-          pnpm --filter @cipherbox/api-client build
-          pnpm --filter @cipherbox/sdk-core build
-          pnpm --filter @cipherbox/sdk build
-
-      - name: Run API tests with coverage
-        run: pnpm --filter @cipherbox/api test:cov
-        env:
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_USERNAME: postgres
-          DB_PASSWORD: postgres
-          DB_DATABASE: cipherbox_test
-          NODE_ENV: test
-          IPFS_PROVIDER: local
-          IPFS_LOCAL_API_URL: http://localhost:5001
-          IPFS_LOCAL_GATEWAY_URL: http://localhost:8080
-
-      - name: Run Crypto tests with coverage
-        run: pnpm --filter @cipherbox/crypto test:coverage
-
-      - name: Run Core tests with coverage
-        run: pnpm --filter @cipherbox/core test:coverage
-
-      - name: Run SDK-Core tests with coverage
-        run: pnpm --filter @cipherbox/sdk-core test:coverage
-
-      - name: Run SDK tests with coverage
-        run: pnpm --filter @cipherbox/sdk test:coverage
-
-      - name: Run API Client tests with coverage
-        run: pnpm --filter @cipherbox/api-client test:coverage
-
-      - name: Run TEE Worker tests
-        run: pnpm --filter cipherbox-tee-worker test
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./apps/api/coverage/lcov.info,./packages/crypto/coverage/lcov.info,./packages/core/coverage/lcov.info,./packages/sdk-core/coverage/lcov.info,./packages/sdk/coverage/lcov.info,./packages/api-client/coverage/lcov.info
-          flags: api,crypto,core,sdk-core,sdk,api-client
-          fail_ci_if_error: false
-
-      - name: Cache coverage for base branch upload
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-lcov
-          path: |
-            apps/api/coverage/lcov.info
-            packages/crypto/coverage/lcov.info
-            packages/core/coverage/lcov.info
-            packages/sdk-core/coverage/lcov.info
-            packages/sdk/coverage/lcov.info
-            packages/api-client/coverage/lcov.info
-          retention-days: 7
-
-  sdk-e2e:
-    name: SDK E2E Tests
-    needs: [changes, lint]
-    if: needs.changes.outputs.src == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: cipherbox_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-      ipfs:
-        image: ipfs/kubo:v0.42.0
-        ports:
-          - 5001:5001
-          - 8080:8080
-        options: >-
-          --health-cmd "ipfs id"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-          --health-start-period 30s
-
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-
-      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version-file: 'package.json'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Install mock-ipns-routing
-        run: |
-          cd tools/mock-ipns-routing
-          npm install
-          npm run build
-
-      - name: Build packages
-        run: |
-          pnpm --filter @cipherbox/crypto build
-          pnpm --filter @cipherbox/core build
-          pnpm --filter @cipherbox/api-client build
-          pnpm --filter @cipherbox/sdk-core build
-          pnpm --filter @cipherbox/sdk build
-          pnpm --filter @cipherbox/api build
-          # tee-worker powers the tee-republish suite's relay->TEE->DB round-trip
-          pnpm --filter cipherbox-tee-worker build
-
-      - name: Create API .env
-        run: |
-          echo "NODE_ENV=test" > apps/api/.env
-          echo "DB_HOST=localhost" >> apps/api/.env
-          echo "DB_PORT=5432" >> apps/api/.env
-          echo "DB_USERNAME=postgres" >> apps/api/.env
-          echo "DB_PASSWORD=postgres" >> apps/api/.env
-          echo "DB_DATABASE=cipherbox_test" >> apps/api/.env
-          echo "JWT_SECRET=e2e-test-jwt-secret-key-for-ci" >> apps/api/.env
-          echo "CORS_ALLOWED_ORIGINS=http://localhost:5173" >> apps/api/.env
-          echo "IPFS_PROVIDER=local" >> apps/api/.env
-          echo "IPFS_LOCAL_API_URL=http://localhost:5001" >> apps/api/.env
-          echo "IPFS_LOCAL_GATEWAY_URL=http://localhost:8080" >> apps/api/.env
-          echo "DELEGATED_ROUTING_URL=http://localhost:3001" >> apps/api/.env
-          echo "REDIS_HOST=localhost" >> apps/api/.env
-          echo "REDIS_PORT=6379" >> apps/api/.env
-          echo "TEST_LOGIN_SECRET=e2e-test-secret-ci-only" >> apps/api/.env
-          echo "IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}" >> apps/api/.env
-          echo "THROTTLE_BYPASS_SECRET=ci-throttle-bypass-secret" >> apps/api/.env
-          # TEE worker (simulator) — must match the tee-worker step's secret so the
-          # onModuleInit bootstrap can fetch the public key and populate tee_key_state.
-          echo "TEE_WORKER_URL=http://localhost:3002" >> apps/api/.env
-          echo "TEE_WORKER_SECRET=ci-tee-worker-secret" >> apps/api/.env
-
-      - name: Start mock IPNS routing
-        run: |
-          cd tools/mock-ipns-routing
-          node dist/index.js &
-          for i in $(seq 1 15); do
-            if curl -fsS http://localhost:3001/health > /dev/null 2>&1; then
-              echo "Mock IPNS routing is ready"
-              break
-            fi
-            sleep 1
-          done
-          if ! curl -fsS http://localhost:3001/health > /dev/null 2>&1; then
-            echo "Mock IPNS routing failed to start within 15s"
-            exit 1
-          fi
-
-      # Start the TEE worker (simulator mode) BEFORE the API. The API's TeeModule
-      # onModuleInit runs exactly once at boot and only populates tee_key_state if the
-      # worker is reachable AND the Bearer secret matches — so the worker must be up
-      # first, or current_public_key stays empty and the tee-republish suite fails.
-      # Simulator mode derives keys via HKDF (no dstack socket / CVM hardware needed).
-      - name: Start TEE worker (simulator)
-        run: |
-          pnpm --filter cipherbox-tee-worker start &
-          for i in $(seq 1 20); do
-            if curl -fsS http://localhost:3002/health > /dev/null 2>&1; then
-              echo "TEE worker is ready"
-              break
-            fi
-            sleep 1
-          done
-          if ! curl -fsS http://localhost:3002/health > /dev/null 2>&1; then
-            echo "TEE worker failed to start within 20s"
-            exit 1
-          fi
-        env:
-          PORT: 3002
-          TEE_MODE: simulator
-          CIPHERBOX_ENVIRONMENT: development
-          TEE_WORKER_SECRET: ci-tee-worker-secret
-
-      - name: Start API server
-        run: |
-          pnpm --filter @cipherbox/api start:prod &
-          for i in $(seq 1 30); do
-            if curl -fsS http://localhost:3000/health > /dev/null 2>&1; then
-              echo "API is ready"
-              break
-            fi
-            sleep 1
-          done
-          if ! curl -fsS http://localhost:3000/health > /dev/null 2>&1; then
-            echo "API failed to start within 30s"
-            exit 1
-          fi
-        env:
-          NODE_ENV: test
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_USERNAME: postgres
-          DB_PASSWORD: postgres
-          DB_DATABASE: cipherbox_test
-          JWT_SECRET: e2e-test-jwt-secret-key-for-ci
-          CORS_ALLOWED_ORIGINS: http://localhost:5173
-          IPFS_PROVIDER: local
-          IPFS_LOCAL_API_URL: http://localhost:5001
-          IPFS_LOCAL_GATEWAY_URL: http://localhost:8080
-          DELEGATED_ROUTING_URL: http://localhost:3001
-          REDIS_HOST: localhost
-          REDIS_PORT: 6379
-          TEST_LOGIN_SECRET: e2e-test-secret-ci-only
-          TEE_WORKER_URL: http://localhost:3002
-          TEE_WORKER_SECRET: ci-tee-worker-secret
-
-      - name: Run SDK E2E tests
-        run: pnpm --filter @cipherbox/sdk-e2e test
-        env:
-          SDK_E2E_API_URL: http://localhost:3000
-          SDK_E2E_SECRET: e2e-test-secret-ci-only
-          THROTTLE_BYPASS_SECRET: ci-throttle-bypass-secret
-          # tee-republish.test.ts talks to postgres + redis directly. Point its
-          # DB_CONFIG at the CI database (cipherbox_test) and its BullMQ connection at
-          # the CI redis (6379) so the enqueue lands on the same instance the in-process
-          # API worker consumes (its own default is 6380 for the local docker stack).
-          DB_HOST: localhost
-          DB_PORT: 5432
-          DB_USERNAME: postgres
-          DB_PASSWORD: postgres
-          DB_DATABASE: cipherbox_test
-          REDIS_HOST: localhost
-          REDIS_PORT: 6379
+      - name: Run unit tests
+        run: pnpm test
 
   build:
     name: Build
     needs: [changes, lint]
-    if: needs.changes.outputs.src == 'true'
+    if: needs.changes.outputs.ts == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -580,42 +129,20 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build packages (excluding desktop)
-        run: |
-          pnpm --filter @cipherbox/crypto build
-          pnpm --filter @cipherbox/core build
-          pnpm --filter @cipherbox/api-client build
-          pnpm --filter @cipherbox/sdk-core build
-          pnpm --filter @cipherbox/sdk build
-          pnpm --filter @cipherbox/api build
-          pnpm --filter @cipherbox/web build
+      - name: Build packages
+        run: pnpm build
 
-  cargo-windows:
-    name: Cargo Check & Test (Windows)
+  cargo-linux:
+    name: Cargo Check & Test (Linux)
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
-      needs.changes.outputs.desktop == 'true'
-    runs-on: windows-latest
+      needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Install WinFsp
-        shell: powershell
-        run: |
-          $url = "https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi"
-          $out = "winfsp.msi"
-          $expectedHash = "073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A"
-          Invoke-WebRequest -Uri $url -OutFile $out
-          $actualHash = (Get-FileHash $out -Algorithm SHA256).Hash
-          if ($actualHash -ne $expectedHash) { throw "WinFsp MSI hash mismatch: expected $expectedHash, got $actualHash" }
-          Start-Process msiexec.exe -ArgumentList "/i","$out","/qn","INSTALLLEVEL=1000" -Wait -NoNewWindow
-
-      - name: Create WinFsp MSI placeholder for resource glob
-        shell: powershell
-        run: New-Item -ItemType File -Force -Path "apps/desktop/src-tauri/resources/winfsp-placeholder.msi"
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -623,41 +150,29 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: windows-cargo-
+          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: linux-cargo-
 
-      - name: Cargo check (workspace)
-        run: cargo check --workspace --no-default-features --features winfsp
+      - name: Cargo fmt
+        run: cargo fmt --all --check
+
+      - name: Cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace --no-default-features --features winfsp
+        run: cargo test --workspace
 
   cargo-macos:
     name: Cargo Check & Test (macOS)
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
-      needs.changes.outputs.desktop == 'true'
+      needs.changes.outputs.rust == 'true'
     runs-on: macos-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Install FUSE-T
-        run: |
-          brew install --cask fuse-t
-          sudo mkdir -p /usr/local/lib/pkgconfig
-          FUSE_T_PC="/Library/Application Support/fuse-t/pkgconfig/fuse-t.pc"
-          if [ ! -f "$FUSE_T_PC" ]; then
-            FUSE_T_PC=$(find /Library /usr/local /opt/homebrew -name "fuse-t.pc" 2>/dev/null | head -1)
-          fi
-          if [ -z "$FUSE_T_PC" ] || [ ! -f "$FUSE_T_PC" ]; then
-            echo "::error::fuse-t.pc not found after FUSE-T installation"
-            exit 1
-          fi
-          sudo cp "$FUSE_T_PC" /usr/local/lib/pkgconfig/fuse.pc
-          sudo sed -i '' 's/^Version:.*/Version: 2.9.9/' /usr/local/lib/pkgconfig/fuse.pc
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -669,39 +184,22 @@ jobs:
           restore-keys: macos-cargo-
 
       - name: Cargo check (workspace)
-        run: cargo check --workspace --no-default-features --features fuse
-        env:
-          PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
+        run: cargo check --workspace --all-targets
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace --no-default-features --features fuse
-        env:
-          PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
+        run: cargo test --workspace
 
-  cargo-linux:
-    name: Cargo Check, Test & Coverage (Linux)
+  cargo-windows:
+    name: Cargo Check & Test (Windows)
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
-      needs.changes.outputs.desktop == 'true'
-    runs-on: ubuntu-22.04
+      needs.changes.outputs.rust == 'true'
+    runs-on: windows-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev \
-            librsvg2-dev \
-            libssl-dev \
-            libxdo-dev \
-            libfuse3-dev \
-            pkg-config \
-            build-essential
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -709,129 +207,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: linux-cargo-
-
-      # SC#6 single-gated-read discipline (69-09). Every node/v3 metadata/content
-      # read in crates/fuse/src MUST route through the sanctioned gated entrypoints
-      # (list_folder / list_shared_folder / list_folder_owned / fetch_node_gated),
-      # which enforce the anti-rollback high-water gate before returning. A raw
-      # `resolve_ipns_verified` / `resolve_published_node` CALL bypasses that gate,
-      # so any such call must carry an inline `// sc6-allow:` marker documenting its
-      # non-read-path role. Two sites are sanctioned today: the replay sequence
-      # resolve (resolve_ipns_for_replay in publish.rs) and the legacy recycle-bin
-      # publish (spawn_bin_entry_publish in metadata.rs). The 69-13 file-meta
-      # reencrypt path was deleted (SC#2), removing its former sc6-allow site.
-      - name: SC#6 single-gated-read grep gate (crates/fuse/src)
-        run: |
-          # A raw resolve is sanctioned when a `// sc6-allow:` marker sits within one
-          # line of the call (same line, or the standalone comment rustfmt lands
-          # directly above/below it). Anything else is a bypass of the anti-rollback gate.
-          fail=0
-          while IFS=: read -r file lineno _; do
-            win=$(sed -n "$(( lineno > 1 ? lineno - 1 : 1 )),$(( lineno + 1 ))p" "$file")
-            if ! printf '%s\n' "$win" | grep -q 'sc6-allow'; then
-              echo "::error file=$file,line=$lineno::SC#6 violation — unsanctioned raw IPNS resolve. Route reads through list_folder_owned/fetch_node_gated, or add a '// sc6-allow: <reason>' marker for a non-read-path site."
-              echo "  $file:$lineno"
-              fail=1
-            fi
-          done < <(grep -rnE 'resolve_ipns_verified\(|resolve_published_node\(' crates/fuse/src)
-          if [ "$fail" -ne 0 ]; then
-            exit 1
-          fi
-          echo "SC#6 gate: OK — all crates/fuse/src reads route through the gated entrypoints (list_folder / list_shared_folder / list_folder_owned / fetch_node_gated)"
-
-      # SC#2 re-encrypt-on-move deletion (69-13/69-14, whole tree). Each node/v3
-      # node self-seals under its OWN readKey, so a cross-folder move is a pure
-      # SealedChildRef relink — the legacy re-encrypt-on-move helper is dead by
-      # construction. 69-13 deleted the non-Windows caller; 69-14 deleted the
-      # lone remaining Windows caller (platform/windows/write_ops.rs handle_rename)
-      # and promoted this gate to the WHOLE tree (no `platform/windows` carve-out).
-      - name: SC#2 re-encrypt-on-move deletion grep gate (crates/fuse/src, whole tree)
-        run: |
-          # Filter out any line whose CONTENT (after the `file:lineno:` prefix)
-          # is a Rust comment, so a doc/comment mention can never re-trip the gate.
-          hits=$(grep -rn 'spawn_file_meta_reencrypt' crates/fuse/src \
-            | grep -vE ':[0-9]+:[[:space:]]*//' || true)
-          if [ -n "$hits" ]; then
-            echo "::error::SC#2 violation — re-encrypt-on-move symbol still present:"
-            echo "$hits"
-            exit 1
-          fi
-          echo "SC#2 gate: OK — re-encrypt-on-move is gone from the whole crates/fuse/src tree"
+          key: windows-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: windows-cargo-
 
       - name: Cargo check (workspace)
-        run: cargo check --workspace --no-default-features --features fuse
+        run: cargo check --workspace --all-targets
 
-      - name: Install cargo-llvm-cov
-        run: |
-          rustup component add llvm-tools-preview
-          cargo install cargo-llvm-cov --locked
-
-      - name: Cargo test with coverage
-        run: >-
-          cargo llvm-cov
-          --workspace
-          --no-default-features --features fuse
-          --lcov --output-path desktop-lcov.info
-
-      - name: Upload desktop coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: desktop-lcov.info
-          flags: desktop
-          fail_ci_if_error: false
-
-      # Same workspace lcov, re-uploaded under the `rust` flag so codecov surfaces
-      # crates/** coverage (the durable journal/replay logic + its unit tests). The
-      # `desktop` flag's path filter discards crate lines; this flag keeps them.
-      - name: Upload Rust crate coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: desktop-lcov.info
-          flags: rust
-          fail_ci_if_error: false
-
-  vector-parity:
-    name: Cross-Language Vector Parity
-    needs: [changes, cargo-linux, test]
-    if: |
-      !failure() && !cancelled() &&
-      (needs.changes.outputs.desktop == 'true' || needs.changes.outputs.src == 'true')
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libfuse3-dev pkg-config build-essential \
-            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
-            libssl-dev libxdo-dev
-
-      - name: Install Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version-file: 'package.json'
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-
-      - name: Install Node dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build TypeScript packages
-        run: pnpm --filter @cipherbox/crypto build && pnpm --filter @cipherbox/core build
-
-      - name: Run Rust vector tests
-        run: cargo test -p cipherbox-crypto --test cross_language --no-default-features
-
-      - name: Run TypeScript vector tests
-        run: pnpm --filter @cipherbox/crypto test -- --reporter=verbose
-
-      - name: Check vector parity
-        run: bash scripts/check-vector-parity.sh
+      - name: Cargo test (workspace)
+        run: cargo test --workspace

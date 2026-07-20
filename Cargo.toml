@@ -1,66 +1,19 @@
+# CipherBox v2 Rust workspace.
+# All crates are unpublished implementation detail, version-frozen at 0.0.0
+# per blueprint/deploy.md — releases never touch Cargo.toml/Cargo.lock.
+
 [workspace]
-resolver = "2"
-members = [
-    "crates/crypto",
-    "crates/core",
-    "crates/api-client",
-    "crates/fuse",
-    "crates/sdk",
-    "apps/desktop/src-tauri",
-]
+resolver = "3"
+members = ["crates/core", "crates/engine", "crates/wasm", "crates/fuse"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/FSM1/cipher-box"
+rust-version = "1.88"
+publish = false
 
 [workspace.dependencies]
-# Crypto
-aes-gcm = "0.10"
-aes = "0.8"
-ctr = "0.9"
-ecies = { version = "0.2", default-features = false, features = ["pure"] }
-ed25519-dalek = { version = "2", features = ["rand_core", "zeroize"] }
-hkdf = "0.12"
-sha2 = "0.10"
-rand = "0.8"
-zeroize = { version = "1", features = ["derive"] }
-
-# UUID parsing
-uuid = { version = "1", features = ["std"] }
-
-# Encoding
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-hex = "0.4"
-base64 = "0.22"
-prost = "0.13"
-ciborium = "0.2"
-
-# Critical section (std impl for ecies pure mode)
-critical-section = { version = "1", features = ["std"] }
-
-# Error handling
-thiserror = "2"
-log = "0.4"
-
-# Async / HTTP
-tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "multipart"] }
-
-# URL encoding
-urlencoding = "2"
-
-# Internal crates
-cipherbox-crypto = { path = "crates/crypto" }
 cipherbox-core = { path = "crates/core" }
-cipherbox-api-client = { path = "crates/api-client" }
-cipherbox-fuse = { path = "crates/fuse", default-features = false }
-cipherbox-sdk = { path = "crates/sdk" }
-
-# Shared dependencies
-unicode-normalization = "0.1.25"
-dirs = "5"
-
-[patch.crates-io]
-# Patched fuser with loop-read for FUSE-T socket compatibility.
-# FUSE-T communicates via Unix domain socket (not /dev/fuse), so large
-# FUSE messages can arrive in fragments. Stock fuser does a single read()
-# and fails with "Short read of FUSE request". This patch loop-reads
-# until the full message is received.
-fuser = { path = "apps/desktop/src-tauri/vendor/fuser" }
+cipherbox-engine = { path = "crates/engine" }

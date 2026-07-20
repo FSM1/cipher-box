@@ -1,9 +1,0 @@
-[
-  {
-    "description": "Ed25519 sign/verify with RFC 8032 test key and 'Hello, CipherBox!' message",
-    "private_key": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
-    "public_key": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
-    "message": "48656c6c6f2c20436970686572426f7821",
-    "signature": "a4cc4f358e30c8630839e457bf9a27da2062b3c6ca588b3947a9085d909d807c9be05a6a0b69e9fdc5e5b6503e79c04b1bdd92921350559e35376b78f9ca5601"
-  }
-]
