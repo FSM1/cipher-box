@@ -5,6 +5,7 @@ import { AuthModule } from './auth/auth.module';
 import { RuntimeModule } from './common/runtime.module';
 import { MailboxModule } from './mailbox/mailbox.module';
 import { OpsModule } from './ops/ops.module';
+import { RegistryModule } from './registry/registry.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { OpsModule } from './ops/ops.module';
     OpsModule,
     AuthModule,
     MailboxModule,
+    RegistryModule,
   ],
 })
 export class AppModule {}

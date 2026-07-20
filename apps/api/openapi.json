@@ -418,6 +418,180 @@
           "Mailbox"
         ]
       }
+    },
+    "/registry/register": {
+      "post": {
+        "operationId": "RegistryController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "maxItems": 1000,
+                "items": {
+                  "$ref": "#/components/schemas/RegisterEntryDto"
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed batch (invalid entry, name, or CID)"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "429": {
+            "description": "Registry rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Batch register [{ipnsName, headCid?, contentCids[]}] under the caller account; register-first, idempotent upserts",
+        "tags": [
+          "Registry"
+        ]
+      }
+    },
+    "/registry/retire": {
+      "post": {
+        "operationId": "RegistryController_retire",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "maxItems": 1000,
+                "items": {
+                  "type": "string",
+                  "maxLength": 256
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetireResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed batch"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "429": {
+            "description": "Registry rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Batch retire [ipnsName | cid] for the caller account; union liveness, refcounted physical unpin at global zero",
+        "tags": [
+          "Registry"
+        ]
+      }
+    },
+    "/account/quota": {
+      "get": {
+        "operationId": "AccountController_quota",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuotaResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "The caller per-account quota: usedBytes (sum over pin rows), limitBytes (override or env default), advisory (BYO)",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
+    "/account/byo": {
+      "patch": {
+        "operationId": "AccountController_setByo",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetByoDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ByoResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Toggle the caller BYO-IPFS flag; advisory pin rows follow it",
+        "tags": [
+          "Account"
+        ]
+      }
     }
   },
   "info": {
@@ -438,6 +612,14 @@
     {
       "name": "Mailbox",
       "description": "Integrity-untrusted sealed-pointer transport: post, poll, ack"
+    },
+    {
+      "name": "Registry",
+      "description": "Pin/name registry: batch register/retire, union liveness"
+    },
+    {
+      "name": "Account",
+      "description": "Per-account quota and the BYO-IPFS toggle"
     }
   ],
   "servers": [],
@@ -718,6 +900,111 @@
         },
         "required": [
           "success"
+        ]
+      },
+      "RegisterEntryDto": {
+        "type": "object",
+        "properties": {
+          "ipnsName": {
+            "type": "string",
+            "description": "The IPNS name to register (libp2p-key CID). Register-first: this row precedes publish.",
+            "example": "k51qzi5uqu5dkuzo866rgfkt5nuqo53l6l3l6zk3l6zk3l6zk3l6zk3l6zk3"
+          },
+          "headCid": {
+            "type": "string",
+            "description": "Current head (metadata) CID this name publishes; omit to register the name only."
+          },
+          "contentCids": {
+            "description": "Content CIDs to pin/count under this account (idempotent upsert).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ipnsName",
+          "contentCids"
+        ]
+      },
+      "RegisterResponseDto": {
+        "type": "object",
+        "properties": {
+          "names": {
+            "type": "number",
+            "description": "Distinct names registered or refreshed in this batch"
+          },
+          "cids": {
+            "type": "number",
+            "description": "Distinct content CIDs pinned/counted in this batch"
+          }
+        },
+        "required": [
+          "names",
+          "cids"
+        ]
+      },
+      "RetireResponseDto": {
+        "type": "object",
+        "properties": {
+          "retired": {
+            "type": "number",
+            "description": "Inventory + pin rows removed for the caller account"
+          },
+          "unpinned": {
+            "type": "number",
+            "description": "CIDs physically unpinned because global refcount reached zero"
+          }
+        },
+        "required": [
+          "retired",
+          "unpinned"
+        ]
+      },
+      "QuotaResponseDto": {
+        "type": "object",
+        "properties": {
+          "usedBytes": {
+            "type": "number",
+            "description": "Bytes currently counted against the account (sum over pin rows)"
+          },
+          "limitBytes": {
+            "type": "number",
+            "description": "The account limit: per-account override, else the env default"
+          },
+          "advisory": {
+            "type": "boolean",
+            "description": "True for BYO accounts, whose rows never gate uploads (quota always allows)"
+          }
+        },
+        "required": [
+          "usedBytes",
+          "limitBytes",
+          "advisory"
+        ]
+      },
+      "SetByoDto": {
+        "type": "object",
+        "properties": {
+          "byo": {
+            "type": "boolean",
+            "description": "Enable BYO-IPFS: pin rows become advisory, never quota-enforced"
+          }
+        },
+        "required": [
+          "byo"
+        ]
+      },
+      "ByoResponseDto": {
+        "type": "object",
+        "properties": {
+          "byo": {
+            "type": "boolean",
+            "description": "The account BYO flag after the update"
+          }
+        },
+        "required": [
+          "byo"
         ]
       }
     }
