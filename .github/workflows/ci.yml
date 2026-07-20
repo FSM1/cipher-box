@@ -322,6 +322,12 @@ jobs:
       - name: Engine tests and seam conformance kits
         run: cargo test -p cipherbox-engine
 
+  # The WASM parity gate. Runs the core KAT + property suite in three shapes —
+  # native, wasm32-wasip1 (libtest under wasmtime), and the browser-shaped
+  # wasm32-unknown-unknown (wasm-bindgen-test → Node) that exercises the
+  # residual u64/BigInt and getrandom-`crypto.getRandomValues` boundary risks
+  # (blueprint/core.md, blueprint/web-client.md) — plus the crates/wasm facade
+  # boundary tests and the single ES-module artifact build.
   core-kats:
     name: Core KATs (native + WASM)
     needs: [changes, lint]
@@ -339,14 +345,29 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.cargo/bin
             target
           key: core-kats-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: core-kats-cargo-
 
-      - name: Add wasm32-wasip1 target
-        run: rustup target add wasm32-wasip1
+      - name: Add wasm targets
+        run: rustup target add wasm32-wasip1 wasm32-unknown-unknown
 
       - uses: bytecodealliance/actions/wasmtime/setup@9152e710e9f7182e4c29ad218e4f335a7b203613 # v1.1.3
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: 'package.json'
+
+      # wasm-bindgen-test-runner drives the wasm32-unknown-unknown tests in
+      # Node and must match the locked wasm-bindgen version exactly (a schema
+      # mismatch fails the run); derive the version from Cargo.lock. Cached in
+      # ~/.cargo/bin, so this is a no-op on a cache hit.
+      - name: Install wasm-bindgen-cli (matching Cargo.lock)
+        run: |
+          WB_VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "wasm-bindgen ${WB_VERSION}"
+          cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked
 
       - name: KAT vectors fresh (committed generator is the only writer)
         run: |
@@ -359,6 +380,28 @@ jobs:
 
       - name: Core suite (WASM, wasm32-wasip1 under wasmtime)
         run: cargo test -p cipherbox-core --target wasm32-wasip1
+
+      # Browser-shaped leg: the KAT + property suite under Node via
+      # wasm-bindgen-test. Count parity with the native run is the anti-vacuity
+      # backstop (the test-file `#[test]` shadow routes both to this harness).
+      - name: Core KAT + property suite (WASM, wasm32-unknown-unknown)
+        run: cargo test -p cipherbox-core --target wasm32-unknown-unknown --test kat_manifest --test codec_props
+
+      # The crates/wasm facade boundary tests (u64/BigInt, getrandom wiring,
+      # command/event shapes) run under the same Node harness.
+      - name: WASM facade boundary tests (wasm32-unknown-unknown)
+        run: cargo test -p cipherbox-wasm --target wasm32-unknown-unknown
+
+      # The single wasm-bindgen ES module and its generated .d.ts contract must
+      # build (blueprint/web-client.md); packages/client hosts and fingerprints
+      # it later.
+      - name: Build the wasm-bindgen ES module and .d.ts
+        run: |
+          cargo build -p cipherbox-wasm --release --target wasm32-unknown-unknown
+          wasm-bindgen --target web --out-dir target/wasm-pkg --out-name cipherbox_wasm \
+            target/wasm32-unknown-unknown/release/cipherbox_wasm.wasm
+          test -f target/wasm-pkg/cipherbox_wasm.d.ts
+          test -f target/wasm-pkg/cipherbox_wasm.js
 
   cargo-macos:
     name: Cargo Check & Test (macOS)
