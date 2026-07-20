@@ -129,14 +129,13 @@ export class AuthService {
   }
 
   async refresh(rawRefreshToken: string): Promise<TokenPair> {
-    const { pair } = await this.tokenService.rotate(rawRefreshToken, async (userId) => {
+    return this.tokenService.rotate(rawRefreshToken, async (userId) => {
       const user = await this.userRepository.findOne({ where: { id: userId } });
       if (!user) {
         throw new UnauthorizedException('Invalid refresh token');
       }
       return user.publicKey;
     });
-    return pair;
   }
 
   async logout(userId: string): Promise<void> {

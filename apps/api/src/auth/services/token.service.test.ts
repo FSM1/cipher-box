@@ -41,7 +41,7 @@ describe('TokenService refresh rotation', () => {
     const pair = await service.createTokenPair(USER_ID, PUBLIC_KEY);
     const familyId = repo.rows[0].familyId;
 
-    const { pair: rotated } = await service.rotate(pair.refreshToken, publicKeyByUserId);
+    const rotated = await service.rotate(pair.refreshToken, publicKeyByUserId);
     expect(rotated.refreshToken).not.toBe(pair.refreshToken);
     expect(repo.rows).toHaveLength(2);
     expect(repo.rows.every((row) => row.familyId === familyId)).toBe(true);
@@ -73,6 +73,20 @@ describe('TokenService refresh rotation', () => {
     await expect(service.rotate('f'.repeat(64), publicKeyByUserId)).rejects.toThrow(
       UnauthorizedException
     );
+  });
+
+  it('rotation sweeps out the user’s expired rows', async () => {
+    await service.createTokenPair(USER_ID, PUBLIC_KEY);
+    clock.advanceMs(8 * 24 * 60 * 60 * 1000); // first family is now expired
+
+    const fresh = await service.createTokenPair(USER_ID, PUBLIC_KEY);
+    const freshFamilyId = repo.rows[1].familyId;
+    expect(repo.rows).toHaveLength(2);
+
+    await service.rotate(fresh.refreshToken, publicKeyByUserId);
+    // Expired row purged; only the fresh family (used + successor) remains.
+    expect(repo.rows).toHaveLength(2);
+    expect(repo.rows.every((row) => row.familyId === freshFamilyId)).toBe(true);
   });
 
   it('revokeAllForUser hard-deletes every row', async () => {

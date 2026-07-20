@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
-import { IsNull, Repository } from 'typeorm';
+import { IsNull, LessThan, Repository } from 'typeorm';
 import { Clock } from '../../common/clock';
 import { Entropy } from '../../common/entropy';
 import { RefreshToken } from '../entities/refresh-token.entity';
@@ -51,7 +51,10 @@ export class TokenService {
    * Rotate a refresh token: single-use, successor in the same family,
    * family-wide hard delete on reuse detection.
    */
-  async rotate(rawToken: string, publicKeyByUserId: (userId: string) => Promise<string>) {
+  async rotate(
+    rawToken: string,
+    publicKeyByUserId: (userId: string) => Promise<string>
+  ): Promise<TokenPair> {
     const now = this.clock.now();
     const tokenHash = this.hashToken(rawToken);
     const existing = await this.refreshTokenRepository.findOne({ where: { tokenHash } });
@@ -85,10 +88,18 @@ export class TokenService {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
+    // Opportunistic housekeeping: expired rows are dead fuel — a replayed
+    // expired token dies in the expiry check regardless of reuse state — so
+    // rotation sweeps them out instead of letting them accumulate forever.
+    await this.refreshTokenRepository.delete({
+      userId: existing.userId,
+      expiresAt: LessThan(now),
+    });
+
     const publicKey = await publicKeyByUserId(existing.userId);
     const accessToken = await this.signAccessToken(existing.userId, publicKey);
     const refreshToken = await this.mintRefreshToken(existing.userId, existing.familyId);
-    return { pair: { accessToken, refreshToken }, userId: existing.userId };
+    return { accessToken, refreshToken };
   }
 
   /** Hard-delete every refresh token the user holds (logout everywhere). */

@@ -10,6 +10,9 @@ function matches(row: Record<string, unknown>, where: Where): boolean {
       if (expected.type === 'isNull') {
         return actual === null || actual === undefined;
       }
+      if (expected.type === 'lessThan') {
+        return actual != null && (actual as Date | number) < (expected.value as Date | number);
+      }
       throw new Error(`FakeRepository: unsupported operator ${expected.type}`);
     }
     return actual === expected;
