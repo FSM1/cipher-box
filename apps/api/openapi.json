@@ -315,6 +315,24 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Malformed body (invalid publicKey, blob, or key)"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "Unknown recipient (rate-limited existence oracle)"
+          },
+          "409": {
+            "description": "Recipient mailbox is full (per-recipient pending cap)"
+          },
+          "413": {
+            "description": "Sealed blob exceeds 8 KiB"
+          },
+          "429": {
+            "description": "Per-sender post rate limit exceeded"
           }
         },
         "security": [
@@ -340,6 +358,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "429": {
+            "description": "Per-recipient poll rate limit exceeded"
           }
         },
         "security": [
@@ -376,6 +400,12 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "429": {
+            "description": "Per-recipient ack rate limit exceeded"
           }
         },
         "security": [
