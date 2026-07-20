@@ -304,6 +304,27 @@ fn accept_kinds_cover_required_kinds_exactly() {
         "requiredKinds must not contain duplicates"
     );
 
+    // The canonical kind list is fixed HERE, independent of the generator —
+    // the accept-side anchor mirroring how reject checks anchor to the error
+    // surface. Dropping an accept vector (and its kind) from kat_gen must
+    // fail this test, never silently shrink coverage.
+    const ALL_KINDS: &[&str] = &[
+        "uint",
+        "negint",
+        "bytes",
+        "text",
+        "array",
+        "map",
+        "bool",
+        "null",
+        "depth-limit",
+    ];
+    let canonical: BTreeSet<&str> = ALL_KINDS.iter().copied().collect();
+    assert_eq!(
+        required, canonical,
+        "requiredKinds must be exactly the canonical kind list"
+    );
+
     let vectors = accept_vectors(&m);
     for kind in &required {
         assert!(

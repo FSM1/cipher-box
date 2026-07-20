@@ -142,6 +142,8 @@ impl<'a> Decoder<'a> {
         if arg > remaining {
             return Err(Malformed::Truncated { offset }.into());
         }
+        // arg <= remaining <= usize::MAX (a slice length), so the cast is
+        // lossless on every target, including 32-bit wasm.
         self.take(arg as usize)
     }
 

@@ -680,15 +680,17 @@ fn build_reject_vectors() -> Vec<RejectVector> {
     // reachable check is present; the only absentees are the two encode-/
     // schema-side checks pinned by unit tests in src/codec/fields.rs.
     let present: BTreeSet<&str> = out.iter().map(|v| v.check.as_str()).collect();
-    let absent: Vec<&str> = TrustViolation::CHECKS
+    let absent: BTreeSet<&str> = TrustViolation::CHECKS
         .iter()
         .chain(Malformed::CHECKS)
         .copied()
         .filter(|c| !present.contains(c))
         .collect();
+    let expected_absent: BTreeSet<&str> = ["unexpected-type", "unknown-field-collision"]
+        .into_iter()
+        .collect();
     assert_eq!(
-        absent,
-        ["unexpected-type", "unknown-field-collision"],
+        absent, expected_absent,
         "reject vectors must cover every decode-reachable check"
     );
     out
