@@ -1,0 +1,105 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "76a675c0a471",
+  "session_id": "7500f1a6-27cc-4e96-bb34-e849cae7bfcd",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-20T02:11:12.875783Z",
+  "branch": "feat/core-det-cbor-kat-spine",
+  "checkpoints_count": 15,
+  "save_step_count": 1,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "8ae1f331cff2",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 650,
+    "cache_creation_tokens": 827041,
+    "cache_read_tokens": 63003652,
+    "output_tokens": 272129,
+    "api_call_count": 325
+  },
+  "session_metrics": {
+    "turn_count": 20
+  },
+  "summary": {
+    "intent": "Continue the CipherBox v2 rewrite kickoff: freeze v1, hand over main to the v2 workspace, adopt the AGENTS.md/blueprint conventions, scaffold the v2 workspace (Rust core crates + TS apps), get the scaffold PR merged, and seed a GitHub-issues build tracker from the blueprint corpus.",
+    "outcome": "PR #616 (freeze/handover: dead release automation removed, toolchain single-sourced, GSD artifacts removed, blueprint corpus adopted, AGENTS.md as source of truth, README/SECURITY.md rewritten) and PR #617 (v2 workspace scaffold: cargo workspace + TS apps, day-one CI gate) both merged to main; a 40-issue dependency-ordered v2 build tracker (milestone v2.0.0, label v2-build) was seeded under umbrella issue #655, ready for execution starting at #618.",
+    "learnings": {
+      "repo": [
+        "cipher-box: 1Password SSH commit signing (gpg.format=ssh) intermittently hangs/wedges — retry signed commits with a timeout guard and verify with `git log` before assuming failure; never fall back to --no-gpg-sign without explicit user authorization",
+        "cipher-box: main branch protection had required status checks tied to deleted workflows (pr-release-preview.yml → 'Release Preview', release-gate.yml → 'Verify E2E Passed') that block merges forever once the producing workflow is removed — must proactively re-point required checks when demolishing workflows",
+        "cipher-box: rust-toolchain.toml must declare `components = [\"rustfmt\",\"clippy\"]` or CI resolves a minimal profile lacking them",
+        "cipher-box: zizmor's `known-vulnerable-actions` audit calls the GitHub advisories API online and can 503-flake; gate should run `--no-online-audits` since Dependabot already covers action advisories and the documented gate intent is only unpinned-uses + excessive-permissions",
+        "cipher-box landing/ was genuinely npm-managed (own package-lock.json) despite being conceptually part of the pnpm monorepo; converting to pnpm requires `--ignore-workspace` since landing isn't a pnpm-workspace member",
+        "cipher-box v1 apps/web: 75 of 182 source files directly import the deleted @cipherbox/sdk/sdk-core/core/crypto stack — the load-bearing hooks/services/stores are inseparable from v1's TS crypto twin-engine, so v1 UI can only be harvested file-by-file via `git checkout v1 -- <path>`, not kept in place",
+        "cipher-box: markdownlint enforces fenced code-block languages (MD040) and proper fence nesting; broke previously in crypto-privacy-review.md",
+        "zsh aborts an entire compound command if any glob pattern in it matches nothing (e.g. `rm ... commands/gsd-*.json` with no matches kills the whole command)",
+        "GitHub API 503 outages can silently leak error JSON into monitor/check output — validate with numeric/schema checks, not just presence of a response"
+      ],
+      "code": [
+        {
+          "path": ".github/workflows/release-please.yml",
+          "finding": "Rewritten to workflow_dispatch-only with a dormancy header comment during the v1 freeze; single-component (root '.') release config replaces the 16-component per-package/crate config, release-as pinned to 2.0.0 against manifest 1.0.0 (never let release-as equal the manifest version — causes a self-comparing changelog loop)"
+        },
+        {
+          "path": "rust-toolchain.toml",
+          "finding": "Root-level toolchain file must include components = [\"rustfmt\", \"clippy\"] — omitting them causes CI cargo-linux failures because the pinned toolchain resolves with a minimal profile"
+        },
+        {
+          "path": ".github/workflows/zizmor.yml",
+          "finding": "Added --no-online-audits flag to avoid GitHub advisories API 503 flakiness; scoped gate intent is only unpinned-uses + excessive-permissions per .github/zizmor.yml ignore list"
+        }
+      ],
+      "workflow": [
+        "Fan out one Agent per blueprint doc (core/engine/api/web-client/desktop) to slice each into PR-sized, dependency-linked GitHub issues in parallel, then synthesize a single topologically-ordered set plus an umbrella tracker issue — worked well for turning a large spec corpus into an actionable backlog",
+        "When a user challenges a destructive decision (e.g. 'why nuke the whole web app'), quantify the coupling first (import counts) rather than just re-asserting the original reasoning — turns a defensive answer into a verifiable one",
+        "When GitHub API is 503-flaking, wrap fetch/patch operations in idempotent retry-loop scripts run in the background rather than blocking the foreground on each call",
+        "Recovering deleted-but-still-useful files via `git show HEAD~1:<path>` before adapting them (ship-phase.md → ship.md) preserves institutional knowledge instead of losing it to a premature delete",
+        "Background TaskCreate/Agent notifications should be treated as async — do status re-checks via API/log rather than assuming a watcher's last known state is current"
+      ]
+    },
+    "friction": [
+      "1Password SSH commit signing hung/failed repeatedly across multiple retries in the cipher-box-next session, eventually requiring user's explicit AFK authorization to bypass with --no-gpg-sign",
+      "Sustained GitHub API 503 outages repeatedly interrupted CI-log fetches, milestone/issue creation, and PR body patching, requiring retry-wrapped background scripts throughout the second half of the session",
+      "Two rounds of CI failures on PR #617 (rust-toolchain missing components; zizmor online-audit 503s) required root-causing and follow-up commits before merge could proceed",
+      "Stale required status checks from deleted workflows silently blocked PR #616 merge ('expected — waiting for status update' forever) until manually diagnosed and removed from branch protection",
+      "python's yaml module and ruby's unsafe_load_file/aliases were unavailable/incompatible, requiring fallback to plain ruby YAML.load for workflow validation",
+      "Write tool required re-reading files before edits multiple times ('File has not been read yet') when working across release-please.yml, DEPLOYMENT.md, CONTEXT.md",
+      "Background python script stdout appeared empty when backgrounded due to buffering, requiring API-based progress checks instead of reading the output file directly"
+    ],
+    "open_items": [
+      "Merge decision and execution of the 40 v2 build tracker slices starting at #618 (core: det-CBOR codec + KAT manifest spine), with #624 (api auth baseline) and #644 (desktop hardware verification gates) startable in parallel",
+      "Desktop slice 0 hardware verification gates (FUSE-T ≥1.2.7 SMB invalidation, license terms, FSKit spike) must run and feed sync-timing-profile constants before crates/fuse work begins",
+      "SHARE-WRITE-KEY gap (write-share key threading) noted in prior CipherBox memory remains open and should be tracked against the relevant engine/grants slice",
+      "CodeRabbit review on PR #617 was explicitly skipped per user instruction ('no real need to wait, it's a cleanup PR') — any post-hoc findings would need a later sweep",
+      "v1 branch/tag preserves all demolished code (1,271+ files across multiple commits) for harvest reference, particularly apps/web presentational components and Web3Auth login glue, tests/load k6 scenarios, and .planning/.learnings GSD artifacts"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-20T02:10:39.307615Z",
+    "agent_lines": 43,
+    "agent_removed": 5,
+    "human_added": 3736,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 3779,
+    "total_lines_changed": 3795,
+    "agent_percentage": 1.2648221343873518,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 1,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0,
+      "user_added_per_file": {
+        ".claude/scheduled_tasks.lock": 1
+      }
+    }
+  ]
+}

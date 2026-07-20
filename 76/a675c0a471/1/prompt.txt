@@ -1,0 +1,469 @@
+<task-notification>
+<task-id>bnvf113q7</task-id>
+<tool-use-id>toolu_012anqeUrndoQUGBWpAha1Su</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/3e231ea1-555b-43f2-a504-7556910f40b0/tasks/bnvf113q7.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch PR 616 checks on head 1d3f36b7b until completion" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bqu8h4n3q</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<status>stopped</status>
+<summary>No completion record was found for this background shell command from the previous session. It may have been stopped (via the UI, Monitor timeout, or agent teardown — these leave no transcript marker), or it may have been running when the previous Claude Code process exited. Check the output file for partial results before assuming it completed.</summary>
+</task-notification>
+
+---
+
+there are 2 pending checks on the PR that are preventing me from merging - release preview and verify e2e passed, both of which are stuck in `expected - waiting for status update`
+
+---
+
+ok pr is merged - lets scaffold the v2 workspace as planned.
+
+---
+
+<task-notification>
+<task-id>a598f92150e1f72ae</task-id>
+<tool-use-id>toolu_019LoEt1F4hXCx2zJPr5Arc5</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/a598f92150e1f72ae.output</output-file>
+<status>completed</status>
+<summary>Agent "Scaffold v2 TS workspace" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Scaffold complete. All verification gates pass.
+
+## Files created
+
+- `/Users/myankelev/Code/random/cipher-box/packages/client/` — `package.json`, `tsconfig.json`, `tsconfig.build.json`, `src/index.ts` (doc comment pointing at blueprint/web-client.md + `CLIENT_PACKAGE` export), `src/index.test.ts`
+- `/Users/myankelev/Code/random/cipher-box/apps/api/` — `package.json` (CommonJS, NestJS ^11.1.28), `tsconfig.json` (experimentalDecorators + emitDecoratorMetadata, module CommonJS), `tsconfig.build.json`, `src/main.ts` (bootstrap, `PORT` env respected), `src/app.module.ts`, `src/health/health.controller.ts`, `src/health/health.controller.test.ts` (direct instantiation, no @nestjs/testing)
+- `/Users/myankelev/Code/random/cipher-box/apps/web/` — `package.json` (react ^19.2.7, vite ^8.1.5, @vitejs/plugin-react ^6.0.3 — peer-verified against vite 8), `tsconfig.json` (noEmit, jsx react-jsx), `vite.config.ts`, `index.html`, `src/main.tsx`, `src/App.tsx` ("CipherBox" / "v2 build in progress")
+
+## Files modified
+
+- `pnpm-workspace.yaml` — dropped `tests/*`
+- `package.json` (root) — rewritten per spec: kept name/0.45.2/packageManager/engines/lint-staged/prepare + eslint/prettier/husky/commitlint/markdownlint/typescript/@types/node/concurrently devDeps; dropped `@noble/secp256k1` and `tsx`; scripts now `typecheck: pnpm -r run typecheck`, `test: pnpm -r --if-present run test`; removed web-e2e/openapi/api:generate; `onlyBuiltDependencies` pruned to `@nestjs/core`, `esbuild`
+- `eslint.config.js` — removed the D-07 boundary block (referenced deleted `@cipherbox/sdk-core`/`@cipherbox/core`); added `**/.astro/**` to ignores (landing's git-ignored Astro build output was failing `eslint .` — 176 of the 177 errors were there, pre-existing)
+- `pnpm-lock.yaml` — regenerated fresh (deleted old, `pnpm install`)
+- `tsconfig.base.json` and `.gitignore` — checked, no changes needed (base has no package references; dist/node_modules/tsbuildinfo already ignored). Only reference to deleted `tsconfig.scripts.json` was the old root typecheck script, now gone. `scripts/` contains only a `.sh` file.
+
+## Verification (real output, from repo root)
+
+- `pnpm install`: `Packages: +42 -1172` ... `Done in 7.8s using pnpm v10.33.0`
+- `pnpm lint`: `&gt; eslint .` — clean exit, zero findings
+- `pnpm typecheck`: all three `Done` (`apps/api tsc --noEmit`, `apps/web tsc -b --noEmit`, `packages/client tsc --noEmit`)
+- `pnpm test`: `packages/client: Tests 1 passed (1)`, `apps/api: Tests 1 passed (1)` — vitest v4.1.10
+- `pnpm build`: all three `Done`; vite output `dist/index.html 0.32 kB`, `dist/assets/index-CpN5ZoXd.js 190.60 kB │ gzip: 60.05 kB`
+- Web build artifact confirmed on disk: `apps/web/dist/index.html` (320 bytes)
+
+## Health smoke
+
+Port 3000 was free; ran the built output (`node apps/api/dist/main.js`):
+
+```
+HEALTH RESPONSE: {"status":"ok"}
+HTTP CODE: 200
+killed api pid 6913
+```
+
+Note: the working tree on this shared branch had unrelated in-flight modifications (`.github/`, `docker/`, `README.md`, `Cargo.toml`, `crates/`, `.coderabbit.yaml`, `codecov.yml`) before I started — untouched by me. Nothing committed or pushed, per instructions.</result>
+<usage><subagent_tokens>62366</subagent_tokens><tool_uses>45</tool_uses><duration_ms>386018</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>blx6wjdcd</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/blx6wjdcd.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch PR 617 checks until completion" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bsg4n4qct</task-id>
+<tool-use-id>toolu_01U6UqQUuXy79qgNxN94WARY</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/bsg4n4qct.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch PR 617 checks on the fixed head" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>b27pupxj4</task-id>
+<tool-use-id>toolu_01JWpmD12eU8nYejjWF8mjfu</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/b27pupxj4.output</output-file>
+<status>completed</status>
+<summary>Background command "Watch PR 617 checks on head e9a8abf25" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bac6bxhe5</task-id>
+<summary>Monitor event: "CodeRabbit review + threads on PR 617"</summary>
+<event>REVIEWS={"message": "No server is currently available to service your request. Sorry about that. Please try resubmitting your request and contact us if the problem persists."} UNRESOLVED_THREADS=0</event>
+If this event is something the user would act on now, send a PushNotification. Routine or benign output doesn't need one.
+</task-notification>
+
+---
+
+no real need to wait for the coderabbit review - its a cleanup PR
+
+---
+
+was there really a need to nuke the entire web app? surely most of the UI/styling/auth flows would be reused
+
+---
+
+ok you can merge the pr and then go ahead and seed the build tracker
+
+---
+
+<task-notification>
+<task-id>a076332e58da0a9ac</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/a076332e58da0a9ac.output</output-file>
+<status>completed</status>
+<summary>Agent "Slice api blueprint" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Slice 1 — Build identity auth, refresh rotation, and ops baseline in apps/api**
+
+- **Scope:** `users`, `auth_methods`, `refresh_tokens` migrations; challenge-signature login against the secp256k1 identity key; SIWE as secondary auth; short-lived access JWT + rotating refresh token; implicit account creation at first login (no vault-init endpoint); staging-gated test-login; a working global throttler with per-surface limits (v1's inert `@Throttle` is a named defect); Prometheus metrics on the existing health stub; OpenAPI document emitted from decorators and committed as a docs artifact. Does NOT include: deletion cascade (needs registry + mailbox rows to cascade over), quota, any pin/name surface.
+- **Blueprint anchors:** Identity and auth; Account lifecycle (creation half); Ops; Contract and clients.
+- **Gate:** new named `api-unit` job (Nest specs for auth services, v1 jest setup ports); named `migration-drift` job (ports as-is since the API keeps TypeORM); named `openapi-freshness` regenerate-and-diff job (documentation hygiene, not the contract gate); contract-suite coverage for challenge-signature login, refresh rotation, SIWE, test-login environment gating (production must refuse), and throttling asserted effective via real 429s — this slice also stands up the CI stack (Postgres + API under test) that the contract suite job boots.
+- **Depends on:** none within the API; cross-area — the engine's hand-written Rust API client (auth calls) for the contract-suite coverage; until that client lands, `api-unit` + `migration-drift` are the day-one merge blockers per testing.md law 1.
+
+**Slice 2 — Build the pin/name registry with register-first and quota**
+
+- **Scope:** `name_inventory (account, ipnsName)` and `pinned_cids (account, cid, size, advisory)` migrations; batch register `[{ipnsName, headCid?, contentCids[]}]` and batch retire `[ipnsName | cid]` endpoints with idempotent upserts (single-item ordinary writes, bulk for name waves/sweeps; v1 `register-cid` folds in); register-first fail-closed semantics; union liveness with refcounted physical unpin at global refcount zero (v1 `guardedUnpin` survives); quota endpoint — per-account sum over pin rows, hosted authoritative, advisory pin rows for BYO (`advisory: true`), env default + per-account override. Does NOT include: hosted upload bytes, the republisher walk, or root-linger/retire timing (client policy — the API stays dumb).
+- **Blueprint anchors:** Pin/name registry; Write-rotation name churn; Data model.
+- **Gate:** `api-unit` extended (quota arithmetic, refcounting); `migration-drift`; contract-suite coverage: register-first fail-closed (publishing an unregistered name refused), batch register/retire idempotency, union liveness + refcounted physical unpin, quota hosted-authoritative vs BYO `advisory: true`.
+- **Depends on:** Slice 1 (authenticated endpoints, throttler); cross-area — engine API client register/retire/quota calls for the contract suite.
+
+**Slice 3 — Add the hosted upload path with quota gate and registry traversal**
+
+- **Scope:** authenticated hosted-ingress upload endpoint — quota-gated, pins bytes to CipherBox Kubo, registers pin rows in the same traversal as the byte path. Does NOT include: any egress (the API process serves no bytes; the read accelerator is Kubo infra per the deployment blueprint), BYO/dual byte paths (they bypass the API entirely), or provider connection testing (client-side; the TEE tester is gone).
+- **Blueprint anchors:** Content plane (Ingress); Pin/name registry (quota).
+- **Gate:** `api-unit` extended; contract-suite coverage: hosted upload against the CI stack's real Kubo, quota gating asserted (over-quota refused for hosted, allowed-with-advisory for BYO).
+- **Depends on:** Slice 2 (registry + quota); Slice 1 (auth); CI-stack Kubo service in the contract-suite job.
+
+**Slice 4 — Build the mailbox with post, poll, ack, caps, and rate limits**
+
+- **Scope:** `mailbox_messages` migration; post (any authenticated account → recipient identity pubkey, HPKE-sealed blob ≤ ~8 KB, sender-supplied idempotency key, unknown-recipient posts rejected — the accepted, rate-limited exact-pubkey existence oracle); poll (recipient-authenticated, `{id, receivedAt, blob}`, no sender metadata in the clear); ack = delete by id; per-recipient pending cap with reject-new, 90-day unacked TTL, rate limits per sender account and per recipient mailbox. Does NOT include: push (pull-only in v2.0, push-ready seam is client-side), payload signature verification (client-side against the contact-code-anchored key), any people directory or contact-exchange endpoint (there is none — contact codes are self-authenticating and out-of-band).
+- **Blueprint anchors:** Mailbox; Contact exchange — no directory; Data model.
+- **Gate:** `api-unit` extended (retention caps); `migration-drift`; contract-suite coverage: full mailbox lifecycle — post/poll/ack, idempotency keys, pending-cap reject-new, unknown-recipient rejection.
+- **Depends on:** Slice 1 (auth, throttler) only — parallelizable with Slices 2–3; cross-area — engine API client mailbox calls for the contract suite.
+
+**Slice 5 — Build the in-process republisher, record cache, and recovery endpoint**
+
+- **Scope:** in-process, worker-shaped, cleanly extractable republisher module — walks the **distinct** names in the name inventory on a ~12 h cadence, resolves each from the network via `/routing/v1`, re-PUTs the same bytes keyless (records carry client-signed 90-day EOLs; the republisher is a liveness optimization inside them, never a correctness dependency); alert when a name goes &gt;24 h without a successful re-PUT; resolve-failure alerting surfaces registered-never-published orphans for GC; non-canonical `record_cache` table (rebuildable, on no client resolve path, refuses sequence-regressing records); authenticated, rate-limited recovery endpoint returning cached record bytes by name — the &gt;EOL revival aid. Cadence/time injected via seam parameters, never direct clocks. Does NOT include: the designed-for re-signer seam (TEE dropped), serving records on any resolve path, tombstone semantics.
+- **Blueprint anchors:** Republisher module and recovery; Doctrine; Hosted infra outside the API process.
+- **Gate:** `api-unit` extended; `migration-drift` (`record_cache`); contract-suite coverage: the republisher's inventory walk and resolve-failure alerting, recovery endpoint auth + rate limit — needs the CI stack's local `/routing/v1` store; the compressed-EOL long-horizon liveness run lands in the dispatch/scheduled tier, not the PR gate.
+- **Depends on:** Slice 2 (name inventory is the walk's input); Slice 1 (auth for recovery); CI-stack `/routing/v1` store service.
+
+**Slice 6 — Implement the account hard-delete cascade**
+
+- **Scope:** one authenticated, client-confirmed deletion call with immediate hard-delete cascade: retire all of the account's inventory and pin rows (refcounted physical unpin; co-registered shared content survives via other accounts' rows under union liveness, sole-registered names leave the inventory and decay from the DHT), purge mailbox rows, delete auth rows. Nothing lingers server-side; hard-delete only, never soft-flagged (data-model law). Does NOT include: any client-side export or re-derivation concerns.
+- **Blueprint anchors:** Account lifecycle (Deletion); Data model.
+- **Gate:** `api-unit` extended; contract-suite coverage: the account hard-delete cascade end to end — inventory/pin retirement observable, mailbox purge, auth invalidation, co-registered name survival.
+- **Depends on:** Slice 2 (inventory/pin retirement), Slice 4 (mailbox purge), Slice 5 preferably landed so the cascade's inventory-exit is asserted against a live republisher walk (soft dependency; hard dependencies are 2 and 4).</result>
+<usage><subagent_tokens>45531</subagent_tokens><tool_uses>4</tool_uses><duration_ms>91843</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9df8f0eb1b85c90f</task-id>
+<tool-use-id>toolu_01D3r3p6DsCec6kYRG1X6kPT</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/a9df8f0eb1b85c90f.output</output-file>
+<status>completed</status>
+<summary>Agent "Slice core blueprint" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Slice 1
+
+**Title:** Land the det-CBOR codec, error surface, and KAT manifest spine
+
+**Scope:**
+- Lands the `codec` module: the deterministic CBOR profile (RFC 8949 §4.2) encoder/decoder with the one strictness policy — duplicate map keys, non-canonical integer/length encodings, and wrong major types reject fail-closed; unknown fields accepted, ignored for logic, preserved byte-stable, and re-emitted canonically on rewrite.
+- Lands the two-class error surface: trust violations vs malformed/availability, disjoint types, no reused codes, every rejection names the check that fired.
+- Lands the KAT manifest machinery: the machine-checked manifest, anti-vacuity count assertions, the committed-generator harness, and the accept/reject vector layout.
+- Wires the merge-blocking CI job running the full suite natively **and** as WASM (the residual parity surface: u64/BigInt, getrandom wiring).
+- Does NOT land: envelope/structure schemas, any crypto primitive, any KDF edge.
+
+**Blueprint anchors:** Doctrine; Module map (codec, kat); Wire format; KAT regime; Error surface
+
+**Gate:** The core KAT manifest job (merge-blocking, native + WASM), created in this slice: manifest completeness check, accept and reject vectors for the codec (duplicate keys, non-canonical encodings, wrong types, truncations), proptest encode∘decode identity including unknown-field byte-stable round-trip and canonicality rejection, failing seeds committed as regression vectors.
+
+**Depends on:** none
+
+## Slice 2
+
+**Title:** Add the crypto suite and the frozen KDF edge catalog
+
+**Scope:**
+- Lands the `suite` module: XChaCha20-Poly1305 (24-byte nonce), BLAKE3 `derive_key`/`keyed_hash`, X25519 ECDH + RFC 9180 HPKE (X25519-HKDF-SHA256 + XChaCha20-Poly1305), secp256k1 ECDSA (RFC 6979) over det-CBOR, Ed25519 — pure RustCrypto, constant-time, key material in `Zeroizing` owning types (type-enforced).
+- Lands the `kdf` module: all fourteen catalog edges (node-seed through vault-pointer-index) with the frozen `cipherbox/v2/&lt;edge&gt;` context-string table; ids as fixed-length message input, never variable context; non-edges (random content keys, override seeds, grant-cut scope seeds) stay non-edges.
+- Lands the encryption subkey, the subkey binding (ECDSA over det-CBOR `{identityPk, encSubkey}`), and the contact code codec with mandatory fail-closed binding verify at import.
+- Does NOT land: AAD/seal/unseal, envelope schemas, structure signatures, IPNS keypair *use* (the ipns-keypair edge lands; the record codec does not).
+
+**Blueprint anchors:** Module map (suite, kdf); Crypto suite; KDF edge catalog
+
+**Gate:** Extends the core KAT manifest job: the separation KAT asserted mechanically over the whole edge table plus proptest KDF-edge separation over random inputs; manifest rows freezing every edge's exact context string and input layout; the fixed-ephemeral-key full-envelope HPKE KAT; subkey-binding and contact-code accept/reject vectors (bad binding signature rejects).
+
+**Depends on:** Land the det-CBOR codec, error surface, and KAT manifest spine
+
+## Slice 3
+
+**Title:** Implement the kind-uniform envelope, AAD, and seal/unseal
+
+**Scope:**
+- Lands the kind-uniform envelope codec `{v, id, epochTag{scope, epoch}, readSealed, writeSealed?, grantSection?}` with `kind` inside the sealed read-body; the read-body tagged union (folder `{children[]}` | file `{versions[]}` with inline random content keys, injected timestamps); child refs `{id, name, ipnsName, kind, linkCounter}`.
+- Lands the `seal` module core: AAD `(v, id, scope, epoch, structTag)` under the fresh `cipherbox/v2` domain separator (`ipnsName` deliberately excluded), seal/unseal via XChaCha20-Poly1305, `v` bound into the AAD so downgrade fails the tag.
+- Lands uniqueness fail-closed at decode: duplicate `id`s anywhere, duplicate `ipnsName`s within a scope; unknown-field preservation through a full rewrite.
+- Freezes the structure-tag registry skeleton in the manifest, populating `read-body`.
+- Does NOT land: the grant section, write-body, structure signatures, pointer/mailbox payloads, anything stateful (floors, gate pipeline — engine).
+
+**Blueprint anchors:** Module map (seal); Envelope and structures (envelope, AAD, read-body, child refs); Structure-tag registry; Wire format (uniqueness fail-closed, versioning)
+
+**Gate:** Extends the core KAT manifest job: fixed key + nonce full-envelope symmetric-seal KATs; accept/reject vectors for AAD transplants, truncations, downgrade (`v` mutation fails the tag), duplicate-id and duplicate-ipnsName rejection; proptest envelope round-trip and the strict name comparator (idempotence, symmetry, platform agreement).
+
+**Depends on:** Land the det-CBOR codec, error surface, and KAT manifest spine; Add the crypto suite and the frozen KDF edge catalog
+
+## Slice 4
+
+**Title:** Implement the grant section, write-body, and structure signatures
+
+**Scope:**
+- Lands the write-body codec (scope roots only): grant ledger `(recipientIdentityPk, recipientEncPk, permission, tag)`, write-plane history link, `directChildScopeIndex`; interior nodes publish no write-body.
+- Lands the grant-section structures: grant blobs keyed by blinded tag (`tag → HPKE{readScopeSeed[, writeScopeSeed], epoch, pointerReadKey}`), the epoch-free grant-set commitment (ECDSA over det-CBOR), owner blob, ascent link (public half plaintext, derive-and-verify against the parent nodeSeed), per-epoch history links.
+- Lands structure signatures: the rotator's pseudonym Ed25519 signature over det-CBOR `{scopeId, epoch, structTag, recipientTag?, H(ciphertext)}`, plus the pure per-structure verify functions the adoption gate composes.
+- Does NOT land: the adoption-gate pipeline, floor law enforcement, or the whole-record fail-closed policy — those are the engine's gate stage.
+
+**Blueprint anchors:** Envelope and structures (write-body, grant section, structure signatures); Structure-tag registry; Crypto suite (HPKE, writer pseudonyms)
+
+**Gate:** Extends the core KAT manifest job: manifest tags `write-body`, `grant-blob`, `owner-blob`, `ascent-link`, `history-link` each with accept/reject vectors; fixed-ephemeral-key HPKE full-envelope KATs per structure; structure-signature preimage vectors with bad-signature, wrong-tag, and recipient-tag-transplant reject vectors; ascent-link derive-and-verify mismatch rejection.
+
+**Depends on:** Add the crypto suite and the frozen KDF edge catalog; Implement the kind-uniform envelope, AAD, and seal/unseal
+
+## Slice 5
+
+**Title:** Implement IPNS records, the name codec, and pointer/mailbox payloads
+
+**Scope:**
+- Lands the `ipns` module: spec-compliant V2 record create/sign (`signatureV2` over the CBOR data field, V1 fields for ecosystem compatibility), `Value = /ipfs/&lt;CID&gt;`, first publish embeds sequence 1, CAS publishes embed the exact expected sequence, 90-day client-signed EOL, TTL always explicit and injected from the sync timing profile — core never defaults it.
+- Lands the pure verify chain: Ed25519 pubkey extracted from the name itself (never a side channel), `signatureV2` verify, data-field/Value consistency, EOL and sequence extraction for the gate's comparators; the name codec (base36 CIDv1 libp2p-key encode + strict decode); keyless re-PUT byte-stable marshal/unmarshal of foreign signed records.
+- Lands the pointer-payload codec (the re-point object `{scopeId, currentRootName, writeEpoch, minReadEpoch, prevRootName}`, owner-identity-signed, sealed under the stable pointerReadKey; vault pointer carries the same object) and the mailbox-payload codec (HPKE-sealed, sender identity signature inside the seal) with their verify functions.
+- Does NOT land: transports (dumb byte movers injected by the engine), the republisher, scope-pointer consult policy, floor comparisons.
+
+**Blueprint anchors:** IPNS records; Envelope and structures (pointer payloads, mailbox payloads); Structure-tag registry
+
+**Gate:** Extends the core KAT manifest job: verdict-vector KATs pinning the record acceptance domain; fixed-key, injected-timestamp full-record KATs; keyless re-PUT byte-stable round-trip vectors; proptest IPNS name codec round-trip; manifest tags `pointer-payload` and `mailbox-payload` with accept/reject vectors (unsigned mailbox payload drops, re-point signature failure rejects).
+
+**Depends on:** Land the det-CBOR codec, error surface, and KAT manifest spine; Add the crypto suite and the frozen KDF edge catalog; Implement the kind-uniform envelope, AAD, and seal/unseal</result>
+<usage><subagent_tokens>45864</subagent_tokens><tool_uses>4</tool_uses><duration_ms>112197</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4de542e645fa7474</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/a4de542e645fa7474.output</output-file>
+<status>completed</status>
+<summary>Agent "Slice desktop blueprint" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Slice 0 — Run the #32 hardware verification gates before crates/fuse work** *(NOT CI — task-shaped pre-work with recorded results)*
+
+- **Scope:** Execute the five #32 pre-build checks: FUSE-T ≥ 1.2.7 SMB invalidation round-trip with measured cross-client latency (feeds the kernel entry/attr TTL constants in the sync timing profile), replay of the v1 macOS cross-client flake scenario against the SMB backend, overwrite-rename atomicity under SMB, FUSE-T commercial license terms for bundling, and the FSKit spike against the macOS 27 beta (`mountSingleVolume`/`DataCacheHandler`). Results recorded alongside the profile constants they feed. Does NOT land any `crates/fuse` code; a failed gate reopens the driver decision, not the blueprint.
+- **Blueprint anchors:** Backends; Freshness — the desktop trigger source; Open edges (desktop.md); Hardware verification gates (testing.md)
+- **Gate:** None — explicitly NOT CI. Deliverable is recorded results + measured constants landed as sync-timing-profile changes with measurements linked.
+- **Depends on:** none
+
+**Slice 1 — Scaffold the apps/desktop Tauri v2 shell and version surface**
+
+- **Scope:** Minimal Tauri v2 app: menu-bar/tray skeleton, window chrome, workspace membership, and `apps/desktop/src-tauri/tauri.conf.json` — restoring the second release-please version surface (root `package.json` + tauri.conf.json via `extra-files`). CI job compiling the shell on all three platforms. No engine wiring, no login, no mount, no vault semantics (shells get no unit suites by design).
+- **Blueprint anchors:** Component map; Tauri shell
+- **Gate:** New named `desktop build` job (cargo check + Tauri build, macOS/Linux/Windows) in the PR tier.
+- **Depends on:** none
+
+**Slice 2 — Implement the desktop seam set against the conformance kits**
+
+- **Scope:** The desktop seam implementations under `&lt;data_local_dir&gt;/cipherbox/&lt;accountId&gt;/`, ciphertext-only at rest: FloorStore (fsync-barriered files, write → `sync_all` → parent-dir fsync), StagingStore (generalized v1 write journal: one durable record per op, sidecar staged ciphertext, `.json`-before-`.bin` removal, orphan-sidecar GC), SnapshotCache (sealed cache files), CredentialStore (`keyring`, refresh token + last-account id only), Http/RecordTransport (`reqwest`), Scheduler (Tokio). Does NOT construct the engine at login or touch the webview.
+- **Blueprint anchors:** Engine wiring
+- **Gate:** Seam conformance kits for desktop implementations inside the cargo workspace tests PR gate.
+- **Depends on:** Slice 1 (Scaffold the apps/desktop Tauri v2 shell and version surface); cross-area: engine seam traits + reusable conformance kits from `crates/engine`.
+
+**Slice 3 — Build the crates/fuse operation core and host-adapter trait**
+
+- **Scope:** The platform-neutral vfs-operation core (lookup, getattr, readdir, open/read/write/release, create, mkdir, unlink, rmdir, rename, statfs) over the facade only; the key-free inode/handle model (per-mount-session allocation, stable across renames, keyed by the engine's stable node id, `kind` from the child ref); name-length/reserved-character validation and platform-junk filtering in the core; the host-adapter trait (inbound platform-normalized ops, outbound push-invalidation callback with declared-capability fallback). readdir/lookup served from the engine snapshot with the pending-op overlay applied. No real adapters, no kernel, no mounts.
+- **Blueprint anchors:** Doctrine; Component map; The FS core and host adapters; Names and attributes; Testing hooks
+- **Gate:** `fuse op core` in the cargo workspace tests PR gate — vfs ops driven against a real engine on fake seams, including never-block-law assertions.
+- **Depends on:** Slice 0 (hardware gates precede `crates/fuse` per testing.md); cross-area: engine facade, snapshot ⊕ pending-op overlay, strict comparator.
+
+**Slice 4 — Implement fuse read and write paths, journal ack, and freshness**
+
+- **Scope:** Ranged chunk reads (cached-first, CID-verified fetch, first byte before last byte) with the bounded in-memory plaintext LRU chunk cache zeroized on unmount; per-handle sealed spill files under ephemeral XChaCha20 keys; release/create/mkdir/rename/unlink/rmdir each becoming exactly one facade intent op, acked at durable StagingStore journal time (no-false-ack); honest ENOSPC on staging-budget exhaustion or hosted-quota preflight refusal; the scope-exit refusal path rejecting the op at journal time with EIO; dead-letter surfacing hooks; FUSE-op TTL checks + focus-window derivation from the op stream + engine-event-stream-driven push invalidation. No adapters, no tray UI (dead-letter UX is Slice 6).
+- **Blueprint anchors:** Reads, writes, and the never-block law; Conflicts, dead letters, and rotation; Freshness — the desktop trigger source
+- **Gate:** `fuse op core` (same named cargo job, extended: never-block law, ack-at-journal, ENOSPC, TTL-check/invalidation coverage).
+- **Depends on:** Slice 3 (Build the crates/fuse operation core and host-adapter trait); cross-area: engine op queue, sync core, content-plane ranged fetch, scope-exit detection in the op pipeline.
+
+**Slice 5 — Add the FUSE-T SMB, libfuse3, and WinFsp host adapters**
+
+- **Scope:** Three thin adapters behind the trait: FUSE-T ≥ 1.2.7 SMB backend (macOS, readdir single-pass quirk, SMB-backend invalidation), Linux kernel FUSE via the vendored `fuser` crate with the MSG_PEEK patch carried plus its committed regression test (`inval_inode`/`inval_entry`), and WinFsp (case-insensitive lookup, NTSTATUS mapping, notify API). Errno/status mapping per adapter; kernel entry/attr TTLs set from the sync timing profile per backend capability. No FSKit adapter (designed-for, deliberately unbuilt), no macFUSE, no File Provider.
+- **Blueprint anchors:** The FS core and host adapters; Backends; Freshness — the desktop trigger source
+- **Gate:** `Windows cargo check + adapter tests` (PR tier, authoritative for the WinFsp adapter) + per-adapter errno/status mapping and MSG_PEEK regression tests in the `fuse op core` cargo job.
+- **Depends on:** Slice 0 (measured constants + SMB verification results); Slice 3; Slice 4.
+
+**Slice 6 — Wire login, mount lifecycle, tray, and the mounted e2e matrix**
+
+- **Scope:** Engine construction in-process at login with the desktop seam set; Web3Auth Core Kit webview handoff — secret crosses once to `start(secret)` and is zeroized, webview never holds tokens or keys; dev-key mode as the headless e2e seam; mount lifecycle (mount failure never fails login; quiesce adapter → unmount → stop engine; logout = facade logout + unmount + keychain delete, durable stores survive; "forget this device" wipes); tray rendering of the event stream (Synced/Reconciling/Stale/Offline ladder, dead-letter parked-writes with edge-triggered notifications and the "recovered files" export, trust-violation/withheld-update escalation warning never conflated with staleness, "Sync Now" nocache); Tauri updater minisign wiring. Ports `tests/desktop-e2e/` onto the facade: mount round-trip, conflict outcomes, cross-client sync, offline replay, rotation-under-mount. Release mechanics stay with the deploy blueprint; recycle bin is NOT projected into the mount.
+- **Blueprint anchors:** Tauri shell; Engine wiring; Conflicts, dead letters, and rotation; Testing hooks
+- **Gate:** `desktop mounted matrix` (macOS/Linux/Windows) in the Main gate, revert-first; the desktop leg of the cross-client e2e matrix; the PR-tier smoke slice's timing-profile cross-client scenario once desktop hosts join it.
+- **Depends on:** Slice 1; Slice 2; Slice 4; Slice 5; cross-area: engine facade event stream, sync timing profile CI values, API test-login path for dev-key mode.</result>
+<usage><subagent_tokens>50625</subagent_tokens><tool_uses>6</tool_uses><duration_ms>115597</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a50d3e399e9221cc2</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/a50d3e399e9221cc2.output</output-file>
+<status>completed</status>
+<summary>Agent "Slice web-client blueprint" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Slice 1 — Build crates/wasm engine facade bindings and the WASM KAT gate**
+- **Scope:** One wasm-bindgen ES module exposing the engine facade — commands and the event stream — with core linked inside (nothing exports core directly to JS); generated `.d.ts` output as the boundary contract, no hand-maintained TS mirror. Boundary hygiene: IPNS sequence numbers and sizes as `bigint`, binary payloads as transferred `ArrayBuffer`s, `getrandom` wired to `crypto.getRandomValues` in the worker scope. Single-threaded, no SharedArrayBuffer; Vite-fingerprinted immutable artifact. Does NOT include worker hosting, transports, seams, or any TS logic — the crate has no logic of its own.
+- **Blueprint anchors:** Component map; WASM packaging and the type boundary
+- **Gate:** The WASM KAT run in the PR gate — the full core KAT suite executed as WASM (the residual parity surface: u64/BigInt and getrandom boundary risks), merge-blocking day one.
+- **Depends on:** engine facade (`crates/engine`, cross-area); core KAT manifest job (cross-area).
+
+**Slice 2 — Implement browser seams and bootstrap the client browser suite**
+- **Scope:** Every browser seam implementation in `packages/client`, running in the engine worker realm: FloorStore (IndexedDB, no in-memory fallback tier — unavailable IndexedDB is an unsupported-browser hard error; cold-seed from the re-point object per the floor law), StagingStore (op-queue rows in IndexedDB, staged bytes in OPFS sync access handles), SnapshotCache (IndexedDB, ciphertext-only at rest), RecordTransport (`fetch` on the `/routing/v1` endpoint set), Http (`fetch` with `credentials: 'include'`), Scheduler (worker timers), CredentialStore no-op. Wires the engine's seam conformance kits against the real implementations and stands up the Playwright-driven browser CI job with real IndexedDB and OPFS. Does NOT include tab leadership, transports, the RefreshHintSource UI leg, or the Service Worker.
+- **Blueprint anchors:** Browser seams; Component map
+- **Gate:** The `packages/client` browser suite — new merge-blocking PR job; seam conformance kits pass per trait (FloorStore monotonicity/durability, StagingStore ordering and orphan GC, SnapshotCache ciphertext-only-at-rest).
+- **Depends on:** Build crates/wasm engine facade bindings and the WASM KAT gate; engine seam traits + conformance kits (cross-area).
+
+**Slice 3 — Host the engine worker and land the local facade transport**
+- **Scope:** The dedicated module worker: dynamic import of the WASM artifact, engine construction over the browser seams, and the hand-written promise-correlated RPC layer — request ids, facade commands verbatim, the one-way event stream, no codegen, wasm-bindgen types end to end. One typed async facade re-exporting the generated types; the local transport (UI ↔ own worker `postMessage`, transferables allowed). Facade `start(secret)` cold-start plumbing (vault-pointer resolve → floor cold-seed → root adoption → first snapshot event) and logout teardown (engine zeroizes WASM state, worker torn down). Single-tab only — no leadership, no broadcast transport, no UI.
+- **Blueprint anchors:** Engine hosting and tab leadership; WASM packaging and the type boundary; Login and identity
+- **Gate:** The `packages/client` browser suite — RPC round-trip and event-stream delivery, `bigint`/transfer boundary hygiene, cold start and logout against a fake `/routing/v1` record store.
+- **Depends on:** Build crates/wasm engine facade bindings and the WASM KAT gate; Implement browser seams and bootstrap the client browser suite.
+
+**Slice 4 — Add tab leadership, broadcast transport, and leader failover**
+- **Scope:** Web Locks election on `cipherbox-engine`: the leader spawns the engine worker and runs everything — sync ticks, background jobs, the op-queue drain, publishes; followers are thin mirrors with no worker and no keys, riding `BroadcastChannel` both ways (projections/events as structured-clone data, commands carrying at most `Blob`/`File` handles). Transport selection under the one facade, swapped on leadership change without the UI noticing. Failover: rehydration from the durable seams, ops journaled before ack so no accepted work is lost, in-flight commands time out and surface a retry. Cross-tab focus hints and the leader's focus window as the union of all tabs' open folders (RefreshHintSource cross-tab leg).
+- **Blueprint anchors:** Engine hosting and tab leadership; Doctrine; Browser seams
+- **Gate:** The `packages/client` browser suite — leadership election and the single-writer invariant, kill-the-leader failover with no accepted-op loss, both facade transports, against real Web Locks and BroadcastChannel.
+- **Depends on:** Host the engine worker and land the local facade transport.
+
+**Slice 5 — Land the Service Worker byte pipe and app-shell precache**
+- **Scope:** The SW as a dumb pipe: registration-time `MessageChannel` port brokerage, `/stream/…` ticket-URL interception, Range forwarded to the engine worker, plaintext streamed back through the port; no keys, no crypto, no state worth keeping — a killed SW or broken port re-brokers and re-buffers; follower tabs route media through the leader. The same SW precaches the app shell so the UI boots offline; it never caches vault data (ciphertext caching stays the SnapshotCache's job). Does NOT freeze media container edge cases (chunk-size/DAG numbers are an open edge with the engine).
+- **Blueprint anchors:** Content paths; Engine hosting and tab leadership; Open edges
+- **Gate:** The `packages/client` browser suite — Service Worker brokerage scenarios, including port re-broker after SW kill and follower media routing.
+- **Depends on:** Add tab leadership, broadcast transport, and leader failover; engine content-plane download/stream commands (cross-area).
+
+**Slice 6 — Rebuild the web shell with login and the vault browser**
+- **Scope:** `apps/web` (React 18 + Vite, edited in place): Web3Auth Core Kit on the UI thread with the one-shot login-secret handoff (transferred buffer, own copy zeroed), SIWE via wagmi signature forwarding, the two cold-start states; routes keyed on the stable node id (`/`, `/files/:nodeId`) — no `'root'` sentinel, no `ipnsName` params; the single `useSyncExternalStore` adapter over the event stream with no independent writers (rendered state = the engine's word, pending-op overlay pre-applied); progressive listing hydration; upload/download via facade (`File` handle transfer, `Blob` object-URL); staleness-ladder chrome, offline banner, manual refresh with nocache semantics. Harvest reusable presentational components/styling and the Web3Auth login glue from v1 (`git checkout v1 -- apps/web/src/...`) while rewiring all data flow to engine state — no Zustand `folderTree`, no web-side crypto, no api-client singleton. Lands the DEV-gated facade introspection hook and ports the `tests/web-e2e/` Playwright skeleton (page objects, wallet-mock, test-login helpers) rewired to it.
+- **Blueprint anchors:** Composition (apps/web); UI state law; Login and identity; Content paths; Testing hooks
+- **Gate:** The e2e smoke slice in the PR gate — web login-and-CRUD against the production build served statically, deterministic waits polling the introspection hook, `retries: 0`.
+- **Depends on:** Add tab leadership, broadcast transport, and leader failover (Slice 5 not required); API test-login environment gating (cross-area).
+
+**Slice 7 — Ship sharing, bin, settings, and invite views over the facade**
+- **Scope:** `/shared` from the vault share list in the snapshot; sharing UI as facade commands end to end — contact-code import (QR/paste, verified in the engine), grant issue/revoke/downgrade, invite links with the fragment secret handed to the facade unread plus the `/invite/:…` claim route; revocation states rendered from the engine's revocation-signal/unresolvable/epoch-lag classification, withheld-update escalations and trust violations as the distinct warning class (never staleness), the bearer-capability flag for write links; `/bin` restore/purge ops; `/settings` (auth methods, MFA/devices via Core Kit UX, sealed `ByoIpfsConfig` BYO pinning, vault settings, export, "forget this device" durable-seam wipe); persistent actionable dead-letter notices. Does NOT include client-side search or the push overlay (designed-for, deliberately unbuilt).
+- **Blueprint anchors:** Composition (apps/web); UI state law; Login and identity; Doctrine
+- **Gate:** Web Playwright — new share/revocation/bin/settings specs land in the full web-e2e suite on the main gate (revert-first), with the timing-profile cross-client scenario (two web instances on one vault) added to the PR smoke slice the same day.
+- **Depends on:** Rebuild the web shell with login and the vault browser; engine grant/rotation commands and the mailbox over the API (cross-area).</result>
+<usage><subagent_tokens>51941</subagent_tokens><tool_uses>6</tool_uses><duration_ms>137725</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a1bdabd6e8dd40095</task-id>
+<tool-use-id>toolu_014yt4BpChMXxHZp8k4Cugz3</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/a1bdabd6e8dd40095.output</output-file>
+<status>completed</status>
+<summary>Agent "Slice engine blueprint" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>**Slice 1 — Scaffold engine seams, in-memory fakes, conformance kits and facade**
+- **Scope:** The nine seam traits (FloorStore, RecordTransport, Http, Mailbox, RefreshHintSource, Scheduler, StagingStore, SnapshotCache, CredentialStore) as opaque-byte/event contracts; the constructor taking the seam set whole so a missing seam is a compile error; the engine test kit's in-memory fakes (virtual-clock Scheduler, fake `/routing/v1` record store, in-memory FloorStore/StagingStore/Mailbox, seeded entropy); the reusable per-seam conformance kits (FloorStore monotonicity/durability, StagingStore ordering and orphan GC, SnapshotCache ciphertext-only-at-rest), proven by the fakes passing them; the sync timing profile type with production and CI profiles; the facade skeleton — the single async command-and-event surface with `start(secret)`, module map stubs. No tab-leadership seam (deliberate). Does NOT land: any pipeline logic, any real seam implementation (those live in hosts and pass the kits there).
+- **Blueprint anchors:** Doctrine; Module map; Host seams; Facade.
+- **Gate:** New merge-blocking engine job inside the PR-gate cargo workspace tests: engine unit tests + every seam conformance kit executed against its in-memory fake.
+- **Depends on:** none (crates/core: type-level only — traits move opaque bytes).
+
+**Slice 2 — Add the hand-written API client, token lifecycle and contract suite**
+- **Scope:** The single hand-written Rust API client inside the engine over the Http seam — auth/refresh plus staging-only test-login, batch register `[{ipnsName, headCid?, contentCids[]}]` and batch retire, quota query with `advisory: true` for BYO, hosted upload, mailbox post/poll/ack, recovery endpoint fetch, account BYO toggle, account hard-delete. Token lifecycle: engine-native challenge-signature login with the identity key, SIWE as secondary via the facade, access JWT in engine memory, rotating refresh token via CredentialStore, single-flight refresh with one retry-then-fail on 401. Stands up the CI stack (real NestJS API + Postgres + Kubo + the promoted `mock-ipns-routing` `/routing/v1` store) and the live contract-test suite — the sdk-e2e descendant and the sole contract enforcement; the API's committed OpenAPI document stays a docs artifact with a freshness check only. Does NOT land: register-first ordering in the publish pipeline (slice 4), mailbox engine logic (slice 7).
+- **Blueprint anchors:** API client; Doctrine (#28 D5/D6); Host seams (Http, CredentialStore).
+- **Gate:** The contract suite on the CI stack, merge-blocking on every PR from day one: challenge-signature login, refresh rotation, SIWE secondary, test-login environment gating (production refuses), raw endpoint round-trips.
+- **Depends on:** Slice 1; crates/core: identity-key signing for the login challenge.
+
+**Slice 3 — Implement the adoption gate and floor law with the simulation harness**
+- **Scope:** The six-stage adoption gate as a pure pipeline over core's checks: record verify, commitment verify (scope roots), grant-section authentication of every seed-bearing structure under committed writer pseudonyms, strictly-newer sequence vs the durable per-name floor, epoch tag at or above the scope's epoch floor, unseal success — any failure a fail-closed trust violation, never staleness; whole-record rejection, pin last-known-good, duplicate `id`/`ipnsName` surfaced as trust violations. The floor law: advance only on AAD-confirmed unseal, cold-seed from a re-point object's owner-vouched `writeEpoch`/`minReadEpoch`, pointer `writeEpoch` advances the floor on sight, grant-blob epoch fields advisory only, FloorStore regression fail-closed. Lands the simulation harness itself: N engine instances on one fake record store, virtual time, adversarial replay/transplant/re-sign, table-mirroring anti-vacuity meta-tests. Does NOT land: resolve/publish wiring (slice 4) or live pointer resolution (slice 6) — records and re-point objects are hand-fed.
+- **Blueprint anchors:** Adoption gate and floors; Doctrine.
+- **Gate:** Engine simulation in the cargo workspace tests PR gate: the six-stage matrix — acceptance plus every reject class with its named trust-violation error — and the floor-law scenarios (cold-seed, monotonic advance, regression rejection, pointer-driven advance), hard-asserted 1:1 against the design tables.
+- **Depends on:** Slice 1; crates/core: record verify chain, grant-set commitment verify, structure signature checks per structure tag, AAD-bound epoch tags, unseal with the trust-violation error class, duplicate-key rejection at decode.
+
+**Slice 4 — Build the gated resolve/publish pipeline and record liveness jobs**
+- **Scope:** The net module: cache-first resolve (last-known-good renders immediately, fan-out GET across the endpoint set, core verify, adoption gate on every resolve, only gate-passing records touch the snapshot); publish register-first fail-closed through the API client (single-item batches for ordinary writes, bulk for waves/sweeps), core-signed with sequence 1 embedded on first publish and exact expected sequence on CAS, parallel PUT with any-ack success and background retry, confirm-by-re-resolve, lost-race re-resolve; explicit TTL from the sync timing profile plus the 90-day client-signed EOL; the ~hourly keyless re-PUT Scheduler job, the sub-~30-day EOL republish at seq+1, revival after a &gt;EOL lapse via the recovery endpoint or pin-set name→CID mapping, and retirement policy (interior batch-retire at wave completion; root linger stubbed pending the migration-window constant). Does NOT land: rebase (slice 6), the pointer planes (slice 6).
+- **Blueprint anchors:** Resolve/publish pipeline; API client (register-first ordering); Open edges (migration-window closure).
+- **Gate:** Engine simulation: CAS races, any-ack/retry fan-out, virtual-time multi-day EOL timelines, the re-PUT job, revival; plus contract suite additions — register-first fail-closed (publishing an unregistered name refused), batch register/retire idempotency.
+- **Depends on:** Slice 2; Slice 3; crates/core: record create/sign, IPNS name codec, EOL/sequence extraction.
+
+**Slice 5 — Add the content plane: chunk framing, pin providers, verified reads**
+- **Scope:** Fixed-size chunk framing sealed with core's content-seal primitive under a fresh random per-version content key, DAG assembly addressed by the version's `contentCid` and shaped chunk-aligned for ranged block/CAR fetches; the pin-provider layer (hosted default, external, dual) with sealed `ByoIpfsConfig` and engine-side provider connection testing over Http; reads via the token-authed trustless gateway with public-gateway fallback, client-side CID verification on every response; pre-flight quota check; keep-all-within-quota retention with an explicit prune op. Chunk size, DAG shape, and retention numbers stay open-edge constants in the profile. Does NOT land: the service-worker decryption layer (web blueprint) or upload staging through the op queue (slice 6).
+- **Blueprint anchors:** Content plane; API client (surface consumed); Open edges (chunk size, DAG shape, retention defaults).
+- **Gate:** Engine cargo tests (framing/DAG determinism, CID-verify rejection on tampered block/CAR bytes over the fake Http seam) plus contract suite additions: hosted upload, quota authoritative vs BYO `advisory: true`.
+- **Depends on:** Slice 2; crates/core: content-seal primitive, CID verification.
+
+**Slice 6 — Implement the sync core: op queue, rebase, staleness, pointer consult**
+- **Scope:** The state law (last-known-good snapshot ⊕ pending-op overlay, single owner); the durable FIFO op queue of intent ops (`create`, `delete`, `rename`, `relink`, `updateContent`) carrying base sequences, FIFO replay through the standard rebase onto gate-passing state only; all five rebase races (conditional delete, rename/rename via parent CAS, add/add auto-suffix with the strict NFC+case-fold comparator, dest-first move with presence-conditional source-remove, dual-link observed repair via the link counter); dead-letter with staged bytes preserved; OPFS/IndexedDB-budgeted offline staging behind StagingStore; the 30 s jittered focus-window tick (vault pointer, open folder, ancestor chain), immediate ticks on RefreshHintSource, on-access refresh past staleness; the staleness ladder and withheld-update escalation; the pointer planes — scope pointer and re-point object handling, consult discipline polled-not-fallback (tick for open shared scopes, access for cached, first act on cold start), the indexed vault-pointer chain with probe-one-past and highest-valid-owner-signed adoption, owner-plane publishes in owner sessions only, and the non-circular cold-start sequence. Does NOT land: scope-exit rotation triggering (slice 8) — a cross-scope `relink` out of a granted scope queues the trigger event only.
+- **Blueprint anchors:** Sync core; Pointer planes; Adoption gate and floors (cold start).
+- **Gate:** Engine simulation: the five-race table mirrored 1:1, offline queue replay, dead-letter on revoked-while-offline, staging-budget fail-fast, staleness ladder and escalation, the keyless re-PUT adversary (forged old-epoch records defeated by re-point adoption, the pin-window bound), cold-start adopts nothing before floor seeding.
+- **Depends on:** Slice 3; Slice 4; crates/core: strict name comparator, pointer-key KDF edges, re-point object codec.
+
+**Slice 7 — Add grants ledger, commitment, contact import and mailbox logic**
+- **Scope:** The grants module's state: the authoritative grant ledger in the write-body, the epoch-free owner-signed grant-set commitment, per-(scope, writer) writer pseudonyms, blinded-tag blob self-location; owner-only authority enforcement; contact import with mandatory fail-closed contact-code binding verification; the mailbox module — sender-identity signature verified inside the HPKE seal against the contact-anchored key, unauthenticated drops, post with idempotency keys, poll on the sync tick, ack only after the pointed-at fact is durable, reject-new surfaced; the accept flow through the gate into the sealed received-shares list with persisted `pointerReadKey`, the owner's sent-index; revocation classification (revocation-signal vs unresolvable vs epoch-lag) surfaced to hosts; the owner seed cache as canonical owner entry with the owner-blob/ascent-link/unseal cross-check raising attributable abuse events. Does NOT land: grant creation, invites, or any revoke action — those require the rotation primitives (slice 8).
+- **Blueprint anchors:** Grants and ledger; Mailbox logic; Adoption gate and floors (stages 2–3).
+- **Gate:** Engine simulation: two-instance share accept end-to-end over the fake mailbox and record store, uncommitted-tag rejection, sender-auth drop, ack-after-durable, the revocation-classification triple, owner-entry cross-check disagreement as abuse events; contract-suite mailbox lifecycle (from slice 2) exercised through the engine path.
+- **Depends on:** Slice 2; Slice 3; Slice 6; crates/core: blinded tags, writer pseudonyms, grant blob and owner blob seal/unseal, HPKE mailbox-payload seal, contact-code binding-signature verify.
+
+**Slice 8 — Implement rotation primitives, sweep, name wave and grant creation**
+- **Scope:** The three primitives with no recovery machinery: `rotateScope` (override seed mint, eager set law — owner cascade over every transitively-reachable descendant scope root fully rotated vs grantee flat self-contained, grant blobs re-wrapped verbatim for the committed set, owner blob, history link, ascent link, structure-signed by the rotator's writer pseudonym); `sweep` (idempotent epoch-lag work-list, epoch-converged pre-grant convergence, direct-child-scope index self-heal, metadata-only re-seal, idle-cadence Scheduler job, CAS-safe concurrent sweepers); `rotateScopeWrite` (commitment re-sign, write override seed, background child-first name wave with root re-pointed last, three-channel re-point publish, inventory swap via register-first and batch retire, root linger); the full trigger table including full-depth scope-exit detection wired to slice 6's queued events, immediate-cut read revoke, write revoke/downgrade, discovered link expiry, manual rotate-now; grant creation (converge → mint scope at epoch 1 → write-scope cut → parent index update → publish → mailbox share pointer) and invites (ephemeral-key blobs, bearer write-link flagging, claim conversion). Does NOT land: scheduled hygiene rotation (designed-for, deferred).
+- **Blueprint anchors:** Rotation primitives (rotateScope, sweep, rotateScopeWrite, Triggers, Residuals); Grants and ledger (grant creation, invites); Pointer planes (re-point publish).
+- **Gate:** Engine simulation: the trigger table and eager-set law mirrored 1:1, sweep idempotence and concurrent sweepers, resumed name waves via the write-plane history link, crash-recovery from published records only, revocation immediate cut, forgery-window bounds for write-grantee and read-only survivors, grant-creation convergence requirement.
+- **Depends on:** Slice 4; Slice 6; Slice 7; crates/core: override seed entropy wiring, history and ascent link seal/unseal, write-plane KDF edges for name derivation, commitment re-sign.</result>
+<usage><subagent_tokens>58046</subagent_tokens><tool_uses>3</tool_uses><duration_ms>218911</duration_ms></usage>
+</task-notification>
+
+---
+
+is there a slice for the grafana dashboard, as well as the load testing functionality that was created in V1?
+
+---
+
+<task-notification>
+<task-id>bnwttag5j</task-id>
+<tool-use-id>toolu_019P2Q8Y4TivtBf9PY8MByA9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/bnwttag5j.output</output-file>
+<status>completed</status>
+<summary>Background command "Create the 37 build-tracker issues plus umbrella" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+seems like all the issues are created - there's a total of 41 issues created.
+
+---
+
+<task-notification>
+<task-id>bdv0f3zkl</task-id>
+<tool-use-id>toolu_01TRZcg6EiqWM1ASGS6LSTBV</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/cf06cf3c-3e8b-4441-b827-71290e2c4d50/tasks/bdv0f3zkl.output</output-file>
+<status>completed</status>
+<summary>Background command "Patch umbrella and cutover issues, retrying through 503s" completed (exit code 0)</summary>
+</task-notification>
