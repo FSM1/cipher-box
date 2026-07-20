@@ -101,7 +101,8 @@ pub fn encode_map_partial(known: &Map, unknown: &UnknownFields) -> Result<Vec<u8
         if take_known {
             let (key, value) = k.next().expect("peeked");
             write_text(&mut out, key);
-            write_value(&mut out, value);
+            // Depth 1: the emitted map is the enclosing item.
+            write_value(&mut out, value, 1);
         } else {
             let (key, raw) = u.next().expect("peeked");
             write_text(&mut out, key);
@@ -185,5 +186,31 @@ mod tests {
         let bytes = [0xa1, 0x61, b'a', 0x18, 0x01];
         let err = decode_map_partial(&bytes, |_| false).unwrap_err();
         assert_eq!(err.check(), "non-canonical-uint");
+    }
+
+    #[test]
+    fn indefinite_length_inside_unknown_value_rejects() {
+        // {"a": <indefinite array>} — 9f ... ff.
+        let bytes = [0xa1, 0x61, b'a', 0x9f, 0xff];
+        let err = decode_map_partial(&bytes, |_| false).unwrap_err();
+        assert_eq!(err.check(), "indefinite-length");
+    }
+
+    #[test]
+    fn truncated_unknown_value_rejects() {
+        // {"a": <uint head with its argument byte cut off>} — no partial
+        // UnknownFields may escape a failed decode.
+        let bytes = [0xa1, 0x61, b'a', 0x18];
+        let err = decode_map_partial(&bytes, |_| false).unwrap_err();
+        assert_eq!(err.check(), "truncated");
+    }
+
+    #[test]
+    fn trailing_bytes_after_partial_map_reject() {
+        // {"a": 1} followed by a stray byte — expect_end guards the partial
+        // path exactly like the full decode.
+        let bytes = [0xa1, 0x61, b'a', 0x01, 0x00];
+        let err = decode_map_partial(&bytes, |_| true).unwrap_err();
+        assert_eq!(err.check(), "trailing-bytes");
     }
 }

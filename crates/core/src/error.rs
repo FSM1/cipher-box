@@ -81,13 +81,30 @@ impl fmt::Display for TrustViolation {
             self.offset()
         )?;
         if let Self::DuplicateMapKey { key, .. } = self {
-            write!(f, " (key {key:?})")?;
+            write!(f, " (key {:?})", DisplayKey(key))?;
         }
         Ok(())
     }
 }
 
 impl std::error::Error for TrustViolation {}
+
+/// Map keys rendered into error messages are writer-controlled content —
+/// post-unseal they are sealed-body plaintext. `{:?}` escaping neutralizes
+/// log injection; this cap bounds how much plaintext a crafted key can push
+/// into upstream logs. Full redaction policy belongs to the engine.
+const DISPLAY_KEY_MAX_CHARS: usize = 64;
+
+struct DisplayKey<'a>(&'a str);
+
+impl fmt::Debug for DisplayKey<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0.char_indices().nth(DISPLAY_KEY_MAX_CHARS) {
+            Some((cut, _)) => write!(f, "{:?}…", &self.0[..cut]),
+            None => write!(f, "{:?}", self.0),
+        }
+    }
+}
 
 /// Structurally invalid or profile-unsupported input. Not evidence of
 /// tampering; never accepted either.
@@ -179,7 +196,9 @@ impl fmt::Display for Malformed {
             Self::UnexpectedType { expected, found } => {
                 write!(f, " (expected {expected}, found {found})")
             }
-            Self::UnknownFieldCollision { key } => write!(f, " (key {key:?})"),
+            Self::UnknownFieldCollision { key } => {
+                write!(f, " (key {:?})", DisplayKey(key))
+            }
         }
     }
 }
@@ -244,6 +263,23 @@ impl std::error::Error for CodecError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_bounds_writer_controlled_keys() {
+        let err = TrustViolation::DuplicateMapKey {
+            offset: 0,
+            key: "k".repeat(200),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains('…'), "long keys must render truncated");
+        assert!(
+            msg.len() < 160,
+            "a crafted key must not flood the message: {msg}"
+        );
+        // Short keys render in full.
+        let short = Malformed::UnknownFieldCollision { key: "v".into() };
+        assert!(short.to_string().contains("\"v\""));
+    }
 
     #[test]
     fn check_names_are_unique_across_both_classes() {

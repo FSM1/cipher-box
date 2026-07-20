@@ -216,6 +216,14 @@
     ]
   },
   {
+    "name": "map-keys-length-class-boundary",
+    "hex": "a277616161616161616161616161616161616161616161616100781862626262626262626262626262626262626262626262626201",
+    "diag": "{\"aaaaaaaaaaaaaaaaaaaaaaa\": 0, \"bbbbbbbbbbbbbbbbbbbbbbbb\": 1}",
+    "kinds": [
+      "map"
+    ]
+  },
+  {
     "name": "bool-true",
     "hex": "f5",
     "diag": "true",

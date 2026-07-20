@@ -5,7 +5,7 @@
     "det-cbor": {
       "accept": {
         "file": "vectors/codec/accept.json",
-        "count": 31,
+        "count": 32,
         "requiredKinds": [
           "uint",
           "negint",
@@ -20,7 +20,7 @@
       },
       "reject": {
         "file": "vectors/codec/reject.json",
-        "count": 35,
+        "count": 43,
         "checks": [
           "non-canonical-uint",
           "non-canonical-length",

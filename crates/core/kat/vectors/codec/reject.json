@@ -208,5 +208,53 @@
     "hex": "818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818181818180",
     "check": "depth-exceeded",
     "class": "malformed"
+  },
+  {
+    "name": "two-byte-simple-255",
+    "hex": "f8ff",
+    "check": "simple-value-forbidden",
+    "class": "malformed"
+  },
+  {
+    "name": "map-duplicate-empty-key",
+    "hex": "a2600060f4",
+    "check": "duplicate-map-key",
+    "class": "trust"
+  },
+  {
+    "name": "map-gap-duplicate-fires-unsorted",
+    "hex": "a3616100616201616102",
+    "check": "unsorted-map-keys",
+    "class": "trust"
+  },
+  {
+    "name": "indefinite-bytes-empty",
+    "hex": "5fff",
+    "check": "indefinite-length",
+    "class": "trust"
+  },
+  {
+    "name": "indefinite-text-empty",
+    "hex": "7fff",
+    "check": "indefinite-length",
+    "class": "trust"
+  },
+  {
+    "name": "tag-head-reserved-ai-precedence",
+    "hex": "dc",
+    "check": "tag-forbidden",
+    "class": "malformed"
+  },
+  {
+    "name": "map-key-len-1-in-8bit-form",
+    "hex": "a1780161f6",
+    "check": "non-canonical-length",
+    "class": "trust"
+  },
+  {
+    "name": "map-keys-length-class-boundary-out-of-order",
+    "hex": "a278186262626262626262626262626262626262626262626262620177616161616161616161616161616161616161616161616100",
+    "check": "unsorted-map-keys",
+    "class": "trust"
   }
 ]

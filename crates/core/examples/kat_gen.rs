@@ -261,6 +261,20 @@ fn accept_specs() -> Vec<(&'static str, Value, Vec<&'static str>)> {
             ]),
             vec!["map"],
         ),
+        // Keys straddling the 23/24 length-header class boundary, in
+        // canonical order (length-first: the 23-char key sorts before the
+        // 24-char one whose header grows to 78 18). The reversed order is a
+        // reject vector.
+        (
+            "map-keys-length-class-boundary",
+            {
+                let mut m = Map::new();
+                m.insert("a".repeat(23), Value::Unsigned(0));
+                m.insert("b".repeat(24), Value::Unsigned(1));
+                Value::Map(m)
+            },
+            vec!["map"],
+        ),
         // Simple values.
         ("bool-true", Value::Bool(true), vec!["bool"]),
         ("bool-false", Value::Bool(false), vec!["bool"]),
@@ -559,6 +573,70 @@ fn reject_specs() -> Vec<(&'static str, String, &'static str, &'static str)> {
             depth_129,
             "depth-exceeded",
             "malformed",
+        ),
+        // --- crypto-review additions (PR #659 security review) ----------
+        // f8 ff — two-byte simple value 255: well-formed CBOR (arg >= 32,
+        // unassigned) yet profile-forbidden; f8 14 pins the ill-formed half.
+        (
+            "two-byte-simple-255",
+            h("f8ff"),
+            "simple-value-forbidden",
+            "malformed",
+        ),
+        // a2 60 00 60 f4 — {"": 0, "": false}: duplicate empty-string key.
+        (
+            "map-duplicate-empty-key",
+            h("a2600060f4"),
+            "duplicate-map-key",
+            "trust",
+        ),
+        // a3 6161 00 6162 01 6161 02 — {"a": 0, "b": 1, "a": 2}: a duplicate
+        // separated by a middle key surfaces as an ordering violation, never
+        // silently — pins the check-precedence choice.
+        (
+            "map-gap-duplicate-fires-unsorted",
+            h("a3616100616201616102"),
+            "unsorted-map-keys",
+            "trust",
+        ),
+        // 5f ff / 7f ff — *empty* indefinite bytes/text (the other
+        // indefinite vectors carry chunks).
+        (
+            "indefinite-bytes-empty",
+            h("5fff"),
+            "indefinite-length",
+            "trust",
+        ),
+        (
+            "indefinite-text-empty",
+            h("7fff"),
+            "indefinite-length",
+            "trust",
+        ),
+        // dc — a tag head with reserved additional info 28: tag rejection
+        // fires on the initial byte, before ai validation.
+        (
+            "tag-head-reserved-ai-precedence",
+            h("dc"),
+            "tag-forbidden",
+            "malformed",
+        ),
+        // a1 78 01 61 f6 — {"a"(8-bit len): null}: non-shortest length on
+        // the *key* path.
+        (
+            "map-key-len-1-in-8bit-form",
+            h("a1780161f6"),
+            "non-canonical-length",
+            "trust",
+        ),
+        // The reversed order of the map-keys-length-class-boundary accept
+        // vector: the 24-char key (header 78 18) before the 23-char key
+        // (header 77) violates length-first order.
+        (
+            "map-keys-length-class-boundary-out-of-order",
+            format!("a27818{}0177{}00", "62".repeat(24), "61".repeat(23)),
+            "unsorted-map-keys",
+            "trust",
         ),
     ]
 }

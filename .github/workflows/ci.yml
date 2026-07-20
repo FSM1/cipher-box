@@ -194,6 +194,7 @@ jobs:
         run: |
           cargo run -p cipherbox-core --example kat_gen
           git diff --exit-code -- crates/core/kat
+          test -z "$(git status --porcelain -- crates/core/kat)"
 
       - name: Core suite (native)
         run: cargo test -p cipherbox-core

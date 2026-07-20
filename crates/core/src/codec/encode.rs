@@ -17,13 +17,21 @@ pub(super) const SIMPLE_TRUE: u8 = 21;
 pub(super) const SIMPLE_NULL: u8 = 22;
 
 /// Encode a value in the deterministic profile.
+///
+/// Callers must respect [`super::MAX_DEPTH`]: a deeper `Value` still encodes
+/// (encoding is infallible), but its bytes reject as `depth-exceeded` on
+/// decode — debug builds assert the bound to catch that divergence early.
 pub fn encode(value: &Value) -> Vec<u8> {
     let mut out = Vec::new();
-    write_value(&mut out, value);
+    write_value(&mut out, value, 0);
     out
 }
 
-pub(super) fn write_value(out: &mut Vec<u8>, value: &Value) {
+pub(super) fn write_value(out: &mut Vec<u8>, value: &Value, depth: usize) {
+    debug_assert!(
+        depth < super::MAX_DEPTH,
+        "Value nesting exceeds MAX_DEPTH; the encoding would be undecodable"
+    );
     match value {
         Value::Unsigned(n) => write_head(out, MAJOR_UNSIGNED, *n),
         Value::Negative(n) => write_head(out, MAJOR_NEGATIVE, *n),
@@ -35,10 +43,10 @@ pub(super) fn write_value(out: &mut Vec<u8>, value: &Value) {
         Value::Array(items) => {
             write_head(out, MAJOR_ARRAY, items.len() as u64);
             for item in items {
-                write_value(out, item);
+                write_value(out, item, depth + 1);
             }
         }
-        Value::Map(map) => write_map_head_and_entries(out, map),
+        Value::Map(map) => write_map_head_and_entries(out, map, depth),
         Value::Bool(false) => out.push((MAJOR_SIMPLE << 5) | SIMPLE_FALSE),
         Value::Bool(true) => out.push((MAJOR_SIMPLE << 5) | SIMPLE_TRUE),
         Value::Null => out.push((MAJOR_SIMPLE << 5) | SIMPLE_NULL),
@@ -50,11 +58,11 @@ pub(super) fn write_text(out: &mut Vec<u8>, t: &str) {
     out.extend_from_slice(t.as_bytes());
 }
 
-fn write_map_head_and_entries(out: &mut Vec<u8>, map: &Map) {
+fn write_map_head_and_entries(out: &mut Vec<u8>, map: &Map, depth: usize) {
     write_head(out, MAJOR_MAP, map.len() as u64);
     for (k, v) in map.entries() {
         write_text(out, k);
-        write_value(out, v);
+        write_value(out, v, depth + 1);
     }
 }
 
