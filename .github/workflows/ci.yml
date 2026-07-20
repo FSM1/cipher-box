@@ -538,10 +538,11 @@ jobs:
       contents: read
     steps:
       - name: Require desktop build to pass or be skipped
+        env:
+          DESKTOP_BUILD_RESULT: ${{ needs.desktop-build.result }}
         run: |
-          result='${{ needs.desktop-build.result }}'
-          echo "desktop-build result: ${result}"
-          if [ "${result}" = 'failure' ] || [ "${result}" = 'cancelled' ]; then
-            echo "::error::desktop-build ${result}"
+          echo "desktop-build result: ${DESKTOP_BUILD_RESULT}"
+          if [ "${DESKTOP_BUILD_RESULT}" = 'failure' ] || [ "${DESKTOP_BUILD_RESULT}" = 'cancelled' ]; then
+            echo "::error::desktop-build ${DESKTOP_BUILD_RESULT}"
             exit 1
           fi
