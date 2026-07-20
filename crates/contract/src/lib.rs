@@ -10,6 +10,7 @@
 #![forbid(unsafe_code)]
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use cipherbox_engine::api::IdentityChallengeSigner;
 use cipherbox_engine::seams::{
@@ -24,10 +25,14 @@ pub struct ReqwestHttp {
 }
 
 impl ReqwestHttp {
-    /// Builds a client with reqwest defaults.
+    /// Builds a client with a finite total request timeout so a hung CI stack
+    /// fails the suite instead of blocking it forever.
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .expect("build reqwest client"),
         }
     }
 }

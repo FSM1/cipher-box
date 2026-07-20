@@ -410,8 +410,8 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         format!("{}{}", self.base_url, path)
     }
 
-    /// POST a JSON body without authentication (the challenge/login/refresh
-    /// surface).
+    /// POST a JSON body without authentication (the challenge/login surface;
+    /// refresh builds its request inline to zeroize the secret-bearing body).
     async fn post_json<B: Serialize>(
         &self,
         path: &str,
@@ -481,16 +481,34 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     async fn do_refresh(&self) -> Result<(), ApiError> {
         let stored = self.credentials.load_refresh_token().await?;
         let refresh_token = match stored {
-            Some(bytes) => Some(
-                String::from_utf8(bytes)
-                    .map_err(|_| ApiError::Decode("stored refresh token is not utf-8".into()))?,
-            ),
+            // Wrap the decoded secret so its allocation is cleared at this
+            // terminal owner (mirrors `store_tokens`); `from_utf8` reuses the
+            // stored bytes' buffer, so this also clears them.
+            Some(bytes) => match String::from_utf8(bytes) {
+                Ok(token) => Some(Zeroizing::new(token)),
+                // Corrupted stored credential: self-heal by clearing the dead
+                // session, else every authed call loops 401 → refresh → Decode
+                // → 401. Mirrors the refresh-failure path below.
+                Err(_) => {
+                    self.clear_session().await?;
+                    return Err(ApiError::Decode("stored refresh token is not utf-8".into()));
+                }
+            },
             // Web: no stored token — the HTTP-only cookie rides the Http seam.
             None => None,
         };
-        let response = self
-            .post_json("/auth/refresh", &RefreshRequest { refresh_token })
-            .await?;
+        // Serialize once into a zeroizing buffer so the secret-bearing body is
+        // cleared on every exit path (success, error, network failure).
+        let body = Zeroizing::new(to_json(&RefreshRequest {
+            refresh_token: refresh_token.as_ref().map(|token| token.to_string()),
+        }));
+        let request = HttpRequest {
+            method: HttpMethod::Post,
+            url: self.url("/auth/refresh"),
+            headers: vec![(CONTENT_TYPE.to_owned(), APPLICATION_JSON.to_owned())],
+            body: Some(body.to_vec()),
+        };
+        let response = self.http.send(request).await?;
         if !is_success(response.status) {
             // Session is dead: drop the stale access + refresh material so it
             // is never replayed.
