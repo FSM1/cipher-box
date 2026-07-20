@@ -175,6 +175,33 @@ jobs:
       - name: Cargo test (workspace)
         run: cargo test --workspace --exclude cipherbox-desktop
 
+  engine:
+    name: Engine Tests
+    needs: [changes, lint]
+    if: |
+      !failure() && !cancelled() &&
+      needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: linux-cargo-
+
+      # Engine unit tests plus every seam conformance kit executed against
+      # its in-memory fake (the test-kit feature activates via the crate's
+      # self dev-dependency).
+      - name: Engine tests and seam conformance kits
+        run: cargo test -p cipherbox-engine
+
   core-kats:
     name: Core KATs (native + WASM)
     needs: [changes, lint]
