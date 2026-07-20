@@ -90,6 +90,26 @@ pub enum TrustViolation {
     /// signing). *Trust*: the structure decoded and the signature is a valid
     /// ECDSA encoding, yet the claimed identity did not author it.
     IdentitySignatureInvalid,
+    /// A detached structure signature did not verify over its det-CBOR preimage
+    /// `{scopeId, epoch, structTag, recipientTag?, H(ciphertext)}` (#39 D2/D3).
+    /// *Trust*, never staleness: the preimage binds the scope, epoch, structure
+    /// tag, and (for grant blobs) the recipient tag, so this fires on a forged
+    /// signature, a signature transplanted to a different structure tag, or a
+    /// grant blob's signature replayed under a different recipient tag. The
+    /// whole-record fail-closed policy over this verdict is the engine's gate.
+    StructureSignatureInvalid,
+    /// A grant-set commitment's identity ECDSA signature did not verify over its
+    /// det-CBOR preimage `{ipnsName, ownerPseudonymPk, [(tag, permission,
+    /// pseudonymPk)]}`. *Trust*: the commitment is structurally well-formed, yet
+    /// the owner did not attest this tag/pseudonym set — the forgery the
+    /// mandatory recipient-side commitment verify rejects fail-closed.
+    CommitmentInvalid,
+    /// An ascent link's plaintext public half did not match the X25519 public
+    /// key re-derived from the parent node seed (the ascent-keypair edge). The
+    /// derive-and-verify check (blueprint/core.md "Envelope and structures"):
+    /// an ancestor reader re-derives the expected keypair and rejects a
+    /// mismatched public half before opening. *Trust*, never staleness.
+    AscentLinkMismatch,
 }
 
 impl TrustViolation {
@@ -109,6 +129,9 @@ impl TrustViolation {
         "ipns-signature-invalid",
         "ipns-value-mismatch",
         "identity-signature-invalid",
+        "structure-signature-invalid",
+        "commitment-invalid",
+        "ascent-link-mismatch",
     ];
 
     /// The stable name of the check that fired.
@@ -127,6 +150,9 @@ impl TrustViolation {
             Self::IpnsSignatureInvalid => "ipns-signature-invalid",
             Self::IpnsValueMismatch => "ipns-value-mismatch",
             Self::IdentitySignatureInvalid => "identity-signature-invalid",
+            Self::StructureSignatureInvalid => "structure-signature-invalid",
+            Self::CommitmentInvalid => "commitment-invalid",
+            Self::AscentLinkMismatch => "ascent-link-mismatch",
         }
     }
 }
@@ -156,7 +182,10 @@ impl fmt::Display for TrustViolation {
             | Self::DuplicateIpnsName
             | Self::IpnsSignatureInvalid
             | Self::IpnsValueMismatch
-            | Self::IdentitySignatureInvalid => {
+            | Self::IdentitySignatureInvalid
+            | Self::StructureSignatureInvalid
+            | Self::CommitmentInvalid
+            | Self::AscentLinkMismatch => {
                 write!(f, "trust violation [{}]", self.check())
             }
         }
@@ -242,6 +271,11 @@ pub enum Malformed {
     /// in the tagged-union tag slot, not a non-canonical encoding of a known
     /// kind.
     InvalidNodeKind,
+    /// A grant `permission` field was a text string other than `"read"`/`"write"`
+    /// (the grant ledger and the grant-set commitment). *Malformed*: an
+    /// unrecognized permission is foreign data in the permission slot, the same
+    /// class boundary [`Self::InvalidNodeKind`] draws for the kind discriminant.
+    InvalidPermission,
     /// A fixed-length byte field (a node `id`/`scope` at 16 bytes, a version
     /// `contentKey` at 32) carried the wrong number of bytes. *Malformed*: a
     /// length-wrong id/key slot is structurally invalid input, the same class
@@ -288,6 +322,7 @@ impl Malformed {
         "invalid-enc-subkey",
         "invalid-binding-sig-encoding",
         "invalid-node-kind",
+        "invalid-permission",
         "invalid-field-length",
         "ipns-name-malformed",
         "ipns-record-malformed",
@@ -313,6 +348,7 @@ impl Malformed {
             Self::InvalidEncSubkey => "invalid-enc-subkey",
             Self::InvalidBindingSigEncoding => "invalid-binding-sig-encoding",
             Self::InvalidNodeKind => "invalid-node-kind",
+            Self::InvalidPermission => "invalid-permission",
             Self::InvalidFieldLength { .. } => "invalid-field-length",
             Self::IpnsNameMalformed => "ipns-name-malformed",
             Self::IpnsRecordMalformed => "ipns-record-malformed",
@@ -350,6 +386,7 @@ impl fmt::Display for Malformed {
             | Self::InvalidEncSubkey
             | Self::InvalidBindingSigEncoding
             | Self::InvalidNodeKind
+            | Self::InvalidPermission
             | Self::IpnsNameMalformed
             | Self::IpnsRecordMalformed => Ok(()),
         }

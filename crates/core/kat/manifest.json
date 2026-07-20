@@ -261,5 +261,100 @@
         "identity-signature-invalid"
       ]
     }
+  },
+  "grant": {
+    "writeBodyStructTag": 2,
+    "grantBlobStructTag": 3,
+    "ownerBlobStructTag": 4,
+    "ascentLinkStructTag": 5,
+    "historyLinkStructTag": 6,
+    "writeBodyAccept": {
+      "file": "vectors/grant/write_body_accept.json",
+      "count": 3
+    },
+    "writeBodyReject": {
+      "file": "vectors/grant/write_body_reject.json",
+      "count": 4,
+      "checks": [
+        "unexpected-type",
+        "missing-field",
+        "invalid-permission",
+        "invalid-field-length"
+      ]
+    },
+    "grantBlobAccept": {
+      "file": "vectors/grant/grant_blob_accept.json",
+      "count": 2
+    },
+    "grantBlobReject": {
+      "file": "vectors/grant/grant_blob_reject.json",
+      "count": 3,
+      "checks": [
+        "unexpected-type",
+        "missing-field",
+        "invalid-field-length"
+      ]
+    },
+    "ownerBlobAccept": {
+      "file": "vectors/grant/owner_blob_accept.json",
+      "count": 1
+    },
+    "ownerBlobReject": {
+      "file": "vectors/grant/owner_blob_reject.json",
+      "count": 2,
+      "checks": [
+        "missing-field",
+        "invalid-field-length"
+      ]
+    },
+    "ascentLinkAccept": {
+      "file": "vectors/grant/ascent_link_accept.json",
+      "count": 1
+    },
+    "ascentLinkReject": {
+      "file": "vectors/grant/ascent_link_reject.json",
+      "count": 2,
+      "checks": [
+        "hpke-open-failed",
+        "ascent-link-mismatch"
+      ]
+    },
+    "historyLinkAccept": {
+      "file": "vectors/grant/history_link_accept.json",
+      "count": 1
+    },
+    "historyLinkReject": {
+      "file": "vectors/grant/history_link_reject.json",
+      "count": 2,
+      "checks": [
+        "missing-field",
+        "invalid-field-length"
+      ]
+    },
+    "structureSigAccept": {
+      "file": "vectors/grant/structure_sig_accept.json",
+      "count": 2
+    },
+    "structureSigReject": {
+      "file": "vectors/grant/structure_sig_reject.json",
+      "count": 3,
+      "checks": [
+        "structure-signature-invalid"
+      ]
+    },
+    "grantSetAccept": {
+      "file": "vectors/grant/grant_set_accept.json",
+      "count": 1
+    },
+    "grantSetReject": {
+      "file": "vectors/grant/grant_set_reject.json",
+      "count": 4,
+      "checks": [
+        "commitment-invalid",
+        "missing-field",
+        "invalid-permission",
+        "invalid-field-length"
+      ]
+    }
   }
 }

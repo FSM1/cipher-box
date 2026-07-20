@@ -28,14 +28,25 @@ use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, ChildRef, NodeKind, ReadBody, STRUCT_TAG_MAILBOX_PAYLOAD,
-    STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, Version, build_aad, decode_envelope,
-    decode_read_body, encode_envelope, encode_read_body, open_read_body, seal_read_body,
+    self, AAD_DOMAIN, AadContext, AscentLink, ChildRef, ChildScopeRef, GrantBlobPayload,
+    GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload, NodeKind,
+    OverrideSeedPayload, Permission, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructureSigInput, Version,
+    WriteBody, build_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload,
+    decode_grant_set_commitment, decode_history_link_payload, decode_override_seed_payload,
+    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope,
+    encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
+    encode_override_seed_payload, encode_read_body, encode_write_body, open_ascent_link,
+    open_grant_blob, open_history_link, open_owner_blob, open_read_body, seal_ascent_link,
+    seal_grant_blob, seal_history_link, seal_owner_blob, seal_read_body, sign_grant_set,
+    sign_structure, structure_sig_preimage, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
-use cipherbox_core::suite::ed25519::Ed25519Signer;
+use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer};
+use cipherbox_core::suite::hash::hash;
 use cipherbox_core::suite::hpke::{self, hpke_open, hpke_seal};
 use cipherbox_core::suite::x25519::X25519Secret;
 use serde::Serialize;
@@ -152,6 +163,181 @@ struct Manifest {
     seal: SealSection,
     ipns: IpnsSection,
     payload: PayloadSection,
+    grant: GrantSection,
+}
+
+// --- Grant section: write-body, grant/owner blobs, ascent + history links,
+// --- structure signatures, and the grant-set commitment (ticket #621).
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GrantSection {
+    write_body_struct_tag: u8,
+    grant_blob_struct_tag: u8,
+    owner_blob_struct_tag: u8,
+    ascent_link_struct_tag: u8,
+    history_link_struct_tag: u8,
+    write_body_accept: FileCount,
+    write_body_reject: RejectSection,
+    grant_blob_accept: FileCount,
+    grant_blob_reject: RejectSection,
+    owner_blob_accept: FileCount,
+    owner_blob_reject: RejectSection,
+    ascent_link_accept: FileCount,
+    ascent_link_reject: RejectSection,
+    history_link_accept: FileCount,
+    history_link_reject: RejectSection,
+    structure_sig_accept: FileCount,
+    structure_sig_reject: RejectSection,
+    grant_set_accept: FileCount,
+    grant_set_reject: RejectSection,
+}
+
+/// A write-body accept vector: the canonical plaintext plus the two list counts
+/// the codec exposes.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WriteBodyAcceptVector {
+    name: String,
+    hex: String,
+    ledger_count: usize,
+    child_scope_count: usize,
+}
+
+/// A per-structure HPKE seal KAT: a fixed-ephemeral seal of a grant/owner-blob
+/// payload with the whole envelope (enc + ciphertext) and the structured AAD
+/// frozen (the eciesjs lesson, applied per structure).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HpkeStructureVector {
+    name: String,
+    recipient_secret: String,
+    recipient_public: String,
+    ephemeral_scalar: String,
+    v: u64,
+    id: String,
+    scope: String,
+    epoch: u64,
+    struct_tag: u8,
+    aad: String,
+    plaintext: String,
+    enc: String,
+    ciphertext: String,
+}
+
+/// An ascent-link accept vector: the parent node seed, the frozen container
+/// (plaintext public half + HPKE seal), and the sealed override-seed plaintext.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AscentLinkAcceptVector {
+    name: String,
+    parent_node_seed: String,
+    ephemeral_scalar: String,
+    v: u64,
+    id: String,
+    scope: String,
+    epoch: u64,
+    struct_tag: u8,
+    aad: String,
+    plaintext: String,
+    ascent_public: String,
+    container: String,
+}
+
+/// An ascent-link reject vector: an ancestor opens `container` under
+/// `parentNodeSeed`, exercising the derive-and-verify mismatch and the HPKE
+/// open-failure paths.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AscentLinkRejectVector {
+    name: String,
+    parent_node_seed: String,
+    v: u64,
+    id: String,
+    scope: String,
+    epoch: u64,
+    struct_tag: u8,
+    container: String,
+    check: String,
+    class: String,
+}
+
+/// A history-link symmetric seal KAT under a fixed structure key + nonce.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryLinkAcceptVector {
+    name: String,
+    key: String,
+    nonce: String,
+    v: u64,
+    id: String,
+    scope: String,
+    epoch: u64,
+    struct_tag: u8,
+    aad: String,
+    plaintext: String,
+    sealed: String,
+}
+
+/// A structure-signature accept vector: the frozen preimage over the ciphertext
+/// hash and context, and the pseudonym signature that verifies against it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StructureSigAcceptVector {
+    name: String,
+    signer_seed: String,
+    verifier_pk: String,
+    scope_id: String,
+    epoch: u64,
+    struct_tag: u8,
+    recipient_tag: String,
+    ciphertext: String,
+    ciphertext_hash: String,
+    preimage: String,
+    signature: String,
+}
+
+/// A structure-signature reject vector: the verify-side context and signature;
+/// verifying recomputes a preimage that does not match (bad signature, a
+/// struct-tag transplant, or a recipient-tag transplant).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StructureSigRejectVector {
+    name: String,
+    verifier_pk: String,
+    scope_id: String,
+    epoch: u64,
+    struct_tag: u8,
+    recipient_tag: String,
+    ciphertext_hash: String,
+    signature: String,
+    check: String,
+    class: String,
+}
+
+/// A grant-set commitment accept vector: the owner identity key, the frozen
+/// commitment preimage, and the owner's ECDSA signature over it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GrantSetAcceptVector {
+    name: String,
+    owner_identity_pk: String,
+    commitment: String,
+    signature: String,
+}
+
+/// A grant-set reject vector. When `signature` is empty the defect is in the
+/// commitment codec (decode fails); otherwise the commitment decodes and the
+/// owner signature fails to verify (`commitment-invalid`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GrantSetRejectVector {
+    name: String,
+    owner_identity_pk: String,
+    commitment: String,
+    signature: String,
+    check: String,
+    class: String,
 }
 
 #[derive(Serialize)]
@@ -431,6 +617,7 @@ fn main() {
     let seal_dir = vectors_dir.join("seal");
     let ipns_dir = vectors_dir.join("ipns");
     let payload_dir = vectors_dir.join("payload");
+    let grant_dir = vectors_dir.join("grant");
     for dir in [
         &codec_dir,
         &kdf_dir,
@@ -439,6 +626,7 @@ fn main() {
         &seal_dir,
         &ipns_dir,
         &payload_dir,
+        &grant_dir,
     ] {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
     }
@@ -499,6 +687,65 @@ fn main() {
     write_pretty(&payload_dir.join("mailbox_accept.json"), &mailbox_accept);
     write_pretty(&payload_dir.join("mailbox_reject.json"), &mailbox_reject);
 
+    let g = build_grant_vectors();
+
+    write_pretty(
+        &grant_dir.join("write_body_accept.json"),
+        &g.write_body_accept,
+    );
+    write_pretty(
+        &grant_dir.join("write_body_reject.json"),
+        &g.write_body_reject,
+    );
+    write_pretty(
+        &grant_dir.join("grant_blob_accept.json"),
+        &g.grant_blob_accept,
+    );
+    write_pretty(
+        &grant_dir.join("grant_blob_reject.json"),
+        &g.grant_blob_reject,
+    );
+    write_pretty(
+        &grant_dir.join("owner_blob_accept.json"),
+        &g.owner_blob_accept,
+    );
+    write_pretty(
+        &grant_dir.join("owner_blob_reject.json"),
+        &g.owner_blob_reject,
+    );
+    write_pretty(
+        &grant_dir.join("ascent_link_accept.json"),
+        &g.ascent_link_accept,
+    );
+    write_pretty(
+        &grant_dir.join("ascent_link_reject.json"),
+        &g.ascent_link_reject,
+    );
+    write_pretty(
+        &grant_dir.join("history_link_accept.json"),
+        &g.history_link_accept,
+    );
+    write_pretty(
+        &grant_dir.join("history_link_reject.json"),
+        &g.history_link_reject,
+    );
+    write_pretty(
+        &grant_dir.join("structure_sig_accept.json"),
+        &g.structure_sig_accept,
+    );
+    write_pretty(
+        &grant_dir.join("structure_sig_reject.json"),
+        &g.structure_sig_reject,
+    );
+    write_pretty(
+        &grant_dir.join("grant_set_accept.json"),
+        &g.grant_set_accept,
+    );
+    write_pretty(
+        &grant_dir.join("grant_set_reject.json"),
+        &g.grant_set_reject,
+    );
+
     let manifest = build_manifest(ManifestInputs {
         accept: &accept,
         reject: &reject,
@@ -523,6 +770,7 @@ fn main() {
         pointer_reject: &pointer_reject,
         mailbox_accept: &mailbox_accept,
         mailbox_reject: &mailbox_reject,
+        grant: &g,
     });
     write_pretty(&kat_dir.join("manifest.json"), &manifest);
 
@@ -531,8 +779,8 @@ fn main() {
          {} hpke-open-reject, {} contact-accept, {} contact-reject, {} seal, {} seal-open-reject, \
          {} read-body-accept, {} read-body-reject, {} envelope-accept, {} envelope-reject, \
          {} name-accept, {} name-reject, {} record-accept, {} record-reject, {} record-reput, \
-         {} pointer-accept, {} pointer-reject, {} mailbox-accept, {} mailbox-reject vectors \
-         + manifest.json",
+         {} pointer-accept, {} pointer-reject, {} mailbox-accept, {} mailbox-reject, \
+         {} grant-family vectors + manifest.json",
         accept.len(),
         reject.len(),
         unknown.len(),
@@ -556,6 +804,7 @@ fn main() {
         pointer_reject.len(),
         mailbox_accept.len(),
         mailbox_reject.len(),
+        g.total(),
     );
 }
 
@@ -1305,6 +1554,7 @@ struct ManifestInputs<'a> {
     pointer_reject: &'a [PointerRejectVector],
     mailbox_accept: &'a [MailboxAcceptVector],
     mailbox_reject: &'a [MailboxRejectVector],
+    grant: &'a GrantVectors,
 }
 
 fn build_manifest(m: ManifestInputs) -> Manifest {
@@ -1481,6 +1731,69 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
                     &m.mailbox_reject.iter().map(|v| v.check.as_str()).collect(),
                 ),
             },
+        },
+        grant: build_grant_section(m.grant),
+    }
+}
+
+/// The grant-section manifest metadata, frozen from the crate's struct-tag
+/// constants and the generated vector counts/checks.
+fn build_grant_section(g: &GrantVectors) -> GrantSection {
+    let file_count = |name: &str, len: usize| FileCount {
+        file: format!("vectors/grant/{name}.json"),
+        count: len,
+    };
+    let reject = |name: &str, checks: &[RejectVector]| RejectSection {
+        file: format!("vectors/grant/{name}.json"),
+        count: checks.len(),
+        checks: checks_in_surface_order(checks),
+    };
+    GrantSection {
+        write_body_struct_tag: STRUCT_TAG_WRITE_BODY,
+        grant_blob_struct_tag: STRUCT_TAG_GRANT_BLOB,
+        owner_blob_struct_tag: STRUCT_TAG_OWNER_BLOB,
+        ascent_link_struct_tag: STRUCT_TAG_ASCENT_LINK,
+        history_link_struct_tag: STRUCT_TAG_HISTORY_LINK,
+        write_body_accept: file_count("write_body_accept", g.write_body_accept.len()),
+        write_body_reject: reject("write_body_reject", &g.write_body_reject),
+        grant_blob_accept: file_count("grant_blob_accept", g.grant_blob_accept.len()),
+        grant_blob_reject: reject("grant_blob_reject", &g.grant_blob_reject),
+        owner_blob_accept: file_count("owner_blob_accept", g.owner_blob_accept.len()),
+        owner_blob_reject: reject("owner_blob_reject", &g.owner_blob_reject),
+        ascent_link_accept: file_count("ascent_link_accept", g.ascent_link_accept.len()),
+        ascent_link_reject: RejectSection {
+            file: "vectors/grant/ascent_link_reject.json".to_string(),
+            count: g.ascent_link_reject.len(),
+            checks: checks_surface_ordered(
+                &g.ascent_link_reject
+                    .iter()
+                    .map(|v| v.check.as_str())
+                    .collect(),
+            ),
+        },
+        history_link_accept: file_count("history_link_accept", g.history_link_accept.len()),
+        history_link_reject: reject("history_link_reject", &g.history_link_reject),
+        structure_sig_accept: file_count("structure_sig_accept", g.structure_sig_accept.len()),
+        structure_sig_reject: RejectSection {
+            file: "vectors/grant/structure_sig_reject.json".to_string(),
+            count: g.structure_sig_reject.len(),
+            checks: checks_surface_ordered(
+                &g.structure_sig_reject
+                    .iter()
+                    .map(|v| v.check.as_str())
+                    .collect(),
+            ),
+        },
+        grant_set_accept: file_count("grant_set_accept", g.grant_set_accept.len()),
+        grant_set_reject: RejectSection {
+            file: "vectors/grant/grant_set_reject.json".to_string(),
+            count: g.grant_set_reject.len(),
+            checks: checks_surface_ordered(
+                &g.grant_set_reject
+                    .iter()
+                    .map(|v| v.check.as_str())
+                    .collect(),
+            ),
         },
     }
 }
@@ -3043,5 +3356,793 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
             class: err.class().to_string(),
         });
     }
+    out
+}
+
+// ===========================================================================
+// Grant section (ticket #621): the write-body, the grant/owner blobs, the
+// ascent + history links, the structure signatures, and the grant-set
+// commitment. Every vector self-checks against the live code before it is
+// written, and the fixed keys/scalars/nonces make each seal byte-reproducible
+// (the eciesjs lesson, applied per structure; production sources a fresh
+// per-seal ephemeral/nonce from the entropy seam — see the seal-layer docs).
+// ===========================================================================
+
+/// The whole grant-family vector inventory, returned by [`build_grant_vectors`].
+struct GrantVectors {
+    write_body_accept: Vec<WriteBodyAcceptVector>,
+    write_body_reject: Vec<RejectVector>,
+    grant_blob_accept: Vec<HpkeStructureVector>,
+    grant_blob_reject: Vec<RejectVector>,
+    owner_blob_accept: Vec<HpkeStructureVector>,
+    owner_blob_reject: Vec<RejectVector>,
+    ascent_link_accept: Vec<AscentLinkAcceptVector>,
+    ascent_link_reject: Vec<AscentLinkRejectVector>,
+    history_link_accept: Vec<HistoryLinkAcceptVector>,
+    history_link_reject: Vec<RejectVector>,
+    structure_sig_accept: Vec<StructureSigAcceptVector>,
+    structure_sig_reject: Vec<StructureSigRejectVector>,
+    grant_set_accept: Vec<GrantSetAcceptVector>,
+    grant_set_reject: Vec<GrantSetRejectVector>,
+}
+
+impl GrantVectors {
+    fn total(&self) -> usize {
+        self.write_body_accept.len()
+            + self.write_body_reject.len()
+            + self.grant_blob_accept.len()
+            + self.grant_blob_reject.len()
+            + self.owner_blob_accept.len()
+            + self.owner_blob_reject.len()
+            + self.ascent_link_accept.len()
+            + self.ascent_link_reject.len()
+            + self.history_link_accept.len()
+            + self.history_link_reject.len()
+            + self.structure_sig_accept.len()
+            + self.structure_sig_reject.len()
+            + self.grant_set_accept.len()
+            + self.grant_set_reject.len()
+    }
+}
+
+/// Frozen probe material shared across the grant families so their vectors are
+/// mutually consistent (a scope root's id equals its scope, per the AAD).
+const GRANT_V: u64 = 2;
+const GRANT_EPOCH: u64 = 4;
+fn grant_scope_id() -> [u8; 16] {
+    std::array::from_fn(|i| (0xc0 + i) as u8)
+}
+
+/// The AAD context of a scope-root grant structure: `id == scope` (the scope
+/// root's own node id is the scope id).
+fn grant_ctx(struct_tag: u8) -> AadContext {
+    let id = grant_scope_id();
+    AadContext {
+        v: GRANT_V,
+        id,
+        scope: id,
+        epoch: GRANT_EPOCH,
+        struct_tag,
+    }
+}
+
+fn build_grant_vectors() -> GrantVectors {
+    GrantVectors {
+        write_body_accept: build_write_body_accept(),
+        write_body_reject: build_write_body_reject(),
+        grant_blob_accept: build_grant_blob_accept(),
+        grant_blob_reject: build_grant_blob_reject(),
+        owner_blob_accept: build_owner_blob_accept(),
+        owner_blob_reject: build_owner_blob_reject(),
+        ascent_link_accept: build_ascent_link_accept(),
+        ascent_link_reject: build_ascent_link_reject(),
+        history_link_accept: build_history_link_accept(),
+        history_link_reject: build_history_link_reject(),
+        structure_sig_accept: build_structure_sig_accept(),
+        structure_sig_reject: build_structure_sig_reject(),
+        grant_set_accept: build_grant_set_accept(),
+        grant_set_reject: build_grant_set_reject(),
+    }
+}
+
+// --- Write-body -------------------------------------------------------------
+
+fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
+    let full = WriteBody {
+        grant_ledger: vec![
+            GrantLedgerEntry::new([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
+            GrantLedgerEntry::new([0x03; 33], [0x12; 32], Permission::Write, [0x22; 32]),
+        ],
+        write_history_link: b"sealed-write-history-link".to_vec(),
+        direct_child_scope_index: vec![
+            ChildScopeRef::new([0x55; 16], b"child-scope-ipns-a".to_vec()),
+            ChildScopeRef::new([0x66; 16], b"child-scope-ipns-b".to_vec()),
+        ],
+        unknown: Vec::new(),
+    };
+    // Write epoch 1: no prior write epoch, so no history link, and a scope root
+    // with no descendant scopes and no grants yet.
+    let epoch_one = WriteBody {
+        grant_ledger: Vec::new(),
+        write_history_link: Vec::new(),
+        direct_child_scope_index: Vec::new(),
+        unknown: Vec::new(),
+    };
+    let read_only = WriteBody {
+        grant_ledger: vec![GrantLedgerEntry::new(
+            [0x02; 33],
+            [0x11; 32],
+            Permission::Read,
+            [0x21; 32],
+        )],
+        write_history_link: b"h".to_vec(),
+        direct_child_scope_index: vec![ChildScopeRef::new([0x77; 16], b"one-child".to_vec())],
+        unknown: Vec::new(),
+    };
+    let cases: Vec<(&str, WriteBody)> = vec![
+        ("full", full),
+        ("write-epoch-1-empty", epoch_one),
+        ("read-only-single-child", read_only),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, body) in cases {
+        assert!(names.insert(name), "duplicate write-body accept {name}");
+        let bytes = encode_write_body(&body);
+        let decoded = decode_write_body(&bytes)
+            .unwrap_or_else(|e| panic!("write-body accept {name}: rejected: {e}"));
+        assert_eq!(decoded, body, "write-body accept {name}: decode != source");
+        assert_eq!(
+            encode_write_body(&decoded),
+            bytes,
+            "write-body accept {name}: not byte-stable"
+        );
+        out.push(WriteBodyAcceptVector {
+            name: name.to_string(),
+            hex: hexstr(&bytes),
+            ledger_count: body.grant_ledger.len(),
+            child_scope_count: body.direct_child_scope_index.len(),
+        });
+    }
+    out
+}
+
+/// A grant-ledger entry map value, for hand-crafting write-body reject vectors.
+fn ledger_entry_map(identity: Vec<u8>, enc: Vec<u8>, permission: &str, tag: Vec<u8>) -> Value {
+    map_of(vec![
+        ("permission", Value::Text(permission.to_string())),
+        ("recipientEncPk", Value::Bytes(enc)),
+        ("recipientIdentityPk", Value::Bytes(identity)),
+        ("tag", Value::Bytes(tag)),
+    ])
+}
+
+fn build_write_body_reject() -> Vec<RejectVector> {
+    // A write-body with the given grant ledger and write-history-link value; the
+    // child-scope index is always empty. Each case builds its whole map, so no
+    // key is ever inserted twice.
+    let body = |ledger: Vec<Value>, write_history_link: Value| {
+        map_of(vec![
+            ("directChildScopeIndex", Value::Array(vec![])),
+            ("grantLedger", Value::Array(ledger)),
+            ("writeHistoryLink", write_history_link),
+        ])
+    };
+    let good_entry = || ledger_entry_map(vec![0x02; 33], vec![0x11; 32], "read", vec![0x21; 32]);
+
+    let cases: Vec<(&str, Value, &str, &str)> = vec![
+        (
+            "ledger-invalid-permission",
+            body(
+                vec![ledger_entry_map(
+                    vec![0x02; 33],
+                    vec![0x11; 32],
+                    "owner",
+                    vec![0x21; 32],
+                )],
+                Value::Bytes(vec![]),
+            ),
+            "invalid-permission",
+            "malformed",
+        ),
+        (
+            "identity-pk-wrong-length",
+            body(
+                vec![ledger_entry_map(
+                    vec![0x02; 32],
+                    vec![0x11; 32],
+                    "read",
+                    vec![0x21; 32],
+                )],
+                Value::Bytes(vec![]),
+            ),
+            "invalid-field-length",
+            "malformed",
+        ),
+        (
+            "missing-grant-ledger",
+            map_of(vec![
+                ("directChildScopeIndex", Value::Array(vec![])),
+                ("writeHistoryLink", Value::Bytes(vec![])),
+            ]),
+            "missing-field",
+            "malformed",
+        ),
+        (
+            "write-history-link-wrong-type",
+            body(vec![good_entry()], Value::Unsigned(0)),
+            "unexpected-type",
+            "malformed",
+        ),
+    ];
+
+    finish_hex_reject_vectors("write-body", cases, decode_write_body)
+}
+
+// --- Grant blob (HPKE) ------------------------------------------------------
+
+fn build_grant_blob_accept() -> Vec<HpkeStructureVector> {
+    let recipient_scalar: [u8; 32] = std::array::from_fn(|i| (0x30 + i) as u8);
+    let recipient = X25519Secret::from_scalar(recipient_scalar);
+    let ctx = grant_ctx(STRUCT_TAG_GRANT_BLOB);
+
+    let cases: Vec<(&str, [u8; 32], GrantBlobPayload)> = vec![
+        (
+            "read-grant",
+            std::array::from_fn(|i| (0x50 + i) as u8),
+            GrantBlobPayload::new([0x11; 32], None, GRANT_EPOCH, [0x22; 32]),
+        ),
+        (
+            "write-grant",
+            std::array::from_fn(|i| (0x58 + i) as u8),
+            GrantBlobPayload::new([0x11; 32], Some([0x44; 32]), GRANT_EPOCH, [0x22; 32]),
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, eph, payload) in cases {
+        assert!(names.insert(name), "duplicate grant-blob accept {name}");
+        let plaintext = encode_grant_blob_payload(&payload);
+        let sealed = seal_grant_blob(&recipient.public(), &eph, &ctx, &payload);
+        assert_eq!(
+            seal_grant_blob(&recipient.public(), &eph, &ctx, &payload).ciphertext,
+            sealed.ciphertext,
+            "grant-blob {name}: not deterministic"
+        );
+        let opened = open_grant_blob(&recipient, &sealed.enc, &ctx, &sealed.ciphertext)
+            .unwrap_or_else(|e| panic!("grant-blob {name}: open: {e}"));
+        assert_eq!(opened, payload, "grant-blob {name}: round-trip");
+        out.push(hpke_structure_vector(
+            name,
+            &ctx,
+            recipient_scalar,
+            &recipient,
+            eph,
+            &plaintext,
+            &sealed,
+        ));
+    }
+    out
+}
+
+fn build_grant_blob_reject() -> Vec<RejectVector> {
+    let cases: Vec<(&str, Value, &str, &str)> = vec![
+        (
+            "read-scope-seed-wrong-length",
+            map_of(vec![
+                ("epoch", Value::Unsigned(GRANT_EPOCH)),
+                ("pointerReadKey", Value::Bytes(vec![0x22; 32])),
+                ("readScopeSeed", Value::Bytes(vec![0x11; 31])),
+            ]),
+            "invalid-field-length",
+            "malformed",
+        ),
+        (
+            "missing-pointer-read-key",
+            map_of(vec![
+                ("epoch", Value::Unsigned(GRANT_EPOCH)),
+                ("readScopeSeed", Value::Bytes(vec![0x11; 32])),
+            ]),
+            "missing-field",
+            "malformed",
+        ),
+        (
+            "epoch-wrong-type",
+            map_of(vec![
+                ("epoch", Value::Text("four".to_string())),
+                ("pointerReadKey", Value::Bytes(vec![0x22; 32])),
+                ("readScopeSeed", Value::Bytes(vec![0x11; 32])),
+            ]),
+            "unexpected-type",
+            "malformed",
+        ),
+    ];
+    finish_hex_reject_vectors("grant-blob", cases, decode_grant_blob_payload)
+}
+
+// --- Owner blob (HPKE) ------------------------------------------------------
+
+fn build_owner_blob_accept() -> Vec<HpkeStructureVector> {
+    let owner_scalar: [u8; 32] = std::array::from_fn(|i| (0x31 + i) as u8);
+    let owner = X25519Secret::from_scalar(owner_scalar);
+    let ctx = grant_ctx(STRUCT_TAG_OWNER_BLOB);
+    let eph: [u8; 32] = std::array::from_fn(|i| (0x60 + i) as u8);
+    let payload = OverrideSeedPayload::new([0x77; 32], GRANT_EPOCH);
+
+    let plaintext = encode_override_seed_payload(&payload);
+    let sealed = seal_owner_blob(&owner.public(), &eph, &ctx, &payload);
+    assert_eq!(
+        seal_owner_blob(&owner.public(), &eph, &ctx, &payload).ciphertext,
+        sealed.ciphertext,
+        "owner-blob: not deterministic"
+    );
+    let opened =
+        open_owner_blob(&owner, &sealed.enc, &ctx, &sealed.ciphertext).expect("owner-blob open");
+    assert_eq!(opened, payload, "owner-blob: round-trip");
+    vec![hpke_structure_vector(
+        "owner",
+        &ctx,
+        owner_scalar,
+        &owner,
+        eph,
+        &plaintext,
+        &sealed,
+    )]
+}
+
+fn build_owner_blob_reject() -> Vec<RejectVector> {
+    let cases: Vec<(&str, Value, &str, &str)> = vec![
+        (
+            "override-seed-wrong-length",
+            map_of(vec![
+                ("epoch", Value::Unsigned(GRANT_EPOCH)),
+                ("overrideSeed", Value::Bytes(vec![0x77; 31])),
+            ]),
+            "invalid-field-length",
+            "malformed",
+        ),
+        (
+            "missing-epoch",
+            map_of(vec![("overrideSeed", Value::Bytes(vec![0x77; 32]))]),
+            "missing-field",
+            "malformed",
+        ),
+    ];
+    finish_hex_reject_vectors("owner-blob", cases, decode_override_seed_payload)
+}
+
+/// Freeze one HPKE-sealed structure (grant blob / owner blob) as a vector,
+/// pinning the recipient keys, the injected ephemeral, the structured AAD, the
+/// plaintext, and the whole HPKE envelope (enc + ciphertext).
+fn hpke_structure_vector(
+    name: &str,
+    ctx: &AadContext,
+    recipient_scalar: [u8; 32],
+    recipient: &X25519Secret,
+    eph: [u8; 32],
+    plaintext: &[u8],
+    sealed: &cipherbox_core::suite::hpke::HpkeCiphertext,
+) -> HpkeStructureVector {
+    HpkeStructureVector {
+        name: name.to_string(),
+        recipient_secret: hexstr(&recipient_scalar),
+        recipient_public: hexstr(&recipient.public().to_bytes()),
+        ephemeral_scalar: hexstr(&eph),
+        v: ctx.v,
+        id: hexstr(&ctx.id),
+        scope: hexstr(&ctx.scope),
+        epoch: ctx.epoch,
+        struct_tag: ctx.struct_tag,
+        aad: hexstr(&build_aad(ctx)),
+        plaintext: hexstr(plaintext),
+        enc: hexstr(&sealed.enc),
+        ciphertext: hexstr(&sealed.ciphertext),
+    }
+}
+
+// --- Ascent link ------------------------------------------------------------
+
+fn build_ascent_link_accept() -> Vec<AscentLinkAcceptVector> {
+    let parent_node_seed: [u8; 32] = std::array::from_fn(|i| (0x12 + i) as u8);
+    let eph: [u8; 32] = std::array::from_fn(|i| (0x70 + i) as u8);
+    let ctx = grant_ctx(STRUCT_TAG_ASCENT_LINK);
+    let payload = OverrideSeedPayload::new([0x88; 32], GRANT_EPOCH);
+    let plaintext = encode_override_seed_payload(&payload);
+
+    let link = seal_ascent_link(&parent_node_seed, &eph, &ctx, &payload);
+    // The ancestor re-derives the keypair, matches the public half, and opens.
+    let opened = open_ascent_link(&parent_node_seed, &ctx, &link).expect("ascent open");
+    assert_eq!(opened, payload, "ascent-link: round-trip");
+    let container = encode_ascent_link(&link);
+    let decoded = decode_ascent_link(&container).expect("ascent container decodes");
+    assert_eq!(decoded, link, "ascent-link: container decode != source");
+    assert_eq!(
+        encode_ascent_link(&decoded),
+        container,
+        "ascent-link: container not byte-stable"
+    );
+
+    vec![AscentLinkAcceptVector {
+        name: "ascent".to_string(),
+        parent_node_seed: hexstr(&parent_node_seed),
+        ephemeral_scalar: hexstr(&eph),
+        v: ctx.v,
+        id: hexstr(&ctx.id),
+        scope: hexstr(&ctx.scope),
+        epoch: ctx.epoch,
+        struct_tag: ctx.struct_tag,
+        aad: hexstr(&build_aad(&ctx)),
+        plaintext: hexstr(&plaintext),
+        ascent_public: hexstr(&link.ascent_public),
+        container: hexstr(&container),
+    }]
+}
+
+fn build_ascent_link_reject() -> Vec<AscentLinkRejectVector> {
+    let parent_node_seed: [u8; 32] = std::array::from_fn(|i| (0x12 + i) as u8);
+    let eph: [u8; 32] = std::array::from_fn(|i| (0x78 + i) as u8);
+    let ctx = grant_ctx(STRUCT_TAG_ASCENT_LINK);
+    let payload = OverrideSeedPayload::new([0x88; 32], GRANT_EPOCH);
+    let good = seal_ascent_link(&parent_node_seed, &eph, &ctx, &payload);
+
+    // Mismatched public half: derive-and-verify rejects before the HPKE open.
+    let mut mismatched = good.clone();
+    mismatched.ascent_public[0] ^= 0x01;
+    // Tampered ciphertext: the public half still matches, so the HPKE open runs
+    // and fails the tag.
+    let mut tampered = good.clone();
+    *tampered.ciphertext.last_mut().unwrap() ^= 0x01;
+
+    let cases: Vec<(&str, AscentLink, &str, &str)> = vec![
+        (
+            "mismatched-public-half",
+            mismatched,
+            "ascent-link-mismatch",
+            "trust",
+        ),
+        ("tampered-ciphertext", tampered, "hpke-open-failed", "trust"),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, link, check, class) in cases {
+        assert!(names.insert(name), "duplicate ascent-link reject {name}");
+        let container = encode_ascent_link(&link);
+        let err = open_ascent_link(&parent_node_seed, &ctx, &link)
+            .expect_err("ascent-link reject must fail closed");
+        assert_eq!(
+            err.check(),
+            check,
+            "ascent-link reject {name}: check ({err})"
+        );
+        assert_eq!(
+            err.class(),
+            class,
+            "ascent-link reject {name}: class ({err})"
+        );
+        out.push(AscentLinkRejectVector {
+            name: name.to_string(),
+            parent_node_seed: hexstr(&parent_node_seed),
+            v: ctx.v,
+            id: hexstr(&ctx.id),
+            scope: hexstr(&ctx.scope),
+            epoch: ctx.epoch,
+            struct_tag: ctx.struct_tag,
+            container: hexstr(&container),
+            check: check.to_string(),
+            class: class.to_string(),
+        });
+    }
+    out
+}
+
+// --- History link (symmetric) -----------------------------------------------
+
+fn build_history_link_accept() -> Vec<HistoryLinkAcceptVector> {
+    let key: [u8; KEY_LEN] = std::array::from_fn(|i| (0x40 + i) as u8);
+    let nonce: [u8; NONCE_LEN] = std::array::from_fn(|i| (0x10 + i) as u8);
+    let ctx = grant_ctx(STRUCT_TAG_HISTORY_LINK);
+    let payload = HistoryLinkPayload::new([0x99; 32], GRANT_EPOCH - 1);
+    let plaintext = encode_history_link_payload(&payload);
+
+    let sealed = seal_history_link(&key, &nonce, &ctx, &payload);
+    assert_eq!(
+        seal_history_link(&key, &nonce, &ctx, &payload),
+        sealed,
+        "history-link: not deterministic"
+    );
+    assert_eq!(&sealed[..NONCE_LEN], &nonce, "history-link: nonce prefix");
+    let opened = open_history_link(&key, &ctx, &sealed).expect("history-link open");
+    assert_eq!(opened, payload, "history-link: round-trip");
+
+    vec![HistoryLinkAcceptVector {
+        name: "prev-epoch".to_string(),
+        key: hexstr(&key),
+        nonce: hexstr(&nonce),
+        v: ctx.v,
+        id: hexstr(&ctx.id),
+        scope: hexstr(&ctx.scope),
+        epoch: ctx.epoch,
+        struct_tag: ctx.struct_tag,
+        aad: hexstr(&build_aad(&ctx)),
+        plaintext: hexstr(&plaintext),
+        sealed: hexstr(&sealed),
+    }]
+}
+
+fn build_history_link_reject() -> Vec<RejectVector> {
+    let cases: Vec<(&str, Value, &str, &str)> = vec![
+        (
+            "prev-seed-wrong-length",
+            map_of(vec![
+                ("prevEpoch", Value::Unsigned(3)),
+                ("prevSeed", Value::Bytes(vec![0x99; 31])),
+            ]),
+            "invalid-field-length",
+            "malformed",
+        ),
+        (
+            "missing-prev-epoch",
+            map_of(vec![("prevSeed", Value::Bytes(vec![0x99; 32]))]),
+            "missing-field",
+            "malformed",
+        ),
+    ];
+    finish_hex_reject_vectors("history-link", cases, decode_history_link_payload)
+}
+
+// --- Structure signatures ---------------------------------------------------
+
+/// One structure-signature accept case: name, struct tag, optional recipient
+/// tag, and the ciphertext to hash.
+type StructSigCase = (&'static str, u8, Option<[u8; 32]>, &'static [u8]);
+
+fn build_structure_sig_accept() -> Vec<StructureSigAcceptVector> {
+    let signer_seed: [u8; 32] = std::array::from_fn(|i| (0x07 + i) as u8);
+    let signer = Ed25519Signer::from_seed(signer_seed);
+    let verifier = signer.verifying_key();
+    let scope_id = grant_scope_id();
+
+    let cases: Vec<StructSigCase> = vec![
+        (
+            "grant-blob-with-recipient-tag",
+            STRUCT_TAG_GRANT_BLOB,
+            Some([0x01; 32]),
+            b"grant-blob-ciphertext",
+        ),
+        (
+            "owner-blob-no-recipient-tag",
+            STRUCT_TAG_OWNER_BLOB,
+            None,
+            b"owner-blob-ciphertext",
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, struct_tag, recipient_tag, ciphertext) in cases {
+        assert!(names.insert(name), "duplicate structure-sig accept {name}");
+        let input =
+            StructureSigInput::over_ciphertext(scope_id, 5, struct_tag, recipient_tag, ciphertext);
+        let preimage = structure_sig_preimage(&input);
+        let sig = sign_structure(&signer, &input);
+        assert!(
+            verify_structure(&verifier, &input, &sig).is_ok(),
+            "structure-sig {name}: must verify"
+        );
+        out.push(StructureSigAcceptVector {
+            name: name.to_string(),
+            signer_seed: hexstr(&signer_seed),
+            verifier_pk: hexstr(&verifier.to_bytes()),
+            scope_id: hexstr(&scope_id),
+            epoch: 5,
+            struct_tag,
+            recipient_tag: recipient_tag.map(|t| hexstr(&t)).unwrap_or_default(),
+            ciphertext: hexstr(ciphertext),
+            ciphertext_hash: hexstr(&hash(ciphertext)),
+            preimage: hexstr(&preimage),
+            signature: hexstr(&sig.to_bytes()),
+        });
+    }
+    out
+}
+
+fn build_structure_sig_reject() -> Vec<StructureSigRejectVector> {
+    let signer = Ed25519Signer::from_seed(std::array::from_fn(|i| (0x07 + i) as u8));
+    let verifier = signer.verifying_key();
+    let scope_id = grant_scope_id();
+    // The authentic signature is over a grant blob with recipient tag A.
+    let base = StructureSigInput::over_ciphertext(
+        scope_id,
+        5,
+        STRUCT_TAG_GRANT_BLOB,
+        Some([0x01; 32]),
+        b"structure-sig-ciphertext",
+    );
+    let base_sig = sign_structure(&signer, &base);
+
+    // (name, verify-side input, verify-side signature). Each recomputes a
+    // preimage that the signature does not cover.
+    let mut bad_sig_bytes = base_sig.to_bytes();
+    bad_sig_bytes[0] ^= 0x01;
+    let cases: Vec<(&str, StructureSigInput, Ed25519Signature)> = vec![
+        (
+            "bad-signature",
+            base,
+            Ed25519Signature::from_bytes(bad_sig_bytes),
+        ),
+        (
+            "wrong-tag",
+            StructureSigInput {
+                struct_tag: STRUCT_TAG_OWNER_BLOB,
+                ..base
+            },
+            base_sig,
+        ),
+        (
+            "recipient-tag-transplant",
+            StructureSigInput {
+                recipient_tag: Some([0x02; 32]),
+                ..base
+            },
+            base_sig,
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, input, sig) in cases {
+        assert!(names.insert(name), "duplicate structure-sig reject {name}");
+        let err = verify_structure(&verifier, &input, &sig)
+            .expect_err("structure-sig reject must fail closed");
+        assert_eq!(
+            err.check(),
+            "structure-signature-invalid",
+            "structure-sig reject {name}: check ({err})"
+        );
+        out.push(StructureSigRejectVector {
+            name: name.to_string(),
+            verifier_pk: hexstr(&verifier.to_bytes()),
+            scope_id: hexstr(&input.scope_id),
+            epoch: input.epoch,
+            struct_tag: input.struct_tag,
+            recipient_tag: input.recipient_tag.map(|t| hexstr(&t)).unwrap_or_default(),
+            ciphertext_hash: hexstr(&input.ciphertext_hash),
+            signature: hexstr(&sig.to_bytes()),
+            check: "structure-signature-invalid".to_string(),
+            class: "trust".to_string(),
+        });
+    }
+    out
+}
+
+// --- Grant-set commitment ---------------------------------------------------
+
+fn grant_set_sample() -> GrantSetCommitment {
+    GrantSetCommitment {
+        ipns_name: b"scope-root-ipns".to_vec(),
+        owner_pseudonym_pk: [0x88; 32],
+        entries: vec![
+            GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
+            GrantSetEntry::new([0x03; 32], Permission::Write, [0x04; 32]),
+        ],
+        unknown: Vec::new(),
+    }
+}
+
+fn build_grant_set_accept() -> Vec<GrantSetAcceptVector> {
+    let owner = EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid identity scalar");
+    let c = grant_set_sample();
+    let bytes = encode_grant_set_commitment(&c);
+    let decoded = decode_grant_set_commitment(&bytes).expect("commitment decodes");
+    assert_eq!(decoded, c, "grant-set accept: decode != source");
+    assert_eq!(
+        encode_grant_set_commitment(&decoded),
+        bytes,
+        "grant-set accept: not byte-stable"
+    );
+    let sig = sign_grant_set(&owner, &c);
+    assert!(
+        verify_grant_set(&owner.verifying_key(), &c, &sig).is_ok(),
+        "grant-set accept: must verify"
+    );
+    vec![GrantSetAcceptVector {
+        name: "read-and-write".to_string(),
+        owner_identity_pk: hexstr(&owner.verifying_key().to_sec1()),
+        commitment: hexstr(&bytes),
+        signature: hexstr(&sig.to_compact()),
+    }]
+}
+
+/// A grant-set entry map value, for hand-crafting commitment reject vectors.
+fn grant_set_entry_map(tag: Vec<u8>, permission: &str, pseudonym: Vec<u8>) -> Value {
+    map_of(vec![
+        ("permission", Value::Text(permission.to_string())),
+        ("pseudonymPk", Value::Bytes(pseudonym)),
+        ("tag", Value::Bytes(tag)),
+    ])
+}
+
+fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
+    let owner = EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid identity scalar");
+    let owner_pk_hex = hexstr(&owner.verifying_key().to_sec1());
+
+    // Codec rejects (signature empty): the commitment never decodes.
+    let commitment_of = |entries: Vec<Value>, omit_entries: bool| -> Vec<u8> {
+        let mut kv = vec![
+            ("ipnsName", Value::Bytes(b"scope-root-ipns".to_vec())),
+            ("ownerPseudonymPk", Value::Bytes(vec![0x88; 32])),
+        ];
+        if !omit_entries {
+            kv.push(("entries", Value::Array(entries)));
+        }
+        encode(&map_of(kv))
+    };
+    let codec_cases: Vec<(&str, Vec<u8>, &str)> = vec![
+        (
+            "entry-invalid-permission",
+            commitment_of(
+                vec![grant_set_entry_map(vec![0x01; 32], "owner", vec![0x02; 32])],
+                false,
+            ),
+            "invalid-permission",
+        ),
+        (
+            "pseudonym-pk-wrong-length",
+            commitment_of(
+                vec![grant_set_entry_map(vec![0x01; 32], "read", vec![0x02; 31])],
+                false,
+            ),
+            "invalid-field-length",
+        ),
+        (
+            "missing-entries",
+            commitment_of(vec![], true),
+            "missing-field",
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out: Vec<GrantSetRejectVector> = Vec::new();
+    for (name, bytes, check) in codec_cases {
+        assert!(names.insert(name), "duplicate grant-set reject {name}");
+        let err = match decode_grant_set_commitment(&bytes) {
+            Err(e) => e,
+            Ok(_) => panic!("grant-set reject {name}: decoder accepted it"),
+        };
+        assert_eq!(err.check(), check, "grant-set reject {name}: check ({err})");
+        assert_eq!(err.class(), "malformed", "grant-set reject {name}: class");
+        out.push(GrantSetRejectVector {
+            name: name.to_string(),
+            owner_identity_pk: String::new(),
+            commitment: hexstr(&bytes),
+            signature: String::new(),
+            check: check.to_string(),
+            class: "malformed".to_string(),
+        });
+    }
+
+    // A verify reject: a well-formed low-S signature over a *different*
+    // commitment never verifies against this one (commitment-invalid).
+    let this = grant_set_sample();
+    let mut other = grant_set_sample();
+    other.entries[0].permission = Permission::Write;
+    let sig_over_other = sign_grant_set(&owner, &other);
+    let this_bytes = encode_grant_set_commitment(&this);
+    let decoded = decode_grant_set_commitment(&this_bytes).expect("this commitment decodes");
+    let err = verify_grant_set(&owner.verifying_key(), &decoded, &sig_over_other)
+        .expect_err("mismatched-signature must fail closed");
+    assert_eq!(err.check(), "commitment-invalid", "grant-set verify reject");
+    assert!(names.insert("signature-over-other-commitment"));
+    out.push(GrantSetRejectVector {
+        name: "signature-over-other-commitment".to_string(),
+        owner_identity_pk: owner_pk_hex,
+        commitment: hexstr(&this_bytes),
+        signature: hexstr(&sig_over_other.to_compact()),
+        check: "commitment-invalid".to_string(),
+        class: "trust".to_string(),
+    });
     out
 }
