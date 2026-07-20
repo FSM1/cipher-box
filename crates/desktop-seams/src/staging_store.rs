@@ -172,12 +172,26 @@ impl StagingStore for FileStagingStore {
             .map_err(|err| seam_err("staging_store staged_bytes_total", &err))?;
         let mut total = 0u64;
         for name in names {
-            if !name.ends_with(SIDECAR_SUFFIX) {
+            // Mirror `staged_keys`: only count sidecars whose stem is valid
+            // hex, so the budget total and the GC-reclaimable set (staged_keys
+            // + remove_staged_bytes) always agree on the same file set. A
+            // foreign `.bin` counted here but invisible to staged_keys could
+            // never be reclaimed and would inflate the budget permanently.
+            let is_sidecar = name
+                .strip_suffix(SIDECAR_SUFFIX)
+                .is_some_and(|stem| from_hex(stem).is_some());
+            if !is_sidecar {
                 continue;
             }
-            let meta = std::fs::metadata(self.staged_dir.join(&name))
-                .map_err(|err| seam_err("staging_store staged_bytes_total meta", &err))?;
-            total = total.saturating_add(meta.len());
+            match std::fs::metadata(self.staged_dir.join(&name)) {
+                Ok(meta) => total = total.saturating_add(meta.len()),
+                // A sidecar removed between listing and stat contributes zero,
+                // mirroring read_file_opt's NotFound handling.
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => {
+                    return Err(seam_err("staging_store staged_bytes_total meta", &err));
+                }
+            }
         }
         Ok(total)
     }

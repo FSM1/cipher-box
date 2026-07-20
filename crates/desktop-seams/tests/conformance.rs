@@ -170,6 +170,34 @@ fn staging_store_reopen_sweeps_stranded_root_temp_debris() {
     );
 }
 
+/// A foreign `.bin` file with a non-hex stem is ignored by both the budget
+/// total and the GC enumeration, so the two always agree on the reclaimable
+/// set — a file counted toward the budget but invisible to `staged_keys`
+/// could never be reclaimed.
+#[test]
+fn staging_store_budget_and_gc_set_agree_on_foreign_sidecars() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("staging");
+    block_on(async {
+        let store = FileStagingStore::open(&path).unwrap();
+        store.put_staged_bytes(b"real", b"12345").await.unwrap();
+
+        // Drop a foreign, non-hex-stemmed .bin into the staged dir.
+        std::fs::write(path.join("staged").join("not-hex.bin"), b"9999999999").unwrap();
+
+        assert_eq!(
+            store.staged_keys().await.unwrap(),
+            vec![b"real".to_vec()],
+            "staged_keys must skip the non-hex file"
+        );
+        assert_eq!(
+            store.staged_bytes_total().await.unwrap(),
+            5,
+            "staged_bytes_total must count only the real sidecar, not the foreign file"
+        );
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Network seams — driven on a Tokio current-thread runtime (reqwest needs the
 // reactor). RecordTransport has a kit; Http does not (pure passthrough), so a
