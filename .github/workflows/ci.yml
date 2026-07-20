@@ -22,6 +22,7 @@ jobs:
     outputs:
       ts: ${{ steps.filter.outputs.ts }}
       rust: ${{ steps.filter.outputs.rust }}
+      desktop: ${{ steps.filter.outputs.desktop }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: dorny/paths-filter@7b450fff21473bca461d4b92ce414b9d0420d706 # v4.0.2
@@ -38,6 +39,13 @@ jobs:
               - '.github/workflows/ci.yml'
             rust:
               - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/config.toml'
+              - '.github/workflows/ci.yml'
+            desktop:
+              - 'apps/desktop/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
@@ -158,11 +166,14 @@ jobs:
       - name: Cargo fmt
         run: cargo fmt --all --check
 
+      # The desktop shell is excluded from the workspace-wide jobs: compiling
+      # Tauri needs webkit2gtk system deps on Linux, and the desktop-build job
+      # owns its check/clippy/build on all three platforms.
       - name: Cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --exclude cipherbox-desktop --all-targets -- -D warnings
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude cipherbox-desktop
 
   core-kats:
     name: Core KATs (native + WASM)
@@ -224,10 +235,10 @@ jobs:
           restore-keys: macos-cargo-
 
       - name: Cargo check (workspace)
-        run: cargo check --workspace --all-targets
+        run: cargo check --workspace --exclude cipherbox-desktop --all-targets
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude cipherbox-desktop
 
   cargo-windows:
     name: Cargo Check & Test (Windows)
@@ -251,7 +262,67 @@ jobs:
           restore-keys: windows-cargo-
 
       - name: Cargo check (workspace)
-        run: cargo check --workspace --all-targets
+        run: cargo check --workspace --exclude cipherbox-desktop --all-targets
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace
+        run: cargo test --workspace --exclude cipherbox-desktop
+
+  desktop-build:
+    name: Desktop Build
+    needs: [changes, lint]
+    if: |
+      !failure() && !cancelled() &&
+      needs.changes.outputs.desktop == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libxdo-dev \
+            pkg-config \
+            build-essential
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-desktop-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-desktop-cargo-
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cargo fmt (desktop shell)
+        run: cargo fmt -p cipherbox-desktop --check
+
+      - name: Cargo check (desktop shell)
+        run: cargo check -p cipherbox-desktop --all-targets
+
+      - name: Cargo clippy (desktop shell)
+        run: cargo clippy -p cipherbox-desktop --all-targets -- -D warnings
+
+      - name: Tauri build (unsigned, no bundle)
+        run: pnpm --filter @cipherbox/desktop tauri build --no-bundle

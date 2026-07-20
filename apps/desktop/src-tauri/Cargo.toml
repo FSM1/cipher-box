@@ -1,0 +1,19 @@
+# CipherBox desktop shell — Tauri v2 tray + window chrome only (#645).
+# No engine wiring yet: the shell links crates/engine natively in a later
+# slice (blueprint/desktop.md, "Tauri shell"). Version-frozen at 0.0.0 like
+# every workspace crate; the product version lives in tauri.conf.json.
+
+[package]
+name = "cipherbox-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
