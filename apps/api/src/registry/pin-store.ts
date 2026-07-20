@@ -40,9 +40,13 @@ export class KuboPinStore extends PinStore {
       return;
     }
     try {
-      await fetch(`${this.apiUrl}/api/v0/pin/rm?arg=${encodeURIComponent(cid)}&recursive=true`, {
-        method: 'POST',
-      });
+      const response = await fetch(
+        `${this.apiUrl}/api/v0/pin/rm?arg=${encodeURIComponent(cid)}&recursive=true`,
+        { method: 'POST', signal: AbortSignal.timeout(5000) }
+      );
+      if (!response.ok) {
+        this.logger.warn(`pin/rm for ${cid} returned ${response.status}`);
+      }
     } catch (error) {
       // Best-effort: bookkeeping already dropped the row, so a Kubo hiccup
       // must not fail the caller's retire. Log and move on.

@@ -5,6 +5,7 @@ import { Test } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import request from 'supertest';
+import { DataSource, FindOperator } from 'typeorm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { configureApp } from '../app-setup';
 import { User } from '../auth/entities/user.entity';
@@ -30,12 +31,77 @@ class FakePinStore extends PinStore {
   }
 }
 
+/** Matches plain equality plus the `In([...])` operator the bulk paths use. */
+function inMatch(row: Record<string, unknown>, where: Record<string, unknown>): boolean {
+  return Object.entries(where).every(([key, expected]) => {
+    if (expected instanceof FindOperator) {
+      if (expected.type === 'in') {
+        return (expected.value as unknown[]).includes(row[key]);
+      }
+      throw new Error(`InAwareRepository: unsupported operator ${expected.type}`);
+    }
+    return row[key] === expected;
+  });
+}
+
+/** FakeRepository plus the `In`/array-save/`sum` surface the bulk paths need. */
+class InAwareRepository<T extends { id: string }> extends FakeRepository<T> {
+  override async find(options: { where?: Record<string, unknown> } = {}): Promise<T[]> {
+    const where = options.where;
+    if (!where) {
+      return [...this.rows];
+    }
+    return this.rows.filter((row) => inMatch(row as Record<string, unknown>, where));
+  }
+
+  override async delete(criteria: Record<string, unknown>): Promise<{ affected: number }> {
+    const before = this.rows.length;
+    this.rows = this.rows.filter((row) => !inMatch(row as Record<string, unknown>, criteria));
+    return { affected: before - this.rows.length };
+  }
+
+  override save(entity: Partial<T>): Promise<T>;
+  override save(entities: Partial<T>[]): Promise<T[]>;
+  override async save(entities: Partial<T> | Partial<T>[]): Promise<T | T[]> {
+    if (Array.isArray(entities)) {
+      const saved: T[] = [];
+      for (const entity of entities) {
+        saved.push(await super.save(entity));
+      }
+      return saved;
+    }
+    return super.save(entities);
+  }
+
+  async sum(column: string, where?: Record<string, unknown>): Promise<number | null> {
+    const rows = where
+      ? this.rows.filter((row) => inMatch(row as Record<string, unknown>, where))
+      : this.rows;
+    if (rows.length === 0) {
+      return null;
+    }
+    return rows.reduce(
+      (total, row) => total + Number((row as Record<string, unknown>)[column] ?? 0),
+      0
+    );
+  }
+}
+
+/** A DataSource whose transaction runs inline against the in-memory repos. */
+function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {
+  const byEntity = new Map(repos);
+  return {
+    transaction: (runInTransaction: (manager: unknown) => unknown) =>
+      runInTransaction({ getRepository: (entity: unknown) => byEntity.get(entity) }),
+  } as unknown as DataSource;
+}
+
 describe('registry HTTP surface', () => {
   let app: INestApplication;
   let http: ReturnType<INestApplication['getHttpServer']>;
   let userRepo: FakeRepository<User>;
-  let nameRepo: FakeRepository<NameInventory>;
-  let pinRepo: FakeRepository<PinnedCid>;
+  let nameRepo: InAwareRepository<NameInventory>;
+  let pinRepo: InAwareRepository<PinnedCid>;
   let pinStore: FakePinStore;
   let jwt: JwtService;
   let priorJwtSecret: string | undefined;
@@ -45,8 +111,8 @@ describe('registry HTTP surface', () => {
     process.env.JWT_SECRET = SECRET;
 
     userRepo = new FakeRepository<User>();
-    nameRepo = new FakeRepository<NameInventory>();
-    pinRepo = new FakeRepository<PinnedCid>();
+    nameRepo = new InAwareRepository<NameInventory>();
+    pinRepo = new InAwareRepository<PinnedCid>();
     pinStore = new FakePinStore();
     jwt = new JwtService();
 
@@ -68,6 +134,13 @@ describe('registry HTTP surface', () => {
         { provide: getRepositoryToken(User), useValue: userRepo },
         { provide: getRepositoryToken(NameInventory), useValue: nameRepo },
         { provide: getRepositoryToken(PinnedCid), useValue: pinRepo },
+        {
+          provide: DataSource,
+          useValue: fakeDataSource([
+            [NameInventory, nameRepo],
+            [PinnedCid, pinRepo],
+          ]),
+        },
       ],
     }).compile();
 
@@ -181,6 +254,15 @@ describe('registry HTTP surface', () => {
       expect(second.body).toEqual({ retired: 1, unpinned: 1 });
       expect(pinStore.unpinned).toContain(shared);
       expect(pinRepo.rows.filter((r) => r.cid === shared)).toHaveLength(0);
+    });
+
+    it('rejects an over-length target at the pipe (256-char cap)', async () => {
+      const acct = await account();
+      await request(http)
+        .post('/registry/retire')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .send(['a'.repeat(257)])
+        .expect(400);
     });
   });
 

@@ -66,6 +66,13 @@ export const RETIRE_ARRAY_OPTIONS = {
   items: String,
 } as const;
 
+/**
+ * Per-target length cap. `ParseArrayPipe`'s `maxLength` never reaches items, so
+ * the guard is enforced explicitly in the controller — 256 matches the widest
+ * target column (`pinned_cids.cid`).
+ */
+export const RETIRE_TARGET_MAX_LENGTH = 256;
+
 export class RegisterResponseDto {
   @ApiProperty({ description: 'Distinct names registered or refreshed in this batch' })
   names!: number;

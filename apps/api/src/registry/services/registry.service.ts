@@ -1,7 +1,7 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
+import { DataSource, In, Repository } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 import { NameInventory } from '../entities/name-inventory.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
@@ -63,6 +63,8 @@ export class RegistryService {
     private readonly pinRepository: Repository<PinnedCid>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
     private readonly pinStore: PinStore,
     configService: ConfigService
   ) {
@@ -81,17 +83,71 @@ export class RegistryService {
    */
   async register(accountId: string, entries: RegisterEntry[]): Promise<RegisterResult> {
     const advisory = await this.isByo(accountId);
+
+    // Collapse the batch to its distinct writes; the last-provided head wins
+    // per name, matching the sequential upsert semantics.
+    const heads = new Map<string, string | undefined>();
+    const nameOrder: string[] = [];
+    const cidOrder: string[] = [];
     const cids = new Set<string>();
-
     for (const entry of entries) {
-      // Register-first: the name row exists before its content is accepted.
-      await this.upsertName(accountId, entry.ipnsName, entry.headCid);
-
-      const entryCids = [...(entry.headCid ? [entry.headCid] : []), ...entry.contentCids];
-      for (const cid of entryCids) {
-        await this.upsertPin(accountId, cid, advisory);
-        cids.add(cid);
+      if (!heads.has(entry.ipnsName)) {
+        nameOrder.push(entry.ipnsName);
+        heads.set(entry.ipnsName, undefined);
       }
+      if (entry.headCid !== undefined) {
+        heads.set(entry.ipnsName, entry.headCid);
+      }
+      for (const cid of [...(entry.headCid ? [entry.headCid] : []), ...entry.contentCids]) {
+        if (!cids.has(cid)) {
+          cids.add(cid);
+          cidOrder.push(cid);
+        }
+      }
+    }
+
+    // All-or-nothing: register-first, fail-closed means a mid-batch error must
+    // leave no partial state behind.
+    if (nameOrder.length > 0 || cidOrder.length > 0) {
+      await this.dataSource.transaction(async (manager) => {
+        const nameRepo = manager.getRepository(NameInventory);
+        const pinRepo = manager.getRepository(PinnedCid);
+
+        // Names first: content is never accepted without its anchoring name.
+        const existingNames = nameOrder.length
+          ? await nameRepo.find({ where: { accountId, ipnsName: In(nameOrder) } })
+          : [];
+        const nameByKey = new Map(existingNames.map((row) => [row.ipnsName, row]));
+        const nameWrites: Partial<NameInventory>[] = [];
+        for (const ipnsName of nameOrder) {
+          const head = heads.get(ipnsName);
+          const existing = nameByKey.get(ipnsName);
+          if (existing) {
+            // A bare re-register (no head) leaves the head untouched.
+            if (head !== undefined && existing.headCid !== head) {
+              existing.headCid = head;
+              nameWrites.push(existing);
+            }
+          } else {
+            nameWrites.push({ accountId, ipnsName, headCid: head ?? null });
+          }
+        }
+        if (nameWrites.length) {
+          await nameRepo.save(nameWrites);
+        }
+
+        const existingPins = cidOrder.length
+          ? await pinRepo.find({ where: { accountId, cid: In(cidOrder) } })
+          : [];
+        const knownCids = new Set(existingPins.map((row) => row.cid));
+        // Idempotent: a CID already counted keeps its size and advisory origin.
+        const pinWrites = cidOrder
+          .filter((cid) => !knownCids.has(cid))
+          .map((cid) => ({ accountId, cid, size: '0', advisory }));
+        if (pinWrites.length) {
+          await pinRepo.save(pinWrites);
+        }
+      });
     }
 
     return { names: entries.length, cids: cids.size };
@@ -105,23 +161,30 @@ export class RegistryService {
    * when the LAST account's row for it is gone (global refcount zero).
    */
   async retire(accountId: string, targets: string[]): Promise<RetireResult> {
-    let retired = 0;
+    if (targets.length === 0) {
+      return { retired: 0, unpinned: 0 };
+    }
+
+    // The CIDs the caller actually holds among the targets — read before the
+    // delete so the refcount check is scoped to rows we remove, never a scan.
+    const held = await this.pinRepository.find({ where: { accountId, cid: In(targets) } });
+    const heldCids = targets.filter(
+      (target, index) => targets.indexOf(target) === index && held.some((row) => row.cid === target)
+    );
+
+    const nameDeleted = await this.nameRepository.delete({ accountId, ipnsName: In(targets) });
+    const pinDeleted = await this.pinRepository.delete({ accountId, cid: In(targets) });
+    const retired = (nameDeleted.affected ?? 0) + (pinDeleted.affected ?? 0);
+
     let unpinned = 0;
-
-    for (const target of targets) {
-      const nameDeleted = await this.nameRepository.delete({ accountId, ipnsName: target });
-      retired += nameDeleted.affected ?? 0;
-
-      const pinDeleted = await this.pinRepository.delete({ accountId, cid: target });
-      const pinAffected = pinDeleted.affected ?? 0;
-      retired += pinAffected;
-
-      // Only the account that actually held this CID can drop the global
-      // refcount; check it exactly when a row was removed.
-      if (pinAffected > 0) {
-        const remaining = await this.pinRepository.count({ where: { cid: target } });
-        if (remaining === 0) {
-          await this.pinStore.unpin(target);
+    if (heldCids.length > 0) {
+      // Only the account that held a row can drop the global refcount; a CID
+      // with no survivor is physically unpinned.
+      const survivors = await this.pinRepository.find({ where: { cid: In(heldCids) } });
+      const surviving = new Set(survivors.map((row) => row.cid));
+      for (const cid of heldCids) {
+        if (!surviving.has(cid)) {
+          await this.pinStore.unpin(cid);
           unpinned += 1;
         }
       }
@@ -143,11 +206,8 @@ export class RegistryService {
       throw new UnauthorizedException('Unknown account');
     }
 
-    const rows = await this.pinRepository.find({ where: { accountId } });
-    let used = 0n;
-    for (const row of rows) {
-      used += BigInt(row.size ?? '0');
-    }
+    // Aggregate server-side; size is a bigint column typed as string.
+    const used = await this.pinRepository.sum('size' as never, { accountId });
 
     const limitBytes =
       user.quotaLimitOverride != null
@@ -155,7 +215,7 @@ export class RegistryService {
         : this.defaultLimitBytes;
 
     return {
-      usedBytes: Number(used),
+      usedBytes: used ?? 0,
       limitBytes,
       advisory: user.byo,
     };
@@ -176,29 +236,5 @@ export class RegistryService {
       throw new UnauthorizedException('Unknown account');
     }
     return user.byo;
-  }
-
-  private async upsertName(accountId: string, ipnsName: string, headCid?: string): Promise<void> {
-    const existing = await this.nameRepository.findOne({ where: { accountId, ipnsName } });
-    if (existing) {
-      // Idempotent: a re-publish only advances the head; a bare re-register
-      // (no headCid) leaves the existing head untouched.
-      if (headCid !== undefined && existing.headCid !== headCid) {
-        existing.headCid = headCid;
-        await this.nameRepository.save(existing);
-      }
-      return;
-    }
-    await this.nameRepository.save({ accountId, ipnsName, headCid: headCid ?? null });
-  }
-
-  private async upsertPin(accountId: string, cid: string, advisory: boolean): Promise<void> {
-    const existing = await this.pinRepository.findOne({ where: { accountId, cid } });
-    if (existing) {
-      // Idempotent: the CID is already counted; its size (set by the hosted
-      // upload path) and advisory origin are preserved.
-      return;
-    }
-    await this.pinRepository.save({ accountId, cid, size: '0', advisory });
   }
 }

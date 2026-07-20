@@ -1,5 +1,6 @@
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { UnauthorizedException } from '@nestjs/common';
+import { DataSource, FindOperator } from 'typeorm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../../auth/entities/user.entity';
 import { FakeRepository } from '../../testing/fake-repo';
@@ -11,7 +12,76 @@ import { RegistryService } from './registry.service';
 
 function newPublicKey(): string {
   const priv = secp256k1.utils.randomPrivateKey();
-  return Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
+  try {
+    return Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
+  } finally {
+    priv.fill(0);
+  }
+}
+
+/** Matches plain equality plus the `In([...])` operator the bulk paths use. */
+function inMatch(row: Record<string, unknown>, where: Record<string, unknown>): boolean {
+  return Object.entries(where).every(([key, expected]) => {
+    if (expected instanceof FindOperator) {
+      if (expected.type === 'in') {
+        return (expected.value as unknown[]).includes(row[key]);
+      }
+      throw new Error(`InAwareRepository: unsupported operator ${expected.type}`);
+    }
+    return row[key] === expected;
+  });
+}
+
+/** FakeRepository plus the `In`/array-save/`sum` surface the bulk paths need. */
+class InAwareRepository<T extends { id: string }> extends FakeRepository<T> {
+  override async find(options: { where?: Record<string, unknown> } = {}): Promise<T[]> {
+    const where = options.where;
+    if (!where) {
+      return [...this.rows];
+    }
+    return this.rows.filter((row) => inMatch(row as Record<string, unknown>, where));
+  }
+
+  override async delete(criteria: Record<string, unknown>): Promise<{ affected: number }> {
+    const before = this.rows.length;
+    this.rows = this.rows.filter((row) => !inMatch(row as Record<string, unknown>, criteria));
+    return { affected: before - this.rows.length };
+  }
+
+  override save(entity: Partial<T>): Promise<T>;
+  override save(entities: Partial<T>[]): Promise<T[]>;
+  override async save(entities: Partial<T> | Partial<T>[]): Promise<T | T[]> {
+    if (Array.isArray(entities)) {
+      const saved: T[] = [];
+      for (const entity of entities) {
+        saved.push(await super.save(entity));
+      }
+      return saved;
+    }
+    return super.save(entities);
+  }
+
+  async sum(column: string, where?: Record<string, unknown>): Promise<number | null> {
+    const rows = where
+      ? this.rows.filter((row) => inMatch(row as Record<string, unknown>, where))
+      : this.rows;
+    if (rows.length === 0) {
+      return null;
+    }
+    return rows.reduce(
+      (total, row) => total + Number((row as Record<string, unknown>)[column] ?? 0),
+      0
+    );
+  }
+}
+
+/** A DataSource whose transaction runs inline against the in-memory repos. */
+function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {
+  const byEntity = new Map(repos);
+  return {
+    transaction: (runInTransaction: (manager: unknown) => unknown) =>
+      runInTransaction({ getRepository: (entity: unknown) => byEntity.get(entity) }),
+  } as unknown as DataSource;
 }
 
 /** Records every physical unpin so the refcount-zero decision is observable. */
@@ -25,21 +95,25 @@ class FakePinStore extends PinStore {
 const GIB = 1024 * 1024 * 1024;
 
 describe('RegistryService', () => {
-  let names: FakeRepository<NameInventory>;
-  let pins: FakeRepository<PinnedCid>;
+  let names: InAwareRepository<NameInventory>;
+  let pins: InAwareRepository<PinnedCid>;
   let users: FakeRepository<User>;
   let pinStore: FakePinStore;
   let service: RegistryService;
 
   function build(config: Record<string, string | undefined> = {}) {
-    names = new FakeRepository<NameInventory>();
-    pins = new FakeRepository<PinnedCid>();
+    names = new InAwareRepository<NameInventory>();
+    pins = new InAwareRepository<PinnedCid>();
     users = new FakeRepository<User>();
     pinStore = new FakePinStore();
     service = new RegistryService(
       names as never,
       pins as never,
       users as never,
+      fakeDataSource([
+        [NameInventory, names],
+        [PinnedCid, pins],
+      ]),
       pinStore,
       fakeConfig(config).service
     );

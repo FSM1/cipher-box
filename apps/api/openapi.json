@@ -430,7 +430,7 @@
               "schema": {
                 "type": "array",
                 "items": {
-                  "type": "string"
+                  "$ref": "#/components/schemas/RegisterEntryDto"
                 }
               }
             }
@@ -897,6 +897,31 @@
         },
         "required": [
           "success"
+        ]
+      },
+      "RegisterEntryDto": {
+        "type": "object",
+        "properties": {
+          "ipnsName": {
+            "type": "string",
+            "description": "The IPNS name to register (libp2p-key CID). Register-first: this row precedes publish.",
+            "example": "k51qzi5uqu5dkuzo866rgfkt5nuqo53l6l3l6zk3l6zk3l6zk3l6zk3l6zk3"
+          },
+          "headCid": {
+            "type": "string",
+            "description": "Current head (metadata) CID this name publishes; omit to register the name only."
+          },
+          "contentCids": {
+            "description": "Content CIDs to pin/count under this account (idempotent upsert).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "ipnsName",
+          "contentCids"
         ]
       },
       "RegisterResponseDto": {
