@@ -18,7 +18,9 @@
           }
         },
         "summary": "Liveness check",
-        "tags": ["Ops"]
+        "tags": [
+          "Ops"
+        ]
       }
     },
     "/metrics": {
@@ -38,7 +40,9 @@
           }
         },
         "summary": "Prometheus metrics in text exposition format",
-        "tags": ["Ops"]
+        "tags": [
+          "Ops"
+        ]
       }
     },
     "/auth/challenge": {
@@ -68,7 +72,9 @@
           }
         },
         "summary": "Issue a single-use login challenge bound to an identity publicKey",
-        "tags": ["Auth"]
+        "tags": [
+          "Auth"
+        ]
       }
     },
     "/auth/login": {
@@ -98,7 +104,9 @@
           }
         },
         "summary": "Challenge-signature login against the secp256k1 identity key; creates the account implicitly at first login",
-        "tags": ["Auth"]
+        "tags": [
+          "Auth"
+        ]
       }
     },
     "/auth/siwe/challenge": {
@@ -118,7 +126,9 @@
           }
         },
         "summary": "Issue a single-use SIWE nonce",
-        "tags": ["Auth"]
+        "tags": [
+          "Auth"
+        ]
       }
     },
     "/auth/siwe/login": {
@@ -148,7 +158,9 @@
           }
         },
         "summary": "SIWE wallet login (secondary method; the wallet must already be linked)",
-        "tags": ["Auth"]
+        "tags": [
+          "Auth"
+        ]
       }
     },
     "/auth/siwe/link": {
@@ -183,7 +195,9 @@
           }
         ],
         "summary": "Link a SIWE wallet to the authenticated account",
-        "tags": ["Auth"]
+        "tags": [
+          "Auth"
+        ]
       }
     },
     "/auth/refresh": {
@@ -213,7 +227,9 @@
           }
         },
         "summary": "Rotate the refresh token (one-time-use; reuse revokes the whole family)",
-        "tags": ["Auth"]
+        "tags": [
+          "Auth"
+        ]
       }
     },
     "/auth/logout": {
@@ -238,7 +254,9 @@
           }
         ],
         "summary": "Revoke every refresh token for the account (hard delete)",
-        "tags": ["Auth"]
+        "tags": [
+          "Auth"
+        ]
       }
     },
     "/auth/test-login": {
@@ -268,7 +286,9 @@
           }
         },
         "summary": "Staging-gated deterministic login for e2e (hard-blocked in production)",
-        "tags": ["Auth"]
+        "tags": [
+          "Auth"
+        ]
       }
     }
   },
@@ -306,7 +326,9 @@
             "example": "ok"
           }
         },
-        "required": ["status"]
+        "required": [
+          "status"
+        ]
       },
       "ChallengeRequestDto": {
         "type": "object",
@@ -317,7 +339,9 @@
             "example": "02a1633cafcc01ebfb6d78e39f687a1f0995c62fc95f51ead10a02ee0be551b5dc"
           }
         },
-        "required": ["publicKey"]
+        "required": [
+          "publicKey"
+        ]
       },
       "ChallengeResponseDto": {
         "type": "object",
@@ -331,7 +355,10 @@
             "description": "Challenge expiry, ISO 8601"
           }
         },
-        "required": ["challenge", "expiresAt"]
+        "required": [
+          "challenge",
+          "expiresAt"
+        ]
       },
       "LoginRequestDto": {
         "type": "object",
@@ -349,7 +376,11 @@
             "description": "Compact secp256k1 signature over sha256(challenge), 64 bytes hex"
           }
         },
-        "required": ["publicKey", "challenge", "signature"]
+        "required": [
+          "publicKey",
+          "challenge",
+          "signature"
+        ]
       },
       "TokenResponseDto": {
         "type": "object",
@@ -367,7 +398,10 @@
             "description": "True when this login created the account implicitly"
           }
         },
-        "required": ["accessToken", "refreshToken"]
+        "required": [
+          "accessToken",
+          "refreshToken"
+        ]
       },
       "SiweChallengeResponseDto": {
         "type": "object",
@@ -381,7 +415,10 @@
             "description": "Nonce expiry, ISO 8601"
           }
         },
-        "required": ["nonce", "expiresAt"]
+        "required": [
+          "nonce",
+          "expiresAt"
+        ]
       },
       "SiweLoginRequestDto": {
         "type": "object",
@@ -395,7 +432,10 @@
             "description": "EIP-191 signature over the message, 0x-prefixed hex"
           }
         },
-        "required": ["message", "signature"]
+        "required": [
+          "message",
+          "signature"
+        ]
       },
       "LogoutResponseDto": {
         "type": "object",
@@ -404,7 +444,9 @@
             "type": "boolean"
           }
         },
-        "required": ["success"]
+        "required": [
+          "success"
+        ]
       },
       "RefreshRequestDto": {
         "type": "object",
@@ -427,7 +469,10 @@
             "description": "Must match TEST_LOGIN_SECRET"
           }
         },
-        "required": ["handle", "secret"]
+        "required": [
+          "handle",
+          "secret"
+        ]
       },
       "TestLoginResponseDto": {
         "type": "object",
@@ -453,7 +498,12 @@
             "description": "Deterministic secp256k1 privateKey, hex (test hook only)"
           }
         },
-        "required": ["accessToken", "refreshToken", "publicKey", "privateKey"]
+        "required": [
+          "accessToken",
+          "refreshToken",
+          "publicKey",
+          "privateKey"
+        ]
       }
     }
   }
