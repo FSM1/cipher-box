@@ -522,3 +522,26 @@ jobs:
 
       - name: Tauri build (unsigned, no bundle)
         run: pnpm --filter @cipherbox/desktop tauri build --no-bundle
+
+  # Single always-reporting gate for the path-filtered desktop matrix. Branch
+  # protection requires this stable context instead of the per-OS matrix legs:
+  # the matrix legs are only reported when `desktop-build` actually runs (its
+  # paths filter matched), so requiring them directly blocks every PR that does
+  # not touch the desktop paths. This job runs on every PR and passes when the
+  # matrix succeeded or was skipped, failing only on a real desktop-build break.
+  desktop-build-result:
+    name: Desktop Build Result
+    needs: desktop-build
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require desktop build to pass or be skipped
+        run: |
+          result='${{ needs.desktop-build.result }}'
+          echo "desktop-build result: ${result}"
+          if [ "${result}" = 'failure' ] || [ "${result}" = 'cancelled' ]; then
+            echo "::error::desktop-build ${result}"
+            exit 1
+          fi
