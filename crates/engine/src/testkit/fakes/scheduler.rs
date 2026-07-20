@@ -1,0 +1,246 @@
+//! The virtual-clock [`Scheduler`] fake.
+
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll, Waker};
+use core::time::Duration;
+use std::sync::{Arc, Mutex};
+
+use crate::seams::{BoxedTask, Scheduler, UnixMillis};
+
+struct Inner {
+    now: UnixMillis,
+    auto_advance: bool,
+    sleepers: Vec<(UnixMillis, Waker)>,
+    tasks: Vec<BoxedTask>,
+}
+
+/// A deterministic virtual clock: time moves only when a test advances it.
+///
+/// Clones share the same clock, so every device in a [`super::super::FakeWorld`]
+/// steps on one timeline. Two modes:
+///
+/// - **Manual** (default): `sleep` parks until [`advance`] /
+///   [`advance_to`] moves virtual time past its deadline — the simulation
+///   harness's stepping lever.
+/// - **Auto-advance** ([`with_auto_advance`]): a polled sleep immediately
+///   jumps the clock to its own deadline and resolves — multi-day
+///   timelines execute in microseconds with no external driver.
+///
+/// [`advance`]: VirtualScheduler::advance
+/// [`advance_to`]: VirtualScheduler::advance_to
+/// [`with_auto_advance`]: VirtualScheduler::with_auto_advance
+#[derive(Clone)]
+pub struct VirtualScheduler {
+    inner: Arc<Mutex<Inner>>,
+}
+
+impl VirtualScheduler {
+    /// A manual-mode clock starting at `UnixMillis(0)`.
+    pub fn new() -> Self {
+        Self::starting_at(UnixMillis(0))
+    }
+
+    /// A manual-mode clock starting at an arbitrary instant.
+    // `BoxedTask` is deliberately `!Send` (the engine runs pinned to one
+    // execution context), which makes `Mutex<Inner>` `!Send + !Sync`; the
+    // `Arc` exists only for same-thread handle cloning, matching how every
+    // fake models "one shared backing".
+    #[allow(clippy::arc_with_non_send_sync)]
+    pub fn starting_at(now: UnixMillis) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(Inner {
+                now,
+                auto_advance: false,
+                sleepers: Vec::new(),
+                tasks: Vec::new(),
+            })),
+        }
+    }
+
+    /// Switches this clock (and every clone of it) to auto-advance mode.
+    #[must_use]
+    pub fn with_auto_advance(self) -> Self {
+        self.inner.lock().expect("lock").auto_advance = true;
+        self
+    }
+
+    /// Moves virtual time forward by `duration`, waking every sleep whose
+    /// deadline is reached.
+    pub fn advance(&self, duration: Duration) {
+        let target = self.now().saturating_add(duration);
+        self.advance_to(target);
+    }
+
+    /// Moves virtual time to `instant` (never backwards), waking every
+    /// sleep whose deadline is reached.
+    pub fn advance_to(&self, instant: UnixMillis) {
+        let woken: Vec<Waker> = {
+            let mut inner = self.inner.lock().expect("lock");
+            inner.now = inner.now.max(instant);
+            let now = inner.now;
+            let (due, pending) = std::mem::take(&mut inner.sleepers)
+                .into_iter()
+                .partition(|(deadline, _)| *deadline <= now);
+            inner.sleepers = pending;
+            due.into_iter().map(|(_, waker)| waker).collect()
+        };
+        for waker in woken {
+            waker.wake();
+        }
+    }
+
+    /// Takes every task handed to [`Scheduler::spawn`] so far; the test
+    /// decides when (and whether) to drive them.
+    pub fn take_spawned_tasks(&self) -> Vec<BoxedTask> {
+        std::mem::take(&mut self.inner.lock().expect("lock").tasks)
+    }
+
+    /// How many sleeps are currently parked (manual mode introspection).
+    pub fn pending_sleepers(&self) -> usize {
+        self.inner.lock().expect("lock").sleepers.len()
+    }
+}
+
+impl Default for VirtualScheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+struct SleepFuture {
+    scheduler: VirtualScheduler,
+    deadline: UnixMillis,
+}
+
+impl Future for SleepFuture {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let woken: Vec<Waker>;
+        let result = {
+            let mut inner = self.scheduler.inner.lock().expect("lock");
+            if inner.now >= self.deadline {
+                woken = Vec::new();
+                Poll::Ready(())
+            } else if inner.auto_advance {
+                inner.now = self.deadline;
+                let now = inner.now;
+                let (due, pending) = std::mem::take(&mut inner.sleepers)
+                    .into_iter()
+                    .partition(|(deadline, _)| *deadline <= now);
+                inner.sleepers = pending;
+                woken = due.into_iter().map(|(_, waker)| waker).collect();
+                Poll::Ready(())
+            } else {
+                inner.sleepers.push((self.deadline, cx.waker().clone()));
+                woken = Vec::new();
+                Poll::Pending
+            }
+        };
+        for waker in woken {
+            waker.wake();
+        }
+        result
+    }
+}
+
+impl Scheduler for VirtualScheduler {
+    fn now(&self) -> UnixMillis {
+        self.inner.lock().expect("lock").now
+    }
+
+    async fn sleep(&self, duration: Duration) {
+        let deadline = self.now().saturating_add(duration);
+        SleepFuture {
+            scheduler: self.clone(),
+            deadline,
+        }
+        .await;
+    }
+
+    fn spawn(&self, task: BoxedTask) {
+        self.inner.lock().expect("lock").tasks.push(task);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::pin::pin;
+
+    fn noop_context() -> Context<'static> {
+        Context::from_waker(Waker::noop())
+    }
+
+    #[test]
+    fn manual_sleep_parks_until_advanced() {
+        let scheduler = VirtualScheduler::new();
+        let mut sleep = pin!(scheduler.sleep(Duration::from_millis(100)));
+        let mut cx = noop_context();
+
+        assert!(sleep.as_mut().poll(&mut cx).is_pending());
+        scheduler.advance(Duration::from_millis(99));
+        assert!(sleep.as_mut().poll(&mut cx).is_pending());
+        scheduler.advance(Duration::from_millis(1));
+        assert!(sleep.as_mut().poll(&mut cx).is_ready());
+        assert_eq!(scheduler.now(), UnixMillis(100));
+    }
+
+    #[test]
+    fn advance_wakes_registered_sleepers() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::task::Wake;
+
+        struct FlagWaker(AtomicBool);
+        impl Wake for FlagWaker {
+            fn wake(self: Arc<Self>) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let scheduler = VirtualScheduler::new();
+        let flag = Arc::new(FlagWaker(AtomicBool::new(false)));
+        let waker = Waker::from(Arc::clone(&flag));
+        let mut cx = Context::from_waker(&waker);
+
+        let mut sleep = pin!(scheduler.sleep(Duration::from_millis(10)));
+        assert!(sleep.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(scheduler.pending_sleepers(), 1);
+
+        scheduler.advance(Duration::from_millis(10));
+        assert!(
+            flag.0.load(Ordering::SeqCst),
+            "advance must wake the sleeper"
+        );
+        assert!(sleep.as_mut().poll(&mut cx).is_ready());
+        assert_eq!(scheduler.pending_sleepers(), 0);
+    }
+
+    #[test]
+    fn auto_advance_resolves_multi_day_sleeps_instantly() {
+        let scheduler = VirtualScheduler::new().with_auto_advance();
+        crate::testkit::block_on(scheduler.sleep(Duration::from_secs(90 * 24 * 3600)));
+        assert_eq!(scheduler.now(), UnixMillis(90 * 24 * 3600 * 1000));
+    }
+
+    #[test]
+    fn spawn_queues_tasks_for_the_test_to_drive() {
+        let scheduler = VirtualScheduler::new();
+        scheduler.spawn(Box::pin(async {}));
+        scheduler.spawn(Box::pin(async {}));
+        assert_eq!(scheduler.take_spawned_tasks().len(), 2);
+        assert!(scheduler.take_spawned_tasks().is_empty());
+    }
+
+    #[test]
+    fn clones_share_one_timeline() {
+        let a = VirtualScheduler::starting_at(UnixMillis(1_000));
+        let b = a.clone();
+        b.advance(Duration::from_millis(500));
+        assert_eq!(a.now(), UnixMillis(1_500));
+    }
+}
