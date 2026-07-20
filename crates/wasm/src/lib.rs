@@ -12,8 +12,9 @@
 //! `packages/client` re-exports — there is no hand-maintained TS mirror of
 //! engine structures. Boundary hygiene is structural: `u64`s (op ids, sizes,
 //! IPNS sequence numbers) cross as `bigint`, binary payloads as `Uint8Array`,
-//! and no key-shaped value crosses at all — the command surface exposes only
-//! intent, the event surface only key-free view state.
+//! and no secret key material crosses at all — the command surface exposes
+//! only intent (a grant carries the recipient's *public* identity key, never
+//! a secret), and the event surface only key-free view state.
 //!
 //! Scope of this slice: the facade's **command builders** and **event
 //! readers** plus their boundary value types. The live engine handle
