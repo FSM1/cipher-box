@@ -55,6 +55,10 @@ impl FileStagingStore {
         let dir = dir.as_ref();
         let ops_dir = dir.join("ops");
         let staged_dir = dir.join("staged");
+        // Sweep the root too: the `next_op_id` counter is atomic-written
+        // directly under `dir`, so a crash mid-counter-write can strand a
+        // temp file here — reclaim it on reopen like the ops/staged debris.
+        ensure_dir(dir).map_err(|err| seam_err("staging_store open root", &err))?;
         ensure_dir(&ops_dir).map_err(|err| seam_err("staging_store open ops", &err))?;
         ensure_dir(&staged_dir).map_err(|err| seam_err("staging_store open staged", &err))?;
         let counter_path = dir.join(COUNTER_FILE);

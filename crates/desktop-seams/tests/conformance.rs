@@ -145,6 +145,31 @@ fn staging_store_op_ids_never_reuse_across_a_full_drain() {
     });
 }
 
+/// A temp file stranded in the store root by a crash mid-counter-write is
+/// reclaimed on reopen — the `next_op_id` counter lives directly under the
+/// root, so the root must be swept like the ops/staged subdirs.
+#[test]
+fn staging_store_reopen_sweeps_stranded_root_temp_debris() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("staging");
+    block_on(async {
+        FileStagingStore::open(&path).unwrap();
+    });
+
+    // Simulate crash debris from a counter write: a temp file in the root.
+    let debris = path.join(".cbtmp.stranded");
+    std::fs::write(&debris, b"partial-counter").unwrap();
+    assert!(debris.exists());
+
+    block_on(async {
+        FileStagingStore::open(&path).unwrap();
+    });
+    assert!(
+        !debris.exists(),
+        "reopen must sweep temp debris stranded in the store root"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Network seams — driven on a Tokio current-thread runtime (reqwest needs the
 // reactor). RecordTransport has a kit; Http does not (pure passthrough), so a
