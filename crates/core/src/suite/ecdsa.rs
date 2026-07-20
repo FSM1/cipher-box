@@ -30,8 +30,9 @@ pub struct EcdsaSigner(SigningKey);
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct EcdsaVerifier(VerifyingKey);
 
-/// A canonical compact ECDSA signature. Constructing one validates that
-/// `r`/`s` are in range, so a stored value is always a well-formed signature.
+/// A canonical, non-malleable compact ECDSA signature. Constructing one
+/// validates that `r`/`s` are in range **and** that `s` is low, so a stored
+/// value is always the single canonical byte form of a well-formed signature.
 #[derive(Clone, PartialEq, Eq)]
 pub struct EcdsaSignature(Signature);
 
@@ -93,13 +94,25 @@ impl fmt::Debug for EcdsaVerifier {
 }
 
 impl EcdsaSignature {
-    /// Parse a compact signature. `None` when it is not exactly 64 bytes or
-    /// `r`/`s` are out of range — the `invalid-binding-sig-encoding` gate.
+    /// Parse a compact signature. `None` when it is not exactly 64 bytes, when
+    /// `r`/`s` are out of range, or when `s` is **high** (non-canonical) — the
+    /// `invalid-binding-sig-encoding` gate. Rejecting high-S at the encoding
+    /// layer makes the byte form canonical and non-malleable: `s` and `n - s`
+    /// are two encodings of the same signature, so pinning low-S here keeps any
+    /// invariant keyed on the signature bytes single-valued (grant-set
+    /// commitment, one contact-code encoding). (k256's verifier also rejects
+    /// high-S, so this is defence in depth on the parse side.) The deterministic
+    /// signer already emits low-S, so this only rejects tampered inputs.
     pub fn from_compact(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != SIGNATURE_LEN {
             return None;
         }
-        Signature::from_slice(bytes).ok().map(Self)
+        let sig = Signature::from_slice(bytes).ok()?;
+        // `normalize_s` returns `Some` iff the input was high-S.
+        if sig.normalize_s().is_some() {
+            return None;
+        }
+        Some(Self(sig))
     }
 
     /// The 64-byte compact `r || s` encoding.
@@ -165,6 +178,32 @@ mod tests {
         assert_eq!(EcdsaSignature::from_compact(&[0u8; 63]), None);
         // All-zero r||s is not a valid signature.
         assert_eq!(EcdsaSignature::from_compact(&[0u8; 64]), None);
+    }
+
+    #[test]
+    fn high_s_malleated_signature_rejects() {
+        // The signer emits low-S; craft the malleable twin s' = n - s.
+        let sig = signer().sign_detcbor(b"x");
+        let (r, s) = sig.0.split_scalars();
+        let high_s = -*s; // n - s: high-S since s was low
+        let malleated =
+            Signature::from_scalars(r.to_bytes(), high_s.to_bytes()).expect("alternate encoding");
+        // It is genuinely the same signature's high-S form: normalizing yields
+        // the original low-S signature.
+        assert_eq!(malleated.normalize_s(), Some(sig.0));
+        // Our canonical parser rejects it at the encoding layer...
+        let mut bytes = [0u8; SIGNATURE_LEN];
+        bytes.copy_from_slice(&malleated.to_bytes());
+        assert_eq!(EcdsaSignature::from_compact(&bytes), None);
+        // ...and k256's verifier independently rejects high-S (defence in depth).
+        let digest = Sha256::digest(b"x");
+        assert!(
+            signer()
+                .verifying_key()
+                .0
+                .verify_prehash(&digest, &malleated)
+                .is_err()
+        );
     }
 
     #[test]

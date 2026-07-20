@@ -57,13 +57,15 @@ pub fn verify_subkey_binding(
 }
 
 /// A verified contact code: an identity key, its bound encryption subkey, and
-/// the binding signature. Only constructed through [`import_contact_code`], so
-/// holding one is proof the binding verified.
+/// the binding signature. Fields are private so the only ways to obtain one are
+/// [`ContactCode::create`] (which signs) and [`import_contact_code`] (which
+/// verifies) — holding a `ContactCode` is therefore proof the binding verified,
+/// an invariant a public struct literal would let a caller forge.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContactCode {
-    pub identity_pk: EcdsaVerifier,
-    pub enc_subkey: X25519Public,
-    pub binding_sig: EcdsaSignature,
+    identity_pk: EcdsaVerifier,
+    enc_subkey: X25519Public,
+    binding_sig: EcdsaSignature,
 }
 
 impl ContactCode {
@@ -76,6 +78,21 @@ impl ContactCode {
             enc_subkey,
             binding_sig,
         }
+    }
+
+    /// The verified identity (signing) public key.
+    pub fn identity_pk(&self) -> EcdsaVerifier {
+        self.identity_pk
+    }
+
+    /// The bound X25519 encryption subkey.
+    pub fn enc_subkey(&self) -> X25519Public {
+        self.enc_subkey
+    }
+
+    /// The binding signature.
+    pub fn binding_sig(&self) -> &EcdsaSignature {
+        &self.binding_sig
     }
 
     /// Encode to det-CBOR `{bindingSig, encSubkey, identityPk}`.

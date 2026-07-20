@@ -944,19 +944,19 @@ fn contact_accept_vectors_import_and_round_trip() {
             v.name
         );
         assert_eq!(
-            hex::encode(code.identity_pk.to_sec1()),
+            hex::encode(code.identity_pk().to_sec1()),
             v.identity_pk,
             "contact accept {}: identityPk",
             v.name
         );
         assert_eq!(
-            hex::encode(code.enc_subkey.to_bytes()),
+            hex::encode(code.enc_subkey().to_bytes()),
             v.enc_subkey,
             "contact accept {}: encSubkey",
             v.name
         );
         assert_eq!(
-            hex::encode(code.binding_sig.to_compact()),
+            hex::encode(code.binding_sig().to_compact()),
             v.binding_sig,
             "contact accept {}: bindingSig",
             v.name

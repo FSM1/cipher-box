@@ -54,6 +54,19 @@ pub struct HpkeCiphertext {
 /// Seal `plaintext` to `recipient_pub` under HPKE base mode. `ephemeral_scalar`
 /// is the injected 32-byte ephemeral secret (X25519 clamps it), making the
 /// whole operation deterministic.
+///
+/// # Security — ephemeral scalar uniqueness (caller invariant)
+///
+/// `ephemeral_scalar` **must be fresh, uniformly-random 32 bytes on every
+/// call.** Reusing it across two different plaintexts for the same
+/// `recipient_pub`/`info` re-derives the identical AEAD key **and** base nonce:
+/// XChaCha20-Poly1305 under a repeated (key, nonce) is a catastrophic break
+/// (keystream reuse leaks the plaintext XOR, and the one-time Poly1305 key
+/// enables forgeries). Core cannot sample entropy or enforce this (determinism
+/// doctrine), so the engine seam that calls `hpke_seal` owns the invariant: the
+/// ephemeral is in the same *random-per-use* class as content keys, **not** a
+/// KDF-catalog edge. KATs reuse a fixed scalar only because they seal one fixed
+/// plaintext per scalar.
 pub fn hpke_seal(
     recipient_pub: &X25519Public,
     ephemeral_scalar: &[u8; 32],

@@ -263,6 +263,13 @@ pub fn enc_subkey(login_secret: &[u8]) -> X25519Secret {
 
 /// `blinded-tag`: the public grant-blob tag from an ECDH secret and the scope
 /// root's `ipnsName`.
+///
+/// `ecdh_shared` is expected to be a **contributory** X25519 result. A
+/// low-order peer public key forces an all-zero shared secret and thus a tag
+/// that depends only on the `ipnsName` — degenerate, not a secrecy break (the
+/// tag is public), but callers computing the ECDH should use the contributory
+/// check on the [`x25519`](crate::suite::x25519) seam if they later attach any
+/// secrecy requirement to the tag.
 pub fn blinded_tag(
     ecdh_shared: &[u8; SECRET_LEN],
     scope_root_ipns_name: &[u8],
@@ -307,7 +314,9 @@ pub fn vault_pointer_index(login_secret: &[u8], index: u64) -> Ed25519Signer {
 /// probe fills each edge's seed-shaped and id-shaped slots, so a difference in
 /// any two outputs is attributable to the context string alone — exactly what
 /// the mechanical separation KAT asserts.
-#[derive(Debug, Clone, Copy)]
+///
+/// `seed` is caller key material, so `Debug` is redacted.
+#[derive(Clone, Copy)]
 pub struct EdgeProbe<'a> {
     /// Fills every 32-byte seed / ECDH / material / login-secret slot.
     pub seed: &'a [u8; SECRET_LEN],
@@ -321,16 +330,46 @@ pub struct EdgeProbe<'a> {
     pub ipns_name: &'a [u8],
 }
 
-/// One edge's raw 32-byte derived output under a probe.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+impl core::fmt::Debug for EdgeProbe<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EdgeProbe")
+            .field("seed", &"<redacted>")
+            .field("id", &self.id)
+            .field("struct_tag", &self.struct_tag)
+            .field("index", &self.index)
+            .field("ipns_name", &self.ipns_name)
+            .finish()
+    }
+}
+
+/// One edge's raw 32-byte derived output under a probe. The output is key
+/// material, so `Debug` is redacted; `PartialEq` compares the frozen KAT
+/// outputs (test inputs, not attacker-controlled secrets) so it needs no
+/// constant-time guarantee.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct EdgeProbeOutput {
     pub name: &'static str,
     pub output: [u8; SECRET_LEN],
 }
 
+impl core::fmt::Debug for EdgeProbeOutput {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EdgeProbeOutput")
+            .field("name", &self.name)
+            .field("output", &"<redacted>")
+            .finish()
+    }
+}
+
 /// Run every edge under one probe, in [`EDGES`] order. Backs the separation KAT
 /// (the fourteen outputs must be pairwise distinct) and its property test, and
 /// is the frozen-vector surface the KAT generator writes.
+///
+/// This is the **catalog-freezing / separation surface**, not the production
+/// derivation path: it returns each edge's raw derived bytes in the clear
+/// (redacted `Debug` notwithstanding). Production code derives keys through the
+/// typed edge functions above ([`node_seed`], [`read_key`], …), which return
+/// zeroizing owning types. Do not feed production seeds through this function.
 pub fn edge_probe_outputs(probe: &EdgeProbe) -> Vec<EdgeProbeOutput> {
     let b = |s: SecretBytes| *s.as_bytes();
     vec![

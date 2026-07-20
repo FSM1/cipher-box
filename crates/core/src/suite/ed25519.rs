@@ -8,7 +8,7 @@
 
 use core::fmt;
 
-use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 
 use super::secret::SECRET_LEN;
 
@@ -70,9 +70,15 @@ impl Ed25519Verifier {
     /// Verify a detached signature over `message`. Returns `true` on a valid
     /// signature; the fail-closed trust policy over this boolean lives in the
     /// engine.
+    ///
+    /// Uses dalek's **strict** verification: it rejects the S-malleability
+    /// (`S` and `S + L` both satisfy cofactored verification) and small-order
+    /// `A`/`R`, so each (key, message) has a single accepting signature. That
+    /// non-malleability is required where signed structures/records may be
+    /// compared or committed in a zero-knowledge store.
     pub fn verify(&self, message: &[u8], signature: &Ed25519Signature) -> bool {
         let sig = ed25519_dalek::Signature::from_bytes(&signature.0);
-        self.0.verify(message, &sig).is_ok()
+        self.0.verify_strict(message, &sig).is_ok()
     }
 }
 

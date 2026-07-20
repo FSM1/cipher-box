@@ -1310,9 +1310,9 @@ fn build_contact_accept() -> Vec<ContactAcceptVector> {
         out.push(ContactAcceptVector {
             name: name.to_string(),
             hex: hexstr(&bytes),
-            identity_pk: hexstr(&code.identity_pk.to_sec1()),
-            enc_subkey: hexstr(&code.enc_subkey.to_bytes()),
-            binding_sig: hexstr(&code.binding_sig.to_compact()),
+            identity_pk: hexstr(&code.identity_pk().to_sec1()),
+            enc_subkey: hexstr(&code.enc_subkey().to_bytes()),
+            binding_sig: hexstr(&code.binding_sig().to_compact()),
         });
     }
     out
@@ -1324,7 +1324,7 @@ fn build_contact_reject() -> Vec<RejectVector> {
     let enc_public = X25519Secret::from_scalar([0x33; 32]).public();
     let good_enc = enc_public.to_bytes().to_vec();
     let good_sig = ContactCode::create(&signer, enc_public)
-        .binding_sig
+        .binding_sig()
         .to_compact()
         .to_vec();
 
