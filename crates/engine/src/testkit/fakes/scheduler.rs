@@ -8,10 +8,19 @@ use std::sync::{Arc, Mutex};
 
 use crate::seams::{BoxedTask, Scheduler, UnixMillis};
 
+/// One parked sleep: its deadline, the identity of the owning
+/// [`SleepFuture`], and the waker from its latest poll.
+struct Sleeper {
+    deadline: UnixMillis,
+    sleep_id: u64,
+    waker: Waker,
+}
+
 struct Inner {
     now: UnixMillis,
     auto_advance: bool,
-    sleepers: Vec<(UnixMillis, Waker)>,
+    next_sleep_id: u64,
+    sleepers: Vec<Sleeper>,
     tasks: Vec<BoxedTask>,
 }
 
@@ -24,9 +33,28 @@ impl Inner {
         let now = self.now;
         let (due, pending): (Vec<_>, Vec<_>) = std::mem::take(&mut self.sleepers)
             .into_iter()
-            .partition(|(deadline, _)| *deadline <= now);
+            .partition(|sleeper| sleeper.deadline <= now);
         self.sleepers = pending;
-        due.into_iter().map(|(_, waker)| waker).collect()
+        due.into_iter().map(|sleeper| sleeper.waker).collect()
+    }
+
+    /// Registers (or, on a re-poll of the same future, replaces) the parked
+    /// waker for one sleep — one entry per live [`SleepFuture`], so
+    /// re-polling never accumulates duplicates and only the latest waker
+    /// fires (the futures contract).
+    fn park(&mut self, sleep_id: u64, deadline: UnixMillis, waker: Waker) {
+        match self
+            .sleepers
+            .iter_mut()
+            .find(|sleeper| sleeper.sleep_id == sleep_id)
+        {
+            Some(sleeper) => sleeper.waker = waker,
+            None => self.sleepers.push(Sleeper {
+                deadline,
+                sleep_id,
+                waker,
+            }),
+        }
     }
 }
 
@@ -67,6 +95,7 @@ impl VirtualScheduler {
             inner: Arc::new(Mutex::new(Inner {
                 now,
                 auto_advance: false,
+                next_sleep_id: 0,
                 sleepers: Vec::new(),
                 tasks: Vec::new(),
             })),
@@ -121,23 +150,32 @@ impl Default for VirtualScheduler {
 struct SleepFuture {
     scheduler: VirtualScheduler,
     deadline: UnixMillis,
+    /// Identity in `Inner::sleepers`, assigned on first park so a re-poll
+    /// replaces this future's waker instead of accumulating duplicates.
+    sleep_id: Option<u64>,
 }
 
 impl Future for SleepFuture {
     type Output = ();
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let this = self.get_mut();
         let woken: Vec<Waker>;
         let result = {
-            let mut inner = self.scheduler.inner.lock().expect("lock");
-            if inner.now >= self.deadline {
+            let mut inner = this.scheduler.inner.lock().expect("lock");
+            if inner.now >= this.deadline {
                 woken = Vec::new();
                 Poll::Ready(())
             } else if inner.auto_advance {
-                woken = inner.advance_and_take_due(self.deadline);
+                woken = inner.advance_and_take_due(this.deadline);
                 Poll::Ready(())
             } else {
-                inner.sleepers.push((self.deadline, cx.waker().clone()));
+                let sleep_id = *this.sleep_id.get_or_insert_with(|| {
+                    let id = inner.next_sleep_id;
+                    inner.next_sleep_id += 1;
+                    id
+                });
+                inner.park(sleep_id, this.deadline, cx.waker().clone());
                 woken = Vec::new();
                 Poll::Pending
             }
@@ -159,6 +197,7 @@ impl Scheduler for VirtualScheduler {
         SleepFuture {
             scheduler: self.clone(),
             deadline,
+            sleep_id: None,
         }
         .await;
     }
@@ -221,6 +260,43 @@ mod tests {
             "advance must wake the sleeper"
         );
         assert!(sleep.as_mut().poll(&mut cx).is_ready());
+        assert_eq!(scheduler.pending_sleepers(), 0);
+    }
+
+    #[test]
+    fn repolling_one_sleep_registers_exactly_one_sleeper() {
+        let scheduler = VirtualScheduler::new();
+        let mut sleep = pin!(scheduler.sleep(Duration::from_millis(100)));
+        let mut cx = noop_context();
+
+        assert!(sleep.as_mut().poll(&mut cx).is_pending());
+        scheduler.advance(Duration::from_millis(50));
+        assert!(sleep.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(
+            scheduler.pending_sleepers(),
+            1,
+            "a re-poll must replace the parked waker, not accumulate"
+        );
+    }
+
+    #[test]
+    fn two_sleeps_sharing_a_deadline_both_wake() {
+        let scheduler = VirtualScheduler::new();
+        let mut cx = noop_context();
+        let mut sleep_a = pin!(scheduler.sleep(Duration::from_millis(10)));
+        let mut sleep_b = pin!(scheduler.sleep(Duration::from_millis(10)));
+
+        assert!(sleep_a.as_mut().poll(&mut cx).is_pending());
+        assert!(sleep_b.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(
+            scheduler.pending_sleepers(),
+            2,
+            "distinct futures park separately"
+        );
+
+        scheduler.advance(Duration::from_millis(10));
+        assert!(sleep_a.as_mut().poll(&mut cx).is_ready());
+        assert!(sleep_b.as_mut().poll(&mut cx).is_ready());
         assert_eq!(scheduler.pending_sleepers(), 0);
     }
 
