@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "922e87506b37",
+  "strategy": "manual-commit",
+  "branch": "chore/ci-desktop-build-gate",
+  "checkpoints_count": 42,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/92/2e87506b37/0/metadata.json",
+      "transcript": "/92/2e87506b37/0/full.jsonl",
+      "compact_transcript": "/92/2e87506b37/0/transcript.jsonl",
+      "content_hash": "/92/2e87506b37/0/content_hash.txt",
+      "prompt": "/92/2e87506b37/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 602,
+    "cache_creation_tokens": 662952,
+    "cache_read_tokens": 62216834,
+    "output_tokens": 269701,
+    "api_call_count": 304
+  }
+}

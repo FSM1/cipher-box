@@ -1,0 +1,149 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "922e87506b37",
+  "session_id": "20e1deea-bb7c-455a-86e2-ae969afb36d2",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-20T11:50:24.091117Z",
+  "branch": "chore/ci-desktop-build-gate",
+  "checkpoints_count": 42,
+  "save_step_count": 3,
+  "files_touched": [
+    ".github/workflows/ci.yml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-fable-5",
+  "turn_id": "ab94ad5427a8",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 602,
+    "cache_creation_tokens": 662952,
+    "cache_read_tokens": 62216834,
+    "output_tokens": 269701,
+    "api_call_count": 304
+  },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "prompt-skill-claude-code-implement-2026-07-20T01:41:24.133548Z",
+      "event_type": "prompt_invocation",
+      "skill": {
+        "name": "implement"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "prompt_slash_command",
+        "confidence": "explicit"
+      },
+      "turn_id": "d06daabe1030",
+      "timestamp": "2026-07-20T01:41:24.133548Z",
+      "native": {
+        "command": "/implement"
+      },
+      "collapse": {
+        "target": "user_message",
+        "label": "/implement",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_016sTpmb9kizGCEP5FvQBRig",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "code-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ab94ad5427a8",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 542,
+        "end": 543,
+        "entry_ids": [
+          "52aaf870-ce64-4073-9464-04cd60a967ca"
+        ],
+        "tool_use_id": "toolu_016sTpmb9kizGCEP5FvQBRig"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_016sTpmb9kizGCEP5FvQBRig"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: code-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_01X4bLJ7tYh4auQNT4PVgvfQ",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "crypto-privacy-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "ab94ad5427a8",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 739,
+        "end": 740,
+        "entry_ids": [
+          "97de864f-9810-4a3b-9feb-6816cae98d05"
+        ],
+        "tool_use_id": "toolu_01X4bLJ7tYh4auQNT4PVgvfQ"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01X4bLJ7tYh4auQNT4PVgvfQ"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: crypto-privacy-review",
+        "default_collapsed": true
+      }
+    }
+  ],
+  "session_metrics": {
+    "turn_count": 48
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-20T11:49:49.538148Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 290,
+    "human_modified": 8,
+    "human_removed": 0,
+    "total_committed": 290,
+    "total_lines_changed": 298,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 3,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    },
+    {
+      "checkpoint_number": 4,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
