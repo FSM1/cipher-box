@@ -51,9 +51,11 @@ export class TestAuthService {
     if (!expectedSecret) {
       throw new ForbiddenException('Test login is not enabled');
     }
-    const secretBuf = Buffer.from(secret);
-    const expectedBuf = Buffer.from(expectedSecret);
-    if (secretBuf.length !== expectedBuf.length || !timingSafeEqual(secretBuf, expectedBuf)) {
+    // Hash both sides to a fixed 32 bytes before the constant-time compare —
+    // a raw length pre-check would leak the secret's length through timing.
+    const secretDigest = createHash('sha256').update(secret).digest();
+    const expectedDigest = createHash('sha256').update(expectedSecret).digest();
+    if (!timingSafeEqual(secretDigest, expectedDigest)) {
       throw new UnauthorizedException('Invalid test login secret');
     }
 

@@ -22,6 +22,7 @@ import { THROTTLE_SURFACES } from '../ops/throttling';
 import {
   ChallengeRequestDto,
   ChallengeResponseDto,
+  HEX_REFRESH_TOKEN,
   LoginRequestDto,
   LogoutResponseDto,
   RefreshRequestDto,
@@ -140,7 +141,9 @@ export class AuthController {
   ): Promise<TokenResponseDto> {
     const cookies = (request as Request & { cookies?: Record<string, string> }).cookies;
     const rawToken = body.refreshToken ?? cookies?.[REFRESH_COOKIE];
-    if (!rawToken) {
+    // The cookie path skips DTO validation — hold it to the same shape the
+    // body field enforces so both paths reject malformed tokens alike.
+    if (!rawToken || !HEX_REFRESH_TOKEN.test(rawToken)) {
       throw new UnauthorizedException('Missing refresh token');
     }
     const pair = await this.authService.refresh(rawToken);

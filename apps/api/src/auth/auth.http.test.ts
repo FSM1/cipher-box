@@ -240,6 +240,14 @@ describe('auth HTTP flows', () => {
     it('rejects a missing token', async () => {
       await request(http).post('/auth/refresh').send({}).expect(401);
     });
+
+    it('holds the cookie path to the same token shape as the body field', async () => {
+      await request(http)
+        .post('/auth/refresh')
+        .set('Cookie', 'refreshToken=not-64-hex-chars')
+        .send({})
+        .expect(401);
+    });
   });
 
   describe('logout', () => {
