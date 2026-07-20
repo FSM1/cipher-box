@@ -1,6 +1,6 @@
 import { ConflictException, NotFoundException, PayloadTooLargeException } from '@nestjs/common';
 import { secp256k1 } from '@noble/curves/secp256k1';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdentityService } from '../../auth/services/identity.service';
 import { User } from '../../auth/entities/user.entity';
 import { FakeRepository } from '../../testing/fake-repo';
@@ -178,9 +178,9 @@ describe('MailboxService', () => {
         idempotencyKey: 'fresh',
       });
       expect(fresh.id).toBeTruthy();
-      // The three expired rows were purged; only the fresh one remains.
+      // The three expired rows were purged; only the freshly-posted one remains.
       expect(messages.rows).toHaveLength(1);
-      expect(messages.rows[0].idempotencyScope).not.toBe(messages.rows[0].recipientPublicKey);
+      expect(messages.rows[0].id).toBe(fresh.id);
     });
   });
 
@@ -298,8 +298,18 @@ describe('MailboxService', () => {
       expect(messages.rows).toHaveLength(1);
     });
 
-    it('is idempotent: acking an already-gone id succeeds', async () => {
-      await expect(service.ack(recipient, 'no-such-id')).resolves.toEqual({ success: true });
+    it('is idempotent: acking a well-formed but already-gone id succeeds', async () => {
+      await expect(service.ack(recipient, '00000000-0000-4000-8000-000000000000')).resolves.toEqual(
+        { success: true }
+      );
+    });
+
+    it('returns idempotent success for a malformed id without touching the repo', async () => {
+      // A non-uuid id would make the `uuid`-typed column raise 22P02 → a 500;
+      // the guard short-circuits to success and never issues the delete.
+      const deleteSpy = vi.spyOn(messages, 'delete');
+      await expect(service.ack(recipient, 'not-a-uuid')).resolves.toEqual({ success: true });
+      expect(deleteSpy).not.toHaveBeenCalled();
     });
   });
 });

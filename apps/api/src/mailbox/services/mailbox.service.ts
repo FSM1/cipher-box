@@ -20,6 +20,14 @@ const MAX_BLOB_BYTES = 8192;
 const TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 /**
+ * Canonical RFC 4122 UUID — the form `gen_random_uuid()` mints for the id
+ * column. Ids are always server-minted uuids, so any other shape can never
+ * name a row; matching this before the ack delete keeps a malformed id from
+ * reaching the `uuid`-typed column (Postgres would raise 22P02 → a 500).
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
  * Read a positive-integer bound from config, falling back to the default for
  * an unset OR garbage value. Both bounds are DoS controls (the pending cap and
  * the poll batch size), so a misconfigured env var must fail closed to the
@@ -169,6 +177,13 @@ export class MailboxService {
    * leak-free: acking a gone or foreign id succeeds without side effects.
    */
   async ack(recipientPublicKey: string, id: string): Promise<{ success: boolean }> {
+    // A malformed (non-uuid) id can never name a server-minted row, so short
+    // out to the documented idempotent success WITHOUT querying Postgres —
+    // otherwise the `uuid`-typed id column raises 22P02 (invalid input syntax
+    // for uuid) and turns a well-behaved no-op into a 500.
+    if (!UUID_RE.test(id)) {
+      return { success: true };
+    }
     await this.messageRepository.delete({ id, recipientPublicKey });
     return { success: true };
   }
