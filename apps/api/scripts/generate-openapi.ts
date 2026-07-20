@@ -21,15 +21,18 @@ import { AuthService } from '../src/auth/services/auth.service';
 import { TestAuthService } from '../src/auth/services/test-auth.service';
 import { TokenService } from '../src/auth/services/token.service';
 import { HealthController } from '../src/health/health.controller';
+import { MailboxController } from '../src/mailbox/mailbox.controller';
+import { MailboxService } from '../src/mailbox/services/mailbox.service';
 import { MetricsController } from '../src/ops/metrics.controller';
 import { MetricsService } from '../src/ops/metrics.service';
 
 @Module({
-  controllers: [HealthController, MetricsController, AuthController],
+  controllers: [HealthController, MetricsController, AuthController, MailboxController],
   providers: [
     { provide: AuthService, useValue: {} },
     { provide: TestAuthService, useValue: {} },
     { provide: TokenService, useValue: {} },
+    { provide: MailboxService, useValue: {} },
     { provide: MetricsService, useValue: {} },
     { provide: JwtService, useValue: {} },
     { provide: ConfigService, useValue: new ConfigService() },
