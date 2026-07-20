@@ -1,0 +1,37 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "35a955e98205",
+  "strategy": "manual-commit",
+  "branch": "chore/v2-workspace-scaffold",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".coderabbit.yaml",
+    ".github/copilot-instructions.md",
+    ".github/workflows/ci-e2e.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/codecov-base.yml",
+    ".github/workflows/deploy-staging.yml",
+    ".github/workflows/desktop-e2e.yml",
+    ".github/workflows/desktop-staging-release.yml",
+    ".github/workflows/load-test.yml",
+    ".github/workflows/web-e2e.yml",
+    "codecov.yml",
+    "docker/docker-compose.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/35/a955e98205/0/metadata.json",
+      "transcript": "/35/a955e98205/0/full.jsonl",
+      "compact_transcript": "/35/a955e98205/0/transcript.jsonl",
+      "content_hash": "/35/a955e98205/0/content_hash.txt",
+      "prompt": "/35/a955e98205/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 490,
+    "cache_creation_tokens": 718502,
+    "cache_read_tokens": 39939260,
+    "output_tokens": 205520,
+    "api_call_count": 245
+  }
+}
