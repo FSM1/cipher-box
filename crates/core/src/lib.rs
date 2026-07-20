@@ -7,3 +7,5 @@
 
 pub mod codec;
 pub mod error;
+pub mod kdf;
+pub mod suite;

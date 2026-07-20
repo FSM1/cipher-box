@@ -23,10 +23,19 @@ use cipherbox_core::codec::{
     MAX_DEPTH, Map, Value, decode, decode_map_partial, encode, encode_map_partial,
 };
 use cipherbox_core::error::{Malformed, TrustViolation};
+use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
+use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
+use cipherbox_core::suite::ecdsa::EcdsaSigner;
+use cipherbox_core::suite::hpke::{self, hpke_open, hpke_seal};
+use cipherbox_core::suite::x25519::X25519Secret;
 use serde::Serialize;
 use serde_json::json;
 
 const PROFILE: &str = "cipherbox/v2 det-cbor";
+
+fn hexstr(bytes: &[u8]) -> String {
+    hex::encode(bytes)
+}
 
 #[derive(Serialize)]
 struct AcceptVector {
@@ -53,6 +62,75 @@ struct UnknownVector {
     expect_unknown_count: usize,
 }
 
+// --- KDF edge vectors -------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KdfEdgesFile {
+    probe: ProbeJson,
+    edges: Vec<EdgeVector>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProbeJson {
+    seed: String,
+    id: String,
+    struct_tag: u8,
+    index: u64,
+    ipns_name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EdgeVector {
+    name: String,
+    context: String,
+    input_layout: String,
+    output: String,
+}
+
+// --- HPKE vectors -----------------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HpkeSealVector {
+    name: String,
+    recipient_secret: String,
+    recipient_public: String,
+    ephemeral_scalar: String,
+    info: String,
+    aad: String,
+    plaintext: String,
+    enc: String,
+    ciphertext: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HpkeOpenRejectVector {
+    name: String,
+    recipient_secret: String,
+    enc: String,
+    info: String,
+    aad: String,
+    ciphertext: String,
+    check: String,
+    class: String,
+}
+
+// --- Contact code vectors ---------------------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContactAcceptVector {
+    name: String,
+    hex: String,
+    identity_pk: String,
+    enc_subkey: String,
+    binding_sig: String,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Manifest {
@@ -60,7 +138,54 @@ struct Manifest {
     profile: String,
     codecs: Codecs,
     structure_tags: serde_json::Value,
-    kdf_edges: serde_json::Value,
+    kdf: KdfSection,
+    suite: SuiteSection,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KdfSection {
+    file: String,
+    count: usize,
+    edges: Vec<EdgeRow>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EdgeRow {
+    name: String,
+    context: String,
+    input_layout: String,
+}
+
+#[derive(Serialize)]
+struct SuiteSection {
+    hpke: HpkeMeta,
+    contact: ContactMeta,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HpkeMeta {
+    kem_id: String,
+    kdf_id: String,
+    aead_id: String,
+    seal_file: String,
+    seal_count: usize,
+    open_reject_file: String,
+    open_reject_count: usize,
+}
+
+#[derive(Serialize)]
+struct ContactMeta {
+    accept: FileCount,
+    reject: RejectSection,
+}
+
+#[derive(Serialize)]
+struct FileCount {
+    file: String,
+    count: usize,
 }
 
 #[derive(Serialize)]
@@ -100,8 +225,14 @@ struct UnknownFieldsSection {
 
 fn main() {
     let kat_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("kat");
-    let codec_dir = kat_dir.join("vectors").join("codec");
-    fs::create_dir_all(&codec_dir).expect("create kat/vectors/codec");
+    let vectors_dir = kat_dir.join("vectors");
+    let codec_dir = vectors_dir.join("codec");
+    let kdf_dir = vectors_dir.join("kdf");
+    let hpke_dir = vectors_dir.join("hpke");
+    let contact_dir = vectors_dir.join("contact");
+    for dir in [&codec_dir, &kdf_dir, &hpke_dir, &contact_dir] {
+        fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
+    }
 
     let accept = build_accept_vectors();
     let reject = build_reject_vectors();
@@ -111,14 +242,41 @@ fn main() {
     write_pretty(&codec_dir.join("reject.json"), &reject);
     write_pretty(&codec_dir.join("unknown_fields.json"), &unknown);
 
-    let manifest = build_manifest(&accept, &reject, &unknown);
+    let kdf_edges = build_kdf_edges();
+    let hpke_seal = build_hpke_seal();
+    let hpke_open_reject = build_hpke_open_reject();
+    let contact_accept = build_contact_accept();
+    let contact_reject = build_contact_reject();
+
+    write_pretty(&kdf_dir.join("edges.json"), &kdf_edges);
+    write_pretty(&hpke_dir.join("seal.json"), &hpke_seal);
+    write_pretty(&hpke_dir.join("open_reject.json"), &hpke_open_reject);
+    write_pretty(&contact_dir.join("accept.json"), &contact_accept);
+    write_pretty(&contact_dir.join("reject.json"), &contact_reject);
+
+    let manifest = build_manifest(
+        &accept,
+        &reject,
+        &unknown,
+        &kdf_edges,
+        &hpke_seal,
+        &hpke_open_reject,
+        &contact_accept,
+        &contact_reject,
+    );
     write_pretty(&kat_dir.join("manifest.json"), &manifest);
 
     println!(
-        "kat_gen: wrote {} accept, {} reject, {} unknown-field vectors + manifest.json",
+        "kat_gen: wrote {} accept, {} reject, {} unknown-field, {} kdf-edge, {} hpke-seal, \
+         {} hpke-open-reject, {} contact-accept, {} contact-reject vectors + manifest.json",
         accept.len(),
         reject.len(),
         unknown.len(),
+        kdf_edges.edges.len(),
+        hpke_seal.len(),
+        hpke_open_reject.len(),
+        contact_accept.len(),
+        contact_reject.len(),
     );
 }
 
@@ -676,24 +834,53 @@ fn build_reject_vectors() -> Vec<RejectVector> {
         });
     }
 
-    // Self-check the coverage law before writing anything: every decode-
-    // reachable check is present; the only absentees are the two encode-/
-    // schema-side checks pinned by unit tests in src/codec/fields.rs.
+    // Self-check the codec coverage law before writing anything: these vectors
+    // cover exactly the codec's decode-reachable checks. The codec's two
+    // encode-/schema-side checks (unexpected-type, unknown-field-collision) are
+    // unit-test-pinned in src/codec/fields.rs; the suite/kdf checks live in the
+    // contact and hpke families, not here.
     let present: BTreeSet<&str> = out.iter().map(|v| v.check.as_str()).collect();
-    let absent: BTreeSet<&str> = TrustViolation::CHECKS
+    assert_eq!(
+        present,
+        codec_decode_reachable_checks(),
+        "codec reject vectors must cover exactly the decode-reachable codec checks"
+    );
+    let surface: BTreeSet<&str> = TrustViolation::CHECKS
         .iter()
         .chain(Malformed::CHECKS)
         .copied()
-        .filter(|c| !present.contains(c))
         .collect();
-    let expected_absent: BTreeSet<&str> = ["unexpected-type", "unknown-field-collision"]
-        .into_iter()
-        .collect();
-    assert_eq!(
-        absent, expected_absent,
-        "reject vectors must cover every decode-reachable check"
+    assert!(
+        present.is_subset(&surface),
+        "every codec reject check must exist on the error surface"
     );
     out
+}
+
+/// The codec's decode-reachable checks, fixed here as the anti-vacuity anchor
+/// for the codec reject family (mirrors kat_manifest.rs). Adding a codec check
+/// without a vector, or a vector for a check outside this set, fails the
+/// generator self-check.
+fn codec_decode_reachable_checks() -> BTreeSet<&'static str> {
+    [
+        "non-canonical-uint",
+        "non-canonical-length",
+        "indefinite-length",
+        "unsorted-map-keys",
+        "duplicate-map-key",
+        "truncated",
+        "trailing-bytes",
+        "invalid-utf8",
+        "invalid-map-key-type",
+        "tag-forbidden",
+        "float-forbidden",
+        "simple-value-forbidden",
+        "reserved-additional-info",
+        "unexpected-break",
+        "depth-exceeded",
+    ]
+    .into_iter()
+    .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -813,10 +1000,16 @@ fn build_unknown_field_vectors() -> Vec<UnknownVector> {
 // when those spine slices land, never by hand-editing the JSON.
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 fn build_manifest(
     accept: &[AcceptVector],
     reject: &[RejectVector],
     unknown: &[UnknownVector],
+    kdf_edges: &KdfEdgesFile,
+    hpke_seal: &[HpkeSealVector],
+    hpke_open_reject: &[HpkeOpenRejectVector],
+    contact_accept: &[ContactAcceptVector],
+    contact_reject: &[RejectVector],
 ) -> Manifest {
     // requiredKinds: distinct kinds in first-appearance order (deterministic).
     let mut required_kinds: Vec<String> = Vec::new();
@@ -828,21 +1021,15 @@ fn build_manifest(
         }
     }
 
-    // checks: the decode-reachable subset, in error-surface declaration order
-    // (trust first, then malformed).
-    let present: BTreeSet<&str> = reject.iter().map(|v| v.check.as_str()).collect();
-    let checks: Vec<String> = TrustViolation::CHECKS
+    // The KDF catalog table is frozen from EDGES itself (single source).
+    let edges: Vec<EdgeRow> = EDGES
         .iter()
-        .chain(Malformed::CHECKS)
-        .copied()
-        .filter(|c| present.contains(c))
-        .map(str::to_string)
+        .map(|e| EdgeRow {
+            name: e.name.to_string(),
+            context: e.context.to_string(),
+            input_layout: e.input_layout.to_string(),
+        })
         .collect();
-    assert_eq!(
-        checks.len(),
-        present.len(),
-        "every reject-vector check must come from the error surface"
-    );
 
     Manifest {
         manifest_version: 1,
@@ -857,7 +1044,7 @@ fn build_manifest(
                 reject: RejectSection {
                     file: "vectors/codec/reject.json".to_string(),
                     count: reject.len(),
-                    checks,
+                    checks: checks_in_surface_order(reject),
                 },
                 unknown_fields: UnknownFieldsSection {
                     file: "vectors/codec/unknown_fields.json".to_string(),
@@ -866,6 +1053,378 @@ fn build_manifest(
             },
         },
         structure_tags: json!({}),
-        kdf_edges: json!({}),
+        kdf: KdfSection {
+            file: "vectors/kdf/edges.json".to_string(),
+            count: kdf_edges.edges.len(),
+            edges,
+        },
+        suite: SuiteSection {
+            hpke: HpkeMeta {
+                kem_id: "0x0020".to_string(),
+                kdf_id: "0x0001".to_string(),
+                aead_id: format!("0x{:04x}", hpke::AEAD_ID_XCHACHA),
+                seal_file: "vectors/hpke/seal.json".to_string(),
+                seal_count: hpke_seal.len(),
+                open_reject_file: "vectors/hpke/open_reject.json".to_string(),
+                open_reject_count: hpke_open_reject.len(),
+            },
+            contact: ContactMeta {
+                accept: FileCount {
+                    file: "vectors/contact/accept.json".to_string(),
+                    count: contact_accept.len(),
+                },
+                reject: RejectSection {
+                    file: "vectors/contact/reject.json".to_string(),
+                    count: contact_reject.len(),
+                    checks: checks_in_surface_order(contact_reject),
+                },
+            },
+        },
     }
+}
+
+/// The distinct reject-vector checks, ordered trust-first then malformed to
+/// match the error-surface declaration order. Asserts every check comes from
+/// the surface.
+fn checks_in_surface_order(vectors: &[RejectVector]) -> Vec<String> {
+    let present: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    let checks: Vec<String> = TrustViolation::CHECKS
+        .iter()
+        .chain(Malformed::CHECKS)
+        .copied()
+        .filter(|c| present.contains(c))
+        .map(str::to_string)
+        .collect();
+    assert_eq!(
+        checks.len(),
+        present.len(),
+        "every reject-vector check must come from the error surface"
+    );
+    checks
+}
+
+// ---------------------------------------------------------------------------
+// KDF edge vectors: the whole catalog under one fixed probe. Frozen outputs
+// pin every edge byte-for-byte (a BLAKE3 or dependency change would move them),
+// and the separation self-check asserts no two edges collide.
+// ---------------------------------------------------------------------------
+
+fn build_kdf_edges() -> KdfEdgesFile {
+    // Fixed probe inputs, frozen alongside the outputs.
+    let seed: [u8; 32] = std::array::from_fn(|i| i as u8);
+    let id: [u8; 16] = std::array::from_fn(|i| (0x40 + i) as u8);
+    let struct_tag = 0x01u8;
+    let index = 0u64;
+    let ipns_name = b"cipherbox/v2/scope-root".to_vec();
+
+    let probe = EdgeProbe {
+        seed: &seed,
+        id: &id,
+        struct_tag,
+        index,
+        ipns_name: &ipns_name,
+    };
+    let outputs = kdf::edge_probe_outputs(&probe);
+    assert_eq!(outputs.len(), EDGES.len(), "probe must cover every edge");
+
+    // Mechanical separation KAT: no two edges share an output for equal inputs.
+    let distinct: BTreeSet<[u8; 32]> = outputs.iter().map(|o| o.output).collect();
+    assert_eq!(
+        distinct.len(),
+        EDGES.len(),
+        "two KDF edges produced equal output under uniform inputs"
+    );
+
+    let edges: Vec<EdgeVector> = outputs
+        .iter()
+        .zip(EDGES)
+        .map(|(o, e)| {
+            assert_eq!(o.name, e.name, "probe order must track EDGES order");
+            EdgeVector {
+                name: e.name.to_string(),
+                context: e.context.to_string(),
+                input_layout: e.input_layout.to_string(),
+                output: hexstr(&o.output),
+            }
+        })
+        .collect();
+
+    KdfEdgesFile {
+        probe: ProbeJson {
+            seed: hexstr(&seed),
+            id: hexstr(&id),
+            struct_tag,
+            index,
+            ipns_name: hexstr(&ipns_name),
+        },
+        edges,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HPKE vectors: fixed-ephemeral seals (the eciesjs lesson — freeze enc + the
+// whole ciphertext) plus open-reject cases pinning the fail-closed check.
+// ---------------------------------------------------------------------------
+
+/// A fixed HPKE seal case: name, ephemeral scalar, info, aad, plaintext.
+type SealCase = (
+    &'static str,
+    [u8; 32],
+    &'static [u8],
+    &'static [u8],
+    &'static [u8],
+);
+
+fn build_hpke_seal() -> Vec<HpkeSealVector> {
+    let recipient_scalar: [u8; 32] = std::array::from_fn(|i| (0x10 + i) as u8);
+    let recipient = X25519Secret::from_scalar(recipient_scalar);
+    let recipient_public = recipient.public();
+
+    let cases: Vec<SealCase> = vec![
+        (
+            "empty-info-empty-aad",
+            std::array::from_fn(|i| (0x20 + i) as u8),
+            b"",
+            b"",
+            b"grant blob payload",
+        ),
+        (
+            "with-info-and-aad",
+            std::array::from_fn(|i| (0x30 + i) as u8),
+            b"cipherbox/v2 grant",
+            b"scope-aad",
+            b"read scope seed",
+        ),
+        (
+            "empty-plaintext",
+            std::array::from_fn(|i| (0x50 + i) as u8),
+            b"info",
+            b"aad",
+            b"",
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, eph, info, aad, pt) in cases {
+        assert!(names.insert(name), "duplicate hpke seal vector {name}");
+        let sealed = hpke_seal(&recipient_public, &eph, info, aad, pt);
+        // Determinism under a fixed ephemeral scalar.
+        assert_eq!(
+            hpke_seal(&recipient_public, &eph, info, aad, pt),
+            sealed,
+            "hpke seal {name}: not deterministic"
+        );
+        // Round-trips.
+        let opened = hpke_open(&recipient, &sealed.enc, info, aad, &sealed.ciphertext)
+            .unwrap_or_else(|_| panic!("hpke seal {name}: open must recover plaintext"));
+        assert_eq!(&opened[..], pt, "hpke seal {name}: plaintext mismatch");
+        out.push(HpkeSealVector {
+            name: name.to_string(),
+            recipient_secret: hexstr(&recipient_scalar),
+            recipient_public: hexstr(&recipient_public.to_bytes()),
+            ephemeral_scalar: hexstr(&eph),
+            info: hexstr(info),
+            aad: hexstr(aad),
+            plaintext: hexstr(pt),
+            enc: hexstr(&sealed.enc),
+            ciphertext: hexstr(&sealed.ciphertext),
+        });
+    }
+    out
+}
+
+fn build_hpke_open_reject() -> Vec<HpkeOpenRejectVector> {
+    let recipient_scalar: [u8; 32] = std::array::from_fn(|i| (0x10 + i) as u8);
+    let recipient = X25519Secret::from_scalar(recipient_scalar);
+    let eph: [u8; 32] = std::array::from_fn(|i| (0x60 + i) as u8);
+    let info: &[u8] = b"info";
+    let aad: &[u8] = b"aad";
+    let sealed = hpke_seal(&recipient.public(), &eph, info, aad, b"open-me");
+    assert!(
+        hpke_open(&recipient, &sealed.enc, info, aad, &sealed.ciphertext).is_ok(),
+        "baseline seal must open"
+    );
+
+    let mut tampered = sealed.ciphertext.clone();
+    tampered[0] ^= 0x01;
+    let cases: Vec<(&str, Vec<u8>, &[u8])> = vec![
+        ("tampered-ciphertext", tampered, aad),
+        ("wrong-aad", sealed.ciphertext.clone(), b"other-aad"),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, ct, open_aad) in cases {
+        assert!(
+            names.insert(name),
+            "duplicate hpke open-reject vector {name}"
+        );
+        let err = hpke_open(&recipient, &sealed.enc, info, open_aad, &ct)
+            .expect_err("open must fail closed");
+        assert_eq!(err.check(), "hpke-open-failed", "hpke open-reject {name}");
+        out.push(HpkeOpenRejectVector {
+            name: name.to_string(),
+            recipient_secret: hexstr(&recipient_scalar),
+            enc: hexstr(&sealed.enc),
+            info: hexstr(info),
+            aad: hexstr(open_aad),
+            ciphertext: hexstr(&ct),
+            check: "hpke-open-failed".to_string(),
+            class: "trust".to_string(),
+        });
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Contact code vectors: valid codes that import, and every fail-closed reject —
+// structural (malformed) and the mandatory binding verify (trust).
+// ---------------------------------------------------------------------------
+
+fn build_contact_accept() -> Vec<ContactAcceptVector> {
+    let cases: Vec<(&str, [u8; 32], [u8; 32])> = vec![
+        ("primary", [0x22; 32], [0x33; 32]),
+        (
+            "alt-keys",
+            std::array::from_fn(|i| (i + 1) as u8),
+            std::array::from_fn(|i| (0x80 + i) as u8),
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, id_scalar, enc_scalar) in cases {
+        assert!(names.insert(name), "duplicate contact accept vector {name}");
+        let signer = EcdsaSigner::from_scalar(&id_scalar).expect("valid identity scalar");
+        let enc_public = X25519Secret::from_scalar(enc_scalar).public();
+        let code = ContactCode::create(&signer, enc_public);
+        let bytes = code.encode();
+        // Self-check: imports, and re-encode is byte-stable.
+        let imported = import_contact_code(&bytes).expect("accept vector must import");
+        assert_eq!(
+            imported.encode(),
+            bytes,
+            "contact accept {name}: not byte-stable"
+        );
+        out.push(ContactAcceptVector {
+            name: name.to_string(),
+            hex: hexstr(&bytes),
+            identity_pk: hexstr(&code.identity_pk.to_sec1()),
+            enc_subkey: hexstr(&code.enc_subkey.to_bytes()),
+            binding_sig: hexstr(&code.binding_sig.to_compact()),
+        });
+    }
+    out
+}
+
+fn build_contact_reject() -> Vec<RejectVector> {
+    let signer = EcdsaSigner::from_scalar(&[0x22; 32]).expect("valid scalar");
+    let good_id = signer.verifying_key().to_sec1().to_vec();
+    let enc_public = X25519Secret::from_scalar([0x33; 32]).public();
+    let good_enc = enc_public.to_bytes().to_vec();
+    let good_sig = ContactCode::create(&signer, enc_public)
+        .binding_sig
+        .to_compact()
+        .to_vec();
+
+    // A structurally valid code whose enc subkey has been flipped: every field
+    // parses, but the binding no longer matches.
+    let mut tampered_enc = good_enc.clone();
+    tampered_enc[0] ^= 0x01;
+
+    let bytes_of = |identity: Option<Value>, enc: Option<Value>, sig: Option<Value>| -> Vec<u8> {
+        let mut m = Map::new();
+        if let Some(v) = sig {
+            m.insert("bindingSig", v);
+        }
+        if let Some(v) = enc {
+            m.insert("encSubkey", v);
+        }
+        if let Some(v) = identity {
+            m.insert("identityPk", v);
+        }
+        encode(&Value::Map(m))
+    };
+    let b = |v: &[u8]| Value::Bytes(v.to_vec());
+
+    let cases: Vec<(&str, Vec<u8>, &str, &str)> = vec![
+        (
+            "missing-binding-sig",
+            bytes_of(Some(b(&good_id)), Some(b(&good_enc)), None),
+            "missing-field",
+            "malformed",
+        ),
+        (
+            "identity-pk-wrong-type",
+            bytes_of(
+                Some(Value::Unsigned(1)),
+                Some(b(&good_enc)),
+                Some(b(&good_sig)),
+            ),
+            "unexpected-type",
+            "malformed",
+        ),
+        (
+            "identity-pk-not-on-curve",
+            bytes_of(Some(b(&[0xff; 33])), Some(b(&good_enc)), Some(b(&good_sig))),
+            "invalid-identity-key",
+            "malformed",
+        ),
+        (
+            "enc-subkey-wrong-length",
+            bytes_of(Some(b(&good_id)), Some(b(&[0u8; 31])), Some(b(&good_sig))),
+            "invalid-enc-subkey",
+            "malformed",
+        ),
+        (
+            "binding-sig-wrong-length",
+            bytes_of(Some(b(&good_id)), Some(b(&good_enc)), Some(b(&[0u8; 63]))),
+            "invalid-binding-sig-encoding",
+            "malformed",
+        ),
+        (
+            "binding-sig-all-zero",
+            bytes_of(Some(b(&good_id)), Some(b(&good_enc)), Some(b(&[0u8; 64]))),
+            "invalid-binding-sig-encoding",
+            "malformed",
+        ),
+        (
+            "binding-does-not-verify",
+            bytes_of(
+                Some(b(&good_id)),
+                Some(b(&tampered_enc)),
+                Some(b(&good_sig)),
+            ),
+            "subkey-binding-invalid",
+            "trust",
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, bytes, check, class) in cases {
+        assert!(names.insert(name), "duplicate contact reject vector {name}");
+        let err = match import_contact_code(&bytes) {
+            Err(e) => e,
+            Ok(_) => panic!("contact reject {name}: import accepted it"),
+        };
+        assert_eq!(
+            err.check(),
+            check,
+            "contact reject {name}: wrong check ({err})"
+        );
+        assert_eq!(
+            err.class(),
+            class,
+            "contact reject {name}: wrong class ({err})"
+        );
+        out.push(RejectVector {
+            name: name.to_string(),
+            hex: hexstr(&bytes),
+            check: check.to_string(),
+            class: class.to_string(),
+        });
+    }
+    out
 }
