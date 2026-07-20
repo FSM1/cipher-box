@@ -107,7 +107,6 @@ describe('RegistryService', () => {
     users = new FakeRepository<User>();
     pinStore = new FakePinStore();
     service = new RegistryService(
-      names as never,
       pins as never,
       users as never,
       fakeDataSource([

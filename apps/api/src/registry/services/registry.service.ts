@@ -57,8 +57,6 @@ export class RegistryService {
   private readonly defaultLimitBytes: number;
 
   constructor(
-    @InjectRepository(NameInventory)
-    private readonly nameRepository: Repository<NameInventory>,
     @InjectRepository(PinnedCid)
     private readonly pinRepository: Repository<PinnedCid>,
     @InjectRepository(User)
@@ -165,29 +163,42 @@ export class RegistryService {
       return { retired: 0, unpinned: 0 };
     }
 
-    // The CIDs the caller actually holds among the targets — read before the
-    // delete so the refcount check is scoped to rows we remove, never a scan.
-    const held = await this.pinRepository.find({ where: { accountId, cid: In(targets) } });
-    const heldCids = targets.filter(
-      (target, index) => targets.indexOf(target) === index && held.some((row) => row.cid === target)
-    );
+    // All-or-nothing, and serialized against concurrent same-CID retires: a
+    // pessimistic-write lock on every target row makes the delete → survivor
+    // check atomic so physical unpin fires exactly at global refcount zero.
+    const { retired, unpinCids } = await this.dataSource.transaction(async (manager) => {
+      const nameRepo = manager.getRepository(NameInventory);
+      const pinRepo = manager.getRepository(PinnedCid);
 
-    const nameDeleted = await this.nameRepository.delete({ accountId, ipnsName: In(targets) });
-    const pinDeleted = await this.pinRepository.delete({ accountId, cid: In(targets) });
-    const retired = (nameDeleted.affected ?? 0) + (pinDeleted.affected ?? 0);
+      const locked = await pinRepo.find({
+        where: { cid: In(targets) },
+        lock: { mode: 'pessimistic_write' },
+      });
+      const heldByCaller = new Set(
+        locked.filter((row) => row.accountId === accountId).map((row) => row.cid)
+      );
+      const heldCids = targets.filter(
+        (target, index) => targets.indexOf(target) === index && heldByCaller.has(target)
+      );
 
-    let unpinned = 0;
-    if (heldCids.length > 0) {
-      // Only the account that held a row can drop the global refcount; a CID
-      // with no survivor is physically unpinned.
-      const survivors = await this.pinRepository.find({ where: { cid: In(heldCids) } });
+      const nameDeleted = await nameRepo.delete({ accountId, ipnsName: In(targets) });
+      const pinDeleted = await pinRepo.delete({ accountId, cid: In(targets) });
+
+      // Under the lock, a held CID with no surviving row is at global zero.
+      const survivors = heldCids.length ? await pinRepo.find({ where: { cid: In(heldCids) } }) : [];
       const surviving = new Set(survivors.map((row) => row.cid));
-      for (const cid of heldCids) {
-        if (!surviving.has(cid)) {
-          await this.pinStore.unpin(cid);
-          unpinned += 1;
-        }
-      }
+
+      return {
+        retired: (nameDeleted.affected ?? 0) + (pinDeleted.affected ?? 0),
+        unpinCids: heldCids.filter((cid) => !surviving.has(cid)),
+      };
+    });
+
+    // Fire the external unpin after commit — never hold the txn across Kubo.
+    let unpinned = 0;
+    for (const cid of unpinCids) {
+      await this.pinStore.unpin(cid);
+      unpinned += 1;
     }
 
     return { retired, unpinned };
