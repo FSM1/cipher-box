@@ -1,0 +1,53 @@
+# CipherBox desktop seam set (blueprint/desktop.md, "Engine wiring").
+#
+# The concrete implementations of the engine's host seam traits for the
+# desktop native host: fsync-barriered file stores, the OS-keyring
+# credential store, reqwest transports, and the Tokio scheduler. Pure Rust,
+# no Tauri: this crate is a library the desktop shell (cipherbox-desktop)
+# links to construct the engine at login — a later slice owns that wiring.
+# Version-frozen at 0.0.0 like every workspace crate; never published.
+[package]
+name = "cipherbox-desktop-seams"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Compiles test-only seam doubles (the file-backed CredentialStore) used to
+# run the CredentialStore conformance kit on headless CI, where the OS
+# keyring is unavailable. Never enabled in production builds; activated only
+# by this crate's own self dev-dependency (below), exactly like the engine's
+# `test-kit` feature.
+test-support = []
+
+[dependencies]
+cipherbox-engine.workspace = true
+# reqwest with ring-backed rustls only — no OpenSSL, no native-tls, no
+# aws-lc-rs/cmake (hard constraint 6). Bundled webpki roots keep it
+# self-contained for the public /routing/v1 and gateway endpoints.
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls-webpki-roots",
+] }
+# OS keyring: Apple Keychain / Windows Credential Manager / Secret Service
+# (crypto-rust keeps the Linux transport encryption pure Rust — no OpenSSL).
+keyring = { version = "3", features = [
+    "apple-native",
+    "windows-native",
+    "sync-secret-service",
+    "crypto-rust",
+] }
+# Tokio backs the Scheduler seam (timers, background tasks, wall clock).
+tokio = { version = "1", features = ["rt", "time"] }
+
+[dev-dependencies]
+# Self dev-dependency enables `test-support` for this crate's own tests
+# without leaking it into downstream production builds (engine's pattern).
+cipherbox-desktop-seams = { path = ".", features = ["test-support"] }
+# The reusable per-seam conformance kits + the minimal single-future
+# executor live behind the engine's `test-kit` feature.
+cipherbox-engine = { workspace = true, features = ["test-kit"] }
+tokio = { version = "1", features = ["rt", "time", "macros"] }
+tempfile = "3"
