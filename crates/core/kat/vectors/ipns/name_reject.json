@@ -1,0 +1,44 @@
+[
+  {
+    "name": "wrong-multibase-prefix",
+    "text": "bxyz",
+    "check": "ipns-name-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "empty",
+    "text": "",
+    "check": "ipns-name-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "prefix-only",
+    "text": "k",
+    "check": "ipns-name-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "uppercase-not-base36",
+    "text": "kABC",
+    "check": "ipns-name-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "wrong-cid-length",
+    "text": "k0",
+    "check": "ipns-name-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "wrong-multicodec-dag-cbor",
+    "text": "k519aw276bkyh20qga910ek5zwiz9nlb329bkgak2epd50bejiw383bj8o7exo",
+    "check": "ipns-name-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "off-curve-pubkey",
+    "text": "k51qzi5uqu5dg8dthom0e9mburtjey6kg9yav7ccp56wlnw1r89f0ny9l0ixvk",
+    "check": "ipns-name-malformed",
+    "class": "malformed"
+  }
+]
