@@ -15,6 +15,9 @@ jobs:
   api-liveness:
     name: API Long-Horizon Liveness
     runs-on: ubuntu-latest
+    # The soak runs over virtual time, so wall-clock is short; cap it so a hung
+    # run fails fast instead of drifting to GitHub's 6h default.
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
