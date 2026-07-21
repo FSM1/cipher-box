@@ -19,6 +19,13 @@
  * Durable monotonic-max per-scope epoch floors and per-name sequence floors.
  * The floor law lives in the engine; this seam only stores (fail-closed
  * regression is a property of `raise*` never lowering a floor).
+ *
+ * Per-key only, by design: there is deliberately no batch/commit method here.
+ * A cross-key floor advance (#685) rides the engine seam's ordered fail-safe
+ * fallback (`FloorStore::commit_floors` default), which commits the
+ * revocation floor first and re-converges idempotently on retry — the #682
+ * mitigation. Web-atomic commit is designed-for but deferred: #685 is a
+ * durability/liveness concern, not a trust hole.
  */
 export interface FloorStoreSeam {
   epochFloor(scopeId: Uint8Array): Promise<number | null>;

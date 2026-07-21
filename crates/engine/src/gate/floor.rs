@@ -30,7 +30,7 @@
 
 use cipherbox_core::payload::RepointObject;
 
-use crate::seams::{FloorStore, SeamResult};
+use crate::seams::{FloorRaise, FloorStore, SeamResult};
 
 /// Suffix that distinguishes a scope's write-epoch floor key from its
 /// read-epoch floor key inside the [`FloorStore`] epoch namespace. The
@@ -83,16 +83,15 @@ pub async fn sequence_floor<F: FloorStore>(
 /// never unsealed can never move a floor — the provenance the plain scalar
 /// arguments cannot express is enforced at that single call site.
 ///
-/// **Fail-safe ordering.** The [`FloorStore`] seam is per-key monotonic with no
-/// cross-key transaction, so the two raises are separate durable writes. The
-/// trust-critical **read-epoch (revocation) floor commits first**: if the
-/// second (sequence) write then fails with a seam error, the durable state is
-/// epoch-advanced (fail-closed — old-epoch records still reject) with only the
-/// sequence floor stale-low, whose sole effect is a harmless idempotent
-/// re-adoption of the identical record on the caller's retry. The reverse
-/// order could leave the revocation floor stale, so it is deliberately avoided.
-/// Because both raises are idempotent monotonic-max, a retried `adopt`
-/// re-converges the pair.
+/// **Fail-safe ordering.** The read-epoch (revocation) and sequence floors are
+/// distinctly keyed. The batch lists the trust-critical **read-epoch
+/// (revocation) floor first**, so on a backing without a cross-key transaction
+/// an interrupted commit is epoch-advanced (fail-closed — old-epoch records
+/// still reject) with only the sequence floor stale-low, whose sole effect is a
+/// harmless idempotent re-adoption of the identical record on retry. A backing
+/// that honors [`FloorStore::commit_floors`] atomically makes the pair
+/// all-or-nothing instead (#685); either way the monotonic-max, idempotent
+/// raises let a retried `adopt` re-converge.
 pub async fn advance_on_unseal<F: FloorStore>(
     floors: &F,
     scope_id: &[u8; 16],
@@ -101,8 +100,12 @@ pub async fn advance_on_unseal<F: FloorStore>(
     epoch: u64,
 ) -> SeamResult<()> {
     // Revocation floor first (see "Fail-safe ordering" above).
-    floors.raise_epoch_floor(scope_id, epoch).await?;
-    floors.raise_sequence_floor(ipns_name, sequence).await?;
+    floors
+        .commit_floors(&[
+            FloorRaise::epoch(scope_id.as_slice(), epoch),
+            FloorRaise::sequence(ipns_name, sequence),
+        ])
+        .await?;
     Ok(())
 }
 
@@ -116,14 +119,15 @@ pub async fn advance_on_unseal<F: FloorStore>(
 /// tampered, or non-owner re-point never produces one, and this function never
 /// runs on unauthenticated input. As with [`advance_on_unseal`], the
 /// trust-critical read-epoch (revocation) floor commits before the write-epoch
-/// floor, so a partial seam failure leaves the fail-closed state.
+/// floor, so a partial seam failure leaves the fail-closed state (or none at
+/// all, on a backing with an atomic [`FloorStore::commit_floors`]).
 pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> SeamResult<()> {
     // Revocation floor first (fail-safe ordering).
     floors
-        .raise_epoch_floor(&repoint.scope_id, repoint.min_read_epoch)
-        .await?;
-    floors
-        .raise_epoch_floor(&write_epoch_key(&repoint.scope_id), repoint.write_epoch)
+        .commit_floors(&[
+            FloorRaise::epoch(repoint.scope_id.as_slice(), repoint.min_read_epoch),
+            FloorRaise::epoch(write_epoch_key(&repoint.scope_id), repoint.write_epoch),
+        ])
         .await?;
     Ok(())
 }

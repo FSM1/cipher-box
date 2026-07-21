@@ -1,7 +1,7 @@
 //! Conformance kit: [`FloorStore`] monotonicity, durability, and
 //! namespacing.
 
-use crate::seams::FloorStore;
+use crate::seams::{FloorRaise, FloorStore};
 
 /// Runs the `FloorStore` contract against an implementation.
 ///
@@ -74,17 +74,72 @@ where
     );
     assert_eq!(store.epoch_floor(scope_a).await.unwrap(), Some(7));
 
-    // Durability: a reopened handle sees every raised floor.
+    // Cross-key batch commit: a mixed-namespace batch raises every entry
+    // monotonic-max and reports the resulting floors in order.
+    let batch = store
+        .commit_floors(&[
+            FloorRaise::epoch(scope_a.to_vec(), 6), // below stored 7 → no-op, reports 7
+            FloorRaise::epoch(scope_b.to_vec(), 8),
+            FloorRaise::sequence(scope_a.to_vec(), 50),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(
+        batch,
+        vec![7, 8, 50],
+        "commit_floors must report each resulting floor in order, monotonic-max"
+    );
+    assert_eq!(
+        store.epoch_floor(scope_a).await.unwrap(),
+        Some(7),
+        "a below-floor batch entry must not lower the floor"
+    );
+    assert_eq!(store.epoch_floor(scope_b).await.unwrap(), Some(8));
+    assert_eq!(
+        store.sequence_floor(scope_a).await.unwrap(),
+        Some(50),
+        "a batch entry must not leak across namespaces"
+    );
+
+    // Durability: a reopened handle sees every raised floor, batch-committed
+    // ones included.
     let reopened = open().await;
     assert_eq!(
         reopened.epoch_floor(scope_a).await.unwrap(),
         Some(7),
         "epoch floors must survive reopen"
     );
-    assert_eq!(reopened.epoch_floor(scope_b).await.unwrap(), Some(2));
+    assert_eq!(
+        reopened.epoch_floor(scope_b).await.unwrap(),
+        Some(8),
+        "batch-committed epoch floors must survive reopen"
+    );
     assert_eq!(
         reopened.sequence_floor(scope_a).await.unwrap(),
-        Some(41),
-        "sequence floors must survive reopen"
+        Some(50),
+        "batch-committed sequence floors must survive reopen"
     );
+
+    // Retry convergence: re-committing the SAME batch (as a caller retry after
+    // an interrupted commit would) is idempotent — identical results, no floor
+    // regresses. This is the convergence property every impl's #685 contract
+    // rests on, whether it closes the hazard by all-or-nothing rollback, by
+    // roll-forward replay, or by the ordered fail-safe fallback: a partial or
+    // replayed commit always heals to the same floors on retry.
+    let retry = reopened
+        .commit_floors(&[
+            FloorRaise::epoch(scope_a.to_vec(), 6), // still below 7 → no-op
+            FloorRaise::epoch(scope_b.to_vec(), 8),
+            FloorRaise::sequence(scope_a.to_vec(), 50),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(
+        retry,
+        vec![7, 8, 50],
+        "re-committing the same batch must converge to the identical floors"
+    );
+    assert_eq!(reopened.epoch_floor(scope_a).await.unwrap(), Some(7));
+    assert_eq!(reopened.epoch_floor(scope_b).await.unwrap(), Some(8));
+    assert_eq!(reopened.sequence_floor(scope_a).await.unwrap(), Some(50));
 }

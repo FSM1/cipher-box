@@ -1,10 +1,14 @@
-//! Desktop [`FloorStore`]: fsync-barriered per-key floor files.
+//! Desktop [`FloorStore`]: fsync-barriered per-key floor files with a
+//! write-ahead intent record for cross-key atomic batch commits.
 
 use std::path::{Path, PathBuf};
 
-use cipherbox_engine::seams::{FloorStore, SeamError, SeamResult};
+use cipherbox_engine::seams::{FloorNamespace, FloorRaise, FloorStore, SeamError, SeamResult};
 
-use crate::fs_util::{atomic_write, ensure_dir, read_file_opt, seam_err, to_hex};
+use crate::fs_util::{
+    atomic_write, ensure_dir, list_file_names, read_file_opt, remove_file_durable, seam_err,
+    to_hex, unique_component,
+};
 
 /// Durable monotonic-max floor store backed by one small file per key
 /// (blueprint/engine.md "FloorStore"; blueprint/desktop.md "Local journal").
@@ -15,21 +19,48 @@ use crate::fs_util::{atomic_write, ensure_dir, read_file_opt, seam_err, to_hex};
 /// [`atomic_write`] fsync barrier, so a floor is structurally incapable of
 /// regression or a torn value, and survives reopen. Keys are opaque engine
 /// bytes, hex-encoded into filenames; the store never interprets them.
+///
+/// A batch [`commit_floors`](FloorStore::commit_floors) that raises several
+/// distinctly-keyed floors is made crash-consistent by a write-ahead intent
+/// record: the whole batch is fsynced under `intent/` before any per-key file
+/// moves, and [`open`](Self::open) replays every leftover intent on reopen. The
+/// recovery is **roll-forward**, not rollback: an advance interrupted between
+/// per-key writes leaves the already-written floors in place and *completes* the
+/// rest on the next open (idempotent monotonic-max) — it never rewinds an
+/// applied floor. Each commit writes its own uniquely-named intent file, so
+/// overlapping commits neither clobber nor remove one another's recovery record
+/// (#685).
 pub struct FileFloorStore {
     epoch_dir: PathBuf,
     seq_dir: PathBuf,
+    intent_dir: PathBuf,
 }
+
+/// Intent-record tag for an epoch-namespace raise.
+const INTENT_TAG_EPOCH: u8 = 0;
+/// Intent-record tag for a sequence-namespace raise.
+const INTENT_TAG_SEQUENCE: u8 = 1;
 
 impl FileFloorStore {
     /// Opens (creating if absent) a floor store rooted at `dir`. Reopening
-    /// the same `dir` yields the same durable floors.
+    /// the same `dir` yields the same durable floors, replaying any intent
+    /// records a crashed batch commit left behind.
     pub fn open(dir: impl AsRef<Path>) -> SeamResult<Self> {
         let dir = dir.as_ref();
         let epoch_dir = dir.join("epoch");
         let seq_dir = dir.join("seq");
+        let intent_dir = dir.join("intent");
+        ensure_dir(dir).map_err(|err| seam_err("floor_store open root", &err))?;
         ensure_dir(&epoch_dir).map_err(|err| seam_err("floor_store open epoch", &err))?;
         ensure_dir(&seq_dir).map_err(|err| seam_err("floor_store open seq", &err))?;
-        Ok(Self { epoch_dir, seq_dir })
+        ensure_dir(&intent_dir).map_err(|err| seam_err("floor_store open intent", &err))?;
+        let store = Self {
+            epoch_dir,
+            seq_dir,
+            intent_dir,
+        };
+        store.replay_intents()?;
+        Ok(store)
     }
 
     fn read_floor(&self, dir: &Path, key: &[u8], op: &str) -> SeamResult<Option<u64>> {
@@ -58,6 +89,44 @@ impl FileFloorStore {
         }
         Ok(raised)
     }
+
+    /// The namespace's floor directory.
+    fn dir_for(&self, namespace: FloorNamespace) -> &Path {
+        match namespace {
+            FloorNamespace::Epoch => &self.epoch_dir,
+            FloorNamespace::Sequence => &self.seq_dir,
+        }
+    }
+
+    /// Applies a batch of raises to the per-key files, returning each result.
+    fn apply_raises(&self, raises: &[FloorRaise], op: &str) -> SeamResult<Vec<u64>> {
+        raises
+            .iter()
+            .map(|r| self.raise_floor(self.dir_for(r.namespace), &r.key, r.value, op))
+            .collect()
+    }
+
+    /// Replays every leftover intent record left by batch commits interrupted
+    /// mid-apply, clearing each once reapplied. Monotonic-max makes replay
+    /// idempotent and order-independent, so a batch that had partly applied
+    /// before the crash simply completes, and multiple pending intents (from
+    /// overlapping commits) all heal forward.
+    fn replay_intents(&self) -> SeamResult<()> {
+        let names = list_file_names(&self.intent_dir)
+            .map_err(|err| seam_err("floor_store list intents", &err))?;
+        for name in names {
+            let path = self.intent_dir.join(&name);
+            let Some(bytes) =
+                read_file_opt(&path).map_err(|err| seam_err("floor_store read intent", &err))?
+            else {
+                continue;
+            };
+            let raises = decode_intent(&bytes)?;
+            self.apply_raises(&raises, "floor_store replay intent")?;
+            remove_file_durable(&path).map_err(|err| seam_err("floor_store clear intent", &err))?;
+        }
+        Ok(())
+    }
 }
 
 impl FloorStore for FileFloorStore {
@@ -85,5 +154,233 @@ impl FloorStore for FileFloorStore {
             sequence,
             "floor_store raise_sequence_floor",
         )
+    }
+
+    /// Crash-consistent across keys via a write-ahead intent record, roll-forward
+    /// (not rollback): the whole batch is fsynced to its own `intent/<unique>`
+    /// file first, so an advance interrupted between per-key writes is *completed*
+    /// by [`open`](Self::open)'s replay rather than left partial (#685). The
+    /// unique filename keeps overlapping commits from clobbering or removing each
+    /// other's record. A commit that returns `Ok` has cleared its intent.
+    async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<Vec<u64>> {
+        if raises.is_empty() {
+            return Ok(Vec::new());
+        }
+        let intent_path = self.intent_dir.join(unique_component());
+        atomic_write(&intent_path, &encode_intent(raises))
+            .map_err(|err| seam_err("floor_store write intent", &err))?;
+        let resulting = self.apply_raises(raises, "floor_store commit_floors")?;
+        remove_file_durable(&intent_path)
+            .map_err(|err| seam_err("floor_store clear intent", &err))?;
+        Ok(resulting)
+    }
+}
+
+/// Serializes a batch into the intent record: for each raise, a 1-byte
+/// namespace tag, a 4-byte little-endian key length, the key bytes, then the
+/// 8-byte little-endian value.
+fn encode_intent(raises: &[FloorRaise]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for raise in raises {
+        let tag = match raise.namespace {
+            FloorNamespace::Epoch => INTENT_TAG_EPOCH,
+            FloorNamespace::Sequence => INTENT_TAG_SEQUENCE,
+        };
+        out.push(tag);
+        out.extend_from_slice(&(raise.key.len() as u32).to_le_bytes());
+        out.extend_from_slice(&raise.key);
+        out.extend_from_slice(&raise.value.to_le_bytes());
+    }
+    out
+}
+
+/// The corruption error surfaced by [`decode_intent`].
+fn corrupt_intent() -> SeamError {
+    SeamError::new("floor_store: corrupt intent record on disk")
+}
+
+/// Reads a fixed slice at `start`, failing closed if it runs past the record.
+fn intent_slice(bytes: &[u8], start: usize, len: usize) -> SeamResult<&[u8]> {
+    bytes.get(start..start + len).ok_or_else(corrupt_intent)
+}
+
+/// Parses an intent record. The record is written whole through the
+/// [`atomic_write`] barrier, so a present file is never torn; a malformed one
+/// is genuine corruption and fails closed.
+fn decode_intent(bytes: &[u8]) -> SeamResult<Vec<FloorRaise>> {
+    let mut raises = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let namespace = match bytes[i] {
+            INTENT_TAG_EPOCH => FloorNamespace::Epoch,
+            INTENT_TAG_SEQUENCE => FloorNamespace::Sequence,
+            _ => return Err(corrupt_intent()),
+        };
+        i += 1;
+        let len_bytes: [u8; 4] = intent_slice(bytes, i, 4)?.try_into().unwrap();
+        let key_len = u32::from_le_bytes(len_bytes) as usize;
+        i += 4;
+        let key = intent_slice(bytes, i, key_len)?.to_vec();
+        i += key_len;
+        let val_bytes: [u8; 8] = intent_slice(bytes, i, 8)?.try_into().unwrap();
+        i += 8;
+        raises.push(FloorRaise {
+            namespace,
+            key,
+            value: u64::from_le_bytes(val_bytes),
+        });
+    }
+    Ok(raises)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cipherbox_engine::testkit::block_on;
+
+    #[test]
+    fn intent_round_trips() {
+        let raises = vec![
+            FloorRaise::epoch(b"scope".to_vec(), 7),
+            FloorRaise::sequence(b"k51-name".to_vec(), 42),
+            FloorRaise::epoch(Vec::new(), 1),
+        ];
+        assert_eq!(decode_intent(&encode_intent(&raises)).unwrap(), raises);
+    }
+
+    #[test]
+    fn decode_rejects_a_truncated_intent() {
+        let bytes = encode_intent(&[FloorRaise::epoch(b"scope".to_vec(), 7)]);
+        assert!(decode_intent(&bytes[..bytes.len() - 1]).is_err());
+    }
+
+    /// A batch commit interrupted mid-apply (intent fsynced, only the first of
+    /// two floors on the platter) is completed by reopen — the second floor
+    /// lands and the intent clears, so no partial advance survives (#685). This
+    /// is the roll-forward recovery contract: reopen *heals forward*, it never
+    /// rewinds the floor that already landed.
+    #[test]
+    fn open_replays_an_interrupted_batch_commit() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("floors");
+
+        // Simulate the crashed state by hand: the revocation floor applied, its
+        // sequence partner not yet, and the intent record still present.
+        block_on(async {
+            let store = FileFloorStore::open(&path).unwrap();
+            store.raise_epoch_floor(b"scope", 9).await.unwrap();
+        });
+        let interrupted = vec![
+            FloorRaise::epoch(b"scope".to_vec(), 9),
+            FloorRaise::sequence(b"k51-name".to_vec(), 5),
+        ];
+        atomic_write(
+            &path.join("intent").join("crashed-commit"),
+            &encode_intent(&interrupted),
+        )
+        .unwrap();
+
+        block_on(async {
+            let reopened = FileFloorStore::open(&path).unwrap();
+            assert_eq!(
+                reopened.sequence_floor(b"k51-name").await.unwrap(),
+                Some(5),
+                "reopen must complete the interrupted sequence raise"
+            );
+            assert_eq!(reopened.epoch_floor(b"scope").await.unwrap(), Some(9));
+        });
+        assert!(
+            list_file_names(&path.join("intent")).unwrap().is_empty(),
+            "reopen must clear the intent record after replay"
+        );
+    }
+
+    /// Two overlapping commits each leave their own intent file — neither
+    /// clobbers nor removes the other's — and reopen replays BOTH, healing every
+    /// floor forward. This is the crash-consistency hole a single shared intent
+    /// path had: the second commit could overwrite or delete the first's
+    /// recovery record (#685).
+    #[test]
+    fn open_replays_multiple_overlapping_intents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("floors");
+        block_on(async {
+            FileFloorStore::open(&path).unwrap();
+        });
+
+        // Two distinct commits crash with their intents still present and none
+        // of their floors yet on the platter (the worst case).
+        let first = vec![
+            FloorRaise::epoch(b"scope-a".to_vec(), 3),
+            FloorRaise::sequence(b"name-a".to_vec(), 7),
+        ];
+        let second = vec![
+            FloorRaise::epoch(b"scope-b".to_vec(), 4),
+            FloorRaise::sequence(b"name-b".to_vec(), 9),
+        ];
+        let intent_dir = path.join("intent");
+        atomic_write(&intent_dir.join("commit-1"), &encode_intent(&first)).unwrap();
+        atomic_write(&intent_dir.join("commit-2"), &encode_intent(&second)).unwrap();
+
+        block_on(async {
+            let reopened = FileFloorStore::open(&path).unwrap();
+            assert_eq!(reopened.epoch_floor(b"scope-a").await.unwrap(), Some(3));
+            assert_eq!(reopened.sequence_floor(b"name-a").await.unwrap(), Some(7));
+            assert_eq!(reopened.epoch_floor(b"scope-b").await.unwrap(), Some(4));
+            assert_eq!(reopened.sequence_floor(b"name-b").await.unwrap(), Some(9));
+        });
+        assert!(
+            list_file_names(&intent_dir).unwrap().is_empty(),
+            "reopen must clear every replayed intent record"
+        );
+    }
+
+    /// A corrupt leftover intent on disk fails the whole reopen closed: `open`
+    /// surfaces the decode error rather than panicking or silently skipping the
+    /// record, so a garbled recovery journal can never be quietly discarded
+    /// (#685). This is the crash-recovery fail-closed contract, exercised through
+    /// the public `open` surface (not just `decode_intent` in isolation).
+    #[test]
+    fn open_fails_closed_on_a_corrupt_intent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("floors");
+        FileFloorStore::open(&path).unwrap();
+
+        // A valid record truncated by one byte: structurally corrupt, not torn.
+        let good = encode_intent(&[FloorRaise::epoch(b"scope".to_vec(), 1)]);
+        atomic_write(
+            &path.join("intent").join("corrupt"),
+            &good[..good.len() - 1],
+        )
+        .unwrap();
+
+        assert!(
+            FileFloorStore::open(&path).is_err(),
+            "a corrupt intent must fail closed on reopen"
+        );
+    }
+
+    /// Sequential commits over one handle each mint a distinct intent file and
+    /// clean it up, so a successful commit leaves no intent debris behind for a
+    /// later reopen to re-apply.
+    #[test]
+    fn successful_commits_leave_no_intent_debris() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("floors");
+        block_on(async {
+            let store = FileFloorStore::open(&path).unwrap();
+            store
+                .commit_floors(&[FloorRaise::epoch(b"scope".to_vec(), 2)])
+                .await
+                .unwrap();
+            store
+                .commit_floors(&[FloorRaise::sequence(b"name".to_vec(), 5)])
+                .await
+                .unwrap();
+        });
+        assert!(
+            list_file_names(&path.join("intent")).unwrap().is_empty(),
+            "a returned commit must clear its own intent record"
+        );
     }
 }
