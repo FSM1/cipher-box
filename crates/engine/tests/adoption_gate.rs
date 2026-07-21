@@ -296,7 +296,6 @@ impl Fixture {
     /// `parent_node_seed` re-derives this keypair — a mismatched reader seed is
     /// a natural `ascent-link-mismatch`, no hand-corruption needed.
     fn ascent_link_under(&self, parent_node_seed: &[u8; 32]) -> AscentCheck {
-        let payload = OverrideSeedPayload::new(self.scope_seed, self.epoch);
         let aad = AadContext {
             v: V,
             id: self.root_id,
@@ -304,6 +303,14 @@ impl Fixture {
             epoch: self.epoch,
             struct_tag: STRUCT_TAG_ASCENT_LINK,
         };
+        self.ascent_link_under_aad(parent_node_seed, aad)
+    }
+
+    /// An ascent link sealed under `parent_node_seed` with a caller-chosen AAD —
+    /// lets a test pass the seed-derive half yet present an AAD that does not
+    /// bind to the envelope.
+    fn ascent_link_under_aad(&self, parent_node_seed: &[u8; 32], aad: AadContext) -> AscentCheck {
+        let payload = OverrideSeedPayload::new(self.scope_seed, self.epoch);
         let link = seal_ascent_link(parent_node_seed, &EPH_ASCENT, &aad, &payload);
         AscentCheck { link, aad }
     }
@@ -1013,6 +1020,32 @@ fn ascent_adopts_when_reader_seed_matches_sealed_link() {
     reader.parent_node_seed = Some(parent_seed);
     let adopted = block_on(adopt(&floors, &reader, &candidate)).expect("valid ascent adopts");
     assert_eq!(adopted.sequence, 1);
+}
+
+#[test]
+fn ascent_link_aad_must_bind_to_the_envelope() {
+    // The link is correctly sealed under the reader's real parent seed (the
+    // seed-derive half passes), but its AAD names a different epoch than the
+    // envelope — a link minted under the same parent seed for another
+    // node/epoch/version. Fail closed on the AAD bind, before opening.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let parent_seed = [0xAB; 32];
+    let foreign_aad = AadContext {
+        v: V,
+        id: fx.root_id,
+        scope: fx.scope_id,
+        epoch: fx.epoch + 1,
+        struct_tag: STRUCT_TAG_ASCENT_LINK,
+    };
+    let mut candidate = fx.candidate(1);
+    candidate.ascent = Some(fx.ascent_link_under_aad(&parent_seed, foreign_aad));
+    let mut reader = fx.reader();
+    reader.parent_node_seed = Some(parent_seed);
+    let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "ascent-link-mismatch");
 }
 
 #[test]

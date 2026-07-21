@@ -42,9 +42,9 @@ use cipherbox_core::error::{CodecError, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, AscentLink, Envelope, GrantSetCommitment, Permission, ReadBody, StructureSigInput,
-    open_ascent_link, open_grant_blob, open_owner_blob, open_read_body, verify_grant_set,
-    verify_structure,
+    AadContext, AscentLink, Envelope, GrantSetCommitment, Permission, ReadBody,
+    STRUCT_TAG_ASCENT_LINK, StructureSigInput, open_ascent_link, open_grant_blob, open_owner_blob,
+    open_read_body, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -458,6 +458,21 @@ pub async fn adopt<F: FloorStore>(
                 RejectionReason::Trust(TrustViolation::AscentLinkMismatch.into()),
             )
         })?;
+        // Bind the link's AAD to THIS envelope: a link valid under the same
+        // parent seed for another node/scope/epoch/version is a replay, not this
+        // record's ascent (blueprint/engine.md:405-406 — derive-and-verify
+        // against the current node). Fail closed before opening.
+        if ascent.aad.scope != reader.scope_id
+            || ascent.aad.id != candidate.envelope.id
+            || ascent.aad.epoch != candidate.envelope.epoch
+            || ascent.aad.v != candidate.envelope.v
+            || ascent.aad.struct_tag != STRUCT_TAG_ASCENT_LINK
+        {
+            return Err(reject(
+                GateStage::GrantSection,
+                RejectionReason::Trust(TrustViolation::AscentLinkMismatch.into()),
+            ));
+        }
         open_ascent_link(&parent_node_seed, &ascent.aad, &ascent.link)
             .map(drop)
             .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
