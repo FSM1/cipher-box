@@ -43,8 +43,9 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, AscentLink, Envelope, GrantSetCommitment, Permission, ReadBody,
-    STRUCT_TAG_ASCENT_LINK, StructureSigInput, open_ascent_link, open_grant_blob, open_owner_blob,
-    open_read_body, verify_grant_set, verify_structure,
+    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_OWNER_BLOB, StructureSigInput,
+    open_ascent_link, open_grant_blob, open_owner_blob, open_read_body, verify_grant_set,
+    verify_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -357,6 +358,16 @@ impl SeedBlob<'_> {
             SeedBlob::Owner { aad, .. } | SeedBlob::Grantee { aad, .. } => aad,
         }
     }
+
+    /// The domain-separation tag this blob variant must carry — the AAD's
+    /// `structTag` is pinned to it so an owner blob can never present as a grant
+    /// blob (or any other structure).
+    fn struct_tag(&self) -> u8 {
+        match self {
+            SeedBlob::Owner { .. } => STRUCT_TAG_OWNER_BLOB,
+            SeedBlob::Grantee { .. } => STRUCT_TAG_GRANT_BLOB,
+        }
+    }
 }
 
 /// Open the reader's HPKE seed source, returning the recovered scope seed so the
@@ -532,14 +543,28 @@ pub async fn adopt<F: FloorStore>(
     // Stage 6 — unseal success required (AAD-confirmed). The HPKE seed source
     // (if any) opens first, then the symmetric read-body; the read-body decode
     // enforces child id/ipnsName uniqueness fail-closed.
+    //
+    // Reader-scope precondition: the scope UUID is not in the read-key KDF, so a
+    // read body sealed under a foreign scope still opens under this reader's key.
+    // Bind the envelope's scope to the reader's own scope so it joins the same
+    // equivalence class as every AAD/structure scope — a foreign-scope envelope
+    // is a scope transplant, fail-closed (blueprint/engine.md cross-check).
+    if candidate.envelope.scope != reader.scope_id {
+        return Err(reject(
+            GateStage::Unseal,
+            RejectionReason::Trust(TrustViolation::SealOpenFailed.into()),
+        ));
+    }
     if let Some(blob) = &reader.seed_blob {
         // Bind the blob to THIS envelope: a seed blob sealed under a different
         // scope/epoch/version is a transplant, not this record's seed source.
         // Fail closed before opening (blueprint/engine.md cross-check discipline).
         let aad = blob.aad();
         if aad.scope != reader.scope_id
+            || aad.id != candidate.envelope.id
             || aad.epoch != candidate.envelope.epoch
             || aad.v != candidate.envelope.v
+            || aad.struct_tag != blob.struct_tag()
         {
             return Err(reject(
                 GateStage::Unseal,

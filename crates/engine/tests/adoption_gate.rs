@@ -1190,3 +1190,82 @@ fn seed_blob_correct_seed_derives_read_key_and_adopts() {
     assert_eq!(adopted.sequence, 1);
     assert_eq!(adopted.epoch, 1);
 }
+
+#[test]
+fn envelope_scope_must_equal_reader_scope() {
+    // The read body is sealed under a FOREIGN scope with the reader's real read
+    // key (the scope UUID is not in the read-key KDF, so it still opens), and the
+    // envelope is labeled that foreign scope — while the reader is scope A. With
+    // structures/ascent absent, only the reader-scope precondition can reject.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let foreign_scope = [0xEE; 16];
+    let folder = ReadBody::Folder {
+        created_at: 0,
+        modified_at: 0,
+        children: Vec::new(),
+        unknown: Vec::new(),
+    };
+    let envelope_b = seal_read_body(
+        &fx.read_key,
+        &NONCE_READ_BODY,
+        V,
+        fx.root_id,
+        foreign_scope,
+        fx.epoch,
+        &folder,
+    )
+    .expect("foreign-scope folder seals under the reader's read key");
+    let mut candidate = fx.candidate(1);
+    candidate.envelope = envelope_b;
+    candidate.structures = Vec::new();
+    let err = block_on(adopt(&floors, &fx.reader(), &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::Unseal);
+    assert_eq!(rej.check(), "seal-open-failed");
+}
+
+#[test]
+fn seed_blob_aad_id_must_equal_envelope_id() {
+    // The blob is wrapped to the reader's real enc subkey with the right
+    // scope/epoch/v, but names a different node id than the envelope — a
+    // wrong-node transplant, fail-closed.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let wrong_id_aad = AadContext {
+        v: V,
+        id: [0xDD; 16],
+        scope: fx.scope_id,
+        epoch: fx.epoch,
+        struct_tag: STRUCT_TAG_OWNER_BLOB,
+    };
+    let mut reader = fx.reader();
+    reader.seed_blob = Some(fx.owner_seed_blob_with_aad(wrong_id_aad));
+    let candidate = fx.candidate(1);
+    let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::Unseal);
+    assert_eq!(rej.check(), "hpke-open-failed");
+}
+
+#[test]
+fn seed_blob_aad_struct_tag_must_match_blob_type() {
+    // An owner blob whose AAD carries the grant-blob tag: domain separation is
+    // broken, fail-closed even though it is wrapped to the reader's enc subkey.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let wrong_tag_aad = AadContext {
+        v: V,
+        id: fx.root_id,
+        scope: fx.scope_id,
+        epoch: fx.epoch,
+        struct_tag: STRUCT_TAG_GRANT_BLOB,
+    };
+    let mut reader = fx.reader();
+    reader.seed_blob = Some(fx.owner_seed_blob_with_aad(wrong_tag_aad));
+    let candidate = fx.candidate(1);
+    let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::Unseal);
+    assert_eq!(rej.check(), "hpke-open-failed");
+}
