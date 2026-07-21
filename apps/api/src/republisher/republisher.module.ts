@@ -15,6 +15,14 @@ import { LoggingRepublisherAlerter, RepublisherAlerter } from './republisher.ale
 import { RepublisherTask } from './republisher.task';
 import { RecordCacheService } from './services/record-cache.service';
 
+/** Disabled tokens for a default-on flag; case-insensitive so `False`/`0`/`OFF` all count. */
+const DISABLED_TOKENS = new Set(['false', '0', 'no', 'off']);
+
+/** A default-on env flag is disabled only by an explicit falsey token; unset stays on. */
+export function isDisabled(raw: unknown): boolean {
+  return DISABLED_TOKENS.has(String(raw).trim().toLowerCase());
+}
+
 /**
  * The republisher slice (blueprint/api.md, Republisher module and recovery): the
  * in-process, worker-shaped, cleanly extractable liveness backstop and its
@@ -59,7 +67,7 @@ export class RepublisherModule implements OnApplicationBootstrap, OnModuleDestro
   onApplicationBootstrap(): void {
     // Opt-out for deployments that run the republisher out of process (or none),
     // defaulting on. Absent, the loop is a no-op cost — an unref'd 12h timer.
-    if (this.configService.get('REPUBLISHER_ENABLED') === 'false') {
+    if (isDisabled(this.configService.get('REPUBLISHER_ENABLED'))) {
       return;
     }
     this.scheduler.register(this.task);

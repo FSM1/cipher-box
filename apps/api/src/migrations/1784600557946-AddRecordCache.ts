@@ -5,7 +5,7 @@ export class AddRecordCache1784600557946 implements MigrationInterface {
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(
-      `CREATE TABLE "record_cache" ("ipns_name" character varying(128) NOT NULL, "record" bytea NOT NULL, "sequence" bigint NOT NULL, "last_republished_at" TIMESTAMP WITH TIME ZONE, "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_49f183426ca65b21642fb75178c" PRIMARY KEY ("ipns_name"))`
+      `CREATE TABLE "record_cache" ("ipns_name" character varying(128) NOT NULL, "record" bytea NOT NULL, "sequence" numeric(20,0) NOT NULL, "last_republished_at" TIMESTAMP WITH TIME ZONE, "created_at" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), CONSTRAINT "PK_49f183426ca65b21642fb75178c" PRIMARY KEY ("ipns_name"))`
     );
   }
 

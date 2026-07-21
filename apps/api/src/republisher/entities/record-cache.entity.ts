@@ -27,8 +27,12 @@ export class RecordCache {
   @Column({ name: 'record', type: 'bytea' })
   record: Buffer;
 
-  /** The record's public sequence number; the monotonic regression guard. */
-  @Column({ name: 'sequence', type: 'bigint' })
+  /**
+   * The record's public sequence number; the monotonic regression guard. IPNS
+   * sequences are uint64, so this is `numeric(20,0)` — a signed `bigint` would
+   * overflow (and abort the sweep) at 2^63, half the domain.
+   */
+  @Column({ name: 'sequence', type: 'numeric', precision: 20, scale: 0 })
   sequence: string;
 
   /** Last successful keyless re-PUT; null until the first succeeds. Drives the >24h liveness alert. */

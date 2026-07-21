@@ -6,15 +6,23 @@ import { Injectable, Logger } from '@nestjs/common';
  * republisher's inventory walk is the first implementer, and the dormant-mailbox
  * scheduled sweep (#667) builds its scheduling on this same seam.
  *
- * `runOnce` MUST resolve/reject on its own — the scheduler never times it out —
- * and MUST NOT assume it runs alone: the scheduler skips a tick while the
- * previous sweep is still in flight, but a task should still be idempotent.
+ * A sweep SHOULD settle on its own, but need not: the scheduler bounds every run
+ * with a per-run timeout, so a wedged sweep (a DB op that never returns) is
+ * abandoned rather than left to block scheduling forever. A task MUST NOT assume
+ * it runs alone either — the scheduler skips a tick while the previous sweep is
+ * still in flight, so a task should still be idempotent.
  */
 export interface PeriodicTask {
   /** Stable label for logs/metrics (bounded cardinality). */
   readonly taskName: string;
   /** Cadence between sweeps, in ms. Injected — never read from a clock here. */
   readonly intervalMs: number;
+  /**
+   * Hard per-run bound in ms; a sweep exceeding it is abandoned (in-flight flag
+   * cleared, logged) so a hung run can't wedge the loop or block shutdown.
+   * Omit to accept the scheduler default.
+   */
+  readonly runTimeoutMs?: number;
   runOnce(): Promise<void>;
 }
 
@@ -38,11 +46,17 @@ interface ScheduledEntry {
   running: boolean;
 }
 
+/** Fallback per-run bound when a task declares no `runTimeoutMs`. */
+const DEFAULT_RUN_TIMEOUT_MS = 60 * 60 * 1000;
+
 /**
  * Real-timer scheduler. Each task fires on a `setInterval` at its own cadence;
  * a per-task in-flight flag drops overlapping ticks (a slow sweep never stacks),
  * and a thrown sweep is caught and logged so one failure never kills the loop.
- * `stop` clears every timer and awaits in-flight sweeps.
+ * Every run is bounded by a per-run timeout: a wedged sweep is abandoned (its
+ * in-flight flag cleared, logged) so it can neither block later ticks forever nor
+ * hang `stop`. `stop` clears every timer and awaits in-flight sweeps — bounded by
+ * that same timeout, never indefinitely.
  */
 @Injectable()
 export class TimerWorkerScheduler extends WorkerScheduler {
@@ -87,13 +101,38 @@ export class TimerWorkerScheduler extends WorkerScheduler {
       return;
     }
     entry.running = true;
-    const run = entry.task
+    const timeoutMs = entry.task.runTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = setTimeout(() => resolve('timeout'), timeoutMs);
+      timer.unref?.();
+    });
+
+    const sweep = entry.task
       .runOnce()
+      .then(() => 'done' as const)
       .catch((error: unknown) => {
         // A failed sweep is logged and swallowed: the loop must survive it.
         this.logger.warn(`${entry.task.taskName} sweep failed: ${String(error)}`);
+        return 'done' as const;
+      });
+
+    // Whichever settles first releases the run. On timeout the sweep promise is
+    // abandoned (still caught, so a late rejection can't surface unhandled) so a
+    // wedged run never pins `running` or `stop`.
+    const run = Promise.race([sweep, timeout])
+      .then((outcome) => {
+        if (outcome === 'timeout') {
+          this.logger.error(
+            `${entry.task.taskName} sweep exceeded ${timeoutMs}ms; abandoned so scheduling continues`
+          );
+        }
       })
       .finally(() => {
+        if (timer) {
+          clearTimeout(timer);
+        }
         entry.running = false;
         this.inFlight.delete(run);
       });

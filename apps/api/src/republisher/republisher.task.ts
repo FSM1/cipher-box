@@ -14,9 +14,15 @@ import { RecordCacheService } from './services/record-cache.service';
 const DEFAULT_INTERVAL_MS = 12 * 60 * 60 * 1000;
 /** >24h without a successful re-PUT alerts (blueprint/api.md); via REPUBLISHER_STALE_ALERT_MS. */
 const DEFAULT_STALE_ALERT_MS = 24 * 60 * 60 * 1000;
+/** Hard bound on one sweep (below the cadence); via REPUBLISHER_RUN_TIMEOUT_MS. */
+const DEFAULT_RUN_TIMEOUT_MS = 60 * 60 * 1000;
+/** In-flight names per sweep so one slow name can't stall the walk; via REPUBLISHER_CONCURRENCY. */
+const DEFAULT_CONCURRENCY = 8;
+/** The monotonic floor a record with no readable sequence caches at (see walkName). */
+const SEQUENCE_FLOOR = 0n;
 
-/** Read a positive-integer ms bound, failing closed to `fallback` for unset/garbage. */
-function positiveMs(raw: unknown, fallback: number): number {
+/** Read a positive integer, failing closed to `fallback` for unset/garbage. */
+function positiveInt(raw: unknown, fallback: number): number {
   const value = Number(raw);
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
@@ -38,7 +44,9 @@ function positiveMs(raw: unknown, fallback: number): number {
 export class RepublisherTask implements PeriodicTask {
   readonly taskName = 'republisher-walk';
   readonly intervalMs: number;
+  readonly runTimeoutMs: number;
   private readonly staleAlertMs: number;
+  private readonly concurrency: number;
 
   constructor(
     @InjectRepository(NameInventory)
@@ -50,23 +58,34 @@ export class RepublisherTask implements PeriodicTask {
     private readonly clock: Clock,
     configService: ConfigService
   ) {
-    this.intervalMs = positiveMs(configService.get('REPUBLISHER_INTERVAL_MS'), DEFAULT_INTERVAL_MS);
-    this.staleAlertMs = positiveMs(
+    this.intervalMs = positiveInt(
+      configService.get('REPUBLISHER_INTERVAL_MS'),
+      DEFAULT_INTERVAL_MS
+    );
+    this.staleAlertMs = positiveInt(
       configService.get('REPUBLISHER_STALE_ALERT_MS'),
       DEFAULT_STALE_ALERT_MS
+    );
+    this.runTimeoutMs = positiveInt(
+      configService.get('REPUBLISHER_RUN_TIMEOUT_MS'),
+      DEFAULT_RUN_TIMEOUT_MS
+    );
+    this.concurrency = positiveInt(
+      configService.get('REPUBLISHER_CONCURRENCY'),
+      DEFAULT_CONCURRENCY
     );
   }
 
   async runOnce(): Promise<void> {
+    // No routing endpoint (BYO-only deploy) → the walk can neither resolve nor
+    // re-PUT; skip it rather than fire a resolve-failure alert for every name.
+    if (!this.transport.configured) {
+      return;
+    }
+
     const now = this.clock.now();
     const names = await this.distinctNames();
-
-    let republished = 0;
-    for (const ipnsName of names) {
-      if (await this.walkName(ipnsName, now)) {
-        republished += 1;
-      }
-    }
+    const republished = await this.walkAll(names, now);
 
     // One bulk pass for the >24h liveness alert — never per-name.
     const cutoff = new Date(now.getTime() - this.staleAlertMs);
@@ -75,6 +94,31 @@ export class RepublisherTask implements PeriodicTask {
     }
 
     this.alerter.walkComplete(names.length, republished);
+  }
+
+  /**
+   * Walk names through a bounded worker pool so one slow name (up to a 10s
+   * resolve + 10s re-PUT) can't serialize the whole inventory past the cadence.
+   * Single-threaded JS makes the cursor claim atomic between awaits.
+   */
+  private async walkAll(names: string[], now: Date): Promise<number> {
+    let cursor = 0;
+    let republished = 0;
+    const worker = async (): Promise<void> => {
+      while (true) {
+        const i = cursor;
+        cursor += 1;
+        if (i >= names.length) {
+          return;
+        }
+        if (await this.walkName(names[i], now)) {
+          republished += 1;
+        }
+      }
+    };
+    const workers = Math.min(this.concurrency, names.length);
+    await Promise.all(Array.from({ length: workers }, () => worker()));
+    return republished;
   }
 
   /** Resolve → cache → re-PUT one name; returns true iff the keyless re-PUT succeeded. */
@@ -93,12 +137,13 @@ export class RepublisherTask implements PeriodicTask {
       return false;
     }
 
-    // Cache the freshest record; a missing/misread sequence just skips the
-    // update (the cache is non-canonical, so a skipped update is harmless).
-    const sequence = this.sequenceReader.read(record);
-    if (sequence !== null) {
-      await this.cache.upsert(ipnsName, record, sequence, now);
-    }
+    // Cache every re-PUT name, floored at 0 when the sequence is unreadable, so a
+    // successful re-PUT is never left without a row (which would 404 recovery and
+    // drop the name from staleness alerts). CipherBox records carry sequence ≥ 1,
+    // so the floor only bites garbage/non-CipherBox bytes — and the monotonic
+    // guard means a later real record (≥ 1) always wins over a floored one.
+    const sequence = this.sequenceReader.read(record) ?? SEQUENCE_FLOOR;
+    await this.cache.upsert(ipnsName, record, sequence, now);
 
     try {
       await this.transport.republish(ipnsName, record);

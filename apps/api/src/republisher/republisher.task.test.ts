@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeClock, fakeConfig } from '../testing/fakes';
 import { MinimalIpnsSequenceReader } from './record-sequence-reader';
 import { RecordTransport } from './record-transport';
@@ -20,6 +20,13 @@ function record(sequence: bigint): Buffer {
     bytes.push(byte);
   } while (v > 0n);
   return Buffer.from(bytes);
+}
+
+/** A well-formed record carrying NO sequence field — the reader returns null. */
+function recordWithoutSequence(): Buffer {
+  // A length-delimited field 1 (`value`) only; field 5 (`sequence`) is absent.
+  const payload = Buffer.from('value-cid-bytes');
+  return Buffer.concat([Buffer.from([(1 << 3) | 2, payload.length]), payload]);
 }
 
 interface CacheRow {
@@ -75,6 +82,11 @@ class FakeTransport extends RecordTransport {
   resolveAnswers = new Map<string, Buffer | null | 'throw'>();
   republishFailures = new Set<string>();
   republished: string[] = [];
+  isConfigured = true;
+
+  override get configured(): boolean {
+    return this.isConfigured;
+  }
 
   async resolve(name: string): Promise<Buffer | null> {
     const answer = this.resolveAnswers.get(name);
@@ -84,6 +96,29 @@ class FakeTransport extends RecordTransport {
 
   async republish(name: string, _record: Buffer): Promise<void> {
     if (this.republishFailures.has(name)) throw new Error('re-PUT failed');
+    this.republished.push(name);
+  }
+}
+
+/** Transport that delays each resolve so a sweep's live concurrency is observable. */
+class ConcurrencyTransport extends RecordTransport {
+  inFlight = 0;
+  maxInFlight = 0;
+  republished: string[] = [];
+
+  constructor(private readonly delayMs: number) {
+    super();
+  }
+
+  async resolve(_name: string): Promise<Buffer | null> {
+    this.inFlight += 1;
+    this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
+    await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+    this.inFlight -= 1;
+    return record(1n);
+  }
+
+  async republish(name: string, _record: Buffer): Promise<void> {
     this.republished.push(name);
   }
 }
@@ -120,10 +155,11 @@ function fakeNameRepo(names: string[]): never {
 function buildTask(opts: {
   names: string[];
   cache: FakeRecordCache;
-  transport: FakeTransport;
+  transport: RecordTransport;
   alerter: RecordingAlerter;
   clock: FakeClock;
   staleAlertMs?: number;
+  concurrency?: number;
 }): RepublisherTask {
   return new RepublisherTask(
     fakeNameRepo(opts.names),
@@ -134,6 +170,7 @@ function buildTask(opts: {
     opts.clock,
     fakeConfig({
       REPUBLISHER_STALE_ALERT_MS: String(opts.staleAlertMs ?? 24 * HOUR),
+      REPUBLISHER_CONCURRENCY: opts.concurrency ? String(opts.concurrency) : undefined,
     }).service
   );
 }
@@ -265,5 +302,120 @@ describe('RepublisherTask walk', () => {
     await buildTask({ names: ['name'], cache, transport, alerter, clock }).runOnce();
 
     expect(alerter.staleAlerts).toEqual([]);
+  });
+
+  // G2: a re-PUT name whose sequence is unreadable must still be cached so
+  // recovery can serve it and staleness can cover it — never a silent 0-row
+  // markRepublished. It caches at the floor 0; a later real record wins.
+  it('caches a re-PUT record even when its sequence is unreadable', async () => {
+    const cache = new FakeRecordCache();
+    const transport = new FakeTransport();
+    const alerter = new RecordingAlerter();
+    const clock = new FakeClock();
+    transport.resolveAnswers.set('seqless', recordWithoutSequence());
+
+    await buildTask({ names: ['seqless'], cache, transport, alerter, clock }).runOnce();
+
+    // Cached (recovery can fetch it) and stamped re-PUT (not a 0-row no-op).
+    const row = cache.rows.get('seqless');
+    expect(row?.sequence).toBe(0n);
+    expect(row?.lastRepublishedAt).toEqual(clock.now());
+    expect(transport.republished).toEqual(['seqless']);
+  });
+
+  it('lets a later real record (seq ≥ 1) overwrite a floored placeholder', async () => {
+    const cache = new FakeRecordCache();
+    const transport = new FakeTransport();
+    const clock = new FakeClock();
+    transport.resolveAnswers.set('name', recordWithoutSequence());
+    await buildTask({
+      names: ['name'],
+      cache,
+      transport,
+      alerter: new RecordingAlerter(),
+      clock,
+    }).runOnce();
+    expect(cache.rows.get('name')?.sequence).toBe(0n);
+
+    transport.resolveAnswers.set('name', record(1n));
+    await buildTask({
+      names: ['name'],
+      cache,
+      transport,
+      alerter: new RecordingAlerter(),
+      clock,
+    }).runOnce();
+    expect(cache.rows.get('name')?.sequence).toBe(1n);
+  });
+
+  // G3: no routing endpoint (BYO-only deploy) → the walk is a no-op, never an
+  // every-name resolve-failure alert storm.
+  it('skips the walk without alerting when the transport is not configured', async () => {
+    const cache = new FakeRecordCache();
+    const transport = new FakeTransport();
+    transport.isConfigured = false;
+    const alerter = new RecordingAlerter();
+    transport.resolveAnswers.set('name-a', record(1n));
+
+    await buildTask({
+      names: ['name-a', 'name-b', 'name-c'],
+      cache,
+      transport,
+      alerter,
+      clock: new FakeClock(),
+    }).runOnce();
+
+    expect(alerter.resolveFailures).toEqual([]);
+    expect(alerter.walks).toEqual([]);
+    expect(transport.republished).toEqual([]);
+    expect(cache.rows.size).toBe(0);
+  });
+
+  // G5: names walk through a bounded pool so one slow name can't serialize the
+  // sweep; live concurrency never exceeds the cap and all names still process.
+  describe('bounded concurrency', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('caps in-flight names at the configured concurrency and processes all', async () => {
+      const cache = new FakeRecordCache();
+      const transport = new ConcurrencyTransport(10);
+      const names = ['a', 'b', 'c', 'd', 'e'];
+      const task = buildTask({
+        names,
+        cache,
+        transport,
+        alerter: new RecordingAlerter(),
+        clock: new FakeClock(),
+        concurrency: 2,
+      });
+
+      const done = task.runOnce();
+      await vi.advanceTimersByTimeAsync(100);
+      await done;
+
+      expect(transport.maxInFlight).toBe(2); // never more than the cap
+      expect(transport.republished.sort()).toEqual([...names].sort());
+    });
+
+    it('runs every name concurrently when the cap exceeds the name count', async () => {
+      const cache = new FakeRecordCache();
+      const transport = new ConcurrencyTransport(10);
+      const names = ['a', 'b', 'c'];
+      const task = buildTask({
+        names,
+        cache,
+        transport,
+        alerter: new RecordingAlerter(),
+        clock: new FakeClock(),
+        concurrency: 8,
+      });
+
+      const done = task.runOnce();
+      await vi.advanceTimersByTimeAsync(100);
+      await done;
+
+      expect(transport.maxInFlight).toBe(3); // bounded by name count, not the cap
+    });
   });
 });

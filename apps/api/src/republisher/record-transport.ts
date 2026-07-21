@@ -18,6 +18,16 @@ export abstract class RecordTransport {
   abstract resolve(ipnsName: string): Promise<Buffer | null>;
   /** Re-PUT opaque record bytes keyless (the records carry client-signed EOLs). */
   abstract republish(ipnsName: string, record: Buffer): Promise<void>;
+
+  /**
+   * Whether a routing endpoint is wired up. False in BYO-only deploys with no
+   * `ROUTING_V1_URL`, where the walk would resolve every name to null — the task
+   * checks this and skips the sweep rather than firing a resolve-failure alert
+   * for every name each cadence.
+   */
+  get configured(): boolean {
+    return true;
+  }
 }
 
 /**
@@ -39,6 +49,10 @@ export class RoutingV1RecordTransport extends RecordTransport {
     this.baseUrl = raw && raw.trim() ? raw.replace(/\/+$/, '') : undefined;
     const timeout = Number(configService.get('ROUTING_V1_TIMEOUT_MS'));
     this.timeoutMs = Number.isInteger(timeout) && timeout > 0 ? timeout : DEFAULT_TIMEOUT_MS;
+  }
+
+  override get configured(): boolean {
+    return this.baseUrl !== undefined;
   }
 
   async resolve(ipnsName: string): Promise<Buffer | null> {

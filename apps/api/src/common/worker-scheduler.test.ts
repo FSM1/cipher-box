@@ -1,5 +1,19 @@
+import { Logger } from '@nestjs/common';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PeriodicTask, TimerWorkerScheduler } from './worker-scheduler';
+
+/** A task whose runOnce never settles — the hung-sweep case the run timeout bounds. */
+function hungTask(runTimeoutMs: number, onRun: () => void): PeriodicTask {
+  return {
+    taskName: 'hung',
+    intervalMs: 1000,
+    runTimeoutMs,
+    runOnce: () => {
+      onRun();
+      return new Promise<void>(() => {});
+    },
+  };
+}
 
 /** A task whose runOnce is fully controlled by the test. */
 class ControllableTask implements PeriodicTask {
@@ -128,5 +142,43 @@ describe('TimerWorkerScheduler', () => {
 
     await vi.advanceTimersByTimeAsync(5000);
     expect(task.runs).toBe(0);
+  });
+
+  it('times out a hung sweep, clears the in-flight flag, and resumes scheduling', async () => {
+    const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const scheduler = new TimerWorkerScheduler();
+    let runs = 0;
+    scheduler.register(hungTask(500, () => (runs += 1)));
+    scheduler.start();
+
+    await vi.advanceTimersByTimeAsync(1000); // tick 1 starts a sweep that never settles
+    expect(runs).toBe(1);
+
+    // The 500ms run timeout abandons the wedged sweep; without it `running` would
+    // stay true forever and every later tick would be dropped.
+    await vi.advanceTimersByTimeAsync(1000); // past the 1500ms timeout and the 2000ms tick
+    expect(runs).toBe(2);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('hung'));
+
+    await vi.advanceTimersByTimeAsync(500); // let the second wedged run time out too
+    await scheduler.stop();
+    errorSpy.mockRestore();
+  });
+
+  it('stop resolves despite a wedged sweep — bounded by the run timeout, never forever', async () => {
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const scheduler = new TimerWorkerScheduler();
+    scheduler.register(hungTask(500, () => undefined));
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(1000); // start the wedged run
+
+    let settled = false;
+    const stopping = scheduler.stop().then(() => {
+      settled = true;
+    });
+    // stop awaits the in-flight run; the run timeout releases it rather than hang.
+    await vi.advanceTimersByTimeAsync(500);
+    await stopping;
+    expect(settled).toBe(true);
   });
 });

@@ -110,6 +110,25 @@ describe('RecordCacheService monotonicity (real Postgres)', () => {
     }
   });
 
+  it('stores and orders sequences across the full uint64 domain, past signed bigint', async () => {
+    const n = name();
+    // 2^63 overflows a signed `bigint` column; the numeric(20,0) column holds it,
+    // so a hostile/garbage high sequence stores instead of faulting the upsert.
+    const beyondSigned = 2n ** 63n;
+    expect((await service.upsert(n, bytes(1), beyondSigned, AT)).stored).toBe(true);
+    expect(await storedSequence(n)).toBe(beyondSigned);
+
+    // A strictly-greater near-max uint64 still wins.
+    const nearMax = 2n ** 64n - 1n;
+    expect((await service.upsert(n, bytes(2), nearMax, AT)).stored).toBe(true);
+    expect(await storedSequence(n)).toBe(nearMax);
+
+    // And a regression just below 2^63 is refused — monotonicity holds past the boundary.
+    const belowSigned = 2n ** 63n - 1n;
+    expect((await service.upsert(n, bytes(3), belowSigned, AT)).stored).toBe(false);
+    expect(await storedSequence(n)).toBe(nearMax);
+  });
+
   it('negative control — without the guard, a regressing sequence overwrites the newer record', async () => {
     const n = name();
     await unsafeUpsert(n, bytes(5), 5n);
