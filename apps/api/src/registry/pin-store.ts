@@ -87,8 +87,9 @@ export class KuboPinStore extends PinStore {
       throw new ServiceUnavailableException('Hosted pin store not configured');
     }
     const form = new FormData();
-    // Copy into an ArrayBuffer-backed view so the Blob part type is exact.
-    form.append('file', new Blob([new Uint8Array(bytes)]));
+    // Copy into an ArrayBuffer-backed view so the Blob part type is exact. Kubo
+    // requires the part to carry a filename, so pass one explicitly.
+    form.append('file', new Blob([new Uint8Array(bytes)]), 'blob');
     const response = await fetch(`${this.apiUrl}/api/v0/add?${params}`, {
       method: 'POST',
       body: form,
