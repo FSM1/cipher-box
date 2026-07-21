@@ -34,4 +34,73 @@ pub trait FloorStore {
     /// Raises the name's sequence floor to `max(stored, sequence)`, durably,
     /// and returns the resulting stored floor.
     async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64>;
+
+    /// Commits a batch of monotonic-max floor raises across both namespaces,
+    /// returning the resulting stored floor for each entry in order.
+    ///
+    /// A single floor advance raises several distinctly-keyed floors at once
+    /// (read-epoch, write-epoch, per-name sequence). Where the backing offers a
+    /// cross-key transaction the commit is **all-or-nothing**: a seam error
+    /// leaves no entry durably changed, so a partial advance is never observable
+    /// (#685). The default fallback applies the raises one key at a time in the
+    /// given order — not atomic, but the caller passes the trust-critical
+    /// (revocation) floor first, so an interrupted fallback fails toward *more*
+    /// restriction and re-converges idempotently on retry, exactly the #682
+    /// mitigation this method subsumes. Callers MUST order entries
+    /// revocation-before-liveness for that guarantee to hold.
+    async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<Vec<u64>> {
+        let mut resulting = Vec::with_capacity(raises.len());
+        for raise in raises {
+            let floor = match raise.namespace {
+                FloorNamespace::Epoch => self.raise_epoch_floor(&raise.key, raise.value).await?,
+                FloorNamespace::Sequence => {
+                    self.raise_sequence_floor(&raise.key, raise.value).await?
+                }
+            };
+            resulting.push(floor);
+        }
+        Ok(resulting)
+    }
+}
+
+/// Which of the two independent floor maps a [`FloorRaise`] targets. Identical
+/// key bytes in the two namespaces never collide (the single-key methods keep
+/// the same separation).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloorNamespace {
+    /// Per-scope epoch floors ([`FloorStore::raise_epoch_floor`]).
+    Epoch,
+    /// Per-name sequence floors ([`FloorStore::raise_sequence_floor`]).
+    Sequence,
+}
+
+/// One monotonic-max floor raise inside a [`FloorStore::commit_floors`] batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FloorRaise {
+    /// The map this raise targets.
+    pub namespace: FloorNamespace,
+    /// Opaque engine-chosen key bytes (scope id or `ipnsName`).
+    pub key: Vec<u8>,
+    /// The floor value to raise to (`max(stored, value)`).
+    pub value: u64,
+}
+
+impl FloorRaise {
+    /// An epoch-namespace raise.
+    pub fn epoch(key: impl Into<Vec<u8>>, value: u64) -> Self {
+        Self {
+            namespace: FloorNamespace::Epoch,
+            key: key.into(),
+            value,
+        }
+    }
+
+    /// A sequence-namespace raise.
+    pub fn sequence(key: impl Into<Vec<u8>>, value: u64) -> Self {
+        Self {
+            namespace: FloorNamespace::Sequence,
+            key: key.into(),
+            value,
+        }
+    }
 }
