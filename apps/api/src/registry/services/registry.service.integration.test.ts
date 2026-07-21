@@ -1,3 +1,4 @@
+import { ServiceUnavailableException } from '@nestjs/common';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { randomBytes } from 'node:crypto';
 import { DataSource, EntityManager, FindManyOptions, FindOneOptions, Repository } from 'typeorm';
@@ -353,6 +354,37 @@ describe('RegistryService concurrency (real Postgres)', () => {
       expect(pinStore.unpinned).toEqual([cid]);
       const survivors = await db.dataSource.getRepository(PinnedCid).find({ where: { cid } });
       expect(survivors.map((r) => r.accountId)).toEqual([b]);
+    });
+  });
+
+  describe('user-row lock timeout maps to 503', () => {
+    it('a register whose users-row lock waits past lock_timeout surfaces a retryable 503, not a 500', async () => {
+      const accountId = await seedAccount(false);
+
+      // The transaction-scoped lock_timeout bounds the advisory acquire AND the
+      // users-row pessimistic_write taken later. Hold that row locked elsewhere
+      // so register's wait aborts with 55P03 — which must map to 503, not 500.
+      const holder = db.dataSource.createQueryRunner();
+      await holder.connect();
+      await holder.startTransaction();
+      await holder.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [accountId]);
+
+      const service = new RegistryService(
+        db.dataSource.getRepository(PinnedCid) as never,
+        db.dataSource.getRepository(User) as never,
+        db.dataSource as never,
+        new RecordingPinStore(),
+        fakeConfig({ DB_ADVISORY_LOCK_TIMEOUT_MS: '200' }).service
+      );
+
+      try {
+        await expect(
+          service.register(accountId, [{ ipnsName: token(), contentCids: [token()] }])
+        ).rejects.toBeInstanceOf(ServiceUnavailableException);
+      } finally {
+        await holder.rollbackTransaction();
+        await holder.release();
+      }
     });
   });
 

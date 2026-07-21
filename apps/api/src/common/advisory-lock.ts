@@ -31,15 +31,19 @@ export function resolveAdvisoryLockTimeoutMs(configService: ConfigService): numb
 /**
  * Bound advisory-lock waits to `timeoutMs` for the current transaction. Call
  * once before acquiring any key; registry batches lock several keys under a
- * single bound. `SET LOCAL` is transaction-scoped and takes no bind parameters,
- * so the validated integer is inlined. `0` leaves the wait unbounded.
+ * single bound. `set_config('lock_timeout', …, true)` is the transaction-local
+ * (`is_local = true`) equivalent of `SET LOCAL`, taking the value as a bind
+ * parameter. `0` leaves the wait unbounded.
  */
 export async function setAdvisoryLockTimeout(
   manager: EntityManager,
   timeoutMs: number
 ): Promise<void> {
   if (timeoutMs > 0) {
-    await manager.query(`SET LOCAL lock_timeout = ${Math.trunc(timeoutMs)}`);
+    await manager.query('SELECT set_config($1, $2, true)', [
+      'lock_timeout',
+      Math.trunc(timeoutMs).toString(),
+    ]);
   }
 }
 
@@ -60,7 +64,13 @@ export async function acquireAdvisoryLock(manager: EntityManager, key: bigint): 
   }
 }
 
-function isLockNotAvailable(error: unknown): boolean {
+/**
+ * A Postgres `lock_not_available` (55P03) — a statement aborted by
+ * `lock_timeout`, whether the advisory-lock acquire or a row lock taken later
+ * under the same transaction-scoped bound. TypeORM wraps it as a
+ * `QueryFailedError` carrying the driver code.
+ */
+export function isLockNotAvailable(error: unknown): boolean {
   if (!(error instanceof QueryFailedError)) {
     return false;
   }
