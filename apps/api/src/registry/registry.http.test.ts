@@ -112,6 +112,11 @@ function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {
         getRepository: (entity: unknown) => byEntity.get(entity),
         query: async () => [],
       }),
+    createQueryRunner: () => ({
+      connect: async () => undefined,
+      query: async () => [],
+      release: async () => undefined,
+    }),
   } as unknown as DataSource;
 }
 

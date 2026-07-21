@@ -189,7 +189,7 @@ export class AccountService {
           async () => {
             // A pin row visible under the durability lock is a live owner that
             // pinned into the post-commit gap — leave its content pinned.
-            if (await this.pinRepository.findOne({ where: { cid } })) {
+            if ((await this.pinRepository.find({ where: { cid } })).length > 0) {
               return false;
             }
             return this.pinStore.unpin(cid);
