@@ -1,4 +1,4 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
@@ -6,6 +6,7 @@ import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 import {
   acquireAdvisoryLock,
+  isLockNotAvailable,
   resolveAdvisoryLockTimeoutMs,
   setAdvisoryLockTimeout,
 } from '../../common/advisory-lock';
@@ -107,6 +108,27 @@ export class RegistryService {
   }
 
   /**
+   * Run `work` in a transaction, mapping any `lock_timeout` abort (55P03) to the
+   * retryable 503. The transaction-scoped `lock_timeout` bounds not just the
+   * advisory-lock acquire but every lock taken later in the same transaction
+   * (the users-row `pessimistic_write`, the delete row locks), so a contended
+   * wait anywhere must degrade the same way instead of escaping as a 500. A 503
+   * the advisory-lock helper already raised passes through unchanged.
+   */
+  private async lockGuardedTransaction<T>(
+    work: (manager: EntityManager) => Promise<T>
+  ): Promise<T> {
+    try {
+      return await this.dataSource.transaction(work);
+    } catch (error) {
+      if (isLockNotAvailable(error)) {
+        throw new ServiceUnavailableException('Contended resource; retry shortly');
+      }
+      throw error;
+    }
+  }
+
+  /**
    * Batch register `[{ipnsName, headCid?, contentCids[]}]` under the caller's
    * account. Register-first, fail-closed: each entry upserts its name-inventory
    * row BEFORE any content pin row, so content is never accepted without the
@@ -139,7 +161,7 @@ export class RegistryService {
     // All-or-nothing: register-first, fail-closed means a mid-batch error must
     // leave no partial state behind.
     if (nameOrder.length > 0 || cidOrder.length > 0) {
-      await this.dataSource.transaction(async (manager) => {
+      await this.lockGuardedTransaction(async (manager) => {
         // Serialize per token before any read/write: register and retire
         // contend on the same keys, closing the phantom-INSERT race and
         // concurrent-duplicate inserts.
@@ -217,7 +239,7 @@ export class RegistryService {
     // All-or-nothing, and serialized per CID against concurrent register and
     // retire: the advisory lock (not a row lock, which can't see an unborn
     // INSERT) makes the delete → survivor check the authority for unpinning.
-    const { retired, unpinCids } = await this.dataSource.transaction(async (manager) => {
+    const { retired, unpinCids } = await this.lockGuardedTransaction(async (manager) => {
       await lockTokens(manager, targets, this.lockTimeoutMs);
 
       const nameRepo = manager.getRepository(NameInventory);
