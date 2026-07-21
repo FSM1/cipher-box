@@ -26,7 +26,7 @@ use cipherbox_core::content::{
     CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid, open_chunk, seal_chunk,
     verify_cid,
 };
-use cipherbox_core::error::{Malformed, TrustViolation};
+use cipherbox_core::error::{CodecError, Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
@@ -75,6 +75,47 @@ struct RejectVector {
     hex: String,
     check: String,
     class: String,
+}
+
+/// An HPKE-blob reject vector: a validly-sealed grant/owner blob whose open must
+/// fail closed. `structTag` is the tag the *opener* uses; for a transplant it is
+/// deliberately a different tag than the seal, so the recomputed AAD makes the
+/// AEAD tag fail — `hpke-open-failed`, the same verdict a tampered ciphertext
+/// yields. The scope seed inside these blobs is the highest-value target.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HpkeBlobRejectVector {
+    name: String,
+    recipient_secret: String,
+    enc: String,
+    v: u64,
+    id: String,
+    scope: String,
+    epoch: u64,
+    struct_tag: u8,
+    ciphertext: String,
+    check: String,
+    class: String,
+}
+
+/// A grant/owner-blob reject vector: either a plaintext-decode failure (`hex`
+/// never decodes) or an HPKE-open failure (a sealed envelope that must not
+/// open). One reject file carries both shapes; the harness dispatches on which
+/// fields are present.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum BlobRejectVector {
+    Decode(RejectVector),
+    HpkeOpen(HpkeBlobRejectVector),
+}
+
+impl BlobRejectVector {
+    fn check(&self) -> &str {
+        match self {
+            Self::Decode(v) => &v.check,
+            Self::HpkeOpen(v) => &v.check,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -1878,6 +1919,11 @@ fn build_grant_section(g: &GrantVectors) -> GrantSection {
         count: checks.len(),
         checks: checks_in_surface_order(checks),
     };
+    let blob_reject = |name: &str, vectors: &[BlobRejectVector]| RejectSection {
+        file: format!("vectors/grant/{name}.json"),
+        count: vectors.len(),
+        checks: checks_surface_ordered(&vectors.iter().map(BlobRejectVector::check).collect()),
+    };
     GrantSection {
         write_body_struct_tag: STRUCT_TAG_WRITE_BODY,
         grant_blob_struct_tag: STRUCT_TAG_GRANT_BLOB,
@@ -1887,9 +1933,9 @@ fn build_grant_section(g: &GrantVectors) -> GrantSection {
         write_body_accept: file_count("write_body_accept", g.write_body_accept.len()),
         write_body_reject: reject("write_body_reject", &g.write_body_reject),
         grant_blob_accept: file_count("grant_blob_accept", g.grant_blob_accept.len()),
-        grant_blob_reject: reject("grant_blob_reject", &g.grant_blob_reject),
+        grant_blob_reject: blob_reject("grant_blob_reject", &g.grant_blob_reject),
         owner_blob_accept: file_count("owner_blob_accept", g.owner_blob_accept.len()),
-        owner_blob_reject: reject("owner_blob_reject", &g.owner_blob_reject),
+        owner_blob_reject: blob_reject("owner_blob_reject", &g.owner_blob_reject),
         ascent_link_accept: file_count("ascent_link_accept", g.ascent_link_accept.len()),
         ascent_link_reject: RejectSection {
             file: "vectors/grant/ascent_link_reject.json".to_string(),
@@ -3324,6 +3370,29 @@ fn build_ipns_record_reject() -> Vec<RecordRejectVector> {
     pb_len_field(8, &sig_bad_vt, &mut bad_validity_type);
     pb_len_field(9, &data_bad_vt, &mut bad_validity_type);
 
+    // The signed data field (9) appearing twice: the unique_len_field guard must
+    // reject a duplicated required field, never fold it silently.
+    let mut duplicate_data = Vec::new();
+    pb_len_field(1, value, &mut duplicate_data);
+    pb_varint_field(3, 0, &mut duplicate_data);
+    pb_len_field(4, validity.as_bytes(), &mut duplicate_data);
+    pb_varint_field(5, seq, &mut duplicate_data);
+    pb_varint_field(6, ttl, &mut duplicate_data);
+    pb_len_field(8, &sig, &mut duplicate_data);
+    pb_len_field(9, &data, &mut duplicate_data);
+    pb_len_field(9, &data, &mut duplicate_data);
+
+    // The value field (1) as a varint, not length-delimited: unique_len_field
+    // requires WIRE_LEN for every required field (value/signatureV2/data).
+    let mut value_wrong_wire = Vec::new();
+    pb_varint_field(1, 7, &mut value_wrong_wire);
+    pb_varint_field(3, 0, &mut value_wrong_wire);
+    pb_len_field(4, validity.as_bytes(), &mut value_wrong_wire);
+    pb_varint_field(5, seq, &mut value_wrong_wire);
+    pb_varint_field(6, ttl, &mut value_wrong_wire);
+    pb_len_field(8, &sig, &mut value_wrong_wire);
+    pb_len_field(9, &data, &mut value_wrong_wire);
+
     let cases: Vec<(&str, Vec<u8>, &str, &str)> = vec![
         (
             "tampered-data-signature",
@@ -3352,6 +3421,18 @@ fn build_ipns_record_reject() -> Vec<RecordRejectVector> {
         (
             "garbage-protobuf",
             vec![0xff],
+            "ipns-record-malformed",
+            "malformed",
+        ),
+        (
+            "duplicate-data-field",
+            duplicate_data,
+            "ipns-record-malformed",
+            "malformed",
+        ),
+        (
+            "value-field-non-len-wire-type",
+            value_wrong_wire,
             "ipns-record-malformed",
             "malformed",
         ),
@@ -3583,19 +3664,21 @@ fn build_mailbox_accept() -> Vec<MailboxAcceptVector> {
     let recipient_scalar = [0x40u8; 32];
     let recipient = X25519Secret::from_scalar(recipient_scalar);
     let recipient_public = recipient.public();
-    let eph = [0x51u8; 32];
     let v = 2u64;
     let sender_scalar = [0x22u8; 32];
     let sender = EcdsaSigner::from_scalar(&sender_scalar).expect("valid sender scalar");
 
-    let cases: Vec<(&str, &[u8])> = vec![
-        ("discovery-ping", b"discovery ping payload"),
-        ("empty-payload", b""),
+    // Each seal to `recipient` draws its own ephemeral. An HPKE seal is
+    // plaintext-independent, so a shared ephemeral under one recipient/AAD reuses
+    // the XChaCha20-Poly1305 key + base nonce across distinct plaintexts.
+    let cases: Vec<(&str, [u8; 32], &[u8])> = vec![
+        ("discovery-ping", [0x51u8; 32], b"discovery ping payload"),
+        ("empty-payload", [0x52u8; 32], b""),
     ];
 
     let mut names = BTreeSet::new();
     let mut out = Vec::new();
-    for (name, payload) in cases {
+    for (name, eph, payload) in cases {
         assert!(names.insert(name), "duplicate mailbox-accept {name}");
         let block = seal_mailbox_payload(&recipient_public, &eph, v, &sender, payload);
         assert_eq!(
@@ -3621,16 +3704,86 @@ fn build_mailbox_accept() -> Vec<MailboxAcceptVector> {
             block: hexstr(&block),
         });
     }
+
+    // Relay (recipient-non-binding) accept vector: R1 opens an item sealed to it,
+    // then re-seals the untouched inner plaintext — the sender's original
+    // signature included — to a different recipient R2, and it still verifies.
+    // The sender signature covers [domain, v, senderIdentityPk, payload] with no
+    // recipient, so relaying cannot break it. Ticket #712 adds recipient
+    // binding; when it lands this relay self-check fails and the vector must be
+    // removed — a conscious KAT break.
+    let relay_payload: &[u8] = b"relayed discovery ping";
+    let r2_scalar = [0x42u8; 32];
+    let r2 = X25519Secret::from_scalar(r2_scalar);
+    // R1's inbound item and R2's relayed item seal to different recipients, each
+    // under its own ephemeral — no ephemeral is shared across seals.
+    let r1_eph = [0x54u8; 32];
+    let relay_eph = [0x53u8; 32];
+    let info = build_aad(&AadContext {
+        v,
+        id: [0; 16],
+        scope: [0; 16],
+        epoch: 0,
+        struct_tag: STRUCT_TAG_MAILBOX_PAYLOAD,
+    });
+    let block_to_r1 = seal_mailbox_payload(&recipient_public, &r1_eph, v, &sender, relay_payload);
+    let r1_map = decode(&block_to_r1).unwrap().as_map().unwrap().clone();
+    let ct1 = r1_map.get("ct").unwrap().as_bytes().unwrap().to_vec();
+    let enc1: [u8; 32] = r1_map
+        .get("enc")
+        .unwrap()
+        .as_bytes()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    // R1 recovers the inner plaintext exactly as received, then relays it to R2.
+    let inner = hpke_open(&recipient, &enc1, &info, &[], &ct1).expect("R1 opens the relayed item");
+    let sealed_to_r2 = hpke_seal(&r2.public(), &relay_eph, &info, &[], &inner);
+    let mut relay_block_map = Map::new();
+    relay_block_map.insert("ct", Value::Bytes(sealed_to_r2.ciphertext));
+    relay_block_map.insert("enc", Value::Bytes(sealed_to_r2.enc.to_vec()));
+    let relay_block = encode(&Value::Map(relay_block_map));
+    // R2 still verifies the original sender — the property #712 will break.
+    let item = open_mailbox_payload(&r2, v, &relay_block).expect("relay verifies for R2");
+    assert_eq!(item.payload, relay_payload, "relay: payload");
+    assert_eq!(
+        item.sender_identity,
+        sender.verifying_key(),
+        "relay: sender identity"
+    );
+    assert!(
+        names.insert("relay-to-other-recipient-still-verifies"),
+        "duplicate mailbox-accept relay"
+    );
+    out.push(MailboxAcceptVector {
+        name: "relay-to-other-recipient-still-verifies".to_string(),
+        recipient_secret: hexstr(&r2_scalar),
+        recipient_public: hexstr(&r2.public().to_bytes()),
+        ephemeral_scalar: hexstr(&relay_eph),
+        v,
+        sender_scalar: hexstr(&sender_scalar),
+        payload: hexstr(relay_payload),
+        block: hexstr(&relay_block),
+    });
     out
 }
 
 fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
     let recipient_scalar = [0x40u8; 32];
     let recipient = X25519Secret::from_scalar(recipient_scalar);
-    let eph = [0x51u8; 32];
     let v = 2u64;
     let sender = EcdsaSigner::from_scalar(&[0x22u8; 32]).expect("valid sender scalar");
-    let block = seal_mailbox_payload(&recipient.public(), &eph, v, &sender, b"authentic");
+    // The authentic block and the forged block seal distinct plaintexts to one
+    // recipient: distinct ephemerals keep each seal's key + base nonce unique.
+    let authentic_eph = [0x55u8; 32];
+    let forged_eph = [0x56u8; 32];
+    let block = seal_mailbox_payload(
+        &recipient.public(),
+        &authentic_eph,
+        v,
+        &sender,
+        b"authentic",
+    );
 
     // Tamper the ciphertext inside the block and re-encode.
     let mut m = decode(&block).unwrap().as_map().unwrap().clone();
@@ -3662,7 +3815,7 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
         epoch: 0,
         struct_tag: STRUCT_TAG_MAILBOX_PAYLOAD,
     });
-    let sealed = hpke_seal(&recipient.public(), &eph, &info, &[], &inner_bytes);
+    let sealed = hpke_seal(&recipient.public(), &forged_eph, &info, &[], &inner_bytes);
     let mut forged = Map::new();
     forged.insert("ct", Value::Bytes(sealed.ciphertext));
     forged.insert("enc", Value::Bytes(sealed.enc.to_vec()));
@@ -3734,9 +3887,9 @@ struct GrantVectors {
     write_body_accept: Vec<WriteBodyAcceptVector>,
     write_body_reject: Vec<RejectVector>,
     grant_blob_accept: Vec<HpkeStructureVector>,
-    grant_blob_reject: Vec<RejectVector>,
+    grant_blob_reject: Vec<BlobRejectVector>,
     owner_blob_accept: Vec<HpkeStructureVector>,
-    owner_blob_reject: Vec<RejectVector>,
+    owner_blob_reject: Vec<BlobRejectVector>,
     ascent_link_accept: Vec<AscentLinkAcceptVector>,
     ascent_link_reject: Vec<AscentLinkRejectVector>,
     history_link_accept: Vec<HistoryLinkAcceptVector>,
@@ -3988,7 +4141,7 @@ fn build_grant_blob_accept() -> Vec<HpkeStructureVector> {
     out
 }
 
-fn build_grant_blob_reject() -> Vec<RejectVector> {
+fn build_grant_blob_reject() -> Vec<BlobRejectVector> {
     let cases: Vec<(&str, Value, &str, &str)> = vec![
         (
             "read-scope-seed-wrong-length",
@@ -4020,7 +4173,107 @@ fn build_grant_blob_reject() -> Vec<RejectVector> {
             "malformed",
         ),
     ];
-    finish_hex_reject_vectors("grant-blob", cases, decode_grant_blob_payload)
+    let mut out: Vec<BlobRejectVector> =
+        finish_hex_reject_vectors("grant-blob", cases, decode_grant_blob_payload)
+            .into_iter()
+            .map(BlobRejectVector::Decode)
+            .collect();
+
+    // HPKE-open rejects: seal a real read+write grant blob, then a byte flip and
+    // a struct-tag transplant must both fail closed at the AEAD tag.
+    let recipient_scalar: [u8; 32] = std::array::from_fn(|i| (0x30 + i) as u8);
+    let recipient = X25519Secret::from_scalar(recipient_scalar);
+    let ctx = grant_ctx(STRUCT_TAG_GRANT_BLOB);
+    let payload = GrantBlobPayload::new([0x11; 32], Some([0x44; 32]), GRANT_EPOCH, [0x22; 32]);
+    let sealed = seal_grant_blob(&recipient.public(), &[0x68; 32], &ctx, &payload);
+    out.extend(hpke_blob_reject_pair(
+        recipient_scalar,
+        &recipient,
+        &sealed,
+        &ctx,
+        STRUCT_TAG_OWNER_BLOB,
+        |r, e, c, ct| open_grant_blob(r, e, c, ct).map(drop),
+    ));
+    out
+}
+
+/// The two HPKE-open reject vectors for a sealed grant/owner blob: a tampered
+/// ciphertext (same ctx) and a struct-tag transplant (intact ciphertext opened
+/// under `transplant_tag`). Both must fail closed at the AEAD tag.
+fn hpke_blob_reject_pair(
+    recipient_scalar: [u8; 32],
+    recipient: &X25519Secret,
+    sealed: &cipherbox_core::suite::hpke::HpkeCiphertext,
+    ctx: &AadContext,
+    transplant_tag: u8,
+    open_fn: impl Fn(&X25519Secret, &[u8; 32], &AadContext, &[u8]) -> Result<(), CodecError>,
+) -> Vec<BlobRejectVector> {
+    let mut tampered = sealed.ciphertext.clone();
+    *tampered.last_mut().expect("non-empty ciphertext") ^= 0x01;
+    let transplant_ctx = AadContext {
+        struct_tag: transplant_tag,
+        ..*ctx
+    };
+    vec![
+        hpke_blob_reject_vector(
+            "tampered-ciphertext",
+            recipient_scalar,
+            recipient,
+            &sealed.enc,
+            ctx,
+            &tampered,
+            &open_fn,
+        ),
+        hpke_blob_reject_vector(
+            "struct-tag-transplant",
+            recipient_scalar,
+            recipient,
+            &sealed.enc,
+            &transplant_ctx,
+            &sealed.ciphertext,
+            &open_fn,
+        ),
+    ]
+}
+
+/// Build + self-check one HPKE-blob reject vector: `open_fn` must fail closed
+/// with `hpke-open-failed`/`trust` under `ctx`.
+fn hpke_blob_reject_vector(
+    name: &str,
+    recipient_scalar: [u8; 32],
+    recipient: &X25519Secret,
+    enc: &[u8; 32],
+    ctx: &AadContext,
+    ciphertext: &[u8],
+    open_fn: impl Fn(&X25519Secret, &[u8; 32], &AadContext, &[u8]) -> Result<(), CodecError>,
+) -> BlobRejectVector {
+    let err = match open_fn(recipient, enc, ctx, ciphertext) {
+        Err(e) => e,
+        Ok(()) => panic!("hpke-blob reject {name}: open accepted it"),
+    };
+    assert_eq!(
+        err.check(),
+        "hpke-open-failed",
+        "hpke-blob reject {name}: check ({err})"
+    );
+    assert_eq!(
+        err.class(),
+        "trust",
+        "hpke-blob reject {name}: class ({err})"
+    );
+    BlobRejectVector::HpkeOpen(HpkeBlobRejectVector {
+        name: name.to_string(),
+        recipient_secret: hexstr(&recipient_scalar),
+        enc: hexstr(enc),
+        v: ctx.v,
+        id: hexstr(&ctx.id),
+        scope: hexstr(&ctx.scope),
+        epoch: ctx.epoch,
+        struct_tag: ctx.struct_tag,
+        ciphertext: hexstr(ciphertext),
+        check: "hpke-open-failed".to_string(),
+        class: "trust".to_string(),
+    })
 }
 
 // --- Owner blob (HPKE) ------------------------------------------------------
@@ -4053,7 +4306,7 @@ fn build_owner_blob_accept() -> Vec<HpkeStructureVector> {
     )]
 }
 
-fn build_owner_blob_reject() -> Vec<RejectVector> {
+fn build_owner_blob_reject() -> Vec<BlobRejectVector> {
     let cases: Vec<(&str, Value, &str, &str)> = vec![
         (
             "override-seed-wrong-length",
@@ -4071,7 +4324,28 @@ fn build_owner_blob_reject() -> Vec<RejectVector> {
             "malformed",
         ),
     ];
-    finish_hex_reject_vectors("owner-blob", cases, decode_override_seed_payload)
+    let mut out: Vec<BlobRejectVector> =
+        finish_hex_reject_vectors("owner-blob", cases, decode_override_seed_payload)
+            .into_iter()
+            .map(BlobRejectVector::Decode)
+            .collect();
+
+    // HPKE-open rejects: seal a real owner blob, then a byte flip and a
+    // struct-tag transplant must both fail closed at the AEAD tag.
+    let owner_scalar: [u8; 32] = std::array::from_fn(|i| (0x31 + i) as u8);
+    let owner = X25519Secret::from_scalar(owner_scalar);
+    let ctx = grant_ctx(STRUCT_TAG_OWNER_BLOB);
+    let payload = OverrideSeedPayload::new([0x77; 32], GRANT_EPOCH);
+    let sealed = seal_owner_blob(&owner.public(), &[0x69; 32], &ctx, &payload);
+    out.extend(hpke_blob_reject_pair(
+        owner_scalar,
+        &owner,
+        &sealed,
+        &ctx,
+        STRUCT_TAG_GRANT_BLOB,
+        |r, e, c, ct| open_owner_blob(r, e, c, ct).map(drop),
+    ));
+    out
 }
 
 /// Freeze one HPKE-sealed structure (grant blob / owner blob) as a vector,

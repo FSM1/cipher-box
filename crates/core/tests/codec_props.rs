@@ -21,6 +21,7 @@ use std::collections::HashMap;
 
 use cipherbox_core::codec::{
     Map, Value, canonical_key_cmp, decode, decode_map_partial, encode, encode_map_partial,
+    encoded_len,
 };
 use proptest::prelude::*;
 
@@ -190,6 +191,15 @@ proptest! {
                 ),
             }
         }
+    }
+
+    /// (f) the two-pass encoder's length oracle is exact for every value:
+    /// `encoded_len` equals the emitted byte count, so `encode`'s single
+    /// up-front reservation never reallocates mid-write — no intermediate
+    /// backing store is freed un-zeroized to strand secret bytes.
+    #[test]
+    fn encoded_len_matches_emitted_bytes(v in arb_value()) {
+        prop_assert_eq!(encoded_len(&v), encode(&v).len());
     }
 
     /// (e) `canonical_key_cmp` is a total order that agrees with bytewise

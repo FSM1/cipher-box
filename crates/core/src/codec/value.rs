@@ -8,6 +8,8 @@
 use core::cmp::Ordering;
 use core::fmt;
 
+use zeroize::Zeroize;
+
 use crate::error::Malformed;
 
 /// A value in the deterministic profile's data model.
@@ -115,6 +117,39 @@ impl Value {
             Self::Negative(!(n as u64))
         }
     }
+
+    /// Scrub every owned byte buffer in this value tree in place: each
+    /// [`Value::Bytes`] has its contents wiped from memory and is cleared to
+    /// empty (`Vec::zeroize` semantics), while the tree's shape and every
+    /// non-byte value are left intact.
+    ///
+    /// The sealed-body encode path builds a transient `Value` tree that carries
+    /// verbatim copies of inline **content-key** material — one
+    /// [`Value::Bytes`] per file version ([`encode_read_body`]). That tree is
+    /// built and owned by the encoder, so the encoder is its terminal owner and
+    /// wipes it here before it drops, closing the window where a
+    /// freed-but-uncleared `Value::Bytes` copy of key material would linger on
+    /// the heap (blueprint/core.md "Crypto suite": key material lives only in
+    /// zeroizing owners). Non-secret byte buffers (ids, cids, ipnsNames) are
+    /// wiped too: they are all encoder-owned transient copies, so a whole-tree
+    /// wipe needs no per-field secret classification and stays correct as later
+    /// sealed bodies add secret byte fields (grant/owner/history seed material).
+    /// This only ever touches the encoder's own transient copies — the caller's
+    /// [`SecretBytes`](crate::suite::secret::SecretBytes) inputs are untouched.
+    ///
+    /// [`encode_read_body`]: crate::seal::encode_read_body
+    pub(crate) fn zeroize_bytes(&mut self) {
+        match self {
+            Self::Bytes(b) => b.zeroize(),
+            Self::Array(items) => {
+                for item in items {
+                    item.zeroize_bytes();
+                }
+            }
+            Self::Map(map) => map.zeroize_bytes(),
+            Self::Unsigned(_) | Self::Negative(_) | Self::Text(_) | Self::Bool(_) | Self::Null => {}
+        }
+    }
 }
 
 fn unexpected(expected: &'static str, found: &Value) -> Malformed {
@@ -190,6 +225,15 @@ impl Map {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Zeroize every entry value's owned byte buffers in place (keys are text,
+    /// never secret). See [`Value::zeroize_bytes`] for the terminal-owner
+    /// rationale — the caller owns this map and is its terminal owner.
+    pub(crate) fn zeroize_bytes(&mut self) {
+        for (_, v) in &mut self.entries {
+            v.zeroize_bytes();
+        }
     }
 }
 
@@ -310,6 +354,43 @@ mod tests {
         assert_eq!(keys, ["a", "bb", "ca"]);
         assert_eq!(m.get("bb"), Some(&Value::Unsigned(9)));
     }
+
+    #[test]
+    fn zeroize_bytes_wipes_every_nested_byte_buffer() {
+        // A tree shaped like the sealed-body encode tree: a map holding an
+        // array of maps, each with a secret-carrying `Bytes` value plus
+        // non-byte fields, and a top-level non-secret `Bytes`.
+        let mut version = Map::new();
+        version.insert("contentKey", Value::Bytes(vec![0xab; SECRET_LEN_TEST]));
+        version.insert("size", Value::Unsigned(4096));
+        version.insert("contentCid", Value::Bytes(vec![0xcd; 5]));
+
+        let mut root = Map::new();
+        root.insert("versions", Value::Array(vec![Value::Map(version)]));
+        root.insert("kind", Value::Text("file".into()));
+        root.insert("id", Value::Bytes(vec![0xef; 16]));
+        let mut tree = Value::Map(root);
+
+        tree.zeroize_bytes();
+
+        // `Vec::zeroize` wipes the whole buffer (contents scrubbed from memory)
+        // and clears it to empty; the tree keeps its shape and every non-byte
+        // value is untouched.
+        let root = tree.as_map().unwrap();
+        assert_eq!(root.get("id"), Some(&Value::Bytes(Vec::new())));
+        assert_eq!(root.get("kind"), Some(&Value::Text("file".into())));
+        let versions = root.get("versions").unwrap().as_array().unwrap();
+        let ver = versions[0].as_map().unwrap();
+        assert_eq!(
+            ver.get("contentKey"),
+            Some(&Value::Bytes(Vec::new())),
+            "content key buffer scrubbed and cleared"
+        );
+        assert_eq!(ver.get("contentCid"), Some(&Value::Bytes(Vec::new())));
+        assert_eq!(ver.get("size"), Some(&Value::Unsigned(4096)));
+    }
+
+    const SECRET_LEN_TEST: usize = 32;
 
     #[test]
     fn i64_round_trip() {

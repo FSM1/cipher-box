@@ -19,7 +19,7 @@ mod fields;
 mod value;
 
 pub use decode::decode;
-pub use encode::encode;
+pub use encode::{encode, encoded_len};
 pub use fields::{UnknownFields, decode_map_partial, encode_map_partial, known_key_set};
 pub use value::{Map, Value, canonical_key_cmp};
 

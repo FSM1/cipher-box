@@ -1,4 +1,9 @@
-import { Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
@@ -7,8 +12,10 @@ import {
   acquireAdvisoryLocks,
   advisoryLockKey,
   isLockNotAvailable,
+  pinDurabilityLockKey,
   resolveAdvisoryLockTimeoutMs,
   setAdvisoryLockTimeout,
+  withSessionAdvisoryLock,
 } from '../../common/advisory-lock';
 import { NameInventory } from '../entities/name-inventory.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
@@ -69,6 +76,7 @@ export interface QuotaResult {
 export class RegistryService {
   private readonly defaultLimitBytes: bigint;
   private readonly lockTimeoutMs: number;
+  private readonly logger = new Logger(RegistryService.name);
 
   constructor(
     @InjectRepository(PinnedCid)
@@ -245,12 +253,43 @@ export class RegistryService {
     });
 
     // Fire the external unpin after commit — never hold the txn across Kubo.
-    // Count only CIDs the seam confirms it physically released; a swallowed
-    // Kubo failure returns false and must not inflate the reported unpin count.
+    // The retire txn's per-token xact lock releases at commit, so between it and
+    // this unpin a concurrent upload can re-pin the same CID under the upload
+    // path's `pin-durability:` session lock, commit a row, and return success —
+    // an unguarded unpin here would then delete freshly-pinned, durably-held
+    // bytes (#714). Re-serialize on that SAME session key and recount under it:
+    // if a survivor row now exists the bytes are legitimately held, so skip.
+    //
+    // The destructive work — the row deletes — is already committed, so `retired`
+    // is authoritative and must stay observable. unpin is best-effort (PinStore
+    // contract: a failed unpin never fails a retire; the CID decays via GC), so a
+    // per-CID durability lock that is contended here — almost always a concurrent
+    // upload re-pinning that same CID — leaves the CID pinned and moves on,
+    // rather than discarding the committed result behind a misleading 503 (#723).
     let unpinned = 0;
     for (const cid of unpinCids) {
-      if (await this.pinStore.unpin(cid)) {
-        unpinned += 1;
+      try {
+        const didUnpin = await withSessionAdvisoryLock(
+          this.dataSource,
+          pinDurabilityLockKey(cid),
+          this.lockTimeoutMs,
+          async () => {
+            const survivors = await this.pinRepository.find({ where: { cid } });
+            if (survivors.length > 0) {
+              return false;
+            }
+            await this.pinStore.unpin(cid);
+            return true;
+          }
+        );
+        if (didUnpin) {
+          unpinned += 1;
+        }
+      } catch (error) {
+        // The row deletes already committed and `retired` is authoritative; the
+        // post-commit unpin is best-effort (PinStore contract), so no failure
+        // here — lock contention or otherwise — may turn a retire into a 500.
+        this.logger.warn(`retire left ${cid} pinned for GC: ${String(error)}`);
       }
     }
 

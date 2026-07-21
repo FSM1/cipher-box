@@ -664,6 +664,9 @@
           "401": {
             "description": "Missing or invalid access token"
           },
+          "409": {
+            "description": "Hosted ingress is unavailable for BYO accounts; pin to your own provider"
+          },
           "413": {
             "description": "Upload exceeds the account storage quota or size cap"
           },
@@ -679,7 +682,7 @@
             "bearer": []
           }
         ],
-        "summary": "Upload content bytes to the hosted pin store; quota-gated for hosted accounts, advisory for BYO",
+        "summary": "Upload content bytes to the hosted pin store; quota-gated for hosted accounts, refused for BYO",
         "tags": [
           "Content"
         ]

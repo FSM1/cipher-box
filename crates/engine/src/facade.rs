@@ -28,7 +28,13 @@ use crate::seams::{OpId, SeamSet, SeamTypes};
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
 /// non-secret, and location-independent — routes and commands key on it,
 /// never on rotating `ipnsName`s.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// `Ord` orders by the raw id bytes: a non-secret, location-independent total
+/// order that keeps the sync core's snapshot maps and dead-letter reporting
+/// deterministic across platforms.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct NodeId(pub [u8; 16]);
 
 /// Plaintext file content crossing the facade.
@@ -47,7 +53,7 @@ impl fmt::Debug for PlaintextContent {
 
 /// What a created node is. Kind is sealed inside the read-body on the wire;
 /// at the facade it is plain intent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NodeKind {
     /// A file node.
     File,
