@@ -107,8 +107,7 @@ pub fn on_access_refresh_due(
     last_refreshed: UnixMillis,
     profile: &SyncTimingProfile,
 ) -> bool {
-    let stale_after = u64::try_from(profile.stale_after.as_millis()).unwrap_or(u64::MAX);
-    now.0.saturating_sub(last_refreshed.0) >= stale_after
+    now.0.saturating_sub(last_refreshed.0) >= crate::sync::duration_millis(profile.stale_after)
 }
 
 /// The poll cadence with jitter drawn from injected entropy:

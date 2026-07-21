@@ -77,7 +77,7 @@ pub async fn stage_op<S: StagingStore>(
 /// bytes hygiene).
 pub async fn orphan_staging_keys<S: StagingStore>(store: &S) -> SeamResult<Vec<Vec<u8>>> {
     let queued = store.queued_ops().await?;
-    let referenced: Vec<Vec<u8>> = queued
+    let referenced: std::collections::HashSet<Vec<u8>> = queued
         .iter()
         .filter_map(|(_, bytes)| Op::decode(bytes).ok())
         .filter_map(|op| op.staging_key().map(<[u8]>::to_vec))

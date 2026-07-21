@@ -54,7 +54,7 @@ pub fn classify(
     match last_success {
         None => Staleness::Reconciling,
         Some(last) => {
-            let stale_after_ms = duration_ms(profile.stale_after);
+            let stale_after_ms = crate::sync::duration_millis(profile.stale_after);
             if now.0.saturating_sub(last.0) >= stale_after_ms {
                 Staleness::Stale
             } else {
@@ -77,13 +77,8 @@ pub fn withheld_escalation(
 ) -> bool {
     is_shared_scope
         && other_resolves_succeeding
-        && now.0.saturating_sub(pinned_since.0) >= duration_ms(profile.escalation_window)
-}
-
-/// A [`core::time::Duration`] as whole milliseconds, saturating (mirrors the
-/// scheduler's millisecond clock).
-fn duration_ms(duration: core::time::Duration) -> u64 {
-    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        && now.0.saturating_sub(pinned_since.0)
+            >= crate::sync::duration_millis(profile.escalation_window)
 }
 
 #[cfg(test)]

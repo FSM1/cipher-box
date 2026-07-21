@@ -23,8 +23,8 @@
 //! with their staged bytes preserved — nothing is silently dropped (#33 D6).
 
 use crate::seams::OpId;
-use crate::sync::model::{Link, NodeMeta, Snapshot, suffix_name};
-use crate::sync::op::{Op, OpDecodeError, OpKind};
+use crate::sync::model::{NodeMeta, Snapshot, suffix_name};
+use crate::sync::op::{Op, OpKind};
 
 /// The highest auto-suffix a loser probes before dead-lettering — a folder
 /// jammed with this many colliding siblings is pathological, not a routine
@@ -124,7 +124,7 @@ pub fn decode_queue(raw: &[(OpId, Vec<u8>)]) -> (DecodedOps, UndecodableOps) {
     for (op_id, bytes) in raw {
         match Op::decode(bytes) {
             Ok(op) => ops.push((*op_id, op)),
-            Err(_e @ OpDecodeError { .. }) => dead.push((*op_id, DeadLetterReason::Undecodable)),
+            Err(_) => dead.push((*op_id, DeadLetterReason::Undecodable)),
         }
     }
     (ops, dead)
@@ -135,14 +135,13 @@ pub fn decode_queue(raw: &[(OpId, Vec<u8>)]) -> (DecodedOps, UndecodableOps) {
 /// — the only rule that must re-materialize a node the gate-passing base no
 /// longer carries.
 pub fn replay(gate_passing: &Snapshot, local: &Snapshot, ops: &[(OpId, Op)]) -> ReplayReport {
+    // The one necessary clone: rebase advances `working` but must never mutate
+    // the caller's gate-passing base.
     let mut working = gate_passing.clone();
-    let mut report = ReplayReport {
-        rebased: gate_passing.clone(),
-        applied: Vec::new(),
-        dropped: Vec::new(),
-        dead_letters: Vec::new(),
-        scope_exit_triggers: Vec::new(),
-    };
+    let mut applied = Vec::new();
+    let mut dropped = Vec::new();
+    let mut dead_letters = Vec::new();
+    let mut scope_exit_triggers = Vec::new();
 
     for (op_id, op) in ops {
         match rebase_one(&mut working, local, op) {
@@ -152,22 +151,40 @@ pub fn replay(gate_passing: &Snapshot, local: &Snapshot, ops: &[(OpId, Op)]) -> 
                 scope_exit_trigger,
             } => {
                 if let Some(scope_root) = scope_exit_trigger {
-                    report.scope_exit_triggers.push(scope_root);
+                    scope_exit_triggers.push(scope_root);
                 }
-                report.applied.push(AppliedOp {
+                applied.push(AppliedOp {
                     op_id: *op_id,
                     op: op.clone(),
                     effective_name,
                     suffixed,
                 });
             }
-            OpResolution::Dropped(reason) => report.dropped.push((*op_id, reason)),
-            OpResolution::DeadLetter(reason) => report.dead_letters.push((*op_id, reason)),
+            OpResolution::Dropped(reason) => dropped.push((*op_id, reason)),
+            OpResolution::DeadLetter(reason) => dead_letters.push((*op_id, reason)),
         }
     }
 
-    report.rebased = working;
-    report
+    ReplayReport {
+        rebased: working,
+        applied,
+        dropped,
+        dead_letters,
+        scope_exit_triggers,
+    }
+}
+
+impl OpResolution {
+    /// An applied op that carries no resolved name and no auto-suffix (delete,
+    /// move, content edit); `scope_exit_trigger` is the queued source scope
+    /// root, if any.
+    fn applied(scope_exit_trigger: Option<crate::facade::NodeId>) -> Self {
+        OpResolution::Applied {
+            effective_name: None,
+            suffixed: false,
+            scope_exit_trigger,
+        }
+    }
 }
 
 /// Rebase one op onto the mutable working base and apply it. Returns the
@@ -217,8 +234,7 @@ fn rebase_create(
     };
 
     working.upsert_node(NodeMeta::new(op.target, effective.clone(), kind));
-    let counter = working.max_link_counter(op.target) + 1;
-    working.link(parent, op.target, counter);
+    working.link_next(parent, op.target);
     OpResolution::Applied {
         effective_name: Some(effective),
         suffixed,
@@ -236,11 +252,7 @@ fn rebase_delete(working: &mut Snapshot, op: &Op, target_sequence: u64) -> OpRes
         }
         Some(_) => {
             working.remove_node(op.target);
-            OpResolution::Applied {
-                effective_name: None,
-                suffixed: false,
-                scope_exit_trigger: None,
-            }
+            OpResolution::applied(None)
         }
     }
 }
@@ -298,26 +310,16 @@ fn rebase_relink(
         }
         // Still under the source we moved from: the normal dest-first + remove.
         Some(current) if current == from_parent => {
-            let counter = working.max_link_counter(op.target) + 1;
-            working.link(new_parent, op.target, counter);
+            working.link_next(new_parent, op.target);
             working.unlink(from_parent, op.target);
-            OpResolution::Applied {
-                effective_name: None,
-                suffixed: false,
-                scope_exit_trigger,
-            }
+            OpResolution::applied(scope_exit_trigger)
         }
         // A concurrent move relocated the child elsewhere: we are the race loser.
         Some(_) => OpResolution::Dropped(DropReason::MoveRaceLost),
         // No current parent (was at root / unlinked): dest-first still links it.
         None => {
-            let counter = working.max_link_counter(op.target) + 1;
-            working.link(new_parent, op.target, counter);
-            OpResolution::Applied {
-                effective_name: None,
-                suffixed: false,
-                scope_exit_trigger,
-            }
+            working.link_next(new_parent, op.target);
+            OpResolution::applied(scope_exit_trigger)
         }
     }
 }
@@ -330,11 +332,7 @@ fn rebase_update_content(working: &mut Snapshot, local: &Snapshot, op: &Op) -> O
         if let Some(node) = working.node_mut(op.target) {
             node.content_version += 1;
         }
-        return OpResolution::Applied {
-            effective_name: None,
-            suffixed: false,
-            scope_exit_trigger: None,
-        };
+        return OpResolution::applied(None);
     }
     // Resurrect a concurrently-deleted node from local knowledge, re-linking it
     // under a parent that still exists in gate-passing state.
@@ -343,13 +341,8 @@ fn rebase_update_content(working: &mut Snapshot, local: &Snapshot, op: &Op) -> O
             let mut resurrected = meta.clone();
             resurrected.content_version += 1;
             working.upsert_node(resurrected);
-            let counter = working.max_link_counter(op.target) + 1;
-            working.link(parent, op.target, counter);
-            OpResolution::Applied {
-                effective_name: None,
-                suffixed: false,
-                scope_exit_trigger: None,
-            }
+            working.link_next(parent, op.target);
+            OpResolution::applied(None)
         }
         _ => OpResolution::DeadLetter(DeadLetterReason::TargetGone),
     }
@@ -376,13 +369,13 @@ fn resolve_name(
     None
 }
 
-/// A dual-link observed repair: the losing links to remove for one child.
+/// A dual-link observed repair: the losing parents to unlink from one child.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Repair {
     /// The dual-linked child.
     pub child: crate::facade::NodeId,
-    /// The losing links to remove (all but the winner).
-    pub remove: Vec<Link>,
+    /// The losing parents (every link but the winner's).
+    pub remove: Vec<crate::facade::NodeId>,
 }
 
 /// Scan for dual-link crash residue: any child linked in more than one parent.
@@ -396,16 +389,24 @@ pub fn observed_repair(snap: &Snapshot) -> Vec<Repair> {
     children.dedup();
 
     for child in children {
+        // One scan per child: pick the winner and the losers from the same set.
         let links = snap.links_to(child);
         if links.len() < 2 {
             continue;
         }
-        let winner = snap
-            .winning_link(child)
+        let winner = links
+            .iter()
+            .copied()
+            .max_by(|a, b| {
+                a.link_counter
+                    .cmp(&b.link_counter)
+                    .then(b.parent.cmp(&a.parent))
+            })
             .expect("a child with links has a winner");
-        let remove: Vec<Link> = links
+        let remove: Vec<crate::facade::NodeId> = links
             .into_iter()
             .filter(|l| l.parent != winner.parent)
+            .map(|l| l.parent)
             .collect();
         if !remove.is_empty() {
             repairs.push(Repair { child, remove });
@@ -414,12 +415,74 @@ pub fn observed_repair(snap: &Snapshot) -> Vec<Repair> {
     repairs
 }
 
-/// Apply observed repairs to a snapshot (removing losing links).
+/// Apply observed repairs to a snapshot (unlinking each losing parent).
 pub fn apply_repairs(snap: &mut Snapshot, repairs: &[Repair]) {
     for repair in repairs {
-        for link in &repair.remove {
-            snap.unlink(link.parent, repair.child);
+        for &parent in &repair.remove {
+            snap.unlink(parent, repair.child);
         }
+    }
+}
+
+/// How a confirm/resolve reconciles the local published head against the record
+/// the network now shows at the same name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HeadReconciliation {
+    /// The observed record is ours, or older/equal-and-identical: nothing
+    /// diverged.
+    Converged,
+    /// A concurrent writer landed a strictly-higher record — the classic lost
+    /// CAS race. Rebase local ops onto it and re-mint above `observed_sequence`.
+    LostRaceHigher {
+        /// The higher sequence a concurrent writer landed first.
+        observed_sequence: u64,
+    },
+    /// A **different** record at the **same** sequence — a same-sequence
+    /// split-brain. IPNS higher-sequence-wins cannot converge equal sequences,
+    /// so the deterministic tiebreak decides: the loser rebases its local ops
+    /// onto the winning sibling and re-mints at `sequence + 1`; the winner
+    /// holds, and the loser's strictly-higher re-mint then supersedes it
+    /// everywhere.
+    SameSequenceDivergence {
+        /// The contested sequence.
+        sequence: u64,
+        /// Whether our record won the deterministic tiebreak. When `false`, we
+        /// rebase local ops onto the observed sibling and re-mint above
+        /// `sequence`.
+        local_wins: bool,
+    },
+}
+
+/// Reconcile our published head (`local_record` at `local_sequence`) with a
+/// sibling record observed at the same name (`observed_record` at
+/// `observed_sequence`) — both already record-verified upstream by the gate.
+///
+/// This closes the same-sequence split-brain the publish confirm-by-re-resolve
+/// cannot resolve by sequence alone (deferred from the net publish slice, #692):
+/// two writers each mint a **different** record at `floor + 1`, both land, and
+/// higher-sequence-wins never picks between them. The tiebreak is a total order
+/// over the exact verified record bytes every client fetches, so all clients
+/// converge on the same canonical head with no shared state, and the loser's
+/// re-mint at `sequence + 1` makes the ordinary higher-sequence-wins machinery
+/// finish the job.
+pub fn reconcile_head(
+    local_record: &[u8],
+    local_sequence: u64,
+    observed_record: &[u8],
+    observed_sequence: u64,
+) -> HeadReconciliation {
+    use core::cmp::Ordering;
+    match observed_sequence.cmp(&local_sequence) {
+        Ordering::Greater => HeadReconciliation::LostRaceHigher { observed_sequence },
+        // Our head is strictly newer: the observed copy is stale, we are canonical.
+        Ordering::Less => HeadReconciliation::Converged,
+        // Same sequence: either an idempotent re-fetch of our own record, or a
+        // genuine split-brain broken by the byte-order tiebreak (smaller wins).
+        Ordering::Equal if observed_record == local_record => HeadReconciliation::Converged,
+        Ordering::Equal => HeadReconciliation::SameSequenceDivergence {
+            sequence: local_sequence,
+            local_wins: local_record < observed_record,
+        },
     }
 }
 
@@ -671,5 +734,55 @@ mod tests {
         let (ops, dead) = decode_queue(&raw);
         assert_eq!(ops.len(), 1);
         assert_eq!(dead, vec![(OpId(2), DeadLetterReason::Undecodable)]);
+    }
+
+    #[test]
+    fn reconcile_head_higher_sibling_is_a_lost_race() {
+        assert_eq!(
+            reconcile_head(b"local", 4, b"winner", 5),
+            HeadReconciliation::LostRaceHigher {
+                observed_sequence: 5
+            }
+        );
+    }
+
+    #[test]
+    fn reconcile_head_lower_or_identical_sibling_is_converged() {
+        // A strictly older observed copy — our head is canonical.
+        assert_eq!(
+            reconcile_head(b"local", 5, b"stale", 4),
+            HeadReconciliation::Converged
+        );
+        // The same record re-fetched (our own PUT / a byte-stable re-PUT).
+        assert_eq!(
+            reconcile_head(b"same", 5, b"same", 5),
+            HeadReconciliation::Converged
+        );
+    }
+
+    #[test]
+    fn reconcile_head_same_sequence_split_brain_is_broken_deterministically() {
+        // Two different records at the same sequence: exactly one side wins, and
+        // the two clients agree on which (the byte-order tiebreak is symmetric).
+        let a = b"aaa-record";
+        let b = b"bbb-record";
+        let from_a = reconcile_head(a, 7, b, 7);
+        let from_b = reconcile_head(b, 7, a, 7);
+        assert_eq!(
+            from_a,
+            HeadReconciliation::SameSequenceDivergence {
+                sequence: 7,
+                local_wins: true
+            },
+            "the lexicographically-smaller record is canonical"
+        );
+        assert_eq!(
+            from_b,
+            HeadReconciliation::SameSequenceDivergence {
+                sequence: 7,
+                local_wins: false
+            },
+            "the other client sees itself as the loser and re-mints above"
+        );
     }
 }

@@ -44,13 +44,13 @@ pub use model::{Link, NodeMeta, Snapshot, collation_key, suffix_name};
 pub use op::{Op, OpDecodeError, OpKind};
 pub use overlay::apply_overlay;
 pub use pointer::{
-    ConsultReason, PointerError, PointerFetch, SessionRole, VaultPointerAdoption,
-    advance_write_epoch_on_sight, cold_seed_floors, open_repoint, resolve_vault_pointer,
-    scope_pointer_name, scope_pointer_signer, seal_repoint, should_consult, vault_pointer_name,
+    ConsultReason, PointerError, PointerFetch, SessionRole, VaultPointerAdoption, cold_seed_floors,
+    open_repoint, resolve_vault_pointer, scope_pointer_name, scope_pointer_signer, seal_repoint,
+    should_consult, vault_pointer_name,
 };
 pub use rebase::{
-    AppliedOp, DeadLetterReason, DropReason, OpResolution, Repair, ReplayReport, apply_repairs,
-    decode_queue, observed_repair, rebase_one, replay,
+    AppliedOp, DeadLetterReason, DropReason, HeadReconciliation, OpResolution, Repair,
+    ReplayReport, apply_repairs, decode_queue, observed_repair, rebase_one, reconcile_head, replay,
 };
 pub use staging::{StageOutcome, orphan_staging_keys, stage_op};
 pub use staleness::{Connectivity, classify, withheld_escalation};
@@ -58,3 +58,10 @@ pub use tick::{
     FocusTarget, FocusWindow, ResolveMode, TickCause, TickControl, focus_set, jittered_cadence,
     on_access_refresh_due, resolve_mode, run_tick_loop,
 };
+
+/// Whole milliseconds of `duration`, truncating and saturating — the engine's
+/// clock is the millisecond [`UnixMillis`](crate::seams::UnixMillis), so every
+/// timing threshold compares in the same unit.
+pub(crate) fn duration_millis(duration: core::time::Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+}

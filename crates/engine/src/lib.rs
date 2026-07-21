@@ -55,11 +55,12 @@ pub use net::{
 pub use profile::SyncTimingProfile;
 pub use seams::{SeamError, SeamResult, SeamSet, SeamTypes};
 pub use sync::{
-    AppliedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow, Link,
-    NodeMeta, Op, OpKind, OpResolution, PointerError, PointerFetch, Repair, ReplayReport,
-    SessionRole, Snapshot, StageOutcome, TickCause, TickControl, VaultPointerAdoption,
-    apply_overlay, apply_repairs, classify, cold_seed_floors, decode_queue, focus_set,
-    observed_repair, rebase_one, replay, resolve_vault_pointer, stage_op,
+    AppliedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow,
+    HeadReconciliation, Link, NodeMeta, Op, OpKind, OpResolution, PointerError, PointerFetch,
+    Repair, ReplayReport, SessionRole, Snapshot, StageOutcome, TickCause, TickControl,
+    VaultPointerAdoption, apply_overlay, apply_repairs, classify, cold_seed_floors, decode_queue,
+    focus_set, observed_repair, rebase_one, reconcile_head, replay, resolve_vault_pointer,
+    stage_op,
 };
 
 /// Placeholder identity item; kept for the sibling crate stubs' dependency

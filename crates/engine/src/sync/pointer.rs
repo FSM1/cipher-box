@@ -138,7 +138,7 @@ pub async fn resolve_vault_pointer<F: PointerFetch>(
         match fetch.fetch(&name).await.map_err(PointerError::Seam)? {
             // A gap: the chain ends here; the highest adopted below is the answer.
             None => break,
-            Some(block) => match open_pointer_payload(
+            Some(block) => match open_repoint(
                 read_key.as_bytes(),
                 payload_version,
                 root_scope_id,
@@ -151,7 +151,7 @@ pub async fn resolve_vault_pointer<F: PointerFetch>(
                 }
                 // Fail-closed: an invalid payload is never adopted and stops the
                 // walk (a forged record cannot extend or masquerade the chain).
-                Err(e) => return Err(PointerError::Open(e)),
+                Err(e) => return Err(e),
             },
         }
     }
@@ -220,19 +220,6 @@ pub async fn cold_seed_floors<F: FloorStore>(
     repoint: &RepointObject,
 ) -> Result<(), PointerError> {
     floor::cold_seed(floors, repoint)
-        .await
-        .map_err(PointerError::Seam)
-}
-
-/// Advance the write-epoch floor on sight of an owner-vouched pointer
-/// `writeEpoch` (#38 D4). From that instant every old-epoch record at the old
-/// name fails the gate. Monotonic-max via the floor law.
-pub async fn advance_write_epoch_on_sight<F: FloorStore>(
-    floors: &F,
-    scope_id: &[u8; 16],
-    write_epoch: u64,
-) -> Result<u64, PointerError> {
-    floor::advance_write_epoch_on_sight(floors, scope_id, write_epoch)
         .await
         .map_err(PointerError::Seam)
 }
@@ -442,5 +429,49 @@ mod tests {
         );
         // A closed, fresh, cached scope is not consulted this tick.
         assert_eq!(should_consult(false, false, false), None);
+    }
+
+    #[test]
+    fn scope_pointer_name_and_signer_agree_and_the_re_point_round_trips() {
+        let owner = owner_signer();
+        let scope: [u8; 16] = [9u8; 16];
+        let owner_seed = kdf::owner_pointer_seed(SECRET);
+
+        // The scope-pointer signer's public key IS the scope-pointer name — the
+        // signer is exactly the key that signs records published at that name.
+        let name = scope_pointer_name(owner_seed.as_bytes(), &scope);
+        let signer = scope_pointer_signer(owner_seed.as_bytes(), &scope);
+        assert_eq!(name, IpnsName::from_public_key(&signer.verifying_key()));
+
+        // A re-point sealed under the scope's stable pointer-read-key round-trips
+        // through the consult read path.
+        let read_key = kdf::pointer_read_key(owner_seed.as_bytes(), &scope);
+        let object = RepointObject {
+            scope_id: scope,
+            current_root: vault_pointer_name(b"some-root", 0),
+            write_epoch: 2,
+            min_read_epoch: 4,
+            prev_root: None,
+        };
+        let mut entropy = SeededEntropy::new(5);
+        let block = seal_repoint(
+            SessionRole::Owner,
+            &mut entropy,
+            read_key.as_bytes(),
+            1,
+            &owner,
+            &object,
+        )
+        .unwrap();
+        let opened = open_repoint(
+            read_key.as_bytes(),
+            1,
+            &scope,
+            &owner.verifying_key(),
+            &block,
+        )
+        .unwrap();
+        assert_eq!(opened.min_read_epoch, 4);
+        assert_eq!(opened.write_epoch, 2);
     }
 }

@@ -29,8 +29,7 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
             parent, name, kind, ..
         } => {
             view.upsert_node(NodeMeta::new(op.target, name.clone(), *kind));
-            let counter = view.max_link_counter(op.target) + 1;
-            view.link(*parent, op.target, counter);
+            view.link_next(*parent, op.target);
         }
         OpKind::Delete { .. } => {
             view.remove_node(op.target);
@@ -44,8 +43,7 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
             if let Some(old_parent) = view.parent_of(op.target) {
                 view.unlink(old_parent, op.target);
             }
-            let counter = view.max_link_counter(op.target) + 1;
-            view.link(*new_parent, op.target, counter);
+            view.link_next(*new_parent, op.target);
         }
         OpKind::UpdateContent { .. } => {
             if let Some(node) = view.node_mut(op.target) {
@@ -119,5 +117,23 @@ mod tests {
         let view = apply_overlay(&base, &[Op::delete(id(1), 1, 1)]);
         assert!(!view.contains(id(1)));
         assert!(base.contains(id(1)));
+    }
+
+    #[test]
+    fn overlay_update_content_bumps_the_content_version() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "f.txt", NodeKind::File));
+        base.link(id(0), id(1), 1);
+        let view = apply_overlay(&base, &[Op::update_content(id(1), b"k".to_vec(), 1)]);
+        assert_eq!(
+            view.node(id(1)).unwrap().content_version,
+            1,
+            "new version rendered"
+        );
+        assert_eq!(
+            base.node(id(1)).unwrap().content_version,
+            0,
+            "base untouched"
+        );
     }
 }

@@ -126,6 +126,32 @@ impl Snapshot {
         });
     }
 
+    /// Links `child` under `parent` with a **fresh winning counter** — one
+    /// above every existing link to the child — in a single pass. The model
+    /// owns the "a newly-established link supersedes prior links" invariant so
+    /// callers (create, relink, resurrect) never hand-roll counter allocation.
+    pub fn link_next(&mut self, parent: NodeId, child: NodeId) {
+        let mut max_counter = 0u64;
+        let mut existing: Option<usize> = None;
+        for (i, l) in self.links.iter().enumerate() {
+            if l.child == child {
+                max_counter = max_counter.max(l.link_counter);
+                if l.parent == parent {
+                    existing = Some(i);
+                }
+            }
+        }
+        let next = max_counter + 1;
+        match existing {
+            Some(i) => self.links[i].link_counter = self.links[i].link_counter.max(next),
+            None => self.links.push(Link {
+                parent,
+                child,
+                link_counter: next,
+            }),
+        }
+    }
+
     /// Removes the link between `parent` and `child`, if any.
     pub fn unlink(&mut self, parent: NodeId, child: NodeId) {
         self.links
