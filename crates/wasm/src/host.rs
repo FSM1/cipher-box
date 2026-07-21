@@ -22,10 +22,11 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
 use crate::seams_bridge::{
-    CredentialStoreAdapter, FloorStoreAdapter, HttpAdapter, JsCredentialStoreSeam, JsFloorStoreSeam,
-    JsHttpSeam, JsMailboxSeam, JsRecordTransportSeam, JsRefreshHintSourceSeam, JsSchedulerSeam,
-    JsSnapshotCacheSeam, JsStagingStoreSeam, MailboxAdapter, RecordTransportAdapter,
-    RefreshHintSourceAdapter, SchedulerAdapter, SnapshotCacheAdapter, StagingStoreAdapter,
+    CredentialStoreAdapter, FloorStoreAdapter, HttpAdapter, JsCredentialStoreSeam,
+    JsFloorStoreSeam, JsHttpSeam, JsMailboxSeam, JsRecordTransportSeam, JsRefreshHintSourceSeam,
+    JsSchedulerSeam, JsSnapshotCacheSeam, JsStagingStoreSeam, MailboxAdapter,
+    RecordTransportAdapter, RefreshHintSourceAdapter, SchedulerAdapter, SnapshotCacheAdapter,
+    StagingStoreAdapter,
 };
 use crate::{Command, Event};
 
