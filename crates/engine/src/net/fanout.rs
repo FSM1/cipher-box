@@ -1,0 +1,117 @@
+//! Endpoint-set fan-out primitives shared by the resolve, publish, and liveness
+//! paths (blueprint/engine.md "Resolve/publish pipeline").
+//!
+//! The engine owns IPNS end-to-end over dumb `/routing/v1` transports (#28 D2):
+//! core signs and verifies, the [`RecordTransport`] seam only moves bytes, and
+//! every decision — which endpoint's copy is freshest, when a PUT has succeeded,
+//! which endpoints still need a retry — lives here.
+
+use core::future::poll_fn;
+use core::task::Poll;
+
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+
+use crate::seams::{EndpointId, RecordTransport};
+
+/// The outcome of a parallel PUT across the endpoint set.
+pub struct Fanout {
+    /// Endpoints that acknowledged the PUT.
+    pub acked: Vec<EndpointId>,
+    /// Endpoints that failed or had not answered when the first ack returned —
+    /// the set a background retry re-PUTs (blueprint: "remaining PUTs retry in
+    /// the background").
+    pub not_acked: Vec<EndpointId>,
+}
+
+impl Fanout {
+    /// Whether any endpoint acknowledged: the publish success condition
+    /// (blueprint: "success = any ack").
+    pub fn any_acked(&self) -> bool {
+        !self.acked.is_empty()
+    }
+}
+
+/// PUT `bytes` for `key` to every endpoint concurrently, returning as soon as
+/// one endpoint acknowledges — the remaining endpoints (failed or still
+/// in-flight) come back in [`Fanout::not_acked`] for a background retry. When
+/// every endpoint settles with no ack, `acked` is empty and the caller fails
+/// closed.
+pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u8]) -> Fanout {
+    let endpoints = transport.endpoints();
+    let mut futs: Vec<_> = endpoints
+        .iter()
+        .map(|endpoint| Box::pin(transport.put_record(endpoint, key, bytes)))
+        .collect();
+    // Per-endpoint settle state: `Some(true)` acked, `Some(false)` failed,
+    // `None` still pending.
+    let mut status: Vec<Option<bool>> = vec![None; futs.len()];
+
+    poll_fn(|cx| {
+        let mut all_settled = true;
+        for (index, fut) in futs.iter_mut().enumerate() {
+            if status[index].is_some() {
+                continue;
+            }
+            match fut.as_mut().poll(cx) {
+                Poll::Ready(Ok(())) => status[index] = Some(true),
+                Poll::Ready(Err(_)) => status[index] = Some(false),
+                Poll::Pending => all_settled = false,
+            }
+        }
+        // Return the instant one endpoint acks, or once every endpoint settled.
+        if status.contains(&Some(true)) || all_settled {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    })
+    .await;
+
+    let mut acked = Vec::new();
+    let mut not_acked = Vec::new();
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        if status[index] == Some(true) {
+            acked.push(endpoint.clone());
+        } else {
+            not_acked.push(endpoint.clone());
+        }
+    }
+    Fanout { acked, not_acked }
+}
+
+/// Fan-out GET across the endpoint set and core-verify each returned record
+/// against `name`, returning the freshest verified `(sequence, record_bytes)`
+/// or `None` when no endpoint serves a verifiable record. A malformed or
+/// signature-invalid copy at one endpoint is ignored (an accelerator can serve
+/// stale garbage); a per-endpoint transport error is tolerated as availability
+/// staleness — only genuine host failure is surfaced.
+///
+/// This is the record-plane verify step (core's Ed25519-from-the-name chain);
+/// the full adoption gate runs downstream on the chosen bytes.
+pub async fn fanout_get_verify<T: RecordTransport>(
+    transport: &T,
+    name: &IpnsName,
+) -> Option<(u64, Vec<u8>)> {
+    let key = name.as_str();
+    let mut best: Option<(u64, Vec<u8>)> = None;
+    for endpoint in transport.endpoints() {
+        // A per-endpoint transport error is availability staleness, not a trust
+        // decision: skip it and keep the freshest copy the other endpoints hold.
+        let Ok(Some(bytes)) = transport.get_record(&endpoint, key).await else {
+            continue;
+        };
+        let Ok(record) = IpnsRecord::unmarshal(&bytes) else {
+            continue;
+        };
+        let Ok(verified) = record.verify(name) else {
+            continue;
+        };
+        if best
+            .as_ref()
+            .is_none_or(|(seq, _)| verified.sequence > *seq)
+        {
+            best = Some((verified.sequence, bytes));
+        }
+    }
+    best
+}

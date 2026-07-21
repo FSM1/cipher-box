@@ -1,6 +1,6 @@
 //! The fake `/routing/v1` record store — an in-memory [`RecordTransport`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 use crate::seams::{EndpointId, RecordTransport, SeamError, SeamResult};
@@ -14,14 +14,26 @@ type EndpointRecords = HashMap<String, Vec<u8>>;
 /// Shared by design — every engine in a scenario clones the same store, so
 /// N instances see one "network". Direct [`seed_record`] /
 /// [`record_at`] access lets tests stage adversarial records and observe
-/// publishes without a transport round-trip.
+/// publishes without a transport round-trip; [`fail_endpoint`] /
+/// [`heal_endpoint`] model an endpoint that is transiently unreachable, so the
+/// simulation harness can exercise any-ack success and the background re-PUT.
 ///
 /// [`seed_record`]: InMemoryRecordStore::seed_record
 /// [`record_at`]: InMemoryRecordStore::record_at
+/// [`fail_endpoint`]: InMemoryRecordStore::fail_endpoint
+/// [`heal_endpoint`]: InMemoryRecordStore::heal_endpoint
 #[derive(Clone)]
 pub struct InMemoryRecordStore {
     endpoints: Vec<EndpointId>,
     inner: Arc<Mutex<HashMap<EndpointId, EndpointRecords>>>,
+    /// Endpoints currently returning a transport error (unreachable). Empty by
+    /// default, so a store's behavior is unchanged until a test injects a fault.
+    failing: Arc<Mutex<HashSet<EndpointId>>>,
+    /// Endpoints that reject a PUT but still serve GET — models an endpoint that
+    /// already holds a strictly-newer record (IPNS higher-sequence-wins) and so
+    /// ignores our stale write while still serving the winner. Lets the harness
+    /// drive a lost CAS race.
+    put_failing: Arc<Mutex<HashSet<EndpointId>>>,
 }
 
 impl InMemoryRecordStore {
@@ -40,6 +52,8 @@ impl InMemoryRecordStore {
         Self {
             endpoints,
             inner: Arc::new(Mutex::new(inner)),
+            failing: Arc::new(Mutex::new(HashSet::new())),
+            put_failing: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -61,6 +75,42 @@ impl InMemoryRecordStore {
             .get(endpoint)
             .and_then(|records| records.get(routing_key).cloned())
     }
+
+    /// Make `endpoint` return a transport error on every GET/PUT until
+    /// [`heal_endpoint`](Self::heal_endpoint) clears it.
+    pub fn fail_endpoint(&self, endpoint: &EndpointId) {
+        self.failing.lock().expect("lock").insert(endpoint.clone());
+    }
+
+    /// Restore `endpoint` to normal operation.
+    pub fn heal_endpoint(&self, endpoint: &EndpointId) {
+        self.failing.lock().expect("lock").remove(endpoint);
+    }
+
+    /// Make `endpoint` reject PUTs while still serving GETs — an endpoint that
+    /// already holds a strictly-newer record and ignores our stale write.
+    pub fn fail_put_endpoint(&self, endpoint: &EndpointId) {
+        self.put_failing
+            .lock()
+            .expect("lock")
+            .insert(endpoint.clone());
+    }
+
+    /// Restore `endpoint`'s PUT path.
+    pub fn heal_put_endpoint(&self, endpoint: &EndpointId) {
+        self.put_failing.lock().expect("lock").remove(endpoint);
+    }
+
+    /// Whether `endpoint`'s GET path is currently injected to fail.
+    fn get_failing(&self, endpoint: &EndpointId) -> bool {
+        self.failing.lock().expect("lock").contains(endpoint)
+    }
+
+    /// Whether `endpoint`'s PUT path is currently injected to fail (a full fault
+    /// fails PUT too).
+    fn put_failing(&self, endpoint: &EndpointId) -> bool {
+        self.get_failing(endpoint) || self.put_failing.lock().expect("lock").contains(endpoint)
+    }
 }
 
 impl RecordTransport for InMemoryRecordStore {
@@ -73,6 +123,12 @@ impl RecordTransport for InMemoryRecordStore {
         endpoint: &EndpointId,
         routing_key: &str,
     ) -> SeamResult<Option<Vec<u8>>> {
+        if self.get_failing(endpoint) {
+            return Err(SeamError::new(format!(
+                "endpoint unreachable: {}",
+                endpoint.0
+            )));
+        }
         self.inner
             .lock()
             .expect("lock")
@@ -87,6 +143,12 @@ impl RecordTransport for InMemoryRecordStore {
         routing_key: &str,
         record: &[u8],
     ) -> SeamResult<()> {
+        if self.put_failing(endpoint) {
+            return Err(SeamError::new(format!(
+                "endpoint unreachable: {}",
+                endpoint.0
+            )));
+        }
         self.inner
             .lock()
             .expect("lock")
