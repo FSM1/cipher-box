@@ -72,7 +72,9 @@ describe('MailboxService pending-cap concurrency (real Postgres)', () => {
       db.dataSource,
       new IdentityService(),
       clock,
-      fakeConfig({ MAILBOX_PENDING_CAP: String(cap) }).service
+      // Disable the advisory-lock wait bound so a slow CI waiter can't 503 before
+      // the cap check; the timeout has its own dedicated regression test.
+      fakeConfig({ MAILBOX_PENDING_CAP: String(cap), DB_ADVISORY_LOCK_TIMEOUT_MS: '0' }).service
     );
     return { service, recipient, sender };
   }

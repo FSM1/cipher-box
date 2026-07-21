@@ -82,10 +82,13 @@ export async function createIntegrationDatabase(
     await dataSource.initialize();
     await dataSource.runMigrations();
   } catch (error) {
-    if (dataSource.isInitialized) {
-      await dataSource.destroy();
+    try {
+      if (dataSource.isInitialized) {
+        await dataSource.destroy();
+      }
+    } finally {
+      await adminExec(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
     }
-    await adminExec(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
     throw error;
   }
 
@@ -93,11 +96,14 @@ export async function createIntegrationDatabase(
     dataSource,
     name,
     async teardown() {
-      if (dataSource.isInitialized) {
-        await dataSource.destroy();
+      try {
+        if (dataSource.isInitialized) {
+          await dataSource.destroy();
+        }
+      } finally {
+        // FORCE only ever targets this run's randomized, exclusively-owned name.
+        await adminExec(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
       }
-      // FORCE only ever targets this run's randomized, exclusively-owned name.
-      await adminExec(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
     },
   };
 }

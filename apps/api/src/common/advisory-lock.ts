@@ -20,7 +20,11 @@ const LOCK_NOT_AVAILABLE = '55P03';
  * it disables the bound (the pre-hardening, unbounded-wait behavior).
  */
 export function resolveAdvisoryLockTimeoutMs(configService: ConfigService): number {
-  const value = Number(configService.get('DB_ADVISORY_LOCK_TIMEOUT_MS'));
+  const raw = configService.get<string | number>('DB_ADVISORY_LOCK_TIMEOUT_MS');
+  if (raw === undefined || raw === null || String(raw).trim() === '') {
+    return DEFAULT_LOCK_TIMEOUT_MS;
+  }
+  const value = Number(raw);
   return Number.isInteger(value) && value >= 0 ? value : DEFAULT_LOCK_TIMEOUT_MS;
 }
 
