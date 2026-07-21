@@ -13,6 +13,7 @@ import { User } from '../auth/entities/user.entity';
 import {
   acquireAdvisoryLocks,
   advisoryLockKey,
+  pinDurabilityLockKey,
   resolveAdvisoryLockTimeoutMs,
   runLockGuardedTransaction,
   setAdvisoryLockTimeout,
@@ -316,14 +317,4 @@ export class ContentService {
 /** Namespaced account advisory key: `account:` prevents any UUID/CID key collision. */
 function accountLockKey(accountId: string): bigint {
   return advisoryLockKey(`account:${accountId}`);
-}
-
-/**
- * Namespaced session lock for the post-commit pin/compensation window. A
- * DISTINCT key from the plain CID xact lock: the same upload holds both (session
- * lock on its own connection, xact lock on the tx connection), and same-key
- * session-vs-xact locks across connections would self-deadlock.
- */
-function pinDurabilityLockKey(cid: string): bigint {
-  return advisoryLockKey(`pin-durability:${cid}`);
 }

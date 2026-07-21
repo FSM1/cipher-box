@@ -1,0 +1,139 @@
+//! The state law — rendered state = last-known-good snapshot ⊕ pending-op
+//! overlay, single owner (blueprint/engine.md "Sync core: State law",
+//! CONTEXT.md "Pending-op overlay").
+//!
+//! The overlay is the **optimistic local view**: the queued ops are applied on
+//! top of the gate-passing snapshot in FIFO order so the UI reflects the user's
+//! own pending mutations immediately, before the network confirms them. It is
+//! deliberately *not* the rebase ([`crate::sync::rebase`]): it never drops,
+//! suffixes, or dead-letters — it renders intent. The op queue is the only
+//! local divergence from the remote snapshot.
+
+use crate::sync::model::{NodeMeta, Snapshot};
+use crate::sync::op::{Op, OpKind};
+
+/// Apply the pending op queue onto `base` in FIFO order, returning the rendered
+/// view. Pure: `base` is untouched.
+pub fn apply_overlay(base: &Snapshot, ops: &[Op]) -> Snapshot {
+    let mut view = base.clone();
+    for op in ops {
+        apply_one(&mut view, op);
+    }
+    view
+}
+
+/// Apply one op to the working view optimistically (intent, not rebase).
+fn apply_one(view: &mut Snapshot, op: &Op) {
+    match &op.kind {
+        OpKind::Create {
+            parent, name, kind, ..
+        } => {
+            view.upsert_node(NodeMeta::new(op.target, name.clone(), *kind));
+            view.link_next(*parent, op.target);
+        }
+        OpKind::Delete { .. } => {
+            view.remove_node(op.target);
+        }
+        OpKind::Rename { new_name } => {
+            if let Some(node) = view.node_mut(op.target) {
+                node.name = new_name.clone();
+            }
+        }
+        OpKind::Relink { new_parent, .. } => {
+            if let Some(old_parent) = view.parent_of(op.target) {
+                view.unlink(old_parent, op.target);
+            }
+            view.link_next(*new_parent, op.target);
+        }
+        OpKind::UpdateContent { .. } => {
+            if let Some(node) = view.node_mut(op.target) {
+                node.content_version += 1;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::facade::{NodeId, NodeKind};
+
+    fn id(b: u8) -> NodeId {
+        NodeId([b; 16])
+    }
+
+    fn base() -> Snapshot {
+        Snapshot::new(id(0))
+    }
+
+    #[test]
+    fn overlay_renders_a_pending_create_over_the_snapshot() {
+        let base = base();
+        let ops = vec![Op::create(id(1), id(0), "a.txt", NodeKind::File, 1, None)];
+        let view = apply_overlay(&base, &ops);
+
+        assert!(view.contains(id(1)), "pending create is rendered");
+        assert_eq!(view.parent_of(id(1)), Some(id(0)));
+        assert!(!base.contains(id(1)), "the base snapshot is untouched");
+    }
+
+    #[test]
+    fn overlay_applies_ops_in_fifo_order() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "old.txt", NodeKind::File));
+        base.link(id(0), id(1), 1);
+
+        let ops = vec![
+            Op::rename(id(1), "mid.txt", 1),
+            Op::rename(id(1), "new.txt", 1),
+        ];
+        let view = apply_overlay(&base, &ops);
+        assert_eq!(
+            view.node(id(1)).unwrap().name,
+            "new.txt",
+            "last write in FIFO order wins"
+        );
+    }
+
+    #[test]
+    fn overlay_relink_moves_the_node_in_the_view() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "dir", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(2), "f", NodeKind::File));
+        base.link(id(0), id(1), 1);
+        base.link(id(0), id(2), 1);
+
+        let ops = vec![Op::relink(id(2), id(0), id(1), 1, false, false)];
+        let view = apply_overlay(&base, &ops);
+        assert_eq!(view.parent_of(id(2)), Some(id(1)));
+        assert_eq!(view.children(id(0)).len(), 1, "moved out of root");
+    }
+
+    #[test]
+    fn overlay_delete_removes_from_the_view_only() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "f", NodeKind::File));
+        base.link(id(0), id(1), 1);
+        let view = apply_overlay(&base, &[Op::delete(id(1), 1, 1)]);
+        assert!(!view.contains(id(1)));
+        assert!(base.contains(id(1)));
+    }
+
+    #[test]
+    fn overlay_update_content_bumps_the_content_version() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "f.txt", NodeKind::File));
+        base.link(id(0), id(1), 1);
+        let view = apply_overlay(&base, &[Op::update_content(id(1), b"k".to_vec(), 1)]);
+        assert_eq!(
+            view.node(id(1)).unwrap().content_version,
+            1,
+            "new version rendered"
+        );
+        assert_eq!(
+            base.node(id(1)).unwrap().content_version,
+            0,
+            "base untouched"
+        );
+    }
+}

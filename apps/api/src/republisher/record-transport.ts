@@ -5,6 +5,16 @@ const IPNS_RECORD_MEDIA_TYPE = 'application/vnd.ipfs.ipns-record';
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
+ * Ceiling on a resolved `/routing/v1` body. An IPNS record
+ * (application/vnd.ipfs.ipns-record) is metadata-scale — a signed name→value
+ * record of ~10 KB by someguy/Kubo discipline — so 64 KiB is a generous cap.
+ * fetch is time-bounded (AbortSignal.timeout) but NOT size-bounded, so without
+ * this a misbehaving/compromised routing endpoint could stream a multi-GB body
+ * into API heap and into record_cache (defense-in-depth, #702).
+ */
+const MAX_RECORD_BYTES = 64 * 1024;
+
+/**
  * The republisher's `/routing/v1` byte mover (blueprint/api.md: resolve from the
  * network, re-PUT the same bytes keyless). A dumb transport, mirroring the
  * client seam's doctrine: it never inspects, decodes, verifies, or reorders
@@ -70,7 +80,22 @@ export class RoutingV1RecordTransport extends RecordTransport {
     if (!response.ok) {
       throw new Error(`routing GET ${response.status} for ${ipnsName}`);
     }
-    return Buffer.from(await response.arrayBuffer());
+    // Reject an honestly-declared oversized body before buffering it; the
+    // post-buffer assert is the real backstop since Content-Length may be absent
+    // or lie.
+    const declared = response.headers.get('content-length');
+    if (declared !== null && Number(declared) > MAX_RECORD_BYTES) {
+      // Release the connection instead of leaking an unread body stream.
+      await response.body?.cancel();
+      throw new Error(`routing GET body ${declared}B exceeds ${MAX_RECORD_BYTES}B for ${ipnsName}`);
+    }
+    const body = Buffer.from(await response.arrayBuffer());
+    if (body.byteLength > MAX_RECORD_BYTES) {
+      throw new Error(
+        `routing GET body ${body.byteLength}B exceeds ${MAX_RECORD_BYTES}B for ${ipnsName}`
+      );
+    }
+    return body;
   }
 
   async republish(ipnsName: string, record: Buffer): Promise<void> {

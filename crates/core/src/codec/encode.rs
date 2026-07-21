@@ -18,13 +18,59 @@ pub(super) const SIMPLE_NULL: u8 = 22;
 
 /// Encode a value in the deterministic profile.
 ///
+/// Two-pass: [`encoded_len`] sizes the buffer up front so the single allocation
+/// is exact and the write never reallocates. A grow-from-empty `Vec` frees each
+/// intermediate backing store un-zeroized, stranding secret bytes (content keys,
+/// scope/override/history seeds) in freed heap; with one right-sized buffer only
+/// the terminal owner's plaintext ever holds them, and that owner zeroizes it.
+///
 /// Callers must respect [`super::MAX_DEPTH`]: a deeper `Value` still encodes
 /// (encoding is infallible), but its bytes reject as `depth-exceeded` on
 /// decode — debug builds assert the bound to catch that divergence early.
 pub fn encode(value: &Value) -> Vec<u8> {
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(encoded_len(value));
     write_value(&mut out, value, 0);
     out
+}
+
+/// The exact number of bytes [`encode`] emits for `value`. Mirrors
+/// [`write_value`] head-for-head; the codec property suite pins the two in
+/// lockstep (`encoded_len == encode().len()`), which is what makes [`encode`]'s
+/// single up-front reservation provably realloc-free.
+pub fn encoded_len(value: &Value) -> usize {
+    match value {
+        Value::Unsigned(n) | Value::Negative(n) => head_len(*n),
+        Value::Bytes(b) => head_len(b.len() as u64) + b.len(),
+        Value::Text(t) => text_len(t),
+        Value::Array(items) => {
+            head_len(items.len() as u64) + items.iter().map(encoded_len).sum::<usize>()
+        }
+        Value::Map(map) => {
+            head_len(map.len() as u64)
+                + map
+                    .entries()
+                    .iter()
+                    .map(|(k, v)| text_len(k) + encoded_len(v))
+                    .sum::<usize>()
+        }
+        Value::Bool(_) | Value::Null => 1,
+    }
+}
+
+/// The byte length of a text item: its head plus its UTF-8 bytes.
+fn text_len(t: &str) -> usize {
+    head_len(t.len() as u64) + t.len()
+}
+
+/// The byte length of a shortest-form head for `arg` (mirrors [`write_head`]).
+fn head_len(arg: u64) -> usize {
+    match arg {
+        0..=23 => 1,
+        24..=0xff => 2,
+        0x100..=0xffff => 3,
+        0x1_0000..=0xffff_ffff => 5,
+        _ => 9,
+    }
 }
 
 pub(super) fn write_value(out: &mut Vec<u8>, value: &Value, depth: usize) {
@@ -88,5 +134,87 @@ pub(super) fn write_head(out: &mut Vec<u8>, major: u8, arg: u64) {
             out.push(mt | 27);
             out.extend_from_slice(&arg.to_be_bytes());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A file-body-shaped value: a version list whose 32-byte `contentKey`
+    /// entries are the secret bytes the realloc-hygiene fix protects. Sized to
+    /// force many reallocations if encoded from an empty `Vec`.
+    fn secret_shaped_value(versions: usize) -> Value {
+        let mut items = Vec::new();
+        for i in 0..versions {
+            let mut m = Map::new();
+            m.insert("contentCid", Value::Bytes(vec![i as u8; 36]));
+            m.insert("contentKey", Value::Bytes(vec![0xAB; 32]));
+            m.insert("size", Value::Unsigned(4096));
+            m.insert("modifiedAt", Value::Unsigned(1_700_000_000));
+            items.push(Value::Map(m));
+        }
+        let mut body = Map::new();
+        body.insert("kind", Value::Text("file".into()));
+        body.insert("versions", Value::Array(items));
+        body.insert("createdAt", Value::Unsigned(1));
+        body.insert("modifiedAt", Value::Unsigned(2));
+        Value::Map(body)
+    }
+
+    /// `encoded_len` is exact across every head size class and nesting, so the
+    /// up-front reservation is neither short (would realloc) nor slack.
+    #[test]
+    fn encoded_len_is_exact() {
+        let cases = [
+            Value::Unsigned(0),
+            Value::Unsigned(23),
+            Value::Unsigned(24),
+            Value::Unsigned(0xff),
+            Value::Unsigned(0x100),
+            Value::Unsigned(0xffff),
+            Value::Unsigned(0x1_0000),
+            Value::Unsigned(0xffff_ffff),
+            Value::Unsigned(0x1_0000_0000),
+            Value::Negative(0),
+            Value::Negative(u64::MAX),
+            Value::Bytes(vec![0; 23]),
+            Value::Bytes(vec![0; 300]),
+            Value::Text("a".repeat(24)),
+            Value::Bool(true),
+            Value::Null,
+            Value::Array(vec![Value::Unsigned(1), Value::Null]),
+            secret_shaped_value(40),
+        ];
+        for v in &cases {
+            assert_eq!(encoded_len(v), encode(v).len(), "len oracle diverged");
+        }
+    }
+
+    /// The security invariant: encoding secret-bearing bytes performs a single
+    /// allocation and never reallocates, so no intermediate backing store is
+    /// freed un-zeroized. Capturing the pointer and capacity after the reserve
+    /// and asserting both are unchanged after the write proves the buffer never
+    /// moved (a realloc would move it and/or grow capacity), independent of any
+    /// allocator over-allocation.
+    #[test]
+    fn secret_bearing_encode_never_reallocates() {
+        let value = secret_shaped_value(64);
+        let mut out = Vec::with_capacity(encoded_len(&value));
+        let ptr = out.as_ptr();
+        let reserved_cap = out.capacity();
+        write_value(&mut out, &value, 0);
+        assert!(out.len() > 1024, "test payload must force multiple growths");
+        assert_eq!(
+            out.capacity(),
+            reserved_cap,
+            "capacity grew — a realloc ran"
+        );
+        assert_eq!(out.as_ptr(), ptr, "backing store moved — a realloc ran");
+        assert_eq!(
+            encode(&value),
+            out,
+            "public two-pass path is byte-identical"
+        );
     }
 }
