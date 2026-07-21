@@ -119,4 +119,27 @@ where
         Some(50),
         "batch-committed sequence floors must survive reopen"
     );
+
+    // Retry convergence: re-committing the SAME batch (as a caller retry after
+    // an interrupted commit would) is idempotent — identical results, no floor
+    // regresses. This is the convergence property every impl's #685 contract
+    // rests on, whether it closes the hazard by all-or-nothing rollback, by
+    // roll-forward replay, or by the ordered fail-safe fallback: a partial or
+    // replayed commit always heals to the same floors on retry.
+    let retry = reopened
+        .commit_floors(&[
+            FloorRaise::epoch(scope_a.to_vec(), 6), // still below 7 → no-op
+            FloorRaise::epoch(scope_b.to_vec(), 8),
+            FloorRaise::sequence(scope_a.to_vec(), 50),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(
+        retry,
+        vec![7, 8, 50],
+        "re-committing the same batch must converge to the identical floors"
+    );
+    assert_eq!(reopened.epoch_floor(scope_a).await.unwrap(), Some(7));
+    assert_eq!(reopened.epoch_floor(scope_b).await.unwrap(), Some(8));
+    assert_eq!(reopened.sequence_floor(scope_a).await.unwrap(), Some(50));
 }

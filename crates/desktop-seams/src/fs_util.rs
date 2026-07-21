@@ -136,10 +136,16 @@ fn fsync_dir(_dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// A process-unique filename component (`<pid>.<seq>`), so two in-flight
+/// records never collide on a name even across concurrent writers.
+pub(crate) fn unique_component() -> String {
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("{}.{seq}", std::process::id())
+}
+
 /// A process-unique temp path inside `dir`.
 fn temp_path(dir: &Path) -> PathBuf {
-    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
-    dir.join(format!("{TEMP_PREFIX}{}.{seq}", std::process::id()))
+    dir.join(format!("{TEMP_PREFIX}{}", unique_component()))
 }
 
 /// Lowercase hex encoding of opaque key bytes for use as a filename.

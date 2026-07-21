@@ -5,13 +5,18 @@
 //! ([`advance_on_unseal`]) through two fault-injecting [`FloorStore`] backings
 //! and contrasts them:
 //!
-//! - a backing whose [`FloorStore::commit_floors`] is atomic → a mid-advance
-//!   seam fault leaves **no** floor moved (all-or-nothing, the #685 fix);
+//! - a backing whose [`FloorStore::commit_floors`] is transactional → a
+//!   mid-advance seam fault leaves **no** floor moved (all-or-nothing, the #685
+//!   fix);
 //! - a backing on the seam's non-atomic default fallback → the same fault
 //!   leaves a *partial* advance. That negative control makes the atomic
 //!   assertion non-vacuous (it is what "the test fails with the atomic commit
 //!   disabled" means here) while confirming #682's fail-safe ordering and
 //!   idempotent re-convergence still hold.
+//!
+//! The desktop file store closes the same hazard by **roll-forward** replay
+//! (write-ahead intent, heal-on-reopen) rather than transactional rollback; that
+//! contract is exercised in `cipherbox-desktop-seams` (`floor_store` unit tests).
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
