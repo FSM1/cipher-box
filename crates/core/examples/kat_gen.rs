@@ -3664,19 +3664,21 @@ fn build_mailbox_accept() -> Vec<MailboxAcceptVector> {
     let recipient_scalar = [0x40u8; 32];
     let recipient = X25519Secret::from_scalar(recipient_scalar);
     let recipient_public = recipient.public();
-    let eph = [0x51u8; 32];
     let v = 2u64;
     let sender_scalar = [0x22u8; 32];
     let sender = EcdsaSigner::from_scalar(&sender_scalar).expect("valid sender scalar");
 
-    let cases: Vec<(&str, &[u8])> = vec![
-        ("discovery-ping", b"discovery ping payload"),
-        ("empty-payload", b""),
+    // Each seal to `recipient` draws its own ephemeral. An HPKE seal is
+    // plaintext-independent, so a shared ephemeral under one recipient/AAD reuses
+    // the XChaCha20-Poly1305 key + base nonce across distinct plaintexts.
+    let cases: Vec<(&str, [u8; 32], &[u8])> = vec![
+        ("discovery-ping", [0x51u8; 32], b"discovery ping payload"),
+        ("empty-payload", [0x52u8; 32], b""),
     ];
 
     let mut names = BTreeSet::new();
     let mut out = Vec::new();
-    for (name, payload) in cases {
+    for (name, eph, payload) in cases {
         assert!(names.insert(name), "duplicate mailbox-accept {name}");
         let block = seal_mailbox_payload(&recipient_public, &eph, v, &sender, payload);
         assert_eq!(
@@ -3713,6 +3715,9 @@ fn build_mailbox_accept() -> Vec<MailboxAcceptVector> {
     let relay_payload: &[u8] = b"relayed discovery ping";
     let r2_scalar = [0x42u8; 32];
     let r2 = X25519Secret::from_scalar(r2_scalar);
+    // R1's inbound item and R2's relayed item seal to different recipients, each
+    // under its own ephemeral — no ephemeral is shared across seals.
+    let r1_eph = [0x54u8; 32];
     let relay_eph = [0x53u8; 32];
     let info = build_aad(&AadContext {
         v,
@@ -3721,7 +3726,7 @@ fn build_mailbox_accept() -> Vec<MailboxAcceptVector> {
         epoch: 0,
         struct_tag: STRUCT_TAG_MAILBOX_PAYLOAD,
     });
-    let block_to_r1 = seal_mailbox_payload(&recipient_public, &eph, v, &sender, relay_payload);
+    let block_to_r1 = seal_mailbox_payload(&recipient_public, &r1_eph, v, &sender, relay_payload);
     let r1_map = decode(&block_to_r1).unwrap().as_map().unwrap().clone();
     let ct1 = r1_map.get("ct").unwrap().as_bytes().unwrap().to_vec();
     let enc1: [u8; 32] = r1_map
@@ -3766,10 +3771,19 @@ fn build_mailbox_accept() -> Vec<MailboxAcceptVector> {
 fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
     let recipient_scalar = [0x40u8; 32];
     let recipient = X25519Secret::from_scalar(recipient_scalar);
-    let eph = [0x51u8; 32];
     let v = 2u64;
     let sender = EcdsaSigner::from_scalar(&[0x22u8; 32]).expect("valid sender scalar");
-    let block = seal_mailbox_payload(&recipient.public(), &eph, v, &sender, b"authentic");
+    // The authentic block and the forged block seal distinct plaintexts to one
+    // recipient: distinct ephemerals keep each seal's key + base nonce unique.
+    let authentic_eph = [0x55u8; 32];
+    let forged_eph = [0x56u8; 32];
+    let block = seal_mailbox_payload(
+        &recipient.public(),
+        &authentic_eph,
+        v,
+        &sender,
+        b"authentic",
+    );
 
     // Tamper the ciphertext inside the block and re-encode.
     let mut m = decode(&block).unwrap().as_map().unwrap().clone();
@@ -3801,7 +3815,7 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
         epoch: 0,
         struct_tag: STRUCT_TAG_MAILBOX_PAYLOAD,
     });
-    let sealed = hpke_seal(&recipient.public(), &eph, &info, &[], &inner_bytes);
+    let sealed = hpke_seal(&recipient.public(), &forged_eph, &info, &[], &inner_bytes);
     let mut forged = Map::new();
     forged.insert("ct", Value::Bytes(sealed.ciphertext));
     forged.insert("enc", Value::Bytes(sealed.enc.to_vec()));
