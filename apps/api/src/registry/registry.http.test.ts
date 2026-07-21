@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { configureApp } from '../app-setup';
 import { User } from '../auth/entities/user.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { MailboxMessage } from '../mailbox/entities/mailbox-message.entity';
 import { OpsModule } from '../ops/ops.module';
 import { FakeRepository } from '../testing/fake-repo';
 import { fakeConfig } from '../testing/fakes';
@@ -18,6 +19,7 @@ import { NameInventory } from './entities/name-inventory.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
 import { PinStore } from './pin-store';
 import { RegistryController } from './registry.controller';
+import { AccountService } from './services/account.service';
 import { RegistryService } from './services/registry.service';
 
 const SECRET = 'registry-test-secret';
@@ -118,6 +120,7 @@ describe('registry HTTP surface', () => {
   let userRepo: FakeRepository<User>;
   let nameRepo: InAwareRepository<NameInventory>;
   let pinRepo: InAwareRepository<PinnedCid>;
+  let mailboxRepo: InAwareRepository<MailboxMessage>;
   let pinStore: FakePinStore;
   let jwt: JwtService;
   let priorJwtSecret: string | undefined;
@@ -129,6 +132,7 @@ describe('registry HTTP surface', () => {
     userRepo = new FakeRepository<User>();
     nameRepo = new InAwareRepository<NameInventory>();
     pinRepo = new InAwareRepository<PinnedCid>();
+    mailboxRepo = new InAwareRepository<MailboxMessage>();
     pinStore = new FakePinStore();
     jwt = new JwtService();
 
@@ -141,6 +145,7 @@ describe('registry HTTP surface', () => {
       controllers: [RegistryController, AccountController],
       providers: [
         RegistryService,
+        AccountService,
         JwtAuthGuard,
         { provide: PinStore, useValue: pinStore },
         {
@@ -156,6 +161,7 @@ describe('registry HTTP surface', () => {
             [User, userRepo],
             [NameInventory, nameRepo],
             [PinnedCid, pinRepo],
+            [MailboxMessage, mailboxRepo],
           ]),
         },
       ],
@@ -326,12 +332,70 @@ describe('registry HTTP surface', () => {
     });
   });
 
+  describe('delete — account hard-delete cascade', () => {
+    it('hard-deletes the caller rows, purges its mailbox, unpins sole CIDs, and reports counts', async () => {
+      const acct = await account();
+      await nameRepo.save({ accountId: acct.id, ipnsName: 'k51del', headCid: null } as never);
+      await pinRepo.save({
+        accountId: acct.id,
+        cid: 'bafyDelSole',
+        size: '4',
+        advisory: false,
+      } as never);
+      const user = userRepo.rows.find((r) => r.id === acct.id)!;
+      await mailboxRepo.save({
+        recipientPublicKey: user.publicKey,
+        idempotencyScope: 'scope',
+        blob: Buffer.from('x'),
+        receivedAt: new Date(),
+      } as never);
+
+      const res = await request(http)
+        .delete('/account')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .expect(200);
+
+      expect(res.body).toEqual({
+        namesRetired: 1,
+        pinsRetired: 1,
+        mailboxPurged: 1,
+        unpinned: 1,
+      });
+      expect(pinStore.unpinned).toContain('bafyDelSole');
+      expect(userRepo.rows.some((r) => r.id === acct.id)).toBe(false);
+      expect(nameRepo.rows.some((r) => r.accountId === acct.id)).toBe(false);
+      expect(pinRepo.rows.some((r) => r.accountId === acct.id)).toBe(false);
+      expect(mailboxRepo.rows.some((r) => r.recipientPublicKey === user.publicKey)).toBe(false);
+    });
+
+    it('leaves a co-registered CID pinned and the other account intact', async () => {
+      const alice = await account();
+      const bob = await account();
+      const shared = 'bafySharedDel';
+      await pinRepo.save({ accountId: alice.id, cid: shared, size: '4', advisory: false } as never);
+      await pinRepo.save({ accountId: bob.id, cid: shared, size: '4', advisory: false } as never);
+
+      const res = await request(http)
+        .delete('/account')
+        .set('Authorization', `Bearer ${alice.token}`)
+        .expect(200);
+
+      expect(res.body.unpinned).toBe(0);
+      expect(pinStore.unpinned).not.toContain(shared);
+      expect(pinRepo.rows.filter((r) => r.cid === shared).map((r) => r.accountId)).toEqual([
+        bob.id,
+      ]);
+      expect(userRepo.rows.some((r) => r.id === bob.id)).toBe(true);
+    });
+  });
+
   describe('auth', () => {
     it('requires authentication on every route', async () => {
       await request(http).post('/registry/register').send([]).expect(401);
       await request(http).post('/registry/retire').send([]).expect(401);
       await request(http).get('/account/quota').expect(401);
       await request(http).patch('/account/byo').send({ byo: true }).expect(401);
+      await request(http).delete('/account').expect(401);
     });
   });
 });

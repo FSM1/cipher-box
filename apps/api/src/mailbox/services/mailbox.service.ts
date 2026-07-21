@@ -12,6 +12,7 @@ import { User } from '../../auth/entities/user.entity';
 import { IdentityService } from '../../auth/services/identity.service';
 import {
   acquireAdvisoryLock,
+  advisoryLockKey,
   resolveAdvisoryLockTimeoutMs,
   setAdvisoryLockTimeout,
 } from '../../common/advisory-lock';
@@ -180,6 +181,20 @@ export class MailboxService {
         return { id: replay.id };
       }
 
+      // Re-verify the recipient still exists while holding the recipient lock,
+      // not only at the unlocked oracle above: the account hard-delete cascade
+      // holds this same key while it purges the mailbox and deletes the account,
+      // so a post that raced the delete observes the committed deletion here and
+      // fails closed rather than resurrecting a row for a gone account (mailbox
+      // rows have no FK to cascade them). The lock (held until this transaction
+      // commits) bars any delete between this re-check and the insert below.
+      const recipient = await this.userRepository.findOne({
+        where: { publicKey: recipientPublicKey },
+      });
+      if (!recipient) {
+        throw new NotFoundException('Unknown recipient');
+      }
+
       // Expired rows are dead fuel: purge before counting so a full-of-expired
       // mailbox still accepts new mail (opportunistic housekeeping).
       await this.purgeExpired(recipientPublicKey, repo);
@@ -250,19 +265,13 @@ export class MailboxService {
   }
 
   /**
-   * Map a recipientPublicKey to a stable signed 64-bit key for
-   * `pg_advisory_xact_lock`. sha256 — this file's existing hash of choice (see
-   * `scopeIdempotency`) — over the ALREADY-normalized recipient key, then the
-   * first 8 bytes read big-endian as a signed BigInt, which is exactly the
-   * Postgres `bigint` domain (−2^63 … 2^63−1). Deterministic and process-stable,
-   * so every API instance maps a given recipient to the same lock. The
-   * acquire helper binds it as a decimal string through `$1::bigint`,
-   * sidestepping driver-level BigInt parameter handling. The 8→64-bit
-   * truncation admits astronomically rare cross-recipient collisions; the only
-   * effect would be two distinct recipients briefly serializing, never a
-   * correctness or cap breach.
+   * The per-recipient advisory-lock key over the ALREADY-normalized recipient
+   * key. This MUST be the shared `advisoryLockKey` (not a private copy): the
+   * account hard-delete cascade serializes against a concurrent post by taking
+   * `advisoryLockKey(publicKey)`, so the two derive the recipient key from one
+   * source — the resurrection guard is structural, not an asserted invariant.
    */
   private recipientLockKey(recipientPublicKey: string): bigint {
-    return createHash('sha256').update(recipientPublicKey).digest().readBigInt64BE(0);
+    return advisoryLockKey(recipientPublicKey);
   }
 }

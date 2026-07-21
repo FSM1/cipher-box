@@ -602,6 +602,36 @@
         ]
       }
     },
+    "/account": {
+      "delete": {
+        "operationId": "AccountController_deleteAccount",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteAccountResponseDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Immediate hard-delete of the caller account: retire inventory/pin rows (refcounted unpin), purge mailbox, delete auth rows",
+        "tags": [
+          "Account"
+        ]
+      }
+    },
     "/content/upload": {
       "post": {
         "operationId": "ContentController_upload",
@@ -1122,6 +1152,33 @@
         },
         "required": [
           "byo"
+        ]
+      },
+      "DeleteAccountResponseDto": {
+        "type": "object",
+        "properties": {
+          "namesRetired": {
+            "type": "number",
+            "description": "Name-inventory rows retired for the account"
+          },
+          "pinsRetired": {
+            "type": "number",
+            "description": "Pin rows retired for the account"
+          },
+          "mailboxPurged": {
+            "type": "number",
+            "description": "Mailbox messages purged for the account"
+          },
+          "unpinned": {
+            "type": "number",
+            "description": "CIDs physically unpinned because global refcount reached zero"
+          }
+        },
+        "required": [
+          "namesRetired",
+          "pinsRetired",
+          "mailboxPurged",
+          "unpinned"
         ]
       },
       "UploadResponseDto": {

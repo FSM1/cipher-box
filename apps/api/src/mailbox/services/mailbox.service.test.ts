@@ -35,7 +35,7 @@ describe('MailboxService', () => {
     service = new MailboxService(
       messages as never,
       users as never,
-      new FakeDataSource(messages as never) as never,
+      new FakeDataSource(messages as never, [[User, users as never]]) as never,
       new IdentityService(),
       clock,
       fakeConfig(config).service

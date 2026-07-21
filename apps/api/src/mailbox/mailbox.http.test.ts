@@ -63,7 +63,10 @@ describe('mailbox HTTP surface', () => {
         },
         { provide: getRepositoryToken(User), useValue: userRepo },
         { provide: getRepositoryToken(MailboxMessage), useValue: messageRepo },
-        { provide: getDataSourceToken(), useValue: new FakeDataSource(messageRepo as never) },
+        {
+          provide: getDataSourceToken(),
+          useValue: new FakeDataSource(messageRepo as never, [[User, userRepo as never]]),
+        },
       ],
     }).compile();
 

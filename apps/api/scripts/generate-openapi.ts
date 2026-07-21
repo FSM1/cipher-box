@@ -29,6 +29,7 @@ import { MetricsController } from '../src/ops/metrics.controller';
 import { MetricsService } from '../src/ops/metrics.service';
 import { AccountController } from '../src/registry/account.controller';
 import { RegistryController } from '../src/registry/registry.controller';
+import { AccountService } from '../src/registry/services/account.service';
 import { RegistryService } from '../src/registry/services/registry.service';
 import { RecoveryController } from '../src/republisher/recovery.controller';
 import { RecordCacheService } from '../src/republisher/services/record-cache.service';
@@ -51,6 +52,7 @@ import { RecordCacheService } from '../src/republisher/services/record-cache.ser
     { provide: MailboxService, useValue: {} },
     { provide: MetricsService, useValue: {} },
     { provide: RegistryService, useValue: {} },
+    { provide: AccountService, useValue: {} },
     { provide: ContentService, useValue: {} },
     { provide: RecordCacheService, useValue: {} },
     { provide: JwtService, useValue: {} },

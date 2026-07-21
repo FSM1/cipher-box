@@ -10,6 +10,7 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource, EntityManager } from 'typeorm';
 import { User } from '../auth/entities/user.entity';
 import {
+  accountLockKey,
   acquireAdvisoryLocks,
   advisoryLockKey,
   resolveAdvisoryLockTimeoutMs,
@@ -229,11 +230,6 @@ export class ContentService {
       this.logger.warn(`compensation for ${cid} failed: ${String(error)}`);
     }
   }
-}
-
-/** Namespaced account advisory key: `account:` prevents any UUID/CID key collision. */
-function accountLockKey(accountId: string): bigint {
-  return advisoryLockKey(`account:${accountId}`);
 }
 
 /**

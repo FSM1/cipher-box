@@ -10,6 +10,7 @@ import { NameInventory } from './entities/name-inventory.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
 import { KuboPinStore, PinStore } from './pin-store';
 import { RegistryController } from './registry.controller';
+import { AccountService } from './services/account.service';
 import { RegistryService } from './services/registry.service';
 
 /**
@@ -29,6 +30,11 @@ import { RegistryService } from './services/registry.service';
     }),
   ],
   controllers: [RegistryController, AccountController],
-  providers: [RegistryService, JwtAuthGuard, { provide: PinStore, useClass: KuboPinStore }],
+  providers: [
+    RegistryService,
+    AccountService,
+    JwtAuthGuard,
+    { provide: PinStore, useClass: KuboPinStore },
+  ],
 })
 export class RegistryModule {}

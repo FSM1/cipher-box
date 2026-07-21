@@ -93,6 +93,16 @@ export function advisoryLockKey(token: string): bigint {
 }
 
 /**
+ * Namespaced per-account advisory key: `account:` prevents any collision with a
+ * bare CID or IPNS-name key in the shared bigint lock space. The upload quota
+ * gate and the account hard-delete cascade MUST share this function so an
+ * in-flight upload serializes against the account's deletion on the same key.
+ */
+export function accountLockKey(accountId: string): bigint {
+  return advisoryLockKey(`account:${accountId}`);
+}
+
+/**
  * Acquire a batch of transaction-scoped advisory locks in one deadlock-free
  * order: keys are de-duplicated and sorted, so any two overlapping batches take
  * their shared keys in the same sequence and cannot form a cycle. Set the
