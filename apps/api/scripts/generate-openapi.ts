@@ -30,6 +30,8 @@ import { MetricsService } from '../src/ops/metrics.service';
 import { AccountController } from '../src/registry/account.controller';
 import { RegistryController } from '../src/registry/registry.controller';
 import { RegistryService } from '../src/registry/services/registry.service';
+import { RecoveryController } from '../src/republisher/recovery.controller';
+import { RecordCacheService } from '../src/republisher/services/record-cache.service';
 
 @Module({
   controllers: [
@@ -40,6 +42,7 @@ import { RegistryService } from '../src/registry/services/registry.service';
     RegistryController,
     AccountController,
     ContentController,
+    RecoveryController,
   ],
   providers: [
     { provide: AuthService, useValue: {} },
@@ -49,6 +52,7 @@ import { RegistryService } from '../src/registry/services/registry.service';
     { provide: MetricsService, useValue: {} },
     { provide: RegistryService, useValue: {} },
     { provide: ContentService, useValue: {} },
+    { provide: RecordCacheService, useValue: {} },
     { provide: JwtService, useValue: {} },
     { provide: ConfigService, useValue: new ConfigService() },
   ],

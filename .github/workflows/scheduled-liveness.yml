@@ -1,0 +1,34 @@
+# Scheduled tier (blueprint/testing.md: Dispatch / scheduled). Long-horizon
+# liveness soaks that must NOT block a PR — the republisher walk against a
+# compressed-EOL profile over virtual time. Runs on a cron and on manual
+# dispatch; the per-PR CI gate never runs these.
+name: Scheduled Liveness
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  api-liveness:
+    name: API Long-Horizon Liveness
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run the compressed-EOL long-horizon suite
+        run: pnpm --filter @cipherbox/api test:scheduled

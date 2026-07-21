@@ -602,46 +602,35 @@
         ]
       }
     },
-    "/content/upload": {
-      "post": {
-        "operationId": "ContentController_upload",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/octet-stream": {
-              "schema": {
-                "type": "string",
-                "format": "binary"
-              }
+    "/recovery/{ipnsName}": {
+      "get": {
+        "operationId": "RecoveryController_fetch",
+        "parameters": [
+          {
+            "name": "ipnsName",
+            "required": true,
+            "in": "path",
+            "description": "The IPNS name (libp2p-key CID)",
+            "schema": {
+              "type": "string"
             }
           }
-        },
+        ],
         "responses": {
-          "201": {
-            "description": "",
+          "200": {
+            "description": "Opaque signed record bytes",
             "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/UploadResponseDto"
-                }
-              }
+              "application/vnd.ipfs.ipns-record": {}
             }
-          },
-          "400": {
-            "description": "Empty or non-binary upload body"
           },
           "401": {
             "description": "Missing or invalid access token"
           },
-          "413": {
-            "description": "Upload exceeds the account storage quota or size cap"
+          "404": {
+            "description": "No cached record for this name"
           },
           "429": {
-            "description": "Upload rate limit exceeded"
-          },
-          "503": {
-            "description": "Pin store contended or unavailable; retry shortly"
+            "description": "Recovery rate limit exceeded"
           }
         },
         "security": [
@@ -649,9 +638,9 @@
             "bearer": []
           }
         ],
-        "summary": "Upload content bytes to the hosted pin store; quota-gated for hosted accounts, advisory for BYO",
+        "summary": "Fetch cached (possibly expired) record bytes for a name — the revival aid after a >EOL lapse. Non-canonical: verify against the network.",
         "tags": [
-          "Content"
+          "Recovery"
         ]
       }
     }
@@ -684,8 +673,8 @@
       "description": "Per-account quota and the BYO-IPFS toggle"
     },
     {
-      "name": "Content",
-      "description": "Hosted ingress: quota-gated byte upload to CipherBox Kubo"
+      "name": "Recovery",
+      "description": "Authenticated fetch of non-canonical cached record bytes by name"
     }
   ],
   "servers": [],
@@ -1071,23 +1060,6 @@
         },
         "required": [
           "byo"
-        ]
-      },
-      "UploadResponseDto": {
-        "type": "object",
-        "properties": {
-          "cid": {
-            "type": "string",
-            "description": "The content CID Kubo pinned"
-          },
-          "size": {
-            "type": "number",
-            "description": "The pinned size in bytes"
-          }
-        },
-        "required": [
-          "cid",
-          "size"
         ]
       }
     }

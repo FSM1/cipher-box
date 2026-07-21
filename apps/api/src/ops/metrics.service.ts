@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Counter, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
+import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from 'prom-client';
 
 /**
  * Prometheus metrics (blueprint/api.md Ops). Uses a per-instance registry
@@ -10,6 +10,10 @@ export class MetricsService {
   private readonly registry = new Registry();
   private readonly httpRequestsTotal: Counter<'method' | 'route' | 'status'>;
   private readonly httpRequestDurationSeconds: Histogram<'method' | 'route'>;
+  private readonly republisherResolveFailuresTotal: Counter;
+  private readonly republisherStaleNamesTotal: Counter;
+  private readonly republisherLastWalkNames: Gauge;
+  private readonly republisherLastWalkRepublished: Gauge;
 
   constructor() {
     collectDefaultMetrics({ register: this.registry });
@@ -25,11 +29,44 @@ export class MetricsService {
       labelNames: ['method', 'route'],
       registers: [this.registry],
     });
+    this.republisherResolveFailuresTotal = new Counter({
+      name: 'republisher_resolve_failures_total',
+      help: 'IPNS names the republisher could not resolve (orphans or unreachable)',
+      registers: [this.registry],
+    });
+    this.republisherStaleNamesTotal = new Counter({
+      name: 'republisher_stale_names_total',
+      help: 'IPNS names observed >24h without a successful re-PUT',
+      registers: [this.registry],
+    });
+    this.republisherLastWalkNames = new Gauge({
+      name: 'republisher_last_walk_names',
+      help: 'Distinct names walked in the most recent republisher sweep',
+      registers: [this.registry],
+    });
+    this.republisherLastWalkRepublished = new Gauge({
+      name: 'republisher_last_walk_republished',
+      help: 'Names successfully re-PUT in the most recent republisher sweep',
+      registers: [this.registry],
+    });
   }
 
   observeRequest(method: string, route: string, status: number, durationSeconds: number): void {
     this.httpRequestsTotal.inc({ method, route, status: String(status) });
     this.httpRequestDurationSeconds.observe({ method, route }, durationSeconds);
+  }
+
+  observeRepublisherResolveFailure(): void {
+    this.republisherResolveFailuresTotal.inc();
+  }
+
+  observeRepublisherStaleName(): void {
+    this.republisherStaleNamesTotal.inc();
+  }
+
+  observeRepublisherWalk(namesWalked: number, republished: number): void {
+    this.republisherLastWalkNames.set(namesWalked);
+    this.republisherLastWalkRepublished.set(republished);
   }
 
   get contentType(): string {

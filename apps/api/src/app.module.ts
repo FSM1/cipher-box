@@ -7,6 +7,7 @@ import { ContentModule } from './content/content.module';
 import { MailboxModule } from './mailbox/mailbox.module';
 import { OpsModule } from './ops/ops.module';
 import { RegistryModule } from './registry/registry.module';
+import { RepublisherModule } from './republisher/republisher.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { RegistryModule } from './registry/registry.module';
     MailboxModule,
     RegistryModule,
     ContentModule,
+    RepublisherModule,
   ],
 })
 export class AppModule {}
