@@ -1,12 +1,13 @@
 import { ConflictException } from '@nestjs/common';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { randomBytes } from 'node:crypto';
-import { DataSource, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../../auth/entities/user.entity';
 import { IdentityService } from '../../auth/services/identity.service';
 import { FakeRepository } from '../../testing/fake-repo';
 import { FakeClock, fakeConfig } from '../../testing/fakes';
+import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
 import { MailboxMessage } from '../entities/mailbox-message.entity';
 import { MailboxService } from './mailbox.service';
 
@@ -15,93 +16,41 @@ import { MailboxService } from './mailbox.service';
  *
  * The fix wraps purge → count → cap-check → insert in one transaction under a
  * per-recipient `pg_advisory_xact_lock`. Advisory locks and the count→insert
- * isolation they provide are genuine Postgres behavior — no sqlite or in-memory
- * fake can exercise them — so this suite is opt-in: it runs only when
- * `MAILBOX_DB_TEST=1` and a reachable Postgres is configured via the standard
- * DB_* env (defaults match docker/docker-compose.yml). Left unset — as in the
- * fake-only `Run API unit suite` CI job — the whole suite is skipped, never
- * failing for want of a database.
+ * isolation they provide are genuine Postgres behavior — no in-memory fake can
+ * exercise them — so this test lives in the real-Postgres integration suite.
  */
-const RUN_DB_TEST = process.env.MAILBOX_DB_TEST === '1';
-
-const DB = {
-  host: process.env.DB_HOST ?? 'localhost',
-  port: Number(process.env.DB_PORT ?? 5432),
-  user: process.env.DB_USERNAME ?? 'postgres',
-  password: process.env.DB_PASSWORD ?? 'postgres',
-};
-
-// A throwaway database, created and dropped by this suite, so the shared dev
-// `cipherbox` database is never touched.
-const TEST_DB = 'cipherbox_mailbox_cap_test';
-
-/** Run one-off admin DDL (CREATE/DROP DATABASE) via a short-lived connection to
- * the default `postgres` database. Kept off TypeORM's entity path so it needs no
- * `pg` type declarations. */
-async function adminExec(sql: string): Promise<void> {
-  const admin = new DataSource({
-    type: 'postgres',
-    host: DB.host,
-    port: DB.port,
-    username: DB.user,
-    password: DB.password,
-    database: 'postgres',
-  });
-  await admin.initialize();
-  try {
-    await admin.query(sql);
-  } finally {
-    await admin.destroy();
-  }
-}
 
 function compressedPublicKey(): string {
   const priv = secp256k1.utils.randomPrivateKey();
-  return Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
+  try {
+    return Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
+  } finally {
+    priv.fill(0);
+  }
 }
 
 function base64Blob(bytes: number): string {
   return Buffer.alloc(bytes, 7).toString('base64');
 }
 
-describe.skipIf(!RUN_DB_TEST)('MailboxService pending-cap concurrency (real Postgres)', () => {
-  let dataSource: DataSource;
+describe('MailboxService pending-cap concurrency (real Postgres)', () => {
+  let db: IntegrationDatabase;
   let repo: Repository<MailboxMessage>;
 
   beforeAll(async () => {
-    await adminExec(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
-    await adminExec(`CREATE DATABASE ${TEST_DB}`);
-
-    dataSource = new DataSource({
-      type: 'postgres',
-      host: DB.host,
-      port: DB.port,
-      username: DB.user,
-      password: DB.password,
-      database: TEST_DB,
-      entities: [MailboxMessage],
-      synchronize: false,
-      uuidExtension: 'pgcrypto',
-      // A pool comfortably wider than any batch below, so the racing posts hold
-      // real connections at once and genuinely contend on the advisory lock
-      // rather than queueing at the JS pool.
-      extra: { max: 30 },
-    });
-    await dataSource.initialize();
-    await dataSource.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
-    await dataSource.synchronize();
-    repo = dataSource.getRepository(MailboxMessage);
-  }, 30_000);
+    // A pool comfortably wider than any batch below, so racing posts hold real
+    // connections at once and genuinely contend on the advisory lock rather than
+    // queueing at the JS pool.
+    db = await createIntegrationDatabase({ poolMax: 30 });
+    repo = db.dataSource.getRepository(MailboxMessage);
+  });
 
   afterAll(async () => {
-    if (dataSource?.isInitialized) {
-      await dataSource.destroy();
-    }
-    await adminExec(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
+    await db?.teardown();
   });
 
   beforeEach(async () => {
-    await dataSource.query('TRUNCATE TABLE mailbox_messages');
+    await db.dataSource.query('TRUNCATE TABLE mailbox_messages');
   });
 
   function buildService(cap: number): {
@@ -120,10 +69,12 @@ describe.skipIf(!RUN_DB_TEST)('MailboxService pending-cap concurrency (real Post
     const service = new MailboxService(
       repo,
       users as never,
-      dataSource,
+      db.dataSource,
       new IdentityService(),
       clock,
-      fakeConfig({ MAILBOX_PENDING_CAP: String(cap) }).service
+      // Disable the advisory-lock wait bound so a slow CI waiter can't 503 before
+      // the cap check; the timeout has its own dedicated regression test.
+      fakeConfig({ MAILBOX_PENDING_CAP: String(cap), DB_ADVISORY_LOCK_TIMEOUT_MS: '0' }).service
     );
     return { service, recipient, sender };
   }

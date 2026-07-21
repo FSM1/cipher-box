@@ -54,6 +54,7 @@ export class RegistryController {
   @ApiResponse({ status: 400, description: 'Malformed batch (invalid entry, name, or CID)' })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
   @ApiResponse({ status: 429, description: 'Registry rate limit exceeded' })
+  @ApiResponse({ status: 503, description: 'Token serialization contended; retry shortly' })
   register(
     @Body(...registerBodyPipes) entries: RegisterEntryDto[],
     @Req() request: AuthenticatedRequest
@@ -78,6 +79,7 @@ export class RegistryController {
   @ApiResponse({ status: 400, description: 'Malformed batch' })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
   @ApiResponse({ status: 429, description: 'Registry rate limit exceeded' })
+  @ApiResponse({ status: 503, description: 'Token serialization contended; retry shortly' })
   retire(
     @Body(...retireBodyPipes) targets: string[],
     @Req() request: AuthenticatedRequest

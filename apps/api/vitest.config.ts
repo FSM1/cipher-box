@@ -1,21 +1,14 @@
-import swc from 'unplugin-swc';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
+import { swcPlugin } from './vitest.swc';
 
-// NestJS dependency injection needs emitDecoratorMetadata, which esbuild
-// (vitest's default transform) cannot emit — so tests compile through SWC.
+// The unit suite: fake-backed Nest specs, no real Postgres. `*.test.ts` would
+// otherwise also match `*.integration.test.ts`, so those are excluded here and
+// run only in the dedicated real-Postgres job (see vitest.integration.config.ts).
 export default defineConfig({
   test: {
     include: ['src/**/*.test.ts'],
+    exclude: [...configDefaults.exclude, 'src/**/*.integration.test.ts'],
     environment: 'node',
   },
-  plugins: [
-    swc.vite({
-      jsc: {
-        parser: { syntax: 'typescript', decorators: true },
-        transform: { legacyDecorator: true, decoratorMetadata: true },
-        target: 'es2022',
-      },
-      module: { type: 'es6' },
-    }),
-  ],
+  plugins: [swcPlugin()],
 });

@@ -4,6 +4,11 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
+import {
+  acquireAdvisoryLock,
+  resolveAdvisoryLockTimeoutMs,
+  setAdvisoryLockTimeout,
+} from '../../common/advisory-lock';
 import { NameInventory } from '../entities/name-inventory.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
 import { PinStore } from '../pin-store';
@@ -21,12 +26,19 @@ function lockKey(token: string): bigint {
  * transaction-scoped advisory lock. Row locks can't see an unborn INSERT, so
  * only a per-token lock closes the register/retire phantom race and concurrent
  * duplicate inserts. Keys are acquired in sorted order so overlapping batches
- * cannot deadlock; the lock auto-releases at commit or rollback.
+ * cannot deadlock; the lock auto-releases at commit or rollback. One
+ * `lock_timeout` bound covers the whole batch so a contended waiter aborts and
+ * releases its pooled connection (surfacing as a 503) instead of holding it.
  */
-async function lockTokens(manager: EntityManager, tokens: string[]): Promise<void> {
+async function lockTokens(
+  manager: EntityManager,
+  tokens: string[],
+  timeoutMs: number
+): Promise<void> {
+  await setAdvisoryLockTimeout(manager, timeoutMs);
   const keys = [...new Set(tokens.map(lockKey))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   for (const key of keys) {
-    await manager.query('SELECT pg_advisory_xact_lock($1::bigint)', [key.toString()]);
+    await acquireAdvisoryLock(manager, key);
   }
 }
 
@@ -75,6 +87,7 @@ function byteConfig(raw: unknown, fallback: number): number {
 @Injectable()
 export class RegistryService {
   private readonly defaultLimitBytes: number;
+  private readonly lockTimeoutMs: number;
 
   constructor(
     @InjectRepository(PinnedCid)
@@ -90,6 +103,7 @@ export class RegistryService {
       configService.get('QUOTA_DEFAULT_BYTES'),
       DEFAULT_QUOTA_BYTES
     );
+    this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
   }
 
   /**
@@ -129,7 +143,7 @@ export class RegistryService {
         // Serialize per token before any read/write: register and retire
         // contend on the same keys, closing the phantom-INSERT race and
         // concurrent-duplicate inserts.
-        await lockTokens(manager, [...nameOrder, ...cidOrder]);
+        await lockTokens(manager, [...nameOrder, ...cidOrder], this.lockTimeoutMs);
 
         // Read BYO under a users-row lock: register and setByo contend on the
         // same existing row, so a row lock (not the token advisory lock) keeps
@@ -204,7 +218,7 @@ export class RegistryService {
     // retire: the advisory lock (not a row lock, which can't see an unborn
     // INSERT) makes the delete → survivor check the authority for unpinning.
     const { retired, unpinCids } = await this.dataSource.transaction(async (manager) => {
-      await lockTokens(manager, targets);
+      await lockTokens(manager, targets, this.lockTimeoutMs);
 
       const nameRepo = manager.getRepository(NameInventory);
       const pinRepo = manager.getRepository(PinnedCid);
