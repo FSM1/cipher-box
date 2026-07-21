@@ -27,6 +27,7 @@
 pub mod api;
 pub mod entropy;
 pub mod facade;
+pub mod gate;
 pub mod profile;
 pub mod seams;
 #[cfg(feature = "test-kit")]
@@ -40,6 +41,10 @@ pub use entropy::{Entropy, EntropyError};
 pub use facade::{
     Command, Engine, EngineError, Event, EventStream, LoginSecret, NodeId, NodeKind, Permission,
     PlaintextContent, Staleness,
+};
+pub use gate::{
+    Adopted, AscentCheck, Candidate, GateError, GateRejection, GateStage, ReaderContext,
+    RejectionReason, SeedBlob, SignedStructure, adopt,
 };
 pub use profile::SyncTimingProfile;
 pub use seams::{SeamError, SeamResult, SeamSet, SeamTypes};
