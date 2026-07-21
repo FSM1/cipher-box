@@ -85,21 +85,22 @@ pub struct ContentDag {
 /// `contentCid`. `plaintext_len` is the pre-seal byte length (the ranged-read
 /// size bound). Deterministic: identical leaves + length + profile give a
 /// byte-identical root block and CID.
+///
+/// Fails closed when the leaf count does not match [`decode_root`]'s
+/// `ceil(size / chunkSize)`. Enforced in every build (not a release-compiled-out
+/// `debug_assert`): a mis-wired caller must never emit a root this crate's own
+/// [`decode_root`] would reject as `link count inconsistent with size`, which
+/// would leave the published version permanently unreadable.
 pub fn assemble(
     leaves: &[SealedChunk],
     plaintext_len: u64,
     profile: &ContentProfile,
-) -> ContentDag {
-    // Produce/consume symmetry: assemble emits exactly the leaf count decode_root
-    // requires, so this crate never produces a root its own decode would reject.
-    // A debug_assert (not a fallible signature) is the right level — the inputs
-    // are trusted engine values, so this guards a mis-wired caller, not untrusted
-    // input.
-    debug_assert_eq!(
-        leaves.len() as u64,
-        expected_leaf_count(plaintext_len, profile.chunk_size() as u64),
-        "assemble leaf count must match decode_root's ceil(size / chunkSize)"
-    );
+) -> Result<ContentDag, DagError> {
+    if leaves.len() as u64 != expected_leaf_count(plaintext_len, profile.chunk_size() as u64) {
+        return Err(DagError::InvalidManifest {
+            reason: "link count inconsistent with size",
+        });
+    }
     let links = leaves
         .iter()
         .map(|leaf| Value::Bytes(leaf.cid.clone()))
@@ -110,10 +111,10 @@ pub fn assemble(
     root.insert(LINKS_KEY, Value::Array(links));
     let root_block = encode(&Value::Map(root));
     let content_cid = compute_cid(DAG_ROOT_CODEC, &root_block);
-    ContentDag {
+    Ok(ContentDag {
         content_cid,
         root_block,
-    }
+    })
 }
 
 /// The manifest read back from a verified root block: the fixed chunk size, the
@@ -243,7 +244,7 @@ mod tests {
     #[test]
     fn root_content_addresses_to_its_content_cid() {
         let (leaves, profile) = framed(&(0..40u8).collect::<Vec<_>>(), 1);
-        let dag = assemble(&leaves, 40, &profile);
+        let dag = assemble(&leaves, 40, &profile).unwrap();
         assert!(verify_cid(&dag.content_cid, &dag.root_block).is_ok());
         assert_eq!(
             dag.content_cid[1], DAG_ROOT_CODEC,
@@ -254,8 +255,8 @@ mod tests {
     #[test]
     fn assembly_is_deterministic() {
         let (leaves, profile) = framed(&(0..40u8).collect::<Vec<_>>(), 7);
-        let a = assemble(&leaves, 40, &profile);
-        let b = assemble(&leaves, 40, &profile);
+        let a = assemble(&leaves, 40, &profile).unwrap();
+        let b = assemble(&leaves, 40, &profile).unwrap();
         assert_eq!(a, b, "same leaves + length => byte-identical root");
     }
 
@@ -263,7 +264,7 @@ mod tests {
     fn root_manifest_round_trips_the_ordered_leaf_cids() {
         let plaintext: Vec<u8> = (0..40u8).collect();
         let (leaves, profile) = framed(&plaintext, 3);
-        let dag = assemble(&leaves, plaintext.len() as u64, &profile);
+        let dag = assemble(&leaves, plaintext.len() as u64, &profile).unwrap();
 
         let manifest = decode_root(&dag.root_block).unwrap();
         assert_eq!(manifest.chunk_size, profile.chunk_size() as u64);
@@ -278,7 +279,7 @@ mod tests {
     #[test]
     fn leaf_cids_use_the_raw_codec_root_uses_dag_cbor() {
         let (leaves, profile) = framed(b"abc", 5);
-        let dag = assemble(&leaves, 3, &profile);
+        let dag = assemble(&leaves, 3, &profile).unwrap();
         assert_eq!(leaves[0].cid[1], CONTENT_CID_CODEC, "leaf is raw");
         assert_eq!(dag.content_cid[1], DAG_ROOT_CODEC, "root is dag-cbor");
     }
@@ -319,9 +320,24 @@ mod tests {
     fn decode_root_accepts_the_empty_version_single_leaf() {
         // size 0 frames to exactly one empty leaf; the count check must allow it.
         let (leaves, profile) = framed(b"", 9);
-        let dag = assemble(&leaves, 0, &profile);
+        let dag = assemble(&leaves, 0, &profile).unwrap();
         let manifest = decode_root(&dag.root_block).unwrap();
         assert_eq!(manifest.size, 0);
         assert_eq!(manifest.leaf_cids.len(), 1);
+    }
+
+    #[test]
+    fn assemble_rejects_a_leaf_count_size_mismatch_in_every_build() {
+        // `b"abc"` frames to one leaf at CI's 16-byte chunk, but a plaintext_len
+        // of 40 expects three — the invariant fails closed in a normal (non
+        // debug_assert) test build rather than emitting an unreadable root.
+        let (leaves, profile) = framed(b"abc", 11);
+        assert_eq!(leaves.len(), 1);
+        assert_eq!(
+            assemble(&leaves, 40, &profile),
+            Err(DagError::InvalidManifest {
+                reason: "link count inconsistent with size",
+            })
+        );
     }
 }
