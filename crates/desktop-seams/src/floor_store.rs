@@ -335,6 +335,31 @@ mod tests {
         );
     }
 
+    /// A corrupt leftover intent on disk fails the whole reopen closed: `open`
+    /// surfaces the decode error rather than panicking or silently skipping the
+    /// record, so a garbled recovery journal can never be quietly discarded
+    /// (#685). This is the crash-recovery fail-closed contract, exercised through
+    /// the public `open` surface (not just `decode_intent` in isolation).
+    #[test]
+    fn open_fails_closed_on_a_corrupt_intent() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("floors");
+        FileFloorStore::open(&path).unwrap();
+
+        // A valid record truncated by one byte: structurally corrupt, not torn.
+        let good = encode_intent(&[FloorRaise::epoch(b"scope".to_vec(), 1)]);
+        atomic_write(
+            &path.join("intent").join("corrupt"),
+            &good[..good.len() - 1],
+        )
+        .unwrap();
+
+        assert!(
+            FileFloorStore::open(&path).is_err(),
+            "a corrupt intent must fail closed on reopen"
+        );
+    }
+
     /// Sequential commits over one handle each mint a distinct intent file and
     /// clean it up, so a successful commit leaves no intent debris behind for a
     /// later reopen to re-apply.
