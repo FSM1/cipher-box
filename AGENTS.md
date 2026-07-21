@@ -51,7 +51,7 @@ There are **no generated API clients** and no codegen loop. The engine contains 
 
 ### Comments
 
-Comments explain *why*, not *what*, and stay short. **If you need a paragraph-long comment to justify why a workaround is OK, the code is wrong — fix the code.** A long apologia for a hack is a smell: rework the code so it no longer needs defending, rather than documenting the shortcut. Reserve multi-line comments for genuinely non-obvious domain rationale — a spec citation, a cryptographic invariant, a wire-format or fail-closed constraint — not for excusing a shortcut.
+Comments explain _why_, not _what_, and stay short. **If you need a paragraph-long comment to justify why a workaround is OK, the code is wrong — fix the code.** A long apologia for a hack is a smell: rework the code so it no longer needs defending, rather than documenting the shortcut. Reserve multi-line comments for genuinely non-obvious domain rationale — a spec citation, a cryptographic invariant, a wire-format or fail-closed constraint — not for excusing a shortcut.
 
 ## Architecture Pillars
 
@@ -149,6 +149,16 @@ type(optional-scope): description
 Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`. Any scope string is allowed (e.g., `feat(api): add health endpoint`). A custom commitlint rule additionally rejects parenthesized text in the subject line (it breaks Release Please parsing).
 
 Enforcement: commitlint is configured via `commitlint.config.js`, and PR titles are validated in CI by `.github/workflows/pr-title.yml`. Note that the husky `commit-msg` hook was replaced by an Entire CLI wrapper and currently does not run commitlint locally — follow the format regardless, since CI will reject non-conforming PR titles.
+
+### Mandatory PR Review Flow
+
+Every code PR runs these review gates after it is opened as a **draft**, before it is driven toward merge — mandatory, not optional:
+
+1. `/simplify` — tighten the diff: remove speculative generality, dead abstraction, and duplication.
+2. `/security-review` — trust boundaries, fail-closed behavior, auth/expiry gates, injection, DoS/resource exhaustion, concurrency, and determinism seams.
+3. `/crypto-privacy-review` — **required whenever the diff touches crypto**: `crates/core` primitives, key/seal material, or trust-boundary and fail-closed reads.
+
+Run each on the PR's own diff (`git diff main...HEAD`) and fold real findings back into the code and tests before requesting a CodeRabbit/Greptile review. If a slash-command skill is unavailable in your environment, do a rigorous manual pass against that review's checklist instead — never skip a gate. Self-review is the floor, not the ceiling: layer an independent reviewer pass on crypto- and trust-critical PRs. A pure documentation change with no code surface is exempt.
 
 ### Releases & Versioning
 
