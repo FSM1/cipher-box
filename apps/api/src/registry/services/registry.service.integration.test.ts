@@ -560,6 +560,47 @@ describe('RegistryService concurrency (real Postgres)', () => {
       expect(survivors.map((r) => r.accountId)).toEqual([b]);
     });
 
+    it('a contended durability lock leaves the CID pinned for GC and still reports the committed retire, not a 503', async () => {
+      const a = await seedAccount(false);
+      const cid = token();
+      await seedPin(a, cid); // A is the sole holder — retire will decide to unpin.
+
+      // Hold the SAME pin-durability session lock so retire's post-commit acquire
+      // waits past lock_timeout and aborts (55P03) — the contention this test
+      // proves must degrade to a skip, not fail the already-committed retire.
+      const gate = makeGate();
+      const holder = withSessionAdvisoryLock(
+        db.dataSource,
+        pinDurabilityLockKey(cid),
+        0,
+        async () => {
+          await gate.onReach();
+        }
+      );
+      await gate.reached; // the durability lock is held
+
+      const pinStore = new RecordingPinStore();
+      const service = new RegistryService(
+        db.dataSource.getRepository(PinnedCid) as never,
+        db.dataSource.getRepository(User) as never,
+        db.dataSource as never,
+        pinStore,
+        fakeConfig({ DB_ADVISORY_LOCK_TIMEOUT_MS: '200' }).service
+      );
+
+      // retire's delete commits; the post-commit unpin can't acquire the held
+      // durability lock within 200ms, so it skips the unpin and returns.
+      const result = await service.retire(a, [cid]);
+
+      gate.release();
+      await holder;
+
+      expect(result).toEqual({ retired: 1, unpinned: 0 });
+      expect(pinStore.unpinned).toEqual([]);
+      // The row is gone (retire committed) but the CID is left pinned for GC.
+      expect(await db.dataSource.getRepository(PinnedCid).find({ where: { cid } })).toEqual([]);
+    });
+
     it('negative control — with the session lock stripped, retire prematurely unpins a CID a concurrent upload re-pins', async () => {
       const a = await seedAccount(false);
       const b = await seedAccount(false);

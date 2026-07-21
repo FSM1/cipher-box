@@ -1,6 +1,6 @@
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { UnauthorizedException } from '@nestjs/common';
-import { DataSource, FindOperator } from 'typeorm';
+import { DataSource, FindOperator, QueryFailedError } from 'typeorm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../../auth/entities/user.entity';
 import { FakeRepository } from '../../testing/fake-repo';
@@ -92,9 +92,15 @@ interface SumQueryBuilder {
  * A DataSource whose transaction runs inline against the in-memory repos and
  * whose query runner no-ops every advisory-lock statement — the post-commit
  * unpin guard's session lock has no effect against a single-threaded fake, so
- * its recount runs directly against the in-memory pins repo.
+ * its recount runs directly against the in-memory pins repo. With
+ * `sessionLockTimeout`, the post-commit `pg_advisory_lock` acquire instead
+ * aborts with a Postgres `lock_timeout` (55P03), simulating a contended
+ * durability window.
  */
-function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {
+function fakeDataSource(
+  repos: Array<[unknown, unknown]>,
+  opts: { sessionLockTimeout?: boolean } = {}
+): DataSource {
   const byEntity = new Map(repos);
   return {
     transaction: (runInTransaction: (manager: unknown) => unknown) =>
@@ -104,7 +110,16 @@ function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {
       }),
     createQueryRunner: () => ({
       connect: async () => undefined,
-      query: async () => [],
+      query: async (sql: string) => {
+        if (
+          opts.sessionLockTimeout &&
+          typeof sql === 'string' &&
+          sql.includes('pg_advisory_lock(')
+        ) {
+          throw new QueryFailedError(sql, [], { code: '55P03' } as never);
+        }
+        return [];
+      },
       release: async () => undefined,
     }),
   } as unknown as DataSource;
@@ -272,6 +287,36 @@ describe('RegistryService', () => {
       const acct = await account();
       const result = await service.retire(acct, ['never-registered']);
       expect(result).toEqual({ retired: 0, unpinned: 0 });
+    });
+
+    it('leaves a refcount-zero CID pinned for GC when the post-commit durability lock is contended, still reporting the committed retire', async () => {
+      const acct = await account();
+      await service.register(acct, [{ ipnsName: 'k51c', contentCids: ['bafyContended'] }]);
+
+      // Swap in a data source whose post-commit session-lock acquire aborts with
+      // a lock_timeout — the committed delete must stay observable, the unpin is
+      // skipped (left to GC), and the retire does NOT surface a 503.
+      service = new RegistryService(
+        pins as never,
+        users as never,
+        fakeDataSource(
+          [
+            [User, users],
+            [NameInventory, names],
+            [PinnedCid, pins],
+          ],
+          { sessionLockTimeout: true }
+        ),
+        pinStore,
+        fakeConfig({}).service
+      );
+
+      const result = await service.retire(acct, ['bafyContended']);
+
+      expect(result).toEqual({ retired: 1, unpinned: 0 });
+      expect(pinStore.unpinned).toEqual([]);
+      // The row is deleted (retire committed) but the physical pin is left intact.
+      expect(pins.rows.filter((r) => r.cid === 'bafyContended')).toHaveLength(0);
     });
   });
 
