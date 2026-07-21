@@ -37,6 +37,10 @@ pub enum StageOutcome {
 /// the budget, nothing is written; otherwise the bytes are staged under the
 /// op's staging key and the op is enqueued.
 ///
+/// `upload` is the **already-sealed** content payload (core's content-seal runs
+/// upstream in the content plane); no plaintext user content ever lands in the
+/// staging store at rest.
+///
 /// Fail-fast ordering: the budget is checked and the bytes staged **before**
 /// the op is enqueued, so a rejected upload leaves no dangling queue entry and
 /// an accepted one leaves no op referencing unstaged bytes.
