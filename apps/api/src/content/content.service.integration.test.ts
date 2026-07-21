@@ -390,6 +390,43 @@ describe('ContentService upload concurrency (real Postgres)', () => {
     });
   });
 
+  describe('quota gate — scoped to authoritative (advisory=false) rows', () => {
+    it('does not count advisory/BYO rows against the hosted quota (no false 413)', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '100' });
+      // A stale advisory row an account kept after toggling BYO off, far over
+      // the limit — its bytes live on the user's own provider, not the quota.
+      await db.dataSource
+        .getRepository(PinnedCid)
+        .save({ accountId, cid: 'baAdvisoryStale', size: '500', advisory: true });
+
+      const pinStore = new FakePinStore();
+      const result = await buildService(db.dataSource, pinStore).upload(
+        accountId,
+        Buffer.alloc(60, 1)
+      );
+
+      expect(result.size).toBe(60);
+      // Only the new authoritative row counts; the advisory 500 bytes are excluded.
+      const authoritative = (await pinsFor(accountId)).filter((row) => !row.advisory);
+      expect(authoritative).toHaveLength(1);
+      expect(authoritative[0].size).toBe('60');
+    });
+
+    it('still 413s a genuine hosted-over-quota upload (authoritative rows do count)', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '100' });
+      await db.dataSource
+        .getRepository(PinnedCid)
+        .save({ accountId, cid: 'baHosted', size: '60', advisory: false });
+
+      const pinStore = new FakePinStore();
+      await expect(
+        buildService(db.dataSource, pinStore).upload(accountId, Buffer.alloc(60, 2))
+      ).rejects.toBeInstanceOf(PayloadTooLargeException);
+      // Nothing pinned; the authoritative 60 + incoming 60 > 100 refused.
+      expect(pinStore.pinned).toEqual([]);
+    });
+  });
+
   describe('atomic byte-pin + register', () => {
     it('pins the bytes and keeps the row on success', async () => {
       const accountId = await seedAccount({ quotaLimitOverride: '1000' });

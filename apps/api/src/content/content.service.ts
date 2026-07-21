@@ -24,7 +24,7 @@ import {
   DEFAULT_QUOTA_BYTES,
   exceedsQuota,
   resolveLimitBytes,
-  sumPinnedBytes,
+  sumHostedBytes,
 } from '../registry/quota';
 
 /** A stored pin outcome plus whether THIS upload created the row (drives the pin). */
@@ -158,7 +158,9 @@ export class ContentService {
     }
 
     if (!advisory) {
-      const used = await sumPinnedBytes(pinRepo, accountId);
+      // Gate against AUTHORITATIVE rows only: stale advisory/BYO rows an account
+      // kept after toggling BYO off live on its own provider, not the hosted quota.
+      const used = await sumHostedBytes(pinRepo, accountId);
       const limit = resolveLimitBytes(user.quotaLimitOverride, this.defaultLimitBytes);
       if (exceedsQuota(used, BigInt(size), limit)) {
         throw new PayloadTooLargeException('Upload exceeds the account storage quota');

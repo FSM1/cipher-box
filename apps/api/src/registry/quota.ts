@@ -40,6 +40,27 @@ export async function sumPinnedBytes(
   return BigInt(row?.used ?? '0');
 }
 
+/**
+ * The quota-GATE sum: only AUTHORITATIVE hosted rows (`advisory = false`).
+ * BYO/advisory bytes live on the user's own provider and never count against
+ * the hosted quota (blueprint/api.md, Registry: "Hosted rows are authoritative
+ * and gate uploads; BYO accounts' rows are advisory — quota always allows").
+ * Distinct from `sumPinnedBytes` (all rows) because a hosted upload must not be
+ * 413'd by stale advisory rows an account kept after toggling BYO off.
+ */
+export async function sumHostedBytes(
+  repo: Repository<PinnedCid>,
+  accountId: string
+): Promise<bigint> {
+  const row = await repo
+    .createQueryBuilder('pin')
+    .select('COALESCE(SUM(pin.size), 0)', 'used')
+    .where('pin.account_id = :accountId', { accountId })
+    .andWhere('pin.advisory = :advisory', { advisory: false })
+    .getRawOne<{ used: string }>();
+  return BigInt(row?.used ?? '0');
+}
+
 /** The account limit in bytes: the per-account override, else the env default. */
 export function resolveLimitBytes(
   quotaLimitOverride: string | null,
