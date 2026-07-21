@@ -65,10 +65,13 @@ pub const CONTENT_CID_LEN: usize = CID_PREFIX_LEN + DIGEST_LEN;
 /// `dag-cbor` (0x71) root (core.md:56) — like the name codec's libp2p-key 0x72
 /// ([`crate::ipns::name`]). A `codec >= 0x80` is a multi-byte unsigned varint,
 /// outside the frozen set and unrepresentable in this fixed layout, so callers
-/// must pass a single-byte multicodec; the guard fails closed (panics in debug)
-/// rather than silently emitting a malformed one-byte-truncated CID.
+/// must pass a single-byte multicodec; the guard fails closed (panics in every
+/// build) rather than silently emitting a malformed one-byte-truncated CID.
 pub fn compute_cid(codec: u8, bytes: &[u8]) -> Vec<u8> {
-    debug_assert!(
+    // A malformed content CID is a content-addressing hazard, so this holds in
+    // release too, not only debug (core.md:56). The frozen content-plane set is
+    // single-byte (raw 0x55, dag-cbor 0x71), so it never fires in correct use.
+    assert!(
         codec < 0x80,
         "content-plane multicodec must be single-byte (< 0x80, core.md:56)"
     );
@@ -188,9 +191,9 @@ mod tests {
         );
     }
 
-    // Native-only: the guard is an arch-independent `u8` comparison, and
-    // `#[should_panic]` is unsafe on the panic=abort wasm legs.
-    #[cfg(all(debug_assertions, not(target_family = "wasm")))]
+    // Native-only: the always-on assert holds in every build (debug and
+    // release), and `#[should_panic]` is unsafe on the panic=abort wasm legs.
+    #[cfg(not(target_family = "wasm"))]
     #[test]
     #[should_panic(expected = "single-byte")]
     fn compute_cid_guards_a_multibyte_codec_fail_closed() {
