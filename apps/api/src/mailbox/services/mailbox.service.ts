@@ -5,9 +5,9 @@ import {
   PayloadTooLargeException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InjectRepository } from '@nestjs/typeorm';
+import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'node:crypto';
-import { LessThan, QueryFailedError, Repository } from 'typeorm';
+import { DataSource, LessThan, QueryFailedError, Repository } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 import { IdentityService } from '../../auth/services/identity.service';
 import { Clock } from '../../common/clock';
@@ -73,6 +73,8 @@ export class MailboxService {
     private readonly messageRepository: Repository<MailboxMessage>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    @InjectDataSource()
+    private readonly dataSource: DataSource,
     private readonly identityService: IdentityService,
     private readonly clock: Clock,
     configService: ConfigService
@@ -110,7 +112,9 @@ export class MailboxService {
 
     const idempotencyScope = this.scopeIdempotency(senderPublicKey, input.idempotencyKey);
 
-    // Idempotent replay wins even when the mailbox is full.
+    // Fast path: an idempotent replay wins even when the mailbox is full, and
+    // takes no lock — the common repost case never contends on the per-recipient
+    // serialization below.
     const existing = await this.messageRepository.findOne({
       where: { recipientPublicKey, idempotencyScope },
     });
@@ -118,26 +122,13 @@ export class MailboxService {
       return { id: existing.id };
     }
 
-    // Expired rows are dead fuel: purge before counting so a full-of-expired
-    // mailbox still accepts new mail (opportunistic housekeeping).
-    await this.purgeExpired(recipientPublicKey);
-
-    const pending = await this.messageRepository.count({ where: { recipientPublicKey } });
-    if (pending >= this.pendingCap) {
-      throw new ConflictException('Recipient mailbox is full');
-    }
-
     try {
-      const saved = await this.messageRepository.save({
-        recipientPublicKey,
-        idempotencyScope,
-        blob,
-        receivedAt: this.clock.now(),
-      });
-      return { id: saved.id };
+      return await this.enforceCapAndInsert(recipientPublicKey, idempotencyScope, blob);
     } catch (error) {
       // The unique (recipient, idempotencyScope) index is the durable dedup
-      // backstop under a concurrent double-post; re-read and return the winner.
+      // backstop under a concurrent double-post: a same-scope insert that races
+      // past the in-transaction replay check aborts the transaction, so re-read
+      // the committed winner on a fresh statement (outside the rolled-back txn).
       if (error instanceof QueryFailedError) {
         const winner = await this.messageRepository.findOne({
           where: { recipientPublicKey, idempotencyScope },
@@ -151,12 +142,62 @@ export class MailboxService {
   }
 
   /**
+   * The pending-cap enforcement window — purge → count → cap-check → insert —
+   * run under a per-recipient transaction-scoped advisory lock so concurrent
+   * posts to the SAME recipient serialize. Without the lock the count read and
+   * the insert are separate statements: two writers arriving at `cap - 1` could
+   * both observe `cap - 1`, both pass the check, and both insert, overshooting
+   * the cap (a DoS control). Holding `pg_advisory_xact_lock` across the whole
+   * transaction means the second writer blocks until the first commits, then
+   * counts the first's committed row before its own check — the overshoot
+   * closes structurally, no schema change required. The lock is transaction
+   * scoped: Postgres releases it automatically on commit or rollback.
+   */
+  private async enforceCapAndInsert(
+    recipientPublicKey: string,
+    idempotencyScope: string,
+    blob: Buffer
+  ): Promise<PostMessageResult> {
+    return this.dataSource.transaction(async (manager) => {
+      await manager.query('SELECT pg_advisory_xact_lock($1::bigint)', [
+        this.recipientLockKey(recipientPublicKey),
+      ]);
+      const repo = manager.getRepository(MailboxMessage);
+
+      // Re-check idempotency now that we hold the lock: a same-scope writer that
+      // committed just ahead of us is visible here, so we return its row instead
+      // of racing it to a unique-index violation.
+      const replay = await repo.findOne({ where: { recipientPublicKey, idempotencyScope } });
+      if (replay) {
+        return { id: replay.id };
+      }
+
+      // Expired rows are dead fuel: purge before counting so a full-of-expired
+      // mailbox still accepts new mail (opportunistic housekeeping).
+      await this.purgeExpired(recipientPublicKey, repo);
+
+      const pending = await repo.count({ where: { recipientPublicKey } });
+      if (pending >= this.pendingCap) {
+        throw new ConflictException('Recipient mailbox is full');
+      }
+
+      const saved = await repo.save({
+        recipientPublicKey,
+        idempotencyScope,
+        blob,
+        receivedAt: this.clock.now(),
+      });
+      return { id: saved.id };
+    });
+  }
+
+  /**
    * Poll the caller mailbox: pending messages oldest-first, capped at the
    * poll limit. No sender metadata is returned in the clear — the sealed
    * payload carries the owner-signed sender inside.
    */
   async poll(recipientPublicKey: string): Promise<{ messages: PolledMessage[] }> {
-    await this.purgeExpired(recipientPublicKey);
+    await this.purgeExpired(recipientPublicKey, this.messageRepository);
     const rows = await this.messageRepository.find({
       where: { recipientPublicKey },
       order: { receivedAt: 'ASC' },
@@ -188,12 +229,31 @@ export class MailboxService {
     return { success: true };
   }
 
-  private async purgeExpired(recipientPublicKey: string): Promise<void> {
+  private async purgeExpired(
+    recipientPublicKey: string,
+    repo: Repository<MailboxMessage>
+  ): Promise<void> {
     const cutoff = new Date(this.clock.now().getTime() - TTL_MS);
-    await this.messageRepository.delete({ recipientPublicKey, receivedAt: LessThan(cutoff) });
+    await repo.delete({ recipientPublicKey, receivedAt: LessThan(cutoff) });
   }
 
   private scopeIdempotency(senderPublicKey: string, idempotencyKey: string): string {
     return createHash('sha256').update(`${senderPublicKey}:${idempotencyKey}`).digest('hex');
+  }
+
+  /**
+   * Map a recipientPublicKey to a stable signed 64-bit key for
+   * `pg_advisory_xact_lock`. sha256 — this file's existing hash of choice (see
+   * `scopeIdempotency`) — over the ALREADY-normalized recipient key, then the
+   * first 8 bytes read big-endian as a signed BigInt, which is exactly the
+   * Postgres `bigint` domain (−2^63 … 2^63−1). Deterministic and process-stable,
+   * so every API instance maps a given recipient to the same lock. Returned as a
+   * decimal string bound through `$1::bigint`, sidestepping driver-level BigInt
+   * parameter handling. The 8→64-bit truncation admits astronomically rare
+   * cross-recipient collisions; the only effect would be two distinct recipients
+   * briefly serializing, never a correctness or cap breach.
+   */
+  private recipientLockKey(recipientPublicKey: string): string {
+    return createHash('sha256').update(recipientPublicKey).digest().readBigInt64BE(0).toString();
   }
 }

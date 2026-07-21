@@ -232,6 +232,13 @@ jobs:
           echo "Fix: pnpm --filter @cipherbox/api migration:generate src/migrations/<Name> and commit the result."
           exit 1
 
+      # Folds the Postgres-backed mailbox pending-cap concurrency guard onto this
+      # job's database so it gates without registering a new required check (law 1).
+      - name: Prove the mailbox pending-cap concurrency guard against real Postgres
+        env:
+          MAILBOX_DB_TEST: '1'
+        run: pnpm --filter @cipherbox/api exec vitest run src/mailbox/services/mailbox.concurrency.test.ts
+
   openapi-freshness:
     name: OpenAPI Freshness
     needs: [changes, lint]

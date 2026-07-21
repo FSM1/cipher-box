@@ -3,6 +3,7 @@ import { secp256k1 } from '@noble/curves/secp256k1';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IdentityService } from '../../auth/services/identity.service';
 import { User } from '../../auth/entities/user.entity';
+import { FakeDataSource } from '../../testing/fake-data-source';
 import { FakeRepository } from '../../testing/fake-repo';
 import { FakeClock, fakeConfig } from '../../testing/fakes';
 import { MailboxMessage } from '../entities/mailbox-message.entity';
@@ -34,6 +35,7 @@ describe('MailboxService', () => {
     service = new MailboxService(
       messages as never,
       users as never,
+      new FakeDataSource(messages as never) as never,
       new IdentityService(),
       clock,
       fakeConfig(config).service
