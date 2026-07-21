@@ -1,6 +1,9 @@
 import { createHmac } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { verifiedSubjectFromBearer } from './account-throttler.guard';
+import {
+  verifiedSubjectFromBearer,
+  verifiedUnexpiredSubjectFromBearer,
+} from './account-throttler.guard';
 
 const SECRET = 'account-throttler-test-secret';
 
@@ -70,5 +73,64 @@ describe('verifiedSubjectFromBearer', () => {
     expect(verifiedSubjectFromBearer({})).toBe(undefined);
     expect(verifiedSubjectFromBearer({ authorization: 'Basic abc' })).toBe(undefined);
     expect(verifiedSubjectFromBearer(bearer('not-a-jwt'))).toBe(undefined);
+  });
+
+  it('still returns the sub of a signed-but-EXPIRED token (expiry ignored for rate-limit keying)', () => {
+    const past = Math.floor(Date.now() / 1000) - 60;
+    expect(verifiedSubjectFromBearer(bearer(token({ sub: 'user-1', exp: past })))).toBe('user-1');
+  });
+});
+
+describe('verifiedUnexpiredSubjectFromBearer', () => {
+  let priorSecret: string | undefined;
+
+  beforeAll(() => {
+    priorSecret = process.env.JWT_SECRET;
+    process.env.JWT_SECRET = SECRET;
+  });
+
+  afterAll(() => {
+    if (priorSecret === undefined) {
+      delete process.env.JWT_SECRET;
+    } else {
+      process.env.JWT_SECRET = priorSecret;
+    }
+  });
+
+  const now = 1_000_000;
+
+  it('returns the sub of a validly-signed, unexpired token', () => {
+    expect(
+      verifiedUnexpiredSubjectFromBearer(bearer(token({ sub: 'user-1', exp: now + 60 })), now)
+    ).toBe('user-1');
+  });
+
+  it('fails closed on a validly-signed but EXPIRED token (unlike the rate-limit keyer)', () => {
+    const expired = bearer(token({ sub: 'user-1', exp: now - 1 }));
+    // The signature is genuine, so the rate-limit keyer still trusts the sub...
+    expect(verifiedSubjectFromBearer(expired)).toBe('user-1');
+    // ...but the pre-buffer gate rejects it (must not buffer for an expired token).
+    expect(verifiedUnexpiredSubjectFromBearer(expired, now)).toBe(undefined);
+  });
+
+  it('rejects at the exact expiry boundary (now >= exp), matching jsonwebtoken', () => {
+    expect(
+      verifiedUnexpiredSubjectFromBearer(bearer(token({ sub: 'user-1', exp: now })), now)
+    ).toBe(undefined);
+  });
+
+  it('treats a token with no exp as unexpired (matching the guard)', () => {
+    expect(verifiedUnexpiredSubjectFromBearer(bearer(token({ sub: 'user-1' })), now)).toBe(
+      'user-1'
+    );
+  });
+
+  it('rejects a token signed with a different secret regardless of expiry', () => {
+    expect(
+      verifiedUnexpiredSubjectFromBearer(
+        bearer(token({ sub: 'victim', exp: now + 60 }, 'attacker-secret')),
+        now
+      )
+    ).toBe(undefined);
   });
 });

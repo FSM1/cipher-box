@@ -2,7 +2,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import type { NextFunction, Request, Response } from 'express';
-import { verifiedSubjectFromBearer } from './ops/account-throttler.guard';
+import { verifiedUnexpiredSubjectFromBearer } from './ops/account-throttler.guard';
 
 /** Absolute upload-size cap (coarse DoS guard); the quota gate is the fine one. */
 const DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -22,14 +22,15 @@ function maxUploadBytes(): number {
  * capture the bytes deterministically — a stream read from inside the handler
  * would race the guard's `await`.
  *
- * The buffer is gated behind a VERIFIED bearer signature: an unauthenticated
- * client is passed through unbuffered so the route's `JwtAuthGuard` 401s it
- * before it can force `maxBytes` of heap per connection (a credential-less
- * memory-exhaustion DoS). The signature check mirrors the throttler's — expiry
- * is left to the guard; a validly-signed token is a genuine, rate-limited
- * account. The content-type match is case-insensitive per RFC 9110. A body over
- * the cap is answered with a 413 and drained (never `req.destroy()`, which would
- * reset the connection before the 413 could flush).
+ * The buffer is gated behind a VERIFIED, UNEXPIRED bearer signature: an
+ * unauthenticated OR expired client is passed through unbuffered so the route's
+ * `JwtAuthGuard` 401s it before it can force `maxBytes` of heap per connection
+ * (a credential-less memory-exhaustion DoS). Expiry mirrors the guard's `exp`
+ * check with the same secret, so a validly-signed-but-expired token cannot
+ * buffer; only a genuine, rate-limited account does. The content-type match is
+ * case-insensitive per RFC 9110. A body over the cap is answered with a 413 and
+ * drained (never `req.destroy()`, which would reset the connection before the
+ * 413 could flush).
  */
 function rawUploadBody(maxBytes: number) {
   return (req: Request & { body?: unknown }, res: Response, next: NextFunction): void => {
@@ -37,7 +38,7 @@ function rawUploadBody(maxBytes: number) {
     if (!contentType.includes('application/octet-stream')) {
       return next();
     }
-    if (!verifiedSubjectFromBearer(req.headers as Record<string, unknown>)) {
+    if (!verifiedUnexpiredSubjectFromBearer(req.headers as Record<string, unknown>)) {
       return next();
     }
     const chunks: Buffer[] = [];

@@ -198,13 +198,13 @@ describe('content upload cap and pre-buffer auth gate', () => {
     else process.env.MAX_UPLOAD_BYTES = priorMax;
   });
 
-  async function authToken(): Promise<string> {
+  async function authToken(expiresIn = 900): Promise<string> {
     const priv = secp256k1.utils.randomPrivateKey();
     try {
       const publicKey = Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
       return jwt.signAsync(
         { sub: '11111111-1111-4111-8111-111111111111', publicKey },
-        { secret: SECRET }
+        { secret: SECRET, expiresIn }
       );
     } finally {
       priv.fill(0);
@@ -228,5 +228,28 @@ describe('content upload cap and pre-buffer auth gate', () => {
       .set('Content-Type', 'application/octet-stream')
       .send(Buffer.alloc(MAX + 8, 1))
       .expect(401);
+  });
+
+  it('refuses an over-cap EXPIRED-but-signed upload with 401 before buffering (not 413)', async () => {
+    // A genuine signature over an expired `exp`: it must NOT trigger buffering,
+    // so the over-cap body is rejected as 401 (unbuffered), never 413.
+    const expired = await authToken(-10);
+    await request(http)
+      .post('/content/upload')
+      .set('Authorization', `Bearer ${expired}`)
+      .set('Content-Type', 'application/octet-stream')
+      .send(Buffer.alloc(MAX + 8, 1))
+      .expect(401);
+  });
+
+  it('still buffers and uploads for an unexpired valid token', async () => {
+    const token = await authToken();
+    const res = await request(http)
+      .post('/content/upload')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Content-Type', 'application/octet-stream')
+      .send(Buffer.from([1, 2, 3]))
+      .expect(201);
+    expect(res.body).toBeDefined();
   });
 });
