@@ -10,5 +10,31 @@
     "hex": "a16c6f766572726964655365656458207777777777777777777777777777777777777777777777777777777777777777",
     "check": "missing-field",
     "class": "malformed"
+  },
+  {
+    "name": "tampered-ciphertext",
+    "recipientSecret": "3132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f50",
+    "enc": "1b1b8caa8136a07b19cdc42dbff58c341de0087d8feaecf29eec0ed4fd0c3355",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 4,
+    "structTag": 4,
+    "ciphertext": "dcd6133f51b5f53ebbba8c2c8254ba51af5776e30aa181c8b670e4dde21e4f949699212602c37903757c1d6b2c37815a8dcdd7b2dea33177fc5ca41650f370cbda676ae201f697",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "struct-tag-transplant",
+    "recipientSecret": "3132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f50",
+    "enc": "1b1b8caa8136a07b19cdc42dbff58c341de0087d8feaecf29eec0ed4fd0c3355",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 4,
+    "structTag": 3,
+    "ciphertext": "dcd6133f51b5f53ebbba8c2c8254ba51af5776e30aa181c8b670e4dde21e4f949699212602c37903757c1d6b2c37815a8dcdd7b2dea33177fc5ca41650f370cbda676ae201f696",
+    "check": "hpke-open-failed",
+    "class": "trust"
   }
 ]

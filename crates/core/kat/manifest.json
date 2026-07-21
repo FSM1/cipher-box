@@ -223,7 +223,7 @@
     },
     "recordReject": {
       "file": "vectors/ipns/record_reject.json",
-      "count": 5,
+      "count": 7,
       "checks": [
         "ipns-signature-invalid",
         "ipns-value-mismatch",
@@ -251,7 +251,7 @@
     },
     "mailboxAccept": {
       "file": "vectors/payload/mailbox_accept.json",
-      "count": 2
+      "count": 3
     },
     "mailboxReject": {
       "file": "vectors/payload/mailbox_reject.json",
@@ -288,8 +288,9 @@
     },
     "grantBlobReject": {
       "file": "vectors/grant/grant_blob_reject.json",
-      "count": 3,
+      "count": 5,
       "checks": [
+        "hpke-open-failed",
         "unexpected-type",
         "missing-field",
         "invalid-field-length"
@@ -301,8 +302,9 @@
     },
     "ownerBlobReject": {
       "file": "vectors/grant/owner_blob_reject.json",
-      "count": 2,
+      "count": 4,
       "checks": [
+        "hpke-open-failed",
         "missing-field",
         "invalid-field-length"
       ]
