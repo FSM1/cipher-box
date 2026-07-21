@@ -209,12 +209,14 @@ struct ContentSealRejectVector {
     class: String,
 }
 
-/// A content-CID accept vector: fixed sealed bytes and their deterministic
-/// CIDv1 (KAT-pinned, byte-identical native + wasm32).
+/// A content-CID accept vector: fixed bytes plus the multicodec (raw leaf or a
+/// non-raw DAG root) and their deterministic CIDv1 (KAT-pinned, byte-identical
+/// native + wasm32).
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ContentCidVector {
     name: String,
+    codec: u8,
     sealed: String,
     cid: String,
 }
@@ -2113,27 +2115,37 @@ fn build_content_seal_reject() -> Vec<ContentSealRejectVector> {
 
 fn build_content_cid() -> Vec<ContentCidVector> {
     let key = content_key();
-    // Fixed sealed byte strings (a real sealed chunk, the empty input, and a
-    // full byte range) → their deterministic CIDv1.
-    let cases: Vec<(&str, Vec<u8>)> = vec![
+    // dag-cbor multicodec (0x71): a non-raw DAG-root codec, engine-owned (#630,
+    // engine.md:497), pins the codec parameterization. `verify_cid` keys off the
+    // claimed CID's own codec, so the version `contentCid` root verifies too.
+    const DAG_CBOR_CODEC: u8 = 0x71;
+    // (name, codec, bytes) → deterministic CIDv1. Three raw leaves (a real
+    // sealed chunk, the empty input, a full byte range) plus one dag-cbor root.
+    let cases: Vec<(&str, u8, Vec<u8>)> = vec![
         (
             "cid-sealed-chunk",
+            CONTENT_CID_CODEC,
             seal_chunk(&key, &content_nonce(0x01), b"caller-framed chunk bytes"),
         ),
-        ("cid-empty-input", Vec::new()),
-        ("cid-256-bytes", (0u8..=255).collect()),
+        ("cid-empty-input", CONTENT_CID_CODEC, Vec::new()),
+        ("cid-256-bytes", CONTENT_CID_CODEC, (0u8..=255).collect()),
+        (
+            "cid-dag-root-nonraw-codec",
+            DAG_CBOR_CODEC,
+            b"assembled dag-root node bytes".to_vec(),
+        ),
     ];
 
     let mut names = BTreeSet::new();
     let mut out = Vec::with_capacity(cases.len());
-    for (name, sealed) in cases {
+    for (name, codec, sealed) in cases {
         assert!(names.insert(name), "duplicate content cid vector {name}");
-        let cid = compute_cid(&sealed);
+        let cid = compute_cid(codec, &sealed);
         assert_eq!(cid.len(), CONTENT_CID_LEN, "content cid {name}: length");
         assert_eq!(
             cid[..4],
-            [0x01, CONTENT_CID_CODEC, CONTENT_CID_MULTIHASH, 0x20],
-            "content cid {name}: v1||raw||blake3||len prefix"
+            [0x01, codec, CONTENT_CID_MULTIHASH, 0x20],
+            "content cid {name}: v1||codec||blake3||len prefix"
         );
         assert!(
             verify_cid(&cid, &sealed).is_ok(),
@@ -2141,6 +2153,7 @@ fn build_content_cid() -> Vec<ContentCidVector> {
         );
         out.push(ContentCidVector {
             name: name.to_string(),
+            codec,
             sealed: hexstr(&sealed),
             cid: hexstr(&cid),
         });
@@ -2151,15 +2164,24 @@ fn build_content_cid() -> Vec<ContentCidVector> {
 fn build_content_cid_reject() -> Vec<ContentCidRejectVector> {
     let key = content_key();
     let sealed = seal_chunk(&key, &content_nonce(0x20), b"the sealed content blob");
-    let good = compute_cid(&sealed);
+    let good = compute_cid(CONTENT_CID_CODEC, &sealed);
 
     let mut flipped_digest = good.clone();
     *flipped_digest.last_mut().unwrap() ^= 0x01;
 
+    // A well-framed digest over the right bytes but the wrong multihash code:
+    // must fail closed even though the codec byte is caller/engine-chosen.
+    let mut wrong_multihash = good.clone();
+    wrong_multihash[2] ^= 0xff;
+
     // (name, claimed-cid, sealed-bytes). Every claim mismatches the sealed bytes.
     let cases: Vec<(&str, Vec<u8>)> = vec![
-        ("mismatched-content", compute_cid(b"different bytes")),
+        (
+            "mismatched-content",
+            compute_cid(CONTENT_CID_CODEC, b"different bytes"),
+        ),
         ("flipped-digest-byte", flipped_digest),
+        ("wrong-multihash-code", wrong_multihash),
         ("truncated-claimed-cid", good[..good.len() - 1].to_vec()),
         ("foreign-claimed-cid", b"not a cid at all".to_vec()),
     ];

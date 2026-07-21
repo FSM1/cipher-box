@@ -375,11 +375,11 @@
     },
     "cid": {
       "file": "vectors/content/cid.json",
-      "count": 3
+      "count": 4
     },
     "cidReject": {
       "file": "vectors/content/cid_reject.json",
-      "count": 4,
+      "count": 5,
       "checks": [
         "content-cid-mismatch"
       ]

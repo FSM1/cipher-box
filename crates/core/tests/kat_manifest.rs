@@ -273,6 +273,7 @@ struct ContentSealRejectVector {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ContentCidVector {
     name: String,
+    codec: u8,
     sealed: String,
     cid: String,
 }
@@ -3506,9 +3507,10 @@ fn content_cid_vectors_are_frozen_and_verify() {
             v.name
         );
         let sealed = unhex(&v.name, &v.sealed);
-        // Deterministic CIDv1 over fixed sealed bytes, byte-identical here on
-        // native and (under the same harness) wasm32.
-        let cid = compute_cid(&sealed);
+        // Deterministic CIDv1 under the vector's codec (raw leaf or a non-raw
+        // DAG root), byte-identical here on native and, under the same harness,
+        // wasm32 — the parameterized codec must not perturb the digest.
+        let cid = compute_cid(v.codec, &sealed);
         assert_eq!(
             hex::encode(&cid),
             v.cid,
@@ -3518,8 +3520,8 @@ fn content_cid_vectors_are_frozen_and_verify() {
         assert_eq!(cid.len(), CONTENT_CID_LEN, "content cid {}: length", v.name);
         assert_eq!(
             cid[..4],
-            [0x01, CONTENT_CID_CODEC, CONTENT_CID_MULTIHASH, 0x20],
-            "content cid {}: v1||raw||blake3||len prefix",
+            [0x01, v.codec, CONTENT_CID_MULTIHASH, 0x20],
+            "content cid {}: v1||codec||blake3||len prefix",
             v.name
         );
         // Verify accepts the blob against its own CID.

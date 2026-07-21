@@ -19,7 +19,7 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 use core::cmp::Ordering;
 use std::collections::BTreeSet;
 
-use cipherbox_core::content::{compute_cid, open_chunk, seal_chunk, verify_cid};
+use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, open_chunk, seal_chunk, verify_cid};
 use cipherbox_core::seal::{
     AadContext, ChildRef, NodeKind, ReadBody, STRUCT_TAG_READ_BODY, Version, decode_envelope,
     decode_read_body, encode_envelope, encode_read_body, name_cmp, open_read_body, seal,
@@ -209,9 +209,9 @@ proptest! {
         prop_assert_eq!(&sealed[..24], &nonce);
         prop_assert_eq!(open_chunk(&key, &sealed).unwrap(), plaintext);
 
-        let cid = compute_cid(&sealed);
+        let cid = compute_cid(CONTENT_CID_CODEC, &sealed);
         prop_assert_eq!(cid.len(), 36);
-        prop_assert_eq!(compute_cid(&sealed), cid.clone());
+        prop_assert_eq!(compute_cid(CONTENT_CID_CODEC, &sealed), cid.clone());
         prop_assert!(verify_cid(&cid, &sealed).is_ok());
 
         // Flipping any sealed byte changes the content address → fail-closed.
