@@ -120,9 +120,11 @@ export function pinDurabilityLockKey(cid: string): bigint {
  * Acquire a batch of transaction-scoped advisory locks in one round-trip and one
  * deadlock-free order: keys are de-duplicated and sorted, so any two overlapping
  * batches take their shared keys in the same sequence and cannot form a cycle.
- * The array is pre-sorted AND `ORDER BY k` is applied, so acquisition stays
- * ascending regardless of how the planner shapes the scan. A `lock_timeout`
- * abort on any key maps to the retryable 503. Set the bound
+ * Acquisition order comes SOLELY from the pre-sorted `sorted` array: Postgres
+ * evaluates each `pg_advisory_xact_lock(k)` as it scans `unnest` in array order,
+ * BEFORE the sort node runs — so the `ORDER BY k` does NOT co-guarantee ascending
+ * acquisition and the pre-sort must never be dropped in reliance on it. A
+ * `lock_timeout` abort on any key maps to the retryable 503. Set the bound
  * (setAdvisoryLockTimeout) once before calling.
  */
 export async function acquireAdvisoryLocks(manager: EntityManager, keys: bigint[]): Promise<void> {

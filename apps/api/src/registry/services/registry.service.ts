@@ -1,9 +1,4 @@
-import {
-  Injectable,
-  Logger,
-  ServiceUnavailableException,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
@@ -11,9 +6,9 @@ import { User } from '../../auth/entities/user.entity';
 import {
   acquireAdvisoryLocks,
   advisoryLockKey,
-  isLockNotAvailable,
   pinDurabilityLockKey,
   resolveAdvisoryLockTimeoutMs,
+  runLockGuardedTransaction,
   setAdvisoryLockTimeout,
   withSessionAdvisoryLock,
 } from '../../common/advisory-lock';
@@ -96,27 +91,6 @@ export class RegistryService {
   }
 
   /**
-   * Run `work` in a transaction, mapping any `lock_timeout` abort (55P03) to the
-   * retryable 503. The transaction-scoped `lock_timeout` bounds not just the
-   * advisory-lock acquire but every lock taken later in the same transaction
-   * (the users-row `pessimistic_write`, the delete row locks), so a contended
-   * wait anywhere must degrade the same way instead of escaping as a 500. A 503
-   * the advisory-lock helper already raised passes through unchanged.
-   */
-  private async lockGuardedTransaction<T>(
-    work: (manager: EntityManager) => Promise<T>
-  ): Promise<T> {
-    try {
-      return await this.dataSource.transaction(work);
-    } catch (error) {
-      if (isLockNotAvailable(error)) {
-        throw new ServiceUnavailableException('Contended resource; retry shortly');
-      }
-      throw error;
-    }
-  }
-
-  /**
    * Batch register `[{ipnsName, headCid?, contentCids[]}]` under the caller's
    * account. Register-first, fail-closed: each entry upserts its name-inventory
    * row BEFORE any content pin row, so content is never accepted without the
@@ -149,7 +123,7 @@ export class RegistryService {
     // All-or-nothing: register-first, fail-closed means a mid-batch error must
     // leave no partial state behind.
     if (nameOrder.length > 0 || cidOrder.length > 0) {
-      await this.lockGuardedTransaction(async (manager) => {
+      await runLockGuardedTransaction(this.dataSource, async (manager) => {
         // Serialize per token before any read/write: register and retire
         // contend on the same keys, closing the phantom-INSERT race and
         // concurrent-duplicate inserts.
@@ -227,30 +201,35 @@ export class RegistryService {
     // All-or-nothing, and serialized per CID against concurrent register and
     // retire: the advisory lock (not a row lock, which can't see an unborn
     // INSERT) makes the delete → survivor check the authority for unpinning.
-    const { retired, unpinCids } = await this.lockGuardedTransaction(async (manager) => {
-      await lockTokens(manager, targets, this.lockTimeoutMs);
+    const { retired, unpinCids } = await runLockGuardedTransaction(
+      this.dataSource,
+      async (manager) => {
+        await lockTokens(manager, targets, this.lockTimeoutMs);
 
-      const nameRepo = manager.getRepository(NameInventory);
-      const pinRepo = manager.getRepository(PinnedCid);
+        const nameRepo = manager.getRepository(NameInventory);
+        const pinRepo = manager.getRepository(PinnedCid);
 
-      const held = await pinRepo.find({ where: { accountId, cid: In(targets) } });
-      const heldByCaller = new Set(held.map((row) => row.cid));
-      const heldCids = targets.filter(
-        (target, index) => targets.indexOf(target) === index && heldByCaller.has(target)
-      );
+        const held = await pinRepo.find({ where: { accountId, cid: In(targets) } });
+        const heldByCaller = new Set(held.map((row) => row.cid));
+        const heldCids = targets.filter(
+          (target, index) => targets.indexOf(target) === index && heldByCaller.has(target)
+        );
 
-      const nameDeleted = await nameRepo.delete({ accountId, ipnsName: In(targets) });
-      const pinDeleted = await pinRepo.delete({ accountId, cid: In(targets) });
+        const nameDeleted = await nameRepo.delete({ accountId, ipnsName: In(targets) });
+        const pinDeleted = await pinRepo.delete({ accountId, cid: In(targets) });
 
-      // Under the lock, a held CID with no surviving row is at global zero.
-      const survivors = heldCids.length ? await pinRepo.find({ where: { cid: In(heldCids) } }) : [];
-      const surviving = new Set(survivors.map((row) => row.cid));
+        // Under the lock, a held CID with no surviving row is at global zero.
+        const survivors = heldCids.length
+          ? await pinRepo.find({ where: { cid: In(heldCids) } })
+          : [];
+        const surviving = new Set(survivors.map((row) => row.cid));
 
-      return {
-        retired: (nameDeleted.affected ?? 0) + (pinDeleted.affected ?? 0),
-        unpinCids: heldCids.filter((cid) => !surviving.has(cid)),
-      };
-    });
+        return {
+          retired: (nameDeleted.affected ?? 0) + (pinDeleted.affected ?? 0),
+          unpinCids: heldCids.filter((cid) => !surviving.has(cid)),
+        };
+      }
+    );
 
     // Fire the external unpin after commit — never hold the txn across Kubo.
     // The retire txn's per-token xact lock releases at commit, so between it and
