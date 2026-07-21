@@ -103,12 +103,20 @@ pub enum ReadError {
 }
 
 /// Fetch and verify one block addressed by `cid_str` against its binary
-/// `expected_cid`. `cid_str` is the gateway address (multibase string as it
-/// appears in metadata/links); `expected_cid` is the binary CIDv1 that is the
-/// trust anchor — verification binds to it, so a mismatched address at worst
-/// fails closed. `plane` pins the codec the CID must carry (raw leaf vs dag-cbor
-/// root), rejecting an out-of-set or wrong-plane codec fail-closed before any
-/// fetch — core's [`verify_cid`] alone would accept any single-byte codec.
+/// `expected_cid`. `cid_str` is the gateway address (the canonical CIDv1
+/// base32 string as it appears in metadata/links); `expected_cid` is the binary
+/// CIDv1 that is the trust anchor — verification binds to it, so a mismatched
+/// address at worst fails closed. `plane` pins the codec the CID must carry (raw
+/// leaf vs dag-cbor root), rejecting an out-of-set or wrong-plane codec
+/// fail-closed before any fetch — core's [`verify_cid`] alone would accept any
+/// single-byte codec.
+///
+/// `cid_str` is a distinct parameter because the engine has no CID-multibase
+/// codec (base encoders live in core; content CIDs have none yet), so the caller
+/// supplies the address form. It is validated to be a canonical content-CID
+/// string before it reaches the URL, so a non-CID or a path/query-bearing string
+/// (`../`, `?`, `#`) cannot be injected; misuse still fails closed on the binary
+/// anchor either way.
 ///
 /// Tries each source in [`Gateway`] order; returns the first block that
 /// verifies. A CID mismatch on any response is terminal
@@ -122,10 +130,12 @@ pub async fn read_block(
     expected_cid: &[u8],
     plane: ContentPlane,
 ) -> Result<Vec<u8>, ReadError> {
-    // Pin the plane codec before touching the network: a CID whose codec is out
-    // of the frozen set, or valid but for the wrong plane, is a fail-closed
-    // trust violation, not something to fetch and hope core rejects.
-    if expected_cid.len() != CONTENT_CID_LEN || expected_cid[CID_CODEC_INDEX] != plane.codec() {
+    // Reject a non-anchor request before touching the network, fail-closed: an
+    // expected CID whose codec is out of the frozen set or is valid but for the
+    // wrong plane, or an address that is not a canonical content-CID string.
+    let codec_ok =
+        expected_cid.len() == CONTENT_CID_LEN && expected_cid[CID_CODEC_INDEX] == plane.codec();
+    if !codec_ok || !is_canonical_content_cid_str(cid_str) {
         return Err(ReadError::TrustViolation(
             TrustViolation::ContentCidMismatch.into(),
         ));
@@ -144,6 +154,22 @@ pub async fn read_block(
             .map_err(ReadError::TrustViolation);
     }
     Err(ReadError::Unavailable)
+}
+
+/// Whether `cid_str` is the canonical CIDv1 base32 string of a content CID: the
+/// multibase base32-lower prefix `b` over the fixed [`CONTENT_CID_LEN`] bytes.
+/// A pure format check (base encoders live in core), tied to the CID length so
+/// only a real content-CID shape reaches the gateway URL — the base32 alphabet
+/// excludes `/`, `?`, `#`, and `.`, so no path/query fragment can slip through.
+fn is_canonical_content_cid_str(cid_str: &str) -> bool {
+    // Unpadded base32 length of CONTENT_CID_LEN bytes, plus the 'b' multibase tag.
+    const CID_STR_LEN: usize = 1 + (CONTENT_CID_LEN * 8).div_ceil(5);
+    cid_str.len() == CID_STR_LEN
+        && cid_str.as_bytes()[0] == b'b'
+        && cid_str
+            .bytes()
+            .skip(1)
+            .all(|c| c.is_ascii_lowercase() || (b'2'..=b'7').contains(&c))
 }
 
 /// Send the raw-block GET to one source; `None` on a transport-level failure
@@ -229,6 +255,13 @@ mod tests {
         .remove(0)
     }
 
+    /// A syntactically canonical CIDv1 base32 address (`b` + 58 base32 chars).
+    /// The trust anchor is the binary `expected_cid`, so a valid address need
+    /// only be well-formed here, not the encoding of that specific CID.
+    fn cid_str() -> String {
+        format!("b{}", "a".repeat(58))
+    }
+
     fn accelerator_only() -> Gateway {
         Gateway {
             accelerator: Some(GatewaySource {
@@ -251,7 +284,7 @@ mod tests {
         let out = block_on(read_block(
             &accelerator_only(),
             &http,
-            "bafyleaf",
+            &cid_str(),
             &leaf.cid,
             ContentPlane::Leaf,
         ))
@@ -261,7 +294,7 @@ mod tests {
         let request = &http.requests()[0];
         assert_eq!(
             request.url,
-            "https://gw.cipherbox.test/ipfs/bafyleaf?format=raw"
+            format!("https://gw.cipherbox.test/ipfs/{}?format=raw", cid_str())
         );
         assert!(
             request
@@ -283,7 +316,7 @@ mod tests {
         let err = block_on(read_block(
             &accelerator_only(),
             &http,
-            "bafyleaf",
+            &cid_str(),
             &leaf.cid,
             ContentPlane::Leaf,
         ))
@@ -315,7 +348,7 @@ mod tests {
         let out = block_on(read_block(
             &accelerator_only(),
             &http,
-            "bafyleaf",
+            &cid_str(),
             &leaf.cid,
             ContentPlane::Leaf,
         ))
@@ -355,7 +388,7 @@ mod tests {
         let err = block_on(read_block(
             &accelerator_only(),
             &http,
-            "bafyleaf",
+            &cid_str(),
             &leaf.cid,
             ContentPlane::Leaf,
         ))
@@ -372,7 +405,7 @@ mod tests {
         let out = block_on(read_block(
             &accelerator_only(),
             &http,
-            "bafyleaf",
+            &cid_str(),
             &leaf.cid,
             ContentPlane::Leaf,
         ))
@@ -393,7 +426,7 @@ mod tests {
         let err = block_on(read_block(
             &accelerator_only(),
             &http,
-            "bafyleaf",
+            &cid_str(),
             &rogue_cid,
             ContentPlane::Leaf,
         ))
@@ -417,7 +450,7 @@ mod tests {
         let err = block_on(read_block(
             &accelerator_only(),
             &http,
-            "bafyleaf",
+            &cid_str(),
             &leaf.cid,
             ContentPlane::Root,
         ))
@@ -426,6 +459,40 @@ mod tests {
         assert!(
             http.requests().is_empty(),
             "wrong-plane codec rejected pre-fetch"
+        );
+    }
+
+    #[test]
+    fn a_non_canonical_address_is_rejected_before_any_fetch() {
+        // A path-traversal / query-bearing address must never reach the URL,
+        // even though the binary anchor (`expected_cid`) is valid.
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        // Correct length and 'b' tag, but a non-base32 tail char.
+        let wrong_charset = format!("b{}", "!".repeat(58));
+        for bad in [
+            "../../etc/passwd",
+            "bafyleaf?foo=bar",
+            "bafyleaf#frag",
+            "BAFYUPPERCASE",
+            wrong_charset.as_str(),
+        ] {
+            let err = block_on(read_block(
+                &accelerator_only(),
+                &http,
+                bad,
+                &leaf.cid,
+                ContentPlane::Leaf,
+            ))
+            .unwrap_err();
+            assert!(
+                matches!(err, ReadError::TrustViolation(_)),
+                "address {bad:?} must be rejected fail-closed"
+            );
+        }
+        assert!(
+            http.requests().is_empty(),
+            "a non-canonical address never reaches the network"
         );
     }
 
