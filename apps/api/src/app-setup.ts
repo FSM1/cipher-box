@@ -2,6 +2,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import type { NextFunction, Request, Response } from 'express';
+import { verifiedSubjectFromBearer } from './ops/account-throttler.guard';
 
 /** Absolute upload-size cap (coarse DoS guard); the quota gate is the fine one. */
 const DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
@@ -19,22 +20,34 @@ function maxUploadBytes(): number {
  * built-in json/urlencoded parsers skip octet-stream without consuming the
  * stream, so this runs as global middleware (before the async auth guard) to
  * capture the bytes deterministically — a stream read from inside the handler
- * would race the guard's `await`. Bodies over the cap abort with a 413.
+ * would race the guard's `await`.
+ *
+ * The buffer is gated behind a VERIFIED bearer signature: an unauthenticated
+ * client is passed through unbuffered so the route's `JwtAuthGuard` 401s it
+ * before it can force `maxBytes` of heap per connection (a credential-less
+ * memory-exhaustion DoS). The signature check mirrors the throttler's — expiry
+ * is left to the guard; a validly-signed token is a genuine, rate-limited
+ * account. The content-type match is case-insensitive per RFC 9110. A body over
+ * the cap is answered with a 413 and drained (never `req.destroy()`, which would
+ * reset the connection before the 413 could flush).
  */
 function rawUploadBody(maxBytes: number) {
   return (req: Request & { body?: unknown }, res: Response, next: NextFunction): void => {
-    if (!(req.headers['content-type'] ?? '').includes('application/octet-stream')) {
+    const contentType = (req.headers['content-type'] ?? '').toLowerCase();
+    if (!contentType.includes('application/octet-stream')) {
+      return next();
+    }
+    if (!verifiedSubjectFromBearer(req.headers as Record<string, unknown>)) {
       return next();
     }
     const chunks: Buffer[] = [];
     let total = 0;
     let aborted = false;
     req.on('data', (chunk: Buffer) => {
-      if (aborted) return;
+      if (aborted) return; // over the cap: drain the rest so the 413 can flush
       total += chunk.length;
       if (total > maxBytes) {
         aborted = true;
-        req.destroy();
         res.status(413).json({
           statusCode: 413,
           message: `Upload exceeds ${maxBytes} bytes`,

@@ -15,6 +15,7 @@ import {
   resolveAdvisoryLockTimeoutMs,
   runLockGuardedTransaction,
   setAdvisoryLockTimeout,
+  withSessionAdvisoryLock,
 } from '../common/advisory-lock';
 import { PinnedCid } from '../registry/entities/pinned-cid.entity';
 import { PinStore } from '../registry/pin-store';
@@ -52,7 +53,11 @@ export interface UploadResult {
  *
  * The DB transaction is the source of truth; the durable Kubo pin fires AFTER
  * commit. Byte-pin + row register stay all-or-nothing: a post-commit pin
- * failure compensates by retiring the row it just added.
+ * failure compensates by retiring the row it just added. A per-CID SESSION lock
+ * (distinct `pin-durability:` key) spans commit → pin → compensate, so the in-tx
+ * xact lock releasing at commit cannot let a concurrent same-CID upload observe
+ * a committed row whose pin is still pending and return success for bytes that
+ * were never durably pinned.
  */
 @Injectable()
 export class ContentService {
@@ -79,6 +84,24 @@ export class ContentService {
     // ledger below can key on it before any bytes are pinned.
     const cid = await this.pinStore.hash(bytes);
 
+    // Serialize the whole commit → pin → compensate span per CID with a session
+    // lock, so a concurrent same-CID upload cannot observe a committed-but-not-
+    // yet-pinned row and return success for it (the in-tx xact lock releases at
+    // commit, too early to cover the post-commit pin).
+    return withSessionAdvisoryLock(
+      this.dataSource,
+      pinDurabilityLockKey(cid),
+      this.lockTimeoutMs,
+      () => this.registerAndPin(accountId, cid, size, bytes)
+    );
+  }
+
+  private async registerAndPin(
+    accountId: string,
+    cid: string,
+    size: number,
+    bytes: Buffer
+  ): Promise<UploadResult> {
     // Phase 2 — the source of truth: gate + register under the account and CID
     // advisory locks, atomically.
     const outcome = await runLockGuardedTransaction(this.dataSource, (manager) =>
@@ -174,4 +197,14 @@ export class ContentService {
 /** Namespaced account advisory key: `account:` prevents any UUID/CID key collision. */
 function accountLockKey(accountId: string): bigint {
   return advisoryLockKey(`account:${accountId}`);
+}
+
+/**
+ * Namespaced session lock for the post-commit pin/compensation window. A
+ * DISTINCT key from the plain CID xact lock: the same upload holds both (session
+ * lock on its own connection, xact lock on the tx connection), and same-key
+ * session-vs-xact locks across connections would self-deadlock.
+ */
+function pinDurabilityLockKey(cid: string): bigint {
+  return advisoryLockKey(`pin-durability:${cid}`);
 }

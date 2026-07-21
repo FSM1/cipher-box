@@ -1,7 +1,7 @@
 import { PayloadTooLargeException, ServiceUnavailableException } from '@nestjs/common';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { createHash } from 'node:crypto';
-import { DataSource, EntityManager, Repository } from 'typeorm';
+import { DataSource, EntityManager, QueryRunner, Repository } from 'typeorm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../auth/entities/user.entity';
 import { advisoryLockKey } from '../common/advisory-lock';
@@ -9,7 +9,7 @@ import { PinnedCid } from '../registry/entities/pinned-cid.entity';
 import { PinStore } from '../registry/pin-store';
 import { fakeConfig } from '../testing/fakes';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
-import { ContentService } from './content.service';
+import { ContentService, UploadResult } from './content.service';
 
 /**
  * The hosted upload path's two concurrency guards + the quota/atomicity
@@ -35,6 +35,8 @@ class FakePinStore extends PinStore {
   readonly pinned: string[] = [];
   readonly unpinned: string[] = [];
   failPin = false;
+  /** When set, pin() reaches this gate (after commit) and waits before resolving. */
+  pinGate?: Gate;
 
   cidFor(bytes: Uint8Array): string {
     return `ba${createHash('sha256').update(bytes).digest('hex')}`;
@@ -45,6 +47,9 @@ class FakePinStore extends PinStore {
   }
 
   override async pin(bytes: Uint8Array): Promise<string> {
+    if (this.pinGate) {
+      await this.pinGate.onReach();
+    }
     if (this.failPin) {
       throw new Error('pin store unavailable');
     }
@@ -90,10 +95,30 @@ interface GateHooks {
 /**
  * A DataSource that runs the real transaction but can drop chosen advisory locks
  * and pause before the insert, so a concurrent upload can be observed to block
- * (lock present) or to race (lock removed).
+ * (lock present) or to race (lock removed). Skipping applies to BOTH the in-tx
+ * xact locks and the session lock taken on a dedicated query runner.
  */
 function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
   const skip = new Set((hooks.skipLockKeys ?? []).map((k) => k.toString()));
+  // The session lock/unlock (pg_advisory_lock / pg_advisory_unlock) — NOT the
+  // xact variant (pg_advisory_xact_lock) — dropped when its key is skipped.
+  const wrapRunner = (runner: QueryRunner): QueryRunner =>
+    new Proxy(runner, {
+      get(target, prop, receiver) {
+        if (prop === 'query') {
+          return async (sql: string, params?: unknown[]) => {
+            if (/pg_advisory_(?:un)?lock\(/i.test(sql) && skip.has(String(params?.[0]))) {
+              return [];
+            }
+            return target.query(sql, params);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function'
+          ? (value as (...a: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
   const wrapPinRepo = (repo: Repository<PinnedCid>): Repository<PinnedCid> =>
     new Proxy(repo, {
       get(target, prop, receiver) {
@@ -111,6 +136,7 @@ function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
     });
 
   return {
+    createQueryRunner: () => wrapRunner(real.createQueryRunner()),
     transaction: (runInTransaction: (manager: EntityManager) => Promise<unknown>) =>
       real.transaction((manager) => {
         const proxied = new Proxy(manager, {
@@ -143,6 +169,10 @@ function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
 
 function accountLockKey(accountId: string): bigint {
   return advisoryLockKey(`account:${accountId}`);
+}
+
+function pinDurabilityLockKey(cid: string): bigint {
+  return advisoryLockKey(`pin-durability:${cid}`);
 }
 
 describe('ContentService upload concurrency (real Postgres)', () => {
@@ -300,11 +330,11 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       const accountId = await seedAccount({ quotaLimitOverride: '1000' });
       const bytes = Buffer.alloc(40, 7);
       const cid = new FakePinStore().cidFor(bytes);
-      const skipKeys = [accountLockKey(accountId), advisoryLockKey(cid)];
+      const skipKeys = [accountLockKey(accountId), advisoryLockKey(cid), pinDurabilityLockKey(cid)];
       const gate = makeGate();
       const pinStore = new FakePinStore();
 
-      // Strip both the account and CID locks (they hash to distinct keys), so
+      // Strip the account, CID, and durability locks (all distinct keys), so
       // nothing serializes the two identical (account, cid) inserts.
       const first = buildService(
         gatedDataSource(db.dataSource, { skipLockKeys: skipKeys, beforeInsert: gate.onReach }),
@@ -391,6 +421,107 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       expect(await usedBytes(accountId)).toBe(0n);
       // The compensating retire unpinned the CID it could not durably pin.
       expect(pinStore.unpinned).toEqual([pinStore.cidFor(bytes)]);
+    });
+
+    // G2: the compensating delete does not take the account lock, so a
+    // concurrent same-account upload can transiently count the failed row and
+    // 413. That over-restriction is conservative (it never over-admits) and
+    // self-heals — once compensation removes the row the account carries no
+    // lingering charge, so an at-limit retry fits.
+    it('leaves no lingering quota charge after compensation, so a later at-limit upload succeeds', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '20' });
+
+      const failing = new FakePinStore();
+      failing.failPin = true;
+      await expect(
+        buildService(db.dataSource, failing).upload(accountId, Buffer.alloc(20, 1))
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+      expect(await usedBytes(accountId)).toBe(0n);
+
+      const ok = new FakePinStore();
+      const result = await buildService(db.dataSource, ok).upload(accountId, Buffer.alloc(20, 2));
+      expect(result.size).toBe(20);
+      expect(await usedBytes(accountId)).toBe(20n);
+    });
+  });
+
+  describe('post-commit durability — per-CID session lock', () => {
+    it('closes the race: while A holds the durability lock through a failing pin, a same-CID B blocks until A compensates, then durably pins itself', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(30, 3);
+      const cid = new FakePinStore().cidFor(bytes);
+
+      const pinGate = makeGate();
+      const failing = new FakePinStore();
+      failing.pinGate = pinGate;
+      failing.failPin = true;
+
+      // A: commits its row, then reaches the (failing) pin while still holding
+      // the session durability lock.
+      const a = buildService(db.dataSource, failing)
+        .upload(accountId, bytes)
+        .catch((e: unknown) => e);
+      await pinGate.reached;
+
+      // B: same CID, its own working pin store — blocks on the durability lock.
+      const okStore = new FakePinStore();
+      let bResult: UploadResult | undefined;
+      const b = buildService(db.dataSource, okStore)
+        .upload(accountId, bytes)
+        .then((r) => (bResult = r));
+
+      await delay(200);
+      expect(bResult).toBeUndefined(); // B is parked on the durability lock
+
+      pinGate.release(); // A's pin fails → A compensates (row deleted, CID unpinned) → releases
+      expect(await a).toBeInstanceOf(ServiceUnavailableException);
+
+      await b; // B wakes, finds no row, and pins the bytes itself
+      expect(bResult).toMatchObject({ cid, size: 30 });
+      expect(okStore.pinned).toEqual([cid]); // B's upload is DURABLE
+      const rows = await pinsFor(accountId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].cid).toBe(cid);
+    });
+
+    it('negative control — with the durability lock removed, B returns success for a CID A leaves unpinned', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(30, 4);
+      const cid = new FakePinStore().cidFor(bytes);
+      const skipDurability = [pinDurabilityLockKey(cid)];
+
+      const pinGate = makeGate();
+      const failing = new FakePinStore();
+      failing.pinGate = pinGate;
+      failing.failPin = true;
+
+      // A skips the durability lock, so it cannot serialize B against A's
+      // post-commit pin/compensation window.
+      const a = buildService(
+        gatedDataSource(db.dataSource, { skipLockKeys: skipDurability }),
+        failing
+      )
+        .upload(accountId, bytes)
+        .catch((e: unknown) => e);
+      await pinGate.reached; // A committed its row, paused in the failing pin
+
+      // B runs fully while A is parked: it sees A's committed row and returns
+      // success WITHOUT pinning (skips its own pin as idempotent).
+      const okStore = new FakePinStore();
+      const bResult = (await buildService(
+        gatedDataSource(db.dataSource, { skipLockKeys: skipDurability }),
+        okStore
+      ).upload(accountId, bytes)) as UploadResult;
+      expect(bResult).toMatchObject({ cid, size: 30 });
+      expect(okStore.pinned).toEqual([]); // B pinned nothing — it trusted A's row
+
+      pinGate.release(); // A now fails and compensates the row + unpins the CID
+      expect(await a).toBeInstanceOf(ServiceUnavailableException);
+
+      // The breach: B returned success, yet the CID was unpinned and no row
+      // survives — a successful upload referencing bytes that are not durable.
+      expect(failing.unpinned).toEqual([cid]);
+      expect(await pinsFor(accountId)).toHaveLength(0);
     });
   });
 });

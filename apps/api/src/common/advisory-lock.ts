@@ -124,3 +124,58 @@ export async function runLockGuardedTransaction<T>(
     throw error;
   }
 }
+
+/**
+ * Run `work` while holding a SESSION-level advisory lock on `key`, on a
+ * dedicated connection held for the whole span and released in a `finally`.
+ * Unlike the xact lock (auto-released at COMMIT), a session lock spans several
+ * transactions PLUS an external side effect — the caller uses it to serialize a
+ * commit → external effect → compensation window that a xact lock would leave
+ * unguarded once it releases at commit. A `lock_timeout` abort maps to the
+ * retryable 503; the bound is set session-local on the dedicated connection and
+ * RESET before release so it never leaks to the next pool borrower.
+ */
+export async function withSessionAdvisoryLock<T>(
+  dataSource: DataSource,
+  key: bigint,
+  timeoutMs: number,
+  work: () => Promise<T>
+): Promise<T> {
+  const runner = dataSource.createQueryRunner();
+  await runner.connect();
+  const bounded = timeoutMs > 0;
+  try {
+    if (bounded) {
+      await runner.query('SELECT set_config($1, $2, false)', [
+        'lock_timeout',
+        Math.trunc(timeoutMs).toString(),
+      ]);
+    }
+    let acquired = false;
+    try {
+      await runner.query('SELECT pg_advisory_lock($1::bigint)', [key.toString()]);
+      acquired = true;
+      return await work();
+    } catch (error) {
+      if (isLockNotAvailable(error)) {
+        throw new ServiceUnavailableException('Contended resource; retry shortly');
+      }
+      throw error;
+    } finally {
+      // Unlock failure implies a dead connection, whose session lock Postgres
+      // has already dropped — the pool discards it on release.
+      if (acquired) {
+        await runner.query('SELECT pg_advisory_unlock($1::bigint)', [key.toString()]).catch(() => {
+          /* noop */
+        });
+      }
+    }
+  } finally {
+    if (bounded) {
+      await runner.query('RESET lock_timeout').catch(() => {
+        /* noop */
+      });
+    }
+    await runner.release();
+  }
+}

@@ -100,6 +100,23 @@ describe('content HTTP surface', () => {
     expect([...(bytesArg as Buffer)]).toEqual([1, 2, 3, 4, 5]);
   });
 
+  it('buffers a mixed-case Application/Octet-Stream content-type (case-insensitive per RFC 9110)', async () => {
+    const auth = await token();
+    const result: UploadResult = { cid: 'bafyMixedCase', size: 2 };
+    upload.mockResolvedValue(result);
+
+    const res = await request(http)
+      .post('/content/upload')
+      .set('Authorization', `Bearer ${auth.token}`)
+      .set('Content-Type', 'Application/Octet-Stream')
+      .send(Buffer.from([7, 8]))
+      .expect(201);
+
+    expect(res.body).toEqual(result);
+    const [, bytesArg] = upload.mock.calls[0];
+    expect([...(bytesArg as Buffer)]).toEqual([7, 8]);
+  });
+
   it('rejects an empty body with 400 before the service runs', async () => {
     const auth = await token();
     await post(auth.token).send(Buffer.alloc(0)).expect(400);
@@ -133,5 +150,83 @@ describe('content HTTP surface', () => {
     await post(auth.token)
       .send(Buffer.from([1, 2, 3]))
       .expect(503);
+  });
+});
+
+/**
+ * The raw-body cap and its auth gate, with a low MAX_UPLOAD_BYTES so the cap is
+ * cheap to trip. Proves (a) an over-cap authenticated upload gets a real 413 JSON
+ * response — not a connection reset from destroying the socket — and (b) an
+ * UNAUTHENTICATED over-cap upload is refused with 401 BEFORE any buffering, so a
+ * credential-less client cannot force the process to buffer up to the cap.
+ */
+describe('content upload cap and pre-buffer auth gate', () => {
+  const MAX = 16;
+  let app: INestApplication;
+  let http: ReturnType<INestApplication['getHttpServer']>;
+  let jwt: JwtService;
+  let priorJwtSecret: string | undefined;
+  let priorMax: string | undefined;
+
+  beforeAll(async () => {
+    priorJwtSecret = process.env.JWT_SECRET;
+    priorMax = process.env.MAX_UPLOAD_BYTES;
+    process.env.JWT_SECRET = SECRET;
+    process.env.MAX_UPLOAD_BYTES = String(MAX);
+    jwt = new JwtService();
+
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
+        OpsModule,
+        JwtModule.register({ secret: SECRET, signOptions: { expiresIn: 900 } }),
+      ],
+      controllers: [ContentController],
+      providers: [JwtAuthGuard, { provide: ContentService, useValue: { upload: vi.fn() } }],
+    }).compile();
+
+    app = configureApp(moduleRef.createNestApplication());
+    await app.init();
+    http = app.getHttpServer();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    if (priorJwtSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = priorJwtSecret;
+    if (priorMax === undefined) delete process.env.MAX_UPLOAD_BYTES;
+    else process.env.MAX_UPLOAD_BYTES = priorMax;
+  });
+
+  async function authToken(): Promise<string> {
+    const priv = secp256k1.utils.randomPrivateKey();
+    try {
+      const publicKey = Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
+      return jwt.signAsync(
+        { sub: '11111111-1111-4111-8111-111111111111', publicKey },
+        { secret: SECRET }
+      );
+    } finally {
+      priv.fill(0);
+    }
+  }
+
+  it('answers an over-cap authenticated upload with a real 413 JSON body (no connection reset)', async () => {
+    const token = await authToken();
+    const res = await request(http)
+      .post('/content/upload')
+      .set('Authorization', `Bearer ${token}`)
+      .set('Content-Type', 'application/octet-stream')
+      .send(Buffer.alloc(MAX + 8, 1))
+      .expect(413);
+    expect(res.body).toMatchObject({ statusCode: 413, error: 'Payload Too Large' });
+  });
+
+  it('refuses an over-cap UNAUTHENTICATED upload with 401 before buffering (not 413)', async () => {
+    await request(http)
+      .post('/content/upload')
+      .set('Content-Type', 'application/octet-stream')
+      .send(Buffer.alloc(MAX + 8, 1))
+      .expect(401);
   });
 });
