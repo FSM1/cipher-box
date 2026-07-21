@@ -12,6 +12,7 @@ import { User } from '../auth/entities/user.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { MailboxMessage } from '../mailbox/entities/mailbox-message.entity';
 import { OpsModule } from '../ops/ops.module';
+import { RecordCache } from '../republisher/entities/record-cache.entity';
 import { FakeRepository } from '../testing/fake-repo';
 import { fakeConfig } from '../testing/fakes';
 import { AccountController } from './account.controller';
@@ -173,6 +174,8 @@ describe('registry HTTP surface', () => {
             [NameInventory, nameRepo],
             [PinnedCid, pinRepo],
             [MailboxMessage, mailboxRepo],
+            // The residue step issues a raw record_cache purge via the entity's repo.
+            [RecordCache, { query: async () => [] }],
           ]),
         },
       ],
