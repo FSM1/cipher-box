@@ -60,7 +60,18 @@ pub const CONTENT_CID_LEN: usize = CID_PREFIX_LEN + DIGEST_LEN;
 /// DAG-root codec for a version's `contentCid` (#630). Deterministic and
 /// byte-identical across native and wasm32; a public content address, so no key
 /// material flows through here.
+///
+/// The content plane's frozen multicodec set is single-byte — `raw` (0x55) leaf,
+/// `dag-cbor` (0x71) root (core.md:56) — like the name codec's libp2p-key 0x72
+/// ([`crate::ipns::name`]). A `codec >= 0x80` is a multi-byte unsigned varint,
+/// outside the frozen set and unrepresentable in this fixed layout, so callers
+/// must pass a single-byte multicodec; the guard fails closed (panics in debug)
+/// rather than silently emitting a malformed one-byte-truncated CID.
 pub fn compute_cid(codec: u8, bytes: &[u8]) -> Vec<u8> {
+    debug_assert!(
+        codec < 0x80,
+        "content-plane multicodec must be single-byte (< 0x80, core.md:56)"
+    );
     let digest = hash(bytes);
     let mut cid = Vec::with_capacity(CONTENT_CID_LEN);
     cid.extend_from_slice(&[CID_VERSION, codec, CONTENT_CID_MULTIHASH, DIGEST_LEN as u8]);
@@ -72,9 +83,10 @@ pub fn compute_cid(codec: u8, bytes: &[u8]) -> Vec<u8> {
 /// codec is read from `claimed_cid` itself (#630 owns the DAG-root codec,
 /// engine.md:497), so a raw leaf and a DAG-root `contentCid` both verify while
 /// the version, multihash code, digest length, and digest are recomputed and
-/// compared byte-for-byte. A malformed/truncated/foreign claimed CID, a wrong
-/// multihash code, or a digest mismatch is [`TrustViolation::ContentCidMismatch`],
-/// never mere staleness. The comparison is over a public content address (no
+/// compared byte-for-byte. A malformed/truncated/foreign claimed CID (including a
+/// multi-byte-varint-codec CID, whose extra prefix byte trips the fixed
+/// `len == CONTENT_CID_LEN` check), a wrong multihash code, or a digest mismatch is
+/// [`TrustViolation::ContentCidMismatch`], never mere staleness. The comparison is over a public content address (no
 /// secret), so ordinary equality is used.
 pub fn verify_cid(claimed_cid: &[u8], bytes: &[u8]) -> Result<(), CodecError> {
     if claimed_cid.len() == CONTENT_CID_LEN
@@ -167,6 +179,38 @@ mod tests {
         cid[2] ^= 0xff; // corrupt the multihash-code byte, digest still matches
         assert_eq!(
             verify_cid(&cid, bytes).unwrap_err().check(),
+            "content-cid-mismatch"
+        );
+    }
+
+    // Native-only: the guard is an arch-independent `u8` comparison, and
+    // `#[should_panic]` is unsafe on the panic=abort wasm legs.
+    #[cfg(all(debug_assertions, not(target_family = "wasm")))]
+    #[test]
+    #[should_panic(expected = "single-byte")]
+    fn compute_cid_guards_a_multibyte_codec_fail_closed() {
+        // A codec >= 0x80 (e.g. dag-json 0x0129) is a multi-byte unsigned varint,
+        // outside the frozen single-byte content-plane set (core.md:56): the guard
+        // must trip rather than silently emit a one-byte-truncated CID.
+        let _ = compute_cid(0x80, b"multi-byte codec is out of the frozen set");
+    }
+
+    #[test]
+    fn verify_rejects_a_multibyte_prefixed_oversized_cid_fail_closed() {
+        // A real multi-byte-codec CID (dag-json 0x0129 = varint [0xa9, 0x02]) is
+        // 37 bytes; the fixed `len == CONTENT_CID_LEN` check rejects it fail-closed
+        // even though the multihash and digest tail match.
+        let bytes = b"content";
+        let cid = compute_cid(CONTENT_CID_CODEC, bytes);
+        let mut oversized = vec![CID_VERSION, 0xa9, 0x02];
+        oversized.extend_from_slice(&cid[CID_CODEC_INDEX + 1..]); // multihash||len||digest
+        assert_eq!(
+            oversized.len(),
+            CONTENT_CID_LEN + 1,
+            "two-byte codec prefix"
+        );
+        assert_eq!(
+            verify_cid(&oversized, bytes).unwrap_err().check(),
             "content-cid-mismatch"
         );
     }
