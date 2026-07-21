@@ -725,14 +725,11 @@ fn assert_entry_tags_unique(entries: &[GrantSetEntry]) -> Result<(), CodecError>
 /// Encode a grant-set commitment to its canonical det-CBOR form — the exact
 /// preimage the owner ECDSA-signs and a recipient verifies.
 ///
-/// Encoding does not re-check tag uniqueness; a `debug_assert` catches a
-/// caller-built commitment with duplicate tags early, while its bytes still
-/// reject on decode.
-pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Vec<u8> {
-    debug_assert!(
-        assert_entry_tags_unique(&c.entries).is_ok(),
-        "encoding a grant-set commitment with duplicate tags; its bytes would reject on decode"
-    );
+/// Fails closed on a duplicate-tag commitment with the same `duplicate-grant-tag`
+/// verdict `decode_grant_set_commitment` raises, so the sign path never attests
+/// bytes every recipient rejects.
+pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, CodecError> {
+    assert_entry_tags_unique(&c.entries)?;
     let mut m = Map::new();
     m.insert(
         "entries",
@@ -744,12 +741,17 @@ pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Vec<u8> {
         Value::Bytes(c.owner_pseudonym_pk.to_vec()),
     );
     merge_unknown(&mut m, &c.unknown);
-    encode(&Value::Map(m))
+    Ok(encode(&Value::Map(m)))
 }
 
 /// Owner-sign a grant-set commitment: RFC 6979 ECDSA over the det-CBOR preimage.
-pub fn sign_grant_set(signer: &EcdsaSigner, c: &GrantSetCommitment) -> EcdsaSignature {
-    signer.sign_detcbor(&encode_grant_set_commitment(c))
+/// Fails closed before signing on a duplicate-tag commitment, so a release build
+/// never publishes an attestation every recipient rejects.
+pub fn sign_grant_set(
+    signer: &EcdsaSigner,
+    c: &GrantSetCommitment,
+) -> Result<EcdsaSignature, CodecError> {
+    Ok(signer.sign_detcbor(&encode_grant_set_commitment(c)?))
 }
 
 /// Verify a grant-set commitment's owner signature. Fails closed with
@@ -762,7 +764,7 @@ pub fn verify_grant_set(
     c: &GrantSetCommitment,
     sig: &EcdsaSignature,
 ) -> Result<(), CodecError> {
-    if verifier.verify_detcbor(&encode_grant_set_commitment(c), sig) {
+    if verifier.verify_detcbor(&encode_grant_set_commitment(c)?, sig) {
         Ok(())
     } else {
         Err(TrustViolation::CommitmentInvalid.into())
@@ -910,14 +912,14 @@ mod tests {
             ],
             unknown: Vec::new(),
         };
-        let bytes = encode_grant_set_commitment(&c);
+        let bytes = encode_grant_set_commitment(&c).expect("encodes");
         assert_eq!(decode_grant_set_commitment(&bytes).unwrap(), c);
         assert_eq!(
-            encode_grant_set_commitment(&decode_grant_set_commitment(&bytes).unwrap()),
+            encode_grant_set_commitment(&decode_grant_set_commitment(&bytes).unwrap()).unwrap(),
             bytes,
             "byte-stable"
         );
-        let sig = sign_grant_set(&owner, &c);
+        let sig = sign_grant_set(&owner, &c).expect("signs");
         assert!(verify_grant_set(&owner.verifying_key(), &c, &sig).is_ok());
         // Tampering with a committed entry fails the commitment.
         let mut tampered = c.clone();
@@ -933,8 +935,8 @@ mod tests {
     #[test]
     fn duplicate_grant_set_tag_rejects() {
         // The confused-deputy shape: one tag committed twice with a different
-        // permission and pseudonym. Hand-built so it bypasses the encode-side
-        // debug_assert, the way a hostile peer's bytes arrive.
+        // permission and pseudonym. Hand-built CBOR, the way a hostile peer's
+        // bytes arrive, so decode is what rejects it here.
         let mut a = Map::new();
         a.insert("permission", Value::Text("read".into()));
         a.insert("pseudonymPk", Value::Bytes(vec![0x02; 32]));
@@ -950,6 +952,31 @@ mod tests {
         let bytes = encode(&Value::Map(m));
         assert_eq!(
             decode_grant_set_commitment(&bytes).unwrap_err().check(),
+            "duplicate-grant-tag"
+        );
+    }
+
+    #[test]
+    fn encode_and_sign_reject_duplicate_tags() {
+        // Release-active guard: a caller-built dup-tag commitment never encodes
+        // or gets signed, so the sign path cannot publish bytes decode rejects.
+        // Exercised without relying on a `debug_assert`.
+        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+        let c = GrantSetCommitment {
+            ipns_name: b"n".to_vec(),
+            owner_pseudonym_pk: [0x88; 32],
+            entries: vec![
+                GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
+                GrantSetEntry::new([0x01; 32], Permission::Write, [0x04; 32]),
+            ],
+            unknown: Vec::new(),
+        };
+        assert_eq!(
+            encode_grant_set_commitment(&c).unwrap_err().check(),
+            "duplicate-grant-tag"
+        );
+        assert_eq!(
+            sign_grant_set(&owner, &c).unwrap_err().check(),
             "duplicate-grant-tag"
         );
     }

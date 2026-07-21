@@ -4112,12 +4112,12 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
     let mut out = Vec::with_capacity(cases.len());
     for (name, body) in cases {
         assert!(names.insert(name), "duplicate write-body accept {name}");
-        let bytes = encode_write_body(&body);
+        let bytes = encode_write_body(&body).expect("write-body accept encodes");
         let decoded = decode_write_body(&bytes)
             .unwrap_or_else(|e| panic!("write-body accept {name}: rejected: {e}"));
         assert_eq!(decoded, body, "write-body accept {name}: decode != source");
         assert_eq!(
-            encode_write_body(&decoded),
+            encode_write_body(&decoded).unwrap(),
             bytes,
             "write-body accept {name}: not byte-stable"
         );
@@ -4794,15 +4794,15 @@ fn grant_set_sample() -> GrantSetCommitment {
 fn build_grant_set_accept() -> Vec<GrantSetAcceptVector> {
     let owner = EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid identity scalar");
     let c = grant_set_sample();
-    let bytes = encode_grant_set_commitment(&c);
+    let bytes = encode_grant_set_commitment(&c).expect("commitment encodes");
     let decoded = decode_grant_set_commitment(&bytes).expect("commitment decodes");
     assert_eq!(decoded, c, "grant-set accept: decode != source");
     assert_eq!(
-        encode_grant_set_commitment(&decoded),
+        encode_grant_set_commitment(&decoded).unwrap(),
         bytes,
         "grant-set accept: not byte-stable"
     );
-    let sig = sign_grant_set(&owner, &c);
+    let sig = sign_grant_set(&owner, &c).expect("commitment signs");
     assert!(
         verify_grant_set(&owner.verifying_key(), &c, &sig).is_ok(),
         "grant-set accept: must verify"
@@ -4916,8 +4916,8 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
     let this = grant_set_sample();
     let mut other = grant_set_sample();
     other.entries[0].permission = Permission::Write;
-    let sig_over_other = sign_grant_set(&owner, &other);
-    let this_bytes = encode_grant_set_commitment(&this);
+    let sig_over_other = sign_grant_set(&owner, &other).expect("other commitment signs");
+    let this_bytes = encode_grant_set_commitment(&this).expect("this commitment encodes");
     let decoded = decode_grant_set_commitment(&this_bytes).expect("this commitment decodes");
     let err = verify_grant_set(&owner.verifying_key(), &decoded, &sig_over_other)
         .expect_err("mismatched-signature must fail closed");

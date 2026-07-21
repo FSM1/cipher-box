@@ -150,7 +150,7 @@ impl Fixture {
             write_key.as_bytes(),
             &NONCE_WRITE_BODY,
             &write_body_aad,
-            &encode_write_body(&write_body),
+            &encode_write_body(&write_body).expect("encodes"),
         );
         let write_body_input = StructureSigInput::over_ciphertext(
             scope_id,
@@ -172,7 +172,7 @@ impl Fixture {
             entries: Vec::new(),
             unknown: Vec::new(),
         };
-        let commitment_sig = sign_grant_set(&owner_identity, &commitment);
+        let commitment_sig = sign_grant_set(&owner_identity, &commitment).expect("signs");
 
         // Valid empty-folder read-body sealed into the envelope.
         let folder = ReadBody::Folder {
@@ -515,7 +515,7 @@ fn run_matrix_case(name: &str) -> Result<Adopted, GateError> {
         }
         "commitment-verify:commitment-invalid" => {
             let foreign = EcdsaSigner::from_scalar(&[0x5A; 32]).expect("valid scalar");
-            candidate.commitment_sig = sign_grant_set(&foreign, &candidate.commitment);
+            candidate.commitment_sig = sign_grant_set(&foreign, &candidate.commitment).expect("signs");
         }
         "grant-section:structure-signature-invalid" => {
             let mut sig = candidate.structures[0].signature.to_bytes();

@@ -226,16 +226,15 @@ fn assert_ledger_tags_unique(entries: &[GrantLedgerEntry]) -> Result<(), CodecEr
 /// Encode a write-body to its canonical det-CBOR plaintext (sealed under the
 /// root's `writeKey` with struct tag `write-body` by the caller / seal path).
 ///
-/// Encoding does not re-check tag uniqueness (mirroring [`encode_read_body`]);
-/// a `debug_assert` catches a caller-built ledger with duplicate tags early,
-/// while its bytes still reject on decode.
+/// Fails closed on a duplicate-tag ledger with the same `duplicate-grant-tag`
+/// verdict `decode_write_body` raises. Unlike [`encode_read_body`] — whose core
+/// seal boundary [`seal_read_body`](super::seal_read_body) runs `ReadBody::validate`
+/// — the write body is sealed outside core, so this encode is its release-active
+/// guard: it never hands back bytes its own decoder rejects.
 ///
 /// [`encode_read_body`]: super::encode_read_body
-pub fn encode_write_body(body: &WriteBody) -> Vec<u8> {
-    debug_assert!(
-        assert_ledger_tags_unique(&body.grant_ledger).is_ok(),
-        "encoding a write-body with duplicate grant tags; its bytes would reject on decode"
-    );
+pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
+    assert_ledger_tags_unique(&body.grant_ledger)?;
     let mut m = Map::new();
     m.insert(
         "directChildScopeIndex",
@@ -260,7 +259,7 @@ pub fn encode_write_body(body: &WriteBody) -> Vec<u8> {
         Value::Bytes(body.write_history_link.clone()),
     );
     merge_unknown(&mut m, &body.unknown);
-    encode(&Value::Map(m))
+    Ok(encode(&Value::Map(m)))
 }
 
 #[cfg(test)]
@@ -285,10 +284,10 @@ mod tests {
     #[test]
     fn write_body_round_trips_byte_stable() {
         let body = sample();
-        let bytes = encode_write_body(&body);
+        let bytes = encode_write_body(&body).expect("encodes");
         let decoded = decode_write_body(&bytes).expect("decodes");
         assert_eq!(decoded, body);
-        assert_eq!(encode_write_body(&decoded), bytes, "byte-stable");
+        assert_eq!(encode_write_body(&decoded).unwrap(), bytes, "byte-stable");
     }
 
     #[test]
@@ -299,7 +298,7 @@ mod tests {
             direct_child_scope_index: Vec::new(),
             unknown: Vec::new(),
         };
-        let bytes = encode_write_body(&body);
+        let bytes = encode_write_body(&body).expect("encodes");
         assert_eq!(decode_write_body(&bytes).unwrap(), body);
     }
 
@@ -391,6 +390,30 @@ mod tests {
         let bytes = encode(&Value::Map(m));
         let decoded = decode_write_body(&bytes).expect("tolerant decode");
         assert_eq!(decoded.unknown.len(), 1);
-        assert_eq!(encode_write_body(&decoded), bytes, "unknown preserved");
+        assert_eq!(
+            encode_write_body(&decoded).unwrap(),
+            bytes,
+            "unknown preserved"
+        );
+    }
+
+    #[test]
+    fn encode_rejects_duplicate_ledger_tags() {
+        // Release-active guard: a caller-built ledger with a repeated tag never
+        // yields bytes, matching the decoder's fail-closed reject. Exercised
+        // without relying on a `debug_assert`.
+        let body = WriteBody {
+            grant_ledger: vec![
+                GrantLedgerEntry::new([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
+                GrantLedgerEntry::new([0x03; 33], [0x12; 32], Permission::Write, [0x21; 32]),
+            ],
+            write_history_link: Vec::new(),
+            direct_child_scope_index: Vec::new(),
+            unknown: Vec::new(),
+        };
+        assert_eq!(
+            encode_write_body(&body).unwrap_err().check(),
+            "duplicate-grant-tag"
+        );
     }
 }

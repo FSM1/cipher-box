@@ -2864,7 +2864,7 @@ fn write_body_accept_vectors_decode_and_round_trip() {
         let body = decode_write_body(&bytes)
             .unwrap_or_else(|e| panic!("write-body accept {}: rejected: {e}", v.name));
         assert_eq!(
-            hex::encode(encode_write_body(&body)),
+            hex::encode(encode_write_body(&body).expect("accept vector re-encodes")),
             v.hex,
             "write-body accept {}: re-encode must be byte-identical",
             v.name
@@ -3405,7 +3405,7 @@ fn grant_set_accept_vectors_decode_and_verify() {
         let c = decode_grant_set_commitment(&bytes)
             .unwrap_or_else(|e| panic!("grant-set accept {}: decode: {e}", v.name));
         assert_eq!(
-            hex::encode(encode_grant_set_commitment(&c)),
+            hex::encode(encode_grant_set_commitment(&c).expect("accept vector re-encodes")),
             v.commitment,
             "grant-set accept {}: re-encode must be byte-identical",
             v.name
