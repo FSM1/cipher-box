@@ -473,9 +473,27 @@ pub async fn adopt<F: FloorStore>(
                 RejectionReason::Trust(TrustViolation::AscentLinkMismatch.into()),
             ));
         }
-        open_ascent_link(&parent_node_seed, &ascent.aad, &ascent.link)
-            .map(drop)
+        // Cross-check the recovered override seed: the ascent public key is
+        // published, so anyone can seal a rogue payload to it. The seed the link
+        // carries is this scope root's current override seed (CONTEXT.md "Ascent
+        // link"/"Override seed"), so it must belong to this epoch and derive this
+        // node's read key — the ascent-link half of engine.md:406-408 (owner-blob
+        // seed vs ascent-link seed vs actual unseal; any disagreement is
+        // attributable abuse). The recovered `OverrideSeedPayload` and derived
+        // `SecretBytes` are gate-owned and zeroize on drop; `reader.read_key` is
+        // caller-owned and never zeroized.
+        let payload = open_ascent_link(&parent_node_seed, &ascent.aad, &ascent.link)
             .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
+        let node_seed = kdf::node_seed(payload.override_seed(), &candidate.envelope.id);
+        let derived_read_key = kdf::read_key(node_seed.as_bytes());
+        if payload.epoch != candidate.envelope.epoch
+            || !ct_eq_secret(derived_read_key.as_bytes(), reader.read_key)
+        {
+            return Err(reject(
+                GateStage::GrantSection,
+                RejectionReason::Trust(TrustViolation::AscentLinkMismatch.into()),
+            ));
+        }
     }
 
     // Stage 4 — strictly newer than the durable per-name sequence floor.

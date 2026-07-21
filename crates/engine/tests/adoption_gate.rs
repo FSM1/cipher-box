@@ -296,23 +296,43 @@ impl Fixture {
     /// `parent_node_seed` re-derives this keypair — a mismatched reader seed is
     /// a natural `ascent-link-mismatch`, no hand-corruption needed.
     fn ascent_link_under(&self, parent_node_seed: &[u8; 32]) -> AscentCheck {
-        let aad = AadContext {
+        self.ascent_link_under_aad(parent_node_seed, self.ascent_aad())
+    }
+
+    /// An ascent link sealed under `parent_node_seed` with a caller-chosen AAD,
+    /// carrying this scope's real override seed — lets a test pass the seed-derive
+    /// half yet present an AAD that does not bind to the envelope.
+    fn ascent_link_under_aad(&self, parent_node_seed: &[u8; 32], aad: AadContext) -> AscentCheck {
+        self.ascent_link_full(
+            parent_node_seed,
+            aad,
+            OverrideSeedPayload::new(self.scope_seed, self.epoch),
+        )
+    }
+
+    /// An ascent link sealed under `parent_node_seed`/`aad` carrying a
+    /// caller-chosen `OverrideSeedPayload` — lets a test seal a rogue or
+    /// stale-epoch seed to the published ascent public key.
+    fn ascent_link_full(
+        &self,
+        parent_node_seed: &[u8; 32],
+        aad: AadContext,
+        payload: OverrideSeedPayload,
+    ) -> AscentCheck {
+        let link = seal_ascent_link(parent_node_seed, &EPH_ASCENT, &aad, &payload);
+        AscentCheck { link, aad }
+    }
+
+    /// The envelope-matching ascent AAD (the honest ascent context for the
+    /// fixture's scope root).
+    fn ascent_aad(&self) -> AadContext {
+        AadContext {
             v: V,
             id: self.root_id,
             scope: self.scope_id,
             epoch: self.epoch,
             struct_tag: STRUCT_TAG_ASCENT_LINK,
-        };
-        self.ascent_link_under_aad(parent_node_seed, aad)
-    }
-
-    /// An ascent link sealed under `parent_node_seed` with a caller-chosen AAD —
-    /// lets a test pass the seed-derive half yet present an AAD that does not
-    /// bind to the envelope.
-    fn ascent_link_under_aad(&self, parent_node_seed: &[u8; 32], aad: AadContext) -> AscentCheck {
-        let payload = OverrideSeedPayload::new(self.scope_seed, self.epoch);
-        let link = seal_ascent_link(parent_node_seed, &EPH_ASCENT, &aad, &payload);
-        AscentCheck { link, aad }
+        }
     }
 
     /// An owner seed blob whose sealed AAD is overridden (e.g. a foreign scope)
@@ -1040,6 +1060,44 @@ fn ascent_link_aad_must_bind_to_the_envelope() {
     };
     let mut candidate = fx.candidate(1);
     candidate.ascent = Some(fx.ascent_link_under_aad(&parent_seed, foreign_aad));
+    let mut reader = fx.reader();
+    reader.parent_node_seed = Some(parent_seed);
+    let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "ascent-link-mismatch");
+}
+
+#[test]
+fn ascent_link_rogue_seed_fails_read_key_cross_check() {
+    // The link opens cleanly (real parent seed, envelope-matching AAD) but a
+    // rogue override seed was sealed to the PUBLISHED ascent public key — it does
+    // not derive this scope root's read key. Attributable abuse, not adoption.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let parent_seed = [0xAB; 32];
+    let rogue = OverrideSeedPayload::new([0xEE; 32], fx.epoch);
+    let mut candidate = fx.candidate(1);
+    candidate.ascent = Some(fx.ascent_link_full(&parent_seed, fx.ascent_aad(), rogue));
+    let mut reader = fx.reader();
+    reader.parent_node_seed = Some(parent_seed);
+    let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "ascent-link-mismatch");
+}
+
+#[test]
+fn ascent_link_stale_epoch_payload_rejected() {
+    // The link opens and carries the real scope seed (so the read-key derive
+    // matches), but its payload epoch is stale vs the envelope — a cross-epoch
+    // ascent seed. The epoch bind rejects it.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let parent_seed = [0xAB; 32];
+    let stale = OverrideSeedPayload::new(fx.scope_seed, fx.epoch + 1);
+    let mut candidate = fx.candidate(1);
+    candidate.ascent = Some(fx.ascent_link_full(&parent_seed, fx.ascent_aad(), stale));
     let mut reader = fx.reader();
     reader.parent_node_seed = Some(parent_seed);
     let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
