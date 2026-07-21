@@ -318,6 +318,36 @@ describe('RegistryService', () => {
       // The row is deleted (retire committed) but the physical pin is left intact.
       expect(pins.rows.filter((r) => r.cid === 'bafyContended')).toHaveLength(0);
     });
+
+    it('does not surface a 500 when the post-commit unpin throws a non-contention error, still reporting the committed retire', async () => {
+      const acct = await account();
+      await service.register(acct, [{ ipnsName: 'k51e', contentCids: ['bafyUnpinFails'] }]);
+
+      // The physical unpin is best-effort after the row delete commits, so an
+      // arbitrary (non-lock-timeout) failure must be logged and skipped, never
+      // rethrown into a 500.
+      const throwing = new (class extends FakePinStore {
+        override async unpin(): Promise<void> {
+          throw new Error('kubo unreachable');
+        }
+      })();
+      service = new RegistryService(
+        pins as never,
+        users as never,
+        fakeDataSource([
+          [User, users],
+          [NameInventory, names],
+          [PinnedCid, pins],
+        ]),
+        throwing,
+        fakeConfig({}).service
+      );
+
+      const result = await service.retire(acct, ['bafyUnpinFails']);
+
+      expect(result).toEqual({ retired: 1, unpinned: 0 });
+      expect(pins.rows.filter((r) => r.cid === 'bafyUnpinFails')).toHaveLength(0);
+    });
   });
 
   describe('quota — arithmetic, override, hosted vs BYO advisory', () => {

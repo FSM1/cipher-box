@@ -286,11 +286,10 @@ export class RegistryService {
           unpinned += 1;
         }
       } catch (error) {
-        if (error instanceof ServiceUnavailableException) {
-          this.logger.warn(`retire left ${cid} pinned for GC: durability lock contended`);
-          continue;
-        }
-        throw error;
+        // The row deletes already committed and `retired` is authoritative; the
+        // post-commit unpin is best-effort (PinStore contract), so no failure
+        // here — lock contention or otherwise — may turn a retire into a 500.
+        this.logger.warn(`retire left ${cid} pinned for GC: ${String(error)}`);
       }
     }
 

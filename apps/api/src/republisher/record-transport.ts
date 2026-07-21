@@ -85,6 +85,8 @@ export class RoutingV1RecordTransport extends RecordTransport {
     // or lie.
     const declared = response.headers.get('content-length');
     if (declared !== null && Number(declared) > MAX_RECORD_BYTES) {
+      // Release the connection instead of leaking an unread body stream.
+      await response.body?.cancel();
       throw new Error(`routing GET body ${declared}B exceeds ${MAX_RECORD_BYTES}B for ${ipnsName}`);
     }
     const body = Buffer.from(await response.arrayBuffer());
