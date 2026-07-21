@@ -27,11 +27,17 @@ import {
   sumHostedBytes,
 } from '../registry/quota';
 
-/** A stored pin outcome plus whether THIS upload created the row (drives the pin). */
+/**
+ * A stored pin outcome. `created` drives the durable pin — true both when this
+ * upload inserted a fresh row and when it PROMOTED a registry-only row (size 0,
+ * never hosted-pinned) to a real hosted pin. `promoted` tells compensation to
+ * revert just the size charge on that pre-existing row rather than delete it.
+ */
 interface RegisterOutcome {
   cid: string;
   size: number;
   created: boolean;
+  promoted: boolean;
 }
 
 export interface UploadResult {
@@ -51,9 +57,14 @@ export interface UploadResult {
  *    the registry's register/retire take, so an insert here can never race an
  *    unpin there. Both keys acquire in one sorted batch (deadlock-free).
  *
+ * A register-only row (CID membership recorded at size 0 with no hosted bytes)
+ * is NOT a completed pin: an upload of the matching bytes promotes it — pinning
+ * and charging it — rather than trusting content Kubo never held.
+ *
  * The DB transaction is the source of truth; the durable Kubo pin fires AFTER
- * commit. Byte-pin + row register stay all-or-nothing: a post-commit pin
- * failure compensates by retiring the row it just added. A per-CID SESSION lock
+ * commit. Byte-pin + row register stay all-or-nothing: a post-commit pin failure
+ * compensates by retiring a row it inserted, or reverting a promoted row's size
+ * charge (the pre-existing registration survives). A per-CID SESSION lock
  * (distinct `pin-durability:` key) spans commit → pin → compensate, so the in-tx
  * xact lock releasing at commit cannot let a concurrent same-CID upload observe
  * a committed row whose pin is still pending and return success for bytes that
@@ -109,19 +120,20 @@ export class ContentService {
     );
 
     // Phase 3 — durable pin AFTER commit. Byte-pin + register are all-or-nothing:
-    // a pin failure (or a CID mismatch) compensates by retiring the new row.
+    // a pin failure (or a CID mismatch) compensates — retiring a row it inserted,
+    // or reverting a promoted row's size charge.
     if (outcome.created) {
       let pinnedCid: string;
       try {
         pinnedCid = await this.pinStore.pin(bytes);
       } catch {
-        await this.compensate(accountId, cid);
+        await this.compensate(accountId, cid, outcome.promoted);
         throw new ServiceUnavailableException('Pin store unavailable; upload not durable');
       }
       if (pinnedCid !== cid) {
         // Fail closed: the row keys on `cid`; a mismatch means Kubo pinned bytes
         // under a different CID than the ledger references.
-        await this.compensate(accountId, cid);
+        await this.compensate(accountId, cid, outcome.promoted);
         throw new ServiceUnavailableException('Pin CID mismatch; upload rejected');
       }
     }
@@ -152,14 +164,21 @@ export class ContentService {
     const advisory = user.byo;
 
     const existing = await pinRepo.findOne({ where: { accountId, cid } });
-    if (existing) {
+    // A registry-only row (register() records CID membership at size 0 with no
+    // bytes on hosted Kubo) is NOT a completed hosted pin: only `size > 0` marks
+    // durably-pinned, charged bytes. Short-circuit as idempotent only for the
+    // latter; promote the former so the bytes are actually pinned and charged
+    // rather than trusted for content Kubo never held.
+    if (existing && BigInt(existing.size) > 0n) {
       // Idempotent re-upload: the CID already counts — no gate, no new charge.
-      return { cid, size: Number(existing.size), created: false };
+      return { cid, size: Number(existing.size), created: false, promoted: false };
     }
 
     if (!advisory) {
       // Gate against AUTHORITATIVE rows only: stale advisory/BYO rows an account
       // kept after toggling BYO off live on its own provider, not the hosted quota.
+      // A promoted row is still size 0 here, so it adds nothing to `used` — the
+      // gate charges the incoming size exactly once, never double-counting.
       const used = await sumHostedBytes(pinRepo, accountId);
       const limit = resolveLimitBytes(user.quotaLimitOverride, this.defaultLimitBytes);
       if (exceedsQuota(used, BigInt(size), limit)) {
@@ -167,22 +186,38 @@ export class ContentService {
       }
     }
 
+    if (existing) {
+      // Promote the registry-only row: stamp the real size and the current
+      // hosting flag so the charge lands in the authoritative sum, then drive
+      // the durable pin (`created`) exactly as a fresh insert would.
+      await pinRepo.update({ accountId, cid }, { size: size.toString(), advisory });
+      return { cid, size, created: true, promoted: true };
+    }
+
     await pinRepo.insert({ accountId, cid, size: size.toString(), advisory });
-    return { cid, size, created: true };
+    return { cid, size, created: true, promoted: false };
   }
 
   /**
-   * Retire a pin row a failed durable pin left dangling, unpinning at global
-   * refcount zero — under the same per-CID lock discipline as the registry. A
-   * compensation failure is logged, never surfaced: a stranded row is only a
-   * registered orphan the republisher GCs, and it must not mask the pin error.
+   * Undo a failed durable pin. For a row THIS upload inserted, retire it,
+   * unpinning at global refcount zero — same per-CID lock discipline as the
+   * registry. For a PROMOTED row (a pre-existing registry-only registration),
+   * revert only the size charge back to 0: the registration must survive a
+   * transient pin failure, and nothing was durably pinned, so no unpin fires. A
+   * compensation failure is logged, never surfaced: a stranded charge/row is
+   * only a registered orphan the republisher GCs, and it must not mask the pin
+   * error.
    */
-  private async compensate(accountId: string, cid: string): Promise<void> {
+  private async compensate(accountId: string, cid: string, promoted: boolean): Promise<void> {
     try {
       const unpin = await runLockGuardedTransaction(this.dataSource, async (manager) => {
         await setAdvisoryLockTimeout(manager, this.lockTimeoutMs);
         await acquireAdvisoryLocks(manager, [advisoryLockKey(cid)]);
         const pinRepo = manager.getRepository(PinnedCid);
+        if (promoted) {
+          await pinRepo.update({ accountId, cid }, { size: '0' });
+          return false;
+        }
         await pinRepo.delete({ accountId, cid });
         const survivors = await pinRepo.find({ where: { cid } });
         return survivors.length === 0;

@@ -7,6 +7,7 @@ import { User } from '../auth/entities/user.entity';
 import { advisoryLockKey } from '../common/advisory-lock';
 import { PinnedCid } from '../registry/entities/pinned-cid.entity';
 import { PinStore } from '../registry/pin-store';
+import { RegistryService } from '../registry/services/registry.service';
 import { fakeConfig } from '../testing/fakes';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { ContentService, UploadResult } from './content.service';
@@ -559,6 +560,113 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       // survives — a successful upload referencing bytes that are not durable.
       expect(failing.unpinned).toEqual([cid]);
       expect(await pinsFor(accountId)).toHaveLength(0);
+    });
+  });
+
+  // A register() row records CID membership at size 0 with NO bytes on hosted
+  // Kubo. The upload path must NOT trust it as a completed pin (that would leave
+  // content unpinned and uncharged); it must promote it — pin + charge — while
+  // still no-opping a genuine duplicate of a completed hosted pin.
+  describe('registry-only row promotion (durability + quota)', () => {
+    function buildRegistry(pinStore: PinStore): RegistryService {
+      return new RegistryService(
+        db.dataSource.getRepository(PinnedCid),
+        db.dataSource.getRepository(User),
+        db.dataSource,
+        pinStore,
+        fakeConfig({ DB_ADVISORY_LOCK_TIMEOUT_MS: '0' }).service
+      );
+    }
+
+    it('promotes a size-0 registry-only row: the matching upload pins and charges it, not skip-with-0', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(50, 8);
+      const pinStore = new FakePinStore();
+      const cid = pinStore.cidFor(bytes);
+
+      // register(cid): CID membership at size 0, nothing pinned to hosted Kubo.
+      await buildRegistry(pinStore).register(accountId, [
+        { ipnsName: 'k51-promote-name', contentCids: [cid] },
+      ]);
+      const registered = (await pinsFor(accountId)).find((row) => row.cid === cid);
+      expect(registered).toMatchObject({ size: '0', advisory: false });
+      expect(pinStore.pinned).toEqual([]); // register pins nothing
+
+      const result = await buildService(db.dataSource, pinStore).upload(accountId, bytes);
+
+      // The bytes are now DURABLY pinned, the row carries the real size, and the
+      // quota is charged — closing the skip-with-size-0 durability/quota hole.
+      expect(result).toMatchObject({ cid, size: 50 });
+      expect(pinStore.pinned).toEqual([cid]);
+      const rows = await pinsFor(accountId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ cid, size: '50', advisory: false });
+      expect(await usedBytes(accountId)).toBe(50n);
+    });
+
+    it('no-ops a genuine duplicate of a completed hosted pin — charged once, not re-pinned', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(30, 9);
+      const pinStore = new FakePinStore();
+
+      const first = await buildService(db.dataSource, pinStore).upload(accountId, bytes);
+      expect(first.size).toBe(30);
+      expect(pinStore.pinned).toEqual([first.cid]);
+
+      // The second upload finds a COMPLETED hosted pin (size > 0): idempotent
+      // no-op — no second pin, no second charge.
+      const second = await buildService(db.dataSource, pinStore).upload(accountId, bytes);
+      expect(second).toMatchObject({ cid: first.cid, size: 30 });
+      expect(pinStore.pinned).toEqual([first.cid]); // not re-pinned
+      expect(await pinsFor(accountId)).toHaveLength(1);
+      expect(await usedBytes(accountId)).toBe(30n); // charged once
+    });
+
+    it('gates the promotion on the hosted quota: an over-limit promote 413s and leaves the registration at size 0', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '40' });
+      const bytes = Buffer.alloc(50, 4);
+      const pinStore = new FakePinStore();
+      const cid = pinStore.cidFor(bytes);
+
+      await buildRegistry(pinStore).register(accountId, [
+        { ipnsName: 'k51-overquota-name', contentCids: [cid] },
+      ]);
+
+      await expect(
+        buildService(db.dataSource, pinStore).upload(accountId, bytes)
+      ).rejects.toBeInstanceOf(PayloadTooLargeException);
+
+      // Refused before any pin; the registry-only row is untouched (still size 0).
+      expect(pinStore.pinned).toEqual([]);
+      const rows = await pinsFor(accountId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ cid, size: '0' });
+    });
+
+    it('reverts a promoted row to size 0 but keeps the registration when the post-commit pin fails', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(50, 2);
+      const registerStore = new FakePinStore();
+      const cid = registerStore.cidFor(bytes);
+
+      await buildRegistry(registerStore).register(accountId, [
+        { ipnsName: 'k51-revert-name', contentCids: [cid] },
+      ]);
+
+      const failing = new FakePinStore();
+      failing.failPin = true;
+      await expect(
+        buildService(db.dataSource, failing).upload(accountId, bytes)
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+      // Compensation reverts the size charge but MUST keep the pre-existing
+      // registration — a transient pin failure cannot un-register the client's
+      // CID membership. No unpin fires: nothing was ever durably pinned.
+      const rows = await pinsFor(accountId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ cid, size: '0' });
+      expect(await usedBytes(accountId)).toBe(0n);
+      expect(failing.unpinned).toEqual([]);
     });
   });
 });
