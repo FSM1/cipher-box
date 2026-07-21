@@ -378,15 +378,31 @@ pub fn encode_read_body(body: &ReadBody) -> Vec<u8> {
     }
     // The transient `Value` tree just built carries a verbatim copy of every
     // inline content key (one `Value::Bytes` per file version, produced by
-    // `Version::to_value`). We own that tree, so we are its terminal owner:
-    // encode it, then wipe its byte buffers before it drops, so no
-    // freed-but-uncleared copy of key material lingers on the heap. The
-    // returned plaintext buffer carries the same key bytes and is the seal
-    // path's ([`seal_read_body`](super::seal_read_body)) to zeroize — it does.
+    // `Version::to_value`). We own that tree, so we are its terminal owner
+    // (blueprint/core.md "Crypto suite": key material lives only in zeroizing
+    // owners). Scrub it through a drop guard, not an explicit trailing call, so
+    // the wipe runs whether `encode` returns or unwinds: `write_value`'s
+    // `debug_assert!(depth < MAX_DEPTH)` can panic in debug/test builds, and a
+    // bare post-`encode` scrub would be skipped on that unwind, leaving a
+    // freed-but-uncleared key copy on the heap. The returned buffer carries the
+    // same key bytes and is the seal path's
+    // ([`seal_read_body`](super::seal_read_body)) to zeroize — it does.
     let mut value = Value::Map(m);
-    let out = encode(&value);
-    value.zeroize_bytes();
-    out
+    let guard = ScrubOnDrop(&mut value);
+    encode(guard.0)
+}
+
+/// Scrubs the encoder's transient `Value` tree on drop, so the inline
+/// content-key copies it carries are wiped on both normal return and
+/// panic-unwind out of `encode` (blueprint/core.md terminal-owner rule). It
+/// borrows the tree rather than owning it, leaving the wiped buffers observable
+/// to a caller/test after the guard falls.
+struct ScrubOnDrop<'a>(&'a mut Value);
+
+impl Drop for ScrubOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.zeroize_bytes();
+    }
 }
 
 /// Fail-closed uniqueness over one folder's child listing (#39 D7).
@@ -661,5 +677,53 @@ mod tests {
             unknown: Vec::new(),
         };
         assert!(file.validate().is_ok());
+    }
+
+    #[test]
+    fn scrub_on_drop_guard_wipes_tree() {
+        let mut value = Value::Array(vec![Value::Bytes(vec![0xab; 32])]);
+        {
+            let _guard = ScrubOnDrop(&mut value);
+        }
+        let items = value.as_array().unwrap();
+        assert_eq!(
+            items[0],
+            Value::Bytes(Vec::new()),
+            "guard's Drop scrubbed the tree"
+        );
+    }
+
+    // Unwinding is a native/desktop concern: wasm builds are `panic=abort`, so
+    // a `debug_assert` there aborts the instance rather than unwinding past the
+    // guard — there is no scrub-skipping window to defend on that leg.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn scrub_runs_when_encode_unwinds() {
+        // `write_value`'s `debug_assert!(depth < MAX_DEPTH)` fires in this
+        // (test) build for a tree nested past MAX_DEPTH; the guard's Drop must
+        // still scrub the content-key copy while the stack unwinds out of
+        // `encode`. The secret rides item 0 (written before the panic); the
+        // deep nest that trips the assert rides item 1.
+        let mut deep = Value::Null;
+        for _ in 0..=crate::codec::MAX_DEPTH {
+            deep = Value::Array(vec![deep]);
+        }
+        let mut value = Value::Array(vec![Value::Bytes(vec![0xab; 32]), deep]);
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let guard = ScrubOnDrop(&mut value);
+            let _ = encode(guard.0);
+        }));
+        assert!(
+            result.is_err(),
+            "encode panics past MAX_DEPTH in test build"
+        );
+
+        let items = value.as_array().unwrap();
+        assert_eq!(
+            items[0],
+            Value::Bytes(Vec::new()),
+            "guard scrubbed the key copy on unwind"
+        );
     }
 }
