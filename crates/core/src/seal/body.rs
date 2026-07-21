@@ -288,9 +288,17 @@ pub fn name_cmp(a: &[u8], b: &[u8]) -> Ordering {
 }
 
 /// Decode a sealed read-body plaintext (strict det-CBOR, uniqueness enforced).
+///
+/// The transient decoded `Value` tree carries a verbatim copy of every file
+/// version's inline **content key**. Those bytes are read into zeroizing
+/// [`SecretBytes`] owners, but the tree itself must be scrubbed before it drops
+/// (terminal-owner rule, symmetric with [`encode_read_body`]). An owning
+/// [`ScrubOwned`] guard wraps the tree and wipes it on drop — covering the Ok
+/// return, every `?` early return, and a panic-unwind — while `map` reads
+/// through the guard's immutable accessor.
 pub fn decode_read_body(bytes: &[u8]) -> Result<ReadBody, CodecError> {
-    let value = decode(bytes)?;
-    let map = value.as_map()?;
+    let value = ScrubOwned(decode(bytes)?);
+    let map = value.value().as_map()?;
 
     let kind =
         NodeKind::from_wire(req(map, "kind")?.as_text()?).ok_or(Malformed::InvalidNodeKind)?;
@@ -392,14 +400,35 @@ pub fn encode_read_body(body: &ReadBody) -> Vec<u8> {
     encode(guard.0)
 }
 
-/// Scrubs the encoder's transient `Value` tree on drop, so the inline
-/// content-key copies it carries are wiped on both normal return and
-/// panic-unwind out of `encode` (blueprint/core.md terminal-owner rule). It
+/// Scrubs a codec-owned transient `Value` tree on drop, so the secret copies it
+/// carries (inline content keys, scope seeds) are wiped on both normal return
+/// and panic-unwind out of `encode` (blueprint/core.md terminal-owner rule). It
 /// borrows the tree rather than owning it, leaving the wiped buffers observable
-/// to a caller/test after the guard falls.
-struct ScrubOnDrop<'a>(&'a mut Value);
+/// to a caller/test after the guard falls. `pub(crate)` so the grant-section
+/// encoders share the one guard.
+pub(crate) struct ScrubOnDrop<'a>(pub(crate) &'a mut Value);
 
 impl Drop for ScrubOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.zeroize_bytes();
+    }
+}
+
+/// The owning sibling of [`ScrubOnDrop`], for the decode side: it takes the
+/// transient decoded `Value` tree by value and scrubs it on drop. The decoder
+/// reads its fields through [`Self::value`], an immutable borrow that coexists
+/// with the guard (a `&mut` guard cannot, since decode holds a live `&Map` into
+/// the same tree). Covers Ok, Err, and panic-unwind.
+struct ScrubOwned(Value);
+
+impl ScrubOwned {
+    /// Borrow the guarded tree for reading.
+    fn value(&self) -> &Value {
+        &self.0
+    }
+}
+
+impl Drop for ScrubOwned {
     fn drop(&mut self) {
         self.0.zeroize_bytes();
     }

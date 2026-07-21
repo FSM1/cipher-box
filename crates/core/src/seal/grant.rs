@@ -43,26 +43,12 @@ use crate::suite::secret::{SECRET_LEN, SecretBytes};
 use crate::suite::x25519::{X25519Public, X25519Secret};
 
 use super::aad::{AadContext, build_aad};
-use super::body::{bytes_fixed, collect_unknown, merge_unknown, req};
+use super::body::{ScrubOnDrop, bytes_fixed, collect_unknown, merge_unknown, req};
 
 /// The HPKE `info` for every grant-section seal. The structured AAD already
 /// binds `(v, id, scope, epoch, structTag)`, so no additional info label is
 /// needed; it is fixed empty and frozen by the KAT.
 const GRANT_HPKE_INFO: &[u8] = b"";
-
-/// Zeroize the temporary `Value::Bytes` seed copies an `encode_*` helper
-/// materialized under `secret_keys`. The encoder is the terminal owner of these
-/// intermediate heap copies, which the codec `Map` would otherwise free without
-/// wiping; the returned encoded buffer stays the seal path's to zeroize.
-fn zeroize_secret_bytes(value: Value, secret_keys: &[&str]) {
-    if let Value::Map(mut m) = value {
-        for key in secret_keys.iter().copied() {
-            if let Some(Value::Bytes(mut b)) = m.remove(key) {
-                b.zeroize();
-            }
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Permission — the grant-ledger / grant-set discriminant.
@@ -226,13 +212,12 @@ pub fn encode_grant_blob_payload(payload: &GrantBlobPayload) -> Vec<u8> {
         m.insert("writeScopeSeed", Value::Bytes(w.as_bytes().to_vec()));
     }
     merge_unknown(&mut m, &payload.unknown);
-    let value = Value::Map(m);
-    let out = encode(&value);
-    zeroize_secret_bytes(
-        value,
-        &["pointerReadKey", "readScopeSeed", "writeScopeSeed"],
-    );
-    out
+    // The transient tree carries verbatim seed copies; scrub the whole tree
+    // through the drop guard so the wipe runs on return and on panic-unwind
+    // (terminal-owner rule). The returned buffer stays the seal path's to zero.
+    let mut value = Value::Map(m);
+    let guard = ScrubOnDrop(&mut value);
+    encode(guard.0)
 }
 
 /// HPKE-seal a grant blob to `recipient_pub` under the grant-blob AAD for `ctx`
@@ -356,10 +341,11 @@ pub fn encode_override_seed_payload(payload: &OverrideSeedPayload) -> Vec<u8> {
         Value::Bytes(payload.override_seed.as_bytes().to_vec()),
     );
     merge_unknown(&mut m, &payload.unknown);
-    let value = Value::Map(m);
-    let out = encode(&value);
-    zeroize_secret_bytes(value, &["overrideSeed"]);
-    out
+    // Whole-tree scrub via the drop guard (terminal-owner rule); the returned
+    // buffer stays the seal path's to zeroize.
+    let mut value = Value::Map(m);
+    let guard = ScrubOnDrop(&mut value);
+    encode(guard.0)
 }
 
 /// HPKE-seal an owner blob to the owner's encryption subkey under the owner-blob
@@ -586,10 +572,11 @@ pub fn encode_history_link_payload(payload: &HistoryLinkPayload) -> Vec<u8> {
         Value::Bytes(payload.prev_seed.as_bytes().to_vec()),
     );
     merge_unknown(&mut m, &payload.unknown);
-    let value = Value::Map(m);
-    let out = encode(&value);
-    zeroize_secret_bytes(value, &["prevSeed"]);
-    out
+    // Whole-tree scrub via the drop guard (terminal-owner rule); the returned
+    // buffer stays the seal path's to zeroize.
+    let mut value = Value::Map(m);
+    let guard = ScrubOnDrop(&mut value);
+    encode(guard.0)
 }
 
 /// Symmetrically seal a history link under the current epoch's structure `key`
