@@ -273,9 +273,10 @@ pub fn enc_subkey(login_secret: &[u8]) -> X25519Secret {
 /// `ecdh_shared` is expected to be a **contributory** X25519 result. A
 /// low-order peer public key forces an all-zero shared secret and thus a tag
 /// that depends only on the `ipnsName` — degenerate, not a secrecy break (the
-/// tag is public), but callers computing the ECDH should use the contributory
-/// check on the [`x25519`](crate::suite::x25519) seam if they later attach any
-/// secrecy requirement to the tag.
+/// tag is public), but callers computing the ECDH get the contributory check for
+/// free from the [`x25519`](crate::suite::x25519) seam: `diffie_hellman` returns
+/// `None` on a non-contributory result, and `X25519Public::from_bytes` rejects
+/// low-order peer keys up front.
 pub fn blinded_tag(
     ecdh_shared: &[u8; SECRET_LEN],
     scope_root_ipns_name: &[u8],

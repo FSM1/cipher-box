@@ -99,7 +99,7 @@ pub fn hpke_open(
     aad: &[u8],
     ciphertext: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, TrustViolation> {
-    let shared = dhkem_decap(recipient_secret, enc);
+    let shared = dhkem_decap(recipient_secret, enc)?;
     let ks = key_schedule_base(
         shared.as_bytes(),
         info,
@@ -189,28 +189,41 @@ fn extract_and_expand(dh: &[u8], kem_context: &[u8]) -> SecretBytes {
     SecretBytes::new(shared[..].try_into().expect("Nsecret == SECRET_LEN"))
 }
 
-/// DHKEM `Encap(pkR)` with an injected ephemeral scalar.
+/// DHKEM `Encap(pkR)` with an injected ephemeral scalar. Infallible: `pk_r` is a
+/// validated [`X25519Public`] (never low-order), so the exchange is always
+/// contributory.
 pub(crate) fn dhkem_encap(
     pk_r: &X25519Public,
     ephemeral_scalar: &[u8; 32],
 ) -> (SecretBytes, [u8; ENC_LEN]) {
     let sk_e = X25519Secret::from_scalar(*ephemeral_scalar);
     let enc = sk_e.public().to_bytes();
-    let dh = sk_e.diffie_hellman(pk_r);
+    let dh = sk_e
+        .diffie_hellman(pk_r)
+        .expect("recipient key is validated non-low-order, so ECDH is contributory");
     let mut kem_context = Vec::with_capacity(2 * ENC_LEN);
     kem_context.extend_from_slice(&enc);
     kem_context.extend_from_slice(&pk_r.to_bytes());
     (extract_and_expand(dh.as_bytes(), &kem_context), enc)
 }
 
-/// DHKEM `Decap(enc, skR)`.
-pub(crate) fn dhkem_decap(sk_r: &X25519Secret, enc: &[u8; ENC_LEN]) -> SecretBytes {
-    let pk_e = X25519Public::from_bytes(*enc);
-    let dh = sk_r.diffie_hellman(&pk_e);
+/// DHKEM `Decap(enc, skR)`. Fails closed with
+/// [`TrustViolation::HpkeNonContributory`] when the peer `enc` is a low-order
+/// point (rejected at the constructor) or otherwise yields a non-contributory
+/// shared secret (RFC 9180 §7.1.4) — a forced-known-secret / key-substitution
+/// attack, not staleness.
+pub(crate) fn dhkem_decap(
+    sk_r: &X25519Secret,
+    enc: &[u8; ENC_LEN],
+) -> Result<SecretBytes, TrustViolation> {
+    let pk_e = X25519Public::from_bytes(*enc).ok_or(TrustViolation::HpkeNonContributory)?;
+    let dh = sk_r
+        .diffie_hellman(&pk_e)
+        .ok_or(TrustViolation::HpkeNonContributory)?;
     let mut kem_context = Vec::with_capacity(2 * ENC_LEN);
     kem_context.extend_from_slice(enc);
     kem_context.extend_from_slice(&sk_r.public().to_bytes());
-    extract_and_expand(dh.as_bytes(), &kem_context)
+    Ok(extract_and_expand(dh.as_bytes(), &kem_context))
 }
 
 /// The base-mode key schedule outputs (seq 0). `key`/`base_nonce` seal; the
@@ -287,7 +300,7 @@ mod tests {
             arr32("fe0e18c9f024ce43799ae393c7e8fe8fce9d218875e8227b0187c04e7d2ea1fc");
 
         // KEM: Encap under the fixed ephemeral scalar.
-        let pk_r = X25519Public::from_bytes(pk_rm);
+        let pk_r = X25519Public::from_bytes(pk_rm).expect("A.1 recipient key");
         let (shared, enc) = dhkem_encap(&pk_r, &sk_em);
         assert_eq!(enc, expected_enc, "A.1 enc");
         assert_eq!(shared.as_bytes(), &expected_shared, "A.1 shared_secret");
@@ -295,7 +308,7 @@ mod tests {
         // KEM: Decap recovers the same shared secret.
         let sk_r = X25519Secret::from_scalar(sk_rm);
         assert_eq!(
-            dhkem_decap(&sk_r, &enc).as_bytes(),
+            dhkem_decap(&sk_r, &enc).expect("A.1 decap").as_bytes(),
             &expected_shared,
             "A.1 decap shared_secret"
         );
@@ -371,5 +384,21 @@ mod tests {
         // Wrong recipient.
         let other = X25519Secret::from_scalar([8u8; 32]);
         assert!(hpke_open(&other, &sealed.enc, b"info", b"aad", &sealed.ciphertext).is_err());
+    }
+
+    #[test]
+    fn low_order_enc_rejects_as_non_contributory() {
+        // A low-order `enc` forces an all-zero DH; decap must fail closed before
+        // the AEAD open (RFC 9180 §7.1.4), distinct from a tag mismatch.
+        let recipient = X25519Secret::from_scalar([7u8; 32]);
+        let low_order = arr32("e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800");
+        assert_eq!(
+            dhkem_decap(&recipient, &low_order).unwrap_err(),
+            TrustViolation::HpkeNonContributory
+        );
+        assert_eq!(
+            hpke_open(&recipient, &low_order, b"info", b"aad", b"whatever").unwrap_err(),
+            TrustViolation::HpkeNonContributory
+        );
     }
 }

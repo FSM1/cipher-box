@@ -2937,6 +2937,9 @@ fn build_hpke_seal() -> Vec<HpkeSealVector> {
     out
 }
 
+/// An hpke open-reject case: (name, enc, ciphertext, aad, expected check).
+type HpkeOpenRejectCase = (&'static str, [u8; 32], Vec<u8>, &'static [u8], &'static str);
+
 fn build_hpke_open_reject() -> Vec<HpkeOpenRejectVector> {
     let recipient_scalar: [u8; 32] = std::array::from_fn(|i| (0x10 + i) as u8);
     let recipient = X25519Secret::from_scalar(recipient_scalar);
@@ -2951,29 +2954,57 @@ fn build_hpke_open_reject() -> Vec<HpkeOpenRejectVector> {
 
     let mut tampered = sealed.ciphertext.clone();
     tampered[0] ^= 0x01;
-    let cases: Vec<(&str, Vec<u8>, &[u8])> = vec![
-        ("tampered-ciphertext", tampered, aad),
-        ("wrong-aad", sealed.ciphertext.clone(), b"other-aad"),
+    // A low-order `enc` (RFC 7748 order-8 point): decap rejects it as
+    // non-contributory before the AEAD open, so the ciphertext is never reached
+    // (RFC 9180 §7.1.4).
+    let low_order_enc: [u8; 32] = [
+        0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4,
+        0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49,
+        0xb8, 0x00,
+    ];
+    // (name, enc, ciphertext, aad, check).
+    let cases: Vec<HpkeOpenRejectCase> = vec![
+        (
+            "tampered-ciphertext",
+            sealed.enc,
+            tampered,
+            aad,
+            "hpke-open-failed",
+        ),
+        (
+            "wrong-aad",
+            sealed.enc,
+            sealed.ciphertext.clone(),
+            b"other-aad",
+            "hpke-open-failed",
+        ),
+        (
+            "low-order-enc",
+            low_order_enc,
+            sealed.ciphertext.clone(),
+            aad,
+            "hpke-non-contributory",
+        ),
     ];
 
     let mut names = BTreeSet::new();
     let mut out = Vec::with_capacity(cases.len());
-    for (name, ct, open_aad) in cases {
+    for (name, enc, ct, open_aad, check) in cases {
         assert!(
             names.insert(name),
             "duplicate hpke open-reject vector {name}"
         );
-        let err = hpke_open(&recipient, &sealed.enc, info, open_aad, &ct)
-            .expect_err("open must fail closed");
-        assert_eq!(err.check(), "hpke-open-failed", "hpke open-reject {name}");
+        let err =
+            hpke_open(&recipient, &enc, info, open_aad, &ct).expect_err("open must fail closed");
+        assert_eq!(err.check(), check, "hpke open-reject {name}");
         out.push(HpkeOpenRejectVector {
             name: name.to_string(),
             recipient_secret: hexstr(&recipient_scalar),
-            enc: hexstr(&sealed.enc),
+            enc: hexstr(&enc),
             info: hexstr(info),
             aad: hexstr(open_aad),
             ciphertext: hexstr(&ct),
-            check: "hpke-open-failed".to_string(),
+            check: check.to_string(),
             class: "trust".to_string(),
         });
     }
@@ -3020,6 +3051,13 @@ fn build_contact_accept() -> Vec<ContactAcceptVector> {
     }
     out
 }
+
+/// An RFC 7748 order-8 X25519 u-coordinate: a low-order point that forces an
+/// all-zero ECDH, so a grant blob sealed to it would be world-readable (#708).
+const LOW_ORDER_X25519: [u8; 32] = [
+    0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4, 0x6a,
+    0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00,
+];
 
 /// The 65-byte uncompressed SEC1 encoding of a compressed secp256k1 key: a
 /// byte-distinct re-encoding of the same point that the frozen 33-byte identity
@@ -3101,6 +3139,19 @@ fn build_contact_reject() -> Vec<RejectVector> {
             bytes_of(Some(b(&good_id)), Some(b(&[0u8; 31])), Some(b(&good_sig))),
             "invalid-enc-subkey",
             "malformed",
+        ),
+        (
+            // A 32-byte but low-order enc subkey (RFC 7748 order-8 point): the
+            // bytes are structurally fine, so it fails closed as a chosen-key
+            // trust violation, rejected before the binding verify.
+            "enc-subkey-low-order",
+            bytes_of(
+                Some(b(&good_id)),
+                Some(b(&LOW_ORDER_X25519)),
+                Some(b(&good_sig)),
+            ),
+            "hpke-non-contributory",
+            "trust",
         ),
         (
             "binding-sig-wrong-length",

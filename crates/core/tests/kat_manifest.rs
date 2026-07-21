@@ -1989,7 +1989,8 @@ fn hpke_seal_vectors_are_frozen_and_open() {
             "duplicate hpke seal {}",
             v.name
         );
-        let recipient_public = X25519Public::from_bytes(unhex32(&v.name, &v.recipient_public));
+        let recipient_public = X25519Public::from_bytes(unhex32(&v.name, &v.recipient_public))
+            .expect("accept-vector recipient key is not low-order");
         let eph = unhex32(&v.name, &v.ephemeral_scalar);
         let info = unhex(&v.name, &v.info);
         let aad = unhex(&v.name, &v.aad);
@@ -2045,7 +2046,14 @@ fn hpke_open_reject_vectors_fail_closed() {
     );
 
     for v in &vectors {
-        assert_eq!(v.check, "hpke-open-failed", "open-reject {}: check", v.name);
+        // Both the tag-mismatch check and the low-order/non-contributory check
+        // are trust violations the open path fails closed on.
+        assert!(
+            v.check == "hpke-open-failed" || v.check == "hpke-non-contributory",
+            "open-reject {}: unexpected check {}",
+            v.name,
+            v.check
+        );
         assert_eq!(v.class, "trust", "open-reject {}: class", v.name);
         let recipient = X25519Secret::from_scalar(unhex32(&v.name, &v.recipient_secret));
         let enc = unhex32(&v.name, &v.enc);
@@ -2057,7 +2065,7 @@ fn hpke_open_reject_vectors_fail_closed() {
             &unhex(&v.name, &v.ciphertext),
         )
         .expect_err("open-reject vector must fail closed");
-        assert_eq!(err.check(), "hpke-open-failed", "open-reject {}", v.name);
+        assert_eq!(err.check(), v.check, "open-reject {}", v.name);
     }
 }
 
@@ -2626,7 +2634,8 @@ fn mailbox_accept_vectors_are_frozen_and_open() {
             v.name
         );
         let recipient = X25519Secret::from_scalar(unhex32(&v.name, &v.recipient_secret));
-        let recipient_public = X25519Public::from_bytes(unhex32(&v.name, &v.recipient_public));
+        let recipient_public = X25519Public::from_bytes(unhex32(&v.name, &v.recipient_public))
+            .expect("accept-vector recipient key is not low-order");
         let eph = unhex32(&v.name, &v.ephemeral_scalar);
         let sender =
             EcdsaSigner::from_scalar(&unhex32(&v.name, &v.sender_scalar)).expect("sender scalar");
@@ -2905,7 +2914,8 @@ fn hpke_structure_reproduce_and_open(v: &HpkeStructureVector) -> Vec<u8> {
         "hpke structure {}: aad drift",
         v.name
     );
-    let recipient_public = X25519Public::from_bytes(unhex32(&v.name, &v.recipient_public));
+    let recipient_public = X25519Public::from_bytes(unhex32(&v.name, &v.recipient_public))
+        .expect("accept-vector recipient key is not low-order");
     let eph = unhex32(&v.name, &v.ephemeral_scalar);
     let plaintext = unhex(&v.name, &v.plaintext);
     // The grant-section HPKE `info` is fixed empty; the structured AAD binds the
@@ -3098,7 +3108,8 @@ fn ascent_link_accept_vectors_derive_verify_and_open() {
         let plaintext = unhex(&v.name, &v.plaintext);
         let eph = unhex32(&v.name, &v.ephemeral_scalar);
         let reproduced = hpke_seal(
-            &X25519Public::from_bytes(unhex32(&v.name, &v.ascent_public)),
+            &X25519Public::from_bytes(unhex32(&v.name, &v.ascent_public))
+                .expect("accept-vector ascent key is not low-order"),
             &eph,
             b"",
             &build_aad(&ctx),
