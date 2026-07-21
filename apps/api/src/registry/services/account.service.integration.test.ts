@@ -7,6 +7,7 @@ import { AuthMethod } from '../../auth/entities/auth-method.entity';
 import { RefreshToken } from '../../auth/entities/refresh-token.entity';
 import { User } from '../../auth/entities/user.entity';
 import { IdentityService } from '../../auth/services/identity.service';
+import { pinDurabilityLockKey } from '../../common/advisory-lock';
 import { MailboxMessage } from '../../mailbox/entities/mailbox-message.entity';
 import { MailboxService } from '../../mailbox/services/mailbox.service';
 import { FakeClock, fakeConfig } from '../../testing/fakes';
@@ -76,6 +77,9 @@ interface GateHooks {
   stripLock?: boolean;
   /** Pause the register path after it inserts its pin row (still holding the lock). */
   afterPinSave?: () => Promise<void>;
+  /** No-op the post-commit session advisory lock so the cascade's unpin does not
+   * serialize on `pinDurabilityLockKey` — the pre-fix post-commit path. */
+  stripDurabilityLock?: boolean;
 }
 
 /**
@@ -138,6 +142,26 @@ function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
         });
         return runInTransaction(proxied);
       }),
+    createQueryRunner: () => {
+      const runner = real.createQueryRunner();
+      if (!hooks.stripDurabilityLock) {
+        return runner;
+      }
+      return new Proxy(runner, {
+        get(target, prop, receiver) {
+          if (prop === 'query') {
+            return async (sql: string, params?: unknown[]) => {
+              if (/pg_advisory_lock\(|pg_advisory_unlock\(/i.test(sql)) {
+                return [];
+              }
+              return target.query(sql, params);
+            };
+          }
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    },
   } as unknown as DataSource;
 }
 
@@ -360,6 +384,76 @@ describe('AccountService cascade (real Postgres)', () => {
       expect(
         await db.dataSource.getRepository(User).findOne({ where: { id: a.id } })
       ).not.toBeNull();
+    });
+
+    it('a concurrent upload committing a live pin into the post-commit gap keeps the CID pinned; the cascade recounts under the durability lock and skips the unpin', async () => {
+      const a = await seedAccount();
+      const b = await seedAccount();
+      const cid = token();
+      await seedPin(a.id, cid);
+
+      const pinStore = new RecordingPinStore();
+
+      // Model the concurrent upload's commit → pin span by HOLDING the same
+      // per-CID durability session lock the upload path holds. The delete's
+      // transaction commits (A gone, unpinCids=[cid]) but its post-commit unpin
+      // blocks on this lock; while blocked the upload's live (B, cid) row commits.
+      const holder = db.dataSource.createQueryRunner();
+      await holder.connect();
+      await holder.query('SELECT pg_advisory_lock($1::bigint)', [
+        pinDurabilityLockKey(cid).toString(),
+      ]);
+
+      const deleted = deleteService(db.dataSource, pinStore).deleteAccount(a.id);
+
+      await delay(200); // delete has committed and is blocked on the durability lock
+      await seedPin(b.id, cid); // the upload's live pin row commits into the gap
+      await holder.query('SELECT pg_advisory_unlock($1::bigint)', [
+        pinDurabilityLockKey(cid).toString(),
+      ]);
+      await holder.release();
+
+      const result = await deleted;
+
+      expect(result.unpinned).toBe(0);
+      expect(pinStore.unpinned).toEqual([]);
+      const survivors = await db.dataSource.getRepository(PinnedCid).find({ where: { cid } });
+      expect(survivors.map((r) => r.accountId)).toEqual([b.id]);
+      expect(await db.dataSource.getRepository(User).findOne({ where: { id: a.id } })).toBeNull();
+    });
+
+    it('negative control — without the durability lock the post-commit unpin ignores the concurrent upload and removes a now-live CID', async () => {
+      const a = await seedAccount();
+      const b = await seedAccount();
+      const cid = token();
+      await seedPin(a.id, cid);
+
+      const pinStore = new RecordingPinStore();
+
+      // The upload holds the durability lock, but the delete's post-commit lock
+      // is stripped: it never waits, recounts before the upload's row is visible,
+      // and unpins content B is about to own.
+      const holder = db.dataSource.createQueryRunner();
+      await holder.connect();
+      await holder.query('SELECT pg_advisory_lock($1::bigint)', [
+        pinDurabilityLockKey(cid).toString(),
+      ]);
+
+      const result = await deleteService(
+        gatedDataSource(db.dataSource, { stripDurabilityLock: true }),
+        pinStore
+      ).deleteAccount(a.id);
+
+      await seedPin(b.id, cid); // the upload's live pin row commits — too late
+      await holder.query('SELECT pg_advisory_unlock($1::bigint)', [
+        pinDurabilityLockKey(cid).toString(),
+      ]);
+      await holder.release();
+
+      expect(result.unpinned).toBe(1);
+      expect(pinStore.unpinned).toEqual([cid]);
+      const survivors = await db.dataSource.getRepository(PinnedCid).find({ where: { cid } });
+      expect(survivors.map((r) => r.accountId)).toEqual([b.id]);
     });
   });
 

@@ -13,6 +13,7 @@ import {
   accountLockKey,
   acquireAdvisoryLocks,
   advisoryLockKey,
+  pinDurabilityLockKey,
   resolveAdvisoryLockTimeoutMs,
   runLockGuardedTransaction,
   setAdvisoryLockTimeout,
@@ -230,14 +231,4 @@ export class ContentService {
       this.logger.warn(`compensation for ${cid} failed: ${String(error)}`);
     }
   }
-}
-
-/**
- * Namespaced session lock for the post-commit pin/compensation window. A
- * DISTINCT key from the plain CID xact lock: the same upload holds both (session
- * lock on its own connection, xact lock on the tx connection), and same-key
- * session-vs-xact locks across connections would self-deadlock.
- */
-function pinDurabilityLockKey(cid: string): bigint {
-  return advisoryLockKey(`pin-durability:${cid}`);
 }

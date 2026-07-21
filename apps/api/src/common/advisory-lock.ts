@@ -103,6 +103,19 @@ export function accountLockKey(accountId: string): bigint {
 }
 
 /**
+ * Namespaced session-lock key for the post-commit pin-durability window: the
+ * upload's commit → pin → compensate span AND the account hard-delete cascade's
+ * post-commit unpin. A DISTINCT key from the plain CID xact lock — a holder takes
+ * both (this session lock on its own connection, the xact lock on the tx
+ * connection), and same-key session-vs-xact locks across connections would
+ * self-deadlock. The upload and hard-delete paths MUST share this key so a
+ * physical unpin serializes against a concurrent same-CID pin.
+ */
+export function pinDurabilityLockKey(cid: string): bigint {
+  return advisoryLockKey(`pin-durability:${cid}`);
+}
+
+/**
  * Acquire a batch of transaction-scoped advisory locks in one deadlock-free
  * order: keys are de-duplicated and sorted, so any two overlapping batches take
  * their shared keys in the same sequence and cannot form a cycle. Set the

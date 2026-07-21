@@ -1,4 +1,4 @@
-import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
@@ -7,9 +7,11 @@ import {
   accountLockKey,
   acquireAdvisoryLocks,
   advisoryLockKey,
+  pinDurabilityLockKey,
   resolveAdvisoryLockTimeoutMs,
   runLockGuardedTransaction,
   setAdvisoryLockTimeout,
+  withSessionAdvisoryLock,
 } from '../../common/advisory-lock';
 import { MailboxMessage } from '../../mailbox/entities/mailbox-message.entity';
 import { NameInventory } from '../entities/name-inventory.entity';
@@ -60,13 +62,19 @@ const EMPTY_RESULT: DeleteAccountResult = {
  * retry re-reads the settled set) rather than delete its row and leak the pin.
  *
  * The physical unpin rides the injectable [`PinStore`] seam AFTER commit — never
- * a Kubo call inside the transaction — and is best-effort: the row bookkeeping is
- * the source of truth, so a Kubo hiccup never fails the delete. `unpinned` counts
- * only CIDs the seam confirms it physically released, not the refcount-zero
- * selection (a swallowed unpin failure must not be reported as a release).
+ * a Kubo call inside the transaction. The in-tx per-CID xact lock releases at
+ * commit, so each post-commit unpin re-acquires the SAME session-scoped
+ * `pinDurabilityLockKey(cid)` the upload path holds across its commit → pin span,
+ * and re-reads the survivor set under it: a pin row that appeared in that gap is
+ * a live owner (a concurrent upload physically pinned), so its content is left
+ * pinned. It is best-effort — the row bookkeeping is the source of truth, so a
+ * Kubo hiccup or lock contention leaves the CID for pin-store GC and never fails
+ * the committed delete. `unpinned` counts only CIDs the seam confirms it released
+ * (a swallowed unpin failure returns false and is not a release).
  */
 @Injectable()
 export class AccountService {
+  private readonly logger = new Logger(AccountService.name);
   private readonly lockTimeoutMs: number;
 
   constructor(
@@ -168,12 +176,30 @@ export class AccountService {
       }
     );
 
-    // Best-effort physical unpin after commit; count only CIDs the seam confirms
-    // it released (a swallowed Kubo failure returns false and is not counted).
+    // Best-effort physical unpin after commit, each serialized on the upload
+    // path's per-CID durability lock and gated on a survivor recount under it
+    // (see class doc). Contention or a Kubo hiccup leaves the CID for GC.
     let unpinned = 0;
     for (const cid of unpinCids) {
-      if (await this.pinStore.unpin(cid)) {
-        unpinned += 1;
+      try {
+        const released = await withSessionAdvisoryLock(
+          this.dataSource,
+          pinDurabilityLockKey(cid),
+          this.lockTimeoutMs,
+          async () => {
+            // A pin row visible under the durability lock is a live owner that
+            // pinned into the post-commit gap — leave its content pinned.
+            if (await this.pinRepository.findOne({ where: { cid } })) {
+              return false;
+            }
+            return this.pinStore.unpin(cid);
+          }
+        );
+        if (released) {
+          unpinned += 1;
+        }
+      } catch (error) {
+        this.logger.warn(`post-delete unpin for ${cid} skipped: ${String(error)}`);
       }
     }
 

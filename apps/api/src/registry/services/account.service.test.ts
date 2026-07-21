@@ -53,11 +53,17 @@ interface Repos {
 }
 
 /**
- * A DataSource whose transaction runs inline against the in-memory repos. The
- * advisory-lock / lock_timeout queries no-op unless `failLockCode` is set, which
- * makes the advisory acquire raise a Postgres error (drives the 503 mapping).
+ * A DataSource whose transaction runs inline against the in-memory repos, plus a
+ * query runner for the post-commit `withSessionAdvisoryLock` unpin. The advisory
+ * / lock_timeout queries no-op unless `failLockCode` is set (drives the 503
+ * mapping); `onSessionAcquire` fires when the post-commit durability lock is
+ * taken, modelling a concurrent pin committing into the gap under that lock.
  */
-function fakeDataSource(repos: Repos, failLockCode?: string): DataSource {
+function fakeDataSource(
+  repos: Repos,
+  failLockCode?: string,
+  onSessionAcquire?: () => Promise<void>
+): DataSource {
   const byEntity = new Map<unknown, unknown>([
     [User, repos.users],
     [PinnedCid, repos.pins],
@@ -77,6 +83,19 @@ function fakeDataSource(repos: Repos, failLockCode?: string): DataSource {
           },
         })
       ),
+    createQueryRunner: () => ({
+      connect: async () => {},
+      release: async () => {},
+      query: async (sql: string) => {
+        if (/pg_advisory_lock\(/i.test(sql)) {
+          if (failLockCode) {
+            throw new QueryFailedError(sql, [], { code: failLockCode } as unknown as Error);
+          }
+          await onSessionAcquire?.();
+        }
+        return [];
+      },
+    }),
   } as unknown as DataSource;
 }
 
@@ -166,6 +185,40 @@ describe('AccountService.deleteAccount', () => {
     expect(result.pinsRetired).toBe(3);
     expect(result.unpinned).toBe(2);
     expect(pinStore.unpinned).toEqual(['ok1', 'ok2']);
+  });
+
+  it('skips the physical unpin when a pin row for the CID appears under the durability lock', async () => {
+    const a = await seedAccount('pk-a');
+    const cid = 'cidRaced';
+    await repos.pins.save({ accountId: a, cid, size: '1', advisory: false } as never);
+
+    // Model a concurrent upload committing a live pin row into the post-commit
+    // gap: it becomes visible exactly when the cascade takes the per-CID
+    // durability lock, so the survivor recount under the lock must skip the unpin.
+    let injected = false;
+    const service = new AccountService(
+      repos.users as never,
+      repos.pins as never,
+      fakeDataSource(repos, undefined, async () => {
+        if (injected) return;
+        injected = true;
+        await repos.pins.save({
+          accountId: 'other-account',
+          cid,
+          size: '1',
+          advisory: false,
+        } as never);
+      }) as never,
+      pinStore,
+      fakeConfig({ DB_ADVISORY_LOCK_TIMEOUT_MS: '0' }).service
+    );
+
+    const result = await service.deleteAccount(a);
+
+    expect(result.unpinned).toBe(0);
+    expect(pinStore.unpinned).toEqual([]);
+    const survivors = await repos.pins.find({ where: { cid } });
+    expect(survivors.map((r) => r.accountId)).toEqual(['other-account']);
   });
 
   it('is idempotent for an unknown account: empty result, no unpin, no writes', async () => {
