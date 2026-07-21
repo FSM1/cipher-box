@@ -14,34 +14,33 @@ publish.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-# Test-only: compiles the browser seam conformance bridge (`src/conformance.rs`),
-# which adapts JS seam objects to the engine seam traits and re-exports the
-# engine's per-seam conformance kits (via `cipherbox-engine/test-kit`) as
-# wasm-bindgen runners. The `packages/client` browser suite builds the WASM
-# module with this feature; the production artifact (built without it) never
-# pulls the test kit or these deps.
-conformance = [
-    "dep:js-sys",
-    "dep:wasm-bindgen-futures",
-    "dep:console_error_panic_hook",
-    "cipherbox-engine/test-kit",
-]
+# Test-only: compiles the browser seam conformance runners (`src/conformance.rs`),
+# which drive the engine's per-seam conformance kits (via `cipherbox-engine/
+# test-kit`) against the shared `seams_bridge` adapters. The `packages/client`
+# browser suite builds the WASM module with this feature; the production
+# artifact (built without it) never pulls the test kit.
+conformance = ["cipherbox-engine/test-kit"]
 
 [dependencies]
 cipherbox-engine.workspace = true
 wasm-bindgen = "0.2"
 
-# Conformance-bridge deps (feature `conformance` only; inert otherwise).
-js-sys = { version = "0.3", optional = true }
-wasm-bindgen-futures = { version = "0.4", optional = true }
-console_error_panic_hook = { version = "0.1", optional = true }
+# Browser wasm host deps: the engine worker host (`src/host.rs`) and the shared
+# seam adapters (`src/seams_bridge.rs`) marshal JS values, drive engine futures,
+# surface panics, and source entropy. getrandom's `wasm_js` backend wires to
+# `crypto.getRandomValues` in the worker scope (`.cargo/config.toml`
+# `getrandom_backend="wasm_js"`). Scoped to wasm32-unknown-unknown — the browser
+# target — so native workspace builds/tests skip the JS glue entirely.
+[target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dependencies]
+js-sys = "0.3"
+wasm-bindgen-futures = "0.4"
+console_error_panic_hook = "0.1"
+getrandom = { version = "0.3", features = ["wasm_js"] }
+# Async mutex: serializes the single engine writer across `.await` (concurrent
+# `start`/`command` queue rather than double-borrowing), and bounds `nextEvent`
+# to one outstanding stream read.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
-# Browser-shaped test deps only (wasm32-unknown-unknown): the boundary tests
-# run under wasm-bindgen-test-runner, and getrandom's `wasm_js` backend proves
-# the `crypto.getRandomValues` worker-scope wiring. No production getrandom use
-# yet — the engine takes injected entropy; the entropy seam impl lands with the
-# worker-hosting slice. The `getrandom_backend="wasm_js"` cfg is in
-# `.cargo/config.toml`.
+# The boundary tests run under wasm-bindgen-test-runner.
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]
 wasm-bindgen-test = "0.3"
-getrandom = { version = "0.3", features = ["wasm_js"] }

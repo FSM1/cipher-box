@@ -97,3 +97,34 @@ export interface HttpResponseData {
 export interface HttpSeam {
   send(request: HttpRequestData): Promise<HttpResponseData>;
 }
+
+/** One pending mailbox item; `sealedPayload` is opaque (the engine unseals it). */
+export interface MailboxItemData {
+  itemId: string;
+  sealedPayload: Uint8Array;
+}
+
+/**
+ * Sealed-blob discovery transport (share pointers, invite claims). An
+ * integrity-untrusted byte mover: nothing on it is load-bearing for safety, and
+ * it does no crypto or codec — the engine seals, unseals, and authenticates.
+ */
+export interface MailboxSeam {
+  post(
+    recipientPublicKey: Uint8Array,
+    sealedPayload: Uint8Array,
+    idempotencyKey: string
+  ): Promise<void>;
+  poll(): Promise<MailboxItemData[]>;
+  ack(itemId: string): Promise<void>;
+}
+
+/**
+ * Host events that force an immediate sync tick (UI navigation, tab-visibility
+ * regain, `online` reconnect). `nextHint` resolves to `true` for a hint, or
+ * `null` once the source is closed for good. A hint carries no payload — losing
+ * one costs staleness, never correctness.
+ */
+export interface RefreshHintSourceSeam {
+  nextHint(): Promise<true | null>;
+}
