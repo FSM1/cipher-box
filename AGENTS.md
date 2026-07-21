@@ -34,6 +34,7 @@ Use the v2 ubiquitous language defined in `CONTEXT.md` — every domain term (sc
 5. Primitives are fixed by `blueprint/core.md`: XChaCha20-Poly1305 sealing, BLAKE3 tree KDF, X25519 + HPKE key wrapping, Ed25519/secp256k1 signing — no key derives outside the frozen KDF edge catalog
 6. Every resolved record passes the adoption gate; a failure is a fail-closed trust violation, never mere staleness
 7. Clear sensitive material from memory after use (zeroize at the terminal owner only — a callee must not zero caller-owned buffers)
+8. **Encode/decode fail-closed symmetry** — when a decode/verify path hard-rejects an invariant violation (a trust/malformed check), the matching encode/produce path MUST enforce the same invariant with a **release-active** check that returns `Err` — never `debug_assert!`/`assert!`, which are stripped in release. Otherwise a release build can sign and publish bytes its own decoder always rejects (an unopenable ledger/commitment/body). Keep these encode-side checks consistent with the `crates/core/src/seal/body.rs` `assert_children_unique` convention, and cover them with a test that fires in a release build.
 
 ## API Contract and Clients
 
