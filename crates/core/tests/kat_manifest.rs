@@ -17,6 +17,10 @@ use std::collections::BTreeSet;
 use wasm_bindgen_test::wasm_bindgen_test as test;
 
 use cipherbox_core::codec::{decode, decode_map_partial, encode, encode_map_partial};
+use cipherbox_core::content::{
+    CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid, open_chunk, seal_chunk,
+    verify_cid,
+};
 use cipherbox_core::error::{Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
@@ -194,6 +198,22 @@ const FIXTURES: &[(&str, &str)] = &[
         "vectors/grant/grant_set_reject.json",
         include_str!("../kat/vectors/grant/grant_set_reject.json"),
     ),
+    (
+        "vectors/content/seal.json",
+        include_str!("../kat/vectors/content/seal.json"),
+    ),
+    (
+        "vectors/content/seal_reject.json",
+        include_str!("../kat/vectors/content/seal_reject.json"),
+    ),
+    (
+        "vectors/content/cid.json",
+        include_str!("../kat/vectors/content/cid.json"),
+    ),
+    (
+        "vectors/content/cid_reject.json",
+        include_str!("../kat/vectors/content/cid_reject.json"),
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -214,6 +234,57 @@ struct Manifest {
     ipns: IpnsManifest,
     payload: PayloadManifest,
     grant: GrantManifest,
+    content: ContentManifest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ContentManifest {
+    cid_codec: u8,
+    cid_multihash: u8,
+    cid_len: usize,
+    seal: FileCount,
+    seal_reject: RejectSection,
+    cid: FileCount,
+    cid_reject: RejectSection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ContentSealVector {
+    name: String,
+    key: String,
+    nonce: String,
+    plaintext: String,
+    sealed: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ContentSealRejectVector {
+    name: String,
+    key: String,
+    sealed: String,
+    check: String,
+    class: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ContentCidVector {
+    name: String,
+    sealed: String,
+    cid: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ContentCidRejectVector {
+    name: String,
+    cid: String,
+    sealed: String,
+    check: String,
+    class: String,
 }
 
 #[derive(Deserialize)]
@@ -785,6 +856,24 @@ fn seal_open_reject_vectors(m: &Manifest) -> Vec<SealOpenRejectVector> {
     serde_json::from_str(fixture(&m.seal.open_reject.file)).expect("seal open_reject.json shape")
 }
 
+fn content_seal_vectors(m: &Manifest) -> Vec<ContentSealVector> {
+    serde_json::from_str(fixture(&m.content.seal.file)).expect("content seal.json shape")
+}
+
+fn content_seal_reject_vectors(m: &Manifest) -> Vec<ContentSealRejectVector> {
+    serde_json::from_str(fixture(&m.content.seal_reject.file))
+        .expect("content seal_reject.json shape")
+}
+
+fn content_cid_vectors(m: &Manifest) -> Vec<ContentCidVector> {
+    serde_json::from_str(fixture(&m.content.cid.file)).expect("content cid.json shape")
+}
+
+fn content_cid_reject_vectors(m: &Manifest) -> Vec<ContentCidRejectVector> {
+    serde_json::from_str(fixture(&m.content.cid_reject.file))
+        .expect("content cid_reject.json shape")
+}
+
 fn read_body_accept_vectors(m: &Manifest) -> Vec<ReadBodyAcceptVector> {
     serde_json::from_str(fixture(&m.seal.read_body_accept.file))
         .expect("read_body_accept.json shape")
@@ -949,6 +1038,10 @@ fn fixture_table_matches_manifest_files() {
         m.grant.structure_sig_reject.file.as_str(),
         m.grant.grant_set_accept.file.as_str(),
         m.grant.grant_set_reject.file.as_str(),
+        m.content.seal.file.as_str(),
+        m.content.seal_reject.file.as_str(),
+        m.content.cid.file.as_str(),
+        m.content.cid_reject.file.as_str(),
     ];
     let referenced_set: BTreeSet<&str> = referenced.iter().copied().collect();
     assert_eq!(
@@ -1117,6 +1210,10 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
             .map(|v| v.check),
     );
     covered.extend(grant_set_reject_vectors(&m).into_iter().map(|v| v.check));
+    // Content plane (ticket #691): the content-open and content-CID reject
+    // families pin `seal-open-failed`/`truncated` and `content-cid-mismatch`.
+    covered.extend(content_seal_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(content_cid_reject_vectors(&m).into_iter().map(|v| v.check));
 
     let surface: BTreeSet<String> = TrustViolation::CHECKS
         .iter()
@@ -3266,5 +3363,218 @@ fn grant_set_reject_vectors_fail_closed() {
                 assert_eq!(err.class(), v.class, "grant-set reject {}: class", v.name);
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Content plane (ticket #691): the content-seal primitive over caller-framed
+// chunks and the content-DAG CID compute/verify codec. Frozen CIDv1 codec bytes,
+// the fixed-parameter seal KAT, deterministic CID KATs (byte-identical native +
+// wasm32), and the fail-closed open / verify reject families.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn content_cid_codec_bytes_are_frozen() {
+    let m = manifest();
+    // raw (0x55) multicodec + BLAKE3 (0x1e) multihash + 36-byte CIDv1 length,
+    // pinned to the crate constants so a codec/multihash change is caught here.
+    assert_eq!(m.content.cid_codec, CONTENT_CID_CODEC, "cid codec drift");
+    assert_eq!(m.content.cid_codec, 0x55, "content CID multicodec is raw");
+    assert_eq!(
+        m.content.cid_multihash, CONTENT_CID_MULTIHASH,
+        "cid multihash drift"
+    );
+    assert_eq!(
+        m.content.cid_multihash, 0x1e,
+        "content CID multihash is BLAKE3-256"
+    );
+    assert_eq!(m.content.cid_len, CONTENT_CID_LEN, "cid length drift");
+    assert_eq!(m.content.cid_len, 36, "CIDv1 raw||blake3 is 36 bytes");
+}
+
+#[test]
+fn content_seal_vectors_are_frozen_and_round_trip() {
+    let m = manifest();
+    let vectors = content_seal_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.content.seal.count,
+        "content seal count drift"
+    );
+    assert!(!vectors.is_empty(), "content seal family must not be empty");
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate content seal {}",
+            v.name
+        );
+        let key = unhex32(&v.name, &v.key);
+        let nonce = unhex_n::<NONCE_LEN>(&v.name, &v.nonce);
+        let plaintext = unhex(&v.name, &v.plaintext);
+
+        // Fixed key + nonce reproduce the sealed blob byte-for-byte.
+        let sealed = seal_chunk(&key, &nonce, &plaintext);
+        assert_eq!(
+            hex::encode(&sealed),
+            v.sealed,
+            "content seal {}: sealed drift",
+            v.name
+        );
+        // The nonce is prefixed and the recipient recovers the plaintext.
+        assert_eq!(
+            &sealed[..NONCE_LEN],
+            &nonce,
+            "content seal {}: nonce prefix",
+            v.name
+        );
+        let opened = open_chunk(&key, &unhex(&v.name, &v.sealed))
+            .unwrap_or_else(|e| panic!("content seal {}: open must recover: {e}", v.name));
+        assert_eq!(opened, plaintext, "content seal {}: plaintext", v.name);
+    }
+}
+
+#[test]
+fn content_seal_open_reject_vectors_fail_closed() {
+    let m = manifest();
+    let vectors = content_seal_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.content.seal_reject.count,
+        "content seal-reject count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "content seal-reject family must not be empty"
+    );
+
+    let listed: BTreeSet<&str> = m
+        .content
+        .seal_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs content seal_reject.json"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate content seal-reject {}",
+            v.name
+        );
+        let key = unhex32(&v.name, &v.key);
+        let err = open_chunk(&key, &unhex(&v.name, &v.sealed))
+            .expect_err("content open-reject must fail closed");
+        assert_eq!(
+            err.check(),
+            v.check,
+            "content open-reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "content open-reject {}: class",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn content_cid_vectors_are_frozen_and_verify() {
+    let m = manifest();
+    let vectors = content_cid_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.content.cid.count,
+        "content cid count drift"
+    );
+    assert!(!vectors.is_empty(), "content cid family must not be empty");
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate content cid {}",
+            v.name
+        );
+        let sealed = unhex(&v.name, &v.sealed);
+        // Deterministic CIDv1 over fixed sealed bytes, byte-identical here on
+        // native and (under the same harness) wasm32.
+        let cid = compute_cid(&sealed);
+        assert_eq!(
+            hex::encode(&cid),
+            v.cid,
+            "content cid {}: cid drift",
+            v.name
+        );
+        assert_eq!(cid.len(), CONTENT_CID_LEN, "content cid {}: length", v.name);
+        assert_eq!(
+            cid[..4],
+            [0x01, CONTENT_CID_CODEC, CONTENT_CID_MULTIHASH, 0x20],
+            "content cid {}: v1||raw||blake3||len prefix",
+            v.name
+        );
+        // Verify accepts the blob against its own CID.
+        verify_cid(&cid, &sealed)
+            .unwrap_or_else(|e| panic!("content cid {}: verify must accept: {e}", v.name));
+    }
+}
+
+#[test]
+fn content_cid_reject_vectors_fail_closed() {
+    let m = manifest();
+    let vectors = content_cid_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.content.cid_reject.count,
+        "content cid-reject count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "content cid-reject family must not be empty"
+    );
+
+    let listed: BTreeSet<&str> = m
+        .content
+        .cid_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs content cid_reject.json"
+    );
+    assert!(
+        listed.contains("content-cid-mismatch"),
+        "content cid-reject must cover content-cid-mismatch"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate content cid-reject {}",
+            v.name
+        );
+        let claimed = unhex(&v.name, &v.cid);
+        let sealed = unhex(&v.name, &v.sealed);
+        let err = verify_cid(&claimed, &sealed).expect_err("cid-reject must fail closed");
+        assert_eq!(
+            err.check(),
+            v.check,
+            "content cid-reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(err.class(), v.class, "content cid-reject {}: class", v.name);
     }
 }

@@ -356,5 +356,33 @@
         "invalid-field-length"
       ]
     }
+  },
+  "content": {
+    "cidCodec": 85,
+    "cidMultihash": 30,
+    "cidLen": 36,
+    "seal": {
+      "file": "vectors/content/seal.json",
+      "count": 3
+    },
+    "sealReject": {
+      "file": "vectors/content/seal_reject.json",
+      "count": 3,
+      "checks": [
+        "seal-open-failed",
+        "truncated"
+      ]
+    },
+    "cid": {
+      "file": "vectors/content/cid.json",
+      "count": 3
+    },
+    "cidReject": {
+      "file": "vectors/content/cid_reject.json",
+      "count": 4,
+      "checks": [
+        "content-cid-mismatch"
+      ]
+    }
   }
 }

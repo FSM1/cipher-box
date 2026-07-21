@@ -22,6 +22,10 @@ use std::path::Path;
 use cipherbox_core::codec::{
     MAX_DEPTH, Map, Value, decode, decode_map_partial, encode, encode_map_partial,
 };
+use cipherbox_core::content::{
+    CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid, open_chunk, seal_chunk,
+    verify_cid,
+};
 use cipherbox_core::error::{Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
@@ -164,6 +168,67 @@ struct Manifest {
     ipns: IpnsSection,
     payload: PayloadSection,
     grant: GrantSection,
+    content: ContentSection,
+}
+
+// --- Content section: the content-seal primitive over caller-framed chunks and
+// --- the content-DAG CID compute/verify codec (ticket #691).
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentSection {
+    cid_codec: u8,
+    cid_multihash: u8,
+    cid_len: usize,
+    seal: FileCount,
+    seal_reject: RejectSection,
+    cid: FileCount,
+    cid_reject: RejectSection,
+}
+
+/// A content-seal accept vector: a fixed content key + nonce seal of
+/// caller-framed chunk bytes, reproducible byte-for-byte.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentSealVector {
+    name: String,
+    key: String,
+    nonce: String,
+    plaintext: String,
+    sealed: String,
+}
+
+/// A content-open reject vector: a sealed blob that must fail closed on open.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentSealRejectVector {
+    name: String,
+    key: String,
+    sealed: String,
+    check: String,
+    class: String,
+}
+
+/// A content-CID accept vector: fixed sealed bytes and their deterministic
+/// CIDv1 (KAT-pinned, byte-identical native + wasm32).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentCidVector {
+    name: String,
+    sealed: String,
+    cid: String,
+}
+
+/// A content-CID verify reject vector: a claimed CID that does not match the
+/// sealed bytes, rejected fail-closed as `content-cid-mismatch`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentCidRejectVector {
+    name: String,
+    cid: String,
+    sealed: String,
+    check: String,
+    class: String,
 }
 
 // --- Grant section: write-body, grant/owner blobs, ascent + history links,
@@ -618,6 +683,7 @@ fn main() {
     let ipns_dir = vectors_dir.join("ipns");
     let payload_dir = vectors_dir.join("payload");
     let grant_dir = vectors_dir.join("grant");
+    let content_dir = vectors_dir.join("content");
     for dir in [
         &codec_dir,
         &kdf_dir,
@@ -627,6 +693,7 @@ fn main() {
         &ipns_dir,
         &payload_dir,
         &grant_dir,
+        &content_dir,
     ] {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
     }
@@ -746,6 +813,16 @@ fn main() {
         &g.grant_set_reject,
     );
 
+    let content_seal = build_content_seal();
+    let content_seal_reject = build_content_seal_reject();
+    let content_cid = build_content_cid();
+    let content_cid_reject = build_content_cid_reject();
+
+    write_pretty(&content_dir.join("seal.json"), &content_seal);
+    write_pretty(&content_dir.join("seal_reject.json"), &content_seal_reject);
+    write_pretty(&content_dir.join("cid.json"), &content_cid);
+    write_pretty(&content_dir.join("cid_reject.json"), &content_cid_reject);
+
     let manifest = build_manifest(ManifestInputs {
         accept: &accept,
         reject: &reject,
@@ -771,6 +848,10 @@ fn main() {
         mailbox_accept: &mailbox_accept,
         mailbox_reject: &mailbox_reject,
         grant: &g,
+        content_seal: &content_seal,
+        content_seal_reject: &content_seal_reject,
+        content_cid: &content_cid,
+        content_cid_reject: &content_cid_reject,
     });
     write_pretty(&kat_dir.join("manifest.json"), &manifest);
 
@@ -780,7 +861,8 @@ fn main() {
          {} read-body-accept, {} read-body-reject, {} envelope-accept, {} envelope-reject, \
          {} name-accept, {} name-reject, {} record-accept, {} record-reject, {} record-reput, \
          {} pointer-accept, {} pointer-reject, {} mailbox-accept, {} mailbox-reject, \
-         {} grant-family vectors + manifest.json",
+         {} grant-family, {} content-seal, {} content-seal-reject, {} content-cid, \
+         {} content-cid-reject vectors + manifest.json",
         accept.len(),
         reject.len(),
         unknown.len(),
@@ -805,6 +887,10 @@ fn main() {
         mailbox_accept.len(),
         mailbox_reject.len(),
         g.total(),
+        content_seal.len(),
+        content_seal_reject.len(),
+        content_cid.len(),
+        content_cid_reject.len(),
     );
 }
 
@@ -1555,6 +1641,10 @@ struct ManifestInputs<'a> {
     mailbox_accept: &'a [MailboxAcceptVector],
     mailbox_reject: &'a [MailboxRejectVector],
     grant: &'a GrantVectors,
+    content_seal: &'a [ContentSealVector],
+    content_seal_reject: &'a [ContentSealRejectVector],
+    content_cid: &'a [ContentCidVector],
+    content_cid_reject: &'a [ContentCidRejectVector],
 }
 
 fn build_manifest(m: ManifestInputs) -> Manifest {
@@ -1733,6 +1823,44 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
             },
         },
         grant: build_grant_section(m.grant),
+        content: build_content_section(&m),
+    }
+}
+
+/// The content-section manifest metadata (ticket #691): the frozen CIDv1
+/// codec/multihash bytes and the generated content-seal + content-CID counts and
+/// reject checks.
+fn build_content_section(m: &ManifestInputs) -> ContentSection {
+    let file = |name: &str, len: usize| FileCount {
+        file: format!("vectors/content/{name}.json"),
+        count: len,
+    };
+    ContentSection {
+        cid_codec: CONTENT_CID_CODEC,
+        cid_multihash: CONTENT_CID_MULTIHASH,
+        cid_len: CONTENT_CID_LEN,
+        seal: file("seal", m.content_seal.len()),
+        seal_reject: RejectSection {
+            file: "vectors/content/seal_reject.json".to_string(),
+            count: m.content_seal_reject.len(),
+            checks: checks_surface_ordered(
+                &m.content_seal_reject
+                    .iter()
+                    .map(|v| v.check.as_str())
+                    .collect(),
+            ),
+        },
+        cid: file("cid", m.content_cid.len()),
+        cid_reject: RejectSection {
+            file: "vectors/content/cid_reject.json".to_string(),
+            count: m.content_cid_reject.len(),
+            checks: checks_surface_ordered(
+                &m.content_cid_reject
+                    .iter()
+                    .map(|v| v.check.as_str())
+                    .collect(),
+            ),
+        },
     }
 }
 
@@ -1852,6 +1980,217 @@ fn seal_probe() -> SealProbe {
         scope: std::array::from_fn(|i| (0xb0 + i) as u8),
         epoch: 5,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Content plane: the content-seal primitive and the content-DAG CID codec
+// (ticket #691). The content key is fixed; nonces vary per chunk (nonce reuse
+// under one key is a break), so the vectors model correct per-chunk nonces.
+// ---------------------------------------------------------------------------
+
+/// The frozen content key for the content KATs (random per version in
+/// production; fixed here so the seal reproduces byte-for-byte).
+fn content_key() -> [u8; KEY_LEN] {
+    std::array::from_fn(|i| (0x80 + i) as u8)
+}
+
+/// A per-chunk nonce seeded by a byte, so every content vector uses a distinct
+/// nonce under the one fixed key.
+fn content_nonce(seed: u8) -> [u8; NONCE_LEN] {
+    std::array::from_fn(|i| seed ^ (0x30 + i) as u8)
+}
+
+fn build_content_seal() -> Vec<ContentSealVector> {
+    let key = content_key();
+    let cases: Vec<(&str, u8, Vec<u8>)> = vec![
+        (
+            "chunk-nonempty",
+            0x01,
+            b"caller-framed chunk bytes".to_vec(),
+        ),
+        ("chunk-empty", 0x02, Vec::new()),
+        ("chunk-256-bytes", 0x03, (0u8..=255).collect()),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, seed, plaintext) in cases {
+        assert!(names.insert(name), "duplicate content seal vector {name}");
+        let nonce = content_nonce(seed);
+        let sealed = seal_chunk(&key, &nonce, &plaintext);
+        assert_eq!(
+            seal_chunk(&key, &nonce, &plaintext),
+            sealed,
+            "content seal {name}: not deterministic"
+        );
+        assert_eq!(
+            &sealed[..NONCE_LEN],
+            &nonce,
+            "content seal {name}: nonce prefix"
+        );
+        assert_eq!(
+            open_chunk(&key, &sealed).unwrap(),
+            plaintext,
+            "content seal {name}: open must recover plaintext"
+        );
+        out.push(ContentSealVector {
+            name: name.to_string(),
+            key: hexstr(&key),
+            nonce: hexstr(&nonce),
+            plaintext: hexstr(&plaintext),
+            sealed: hexstr(&sealed),
+        });
+    }
+    out
+}
+
+fn build_content_seal_reject() -> Vec<ContentSealRejectVector> {
+    let key = content_key();
+    let nonce = content_nonce(0x10);
+    let sealed = seal_chunk(&key, &nonce, b"authentic content");
+    assert!(
+        open_chunk(&key, &sealed).is_ok(),
+        "baseline content seal must open"
+    );
+
+    let mut tampered_ct = sealed.clone();
+    *tampered_ct.last_mut().unwrap() ^= 0x01;
+    let mut tampered_nonce = sealed.clone();
+    tampered_nonce[0] ^= 0x01;
+    let mut truncated = sealed.clone();
+    truncated.truncate(NONCE_LEN + TAG_LEN - 1);
+
+    // (name, sealed-blob, check, class).
+    let cases: Vec<(&str, Vec<u8>, &str, &str)> = vec![
+        (
+            "tampered-ciphertext",
+            tampered_ct,
+            "seal-open-failed",
+            "trust",
+        ),
+        (
+            "tampered-nonce-prefix",
+            tampered_nonce,
+            "seal-open-failed",
+            "trust",
+        ),
+        (
+            "truncated-below-nonce-tag",
+            truncated,
+            "truncated",
+            "malformed",
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, blob, check, class) in cases {
+        assert!(
+            names.insert(name),
+            "duplicate content seal-reject vector {name}"
+        );
+        let err = open_chunk(&key, &blob).expect_err("content open-reject must fail closed");
+        assert_eq!(
+            err.check(),
+            check,
+            "content open-reject {name}: check ({err})"
+        );
+        assert_eq!(
+            err.class(),
+            class,
+            "content open-reject {name}: class ({err})"
+        );
+        out.push(ContentSealRejectVector {
+            name: name.to_string(),
+            key: hexstr(&key),
+            sealed: hexstr(&blob),
+            check: check.to_string(),
+            class: class.to_string(),
+        });
+    }
+    out
+}
+
+fn build_content_cid() -> Vec<ContentCidVector> {
+    let key = content_key();
+    // Fixed sealed byte strings (a real sealed chunk, the empty input, and a
+    // full byte range) → their deterministic CIDv1.
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        (
+            "cid-sealed-chunk",
+            seal_chunk(&key, &content_nonce(0x01), b"caller-framed chunk bytes"),
+        ),
+        ("cid-empty-input", Vec::new()),
+        ("cid-256-bytes", (0u8..=255).collect()),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, sealed) in cases {
+        assert!(names.insert(name), "duplicate content cid vector {name}");
+        let cid = compute_cid(&sealed);
+        assert_eq!(cid.len(), CONTENT_CID_LEN, "content cid {name}: length");
+        assert_eq!(
+            cid[..4],
+            [0x01, CONTENT_CID_CODEC, CONTENT_CID_MULTIHASH, 0x20],
+            "content cid {name}: v1||raw||blake3||len prefix"
+        );
+        assert!(
+            verify_cid(&cid, &sealed).is_ok(),
+            "content cid {name}: verify must accept its own CID"
+        );
+        out.push(ContentCidVector {
+            name: name.to_string(),
+            sealed: hexstr(&sealed),
+            cid: hexstr(&cid),
+        });
+    }
+    out
+}
+
+fn build_content_cid_reject() -> Vec<ContentCidRejectVector> {
+    let key = content_key();
+    let sealed = seal_chunk(&key, &content_nonce(0x20), b"the sealed content blob");
+    let good = compute_cid(&sealed);
+
+    let mut flipped_digest = good.clone();
+    *flipped_digest.last_mut().unwrap() ^= 0x01;
+
+    // (name, claimed-cid, sealed-bytes). Every claim mismatches the sealed bytes.
+    let cases: Vec<(&str, Vec<u8>)> = vec![
+        ("mismatched-content", compute_cid(b"different bytes")),
+        ("flipped-digest-byte", flipped_digest),
+        ("truncated-claimed-cid", good[..good.len() - 1].to_vec()),
+        ("foreign-claimed-cid", b"not a cid at all".to_vec()),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, claimed) in cases {
+        assert!(
+            names.insert(name),
+            "duplicate content cid-reject vector {name}"
+        );
+        let err = verify_cid(&claimed, &sealed).expect_err("cid-reject must fail closed");
+        assert_eq!(
+            err.check(),
+            "content-cid-mismatch",
+            "content cid-reject {name}: check ({err})"
+        );
+        assert_eq!(
+            err.class(),
+            "trust",
+            "content cid-reject {name}: class ({err})"
+        );
+        out.push(ContentCidRejectVector {
+            name: name.to_string(),
+            cid: hexstr(&claimed),
+            sealed: hexstr(&sealed),
+            check: "content-cid-mismatch".to_string(),
+            class: "trust".to_string(),
+        });
+    }
+    out
 }
 
 /// A frozen sample folder read-body, used as the read-body-tag plaintext.
