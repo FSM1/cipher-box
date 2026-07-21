@@ -1,5 +1,59 @@
-import { describe, expect, it } from 'vitest';
-import { byteConfigBigInt, DEFAULT_QUOTA_BYTES, exceedsQuota, resolveLimitBytes } from './quota';
+import { describe, expect, it, vi } from 'vitest';
+import type { Repository } from 'typeorm';
+import {
+  byteConfigBigInt,
+  DEFAULT_QUOTA_BYTES,
+  exceedsQuota,
+  resolveLimitBytes,
+  sumHostedBytes,
+  sumPinnedBytes,
+} from './quota';
+import type { PinnedCid } from './entities/pinned-cid.entity';
+
+/**
+ * A minimal QueryBuilder double that records the `andWhere` clauses each sum
+ * applies and returns a caller-set raw `used` string, so a test can prove which
+ * rows a sum narrows to and that the driver's `numeric` string is read back as
+ * an exact BigInt — without a live Postgres.
+ */
+function fakeRepo(used: string | undefined) {
+  const andWhere = vi.fn().mockReturnThis();
+  const qb = {
+    select: vi.fn().mockReturnThis(),
+    where: vi.fn().mockReturnThis(),
+    andWhere,
+    getRawOne: vi.fn().mockResolvedValue(used === undefined ? undefined : { used }),
+  };
+  const repo = {
+    createQueryBuilder: vi.fn().mockReturnValue(qb),
+  } as unknown as Repository<PinnedCid>;
+  return { repo, qb, andWhere };
+}
+
+describe('sumPinnedBytes / sumHostedBytes — aggregation scope and BigInt read-back', () => {
+  it('sumPinnedBytes sums ALL rows: no advisory predicate is applied', async () => {
+    const { repo, andWhere } = fakeRepo('42');
+    expect(await sumPinnedBytes(repo, 'acct-1')).toBe(42n);
+    expect(andWhere).not.toHaveBeenCalled();
+  });
+
+  it('sumHostedBytes narrows to authoritative rows via advisory = false', async () => {
+    const { repo, andWhere } = fakeRepo('42');
+    expect(await sumHostedBytes(repo, 'acct-1')).toBe(42n);
+    expect(andWhere).toHaveBeenCalledWith('pin.advisory = :advisory', { advisory: false });
+  });
+
+  it('reads the driver numeric string back as an exact BigInt above 2^53', async () => {
+    const huge = ((1n << 53n) + 5n).toString();
+    expect(await sumPinnedBytes(fakeRepo(huge).repo, 'acct-1')).toBe((1n << 53n) + 5n);
+    expect(await sumHostedBytes(fakeRepo(huge).repo, 'acct-1')).toBe((1n << 53n) + 5n);
+  });
+
+  it('reads an empty account (no row / COALESCE 0) as 0n', async () => {
+    expect(await sumPinnedBytes(fakeRepo(undefined).repo, 'acct-1')).toBe(0n);
+    expect(await sumHostedBytes(fakeRepo('0').repo, 'acct-1')).toBe(0n);
+  });
+});
 
 /**
  * The quota arithmetic that gates uploads, proven exact in BigInt where a JS

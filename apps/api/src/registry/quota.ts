@@ -1,4 +1,4 @@
-import { Repository } from 'typeorm';
+import { Repository, SelectQueryBuilder } from 'typeorm';
 import { PinnedCid } from './entities/pinned-cid.entity';
 
 /** Default per-account quota when neither an override nor `QUOTA_DEFAULT_BYTES` is set: 10 GiB. */
@@ -22,22 +22,34 @@ export function byteConfigBigInt(raw: unknown, fallback: bigint): bigint {
 }
 
 /**
- * Server-side `SUM(size)` over the account's pin rows, exact at any magnitude.
+ * Per-account `COALESCE(SUM(size), 0)` aggregate, exact at any magnitude.
  * Postgres returns the `bigint` sum as `numeric` (a driver STRING), so
  * `BigInt(...)` preserves precision that TypeORM's `sum()` — which returns a
  * lossy JS `number` and can only type numeric columns — would drop above 2^53
  * bytes (folded from #677). `COALESCE(..., 0)` makes an empty account read 0.
+ * `narrow` optionally restricts the summed rows (e.g. authoritative-only for
+ * the quota gate).
  */
-export async function sumPinnedBytes(
+async function sumSizeBytes(
   repo: Repository<PinnedCid>,
-  accountId: string
+  accountId: string,
+  narrow?: (qb: SelectQueryBuilder<PinnedCid>) => void
 ): Promise<bigint> {
-  const row = await repo
+  const qb = repo
     .createQueryBuilder('pin')
     .select('COALESCE(SUM(pin.size), 0)', 'used')
-    .where('pin.account_id = :accountId', { accountId })
-    .getRawOne<{ used: string }>();
+    .where('pin.account_id = :accountId', { accountId });
+  narrow?.(qb);
+  const row = await qb.getRawOne<{ used: string }>();
   return BigInt(row?.used ?? '0');
+}
+
+/**
+ * Server-side `SUM(size)` over ALL of the account's pin rows — the usage the
+ * inventory REPORTS, exact at any magnitude (#677).
+ */
+export function sumPinnedBytes(repo: Repository<PinnedCid>, accountId: string): Promise<bigint> {
+  return sumSizeBytes(repo, accountId);
 }
 
 /**
@@ -48,17 +60,10 @@ export async function sumPinnedBytes(
  * Distinct from `sumPinnedBytes` (all rows) because a hosted upload must not be
  * 413'd by stale advisory rows an account kept after toggling BYO off.
  */
-export async function sumHostedBytes(
-  repo: Repository<PinnedCid>,
-  accountId: string
-): Promise<bigint> {
-  const row = await repo
-    .createQueryBuilder('pin')
-    .select('COALESCE(SUM(pin.size), 0)', 'used')
-    .where('pin.account_id = :accountId', { accountId })
-    .andWhere('pin.advisory = :advisory', { advisory: false })
-    .getRawOne<{ used: string }>();
-  return BigInt(row?.used ?? '0');
+export function sumHostedBytes(repo: Repository<PinnedCid>, accountId: string): Promise<bigint> {
+  return sumSizeBytes(repo, accountId, (qb) =>
+    qb.andWhere('pin.advisory = :advisory', { advisory: false })
+  );
 }
 
 /** The account limit in bytes: the per-account override, else the env default. */
