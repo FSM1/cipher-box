@@ -515,7 +515,8 @@ fn run_matrix_case(name: &str) -> Result<Adopted, GateError> {
         }
         "commitment-verify:commitment-invalid" => {
             let foreign = EcdsaSigner::from_scalar(&[0x5A; 32]).expect("valid scalar");
-            candidate.commitment_sig = sign_grant_set(&foreign, &candidate.commitment).expect("signs");
+            candidate.commitment_sig =
+                sign_grant_set(&foreign, &candidate.commitment).expect("signs");
         }
         "grant-section:structure-signature-invalid" => {
             let mut sig = candidate.structures[0].signature.to_bytes();
