@@ -1,7 +1,11 @@
-import { PayloadTooLargeException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  ConflictException,
+  PayloadTooLargeException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { createHash } from 'node:crypto';
-import { DataSource, EntityManager, QueryRunner, Repository } from 'typeorm';
+import { DataSource, EntityManager, FindOneOptions, QueryRunner, Repository } from 'typeorm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../auth/entities/user.entity';
 import { advisoryLockKey } from '../common/advisory-lock';
@@ -91,6 +95,10 @@ interface GateHooks {
   skipLockKeys?: bigint[];
   /** Pause right before the pin-row INSERT (after the quota gate has decided). */
   beforeInsert?: () => Promise<void>;
+  /** Drop the users-row FOR UPDATE lock — models the pre-fix unlocked BYO read. */
+  stripUserLock?: boolean;
+  /** Pause right after the users-row read (BYO already read under the lock). */
+  afterUserRead?: () => Promise<void>;
 }
 
 /**
@@ -112,6 +120,23 @@ function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
               return [];
             }
             return target.query(sql, params);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function'
+          ? (value as (...a: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+  const wrapUserRepo = (repo: Repository<User>): Repository<User> =>
+    new Proxy(repo, {
+      get(target, prop, receiver) {
+        if (prop === 'findOne') {
+          return async (options: FindOneOptions<User>) => {
+            const opts = hooks.stripUserLock ? { ...options, lock: undefined } : options;
+            const row = await target.findOne(opts);
+            if (hooks.afterUserRead) await hooks.afterUserRead();
+            return row;
           };
         }
         const value = Reflect.get(target, prop, receiver);
@@ -154,6 +179,7 @@ function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
               return (entity: unknown) => {
                 const repo = target.getRepository(entity as never);
                 if (entity === PinnedCid) return wrapPinRepo(repo as Repository<PinnedCid>);
+                if (entity === User) return wrapUserRepo(repo as Repository<User>);
                 return repo;
               };
             }
@@ -261,32 +287,34 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       expect(await usedBytes(accountId)).toBe(60n);
     });
 
-    it('negative control — with the account lock removed, both uploads pass the stale sum and breach the quota', async () => {
+    it('negative control — with both account serializers removed, both uploads pass the stale sum and breach the quota', async () => {
       const accountId = await seedAccount({ quotaLimitOverride: '100' });
       const skipLockKey = accountLockKey(accountId);
       const gate = makeGate();
       const pinStore = new FakePinStore();
 
-      // Both uploads skip ONLY the account lock; their CIDs differ, so the CID
-      // lock never serializes them — nothing does.
+      // Both uploads skip the account advisory lock AND the users-row lock (the
+      // two per-account serializers); their CIDs differ, so the CID lock never
+      // serializes them either — nothing does.
+      const gateHooks = { skipLockKeys: [skipLockKey], stripUserLock: true };
       const first = buildService(
-        gatedDataSource(db.dataSource, { skipLockKeys: [skipLockKey], beforeInsert: gate.onReach }),
+        gatedDataSource(db.dataSource, { ...gateHooks, beforeInsert: gate.onReach }),
         pinStore
       ).upload(accountId, Buffer.alloc(60, 1));
 
       await gate.reached; // first read used=0, passed the gate, paused before insert
 
-      // second runs fully with no account lock: it also reads used=0 and inserts.
-      await buildService(
-        gatedDataSource(db.dataSource, { skipLockKeys: [skipLockKey] }),
-        pinStore
-      ).upload(accountId, Buffer.alloc(60, 2));
+      // second runs fully with no account serializer: it also reads used=0 and inserts.
+      await buildService(gatedDataSource(db.dataSource, gateHooks), pinStore).upload(
+        accountId,
+        Buffer.alloc(60, 2)
+      );
 
       gate.release();
       await first;
 
       // Both were admitted at the same 100-byte limit — a 120-byte over-quota
-      // breach the account lock closes.
+      // breach the per-account serialization closes.
       expect(await pinsFor(accountId)).toHaveLength(2);
       expect(await usedBytes(accountId)).toBe(120n);
     });
@@ -335,20 +363,19 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       const gate = makeGate();
       const pinStore = new FakePinStore();
 
-      // Strip the account, CID, and durability locks (all distinct keys), so
-      // nothing serializes the two identical (account, cid) inserts.
+      // Strip the account, CID, and durability advisory locks AND the users-row
+      // lock (all distinct), so nothing serializes the two identical (account,
+      // cid) inserts.
+      const skipHooks = { skipLockKeys: skipKeys, stripUserLock: true };
       const first = buildService(
-        gatedDataSource(db.dataSource, { skipLockKeys: skipKeys, beforeInsert: gate.onReach }),
+        gatedDataSource(db.dataSource, { ...skipHooks, beforeInsert: gate.onReach }),
         pinStore
       ).upload(accountId, bytes);
 
       await gate.reached; // first found no existing row and paused before insert
 
       // second runs fully with no locks: it also sees no existing row and inserts.
-      const secondResult = await buildService(
-        gatedDataSource(db.dataSource, { skipLockKeys: skipKeys }),
-        pinStore
-      )
+      const secondResult = await buildService(gatedDataSource(db.dataSource, skipHooks), pinStore)
         .upload(accountId, bytes)
         .catch((e: unknown) => e);
 
@@ -425,6 +452,137 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       ).rejects.toBeInstanceOf(PayloadTooLargeException);
       // Nothing pinned; the authoritative 60 + incoming 60 > 100 refused.
       expect(pinStore.pinned).toEqual([]);
+    });
+  });
+
+  // A BYO account's bytes live on its own provider and bypass the API
+  // (blueprint/api.md, Content plane; #701). Hosted ingress must refuse it — a
+  // 409 with NO pin and NO row — never pin to hosted Kubo off an advisory,
+  // uncounted row (which would be unbounded free hosted storage).
+  describe('hosted ingress refuses a BYO account', () => {
+    it('rejects the upload with 409 and pins nothing, leaving no uncounted row', async () => {
+      const accountId = await seedAccount({ byo: true, quotaLimitOverride: '100' });
+      const pinStore = new FakePinStore();
+
+      await expect(
+        buildService(db.dataSource, pinStore).upload(accountId, Buffer.alloc(4096, 1))
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      // The adversarial invariant: bytes were NOT pinned to hosted Kubo, and no
+      // row (advisory or otherwise) was written to charge or track them.
+      expect(pinStore.pinned).toEqual([]);
+      expect(await pinsFor(accountId)).toHaveLength(0);
+    });
+
+    it('does not promote a pre-existing registry-only row for a BYO account', async () => {
+      const accountId = await seedAccount({ byo: true, quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(50, 8);
+      const pinStore = new FakePinStore();
+      const cid = pinStore.cidFor(bytes);
+
+      // A size-0 registry membership row already exists (from a prior publish).
+      await db.dataSource
+        .getRepository(PinnedCid)
+        .save({ accountId, cid, size: '0', advisory: true });
+
+      await expect(
+        buildService(db.dataSource, pinStore).upload(accountId, bytes)
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      // The registry row is untouched (never promoted/charged) and nothing pinned.
+      expect(pinStore.pinned).toEqual([]);
+      const rows = await pinsFor(accountId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ cid, size: '0' });
+    });
+  });
+
+  // A concurrent PATCH /account/byo must serialize against the hosted-ingress
+  // BYO read: setByo toggles the flag with a bare UPDATE that takes no advisory
+  // lock, so only a users-row lock keeps an upload from reading byo=false, having
+  // the toggle commit true under it, and still pinning to hosted Kubo (free
+  // hosted storage for a BYO account) — or reading true and 409ing an upload the
+  // toggle just made hosted. The read takes the same FOR UPDATE registry.register
+  // uses; setByo's UPDATE blocks on it (#716).
+  describe('hosted ingress — BYO-flag serialization', () => {
+    function buildRegistry(): RegistryService {
+      return new RegistryService(
+        db.dataSource.getRepository(PinnedCid),
+        db.dataSource.getRepository(User),
+        db.dataSource,
+        new FakePinStore(),
+        fakeConfig({ DB_ADVISORY_LOCK_TIMEOUT_MS: '0' }).service
+      );
+    }
+
+    it('a concurrent setByo blocks while an upload holds the users-row lock', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(40, 1);
+      const gate = makeGate();
+      const pinStore = new FakePinStore();
+
+      // The upload takes the row lock, reads byo=false, then parks — still
+      // holding the lock, uncommitted.
+      const uploaded = buildService(
+        gatedDataSource(db.dataSource, { afterUserRead: gate.onReach }),
+        pinStore
+      ).upload(accountId, bytes);
+      await gate.reached;
+
+      let setByoDone = false;
+      const toggled = buildRegistry()
+        .setByo(accountId, true)
+        .then((r) => {
+          setByoDone = true;
+          return r;
+        });
+
+      // The toggle is blocked on the upload's row lock — it cannot commit.
+      await delay(200);
+      expect(setByoDone).toBe(false);
+
+      gate.release();
+      const result = await uploaded;
+      await toggled;
+      expect(setByoDone).toBe(true);
+
+      // The upload was hosted at its serialization point, so it pinned and
+      // charged; the toggle to BYO applied strictly after it committed.
+      expect(result.size).toBe(40);
+      expect(pinStore.pinned).toEqual([pinStore.cidFor(bytes)]);
+      const user = await db.dataSource.getRepository(User).findOne({ where: { id: accountId } });
+      expect(user?.byo).toBe(true);
+    });
+
+    it('negative control — without the row lock, the toggle commits mid-upload and a BYO account gets a hosted pin', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(40, 2);
+      const gate = makeGate();
+      const pinStore = new FakePinStore();
+
+      // The user read drops the FOR UPDATE lock (the pre-fix path); nothing
+      // serializes the upload against the toggle.
+      const uploaded = buildService(
+        gatedDataSource(db.dataSource, { stripUserLock: true, afterUserRead: gate.onReach }),
+        pinStore
+      ).upload(accountId, bytes);
+      await gate.reached; // upload read byo=false with no lock, then paused
+
+      // The toggle commits immediately, mid-upload.
+      await buildRegistry().setByo(accountId, true);
+      const midUser = await db.dataSource.getRepository(User).findOne({ where: { id: accountId } });
+      expect(midUser?.byo).toBe(true);
+
+      gate.release();
+      await uploaded;
+
+      // The breach: the account is now BYO, yet the upload pinned to hosted Kubo
+      // and wrote an authoritative, quota-charged row — the free hosted storage
+      // the row lock closes.
+      expect(pinStore.pinned).toEqual([pinStore.cidFor(bytes)]);
+      const rows = await pinsFor(accountId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].advisory).toBe(false);
     });
   });
 

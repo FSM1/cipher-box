@@ -1,4 +1,5 @@
 import {
+  ConflictException,
   Injectable,
   Logger,
   PayloadTooLargeException,
@@ -18,6 +19,8 @@ import {
   setAdvisoryLockTimeout,
   withSessionAdvisoryLock,
 } from '../common/advisory-lock';
+import { resolveDbPoolSize } from '../common/db-pool';
+import { Semaphore } from '../common/semaphore';
 import { PinnedCid } from '../registry/entities/pinned-cid.entity';
 import { PinStore } from '../registry/pin-store';
 import {
@@ -27,6 +30,44 @@ import {
   resolveLimitBytes,
   sumHostedBytes,
 } from '../registry/quota';
+
+/**
+ * Max uploads admitted concurrently to the pin path (`CONTENT_PIN_CONCURRENCY`).
+ * Each admitted upload holds one pooled DB connection (the session lock) across
+ * its ~30s Kubo pin, and transiently a second (the Phase-2 tx) — so a pin burst
+ * could otherwise tie up the whole pool and 503 unrelated routes.
+ */
+const DEFAULT_PIN_CONCURRENCY = 4;
+
+export interface ResolvedPinConcurrency {
+  ceiling: number;
+  /** The configured value before clamping, when it had to be lowered. */
+  clampedFrom?: number;
+}
+
+/**
+ * The pin-admission ceiling, clamped so `2 × ceiling ≤ poolSize` always holds
+ * (an admitted upload holds its session-lock connection across the pin AND
+ * borrows a second for the commit tx, so it needs 2 pooled connections to make
+ * progress). Deriving the ceiling from the pool size makes that invariant
+ * structural — config drift (an over-large ceiling) can no longer silently
+ * reintroduce pool exhaustion. A pool of 1 cannot host even one upload without
+ * self-deadlocking on its second connection, so the safe max floors to 0 there
+ * and the pin path is refused (upload() fails closed) rather than deadlocked.
+ */
+export function resolvePinConcurrency(configService: ConfigService): ResolvedPinConcurrency {
+  const raw = configService.get<string | number>('CONTENT_PIN_CONCURRENCY');
+  let configured = DEFAULT_PIN_CONCURRENCY;
+  if (raw !== undefined && raw !== null && String(raw).trim() !== '') {
+    const value = Number(raw);
+    if (Number.isInteger(value) && value >= 1) {
+      configured = value;
+    }
+  }
+  const safeMax = Math.floor(resolveDbPoolSize(configService) / 2);
+  const ceiling = Math.min(configured, safeMax);
+  return ceiling < configured ? { ceiling, clampedFrom: configured } : { ceiling };
+}
 
 /**
  * A stored pin outcome. `created` drives the durable pin — true both when this
@@ -49,7 +90,10 @@ export interface UploadResult {
 /**
  * The hosted ingress upload path (blueprint/api.md, Content plane): pin opaque
  * bytes to CipherBox Kubo, quota-gated, registering the pin row in the same
- * traversal. The API is zero-knowledge — it pins bytes it never inspects.
+ * traversal. The API is zero-knowledge — it pins bytes it never inspects. Only
+ * hosted accounts may ingress here: a BYO account pins to its own provider and
+ * its bytes bypass the API, so a BYO upload is refused (409) rather than pinned
+ * to hosted Kubo off the quota's books.
  *
  * Concurrency (two shared resources under contention):
  *  - the per-account quota SUM — a check-then-act serialized by a per-account
@@ -76,6 +120,10 @@ export class ContentService {
   private readonly logger = new Logger(ContentService.name);
   private readonly defaultLimitBytes: bigint;
   private readonly lockTimeoutMs: number;
+  /** Bounds concurrent pin-path connections so the pin can't starve the pool. */
+  private readonly pinSlots: Semaphore;
+  /** 0 when the pool is too small (< 2) to host one upload — the path fails closed. */
+  private readonly pinCeiling: number;
 
   constructor(
     @InjectDataSource()
@@ -88,23 +136,44 @@ export class ContentService {
       DEFAULT_QUOTA_BYTES
     );
     this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
+    const pinConcurrency = resolvePinConcurrency(configService);
+    this.pinCeiling = pinConcurrency.ceiling;
+    if (pinConcurrency.ceiling === 0) {
+      this.logger.error(
+        'DB pool too small for the content pin path (needs DB_POOL_SIZE >= 2); hosted uploads will be refused with 503'
+      );
+    } else if (pinConcurrency.clampedFrom !== undefined) {
+      this.logger.warn(
+        `CONTENT_PIN_CONCURRENCY=${pinConcurrency.clampedFrom} exceeds the safe bound for the DB pool; clamped to ${pinConcurrency.ceiling} to preserve pool headroom`
+      );
+    }
+    this.pinSlots = new Semaphore(pinConcurrency.ceiling);
   }
 
   async upload(accountId: string, bytes: Buffer): Promise<UploadResult> {
+    // Fail closed on a pool too small (< 2 connections) to host one upload: the
+    // pin path needs its session-lock connection AND a second for the commit tx,
+    // so admitting a request here would self-deadlock waiting for the second.
+    if (this.pinCeiling === 0) {
+      throw new ServiceUnavailableException('Content pin path unavailable; DB pool too small');
+    }
     const size = bytes.byteLength;
     // Phase 1 — derive the CID with no durable side effect (only-hash), so the
     // ledger below can key on it before any bytes are pinned.
     const cid = await this.pinStore.hash(bytes);
 
-    // Serialize the whole commit → pin → compensate span per CID with a session
-    // lock, so a concurrent same-CID upload cannot observe a committed-but-not-
-    // yet-pinned row and return success for it (the in-tx xact lock releases at
-    // commit, too early to cover the post-commit pin).
-    return withSessionAdvisoryLock(
-      this.dataSource,
-      pinDurabilityLockKey(cid),
-      this.lockTimeoutMs,
-      () => this.registerAndPin(accountId, cid, size, bytes)
+    // Admit at most `pinSlots` uploads into the session-lock → pin → compensate
+    // span at once. That span holds a pooled connection across the external pin,
+    // so an unbounded burst would otherwise exhaust the DB pool; the ceiling
+    // reserves connections for every other route while the pin is in flight.
+    return this.pinSlots.run(() =>
+      // Serialize the whole commit → pin → compensate span per CID with a
+      // session lock, so a concurrent same-CID upload cannot observe a
+      // committed-but-not-yet-pinned row and return success for it (the in-tx
+      // xact lock releases at commit, too early to cover the post-commit pin).
+      withSessionAdvisoryLock(this.dataSource, pinDurabilityLockKey(cid), this.lockTimeoutMs, () =>
+        this.registerAndPin(accountId, cid, size, bytes)
+      )
     );
   }
 
@@ -156,13 +225,28 @@ export class ContentService {
     const userRepo = manager.getRepository(User);
     const pinRepo = manager.getRepository(PinnedCid);
 
-    const user = await userRepo.findOne({ where: { id: accountId } });
+    // Read BYO under a users-row lock (FOR UPDATE), the same synchronization
+    // point registry.register uses: setByo toggles the flag with a bare UPDATE
+    // that takes no advisory lock, so only the row lock serializes it against
+    // this read. Without it a concurrent PATCH /account/byo could commit true
+    // after an unlocked read of false and let a BYO account pin to hosted Kubo,
+    // or commit false after a read of true and 409 a valid hosted upload.
+    const user = await userRepo.findOne({
+      where: { id: accountId },
+      lock: { mode: 'pessimistic_write' },
+    });
     if (!user) {
       throw new UnauthorizedException('Unknown account');
     }
-    // byo is read unlocked: the account lock serializes the quota gate; a racing
-    // BYO toggle only mis-stamps advisory on the new row, which self-heals.
-    const advisory = user.byo;
+    // Fail closed at hosted ingress for a BYO account: its bytes belong on its
+    // own provider and bypass the API (blueprint/api.md, Content plane). Pinning
+    // them to hosted Kubo off an advisory, uncounted row would be free hosted
+    // storage, so refuse rather than pin. The row lock above makes this read and
+    // the quota gate below atomic w.r.t. setByo, so a hosted upload past this
+    // point always registers an AUTHORITATIVE (advisory=false) row.
+    if (user.byo) {
+      throw new ConflictException('Hosted ingress is unavailable for BYO accounts');
+    }
 
     const existing = await pinRepo.findOne({ where: { accountId, cid } });
     // A registry-only row (register() records CID membership at size 0 with no
@@ -175,27 +259,25 @@ export class ContentService {
       return { cid, size: Number(existing.size), created: false, promoted: false };
     }
 
-    if (!advisory) {
-      // Gate against AUTHORITATIVE rows only: stale advisory/BYO rows an account
-      // kept after toggling BYO off live on its own provider, not the hosted quota.
-      // A promoted row is still size 0 here, so it adds nothing to `used` — the
-      // gate charges the incoming size exactly once, never double-counting.
-      const used = await sumHostedBytes(pinRepo, accountId);
-      const limit = resolveLimitBytes(user.quotaLimitOverride, this.defaultLimitBytes);
-      if (exceedsQuota(used, BigInt(size), limit)) {
-        throw new PayloadTooLargeException('Upload exceeds the account storage quota');
-      }
+    // Gate against AUTHORITATIVE rows only: stale advisory rows an account kept
+    // after toggling BYO off live on its own provider, not the hosted quota. A
+    // promoted row is still size 0 here, so it adds nothing to `used` — the gate
+    // charges the incoming size exactly once, never double-counting.
+    const used = await sumHostedBytes(pinRepo, accountId);
+    const limit = resolveLimitBytes(user.quotaLimitOverride, this.defaultLimitBytes);
+    if (exceedsQuota(used, BigInt(size), limit)) {
+      throw new PayloadTooLargeException('Upload exceeds the account storage quota');
     }
 
     if (existing) {
-      // Promote the registry-only row: stamp the real size and the current
-      // hosting flag so the charge lands in the authoritative sum, then drive
-      // the durable pin (`created`) exactly as a fresh insert would.
-      await pinRepo.update({ accountId, cid }, { size: size.toString(), advisory });
+      // Promote the registry-only row: stamp the real size and mark it
+      // authoritative so the charge lands in the hosted sum, then drive the
+      // durable pin (`created`) exactly as a fresh insert would.
+      await pinRepo.update({ accountId, cid }, { size: size.toString(), advisory: false });
       return { cid, size, created: true, promoted: true };
     }
 
-    await pinRepo.insert({ accountId, cid, size: size.toString(), advisory });
+    await pinRepo.insert({ accountId, cid, size: size.toString(), advisory: false });
     return { cid, size, created: true, promoted: false };
   }
 

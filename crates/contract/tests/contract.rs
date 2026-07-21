@@ -389,13 +389,15 @@ async fn union_liveness_is_per_account_and_permissionless() {
         .expect("bob retires the last row");
 }
 
-/// Quota + hosted ingress (blueprint/api.md; #629): hosted accounts are
+/// Quota + hosted ingress (blueprint/api.md; #629, #701): hosted accounts are
 /// authoritative (`advisory: false`) with a positive limit and gate uploads; a
-/// BYO account's rows are advisory (`advisory: true`, quota always allows). The
-/// upload path pins bytes to the real CI Kubo and is exercised here rather than
-/// in dedicated tests so the shared per-IP login throttle is not tripped by an
-/// extra account. The contract-suite job sets a tiny 1 KiB QUOTA_DEFAULT_BYTES,
-/// so a few hundred bytes straddle the over-quota limit deterministically.
+/// BYO account's quota is advisory (`advisory: true`, quota always allows) and
+/// its bytes bypass the API entirely — so hosted ingress is REFUSED for a BYO
+/// account rather than pinned off an uncounted row. The upload path pins bytes
+/// to the real CI Kubo and is exercised here rather than in dedicated tests so
+/// the shared per-IP login throttle is not tripped by an extra account. The
+/// contract-suite job sets a tiny 1 KiB QUOTA_DEFAULT_BYTES, so a few hundred
+/// bytes straddle the over-quota limit deterministically.
 #[tokio::test]
 async fn quota_is_hosted_authoritative_and_byo_advisory() {
     let base = require_stack!("quota_is_hosted_authoritative_and_byo_advisory");
@@ -435,8 +437,10 @@ async fn quota_is_hosted_authoritative_and_byo_advisory() {
         "over-quota is a 413, got {error:?}"
     );
 
-    // Enabling BYO makes the account's rows advisory: quota always allows, so an
-    // upload past the hosted limit is accepted.
+    // Enabling BYO makes the account's quota advisory (quota always allows), but
+    // hosted ingress is a hosted-only path: a BYO account's bytes belong on its
+    // own provider, so the upload endpoint refuses it (409) instead of pinning
+    // to hosted Kubo off an uncounted row (#701).
     client.set_byo(true).await.expect("enable BYO");
     let byo = client.quota().await.expect("byo quota");
     assert!(byo.advisory, "a BYO account's quota is advisory");
@@ -444,11 +448,14 @@ async fn quota_is_hosted_authoritative_and_byo_advisory() {
         byo.limit_bytes, hosted.limit_bytes,
         "the limit is unchanged"
     );
-    let byo_upload = client
+    let refused = client
         .upload(&vec![3u8; 4096])
         .await
-        .expect("a BYO upload is never quota-gated");
-    assert_eq!(byo_upload.size, 4096, "size is the uploaded byte count");
+        .expect_err("a BYO account cannot ingress to hosted Kubo");
+    assert!(
+        matches!(refused, ApiError::Status { status: 409, .. }),
+        "hosted ingress for a BYO account is a 409, got {refused:?}"
+    );
 
     // Toggling BYO back restores the authoritative posture.
     client.set_byo(false).await.expect("disable BYO");
