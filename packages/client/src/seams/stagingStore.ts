@@ -48,9 +48,12 @@ export class OpfsStagingStore implements StagingStoreSeam {
   }
 
   async enqueueOp(op: Uint8Array): Promise<number> {
+    // Copy before the first await: `op` may be a view into WASM linear memory
+    // that a concurrent task's `Memory.grow()` can detach across the await (#717).
+    const staged = op.slice();
     const db = await this.open();
     const tx = db.transaction(OPS_STORE, 'readwrite');
-    const key = await requestResult<IDBValidKey>(tx.objectStore(OPS_STORE).add(op.slice()));
+    const key = await requestResult<IDBValidKey>(tx.objectStore(OPS_STORE).add(staged));
     await transactionDone(tx);
     return Number(key);
   }
@@ -74,12 +77,17 @@ export class OpfsStagingStore implements StagingStoreSeam {
   }
 
   async putStagedBytes(stagingKey: Uint8Array, bytes: Uint8Array): Promise<void> {
+    // Copy before the first await: `bytes` may be a view into WASM linear
+    // memory that a concurrent task's `Memory.grow()` can detach across the
+    // awaits below, so `handle.write` would truncate or throw on a detached
+    // view (#717).
+    const staged = bytes.slice();
     const dir = await this.stagedDir();
     const fileHandle = await dir.getFileHandle(toHex(stagingKey), { create: true });
     const handle = await fileHandle.createSyncAccessHandle();
     try {
       handle.truncate(0);
-      handle.write(bytes, { at: 0 });
+      handle.write(staged, { at: 0 });
       handle.flush();
     } finally {
       handle.close();

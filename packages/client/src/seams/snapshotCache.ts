@@ -36,11 +36,13 @@ export class IdbSnapshotCache implements SnapshotCacheSeam {
   }
 
   async put(cacheKey: Uint8Array, ciphertext: Uint8Array): Promise<void> {
+    // Copy synchronously, before the first await: `ciphertext` may be a view
+    // into WASM linear memory that a concurrent task's `Memory.grow()` can
+    // detach across the await, silently corrupting the stored value (#717).
+    const value = ciphertext.slice();
     const db = await this.open();
     const tx = db.transaction(STORE, 'readwrite');
-    // Store a standalone copy: the value must be independent of any buffer the
-    // caller may reuse, and round-trip byte-for-byte.
-    tx.objectStore(STORE).put(ciphertext.slice(), toHex(cacheKey));
+    tx.objectStore(STORE).put(value, toHex(cacheKey));
     await transactionDone(tx);
   }
 
