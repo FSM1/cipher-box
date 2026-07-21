@@ -93,6 +93,19 @@ export function advisoryLockKey(token: string): bigint {
 }
 
 /**
+ * Namespaced per-CID key for the SESSION lock that guards a durability window:
+ * the upload path holds it across commit → pin, and retire holds it across
+ * commit → unpin. DISTINCT from the plain CID xact lock so the upload can hold
+ * both — session lock on its own connection, xact lock on the tx connection —
+ * without a same-key self-deadlock. Upload and retire MUST share this key so
+ * retire's post-commit unpin of a CID serializes against a concurrent upload
+ * re-pinning the same CID (#714).
+ */
+export function pinDurabilityLockKey(cid: string): bigint {
+  return advisoryLockKey(`pin-durability:${cid}`);
+}
+
+/**
  * Acquire a batch of transaction-scoped advisory locks in one deadlock-free
  * order: keys are de-duplicated and sorted, so any two overlapping batches take
  * their shared keys in the same sequence and cannot form a cycle. Set the

@@ -100,7 +100,12 @@ interface SumQueryBuilder {
   getRawOne: () => Promise<{ used: string }>;
 }
 
-/** A DataSource whose transaction runs inline against the in-memory repos. */
+/**
+ * A DataSource whose transaction runs inline against the in-memory repos and
+ * whose query runner no-ops advisory-lock statements — the post-commit unpin
+ * guard's session lock is inert against a single-threaded fake, so its recount
+ * runs directly against the in-memory pins repo.
+ */
 function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {
   const byEntity = new Map(repos);
   return {
@@ -109,6 +114,11 @@ function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {
         getRepository: (entity: unknown) => byEntity.get(entity),
         query: async () => [],
       }),
+    createQueryRunner: () => ({
+      connect: async () => undefined,
+      query: async () => [],
+      release: async () => undefined,
+    }),
   } as unknown as DataSource;
 }
 
