@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from './auth/auth.module';
+import { resolveDbPoolSize } from './common/db-pool';
 import { RuntimeModule } from './common/runtime.module';
 import { ContentModule } from './content/content.module';
 import { MailboxModule } from './mailbox/mailbox.module';
@@ -25,6 +26,10 @@ import { RepublisherModule } from './republisher/republisher.module';
         // Schema changes ship as committed migrations only (CI drift-checked).
         synchronize: false,
         uuidExtension: 'pgcrypto' as const,
+        // Explicit pool ceiling: the content path derives its pin-admission
+        // ceiling from this same value, so a pin burst leaves connections free
+        // for other routes.
+        extra: { max: resolveDbPoolSize(configService) },
       }),
     }),
     RuntimeModule,

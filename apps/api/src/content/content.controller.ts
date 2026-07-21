@@ -31,13 +31,17 @@ export class ContentController {
   @Throttle(THROTTLE_SURFACES.content)
   @ApiOperation({
     summary:
-      'Upload content bytes to the hosted pin store; quota-gated for hosted accounts, advisory for BYO',
+      'Upload content bytes to the hosted pin store; quota-gated for hosted accounts, refused for BYO',
   })
   @ApiConsumes('application/octet-stream')
   @ApiBody({ schema: { type: 'string', format: 'binary' } })
   @ApiCreatedResponse({ type: UploadResponseDto })
   @ApiResponse({ status: 400, description: 'Empty or non-binary upload body' })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
+  @ApiResponse({
+    status: 409,
+    description: 'Hosted ingress is unavailable for BYO accounts; pin to your own provider',
+  })
   @ApiResponse({ status: 413, description: 'Upload exceeds the account storage quota or size cap' })
   @ApiResponse({ status: 429, description: 'Upload rate limit exceeded' })
   @ApiResponse({ status: 503, description: 'Pin store contended or unavailable; retry shortly' })

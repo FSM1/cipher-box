@@ -1,4 +1,8 @@
-import { PayloadTooLargeException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  ConflictException,
+  PayloadTooLargeException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { createHash } from 'node:crypto';
 import { DataSource, EntityManager, QueryRunner, Repository } from 'typeorm';
@@ -425,6 +429,48 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       ).rejects.toBeInstanceOf(PayloadTooLargeException);
       // Nothing pinned; the authoritative 60 + incoming 60 > 100 refused.
       expect(pinStore.pinned).toEqual([]);
+    });
+  });
+
+  // A BYO account's bytes live on its own provider and bypass the API
+  // (blueprint/api.md, Content plane; #701). Hosted ingress must refuse it — a
+  // 409 with NO pin and NO row — never pin to hosted Kubo off an advisory,
+  // uncounted row (which would be unbounded free hosted storage).
+  describe('hosted ingress refuses a BYO account', () => {
+    it('rejects the upload with 409 and pins nothing, leaving no uncounted row', async () => {
+      const accountId = await seedAccount({ byo: true, quotaLimitOverride: '100' });
+      const pinStore = new FakePinStore();
+
+      await expect(
+        buildService(db.dataSource, pinStore).upload(accountId, Buffer.alloc(4096, 1))
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      // The adversarial invariant: bytes were NOT pinned to hosted Kubo, and no
+      // row (advisory or otherwise) was written to charge or track them.
+      expect(pinStore.pinned).toEqual([]);
+      expect(await pinsFor(accountId)).toHaveLength(0);
+    });
+
+    it('does not promote a pre-existing registry-only row for a BYO account', async () => {
+      const accountId = await seedAccount({ byo: true, quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(50, 8);
+      const pinStore = new FakePinStore();
+      const cid = pinStore.cidFor(bytes);
+
+      // A size-0 registry membership row already exists (from a prior publish).
+      await db.dataSource
+        .getRepository(PinnedCid)
+        .save({ accountId, cid, size: '0', advisory: true });
+
+      await expect(
+        buildService(db.dataSource, pinStore).upload(accountId, bytes)
+      ).rejects.toBeInstanceOf(ConflictException);
+
+      // The registry row is untouched (never promoted/charged) and nothing pinned.
+      expect(pinStore.pinned).toEqual([]);
+      const rows = await pinsFor(accountId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ cid, size: '0' });
     });
   });
 
