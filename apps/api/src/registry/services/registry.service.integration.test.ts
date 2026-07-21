@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { DataSource, EntityManager, FindManyOptions, FindOneOptions, Repository } from 'typeorm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../../auth/entities/user.entity';
+import { pinDurabilityLockKey, withSessionAdvisoryLock } from '../../common/advisory-lock';
 import { fakeConfig } from '../../testing/fakes';
 import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
 import { PinnedCid } from '../entities/pinned-cid.entity';
@@ -48,6 +49,17 @@ class RecordingPinStore extends PinStore {
   }
 }
 
+/** Records the unpin, then pauses inside it so a test can commit a racing row. */
+class GatedUnpinStore extends RecordingPinStore {
+  constructor(private readonly gate: Gate) {
+    super();
+  }
+  override async unpin(cid: string): Promise<void> {
+    await super.unpin(cid);
+    await this.gate.onReach();
+  }
+}
+
 /** A barrier a gated transaction trips the instant it reaches its hook point. */
 interface Gate {
   reached: Promise<void>;
@@ -73,6 +85,8 @@ function makeGate(): Gate {
 interface GateHooks {
   /** No-op the advisory lock + lock_timeout, and drop the users-row lock — the pre-#677 path. */
   stripLock?: boolean;
+  /** No-op the post-commit SESSION advisory lock — the pre-#714 unguarded-unpin path. */
+  stripSessionLock?: boolean;
   afterUserRead?: () => Promise<void>;
   afterPinFind?: () => Promise<void>;
   afterPinSave?: () => Promise<void>;
@@ -122,7 +136,30 @@ function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
       },
     });
 
+  // Strip the SESSION advisory (un)lock the post-commit unpin guard takes on a
+  // dedicated runner, so retire's recount races the concurrent upload instead of
+  // serializing behind it — the pre-#714 unguarded-unpin path.
+  const wrapQueryRunner = (runner: ReturnType<DataSource['createQueryRunner']>) =>
+    new Proxy(runner, {
+      get(target, prop, receiver) {
+        if (prop === 'query') {
+          return async (sql: string, params?: unknown[]) => {
+            if (/pg_advisory_lock|pg_advisory_unlock/i.test(sql)) {
+              return [];
+            }
+            return target.query(sql, params);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
   return {
+    createQueryRunner: () => {
+      const runner = real.createQueryRunner();
+      return hooks.stripSessionLock ? wrapQueryRunner(runner) : runner;
+    },
     transaction: (runInTransaction: (manager: EntityManager) => Promise<unknown>) =>
       real.transaction((manager) => {
         const proxied = new Proxy(manager, {
@@ -456,6 +493,103 @@ describe('RegistryService concurrency (real Postgres)', () => {
         caught = error;
       }
       expect(pgErrorCode(caught)).toBe('23505');
+    });
+  });
+
+  describe('retire post-commit unpin guard (#714)', () => {
+    it('at true global-zero the guarded unpin fires exactly once', async () => {
+      const a = await seedAccount(false);
+      const cid = token();
+      await seedPin(a, cid);
+
+      const pinStore = new RecordingPinStore();
+      const result = await buildService(db.dataSource, pinStore).retire(a, [cid]);
+
+      expect(result.unpinned).toBe(1);
+      expect(pinStore.unpinned).toEqual([cid]);
+      expect(await db.dataSource.getRepository(PinnedCid).find({ where: { cid } })).toEqual([]);
+    });
+
+    it('skips the unpin when a concurrent upload re-pins the CID inside the commit→unpin window', async () => {
+      const a = await seedAccount(false);
+      const b = await seedAccount(false);
+      const cid = token();
+      await seedPin(a, cid); // A is the sole holder — retire will decide to unpin.
+
+      // A concurrent upload holds the SAME pin-durability session lock the guard
+      // takes and, while holding it, commits a fresh size>0 pin row for the CID —
+      // the re-pin retire's lagging unpin would otherwise destroy.
+      const gate = makeGate();
+      const uploadPromise = withSessionAdvisoryLock(
+        db.dataSource,
+        pinDurabilityLockKey(cid),
+        0,
+        async () => {
+          await gate.onReach();
+          await db.dataSource
+            .getRepository(PinnedCid)
+            .save({ accountId: b, cid, size: '100', advisory: false });
+        }
+      );
+      await gate.reached; // upload holds the session lock; B's row not yet inserted
+
+      // retire(A): its txn deletes A's only row, sees no survivor, commits, then
+      // BLOCKS acquiring the pin-durability lock the upload still holds.
+      const pinStore = new RecordingPinStore();
+      let retireDone = false;
+      const retired = buildService(db.dataSource, pinStore)
+        .retire(a, [cid])
+        .then((r) => {
+          retireDone = true;
+          return r;
+        });
+
+      await delay(200);
+      expect(retireDone).toBe(false);
+      expect(pinStore.unpinned).toEqual([]);
+
+      gate.release(); // upload commits B's row and releases the session lock
+      await uploadPromise;
+      const result = await retired;
+
+      // retire acquired the lock, recounted, saw B's survivor, and SKIPPED the
+      // unpin — the freshly-pinned bytes are preserved.
+      expect(result.unpinned).toBe(0);
+      expect(pinStore.unpinned).toEqual([]);
+      const survivors = await db.dataSource.getRepository(PinnedCid).find({ where: { cid } });
+      expect(survivors.map((r) => r.accountId)).toEqual([b]);
+    });
+
+    it('negative control — with the session lock stripped, retire prematurely unpins a CID a concurrent upload re-pins', async () => {
+      const a = await seedAccount(false);
+      const b = await seedAccount(false);
+      const cid = token();
+      await seedPin(a, cid);
+
+      // The unpin is gated so the racing upload can commit its row DURING it,
+      // after retire's now-unserialized recount has already passed.
+      const gate = makeGate();
+      const pinStore = new GatedUnpinStore(gate);
+      const retired = buildService(
+        gatedDataSource(db.dataSource, { stripSessionLock: true }),
+        pinStore
+      ).retire(a, [cid]);
+
+      // retire committed, recounted (no survivor), and is now paused inside unpin.
+      await gate.reached;
+      await db.dataSource
+        .getRepository(PinnedCid)
+        .save({ accountId: b, cid, size: '100', advisory: false });
+
+      gate.release();
+      const result = await retired;
+
+      // The CID was physically unpinned even though B now holds it — the
+      // data-loss window the session-lock guard closes.
+      expect(result.unpinned).toBe(1);
+      expect(pinStore.unpinned).toEqual([cid]);
+      const survivors = await db.dataSource.getRepository(PinnedCid).find({ where: { cid } });
+      expect(survivors.map((r) => r.accountId)).toEqual([b]);
     });
   });
 });

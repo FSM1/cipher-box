@@ -7,8 +7,10 @@ import {
   acquireAdvisoryLocks,
   advisoryLockKey,
   isLockNotAvailable,
+  pinDurabilityLockKey,
   resolveAdvisoryLockTimeoutMs,
   setAdvisoryLockTimeout,
+  withSessionAdvisoryLock,
 } from '../../common/advisory-lock';
 import { NameInventory } from '../entities/name-inventory.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
@@ -245,10 +247,30 @@ export class RegistryService {
     });
 
     // Fire the external unpin after commit — never hold the txn across Kubo.
+    // The retire txn's per-token xact lock releases at commit, so between it and
+    // this unpin a concurrent upload can re-pin the same CID under the upload
+    // path's `pin-durability:` session lock, commit a row, and return success —
+    // an unguarded unpin here would then delete freshly-pinned, durably-held
+    // bytes (#714). Re-serialize on that SAME session key and recount under it:
+    // if a survivor row now exists the bytes are legitimately held, so skip.
     let unpinned = 0;
     for (const cid of unpinCids) {
-      await this.pinStore.unpin(cid);
-      unpinned += 1;
+      const didUnpin = await withSessionAdvisoryLock(
+        this.dataSource,
+        pinDurabilityLockKey(cid),
+        this.lockTimeoutMs,
+        async () => {
+          const survivors = await this.pinRepository.find({ where: { cid } });
+          if (survivors.length > 0) {
+            return false;
+          }
+          await this.pinStore.unpin(cid);
+          return true;
+        }
+      );
+      if (didUnpin) {
+        unpinned += 1;
+      }
     }
 
     return { retired, unpinned };
