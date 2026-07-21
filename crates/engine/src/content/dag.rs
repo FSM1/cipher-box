@@ -90,6 +90,16 @@ pub fn assemble(
     plaintext_len: u64,
     profile: &ContentProfile,
 ) -> ContentDag {
+    // Produce/consume symmetry: assemble emits exactly the leaf count decode_root
+    // requires, so this crate never produces a root its own decode would reject.
+    // A debug_assert (not a fallible signature) is the right level — the inputs
+    // are trusted engine values, so this guards a mis-wired caller, not untrusted
+    // input.
+    debug_assert_eq!(
+        leaves.len() as u64,
+        expected_leaf_count(plaintext_len, profile.chunk_size() as u64),
+        "assemble leaf count must match decode_root's ceil(size / chunkSize)"
+    );
     let links = leaves
         .iter()
         .map(|leaf| Value::Bytes(leaf.cid.clone()))
@@ -155,13 +165,7 @@ pub fn decode_root(root_block: &[u8]) -> Result<RootManifest, DagError> {
             reason: "malformed leaf cid",
         });
     }
-    // An empty version frames to one empty leaf; otherwise ceil(size/chunkSize).
-    let expected_leaves = if size == 0 {
-        1
-    } else {
-        size.div_ceil(chunk_size)
-    };
-    if leaf_cids.len() as u64 != expected_leaves {
+    if leaf_cids.len() as u64 != expected_leaf_count(size, chunk_size) {
         return Err(DagError::InvalidManifest {
             reason: "link count inconsistent with size",
         });
@@ -172,6 +176,20 @@ pub fn decode_root(root_block: &[u8]) -> Result<RootManifest, DagError> {
         size,
         leaf_cids,
     })
+}
+
+/// The leaf count a version of `plaintext_len` bytes frames to at `chunk_size`:
+/// `ceil(len / chunk_size)`, except an empty version is exactly one empty leaf.
+/// The single formula both [`assemble`] (produce) and [`decode_root`] (consume)
+/// share, so the two sides cannot diverge. `chunk_size` is nonzero at both call
+/// sites (a profile invariant on produce; the zero-chunk check runs first on
+/// decode).
+fn expected_leaf_count(plaintext_len: u64, chunk_size: u64) -> u64 {
+    if plaintext_len == 0 {
+        1
+    } else {
+        plaintext_len.div_ceil(chunk_size)
+    }
 }
 
 /// Whether `cid` is a well-formed `raw` leaf content CID: the fixed CIDv1 framing

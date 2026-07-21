@@ -71,7 +71,10 @@ pub struct PrunePlan {
 /// nothing (an empty plan).
 pub fn plan_prune(versions_newest_first: &[ContentVersion], keep_latest: usize) -> PrunePlan {
     let doomed = versions_newest_first.iter().skip(keep_latest);
-    let mut plan = PrunePlan::default();
+    let mut plan = PrunePlan {
+        retire_targets: Vec::with_capacity(doomed.len()),
+        ..PrunePlan::default()
+    };
     // Emit oldest-first so retirement proceeds from the tail of history.
     for version in doomed.rev() {
         plan.retire_targets.push(version.content_cid.clone());
