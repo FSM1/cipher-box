@@ -1,0 +1,37 @@
+[
+  {
+    "name": "mismatched-content",
+    "cid": "01551e20a7875304962469af06a8e9efcb3cf30f65312f5258879d66b2349826bb91a0af",
+    "sealed": "101112131415161718191a1b1c1d1e1f6061626364656667e8514f26aa6426397a6dacbcf8895ea323137621ece5d29e6aa66337fd91ada7b1225a69dd45b5",
+    "check": "content-cid-mismatch",
+    "class": "trust"
+  },
+  {
+    "name": "flipped-digest-byte",
+    "cid": "01551e202509fbe15c424d7c8d1daeb6c1092117ef6d6ffa51416fa08cbbb1e2a20293ed",
+    "sealed": "101112131415161718191a1b1c1d1e1f6061626364656667e8514f26aa6426397a6dacbcf8895ea323137621ece5d29e6aa66337fd91ada7b1225a69dd45b5",
+    "check": "content-cid-mismatch",
+    "class": "trust"
+  },
+  {
+    "name": "wrong-multihash-code",
+    "cid": "0155e1202509fbe15c424d7c8d1daeb6c1092117ef6d6ffa51416fa08cbbb1e2a20293ec",
+    "sealed": "101112131415161718191a1b1c1d1e1f6061626364656667e8514f26aa6426397a6dacbcf8895ea323137621ece5d29e6aa66337fd91ada7b1225a69dd45b5",
+    "check": "content-cid-mismatch",
+    "class": "trust"
+  },
+  {
+    "name": "truncated-claimed-cid",
+    "cid": "01551e202509fbe15c424d7c8d1daeb6c1092117ef6d6ffa51416fa08cbbb1e2a20293",
+    "sealed": "101112131415161718191a1b1c1d1e1f6061626364656667e8514f26aa6426397a6dacbcf8895ea323137621ece5d29e6aa66337fd91ada7b1225a69dd45b5",
+    "check": "content-cid-mismatch",
+    "class": "trust"
+  },
+  {
+    "name": "foreign-claimed-cid",
+    "cid": "6e6f7420612063696420617420616c6c",
+    "sealed": "101112131415161718191a1b1c1d1e1f6061626364656667e8514f26aa6426397a6dacbcf8895ea323137621ece5d29e6aa66337fd91ada7b1225a69dd45b5",
+    "check": "content-cid-mismatch",
+    "class": "trust"
+  }
+]

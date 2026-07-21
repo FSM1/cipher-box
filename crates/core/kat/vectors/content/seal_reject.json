@@ -1,0 +1,23 @@
+[
+  {
+    "name": "tampered-ciphertext",
+    "key": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+    "sealed": "202122232425262728292a2b2c2d2e2f5051525354555657f60276b5d5a5e2833cb227f668bfe338c9506c7655a0a0bc7dd6f0e69c173f6d10",
+    "check": "seal-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "tampered-nonce-prefix",
+    "key": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+    "sealed": "212122232425262728292a2b2c2d2e2f5051525354555657f60276b5d5a5e2833cb227f668bfe338c9506c7655a0a0bc7dd6f0e69c173f6d11",
+    "check": "seal-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "truncated-below-nonce-tag",
+    "key": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+    "sealed": "202122232425262728292a2b2c2d2e2f5051525354555657f60276b5d5a5e2833cb227f668bfe3",
+    "check": "truncated",
+    "class": "malformed"
+  }
+]

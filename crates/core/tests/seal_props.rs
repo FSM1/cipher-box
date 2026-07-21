@@ -19,6 +19,7 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 use core::cmp::Ordering;
 use std::collections::BTreeSet;
 
+use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, open_chunk, seal_chunk, verify_cid};
 use cipherbox_core::seal::{
     AadContext, ChildRef, NodeKind, ReadBody, STRUCT_TAG_READ_BODY, Version, decode_envelope,
     decode_read_body, encode_envelope, encode_read_body, name_cmp, open_read_body, seal,
@@ -192,6 +193,34 @@ proptest! {
         }
         let err = unseal(&key, &bad, &sealed).expect_err("transplant must fail closed");
         prop_assert_eq!(err.check(), "seal-open-failed");
+    }
+
+    /// (c2) the content-seal round-trips and its content CID is a deterministic
+    /// 36-byte CIDv1 that verify accepts; tampering any sealed byte breaks the
+    /// content address fail-closed (ticket #691). Runs under the wasm32
+    /// harness too, so the CID is byte-identical across targets.
+    #[test]
+    fn content_seal_and_cid_round_trip(
+        key in prop::array::uniform32(any::<u8>()),
+        nonce in prop::array::uniform24(any::<u8>()),
+        plaintext in arb_bytes(),
+    ) {
+        let sealed = seal_chunk(&key, &nonce, &plaintext);
+        prop_assert_eq!(&sealed[..24], &nonce);
+        prop_assert_eq!(open_chunk(&key, &sealed).unwrap(), plaintext);
+
+        let cid = compute_cid(CONTENT_CID_CODEC, &sealed);
+        prop_assert_eq!(cid.len(), 36);
+        prop_assert_eq!(compute_cid(CONTENT_CID_CODEC, &sealed), cid.clone());
+        prop_assert!(verify_cid(&cid, &sealed).is_ok());
+
+        // Flipping any sealed byte changes the content address → fail-closed.
+        let mut tampered = sealed.clone();
+        tampered[0] ^= 0x01;
+        prop_assert_eq!(
+            verify_cid(&cid, &tampered).unwrap_err().check(),
+            "content-cid-mismatch"
+        );
     }
 
     /// (d) the strict name comparator is a total order that agrees with bytewise

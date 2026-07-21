@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 pub mod codec;
+pub mod content;
 pub mod error;
 pub mod ipns;
 pub mod kdf;

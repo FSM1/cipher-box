@@ -63,6 +63,13 @@ pub enum TrustViolation {
     /// the AAD, so a rolled-back `v` fails the tag). Unseal never silently
     /// degrades to staleness.
     SealOpenFailed,
+    /// A sealed content blob did not content-address to its claimed `contentCid`
+    /// (blueprint/core.md "Open edges"; the content-DAG CID verify). *Trust*,
+    /// never staleness: the CID is a BLAKE3 digest over the sealed bytes, so a
+    /// mismatch is evidence the bytes were substituted or the claimed CID is
+    /// wrong — the fail-closed content-address check, distinct from an unopened
+    /// seal ([`Self::SealOpenFailed`]).
+    ContentCidMismatch,
     /// Two child refs in one folder read-body carried the same `id`. Uniqueness
     /// is fail-closed at decode (#39 D7): duplicate ids anywhere are a trust
     /// violation, never tolerated — a location-independent node id must name at
@@ -124,6 +131,7 @@ impl TrustViolation {
         "subkey-binding-invalid",
         "hpke-open-failed",
         "seal-open-failed",
+        "content-cid-mismatch",
         "duplicate-id",
         "duplicate-ipns-name",
         "ipns-signature-invalid",
@@ -145,6 +153,7 @@ impl TrustViolation {
             Self::SubkeyBindingInvalid => "subkey-binding-invalid",
             Self::HpkeOpenFailed => "hpke-open-failed",
             Self::SealOpenFailed => "seal-open-failed",
+            Self::ContentCidMismatch => "content-cid-mismatch",
             Self::DuplicateId => "duplicate-id",
             Self::DuplicateIpnsName => "duplicate-ipns-name",
             Self::IpnsSignatureInvalid => "ipns-signature-invalid",
@@ -178,6 +187,7 @@ impl fmt::Display for TrustViolation {
             Self::SubkeyBindingInvalid
             | Self::HpkeOpenFailed
             | Self::SealOpenFailed
+            | Self::ContentCidMismatch
             | Self::DuplicateId
             | Self::DuplicateIpnsName
             | Self::IpnsSignatureInvalid
