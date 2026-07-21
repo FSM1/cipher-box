@@ -426,3 +426,57 @@ async fn quota_is_hosted_authoritative_and_byo_advisory() {
         "clearing BYO restores authoritative quota"
     );
 }
+
+// --- hosted content ingress (blueprint/api.md; #629) ------------------------
+// These exercise the real Kubo pin against the CI stack's tiny 1 KiB
+// QUOTA_DEFAULT_BYTES (set in the contract-suite job), so a few hundred bytes
+// straddle the limit deterministically.
+
+/// Hosted upload (blueprint/api.md, Content plane — Ingress): pins bytes to
+/// CipherBox Kubo, returns the pinned CID + size, counts against the account's
+/// quota, and refuses an upload that would cross the limit.
+#[tokio::test]
+async fn hosted_upload_pins_bytes_and_gates_on_quota() {
+    let base = require_stack!("hosted_upload_pins_bytes_and_gates_on_quota");
+    let client = fresh_account(&base).await;
+
+    // A sub-limit upload is pinned and its bytes count against the quota.
+    let first = client
+        .upload(&vec![7u8; 512])
+        .await
+        .expect("hosted upload under quota is pinned");
+    assert!(!first.cid.is_empty(), "the pinned CID is returned");
+    assert_eq!(first.size, 512, "size is the uploaded byte count");
+
+    let quota = client.quota().await.expect("quota after upload");
+    assert_eq!(quota.used_bytes, 512, "the upload is counted against quota");
+
+    // A second upload that would cross the 1 KiB limit is refused (over-quota).
+    let error = client
+        .upload(&vec![9u8; 600])
+        .await
+        .expect_err("an over-quota upload is refused for a hosted account");
+    assert!(
+        matches!(error, ApiError::Status { status: 413, .. }),
+        "over-quota is a 413, got {error:?}"
+    );
+}
+
+/// A BYO account's upload is advisory (blueprint/api.md): the quota never gates
+/// it, so bytes larger than the hosted limit are still accepted.
+#[tokio::test]
+async fn byo_upload_is_advisory_and_never_gated() {
+    let base = require_stack!("byo_upload_is_advisory_and_never_gated");
+    let client = fresh_account(&base).await;
+    client.set_byo(true).await.expect("enable BYO");
+
+    // 4 KiB is well past the 1 KiB hosted limit, yet a BYO upload is allowed.
+    let result = client
+        .upload(&vec![3u8; 4096])
+        .await
+        .expect("a BYO upload is never quota-gated");
+    assert_eq!(result.size, 4096, "size is the uploaded byte count");
+
+    let quota = client.quota().await.expect("byo quota");
+    assert!(quota.advisory, "a BYO account's quota is advisory");
+}

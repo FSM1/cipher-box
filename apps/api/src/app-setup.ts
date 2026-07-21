@@ -1,6 +1,60 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
+import type { NextFunction, Request, Response } from 'express';
+
+/** Absolute upload-size cap (coarse DoS guard); the quota gate is the fine one. */
+const DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+
+function maxUploadBytes(): number {
+  const raw = process.env.MAX_UPLOAD_BYTES;
+  const value = Number(raw);
+  return raw !== undefined && Number.isInteger(value) && value > 0
+    ? value
+    : DEFAULT_MAX_UPLOAD_BYTES;
+}
+
+/**
+ * Buffer an `application/octet-stream` body into `req.body` as a Buffer. Nest's
+ * built-in json/urlencoded parsers skip octet-stream without consuming the
+ * stream, so this runs as global middleware (before the async auth guard) to
+ * capture the bytes deterministically — a stream read from inside the handler
+ * would race the guard's `await`. Bodies over the cap abort with a 413.
+ */
+function rawUploadBody(maxBytes: number) {
+  return (req: Request & { body?: unknown }, res: Response, next: NextFunction): void => {
+    if (!(req.headers['content-type'] ?? '').includes('application/octet-stream')) {
+      return next();
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    let aborted = false;
+    req.on('data', (chunk: Buffer) => {
+      if (aborted) return;
+      total += chunk.length;
+      if (total > maxBytes) {
+        aborted = true;
+        req.destroy();
+        res.status(413).json({
+          statusCode: 413,
+          message: `Upload exceeds ${maxBytes} bytes`,
+          error: 'Payload Too Large',
+        });
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      if (!aborted) {
+        req.body = Buffer.concat(chunks);
+        next();
+      }
+    });
+    req.on('error', (error) => {
+      if (!aborted) next(error);
+    });
+  };
+}
 
 /**
  * Shared HTTP-pipeline configuration, applied identically by main.ts and by
@@ -15,6 +69,7 @@ export function configureApp(app: INestApplication): INestApplication {
     })
   );
   app.use(cookieParser());
+  app.use(rawUploadBody(maxUploadBytes()));
   return app;
 }
 
@@ -64,6 +119,7 @@ export function buildOpenApiDocument(app: INestApplication): OpenAPIObject {
     .addTag('Mailbox', 'Integrity-untrusted sealed-pointer transport: post, poll, ack')
     .addTag('Registry', 'Pin/name registry: batch register/retire, union liveness')
     .addTag('Account', 'Per-account quota and the BYO-IPFS toggle')
+    .addTag('Content', 'Hosted ingress: quota-gated byte upload to CipherBox Kubo')
     .build();
   return SwaggerModule.createDocument(app, config);
 }

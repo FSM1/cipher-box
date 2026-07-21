@@ -1,0 +1,396 @@
+import { PayloadTooLargeException, ServiceUnavailableException } from '@nestjs/common';
+import { secp256k1 } from '@noble/curves/secp256k1';
+import { createHash } from 'node:crypto';
+import { DataSource, EntityManager, Repository } from 'typeorm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { User } from '../auth/entities/user.entity';
+import { advisoryLockKey } from '../common/advisory-lock';
+import { PinnedCid } from '../registry/entities/pinned-cid.entity';
+import { PinStore } from '../registry/pin-store';
+import { fakeConfig } from '../testing/fakes';
+import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
+import { ContentService } from './content.service';
+
+/**
+ * The hosted upload path's two concurrency guards + the quota/atomicity
+ * invariants, proven on a REAL Postgres where genuine advisory locks and the
+ * numeric SUM behave as they cannot under an in-memory fake. Each guard is
+ * pinned by a negative control that reproduces the breach once the guard is
+ * stripped.
+ */
+
+function compressedPublicKey(): string {
+  const priv = secp256k1.utils.randomPrivateKey();
+  try {
+    return Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
+  } finally {
+    priv.fill(0);
+  }
+}
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Deterministic CID from bytes so hash() and pin() always agree; records effects. */
+class FakePinStore extends PinStore {
+  readonly pinned: string[] = [];
+  readonly unpinned: string[] = [];
+  failPin = false;
+
+  cidFor(bytes: Uint8Array): string {
+    return `ba${createHash('sha256').update(bytes).digest('hex')}`;
+  }
+
+  override async hash(bytes: Uint8Array): Promise<string> {
+    return this.cidFor(bytes);
+  }
+
+  override async pin(bytes: Uint8Array): Promise<string> {
+    if (this.failPin) {
+      throw new Error('pin store unavailable');
+    }
+    const cid = this.cidFor(bytes);
+    this.pinned.push(cid);
+    return cid;
+  }
+
+  async unpin(cid: string): Promise<void> {
+    this.unpinned.push(cid);
+  }
+}
+
+/** A barrier a gated transaction trips the instant it reaches its hook point. */
+interface Gate {
+  reached: Promise<void>;
+  release: () => void;
+  onReach: () => Promise<void>;
+}
+
+function makeGate(): Gate {
+  let signalReached!: () => void;
+  let release!: () => void;
+  const reached = new Promise<void>((resolve) => (signalReached = resolve));
+  const open = new Promise<void>((resolve) => (release = resolve));
+  return {
+    reached,
+    release,
+    onReach: async () => {
+      signalReached();
+      await open;
+    },
+  };
+}
+
+interface GateHooks {
+  /** Skip these advisory-lock keys' acquires — models removing a guard. */
+  skipLockKeys?: bigint[];
+  /** Pause right before the pin-row INSERT (after the quota gate has decided). */
+  beforeInsert?: () => Promise<void>;
+}
+
+/**
+ * A DataSource that runs the real transaction but can drop chosen advisory locks
+ * and pause before the insert, so a concurrent upload can be observed to block
+ * (lock present) or to race (lock removed).
+ */
+function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
+  const skip = new Set((hooks.skipLockKeys ?? []).map((k) => k.toString()));
+  const wrapPinRepo = (repo: Repository<PinnedCid>): Repository<PinnedCid> =>
+    new Proxy(repo, {
+      get(target, prop, receiver) {
+        if (prop === 'insert') {
+          return async (entity: never) => {
+            if (hooks.beforeInsert) await hooks.beforeInsert();
+            return target.insert(entity);
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function'
+          ? (value as (...a: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+
+  return {
+    transaction: (runInTransaction: (manager: EntityManager) => Promise<unknown>) =>
+      real.transaction((manager) => {
+        const proxied = new Proxy(manager, {
+          get(target, prop, receiver) {
+            if (prop === 'query') {
+              return async (sql: string, params?: unknown[]) => {
+                if (/pg_advisory_xact_lock/i.test(sql) && skip.has(String(params?.[0]))) {
+                  return [];
+                }
+                return target.query(sql, params);
+              };
+            }
+            if (prop === 'getRepository') {
+              return (entity: unknown) => {
+                const repo = target.getRepository(entity as never);
+                if (entity === PinnedCid) return wrapPinRepo(repo as Repository<PinnedCid>);
+                return repo;
+              };
+            }
+            const value = Reflect.get(target, prop, receiver);
+            return typeof value === 'function'
+              ? (value as (...a: unknown[]) => unknown).bind(target)
+              : value;
+          },
+        });
+        return runInTransaction(proxied);
+      }),
+  } as unknown as DataSource;
+}
+
+function accountLockKey(accountId: string): bigint {
+  return advisoryLockKey(`account:${accountId}`);
+}
+
+describe('ContentService upload concurrency (real Postgres)', () => {
+  let db: IntegrationDatabase;
+
+  beforeAll(async () => {
+    db = await createIntegrationDatabase({ poolMax: 10 });
+  });
+
+  afterAll(async () => {
+    await db?.teardown();
+  });
+
+  beforeEach(async () => {
+    await db.dataSource.query('TRUNCATE TABLE users CASCADE');
+  });
+
+  // Lock timeout disabled: the gate, not the wall clock, decides when a blocked
+  // upload proceeds. The timeout's own effect is proven in advisory-lock tests.
+  function buildService(
+    ds: DataSource,
+    pinStore: PinStore,
+    config: Record<string, string> = {}
+  ): ContentService {
+    return new ContentService(
+      ds as never,
+      pinStore,
+      fakeConfig({ DB_ADVISORY_LOCK_TIMEOUT_MS: '0', ...config }).service
+    );
+  }
+
+  async function seedAccount(overrides: Partial<User> = {}): Promise<string> {
+    const user = await db.dataSource
+      .getRepository(User)
+      .save({ publicKey: compressedPublicKey(), byo: false, ...overrides });
+    return user.id;
+  }
+
+  async function pinsFor(accountId: string): Promise<PinnedCid[]> {
+    return db.dataSource.getRepository(PinnedCid).find({ where: { accountId } });
+  }
+
+  async function usedBytes(accountId: string): Promise<bigint> {
+    const rows = await pinsFor(accountId);
+    return rows.reduce((total, row) => total + BigInt(row.size), 0n);
+  }
+
+  describe('quota gate — per-account advisory lock', () => {
+    it('serializes two same-account uploads at the limit: exactly one is admitted, the other refused', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '100' });
+      const gate = makeGate();
+      const pinStore = new FakePinStore();
+
+      const first = buildService(
+        gatedDataSource(db.dataSource, { beforeInsert: gate.onReach }),
+        pinStore
+      ).upload(accountId, Buffer.alloc(60, 1));
+
+      // first holds the account lock, passed the gate (used 0 + 60 <= 100), and
+      // paused just before its insert.
+      await gate.reached;
+
+      let secondDone = false;
+      const second = buildService(db.dataSource, pinStore)
+        .upload(accountId, Buffer.alloc(60, 2))
+        .then((r) => {
+          secondDone = true;
+          return r;
+        })
+        .catch((e: unknown) => {
+          secondDone = true;
+          throw e;
+        });
+
+      // second is blocked acquiring the account lock first still holds.
+      await delay(200);
+      expect(secondDone).toBe(false);
+
+      gate.release();
+      await expect(first).resolves.toMatchObject({ size: 60 });
+      // second wakes, reads used=60, and 60+60 > 100 is refused.
+      await expect(second).rejects.toBeInstanceOf(PayloadTooLargeException);
+
+      expect(await pinsFor(accountId)).toHaveLength(1);
+      expect(await usedBytes(accountId)).toBe(60n);
+    });
+
+    it('negative control — with the account lock removed, both uploads pass the stale sum and breach the quota', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '100' });
+      const skipLockKey = accountLockKey(accountId);
+      const gate = makeGate();
+      const pinStore = new FakePinStore();
+
+      // Both uploads skip ONLY the account lock; their CIDs differ, so the CID
+      // lock never serializes them — nothing does.
+      const first = buildService(
+        gatedDataSource(db.dataSource, { skipLockKeys: [skipLockKey], beforeInsert: gate.onReach }),
+        pinStore
+      ).upload(accountId, Buffer.alloc(60, 1));
+
+      await gate.reached; // first read used=0, passed the gate, paused before insert
+
+      // second runs fully with no account lock: it also reads used=0 and inserts.
+      await buildService(
+        gatedDataSource(db.dataSource, { skipLockKeys: [skipLockKey] }),
+        pinStore
+      ).upload(accountId, Buffer.alloc(60, 2));
+
+      gate.release();
+      await first;
+
+      // Both were admitted at the same 100-byte limit — a 120-byte over-quota
+      // breach the account lock closes.
+      expect(await pinsFor(accountId)).toHaveLength(2);
+      expect(await usedBytes(accountId)).toBe(120n);
+    });
+  });
+
+  describe('per-CID pin row — advisory lock', () => {
+    it('serializes two same-account uploads of the same CID into exactly one pin row (idempotent, charged once)', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(40, 7);
+      const gate = makeGate();
+      const pinStore = new FakePinStore();
+
+      const first = buildService(
+        gatedDataSource(db.dataSource, { beforeInsert: gate.onReach }),
+        pinStore
+      ).upload(accountId, bytes);
+
+      await gate.reached;
+
+      let secondDone = false;
+      const second = buildService(db.dataSource, pinStore)
+        .upload(accountId, bytes)
+        .then((r) => {
+          secondDone = true;
+          return r;
+        });
+
+      // second is blocked at the shared account/CID locks first holds.
+      await delay(200);
+      expect(secondDone).toBe(false);
+
+      gate.release();
+      await expect(first).resolves.toMatchObject({ size: 40 });
+      // second wakes, finds first's committed row, and is an idempotent no-op.
+      await expect(second).resolves.toMatchObject({ size: 40 });
+
+      expect(await pinsFor(accountId)).toHaveLength(1);
+      expect(await usedBytes(accountId)).toBe(40n); // charged once, not 80
+    });
+
+    it('negative control — without the locks, two concurrent same-CID uploads collide on the unique index (23505)', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(40, 7);
+      const cid = new FakePinStore().cidFor(bytes);
+      const skipKeys = [accountLockKey(accountId), advisoryLockKey(cid)];
+      const gate = makeGate();
+      const pinStore = new FakePinStore();
+
+      // Strip both the account and CID locks (they hash to distinct keys), so
+      // nothing serializes the two identical (account, cid) inserts.
+      const first = buildService(
+        gatedDataSource(db.dataSource, { skipLockKeys: skipKeys, beforeInsert: gate.onReach }),
+        pinStore
+      ).upload(accountId, bytes);
+
+      await gate.reached; // first found no existing row and paused before insert
+
+      // second runs fully with no locks: it also sees no existing row and inserts.
+      const secondResult = await buildService(
+        gatedDataSource(db.dataSource, { skipLockKeys: skipKeys }),
+        pinStore
+      )
+        .upload(accountId, bytes)
+        .catch((e: unknown) => e);
+
+      // first now inserts the duplicate (account, cid) and hits the unique index.
+      gate.release();
+      const firstResult = await first.catch((e: unknown) => e);
+
+      const errors = [firstResult, secondResult].filter((r) => r instanceof Error) as {
+        driverError?: { code?: string };
+        code?: string;
+      }[];
+      expect(errors.length).toBeGreaterThanOrEqual(1);
+      const codes = errors.map((e) => e.driverError?.code ?? e.code);
+      expect(codes).toContain('23505');
+    });
+  });
+
+  describe('quota gate — BigInt exactness above 2^53', () => {
+    it('refuses an upload a Number comparison would wrongly admit', async () => {
+      // A limit and existing use far above 2^53, where a JS number cannot tell
+      // `limit` from `limit + 1` (folded from #677).
+      const limit = (1n << 60n) + 1n;
+      const accountId = await seedAccount({ quotaLimitOverride: limit.toString() });
+      await db.dataSource
+        .getRepository(PinnedCid)
+        .save({ accountId, cid: 'baExistingHuge', size: limit.toString(), advisory: false });
+
+      // A Number-based gate would admit this (Number(used) + 1 rounds back to
+      // Number(limit)); the BigInt gate refuses it.
+      expect(Number(limit) + 1 <= Number(limit)).toBe(true);
+
+      const pinStore = new FakePinStore();
+      await expect(
+        buildService(db.dataSource, pinStore).upload(accountId, Buffer.alloc(1, 9))
+      ).rejects.toBeInstanceOf(PayloadTooLargeException);
+
+      // Nothing was pinned; the ledger is unchanged.
+      expect(pinStore.pinned).toEqual([]);
+      expect(await usedBytes(accountId)).toBe(limit);
+    });
+  });
+
+  describe('atomic byte-pin + register', () => {
+    it('pins the bytes and keeps the row on success', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(20, 5);
+      const pinStore = new FakePinStore();
+
+      const result = await buildService(db.dataSource, pinStore).upload(accountId, bytes);
+
+      expect(result.size).toBe(20);
+      expect(pinStore.pinned).toEqual([result.cid]);
+      const rows = await pinsFor(accountId);
+      expect(rows).toHaveLength(1);
+      expect(rows[0].cid).toBe(result.cid);
+    });
+
+    it('rolls back to no durable state when the post-commit pin fails (compensation)', async () => {
+      const accountId = await seedAccount({ quotaLimitOverride: '1000' });
+      const bytes = Buffer.alloc(20, 6);
+      const pinStore = new FakePinStore();
+      pinStore.failPin = true;
+
+      await expect(
+        buildService(db.dataSource, pinStore).upload(accountId, bytes)
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+      // Byte-pin + register are all-or-nothing: the row it registered was
+      // compensated away, so the account is charged nothing.
+      expect(await pinsFor(accountId)).toHaveLength(0);
+      expect(await usedBytes(accountId)).toBe(0n);
+      // The compensating retire unpinned the CID it could not durably pin.
+      expect(pinStore.unpinned).toEqual([pinStore.cidFor(bytes)]);
+    });
+  });
+});

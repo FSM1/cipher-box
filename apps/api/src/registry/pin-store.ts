@@ -1,28 +1,47 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
 /**
- * The physical-unpin seam (blueprint/api.md: "physical unpin fires at global
- * refcount zero" — v1's `guardedUnpin` survives). The registry owns the
- * refcount DECISION; this port owns the side effect of releasing bytes from
- * the hosted pin store.
+ * The hosted pin-store port (blueprint/api.md, Content plane + "physical unpin
+ * fires at global refcount zero" — v1's `guardedUnpin` survives). It owns every
+ * side effect against CipherBox Kubo: computing a content CID, durably pinning
+ * bytes on the ingress path, and releasing bytes at refcount zero. The registry
+ * and content services own the row DECISIONS; this port owns the byte effects.
  *
- * It is a best-effort liveness optimization, not a correctness dependency:
+ * `unpin` is a best-effort liveness optimization, not a correctness dependency:
  * the per-account row bookkeeping is the source of truth, so a failed or
- * unconfigured unpin never fails a retire. The pinned CID simply lingers and
- * decays from the pin store's own GC — never re-registered, so union liveness
- * still reports it gone.
+ * unconfigured unpin never fails a retire — the CID lingers and decays from the
+ * pin store's own GC. `hash`/`pin` are the ingress byte path; a consumer that
+ * only retires (the registry) never calls them, so the base rejects rather than
+ * forcing every unpin-only fake to stub the byte methods.
  */
 @Injectable()
 export abstract class PinStore {
   abstract unpin(cid: string): Promise<void>;
+
+  /** Content CID of `bytes` with no durable pin (the pre-commit CID derivation). */
+  hash(_bytes: Uint8Array): Promise<string> {
+    throw new ServiceUnavailableException('Hosted pin store does not support content hashing');
+  }
+
+  /** Durably pin `bytes`, returning the pinned CID (the post-commit byte effect). */
+  pin(_bytes: Uint8Array): Promise<string> {
+    throw new ServiceUnavailableException('Hosted pin store does not support pinning');
+  }
+}
+
+/** One Kubo `add` result line: `{ Name, Hash, Size }` (Size is a decimal string). */
+interface KuboAddResult {
+  Hash: string;
+  Size: string;
 }
 
 /**
- * Default hosted implementation: releases a CID from CipherBox Kubo when
- * `KUBO_API_URL` is configured. Absent that config (unit tests, BYO-only
- * deployments), it no-ops — the hosted byte path is wired by the content-plane
- * slice; this slice ships the refcount decision that drives it.
+ * Default hosted implementation over the Kubo RPC API (`KUBO_API_URL`). `hash`
+ * and `pin` share identical `add` parameters so the pre-commit CID always
+ * matches the pinned CID (content addressing is deterministic). `unpin` no-ops
+ * when Kubo is unconfigured (unit tests, BYO-only deployments); the byte path
+ * fails closed instead, since an upload with no pin store cannot be durable.
  */
 @Injectable()
 export class KuboPinStore extends PinStore {
@@ -33,6 +52,15 @@ export class KuboPinStore extends PinStore {
     super();
     const raw = configService.get<string>('KUBO_API_URL');
     this.apiUrl = raw && raw.trim() ? raw.replace(/\/+$/, '') : undefined;
+  }
+
+  override async hash(bytes: Uint8Array): Promise<string> {
+    // `only-hash` chunks and hashes without writing blocks — no durable effect.
+    return (await this.add(bytes, 'only-hash=true')).Hash;
+  }
+
+  override async pin(bytes: Uint8Array): Promise<string> {
+    return (await this.add(bytes, 'pin=true')).Hash;
   }
 
   async unpin(cid: string): Promise<void> {
@@ -52,5 +80,29 @@ export class KuboPinStore extends PinStore {
       // must not fail the caller's retire. Log and move on.
       this.logger.warn(`pin/rm failed for ${cid}: ${String(error)}`);
     }
+  }
+
+  private async add(bytes: Uint8Array, params: string): Promise<KuboAddResult> {
+    if (!this.apiUrl) {
+      throw new ServiceUnavailableException('Hosted pin store not configured');
+    }
+    const form = new FormData();
+    // Copy into an ArrayBuffer-backed view so the Blob part type is exact.
+    form.append('file', new Blob([new Uint8Array(bytes)]));
+    const response = await fetch(`${this.apiUrl}/api/v0/add?${params}`, {
+      method: 'POST',
+      body: form,
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) {
+      throw new ServiceUnavailableException(`Kubo add failed: ${response.status}`);
+    }
+    // Kubo streams newline-delimited JSON; a single file yields one final object.
+    const lines = (await response.text()).trim().split('\n').filter(Boolean);
+    const last = lines[lines.length - 1];
+    if (!last) {
+      throw new ServiceUnavailableException('Kubo add returned no result');
+    }
+    return JSON.parse(last) as KuboAddResult;
   }
 }

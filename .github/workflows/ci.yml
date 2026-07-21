@@ -626,6 +626,10 @@ jobs:
       DB_DATABASE: cipherbox_test
       NODE_ENV: test
       JWT_SECRET: contract-suite-jwt-secret
+      # The hosted upload path pins to the CI Kubo service; a tiny per-account
+      # quota lets a few-hundred-byte upload straddle the over-quota limit.
+      KUBO_API_URL: http://localhost:5001
+      QUOTA_DEFAULT_BYTES: '1024'
       # The client-presented secret must equal the API's TEST_LOGIN_SECRET.
       TEST_LOGIN_SECRET: contract-suite-secret
       CONTRACT_API_URL: http://localhost:3000
