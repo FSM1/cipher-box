@@ -22,8 +22,10 @@
 //! Terminally unrebasable ops (access revoked while offline) **dead-letter**
 //! with their staged bytes preserved — nothing is silently dropped (#33 D6).
 
+use std::collections::HashSet;
+
 use crate::seams::OpId;
-use crate::sync::model::{NodeMeta, Snapshot, suffix_name};
+use crate::sync::model::{NodeMeta, Snapshot, collation_key, suffix_name};
 use crate::sync::op::{Op, OpKind};
 
 /// The highest auto-suffix a loser probes before dead-lettering — a folder
@@ -338,11 +340,23 @@ fn rebase_update_content(working: &mut Snapshot, local: &Snapshot, op: &Op) -> O
     // under a parent that still exists in gate-passing state.
     match (local.node(op.target), local.parent_of(op.target)) {
         (Some(meta), Some(parent)) if working.contains(parent) => {
+            // Re-link under the freed name only if it is still free: a concurrent
+            // sibling may have taken it, so route through the one collision
+            // resolver every other insert uses.
+            let (effective, suffixed) = match resolve_name(working, parent, &meta.name, op.target) {
+                Some(resolved) => resolved,
+                None => return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted),
+            };
             let mut resurrected = meta.clone();
+            resurrected.name = effective.clone();
             resurrected.content_version += 1;
             working.upsert_node(resurrected);
             working.link_next(parent, op.target);
-            OpResolution::applied(None)
+            OpResolution::Applied {
+                effective_name: Some(effective),
+                suffixed,
+                scope_exit_trigger: None,
+            }
         }
         _ => OpResolution::DeadLetter(DeadLetterReason::TargetGone),
     }
@@ -357,12 +371,20 @@ fn resolve_name(
     name: &str,
     exclude: crate::facade::NodeId,
 ) -> Option<(String, bool)> {
-    if !snap.name_taken(parent, name, Some(exclude)) {
+    // Fold the sibling collation keys once instead of rescanning the children on
+    // every probe — identical to `name_taken`, which folds the same set.
+    let taken: HashSet<String> = snap
+        .children(parent)
+        .into_iter()
+        .filter(|child| child.id != exclude)
+        .map(|child| collation_key(&child.name))
+        .collect();
+    if !taken.contains(&collation_key(name)) {
         return Some((name.to_owned(), false));
     }
     for n in 2..=MAX_SUFFIX_PROBE {
         let candidate = suffix_name(name, n);
-        if !snap.name_taken(parent, &candidate, Some(exclude)) {
+        if !taken.contains(&collation_key(&candidate)) {
             return Some((candidate, true));
         }
     }
@@ -389,19 +411,13 @@ pub fn observed_repair(snap: &Snapshot) -> Vec<Repair> {
     children.dedup();
 
     for child in children {
-        // One scan per child: pick the winner and the losers from the same set.
         let links = snap.links_to(child);
         if links.len() < 2 {
             continue;
         }
-        let winner = links
-            .iter()
-            .copied()
-            .max_by(|a, b| {
-                a.link_counter
-                    .cmp(&b.link_counter)
-                    .then(b.parent.cmp(&a.parent))
-            })
+        // The same dual-link tiebreak the model exposes — one comparator here too.
+        let winner = snap
+            .winning_link(child)
             .expect("a child with links has a winner");
         let remove: Vec<crate::facade::NodeId> = links
             .into_iter()
@@ -544,6 +560,90 @@ mod tests {
         assert!(matches!(res, OpResolution::Applied { .. }));
         assert!(working.contains(id(1)), "the edit resurrected the node");
         assert_eq!(working.parent_of(id(1)), Some(id(0)));
+    }
+
+    #[test]
+    fn resurrection_auto_suffixes_when_a_concurrent_create_took_the_freed_name() {
+        // Gate-passing state: the deleted node is gone, and a concurrent create
+        // already landed a sibling under the freed name.
+        let mut gate_passing = tree();
+        with_node(&mut gate_passing, id(0), id(2), "f.txt", NodeKind::File);
+        // Our overlay still holds the deleted node under its original name.
+        let mut local = tree();
+        with_node(&mut local, id(0), id(1), "f.txt", NodeKind::File);
+
+        let mut working = gate_passing.clone();
+        let res = rebase_one(
+            &mut working,
+            &local,
+            &Op::update_content(id(1), b"k".to_vec(), 1),
+        );
+        assert_eq!(
+            res,
+            OpResolution::Applied {
+                effective_name: Some("f (2).txt".to_owned()),
+                suffixed: true,
+                scope_exit_trigger: None,
+            },
+            "the resurrected node auto-suffixes off the taken name"
+        );
+        assert_eq!(working.node(id(1)).unwrap().name, "f (2).txt");
+        // Both siblings survive with distinct collation keys.
+        let keys: std::collections::HashSet<String> = working
+            .children(id(0))
+            .iter()
+            .map(|n| collation_key(&n.name))
+            .collect();
+        assert_eq!(
+            keys.len(),
+            2,
+            "distinct collation keys, no shadowed sibling"
+        );
+        assert!(
+            working.contains(id(1)) && working.contains(id(2)),
+            "both present"
+        );
+    }
+
+    #[test]
+    fn resurrection_dead_letters_under_a_saturated_parent() {
+        fn node_id(n: u32) -> NodeId {
+            let mut bytes = [0u8; 16];
+            bytes[..4].copy_from_slice(&n.to_le_bytes());
+            NodeId(bytes)
+        }
+        // Saturate the parent with every name the probe would try: "f.txt" plus
+        // "f (2).txt" .. "f (MAX).txt".
+        let mut gate_passing = tree();
+        with_node(
+            &mut gate_passing,
+            id(0),
+            node_id(1),
+            "f.txt",
+            NodeKind::File,
+        );
+        for n in 2..=MAX_SUFFIX_PROBE {
+            with_node(
+                &mut gate_passing,
+                id(0),
+                node_id(n),
+                &suffix_name("f.txt", n),
+                NodeKind::File,
+            );
+        }
+        // Our overlay still holds the concurrently-deleted node "f.txt".
+        let mut local = tree();
+        with_node(&mut local, id(0), id(1), "f.txt", NodeKind::File);
+
+        let res = rebase_one(
+            &mut gate_passing.clone(),
+            &local,
+            &Op::update_content(id(1), b"k".to_vec(), 1),
+        );
+        assert_eq!(
+            res,
+            OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted)
+        );
     }
 
     #[test]

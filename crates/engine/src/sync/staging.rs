@@ -9,7 +9,7 @@
 //! storage.
 
 use crate::profile::SyncTimingProfile;
-use crate::seams::{OpId, SeamResult, StagingStore};
+use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
 use crate::sync::op::Op;
 
 /// The outcome of staging one op.
@@ -68,8 +68,14 @@ pub async fn stage_op<S: StagingStore>(
             let op_id = store.enqueue_op(&op.encode()).await?;
             Ok(StageOutcome::Queued { op_id })
         }
-        // A content op with no bytes, or a metadata op: journal unbounded.
-        _ => {
+        // A content op (staging key present) with no bytes is a broken caller
+        // contract: journaling it would leave a durable op referencing content
+        // that was never staged. Fail closed — enqueue nothing.
+        (Some(_), None) => Err(SeamError::new(
+            "stage_op: content op carries a staging key but no upload bytes",
+        )),
+        // A metadata op (no staging key): journal unbounded.
+        (None, _) => {
             let op_id = store.enqueue_op(&op.encode()).await?;
             Ok(StageOutcome::Queued { op_id })
         }
@@ -81,11 +87,20 @@ pub async fn stage_op<S: StagingStore>(
 /// bytes hygiene).
 pub async fn orphan_staging_keys<S: StagingStore>(store: &S) -> SeamResult<Vec<Vec<u8>>> {
     let queued = store.queued_ops().await?;
-    let referenced: std::collections::HashSet<Vec<u8>> = queued
-        .iter()
-        .filter_map(|(_, bytes)| Op::decode(bytes).ok())
-        .filter_map(|op| op.staging_key().map(<[u8]>::to_vec))
-        .collect();
+    let mut referenced = std::collections::HashSet::new();
+    for (_, bytes) in &queued {
+        match Op::decode(bytes) {
+            Ok(op) => {
+                if let Some(key) = op.staging_key() {
+                    referenced.insert(key.to_vec());
+                }
+            }
+            // An undecodable entry dead-letters with its staged bytes preserved
+            // (#33 D6); its staging key is unknowable, so nothing is safely an
+            // orphan this pass — fail closed.
+            Err(_) => return Ok(Vec::new()),
+        }
+    }
     let orphans = store
         .staged_keys()
         .await?
@@ -196,6 +211,47 @@ mod tests {
                 .await
                 .unwrap();
             assert!(matches!(out, StageOutcome::RejectedOverBudget { .. }));
+        });
+    }
+
+    #[test]
+    fn content_op_without_bytes_fails_closed_and_queues_nothing() {
+        let store = InMemoryStagingStore::default();
+        let profile = SyncTimingProfile {
+            staging_budget_bytes: 1024,
+            ..SyncTimingProfile::CI
+        };
+        block_on(async {
+            // A Create carrying a staging key but no upload bytes — a broken
+            // caller contract that must never journal a dangling content op.
+            let op = Op::create(id(1), id(0), "f", NodeKind::File, 1, Some(b"key".to_vec()));
+            let result = stage_op(&store, &profile, &op, None).await;
+            assert!(result.is_err(), "content op with no bytes fails closed");
+            assert!(
+                store.queued_ops().await.unwrap().is_empty(),
+                "nothing enqueued on the reject path"
+            );
+        });
+    }
+
+    #[test]
+    fn undecodable_queue_entry_makes_orphan_gc_conservative() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            // An undecodable/forward-version queue entry whose staging key is
+            // unknowable (its staged bytes are preserved by the dead-letter path).
+            store.enqueue_op(b"not a valid op").await.unwrap();
+            // A staged blob a naive scan would class as an orphan.
+            store
+                .put_staged_bytes(b"maybe-orphan", b"stale")
+                .await
+                .unwrap();
+
+            let orphans = orphan_staging_keys(&store).await.unwrap();
+            assert!(
+                orphans.is_empty(),
+                "an undecodable entry forbids classing anything an orphan"
+            );
         });
     }
 
