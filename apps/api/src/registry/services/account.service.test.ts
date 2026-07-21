@@ -3,6 +3,7 @@ import { DataSource, FindOperator, QueryFailedError } from 'typeorm';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../../auth/entities/user.entity';
 import { MailboxMessage } from '../../mailbox/entities/mailbox-message.entity';
+import { RecordCache } from '../../republisher/entities/record-cache.entity';
 import { FakeRepository } from '../../testing/fake-repo';
 import { fakeConfig } from '../../testing/fakes';
 import { NameInventory } from '../entities/name-inventory.entity';
@@ -85,6 +86,9 @@ function fakeDataSource(
     [PinnedCid, repos.pins],
     [NameInventory, repos.names],
     [MailboxMessage, repos.mailbox],
+    // The residue step issues a raw record_cache purge via the entity's repo;
+    // the unit fake only needs its `query` to no-op (integration covers effect).
+    [RecordCache, { query: async () => [] }],
   ]);
   return {
     transaction: (runInTransaction: (manager: unknown) => unknown) =>

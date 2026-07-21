@@ -10,6 +10,7 @@ import { IdentityService } from '../../auth/services/identity.service';
 import { advisoryLockKey, pinDurabilityLockKey } from '../../common/advisory-lock';
 import { MailboxMessage } from '../../mailbox/entities/mailbox-message.entity';
 import { MailboxService } from '../../mailbox/services/mailbox.service';
+import { RecordCache } from '../../republisher/entities/record-cache.entity';
 import { FakeClock, fakeConfig } from '../../testing/fakes';
 import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
 import { NameInventory } from '../entities/name-inventory.entity';
@@ -202,7 +203,7 @@ describe('AccountService cascade (real Postgres)', () => {
   });
 
   beforeEach(async () => {
-    await db.dataSource.query('TRUNCATE TABLE users, mailbox_messages CASCADE');
+    await db.dataSource.query('TRUNCATE TABLE users, mailbox_messages, record_cache CASCADE');
   });
 
   function deleteService(ds: DataSource, pinStore: PinStore, lockMs = '0'): AccountService {
@@ -498,6 +499,89 @@ describe('AccountService cascade (real Postgres)', () => {
       expect(pinStore.unpinned).toEqual([cid]);
       const survivors = await db.dataSource.getRepository(PinnedCid).find({ where: { cid } });
       expect(survivors.map((r) => r.accountId)).toEqual([b.id]);
+    });
+  });
+
+  describe('record_cache residue purge', () => {
+    it('purges the account cache rows but spares a name another account co-owns', async () => {
+      const a = await seedAccount();
+      const b = await seedAccount();
+      const own = token(); // IPNS name only A holds
+      const shared = token(); // IPNS name A and B both hold
+      await db.dataSource.getRepository(NameInventory).save([
+        { accountId: a.id, ipnsName: own },
+        { accountId: a.id, ipnsName: shared },
+        { accountId: b.id, ipnsName: shared },
+      ]);
+      const cacheRepo = db.dataSource.getRepository(RecordCache);
+      await cacheRepo.save([
+        { ipnsName: own, record: Buffer.from('r1'), sequence: '1', lastRepublishedAt: null },
+        { ipnsName: shared, record: Buffer.from('r2'), sequence: '1', lastRepublishedAt: null },
+      ]);
+
+      await deleteService(db.dataSource, new RecordingPinStore()).deleteAccount(a.id);
+
+      // A's orphan cache row is gone; the co-owned name's row survives (B still
+      // owns it — it repopulates next sweep regardless).
+      expect(await cacheRepo.findOne({ where: { ipnsName: own } })).toBeNull();
+      expect(await cacheRepo.findOne({ where: { ipnsName: shared } })).not.toBeNull();
+      expect(
+        await db.dataSource.getRepository(NameInventory).find({ where: { accountId: a.id } })
+      ).toEqual([]);
+    });
+  });
+
+  describe('per-call drain budget', () => {
+    it('caps one call with a retryable 503 and a retry resumes to completion', async () => {
+      const { id } = await seedAccount();
+      await seedPin(id, token());
+
+      // An adversarial client re-uploads a fresh pin against each chunk's
+      // pre-read, so a single call can never observe zero pins. The per-call
+      // budget must stop it with a 503; a retry (no re-seeding) then drains.
+      let reseed = true;
+      const realPinRepo = db.dataSource.getRepository(PinnedCid);
+      const gatedPinRepo = new Proxy(realPinRepo, {
+        get(target, prop, receiver) {
+          if (prop === 'find') {
+            return async (options?: unknown) => {
+              const rows = await target.find(options as never);
+              if (
+                reseed &&
+                (options as { take?: number })?.take === DELETE_CHUNK_SIZE &&
+                (rows as unknown[]).length > 0
+              ) {
+                await seedPin(id, token());
+              }
+              return rows;
+            };
+          }
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }) as Repository<PinnedCid>;
+
+      const pinStore = new RecordingPinStore();
+      const service = new AccountService(
+        db.dataSource.getRepository(User) as never,
+        gatedPinRepo as never,
+        db.dataSource as never,
+        pinStore,
+        fakeConfig({ DB_ADVISORY_LOCK_TIMEOUT_MS: '0' }).service
+      );
+
+      await expect(service.deleteAccount(id)).rejects.toBeInstanceOf(ServiceUnavailableException);
+      // The account is NOT deleted — residue is left for the retry, never lost.
+      expect(await db.dataSource.getRepository(User).findOne({ where: { id } })).not.toBeNull();
+
+      reseed = false;
+      const resumed = await service.deleteAccount(id);
+
+      expect(resumed.pinsRetired).toBeGreaterThanOrEqual(1);
+      expect(
+        await db.dataSource.getRepository(PinnedCid).find({ where: { accountId: id } })
+      ).toEqual([]);
+      expect(await db.dataSource.getRepository(User).findOne({ where: { id } })).toBeNull();
     });
   });
 

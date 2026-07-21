@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
@@ -14,6 +14,7 @@ import {
   withSessionAdvisoryLock,
 } from '../../common/advisory-lock';
 import { MailboxMessage } from '../../mailbox/entities/mailbox-message.entity';
+import { RecordCache } from '../../republisher/entities/record-cache.entity';
 import { NameInventory } from '../entities/name-inventory.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
 import { PinStore } from '../pin-store';
@@ -41,6 +42,14 @@ const EMPTY_RESULT: DeleteAccountResult = {
  * small so an account of any size stays deletable.
  */
 export const DELETE_CHUNK_SIZE = 256;
+
+/**
+ * Extra chunks a single call may run beyond `ceil(preReadPins / chunk)`, to
+ * absorb a bounded number of pins a client inserts concurrently with its own
+ * delete. Past this a call fails closed with a retryable 503; a retry re-enters
+ * with a fresh pre-read and budget, so any account still drains across retries.
+ */
+export const DELETE_ITERATION_SLACK = 8;
 
 type ChunkOutcome =
   | { kind: 'gone' }
@@ -74,9 +83,12 @@ type ChunkOutcome =
  * account adds meanwhile is simply picked up by a later chunk. The residue
  * (names, mailbox, user row) is removed only once a chunk observes zero pins
  * UNDER the account + users-row lock, where no new pin can be born, so the FK
- * cascade on the user delete never strands an un-unpinned row. That residue step
- * also takes `advisoryLockKey(publicKey)` — the mailbox POST's recipient key —
- * so a post cannot resurrect an orphan row across the purge + user delete.
+ * cascade on the user delete never strands an un-unpinned row. The residue also
+ * purges the account's orphan `record_cache` rows (that table has no users FK,
+ * so a cached IPNS name would otherwise leak and trip staleRepublish forever).
+ * That residue step also takes `advisoryLockKey(publicKey)` — the mailbox POST's
+ * recipient key — so a post cannot resurrect an orphan row across the purge +
+ * user delete.
  *
  * The physical unpin rides the injectable [`PinStore`] seam AFTER commit — never
  * a Kubo call inside the transaction. The in-tx per-CID xact lock releases at
@@ -118,21 +130,30 @@ export class AccountService {
     // mailbox purge and the recipient advisory lock.
     const { publicKey } = account;
 
+    // Bound ONE call's work so a client racing its own delete with self-uploads
+    // cannot spin it forever. Each chunk removes >=1 pin, so this pre-read count
+    // (plus slack for concurrent inserts) caps the chunks a single call runs; a
+    // 503 retry re-enters with a fresh count, draining any account eventually.
+    const preReadPins = await this.pinRepository.count({ where: { accountId } });
+    const maxIterations = Math.ceil(preReadPins / DELETE_CHUNK_SIZE) + DELETE_ITERATION_SLACK;
+
     const totals: DeleteAccountResult = { ...EMPTY_RESULT };
-    for (;;) {
+    for (let iterations = 0; ; iterations += 1) {
+      if (iterations >= maxIterations) {
+        throw new ServiceUnavailableException(
+          'Account deletion exceeded per-call budget; retry to resume'
+        );
+      }
       // Seed the chunk's sorted lock batch from an unlocked pre-read; the chunk
-      // deletes and unpins ONLY these locked CIDs.
-      const chunkCids = [
-        ...new Set(
-          (
-            await this.pinRepository.find({
-              where: { accountId },
-              select: { cid: true },
-              take: DELETE_CHUNK_SIZE,
-            })
-          ).map((row) => row.cid)
-        ),
-      ];
+      // deletes and unpins ONLY these locked CIDs. The unique (accountId, cid)
+      // index makes a single-account read already distinct.
+      const chunkCids = (
+        await this.pinRepository.find({
+          where: { accountId },
+          select: { cid: true },
+          take: DELETE_CHUNK_SIZE,
+        })
+      ).map((row) => row.cid);
 
       const outcome = await this.deleteChunk(accountId, publicKey, chunkCids);
       if (outcome.kind === 'gone') {
@@ -201,7 +222,25 @@ export class AccountService {
         if (await pinRepo.findOne({ where: { accountId } })) {
           return { kind: 'more' };
         }
+        const ownedNames = (
+          await nameRepo.find({ where: { accountId }, select: { ipnsName: true } })
+        ).map((row) => row.ipnsName);
         const namesRetired = (await nameRepo.delete({ accountId })).affected ?? 0;
+        // record_cache has no FK to users, so an account's cached IPNS names
+        // would otherwise orphan and trip staleRepublish forever. Purge AFTER the
+        // inventory delete so the NOT EXISTS sees post-delete state: a name still
+        // in name_inventory (co-registered by another account) keeps its cache
+        // row, which repopulates next sweep anyway.
+        if (ownedNames.length > 0) {
+          await manager.getRepository(RecordCache).query(
+            `DELETE FROM record_cache
+               WHERE ipns_name = ANY($1)
+                 AND NOT EXISTS (
+                   SELECT 1 FROM name_inventory ni WHERE ni.ipns_name = record_cache.ipns_name
+                 )`,
+            [ownedNames]
+          );
+        }
         // Mailbox rows are keyed by recipient publicKey with no FK to users —
         // purge explicitly. Auth rows (auth_methods, refresh_tokens) cascade on
         // the users delete via their onDelete: 'CASCADE'.
