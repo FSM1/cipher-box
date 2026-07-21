@@ -58,6 +58,10 @@ export class AccountController {
   })
   @ApiOkResponse({ type: DeleteAccountResponseDto })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
+  @ApiResponse({
+    status: 503,
+    description: 'Contended resource or concurrent pin write; retry shortly',
+  })
   deleteAccount(@Req() request: AuthenticatedRequest): Promise<DeleteAccountResponseDto> {
     return this.accountService.deleteAccount(request.user.userId);
   }

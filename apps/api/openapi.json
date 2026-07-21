@@ -619,6 +619,9 @@
           },
           "401": {
             "description": "Missing or invalid access token"
+          },
+          "503": {
+            "description": "Contended resource or concurrent pin write; retry shortly"
           }
         },
         "security": [

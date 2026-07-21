@@ -7,7 +7,7 @@ import { AuthMethod } from '../../auth/entities/auth-method.entity';
 import { RefreshToken } from '../../auth/entities/refresh-token.entity';
 import { User } from '../../auth/entities/user.entity';
 import { IdentityService } from '../../auth/services/identity.service';
-import { pinDurabilityLockKey } from '../../common/advisory-lock';
+import { advisoryLockKey, pinDurabilityLockKey } from '../../common/advisory-lock';
 import { MailboxMessage } from '../../mailbox/entities/mailbox-message.entity';
 import { MailboxService } from '../../mailbox/services/mailbox.service';
 import { FakeClock, fakeConfig } from '../../testing/fakes';
@@ -16,15 +16,17 @@ import { NameInventory } from '../entities/name-inventory.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
 import { PinStore } from '../pin-store';
 import { RegistryService } from './registry.service';
-import { AccountService } from './account.service';
+import { AccountService, DELETE_CHUNK_SIZE } from './account.service';
 
 /**
  * The account hard-delete cascade proven on a REAL Postgres: the refcount unpin
- * across the delete/register phantom, the mailbox-post resurrection window, the
- * auth-row cascade, co-registered survival, and the lock-timeout 503. Real
- * row/advisory locks and FK cascades are genuine Postgres behavior no in-memory
- * fake can exercise. Each interleaving test pins the lock/re-check effect with a
- * negative control that reproduces the failure once the guard is stripped.
+ * across the delete/register phantom, the post-commit durability recount against
+ * a concurrent upload, the bounded multi-chunk drain, a straggler pin racing the
+ * residue step, the mailbox-post resurrection window, the auth-row cascade,
+ * co-registered survival, and the lock-timeout 503. Real row/advisory locks and
+ * FK cascades are genuine Postgres behavior no in-memory fake can exercise. Each
+ * interleaving test pins the lock/re-check effect with a negative control that
+ * reproduces the failure once the guard is stripped.
  */
 
 function compressedPublicKey(): string {
@@ -41,6 +43,29 @@ function token(): string {
 }
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Block until a backend is parked on an ungranted advisory lock — an observable
+ * signal that the delete has actually reached and is WAITING on the contended
+ * lock, replacing a fixed delay that only assumes it "should be blocked by now".
+ * The suite runs serially and truncates between cases, so the only ungranted
+ * advisory lock is the delete waiting on the gate holder's lock.
+ */
+async function waitForAdvisoryLockWait(ds: DataSource, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const waiting = await ds.query(
+      `SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted LIMIT 1`
+    );
+    if (waiting.length > 0) {
+      return;
+    }
+    if (Date.now() > deadline) {
+      throw new Error('timed out waiting for the delete to park on the advisory lock');
+    }
+    await delay(20);
+  }
+}
 
 class RecordingPinStore extends PinStore {
   readonly unpinned: string[] = [];
@@ -285,8 +310,8 @@ describe('AccountService cascade (real Postgres)', () => {
         });
 
       // delete(A) is blocked on register(B)'s advisory(cid) — it cannot reach its
-      // survivor check, let alone unpin.
-      await delay(200);
+      // survivor check, let alone unpin. Observe the actual lock wait, not a delay.
+      await waitForAdvisoryLockWait(db.dataSource);
       expect(deleteDone).toBe(false);
       expect(pinStore.unpinned).toEqual([]);
 
@@ -331,24 +356,24 @@ describe('AccountService cascade (real Postgres)', () => {
       expect(survivors.map((r) => r.accountId)).toEqual([b.id]);
     });
 
-    it('fails closed (retryable 503) when a pin commits into the unlocked pre-read gap, never deleting it unpinned', async () => {
+    it('drains a pin that races in after an empty pre-read rather than cascading it away un-unpinned', async () => {
       const a = await seedAccount();
       const cid = token();
 
-      // Pause the delete's UNLOCKED pre-read; a pin then commits into the gap
-      // before the delete takes its account-lock batch — the exact phantom the
-      // in-lock re-read closes.
-      const gate = makeGate();
-      let firstFind = true;
+      // The UNLOCKED pre-read observes no pins, then a pin commits into the gap
+      // before the residue step. The in-lock straggler re-check must see it and
+      // defer to another draining pass — never let the user delete cascade it
+      // away un-unpinned (its FK is onDelete: CASCADE).
+      let injected = false;
       const pinRepo = db.dataSource.getRepository(PinnedCid);
       const gatedPinRepo = new Proxy(pinRepo, {
         get(target, prop, receiver) {
           if (prop === 'find') {
             return async (options?: unknown) => {
               const rows = await target.find(options as never);
-              if (firstFind) {
-                firstFind = false;
-                await gate.onReach();
+              if (!injected && (rows as unknown[]).length === 0) {
+                injected = true;
+                await seedPin(a.id, cid); // races in after the empty pre-read
               }
               return rows;
             };
@@ -367,23 +392,40 @@ describe('AccountService cascade (real Postgres)', () => {
         fakeConfig({ DB_ADVISORY_LOCK_TIMEOUT_MS: '0' }).service
       );
 
-      const deleted = service.deleteAccount(a.id);
-      await gate.reached; // pre-read observed no pins; still before the lock batch
-      await seedPin(a.id, cid); // a pin commits into the gap, unlocked by the batch
-      gate.release();
+      const result = await service.deleteAccount(a.id);
 
-      await expect(deleted).rejects.toBeInstanceOf(ServiceUnavailableException);
-
-      // Fail-closed: the raced pin's row is intact (never deleted unpinned) and
-      // the account survives, so the client's retry unpins it at refcount zero.
-      expect(pinStore.unpinned).toEqual([]);
-      const rows = await db.dataSource
-        .getRepository(PinnedCid)
-        .find({ where: { accountId: a.id } });
-      expect(rows.map((r) => r.cid)).toEqual([cid]);
+      // The straggler is drained and unpinned under its own per-CID lock, and the
+      // account is fully removed — no residue, no leaked pin.
+      expect(result.pinsRetired).toBe(1);
+      expect(result.unpinned).toBe(1);
+      expect(pinStore.unpinned).toEqual([cid]);
       expect(
-        await db.dataSource.getRepository(User).findOne({ where: { id: a.id } })
-      ).not.toBeNull();
+        await db.dataSource.getRepository(PinnedCid).find({ where: { accountId: a.id } })
+      ).toEqual([]);
+      expect(await db.dataSource.getRepository(User).findOne({ where: { id: a.id } })).toBeNull();
+    });
+
+    it('drains a multi-chunk account to completion without wedging on lock_timeout', async () => {
+      const { id } = await seedAccount();
+      const cids = Array.from({ length: DELETE_CHUNK_SIZE + 5 }, () => token());
+      await db.dataSource
+        .getRepository(PinnedCid)
+        .save(cids.map((cid) => ({ accountId: id, cid, size: '1', advisory: false })));
+      await db.dataSource.getRepository(NameInventory).save({ accountId: id, ipnsName: token() });
+
+      // A real (bounded) lock timeout: the pre-fix single unbounded batch of this
+      // many advisory keys is exactly what would blow past it and wedge.
+      const pinStore = new RecordingPinStore();
+      const result = await deleteService(db.dataSource, pinStore, '2000').deleteAccount(id);
+
+      expect(result.pinsRetired).toBe(cids.length);
+      expect(result.namesRetired).toBe(1);
+      expect(result.unpinned).toBe(cids.length);
+      expect(new Set(pinStore.unpinned)).toEqual(new Set(cids));
+      expect(
+        await db.dataSource.getRepository(PinnedCid).find({ where: { accountId: id } })
+      ).toEqual([]);
+      expect(await db.dataSource.getRepository(User).findOne({ where: { id } })).toBeNull();
     });
 
     it('a concurrent upload committing a live pin into the post-commit gap keeps the CID pinned; the cascade recounts under the durability lock and skips the unpin', async () => {
@@ -406,7 +448,9 @@ describe('AccountService cascade (real Postgres)', () => {
 
       const deleted = deleteService(db.dataSource, pinStore).deleteAccount(a.id);
 
-      await delay(200); // delete has committed and is blocked on the durability lock
+      // The chunk has committed (A gone) and the post-commit unpin now parks on
+      // the durability lock the holder owns — wait for that actual lock wait.
+      await waitForAdvisoryLockWait(db.dataSource);
       await seedPin(b.id, cid); // the upload's live pin row commits into the gap
       await holder.query('SELECT pg_advisory_unlock($1::bigint)', [
         pinDurabilityLockKey(cid).toString(),
@@ -516,6 +560,37 @@ describe('AccountService cascade (real Postgres)', () => {
       // The in-lock existence re-check now sees a gone recipient → fail closed.
       await expect(posting).rejects.toBeInstanceOf(NotFoundException);
       expect(await db.dataSource.getRepository(MailboxMessage).count()).toBe(0);
+    });
+
+    it('the residue delete serializes on the recipient lock a mailbox post holds', async () => {
+      const { id, publicKey } = await seedAccount();
+
+      // Hold the recipient advisory key the mailbox POST takes across its
+      // existence re-check → insert. The residue delete must block on it — proof
+      // it serializes with a concurrent post rather than racing it to an orphan.
+      const holder = db.dataSource.createQueryRunner();
+      await holder.connect();
+      await holder.startTransaction();
+      await holder.query('SELECT pg_advisory_xact_lock($1::bigint)', [
+        advisoryLockKey(publicKey).toString(),
+      ]);
+
+      let deleteDone = false;
+      const deleted = deleteService(db.dataSource, new RecordingPinStore())
+        .deleteAccount(id)
+        .then((r) => {
+          deleteDone = true;
+          return r;
+        });
+
+      await waitForAdvisoryLockWait(db.dataSource);
+      expect(deleteDone).toBe(false);
+
+      await holder.rollbackTransaction();
+      await holder.release();
+      await deleted;
+
+      expect(await db.dataSource.getRepository(User).findOne({ where: { id } })).toBeNull();
     });
 
     it('negative control — with an existence check that never reflects the deletion, the raced post resurrects an orphan mailbox row', async () => {

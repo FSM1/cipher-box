@@ -27,21 +27,37 @@ class RecordingPinStore extends PinStore {
   }
 }
 
-/** FakeRepository plus the `In([...])` find the survivor check uses. */
-class InAwareRepository<T extends { id: string }> extends FakeRepository<T> {
-  override async find(options: { where?: Record<string, unknown> } = {}): Promise<T[]> {
-    const where = options.where;
-    if (!where) {
-      return [...this.rows];
+function inAwareMatch(row: Record<string, unknown>, where: Record<string, unknown>): boolean {
+  return Object.entries(where).every(([key, expected]) => {
+    if (expected instanceof FindOperator && expected.type === 'in') {
+      return (expected.value as unknown[]).includes(row[key]);
     }
-    return this.rows.filter((row) =>
-      Object.entries(where).every(([key, expected]) => {
-        if (expected instanceof FindOperator && expected.type === 'in') {
-          return (expected.value as unknown[]).includes((row as Record<string, unknown>)[key]);
-        }
-        return (row as Record<string, unknown>)[key] === expected;
-      })
+    return row[key] === expected;
+  });
+}
+
+/** FakeRepository plus the `In([...])` find/delete the chunked cascade uses. */
+class InAwareRepository<T extends { id: string }> extends FakeRepository<T> {
+  override async find(
+    options: { where?: Record<string, unknown>; take?: number } = {}
+  ): Promise<T[]> {
+    const where = options.where;
+    const rows = where
+      ? this.rows.filter((row) => inAwareMatch(row as Record<string, unknown>, where))
+      : [...this.rows];
+    return options.take != null ? rows.slice(0, options.take) : rows;
+  }
+
+  override async findOne(options: { where: Record<string, unknown> }): Promise<T | null> {
+    return (
+      this.rows.find((row) => inAwareMatch(row as Record<string, unknown>, options.where)) ?? null
     );
+  }
+
+  override async delete(criteria: Record<string, unknown>): Promise<{ affected: number }> {
+    const before = this.rows.length;
+    this.rows = this.rows.filter((row) => !inAwareMatch(row as Record<string, unknown>, criteria));
+    return { affected: before - this.rows.length };
   }
 }
 

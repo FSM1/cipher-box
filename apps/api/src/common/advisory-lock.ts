@@ -117,15 +117,29 @@ export function pinDurabilityLockKey(cid: string): bigint {
 }
 
 /**
- * Acquire a batch of transaction-scoped advisory locks in one deadlock-free
- * order: keys are de-duplicated and sorted, so any two overlapping batches take
- * their shared keys in the same sequence and cannot form a cycle. Set the
- * `lock_timeout` bound (setAdvisoryLockTimeout) once before calling.
+ * Acquire a batch of transaction-scoped advisory locks in one round-trip and one
+ * deadlock-free order: keys are de-duplicated and sorted, so any two overlapping
+ * batches take their shared keys in the same sequence and cannot form a cycle.
+ * The array is pre-sorted AND `ORDER BY k` is applied, so acquisition stays
+ * ascending regardless of how the planner shapes the scan. A `lock_timeout`
+ * abort on any key maps to the retryable 503. Set the bound
+ * (setAdvisoryLockTimeout) once before calling.
  */
 export async function acquireAdvisoryLocks(manager: EntityManager, keys: bigint[]): Promise<void> {
   const sorted = [...new Set(keys)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  for (const key of sorted) {
-    await acquireAdvisoryLock(manager, key);
+  if (sorted.length === 0) {
+    return;
+  }
+  try {
+    await manager.query(
+      'SELECT pg_advisory_xact_lock(k) FROM unnest($1::bigint[]) AS k ORDER BY k',
+      [sorted.map((key) => key.toString())]
+    );
+  } catch (error) {
+    if (isLockNotAvailable(error)) {
+      throw new ServiceUnavailableException('Contended resource; retry shortly');
+    }
+    throw error;
   }
 }
 
