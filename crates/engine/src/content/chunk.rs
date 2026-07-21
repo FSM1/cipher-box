@@ -10,7 +10,7 @@
 
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, seal_chunk};
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use super::profile::ContentProfile;
 use crate::entropy::{Entropy, EntropyError};
@@ -25,13 +25,13 @@ pub struct ContentKey([u8; KEY_LEN]);
 
 impl ContentKey {
     /// Mint a fresh content key from injected entropy. Fails closed if entropy
-    /// acquisition fails — never substitutes predictable bytes.
+    /// acquisition fails — never substitutes predictable bytes. The staging
+    /// buffer self-zeroizes on every return path (incl. the error path, where
+    /// it may hold partially-written key bytes).
     pub fn generate(entropy: &mut impl Entropy) -> Result<Self, EntropyError> {
-        let mut bytes = [0u8; KEY_LEN];
-        entropy.fill(&mut bytes)?;
-        let key = Self(bytes);
-        bytes.zeroize();
-        Ok(key)
+        let mut bytes = Zeroizing::new([0u8; KEY_LEN]);
+        entropy.fill(bytes.as_mut())?;
+        Ok(Self(*bytes))
     }
 
     /// Adopt caller-supplied key bytes (a restored per-version key). The array
@@ -182,5 +182,18 @@ mod tests {
             b"payload"
         );
         assert_eq!(format!("{key:?}"), "ContentKey(<redacted>)");
+    }
+
+    #[test]
+    fn generate_fails_closed_when_entropy_fails() {
+        struct FailingEntropy;
+        impl Entropy for FailingEntropy {
+            fn fill(&mut self, _: &mut [u8]) -> Result<(), EntropyError> {
+                Err(EntropyError::new("no entropy"))
+            }
+        }
+        // The error path (where the staging buffer may hold partial key bytes and
+        // the Zeroizing wrapper scrubs it on drop) returns Err, never a key.
+        assert!(ContentKey::generate(&mut FailingEntropy).is_err());
     }
 }
