@@ -47,6 +47,7 @@ export class MailboxController {
   })
   @ApiResponse({ status: 413, description: 'Sealed blob exceeds 8 KiB' })
   @ApiResponse({ status: 429, description: 'Per-sender post rate limit exceeded' })
+  @ApiResponse({ status: 503, description: 'Recipient serialization contended; retry shortly' })
   post(
     @Body() body: PostMessageDto,
     @Req() request: AuthenticatedRequest

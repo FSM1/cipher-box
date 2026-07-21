@@ -333,6 +333,9 @@
           },
           "429": {
             "description": "Per-sender post rate limit exceeded"
+          },
+          "503": {
+            "description": "Recipient serialization contended; retry shortly"
           }
         },
         "security": [
@@ -456,6 +459,9 @@
           },
           "429": {
             "description": "Registry rate limit exceeded"
+          },
+          "503": {
+            "description": "Token serialization contended; retry shortly"
           }
         },
         "security": [
@@ -507,6 +513,9 @@
           },
           "429": {
             "description": "Registry rate limit exceeded"
+          },
+          "503": {
+            "description": "Token serialization contended; retry shortly"
           }
         },
         "security": [

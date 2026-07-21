@@ -10,6 +10,11 @@ import { createHash } from 'node:crypto';
 import { DataSource, LessThan, QueryFailedError, Repository } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 import { IdentityService } from '../../auth/services/identity.service';
+import {
+  acquireAdvisoryLock,
+  resolveAdvisoryLockTimeoutMs,
+  setAdvisoryLockTimeout,
+} from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
 import { MailboxMessage } from '../entities/mailbox-message.entity';
 
@@ -67,6 +72,7 @@ export interface PolledMessage {
 export class MailboxService {
   private readonly pendingCap: number;
   private readonly pollLimit: number;
+  private readonly lockTimeoutMs: number;
 
   constructor(
     @InjectRepository(MailboxMessage)
@@ -81,6 +87,7 @@ export class MailboxService {
   ) {
     this.pendingCap = positiveIntConfig(configService.get('MAILBOX_PENDING_CAP'), 1000);
     this.pollLimit = positiveIntConfig(configService.get('MAILBOX_POLL_LIMIT'), 100);
+    this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
   }
 
   /**
@@ -151,7 +158,9 @@ export class MailboxService {
    * transaction means the second writer blocks until the first commits, then
    * counts the first's committed row before its own check — the overshoot
    * closes structurally, no schema change required. The lock is transaction
-   * scoped: Postgres releases it automatically on commit or rollback.
+   * scoped: Postgres releases it automatically on commit or rollback. The wait
+   * is bounded by `lock_timeout` so sustained same-recipient contention cannot
+   * fill the pool with blocked waiters (a timed-out waiter surfaces as a 503).
    */
   private async enforceCapAndInsert(
     recipientPublicKey: string,
@@ -159,9 +168,8 @@ export class MailboxService {
     blob: Buffer
   ): Promise<PostMessageResult> {
     return this.dataSource.transaction(async (manager) => {
-      await manager.query('SELECT pg_advisory_xact_lock($1::bigint)', [
-        this.recipientLockKey(recipientPublicKey),
-      ]);
+      await setAdvisoryLockTimeout(manager, this.lockTimeoutMs);
+      await acquireAdvisoryLock(manager, this.recipientLockKey(recipientPublicKey));
       const repo = manager.getRepository(MailboxMessage);
 
       // Re-check idempotency now that we hold the lock: a same-scope writer that
@@ -247,13 +255,14 @@ export class MailboxService {
    * `scopeIdempotency`) — over the ALREADY-normalized recipient key, then the
    * first 8 bytes read big-endian as a signed BigInt, which is exactly the
    * Postgres `bigint` domain (−2^63 … 2^63−1). Deterministic and process-stable,
-   * so every API instance maps a given recipient to the same lock. Returned as a
-   * decimal string bound through `$1::bigint`, sidestepping driver-level BigInt
-   * parameter handling. The 8→64-bit truncation admits astronomically rare
-   * cross-recipient collisions; the only effect would be two distinct recipients
-   * briefly serializing, never a correctness or cap breach.
+   * so every API instance maps a given recipient to the same lock. The
+   * acquire helper binds it as a decimal string through `$1::bigint`,
+   * sidestepping driver-level BigInt parameter handling. The 8→64-bit
+   * truncation admits astronomically rare cross-recipient collisions; the only
+   * effect would be two distinct recipients briefly serializing, never a
+   * correctness or cap breach.
    */
-  private recipientLockKey(recipientPublicKey: string): string {
-    return createHash('sha256').update(recipientPublicKey).digest().readBigInt64BE(0).toString();
+  private recipientLockKey(recipientPublicKey: string): bigint {
+    return createHash('sha256').update(recipientPublicKey).digest().readBigInt64BE(0);
   }
 }
