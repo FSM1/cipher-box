@@ -43,7 +43,7 @@ export class RecoveryController {
   @ApiResponse({
     status: 200,
     description: 'Opaque signed record bytes',
-    content: { [IPNS_RECORD_MEDIA_TYPE]: {} },
+    content: { [IPNS_RECORD_MEDIA_TYPE]: { schema: { type: 'string', format: 'binary' } } },
   })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
   @ApiResponse({ status: 404, description: 'No cached record for this name' })

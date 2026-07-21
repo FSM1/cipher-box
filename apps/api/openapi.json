@@ -620,7 +620,12 @@
           "200": {
             "description": "Opaque signed record bytes",
             "content": {
-              "application/vnd.ipfs.ipns-record": {}
+              "application/vnd.ipfs.ipns-record": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
             }
           },
           "401": {

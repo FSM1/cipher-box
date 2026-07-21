@@ -32,9 +32,11 @@ export function isDisabled(raw: unknown): boolean {
  * network transport, the sequence read, alerting, and the scheduler — is a seam,
  * so the walk is deterministic under test and the module extracts cleanly.
  *
- * The scheduler and its {@link RepublisherTask} are wired here but the loop is
- * generic: the dormant-mailbox scheduled sweep (#667) registers its own
- * PeriodicTask on the same WorkerScheduler.
+ * The scheduler and its {@link RepublisherTask} are wired here, but the loop is
+ * generic. The {@link WorkerScheduler} provider is scoped to this module, not a
+ * shared instance — when the dormant-mailbox scheduled sweep (#667) lands, one
+ * shared loop means exporting this provider (or hoisting it into a shared
+ * module) and registering the mailbox PeriodicTask on it, not binding a second.
  */
 @Module({
   imports: [
