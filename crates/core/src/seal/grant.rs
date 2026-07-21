@@ -31,7 +31,6 @@
 //! owner — the seal path — before it drops.
 
 use core::fmt;
-use std::collections::BTreeSet;
 
 use zeroize::Zeroize;
 
@@ -44,7 +43,9 @@ use crate::suite::secret::{SECRET_LEN, SecretBytes};
 use crate::suite::x25519::{X25519Public, X25519Secret};
 
 use super::aad::{AadContext, build_aad};
-use super::body::{ScrubOnDrop, bytes_fixed, collect_unknown, merge_unknown, req};
+use super::body::{
+    ScrubOnDrop, assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown, req,
+};
 
 /// The HPKE `info` for every grant-section seal. The structured AAD already
 /// binds `(v, id, scope, epoch, structTag)`, so no additional info label is
@@ -700,26 +701,13 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
     for item in req(map, "entries")?.as_array()? {
         entries.push(GrantSetEntry::from_value(item)?);
     }
-    assert_entry_tags_unique(&entries)?;
+    assert_grant_tags_unique(entries.iter().map(|e| e.tag))?;
     Ok(GrantSetCommitment {
         ipns_name,
         owner_pseudonym_pk,
         entries,
         unknown: collect_unknown(map, GRANT_SET_KNOWN),
     })
-}
-
-/// Fail-closed uniqueness over a grant-set commitment's blinded tags — the same
-/// analog as the grant-ledger check (#39 D7): a recipient's tag names at most one
-/// committed `(permission, pseudonymPk)`, so a duplicate is a confused-deputy.
-fn assert_entry_tags_unique(entries: &[GrantSetEntry]) -> Result<(), CodecError> {
-    let mut tags = BTreeSet::new();
-    for e in entries {
-        if !tags.insert(e.tag) {
-            return Err(TrustViolation::DuplicateGrantTag.into());
-        }
-    }
-    Ok(())
 }
 
 /// Encode a grant-set commitment to its canonical det-CBOR form — the exact
@@ -729,7 +717,7 @@ fn assert_entry_tags_unique(entries: &[GrantSetEntry]) -> Result<(), CodecError>
 /// verdict `decode_grant_set_commitment` raises, so the sign path never attests
 /// bytes every recipient rejects.
 pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, CodecError> {
-    assert_entry_tags_unique(&c.entries)?;
+    assert_grant_tags_unique(c.entries.iter().map(|e| e.tag))?;
     let mut m = Map::new();
     m.insert(
         "entries",

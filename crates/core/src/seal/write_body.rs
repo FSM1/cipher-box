@@ -21,14 +21,12 @@
 //! re-sealing a write-body under shared write never strips a newer client's
 //! fields.
 
-use std::collections::BTreeSet;
-
 use crate::codec::{Map, Value, decode, encode};
-use crate::error::{CodecError, TrustViolation};
+use crate::error::CodecError;
 use crate::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use crate::suite::secret::SECRET_LEN;
 
-use super::body::{bytes_fixed, collect_unknown, merge_unknown, req};
+use super::body::{assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown, req};
 use super::grant::Permission;
 
 // ---------------------------------------------------------------------------
@@ -195,7 +193,7 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
     for item in req(map, "grantLedger")?.as_array()? {
         grant_ledger.push(GrantLedgerEntry::from_value(item)?);
     }
-    assert_ledger_tags_unique(&grant_ledger)?;
+    assert_grant_tags_unique(grant_ledger.iter().map(|e| e.tag))?;
     let write_history_link = req(map, "writeHistoryLink")?.as_bytes()?.to_vec();
     let mut direct_child_scope_index = Vec::new();
     for item in req(map, "directChildScopeIndex")?.as_array()? {
@@ -210,19 +208,6 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
     })
 }
 
-/// Fail-closed uniqueness over a grant ledger's blinded tags — the exact analog
-/// of the read-body child-id uniqueness (#39 D7): a recipient's tag names at most
-/// one grant, so a duplicate is a confused-deputy over read-vs-write authority.
-fn assert_ledger_tags_unique(entries: &[GrantLedgerEntry]) -> Result<(), CodecError> {
-    let mut tags = BTreeSet::new();
-    for e in entries {
-        if !tags.insert(e.tag) {
-            return Err(TrustViolation::DuplicateGrantTag.into());
-        }
-    }
-    Ok(())
-}
-
 /// Encode a write-body to its canonical det-CBOR plaintext (sealed under the
 /// root's `writeKey` with struct tag `write-body` by the caller / seal path).
 ///
@@ -234,7 +219,7 @@ fn assert_ledger_tags_unique(entries: &[GrantLedgerEntry]) -> Result<(), CodecEr
 ///
 /// [`encode_read_body`]: super::encode_read_body
 pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
-    assert_ledger_tags_unique(&body.grant_ledger)?;
+    assert_grant_tags_unique(body.grant_ledger.iter().map(|e| e.tag))?;
     let mut m = Map::new();
     m.insert(
         "directChildScopeIndex",

@@ -434,6 +434,22 @@ impl Drop for ScrubOwned {
     }
 }
 
+/// Fail-closed uniqueness over a set of grant blinded tags (#39 D7): a
+/// recipient's tag names at most one grant, so a duplicate is a confused-deputy
+/// over read-vs-write authority. Shared by the grant-ledger (write-body) and the
+/// grant-set commitment (grant section) decoders/encoders.
+pub(crate) fn assert_grant_tags_unique(
+    tags: impl IntoIterator<Item = [u8; SECRET_LEN]>,
+) -> Result<(), CodecError> {
+    let mut seen = BTreeSet::new();
+    for t in tags {
+        if !seen.insert(t) {
+            return Err(TrustViolation::DuplicateGrantTag.into());
+        }
+    }
+    Ok(())
+}
+
 /// Fail-closed uniqueness over one folder's child listing (#39 D7).
 fn assert_children_unique(children: &[ChildRef]) -> Result<(), CodecError> {
     let mut ids = BTreeSet::new();

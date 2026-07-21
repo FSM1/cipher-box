@@ -103,7 +103,6 @@ mod tests {
         // infallible `encrypt` contract holds for every framed chunk.
         let engine_chunk_size: u64 = 1 << 20;
         let ceiling = MAX_PLAINTEXT_LEN;
-        assert!(engine_chunk_size < ceiling);
         assert!(engine_chunk_size.saturating_mul(1000) < ceiling);
         // Sanity-pin the ceiling itself: 64 * (2^32 - 1) bytes.
         assert_eq!(ceiling, 274_877_906_880);

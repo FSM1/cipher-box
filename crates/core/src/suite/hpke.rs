@@ -198,6 +198,9 @@ pub(crate) fn dhkem_encap(
 ) -> (SecretBytes, [u8; ENC_LEN]) {
     let sk_e = X25519Secret::from_scalar(*ephemeral_scalar);
     let enc = sk_e.public().to_bytes();
+    // Sound only because every `X25519Public` is built through the low-order-
+    // rejecting `from_bytes`, guaranteeing a contributory exchange; a future
+    // constructor that bypasses `from_bytes` would require re-auditing this.
     let dh = sk_e
         .diffie_hellman(pk_r)
         .expect("recipient key is validated non-low-order, so ECDH is contributory");
