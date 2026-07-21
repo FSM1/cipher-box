@@ -98,7 +98,8 @@ export class RepublisherTask implements PeriodicTask {
 
   /**
    * Walk names through a bounded worker pool so one slow name (up to a 10s
-   * resolve + 10s re-PUT) can't serialize the whole inventory past the cadence.
+   * resolve + 10s re-PUT) can't serialize the whole inventory past the cadence,
+   * and one failing name can't reject the pool and abandon the rest of the sweep.
    * Single-threaded JS makes the cursor claim atomic between awaits.
    */
   private async walkAll(names: string[], now: Date): Promise<number> {
@@ -111,8 +112,15 @@ export class RepublisherTask implements PeriodicTask {
         if (i >= names.length) {
           return;
         }
-        if (await this.walkName(names[i], now)) {
-          republished += 1;
+        // Isolate each name: a rejection (a cache write that fails, say) alerts and
+        // counts for that name alone — it must never reject the pool and abandon
+        // the names not yet claimed until the next 12h cadence.
+        try {
+          if (await this.walkName(names[i], now)) {
+            republished += 1;
+          }
+        } catch {
+          this.alerter.resolveFailure(names[i]);
         }
       }
     };

@@ -39,12 +39,15 @@ interface CacheRow {
 /** In-memory cache mirroring RecordCacheService's monotonic semantics. */
 class FakeRecordCache {
   readonly rows = new Map<string, CacheRow>();
+  /** Names whose `upsert` rejects — models a transient per-name DB failure. */
+  readonly upsertThrows = new Set<string>();
 
   seed(name: string, row: CacheRow): void {
     this.rows.set(name, row);
   }
 
   async upsert(name: string, rec: Buffer, sequence: bigint, now: Date): Promise<CacheUpsertResult> {
+    if (this.upsertThrows.has(name)) throw new Error('cache upsert failed');
     const existing = this.rows.get(name);
     if (!existing) {
       this.rows.set(name, { record: rec, sequence, lastRepublishedAt: null, createdAt: now });
@@ -211,6 +214,38 @@ describe('RepublisherTask walk', () => {
     expect(alerter.resolveFailures.sort()).toEqual(['orphan', 'unreachable']);
     expect(transport.republished).toEqual(['live']);
     expect(cache.rows.has('orphan')).toBe(false);
+  });
+
+  // Per-name isolation (Greptile P1): a cache op that rejects for one name must
+  // not reject the pool and abandon the rest — the remaining inventory is still
+  // re-PUT, and the failing name is counted through the resolve-failure path.
+  it('isolates a cache failure to one name and still processes the rest', async () => {
+    const cache = new FakeRecordCache();
+    const transport = new FakeTransport();
+    const alerter = new RecordingAlerter();
+    const clock = new FakeClock();
+    cache.upsertThrows.add('boom');
+    transport.resolveAnswers.set('boom', record(1n));
+    transport.resolveAnswers.set('name-a', record(1n));
+    transport.resolveAnswers.set('name-b', record(1n));
+
+    await buildTask({
+      names: ['boom', 'name-a', 'name-b'],
+      cache,
+      transport,
+      alerter,
+      clock,
+    }).runOnce();
+
+    // The failing name never re-PUTs and is counted as a failure...
+    expect(transport.republished).not.toContain('boom');
+    expect(alerter.resolveFailures).toEqual(['boom']);
+    // ...while the healthy names are still re-PUT and stamped.
+    expect(transport.republished.sort()).toEqual(['name-a', 'name-b']);
+    expect(cache.rows.get('name-a')?.lastRepublishedAt).toEqual(clock.now());
+    expect(cache.rows.get('name-b')?.lastRepublishedAt).toEqual(clock.now());
+    // The sweep completed cleanly and reported the two successes.
+    expect(alerter.walks).toEqual([{ names: 3, republished: 2 }]);
   });
 
   it('refuses a sequence-regressing resolve but keeps re-PUTting for liveness', async () => {
