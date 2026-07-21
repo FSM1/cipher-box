@@ -602,6 +602,59 @@
         ]
       }
     },
+    "/content/upload": {
+      "post": {
+        "operationId": "ContentController_upload",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Empty or non-binary upload body"
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "413": {
+            "description": "Upload exceeds the account storage quota or size cap"
+          },
+          "429": {
+            "description": "Upload rate limit exceeded"
+          },
+          "503": {
+            "description": "Pin store contended or unavailable; retry shortly"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Upload content bytes to the hosted pin store; quota-gated for hosted accounts, advisory for BYO",
+        "tags": [
+          "Content"
+        ]
+      }
+    },
     "/recovery/{ipnsName}": {
       "get": {
         "operationId": "RecoveryController_fetch",
@@ -676,6 +729,10 @@
     {
       "name": "Account",
       "description": "Per-account quota and the BYO-IPFS toggle"
+    },
+    {
+      "name": "Content",
+      "description": "Hosted ingress: quota-gated byte upload to CipherBox Kubo"
     },
     {
       "name": "Recovery",
@@ -1065,6 +1122,23 @@
         },
         "required": [
           "byo"
+        ]
+      },
+      "UploadResponseDto": {
+        "type": "object",
+        "properties": {
+          "cid": {
+            "type": "string",
+            "description": "The content CID Kubo pinned"
+          },
+          "size": {
+            "type": "number",
+            "description": "The pinned size in bytes"
+          }
+        },
+        "required": [
+          "cid",
+          "size"
         ]
       }
     }
