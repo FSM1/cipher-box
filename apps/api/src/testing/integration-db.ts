@@ -6,9 +6,11 @@ import { User } from '../auth/entities/user.entity';
 import { MailboxMessage } from '../mailbox/entities/mailbox-message.entity';
 import { AddMailboxMessages1784519962991 } from '../migrations/1784519962991-AddMailboxMessages';
 import { AddNameInventoryAndPinnedCids1784566605863 } from '../migrations/1784566605863-AddNameInventoryAndPinnedCids';
+import { AddRecordCache1784600557946 } from '../migrations/1784600557946-AddRecordCache';
 import { InitAuthSchema1784513040045 } from '../migrations/1784513040045-InitAuthSchema';
 import { NameInventory } from '../registry/entities/name-inventory.entity';
 import { PinnedCid } from '../registry/entities/pinned-cid.entity';
+import { RecordCache } from '../republisher/entities/record-cache.entity';
 
 /**
  * Standard DB_* env, defaulting to docker/docker-compose.yml. Only the admin
@@ -24,11 +26,20 @@ const DB = {
 // The full application schema — every entity + every committed migration — so a
 // throwaway database is a faithful copy of production regardless of which tables
 // a given suite touches.
-const ENTITIES = [User, AuthMethod, RefreshToken, NameInventory, PinnedCid, MailboxMessage];
+const ENTITIES = [
+  User,
+  AuthMethod,
+  RefreshToken,
+  NameInventory,
+  PinnedCid,
+  MailboxMessage,
+  RecordCache,
+];
 const MIGRATIONS = [
   InitAuthSchema1784513040045,
   AddMailboxMessages1784519962991,
   AddNameInventoryAndPinnedCids1784566605863,
+  AddRecordCache1784600557946,
 ];
 
 export interface IntegrationDatabase {

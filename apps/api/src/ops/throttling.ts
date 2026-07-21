@@ -31,4 +31,10 @@ export const THROTTLE_SURFACES = {
   account: { default: { limit: 120, ttl: 60_000 } },
   /** Content upload: per account; bounded above the write cadence, below abuse. */
   content: { default: { limit: 60, ttl: 60_000 } },
+  /**
+   * Recovery fetch: per account. The revival aid after a >EOL lapse is a rare,
+   * deliberate operation (extract the last CID, mint a fresh record), so the cap
+   * sits low — enough to sweep a handful of scope names, far below abuse rates.
+   */
+  recovery: { default: { limit: 30, ttl: 60_000 } },
 } as const;

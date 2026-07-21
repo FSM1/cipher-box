@@ -654,6 +654,53 @@
           "Content"
         ]
       }
+    },
+    "/recovery/{ipnsName}": {
+      "get": {
+        "operationId": "RecoveryController_fetch",
+        "parameters": [
+          {
+            "name": "ipnsName",
+            "required": true,
+            "in": "path",
+            "description": "The IPNS name (libp2p-key CID)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Opaque signed record bytes",
+            "content": {
+              "application/vnd.ipfs.ipns-record": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token"
+          },
+          "404": {
+            "description": "No cached record for this name"
+          },
+          "429": {
+            "description": "Recovery rate limit exceeded"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Fetch cached (possibly expired) record bytes for a name — the revival aid after a >EOL lapse. Non-canonical: verify against the network.",
+        "tags": [
+          "Recovery"
+        ]
+      }
     }
   },
   "info": {
@@ -686,6 +733,10 @@
     {
       "name": "Content",
       "description": "Hosted ingress: quota-gated byte upload to CipherBox Kubo"
+    },
+    {
+      "name": "Recovery",
+      "description": "Authenticated fetch of non-canonical cached record bytes by name"
     }
   ],
   "servers": [],

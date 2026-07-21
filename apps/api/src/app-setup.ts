@@ -134,6 +134,7 @@ export function buildOpenApiDocument(app: INestApplication): OpenAPIObject {
     .addTag('Registry', 'Pin/name registry: batch register/retire, union liveness')
     .addTag('Account', 'Per-account quota and the BYO-IPFS toggle')
     .addTag('Content', 'Hosted ingress: quota-gated byte upload to CipherBox Kubo')
+    .addTag('Recovery', 'Authenticated fetch of non-canonical cached record bytes by name')
     .build();
   return SwaggerModule.createDocument(app, config);
 }
