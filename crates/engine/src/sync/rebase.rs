@@ -1,0 +1,675 @@
+//! The rebase engine — FIFO replay of the op queue onto gate-passing state,
+//! the five per-op race rules, dead-lettering, and dual-link observed repair
+//! (blueprint/engine.md "Sync core: Per-op rebase rules"; CONTEXT.md).
+//!
+//! Replay is FIFO in performed order through the standard rebase, and rebases
+//! **only onto gate-passing state** (#33 D5–D7): the caller resolves a fresh
+//! last-known-good snapshot (every record through the adoption gate) and hands
+//! it here as the base. Each op resolves to exactly one outcome — applied
+//! (possibly auto-suffixed), dropped, or dead-lettered — and an applied op
+//! advances the working base so later ops rebase onto the updated state.
+//!
+//! The five races, one rule each:
+//!
+//! | Race                | Rule                                                       |
+//! | ------------------- | ---------------------------------------------------------- |
+//! | Delete vs edit      | Conditional delete: drop if the target advanced (edit wins)|
+//! | Rename vs rename    | Parent-CAS serialized; the rebasing writer re-anchors, wins|
+//! | Add vs add          | Always visible; the loser auto-suffixes `name (2).ext`     |
+//! | Move                | Dest-first, presence-conditional source-remove; loser undoes|
+//! | Dual-link           | Observed repair; the link counter picks the loser          |
+//!
+//! Terminally unrebasable ops (access revoked while offline) **dead-letter**
+//! with their staged bytes preserved — nothing is silently dropped (#33 D6).
+
+use crate::seams::OpId;
+use crate::sync::model::{Link, NodeMeta, Snapshot, suffix_name};
+use crate::sync::op::{Op, OpDecodeError, OpKind};
+
+/// The highest auto-suffix a loser probes before dead-lettering — a folder
+/// jammed with this many colliding siblings is pathological, not a routine
+/// merge.
+const MAX_SUFFIX_PROBE: u32 = 10_000;
+
+/// How one op resolved against the working base.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpResolution {
+    /// The op applied onto the (possibly advanced) base.
+    Applied {
+        /// The name the op resolves to publish under — `Some` for create and
+        /// rename (auto-suffixed when `suffixed`), `None` otherwise.
+        effective_name: Option<String>,
+        /// The add/add auto-suffix fired.
+        suffixed: bool,
+        /// A cross-scope relink that left a granted source scope: the source
+        /// scope root whose scope-exit rotation is **queued** (this slice does
+        /// not rotate — CONTEXT.md #632 scope).
+        scope_exit_trigger: Option<crate::facade::NodeId>,
+    },
+    /// The op was dropped as a no-op or a lost race.
+    Dropped(DropReason),
+    /// The op is terminally unrebasable; the caller preserves its staged bytes.
+    DeadLetter(DeadLetterReason),
+}
+
+/// Why a rebasing op was dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DropReason {
+    /// Conditional delete: the target advanced past the op's snapshot by rebase
+    /// time — the concurrent edit wins in both directions.
+    TargetAdvanced,
+    /// The mutation is already reflected in gate-passing state (e.g. a delete
+    /// of an already-absent node, or a move already at its destination).
+    AlreadySatisfied,
+    /// A concurrent move won the child; this move undoes its own dest-add so
+    /// no orphan and no duplicate survives.
+    MoveRaceLost,
+}
+
+/// Why an op terminally dead-lettered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeadLetterReason {
+    /// The op's target/parent is absent from gate-passing state and cannot be
+    /// recreated — its scope was revoked (or the node hard-deleted) while the
+    /// op sat offline.
+    TargetGone,
+    /// A relink destination is absent from gate-passing state.
+    DestinationGone,
+    /// A folder is pathologically saturated with colliding names.
+    SuffixExhausted,
+    /// The durable op record failed to decode (corrupt or forward-version).
+    Undecodable,
+}
+
+/// One applied op, resolved for republish.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedOp {
+    /// The durable-queue id.
+    pub op_id: OpId,
+    /// The op as journaled.
+    pub op: Op,
+    /// The resolved name to publish under (create/rename; auto-suffixed on a
+    /// collision), `None` for ops that carry no name.
+    pub effective_name: Option<String>,
+    /// The add/add auto-suffix fired.
+    pub suffixed: bool,
+}
+
+/// The full replay result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayReport {
+    /// Gate-passing base after every applied op — the state to publish from.
+    pub rebased: Snapshot,
+    /// Ops to (re)publish, in FIFO order.
+    pub applied: Vec<AppliedOp>,
+    /// Dropped ops (no-op or lost race) — silently discarded, never surfaced.
+    pub dropped: Vec<(OpId, DropReason)>,
+    /// Dead-lettered ops — surfaced to the host; staged bytes preserved.
+    pub dead_letters: Vec<(OpId, DeadLetterReason)>,
+    /// Scope-exit rotation triggers this replay queued (the source scope roots).
+    pub scope_exit_triggers: Vec<crate::facade::NodeId>,
+}
+
+/// Decoded op-queue entries, in FIFO order.
+pub type DecodedOps = Vec<(OpId, Op)>;
+
+/// Op-queue entries that failed to decode, tagged for dead-lettering.
+pub type UndecodableOps = Vec<(OpId, DeadLetterReason)>;
+
+/// Decode a raw durable op queue, dead-lettering any entry that fails to
+/// decode rather than aborting the whole replay.
+pub fn decode_queue(raw: &[(OpId, Vec<u8>)]) -> (DecodedOps, UndecodableOps) {
+    let mut ops = Vec::new();
+    let mut dead = Vec::new();
+    for (op_id, bytes) in raw {
+        match Op::decode(bytes) {
+            Ok(op) => ops.push((*op_id, op)),
+            Err(_e @ OpDecodeError { .. }) => dead.push((*op_id, DeadLetterReason::Undecodable)),
+        }
+    }
+    (ops, dead)
+}
+
+/// Replay `ops` FIFO onto the gate-passing base. `local` (the pre-rebase
+/// overlay view) supplies node metadata for the edit-resurrects-a-delete case
+/// — the only rule that must re-materialize a node the gate-passing base no
+/// longer carries.
+pub fn replay(gate_passing: &Snapshot, local: &Snapshot, ops: &[(OpId, Op)]) -> ReplayReport {
+    let mut working = gate_passing.clone();
+    let mut report = ReplayReport {
+        rebased: gate_passing.clone(),
+        applied: Vec::new(),
+        dropped: Vec::new(),
+        dead_letters: Vec::new(),
+        scope_exit_triggers: Vec::new(),
+    };
+
+    for (op_id, op) in ops {
+        match rebase_one(&mut working, local, op) {
+            OpResolution::Applied {
+                effective_name,
+                suffixed,
+                scope_exit_trigger,
+            } => {
+                if let Some(scope_root) = scope_exit_trigger {
+                    report.scope_exit_triggers.push(scope_root);
+                }
+                report.applied.push(AppliedOp {
+                    op_id: *op_id,
+                    op: op.clone(),
+                    effective_name,
+                    suffixed,
+                });
+            }
+            OpResolution::Dropped(reason) => report.dropped.push((*op_id, reason)),
+            OpResolution::DeadLetter(reason) => report.dead_letters.push((*op_id, reason)),
+        }
+    }
+
+    report.rebased = working;
+    report
+}
+
+/// Rebase one op onto the mutable working base and apply it. Returns the
+/// resolution and, on `Applied`, mutates `working` to reflect it.
+pub fn rebase_one(working: &mut Snapshot, local: &Snapshot, op: &Op) -> OpResolution {
+    match &op.kind {
+        OpKind::Create {
+            parent, name, kind, ..
+        } => rebase_create(working, op, *parent, name, *kind),
+        OpKind::Delete { target_sequence } => rebase_delete(working, op, *target_sequence),
+        OpKind::Rename { new_name } => rebase_rename(working, op, new_name),
+        OpKind::Relink {
+            from_parent,
+            new_parent,
+            exits_granted_source,
+            ..
+        } => rebase_relink(
+            working,
+            op,
+            *from_parent,
+            *new_parent,
+            *exits_granted_source,
+        ),
+        OpKind::UpdateContent { .. } => rebase_update_content(working, local, op),
+    }
+}
+
+/// Add vs add: always visible; the rebasing loser auto-suffixes.
+fn rebase_create(
+    working: &mut Snapshot,
+    op: &Op,
+    parent: crate::facade::NodeId,
+    name: &str,
+    kind: crate::facade::NodeKind,
+) -> OpResolution {
+    if working.contains(op.target) {
+        // Our own create already landed remotely (confirmed by a prior resolve).
+        return OpResolution::Dropped(DropReason::AlreadySatisfied);
+    }
+    if !working.contains(parent) {
+        return OpResolution::DeadLetter(DeadLetterReason::TargetGone);
+    }
+
+    let (effective, suffixed) = match resolve_name(working, parent, name, op.target) {
+        Some(resolved) => resolved,
+        None => return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted),
+    };
+
+    working.upsert_node(NodeMeta::new(op.target, effective.clone(), kind));
+    let counter = working.max_link_counter(op.target) + 1;
+    working.link(parent, op.target, counter);
+    OpResolution::Applied {
+        effective_name: Some(effective),
+        suffixed,
+        scope_exit_trigger: None,
+    }
+}
+
+/// Conditional delete: drop if the target advanced past the op's snapshot.
+fn rebase_delete(working: &mut Snapshot, op: &Op, target_sequence: u64) -> OpResolution {
+    match working.record_sequence(op.target) {
+        None => OpResolution::Dropped(DropReason::AlreadySatisfied),
+        Some(current) if current > target_sequence => {
+            // The target advanced by a concurrent edit — edit wins, delete drops.
+            OpResolution::Dropped(DropReason::TargetAdvanced)
+        }
+        Some(_) => {
+            working.remove_node(op.target);
+            OpResolution::Applied {
+                effective_name: None,
+                suffixed: false,
+                scope_exit_trigger: None,
+            }
+        }
+    }
+}
+
+/// Rename vs rename: serialized by the parent CAS; the rebasing writer
+/// re-anchors onto the fresh base and publishes at a higher sequence, so it
+/// wins. A rename into a name a concurrent add took auto-suffixes (one
+/// comparator everywhere).
+fn rebase_rename(working: &mut Snapshot, op: &Op, new_name: &str) -> OpResolution {
+    if !working.contains(op.target) {
+        return OpResolution::DeadLetter(DeadLetterReason::TargetGone);
+    }
+    let parent = working.parent_of(op.target);
+    let (effective, suffixed) = match parent {
+        Some(parent) => match resolve_name(working, parent, new_name, op.target) {
+            Some(resolved) => resolved,
+            None => return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted),
+        },
+        // The root has no parent scope to enforce sibling uniqueness against.
+        None => (new_name.to_owned(), false),
+    };
+    if let Some(node) = working.node_mut(op.target) {
+        node.name = effective.clone();
+    }
+    OpResolution::Applied {
+        effective_name: Some(effective),
+        suffixed,
+        scope_exit_trigger: None,
+    }
+}
+
+/// Move: dest-first publish, then a presence-conditional source-remove. A
+/// concurrent move that already relocated the child makes this op the race
+/// loser, which undoes its dest-add (no orphan, no duplicate).
+fn rebase_relink(
+    working: &mut Snapshot,
+    op: &Op,
+    from_parent: crate::facade::NodeId,
+    new_parent: crate::facade::NodeId,
+    exits_granted_source: bool,
+) -> OpResolution {
+    if !working.contains(op.target) {
+        return OpResolution::DeadLetter(DeadLetterReason::TargetGone);
+    }
+    if !working.contains(new_parent) {
+        return OpResolution::DeadLetter(DeadLetterReason::DestinationGone);
+    }
+
+    let scope_exit_trigger = exits_granted_source.then_some(from_parent);
+    match working.parent_of(op.target) {
+        // Already at the destination — our move (or an identical concurrent one)
+        // already landed.
+        Some(current) if current == new_parent => {
+            OpResolution::Dropped(DropReason::AlreadySatisfied)
+        }
+        // Still under the source we moved from: the normal dest-first + remove.
+        Some(current) if current == from_parent => {
+            let counter = working.max_link_counter(op.target) + 1;
+            working.link(new_parent, op.target, counter);
+            working.unlink(from_parent, op.target);
+            OpResolution::Applied {
+                effective_name: None,
+                suffixed: false,
+                scope_exit_trigger,
+            }
+        }
+        // A concurrent move relocated the child elsewhere: we are the race loser.
+        Some(_) => OpResolution::Dropped(DropReason::MoveRaceLost),
+        // No current parent (was at root / unlinked): dest-first still links it.
+        None => {
+            let counter = working.max_link_counter(op.target) + 1;
+            working.link(new_parent, op.target, counter);
+            OpResolution::Applied {
+                effective_name: None,
+                suffixed: false,
+                scope_exit_trigger,
+            }
+        }
+    }
+}
+
+/// Edit: applies onto a present target; onto a concurrently-deleted target the
+/// edit **resurrects** it from the local overlay view (edit wins in both
+/// directions). A target absent from both is a dead-letter.
+fn rebase_update_content(working: &mut Snapshot, local: &Snapshot, op: &Op) -> OpResolution {
+    if working.contains(op.target) {
+        if let Some(node) = working.node_mut(op.target) {
+            node.content_version += 1;
+        }
+        return OpResolution::Applied {
+            effective_name: None,
+            suffixed: false,
+            scope_exit_trigger: None,
+        };
+    }
+    // Resurrect a concurrently-deleted node from local knowledge, re-linking it
+    // under a parent that still exists in gate-passing state.
+    match (local.node(op.target), local.parent_of(op.target)) {
+        (Some(meta), Some(parent)) if working.contains(parent) => {
+            let mut resurrected = meta.clone();
+            resurrected.content_version += 1;
+            working.upsert_node(resurrected);
+            let counter = working.max_link_counter(op.target) + 1;
+            working.link(parent, op.target, counter);
+            OpResolution::Applied {
+                effective_name: None,
+                suffixed: false,
+                scope_exit_trigger: None,
+            }
+        }
+        _ => OpResolution::DeadLetter(DeadLetterReason::TargetGone),
+    }
+}
+
+/// Resolve a create/rename name against a parent's siblings: the entered name
+/// when free, else the lowest `name (n)` (n ≥ 2) that is free. `None` iff a
+/// pathological folder exhausts the probe.
+fn resolve_name(
+    snap: &Snapshot,
+    parent: crate::facade::NodeId,
+    name: &str,
+    exclude: crate::facade::NodeId,
+) -> Option<(String, bool)> {
+    if !snap.name_taken(parent, name, Some(exclude)) {
+        return Some((name.to_owned(), false));
+    }
+    for n in 2..=MAX_SUFFIX_PROBE {
+        let candidate = suffix_name(name, n);
+        if !snap.name_taken(parent, &candidate, Some(exclude)) {
+            return Some((candidate, true));
+        }
+    }
+    None
+}
+
+/// A dual-link observed repair: the losing links to remove for one child.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Repair {
+    /// The dual-linked child.
+    pub child: crate::facade::NodeId,
+    /// The losing links to remove (all but the winner).
+    pub remove: Vec<Link>,
+}
+
+/// Scan for dual-link crash residue: any child linked in more than one parent.
+/// The winner is the highest `link_counter` (ties by lowest parent id, a
+/// total cross-platform-stable order); every other link is a loser to remove.
+/// Any write-capable client that sees this publishes the fix (#33 D5).
+pub fn observed_repair(snap: &Snapshot) -> Vec<Repair> {
+    let mut repairs = Vec::new();
+    let mut children: Vec<crate::facade::NodeId> = snap.links().iter().map(|l| l.child).collect();
+    children.sort_unstable();
+    children.dedup();
+
+    for child in children {
+        let links = snap.links_to(child);
+        if links.len() < 2 {
+            continue;
+        }
+        let winner = snap
+            .winning_link(child)
+            .expect("a child with links has a winner");
+        let remove: Vec<Link> = links
+            .into_iter()
+            .filter(|l| l.parent != winner.parent)
+            .collect();
+        if !remove.is_empty() {
+            repairs.push(Repair { child, remove });
+        }
+    }
+    repairs
+}
+
+/// Apply observed repairs to a snapshot (removing losing links).
+pub fn apply_repairs(snap: &mut Snapshot, repairs: &[Repair]) {
+    for repair in repairs {
+        for link in &repair.remove {
+            snap.unlink(link.parent, repair.child);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::facade::{NodeId, NodeKind};
+
+    fn id(b: u8) -> NodeId {
+        NodeId([b; 16])
+    }
+
+    fn tree() -> Snapshot {
+        Snapshot::new(id(0))
+    }
+
+    fn with_node(snap: &mut Snapshot, parent: NodeId, node: NodeId, name: &str, kind: NodeKind) {
+        snap.upsert_node(NodeMeta::new(node, name, kind));
+        snap.link(parent, node, 1);
+    }
+
+    #[test]
+    fn conditional_delete_drops_when_the_target_advanced() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "f", NodeKind::File);
+        base.node_mut(id(1)).unwrap().record_sequence = 5; // concurrent edit advanced it
+
+        // The delete snapshotted the target at sequence 3.
+        let local = base.clone();
+        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, 3));
+        assert_eq!(res, OpResolution::Dropped(DropReason::TargetAdvanced));
+        assert!(base.contains(id(1)), "edit wins — the node survives");
+    }
+
+    #[test]
+    fn conditional_delete_applies_when_the_target_did_not_advance() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "f", NodeKind::File);
+        base.node_mut(id(1)).unwrap().record_sequence = 3;
+
+        let local = base.clone();
+        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, 3));
+        assert!(matches!(res, OpResolution::Applied { .. }));
+        assert!(!base.contains(id(1)));
+    }
+
+    #[test]
+    fn edit_resurrects_a_concurrently_deleted_node() {
+        let gate_passing = tree(); // the node was deleted remotely — absent here
+        let mut local = tree(); // our overlay still holds it
+        with_node(&mut local, id(0), id(1), "f", NodeKind::File);
+
+        let mut working = gate_passing.clone();
+        let res = rebase_one(
+            &mut working,
+            &local,
+            &Op::update_content(id(1), b"k".to_vec(), 1),
+        );
+        assert!(matches!(res, OpResolution::Applied { .. }));
+        assert!(working.contains(id(1)), "the edit resurrected the node");
+        assert_eq!(working.parent_of(id(1)), Some(id(0)));
+    }
+
+    #[test]
+    fn add_add_collision_auto_suffixes_the_loser() {
+        let mut base = tree();
+        // A concurrent add already took "a.txt" under the root.
+        with_node(&mut base, id(0), id(1), "a.txt", NodeKind::File);
+
+        let local = base.clone();
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::create(id(2), id(0), "a.txt", NodeKind::File, 1, None),
+        );
+        assert_eq!(
+            res,
+            OpResolution::Applied {
+                effective_name: Some("a (2).txt".to_owned()),
+                suffixed: true,
+                scope_exit_trigger: None,
+            }
+        );
+        assert_eq!(base.node(id(2)).unwrap().name, "a (2).txt");
+        // Both are visible.
+        assert_eq!(base.children(id(0)).len(), 2);
+    }
+
+    #[test]
+    fn rename_reanchors_onto_the_fresh_base_and_wins() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "start.txt", NodeKind::File);
+        // A concurrent rename already moved it to "other.txt".
+        base.node_mut(id(1)).unwrap().name = "other.txt".into();
+
+        let local = base.clone();
+        let res = rebase_one(&mut base, &local, &Op::rename(id(1), "final.txt", 1));
+        assert!(matches!(
+            res,
+            OpResolution::Applied {
+                suffixed: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            base.node(id(1)).unwrap().name,
+            "final.txt",
+            "the rebasing writer wins"
+        );
+    }
+
+    #[test]
+    fn move_dest_first_then_presence_conditional_source_remove() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "dir", NodeKind::Folder);
+        with_node(&mut base, id(0), id(2), "f", NodeKind::File);
+
+        let local = base.clone();
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::relink(id(2), id(0), id(1), 1, false, false),
+        );
+        assert!(matches!(res, OpResolution::Applied { .. }));
+        assert_eq!(base.parent_of(id(2)), Some(id(1)), "dest-linked");
+        assert_eq!(base.children(id(0)).len(), 1, "source-removed, no orphan");
+    }
+
+    #[test]
+    fn move_race_loser_undoes_its_dest_add() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "dirA", NodeKind::Folder);
+        with_node(&mut base, id(0), id(2), "dirB", NodeKind::Folder);
+        with_node(&mut base, id(0), id(3), "f", NodeKind::File);
+        // A concurrent move already relocated the child into dirB.
+        base.unlink(id(0), id(3));
+        base.link(id(2), id(3), 2);
+
+        // Our queued move was from root → dirA; the child is no longer at root.
+        let local = base.clone();
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::relink(id(3), id(0), id(1), 1, false, false),
+        );
+        assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
+        assert_eq!(
+            base.parent_of(id(3)),
+            Some(id(2)),
+            "the winning move stands"
+        );
+        assert!(base.children(id(1)).is_empty(), "no dest-add residue");
+    }
+
+    #[test]
+    fn cross_scope_move_out_of_a_granted_scope_queues_a_trigger_only() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(5), "granted", NodeKind::Folder);
+        with_node(&mut base, id(5), id(6), "dest", NodeKind::Folder);
+        with_node(&mut base, id(5), id(7), "moved", NodeKind::File);
+
+        let local = base.clone();
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::relink(id(7), id(5), id(6), 1, true, true),
+        );
+        assert_eq!(
+            res,
+            OpResolution::Applied {
+                effective_name: None,
+                suffixed: false,
+                scope_exit_trigger: Some(id(5)),
+            },
+            "the trigger is queued; no rotation happens in this slice"
+        );
+    }
+
+    #[test]
+    fn observed_repair_removes_the_lower_counter_link() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "p1", NodeKind::Folder);
+        with_node(&mut base, id(0), id(2), "p2", NodeKind::Folder);
+        base.upsert_node(NodeMeta::new(id(3), "child", NodeKind::File));
+        base.link(id(1), id(3), 1);
+        base.link(id(2), id(3), 2); // the winner
+
+        let repairs = observed_repair(&base);
+        assert_eq!(repairs.len(), 1);
+        assert_eq!(repairs[0].child, id(3));
+        apply_repairs(&mut base, &repairs);
+        assert_eq!(base.links_to(id(3)).len(), 1);
+        assert_eq!(base.parent_of(id(3)), Some(id(2)), "higher counter kept");
+    }
+
+    #[test]
+    fn revoked_while_offline_op_dead_letters() {
+        // Gate-passing state no longer carries the granted parent (access revoked).
+        let gate_passing = tree();
+        let res = rebase_one(
+            &mut gate_passing.clone(),
+            &gate_passing,
+            &Op::create(
+                id(9),
+                id(8),
+                "x.txt",
+                NodeKind::File,
+                1,
+                Some(b"bytes".to_vec()),
+            ),
+        );
+        assert_eq!(res, OpResolution::DeadLetter(DeadLetterReason::TargetGone));
+    }
+
+    #[test]
+    fn replay_threads_the_base_and_buckets_every_outcome() {
+        let mut gate_passing = tree();
+        with_node(&mut gate_passing, id(0), id(1), "keep", NodeKind::Folder);
+
+        let ops = vec![
+            (
+                OpId(1),
+                Op::create(id(2), id(1), "a.txt", NodeKind::File, 1, None),
+            ),
+            (
+                OpId(2),
+                Op::create(id(3), id(1), "a.txt", NodeKind::File, 1, None),
+            ), // collides → suffix
+            (
+                OpId(3),
+                Op::create(id(4), id(99), "orphan", NodeKind::File, 1, None),
+            ), // dead-letter
+        ];
+        let report = replay(&gate_passing, &gate_passing, &ops);
+
+        assert_eq!(report.applied.len(), 2);
+        assert!(report.applied[1].suffixed);
+        assert_eq!(
+            report.dead_letters,
+            vec![(OpId(3), DeadLetterReason::TargetGone)]
+        );
+        assert_eq!(report.rebased.children(id(1)).len(), 2);
+    }
+
+    #[test]
+    fn decode_queue_dead_letters_corrupt_entries() {
+        let good = Op::rename(id(1), "n", 1).encode();
+        let raw = vec![(OpId(1), good), (OpId(2), b"garbage".to_vec())];
+        let (ops, dead) = decode_queue(&raw);
+        assert_eq!(ops.len(), 1);
+        assert_eq!(dead, vec![(OpId(2), DeadLetterReason::Undecodable)]);
+    }
+}
