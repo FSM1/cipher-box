@@ -25,6 +25,7 @@
 #![allow(async_fn_in_trait)]
 
 pub mod api;
+pub mod content;
 pub mod entropy;
 pub mod facade;
 pub mod gate;
@@ -37,6 +38,13 @@ pub mod testkit;
 pub use api::{
     ApiClient, ApiError, ChallengeSigner, IdentityChallengeSigner, LoginOutcome, MailboxItem,
     NameRegistration, Quota, SiweNonce, TestLoginOutcome, UploadResult,
+};
+pub use content::{
+    ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
+    DAG_ROOT_CODEC, Gateway, GatewaySource, PinMode, ProviderError, PrunePlan, QuotaExceeded,
+    ReadError, RootManifest, SealedChunk, SealedContent, assemble, decode_root, frame_and_seal,
+    leaf_range_for_byte_range, plan_prune, pre_flight_quota_check, read_block, seal_content,
+    test_connection,
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{
