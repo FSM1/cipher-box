@@ -83,13 +83,18 @@ pub fn compute_cid(codec: u8, bytes: &[u8]) -> Vec<u8> {
 /// codec is read from `claimed_cid` itself (#630 owns the DAG-root codec,
 /// engine.md:497), so a raw leaf and a DAG-root `contentCid` both verify while
 /// the version, multihash code, digest length, and digest are recomputed and
-/// compared byte-for-byte. A malformed/truncated/foreign claimed CID (including a
-/// multi-byte-varint-codec CID, whose extra prefix byte trips the fixed
-/// `len == CONTENT_CID_LEN` check), a wrong multihash code, or a digest mismatch is
-/// [`TrustViolation::ContentCidMismatch`], never mere staleness. The comparison is over a public content address (no
-/// secret), so ordinary equality is used.
+/// compared byte-for-byte. A malformed/truncated/foreign claimed CID, a codec byte
+/// outside the frozen single-byte set, a wrong multihash code, or a digest mismatch
+/// is [`TrustViolation::ContentCidMismatch`], never mere staleness. The comparison
+/// is over a public content address (no secret), so ordinary equality is used.
 pub fn verify_cid(claimed_cid: &[u8], bytes: &[u8]) -> Result<(), CodecError> {
+    // Untrusted claimed CID: reject a multi-byte-varint codec byte (>= 0x80)
+    // before mirroring it into `compute_cid`. A 36-byte CID with a high codec byte
+    // passes the length check, so without this guard it would trip the internal
+    // `debug_assert!` (debug DoS) and — with asserts stripped — fail open by
+    // matching the recomputed malformed CID byte-for-byte. Fail-closed in both.
     if claimed_cid.len() == CONTENT_CID_LEN
+        && claimed_cid[CID_CODEC_INDEX] < 0x80
         && compute_cid(claimed_cid[CID_CODEC_INDEX], bytes) == claimed_cid
     {
         Ok(())
@@ -211,6 +216,24 @@ mod tests {
         );
         assert_eq!(
             verify_cid(&oversized, bytes).unwrap_err().check(),
+            "content-cid-mismatch"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_a_high_codec_byte_exact_len_cid_fail_closed() {
+        // Release-mode fail-open guard: a full-length (CONTENT_CID_LEN) CID whose
+        // codec byte is >= 0x80 with an otherwise valid framing and a *matching*
+        // BLAKE3 digest. Without the codec guard, release builds (asserts stripped)
+        // would mirror the byte and accept this malformed CID byte-for-byte, and
+        // debug builds would panic on the internal assert. verify_cid must return
+        // Err — never panic — in both, so this test runs on every leg incl. wasm.
+        let bytes = b"content";
+        let mut cid = vec![CID_VERSION, 0x80, CONTENT_CID_MULTIHASH, DIGEST_LEN as u8];
+        cid.extend_from_slice(&hash(bytes));
+        assert_eq!(cid.len(), CONTENT_CID_LEN, "exact-length malformed CID");
+        assert_eq!(
+            verify_cid(&cid, bytes).unwrap_err().check(),
             "content-cid-mismatch"
         );
     }
