@@ -1,11 +1,11 @@
 import { Injectable, ServiceUnavailableException, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
-import { createHash } from 'node:crypto';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 import {
-  acquireAdvisoryLock,
+  acquireAdvisoryLocks,
+  advisoryLockKey,
   isLockNotAvailable,
   resolveAdvisoryLockTimeoutMs,
   setAdvisoryLockTimeout,
@@ -13,14 +13,7 @@ import {
 import { NameInventory } from '../entities/name-inventory.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
 import { PinStore } from '../pin-store';
-
-/** Default per-account quota when neither an override nor `QUOTA_DEFAULT_BYTES` is set: 10 GiB. */
-const DEFAULT_QUOTA_BYTES = 10 * 1024 * 1024 * 1024;
-
-/** Stable 64-bit advisory-lock key for a token: first 8 bytes of its sha256. */
-function lockKey(token: string): bigint {
-  return createHash('sha256').update(token).digest().readBigInt64BE(0);
-}
+import { byteConfigBigInt, DEFAULT_QUOTA_BYTES, resolveLimitBytes, sumPinnedBytes } from '../quota';
 
 /**
  * Serialize every refcount/inventory mutation for each token by taking a
@@ -37,10 +30,7 @@ async function lockTokens(
   timeoutMs: number
 ): Promise<void> {
   await setAdvisoryLockTimeout(manager, timeoutMs);
-  const keys = [...new Set(tokens.map(lockKey))].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  for (const key of keys) {
-    await acquireAdvisoryLock(manager, key);
-  }
+  await acquireAdvisoryLocks(manager, tokens.map(advisoryLockKey));
 }
 
 export interface RegisterEntry {
@@ -66,16 +56,6 @@ export interface QuotaResult {
 }
 
 /**
- * Read a non-negative integer byte bound from config, falling back to the
- * default for an unset OR garbage value (a misconfigured limit must fail
- * closed to the safe default, never to NaN).
- */
-function byteConfig(raw: unknown, fallback: number): number {
-  const value = Number(raw);
-  return Number.isInteger(value) && value >= 0 ? value : fallback;
-}
-
-/**
  * The pin/name registry (blueprint/api.md, Pin/name registry) — the one
  * surface every publish flow traverses. It is deliberately dumb bookkeeping:
  * per-account rows, idempotent upserts, union liveness, and a per-account
@@ -87,7 +67,7 @@ function byteConfig(raw: unknown, fallback: number): number {
  */
 @Injectable()
 export class RegistryService {
-  private readonly defaultLimitBytes: number;
+  private readonly defaultLimitBytes: bigint;
   private readonly lockTimeoutMs: number;
 
   constructor(
@@ -100,7 +80,7 @@ export class RegistryService {
     private readonly pinStore: PinStore,
     configService: ConfigService
   ) {
-    this.defaultLimitBytes = byteConfig(
+    this.defaultLimitBytes = byteConfigBigInt(
       configService.get('QUOTA_DEFAULT_BYTES'),
       DEFAULT_QUOTA_BYTES
     );
@@ -287,17 +267,14 @@ export class RegistryService {
       throw new UnauthorizedException('Unknown account');
     }
 
-    // Aggregate server-side; size is a bigint column typed as string.
-    const used = await this.pinRepository.sum('size' as never, { accountId });
-
-    const limitBytes =
-      user.quotaLimitOverride != null
-        ? Number(BigInt(user.quotaLimitOverride))
-        : this.defaultLimitBytes;
+    // Compute in BigInt (exact above 2^53) and narrow to the wire number at the
+    // edge; the DTO is a JSON number, but the gate math never rounds (#677).
+    const used = await sumPinnedBytes(this.pinRepository, accountId);
+    const limit = resolveLimitBytes(user.quotaLimitOverride, this.defaultLimitBytes);
 
     return {
-      usedBytes: used ?? 0,
-      limitBytes,
+      usedBytes: Number(used),
+      limitBytes: Number(limit),
       advisory: user.byo,
     };
   }

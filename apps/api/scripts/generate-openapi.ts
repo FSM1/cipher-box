@@ -20,6 +20,8 @@ import { AuthController } from '../src/auth/auth.controller';
 import { AuthService } from '../src/auth/services/auth.service';
 import { TestAuthService } from '../src/auth/services/test-auth.service';
 import { TokenService } from '../src/auth/services/token.service';
+import { ContentController } from '../src/content/content.controller';
+import { ContentService } from '../src/content/content.service';
 import { HealthController } from '../src/health/health.controller';
 import { MailboxController } from '../src/mailbox/mailbox.controller';
 import { MailboxService } from '../src/mailbox/services/mailbox.service';
@@ -37,6 +39,7 @@ import { RegistryService } from '../src/registry/services/registry.service';
     MailboxController,
     RegistryController,
     AccountController,
+    ContentController,
   ],
   providers: [
     { provide: AuthService, useValue: {} },
@@ -45,6 +48,7 @@ import { RegistryService } from '../src/registry/services/registry.service';
     { provide: MailboxService, useValue: {} },
     { provide: MetricsService, useValue: {} },
     { provide: RegistryService, useValue: {} },
+    { provide: ContentService, useValue: {} },
     { provide: JwtService, useValue: {} },
     { provide: ConfigService, useValue: new ConfigService() },
   ],

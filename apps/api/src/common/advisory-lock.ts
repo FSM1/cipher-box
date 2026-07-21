@@ -1,6 +1,7 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { EntityManager, QueryFailedError } from 'typeorm';
+import { createHash } from 'node:crypto';
+import { DataSource, EntityManager, QueryFailedError } from 'typeorm';
 
 /**
  * Default bound on how long an advisory-lock acquire may WAIT while holding its
@@ -78,4 +79,103 @@ export function isLockNotAvailable(error: unknown): boolean {
     (error.driverError as { code?: string } | undefined)?.code ??
     (error as unknown as { code?: string }).code;
   return code === LOCK_NOT_AVAILABLE;
+}
+
+/**
+ * Stable 64-bit advisory-lock key for an opaque token — a content CID, an IPNS
+ * name, or a namespaced account key: the first 8 bytes of its sha256 read
+ * big-endian as a signed 64-bit int for `pg_advisory_xact_lock($1::bigint)`.
+ * The registry and the upload path MUST share this function so the same CID
+ * locked from either serializes against the other.
+ */
+export function advisoryLockKey(token: string): bigint {
+  return createHash('sha256').update(token).digest().readBigInt64BE(0);
+}
+
+/**
+ * Acquire a batch of transaction-scoped advisory locks in one deadlock-free
+ * order: keys are de-duplicated and sorted, so any two overlapping batches take
+ * their shared keys in the same sequence and cannot form a cycle. Set the
+ * `lock_timeout` bound (setAdvisoryLockTimeout) once before calling.
+ */
+export async function acquireAdvisoryLocks(manager: EntityManager, keys: bigint[]): Promise<void> {
+  const sorted = [...new Set(keys)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const key of sorted) {
+    await acquireAdvisoryLock(manager, key);
+  }
+}
+
+/**
+ * Run `work` in a transaction, mapping any `lock_timeout` abort (55P03) — the
+ * advisory acquire OR any row lock taken later under the same bound — to the
+ * retryable 503, so a contended caller degrades gracefully instead of escaping
+ * as a 500. A 503 an inner helper already raised passes through unchanged.
+ */
+export async function runLockGuardedTransaction<T>(
+  dataSource: DataSource,
+  work: (manager: EntityManager) => Promise<T>
+): Promise<T> {
+  try {
+    return await dataSource.transaction(work);
+  } catch (error) {
+    if (isLockNotAvailable(error)) {
+      throw new ServiceUnavailableException('Contended resource; retry shortly');
+    }
+    throw error;
+  }
+}
+
+/**
+ * Run `work` while holding a SESSION-level advisory lock on `key`, on a
+ * dedicated connection held for the whole span and released in a `finally`.
+ * Unlike the xact lock (auto-released at COMMIT), a session lock spans several
+ * transactions PLUS an external side effect — the caller uses it to serialize a
+ * commit → external effect → compensation window that a xact lock would leave
+ * unguarded once it releases at commit. A `lock_timeout` abort maps to the
+ * retryable 503; the bound is set session-local on the dedicated connection and
+ * RESET before release so it never leaks to the next pool borrower.
+ */
+export async function withSessionAdvisoryLock<T>(
+  dataSource: DataSource,
+  key: bigint,
+  timeoutMs: number,
+  work: () => Promise<T>
+): Promise<T> {
+  const runner = dataSource.createQueryRunner();
+  await runner.connect();
+  const bounded = timeoutMs > 0;
+  try {
+    if (bounded) {
+      await runner.query('SELECT set_config($1, $2, false)', [
+        'lock_timeout',
+        Math.trunc(timeoutMs).toString(),
+      ]);
+    }
+    let acquired = false;
+    try {
+      await runner.query('SELECT pg_advisory_lock($1::bigint)', [key.toString()]);
+      acquired = true;
+      return await work();
+    } catch (error) {
+      if (isLockNotAvailable(error)) {
+        throw new ServiceUnavailableException('Contended resource; retry shortly');
+      }
+      throw error;
+    } finally {
+      // Unlock failure implies a dead connection, whose session lock Postgres
+      // has already dropped — the pool discards it on release.
+      if (acquired) {
+        await runner.query('SELECT pg_advisory_unlock($1::bigint)', [key.toString()]).catch(() => {
+          /* noop */
+        });
+      }
+    }
+  } finally {
+    if (bounded) {
+      await runner.query('RESET lock_timeout').catch(() => {
+        /* noop */
+      });
+    }
+    await runner.release();
+  }
 }

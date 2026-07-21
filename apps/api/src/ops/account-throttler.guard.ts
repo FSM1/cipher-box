@@ -41,17 +41,14 @@ function jwtSecret(): string {
 }
 
 /**
- * Return the `sub` claim ONLY when the bearer is a well-formed HS256 JWT that
- * carries our own signature; otherwise `undefined` (so the caller keys by IP).
- * The header's declared `alg` is never trusted — the signature is always
- * recomputed as HMAC-SHA256, so `alg: none`/algorithm-confusion cannot forge a
- * subject. Expiry is intentionally not enforced: a validly-signed-but-expired
- * token still carries a genuine (non-forgeable) `sub`, which is a correct
- * rate-limit key; it will still 401 at the route's auth guard.
+ * The signature-verified claims of a bearer token, or `undefined` when the
+ * header is absent/malformed or carries a signature we did not produce. The
+ * declared `alg` is never trusted — the signature is always recomputed as
+ * HMAC-SHA256, so `alg: none`/algorithm-confusion cannot forge claims.
  */
-export function verifiedSubjectFromBearer(
+function verifiedBearerClaims(
   headers: Record<string, unknown> | undefined
-): string | undefined {
+): { sub?: unknown; exp?: unknown } | undefined {
   const authorization = headers?.authorization;
   if (typeof authorization !== 'string' || !authorization.startsWith('Bearer ')) {
     return undefined;
@@ -72,11 +69,47 @@ export function verifiedSubjectFromBearer(
     return undefined;
   }
   try {
-    const claims = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
+    return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as {
       sub?: unknown;
+      exp?: unknown;
     };
-    return typeof claims.sub === 'string' ? claims.sub : undefined;
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Return the `sub` claim ONLY when the bearer carries our own HS256 signature;
+ * otherwise `undefined` (so the caller keys by IP). Expiry is intentionally not
+ * enforced: a validly-signed-but-expired token still carries a genuine (non-
+ * forgeable) `sub`, which is a correct rate-limit key; it will still 401 at the
+ * route's auth guard.
+ */
+export function verifiedSubjectFromBearer(
+  headers: Record<string, unknown> | undefined
+): string | undefined {
+  const claims = verifiedBearerClaims(headers);
+  return typeof claims?.sub === 'string' ? claims.sub : undefined;
+}
+
+/**
+ * Like `verifiedSubjectFromBearer`, but ALSO fails closed on an expired token:
+ * the `sub` only when the bearer is validly signed AND unexpired. The pre-body
+ * upload gate uses this so a validly-signed-but-EXPIRED token cannot force
+ * `maxBytes` of heap buffering before the route's `JwtAuthGuard` 401s it — same
+ * `exp` semantics as that guard (reject at `now >= exp`), same secret. A token
+ * with no `exp` never expires, matching the guard.
+ */
+export function verifiedUnexpiredSubjectFromBearer(
+  headers: Record<string, unknown> | undefined,
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): string | undefined {
+  const claims = verifiedBearerClaims(headers);
+  if (typeof claims?.sub !== 'string') {
+    return undefined;
+  }
+  if (typeof claims.exp === 'number' && nowSeconds >= claims.exp) {
+    return undefined;
+  }
+  return claims.sub;
 }

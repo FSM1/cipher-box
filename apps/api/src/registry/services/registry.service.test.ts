@@ -61,18 +61,31 @@ class InAwareRepository<T extends { id: string }> extends FakeRepository<T> {
     return super.save(entities);
   }
 
-  async sum(column: string, where?: Record<string, unknown>): Promise<number | null> {
-    const rows = where
-      ? this.rows.filter((row) => inMatch(row as Record<string, unknown>, where))
-      : this.rows;
-    if (rows.length === 0) {
-      return null;
-    }
-    return rows.reduce(
-      (total, row) => total + Number((row as Record<string, unknown>)[column] ?? 0),
-      0
-    );
+  /** Emulates the `COALESCE(SUM(size), 0)` aggregate `sumPinnedBytes` runs, keyed by accountId. */
+  createQueryBuilder(_alias?: string): SumQueryBuilder {
+    const allRows = this.rows;
+    let accountId: string | undefined;
+    const qb: SumQueryBuilder = {
+      select: () => qb,
+      where: (_clause, params) => {
+        accountId = params?.accountId as string | undefined;
+        return qb;
+      },
+      getRawOne: async () => {
+        const used = allRows
+          .filter((row) => (row as { accountId?: string }).accountId === accountId)
+          .reduce((total, row) => total + BigInt((row as { size?: string }).size ?? '0'), 0n);
+        return { used: used.toString() };
+      },
+    };
+    return qb;
   }
+}
+
+interface SumQueryBuilder {
+  select: (selection: string, alias: string) => SumQueryBuilder;
+  where: (clause: string, params?: Record<string, unknown>) => SumQueryBuilder;
+  getRawOne: () => Promise<{ used: string }>;
 }
 
 /** A DataSource whose transaction runs inline against the in-memory repos. */

@@ -389,10 +389,13 @@ async fn union_liveness_is_per_account_and_permissionless() {
         .expect("bob retires the last row");
 }
 
-/// Quota (blueprint/api.md): hosted accounts are authoritative (`advisory:
-/// false`) with a positive limit; a BYO account's rows are advisory
-/// (`advisory: true`, quota always allows). The flag flips live with the BYO
-/// toggle.
+/// Quota + hosted ingress (blueprint/api.md; #629): hosted accounts are
+/// authoritative (`advisory: false`) with a positive limit and gate uploads; a
+/// BYO account's rows are advisory (`advisory: true`, quota always allows). The
+/// upload path pins bytes to the real CI Kubo and is exercised here rather than
+/// in dedicated tests so the shared per-IP login throttle is not tripped by an
+/// extra account. The contract-suite job sets a tiny 1 KiB QUOTA_DEFAULT_BYTES,
+/// so a few hundred bytes straddle the over-quota limit deterministically.
 #[tokio::test]
 async fn quota_is_hosted_authoritative_and_byo_advisory() {
     let base = require_stack!("quota_is_hosted_authoritative_and_byo_advisory");
@@ -409,7 +412,31 @@ async fn quota_is_hosted_authoritative_and_byo_advisory() {
         "a hosted account has a positive limit"
     );
 
-    // Enabling BYO makes the account's rows advisory: quota always allows.
+    // A sub-limit hosted upload is pinned to Kubo and counts against the quota.
+    let pinned = client
+        .upload(&vec![7u8; 512])
+        .await
+        .expect("hosted upload under quota is pinned");
+    assert!(!pinned.cid.is_empty(), "the pinned CID is returned");
+    assert_eq!(pinned.size, 512, "size is the uploaded byte count");
+    assert_eq!(
+        client.quota().await.expect("quota after upload").used_bytes,
+        512,
+        "the upload is counted against quota"
+    );
+
+    // An upload crossing the 1 KiB limit is refused for a hosted account.
+    let error = client
+        .upload(&vec![9u8; 600])
+        .await
+        .expect_err("an over-quota upload is refused for a hosted account");
+    assert!(
+        matches!(error, ApiError::Status { status: 413, .. }),
+        "over-quota is a 413, got {error:?}"
+    );
+
+    // Enabling BYO makes the account's rows advisory: quota always allows, so an
+    // upload past the hosted limit is accepted.
     client.set_byo(true).await.expect("enable BYO");
     let byo = client.quota().await.expect("byo quota");
     assert!(byo.advisory, "a BYO account's quota is advisory");
@@ -417,6 +444,11 @@ async fn quota_is_hosted_authoritative_and_byo_advisory() {
         byo.limit_bytes, hosted.limit_bytes,
         "the limit is unchanged"
     );
+    let byo_upload = client
+        .upload(&vec![3u8; 4096])
+        .await
+        .expect("a BYO upload is never quota-gated");
+    assert_eq!(byo_upload.size, 4096, "size is the uploaded byte count");
 
     // Toggling BYO back restores the authoritative posture.
     client.set_byo(false).await.expect("disable BYO");
