@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "16759536a07f",
+  "strategy": "manual-commit",
+  "branch": "docs/agents-encode-decode-fail-closed-symmetry",
+  "checkpoints_count": 20,
+  "files_touched": [
+    "AGENTS.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/16/759536a07f/0/metadata.json",
+      "transcript": "/16/759536a07f/0/full.jsonl",
+      "compact_transcript": "/16/759536a07f/0/transcript.jsonl",
+      "content_hash": "/16/759536a07f/0/content_hash.txt",
+      "prompt": "/16/759536a07f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 186,
+    "cache_creation_tokens": 394528,
+    "cache_read_tokens": 12944409,
+    "output_tokens": 109978,
+    "api_call_count": 95
+  }
+}
