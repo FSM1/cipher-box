@@ -89,6 +89,14 @@ pub enum TrustViolation {
     /// scope's child listing is the transplant closure the AAD deliberately
     /// leaves the name out for — rejected here instead of by the tag.
     DuplicateIpnsName,
+    /// Two rows of a grant ledger or grant-set commitment carried the same
+    /// blinded `tag`. The exact analog of [`Self::DuplicateId`] (#39 D7): a
+    /// recipient's tag locates its grant blob and its committed
+    /// `(permission, pseudonymPk)`, so a duplicate is a confused-deputy over
+    /// read-vs-write authority (a second row injecting the victim's tag with a
+    /// different permission/enc key makes the lookup ambiguous). Fail-closed at
+    /// decode, never first-match.
+    DuplicateGrantTag,
     /// An IPNS record's `signatureV2` did not verify over
     /// `"ipns-signature:" || data` under the Ed25519 key **extracted from the
     /// name itself** (#24). *Trust*: the record is structurally a well-formed
@@ -144,6 +152,7 @@ impl TrustViolation {
         "content-cid-mismatch",
         "duplicate-id",
         "duplicate-ipns-name",
+        "duplicate-grant-tag",
         "ipns-signature-invalid",
         "ipns-value-mismatch",
         "identity-signature-invalid",
@@ -167,6 +176,7 @@ impl TrustViolation {
             Self::ContentCidMismatch => "content-cid-mismatch",
             Self::DuplicateId => "duplicate-id",
             Self::DuplicateIpnsName => "duplicate-ipns-name",
+            Self::DuplicateGrantTag => "duplicate-grant-tag",
             Self::IpnsSignatureInvalid => "ipns-signature-invalid",
             Self::IpnsValueMismatch => "ipns-value-mismatch",
             Self::IdentitySignatureInvalid => "identity-signature-invalid",
@@ -202,6 +212,7 @@ impl fmt::Display for TrustViolation {
             | Self::ContentCidMismatch
             | Self::DuplicateId
             | Self::DuplicateIpnsName
+            | Self::DuplicateGrantTag
             | Self::IpnsSignatureInvalid
             | Self::IpnsValueMismatch
             | Self::IdentitySignatureInvalid

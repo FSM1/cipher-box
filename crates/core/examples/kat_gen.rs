@@ -4198,6 +4198,21 @@ fn build_write_body_reject() -> Vec<RejectVector> {
             "unexpected-type",
             "malformed",
         ),
+        (
+            // Confused-deputy: one blinded tag committed twice, `read` then
+            // `write`, with a different recipientEncPk — the shared-write holder
+            // injecting a second ledger row for a victim's tag.
+            "ledger-duplicate-tag",
+            body(
+                vec![
+                    ledger_entry_map(vec![0x02; 33], vec![0x11; 32], "read", vec![0x21; 32]),
+                    ledger_entry_map(vec![0x03; 33], vec![0x99; 32], "write", vec![0x21; 32]),
+                ],
+                Value::Bytes(vec![]),
+            ),
+            "duplicate-grant-tag",
+            "trust",
+        ),
     ];
 
     finish_hex_reject_vectors("write-body", cases, decode_write_body)
@@ -4867,6 +4882,34 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
             class: "malformed".to_string(),
         });
     }
+
+    // A trust decode-reject: one blinded tag committed twice, `read` then
+    // `write`, with a different pseudonym — the confused-deputy shape. It rejects
+    // at decode (no signature exercised), so its signature stays empty.
+    let dup_tag_bytes = commitment_of(
+        vec![
+            grant_set_entry_map(vec![0x01; 32], "read", vec![0x02; 32]),
+            grant_set_entry_map(vec![0x01; 32], "write", vec![0x09; 32]),
+        ],
+        false,
+    );
+    let err = decode_grant_set_commitment(&dup_tag_bytes)
+        .expect_err("duplicate grant-set tag must reject");
+    assert_eq!(
+        err.check(),
+        "duplicate-grant-tag",
+        "grant-set dup-tag reject"
+    );
+    assert_eq!(err.class(), "trust", "grant-set dup-tag class");
+    assert!(names.insert("entries-duplicate-tag"));
+    out.push(GrantSetRejectVector {
+        name: "entries-duplicate-tag".to_string(),
+        owner_identity_pk: String::new(),
+        commitment: hexstr(&dup_tag_bytes),
+        signature: String::new(),
+        check: "duplicate-grant-tag".to_string(),
+        class: "trust".to_string(),
+    });
 
     // A verify reject: a well-formed low-S signature over a *different*
     // commitment never verifies against this one (commitment-invalid).

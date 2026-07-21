@@ -31,6 +31,7 @@
 //! owner — the seal path — before it drops.
 
 use core::fmt;
+use std::collections::BTreeSet;
 
 use zeroize::Zeroize;
 
@@ -699,6 +700,7 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
     for item in req(map, "entries")?.as_array()? {
         entries.push(GrantSetEntry::from_value(item)?);
     }
+    assert_entry_tags_unique(&entries)?;
     Ok(GrantSetCommitment {
         ipns_name,
         owner_pseudonym_pk,
@@ -707,9 +709,30 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
     })
 }
 
+/// Fail-closed uniqueness over a grant-set commitment's blinded tags — the same
+/// analog as the grant-ledger check (#39 D7): a recipient's tag names at most one
+/// committed `(permission, pseudonymPk)`, so a duplicate is a confused-deputy.
+fn assert_entry_tags_unique(entries: &[GrantSetEntry]) -> Result<(), CodecError> {
+    let mut tags = BTreeSet::new();
+    for e in entries {
+        if !tags.insert(e.tag) {
+            return Err(TrustViolation::DuplicateGrantTag.into());
+        }
+    }
+    Ok(())
+}
+
 /// Encode a grant-set commitment to its canonical det-CBOR form — the exact
 /// preimage the owner ECDSA-signs and a recipient verifies.
+///
+/// Encoding does not re-check tag uniqueness; a `debug_assert` catches a
+/// caller-built commitment with duplicate tags early, while its bytes still
+/// reject on decode.
 pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Vec<u8> {
+    debug_assert!(
+        assert_entry_tags_unique(&c.entries).is_ok(),
+        "encoding a grant-set commitment with duplicate tags; its bytes would reject on decode"
+    );
     let mut m = Map::new();
     m.insert(
         "entries",
@@ -904,6 +927,30 @@ mod tests {
                 .unwrap_err()
                 .check(),
             "commitment-invalid"
+        );
+    }
+
+    #[test]
+    fn duplicate_grant_set_tag_rejects() {
+        // The confused-deputy shape: one tag committed twice with a different
+        // permission and pseudonym. Hand-built so it bypasses the encode-side
+        // debug_assert, the way a hostile peer's bytes arrive.
+        let mut a = Map::new();
+        a.insert("permission", Value::Text("read".into()));
+        a.insert("pseudonymPk", Value::Bytes(vec![0x02; 32]));
+        a.insert("tag", Value::Bytes(vec![0x01; 32]));
+        let mut b = Map::new();
+        b.insert("permission", Value::Text("write".into()));
+        b.insert("pseudonymPk", Value::Bytes(vec![0x09; 32]));
+        b.insert("tag", Value::Bytes(vec![0x01; 32])); // same tag as `a`
+        let mut m = Map::new();
+        m.insert("entries", Value::Array(vec![Value::Map(a), Value::Map(b)]));
+        m.insert("ipnsName", Value::Bytes(b"n".to_vec()));
+        m.insert("ownerPseudonymPk", Value::Bytes(vec![0x88; 32]));
+        let bytes = encode(&Value::Map(m));
+        assert_eq!(
+            decode_grant_set_commitment(&bytes).unwrap_err().check(),
+            "duplicate-grant-tag"
         );
     }
 
