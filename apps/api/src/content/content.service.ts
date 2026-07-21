@@ -46,10 +46,13 @@ export interface ResolvedPinConcurrency {
 
 /**
  * The pin-admission ceiling, clamped so `2 × ceiling ≤ poolSize` always holds
- * (an admitted upload momentarily borrows a second connection during its commit
- * tx). Deriving the ceiling from the pool size makes the headroom invariant that
- * Fix 2 relies on structural — config drift (an over-large ceiling) can no
- * longer silently reintroduce pool exhaustion. Fails closed to the default.
+ * (an admitted upload holds its session-lock connection across the pin AND
+ * borrows a second for the commit tx, so it needs 2 pooled connections to make
+ * progress). Deriving the ceiling from the pool size makes that invariant
+ * structural — config drift (an over-large ceiling) can no longer silently
+ * reintroduce pool exhaustion. A pool of 1 cannot host even one upload without
+ * self-deadlocking on its second connection, so the safe max floors to 0 there
+ * and the pin path is refused (upload() fails closed) rather than deadlocked.
  */
 export function resolvePinConcurrency(configService: ConfigService): ResolvedPinConcurrency {
   const raw = configService.get<string | number>('CONTENT_PIN_CONCURRENCY');
@@ -60,7 +63,7 @@ export function resolvePinConcurrency(configService: ConfigService): ResolvedPin
       configured = value;
     }
   }
-  const safeMax = Math.max(1, Math.floor(resolveDbPoolSize(configService) / 2));
+  const safeMax = Math.floor(resolveDbPoolSize(configService) / 2);
   const ceiling = Math.min(configured, safeMax);
   return ceiling < configured ? { ceiling, clampedFrom: configured } : { ceiling };
 }
@@ -118,6 +121,8 @@ export class ContentService {
   private readonly lockTimeoutMs: number;
   /** Bounds concurrent pin-path connections so the pin can't starve the pool. */
   private readonly pinSlots: Semaphore;
+  /** 0 when the pool is too small (< 2) to host one upload — the path fails closed. */
+  private readonly pinCeiling: number;
 
   constructor(
     @InjectDataSource()
@@ -131,7 +136,12 @@ export class ContentService {
     );
     this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
     const pinConcurrency = resolvePinConcurrency(configService);
-    if (pinConcurrency.clampedFrom !== undefined) {
+    this.pinCeiling = pinConcurrency.ceiling;
+    if (pinConcurrency.ceiling === 0) {
+      this.logger.error(
+        'DB pool too small for the content pin path (needs DB_POOL_SIZE >= 2); hosted uploads will be refused with 503'
+      );
+    } else if (pinConcurrency.clampedFrom !== undefined) {
       this.logger.warn(
         `CONTENT_PIN_CONCURRENCY=${pinConcurrency.clampedFrom} exceeds the safe bound for the DB pool; clamped to ${pinConcurrency.ceiling} to preserve pool headroom`
       );
@@ -140,6 +150,12 @@ export class ContentService {
   }
 
   async upload(accountId: string, bytes: Buffer): Promise<UploadResult> {
+    // Fail closed on a pool too small (< 2 connections) to host one upload: the
+    // pin path needs its session-lock connection AND a second for the commit tx,
+    // so admitting a request here would self-deadlock waiting for the second.
+    if (this.pinCeiling === 0) {
+      throw new ServiceUnavailableException('Content pin path unavailable; DB pool too small');
+    }
     const size = bytes.byteLength;
     // Phase 1 — derive the CID with no durable side effect (only-hash), so the
     // ledger below can key on it before any bytes are pinned.
@@ -208,16 +224,25 @@ export class ContentService {
     const userRepo = manager.getRepository(User);
     const pinRepo = manager.getRepository(PinnedCid);
 
-    const user = await userRepo.findOne({ where: { id: accountId } });
+    // Read BYO under a users-row lock (FOR UPDATE), the same synchronization
+    // point registry.register uses: setByo toggles the flag with a bare UPDATE
+    // that takes no advisory lock, so only the row lock serializes it against
+    // this read. Without it a concurrent PATCH /account/byo could commit true
+    // after an unlocked read of false and let a BYO account pin to hosted Kubo,
+    // or commit false after a read of true and 409 a valid hosted upload.
+    const user = await userRepo.findOne({
+      where: { id: accountId },
+      lock: { mode: 'pessimistic_write' },
+    });
     if (!user) {
       throw new UnauthorizedException('Unknown account');
     }
     // Fail closed at hosted ingress for a BYO account: its bytes belong on its
     // own provider and bypass the API (blueprint/api.md, Content plane). Pinning
     // them to hosted Kubo off an advisory, uncounted row would be free hosted
-    // storage, so refuse rather than pin. Read under the account lock alongside
-    // the quota gate below, so a hosted upload past this point always registers
-    // an AUTHORITATIVE (advisory=false) row.
+    // storage, so refuse rather than pin. The row lock above makes this read and
+    // the quota gate below atomic w.r.t. setByo, so a hosted upload past this
+    // point always registers an AUTHORITATIVE (advisory=false) row.
     if (user.byo) {
       throw new ConflictException('Hosted ingress is unavailable for BYO accounts');
     }

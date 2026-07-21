@@ -32,8 +32,20 @@ describe('resolvePinConcurrency', () => {
     });
   });
 
-  it('never floors below 1 even for a pathologically small pool', () => {
+  it('refuses the pin path (ceiling 0) for a pool too small to host one upload', () => {
+    // An admitted upload needs 2 pooled connections (session lock + commit tx),
+    // so a pool of 1 would self-deadlock. floor(1 / 2) = 0 disables the path and
+    // upload() fails closed with 503 rather than admitting an unfinishable request.
     expect(resolve({ CONTENT_PIN_CONCURRENCY: '4', DB_POOL_SIZE: '1' })).toEqual({
+      ceiling: 0,
+      clampedFrom: 4,
+    });
+  });
+
+  it('admits exactly one upload at the minimum viable pool of 2', () => {
+    // floor(2 / 2) = 1: one upload holds both connections, none to spare, but no
+    // deadlock — the smallest pool the pin path can serve.
+    expect(resolve({ CONTENT_PIN_CONCURRENCY: '4', DB_POOL_SIZE: '2' })).toEqual({
       ceiling: 1,
       clampedFrom: 4,
     });
