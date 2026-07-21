@@ -16,7 +16,9 @@
 //! size (blueprint/engine.md "Open edges").
 
 use cipherbox_core::codec::{Map, Value, decode, encode};
-use cipherbox_core::content::compute_cid;
+use cipherbox_core::content::{
+    CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid,
+};
 use cipherbox_core::error::{CodecError, Malformed};
 
 use super::chunk::SealedChunk;
@@ -26,6 +28,41 @@ use super::profile::ContentProfile;
 /// (#630, engine.md:497) — core keeps the leaf `raw` codec but takes the root
 /// codec as a parameter. Single-byte, inside core's frozen content-plane set.
 pub const DAG_ROOT_CODEC: u8 = 0x71;
+
+/// CIDv1 version byte, and the digest-length byte (BLAKE3-256 = 32) — the two
+/// fixed CIDv1 framing bytes core does not expose as public constants; used to
+/// validate that a decoded leaf link is a well-formed content CID.
+const CID_VERSION: u8 = 0x01;
+const CID_DIGEST_LEN: u8 = 32;
+
+/// Why decoding a root block failed, fail-closed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DagError {
+    /// The root block was not valid deterministic CBOR, or not the root map
+    /// shape (a non-canonical encoding, a missing field, a wrong-typed field) —
+    /// a core [`CodecError`] surfaced verbatim.
+    Cbor(CodecError),
+    /// The root decoded but violated a manifest invariant: a zero chunk size, a
+    /// leaf link that is not a well-formed content CID, or a link count
+    /// inconsistent with the byte size. An internally inconsistent manifest is
+    /// never trusted, even when its own `contentCid` verifies.
+    InvalidManifest {
+        /// Which invariant failed.
+        reason: &'static str,
+    },
+}
+
+impl From<CodecError> for DagError {
+    fn from(error: CodecError) -> Self {
+        Self::Cbor(error)
+    }
+}
+
+impl From<Malformed> for DagError {
+    fn from(error: Malformed) -> Self {
+        Self::Cbor(error.into())
+    }
+}
 
 const CHUNK_SIZE_KEY: &str = "chunkSize";
 const SIZE_KEY: &str = "size";
@@ -58,7 +95,7 @@ pub fn assemble(
         .map(|leaf| Value::Bytes(leaf.cid.clone()))
         .collect();
     let mut root = Map::new();
-    root.insert(CHUNK_SIZE_KEY, Value::Unsigned(profile.chunk_size as u64));
+    root.insert(CHUNK_SIZE_KEY, Value::Unsigned(profile.chunk_size() as u64));
     root.insert(SIZE_KEY, Value::Unsigned(plaintext_len));
     root.insert(LINKS_KEY, Value::Array(links));
     let root_block = encode(&Value::Map(root));
@@ -83,10 +120,13 @@ pub struct RootManifest {
 }
 
 /// Decode a root block (already verified against its `contentCid` by the
-/// caller) into its manifest. Fail-closed on a structurally invalid root: a
-/// non-canonical encoding is a core [`CodecError`] surfaced verbatim; a missing
-/// or wrong-typed field is [`Malformed`].
-pub fn decode_root(root_block: &[u8]) -> Result<RootManifest, CodecError> {
+/// caller) into its manifest, fail-closed. Beyond the core-CBOR checks (a
+/// non-canonical encoding, a missing or wrong-typed field), the manifest
+/// invariants are enforced here so a `contentCid`-valid-but-inconsistent root is
+/// rejected, not silently trusted: the chunk size must be nonzero, every leaf
+/// link must be a well-formed `raw` content CID, and the link count must match
+/// `ceil(size / chunkSize)` (an empty version is exactly one empty leaf).
+pub fn decode_root(root_block: &[u8]) -> Result<RootManifest, DagError> {
     let root = decode(root_block)?;
     let map = root.as_map()?;
     let chunk_size = map
@@ -103,7 +143,30 @@ pub fn decode_root(root_block: &[u8]) -> Result<RootManifest, CodecError> {
         .as_array()?
         .iter()
         .map(|link| link.as_bytes().map(<[u8]>::to_vec))
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, Malformed>>()?;
+
+    if chunk_size == 0 {
+        return Err(DagError::InvalidManifest {
+            reason: "zero chunk size",
+        });
+    }
+    if !leaf_cids.iter().all(|cid| is_raw_leaf_cid(cid)) {
+        return Err(DagError::InvalidManifest {
+            reason: "malformed leaf cid",
+        });
+    }
+    // An empty version frames to one empty leaf; otherwise ceil(size/chunkSize).
+    let expected_leaves = if size == 0 {
+        1
+    } else {
+        size.div_ceil(chunk_size)
+    };
+    if leaf_cids.len() as u64 != expected_leaves {
+        return Err(DagError::InvalidManifest {
+            reason: "link count inconsistent with size",
+        });
+    }
+
     Ok(RootManifest {
         chunk_size,
         size,
@@ -111,12 +174,24 @@ pub fn decode_root(root_block: &[u8]) -> Result<RootManifest, CodecError> {
     })
 }
 
+/// Whether `cid` is a well-formed `raw` leaf content CID: the fixed CIDv1 framing
+/// `version || raw || blake3 || len` over a 32-byte digest. This checks framing,
+/// not the digest — the digest is verified when the leaf block is fetched and
+/// run through [`cipherbox_core::content::verify_cid`].
+fn is_raw_leaf_cid(cid: &[u8]) -> bool {
+    cid.len() == CONTENT_CID_LEN
+        && cid[0] == CID_VERSION
+        && cid[1] == CONTENT_CID_CODEC
+        && cid[2] == CONTENT_CID_MULTIHASH
+        && cid[3] == CID_DIGEST_LEN
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::content::chunk::{ContentKey, frame_and_seal};
     use crate::testkit::SeededEntropy;
-    use cipherbox_core::content::{CONTENT_CID_CODEC, verify_cid};
+    use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, verify_cid};
     use cipherbox_core::suite::aead::KEY_LEN;
 
     fn framed(plaintext: &[u8], seed: u64) -> (Vec<SealedChunk>, ContentProfile) {
@@ -125,6 +200,26 @@ mod tests {
         let leaves =
             frame_and_seal(plaintext, &key, &mut SeededEntropy::new(seed), &profile).unwrap();
         (leaves, profile)
+    }
+
+    /// Hand-build a root block with arbitrary fields, bypassing `assemble`, to
+    /// drive the fail-closed manifest checks.
+    fn root_bytes(chunk_size: u64, size: u64, links: &[Vec<u8>]) -> Vec<u8> {
+        let mut root = Map::new();
+        root.insert(CHUNK_SIZE_KEY, Value::Unsigned(chunk_size));
+        root.insert(SIZE_KEY, Value::Unsigned(size));
+        root.insert(
+            LINKS_KEY,
+            Value::Array(links.iter().cloned().map(Value::Bytes).collect()),
+        );
+        encode(&Value::Map(root))
+    }
+
+    fn invalid_manifest_reason(block: &[u8]) -> &'static str {
+        match decode_root(block) {
+            Err(DagError::InvalidManifest { reason }) => reason,
+            other => panic!("expected an InvalidManifest error, got {other:?}"),
+        }
     }
 
     #[test]
@@ -153,7 +248,7 @@ mod tests {
         let dag = assemble(&leaves, plaintext.len() as u64, &profile);
 
         let manifest = decode_root(&dag.root_block).unwrap();
-        assert_eq!(manifest.chunk_size, profile.chunk_size as u64);
+        assert_eq!(manifest.chunk_size, profile.chunk_size() as u64);
         assert_eq!(manifest.size, plaintext.len() as u64);
         assert_eq!(
             manifest.leaf_cids,
@@ -175,5 +270,40 @@ mod tests {
         // A valid det-CBOR value that is not the root map shape.
         let not_a_root = encode(&Value::Unsigned(7));
         assert!(decode_root(&not_a_root).is_err());
+    }
+
+    #[test]
+    fn decode_root_rejects_a_zero_chunk_size() {
+        assert_eq!(
+            invalid_manifest_reason(&root_bytes(0, 0, &[])),
+            "zero chunk size"
+        );
+    }
+
+    #[test]
+    fn decode_root_rejects_a_malformed_leaf_cid() {
+        // chunkSize 16, size 16 => one leaf expected; the one link is not a CID.
+        let block = root_bytes(16, 16, &[b"not-a-content-cid".to_vec()]);
+        assert_eq!(invalid_manifest_reason(&block), "malformed leaf cid");
+    }
+
+    #[test]
+    fn decode_root_rejects_a_link_count_size_mismatch() {
+        // size 40 at chunkSize 16 expects 3 leaves; only one (valid) link given.
+        let block = root_bytes(16, 40, &[compute_cid(CONTENT_CID_CODEC, b"x")]);
+        assert_eq!(
+            invalid_manifest_reason(&block),
+            "link count inconsistent with size"
+        );
+    }
+
+    #[test]
+    fn decode_root_accepts_the_empty_version_single_leaf() {
+        // size 0 frames to exactly one empty leaf; the count check must allow it.
+        let (leaves, profile) = framed(b"", 9);
+        let dag = assemble(&leaves, 0, &profile);
+        let manifest = decode_root(&dag.root_block).unwrap();
+        assert_eq!(manifest.size, 0);
+        assert_eq!(manifest.leaf_cids.len(), 1);
     }
 }

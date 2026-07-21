@@ -11,18 +11,19 @@
 /// of the shape today; DAG fan-out/balancing stays flat (an open edge below).
 ///
 /// There is deliberately **no `Default`** (mirrors [`crate::profile`]): every
-/// construction site names its profile, and [`chunk_size`] is always a real,
-/// nonzero value.
-///
-/// [`chunk_size`]: ContentProfile::chunk_size
+/// construction site names its profile, and the chunk size is always a real,
+/// nonzero value — the field is private and every constructor rejects zero, so
+/// a zero chunk size (which would panic framing at `chunks(0)`) is
+/// unrepresentable rather than a fail-late panic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ContentProfile {
     /// Fixed content chunk size in bytes. Every leaf but the last carries
     /// exactly this many plaintext bytes, so a byte offset maps to a leaf index
     /// by integer division — the chunk-aligned property ranged block/CAR
     /// fetches rely on (blueprint/engine.md "shaped so ranged ... fetches map
-    /// chunk-aligned").
-    pub chunk_size: usize,
+    /// chunk-aligned"). Private with a nonzero invariant; read via
+    /// [`ContentProfile::chunk_size`].
+    chunk_size: usize,
 }
 
 impl ContentProfile {
@@ -39,6 +40,23 @@ impl ContentProfile {
     /// CI framing: 16-byte chunks so multi-chunk framing and DAG assembly are
     /// reachable from tiny fixtures (blueprint/testing.md "The DX hook").
     pub const CI: Self = Self { chunk_size: 16 };
+
+    /// A custom profile with the given chunk size, or `None` for a zero size.
+    /// The nonzero invariant is enforced here so framing never divides or
+    /// `chunks()` by zero — a zero chunk size is rejected at construction, not
+    /// discovered as a panic during a seal.
+    pub const fn new(chunk_size: usize) -> Option<Self> {
+        if chunk_size == 0 {
+            None
+        } else {
+            Some(Self { chunk_size })
+        }
+    }
+
+    /// The fixed chunk size in bytes (always nonzero).
+    pub const fn chunk_size(&self) -> usize {
+        self.chunk_size
+    }
 }
 
 #[cfg(test)]
@@ -50,13 +68,13 @@ mod tests {
 
     #[test]
     fn production_chunk_size_is_one_mib() {
-        assert_eq!(ContentProfile::PRODUCTION.chunk_size, 1 << 20);
+        assert_eq!(ContentProfile::PRODUCTION.chunk_size(), 1 << 20);
     }
 
     #[test]
     fn ci_chunk_size_keeps_multi_chunk_reachable() {
         assert!(
-            ContentProfile::CI.chunk_size <= 64,
+            ContentProfile::CI.chunk_size() <= 64,
             "CI chunk size must be small enough to exceed from a tiny fixture"
         );
     }
@@ -65,9 +83,15 @@ mod tests {
     fn every_profile_chunk_size_is_nonzero() {
         for profile in [ContentProfile::PRODUCTION, ContentProfile::CI] {
             assert!(
-                profile.chunk_size > 0,
+                profile.chunk_size() > 0,
                 "chunk size is always real, never zero"
             );
         }
+    }
+
+    #[test]
+    fn new_rejects_a_zero_chunk_size() {
+        assert_eq!(ContentProfile::new(0), None, "zero is unrepresentable");
+        assert_eq!(ContentProfile::new(4096).unwrap().chunk_size(), 4096);
     }
 }

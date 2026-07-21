@@ -74,6 +74,11 @@ impl fmt::Debug for ByoIpfsConfig {
 /// Why a provider connection test did not succeed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderError {
+    /// The endpoint is not an absolute `http(s)` URL with a host, so it is
+    /// rejected before any request is issued — a member-supplied string must not
+    /// reach the Http seam as a `file:`/relative/hostless target (SSRF and
+    /// scheme-exfiltration surface).
+    InvalidEndpoint,
     /// The provider could not be reached (transport-level failure).
     Unreachable,
     /// The provider was reached but rejected the probe (bad endpoint, auth
@@ -86,12 +91,18 @@ pub enum ProviderError {
 
 /// Test that a member's BYO provider is reachable and authenticated, engine-side
 /// over the Http seam. Issues the provider's standard health/auth probe and
-/// treats any 2xx as success. A transport failure is [`ProviderError::Unreachable`];
-/// a non-2xx is [`ProviderError::Rejected`].
+/// treats any 2xx as success.
+///
+/// The endpoint is member-controlled by design (it is the member's own
+/// provider), but it is still validated to an absolute `http(s)` URL before it
+/// reaches the seam — a `file:`, relative, or hostless target is
+/// [`ProviderError::InvalidEndpoint`], never sent. A transport failure is
+/// [`ProviderError::Unreachable`]; a non-2xx is [`ProviderError::Rejected`].
 pub async fn test_connection(
     config: &ByoIpfsConfig,
     http: &impl Http,
 ) -> Result<(), ProviderError> {
+    validate_endpoint(&config.endpoint)?;
     let request = probe_request(config);
     let response = http
         .send(request)
@@ -103,6 +114,23 @@ pub async fn test_connection(
         Err(ProviderError::Rejected {
             status: response.status,
         })
+    }
+}
+
+/// Require an absolute `http(s)` URL with a non-empty host before the endpoint
+/// reaches the Http seam. A lightweight scheme+authority check (the engine has
+/// no URL parser): it rejects other schemes (`file:`, `ftp:`, …), scheme-less or
+/// relative strings, and a hostless `http:///path`, closing the
+/// scheme-exfiltration / SSRF surface a raw member string would open.
+pub fn validate_endpoint(endpoint: &str) -> Result<(), ProviderError> {
+    let lower = endpoint.to_ascii_lowercase();
+    let authority = lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"));
+    match authority {
+        // A host must follow the scheme (not empty, not straight into a path).
+        Some(rest) if !rest.is_empty() && !rest.starts_with('/') => Ok(()),
+        _ => Err(ProviderError::InvalidEndpoint),
     }
 }
 
@@ -217,6 +245,47 @@ mod tests {
         http.enqueue_error(crate::seams::SeamError::new("dns failure"));
         let err = block_on(test_connection(&config(ByoKind::Kubo, None), &http)).unwrap_err();
         assert_eq!(err, ProviderError::Unreachable);
+    }
+
+    #[test]
+    fn a_non_http_or_hostless_endpoint_is_rejected_before_any_request() {
+        let http = ScriptedHttp::default();
+        for bad in [
+            "file:///etc/passwd",
+            "ftp://host/x",
+            "ipfs.member.test", // no scheme
+            "http://",          // no host
+            "https:///pins",    // hostless
+            "",
+        ] {
+            let cfg = ByoIpfsConfig {
+                endpoint: bad.into(),
+                kind: ByoKind::Psa,
+                access_token: None,
+            };
+            assert_eq!(
+                block_on(test_connection(&cfg, &http)).unwrap_err(),
+                ProviderError::InvalidEndpoint,
+                "{bad:?} must be rejected"
+            );
+        }
+        assert!(
+            http.requests().is_empty(),
+            "an invalid endpoint never reaches the seam"
+        );
+    }
+
+    #[test]
+    fn a_local_http_kubo_endpoint_is_allowed() {
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok());
+        let cfg = ByoIpfsConfig {
+            endpoint: "http://127.0.0.1:5001".into(),
+            kind: ByoKind::Kubo,
+            access_token: None,
+        };
+        block_on(test_connection(&cfg, &http)).unwrap();
+        assert_eq!(http.requests()[0].url, "http://127.0.0.1:5001/api/v0/id");
     }
 
     #[test]

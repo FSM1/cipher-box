@@ -84,7 +84,7 @@ pub fn frame_and_seal(
     let framed: Vec<&[u8]> = if plaintext.is_empty() {
         vec![&[][..]]
     } else {
-        plaintext.chunks(profile.chunk_size).collect()
+        plaintext.chunks(profile.chunk_size()).collect()
     };
     let mut leaves = Vec::with_capacity(framed.len());
     for chunk in framed {

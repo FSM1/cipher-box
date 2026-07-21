@@ -215,10 +215,13 @@ pub fn leaf_range_for_byte_range(
     let leaf_count = leaf_count as u64;
     let first = (offset / chunk_size).min(leaf_count);
     // The last byte touched is offset+length-1; a zero length touches nothing.
+    // Every step is saturating so an extreme range can never overflow the +1.
     let last_exclusive = if length == 0 {
         first
     } else {
-        (offset.saturating_add(length).saturating_sub(1) / chunk_size + 1).min(leaf_count)
+        (offset.saturating_add(length).saturating_sub(1) / chunk_size)
+            .saturating_add(1)
+            .min(leaf_count)
     };
     (first as usize)..(last_exclusive as usize)
 }
@@ -513,6 +516,16 @@ mod tests {
     #[test]
     fn zero_chunk_size_yields_an_empty_range_not_a_panic() {
         assert_eq!(leaf_range_for_byte_range(0, 10, 0, 3), 0..0);
+    }
+
+    #[test]
+    fn extreme_range_saturates_without_overflow() {
+        // Debug builds enable overflow checks; the +1 must not panic at u64::MAX.
+        assert_eq!(
+            leaf_range_for_byte_range(u64::MAX, u64::MAX, 1, 3),
+            3..3,
+            "clamped to leaf count, no overflow"
+        );
     }
 
     #[test]

@@ -41,10 +41,10 @@ pub use api::{
 };
 pub use content::{
     ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
-    DAG_ROOT_CODEC, Gateway, GatewaySource, PinMode, ProviderError, PrunePlan, QuotaExceeded,
-    ReadError, RootManifest, SealedChunk, SealedContent, assemble, decode_root, frame_and_seal,
-    leaf_range_for_byte_range, plan_prune, pre_flight_quota_check, read_block, seal_content,
-    test_connection,
+    DAG_ROOT_CODEC, DagError, Gateway, GatewaySource, PinMode, ProviderError, PrunePlan,
+    QuotaExceeded, ReadError, RootManifest, SealedChunk, SealedContent, assemble, decode_root,
+    frame_and_seal, leaf_range_for_byte_range, plan_prune, pre_flight_quota_check, read_block,
+    seal_content, test_connection, validate_endpoint,
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{

@@ -24,9 +24,11 @@ pub mod read;
 pub mod retention;
 
 pub use chunk::{ContentKey, SealedChunk, frame_and_seal};
-pub use dag::{ContentDag, DAG_ROOT_CODEC, RootManifest, assemble, decode_root};
+pub use dag::{ContentDag, DAG_ROOT_CODEC, DagError, RootManifest, assemble, decode_root};
 pub use profile::ContentProfile;
-pub use provider::{ByoIpfsConfig, ByoKind, PinMode, ProviderError, test_connection};
+pub use provider::{
+    ByoIpfsConfig, ByoKind, PinMode, ProviderError, test_connection, validate_endpoint,
+};
 pub use read::{
     ContentPlane, Gateway, GatewaySource, ReadError, leaf_range_for_byte_range, read_block,
 };
