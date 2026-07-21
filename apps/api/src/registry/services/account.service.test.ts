@@ -10,11 +10,20 @@ import { PinnedCid } from '../entities/pinned-cid.entity';
 import { PinStore } from '../pin-store';
 import { AccountService } from './account.service';
 
-/** Records physical unpins so the refcount-zero decision is observable. */
+/**
+ * Records physical unpins so the refcount-zero decision is observable. A CID in
+ * `failFor` models a swallowed Kubo failure: `unpin` returns false and records
+ * nothing, so the caller's unpin count must exclude it.
+ */
 class RecordingPinStore extends PinStore {
   readonly unpinned: string[] = [];
-  async unpin(cid: string): Promise<void> {
+  readonly failFor = new Set<string>();
+  async unpin(cid: string): Promise<boolean> {
+    if (this.failFor.has(cid)) {
+      return false;
+    }
     this.unpinned.push(cid);
+    return true;
   }
 }
 
@@ -141,6 +150,22 @@ describe('AccountService.deleteAccount', () => {
     expect(result.unpinned).toBe(0);
     expect(pinStore.unpinned).toEqual([]);
     expect(repos.pins.rows.map((r) => r.accountId)).toEqual([b]);
+  });
+
+  it('counts only physically-unpinned CIDs, not the refcount-zero selection', async () => {
+    const a = await seedAccount('pk-a');
+    for (const cid of ['ok1', 'fail', 'ok2']) {
+      await repos.pins.save({ accountId: a, cid, size: '1', advisory: false } as never);
+    }
+    // The middle CID's physical unpin is swallowed (Kubo failure) — it is still
+    // at refcount zero and selected, but must not be reported as released.
+    pinStore.failFor.add('fail');
+
+    const result = await build().deleteAccount(a);
+
+    expect(result.pinsRetired).toBe(3);
+    expect(result.unpinned).toBe(2);
+    expect(pinStore.unpinned).toEqual(['ok1', 'ok2']);
   });
 
   it('is idempotent for an unknown account: empty result, no unpin, no writes', async () => {

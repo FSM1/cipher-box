@@ -28,8 +28,9 @@ const GIB = 1024 * 1024 * 1024;
 /** Records physical unpins so the refcount-zero decision is observable in HTTP tests. */
 class FakePinStore extends PinStore {
   readonly unpinned: string[] = [];
-  async unpin(cid: string): Promise<void> {
+  async unpin(cid: string): Promise<boolean> {
     this.unpinned.push(cid);
+    return true;
   }
 }
 

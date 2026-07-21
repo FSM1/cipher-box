@@ -11,13 +11,15 @@ import { ConfigService } from '@nestjs/config';
  * `unpin` is a best-effort liveness optimization, not a correctness dependency:
  * the per-account row bookkeeping is the source of truth, so a failed or
  * unconfigured unpin never fails a retire — the CID lingers and decays from the
- * pin store's own GC. `hash`/`pin` are the ingress byte path; a consumer that
+ * pin store's own GC. It returns whether the CID was physically released (`true`)
+ * so callers report a truthful unpin count; a no-op or swallowed failure returns
+ * `false` (never throws). `hash`/`pin` are the ingress byte path; a consumer that
  * only retires (the registry) never calls them, so the base rejects rather than
  * forcing every unpin-only fake to stub the byte methods.
  */
 @Injectable()
 export abstract class PinStore {
-  abstract unpin(cid: string): Promise<void>;
+  abstract unpin(cid: string): Promise<boolean>;
 
   /** Content CID of `bytes` with no durable pin (the pre-commit CID derivation). */
   hash(_bytes: Uint8Array): Promise<string> {
@@ -63,9 +65,9 @@ export class KuboPinStore extends PinStore {
     return (await this.add(bytes, 'pin=true')).Hash;
   }
 
-  async unpin(cid: string): Promise<void> {
+  async unpin(cid: string): Promise<boolean> {
     if (!this.apiUrl) {
-      return;
+      return false;
     }
     try {
       const response = await fetch(
@@ -74,11 +76,14 @@ export class KuboPinStore extends PinStore {
       );
       if (!response.ok) {
         this.logger.warn(`pin/rm for ${cid} returned ${response.status}`);
+        return false;
       }
+      return true;
     } catch (error) {
       // Best-effort: bookkeeping already dropped the row, so a Kubo hiccup
-      // must not fail the caller's retire. Log and move on.
+      // must not fail the caller's retire. Log and report no physical release.
       this.logger.warn(`pin/rm failed for ${cid}: ${String(error)}`);
+      return false;
     }
   }
 

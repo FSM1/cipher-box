@@ -59,8 +59,9 @@ class FakePinStore extends PinStore {
     return cid;
   }
 
-  async unpin(cid: string): Promise<void> {
+  async unpin(cid: string): Promise<boolean> {
     this.unpinned.push(cid);
+    return true;
   }
 }
 

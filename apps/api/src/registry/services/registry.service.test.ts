@@ -103,8 +103,9 @@ function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {
 /** Records every physical unpin so the refcount-zero decision is observable. */
 class FakePinStore extends PinStore {
   readonly unpinned: string[] = [];
-  async unpin(cid: string): Promise<void> {
+  async unpin(cid: string): Promise<boolean> {
     this.unpinned.push(cid);
+    return true;
   }
 }
 

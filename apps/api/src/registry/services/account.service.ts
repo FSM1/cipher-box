@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, In, Repository } from 'typeorm';
@@ -51,10 +51,19 @@ const EMPTY_RESULT: DeleteAccountResult = {
  * batches cannot deadlock, and once we commit the delete a blocked register
  * fails closed with "Unknown account" rather than inserting a fresh row.
  *
+ * The per-CID batch is seeded from an UNLOCKED pre-read (a single sorted batch is
+ * the only deadlock-free way to co-hold `accountLockKey` and the per-CID keys
+ * against an upload that takes both together). Under the locks the pin set is
+ * re-read as the authority: a CID present there but absent from the pre-read
+ * slipped in before the lock and carries no refcount lock, so its unpin decision
+ * is unsafe — we fail closed with a retryable 503 (DELETE is idempotent; the
+ * retry re-reads the settled set) rather than delete its row and leak the pin.
+ *
  * The physical unpin rides the injectable [`PinStore`] seam AFTER commit — never
- * a Kubo call inside the transaction — and is best-effort, exactly as retire:
- * the row bookkeeping is the source of truth, so a missed unpin only lingers and
- * decays from the pin store's own GC, never fails the delete.
+ * a Kubo call inside the transaction — and is best-effort: the row bookkeeping is
+ * the source of truth, so a Kubo hiccup never fails the delete. `unpinned` counts
+ * only CIDs the seam confirms it physically released, not the refcount-zero
+ * selection (a swallowed unpin failure must not be reported as a release).
  */
 @Injectable()
 export class AccountService {
@@ -84,13 +93,12 @@ export class AccountService {
     // mailbox purge and the recipient advisory lock.
     const { publicKey } = account;
 
-    // Pre-read the account's CID set unlocked, only to know which per-CID refcount
-    // locks to take. The set is re-frozen under the account + users-row locks
-    // below; a straggler a racing upload/register commits after this read is
-    // still deleted set-based by account_id — only its best-effort unpin can be
-    // missed (a leaked pin the store GCs, never a lost one).
+    // Seed the per-CID lock batch from an unlocked pre-read. This only chooses
+    // which refcount keys to take; the transaction re-reads the true set under
+    // the locks and refuses (503) any CID that raced into the gap (see below).
     const preCids = await this.pinRepository.find({ where: { accountId }, select: { cid: true } });
     const cidSet = [...new Set(preCids.map((row) => row.cid))];
+    const heldCids = new Set(cidSet);
 
     const { result, unpinCids } = await runLockGuardedTransaction(
       this.dataSource,
@@ -115,15 +123,36 @@ export class AccountService {
         const pinRepo = manager.getRepository(PinnedCid);
         const mailboxRepo = manager.getRepository(MailboxMessage);
 
+        // Authoritative set: under the account lock (upload frozen) AND the
+        // users-row lock (a concurrent register blocks, then fails closed on its
+        // own existence re-check), no new pin row can be born, so this read is
+        // the final set. A CID here we did NOT lock above slipped in between the
+        // unlocked pre-read and the lock batch — its refcount-zero decision is
+        // unguarded, so fail closed (retryable) rather than delete it unpinned.
+        const currentCids = [
+          ...new Set(
+            (await pinRepo.find({ where: { accountId }, select: { cid: true } })).map(
+              (row) => row.cid
+            )
+          ),
+        ];
+        if (currentCids.some((cid) => !heldCids.has(cid))) {
+          throw new ServiceUnavailableException(
+            'Concurrent pin write during delete; retry shortly'
+          );
+        }
+
         const namesRetired = (await nameRepo.delete({ accountId })).affected ?? 0;
         const pinsRetired = (await pinRepo.delete({ accountId })).affected ?? 0;
 
         // Under the per-CID locks, a held CID with no surviving row across all
         // accounts is at global refcount zero. Co-registered shared content
         // survives via other accounts' rows (union liveness).
-        const survivors = cidSet.length ? await pinRepo.find({ where: { cid: In(cidSet) } }) : [];
+        const survivors = currentCids.length
+          ? await pinRepo.find({ where: { cid: In(currentCids) } })
+          : [];
         const surviving = new Set(survivors.map((row) => row.cid));
-        const unpinCids = cidSet.filter((cid) => !surviving.has(cid));
+        const unpinCids = currentCids.filter((cid) => !surviving.has(cid));
 
         // Mailbox rows are keyed by recipient publicKey with no FK to users — purge
         // explicitly. Auth rows (auth_methods, refresh_tokens) cascade on the
@@ -133,16 +162,21 @@ export class AccountService {
         await manager.getRepository(User).delete({ id: accountId });
 
         return {
-          result: { namesRetired, pinsRetired, mailboxPurged, unpinned: unpinCids.length },
+          result: { namesRetired, pinsRetired, mailboxPurged, unpinned: 0 },
           unpinCids,
         };
       }
     );
 
+    // Best-effort physical unpin after commit; count only CIDs the seam confirms
+    // it released (a swallowed Kubo failure returns false and is not counted).
+    let unpinned = 0;
     for (const cid of unpinCids) {
-      await this.pinStore.unpin(cid);
+      if (await this.pinStore.unpin(cid)) {
+        unpinned += 1;
+      }
     }
 
-    return result;
+    return { ...result, unpinned };
   }
 }

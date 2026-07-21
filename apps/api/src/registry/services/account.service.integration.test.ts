@@ -43,8 +43,9 @@ const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout
 
 class RecordingPinStore extends PinStore {
   readonly unpinned: string[] = [];
-  async unpin(cid: string): Promise<void> {
+  async unpin(cid: string): Promise<boolean> {
     this.unpinned.push(cid);
+    return true;
   }
 }
 
@@ -304,6 +305,61 @@ describe('AccountService cascade (real Postgres)', () => {
       expect(pinStore.unpinned).toEqual([cid]);
       const survivors = await db.dataSource.getRepository(PinnedCid).find({ where: { cid } });
       expect(survivors.map((r) => r.accountId)).toEqual([b.id]);
+    });
+
+    it('fails closed (retryable 503) when a pin commits into the unlocked pre-read gap, never deleting it unpinned', async () => {
+      const a = await seedAccount();
+      const cid = token();
+
+      // Pause the delete's UNLOCKED pre-read; a pin then commits into the gap
+      // before the delete takes its account-lock batch — the exact phantom the
+      // in-lock re-read closes.
+      const gate = makeGate();
+      let firstFind = true;
+      const pinRepo = db.dataSource.getRepository(PinnedCid);
+      const gatedPinRepo = new Proxy(pinRepo, {
+        get(target, prop, receiver) {
+          if (prop === 'find') {
+            return async (options?: unknown) => {
+              const rows = await target.find(options as never);
+              if (firstFind) {
+                firstFind = false;
+                await gate.onReach();
+              }
+              return rows;
+            };
+          }
+          const value = Reflect.get(target, prop, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }) as Repository<PinnedCid>;
+
+      const pinStore = new RecordingPinStore();
+      const service = new AccountService(
+        db.dataSource.getRepository(User) as never,
+        gatedPinRepo as never,
+        db.dataSource as never,
+        pinStore,
+        fakeConfig({ DB_ADVISORY_LOCK_TIMEOUT_MS: '0' }).service
+      );
+
+      const deleted = service.deleteAccount(a.id);
+      await gate.reached; // pre-read observed no pins; still before the lock batch
+      await seedPin(a.id, cid); // a pin commits into the gap, unlocked by the batch
+      gate.release();
+
+      await expect(deleted).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+      // Fail-closed: the raced pin's row is intact (never deleted unpinned) and
+      // the account survives, so the client's retry unpins it at refcount zero.
+      expect(pinStore.unpinned).toEqual([]);
+      const rows = await db.dataSource
+        .getRepository(PinnedCid)
+        .find({ where: { accountId: a.id } });
+      expect(rows.map((r) => r.cid)).toEqual([cid]);
+      expect(
+        await db.dataSource.getRepository(User).findOne({ where: { id: a.id } })
+      ).not.toBeNull();
     });
   });
 

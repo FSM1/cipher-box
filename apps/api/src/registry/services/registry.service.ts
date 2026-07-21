@@ -245,10 +245,13 @@ export class RegistryService {
     });
 
     // Fire the external unpin after commit — never hold the txn across Kubo.
+    // Count only CIDs the seam confirms it physically released; a swallowed
+    // Kubo failure returns false and must not inflate the reported unpin count.
     let unpinned = 0;
     for (const cid of unpinCids) {
-      await this.pinStore.unpin(cid);
-      unpinned += 1;
+      if (await this.pinStore.unpin(cid)) {
+        unpinned += 1;
+      }
     }
 
     return { retired, unpinned };
