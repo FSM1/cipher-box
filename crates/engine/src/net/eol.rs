@@ -95,7 +95,12 @@ fn parse_rfc3339(bytes: &[u8]) -> Option<u64> {
     let year: i64 = date_parts.next()?.parse().ok()?;
     let month: u32 = parse_2(date_parts.next()?)?;
     let day: u32 = parse_2(date_parts.next()?)?;
-    if date_parts.next().is_some() || !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    // Reject out-of-range calendar dates outright — an invalid day (e.g. Feb 30)
+    // must fail closed, never silently normalize into the next month.
+    if date_parts.next().is_some()
+        || !(1..=12).contains(&month)
+        || !(1..=days_in_month(year, month)).contains(&day)
+    {
         return None;
     }
 
@@ -140,6 +145,22 @@ fn fractional_millis(frac: &str) -> Option<u32> {
         millis = millis * 10 + frac.as_bytes().get(i).map_or(0, |b| u32::from(b - b'0'));
     }
     Some(millis)
+}
+
+/// Proleptic-Gregorian leap year.
+fn is_leap_year(year: i64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+}
+
+/// Days in a validated `month` (1-12) of `year` — 29 for a leap February.
+fn days_in_month(year: i64, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
 }
 
 // Civil-date conversions (Howard Hinnant's algorithms): days since the Unix
@@ -263,6 +284,33 @@ mod tests {
         assert!(
             parse_rfc3339(b"2026-1-1T0:0:0Z").is_none(),
             "unpadded fields"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_out_of_range_calendar_dates() {
+        // An invalid day for the month must fail closed, never normalize forward.
+        assert!(parse_rfc3339(b"2026-02-30T00:00:00Z").is_none(), "Feb 30");
+        assert!(
+            parse_rfc3339(b"2025-02-29T00:00:00Z").is_none(),
+            "Feb 29 in a non-leap year"
+        );
+        assert!(parse_rfc3339(b"2026-04-31T00:00:00Z").is_none(), "Apr 31");
+        assert!(parse_rfc3339(b"2026-01-32T00:00:00Z").is_none(), "Jan 32");
+        assert!(parse_rfc3339(b"2026-01-00T00:00:00Z").is_none(), "day 00");
+        // Genuine leap-day and month-length boundaries still parse.
+        assert!(
+            parse_rfc3339(b"2024-02-29T00:00:00Z").is_some(),
+            "Feb 29 in a leap year"
+        );
+        assert!(parse_rfc3339(b"2026-04-30T00:00:00Z").is_some(), "Apr 30");
+        assert!(
+            parse_rfc3339(b"2000-02-29T00:00:00Z").is_some(),
+            "Feb 29 2000"
+        );
+        assert!(
+            parse_rfc3339(b"1900-02-29T00:00:00Z").is_none(),
+            "1900 is not a leap year (century, not 400)"
         );
     }
 }

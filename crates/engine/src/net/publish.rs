@@ -20,7 +20,9 @@ use super::eol;
 use super::fanout::{fanout_get_verify, fanout_put};
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::profile::SyncTimingProfile;
-use crate::seams::{CredentialStore, EndpointId, FloorStore, Http, RecordTransport, Scheduler};
+use crate::seams::{
+    CredentialStore, EndpointId, FloorStore, Http, RecordTransport, Scheduler, SeamError,
+};
 
 /// The `/ipfs/` path prefix a record's `Value` carries in front of the head CID.
 const IPFS_PREFIX: &str = "/ipfs/";
@@ -97,6 +99,10 @@ pub enum PublishError {
     /// No endpoint acknowledged the record PUT (the whole endpoint set is
     /// unreachable). Nothing durable happened; the caller retries later.
     AllEndpointsFailed,
+    /// The durable sequence floor could not be read. A floor-read failure is a
+    /// fail-closed trust event, never "no floor": publish stops rather than mint
+    /// a sequence from assumed-empty state (blueprint/engine.md floor law).
+    FloorRead(SeamError),
 }
 
 /// Run the publish pipeline for `request`. Register-first and fail-closed:
@@ -124,12 +130,14 @@ where
 
     // CAS expected sequence: floor + 1 (first publish → 1, the "no floor" 0
     // sentinel reserved). Revival raises the floor read to the recovered
-    // sequence so the re-mint is strictly newer than what lapsed.
+    // sequence so the re-mint is strictly newer than what lapsed. A floor-read
+    // failure is fail-closed — only a successful read with no floor defaults to
+    // 0 (blueprint/engine.md floor law).
     let name_bytes = request.name.as_str().as_bytes();
     let durable = floors
         .sequence_floor(name_bytes)
         .await
-        .map(|floor| floor.unwrap_or(0))
+        .map_err(PublishError::FloorRead)?
         .unwrap_or(0);
     let sequence = durable.max(request.min_current_sequence.unwrap_or(0)) + 1;
 

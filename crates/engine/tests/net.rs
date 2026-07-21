@@ -31,7 +31,8 @@ use cipherbox_engine::net::{
     revive,
 };
 use cipherbox_engine::seams::{
-    FloorStore, HttpResponse, RecordTransport, Scheduler, SnapshotCache, UnixMillis,
+    FloorStore, HttpResponse, RecordTransport, Scheduler, SeamError, SeamResult, SnapshotCache,
+    UnixMillis,
 };
 use cipherbox_engine::testkit::fakes::{
     InMemoryCredentialStore, InMemoryRecordStore, ScriptedHttp,
@@ -436,6 +437,68 @@ fn register_first_fail_closed_puts_no_record() {
                 .record_at(&endpoint, name.as_str())
                 .is_none(),
             "no record is PUT when registration fails"
+        );
+    }
+}
+
+/// A [`FloorStore`] whose sequence-floor read always fails — models a durable
+/// floor-store I/O error so publish must fail closed rather than assume "no
+/// floor" and mint a stale sequence.
+#[derive(Clone, Default)]
+struct FailingFloorStore;
+
+impl FloorStore for FailingFloorStore {
+    async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
+        Ok(None)
+    }
+    async fn raise_epoch_floor(&self, _scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
+        Ok(epoch)
+    }
+    async fn sequence_floor(&self, _ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+        Err(SeamError::new("floor store unavailable"))
+    }
+    async fn raise_sequence_floor(&self, _ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+        Ok(sequence)
+    }
+}
+
+#[test]
+fn publish_fails_closed_when_the_sequence_floor_cannot_be_read() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(9);
+    let name = name_of(&s);
+    let api = api_for(&device);
+    let floors = FailingFloorStore;
+    // Registration succeeds; the floor read then fails — the failure must stop
+    // publish before any record is minted or PUT (never collapse to "no floor").
+    device.http.enqueue_response(ok_200());
+
+    let request = PublishRequest {
+        name: &name,
+        signer: &s,
+        head_cid: "bafyhead".into(),
+        content_cids: Vec::new(),
+        min_current_sequence: None,
+    };
+    let error = block_on(publish(
+        &device.record_store,
+        &api,
+        &floors,
+        &device.scheduler,
+        &SyncTimingProfile::CI,
+        &request,
+    ))
+    .expect_err("a floor-read failure is fail-closed");
+
+    assert!(matches!(error, PublishError::FloorRead(_)));
+    for endpoint in world.record_store.endpoints() {
+        assert!(
+            world
+                .record_store
+                .record_at(&endpoint, name.as_str())
+                .is_none(),
+            "no record is PUT when the floor read fails"
         );
     }
 }
