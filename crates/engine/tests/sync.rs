@@ -1,0 +1,576 @@
+//! The sync-core simulation harness — the issue #632 gate mirrored 1:1
+//! (blueprint/engine.md "Sync core", "Pointer planes"; blueprint/testing.md
+//! "the simulation harness").
+//!
+//! No network, no docker, no wall clock: the whole sync core runs in memory on
+//! the test kit's fakes and virtual clock. The five-race table, offline queue
+//! replay, dead-letter on revoked-while-offline, the staging-budget fail-fast,
+//! the staleness ladder and escalation, the keyless-re-PUT adversary, and the
+//! cold-start-adopts-nothing sequence each get a narrative here, driven only
+//! through the engine's public sync surface.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::kdf;
+use cipherbox_core::payload::RepointObject;
+use cipherbox_core::suite::ecdsa::EcdsaSigner;
+
+use cipherbox_engine::gate::floor;
+use cipherbox_engine::profile::SyncTimingProfile;
+use cipherbox_engine::seams::{SeamResult, StagingStore, UnixMillis};
+use cipherbox_engine::sync::model::NodeMeta;
+use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
+use cipherbox_engine::sync::{
+    self, Connectivity, DeadLetterReason, DropReason, Op, OpResolution, PointerFetch, SessionRole,
+    Snapshot, StageOutcome, apply_repairs, classify, cold_seed_floors, decode_queue,
+    observed_repair, rebase_one, replay, resolve_vault_pointer, stage_op, withheld_escalation,
+};
+use cipherbox_engine::testkit::fakes::{InMemoryFloorStore, InMemoryStagingStore};
+use cipherbox_engine::testkit::{SeededEntropy, block_on};
+use cipherbox_engine::{NodeId, NodeKind, Staleness};
+
+fn id(b: u8) -> NodeId {
+    NodeId([b; 16])
+}
+
+fn with_child(snap: &mut Snapshot, parent: NodeId, node: NodeId, name: &str, kind: NodeKind) {
+    snap.upsert_node(NodeMeta::new(node, name, kind));
+    snap.link(parent, node, 1);
+}
+
+// ---------------------------------------------------------------------------
+// The five-race table, mirrored 1:1 (blueprint/engine.md rebase rules).
+// Each is a two-client narrative: the "other" client's change is the fresh
+// gate-passing base our queued op rebases onto.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn race_1_delete_vs_concurrent_edit_edit_wins() {
+    // Other client edited the file (its record advanced 3 → 6). Our delete
+    // snapshotted it at 3.
+    let mut base = Snapshot::new(id(0));
+    with_child(&mut base, id(0), id(1), "f", NodeKind::File);
+    base.node_mut(id(1)).unwrap().record_sequence = 6;
+    let local = base.clone();
+
+    let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, 3));
+    assert_eq!(res, OpResolution::Dropped(DropReason::TargetAdvanced));
+    assert!(
+        base.contains(id(1)),
+        "the concurrent edit wins; the node survives"
+    );
+}
+
+#[test]
+fn race_1_reverse_edit_resurrects_a_concurrently_deleted_node() {
+    // Other client deleted the node (absent from gate-passing state); our edit
+    // resurrects it (edit wins in both directions).
+    let gate_passing = Snapshot::new(id(0));
+    let mut local = Snapshot::new(id(0));
+    with_child(&mut local, id(0), id(1), "f", NodeKind::File);
+
+    let mut working = gate_passing.clone();
+    let res = rebase_one(
+        &mut working,
+        &local,
+        &Op::update_content(id(1), b"v2".to_vec(), 1),
+    );
+    assert!(matches!(res, OpResolution::Applied { .. }));
+    assert!(
+        working.contains(id(1)),
+        "the edit resurrected the deleted node"
+    );
+}
+
+#[test]
+fn race_2_rename_vs_rename_serialized_by_parent_cas_higher_writer_wins() {
+    // Other client renamed the node first (base shows "other.txt"); our rebasing
+    // rename re-anchors and publishes at a higher parent sequence, so it wins.
+    let mut base = Snapshot::new(id(0));
+    with_child(&mut base, id(0), id(1), "start.txt", NodeKind::File);
+    base.node_mut(id(1)).unwrap().name = "other.txt".into();
+    let local = base.clone();
+
+    let res = rebase_one(&mut base, &local, &Op::rename(id(1), "mine.txt", 1));
+    assert!(matches!(
+        res,
+        OpResolution::Applied {
+            suffixed: false,
+            ..
+        }
+    ));
+    assert_eq!(base.node(id(1)).unwrap().name, "mine.txt");
+}
+
+#[test]
+fn race_3_add_vs_add_name_collision_auto_suffixes_the_loser() {
+    // Other client already created "a.txt" under root; our create collides and
+    // auto-suffixes — both stay visible.
+    let mut base = Snapshot::new(id(0));
+    with_child(&mut base, id(0), id(1), "a.txt", NodeKind::File);
+    let local = base.clone();
+
+    let res = rebase_one(
+        &mut base,
+        &local,
+        &Op::create(id(2), id(0), "a.txt", NodeKind::File, 1, None),
+    );
+    assert_eq!(
+        res,
+        OpResolution::Applied {
+            effective_name: Some("a (2).txt".to_owned()),
+            suffixed: true,
+            scope_exit_trigger: None,
+        }
+    );
+    assert_eq!(base.children(id(0)).len(), 2, "both adds are visible");
+}
+
+#[test]
+fn race_4_move_dest_first_then_presence_conditional_source_remove() {
+    let mut base = Snapshot::new(id(0));
+    with_child(&mut base, id(0), id(1), "dir", NodeKind::Folder);
+    with_child(&mut base, id(0), id(2), "f", NodeKind::File);
+    let local = base.clone();
+
+    let res = rebase_one(
+        &mut base,
+        &local,
+        &Op::relink(id(2), id(0), id(1), 1, false, false),
+    );
+    assert!(matches!(res, OpResolution::Applied { .. }));
+    assert_eq!(base.parent_of(id(2)), Some(id(1)), "dest-linked");
+    assert!(
+        base.children(id(0)).iter().all(|c| c.id != id(2)),
+        "source-removed — no orphan"
+    );
+}
+
+#[test]
+fn race_4_move_race_loser_undoes_its_dest_add() {
+    let mut base = Snapshot::new(id(0));
+    with_child(&mut base, id(0), id(1), "dirA", NodeKind::Folder);
+    with_child(&mut base, id(0), id(2), "dirB", NodeKind::Folder);
+    with_child(&mut base, id(0), id(3), "f", NodeKind::File);
+    // The other client's move already relocated the child into dirB.
+    base.unlink(id(0), id(3));
+    base.link(id(2), id(3), 2);
+    let local = base.clone();
+
+    // Our queued move (root → dirA) is the race loser: it undoes its dest-add.
+    let res = rebase_one(
+        &mut base,
+        &local,
+        &Op::relink(id(3), id(0), id(1), 1, false, false),
+    );
+    assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
+    assert_eq!(
+        base.parent_of(id(3)),
+        Some(id(2)),
+        "the winning move stands"
+    );
+    assert!(
+        base.children(id(1)).is_empty(),
+        "no dest-add residue under dirA"
+    );
+}
+
+#[test]
+fn race_5_dual_link_observed_repair_uses_the_link_counter() {
+    // Crash residue of a dest-first move: one child linked in two parents.
+    let mut base = Snapshot::new(id(0));
+    with_child(&mut base, id(0), id(1), "p1", NodeKind::Folder);
+    with_child(&mut base, id(0), id(2), "p2", NodeKind::Folder);
+    base.upsert_node(NodeMeta::new(id(3), "child", NodeKind::File));
+    base.link(id(1), id(3), 1);
+    base.link(id(2), id(3), 2); // the higher counter is the winner
+
+    let repairs = observed_repair(&base);
+    assert_eq!(repairs.len(), 1, "the dual link is detected");
+    apply_repairs(&mut base, &repairs);
+    assert_eq!(base.links_to(id(3)).len(), 1, "the losing link is removed");
+    assert_eq!(base.parent_of(id(3)), Some(id(2)));
+}
+
+// ---------------------------------------------------------------------------
+// Offline queue replay — stage ops offline, then replay FIFO onto a fresh
+// gate-passing base through the same rebase path.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn offline_queue_replays_fifo_onto_gate_passing_state() {
+    let store = InMemoryStagingStore::default();
+    let profile = SyncTimingProfile::CI;
+
+    block_on(async {
+        // Offline: journal a create, a rename, and a colliding create.
+        let ops = [
+            Op::create(id(1), id(0), "notes.txt", NodeKind::File, 1, None),
+            Op::rename(id(1), "notes-v2.txt", 1),
+            Op::create(id(2), id(0), "notes-v2.txt", NodeKind::File, 1, None), // will collide
+        ];
+        for op in &ops {
+            assert!(matches!(
+                stage_op(&store, &profile, op, None).await.unwrap(),
+                StageOutcome::Queued { .. }
+            ));
+        }
+
+        // Reconnect: decode the durable journal and replay onto fresh state.
+        let raw = store.queued_ops().await.unwrap();
+        let (decoded, undecodable) = decode_queue(&raw);
+        assert!(undecodable.is_empty());
+
+        let base = Snapshot::new(id(0));
+        let report = replay(&base, &base, &decoded);
+
+        assert_eq!(report.applied.len(), 3, "every op replayed in FIFO order");
+        assert_eq!(report.rebased.node(id(1)).unwrap().name, "notes-v2.txt");
+        // The colliding create auto-suffixed on merge.
+        assert!(report.applied[2].suffixed);
+        assert_eq!(report.rebased.node(id(2)).unwrap().name, "notes-v2 (2).txt");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Dead-letter on revoked-while-offline — staged bytes preserved.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
+    let store = InMemoryStagingStore::default();
+    let profile = SyncTimingProfile {
+        staging_budget_bytes: 1 << 20,
+        ..SyncTimingProfile::CI
+    };
+
+    block_on(async {
+        // Offline: create a file inside a granted folder (id 5), staging its bytes.
+        let op = Op::create(
+            id(6),
+            id(5),
+            "secret.txt",
+            NodeKind::File,
+            1,
+            Some(b"stage-key".to_vec()),
+        );
+        assert!(matches!(
+            stage_op(&store, &profile, &op, Some(b"plaintext-bytes"))
+                .await
+                .unwrap(),
+            StageOutcome::Queued { .. }
+        ));
+
+        // While offline the grant is revoked: the granted folder is gone from
+        // gate-passing state entirely.
+        let gate_passing = Snapshot::new(id(0)); // no id(5)
+        let raw = store.queued_ops().await.unwrap();
+        let (decoded, _) = decode_queue(&raw);
+        let report = replay(&gate_passing, &gate_passing, &decoded);
+
+        // The op terminally dead-letters — nothing silently dropped.
+        assert_eq!(report.applied.len(), 0);
+        assert_eq!(report.dead_letters.len(), 1);
+        assert_eq!(report.dead_letters[0].1, DeadLetterReason::TargetGone);
+
+        // The staged bytes are preserved (the caller does NOT GC a dead-letter's
+        // bytes — the user can still recover them).
+        assert_eq!(
+            store.staged_bytes(b"stage-key").await.unwrap(),
+            Some(b"plaintext-bytes".to_vec()),
+            "staged bytes survive the dead-letter"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Staging-budget fail-fast — uploads bounded, metadata unbounded.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn staging_budget_fails_fast_on_uploads_but_metadata_queues_unbounded() {
+    let store = InMemoryStagingStore::default();
+    let profile = SyncTimingProfile {
+        staging_budget_bytes: 8,
+        ..SyncTimingProfile::CI
+    };
+    block_on(async {
+        // A 9-byte upload past the 8-byte budget fails fast — nothing staged.
+        let upload = Op::create(id(1), id(0), "big", NodeKind::File, 1, Some(b"k".to_vec()));
+        assert!(matches!(
+            stage_op(&store, &profile, &upload, Some(b"nine byte"))
+                .await
+                .unwrap(),
+            StageOutcome::RejectedOverBudget { .. }
+        ));
+        assert_eq!(store.staged_bytes_total().await.unwrap(), 0);
+
+        // Metadata ops still queue past the exhausted budget.
+        for i in 10..20 {
+            assert!(matches!(
+                stage_op(&store, &profile, &Op::rename(id(i), "n", 1), None)
+                    .await
+                    .unwrap(),
+                StageOutcome::Queued { .. }
+            ));
+        }
+        assert_eq!(
+            store.queued_ops().await.unwrap().len(),
+            10,
+            "metadata is unbounded"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// The staleness ladder and the withheld-update escalation.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn staleness_ladder_climbs_fresh_reconciling_stale_offline() {
+    let p = SyncTimingProfile::PRODUCTION; // stale_after 90 s
+    let last = UnixMillis(0);
+
+    // Fresh within the window.
+    assert_eq!(
+        classify(
+            UnixMillis(10_000),
+            Some(last),
+            false,
+            Connectivity::Online,
+            &p
+        ),
+        Staleness::Fresh
+    );
+    // A reconcile in flight shows the quiet indicator.
+    assert_eq!(
+        classify(
+            UnixMillis(10_000),
+            Some(last),
+            true,
+            Connectivity::Online,
+            &p
+        ),
+        Staleness::Reconciling
+    );
+    // Past the threshold, idle: the stale badge.
+    assert_eq!(
+        classify(
+            UnixMillis(120_000),
+            Some(last),
+            false,
+            Connectivity::Online,
+            &p
+        ),
+        Staleness::Stale
+    );
+    // Offline outranks everything.
+    assert_eq!(
+        classify(
+            UnixMillis(120_000),
+            Some(last),
+            false,
+            Connectivity::Offline,
+            &p
+        ),
+        Staleness::Offline
+    );
+}
+
+#[test]
+fn withheld_update_escalation_is_shared_scope_only() {
+    let p = SyncTimingProfile::PRODUCTION; // escalation window 600 s
+    // Shared scope, others succeeding, pinned past the window: escalate.
+    assert!(withheld_escalation(
+        UnixMillis(600_000),
+        UnixMillis(0),
+        true,
+        true,
+        &p
+    ));
+    // A private-vault pin past the window is ordinary staleness, never escalated.
+    assert!(!withheld_escalation(
+        UnixMillis(600_000),
+        UnixMillis(0),
+        false,
+        true,
+        &p
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// The keyless re-PUT adversary — the floor law blocks a rollback.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn keyless_re_put_adversary_cannot_roll_the_floor_back() {
+    let floors = InMemoryFloorStore::default();
+    const SCOPE: [u8; 16] = [1u8; 16];
+    const NAME: &[u8] = b"scope-root-ipns-name";
+
+    block_on(async {
+        // The device adopted the record at sequence 5, epoch 3 (floors advanced).
+        floor::advance_on_unseal(&floors, &SCOPE, NAME, 5, 3)
+            .await
+            .unwrap();
+
+        // The adversary keyless-re-PUTs a captured OLDER record (seq 4, epoch 2)
+        // to try to roll the view back. It is byte-valid and validly signed, but
+        // both floors reject it — a re-PUT keeps a record alive, it can never
+        // regress the durable floors.
+        assert_eq!(floor::sequence_floor(&floors, NAME).await.unwrap(), Some(5));
+        assert_eq!(
+            floor::read_epoch_floor(&floors, &SCOPE).await.unwrap(),
+            Some(3)
+        );
+
+        // A monotonic-max re-raise at the lower values is a no-op: the floor holds.
+        floor::advance_on_unseal(&floors, &SCOPE, NAME, 4, 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            floor::sequence_floor(&floors, NAME).await.unwrap(),
+            Some(5),
+            "no rollback"
+        );
+        assert_eq!(
+            floor::read_epoch_floor(&floors, &SCOPE).await.unwrap(),
+            Some(3),
+            "no rollback"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Cold-start adopts nothing before floor seeding — the non-circular sequence.
+// ---------------------------------------------------------------------------
+
+/// A scripted pointer network for the cold-start narrative.
+#[derive(Clone, Default)]
+struct ScriptedPointers {
+    blocks: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+}
+
+impl ScriptedPointers {
+    fn put(&self, name: &IpnsName, block: Vec<u8>) {
+        self.blocks
+            .lock()
+            .unwrap()
+            .insert(name.as_str().to_owned(), block);
+    }
+}
+
+impl PointerFetch for ScriptedPointers {
+    async fn fetch(&self, name: &IpnsName) -> SeamResult<Option<Vec<u8>>> {
+        Ok(self.blocks.lock().unwrap().get(name.as_str()).cloned())
+    }
+}
+
+const LOGIN_SECRET: &[u8] = b"cold-start-login-secret";
+const ROOT_SCOPE: [u8; 16] = [0u8; 16];
+
+fn repoint(min_read_epoch: u64, write_epoch: u64) -> RepointObject {
+    RepointObject {
+        scope_id: ROOT_SCOPE,
+        current_root: vault_pointer_name(LOGIN_SECRET, 0),
+        write_epoch,
+        min_read_epoch,
+        prev_root: None,
+    }
+}
+
+#[test]
+fn cold_start_adopts_nothing_until_the_floor_seeds_from_the_pointer() {
+    let pointers = ScriptedPointers::default();
+    let owner = EcdsaSigner::from_scalar(&[3u8; 32]).unwrap();
+    let floors = InMemoryFloorStore::default();
+
+    block_on(async {
+        // Step 1 — cold start with an empty vault-pointer chain: adopt nothing.
+        let cold = resolve_vault_pointer(
+            &pointers,
+            LOGIN_SECRET,
+            &owner.verifying_key(),
+            &ROOT_SCOPE,
+            1,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            cold, None,
+            "cold start adopts nothing before a pointer exists"
+        );
+        assert_eq!(
+            floor::read_epoch_floor(&floors, &ROOT_SCOPE).await.unwrap(),
+            None,
+            "no floor is seeded yet — the gate would have no revocation boundary"
+        );
+
+        // Step 2 — the owner publishes the vault pointer (re-point: minReadEpoch 5).
+        let owner_seed = kdf::owner_pointer_seed(LOGIN_SECRET);
+        let read_key = kdf::pointer_read_key(owner_seed.as_bytes(), &ROOT_SCOPE);
+        let mut entropy = SeededEntropy::new(1);
+        let block = seal_repoint(
+            SessionRole::Owner,
+            &mut entropy,
+            read_key.as_bytes(),
+            1,
+            &owner,
+            &repoint(5, 3),
+        )
+        .unwrap();
+        pointers.put(&vault_pointer_name(LOGIN_SECRET, 0), block);
+
+        // Step 3 — the pointer resolves first (the non-circular cold-start act),
+        // then the floors cold-seed from its owner-vouched epochs.
+        let adopted = resolve_vault_pointer(
+            &pointers,
+            LOGIN_SECRET,
+            &owner.verifying_key(),
+            &ROOT_SCOPE,
+            1,
+        )
+        .await
+        .unwrap()
+        .expect("the vault pointer now resolves");
+        assert_eq!(adopted.index, 0);
+        cold_seed_floors(&floors, &adopted.repoint).await.unwrap();
+
+        // Now the revocation floor is seeded: an old-epoch record (epoch 3 < 5)
+        // would fail the gate's epoch stage — cold start no longer adopts blindly.
+        assert_eq!(
+            floor::read_epoch_floor(&floors, &ROOT_SCOPE).await.unwrap(),
+            Some(5),
+            "the floor seeded from the owner-signed re-point anchor"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// The state law — rendered = gate-passing snapshot ⊕ pending-op overlay.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn state_law_renders_the_snapshot_plus_the_pending_overlay() {
+    let mut base = Snapshot::new(id(0));
+    with_child(&mut base, id(0), id(1), "confirmed.txt", NodeKind::File);
+
+    // Two pending ops not yet confirmed by the network.
+    let pending = [
+        Op::create(id(2), id(0), "pending.txt", NodeKind::File, 1, None),
+        Op::rename(id(1), "renamed.txt", 1),
+    ];
+    let view = sync::apply_overlay(&base, &pending);
+
+    assert!(view.contains(id(2)), "pending create shows immediately");
+    assert_eq!(
+        view.node(id(1)).unwrap().name,
+        "renamed.txt",
+        "pending rename shows"
+    );
+    // The gate-passing snapshot is the only source of truth and is untouched.
+    assert!(!base.contains(id(2)));
+    assert_eq!(base.node(id(1)).unwrap().name, "confirmed.txt");
+}

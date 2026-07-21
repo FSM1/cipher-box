@@ -32,6 +32,7 @@ pub mod gate;
 pub mod net;
 pub mod profile;
 pub mod seams;
+pub mod sync;
 #[cfg(feature = "test-kit")]
 pub mod testkit;
 
@@ -42,9 +43,9 @@ pub use api::{
 pub use content::{
     ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
     DAG_ROOT_CODEC, DagError, Gateway, GatewaySource, PinMode, ProviderError, PrunePlan,
-    QuotaExceeded, ReadError, RootManifest, SealedChunk, SealedContent, assemble, decode_root,
-    frame_and_seal, leaf_range_for_byte_range, plan_prune, pre_flight_quota_check, read_block,
-    seal_content, test_connection, validate_endpoint,
+    QuotaExceeded, ReadError, RootManifest, SealError, SealedChunk, SealedContent, assemble,
+    decode_root, frame_and_seal, leaf_range_for_byte_range, plan_prune, pre_flight_quota_check,
+    read_block, seal_content, test_connection, validate_endpoint,
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{
@@ -61,6 +62,14 @@ pub use net::{
 };
 pub use profile::SyncTimingProfile;
 pub use seams::{SeamError, SeamResult, SeamSet, SeamTypes};
+pub use sync::{
+    AppliedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow,
+    HeadReconciliation, Link, NodeMeta, Op, OpKind, OpResolution, PointerError, PointerFetch,
+    Repair, ReplayReport, SessionRole, Snapshot, StageOutcome, TickCause, TickControl,
+    VaultPointerAdoption, apply_overlay, apply_repairs, classify, cold_seed_floors, decode_queue,
+    focus_set, observed_repair, rebase_one, reconcile_head, replay, resolve_vault_pointer,
+    stage_op,
+};
 
 /// Placeholder identity item; kept for the sibling crate stubs' dependency
 /// tests until real cross-crate surface replaces it.

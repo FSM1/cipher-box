@@ -49,18 +49,42 @@ pub struct SealedContent {
     pub leaves: Vec<SealedChunk>,
 }
 
+/// Why sealing a content version failed, fail-closed: entropy acquisition, or a
+/// leaf set that would assemble a root [`decode_root`] rejects. An `Ok` return is
+/// a version whose own DAG root this crate can decode.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SealError {
+    /// Entropy acquisition for chunk sealing failed.
+    Entropy(EntropyError),
+    /// DAG assembly rejected the leaf set (see [`DagError`]).
+    Dag(DagError),
+}
+
+impl From<EntropyError> for SealError {
+    fn from(error: EntropyError) -> Self {
+        Self::Entropy(error)
+    }
+}
+
+impl From<DagError> for SealError {
+    fn from(error: DagError) -> Self {
+        Self::Dag(error)
+    }
+}
+
 /// Frame, seal, and assemble `plaintext` into a content version under `key`
 /// (blueprint/engine.md "Content plane"). Composes [`frame_and_seal`] and
 /// [`assemble`]; deterministic under a fixed key and seeded entropy. Fails
-/// closed only if entropy acquisition fails.
+/// closed if entropy acquisition fails or the assembled leaf count would not
+/// round-trip through [`decode_root`].
 pub fn seal_content(
     plaintext: &[u8],
     key: &ContentKey,
     entropy: &mut impl Entropy,
     profile: &ContentProfile,
-) -> Result<SealedContent, EntropyError> {
+) -> Result<SealedContent, SealError> {
     let leaves = frame_and_seal(plaintext, key, entropy, profile)?;
-    let dag = assemble(&leaves, plaintext.len() as u64, profile);
+    let dag = assemble(&leaves, plaintext.len() as u64, profile)?;
     Ok(SealedContent {
         content_cid: dag.content_cid,
         root_block: dag.root_block,
