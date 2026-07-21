@@ -33,8 +33,8 @@ use cipherbox_core::seal::{
     decode_grant_blob_payload, decode_grant_set_commitment, decode_history_link_payload,
     decode_override_seed_payload, decode_read_body, decode_write_body, encode_ascent_link,
     encode_envelope, encode_grant_set_commitment, encode_override_seed_payload, encode_read_body,
-    encode_write_body, open_ascent_link, open_read_body, structure_sig_preimage, verify_grant_set,
-    verify_structure,
+    encode_write_body, open_ascent_link, open_grant_blob, open_owner_blob, open_read_body,
+    structure_sig_preimage, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
@@ -727,6 +727,51 @@ struct RejectVector {
     class: String,
 }
 
+/// An HPKE-blob reject vector: a sealed grant/owner blob whose open must fail
+/// closed (a tampered ciphertext or a struct-tag transplant). `structTag` is the
+/// tag the opener uses — for a transplant it differs from the seal.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HpkeBlobRejectVector {
+    name: String,
+    recipient_secret: String,
+    enc: String,
+    v: u64,
+    id: String,
+    scope: String,
+    epoch: u64,
+    struct_tag: u8,
+    ciphertext: String,
+    check: String,
+    class: String,
+}
+
+/// A grant/owner-blob reject vector: a plaintext-decode failure (`hex`) or an
+/// HPKE-open failure (a sealed envelope). Discriminated on which fields are
+/// present — a decode vector has `hex`, an HPKE vector has `enc`/`ciphertext`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum BlobRejectVector {
+    Decode(RejectVector),
+    HpkeOpen(HpkeBlobRejectVector),
+}
+
+impl BlobRejectVector {
+    fn name(&self) -> &str {
+        match self {
+            Self::Decode(v) => &v.name,
+            Self::HpkeOpen(v) => &v.name,
+        }
+    }
+
+    fn check(&self) -> &str {
+        match self {
+            Self::Decode(v) => &v.check,
+            Self::HpkeOpen(v) => &v.check,
+        }
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct UnknownVector {
@@ -905,7 +950,7 @@ fn grant_blob_accept_vectors(m: &Manifest) -> Vec<HpkeStructureVector> {
     serde_json::from_str(fixture(&m.grant.grant_blob_accept.file)).expect("grant_blob_accept shape")
 }
 
-fn grant_blob_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
+fn grant_blob_reject_vectors(m: &Manifest) -> Vec<BlobRejectVector> {
     serde_json::from_str(fixture(&m.grant.grant_blob_reject.file)).expect("grant_blob_reject shape")
 }
 
@@ -913,7 +958,7 @@ fn owner_blob_accept_vectors(m: &Manifest) -> Vec<HpkeStructureVector> {
     serde_json::from_str(fixture(&m.grant.owner_blob_accept.file)).expect("owner_blob_accept shape")
 }
 
-fn owner_blob_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
+fn owner_blob_reject_vectors(m: &Manifest) -> Vec<BlobRejectVector> {
     serde_json::from_str(fixture(&m.grant.owner_blob_reject.file)).expect("owner_blob_reject shape")
 }
 
@@ -1201,8 +1246,16 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
     covered.extend(mailbox_reject_vectors(&m).into_iter().map(|v| v.check));
     // Grant-family reject families (ticket #621).
     covered.extend(write_body_reject_vectors(&m).into_iter().map(|v| v.check));
-    covered.extend(grant_blob_reject_vectors(&m).into_iter().map(|v| v.check));
-    covered.extend(owner_blob_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(
+        grant_blob_reject_vectors(&m)
+            .iter()
+            .map(|v| v.check().to_string()),
+    );
+    covered.extend(
+        owner_blob_reject_vectors(&m)
+            .iter()
+            .map(|v| v.check().to_string()),
+    );
     covered.extend(history_link_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(ascent_link_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(
@@ -2707,6 +2760,60 @@ fn check_reject_family<T>(
     }
 }
 
+/// The grant/owner-blob reject-family shape: exact count, the manifest checks
+/// list equals the distinct file checks, and every vector fails closed — a
+/// decode vector through `decode_fn`, an HPKE vector through `open_fn` under the
+/// context it carries (a struct-tag transplant carries the opener's differing
+/// tag, so the recomputed AAD fails the tag).
+fn check_blob_reject_family<TDec, TOpen>(
+    label: &str,
+    vectors: &[BlobRejectVector],
+    section: &RejectSection,
+    decode_fn: impl Fn(&[u8]) -> Result<TDec, cipherbox_core::error::CodecError>,
+    open_fn: impl Fn(
+        &X25519Secret,
+        &[u8; 32],
+        &AadContext,
+        &[u8],
+    ) -> Result<TOpen, cipherbox_core::error::CodecError>,
+) {
+    assert_eq!(vectors.len(), section.count, "{label} reject count drift");
+    let listed: BTreeSet<&str> = section.checks.iter().map(String::as_str).collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(BlobRejectVector::check).collect();
+    assert_eq!(listed, in_vectors, "manifest checks vs {label} reject.json");
+    let mut names = BTreeSet::new();
+    for v in vectors {
+        let name = v.name();
+        assert!(
+            names.insert(name.to_string()),
+            "duplicate {label} reject {name}"
+        );
+        match v {
+            BlobRejectVector::Decode(r) => {
+                let bytes = unhex(name, &r.hex);
+                let err = match decode_fn(&bytes) {
+                    Err(e) => e,
+                    Ok(_) => panic!("{label} reject {name}: decoder accepted it"),
+                };
+                assert_eq!(err.check(), r.check, "{label} reject {name}: check ({err})");
+                assert_eq!(err.class(), r.class, "{label} reject {name}: class ({err})");
+            }
+            BlobRejectVector::HpkeOpen(h) => {
+                let ctx = seal_ctx(name, h.v, &h.id, &h.scope, h.epoch, h.struct_tag);
+                let recipient = X25519Secret::from_scalar(unhex32(name, &h.recipient_secret));
+                let enc = unhex32(name, &h.enc);
+                let ciphertext = unhex(name, &h.ciphertext);
+                let err = match open_fn(&recipient, &enc, &ctx, &ciphertext) {
+                    Err(e) => e,
+                    Ok(_) => panic!("{label} reject {name}: open accepted it"),
+                };
+                assert_eq!(err.check(), h.check, "{label} reject {name}: check ({err})");
+                assert_eq!(err.class(), h.class, "{label} reject {name}: class ({err})");
+            }
+        }
+    }
+}
+
 #[test]
 fn grant_struct_tags_are_frozen() {
     let m = manifest();
@@ -2873,20 +2980,23 @@ fn grant_blob_accept_vectors_seal_reproduce_open_and_decode() {
 fn grant_blob_reject_vectors_fire_the_named_check() {
     let m = manifest();
     let vectors = grant_blob_reject_vectors(&m);
-    check_reject_family(
+    check_blob_reject_family(
         "grant-blob",
         &vectors,
         &m.grant.grant_blob_reject,
         decode_grant_blob_payload,
+        open_grant_blob,
     );
-    assert!(
-        m.grant
-            .grant_blob_reject
-            .checks
-            .iter()
-            .any(|c| c == "missing-field"),
-        "grant-blob reject must cover the missing-field check"
-    );
+    for required in ["missing-field", "hpke-open-failed"] {
+        assert!(
+            m.grant
+                .grant_blob_reject
+                .checks
+                .iter()
+                .any(|c| c == required),
+            "grant-blob reject must cover the {required} check"
+        );
+    }
 }
 
 #[test]
@@ -2921,20 +3031,23 @@ fn owner_blob_accept_vectors_seal_reproduce_open_and_decode() {
 fn owner_blob_reject_vectors_fire_the_named_check() {
     let m = manifest();
     let vectors = owner_blob_reject_vectors(&m);
-    check_reject_family(
+    check_blob_reject_family(
         "owner-blob",
         &vectors,
         &m.grant.owner_blob_reject,
         decode_override_seed_payload,
+        open_owner_blob,
     );
-    assert!(
-        m.grant
-            .owner_blob_reject
-            .checks
-            .iter()
-            .any(|c| c == "missing-field"),
-        "owner-blob reject must cover the missing-field check"
-    );
+    for required in ["missing-field", "hpke-open-failed"] {
+        assert!(
+            m.grant
+                .owner_blob_reject
+                .checks
+                .iter()
+                .any(|c| c == required),
+            "owner-blob reject must cover the {required} check"
+        );
+    }
 }
 
 #[test]
