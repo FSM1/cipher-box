@@ -66,9 +66,19 @@ impl fmt::Debug for EcdsaSigner {
 }
 
 impl EcdsaVerifier {
-    /// Parse a compressed SEC1 public key. `None` when the bytes are not a
-    /// valid point on secp256k1.
+    /// Parse a **compressed** SEC1 public key. `None` when the bytes are not
+    /// exactly the frozen 33-byte compressed width, or are not a valid point on
+    /// secp256k1. The explicit length guard runs *before* `from_sec1_bytes`
+    /// (which also accepts 65-byte uncompressed/hybrid forms): a compressed key
+    /// re-emitted uncompressed is byte-distinct yet decodes to the same point,
+    /// so admitting it would break the frozen 33-byte-width canonical doctrine —
+    /// a `PartialEq`-equal contact code with different bytes, and (in the mailbox
+    /// path, where `sig_preimage` hashes the raw sender key) a distinct signed
+    /// preimage that still verifies.
     pub fn from_sec1(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != IDENTITY_PUBLIC_LEN {
+            return None;
+        }
         VerifyingKey::from_sec1_bytes(bytes).ok().map(Self)
     }
 
@@ -204,6 +214,19 @@ mod tests {
                 .verify_prehash(&digest, &malleated)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn uncompressed_sec1_encoding_of_a_valid_key_is_rejected() {
+        let vk = signer().verifying_key();
+        // The same point, re-encoded uncompressed (65 bytes): a valid secp256k1
+        // point that `from_sec1_bytes` would accept, but the frozen 33-byte
+        // width must reject it so the byte form stays single-valued.
+        let point = vk.0.to_encoded_point(false);
+        assert_eq!(point.as_bytes().len(), 65);
+        assert_eq!(EcdsaVerifier::from_sec1(point.as_bytes()), None);
+        // The canonical compressed form still parses.
+        assert_eq!(EcdsaVerifier::from_sec1(&vk.to_sec1()), Some(vk));
     }
 
     #[test]

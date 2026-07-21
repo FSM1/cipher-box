@@ -148,7 +148,7 @@
       },
       "reject": {
         "file": "vectors/contact/reject.json",
-        "count": 7,
+        "count": 8,
         "checks": [
           "subkey-binding-invalid",
           "unexpected-type",
@@ -255,7 +255,7 @@
     },
     "mailboxReject": {
       "file": "vectors/payload/mailbox_reject.json",
-      "count": 4,
+      "count": 5,
       "checks": [
         "hpke-open-failed",
         "identity-signature-invalid"

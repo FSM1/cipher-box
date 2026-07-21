@@ -3021,9 +3021,19 @@ fn build_contact_accept() -> Vec<ContactAcceptVector> {
     out
 }
 
+/// The 65-byte uncompressed SEC1 encoding of a compressed secp256k1 key: a
+/// byte-distinct re-encoding of the same point that the frozen 33-byte identity
+/// width must reject (issue #709).
+fn uncompressed_sec1(compressed: &[u8]) -> Vec<u8> {
+    use k256::elliptic_curve::sec1::ToEncodedPoint;
+    let pk = k256::PublicKey::from_sec1_bytes(compressed).expect("valid compressed key");
+    pk.to_encoded_point(false).as_bytes().to_vec()
+}
+
 fn build_contact_reject() -> Vec<RejectVector> {
     let signer = EcdsaSigner::from_scalar(&[0x22; 32]).expect("valid scalar");
     let good_id = signer.verifying_key().to_sec1().to_vec();
+    let uncompressed_id = uncompressed_sec1(&good_id);
     let enc_public = X25519Secret::from_scalar([0x33; 32]).public();
     let good_enc = enc_public.to_bytes().to_vec();
     let good_sig = ContactCode::create(&signer, enc_public)
@@ -3071,6 +3081,18 @@ fn build_contact_reject() -> Vec<RejectVector> {
         (
             "identity-pk-not-on-curve",
             bytes_of(Some(b(&[0xff; 33])), Some(b(&good_enc)), Some(b(&good_sig))),
+            "invalid-identity-key",
+            "malformed",
+        ),
+        (
+            // A valid identity point re-encoded uncompressed (65 bytes): the
+            // frozen 33-byte width rejects it before the binding verify runs.
+            "identity-pk-uncompressed",
+            bytes_of(
+                Some(b(&uncompressed_id)),
+                Some(b(&good_enc)),
+                Some(b(&good_sig)),
+            ),
             "invalid-identity-key",
             "malformed",
         ),
@@ -3821,6 +3843,35 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
     forged.insert("enc", Value::Bytes(sealed.enc.to_vec()));
     let forged_block = encode(&Value::Map(forged));
 
+    // A block that opens but whose senderIdentityPk is the 65-byte uncompressed
+    // re-encoding of the sender key: the frozen 33-byte identity width rejects it
+    // as identity-signature-invalid, and — because sig_preimage hashes the raw
+    // sender key — an uncompressed re-encode is byte-distinct from the authentic
+    // block, so admitting it would forge a distinct signed preimage (issue #709).
+    let uncompressed_eph = [0x57u8; 32];
+    let mut uncompressed_inner = Map::new();
+    uncompressed_inner.insert("payload", Value::Bytes(b"uncompressed".to_vec()));
+    uncompressed_inner.insert(
+        "senderIdentityPk",
+        Value::Bytes(uncompressed_sec1(&sender_pk)),
+    );
+    uncompressed_inner.insert(
+        "senderSig",
+        Value::Bytes(sender.sign_detcbor(b"any").to_compact().to_vec()),
+    );
+    let uncompressed_inner_bytes = encode(&Value::Map(uncompressed_inner));
+    let sealed_uncompressed = hpke_seal(
+        &recipient.public(),
+        &uncompressed_eph,
+        &info,
+        &[],
+        &uncompressed_inner_bytes,
+    );
+    let mut uncompressed_block_map = Map::new();
+    uncompressed_block_map.insert("ct", Value::Bytes(sealed_uncompressed.ciphertext));
+    uncompressed_block_map.insert("enc", Value::Bytes(sealed_uncompressed.enc.to_vec()));
+    let uncompressed_block = encode(&Value::Map(uncompressed_block_map));
+
     // (name, recipient_secret, v, block, check).
     let wrong_recipient = [0x41u8; 32];
     let cases: Vec<MailboxRejectCase> = vec![
@@ -3850,6 +3901,13 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
             recipient_scalar,
             v,
             forged_block,
+            "identity-signature-invalid",
+        ),
+        (
+            "sender-pk-uncompressed",
+            recipient_scalar,
+            v,
+            uncompressed_block,
             "identity-signature-invalid",
         ),
     ];

@@ -16,9 +16,23 @@ pub const NONCE_LEN: usize = 24;
 /// Poly1305 authentication tag length, appended to the ciphertext.
 pub const TAG_LEN: usize = 16;
 
+/// The largest single-message plaintext XChaCha20-Poly1305 can seal:
+/// `64 * (2^32 - 1)` bytes (≈256 GiB), the ChaCha20 32-bit block-counter limit.
+///
+/// # Security — plaintext length (caller invariant)
+///
+/// [`encrypt`] treats sealing as **infallible** and would panic on a single
+/// message strictly longer than this. Core exports the raw AEAD over
+/// caller-framed chunks (the engine frames content well below this, at 1 MiB),
+/// so the framing seam owns the ceiling — the same caller-invariant class as the
+/// per-call ephemeral-scalar uniqueness [`hpke_seal`](super::hpke::hpke_seal)
+/// documents. A `u64` keeps the constant representable on the 32-bit WASM leg,
+/// where the value exceeds `usize::MAX`.
+pub const MAX_PLAINTEXT_LEN: u64 = 64 * ((1u64 << 32) - 1);
+
 /// Seal `plaintext` under `key`/`nonce` with additional authenticated data
 /// `aad`. Returns `ciphertext || tag`. Infallible for in-memory inputs (the
-/// AEAD only errors on lengths no caller can reach here).
+/// AEAD only errors above [`MAX_PLAINTEXT_LEN`], which no caller reaches here).
 pub fn encrypt(
     key: &[u8; KEY_LEN],
     nonce: &[u8; NONCE_LEN],
@@ -80,6 +94,19 @@ mod tests {
         let nonce = [2u8; NONCE_LEN];
         let ct = encrypt(&key, &nonce, b"aad", b"hello");
         assert_eq!(decrypt(&key, &nonce, b"other", &ct), None);
+    }
+
+    #[test]
+    fn content_chunk_size_is_far_below_the_plaintext_ceiling() {
+        // The engine frames content into 1 MiB chunks (crates/engine content
+        // profile); that is orders of magnitude below the AEAD ceiling, so the
+        // infallible `encrypt` contract holds for every framed chunk.
+        let engine_chunk_size: u64 = 1 << 20;
+        let ceiling = MAX_PLAINTEXT_LEN;
+        assert!(engine_chunk_size < ceiling);
+        assert!(engine_chunk_size.saturating_mul(1000) < ceiling);
+        // Sanity-pin the ceiling itself: 64 * (2^32 - 1) bytes.
+        assert_eq!(ceiling, 274_877_906_880);
     }
 
     #[test]
