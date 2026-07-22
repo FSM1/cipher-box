@@ -120,11 +120,11 @@ The adapter trait carries, in each direction:
 
 ### Backends
 
-|              | macOS                                                                                                                     | Linux                                                     | Windows                  | macOS successor                                                                                |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------- |
-| Backend      | **FUSE-T ≥ 1.2.7, SMB backend** — NFS abandoned unconditionally (#32)                                                     | kernel FUSE via vendored `fuser` (MSG_PEEK patch carried) | **WinFsp** (MSI bundled) | **FSKit** module once macOS 27 is stable: Swift appex shell delegating into the shared FS core |
-| Invalidation | SMB-backend invalidation (added 1.2.1) — **mount with `noattrcache`**, verified on hardware (`tools/hw-gates/RESULTS.md`) | `inval_inode`/`inval_entry`                               | WinFsp notify API        | `FSVolume.DataCacheHandler`                                                                    |
-| Status       | ship v2.0                                                                                                                 | ship v2.0                                                 | ship v2.0                | designed-for; blocked on macOS 27 + the FSKit spike                                            |
+|              | macOS                                                                                                                     | Linux                                                     | Windows                  | macOS successor                                                                                                           |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| Backend      | **FUSE-T ≥ 1.2.7, SMB backend** — NFS abandoned unconditionally (#32)                                                     | kernel FUSE via vendored `fuser` (MSG_PEEK patch carried) | **WinFsp** (MSI bundled) | **FSKit** module once macOS 27 is stable: Swift appex shell delegating into the shared FS core                            |
+| Invalidation | SMB-backend invalidation (added 1.2.1) — **mount with `noattrcache`**, verified on hardware (`tools/hw-gates/RESULTS.md`) | `inval_inode`/`inval_entry`                               | WinFsp notify API        | `FSVolume.DataCacheHandler`                                                                                               |
+| Status       | ship v2.0                                                                                                                 | ship v2.0                                                 | ship v2.0                | designed-for; FSKit spike **passed** on macOS 27 (`tools/hw-gates/fskit-spike/RESULTS.md`) — successor timeline unblocked |
 
 macFUSE stays rejected (kext install friction, license, fuser ABI divergence);
 File Provider stays a fallback-only note (its plaintext replica is an E2EE
@@ -279,10 +279,14 @@ the headless harness entry.
 
 ## Open edges
 
-- **FSKit spike** — run against the macOS 27 beta before committing the
-  successor timeline; the adapter trait is shaped for it, but
-  `mountSingleVolume`/`DataCacheHandler` behavior needs hands-on confirmation
-  (#32 verify list, → [#47](https://github.com/FSM1/cipher-box-next/issues/47)).
+- **FSKit spike** — done (#644, `tools/hw-gates/fskit-spike/RESULTS.md`):
+  native FSKit builds/mounts on macOS 27 and `FSVolume.DataCacheHandler` +
+  `-[FSVolume setCacheStateForItem:…]` (`coherencyAction = 1`) give a reliable
+  sub-ms push-invalidation that lands on cached pages — the adapter trait's
+  outbound push-invalidation callback maps directly onto it, and coherence is
+  strictly better than the shipping FUSE-T SMB backend (gate 1). Remaining
+  successor work is the `crates/fuse` FSKit adapter itself, not a feasibility
+  question ([#47](https://github.com/FSM1/cipher-box-next/issues/47)).
 - **FUSE-T license terms** — verified (#644, `tools/hw-gates/RESULTS.md`
   gate 4): bundling in the app requires a negotiated commercial license
   from the author (no published pricing; <alex@fuse-t.org>); user-installed

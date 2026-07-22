@@ -12,13 +12,13 @@ Measured 2026-07-22.
 
 ## Verdict summary
 
-| Gate | Check                               | Result                                                                                                                                                                       |
-| ---- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1    | SMB invalidation round-trip latency | **PASS, with `noattrcache` required** — sub-ms coherence with push invalidation; without the option there is a 3 s attr floor and unbounded staleness for client-cached data |
-| 2    | v1 cross-client flake replay        | **PASS** — 0/100 flakes (v1/NFS baseline ~15 %); issue-109 churn workload survives with 0 errors                                                                             |
-| 3    | Overwrite-rename atomicity          | **PASS** — 0 torn/missing/short reads across 300 overwrite-renames                                                                                                           |
-| 4    | Commercial license terms            | **CONDITIONAL** — bundling requires a paid commercial license from the author; free path is user-installed FUSE-T                                                            |
-| 5    | FSKit spike (macOS 27 beta)         | **BLOCKED — no macOS 27 beta hardware** (this machine is 26.5.2)                                                                                                             |
+| Gate | Check                               | Result                                                                                                                                                                                                                                    |
+| ---- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | SMB invalidation round-trip latency | **PASS, with `noattrcache` required** — sub-ms coherence with push invalidation; without the option there is a 3 s attr floor and unbounded staleness for client-cached data                                                              |
+| 2    | v1 cross-client flake replay        | **PASS** — 0/100 flakes (v1/NFS baseline ~15 %); issue-109 churn workload survives with 0 errors                                                                                                                                          |
+| 3    | Overwrite-rename atomicity          | **PASS** — 0 torn/missing/short reads across 300 overwrite-renames                                                                                                                                                                        |
+| 4    | Commercial license terms            | **CONDITIONAL** — bundling requires a paid commercial license from the author; free path is user-installed FUSE-T                                                                                                                         |
+| 5    | FSKit spike (macOS 27 beta)         | **PASS** — native FSKit builds/mounts on macOS 27; `DataCacheHandler` + `setCacheStateForItem` give a reliable sub-ms push-invalidation that lands on cached pages (strictly better than gate 1). Full write-up: `fskit-spike/RESULTS.md` |
 
 No gate failed in a way that reopens the driver decision: FUSE-T ≥ 1.2.7
 SMB backend stands, with one new mount-option requirement (`noattrcache`)
@@ -141,17 +141,26 @@ repackaging/re-signing the binaries inside a vendor's app bundle.
 
 ## Gate 5 — FSKit spike
 
-**Blocked on hardware:** `FSClient.mountSingleVolume` and
-`FSVolume.DataCacheHandler` exist only in the macOS 27 beta; this machine
-is on 26.5.2. Two notes for when hardware is available:
+**PASS on macOS 27 beta hardware** (Darwin `26A5388g`). Full results,
+API surface, and build gotchas: **`fskit-spike/RESULTS.md`**; harness in
+`fskit-spike/`. Headline findings:
 
-- FUSE-T 1.2.7 itself now ships an FSKit backend (`org.fuse-t.fskit`
-  pkg), but its wiki marks notifications **unsupported** on that backend —
-  as shipped it would reintroduce the gate-1 staleness problem, so it is
-  not a shortcut around the native-FSKit spike.
-- The spike still needs hands-on confirmation of `DataCacheHandler`
-  invalidation semantics before the successor timeline in
-  `blueprint/desktop.md` is committed.
+- A native FSKit module (`FSUnaryFileSystem` + `FSVolumeDataCacheHandler`)
+  builds with the Command Line Tools alone, mounts via
+  `FSClient.mountSingleVolume`, and serves a fully usable volume.
+- `FSVolume.DataCacheHandler` (`openItem:…cacheMode:context:` /
+  `upgradeItem:` / `closeItem:`, per-open `grantedCoherency`) is live and
+  called by the kernel on every open path.
+- **`-[FSVolume setCacheStateForItem:cacheMode:coherencyType:coherencyAction:]`
+  with `coherencyAction = 1` is the push-invalidation primitive** — it
+  purges kernel-cached (mmap) pages, 100/100 reliable, p50 ≈ 0.35–1.15 ms /
+  p95 ≈ 0.44–2.22 ms. This lands on already-cached data, the exact case
+  FUSE-T gate 1 could not invalidate, so FSKit's coherence story is
+  strictly better than the shipping SMB backend.
+- FUSE-T 1.2.7's own bundled FSKit backend (`org.fuse-t.fskit`) still marks
+  notifications unsupported on its wiki, so it is not a shortcut — the
+  native-FSKit adapter is the path, and its invalidation seam maps cleanly
+  onto the adapter trait's outbound push-invalidation callback.
 
 ## Reproducing
 
@@ -163,6 +172,9 @@ cargo run --release -- gate1c  # throughput A/B
 cargo run --release -- gate2   # flake replay + churn
 cargo run --release -- gate3   # rename atomicity
 ```
+
+Gate 5 (FSKit, macOS 27) has its own harness and reproduction steps in
+`fskit-spike/RESULTS.md`.
 
 Requires FUSE-T ≥ 1.2.7 installed (no kext, no sudo). If macFUSE is also
 installed, the vendored fuser's build script prefers `fuse-t.pc` — do not

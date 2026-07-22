@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Gate5FS</string>
+	<key>CFBundleExecutable</key>
+	<string>Gate5FSModule</string>
+	<key>CFBundleIdentifier</key>
+	<string>cc.cipherbox.gate5host.fsmodule</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Gate5FSModule</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.1</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>MacOSX</string>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>EXAppExtensionAttributes</key>
+	<dict>
+		<key>EXExtensionPointIdentifier</key>
+		<string>com.apple.fskit.fsmodule</string>
+		<key>FSShortName</key>
+		<string>gate5fs</string>
+		<key>FSSupportsBlockResources</key>
+		<false/>
+		<key>FSSupportsPathURLs</key>
+		<true/>
+		<key>FSRequiresSecurityScopedPathURLResources</key>
+		<false/>
+		<key>FSMediaTypes</key>
+		<dict/>
+		<key>FSPersonalities</key>
+		<dict/>
+		<key>FSActivateOptionSyntax</key>
+		<dict>
+			<key>shortOptions</key>
+			<string>o:</string>
+		</dict>
+	</dict>
+</dict>
+</plist>
