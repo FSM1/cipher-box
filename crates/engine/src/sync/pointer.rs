@@ -212,9 +212,8 @@ pub fn open_repoint(
 ///
 /// **Cold start adopts nothing** until this runs: before the floor store seeds
 /// from the owner-signed anchor, every scope's read-epoch floor is unseeded and
-/// the gate can be shown any old-epoch record. The non-circular sequence
-/// (#38 D3): own vault → vault/scope pointer (first act) → floors seeded →
-/// current root name → envelope grant blob → seeds → render.
+/// the gate can be shown any old-epoch record (the non-circular sequence,
+/// #38 D3).
 pub async fn cold_seed_floors<F: FloorStore>(
     floors: &F,
     repoint: &RepointObject,

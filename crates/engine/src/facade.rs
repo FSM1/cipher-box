@@ -131,9 +131,8 @@ impl fmt::Debug for LoginSecret {
 /// Every command a host can issue — the intent ops, grant/rotation/share
 /// actions, auth, and manual refresh (blueprint/engine.md "Facade").
 ///
-/// Payload shapes are scaffold-minimal: opaque byte payloads harden into
-/// typed forms as the owning pipeline slices land, but the variant set is
-/// the surface hosts build against.
+/// Payloads are scaffold-minimal and harden with the pipeline slices; the
+/// variant set is the surface hosts build against.
 ///
 /// `Debug` is hand-written and prints only the variant name: payloads
 /// carry private user data (plaintext content, names, contact bundles),
@@ -373,14 +372,11 @@ impl EventStream {
 /// `Send` requirement, so one implementation links natively on desktop and
 /// compiles to worker-hosted WASM on web.
 pub struct Engine<T: SeamTypes> {
-    /// Injection is the contract this slice freezes; the cold-start liveness
-    /// loop is the first live use (the rest wire with the pipeline slices).
     seams: SeamSet<T>,
     /// Wired by the pipeline slices (seeds, nonces, jitter).
     #[allow(dead_code)]
     entropy: Box<dyn Entropy>,
     profile: SyncTimingProfile,
-    /// Held by the engine; every emit site lands with its pipeline slice.
     #[allow(dead_code)]
     events: mpsc::UnboundedSender<Event>,
     /// The session's live held-record set: the resolve slice pushes each

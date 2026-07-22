@@ -2,12 +2,11 @@
 //! the five per-op race rules, dead-lettering, and dual-link observed repair
 //! (blueprint/engine.md "Sync core: Per-op rebase rules"; CONTEXT.md).
 //!
-//! Replay is FIFO in performed order through the standard rebase, and rebases
-//! **only onto gate-passing state** (#33 D5–D7): the caller resolves a fresh
-//! last-known-good snapshot (every record through the adoption gate) and hands
-//! it here as the base. Each op resolves to exactly one outcome — applied
-//! (possibly auto-suffixed), dropped, or dead-lettered — and an applied op
-//! advances the working base so later ops rebase onto the updated state.
+//! Replay is FIFO in performed order and rebases **only onto gate-passing
+//! state** (#33 D5–D7): the caller resolves a fresh last-known-good snapshot
+//! (every record through the adoption gate) and hands it here as the base. An
+//! applied op advances the working base so later ops rebase onto the updated
+//! state.
 //!
 //! The five races, one rule each:
 //!
@@ -473,14 +472,11 @@ pub enum HeadReconciliation {
 /// sibling record observed at the same name (`observed_record` at
 /// `observed_sequence`) — both already record-verified upstream by the gate.
 ///
-/// This closes the same-sequence split-brain the publish confirm-by-re-resolve
+/// Closes the same-sequence split-brain the publish confirm-by-re-resolve
 /// cannot resolve by sequence alone (deferred from the net publish slice, #692):
-/// two writers each mint a **different** record at `floor + 1`, both land, and
-/// higher-sequence-wins never picks between them. The tiebreak is a total order
-/// over the exact verified record bytes every client fetches, so all clients
-/// converge on the same canonical head with no shared state, and the loser's
-/// re-mint at `sequence + 1` makes the ordinary higher-sequence-wins machinery
-/// finish the job.
+/// the tiebreak is a total order over the exact verified record bytes every
+/// client fetches, so all clients converge on the same canonical head with no
+/// shared state (see [`HeadReconciliation::SameSequenceDivergence`]).
 pub fn reconcile_head(
     local_record: &[u8],
     local_sequence: u64,

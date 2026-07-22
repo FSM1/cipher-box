@@ -4,8 +4,7 @@
 //! Every capability the engine needs from a host enters through one of these
 //! traits, injected as a constructor argument via [`SeamSet`]. Traits move
 //! opaque bytes and events — no seam holds logic, no domain type leaks into a
-//! seam; the engine owns all interpretation. A missing seam is a compile
-//! error (a missing [`SeamSet`] field), never a runtime gap.
+//! seam; the engine owns all interpretation.
 //!
 //! Determinism is injected: wall clock and timers come only from
 //! [`Scheduler`], entropy only from [`crate::entropy::Entropy`]. Engine logic

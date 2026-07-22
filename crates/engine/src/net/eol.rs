@@ -28,9 +28,7 @@ const SECS_PER_DAY: u64 = 24 * 60 * 60;
 ///
 /// Designed-for cadence, not yet a frozen profile constant: like the sweep
 /// cadence (blueprint/engine.md "Open edges"), it joins the sync timing
-/// profile once the testing-strategy measurement process fixes it. The
-/// end-to-end timelines that exercise it run on virtual time, so a real 30-day
-/// value stays fast to test.
+/// profile once the testing-strategy measurement process fixes it.
 pub const EOL_RENEW_THRESHOLD: Duration = Duration::from_secs(30 * SECS_PER_DAY);
 
 /// The full client-signed EOL window (90 days), as a [`Duration`]. Mirrors
