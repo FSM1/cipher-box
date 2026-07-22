@@ -63,8 +63,9 @@ class FakePinStore extends PinStore {
     return cid;
   }
 
-  async unpin(cid: string): Promise<void> {
+  async unpin(cid: string): Promise<boolean> {
     this.unpinned.push(cid);
+    return true;
   }
 }
 
@@ -169,6 +170,16 @@ function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
           get(target, prop, receiver) {
             if (prop === 'query') {
               return async (sql: string, params?: unknown[]) => {
+                // The batch helper acquires all keys in one round-trip via
+                // `unnest($1::bigint[])`, so drop skipped keys FROM the array and
+                // acquire the rest; return [] only if every key was skipped.
+                if (/pg_advisory_xact_lock/i.test(sql) && Array.isArray(params?.[0])) {
+                  const kept = (params[0] as unknown[]).filter((k) => !skip.has(String(k)));
+                  if (kept.length === 0) {
+                    return [];
+                  }
+                  return target.query(sql, [kept]);
+                }
                 if (/pg_advisory_xact_lock/i.test(sql) && skip.has(String(params?.[0]))) {
                   return [];
                 }

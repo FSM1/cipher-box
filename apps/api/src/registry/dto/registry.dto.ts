@@ -112,3 +112,17 @@ export class ByoResponseDto {
   @ApiProperty({ description: 'The account BYO flag after the update' })
   byo!: boolean;
 }
+
+export class DeleteAccountResponseDto {
+  @ApiProperty({ description: 'Name-inventory rows retired for the account' })
+  namesRetired!: number;
+
+  @ApiProperty({ description: 'Pin rows retired for the account' })
+  pinsRetired!: number;
+
+  @ApiProperty({ description: 'Mailbox messages purged for the account' })
+  mailboxPurged!: number;
+
+  @ApiProperty({ description: 'CIDs physically unpinned because global refcount reached zero' })
+  unpinned!: number;
+}

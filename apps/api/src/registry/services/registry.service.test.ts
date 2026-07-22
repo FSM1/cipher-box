@@ -128,8 +128,9 @@ function fakeDataSource(
 /** Records every physical unpin so the refcount-zero decision is observable. */
 class FakePinStore extends PinStore {
   readonly unpinned: string[] = [];
-  async unpin(cid: string): Promise<void> {
+  async unpin(cid: string): Promise<boolean> {
     this.unpinned.push(cid);
+    return true;
   }
 }
 
@@ -327,7 +328,7 @@ describe('RegistryService', () => {
       // arbitrary (non-lock-timeout) failure must be logged and skipped, never
       // rethrown into a 500.
       const throwing = new (class extends FakePinStore {
-        override async unpin(): Promise<void> {
+        override async unpin(): Promise<boolean> {
           throw new Error('kubo unreachable');
         }
       })();

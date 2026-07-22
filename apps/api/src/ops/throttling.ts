@@ -29,6 +29,12 @@ export const THROTTLE_SURFACES = {
   registry: { default: { limit: 120, ttl: 60_000 } },
   /** Account quota/BYO: per account; quota is polled on the statfs path. */
   account: { default: { limit: 120, ttl: 60_000 } },
+  /**
+   * Account hard-delete: per account. A rare, deliberate, destructive
+   * operation (client-confirmed), so the cap sits low — a handful of retries is
+   * plenty; anything above that is abuse.
+   */
+  accountDelete: { default: { limit: 5, ttl: 60_000 } },
   /** Content upload: per account; bounded above the write cadence, below abuse. */
   content: { default: { limit: 60, ttl: 60_000 } },
   /**

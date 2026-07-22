@@ -93,28 +93,55 @@ export function advisoryLockKey(token: string): bigint {
 }
 
 /**
+ * Namespaced per-account advisory key: `account:` prevents any collision with a
+ * bare CID or IPNS-name key in the shared bigint lock space. The upload quota
+ * gate and the account hard-delete cascade MUST share this function so an
+ * in-flight upload serializes against the account's deletion on the same key.
+ */
+export function accountLockKey(accountId: string): bigint {
+  return advisoryLockKey(`account:${accountId}`);
+}
+
+/**
  * Namespaced per-CID key for the SESSION lock that guards a durability window:
- * the upload path holds it across commit → pin, and retire holds it across
- * commit → unpin. DISTINCT from the plain CID xact lock so the upload can hold
- * both — session lock on its own connection, xact lock on the tx connection —
- * without a same-key self-deadlock. Upload and retire MUST share this key so
- * retire's post-commit unpin of a CID serializes against a concurrent upload
- * re-pinning the same CID (#714).
+ * the upload path holds it across commit → pin, and retire (and the account
+ * hard-delete cascade's post-commit unpin) holds it across commit → unpin.
+ * DISTINCT from the plain CID xact lock so the upload can hold both — session
+ * lock on its own connection, xact lock on the tx connection — without a
+ * same-key self-deadlock. Upload and retire MUST share this key so retire's
+ * post-commit unpin of a CID serializes against a concurrent upload re-pinning
+ * the same CID (#714).
  */
 export function pinDurabilityLockKey(cid: string): bigint {
   return advisoryLockKey(`pin-durability:${cid}`);
 }
 
 /**
- * Acquire a batch of transaction-scoped advisory locks in one deadlock-free
- * order: keys are de-duplicated and sorted, so any two overlapping batches take
- * their shared keys in the same sequence and cannot form a cycle. Set the
- * `lock_timeout` bound (setAdvisoryLockTimeout) once before calling.
+ * Acquire a batch of transaction-scoped advisory locks in one round-trip and one
+ * deadlock-free order: keys are de-duplicated and sorted, so any two overlapping
+ * batches take their shared keys in the same sequence and cannot form a cycle.
+ * Acquisition order comes SOLELY from the pre-sorted `sorted` array: Postgres
+ * evaluates each `pg_advisory_xact_lock(k)` as it scans `unnest` in array order,
+ * BEFORE the sort node runs — so the `ORDER BY k` does NOT co-guarantee ascending
+ * acquisition and the pre-sort must never be dropped in reliance on it. A
+ * `lock_timeout` abort on any key maps to the retryable 503. Set the bound
+ * (setAdvisoryLockTimeout) once before calling.
  */
 export async function acquireAdvisoryLocks(manager: EntityManager, keys: bigint[]): Promise<void> {
   const sorted = [...new Set(keys)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  for (const key of sorted) {
-    await acquireAdvisoryLock(manager, key);
+  if (sorted.length === 0) {
+    return;
+  }
+  try {
+    await manager.query(
+      'SELECT pg_advisory_xact_lock(k) FROM unnest($1::bigint[]) AS k ORDER BY k',
+      [sorted.map((key) => key.toString())]
+    );
+  } catch (error) {
+    if (isLockNotAvailable(error)) {
+      throw new ServiceUnavailableException('Contended resource; retry shortly');
+    }
+    throw error;
   }
 }
 

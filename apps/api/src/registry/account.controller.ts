@@ -1,9 +1,15 @@
-import { Body, Controller, Get, Patch, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Patch, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { AuthenticatedRequest, JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { THROTTLE_SURFACES } from '../ops/throttling';
-import { ByoResponseDto, QuotaResponseDto, SetByoDto } from './dto/registry.dto';
+import {
+  ByoResponseDto,
+  DeleteAccountResponseDto,
+  QuotaResponseDto,
+  SetByoDto,
+} from './dto/registry.dto';
+import { AccountService } from './services/account.service';
 import { RegistryService } from './services/registry.service';
 
 /**
@@ -17,7 +23,10 @@ import { RegistryService } from './services/registry.service';
 @UseGuards(JwtAuthGuard)
 @Controller('account')
 export class AccountController {
-  constructor(private readonly registryService: RegistryService) {}
+  constructor(
+    private readonly registryService: RegistryService,
+    private readonly accountService: AccountService
+  ) {}
 
   @Get('quota')
   @Throttle(THROTTLE_SURFACES.account)
@@ -39,5 +48,21 @@ export class AccountController {
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
   setByo(@Body() body: SetByoDto, @Req() request: AuthenticatedRequest): Promise<ByoResponseDto> {
     return this.registryService.setByo(request.user.userId, body.byo);
+  }
+
+  @Delete()
+  @Throttle(THROTTLE_SURFACES.accountDelete)
+  @ApiOperation({
+    summary:
+      'Immediate hard-delete of the caller account: retire inventory/pin rows (refcounted unpin), purge mailbox, delete auth rows',
+  })
+  @ApiOkResponse({ type: DeleteAccountResponseDto })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
+  @ApiResponse({
+    status: 503,
+    description: 'Contended resource or concurrent pin write; retry shortly',
+  })
+  deleteAccount(@Req() request: AuthenticatedRequest): Promise<DeleteAccountResponseDto> {
+    return this.accountService.deleteAccount(request.user.userId);
   }
 }

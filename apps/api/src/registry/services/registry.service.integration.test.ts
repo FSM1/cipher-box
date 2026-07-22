@@ -44,8 +44,9 @@ function pgErrorCode(error: unknown): string | undefined {
 /** Records the CIDs a retire physically unpins, so premature unpins are observable. */
 class RecordingPinStore extends PinStore {
   readonly unpinned: string[] = [];
-  async unpin(cid: string): Promise<void> {
+  async unpin(cid: string): Promise<boolean> {
     this.unpinned.push(cid);
+    return true;
   }
 }
 
@@ -54,9 +55,10 @@ class GatedUnpinStore extends RecordingPinStore {
   constructor(private readonly gate: Gate) {
     super();
   }
-  override async unpin(cid: string): Promise<void> {
-    await super.unpin(cid);
+  override async unpin(cid: string): Promise<boolean> {
+    const released = await super.unpin(cid);
     await this.gate.onReach();
+    return released;
   }
 }
 
