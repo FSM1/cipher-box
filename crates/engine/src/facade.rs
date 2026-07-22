@@ -1031,5 +1031,55 @@ mod tests {
                 "an unsurfaced dead-letter is retained when the send fails"
             );
         }
+
+        #[test]
+        fn remove_op_failure_after_send_re_surfaces_the_dead_letter_next_boot() {
+            let (mut engine, mut events, pointers) = started_at(UnixMillis(123_456));
+            block_on(engine.seams.staging_store.enqueue_op(b"not-a-valid-op")).expect("enqueue");
+            // Send lands in the buffer but the durable removal fails: the gated
+            // `?` aborts cold-start with `Seam` before the paint, leaving the op
+            // queued. The receiver stays alive, so the `DeadLetter` is observable.
+            engine.seams.staging_store.fail_remove_op();
+
+            let first = block_on(engine.cold_start_data_path(
+                &pointers,
+                &AdoptingAdopter,
+                &owner().verifying_key(),
+                ROOT_SCOPE,
+                VERSION,
+                NodeId([0xAB; 16]),
+            ));
+            assert!(
+                matches!(first, Err(ColdStartError::Seam(_))),
+                "a failed durable removal aborts cold-start as a retryable Seam error"
+            );
+            assert_eq!(
+                block_on(events.next()),
+                Some(Event::DeadLetter { op_id: OpId(1) })
+            );
+            assert_eq!(
+                block_on(engine.seams.staging_store.queued_ops())
+                    .unwrap()
+                    .len(),
+                1,
+                "a removal failure after a successful send retains the op"
+            );
+
+            // Next boot re-surfaces the same op_id — hosts dedup by it — proving
+            // the best-effort contract holds under a partial seam failure.
+            let second = block_on(engine.cold_start_data_path(
+                &pointers,
+                &AdoptingAdopter,
+                &owner().verifying_key(),
+                ROOT_SCOPE,
+                VERSION,
+                NodeId([0xAB; 16]),
+            ));
+            assert!(matches!(second, Err(ColdStartError::Seam(_))));
+            assert_eq!(
+                block_on(events.next()),
+                Some(Event::DeadLetter { op_id: OpId(1) })
+            );
+        }
     }
 }
