@@ -105,7 +105,7 @@ describe('EngineClient leadership + transport swap', () => {
   });
 
   it('keeps the UI event subscription alive across a leadership swap', async () => {
-    const { tab } = origin();
+    const { tab, workers } = origin();
     const secretSource = {
       provideSecret: (): Promise<ArrayBuffer> => Promise.resolve(new Uint8Array([1]).buffer),
     };
@@ -120,9 +120,16 @@ describe('EngineClient leadership + transport swap', () => {
     await leader.dispose();
     await tick();
     await tick();
-    // After promotion the follower is the leader; its own worker's events reach
-    // the same UI subscription registered before the swap.
     expect(follower.currentRole()).toBe('leader');
+
+    // The subscription registered *before* the swap must still be live: an event
+    // emitted by the promoted tab's own worker reaches it. A swap that dropped
+    // the subscription would leave `received` empty and fail here.
+    const promoted = workers[workers.length - 1];
+    promoted.emit({ type: 'event', event: { kind: 'snapshotUpdated' } });
+    await tick();
+    expect(received).toContainEqual({ kind: 'snapshotUpdated' });
+
     await follower.dispose();
   });
 
@@ -179,6 +186,34 @@ describe('EngineClient leadership + transport swap', () => {
     expect(promoted.posted.some((m) => (m as { type?: string }).type === 'start')).toBe(true);
 
     await follower.dispose();
+  });
+
+  it('releases the election lock and surfaces onError when the worker spawn throws synchronously (P1-5)', async () => {
+    const { tab } = origin();
+    const errors: Error[] = [];
+    const spawnFailure = new Error('worker spawn failed');
+
+    // This tab wins the lock first but its worker spawn throws synchronously
+    // during promotion: it must not sit on a dead-leader lock. It releases the
+    // lock, falls back to a follower, and surfaces the fault via onError.
+    const doomed = tab({
+      spawnWorker: (): never => {
+        throw spawnFailure;
+      },
+      onError: (error) => errors.push(error),
+    });
+    const healthy = tab();
+    await tick();
+    await tick();
+
+    expect(doomed.currentRole()).not.toBe('leader');
+    expect(errors).toContain(spawnFailure);
+    // The released lock was handed to the healthy tab, proving it was never held
+    // by the doomed leader after the throw.
+    expect(healthy.currentRole()).toBe('leader');
+
+    await doomed.dispose();
+    await healthy.dispose();
   });
 
   it('rejects a command in flight at a leadership swap so the UI can retry', async () => {

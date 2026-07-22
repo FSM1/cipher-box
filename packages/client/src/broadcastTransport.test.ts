@@ -42,9 +42,16 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(followerPosts.map((m) => m.type)).toEqual(['cb:hello']);
   });
 
-  it('leaks no key-shaped sentinel on any leader→follower message (structural)', async () => {
+  it('never echoes the leader secret onto any leader→follower message (structural)', async () => {
     const bus = new FakeBus();
     const engine = new FakeEngineTransport();
+
+    // The sentinel *is* the leader's key material: 32 distinctive secret bytes
+    // actually handed to the leader engine. It must never ride the keyless
+    // leader→follower wire — not on an event, not in a response error string.
+    const sentinel = Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + 3) & 0xff);
+    await engine.start(sentinel.buffer.slice(0));
+
     new LeaderRelay(bus.channel(), engine);
 
     // Capture everything the leader broadcasts to followers (events + responses).
@@ -53,14 +60,17 @@ describe('broadcast transport ↔ leader relay', () => {
     spy.addEventListener('message', (event) => leaderPosts.push(event.data));
 
     const follower = new BroadcastTransport(bus.channel(), 'f');
-    // A key-shaped sentinel: distinctive 32-byte key material that must never
-    // appear on the keyless leader→follower wire.
-    const sentinel = Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + 3) & 0xff);
     await follower.start();
 
-    // Drive the full leader→follower surface: a correlated response plus every
-    // EventDescriptor variant, including the byte- and string-bearing ones.
-    await follower.command({ kind: 'manualRefresh' }, []);
+    // A command whose engine handling rejects: the relay forwards the failure as
+    // a `cb:response` error string — a real leak vector for secret bytes bleeding
+    // into an error message. A hygienic engine rejects with a generic message.
+    engine.respond = () => Promise.reject(new Error('command failed'));
+    await follower.command({ kind: 'manualRefresh' }, []).catch(() => undefined);
+
+    // Plus every EventDescriptor variant, including the byte- and string-bearing
+    // ones the relay forwards verbatim.
+    engine.respond = () => Promise.resolve();
     engine.emit({ kind: 'snapshotUpdated' });
     engine.emit({ kind: 'stalenessChanged', staleness: 'stale' });
     engine.emit({ kind: 'withheldUpdateEscalation', ipnsName: new Uint8Array([1, 2, 3]) });
@@ -69,7 +79,8 @@ describe('broadcast transport ↔ leader relay', () => {
     await tick();
 
     // Serialize every leader post (bytes as csv, bigint as string) and assert the
-    // sentinel never rode along — a future variant echoing key bytes would fail.
+    // secret never rode along. A relay that echoed the leader's key material into
+    // an event or error string would surface the sentinel here and fail.
     const serialize = (value: unknown): string =>
       JSON.stringify(value, (_key, v) =>
         v instanceof Uint8Array ? [...v].join(',') : typeof v === 'bigint' ? v.toString() : v
@@ -77,7 +88,13 @@ describe('broadcast transport ↔ leader relay', () => {
     const sentinelCsv = [...sentinel].join(',');
     const leaked = leaderPosts.some((message) => serialize(message).includes(sentinelCsv));
     expect(leaked).toBe(false);
-    // Sanity: the leader actually broadcast the events + response we drove.
+    // Sanity: the leader actually broadcast the failure response + events we drove
+    // — the error-string wire field the sentinel could have leaked through is live.
+    const errorResponses = leaderPosts.filter(
+      (m) =>
+        (m as { type?: string; ok?: boolean }).type === 'cb:response' && !(m as { ok?: boolean }).ok
+    );
+    expect(errorResponses.length).toBe(1);
     expect(leaderPosts.length).toBeGreaterThanOrEqual(6);
   });
 

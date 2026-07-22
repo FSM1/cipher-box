@@ -154,7 +154,10 @@ export class EngineClient implements EngineTransport {
 
   private becomeLeader(): void {
     if (this.role === 'closed') return;
-    void this.promote();
+    // Defer off the election callback so `this.election` is fully assigned before
+    // promotion runs: a synchronous worker-spawn throw then reaches `abortPromotion`
+    // with a live election to release, never a half-constructed one.
+    queueMicrotask(() => void this.promote());
   }
 
   /**
@@ -176,31 +179,35 @@ export class EngineClient implements EngineTransport {
     this.innerUnsub();
     this.current.close();
 
-    const worker = this.config.spawnWorker();
-    const local = new LocalTransport(worker);
+    // Worker creation and cold start run inside the guard: a synchronous throw
+    // from `spawnWorker()` or the `LocalTransport` constructor must release the
+    // Web Lock exactly like an async startup failure, never leave it held with
+    // no live leader (a dead-leader lock).
+    let local: LocalTransport | null = null;
+    try {
+      const worker = this.config.spawnWorker();
+      local = new LocalTransport(worker);
 
-    if (wasActiveFollower) {
-      try {
+      if (wasActiveFollower) {
         const secret = await this.provideFailoverSecret();
         await local.start(secret);
-      } catch (error) {
-        this.abortPromotion(local, error);
-        return;
       }
       // `dispose()` may have latched `closed` during the awaited startup.
       if ((this.role as EngineClientRole) === 'closed') {
         local.close();
         return;
       }
-    }
 
-    // Startup resolved: only now install the transport as active, wire events,
-    // and announce the relay so followers route commands to a live worker.
-    this.role = 'leader';
-    this.current = local;
-    this.innerUnsub = local.subscribe((event) => this.fanOut(event));
-    this.relay = new LeaderRelay(this.channel, local);
-    if (this.ownFocus) this.relay.reportLocalFocus(this.clientId, this.ownFocus);
+      // Startup resolved: only now install the transport as active, wire events,
+      // and announce the relay so followers route commands to a live worker.
+      this.role = 'leader';
+      this.current = local;
+      this.innerUnsub = local.subscribe((event) => this.fanOut(event));
+      this.relay = new LeaderRelay(this.channel, local);
+      if (this.ownFocus) this.relay.reportLocalFocus(this.clientId, this.ownFocus);
+    } catch (error) {
+      this.abortPromotion(local, error);
+    }
   }
 
   private async provideFailoverSecret(): Promise<ArrayBuffer> {
@@ -209,11 +216,12 @@ export class EngineClient implements EngineTransport {
     return source.provideSecret();
   }
 
-  private abortPromotion(local: LocalTransport, error: unknown): void {
-    // Never advertise a dead leader: tear down the half-built worker, release
+  private abortPromotion(local: LocalTransport | null, error: unknown): void {
+    // Never advertise a dead leader: tear down any half-built worker, release
     // the lock so a healthy tab is elected, and fall back to a follower that
-    // mirrors the next leader.
-    local.close();
+    // mirrors the next leader. `local` is null when the throw beat transport
+    // construction — there is nothing to tear down, only the lock to release.
+    local?.close();
     if (this.role !== 'closed') {
       this.role = 'follower';
       this.installFollower();
