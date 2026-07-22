@@ -56,7 +56,9 @@
 //! transaction); that is safe and retryable — every re-key is monotonic (a fresh
 //! seed at a higher epoch) — and the `Err` tells the caller the revoke is
 //! incomplete and must be retried, so success is never *claimed* on a partial
-//! cascade.
+//! cascade. A retry re-resolves current network state and rebuilds the plan; it
+//! must not replay a plan whose root/descendants already advanced, or the stale
+//! epoch transition loses CAS.
 //!
 //! # Determinism
 //!
@@ -435,11 +437,13 @@ where
 /// **and** every transitively-reachable descendant scope root with a fresh
 /// override seed, then enqueue the lazy-wave sweep.
 ///
-/// `root_child_index` is the root's own write-body direct-child-scope index (the
-/// caller already holds it — the level-1 adjacency). The `resolver` supplies each
-/// deeper descendant's re-seal material; `publisher` CAS-publishes each re-key;
-/// `floors` raises each scope's `minReadEpoch`; `scheduler` receives the sweep
-/// task from `make_sweep_task` on success.
+/// The level-1 frontier is `root_plan`'s own committed `direct_child_scope_index`
+/// — the *same* index the re-sealed root record publishes, so the walk can never
+/// diverge from what the root commits to (single source of truth, matching how
+/// each descendant descends into its resolved `direct_child_scope_index`). The
+/// `resolver` supplies each deeper descendant's re-seal material; `publisher`
+/// CAS-publishes each re-key; `floors` raises each scope's `minReadEpoch`;
+/// `scheduler` receives the sweep task from `make_sweep_task` on success.
 ///
 /// Top-down and fail-closed: the root's fresh seed threads to its children as
 /// their new parent derivation, and so on down the tree; any descendant that
@@ -459,7 +463,6 @@ pub async fn cascade_rotate_scope<E, F, S, R, P, Mk>(
     resolver: &R,
     publisher: &P,
     root_plan: &RotateScopePlan<'_>,
-    root_child_index: &[ChildScopeRef],
     make_sweep_task: Mk,
 ) -> Result<CascadeOutcome, CascadeError>
 where
@@ -490,7 +493,9 @@ where
     visited.insert(root_scope_id);
 
     let mut frontier = canonicalize_frontier(
-        root_child_index
+        root_plan
+            .committed
+            .direct_child_scope_index
             .iter()
             .map(|child| (child.clone(), root_fresh_seed.clone()))
             .collect(),
@@ -932,16 +937,9 @@ mod tests {
         let outcome = block_on(async {
             let mut entropy = SeededEntropy::new(0xCA5CADE);
             let plan = fx.plan(&root_index);
-            cascade_rotate_scope(
-                &mut entropy,
-                &floors,
-                &scheduler,
-                &net,
-                &net,
-                &plan,
-                &root_index,
-                || Box::pin(async {}),
-            )
+            cascade_rotate_scope(&mut entropy, &floors, &scheduler, &net, &net, &plan, || {
+                Box::pin(async {})
+            })
             .await
         });
         let spawned = scheduler.take_spawned_tasks().len();
