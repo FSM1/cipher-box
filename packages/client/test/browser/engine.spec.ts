@@ -80,6 +80,22 @@ test.describe('engine worker host', () => {
     expect(outcome.error ?? '', 'staging detachment failure (#717)').toBe('');
     expect(outcome.ok).toBe(true);
   });
+
+  test('a WASM-backed staging key is encoded before await, surviving detachment', async ({
+    page,
+  }) => {
+    const outcome = await runBoundary(page, 'stagingKeyDetachment');
+    expect(outcome.error ?? '', 'staging key detachment failure (#717)').toBe('');
+    expect(outcome.ok).toBe(true);
+  });
+
+  test('a WASM-backed snapshot key is encoded before await, surviving detachment', async ({
+    page,
+  }) => {
+    const outcome = await runBoundary(page, 'snapshotKeyDetachment');
+    expect(outcome.error ?? '', 'snapshot key detachment failure (#717)').toBe('');
+    expect(outcome.ok).toBe(true);
+  });
 });
 
 function runBoundary(page: Page, name: string): Promise<{ ok: boolean; error?: string }> {

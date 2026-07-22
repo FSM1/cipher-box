@@ -4,17 +4,21 @@
  *
  * - `bigint`: the facade's `u64`→`bigint` boundary round-trips a value beyond
  *   `Number.MAX_SAFE_INTEGER` intact, through the real wasm-bindgen `Event`.
- * - `stagingDetachment` (#717): a WASM-backed byte view handed to a seam is
+ * - `stagingDetachment` (#717): a WASM-backed byte *value* handed to a seam is
  *   copied synchronously at entry, so detaching it across the seam's awaits
  *   cannot corrupt or truncate the stored bytes. The test grows a
  *   `WebAssembly.Memory` (detaching the view) right after the call, before its
  *   awaits resolve; a copy-after-await implementation would write a detached
  *   view and fail.
+ * - `stagingKeyDetachment` / `snapshotKeyDetachment` (#717): the *key* view is
+ *   likewise encoded synchronously at entry. A key hexed after the await would
+ *   read a detached view as '' and store the entry under the wrong name, so the
+ *   read-back under the real key here would miss — the fix stores it correctly.
  */
 import init, { deadLetterEvent } from './pkg/cipherbox_wasm.js';
 import wasmUrl from './pkg/cipherbox_wasm_bg.wasm?url';
 
-import { OpfsStagingStore } from '../../src/seams/index.js';
+import { IdbSnapshotCache, OpfsStagingStore } from '../../src/seams/index.js';
 
 interface Outcome {
   ok: boolean;
@@ -68,12 +72,73 @@ async function runStagingDetachment(): Promise<void> {
   }
 }
 
+async function runStagingKeyDetachment(): Promise<void> {
+  const dirName = `boundary-staging-key-${Date.now()}`;
+  await clearOpfsDir(`${dirName}-staged`);
+  const store = new OpfsStagingStore(dirName);
+
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const keyView = new Uint8Array(memory.buffer, 0, 8);
+  for (let i = 0; i < keyView.length; i += 1) keyView[i] = (i * 13 + 3) & 0xff;
+  const expectedKey = keyView.slice();
+  const bytes = new Uint8Array([1, 2, 3, 4]);
+
+  // Start the write, then detach the KEY view before its awaits resolve.
+  const writing = store.putStagedBytes(keyView, bytes);
+  memory.grow(1); // detaches memory.buffer → `keyView` is now zero-length
+  if (keyView.byteLength !== 0) throw new Error('precondition: key view was not detached by grow');
+  await writing;
+
+  // Read back under the real key. A key hexed after the await would be '',
+  // storing the entry under the wrong name and missing here.
+  const stored = await store.stagedBytes(expectedKey);
+  if (!stored || stored.length !== bytes.length) {
+    throw new Error(`stored length ${stored?.length ?? 'null'} != ${bytes.length}`);
+  }
+  for (let i = 0; i < bytes.length; i += 1) {
+    if (stored[i] !== bytes[i]) throw new Error(`byte ${i}: ${stored[i]} != ${bytes[i]}`);
+  }
+}
+
+async function runSnapshotKeyDetachment(): Promise<void> {
+  const cache = new IdbSnapshotCache(`boundary-snapshot-key-${Date.now()}`);
+  try {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const keyView = new Uint8Array(memory.buffer, 0, 8);
+    for (let i = 0; i < keyView.length; i += 1) keyView[i] = (i * 5 + 2) & 0xff;
+    const expectedKey = keyView.slice();
+    const value = new Uint8Array([9, 8, 7, 6]);
+
+    // Start the put, then detach the KEY view before its await resolves.
+    const writing = cache.put(keyView, value);
+    memory.grow(1); // detaches memory.buffer → `keyView` is now zero-length
+    if (keyView.byteLength !== 0) {
+      throw new Error('precondition: key view was not detached by grow');
+    }
+    await writing;
+
+    const stored = await cache.get(expectedKey);
+    if (!stored || stored.length !== value.length) {
+      throw new Error(`stored length ${stored?.length ?? 'null'} != ${value.length}`);
+    }
+    for (let i = 0; i < value.length; i += 1) {
+      if (stored[i] !== value[i]) throw new Error(`byte ${i}: ${stored[i]} != ${value[i]}`);
+    }
+  } finally {
+    await cache.clear();
+  }
+}
+
 async function run(name: string): Promise<void> {
   switch (name) {
     case 'bigint':
       return runBigint();
     case 'stagingDetachment':
       return runStagingDetachment();
+    case 'stagingKeyDetachment':
+      return runStagingKeyDetachment();
+    case 'snapshotKeyDetachment':
+      return runSnapshotKeyDetachment();
     default:
       throw new Error(`unknown boundary check: ${name}`);
   }
