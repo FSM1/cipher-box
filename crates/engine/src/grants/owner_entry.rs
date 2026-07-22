@@ -147,13 +147,16 @@ mod tests {
         let mut cache = OwnerSeedCache::new();
         match outcome {
             OwnerEntry::Confirmed { seed, epoch } => {
-                assert_eq!(*seed, SEED);
+                assert!(ct_eq_32(&seed, &SEED), "seed mismatch");
                 assert_eq!(epoch, 4);
                 cache.refresh(SCOPE, seed, epoch);
             }
             OwnerEntry::Abuse(_) => panic!("agreement must confirm"),
         }
-        assert_eq!(cache.get(&SCOPE).unwrap().seed(), &SEED);
+        assert!(
+            ct_eq_32(cache.get(&SCOPE).unwrap().seed(), &SEED),
+            "cached seed mismatch"
+        );
         assert_eq!(cache.get(&SCOPE).unwrap().epoch, 4);
     }
 
@@ -189,7 +192,10 @@ mod tests {
         let mut cache = OwnerSeedCache::new();
         cache.refresh(SCOPE, Zeroizing::new(SEED), 1);
         cache.refresh(SCOPE, Zeroizing::new(OTHER), 2);
-        assert_eq!(cache.get(&SCOPE).unwrap().seed(), &OTHER);
+        assert!(
+            ct_eq_32(cache.get(&SCOPE).unwrap().seed(), &OTHER),
+            "cached seed mismatch"
+        );
         assert_eq!(cache.get(&SCOPE).unwrap().epoch, 2);
     }
 }

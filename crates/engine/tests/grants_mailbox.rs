@@ -34,6 +34,7 @@ use cipherbox_engine::grants::{
 };
 use cipherbox_engine::mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 use cipherbox_engine::seams::{FloorStore, HttpMethod, HttpResponse, Mailbox, RecordTransport};
+use cipherbox_engine::secret_util::ct_eq_32;
 use cipherbox_engine::testkit::fakes::InMemoryCredentialStore;
 use cipherbox_engine::testkit::fakes::ScriptedHttp;
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, block_on};
@@ -396,9 +397,12 @@ fn two_instance_share_accept_end_to_end() {
     assert!(outcome.newly_added);
     assert!(received.contains(fx.name.as_str().as_bytes()));
     // The pointer read key was persisted from the unsealed grant blob.
-    assert_eq!(
-        received.iter().next().unwrap().pointer_read_key(),
-        &POINTER_READ_KEY
+    assert!(
+        ct_eq_32(
+            received.iter().next().unwrap().pointer_read_key(),
+            &POINTER_READ_KEY
+        ),
+        "pointer read key mismatch"
     );
 
     // The item was acked only after the durable append: the inbox is now empty.
@@ -698,6 +702,96 @@ fn a_failed_persist_never_acks_the_item() {
     );
 }
 
+/// The durable sequence floor must not advance unless the accepted bookmark is
+/// durably persisted (floor/bookmark atomicity, P1 durability). A persist
+/// failure leaves the floor UNCHANGED, so redelivery with a recovered store
+/// re-adopts cleanly instead of being stranded below an already-advanced floor —
+/// a permanently-unrecoverable share.
+#[test]
+fn a_persist_failure_leaves_the_floor_unadvanced_and_redelivery_recovers() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let poster = world.device(b"owner-inbox");
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+    let contact = import_contact(&fx.owner_contact).unwrap();
+    let name_bytes = fx.name.as_str().as_bytes();
+
+    // Pre-accept: no durable sequence floor for this name yet.
+    assert_eq!(
+        block_on(recipient.floor_store.sequence_floor(name_bytes)).unwrap(),
+        None
+    );
+
+    // First attempt: the durable store is offline, so the persist fails.
+    recipient.received_share_store.set_failing(true);
+    let mut received = ReceivedSharesList::new();
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .unwrap_err();
+    assert!(matches!(err, AcceptError::Persist(_)), "got {err}");
+
+    // (a) un-acked: the item redelivers.
+    assert_eq!(
+        inbox_len(&fx, &recipient),
+        1,
+        "un-acked: the item redelivers"
+    );
+    // (b) the durable sequence floor is UNCHANGED from its pre-accept state.
+    assert_eq!(
+        block_on(recipient.floor_store.sequence_floor(name_bytes)).unwrap(),
+        None,
+        "the floor never advanced past a share that did not durably persist"
+    );
+
+    // (c) redelivery with a recovered store re-adopts and restores the bookmark.
+    recipient.received_share_store.set_failing(false);
+    let redelivered = block_on(poll_verified(&recipient.mailbox, &fx.recipient_enc, V))
+        .unwrap()
+        .remove(0);
+    let outcome = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &redelivered,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .expect("redelivery re-adopts once the store recovers");
+    assert!(outcome.newly_added, "the share was appended, not stranded");
+    assert_eq!(outcome.sequence, 1);
+    assert!(received.contains(name_bytes));
+    // The floor advanced exactly now, and the item is acked.
+    assert_eq!(
+        block_on(recipient.floor_store.sequence_floor(name_bytes)).unwrap(),
+        Some(1),
+        "the floor advances only with the durable bookmark"
+    );
+    assert_eq!(
+        inbox_len(&fx, &recipient),
+        0,
+        "acked after the durable persist and floor advance"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Self-healing bookmark: a re-accept with drifted authority heals (P1-2).
 // ---------------------------------------------------------------------------
@@ -740,9 +834,12 @@ fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
     .expect("first accept");
     assert!(outcome1.newly_added);
     assert_eq!(received.iter().next().unwrap().permission, Permission::Read);
-    assert_eq!(
-        received.iter().next().unwrap().pointer_read_key(),
-        &POINTER_READ_KEY
+    assert!(
+        ct_eq_32(
+            received.iter().next().unwrap().pointer_read_key(),
+            &POINTER_READ_KEY
+        ),
+        "pointer read key mismatch"
     );
     let persists_after_first = recipient.received_share_store.persist_count();
     assert_eq!(
@@ -794,9 +891,8 @@ fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
         Permission::Write,
         "permission healed to the new committed value"
     );
-    assert_eq!(
-        healed.pointer_read_key(),
-        &ROTATED_POINTER_READ_KEY,
+    assert!(
+        ct_eq_32(healed.pointer_read_key(), &ROTATED_POINTER_READ_KEY),
         "pointer read key healed to the rotated value"
     );
     assert_eq!(
@@ -1126,7 +1222,7 @@ fn owner_entry_seed_disagreement_raises_an_abuse_event() {
     // → a confirmed owner read (no abuse).
     match cross_check(&unseal_seed, Some(&unseal_seed), &unseal_seed, fx.epoch) {
         OwnerEntry::Confirmed { seed, epoch } => {
-            assert_eq!(*seed, unseal_seed);
+            assert!(ct_eq_32(&seed, &unseal_seed), "seed mismatch");
             assert_eq!(epoch, fx.epoch);
         }
         OwnerEntry::Abuse(_) => panic!("agreement must confirm"),

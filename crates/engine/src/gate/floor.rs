@@ -78,10 +78,12 @@ pub async fn sequence_floor<F: FloorStore>(
 /// Advance floors after an AAD-confirmed unseal — the only record-sourced
 /// advancement. Raises the per-scope read-epoch floor to `epoch` and the
 /// per-name sequence floor to `sequence`, both monotonic-max. Callers invoke
-/// this exactly once, at the adoption gate's successful unseal stage
-/// ([`adopt`](crate::gate::adopt) is the sole caller), so a record whose body
-/// never unsealed can never move a floor — the provenance the plain scalar
-/// arguments cannot express is enforced at that single call site.
+/// this exactly once, at the adoption gate's successful unseal stage (the gate
+/// commits it — eagerly via [`adopt`](crate::gate::adopt), or deferred via
+/// [`PendingAdoption::commit`](crate::gate::PendingAdoption::commit) — after a
+/// confirmed unseal), so a record whose body never unsealed can never move a
+/// floor — the provenance the plain scalar arguments cannot express is enforced
+/// at that single call site.
 ///
 /// **Fail-safe ordering.** The read-epoch (revocation) and sequence floors are
 /// distinctly keyed. The batch lists the trust-critical **read-epoch

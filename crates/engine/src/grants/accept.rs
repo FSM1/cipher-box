@@ -28,7 +28,7 @@ use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
-use crate::gate::{Candidate, GateError, ReaderContext, SeedBlob, adopt};
+use crate::gate::{Candidate, GateError, ReaderContext, SeedBlob, adopt_deferred};
 use crate::mailbox::VerifiedMailboxItem;
 use crate::seams::{FloorStore, Mailbox, SeamError, SeamResult};
 
@@ -247,11 +247,12 @@ impl Reconciled {
 /// the accept flow writes through before it acks the mailbox item.
 ///
 /// The engine acks **only** after this returns `Ok` (blueprint/engine.md
-/// "Mailbox logic — ack after durable"): a crash between the adoption gate
-/// advancing the durable sequence floor and this write would otherwise lose the
-/// bookmark for good, because the redelivered record is now below the floor and
-/// rejected. Persisting the whole list first, then acking, keeps redelivery
-/// safe — a persist failure returns un-acked and the item re-accepts idempotently
+/// "Mailbox logic — ack after durable"), and the durable sequence floor is
+/// advanced only after this returns `Ok` too: were the floor to advance first, a
+/// persist failure would strand the share for good, because the redelivered
+/// record is now below the floor and rejected. Persisting the whole list first,
+/// then advancing the floor and acking, keeps redelivery safe — a persist failure
+/// returns un-acked with the floor untouched and the item re-accepts idempotently
 /// (the bookmark self-heals). Injected as a grants-layer seam, not one of the
 /// nine host seams; the facade wires a concrete store when the accept flow is
 /// mounted (#635).
@@ -480,7 +481,11 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
             aad: grant_aad,
         }),
     };
-    let adopted = adopt(floors, &reader, candidate)
+    // Gate the record but DEFER the floor-law advance: the durable sequence
+    // floor must not move ahead of the bookmark it accepts. If the persist below
+    // fails the floor stays put, so redelivery re-adopts cleanly instead of being
+    // stranded below an already-advanced floor (a permanently-lost share).
+    let pending = adopt_deferred(floors, &reader, candidate)
         .await
         .map_err(AcceptError::Gate)?;
 
@@ -495,10 +500,9 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     });
     let newly_added = matches!(reconciled, Reconciled::Added);
 
-    // Persist durably BEFORE acking. A failure rolls the in-memory bookmark back
-    // and returns un-acked, so the item redelivers rather than being lost — the
-    // ack strictly follows durable persistence. A true no-op re-accept needs no
-    // durable write.
+    // Persist durably BEFORE the floor advance and the ack. A failure rolls the
+    // in-memory bookmark back and returns un-acked, so the item redelivers rather
+    // than being lost. A true no-op re-accept needs no durable write.
     if reconciled.is_durable_change() {
         if let Err(e) = store.persist(received).await {
             received.revert(&pointer.scope_root_name, reconciled);
@@ -506,7 +510,8 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
         }
     }
 
-    // ...and only now ack.
+    // The bookmark is durable — now commit the deferred floor advance, then ack.
+    let adopted = pending.commit(floors).await.map_err(AcceptError::Gate)?;
     mailbox.ack(&item.item_id).await.map_err(AcceptError::Ack)?;
 
     Ok(AcceptOutcome {
@@ -614,7 +619,10 @@ mod tests {
         assert_eq!(list.len(), 1);
         let stored = list.iter().next().unwrap();
         assert_eq!(stored.permission, Permission::Write);
-        assert_eq!(stored.pointer_read_key(), &[0x9C; 32]);
+        assert!(
+            crate::secret_util::ct_eq_32(stored.pointer_read_key(), &[0x9C; 32]),
+            "pointer read key mismatch"
+        );
     }
 
     #[test]
@@ -649,7 +657,10 @@ mod tests {
             Permission::Read,
             "healed field rolled back"
         );
-        assert_eq!(stored.pointer_read_key(), &[0x8A; 32]);
+        assert!(
+            crate::secret_util::ct_eq_32(stored.pointer_read_key(), &[0x8A; 32]),
+            "pointer read key mismatch"
+        );
     }
 
     #[test]
