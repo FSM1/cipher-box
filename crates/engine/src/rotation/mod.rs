@@ -23,13 +23,17 @@
 //!   descendant seeds. Proven in simulation against faked seams; the production
 //!   resolver wiring is #745/#746.
 //!
-//! `rotateScopeWrite` (the write-plane name wave) is a separate primitive, out
-//! of this slice's read-plane scope.
+//! - [`rotate_write`] — `rotateScopeWrite`, the owner-only write-plane rotation:
+//!   a fresh write override seed, a bumped `writeEpoch`, and a child-first name
+//!   wave (root re-pointed last) with the three-channel re-point, register-first
+//!   inventory swap, and root linger. The write-plane sibling of `rotate_scope`;
+//!   proven in simulation against faked resolve/publish seams (#745/#746).
 
 pub mod cascade;
 pub mod eager_set;
 pub mod reseal;
 pub mod rotate;
+pub mod rotate_write;
 pub mod sweep;
 pub mod trigger;
 
@@ -46,6 +50,11 @@ pub use reseal::{
 pub use rotate::{
     ResealedScopeRoot, RotateError, RotateScopePlan, RotationOutcome, ScopeRootPublishError,
     ScopeRootPublisher, rotate_scope,
+};
+pub use rotate_write::{
+    RepointChannel, RepublishedNode, RotateScopeWritePlan, WritePublishError, WriteRotateError,
+    WriteRotationOutcome, WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher,
+    build_repoint_object, derive_write_name, rotate_scope_write,
 };
 pub use sweep::{SweepError, SweepOutcome, SweepResolver, SweepTarget, run_sweep, sweep_pass};
 pub use trigger::{RevokeError, RevokedCommittedSet, RotationTrigger, revoke_read_grant};
