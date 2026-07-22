@@ -7,14 +7,16 @@
 //! layer that *composes* `crates/core`'s grant/contact/mailbox codecs and KDF
 //! edges into the stateful behaviour — self-location, owner-only authority,
 //! contact import, the accept flow, revocation classification, and the owner
-//! seed cross-check. It mints no grants: grant *creation*, invites, and revoke
-//! *actions* ride the rotation primitives of a sibling slice (#635). Every trust
-//! decision here is a composed core verdict or the adoption gate's; this layer
-//! holds no crypto.
+//! seed cross-check. Read-grant *creation* ([`create`]) composes the sweep +
+//! re-seal + mailbox primitives into the owner-side mint; write grants, invites,
+//! and revoke *actions* ride further slices of #635. Every trust decision here
+//! is a composed core verdict or the adoption gate's; this layer holds no
+//! crypto.
 
 pub mod accept;
 pub mod child_index;
 pub mod contact;
+pub mod create;
 pub mod ledger;
 pub mod owner_entry;
 pub mod revocation;
@@ -27,6 +29,10 @@ pub use child_index::{
     canonicalize, insert_child, move_child, remove_child, repair_observed, undo_dest_add,
 };
 pub use contact::{Contact, import_contact};
+pub use create::{
+    CreateGrantError, CreateGrantOutcome, GrantRecipient, GranteeScopePlan, OwnerGrantKeys,
+    ParentScopePlan, create_read_grant,
+};
 pub use ledger::{
     AuthorityViolation, PublishedGrantBlob, enforce_committed_ledger, recipient_blinded_tag,
     self_locate,
