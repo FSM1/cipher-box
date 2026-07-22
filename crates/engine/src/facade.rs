@@ -27,6 +27,7 @@ use crate::entropy::Entropy;
 use crate::net::{HeldRecord, LivenessControl, RE_PUT_INTERVAL, keyless_re_put, run_liveness_loop};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{OpId, Scheduler, SeamSet, SeamTypes};
+use crate::session::SessionIdentity;
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
 /// non-secret, and location-independent — routes and commands key on it,
@@ -105,6 +106,13 @@ impl LoginSecret {
     /// Whether the secret is empty (always a caller bug).
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// Borrow the raw secret bytes for in-crate cold-start derivation only.
+    /// `pub(crate)` so the secret never leaves engine memory; the only caller
+    /// is [`SessionIdentity::derive`](crate::session::SessionIdentity::derive).
+    pub(crate) fn expose(&self) -> &[u8] {
+        &self.0
     }
 }
 
@@ -376,6 +384,11 @@ pub struct Engine<T: SeamTypes> {
     /// Session-alive latch: cleared on drop so the spawned liveness loop
     /// stops at its next wake instead of re-PUTting after the engine is gone.
     alive: Rc<Cell<bool>>,
+    /// The cold-start session identity, derived from the login secret at
+    /// [`start`](Self::start). `None` until then; the single place derived key
+    /// material lives once the engine is live. The resolve/publish/rotation
+    /// slices and the liveness loop read every signer from here.
+    session: Option<SessionIdentity>,
     started: bool,
 }
 
@@ -396,6 +409,7 @@ impl<T: SeamTypes> Engine<T> {
                 events,
                 held_records: Rc::new(RefCell::new(Vec::new())),
                 alive: Rc::new(Cell::new(true)),
+                session: None,
                 started: false,
             },
             EventStream { receiver },
@@ -404,11 +418,18 @@ impl<T: SeamTypes> Engine<T> {
 
     /// Start of secret: consumes the login secret and brings the engine up.
     ///
-    /// The full cold-start sequence (identity derivation, vault-pointer
-    /// resolve, floor cold-seed, root adoption, first snapshot event) lands
-    /// with the pipeline slices; the lifecycle contract — exactly one
-    /// successful `start` per instance, secret zeroized on consumption — is
-    /// in force now.
+    /// Derives the cold-start [`SessionIdentity`] from the secret — the
+    /// owner-plane identity that needs no network (enc subkey, owner pointer
+    /// seed, vault-pointer signer chain), plus the per-scope/per-name signer
+    /// factories the pipeline layers scope material onto. The remaining
+    /// cold-start steps (vault-pointer resolve, floor cold-seed, root
+    /// adoption, first snapshot event) land with the resolve/gate slices,
+    /// which read their key material from the session assembled here.
+    ///
+    /// The lifecycle contract holds: exactly one successful `start` per
+    /// instance, and the secret is zeroized on consumption — derivation is the
+    /// only reader, and the secret is dropped at its terminal owner the moment
+    /// the identity is built.
     pub async fn start(&mut self, secret: LoginSecret) -> Result<(), EngineError>
     where
         T::Scheduler: Clone + 'static,
@@ -420,12 +441,24 @@ impl<T: SeamTypes> Engine<T> {
         if secret.is_empty() {
             return Err(EngineError::InvalidSecret);
         }
-        // Derivation lands with the pipeline slices; the secret zeroizes on
-        // drop here, at its terminal owner.
+        // Pure derivation from the injected secret — no clock, no RNG — then
+        // the secret zeroizes on drop here, at its terminal owner.
+        self.session = Some(SessionIdentity::derive(&secret));
         drop(secret);
         self.spawn_liveness_loop();
         self.started = true;
         Ok(())
+    }
+
+    /// The live session identity, once [`start`](Self::start) has derived it.
+    /// `pub(crate)`: the in-crate pipeline (resolve, publish, rotation, the
+    /// liveness loop) reads its signers here; hosts wrap the facade and never
+    /// hold key material.
+    // Read by the pipeline slices that consume the session (resolve #745/#746,
+    // liveness composition #750/#751); the hook is live now, its callers land next.
+    #[allow(dead_code)]
+    pub(crate) fn session(&self) -> Option<&SessionIdentity> {
+        self.session.as_ref()
     }
 
     /// Spawn the ~hourly keyless re-PUT loop (blueprint/engine.md "Liveness"):
@@ -485,10 +518,85 @@ impl<T: SeamTypes> Drop for Engine<T> {
 mod tests {
     use super::*;
 
+    use crate::seams::UnixMillis;
+    use crate::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
+
+    fn new_engine() -> (Engine<FakeSeamTypes>, EventStream) {
+        let device = FakeWorld::new().device(b"alice-pk");
+        Engine::new(
+            device.seam_set(),
+            Box::new(SeededEntropy::new(42)),
+            SyncTimingProfile::CI,
+        )
+    }
+
+    /// Starts an engine whose virtual clock sits at `clock` before `start`, so
+    /// tests can prove derivation is independent of the wall time at boot.
+    fn started_engine_at(secret_byte: u8, clock: UnixMillis) -> Engine<FakeSeamTypes> {
+        let world = FakeWorld::new();
+        world.scheduler.advance_to(clock);
+        let device = world.device(b"alice-pk");
+        let (mut engine, _events) = Engine::new(
+            device.seam_set(),
+            Box::new(SeededEntropy::new(42)),
+            SyncTimingProfile::CI,
+        );
+        block_on(engine.start(LoginSecret::new(vec![secret_byte; 32]))).unwrap();
+        engine
+    }
+
     #[test]
     fn login_secret_debug_is_redacted() {
         let secret = LoginSecret::new(vec![0xAA; 32]);
         assert_eq!(format!("{secret:?}"), "LoginSecret(redacted)");
+    }
+
+    #[test]
+    fn cold_start_derives_and_wires_the_session_identity() {
+        let (mut engine, _events) = new_engine();
+        assert!(engine.session().is_none(), "no identity before start");
+
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        let session = engine
+            .session()
+            .expect("start derives the session identity");
+
+        // The per-name signers #750/#751 need are reachable and match the pure
+        // derivation from the same secret — start invents no key material.
+        let expected = SessionIdentity::derive(&LoginSecret::new(vec![7u8; 32]));
+        assert_eq!(
+            session.vault_pointer_signer(0).verifying_key().to_bytes(),
+            expected.vault_pointer_signer(0).verifying_key().to_bytes(),
+        );
+        assert_eq!(
+            session
+                .write_name_signer(&[5u8; 32], &[4u8; 16])
+                .verifying_key()
+                .to_bytes(),
+            expected
+                .write_name_signer(&[5u8; 32], &[4u8; 16])
+                .verifying_key()
+                .to_bytes(),
+        );
+    }
+
+    #[test]
+    fn cold_start_derivation_is_deterministic_and_clock_independent() {
+        // Two engines whose virtual clocks sit at different instants derive the
+        // same identity from the same secret: `start` reads no clock or RNG,
+        // only the seed.
+        let a = started_engine_at(7, UnixMillis(0));
+        let b = started_engine_at(7, UnixMillis(1_000_000));
+        assert_eq!(
+            a.session().unwrap().enc_subkey_public().to_bytes(),
+            b.session().unwrap().enc_subkey_public().to_bytes(),
+        );
+        let c = started_engine_at(8, UnixMillis(2_000_000));
+        assert_ne!(
+            a.session().unwrap().enc_subkey_public().to_bytes(),
+            c.session().unwrap().enc_subkey_public().to_bytes(),
+            "a different secret is a different identity",
+        );
     }
 
     #[test]
