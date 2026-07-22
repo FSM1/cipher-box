@@ -85,9 +85,8 @@ pub use sync::{
     AppliedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow,
     HeadReconciliation, Link, NodeMeta, Op, OpKind, OpResolution, PointerError, PointerFetch,
     Repair, ReplayReport, SessionRole, Snapshot, StageOutcome, TickCause, TickControl,
-    VaultPointerAdoption, apply_overlay, apply_repairs, classify, cold_seed_floors, decode_queue,
-    focus_set, observed_repair, rebase_one, reconcile_head, replay, resolve_vault_pointer,
-    stage_op,
+    VaultPointerAdoption, apply_overlay, apply_repairs, classify, decode_queue, focus_set,
+    observed_repair, rebase_one, reconcile_head, replay, resolve_vault_pointer, stage_op,
 };
 
 /// Placeholder identity item; kept for the sibling crate stubs' dependency

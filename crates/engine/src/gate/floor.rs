@@ -99,6 +99,33 @@ impl core::fmt::Display for ColdSeedError {
 
 impl std::error::Error for ColdSeedError {}
 
+/// The scope role a cold-seed runs against — the gate on the read-epoch
+/// (revocation) regression check, which is sound **only at the root/vault
+/// anchor**.
+///
+/// At the root scope the read epoch is owner-authored, so
+/// [`advance_on_unseal`] raises the read-epoch floor in lockstep with the owner
+/// clock and a vouched `minReadEpoch` below the durable floor is an unambiguous
+/// owner rollback (correct fail-closed). At a **shared** scope a grantee's
+/// legitimate lazy-rotation unseal-advances that same floor *past* the
+/// owner-authored `minReadEpoch`, so the identical comparison would
+/// false-positive into a self-inflicted fail-closed **DoS** (a bricked boot) —
+/// never a security hole, since no rollback is accepted and the write-epoch
+/// check stays unconditionally sound. `Shared` therefore never runs the
+/// read-epoch check; only `Root` does (#763). Making the role explicit means no
+/// caller can express "read-epoch check on a shared scope": the check lives
+/// behind the `Root` arm alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnchorRole {
+    /// The vault/root anchor: read-epoch check runs (alongside write-epoch).
+    Root,
+    /// A shared scope: read-epoch check skipped; only write-epoch runs.
+    ///
+    /// A production `Shared` caller MUST select this role from authenticated
+    /// scope identity, never a network/`RepointObject` field (#775).
+    Shared,
+}
+
 /// Suffix that distinguishes a scope's write-epoch floor key from its
 /// read-epoch floor key inside the [`FloorStore`] epoch namespace. The
 /// read-epoch floor (the revocation boundary the adoption gate's epoch stage
@@ -201,14 +228,18 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
     Ok(())
 }
 
-/// Cold-seed a scope's floors **fail-closed on regression** (the floor law).
+/// Cold-seed a scope's floors **fail-closed on regression** (the floor law) —
+/// the single checked cold-seed seam production uses.
 ///
-/// Reads the durable read- and write-epoch floors and rejects before any write
-/// if the owner-vouched re-point would move either backward: a re-point whose
-/// `minReadEpoch` or `writeEpoch` is strictly below the durable floor is a
-/// rolled-back pointer (a replay past a revocation boundary), a trust violation
-/// never mere staleness. Only when neither regresses does it advance the floors
-/// via the monotonic-max [`cold_seed`].
+/// Reads the durable floors and rejects before any write if the owner-vouched
+/// re-point would move one backward: a re-point whose `writeEpoch` (any role),
+/// or whose `minReadEpoch` (root anchor only, see below), is strictly below the
+/// durable floor is a rolled-back pointer (a replay past a revocation
+/// boundary), a trust violation never mere staleness. Only when nothing
+/// regresses does it advance the floors via the monotonic-max [`cold_seed`].
+///
+/// The read-epoch check runs under [`AnchorRole::Root`] only; the write-epoch
+/// check is unconditional — see [`AnchorRole`] for why.
 ///
 /// The single-writer engine reads the floors and advances them with no
 /// concurrent adopt in between (blueprint/engine.md "Facade" — one live
@@ -217,16 +248,19 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
 pub async fn cold_seed_checked<F: FloorStore>(
     floors: &F,
     repoint: &RepointObject,
+    role: AnchorRole,
 ) -> Result<(), ColdSeedError> {
-    if let Some(floor) = read_epoch_floor(floors, &repoint.scope_id)
-        .await
-        .map_err(ColdSeedError::Seam)?
-    {
-        if repoint.min_read_epoch < floor {
-            return Err(ColdSeedError::Regression(FloorRegression::ReadEpoch {
-                floor,
-                vouched: repoint.min_read_epoch,
-            }));
+    if role == AnchorRole::Root {
+        if let Some(floor) = read_epoch_floor(floors, &repoint.scope_id)
+            .await
+            .map_err(ColdSeedError::Seam)?
+        {
+            if repoint.min_read_epoch < floor {
+                return Err(ColdSeedError::Regression(FloorRegression::ReadEpoch {
+                    floor,
+                    vouched: repoint.min_read_epoch,
+                }));
+            }
         }
     }
     if let Some(floor) = write_epoch_floor(floors, &repoint.scope_id)
@@ -305,13 +339,13 @@ mod tests {
         let floors = InMemoryFloorStore::default();
         block_on(async {
             // A fresh (unseeded) scope adopts the owner-vouched anchor.
-            cold_seed_checked(&floors, &repoint(SCOPE, 5, 3))
+            cold_seed_checked(&floors, &repoint(SCOPE, 5, 3), AnchorRole::Root)
                 .await
                 .unwrap();
             assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(5));
             assert_eq!(write_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(3));
             // Re-seeding at or above the floor advances monotonically.
-            cold_seed_checked(&floors, &repoint(SCOPE, 7, 3))
+            cold_seed_checked(&floors, &repoint(SCOPE, 7, 3), AnchorRole::Root)
                 .await
                 .unwrap();
             assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(7));
@@ -322,11 +356,11 @@ mod tests {
     fn cold_seed_checked_rejects_a_read_epoch_regression_fail_closed() {
         let floors = InMemoryFloorStore::default();
         block_on(async {
-            cold_seed_checked(&floors, &repoint(SCOPE, 5, 3))
+            cold_seed_checked(&floors, &repoint(SCOPE, 5, 3), AnchorRole::Root)
                 .await
                 .unwrap();
             // A rolled-back re-point vouching a lower minReadEpoch is fail-closed.
-            let err = cold_seed_checked(&floors, &repoint(SCOPE, 4, 3))
+            let err = cold_seed_checked(&floors, &repoint(SCOPE, 4, 3), AnchorRole::Root)
                 .await
                 .expect_err("read-epoch regression is a trust violation");
             assert_eq!(
@@ -345,10 +379,10 @@ mod tests {
     fn cold_seed_checked_rejects_a_write_epoch_regression_fail_closed() {
         let floors = InMemoryFloorStore::default();
         block_on(async {
-            cold_seed_checked(&floors, &repoint(SCOPE, 5, 6))
+            cold_seed_checked(&floors, &repoint(SCOPE, 5, 6), AnchorRole::Root)
                 .await
                 .unwrap();
-            let err = cold_seed_checked(&floors, &repoint(SCOPE, 5, 4))
+            let err = cold_seed_checked(&floors, &repoint(SCOPE, 5, 4), AnchorRole::Root)
                 .await
                 .expect_err("write-epoch regression is a trust violation");
             assert_eq!(
@@ -359,6 +393,83 @@ mod tests {
                 })
             );
             assert_eq!(write_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(6));
+        });
+    }
+
+    /// The read-epoch regression check is unrepresentable for a shared scope:
+    /// under [`AnchorRole::Shared`] a `minReadEpoch` far below the durable
+    /// read-epoch floor (the legitimate steady state once grantee lazy rotation
+    /// has unseal-advanced that floor) seeds cleanly instead of false-positiving
+    /// into a fail-closed DoS (#763). The same input under `Root` is fail-closed.
+    #[test]
+    fn cold_seed_checked_shared_scope_skips_the_read_epoch_check() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            // Grantee lazy rotation has driven the read-epoch floor to 9.
+            advance_on_unseal(&floors, &SCOPE, NAME, 1, 9)
+                .await
+                .unwrap();
+
+            // A shared-scope cold-seed vouching minReadEpoch 4 (< floor 9) is the
+            // normal steady state — it must NOT fire the read-epoch check.
+            cold_seed_checked(&floors, &repoint(SCOPE, 4, 2), AnchorRole::Shared)
+                .await
+                .expect("shared-scope cold-seed never runs the read-epoch check");
+            // The monotonic-max floor is unmoved by the lower vouched read epoch;
+            // the write-epoch floor still seeds.
+            assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(9));
+            assert_eq!(write_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(2));
+
+            // The identical input at the root anchor IS a fail-closed rollback.
+            let err = cold_seed_checked(&floors, &repoint(SCOPE, 4, 2), AnchorRole::Root)
+                .await
+                .expect_err("the read-epoch check is sound and active at the root anchor");
+            assert_eq!(
+                err,
+                ColdSeedError::Regression(FloorRegression::ReadEpoch {
+                    floor: 9,
+                    vouched: 4
+                })
+            );
+        });
+    }
+
+    /// Skipping the read-epoch *check* for a shared scope must not skip the
+    /// unconditional `cold_seed`: a fresh (None) shared scope still seeds its
+    /// read-epoch floor to `minReadEpoch` via the monotonic-max raise, exactly
+    /// as `Root` does. Guards a future refactor from dropping the seed for
+    /// `Shared`.
+    #[test]
+    fn cold_seed_checked_shared_scope_seeds_a_fresh_read_epoch_floor() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            cold_seed_checked(&floors, &repoint(SCOPE, 5, 3), AnchorRole::Shared)
+                .await
+                .expect("a fresh shared scope seeds without running the read-epoch check");
+            assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(5));
+            assert_eq!(write_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(3));
+        });
+    }
+
+    /// The write-epoch check stays unconditionally active — a shared-scope
+    /// cold-seed still fails closed on a write-epoch rollback.
+    #[test]
+    fn cold_seed_checked_shared_scope_still_rejects_a_write_epoch_regression() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            cold_seed_checked(&floors, &repoint(SCOPE, 5, 6), AnchorRole::Shared)
+                .await
+                .unwrap();
+            let err = cold_seed_checked(&floors, &repoint(SCOPE, 5, 4), AnchorRole::Shared)
+                .await
+                .expect_err("write-epoch regression is fail-closed for every role");
+            assert_eq!(
+                err,
+                ColdSeedError::Regression(FloorRegression::WriteEpoch {
+                    floor: 6,
+                    vouched: 4
+                })
+            );
         });
     }
 

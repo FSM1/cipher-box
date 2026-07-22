@@ -24,8 +24,8 @@ use cipherbox_engine::sync::model::NodeMeta;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
     self, Connectivity, DeadLetterReason, DropReason, Op, OpResolution, PointerFetch, SessionRole,
-    Snapshot, StageOutcome, apply_repairs, classify, cold_seed_floors, decode_queue,
-    observed_repair, rebase_one, replay, resolve_vault_pointer, stage_op, withheld_escalation,
+    Snapshot, StageOutcome, apply_repairs, classify, decode_queue, observed_repair, rebase_one,
+    replay, resolve_vault_pointer, stage_op, withheld_escalation,
 };
 use cipherbox_engine::testkit::fakes::{InMemoryFloorStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{SeededEntropy, block_on};
@@ -536,7 +536,11 @@ fn cold_start_adopts_nothing_until_the_floor_seeds_from_the_pointer() {
         .unwrap()
         .expect("the vault pointer now resolves");
         assert_eq!(adopted.index, 0);
-        cold_seed_floors(&floors, &adopted.repoint).await.unwrap();
+        // The vault pointer is the root anchor: cold-seed through the same
+        // checked, fail-closed seam production's `cold_start` uses.
+        floor::cold_seed_checked(&floors, &adopted.repoint, floor::AnchorRole::Root)
+            .await
+            .unwrap();
 
         // Now the revocation floor is seeded: an old-epoch record (epoch 3 < 5)
         // would fail the gate's epoch stage — cold start no longer adopts blindly.
