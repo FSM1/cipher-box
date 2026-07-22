@@ -15,6 +15,7 @@
 //!
 //! The API republisher (~12 h inventory walk) backstops dormant vaults only.
 
+use core::future::Future;
 use core::time::Duration;
 
 use cipherbox_core::ipns::IpnsRecord;
@@ -37,6 +38,7 @@ pub const RE_PUT_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// One held record to keep alive: its routing key (the `ipnsName`) and the exact
 /// signed record bytes the session last held for it.
+#[derive(Clone)]
 pub struct HeldRecord {
     /// The routing key — the record's `ipnsName`.
     pub routing_key: String,
@@ -85,6 +87,36 @@ pub async fn keyless_re_put<T: RecordTransport>(
         });
     }
     results
+}
+
+/// Whether the liveness loop keeps running after a pass (mirrors
+/// [`TickControl`](crate::sync::TickControl) for the sync tick loop).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LivenessControl {
+    /// Run the next pass after the interval.
+    Continue,
+    /// Stop the loop (session end / logout).
+    Stop,
+}
+
+/// Drive a liveness pass on a fixed cadence off the injected [`Scheduler`]
+/// clock: sleep `interval`, run `pass`, repeat until it returns
+/// [`LivenessControl::Stop`]. This is the ~hourly loop the facade spawns at
+/// [`RE_PUT_INTERVAL`] over [`keyless_re_put`] (and, once cold-start derives the
+/// per-name signers, the sub-EOL [`eol_republish`] renewal composes into the
+/// same `pass`). Determinism law: the only time source is `scheduler.sleep`.
+pub async fn run_liveness_loop<Sch, F, Fut>(scheduler: &Sch, interval: Duration, mut pass: F)
+where
+    Sch: Scheduler,
+    F: FnMut() -> Fut,
+    Fut: Future<Output = LivenessControl>,
+{
+    loop {
+        scheduler.sleep(interval).await;
+        if pass().await == LivenessControl::Stop {
+            break;
+        }
+    }
 }
 
 /// Republish `request`'s name at seq+1 with a fresh 90-day EOL **iff** its

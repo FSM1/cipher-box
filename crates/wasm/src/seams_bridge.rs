@@ -363,6 +363,7 @@ impl CredentialStore for CredentialStoreAdapter {
 extern "C" {
     /// JS `SchedulerSeam` (packages/client) — clock and delays only; background
     /// task execution is engine-side.
+    #[derive(Clone)]
     pub type JsSchedulerSeam;
 
     #[wasm_bindgen(method, js_name = now)]
@@ -371,6 +372,7 @@ extern "C" {
     async fn sleep(this: &JsSchedulerSeam, duration_ms: f64) -> Result<JsValue, JsValue>;
 }
 
+#[derive(Clone)]
 pub(crate) struct SchedulerAdapter {
     pub(crate) js: JsSchedulerSeam,
 }
@@ -399,6 +401,7 @@ impl Scheduler for SchedulerAdapter {
 #[wasm_bindgen]
 extern "C" {
     /// JS `RecordTransportSeam` (packages/client).
+    #[derive(Clone)]
     pub type JsRecordTransportSeam;
 
     #[wasm_bindgen(method, js_name = endpoints)]
@@ -418,6 +421,7 @@ extern "C" {
     ) -> Result<JsValue, JsValue>;
 }
 
+#[derive(Clone)]
 pub(crate) struct RecordTransportAdapter {
     pub(crate) js: JsRecordTransportSeam,
 }
