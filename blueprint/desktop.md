@@ -120,11 +120,11 @@ The adapter trait carries, in each direction:
 
 ### Backends
 
-|              | macOS                                                                 | Linux                                                     | Windows                  | macOS successor                                                                                |
-| ------------ | --------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------ | ---------------------------------------------------------------------------------------------- |
-| Backend      | **FUSE-T ≥ 1.2.7, SMB backend** — NFS abandoned unconditionally (#32) | kernel FUSE via vendored `fuser` (MSG_PEEK patch carried) | **WinFsp** (MSI bundled) | **FSKit** module once macOS 27 is stable: Swift appex shell delegating into the shared FS core |
-| Invalidation | SMB-backend invalidation (added 1.2.1)                                | `inval_inode`/`inval_entry`                               | WinFsp notify API        | `FSVolume.DataCacheHandler`                                                                    |
-| Status       | ship v2.0                                                             | ship v2.0                                                 | ship v2.0                | designed-for; blocked on macOS 27 + the FSKit spike                                            |
+|              | macOS                                                                                                                     | Linux                                                     | Windows                  | macOS successor                                                                                                           |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| Backend      | **FUSE-T ≥ 1.2.7, SMB backend** — NFS abandoned unconditionally (#32)                                                     | kernel FUSE via vendored `fuser` (MSG_PEEK patch carried) | **WinFsp** (MSI bundled) | **FSKit** module once macOS 27 is stable: Swift appex shell delegating into the shared FS core                            |
+| Invalidation | SMB-backend invalidation (added 1.2.1) — **mount with `noattrcache`**, verified on hardware (`tools/hw-gates/RESULTS.md`) | `inval_inode`/`inval_entry`                               | WinFsp notify API        | `FSVolume.DataCacheHandler`                                                                                               |
+| Status       | ship v2.0                                                                                                                 | ship v2.0                                                 | ship v2.0                | designed-for; FSKit spike **passed** on macOS 27 (`tools/hw-gates/fskit-spike/RESULTS.md`) — successor timeline unblocked |
 
 macFUSE stays rejected (kext install friction, license, fuser ABI divergence);
 File Provider stays a fallback-only note (its plaintext replica is an E2EE
@@ -226,9 +226,15 @@ navigation (#33 D2):
   re-reads through the adapter — replacing dir-TTL-0, drain choreography, and
   the pump thread. Kernel entry/attr TTLs are set from the sync timing
   profile per backend capability, not hardcoded zeros.
-- The FUSE-T SMB cache remains a platform ceiling: invalidation now works
-  (≥ 1.2.1), but its actual cross-client latency is a hardware-verify item
-  (#32 → #47), and the FSKit successor is the structural fix.
+- The FUSE-T SMB cache is measured, not a ceiling (#644 gates,
+  `tools/hw-gates/RESULTS.md`): with `noattrcache`, invalidation
+  round-trips are milliseconds — cross-client latency is dominated by
+  poll cadence, not the mount. Two hard requirements fall out: the mount
+  must set `noattrcache` (without it the smbfs client imposes a 3 s attr
+  floor and unbounded staleness for cached data), and every remote change
+  must fire push invalidation (uninvalidated cached data never
+  revalidates). The smbfs client ignores FUSE reply TTLs entirely on this
+  backend.
 
 ## Tauri shell
 
@@ -273,19 +279,30 @@ the headless harness entry.
 
 ## Open edges
 
-- **FSKit spike** — run against the macOS 27 beta before committing the
-  successor timeline; the adapter trait is shaped for it, but
-  `mountSingleVolume`/`DataCacheHandler` behavior needs hands-on confirmation
-  (#32 verify list, → [#47](https://github.com/FSM1/cipher-box-next/issues/47)).
-- **FUSE-T license terms** for commercial bundling — verify before v2.0 ships
-  (#32).
+- **FSKit spike** — done (#644, `tools/hw-gates/fskit-spike/RESULTS.md`):
+  native FSKit builds/mounts on macOS 27 and `FSVolume.DataCacheHandler` +
+  `-[FSVolume setCacheStateForItem:…]` (`coherencyAction = 1`) give a reliable
+  sub-ms push-invalidation that lands on cached pages — the adapter trait's
+  outbound push-invalidation callback maps directly onto it, and coherence is
+  strictly better than the shipping FUSE-T SMB backend (gate 1). Remaining
+  successor work is the `crates/fuse` FSKit adapter itself, not a feasibility
+  question ([#47](https://github.com/FSM1/cipher-box-next/issues/47)).
+- **FUSE-T license terms** — verified (#644, `tools/hw-gates/RESULTS.md`
+  gate 4): bundling in the app requires a negotiated commercial license
+  from the author (no published pricing; <alex@fuse-t.org>); user-installed
+  FUSE-T is the free interim path. Negotiation must close before v2.0
+  ships with a bundled FUSE-T.
 - **Dead-letter recovery UX** — the tray surface and "recovered files" export
   shape; settle alongside the failover/offline e2e work
   ([#47](https://github.com/FSM1/cipher-box-next/issues/47)).
 - **Focus-horizon value** — how long FUSE traffic keeps a folder "open" joins
   the sync timing profile.
-- **Kernel TTL values per backend** — profile constants, frozen with the #47
-  cross-client latency measurements.
+- **Kernel TTL values per backend** — resolved for FUSE-T SMB (#644,
+  `tools/hw-gates/RESULTS.md`): the client ignores FUSE reply TTLs, so
+  there is no TTL constant to freeze for this backend — `noattrcache` +
+  push invalidation replace it. Linux/WinFsp values still freeze with the
+  cross-client measurements
+  ([#47](https://github.com/FSM1/cipher-box-next/issues/47)).
 - **Designed-for, deliberately unbuilt**: FSKit adapter (above); desktop
   embedded DHT behind RecordTransport (#23 D2); desktop PubSub push behind
   RefreshHintSource (#33 D1).

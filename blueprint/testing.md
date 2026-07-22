@@ -251,6 +251,12 @@ recorded results — they precede `crates/fuse` work, and they are not CI:
 Results are recorded alongside the profile constants they feed; a failed
 gate reopens the driver decision (#32), not this doc.
 
+The #644 execution of these gates — harness, measurements, and per-gate
+verdicts — is recorded in `tools/hw-gates/RESULTS.md`. All five passed:
+gate 5 ran on macOS 27 beta hardware and confirmed FSKit's
+`DataCacheHandler`/`setCacheStateForItem` push-invalidation
+(`tools/hw-gates/fskit-spike/RESULTS.md`).
+
 ## Coverage policy
 
 No blanket line-coverage thresholds as merge gates. v1's record: the
