@@ -6,27 +6,37 @@
 //!   scope root a revocation rotation must touch (#744).
 //! - [`reseal`] — the shared per-scope-root re-seal helper: assemble one scope
 //!   root's signed grant section at a given epoch/seed, re-wrapping grant blobs
-//!   for exactly the committed set. Consumed by `rotate_scope` (the root cut and,
-//!   once the resolver wiring lands, each eager-set descendant) and by the sweep.
+//!   for exactly the committed set. Consumed by `rotate_scope` (the root cut), by
+//!   the [`cascade`] (each eager-set descendant, fresh seed), and by the sweep.
 //! - [`rotate`] — `rotateScope`, the read-plane root cut: mint a fresh override
 //!   seed, re-seal, publish CAS, raise `minReadEpoch`, enqueue the sweep.
 //! - [`trigger`] — the read-revoke / scope-exit / manual trigger surface.
 //! - [`sweep`] — the lazy-wave epoch-lag convergence pass (metadata-only,
 //!   existing seed, `prev = None`) plus its idle-cadence driver and the
 //!   direct-child-scope index self-heal. It does **not** mint fresh descendant
-//!   seeds — that fresh-seed eager-set republish is `rotateScope`'s job on an
-//!   owner-revocation rotation, deferred pending the resolver/tree wiring
-//!   (#745/#746).
+//!   seeds — that fresh-seed eager-set republish is the [`cascade`]'s job.
+//! - [`cascade`] — the owner-revocation eager cascade (`rotateScope` on a read
+//!   revoke): re-key the root **and every transitively-reachable descendant scope
+//!   root** with a **fresh** override seed (`prev = Some`), threaded top-down so
+//!   each descendant's ascent link re-seals under its parent's new derivation.
+//!   This — not the sweep — completes a read revoke by locking out cached
+//!   descendant seeds. Proven in simulation against faked seams; the production
+//!   resolver wiring is #745/#746.
 //!
 //! `rotateScopeWrite` (the write-plane name wave) is a separate primitive, out
 //! of this slice's read-plane scope.
 
+pub mod cascade;
 pub mod eager_set;
 pub mod reseal;
 pub mod rotate;
 pub mod sweep;
 pub mod trigger;
 
+pub use cascade::{
+    CascadeError, CascadeOutcome, CascadeResealResolver, CascadeTarget, RekeyedScope,
+    cascade_rotate_scope,
+};
 pub use eager_set::{
     ChildIndexResolver, EagerSet, EnumerationError, ResolveFailure, enumerate_eager_set,
 };

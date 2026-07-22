@@ -4,23 +4,26 @@
 //! A read-plane rotation fires from three sources, all driving the one
 //! [`rotate_scope`](super::rotate::rotate_scope) primitive:
 //!
-//! | Trigger      | Committed-set change | Cascade                                 |
-//! | ------------ | -------------------- | --------------------------------------- |
-//! | Scope exit   | none (grantee flat)  | flat — the single root re-publishes     |
-//! | Read revoke  | revokee removed      | root cut here; eager-set via the sweep  |
-//! | Manual       | none                 | per-scope, same primitive               |
+//! | Trigger      | Committed-set change | Cascade                                    |
+//! | ------------ | -------------------- | ------------------------------------------ |
+//! | Scope exit   | none (grantee flat)  | flat — the single root re-publishes        |
+//! | Read revoke  | revokee removed      | root + every descendant, fresh-seed re-key |
+//! | Manual       | none                 | per-scope, same primitive                  |
 //!
-//! This slice wires only the **root cut** for a read revoke. On an
-//! owner-revocation rotation the fresh-seed descendant re-key is
-//! `rotateScope`'s **eager-set republish** — every transitively-reachable
-//! descendant scope root fully rotated with a fresh override seed
-//! (blueprint/engine.md "rotateScope", L243-252) — currently deferred pending
-//! the resolver/tree wiring (#745/#746). That eager cascade, not the sweep, is
-//! what defeats a revokee's cached descendant seeds. The sweep
-//! ([`super::sweep`]) does only metadata-only epoch-lag convergence and the
-//! index self-heal; it reuses the existing seed and never re-keys, so it does
-//! not on its own complete a read revoke. Read-revoke is not end-to-end
-//! complete here.
+//! On an owner read-revocation the rotation is the fresh-seed **eager cascade**
+//! ([`cascade_rotate_scope`](super::cascade::cascade_rotate_scope)): the rotated
+//! root **and every transitively-reachable descendant scope root** are re-keyed
+//! with a fresh override seed (blueprint/engine.md "rotateScope", L243-252).
+//! **That cascade — not the sweep — completes a read revoke**: a revokee who
+//! cached a descendant scope root's override seed can open that descendant at any
+//! epoch, so only minting a fresh seed per descendant locks them out. The sweep
+//! ([`super::sweep`]) does only metadata-only epoch-lag convergence and the index
+//! self-heal — it reuses the existing seed and never re-keys, so a floor-raise +
+//! sweep would merely walk the revokee's cached seed forward to the new epoch.
+//! [`revoke_read_grant`] performs the owner-only committed-set cut that feeds the
+//! cascade for the root; the cascade re-seals each descendant's own unchanged
+//! committed set. The cascade is proven in simulation against faked seams; the
+//! production resolver/tree wiring of its per-descendant resolve edge is #745/#746.
 //!
 //! Scope-exit and manual rotations re-seal the **unchanged** committed set: a
 //! grantee re-wraps blobs verbatim and can neither extend nor shrink the tag set
