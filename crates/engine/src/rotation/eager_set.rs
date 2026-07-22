@@ -45,9 +45,11 @@
 //! back-edge) is skipped, not followed — the walk always terminates. No depth or
 //! count cap is imposed: the eager set of a legitimately large owner tree must
 //! not be rejected. A compromised descendant index that injects fake children
-//! cannot amplify unboundedly either — a forged child fails its resolve, which
-//! fails the whole walk closed at the first forgery, so an attacker can force at
-//! most one wasted resolve, not a fan-out bomb.
+//! cannot amplify unboundedly either — each frontier is canonicalized and the
+//! walk aborts at the first resolve that fails the gate, so at most the scopes
+//! ordered before the first forgery's canonical position are resolved (bounded
+//! by the genuinely gate-passing scopes the attacker controls), never an
+//! unbounded injected fan-out.
 //!
 //! # Determinism
 //!
@@ -157,6 +159,20 @@ pub trait ChildIndexResolver {
     /// Return `child`'s own `direct_child_scope_index`, or a fail-closed
     /// [`ResolveFailure`] if its record cannot be authoritatively obtained. An
     /// empty `Vec` is a valid answer: a leaf scope root with no descendants.
+    ///
+    /// # Binding contract
+    ///
+    /// `ipns_name` is the **sole gated identity edge**: the adoption gate binds
+    /// `ipns_name -> record` via the Ed25519 pubkey derived from the name.
+    /// `scope_id` is a **trusted parent-index label** carried inside the parent's
+    /// sealed + gated write-body index. The real resolver MUST derive each
+    /// descendant's `scope_id` solely from that gated parent index entry, and
+    /// MUST NEVER let a network-supplied source (e.g. a registry hint) influence
+    /// `scope_id` independently of the gated parent record. The walk keys
+    /// visited / dedup / rotation identity on `scope_id`, so an independently
+    /// influenced `scope_id` would dedup or rotate the wrong scope key — a silent
+    /// revocation hole defeating the eager-set completeness guarantee. Enforcement
+    /// of this obligation in the real resolver-wiring slice is tracked in #745.
     async fn direct_child_index(
         &self,
         child: &ChildScopeRef,
@@ -236,6 +252,12 @@ mod tests {
 
     fn child(byte: u8) -> ChildScopeRef {
         ChildScopeRef::new(sid(byte), format!("ipns-{byte:02x}").into_bytes())
+    }
+
+    /// A `ChildScopeRef` with a caller-chosen `ipns_name`, to build a diamond
+    /// where one `scope_id` is reachable carrying differing `ipns_name` values.
+    fn child_named(scope_byte: u8, ipns_name: &str) -> ChildScopeRef {
+        ChildScopeRef::new(sid(scope_byte), ipns_name.as_bytes().to_vec())
     }
 
     /// A fake resolver over a fixed adjacency map, counting resolves so tests can
@@ -402,6 +424,43 @@ mod tests {
             ids(&one),
             vec![sid(0x01), sid(0x02), sid(0x04), sid(0x05), sid(0x06)]
         );
+    }
+
+    #[test]
+    fn determinism_diamond_records_first_seen_ipns_name() {
+        // root -> A(0x01), B(0x02); both parents list the same descendant scope
+        // D(0x04) but carry DIFFERING ipns_name values. D is recorded exactly
+        // once, and the recorded ChildScopeRef is the canonically-first
+        // (lowest-scope_id, thus earliest-visited) parent A's ipns_name —
+        // deterministically and independent of the root-index permutation.
+        let build = |root_index: Vec<ChildScopeRef>| {
+            let resolver = FakeResolver::new()
+                .with_refs(0x01, vec![child_named(0x04, "via-a")])
+                .with_refs(0x02, vec![child_named(0x04, "via-b")]);
+            block_on(enumerate_eager_set(sid(0x00), &root_index, &resolver)).expect("enumerates")
+        };
+        let d_name = |set: &EagerSet| {
+            set.descendants()
+                .iter()
+                .find(|c| c.scope_id == sid(0x04))
+                .expect("D present")
+                .ipns_name
+                .clone()
+        };
+
+        let forward = build(vec![child(0x01), child(0x02)]);
+        let reversed = build(vec![child(0x02), child(0x01)]);
+
+        assert_eq!(
+            forward, reversed,
+            "first-seen content is permutation-independent"
+        );
+        assert_eq!(
+            d_name(&forward),
+            b"via-a",
+            "canonically-first parent's ipns_name wins the first-seen record"
+        );
+        assert_eq!(ids(&forward), vec![sid(0x01), sid(0x02), sid(0x04)]);
     }
 
     #[test]
