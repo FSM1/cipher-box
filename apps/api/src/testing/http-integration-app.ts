@@ -59,6 +59,10 @@ export async function createHttpIntegrationApp(
 ): Promise<HttpIntegrationApp> {
   const jwtSecret = options.jwtSecret ?? INTEGRATION_JWT_SECRET;
   const priorJwtSecret = process.env.JWT_SECRET;
+  const restorePriorJwtSecret = () => {
+    if (priorJwtSecret === undefined) delete process.env.JWT_SECRET;
+    else process.env.JWT_SECRET = priorJwtSecret;
+  };
   process.env.JWT_SECRET = jwtSecret;
 
   const repoProviders: Provider[] = (options.entities ?? []).map((entity) => ({
@@ -66,28 +70,38 @@ export async function createHttpIntegrationApp(
     useValue: options.db.dataSource.getRepository(entity),
   }));
 
-  const moduleRef = await Test.createTestingModule({
-    imports: [
-      ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
-      ...(options.withOps === false ? [] : [OpsModule]),
-      JwtModule.register({ secret: jwtSecret, signOptions: { expiresIn: 900 } }),
-    ],
-    controllers: options.controllers ?? [],
-    providers: [
-      { provide: DataSource, useValue: options.db.dataSource },
-      { provide: getDataSourceToken(), useValue: options.db.dataSource },
-      ...repoProviders,
-      ...(options.providers ?? []),
-    ],
-  }).compile();
+  let app: INestApplication;
+  try {
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
+        ...(options.withOps === false ? [] : [OpsModule]),
+        JwtModule.register({
+          secret: jwtSecret,
+          signOptions: { expiresIn: 900 },
+        }),
+      ],
+      controllers: options.controllers ?? [],
+      providers: [
+        { provide: DataSource, useValue: options.db.dataSource },
+        { provide: getDataSourceToken(), useValue: options.db.dataSource },
+        ...repoProviders,
+        ...(options.providers ?? []),
+      ],
+    }).compile();
 
-  const app = configureApp(moduleRef.createNestApplication());
-  await app.init();
+    app = configureApp(moduleRef.createNestApplication());
+    await app.init();
+  } catch (err) {
+    // Fail-closed: a boot failure must not leak the harness secret to the next
+    // test file — the integration suite runs one sequential worker.
+    restorePriorJwtSecret();
+    throw err;
+  }
 
   const close = async () => {
     await app.close();
-    if (priorJwtSecret === undefined) delete process.env.JWT_SECRET;
-    else process.env.JWT_SECRET = priorJwtSecret;
+    restorePriorJwtSecret();
   };
 
   return { app, http: app.getHttpServer(), close };
