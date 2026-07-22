@@ -19,8 +19,8 @@ pub mod owner_entry;
 pub mod revocation;
 
 pub use accept::{
-    AcceptError, AcceptOutcome, ReceivedShare, ReceivedSharesList, SentIndex, SentShare,
-    SharePointer, accept_share,
+    AcceptError, AcceptOutcome, ReceivedShare, ReceivedShareStore, ReceivedSharesList, SentIndex,
+    SentShare, SharePointer, accept_share,
 };
 pub use contact::{Contact, import_contact};
 pub use ledger::{

@@ -3,12 +3,13 @@
 //!
 //! Accepting a share is: a sender-verified mailbox pointer → resolve the name →
 //! the adoption gate (commitment verified against the contact-anchored owner) →
-//! self-locate the grant blob by blinded tag → unseal the seeds → append
-//! `{name, sharerPub, displayName, permission}` to the recipient's received-
-//! shares list (persisting the `pointerReadKey`) → **then** ack. The owner keeps
-//! a denormalized sent-index. Both lists are self-healing bookmarks: the
-//! published metadata is the authority, so an append is idempotent by scope-root
-//! name.
+//! self-locate the grant blob by blinded tag → unseal the seeds → reconcile
+//! `{name, sharerPub, displayName, permission, pointerReadKey}` into the
+//! recipient's received-shares list → **durably persist that list** → **only
+//! then** ack. The owner keeps a denormalized sent-index. Both lists are
+//! self-healing bookmarks keyed by scope-root name: the published metadata is
+//! the authority, so a re-accept heals a drifted permission or rotated pointer
+//! read key in place, and only a byte-identical re-accept is a true no-op.
 //!
 //! Trust flows from the resolved record and the verified [`Contact`], never from
 //! the untrusted pointer: the pointer only says *which name to resolve*, and the
@@ -29,7 +30,7 @@ use zeroize::Zeroizing;
 
 use crate::gate::{Candidate, GateError, ReaderContext, SeedBlob, adopt};
 use crate::mailbox::VerifiedMailboxItem;
-use crate::seams::{FloorStore, Mailbox};
+use crate::seams::{FloorStore, Mailbox, SeamError, SeamResult};
 
 use super::contact::Contact;
 use super::ledger::{PublishedGrantBlob, recipient_blinded_tag, self_locate};
@@ -110,6 +111,18 @@ impl ReceivedShare {
     pub fn pointer_read_key(&self) -> &[u8; 32] {
         self.pointer_read_key.as_bytes()
     }
+
+    /// Whether two bookmarks for the same scope carry identical authority and
+    /// discovery bytes — the "true no-op re-accept" test. A drift in the
+    /// committed permission, the rotated pointer read key, or the courtesy
+    /// display fields means the freshly-verified metadata is authority and the
+    /// stored entry must self-heal to it.
+    fn same_bookmark(&self, other: &ReceivedShare) -> bool {
+        self.sharer_identity_pk == other.sharer_identity_pk
+            && self.display_name == other.display_name
+            && self.permission == other.permission
+            && self.pointer_read_key() == other.pointer_read_key()
+    }
 }
 
 impl fmt::Debug for ReceivedShare {
@@ -125,7 +138,8 @@ impl fmt::Debug for ReceivedShare {
 
 /// The recipient's received-shares list — a self-healing bookmark keyed by
 /// scope-root name. The published metadata is the authority; this list only
-/// speeds discovery, so appends are idempotent.
+/// speeds discovery, so a re-accept heals a drifted entry in place rather than
+/// duplicating or keeping stale authority.
 #[derive(Default)]
 pub struct ReceivedSharesList {
     entries: Vec<ReceivedShare>,
@@ -144,14 +158,52 @@ impl ReceivedSharesList {
             .any(|e| e.scope_root_name == scope_root_name)
     }
 
-    /// Append a share, idempotent by scope-root name. Returns `true` if it was
-    /// newly added, `false` if already present (a re-accept is a no-op bookmark).
-    pub fn append(&mut self, share: ReceivedShare) -> bool {
-        if self.contains(&share.scope_root_name) {
-            return false;
+    /// Reconcile a freshly-verified share into the self-healing bookmark: append
+    /// if the scope is absent, heal the stored entry in place if its authority
+    /// or pointer key drifted, or no-op if it is byte-identical. The published
+    /// metadata is always the authority, so a re-accept that carries a changed
+    /// committed permission or a rotated pointer read key must overwrite the
+    /// stale entry — never keep it (blueprint/engine.md "self-healing
+    /// bookmarks"). The returned [`Reconciled`] carries the pre-image needed to
+    /// [`revert`](Self::revert) if the durable persist then fails.
+    fn reconcile(&mut self, share: ReceivedShare) -> Reconciled {
+        match self
+            .entries
+            .iter_mut()
+            .position(|e| e.scope_root_name == share.scope_root_name)
+        {
+            None => {
+                self.entries.push(share);
+                Reconciled::Added
+            }
+            Some(i) if self.entries[i].same_bookmark(&share) => Reconciled::Unchanged,
+            Some(i) => {
+                let previous = core::mem::replace(&mut self.entries[i], share);
+                Reconciled::Healed(Box::new(previous))
+            }
         }
-        self.entries.push(share);
-        true
+    }
+
+    /// Undo a [`reconcile`](Self::reconcile) whose durable persist failed,
+    /// restoring the list to its pre-accept state so a persist failure is
+    /// redelivery-safe exactly like a gate failure (the in-memory bookmark never
+    /// gets ahead of durable storage).
+    fn revert(&mut self, scope_root_name: &[u8], reconciled: Reconciled) {
+        match reconciled {
+            Reconciled::Added => self
+                .entries
+                .retain(|e| e.scope_root_name != scope_root_name),
+            Reconciled::Healed(previous) => {
+                if let Some(e) = self
+                    .entries
+                    .iter_mut()
+                    .find(|e| e.scope_root_name == scope_root_name)
+                {
+                    *e = *previous;
+                }
+            }
+            Reconciled::Unchanged => {}
+        }
     }
 
     /// The bookmarked shares.
@@ -168,6 +220,45 @@ impl ReceivedSharesList {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+}
+
+/// What reconciling a freshly-verified grant did to the received-shares
+/// bookmark — the durable action the accept flow must persist before it acks.
+enum Reconciled {
+    /// No entry existed for the scope; a new bookmark was appended.
+    Added,
+    /// An entry existed but its authority or pointer key had drifted; it was
+    /// healed in place. Carries the pre-image for [`ReceivedSharesList::revert`].
+    Healed(Box<ReceivedShare>),
+    /// A byte-identical entry already existed; nothing changed and no durable
+    /// write is needed.
+    Unchanged,
+}
+
+impl Reconciled {
+    /// Whether this reconcile changed durable state (so a persist is required
+    /// before the ack). Only a byte-identical re-accept is a true no-op.
+    fn is_durable_change(&self) -> bool {
+        !matches!(self, Reconciled::Unchanged)
+    }
+}
+
+/// Durable persistence for the recipient's received-shares bookmark — the seam
+/// the accept flow writes through before it acks the mailbox item.
+///
+/// The engine acks **only** after this returns `Ok` (blueprint/engine.md
+/// "Mailbox logic — ack after durable"): a crash between the adoption gate
+/// advancing the durable sequence floor and this write would otherwise lose the
+/// bookmark for good, because the redelivered record is now below the floor and
+/// rejected. Persisting the whole list first, then acking, keeps redelivery
+/// safe — a persist failure returns un-acked and the item re-accepts idempotently
+/// (the bookmark self-heals). Injected as a grants-layer seam, not one of the
+/// nine host seams; the facade wires a concrete store when the accept flow is
+/// mounted (#635).
+pub trait ReceivedShareStore {
+    /// Durably persist the whole received-shares list. A failure returns a
+    /// [`SeamError`] and the accept flow does not ack.
+    async fn persist(&self, shares: &ReceivedSharesList) -> SeamResult<()>;
 }
 
 /// One owner-side sent-share record — the denormalized index the owner keeps.
@@ -263,9 +354,13 @@ pub enum AcceptError {
     GrantBlobOpen(CodecError),
     /// The adoption gate rejected the resolved record.
     Gate(GateError),
-    /// Acking the item failed after the durable append (the share IS recorded;
+    /// Durably persisting the updated received-shares list failed — the item is
+    /// left un-acked (never acked before durable), so it redelivers and
+    /// re-accepts idempotently. Nothing was lost.
+    Persist(SeamError),
+    /// Acking the item failed after the durable persist (the share IS recorded;
     /// the item will redeliver and re-accept idempotently).
-    Ack(crate::seams::SeamError),
+    Ack(SeamError),
 }
 
 impl fmt::Display for AcceptError {
@@ -282,7 +377,8 @@ impl fmt::Display for AcceptError {
             AcceptError::UncommittedTag => f.write_str("tag is not in the owner-signed commitment"),
             AcceptError::GrantBlobOpen(e) => write!(f, "grant blob open failed: {e}"),
             AcceptError::Gate(e) => write!(f, "adoption gate rejected: {e}"),
-            AcceptError::Ack(e) => write!(f, "ack failed after durable append: {e}"),
+            AcceptError::Persist(e) => write!(f, "durable persist failed before ack: {e}"),
+            AcceptError::Ack(e) => write!(f, "ack failed after durable persist: {e}"),
         }
     }
 }
@@ -293,17 +389,20 @@ impl std::error::Error for AcceptError {}
 /// scope-root record.
 ///
 /// Order is load-bearing: bind the pointer to the contact, self-locate the blob,
-/// unseal the seeds, run the gate, append to the received-shares list, and
-/// **only then** ack. Any earlier failure returns without acking, so an
-/// undelivered accept redelivers and re-runs idempotently.
+/// unseal the seeds, run the gate, reconcile the received-shares list,
+/// **durably persist it via [`ReceivedShareStore`]**, and **only then** ack. Any
+/// failure before the durable persist returns without acking; a persist failure
+/// rolls the in-memory bookmark back and returns un-acked, so an undelivered
+/// accept redelivers and re-runs idempotently (the bookmark self-heals).
 ///
 /// `candidate` is the resolved record (hand-fed here; the resolve pipeline is a
 /// sibling slice); `grant_blobs` is its published grant section for self-
 /// location.
 #[allow(clippy::too_many_arguments)]
-pub async fn accept_share<F: FloorStore, M: Mailbox>(
+pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     floors: &F,
     mailbox: &M,
+    store: &S,
     item: &VerifiedMailboxItem,
     contact: &Contact,
     my_enc_secret: &X25519Secret,
@@ -385,14 +484,27 @@ pub async fn accept_share<F: FloorStore, M: Mailbox>(
         .await
         .map_err(AcceptError::Gate)?;
 
-    // Durable append FIRST (the pointer_read_key persists with it).
-    let newly_added = received.append(ReceivedShare {
+    // Reconcile the self-healing bookmark: append if new, heal in place if the
+    // committed permission or pointer read key drifted, no-op if byte-identical.
+    let reconciled = received.reconcile(ReceivedShare {
         scope_root_name: pointer.scope_root_name.clone(),
         sharer_identity_pk: pointer.sharer_identity_pk,
         display_name: pointer.display_name.clone(),
         permission,
         pointer_read_key: SecretBytes::new(*grant.pointer_read_key()),
     });
+    let newly_added = matches!(reconciled, Reconciled::Added);
+
+    // Persist durably BEFORE acking. A failure rolls the in-memory bookmark back
+    // and returns un-acked, so the item redelivers rather than being lost — the
+    // ack strictly follows durable persistence. A true no-op re-accept needs no
+    // durable write.
+    if reconciled.is_durable_change() {
+        if let Err(e) = store.persist(received).await {
+            received.revert(&pointer.scope_root_name, reconciled);
+            return Err(AcceptError::Persist(e));
+        }
+    }
 
     // ...and only now ack.
     mailbox.ack(&item.item_id).await.map_err(AcceptError::Ack)?;
@@ -462,7 +574,7 @@ mod tests {
     }
 
     #[test]
-    fn received_list_append_is_idempotent_by_name() {
+    fn reconcile_appends_then_no_ops_a_byte_identical_reaccept() {
         let mut list = ReceivedSharesList::new();
         let share = ReceivedShare {
             scope_root_name: b"n".to_vec(),
@@ -471,9 +583,73 @@ mod tests {
             permission: Permission::Read,
             pointer_read_key: SecretBytes::new([0x8A; 32]),
         };
-        assert!(list.append(share.clone()), "first append is new");
-        assert!(!list.append(share), "re-accept is a no-op bookmark");
+        assert!(matches!(list.reconcile(share.clone()), Reconciled::Added));
+        assert!(
+            matches!(list.reconcile(share), Reconciled::Unchanged),
+            "a byte-identical re-accept is a true no-op"
+        );
         assert_eq!(list.len(), 1);
+    }
+
+    #[test]
+    fn reconcile_self_heals_changed_permission_and_rotated_pointer_key() {
+        let mut list = ReceivedSharesList::new();
+        let base = ReceivedShare {
+            scope_root_name: b"n".to_vec(),
+            sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
+            display_name: "s".into(),
+            permission: Permission::Read,
+            pointer_read_key: SecretBytes::new([0x8A; 32]),
+        };
+        assert!(matches!(list.reconcile(base.clone()), Reconciled::Added));
+
+        // Same scope, but the committed permission and pointer key drifted: the
+        // stored entry heals to the new values, never keeps the stale ones.
+        let healed = ReceivedShare {
+            permission: Permission::Write,
+            pointer_read_key: SecretBytes::new([0x9C; 32]),
+            ..base
+        };
+        assert!(matches!(list.reconcile(healed), Reconciled::Healed(_)));
+        assert_eq!(list.len(), 1);
+        let stored = list.iter().next().unwrap();
+        assert_eq!(stored.permission, Permission::Write);
+        assert_eq!(stored.pointer_read_key(), &[0x9C; 32]);
+    }
+
+    #[test]
+    fn revert_restores_an_added_then_a_healed_bookmark() {
+        let mut list = ReceivedSharesList::new();
+        let base = ReceivedShare {
+            scope_root_name: b"n".to_vec(),
+            sharer_identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
+            display_name: "s".into(),
+            permission: Permission::Read,
+            pointer_read_key: SecretBytes::new([0x8A; 32]),
+        };
+
+        // Revert an append → the list is empty again (persist-failure rollback).
+        let added = list.reconcile(base.clone());
+        assert!(matches!(added, Reconciled::Added));
+        list.revert(b"n", added);
+        assert!(list.is_empty());
+
+        // Revert a heal → the stored entry returns to its pre-heal values.
+        assert!(matches!(list.reconcile(base.clone()), Reconciled::Added));
+        let healed = list.reconcile(ReceivedShare {
+            permission: Permission::Write,
+            pointer_read_key: SecretBytes::new([0x9C; 32]),
+            ..base
+        });
+        assert!(matches!(healed, Reconciled::Healed(_)));
+        list.revert(b"n", healed);
+        let stored = list.iter().next().unwrap();
+        assert_eq!(
+            stored.permission,
+            Permission::Read,
+            "healed field rolled back"
+        );
+        assert_eq!(stored.pointer_read_key(), &[0x8A; 32]);
     }
 
     #[test]

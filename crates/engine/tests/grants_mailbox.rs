@@ -45,6 +45,7 @@ const RECORD_VALUE: &[u8] = b"/ipfs/AAAAAAAAAA";
 const NONCE_READ_BODY: [u8; 24] = [11u8; 24];
 const NONCE_WRITE_BODY: [u8; 24] = [22u8; 24];
 const EPH_GRANT: [u8; 32] = [5u8; 32];
+const EPH_GRANT_2: [u8; 32] = [6u8; 32];
 const EPH_MAILBOX: [u8; 32] = [7u8; 32];
 const POINTER_READ_KEY: [u8; 32] = [0x8A; 32];
 
@@ -244,6 +245,71 @@ impl GrantFixture {
             permission: Permission::Read,
         }
     }
+
+    /// A re-accept variant of the SAME scope root (same name, same blinded tag,
+    /// same read key so the adoption gate still passes) in which the owner has
+    /// re-committed the tag with a new `permission` and re-sealed the grant blob
+    /// with a rotated `pointer_read_key`. The record advances to sequence 2 so it
+    /// clears the floor the first accept raised. Exercises the self-healing
+    /// bookmark: the freshly-verified metadata is authority.
+    fn reaccept_variant(
+        &self,
+        permission: Permission,
+        rotated_pointer_read_key: [u8; 32],
+    ) -> (Vec<PublishedGrantBlob>, Candidate) {
+        let owner_pseudonym = Ed25519Signer::from_seed([0x22; 32]);
+        let root_id = self.scope_id;
+
+        let grant_aad = AadContext {
+            v: V,
+            id: root_id,
+            scope: self.scope_id,
+            epoch: self.epoch,
+            struct_tag: STRUCT_TAG_GRANT_BLOB,
+        };
+        let grant_payload =
+            GrantBlobPayload::new(self.scope_seed, None, self.epoch, rotated_pointer_read_key);
+        let grant_blob = seal_grant_blob(
+            &self.recipient_enc.public(),
+            &EPH_GRANT_2,
+            &grant_aad,
+            &grant_payload,
+        );
+        let grant_blob_input = StructureSigInput::over_ciphertext(
+            self.scope_id,
+            self.epoch,
+            STRUCT_TAG_GRANT_BLOB,
+            Some(self.tag),
+            &grant_blob.ciphertext,
+        );
+        let grant_blob_structure = SignedStructure {
+            signature: sign_structure(&owner_pseudonym, &grant_blob_input),
+            input: grant_blob_input,
+        };
+
+        let mut commitment = self.commitment.clone();
+        commitment.entries = vec![GrantSetEntry::new(self.tag, permission, [0xC0; 32])];
+        let commitment_sig = sign_grant_set(&self.owner_identity, &commitment).expect("signs");
+
+        // Keep the write-body structure; swap the re-sealed grant blob structure.
+        let structures = vec![grant_blob_structure, self.structures[1].clone()];
+
+        let candidate = Candidate {
+            name: self.name.clone(),
+            record_bytes: self.record_bytes(2),
+            commitment,
+            commitment_sig,
+            structures,
+            ascent: None,
+            envelope: self.envelope.clone(),
+        };
+        let blobs = vec![PublishedGrantBlob {
+            tag: self.tag,
+            enc: grant_blob.enc,
+            ciphertext: grant_blob.ciphertext,
+        }];
+        (blobs, candidate)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +381,7 @@ fn two_instance_share_accept_end_to_end() {
     let outcome = block_on(accept_share(
         &recipient_device.floor_store,
         &recipient_device.mailbox,
+        &recipient_device.received_share_store,
         &items[0],
         &contact,
         &fx.recipient_enc,
@@ -369,6 +436,7 @@ fn two_instance_share_accept_end_to_end() {
     let outcome2 = block_on(accept_share(
         &recipient_device.floor_store,
         &recipient_device.mailbox,
+        &recipient_device.received_share_store,
         &again[0],
         &contact,
         &fx.recipient_enc,
@@ -425,6 +493,7 @@ fn uncommitted_tag_is_rejected_before_the_gate() {
     let err = block_on(accept_share(
         &recipient_device.floor_store,
         &recipient_device.mailbox,
+        &recipient_device.received_share_store,
         &items[0],
         &contact,
         &fx.recipient_enc,
@@ -502,6 +571,7 @@ fn unauthenticated_sender_is_dropped_and_wrong_contact_is_rejected() {
     let err = block_on(accept_share(
         &recipient_device.floor_store,
         &recipient_device.mailbox,
+        &recipient_device.received_share_store,
         &items[0],
         &contact,
         &fx.recipient_enc,
@@ -553,6 +623,7 @@ fn a_failed_gate_never_acks_the_item() {
     let err = block_on(accept_share(
         &recipient_device.floor_store,
         &recipient_device.mailbox,
+        &recipient_device.received_share_store,
         &items[0],
         &contact,
         &fx.recipient_enc,
@@ -573,6 +644,170 @@ fn a_failed_gate_never_acks_the_item() {
         .len(),
         1,
         "a rejected accept leaves the item un-acked"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Ack-after-durable: a durable-persist failure never acks (P1-1).
+// ---------------------------------------------------------------------------
+
+/// The gate passes and the bookmark is reconciled, but the durable
+/// `ReceivedShareStore` is offline: the accept flow rolls the in-memory bookmark
+/// back and returns un-acked, so the item redelivers rather than advancing the
+/// durable floor while losing the share. Mirrors `a_failed_gate_never_acks`.
+#[test]
+fn a_failed_persist_never_acks_the_item() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let poster = world.device(b"owner-inbox");
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+    let contact = import_contact(&fx.owner_contact).unwrap();
+
+    recipient.received_share_store.set_failing(true);
+
+    let mut received = ReceivedSharesList::new();
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .unwrap_err();
+    assert!(matches!(err, AcceptError::Persist(_)), "got {err}");
+    assert!(
+        received.is_empty(),
+        "the in-memory bookmark rolled back to its pre-accept state"
+    );
+    assert_eq!(recipient.received_share_store.persist_count(), 0);
+    assert_eq!(
+        inbox_len(&fx, &recipient),
+        1,
+        "un-acked: the item redelivers"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Self-healing bookmark: a re-accept with drifted authority heals (P1-2).
+// ---------------------------------------------------------------------------
+
+/// Accept a Read grant, then re-accept the SAME scope root after the owner
+/// changed the committed permission to Write and rotated the pointer read key.
+/// The stored entry heals to the NEW values (the metadata is authority) and is
+/// acked only after the durable heal persists — a stale entry is never kept.
+#[test]
+fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
+    const ROTATED_POINTER_READ_KEY: [u8; 32] = [0x9C; 32];
+
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient_address = fx.recipient_enc.public().to_bytes();
+    let recipient = world.device(&recipient_address);
+    let poster = world.device(b"owner-inbox");
+    let contact = import_contact(&fx.owner_contact).unwrap();
+    let mut received = ReceivedSharesList::new();
+
+    // First accept: Read permission, original pointer read key.
+    let item1 = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+    let outcome1 = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &item1,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .expect("first accept");
+    assert!(outcome1.newly_added);
+    assert_eq!(received.iter().next().unwrap().permission, Permission::Read);
+    assert_eq!(
+        received.iter().next().unwrap().pointer_read_key(),
+        &POINTER_READ_KEY
+    );
+    let persists_after_first = recipient.received_share_store.persist_count();
+    assert_eq!(
+        persists_after_first, 1,
+        "the first accept persisted durably"
+    );
+
+    // Re-accept the SAME scope with drifted authority. A fresh mailbox item (a
+    // distinct idempotency key) redelivers the pointer.
+    let (blobs2, candidate2) = fx.reaccept_variant(Permission::Write, ROTATED_POINTER_READ_KEY);
+    block_on(post_sealed(
+        &poster.mailbox,
+        &fx.recipient_enc.public(),
+        &recipient_address,
+        &EPH_MAILBOX,
+        V,
+        &fx.owner_identity,
+        &fx.share_pointer().encode(),
+        "share-2",
+    ))
+    .unwrap();
+    let item2 = block_on(poll_verified(&recipient.mailbox, &fx.recipient_enc, V))
+        .unwrap()
+        .remove(0);
+
+    let outcome2 = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &item2,
+        &contact,
+        &fx.recipient_enc,
+        &candidate2,
+        &blobs2,
+        &mut received,
+    ))
+    .expect("re-accept self-heals");
+    assert!(!outcome2.newly_added, "existing scope, healed not appended");
+    assert_eq!(
+        outcome2.permission,
+        Permission::Write,
+        "committed authority"
+    );
+    assert_eq!(received.len(), 1, "still one self-healing bookmark");
+
+    let healed = received.iter().next().unwrap();
+    assert_eq!(
+        healed.permission,
+        Permission::Write,
+        "permission healed to the new committed value"
+    );
+    assert_eq!(
+        healed.pointer_read_key(),
+        &ROTATED_POINTER_READ_KEY,
+        "pointer read key healed to the rotated value"
+    );
+    assert_eq!(
+        recipient.received_share_store.persist_count(),
+        persists_after_first + 1,
+        "the heal was durably persisted before the ack"
+    );
+    assert_eq!(
+        inbox_len(&fx, &recipient),
+        0,
+        "acked after the durable heal"
     );
 }
 
@@ -636,6 +871,7 @@ fn pointer_sharer_mismatch_is_rejected_and_unacked() {
     let err = block_on(accept_share(
         &recipient.floor_store,
         &recipient.mailbox,
+        &recipient.received_share_store,
         &item,
         &contact,
         &fx.recipient_enc,
@@ -676,6 +912,7 @@ fn tampered_commitment_is_rejected_at_the_gate_and_unacked() {
     let err = block_on(accept_share(
         &recipient.floor_store,
         &recipient.mailbox,
+        &recipient.received_share_store,
         &item,
         &contact,
         &fx.recipient_enc,
@@ -711,6 +948,7 @@ fn no_blob_at_tag_is_rejected_and_unacked() {
     let err = block_on(accept_share(
         &recipient.floor_store,
         &recipient.mailbox,
+        &recipient.received_share_store,
         &item,
         &contact,
         &fx.recipient_enc,
@@ -751,6 +989,7 @@ fn tampered_grant_blob_fails_open_and_is_unacked() {
     let err = block_on(accept_share(
         &recipient.floor_store,
         &recipient.mailbox,
+        &recipient.received_share_store,
         &item,
         &contact,
         &fx.recipient_enc,
@@ -789,6 +1028,7 @@ fn resolved_name_mismatch_is_rejected_and_unacked() {
     let err = block_on(accept_share(
         &recipient.floor_store,
         &recipient.mailbox,
+        &recipient.received_share_store,
         &item,
         &contact,
         &fx.recipient_enc,
