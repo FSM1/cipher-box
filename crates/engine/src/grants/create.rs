@@ -166,8 +166,17 @@ pub struct CreateGrantOutcome {
     pub parent_child_index: Vec<ChildScopeRef>,
 }
 
-/// A read-grant creation failure — every variant is fail-closed: on any error
-/// nothing partial is minted or shared.
+/// A read-grant creation failure.
+///
+/// Failures **through the grantee scope-root publish (step 5)** are truly
+/// fail-closed — nothing is minted or shared: `Converge`,
+/// `SubtreeNotConverged`, `UnusableRecipientKey`, `CommitmentEncode`,
+/// `Entropy`, `Mint`, and `Publish` (register-first: a failed grantee publish
+/// pushes nothing to the network). Failures **after** that publish are NOT
+/// atomic: the grantee root — and, for `Mailbox`, the reparented parent — is
+/// already committed to the network, so a stale orphan can outlive the error.
+/// Orphan reconciliation belongs to the deferred resume machinery (#745/#746);
+/// each post-publish variant documents what it leaves behind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateGrantError {
     /// The pre-grant convergence sweep aborted (enumeration/floor/publish/reseal).
@@ -185,15 +194,23 @@ pub enum CreateGrantError {
     CommitmentEncode(CodecError),
     /// Entropy acquisition failed (seed mint or mailbox ephemeral).
     Entropy(EntropyError),
-    /// Assembling the grantee scope root failed.
+    /// Assembling the grantee scope root failed (pre-publish: fail-closed).
     Mint(ResealError),
-    /// Publishing the grantee scope root failed.
+    /// Publishing the grantee scope root failed (register-first: nothing was
+    /// pushed, so this is still fail-closed).
     Publish(ScopeRootPublishError),
-    /// Re-sealing the reparented parent scope root failed.
+    /// Re-sealing the reparented parent scope root failed. Post-publish: the
+    /// grantee root is already on the network with no parent reference — an
+    /// orphan reconciled by #745/#746.
     ParentMint(ResealError),
-    /// Publishing the reparented parent scope root failed.
+    /// Publishing the reparented parent scope root failed. Post-publish: the
+    /// grantee root is already on the network with no parent reference — an
+    /// orphan reconciled by #745/#746.
     ParentPublish(ScopeRootPublishError),
     /// Posting the sealed share pointer to the recipient mailbox failed.
+    /// Post-publish: both scope roots are published and the parent index is
+    /// updated; only the share pointer is missing. Retry re-posts under the
+    /// same idempotency key.
     Mailbox(SeamError),
 }
 
@@ -226,9 +243,12 @@ impl std::error::Error for CreateGrantError {}
 /// Mint a read grant for one recipient over `grantee`'s folder.
 ///
 /// Converge → mint (epoch 1) → reparent + parent index update → publish
-/// (grantee first) → post the mailbox share pointer. On any failure nothing is
-/// minted or shared (fail-closed). See the module docs for the full sequence
-/// and the deferred write-grant / invite slices.
+/// (grantee first) → post the mailbox share pointer. Fail-closed **through the
+/// grantee publish** (step 5): any earlier error mints and shares nothing. Past
+/// that point the sequence is not atomic — see [`CreateGrantError`] for what
+/// each post-publish variant leaves committed (orphan cleanup is deferred to
+/// #745/#746). See the module docs for the full sequence and the deferred
+/// write-grant / invite slices.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_read_grant<E, F, R, P, M>(
     entropy: &mut E,
@@ -496,10 +516,17 @@ mod tests {
     /// subtree. `resolve` builds a valid, lagging descendant `SweepTarget` for
     /// `DESCENDANT_SCOPE` (whose re-seal succeeds, so the convergence outcome is
     /// decided by the publish result).
+    ///
+    /// `fail_after` fails the Nth+ `publish_scope_root` call so a test can let
+    /// the grantee publish succeed and then fail the parent publish — the
+    /// post-publish partial-commit path a single `publish_result` flag cannot
+    /// express.
     #[derive(Clone)]
     struct FakeNet {
         published: Rc<RefCell<Vec<ResealedScopeRoot>>>,
         publish_result: Result<(), ScopeRootPublishError>,
+        publish_calls: Rc<RefCell<usize>>,
+        fail_after: Option<(usize, ScopeRootPublishError)>,
     }
 
     impl FakeNet {
@@ -507,6 +534,18 @@ mod tests {
             Self {
                 published: Rc::new(RefCell::new(Vec::new())),
                 publish_result,
+                publish_calls: Rc::new(RefCell::new(0)),
+                fail_after: None,
+            }
+        }
+
+        /// Succeed every publish up to (excluding) the `n`th, then fail with
+        /// `err` — models a grantee publish that lands and a later parent
+        /// publish that loses the race.
+        fn new_fail_after(n: usize, err: ScopeRootPublishError) -> Self {
+            Self {
+                fail_after: Some((n, err)),
+                ..Self::new(Ok(()))
             }
         }
     }
@@ -553,6 +592,17 @@ mod tests {
             &self,
             record: &ResealedScopeRoot,
         ) -> Result<(), ScopeRootPublishError> {
+            let call = {
+                let mut c = self.publish_calls.borrow_mut();
+                let call = *c;
+                *c += 1;
+                call
+            };
+            if let Some((n, err)) = &self.fail_after {
+                if call >= *n {
+                    return Err(err.clone());
+                }
+            }
             match &self.publish_result {
                 Ok(()) => {
                     self.published.borrow_mut().push(record.clone());
@@ -690,7 +740,7 @@ mod tests {
         entropy_seed: u64,
         subtree: &[ChildScopeRef],
         floor: Option<([u8; 16], u64)>,
-        publish_result: Result<(), ScopeRootPublishError>,
+        net: FakeNet,
     ) -> (
         Result<CreateGrantOutcome, CreateGrantError>,
         Vec<ResealedScopeRoot>,
@@ -700,7 +750,6 @@ mod tests {
         if let Some((scope, epoch)) = floor {
             block_on(floors.raise_epoch_floor(&scope, epoch)).unwrap();
         }
-        let net = FakeNet::new(publish_result);
         let hub = InMemoryMailboxHub::default();
         let mailbox = hub.mailbox_for(&recipient_enc().public().to_bytes());
 
@@ -792,7 +841,7 @@ mod tests {
 
     #[test]
     fn converged_subtree_mints_publishes_and_posts_the_share_pointer() {
-        let (outcome, published, hub) = run(7, &[], None, Ok(()));
+        let (outcome, published, hub) = run(7, &[], None, FakeNet::new(Ok(())));
         let outcome = outcome.expect("grant creation succeeds over a converged subtree");
 
         // Two records, grantee first (register-first / never-orphan / dest-first).
@@ -867,7 +916,7 @@ mod tests {
             7,
             &subtree,
             Some((DESCENDANT_SCOPE, 2)),
-            Err(ScopeRootPublishError::LostRace),
+            FakeNet::new(Err(ScopeRootPublishError::LostRace)),
         );
 
         match outcome {
@@ -888,15 +937,44 @@ mod tests {
         // A subtree scope root that will not resolve is a fail-closed convergence
         // abort, never a silent partial share.
         let subtree = vec![ChildScopeRef::new([0x99; 16], b"unresolvable".to_vec())];
-        let (outcome, published, _hub) = run(7, &subtree, None, Ok(()));
+        let (outcome, published, _hub) = run(7, &subtree, None, FakeNet::new(Ok(())));
         assert_eq!(outcome.unwrap_err().check(), "converge-failed");
         assert!(published.is_empty());
     }
 
     #[test]
+    fn parent_publish_failure_leaves_the_grantee_root_committed_and_no_share() {
+        // Post-publish partial commit: the grantee root publishes (call 0), then
+        // the parent publish (call 1) loses the CAS race. The primitive is NOT
+        // atomic past step 5 — the grantee root is already on the network (orphan
+        // cleanup belongs to #745/#746) and NO share pointer is posted. This pins
+        // the doc comment's post-publish caveat to behavior.
+        let (outcome, published, hub) = run(
+            7,
+            &[],
+            None,
+            FakeNet::new_fail_after(1, ScopeRootPublishError::LostRace),
+        );
+
+        assert_eq!(
+            outcome.unwrap_err().check(),
+            "parent-publish-failed",
+            "the parent publish is the failing step"
+        );
+        // The grantee root is already committed — the partial-commit the doc warns
+        // about, not a fail-closed rollback.
+        assert_eq!(published.len(), 1, "grantee root committed, parent not");
+        assert_eq!(published[0].scope_id, GRANTEE_SCOPE);
+        // No share pointer is posted when publishing aborts before the mailbox step.
+        let recip_box = hub.mailbox_for(&recipient_enc().public().to_bytes());
+        let items = block_on(poll_verified(&recip_box, &recipient_enc(), V)).unwrap();
+        assert!(items.is_empty(), "no share pointer when publish aborts");
+    }
+
+    #[test]
     fn creation_is_deterministic_under_a_fixed_entropy_seed() {
-        let (a_outcome, a_pub, _) = run(42, &[], None, Ok(()));
-        let (b_outcome, b_pub, _) = run(42, &[], None, Ok(()));
+        let (a_outcome, a_pub, _) = run(42, &[], None, FakeNet::new(Ok(())));
+        let (b_outcome, b_pub, _) = run(42, &[], None, FakeNet::new(Ok(())));
         assert_eq!(a_outcome.unwrap(), b_outcome.unwrap());
         assert_eq!(a_pub, b_pub, "same seed → byte-identical published records");
     }
