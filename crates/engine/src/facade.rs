@@ -518,6 +518,7 @@ impl<T: SeamTypes> Drop for Engine<T> {
 mod tests {
     use super::*;
 
+    use crate::seams::UnixMillis;
     use crate::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 
     fn new_engine() -> (Engine<FakeSeamTypes>, EventStream) {
@@ -529,8 +530,17 @@ mod tests {
         )
     }
 
-    fn started_engine(secret_byte: u8) -> Engine<FakeSeamTypes> {
-        let (mut engine, _events) = new_engine();
+    /// Starts an engine whose virtual clock sits at `clock` before `start`, so
+    /// tests can prove derivation is independent of the wall time at boot.
+    fn started_engine_at(secret_byte: u8, clock: UnixMillis) -> Engine<FakeSeamTypes> {
+        let world = FakeWorld::new();
+        world.scheduler.advance_to(clock);
+        let device = world.device(b"alice-pk");
+        let (mut engine, _events) = Engine::new(
+            device.seam_set(),
+            Box::new(SeededEntropy::new(42)),
+            SyncTimingProfile::CI,
+        );
         block_on(engine.start(LoginSecret::new(vec![secret_byte; 32]))).unwrap();
         engine
     }
@@ -572,15 +582,16 @@ mod tests {
 
     #[test]
     fn cold_start_derivation_is_deterministic_and_clock_independent() {
-        // Two engines over independent virtual clocks derive the same identity
-        // from the same secret: `start` reads no clock or RNG, only the seed.
-        let a = started_engine(7);
-        let b = started_engine(7);
+        // Two engines whose virtual clocks sit at different instants derive the
+        // same identity from the same secret: `start` reads no clock or RNG,
+        // only the seed.
+        let a = started_engine_at(7, UnixMillis(0));
+        let b = started_engine_at(7, UnixMillis(1_000_000));
         assert_eq!(
             a.session().unwrap().enc_subkey_public().to_bytes(),
             b.session().unwrap().enc_subkey_public().to_bytes(),
         );
-        let c = started_engine(8);
+        let c = started_engine_at(8, UnixMillis(2_000_000));
         assert_ne!(
             a.session().unwrap().enc_subkey_public().to_bytes(),
             c.session().unwrap().enc_subkey_public().to_bytes(),

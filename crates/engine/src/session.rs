@@ -118,7 +118,10 @@ impl SessionIdentity {
     /// The writer-pseudonym signer (`pseudonym-sign` edge): the per-(scope,
     /// writer) signing keypair the rotator detached-signs re-sealed structures
     /// with, from the pairwise material (owner root secret or grant ECDH) and
-    /// the scope id.
+    /// the scope id. The pairwise material already fully encodes the
+    /// owner/writer identity, so — unlike every sibling factory — this one
+    /// consults no stored session field; its output is keyed solely by its
+    /// arguments.
     pub(crate) fn writer_pseudonym_signer(
         &self,
         pairwise_material: &[u8; 32],
@@ -237,6 +240,38 @@ mod tests {
                 .verifying_key()
                 .to_bytes(),
             "a different node id is a different name",
+        );
+    }
+
+    #[test]
+    fn writer_pseudonym_signer_binds_pairwise_material_and_scope() {
+        let id = identity(&[7u8; 32]);
+        let pairwise = [2u8; 32];
+        let scope = [3u8; 16];
+        let base = id
+            .writer_pseudonym_signer(&pairwise, &scope)
+            .verifying_key()
+            .to_bytes();
+        assert_eq!(
+            base,
+            id.writer_pseudonym_signer(&pairwise, &scope)
+                .verifying_key()
+                .to_bytes(),
+            "same pairwise material and scope must yield the same pseudonym signer",
+        );
+        assert_ne!(
+            base,
+            id.writer_pseudonym_signer(&[9u8; 32], &scope)
+                .verifying_key()
+                .to_bytes(),
+            "different pairwise material is a different pseudonym",
+        );
+        assert_ne!(
+            base,
+            id.writer_pseudonym_signer(&pairwise, &[4u8; 16])
+                .verifying_key()
+                .to_bytes(),
+            "a different scope is a different pseudonym",
         );
     }
 
