@@ -74,7 +74,10 @@ pub use net::{
 };
 pub use profile::SyncTimingProfile;
 pub use rotation::{
-    ChildIndexResolver, EagerSet, EnumerationError, ResolveFailure, enumerate_eager_set,
+    ChildIndexResolver, CommittedSet, EagerSet, EnumerationError, PrevEpochSeed, ResealError,
+    ResealSeeds, ResealedScopeRoot, ResolveFailure, RevokeError, RevokedCommittedSet, RotateError,
+    RotateScopePlan, RotationOutcome, RotationTrigger, ScopeRootIdentity, ScopeRootPublishError,
+    ScopeRootPublisher, enumerate_eager_set, reseal_scope_root, revoke_read_grant, rotate_scope,
 };
 pub use seams::{SeamError, SeamResult, SeamSet, SeamTypes};
 pub use sync::{
