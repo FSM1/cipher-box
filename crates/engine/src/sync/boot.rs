@@ -55,9 +55,10 @@ pub struct ColdStartParams<'a> {
     pub pending_ops: &'a [Op],
 }
 
-/// A fail-closed cold-start failure. Only [`ColdStartError::Seam`] is
-/// availability (retryable host I/O); every other arm is a trust violation the
-/// engine never renders past.
+/// A fail-closed cold-start failure. [`ColdStartError::Seam`] is availability
+/// (retryable host I/O) and [`ColdStartError::NotStarted`] is a caller-ordering
+/// precondition; every other arm is a trust violation the engine never renders
+/// past.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ColdStartError {
     /// The vault-pointer walk hit a forged/tampered index — fail-closed.
@@ -70,6 +71,10 @@ pub enum ColdStartError {
     /// A host seam failure (floor store, snapshot cache, transport) — not a
     /// trust decision.
     Seam(SeamError),
+    /// Cold start was invoked before `start` derived the session identity — a
+    /// caller-ordering precondition, mirroring `EngineError::NotStarted` rather
+    /// than panicking.
+    NotStarted,
 }
 
 impl core::fmt::Display for ColdStartError {
@@ -79,6 +84,7 @@ impl core::fmt::Display for ColdStartError {
             ColdStartError::FloorRegression(r) => write!(f, "{r}"),
             ColdStartError::RootAdoption(r) => write!(f, "{r}"),
             ColdStartError::Seam(e) => write!(f, "{e}"),
+            ColdStartError::NotStarted => f.write_str("engine not started"),
         }
     }
 }

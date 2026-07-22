@@ -509,10 +509,7 @@ impl<T: SeamTypes> Engine<T> {
         let (decoded, _undecodable) = decode_queue(&raw);
         let pending: Vec<_> = decoded.into_iter().map(|(_id, op)| op).collect();
 
-        let session = self
-            .session
-            .as_ref()
-            .expect("cold start runs after start derives the session");
+        let session = self.session.as_ref().ok_or(ColdStartError::NotStarted)?;
         let params = ColdStartParams {
             login_secret: session.login_secret(),
             owner_identity,
@@ -900,6 +897,21 @@ mod tests {
             // The data path is a pure function of the seams + session: the two
             // outcomes match despite the engines' clocks sitting far apart.
             assert_eq!(drive(&mut a, &pa), drive(&mut b, &pb));
+        }
+
+        #[test]
+        fn before_start_returns_not_started_not_panic() {
+            let (mut engine, _events) = new_engine();
+            assert!(engine.session().is_none(), "no identity before start");
+            let out = block_on(engine.cold_start_data_path(
+                &ScriptedPointers::default(),
+                &AdoptingAdopter,
+                &owner().verifying_key(),
+                ROOT_SCOPE,
+                VERSION,
+                NodeId([0xAB; 16]),
+            ));
+            assert_eq!(out, Err(ColdStartError::NotStarted));
         }
     }
 }
