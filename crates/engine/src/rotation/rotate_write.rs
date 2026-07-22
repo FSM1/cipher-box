@@ -58,6 +58,13 @@
 //! the recovery. register/republish/retire/re-point are all idempotent, so a
 //! resumed wave converges to the same terminal state.
 //!
+//! One accepted limitation: a crash **after** the pointer flips but **before**
+//! interior retirement orphans the prior run's interior old names. Post-flip the
+//! resolver reports every node's new name as current, so the never-orphan-a-live-
+//! name guard finds nothing to retire and no durable read can rediscover the
+//! superseded names. This is the fail-safe direction (leaking a name registration
+//! beats retiring a live one); reclaiming the orphans is tracked in #764.
+//!
 //! # Owner-only, fail-closed
 //!
 //! `rotateScopeWrite` is owner-only: the caller must present the owner identity
@@ -260,7 +267,10 @@ pub struct WriteRotationOutcome {
     pub new_write_epoch: u64,
     /// The scope root's new `ipnsName` (`currentRootName` in the re-point object).
     pub new_root_name: IpnsName,
-    /// The number of interior (non-root) nodes republished and retired.
+    /// The number of interior (non-root) nodes in the scope's subtree — the wave
+    /// covers all of them, though a resumed wave may have republished some in a
+    /// prior run (skipped via `is_republished`), and a post-flip-crash resume
+    /// retires none of them (see the crash-recovery module docs).
     pub interior_node_count: usize,
 }
 
