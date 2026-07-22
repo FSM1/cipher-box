@@ -500,16 +500,21 @@ impl<T: SeamTypes> Engine<T> {
         Pf: PointerFetch,
         Ad: Adopter,
     {
+        // Precondition guard fails fast before any seam I/O, so an unstarted
+        // engine returns `NotStarted` rather than misclassifying a staging-store
+        // failure as retryable `Seam`.
+        let session = self.session.as_ref().ok_or(ColdStartError::NotStarted)?;
         let raw = self
             .seams
             .staging_store
             .queued_ops()
             .await
             .map_err(ColdStartError::Seam)?;
+        // `_undecodable` dead-letters are dropped here; surfacing them (and
+        // replay dead-letters) as `Event::DeadLetter` on boot is deferred to #768.
         let (decoded, _undecodable) = decode_queue(&raw);
         let pending: Vec<_> = decoded.into_iter().map(|(_id, op)| op).collect();
 
-        let session = self.session.as_ref().ok_or(ColdStartError::NotStarted)?;
         let params = ColdStartParams {
             login_secret: session.login_secret(),
             owner_identity,
@@ -902,6 +907,31 @@ mod tests {
         #[test]
         fn before_start_returns_not_started_not_panic() {
             let (mut engine, _events) = new_engine();
+            assert!(engine.session().is_none(), "no identity before start");
+            let out = block_on(engine.cold_start_data_path(
+                &ScriptedPointers::default(),
+                &AdoptingAdopter,
+                &owner().verifying_key(),
+                ROOT_SCOPE,
+                VERSION,
+                NodeId([0xAB; 16]),
+            ));
+            assert_eq!(out, Err(ColdStartError::NotStarted));
+        }
+
+        #[test]
+        fn unstarted_engine_reports_not_started_even_when_staging_store_fails() {
+            // Precondition guard must run before the staging read, so a failing
+            // seam on an unstarted engine still classifies as `NotStarted`, not
+            // a retryable `Seam`.
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            device.staging_store.fail_queued_ops();
+            let (mut engine, _events) = Engine::new(
+                device.seam_set(),
+                Box::new(SeededEntropy::new(42)),
+                SyncTimingProfile::CI,
+            );
             assert!(engine.session().is_none(), "no identity before start");
             let out = block_on(engine.cold_start_data_path(
                 &ScriptedPointers::default(),

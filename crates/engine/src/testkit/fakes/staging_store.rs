@@ -3,12 +3,13 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use crate::seams::{OpId, SeamResult, StagingStore};
+use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
 
 struct Inner {
     next_op_id: u64,
     ops: Vec<(OpId, Vec<u8>)>,
     staged: BTreeMap<Vec<u8>, Vec<u8>>,
+    fail_queued_ops: bool,
 }
 
 impl Default for Inner {
@@ -17,6 +18,7 @@ impl Default for Inner {
             next_op_id: 1,
             ops: Vec::new(),
             staged: BTreeMap::new(),
+            fail_queued_ops: false,
         }
     }
 }
@@ -26,6 +28,14 @@ impl Default for Inner {
 #[derive(Clone, Default)]
 pub struct InMemoryStagingStore {
     inner: Arc<Mutex<Inner>>,
+}
+
+impl InMemoryStagingStore {
+    /// Makes `queued_ops` return a seam error, so tests can prove a caller's
+    /// precondition guard runs before the staging read.
+    pub fn fail_queued_ops(&self) {
+        self.inner.lock().expect("lock").fail_queued_ops = true;
+    }
 }
 
 impl StagingStore for InMemoryStagingStore {
@@ -38,7 +48,11 @@ impl StagingStore for InMemoryStagingStore {
     }
 
     async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>> {
-        Ok(self.inner.lock().expect("lock").ops.clone())
+        let inner = self.inner.lock().expect("lock");
+        if inner.fail_queued_ops {
+            return Err(SeamError::new("queued_ops unavailable"));
+        }
+        Ok(inner.ops.clone())
     }
 
     async fn remove_op(&self, op_id: OpId) -> SeamResult<()> {
