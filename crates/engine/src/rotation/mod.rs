@@ -11,14 +11,20 @@
 //! - [`rotate`] — `rotateScope`, the read-plane root cut: mint a fresh override
 //!   seed, re-seal, publish CAS, raise `minReadEpoch`, enqueue the sweep.
 //! - [`trigger`] — the read-revoke / scope-exit / manual trigger surface.
+//! - [`sweep`] — the lazy-wave epoch-lag convergence pass (metadata-only,
+//!   existing seed, `prev = None`) plus its idle-cadence driver and the
+//!   direct-child-scope index self-heal. It does **not** mint fresh descendant
+//!   seeds — that fresh-seed eager-set republish is `rotateScope`'s job on an
+//!   owner-revocation rotation, deferred pending the resolver/tree wiring
+//!   (#745/#746).
 //!
-//! `sweep` (the epoch-lag work-list) is a sibling slice of #635 that consumes
-//! [`reseal`]; it does not land here. `rotateScopeWrite` (the write-plane name
-//! wave) is a separate primitive, out of this slice's read-plane scope.
+//! `rotateScopeWrite` (the write-plane name wave) is a separate primitive, out
+//! of this slice's read-plane scope.
 
 pub mod eager_set;
 pub mod reseal;
 pub mod rotate;
+pub mod sweep;
 pub mod trigger;
 
 pub use eager_set::{
@@ -31,4 +37,5 @@ pub use rotate::{
     ResealedScopeRoot, RotateError, RotateScopePlan, RotationOutcome, ScopeRootPublishError,
     ScopeRootPublisher, rotate_scope,
 };
+pub use sweep::{SweepError, SweepOutcome, SweepResolver, SweepTarget, run_sweep, sweep_pass};
 pub use trigger::{RevokeError, RevokedCommittedSet, RotationTrigger, revoke_read_grant};
