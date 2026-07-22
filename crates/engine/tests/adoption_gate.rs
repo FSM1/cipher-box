@@ -18,14 +18,15 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    AadContext, Envelope, GrantBlobPayload, GrantSetCommitment, OverrideSeedPayload, ReadBody,
-    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, StructureSigInput, WriteBody, encode_write_body,
-    open_grant_blob, seal, seal_ascent_link, seal_grant_blob, seal_owner_blob, seal_read_body,
-    sign_grant_set, sign_structure,
+    AadContext, Envelope, GrantBlobPayload, GrantSection, GrantSetCommitment, OverrideSeedPayload,
+    ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, SignedAscentLink,
+    SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, WriteBody,
+    encode_write_body, open_grant_blob, seal, seal_ascent_link, seal_grant_blob, seal_owner_blob,
+    seal_read_body, sign_grant_set, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
-use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer};
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use cipherbox_engine::SyncTimingProfile;
@@ -33,8 +34,7 @@ use cipherbox_engine::gate::floor::{
     advance_write_epoch_on_sight, cold_seed, read_epoch_floor, sequence_floor, write_epoch_floor,
 };
 use cipherbox_engine::gate::{
-    Adopted, AscentCheck, Candidate, FLOOR_VERDICTS, GateError, GateStage, ReaderContext, SeedBlob,
-    SignedStructure, adopt,
+    Adopted, Candidate, FLOOR_VERDICTS, GateError, GateStage, ReaderContext, SeedBlob, adopt,
 };
 use cipherbox_engine::seams::{FloorStore, RecordTransport, Scheduler};
 use cipherbox_engine::testkit::fakes::InMemoryFloorStore;
@@ -74,9 +74,10 @@ struct Fixture {
     owner_blob_enc: [u8; 32],
     owner_blob_ct: Vec<u8>,
     owner_blob_aad: AadContext,
-    commitment: GrantSetCommitment,
-    commitment_sig: cipherbox_core::suite::ecdsa::EcdsaSignature,
-    structures: Vec<SignedStructure>,
+    /// The record's grant section — the commitment, owner blob, and write-body
+    /// with real detached structure signatures. The gate enumerates and
+    /// recomputes over this (#687).
+    grant_section: GrantSection,
     valid_envelope: Envelope,
 }
 
@@ -120,16 +121,17 @@ impl Fixture {
         );
         let owner_blob_ct = owner_blob.ciphertext.clone();
         let owner_blob_enc = owner_blob.enc;
-        let owner_blob_input = StructureSigInput::over_ciphertext(
-            scope_id,
-            epoch,
-            STRUCT_TAG_OWNER_BLOB,
-            None,
-            &owner_blob_ct,
-        );
-        let owner_blob_structure = SignedStructure {
-            signature: sign_structure(&owner_pseudonym, &owner_blob_input),
-            input: owner_blob_input,
+        // Sign a seed-bearing structure's ciphertext with the owner pseudonym —
+        // the detached structure signature the gate recomputes and verifies.
+        let sign = |tag: u8, recipient: Option<[u8; 32]>, ct: &[u8]| -> [u8; 64] {
+            let input = StructureSigInput::over_ciphertext(scope_id, epoch, tag, recipient, ct);
+            sign_structure(&owner_pseudonym, &input).to_bytes()
+        };
+        let signed_owner_blob = SignedOwnerBlob {
+            enc: owner_blob_enc,
+            ciphertext: owner_blob_ct.clone(),
+            signature: sign(STRUCT_TAG_OWNER_BLOB, None, &owner_blob_ct),
+            unknown: Vec::new(),
         };
 
         // Write-body (a second seed-bearing structure, to exercise the loop).
@@ -152,16 +154,10 @@ impl Fixture {
             &write_body_aad,
             &encode_write_body(&write_body).expect("encodes"),
         );
-        let write_body_input = StructureSigInput::over_ciphertext(
-            scope_id,
-            epoch,
-            STRUCT_TAG_WRITE_BODY,
-            None,
-            &write_body_sealed,
-        );
-        let write_body_structure = SignedStructure {
-            signature: sign_structure(&owner_pseudonym, &write_body_input),
-            input: write_body_input,
+        let signed_write_body = SignedSealed {
+            signature: sign(STRUCT_TAG_WRITE_BODY, None, &write_body_sealed),
+            sealed: write_body_sealed,
+            unknown: Vec::new(),
         };
 
         // Grant-set commitment (grant-less scope: the owner pseudonym is the
@@ -172,7 +168,19 @@ impl Fixture {
             entries: Vec::new(),
             unknown: Vec::new(),
         };
-        let commitment_sig = sign_grant_set(&owner_identity, &commitment).expect("signs");
+        let commitment_sig = sign_grant_set(&owner_identity, &commitment)
+            .expect("signs")
+            .to_compact();
+        let grant_section = GrantSection {
+            commitment: commitment.clone(),
+            commitment_sig,
+            grant_blobs: Vec::new(),
+            owner_blob: signed_owner_blob,
+            ascent_link: None,
+            history_links: Vec::new(),
+            write_body: signed_write_body,
+            unknown: Vec::new(),
+        };
 
         // Valid empty-folder read-body sealed into the envelope.
         let folder = ReadBody::Folder {
@@ -207,9 +215,7 @@ impl Fixture {
             owner_blob_enc,
             owner_blob_ct,
             owner_blob_aad,
-            commitment,
-            commitment_sig,
-            structures: vec![owner_blob_structure, write_body_structure],
+            grant_section,
             valid_envelope,
         }
     }
@@ -256,10 +262,7 @@ impl Fixture {
         Candidate {
             name: self.name.clone(),
             record_bytes,
-            commitment: self.commitment.clone(),
-            commitment_sig: self.commitment_sig.clone(),
-            structures: self.structures.clone(),
-            ascent: None,
+            grant_section: self.grant_section.clone(),
             envelope: self.valid_envelope.clone(),
         }
     }
@@ -291,18 +294,24 @@ impl Fixture {
         }
     }
 
-    /// A well-formed ascent link sealed under `parent_node_seed` (uncorrupted
-    /// public half). The stage-3 verdict now hinges on whether the *reader's*
-    /// `parent_node_seed` re-derives this keypair — a mismatched reader seed is
-    /// a natural `ascent-link-mismatch`, no hand-corruption needed.
-    fn ascent_link_under(&self, parent_node_seed: &[u8; 32]) -> AscentCheck {
+    /// A well-formed published ascent link sealed under `parent_node_seed`
+    /// (uncorrupted public half) with a valid owner-pseudonym structure signature.
+    /// The stage-3 verdict now hinges on whether the *reader's* `parent_node_seed`
+    /// re-derives this keypair — a mismatched reader seed is a natural
+    /// `ascent-link-mismatch`, no hand-corruption needed.
+    fn ascent_link_under(&self, parent_node_seed: &[u8; 32]) -> SignedAscentLink {
         self.ascent_link_under_aad(parent_node_seed, self.ascent_aad())
     }
 
     /// An ascent link sealed under `parent_node_seed` with a caller-chosen AAD,
-    /// carrying this scope's real override seed — lets a test pass the seed-derive
-    /// half yet present an AAD that does not bind to the envelope.
-    fn ascent_link_under_aad(&self, parent_node_seed: &[u8; 32], aad: AadContext) -> AscentCheck {
+    /// carrying this scope's real override seed — lets a test seal under an AAD
+    /// that does not bind to the envelope (the gate rebuilds the AAD from the
+    /// envelope, so such a link fails the HPKE open).
+    fn ascent_link_under_aad(
+        &self,
+        parent_node_seed: &[u8; 32],
+        aad: AadContext,
+    ) -> SignedAscentLink {
         self.ascent_link_full(
             parent_node_seed,
             aad,
@@ -312,15 +321,30 @@ impl Fixture {
 
     /// An ascent link sealed under `parent_node_seed`/`aad` carrying a
     /// caller-chosen `OverrideSeedPayload` — lets a test seal a rogue or
-    /// stale-epoch seed to the published ascent public key.
+    /// stale-epoch seed to the published ascent public key. The structure
+    /// signature is always valid (over the real ciphertext at the fixture
+    /// scope/epoch), so the derive-and-verify half is what a test exercises.
     fn ascent_link_full(
         &self,
         parent_node_seed: &[u8; 32],
         aad: AadContext,
         payload: OverrideSeedPayload,
-    ) -> AscentCheck {
+    ) -> SignedAscentLink {
         let link = seal_ascent_link(parent_node_seed, &EPH_ASCENT, &aad, &payload);
-        AscentCheck { link, aad }
+        let input = StructureSigInput::over_ciphertext(
+            self.scope_id,
+            self.epoch,
+            STRUCT_TAG_ASCENT_LINK,
+            None,
+            &link.ciphertext,
+        );
+        SignedAscentLink {
+            ascent_public: link.ascent_public,
+            enc: link.enc,
+            ciphertext: link.ciphertext,
+            signature: sign_structure(&self.owner_pseudonym, &input).to_bytes(),
+            unknown: Vec::new(),
+        }
     }
 
     /// The envelope-matching ascent AAD (the honest ascent context for the
@@ -515,19 +539,19 @@ fn run_matrix_case(name: &str) -> Result<Adopted, GateError> {
         }
         "commitment-verify:commitment-invalid" => {
             let foreign = EcdsaSigner::from_scalar(&[0x5A; 32]).expect("valid scalar");
-            candidate.commitment_sig =
-                sign_grant_set(&foreign, &candidate.commitment).expect("signs");
+            candidate.grant_section.commitment_sig =
+                sign_grant_set(&foreign, &candidate.grant_section.commitment)
+                    .expect("signs")
+                    .to_compact();
         }
         "grant-section:structure-signature-invalid" => {
-            let mut sig = candidate.structures[0].signature.to_bytes();
-            sig[0] ^= 0xFF;
-            candidate.structures[0].signature = Ed25519Signature::from_bytes(sig);
+            candidate.grant_section.owner_blob.signature[0] ^= 0xFF;
         }
         "grant-section:ascent-link-mismatch" => {
             // The link is sealed under one parent seed; the reader supplies a
             // DIFFERENT real ancestor seed, so the reader-derived keypair
             // mismatches the link's public half — a natural ascent-link-mismatch.
-            candidate.ascent = Some(fx.ascent_link_under(&[0xA1; 32]));
+            candidate.grant_section.ascent_link = Some(fx.ascent_link_under(&[0xA1; 32]));
             reader_parent_seed = Some([0xB2; 32]);
         }
         "sequence:sequence-not-newer" => {
@@ -794,12 +818,15 @@ fn run_floor_scenario(rule: &str) {
                 Some(recipient_tag),
                 &blob.ciphertext,
             );
-            let signed = SignedStructure {
-                signature: sign_structure(&fx.owner_pseudonym, &input),
-                input,
+            let signed_blob = SignedGrantBlob {
+                tag: recipient_tag,
+                enc: blob.enc,
+                ciphertext: blob.ciphertext.clone(),
+                signature: sign_structure(&fx.owner_pseudonym, &input).to_bytes(),
+                unknown: Vec::new(),
             };
             let mut candidate = fx.candidate(1);
-            candidate.structures.push(signed);
+            candidate.grant_section.grant_blobs.push(signed_blob);
 
             block_on(adopt(&floors, &fx.reader(), &candidate)).expect("adopts");
             assert_eq!(
@@ -967,16 +994,22 @@ fn simulation_n_engines_one_record_store_adversarial() {
         "a revokee's validly re-signed old-epoch record fails the advanced floor"
     );
 
-    // Transplant: a structure signature moved to a different structure tag
-    // fails core's tag-bound preimage check.
+    // Transplant: a signature made over the history-link tag, planted in the
+    // owner-blob slot. The gate recomputes the owner-blob preimage (fixed tag by
+    // enumeration position) and the transplanted signature fails.
     let mut transplanted = fx.candidate(1);
-    transplanted.structures[0].input = StructureSigInput::over_ciphertext(
-        fx.scope_id,
-        fx.epoch,
-        STRUCT_TAG_HISTORY_LINK,
-        None,
-        &fx.owner_blob_ct,
-    );
+    let history_tag_sig = sign_structure(
+        &fx.owner_pseudonym,
+        &StructureSigInput::over_ciphertext(
+            fx.scope_id,
+            fx.epoch,
+            STRUCT_TAG_HISTORY_LINK,
+            None,
+            &fx.owner_blob_ct,
+        ),
+    )
+    .to_bytes();
+    transplanted.grant_section.owner_blob.signature = history_tag_sig;
     let err = block_on(adopt(
         &reader_device.floor_store,
         &fx.reader(),
@@ -988,6 +1021,82 @@ fn simulation_n_engines_one_record_store_adversarial() {
         "structure-signature-invalid",
         "a transplanted structure signature is rejected by core's tag-bound preimage"
     );
+}
+
+#[test]
+fn non_empty_history_link_authenticates_and_rejects_tamper_and_replay() {
+    // Every other fixture leaves history_links empty, so the STRUCT_TAG_HISTORY_LINK
+    // recompute-and-verify loop is exercised here over a populated list (#687): a
+    // valid link authenticates, a tampered sealed body is rejected, and a link
+    // validly signed for a different epoch (cross-epoch replay) recomputes a
+    // preimage the authenticated envelope epoch never covered.
+    let fx = Fixture::new();
+    let sealed = b"prior-write-epoch-history-link".to_vec();
+    let sign_link = |epoch: u64, bytes: &[u8]| -> [u8; 64] {
+        sign_structure(
+            &fx.owner_pseudonym,
+            &StructureSigInput::over_ciphertext(
+                fx.scope_id,
+                epoch,
+                STRUCT_TAG_HISTORY_LINK,
+                None,
+                bytes,
+            ),
+        )
+        .to_bytes()
+    };
+
+    // Valid link signed over the envelope epoch passes through the loop.
+    let mut candidate = fx.candidate(1);
+    candidate.grant_section.history_links.push(SignedSealed {
+        sealed: sealed.clone(),
+        signature: sign_link(fx.epoch, &sealed),
+        unknown: Vec::new(),
+    });
+    block_on(adopt(
+        &InMemoryFloorStore::default(),
+        &fx.reader(),
+        &candidate,
+    ))
+    .expect("valid non-empty history link adopts");
+
+    // Tamper: mutate the sealed bytes but keep the old signature — the recomputed
+    // preimage no longer matches, rejecting the whole record.
+    let mut tampered = fx.candidate(1);
+    let mut bad = sealed.clone();
+    bad[0] ^= 0xFF;
+    tampered.grant_section.history_links.push(SignedSealed {
+        sealed: bad,
+        signature: sign_link(fx.epoch, &sealed),
+        unknown: Vec::new(),
+    });
+    let rej = block_on(adopt(
+        &InMemoryFloorStore::default(),
+        &fx.reader(),
+        &tampered,
+    ))
+    .unwrap_err();
+    let rej = rej.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "structure-signature-invalid");
+
+    // Cross-epoch replay: a link validly signed for a neighbouring epoch fails the
+    // gate's recompute at the authenticated envelope epoch.
+    let mut replayed = fx.candidate(1);
+    replayed.grant_section.history_links.push(SignedSealed {
+        sealed: sealed.clone(),
+        signature: sign_link(fx.epoch + 1, &sealed),
+        unknown: Vec::new(),
+    });
+    let rej = block_on(adopt(
+        &InMemoryFloorStore::default(),
+        &fx.reader(),
+        &replayed,
+    ))
+    .unwrap_err();
+    let rej = rej.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "structure-signature-invalid");
 }
 
 // ---------------------------------------------------------------------------
@@ -1004,7 +1113,7 @@ fn ascent_authority_is_reader_derived_not_candidate_supplied() {
     let fx = Fixture::new();
     let floors = InMemoryFloorStore::default();
     let mut candidate = fx.candidate(1);
-    candidate.ascent = Some(fx.ascent_link_under(&[0xAB; 32]));
+    candidate.grant_section.ascent_link = Some(fx.ascent_link_under(&[0xAB; 32]));
     let mut reader = fx.reader();
     reader.parent_node_seed = Some([0xCD; 32]);
     let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
@@ -1020,7 +1129,7 @@ fn ascent_present_without_reader_seed_fails_closed() {
     let fx = Fixture::new();
     let floors = InMemoryFloorStore::default();
     let mut candidate = fx.candidate(1);
-    candidate.ascent = Some(fx.ascent_link_under(&[0xAB; 32]));
+    candidate.grant_section.ascent_link = Some(fx.ascent_link_under(&[0xAB; 32]));
     let reader = fx.reader();
     let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
     let rej = err.rejection().unwrap();
@@ -1036,7 +1145,7 @@ fn ascent_adopts_when_reader_seed_matches_sealed_link() {
     let floors = InMemoryFloorStore::default();
     let parent_seed = [0xAB; 32];
     let mut candidate = fx.candidate(1);
-    candidate.ascent = Some(fx.ascent_link_under(&parent_seed));
+    candidate.grant_section.ascent_link = Some(fx.ascent_link_under(&parent_seed));
     let mut reader = fx.reader();
     reader.parent_node_seed = Some(parent_seed);
     let adopted = block_on(adopt(&floors, &reader, &candidate)).expect("valid ascent adopts");
@@ -1045,10 +1154,10 @@ fn ascent_adopts_when_reader_seed_matches_sealed_link() {
 
 #[test]
 fn ascent_link_aad_must_bind_to_the_envelope() {
-    // The link is correctly sealed under the reader's real parent seed (the
-    // seed-derive half passes), but its AAD names a different epoch than the
-    // envelope — a link minted under the same parent seed for another
-    // node/epoch/version. Fail closed on the AAD bind, before opening.
+    // The link's public half derives from the reader's real parent seed (the
+    // derive half passes) and its structure signature is valid, but it was
+    // HPKE-sealed under a foreign-epoch AAD. The gate rebuilds the AAD from the
+    // authenticated envelope, so the HPKE open fails the tag — fail closed.
     let fx = Fixture::new();
     let floors = InMemoryFloorStore::default();
     let parent_seed = [0xAB; 32];
@@ -1060,13 +1169,13 @@ fn ascent_link_aad_must_bind_to_the_envelope() {
         struct_tag: STRUCT_TAG_ASCENT_LINK,
     };
     let mut candidate = fx.candidate(1);
-    candidate.ascent = Some(fx.ascent_link_under_aad(&parent_seed, foreign_aad));
+    candidate.grant_section.ascent_link = Some(fx.ascent_link_under_aad(&parent_seed, foreign_aad));
     let mut reader = fx.reader();
     reader.parent_node_seed = Some(parent_seed);
     let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
     let rej = err.rejection().unwrap();
     assert_eq!(rej.stage, GateStage::GrantSection);
-    assert_eq!(rej.check(), "ascent-link-mismatch");
+    assert_eq!(rej.check(), "hpke-open-failed");
 }
 
 #[test]
@@ -1079,7 +1188,8 @@ fn ascent_link_rogue_seed_fails_read_key_cross_check() {
     let parent_seed = [0xAB; 32];
     let rogue = OverrideSeedPayload::new([0xEE; 32], fx.epoch);
     let mut candidate = fx.candidate(1);
-    candidate.ascent = Some(fx.ascent_link_full(&parent_seed, fx.ascent_aad(), rogue));
+    candidate.grant_section.ascent_link =
+        Some(fx.ascent_link_full(&parent_seed, fx.ascent_aad(), rogue));
     let mut reader = fx.reader();
     reader.parent_node_seed = Some(parent_seed);
     let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
@@ -1098,7 +1208,8 @@ fn ascent_link_stale_epoch_payload_rejected() {
     let parent_seed = [0xAB; 32];
     let stale = OverrideSeedPayload::new(fx.scope_seed, fx.epoch + 1);
     let mut candidate = fx.candidate(1);
-    candidate.ascent = Some(fx.ascent_link_full(&parent_seed, fx.ascent_aad(), stale));
+    candidate.grant_section.ascent_link =
+        Some(fx.ascent_link_full(&parent_seed, fx.ascent_aad(), stale));
     let mut reader = fx.reader();
     reader.parent_node_seed = Some(parent_seed);
     let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
@@ -1130,16 +1241,39 @@ fn cross_epoch_structure_replay_rejected_at_grant_section() {
         &folder,
     )
     .expect("epoch-2 folder seals");
+    // The grant section's structures are all signed at epoch 1; presenting them
+    // in an epoch-2 envelope makes the gate recompute each preimage at epoch 2,
+    // so the epoch-1 signatures no longer verify — the cross-epoch replay is
+    // rejected without any caller-asserted epoch to trust (#687).
     let mut candidate = fx.candidate(1);
     candidate.envelope = envelope_e2;
-    // The old-epoch owner-blob structure is validly signed (epoch 1 != 2).
-    candidate.structures = vec![fx.structures[0].clone()];
-    assert_eq!(candidate.structures[0].input.scope_id, fx.scope_id);
-    assert_eq!(candidate.structures[0].input.epoch, 1);
     let err = block_on(adopt(&floors, &fx.reader(), &candidate)).unwrap_err();
     let rej = err.rejection().unwrap();
     assert_eq!(rej.stage, GateStage::GrantSection);
     assert_eq!(rej.check(), "structure-signature-invalid");
+}
+
+#[test]
+fn swapped_structure_ciphertext_rejected_at_grant_section() {
+    // #687: the owner-blob signature is authentically the committed owner
+    // pseudonym's, over the ORIGINAL ciphertext at the correct scope/epoch — but
+    // the grant section presents a DIFFERENT ciphertext. The gate recomputes
+    // `H(ciphertext)` from the actual bytes, so the signed hash no longer
+    // matches. (Before the fix the gate trusted a caller-supplied hash and this
+    // swap adopted.)
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let mut candidate = fx.candidate(1);
+    // Flip a byte of the owner-blob ciphertext, leaving the (valid) signature.
+    candidate.grant_section.owner_blob.ciphertext[0] ^= 0xFF;
+    let err = block_on(adopt(&floors, &fx.reader(), &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(
+        rej.check(),
+        "structure-signature-invalid",
+        "a swapped ciphertext must fail the recomputed structure-signature hash"
+    );
 }
 
 #[test]
@@ -1196,8 +1330,9 @@ fn seed_blob_correct_seed_derives_read_key_and_adopts() {
 fn envelope_scope_must_equal_reader_scope() {
     // The read body is sealed under a FOREIGN scope with the reader's real read
     // key (the scope UUID is not in the read-key KDF, so it still opens), and the
-    // envelope is labeled that foreign scope — while the reader is scope A. With
-    // structures/ascent absent, only the reader-scope precondition can reject.
+    // envelope is labeled that foreign scope — while the reader is scope A. The
+    // grant section's structures are re-signed at the foreign scope so stage 3
+    // passes and the stage-6 reader-scope precondition is the sole rejection.
     let fx = Fixture::new();
     let floors = InMemoryFloorStore::default();
     let foreign_scope = [0xEE; 16];
@@ -1219,7 +1354,17 @@ fn envelope_scope_must_equal_reader_scope() {
     .expect("foreign-scope folder seals under the reader's read key");
     let mut candidate = fx.candidate(1);
     candidate.envelope = envelope_b;
-    candidate.structures = Vec::new();
+    let resign = |tag: u8, ct: &[u8]| {
+        sign_structure(
+            &fx.owner_pseudonym,
+            &StructureSigInput::over_ciphertext(foreign_scope, fx.epoch, tag, None, ct),
+        )
+        .to_bytes()
+    };
+    let owner_ct = candidate.grant_section.owner_blob.ciphertext.clone();
+    candidate.grant_section.owner_blob.signature = resign(STRUCT_TAG_OWNER_BLOB, &owner_ct);
+    let wb_sealed = candidate.grant_section.write_body.sealed.clone();
+    candidate.grant_section.write_body.signature = resign(STRUCT_TAG_WRITE_BODY, &wb_sealed);
     let err = block_on(adopt(&floors, &fx.reader(), &candidate)).unwrap_err();
     let rej = err.rejection().unwrap();
     assert_eq!(rej.stage, GateStage::Unseal);

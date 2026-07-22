@@ -36,15 +36,15 @@ use cipherbox_core::seal::{
     GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload, NodeKind,
     OverrideSeedPayload, Permission, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
     STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructureSigInput, Version,
-    WriteBody, build_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload,
-    decode_grant_set_commitment, decode_history_link_payload, decode_override_seed_payload,
-    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope,
-    encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
-    encode_override_seed_payload, encode_read_body, encode_write_body, open_ascent_link,
-    open_grant_blob, open_history_link, open_owner_blob, open_read_body, seal_ascent_link,
-    seal_grant_blob, seal_history_link, seal_owner_blob, seal_read_body, sign_grant_set,
-    sign_structure, structure_sig_preimage, verify_grant_set, verify_structure,
+    STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, SignedAscentLink, SignedGrantBlob,
+    SignedOwnerBlob, SignedSealed, StructureSigInput, Version, WriteBody, build_aad,
+    decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_set_commitment,
+    decode_history_link_payload, decode_override_seed_payload, decode_read_body, decode_write_body,
+    encode_ascent_link, encode_envelope, encode_grant_blob_payload, encode_grant_set_commitment,
+    encode_history_link_payload, encode_override_seed_payload, encode_read_body, encode_write_body,
+    open_ascent_link, open_grant_blob, open_history_link, open_owner_blob, open_read_body,
+    seal_ascent_link, seal_grant_blob, seal_history_link, seal_owner_blob, seal_read_body,
+    sign_grant_set, sign_structure, structure_sig_preimage, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
@@ -299,6 +299,8 @@ struct GrantSection {
     structure_sig_reject: RejectSection,
     grant_set_accept: FileCount,
     grant_set_reject: RejectSection,
+    section_accept: FileCount,
+    section_reject: RejectSection,
 }
 
 /// A write-body accept vector: the canonical plaintext plus the two list counts
@@ -310,6 +312,18 @@ struct WriteBodyAcceptVector {
     hex: String,
     ledger_count: usize,
     child_scope_count: usize,
+}
+
+/// A grant-section accept vector: the canonical bundle plus the counts the
+/// framing codec exposes (a decoder cross-check anchor).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SectionAcceptVector {
+    name: String,
+    hex: String,
+    grant_blob_count: usize,
+    history_link_count: usize,
+    has_ascent_link: bool,
 }
 
 /// A per-structure HPKE seal KAT: a fixed-ephemeral seal of a grant/owner-blob
@@ -855,6 +869,8 @@ fn main() {
         &grant_dir.join("grant_set_reject.json"),
         &g.grant_set_reject,
     );
+    write_pretty(&grant_dir.join("section_accept.json"), &g.section_accept);
+    write_pretty(&grant_dir.join("section_reject.json"), &g.section_reject);
 
     let content_seal = build_content_seal();
     let content_seal_reject = build_content_seal_reject();
@@ -1971,6 +1987,8 @@ fn build_grant_section(g: &GrantVectors) -> GrantSection {
                     .collect(),
             ),
         },
+        section_accept: file_count("section_accept", g.section_accept.len()),
+        section_reject: reject("section_reject", &g.section_reject),
     }
 }
 
@@ -3975,11 +3993,15 @@ struct GrantVectors {
     structure_sig_reject: Vec<StructureSigRejectVector>,
     grant_set_accept: Vec<GrantSetAcceptVector>,
     grant_set_reject: Vec<GrantSetRejectVector>,
+    section_accept: Vec<SectionAcceptVector>,
+    section_reject: Vec<RejectVector>,
 }
 
 impl GrantVectors {
     fn total(&self) -> usize {
-        self.write_body_accept.len()
+        self.section_accept.len()
+            + self.section_reject.len()
+            + self.write_body_accept.len()
             + self.write_body_reject.len()
             + self.grant_blob_accept.len()
             + self.grant_blob_reject.len()
@@ -4021,6 +4043,8 @@ fn build_grant_vectors() -> GrantVectors {
     GrantVectors {
         write_body_accept: build_write_body_accept(),
         write_body_reject: build_write_body_reject(),
+        section_accept: build_grant_section_accept(),
+        section_reject: build_grant_section_reject(),
         grant_blob_accept: build_grant_blob_accept(),
         grant_blob_reject: build_grant_blob_reject(),
         owner_blob_accept: build_owner_blob_accept(),
@@ -4184,6 +4208,203 @@ fn build_write_body_reject() -> Vec<RejectVector> {
     ];
 
     finish_hex_reject_vectors("write-body", cases, decode_write_body)
+}
+
+// --- Grant section (the seed-bearing-structure bundle) ----------------------
+
+/// A frozen grant-section bundle: the framing codec is crypto-free, so the
+/// sealed bytes and signatures are fixed opaque fillers (the sig-verifying KATs
+/// live in the per-structure families). A commitment is a real encoded
+/// `GrantSetCommitment` so `decode_grant_section` exercises the nested codec.
+fn section_commitment(entries: Vec<GrantSetEntry>) -> GrantSetCommitment {
+    GrantSetCommitment {
+        ipns_name: b"grant-section-scope-root".to_vec(),
+        owner_pseudonym_pk: [0x88; 32],
+        entries,
+        unknown: Vec::new(),
+    }
+}
+
+fn section_grant_blob(tag: u8) -> SignedGrantBlob {
+    SignedGrantBlob {
+        tag: [tag; 32],
+        enc: [0x0a; 32],
+        ciphertext: vec![0x0b, 0x0c, 0x0d],
+        signature: [0x0e; 64],
+        unknown: Vec::new(),
+    }
+}
+
+fn build_grant_section_accept() -> Vec<SectionAcceptVector> {
+    let full = seal::GrantSection {
+        commitment: section_commitment(vec![
+            GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
+            GrantSetEntry::new([0x03; 32], Permission::Write, [0x04; 32]),
+        ]),
+        commitment_sig: [0x11; 64],
+        grant_blobs: vec![section_grant_blob(0x01), section_grant_blob(0x03)],
+        owner_blob: SignedOwnerBlob {
+            enc: [0x20; 32],
+            ciphertext: vec![0x21, 0x22],
+            signature: [0x23; 64],
+            unknown: Vec::new(),
+        },
+        ascent_link: Some(SignedAscentLink {
+            ascent_public: [0x30; 32],
+            enc: [0x31; 32],
+            ciphertext: vec![0x32, 0x33],
+            signature: [0x34; 64],
+            unknown: Vec::new(),
+        }),
+        history_links: vec![SignedSealed {
+            sealed: vec![0x40, 0x41, 0x42],
+            signature: [0x43; 64],
+            unknown: Vec::new(),
+        }],
+        write_body: SignedSealed {
+            sealed: vec![0x50, 0x51, 0x52],
+            signature: [0x53; 64],
+            unknown: Vec::new(),
+        },
+        unknown: Vec::new(),
+    };
+    // Epoch 1 at the vault root: no grants, no history link, no ascent link.
+    let minimal = seal::GrantSection {
+        commitment: section_commitment(Vec::new()),
+        commitment_sig: [0x11; 64],
+        grant_blobs: Vec::new(),
+        owner_blob: SignedOwnerBlob {
+            enc: [0x20; 32],
+            ciphertext: vec![0x21],
+            signature: [0x23; 64],
+            unknown: Vec::new(),
+        },
+        ascent_link: None,
+        history_links: Vec::new(),
+        write_body: SignedSealed {
+            sealed: vec![0x50],
+            signature: [0x53; 64],
+            unknown: Vec::new(),
+        },
+        unknown: Vec::new(),
+    };
+    let cases: Vec<(&str, seal::GrantSection)> =
+        vec![("full", full), ("vault-root-epoch-1", minimal)];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, section) in cases {
+        assert!(names.insert(name), "duplicate grant-section accept {name}");
+        let bytes = seal::encode_grant_section(&section).expect("grant-section accept encodes");
+        let decoded = seal::decode_grant_section(&bytes)
+            .unwrap_or_else(|e| panic!("grant-section accept {name}: rejected: {e}"));
+        assert_eq!(
+            decoded, section,
+            "grant-section accept {name}: decode != source"
+        );
+        assert_eq!(
+            seal::encode_grant_section(&decoded).unwrap(),
+            bytes,
+            "grant-section accept {name}: not byte-stable"
+        );
+        out.push(SectionAcceptVector {
+            name: name.to_string(),
+            hex: hexstr(&bytes),
+            grant_blob_count: section.grant_blobs.len(),
+            history_link_count: section.history_links.len(),
+            has_ascent_link: section.ascent_link.is_some(),
+        });
+    }
+    out
+}
+
+fn build_grant_section_reject() -> Vec<RejectVector> {
+    // A structural filler owner blob / write body map for hand-built sections.
+    let owner_blob = || {
+        map_of(vec![
+            ("ciphertext", Value::Bytes(vec![0x21, 0x22])),
+            ("enc", Value::Bytes(vec![0x20; 32])),
+            ("sig", Value::Bytes(vec![0x23; 64])),
+        ])
+    };
+    let write_body = || {
+        map_of(vec![
+            ("sealed", Value::Bytes(vec![0x50, 0x51])),
+            ("sig", Value::Bytes(vec![0x53; 64])),
+        ])
+    };
+    let commitment_bytes =
+        encode_grant_set_commitment(&section_commitment(Vec::new())).expect("commitment encodes");
+    let grant_blob_map = |tag: u8| {
+        map_of(vec![
+            ("ciphertext", Value::Bytes(vec![0x0b, 0x0c])),
+            ("enc", Value::Bytes(vec![0x0a; 32])),
+            ("sig", Value::Bytes(vec![0x0e; 64])),
+            ("tag", Value::Bytes(vec![tag; 32])),
+        ])
+    };
+    // A whole section map with caller-chosen grant blobs / owner blob presence.
+    let section = |grant_blobs: Vec<Value>, owner: Option<Value>| {
+        let mut entries = vec![
+            ("commitment", Value::Bytes(commitment_bytes.clone())),
+            ("commitmentSig", Value::Bytes(vec![0x11; 64])),
+            ("grantBlobs", Value::Array(grant_blobs)),
+            ("historyLinks", Value::Array(vec![])),
+            ("writeBody", write_body()),
+        ];
+        if let Some(o) = owner {
+            entries.push(("ownerBlob", o));
+        }
+        map_of(entries)
+    };
+
+    let cases: Vec<(&str, Value, &str, &str)> = vec![
+        (
+            // Confused-deputy: one blinded tag under two grant blobs.
+            "duplicate-grant-blob-tag",
+            section(
+                vec![grant_blob_map(0x01), grant_blob_map(0x01)],
+                Some(owner_blob()),
+            ),
+            "duplicate-grant-tag",
+            "trust",
+        ),
+        (
+            "missing-owner-blob",
+            section(vec![], None),
+            "missing-field",
+            "malformed",
+        ),
+        (
+            // A structure signature truncated below the fixed 64-byte width.
+            "owner-blob-short-signature",
+            section(
+                vec![],
+                Some(map_of(vec![
+                    ("ciphertext", Value::Bytes(vec![0x21])),
+                    ("enc", Value::Bytes(vec![0x20; 32])),
+                    ("sig", Value::Bytes(vec![0x23; 63])),
+                ])),
+            ),
+            "invalid-field-length",
+            "malformed",
+        ),
+        (
+            "commitment-sig-wrong-type",
+            map_of(vec![
+                ("commitment", Value::Bytes(commitment_bytes.clone())),
+                ("commitmentSig", Value::Unsigned(0)),
+                ("grantBlobs", Value::Array(vec![])),
+                ("historyLinks", Value::Array(vec![])),
+                ("ownerBlob", owner_blob()),
+                ("writeBody", write_body()),
+            ]),
+            "unexpected-type",
+            "malformed",
+        ),
+    ];
+
+    finish_hex_reject_vectors("grant-section", cases, seal::decode_grant_section)
 }
 
 // --- Grant blob (HPKE) ------------------------------------------------------

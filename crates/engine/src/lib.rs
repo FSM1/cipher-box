@@ -56,8 +56,8 @@ pub use facade::{
     PlaintextContent, Staleness,
 };
 pub use gate::{
-    Adopted, AscentCheck, Candidate, GateError, GateRejection, GateStage, ReaderContext,
-    RejectionReason, SeedBlob, SignedStructure, adopt,
+    Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,
+    SeedBlob, adopt,
 };
 pub use grants::{
     AbuseEvent, AcceptError, AcceptOutcome, AuthorityViolation, Contact, OwnerEntry,

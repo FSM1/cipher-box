@@ -13,6 +13,7 @@
 //! holds no crypto.
 
 pub mod accept;
+pub mod child_index;
 pub mod contact;
 pub mod ledger;
 pub mod owner_entry;
@@ -21,6 +22,9 @@ pub mod revocation;
 pub use accept::{
     AcceptError, AcceptOutcome, ReceivedShare, ReceivedShareStore, ReceivedSharesList, SentIndex,
     SentShare, SharePointer, accept_share,
+};
+pub use child_index::{
+    canonicalize, insert_child, move_child, remove_child, repair_observed, undo_dest_add,
 };
 pub use contact::{Contact, import_contact};
 pub use ledger::{
