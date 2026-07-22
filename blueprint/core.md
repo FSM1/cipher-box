@@ -133,8 +133,11 @@ H(ciphertext)}` — covering grant blobs, owner blob, ascent link, history
 writeEpoch, minReadEpoch, prevRootName}`, owner-identity-signed inside the
   record, sealed under the scope's stable `pointerReadKey`. The vault pointer
   carries the same object for the root scope (#39 D5). Mailbox payloads are
-  HPKE-sealed with a sender identity signature inside the seal (#39 D9); core
-  owns their codecs and verify functions.
+  HPKE-sealed with a sender identity signature inside the seal (#39 D9), whose
+  preimage binds the recipient key
+  (`[domain, v, recipientEncPk, senderIdentityPk, payload]`) so a relayed item
+  fails verification for any other recipient (#712); core owns their codecs and
+  verify functions.
 
 ### Structure-tag registry
 
