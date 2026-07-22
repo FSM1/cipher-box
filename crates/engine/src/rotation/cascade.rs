@@ -113,7 +113,9 @@ use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
 pub struct CascadeTarget {
     /// The envelope format+suite version.
     pub v: u64,
-    /// The scope-root node id (== scope id).
+    /// The scope-root node id (== scope id). This is the id the re-seal, publish,
+    /// and floor-raise run under; the production resolver MUST return it equal to
+    /// the enumerated `child.scope_id` (see [`CascadeResealResolver::resolve`]).
     pub scope_id: [u8; 16],
     /// The scope root's opaque `ipnsName` bytes.
     pub ipns_name: Vec<u8>,
@@ -166,11 +168,17 @@ pub trait CascadeResealResolver {
     /// gate binds `ipns_name -> record` via the Ed25519 key derived from the
     /// name). The returned material's `ipns_name` — the CAS **publish**
     /// destination — MUST be that gated name, equal to `commitment.ipns_name`, and
-    /// MUST NOT be swayed by any network-supplied hint. The cascade re-seals and
-    /// publishes under the enumerated parent-index `scope_id` (never a
-    /// resolver-returned one), so a mismatched name/commitment could only mint a
-    /// record its own resolve-time gate rejects — but binding the two here keeps
-    /// that fail-closed at the source.
+    /// MUST NOT be swayed by any network-supplied hint.
+    ///
+    /// The enumerated `child.scope_id` drives the parent-node-seed derivation
+    /// (`node_seed(parent_fresh_seed, child.scope_id)`) and the visited/dedup key,
+    /// but the re-seal identity, CAS publish, and epoch-floor raise all run under
+    /// the resolver-returned `target.scope_id`. The production resolver therefore
+    /// MUST guarantee `target.scope_id == child.scope_id` — the same equality that
+    /// keeps `ipns_name`/`commitment.ipns_name` gate-consistent — so the enumerated
+    /// id it was asked to resolve is the id it re-keys and publishes under. This
+    /// binding obligation is on the #745/#746 resolver wiring (tracked by #756); in
+    /// this slice the resolver is faked and always returns the equal id.
     async fn resolve(&self, scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure>;
 }
 
