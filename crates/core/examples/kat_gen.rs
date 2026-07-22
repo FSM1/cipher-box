@@ -2940,6 +2940,13 @@ fn build_hpke_seal() -> Vec<HpkeSealVector> {
 /// An hpke open-reject case: (name, enc, ciphertext, aad, expected check).
 type HpkeOpenRejectCase = (&'static str, [u8; 32], Vec<u8>, &'static [u8], &'static str);
 
+/// An RFC 7748 order-8 X25519 u-coordinate: a low-order point that forces an
+/// all-zero ECDH, so a grant blob sealed to it would be world-readable (#708).
+const LOW_ORDER_X25519: [u8; 32] = [
+    0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4, 0x6a,
+    0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00,
+];
+
 fn build_hpke_open_reject() -> Vec<HpkeOpenRejectVector> {
     let recipient_scalar: [u8; 32] = std::array::from_fn(|i| (0x10 + i) as u8);
     let recipient = X25519Secret::from_scalar(recipient_scalar);
@@ -2957,11 +2964,7 @@ fn build_hpke_open_reject() -> Vec<HpkeOpenRejectVector> {
     // A low-order `enc` (RFC 7748 order-8 point): decap rejects it as
     // non-contributory before the AEAD open, so the ciphertext is never reached
     // (RFC 9180 §7.1.4).
-    let low_order_enc: [u8; 32] = [
-        0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4,
-        0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49,
-        0xb8, 0x00,
-    ];
+    let low_order_enc = LOW_ORDER_X25519;
     // (name, enc, ciphertext, aad, check).
     let cases: Vec<HpkeOpenRejectCase> = vec![
         (
@@ -3051,13 +3054,6 @@ fn build_contact_accept() -> Vec<ContactAcceptVector> {
     }
     out
 }
-
-/// An RFC 7748 order-8 X25519 u-coordinate: a low-order point that forces an
-/// all-zero ECDH, so a grant blob sealed to it would be world-readable (#708).
-const LOW_ORDER_X25519: [u8; 32] = [
-    0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4, 0x6a,
-    0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00,
-];
 
 /// The 65-byte uncompressed SEC1 encoding of a compressed secp256k1 key: a
 /// byte-distinct re-encoding of the same point that the frozen 33-byte identity

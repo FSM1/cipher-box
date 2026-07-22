@@ -418,12 +418,13 @@ impl Drop for ScrubOnDrop<'_> {
 /// transient decoded `Value` tree by value and scrubs it on drop. The decoder
 /// reads its fields through [`Self::value`], an immutable borrow that coexists
 /// with the guard (a `&mut` guard cannot, since decode holds a live `&Map` into
-/// the same tree). Covers Ok, Err, and panic-unwind.
-struct ScrubOwned(Value);
+/// the same tree). Covers Ok, Err, and panic-unwind. `pub(crate)` so the
+/// grant-section decoders share the one guard.
+pub(crate) struct ScrubOwned(pub(crate) Value);
 
 impl ScrubOwned {
     /// Borrow the guarded tree for reading.
-    fn value(&self) -> &Value {
+    pub(crate) fn value(&self) -> &Value {
         &self.0
     }
 }

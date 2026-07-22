@@ -327,8 +327,9 @@ mod tests {
     fn duplicate_ledger_tag_rejects() {
         // The confused-deputy shape: the same tag appears twice with a different
         // permission and recipientEncPk (a shared-write holder injecting a second
-        // row for a victim's tag). Hand-built so it bypasses the encode-side
-        // debug_assert, the way a hostile peer's bytes arrive.
+        // row for a victim's tag). Hand-built wire bytes that never passed through
+        // any encoder, so decode is what must reject them, the way a hostile
+        // peer's bytes arrive.
         let mut a = Map::new();
         a.insert("permission", Value::Text("read".into()));
         a.insert("recipientEncPk", Value::Bytes(vec![0x11; 32]));

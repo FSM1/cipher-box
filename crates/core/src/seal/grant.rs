@@ -44,7 +44,8 @@ use crate::suite::x25519::{X25519Public, X25519Secret};
 
 use super::aad::{AadContext, build_aad};
 use super::body::{
-    ScrubOnDrop, assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown, req,
+    ScrubOnDrop, ScrubOwned, assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown,
+    req,
 };
 
 /// The HPKE `info` for every grant-section seal. The structured AAD already
@@ -175,9 +176,14 @@ impl PartialEq for GrantBlobPayload {
 impl Eq for GrantBlobPayload {}
 
 /// Decode a grant-blob plaintext (strict det-CBOR, unknown fields preserved).
+///
+/// The transient decoded tree carries verbatim copies of the read/write scope
+/// seeds and the pointer read key; those bytes land in zeroizing owners, but the
+/// tree itself is scrubbed on drop via [`ScrubOwned`] (terminal-owner rule,
+/// symmetric with [`encode_grant_blob_payload`]).
 pub fn decode_grant_blob_payload(bytes: &[u8]) -> Result<GrantBlobPayload, CodecError> {
-    let value = decode(bytes)?;
-    let map = value.as_map()?;
+    let value = ScrubOwned(decode(bytes)?);
+    let map = value.value().as_map()?;
     let read_scope_seed = bytes_fixed::<SECRET_LEN>(req(map, "readScopeSeed")?, "readScopeSeed")?;
     let write_scope_seed = match map.get("writeScopeSeed") {
         Some(v) => Some(bytes_fixed::<SECRET_LEN>(v, "writeScopeSeed")?),
@@ -320,9 +326,14 @@ impl PartialEq for OverrideSeedPayload {
 impl Eq for OverrideSeedPayload {}
 
 /// Decode an override-seed plaintext (strict det-CBOR, unknown fields preserved).
+///
+/// The transient decoded tree carries a verbatim copy of the override seed; it
+/// lands in a zeroizing owner, but the tree itself is scrubbed on drop via
+/// [`ScrubOwned`] (terminal-owner rule, symmetric with
+/// [`encode_override_seed_payload`]).
 pub fn decode_override_seed_payload(bytes: &[u8]) -> Result<OverrideSeedPayload, CodecError> {
-    let value = decode(bytes)?;
-    let map = value.as_map()?;
+    let value = ScrubOwned(decode(bytes)?);
+    let map = value.value().as_map()?;
     let override_seed = bytes_fixed::<SECRET_LEN>(req(map, "overrideSeed")?, "overrideSeed")?;
     let epoch = req(map, "epoch")?.as_unsigned()?;
     Ok(OverrideSeedPayload {
@@ -551,9 +562,14 @@ impl PartialEq for HistoryLinkPayload {
 impl Eq for HistoryLinkPayload {}
 
 /// Decode a history-link plaintext (strict det-CBOR, unknown fields preserved).
+///
+/// The transient decoded tree carries a verbatim copy of the previous epoch's
+/// seed; it lands in a zeroizing owner, but the tree itself is scrubbed on drop
+/// via [`ScrubOwned`] (terminal-owner rule, symmetric with
+/// [`encode_history_link_payload`]).
 pub fn decode_history_link_payload(bytes: &[u8]) -> Result<HistoryLinkPayload, CodecError> {
-    let value = decode(bytes)?;
-    let map = value.as_map()?;
+    let value = ScrubOwned(decode(bytes)?);
+    let map = value.value().as_map()?;
     let prev_seed = bytes_fixed::<SECRET_LEN>(req(map, "prevSeed")?, "prevSeed")?;
     let prev_epoch = req(map, "prevEpoch")?.as_unsigned()?;
     Ok(HistoryLinkPayload {
@@ -811,6 +827,20 @@ mod tests {
                 .check(),
             "hpke-open-failed"
         );
+    }
+
+    #[test]
+    fn decode_grant_blob_payload_scrub_preserves_secret_outputs() {
+        // The decoder wraps its transient `Value` tree in `ScrubOwned`, which
+        // wipes only that tree on drop. The caller-owned `SecretBytes` outputs
+        // must survive intact (terminal-owner rule: never zero a caller's
+        // buffer). Ok path: decode returns the exact seeds it read.
+        let payload = GrantBlobPayload::new([0x11; 32], Some([0x44; 32]), 7, [0x22; 32]);
+        let bytes = encode_grant_blob_payload(&payload);
+        let decoded = decode_grant_blob_payload(&bytes).expect("decodes");
+        assert_eq!(decoded.read_scope_seed(), &[0x11; 32]);
+        assert_eq!(decoded.write_scope_seed(), Some(&[0x44; 32]));
+        assert_eq!(decoded.pointer_read_key(), &[0x22; 32]);
     }
 
     #[test]
