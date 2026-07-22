@@ -18,7 +18,9 @@ use cipherbox_core::seal::{
     encode_write_body, seal, seal_grant_blob, seal_read_body, sign_grant_set, sign_structure,
 };
 use cipherbox_core::suite::contact::ContactCode;
-use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, EcdsaVerifier};
+use cipherbox_core::suite::ecdsa::{
+    EcdsaSignature, EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN,
+};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 
@@ -30,11 +32,11 @@ use cipherbox_engine::grants::{
     AcceptError, PublishedGrantBlob, ReceivedSharesList, SentIndex, SentShare, SharePointer,
     accept_share, import_contact, self_locate,
 };
-use cipherbox_engine::mailbox::{poll_verified, post_sealed};
+use cipherbox_engine::mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 use cipherbox_engine::seams::{FloorStore, HttpMethod, HttpResponse, Mailbox, RecordTransport};
 use cipherbox_engine::testkit::fakes::InMemoryCredentialStore;
 use cipherbox_engine::testkit::fakes::ScriptedHttp;
-use cipherbox_engine::testkit::{FakeWorld, block_on};
+use cipherbox_engine::testkit::{FakeDevice, FakeWorld, block_on};
 
 const V: u64 = 1;
 const TTL_NANOS: u64 = 2_000_000_000;
@@ -572,6 +574,232 @@ fn a_failed_gate_never_acks_the_item() {
         1,
         "a rejected accept leaves the item un-acked"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Fail-closed reject arms on the accept path (each leaves the item un-acked).
+// ---------------------------------------------------------------------------
+
+/// Post `pointer` sealed + signed by `signer` to the recipient's inbox, then
+/// poll it back as the single verified item — the common accept-test setup.
+fn deliver_pointer(
+    fx: &GrantFixture,
+    recipient: &FakeDevice,
+    poster: &FakeDevice,
+    signer: &EcdsaSigner,
+    pointer: &SharePointer,
+) -> VerifiedMailboxItem {
+    let recipient_address = fx.recipient_enc.public().to_bytes();
+    block_on(post_sealed(
+        &poster.mailbox,
+        &fx.recipient_enc.public(),
+        &recipient_address,
+        &EPH_MAILBOX,
+        V,
+        signer,
+        &pointer.encode(),
+        "share",
+    ))
+    .expect("post");
+    let mut items =
+        block_on(poll_verified(&recipient.mailbox, &fx.recipient_enc, V)).expect("poll");
+    assert_eq!(
+        items.len(),
+        1,
+        "the sealed, sender-authed pointer is delivered"
+    );
+    items.remove(0)
+}
+
+/// The count of currently-deliverable (un-acked) items in the recipient inbox.
+fn inbox_len(fx: &GrantFixture, recipient: &FakeDevice) -> usize {
+    block_on(poll_verified(&recipient.mailbox, &fx.recipient_enc, V))
+        .unwrap()
+        .len()
+}
+
+/// A valid contact sender, but the pointer's `sharerPub` is a different identity
+/// than the verified contact's owner: bind-to-contact rejects it, un-acked.
+#[test]
+fn pointer_sharer_mismatch_is_rejected_and_unacked() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let poster = world.device(b"owner-inbox");
+
+    let mut pointer = fx.share_pointer();
+    pointer.sharer_identity_pk = [0x07; IDENTITY_PUBLIC_LEN]; // not the owner identity
+    let item = deliver_pointer(&fx, &recipient, &poster, &fx.owner_identity, &pointer);
+
+    let contact = import_contact(&fx.owner_contact).unwrap();
+    let mut received = ReceivedSharesList::new();
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .unwrap_err();
+    assert!(matches!(err, AcceptError::SharerMismatch), "got {err}");
+    assert!(received.is_empty());
+    assert_eq!(inbox_len(&fx, &recipient), 1, "un-acked");
+}
+
+/// The tag stays committed (so the pre-gate committed-tag check passes), but the
+/// commitment is re-signed by an ATTACKER: the gate's owner-anchored commitment
+/// verify fails. Contrast `a_failed_gate_never_acks_the_item`, which tampers the
+/// record bytes and rejects earlier at record-verify.
+#[test]
+fn tampered_commitment_is_rejected_at_the_gate_and_unacked() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let poster = world.device(b"owner-inbox");
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+    let contact = import_contact(&fx.owner_contact).unwrap();
+
+    let attacker = EcdsaSigner::from_scalar(&[0x9E; 32]).unwrap();
+    let mut candidate = fx.candidate();
+    candidate.commitment_sig = sign_grant_set(&attacker, &candidate.commitment).unwrap();
+
+    let mut received = ReceivedSharesList::new();
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &candidate,
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .unwrap_err();
+    assert!(matches!(err, AcceptError::Gate(_)), "got {err}");
+    assert!(received.is_empty(), "nothing durable was recorded");
+    assert_eq!(inbox_len(&fx, &recipient), 1, "un-acked");
+}
+
+/// A fresh owner-signed record with NO grant blob at the recipient's blinded tag
+/// — the revocation-signal shape: self-locate returns the fail-closed arm.
+#[test]
+fn no_blob_at_tag_is_rejected_and_unacked() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let poster = world.device(b"owner-inbox");
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+    let contact = import_contact(&fx.owner_contact).unwrap();
+
+    let no_blobs: Vec<PublishedGrantBlob> = Vec::new();
+    let mut received = ReceivedSharesList::new();
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &no_blobs,
+        &mut received,
+    ))
+    .unwrap_err();
+    assert!(matches!(err, AcceptError::NoBlobAtTag), "got {err}");
+    assert!(received.is_empty());
+    assert_eq!(inbox_len(&fx, &recipient), 1, "un-acked");
+}
+
+/// A blob is at the right (committed) tag, but its ciphertext is tampered:
+/// opening the grant blob fails closed. `UnusableSharerKey` — the sibling arm —
+/// is unreachable by construction here: `X25519Public` rejects small-order
+/// points at `from_bytes`/`.public()`, so a `Contact`'s enc subkey is always
+/// contributory and the ECDH never returns `None`.
+#[test]
+fn tampered_grant_blob_fails_open_and_is_unacked() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let poster = world.device(b"owner-inbox");
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+    let contact = import_contact(&fx.owner_contact).unwrap();
+
+    let mut blobs = fx.grant_blobs();
+    blobs[0].ciphertext[0] ^= 0x01; // tag unchanged, so self-locate still finds it
+
+    let mut received = ReceivedSharesList::new();
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &blobs,
+        &mut received,
+    ))
+    .unwrap_err();
+    assert!(matches!(err, AcceptError::GrantBlobOpen(_)), "got {err}");
+    assert!(received.is_empty());
+    assert_eq!(inbox_len(&fx, &recipient), 1, "un-acked");
+}
+
+/// The pointer names one scope root but a DIFFERENT record is fed as the
+/// candidate: the explicit name/tag coupling check rejects it up front.
+#[test]
+fn resolved_name_mismatch_is_rejected_and_unacked() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let poster = world.device(b"owner-inbox");
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+    let contact = import_contact(&fx.owner_contact).unwrap();
+
+    let other_signer = Ed25519Signer::from_seed([0xAB; 32]);
+    let mut candidate = fx.candidate();
+    candidate.name = IpnsName::from_public_key(&other_signer.verifying_key());
+
+    let mut received = ReceivedSharesList::new();
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &candidate,
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .unwrap_err();
+    assert!(matches!(err, AcceptError::NameMismatch), "got {err}");
+    assert!(received.is_empty());
+    assert_eq!(inbox_len(&fx, &recipient), 1, "un-acked");
 }
 
 // ---------------------------------------------------------------------------

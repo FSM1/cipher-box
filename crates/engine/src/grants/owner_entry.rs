@@ -19,6 +19,8 @@ use std::collections::BTreeMap;
 
 use cipherbox_core::suite::secret::SecretBytes;
 
+use crate::secret_util::ct_eq_32;
+
 /// The last-confirmed override seed and epoch for one scope — the canonical
 /// owner-session view. `seed` is secret material; it zeroizes on drop.
 #[derive(Clone)]
@@ -97,16 +99,6 @@ pub enum OwnerEntry {
     Abuse(AbuseEvent),
 }
 
-/// Constant-time 32-byte equality: no data-dependent early exit, so a seed
-/// mismatch is never a timing oracle (mirrors the adoption gate's compare).
-fn ct_eq(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    core::hint::black_box(diff) == 0
-}
-
 /// Cross-check the owner-blob seed, the optional ascent-link seed, and the seed
 /// that actually unsealed the read-body. All present sources must equal
 /// `unseal_seed`; the first disagreement is an [`AbuseEvent`], otherwise the
@@ -122,13 +114,13 @@ pub fn cross_check(
     unseal_seed: &[u8; 32],
     epoch: u64,
 ) -> OwnerEntry {
-    if !ct_eq(owner_blob_seed, unseal_seed) {
+    if !ct_eq_32(owner_blob_seed, unseal_seed) {
         return OwnerEntry::Abuse(AbuseEvent {
             description: "owner-blob seed disagrees with the unsealed scope seed".to_string(),
         });
     }
     if let Some(ascent) = ascent_link_seed {
-        if !ct_eq(ascent, unseal_seed) {
+        if !ct_eq_32(ascent, unseal_seed) {
             return OwnerEntry::Abuse(AbuseEvent {
                 description: "ascent-link seed disagrees with the unsealed scope seed".to_string(),
             });

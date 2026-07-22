@@ -246,6 +246,10 @@ pub enum AcceptError {
     SenderNotContact,
     /// The pointer's `sharerPub` does not match the contact-anchored identity.
     SharerMismatch,
+    /// The resolved record's name is not the scope root the pointer named — a
+    /// mis-paired pointer/record. KDF tag-binding already fails closed on this,
+    /// so this is a defense-in-depth early reject.
+    NameMismatch,
     /// The sharer's contact encryption subkey is non-contributory — an unusable
     /// key for the blinded-tag ECDH.
     UnusableSharerKey,
@@ -270,6 +274,9 @@ impl fmt::Display for AcceptError {
             AcceptError::MalformedPointer(e) => write!(f, "malformed share pointer: {e}"),
             AcceptError::SenderNotContact => f.write_str("mailbox sender is not the contact"),
             AcceptError::SharerMismatch => f.write_str("pointer sharerPub is not the contact"),
+            AcceptError::NameMismatch => {
+                f.write_str("resolved record name is not the pointer's scope root")
+            }
             AcceptError::UnusableSharerKey => f.write_str("sharer contact key is non-contributory"),
             AcceptError::NoBlobAtTag => f.write_str("no grant blob at tag (revocation signal)"),
             AcceptError::UncommittedTag => f.write_str("tag is not in the owner-signed commitment"),
@@ -314,6 +321,14 @@ pub async fn accept_share<F: FloorStore, M: Mailbox>(
     }
     if pointer.sharer_identity_pk != owner_identity.to_sec1() {
         return Err(AcceptError::SharerMismatch);
+    }
+
+    // The resolved record must be the scope root the pointer named. The blinded
+    // tag folds the name in, so a mis-paired record already fails closed at the
+    // gate (NoBlobAtTag) — bind it explicitly so it is a named reject, not an
+    // opaque miss.
+    if candidate.name.as_str().as_bytes() != pointer.scope_root_name.as_slice() {
+        return Err(AcceptError::NameMismatch);
     }
 
     // Self-locate: the ECDH peer is the VERIFIED contact enc subkey, never the

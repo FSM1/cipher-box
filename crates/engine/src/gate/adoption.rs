@@ -54,6 +54,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 
 use crate::gate::floor;
 use crate::seams::{FloorStore, SeamError};
+use crate::secret_util::ct_eq_32;
 
 /// The six ordered stages of the adoption gate. The stage a rejection names is
 /// the first stage that failed; earlier stages all passed.
@@ -396,17 +397,6 @@ fn open_seed_blob(blob: &SeedBlob<'_>) -> Result<SecretBytes, CodecError> {
     }
 }
 
-/// Constant-time 32-byte equality: no data-dependent early exit, so a mismatch
-/// between a candidate-derived key and the caller-owned read key is never a
-/// timing oracle over the reader's secret.
-fn ct_eq_secret(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    core::hint::black_box(diff) == 0
-}
-
 /// Run the adoption gate over one hand-fed [`Candidate`] for one
 /// [`ReaderContext`]. On success the floor law has advanced (per the
 /// AAD-confirmed-unseal rule) and the unsealed read-body is returned; on
@@ -498,7 +488,7 @@ pub async fn adopt<F: FloorStore>(
         let node_seed = kdf::node_seed(payload.override_seed(), &candidate.envelope.id);
         let derived_read_key = kdf::read_key(node_seed.as_bytes());
         if payload.epoch != candidate.envelope.epoch
-            || !ct_eq_secret(derived_read_key.as_bytes(), reader.read_key)
+            || !ct_eq_32(derived_read_key.as_bytes(), reader.read_key)
         {
             return Err(reject(
                 GateStage::GrantSection,
@@ -580,7 +570,7 @@ pub async fn adopt<F: FloorStore>(
             .map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
         let node_seed = kdf::node_seed(seed.as_bytes(), &candidate.envelope.id);
         let derived_read_key = kdf::read_key(node_seed.as_bytes());
-        if !ct_eq_secret(derived_read_key.as_bytes(), reader.read_key) {
+        if !ct_eq_32(derived_read_key.as_bytes(), reader.read_key) {
             return Err(reject(
                 GateStage::Unseal,
                 RejectionReason::Trust(TrustViolation::SealOpenFailed.into()),

@@ -16,10 +16,10 @@
 //!   open (tamper, wrong recipient, version downgrade) or whose sender signature
 //!   does not verify is dropped, never surfaced — so no forged item ever costs a
 //!   wasted name resolve.
-//! - **Ack-after-durable**: [`ack`] is a thin, intention-revealing passthrough.
-//!   The engine calls it **only** after the pointed-at fact is durably recorded
-//!   (the share appended to the vault list, the re-point applied); until-acked
-//!   retention then guarantees at-least-once delivery.
+//! - **Ack-after-durable**: the accept flow calls the [`Mailbox`] seam's `ack`
+//!   **only** after the pointed-at fact is durably recorded (the share appended
+//!   to the vault list, the re-point applied); until-acked retention then
+//!   guarantees at-least-once delivery.
 
 use cipherbox_core::payload::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
@@ -101,14 +101,6 @@ pub async fn poll_verified<M: Mailbox>(
         }
     }
     Ok(verified)
-}
-
-/// Acknowledge (delete) an item — call this **only** after the pointed-at fact
-/// is durably recorded. A thin passthrough that names the ack-after-durable
-/// contract at its one call boundary; until-acked retention makes premature
-/// acking the only way to lose a share, so the accept flow acks last.
-pub async fn ack<M: Mailbox>(mailbox: &M, item_id: &str) -> SeamResult<()> {
-    mailbox.ack(item_id).await
 }
 
 #[cfg(test)]
@@ -203,7 +195,7 @@ mod tests {
 
         let items = block_on(poll_verified(&recip_box, &recip, V)).unwrap();
         assert_eq!(items.len(), 1, "item is retained until acked");
-        block_on(ack(&recip_box, &items[0].item_id)).unwrap();
+        block_on(recip_box.ack(&items[0].item_id)).unwrap();
         assert!(
             block_on(poll_verified(&recip_box, &recip, V))
                 .unwrap()

@@ -34,6 +34,7 @@ pub mod mailbox;
 pub mod net;
 pub mod profile;
 pub mod seams;
+mod secret_util;
 pub mod sync;
 #[cfg(feature = "test-kit")]
 pub mod testkit;
