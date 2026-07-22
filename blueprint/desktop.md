@@ -227,14 +227,14 @@ navigation (#33 D2):
   the pump thread. Kernel entry/attr TTLs are set from the sync timing
   profile per backend capability, not hardcoded zeros.
 - The FUSE-T SMB cache is measured, not a ceiling (#644 gates,
-  `tools/hw-gates/RESULTS.md`): with `noattrcache` the invalidation
-  round-trip is ≤ 5 ms p95 for data, attrs, and entries — cross-client
-  latency is dominated by poll cadence, not the mount. Two hard
-  requirements fall out: the mount must set `noattrcache` (without it the
-  smbfs client imposes a 3 s attr floor and unbounded staleness for
-  cached data), and every remote change must fire push invalidation
-  (uninvalidated cached data never revalidates). The smbfs client ignores
-  FUSE reply TTLs entirely on this backend.
+  `tools/hw-gates/RESULTS.md`): with `noattrcache`, invalidation
+  round-trips are milliseconds — cross-client latency is dominated by
+  poll cadence, not the mount. Two hard requirements fall out: the mount
+  must set `noattrcache` (without it the smbfs client imposes a 3 s attr
+  floor and unbounded staleness for cached data), and every remote change
+  must fire push invalidation (uninvalidated cached data never
+  revalidates). The smbfs client ignores FUSE reply TTLs entirely on this
+  backend.
 
 ## Tauri shell
 
@@ -297,7 +297,8 @@ the headless harness entry.
   `tools/hw-gates/RESULTS.md`): the client ignores FUSE reply TTLs, so
   there is no TTL constant to freeze for this backend — `noattrcache` +
   push invalidation replace it. Linux/WinFsp values still freeze with the
-  #47 cross-client measurements.
+  cross-client measurements
+  ([#47](https://github.com/FSM1/cipher-box-next/issues/47)).
 - **Designed-for, deliberately unbuilt**: FSKit adapter (above); desktop
   embedded DHT behind RecordTransport (#23 D2); desktop PubSub push behind
   RefreshHintSource (#33 D1).

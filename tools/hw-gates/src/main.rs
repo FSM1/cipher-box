@@ -21,8 +21,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use fuser::{
     FileAttr, FileType, Filesystem, MountOption, Notifier, ReplyAttr, ReplyCreate, ReplyData,
-    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request,
-    TimeOrNow,
+    ReplyDirectory, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, Request, TimeOrNow,
 };
 
 const ROOT_INO: u64 = 1;
@@ -47,11 +46,19 @@ struct Node {
 impl Node {
     fn new_file(data: Vec<u8>) -> Self {
         let now = SystemTime::now();
-        Node { kind: NodeKind::File(data), mtime: now, crtime: now }
+        Node {
+            kind: NodeKind::File(data),
+            mtime: now,
+            crtime: now,
+        }
     }
     fn new_dir() -> Self {
         let now = SystemTime::now();
-        Node { kind: NodeKind::Dir(BTreeMap::new()), mtime: now, crtime: now }
+        Node {
+            kind: NodeKind::Dir(BTreeMap::new()),
+            mtime: now,
+            crtime: now,
+        }
     }
     fn size(&self) -> u64 {
         match &self.kind {
@@ -80,7 +87,11 @@ impl Store {
     fn new() -> Self {
         let mut nodes = HashMap::new();
         nodes.insert(ROOT_INO, Node::new_dir());
-        Store { nodes, next_ino: 2, ops: OpLog::default() }
+        Store {
+            nodes,
+            next_ino: 2,
+            ops: OpLog::default(),
+        }
     }
 
     fn alloc_ino(&mut self) -> u64 {
@@ -92,7 +103,11 @@ impl Store {
     fn insert_file(&mut self, parent: u64, name: &OsStr, data: Vec<u8>) -> u64 {
         let ino = self.alloc_ino();
         self.nodes.insert(ino, Node::new_file(data));
-        if let Some(Node { kind: NodeKind::Dir(children), .. }) = self.nodes.get_mut(&parent) {
+        if let Some(Node {
+            kind: NodeKind::Dir(children),
+            ..
+        }) = self.nodes.get_mut(&parent)
+        {
             children.insert(name.to_owned(), ino);
         }
         ino
@@ -101,7 +116,11 @@ impl Store {
     fn insert_dir(&mut self, parent: u64, name: &OsStr) -> u64 {
         let ino = self.alloc_ino();
         self.nodes.insert(ino, Node::new_dir());
-        if let Some(Node { kind: NodeKind::Dir(children), .. }) = self.nodes.get_mut(&parent) {
+        if let Some(Node {
+            kind: NodeKind::Dir(children),
+            ..
+        }) = self.nodes.get_mut(&parent)
+        {
             children.insert(name.to_owned(), ino);
         }
         ino
@@ -125,9 +144,7 @@ impl Store {
         let matches: Vec<(OsString, u64)> = match &self.nodes.get(&parent)?.kind {
             NodeKind::Dir(children) => children
                 .iter()
-                .filter(|(n, _)| {
-                    n.as_encoded_bytes().starts_with(name.as_encoded_bytes())
-                })
+                .filter(|(n, _)| n.as_encoded_bytes().starts_with(name.as_encoded_bytes()))
                 .map(|(n, i)| (n.clone(), *i))
                 .collect(),
             _ => return None,
@@ -169,7 +186,11 @@ impl HwFs {
             ctime: node.mtime,
             crtime: node.crtime,
             kind,
-            perm: if matches!(kind, FileType::Directory) { 0o755 } else { 0o644 },
+            perm: if matches!(kind, FileType::Directory) {
+                0o755
+            } else {
+                0o644
+            },
             nlink: 1,
             uid: self.uid,
             gid: self.gid,
@@ -268,7 +289,11 @@ impl Filesystem for HwFs {
             reply.error(libc::ENOENT);
             return;
         };
-        if let Some(Node { kind: NodeKind::Dir(children), .. }) = store.nodes.get_mut(&parent) {
+        if let Some(Node {
+            kind: NodeKind::Dir(children),
+            ..
+        }) = store.nodes.get_mut(&parent)
+        {
             children.retain(|_, i| *i != ino);
         }
         store.nodes.remove(&ino);
@@ -290,10 +315,11 @@ impl Filesystem for HwFs {
         reply: ReplyEmpty,
     ) {
         let mut store = self.store.lock().unwrap();
-        store
-            .ops
-            .renames
-            .push(format!("{} -> {}", name.to_string_lossy(), newname.to_string_lossy()));
+        store.ops.renames.push(format!(
+            "{} -> {}",
+            name.to_string_lossy(),
+            newname.to_string_lossy()
+        ));
         let Some((actual_name, ino)) = store.child_for_rename(parent, name) else {
             reply.error(libc::ENOENT);
             return;
@@ -302,10 +328,18 @@ impl Filesystem for HwFs {
         // the store lock — the whole point of gate 3 is whether the kernel
         // side preserves this atomicity for readers.
         let displaced = store.child(newparent, newname);
-        if let Some(Node { kind: NodeKind::Dir(children), .. }) = store.nodes.get_mut(&parent) {
+        if let Some(Node {
+            kind: NodeKind::Dir(children),
+            ..
+        }) = store.nodes.get_mut(&parent)
+        {
             children.remove(&actual_name);
         }
-        if let Some(Node { kind: NodeKind::Dir(children), .. }) = store.nodes.get_mut(&newparent) {
+        if let Some(Node {
+            kind: NodeKind::Dir(children),
+            ..
+        }) = store.nodes.get_mut(&newparent)
+        {
             children.insert(newname.to_owned(), ino);
         }
         if let Some(old) = displaced {
@@ -332,7 +366,10 @@ impl Filesystem for HwFs {
     ) {
         let store = self.store.lock().unwrap();
         match store.nodes.get(&ino) {
-            Some(Node { kind: NodeKind::File(data), .. }) => {
+            Some(Node {
+                kind: NodeKind::File(data),
+                ..
+            }) => {
                 let start = (offset as usize).min(data.len());
                 let end = (start + size as usize).min(data.len());
                 reply.data(&data[start..end]);
@@ -407,7 +444,11 @@ impl Filesystem for HwFs {
         mut reply: ReplyDirectory,
     ) {
         let store = self.store.lock().unwrap();
-        let Some(Node { kind: NodeKind::Dir(children), .. }) = store.nodes.get(&ino) else {
+        let Some(Node {
+            kind: NodeKind::Dir(children),
+            ..
+        }) = store.nodes.get(&ino)
+        else {
             reply.error(libc::ENOTDIR);
             return;
         };
@@ -435,7 +476,16 @@ impl Filesystem for HwFs {
     }
 
     fn statfs(&mut self, _req: &Request<'_>, _ino: u64, reply: ReplyStatfs) {
-        reply.statfs(1 << 30, 1 << 29, 1 << 29, 1 << 20, 1 << 20, BLOCK, 255, BLOCK);
+        reply.statfs(
+            1 << 30,
+            1 << 29,
+            1 << 29,
+            1 << 20,
+            1 << 20,
+            BLOCK,
+            255,
+            BLOCK,
+        );
     }
 
     // Encryption is the access control (v1 finding: SMB backend runs requests
@@ -487,15 +537,23 @@ impl Drop for Mounted {
     }
 }
 
+impl Mounted {
+    /// A "remote client" mutation: edit a file's bytes directly in the store
+    /// (bypassing the mount) and bump its mtime.
+    fn edit(&self, ino: u64, f: impl FnOnce(&mut Vec<u8>)) {
+        let mut s = self.store.lock().unwrap();
+        let node = s.nodes.get_mut(&ino).unwrap();
+        if let NodeKind::File(d) = &mut node.kind {
+            f(d);
+        }
+        node.mtime = SystemTime::now();
+    }
+}
+
 /// `init` populates the store before the mount comes up: the SMB client
 /// caches the first root listing, so anything a gate expects to be visible
 /// without an invalidation must exist before the first read.
-fn mount_opts(
-    mnt: &Path,
-    ttl: Duration,
-    extra: &[&str],
-    init: impl FnOnce(&mut Store),
-) -> Mounted {
+fn mount_opts(mnt: &Path, ttl: Duration, extra: &[&str], init: impl FnOnce(&mut Store)) -> Mounted {
     let _ = std::process::Command::new("umount").arg(mnt).output();
     std::fs::create_dir_all(mnt).expect("create mountpoint");
 
@@ -533,10 +591,18 @@ fn mount_opts(
                 break;
             }
         }
-        assert!(Instant::now() < deadline, "smbfs mount did not appear in 20s");
+        assert!(
+            Instant::now() < deadline,
+            "smbfs mount did not appear in 20s"
+        );
         std::thread::sleep(Duration::from_millis(50));
     }
-    Mounted { session: Some(session), notifier, store, mnt: mnt.to_path_buf() }
+    Mounted {
+        session: Some(session),
+        notifier,
+        store,
+        mnt: mnt.to_path_buf(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -574,12 +640,34 @@ fn poll_until(deadline: Duration, mut check: impl FnMut() -> bool) -> Option<Dur
     }
 }
 
+/// Run `round` n times, collecting latencies and counting timeouts.
+fn measure(n: usize, mut round: impl FnMut(usize) -> Option<Duration>) -> (Vec<Duration>, usize) {
+    let mut lat = Vec::new();
+    let mut timeouts = 0;
+    for i in 0..n {
+        match round(i) {
+            Some(d) => lat.push(d),
+            None => timeouts += 1,
+        }
+    }
+    (lat, timeouts)
+}
+
+fn read_first(f: &std::fs::File) -> Option<u8> {
+    use std::os::unix::fs::FileExt as _;
+    let mut b = [0u8; 1];
+    f.read_at(&mut b, 0).ok().map(|_| b[0])
+}
+
 // ---------------------------------------------------------------------------
 // Gate 1 — invalidation round-trip latency
 // ---------------------------------------------------------------------------
 
 fn gate1(mnt: &Path, iters: usize, ttl: Duration) {
-    println!("\n=== Gate 1: SMB invalidation round-trip (ttl={}s) ===", ttl.as_secs());
+    println!(
+        "\n=== Gate 1: SMB invalidation round-trip (ttl={}s) ===",
+        ttl.as_secs()
+    );
     let mut probe_ino = 0;
     let m = mount_opts(mnt, ttl, &[], |s| {
         probe_ino = s.insert_file(ROOT_INO, OsStr::new("probe.dat"), vec![0u8; 4096]);
@@ -589,172 +677,111 @@ fn gate1(mnt: &Path, iters: usize, ttl: Duration) {
 
     // Data invalidation: same-size content change, so only the data cache can
     // reveal it.
-    let mut data_lat = Vec::new();
-    let mut data_to = 0;
-    for i in 1..=iters {
-        let pattern = (i % 251 + 1) as u8;
-        {
-            let mut s = m.store.lock().unwrap();
-            let node = s.nodes.get_mut(&probe_ino).unwrap();
-            if let NodeKind::File(d) = &mut node.kind {
-                d.fill(pattern);
-            }
-            node.mtime = SystemTime::now();
-        }
+    let (mut lat, to) = measure(iters, |i| {
+        let pattern = ((i + 1) % 251 + 1) as u8;
+        m.edit(probe_ino, |d| d.fill(pattern));
         m.notifier
             .inval_inode(probe_ino, 0, -1)
             .expect("inval_inode failed — SMB invalidation unsupported?");
-        match poll_until(Duration::from_secs(10), || {
-            std::fs::read(&probe).map(|d| d.first() == Some(&pattern)).unwrap_or(false)
-        }) {
-            Some(d) => data_lat.push(d),
-            None => data_to += 1,
-        }
-    }
-    println!("{}", stats_line("data-inval ", &mut data_lat, data_to));
+        poll_until(Duration::from_secs(10), || {
+            std::fs::read(&probe)
+                .map(|d| d.first() == Some(&pattern))
+                .unwrap_or(false)
+        })
+    });
+    println!("{}", stats_line("data-inval ", &mut lat, to));
 
     // Attr invalidation: size grows by one byte per round.
-    let mut attr_lat = Vec::new();
-    let mut attr_to = 0;
     let mut expect_len = 4096u64;
-    for _ in 1..=iters {
+    let (mut lat, to) = measure(iters, |_| {
         expect_len += 1;
-        {
-            let mut s = m.store.lock().unwrap();
-            let node = s.nodes.get_mut(&probe_ino).unwrap();
-            if let NodeKind::File(d) = &mut node.kind {
-                d.push(0xAB);
-            }
-            node.mtime = SystemTime::now();
-        }
-        m.notifier.inval_inode(probe_ino, 0, -1).expect("inval_inode");
-        match poll_until(Duration::from_secs(10), || {
-            std::fs::metadata(&probe).map(|md| md.len() == expect_len).unwrap_or(false)
-        }) {
-            Some(d) => attr_lat.push(d),
-            None => attr_to += 1,
-        }
-    }
-    println!("{}", stats_line("attr-inval ", &mut attr_lat, attr_to));
+        m.edit(probe_ino, |d| d.push(0xAB));
+        m.notifier
+            .inval_inode(probe_ino, 0, -1)
+            .expect("inval_inode");
+        poll_until(Duration::from_secs(10), || {
+            std::fs::metadata(&probe)
+                .map(|md| md.len() == expect_len)
+                .unwrap_or(false)
+        })
+    });
+    println!("{}", stats_line("attr-inval ", &mut lat, to));
 
     // Attr control: same size-growth change with NO invalidation, to tell
     // whether inval_inode moves attr visibility at all or the smbfs client
     // attr-cache TTL is the floor either way.
-    let mut attr_ctl_lat = Vec::new();
-    let mut attr_ctl_to = 0;
-    for _ in 0..5usize {
+    let (mut lat, to) = measure(5, |_| {
         expect_len += 1;
-        {
-            let mut s = m.store.lock().unwrap();
-            let node = s.nodes.get_mut(&probe_ino).unwrap();
-            if let NodeKind::File(d) = &mut node.kind {
-                d.push(0xAB);
-            }
-            node.mtime = SystemTime::now();
-        }
-        match poll_until(Duration::from_secs(30), || {
-            std::fs::metadata(&probe).map(|md| md.len() == expect_len).unwrap_or(false)
-        }) {
-            Some(d) => attr_ctl_lat.push(d),
-            None => attr_ctl_to += 1,
-        }
-    }
-    println!("{}", stats_line("attr-noinval", &mut attr_ctl_lat, attr_ctl_to));
+        m.edit(probe_ino, |d| d.push(0xAB));
+        poll_until(Duration::from_secs(30), || {
+            std::fs::metadata(&probe)
+                .map(|md| md.len() == expect_len)
+                .unwrap_or(false)
+        })
+    });
+    println!("{}", stats_line("attr-noinval", &mut lat, to));
 
     // Data visibility for a HELD-OPEN descriptor — the realistic desktop
     // case (apps keep files open; open-per-read polling defeats the SMB
     // client cache and hides staleness).
-    use std::os::unix::fs::FileExt as _;
     let held = std::fs::File::open(&probe).expect("open probe");
-    let read_first = |f: &std::fs::File| -> Option<u8> {
-        let mut b = [0u8; 1];
-        f.read_at(&mut b, 0).ok().map(|_| b[0])
-    };
-    let mut open_inval_lat = Vec::new();
-    let mut open_inval_to = 0;
-    for i in 0..iters {
+    let (mut lat, to) = measure(iters, |i| {
         let pattern = (100 + i % 100) as u8;
-        {
-            let mut s = m.store.lock().unwrap();
-            let node = s.nodes.get_mut(&probe_ino).unwrap();
-            if let NodeKind::File(d) = &mut node.kind {
-                d.fill(pattern);
-            }
-            node.mtime = SystemTime::now();
-        }
-        m.notifier.inval_inode(probe_ino, 0, -1).expect("inval_inode");
-        match poll_until(Duration::from_secs(10), || read_first(&held) == Some(pattern)) {
-            Some(d) => open_inval_lat.push(d),
-            None => open_inval_to += 1,
-        }
-    }
-    println!("{}", stats_line("open-fd data-inval  ", &mut open_inval_lat, open_inval_to));
+        m.edit(probe_ino, |d| d.fill(pattern));
+        m.notifier
+            .inval_inode(probe_ino, 0, -1)
+            .expect("inval_inode");
+        poll_until(Duration::from_secs(10), || {
+            read_first(&held) == Some(pattern)
+        })
+    });
+    println!("{}", stats_line("open-fd data-inval  ", &mut lat, to));
 
-    let mut open_ctl_lat = Vec::new();
-    let mut open_ctl_to = 0;
-    for i in 0..5usize {
+    let (mut lat, to) = measure(5, |i| {
         let pattern = (210 + i) as u8;
-        {
-            let mut s = m.store.lock().unwrap();
-            let node = s.nodes.get_mut(&probe_ino).unwrap();
-            if let NodeKind::File(d) = &mut node.kind {
-                d.fill(pattern);
-            }
-            node.mtime = SystemTime::now();
-        }
-        match poll_until(Duration::from_secs(30), || read_first(&held) == Some(pattern)) {
-            Some(d) => open_ctl_lat.push(d),
-            None => open_ctl_to += 1,
-        }
+        m.edit(probe_ino, |d| d.fill(pattern));
+        let r = poll_until(Duration::from_secs(30), || {
+            read_first(&held) == Some(pattern)
+        });
+        // Resync before the next control round.
         let _ = m.notifier.inval_inode(probe_ino, 0, -1);
         std::thread::sleep(Duration::from_millis(200));
-    }
-    println!("{}", stats_line("open-fd data-noinval", &mut open_ctl_lat, open_ctl_to));
+        r
+    });
+    println!("{}", stats_line("open-fd data-noinval", &mut lat, to));
     drop(held);
 
     // Entry invalidation: new child appears remotely.
-    let mut entry_lat = Vec::new();
-    let mut entry_to = 0;
-    for i in 0..iters {
+    let (mut lat, to) = measure(iters, |i| {
         let name = format!("entry_{i}.dat");
         m.store
             .lock()
             .unwrap()
             .insert_file(ROOT_INO, OsStr::new(&name), vec![1u8; 128]);
-        m.notifier.inval_entry(ROOT_INO, OsStr::new(&name)).expect("inval_entry");
+        m.notifier
+            .inval_entry(ROOT_INO, OsStr::new(&name))
+            .expect("inval_entry");
         let path = m.mnt.join(&name);
-        match poll_until(Duration::from_secs(10), || std::fs::metadata(&path).is_ok()) {
-            Some(d) => entry_lat.push(d),
-            None => entry_to += 1,
-        }
-    }
-    println!("{}", stats_line("entry-inval", &mut entry_lat, entry_to));
+        poll_until(Duration::from_secs(10), || std::fs::metadata(&path).is_ok())
+    });
+    println!("{}", stats_line("entry-inval", &mut lat, to));
 
     // Control: how stale does the mount stay with NO invalidation? This is
     // the natural SMB cache horizon the TTL constants must otherwise absorb.
-    let mut ctl_lat = Vec::new();
-    let mut ctl_to = 0;
-    for i in 0..5usize {
+    let (mut lat, to) = measure(5, |i| {
         let pattern = (200 + i) as u8;
-        {
-            let mut s = m.store.lock().unwrap();
-            let node = s.nodes.get_mut(&probe_ino).unwrap();
-            if let NodeKind::File(d) = &mut node.kind {
-                d.fill(pattern);
-            }
-            node.mtime = SystemTime::now();
-        }
-        match poll_until(Duration::from_secs(30), || {
-            std::fs::read(&probe).map(|d| d.first() == Some(&pattern)).unwrap_or(false)
-        }) {
-            Some(d) => ctl_lat.push(d),
-            None => ctl_to += 1,
-        }
+        m.edit(probe_ino, |d| d.fill(pattern));
+        let r = poll_until(Duration::from_secs(30), || {
+            std::fs::read(&probe)
+                .map(|d| d.first() == Some(&pattern))
+                .unwrap_or(false)
+        });
         // Resync before the next control round.
         let _ = m.notifier.inval_inode(probe_ino, 0, -1);
         std::thread::sleep(Duration::from_millis(200));
-    }
-    println!("{}", stats_line("no-inval   ", &mut ctl_lat, ctl_to));
+        r
+    });
+    println!("{}", stats_line("no-inval   ", &mut lat, to));
 }
 
 /// Gate 1 follow-ups: (a) does `-o noattrcache` remove the smbfs 3s attr
@@ -770,75 +797,49 @@ fn gate1b(mnt: &Path, ttl: Duration) {
     std::fs::read(&probe).expect("warm read");
 
     // Attr latency with noattrcache, invalidation fired.
-    let mut lat = Vec::new();
-    let mut to = 0;
     let mut expect_len = 4096u64;
-    for _ in 0..10 {
+    let (mut lat, to) = measure(10, |_| {
         expect_len += 1;
-        {
-            let mut s = m.store.lock().unwrap();
-            let node = s.nodes.get_mut(&probe_ino).unwrap();
-            if let NodeKind::File(d) = &mut node.kind {
-                d.push(0xAB);
-            }
-            node.mtime = SystemTime::now();
-        }
-        m.notifier.inval_inode(probe_ino, 0, -1).expect("inval_inode");
-        match poll_until(Duration::from_secs(10), || {
-            std::fs::metadata(&probe).map(|md| md.len() == expect_len).unwrap_or(false)
-        }) {
-            Some(d) => lat.push(d),
-            None => to += 1,
-        }
-    }
+        m.edit(probe_ino, |d| d.push(0xAB));
+        m.notifier
+            .inval_inode(probe_ino, 0, -1)
+            .expect("inval_inode");
+        poll_until(Duration::from_secs(10), || {
+            std::fs::metadata(&probe)
+                .map(|md| md.len() == expect_len)
+                .unwrap_or(false)
+        })
+    });
     println!("{}", stats_line("noattrcache attr-inval  ", &mut lat, to));
 
-    let mut lat = Vec::new();
-    let mut to = 0;
-    for _ in 0..5 {
+    let (mut lat, to) = measure(5, |_| {
         expect_len += 1;
-        {
-            let mut s = m.store.lock().unwrap();
-            let node = s.nodes.get_mut(&probe_ino).unwrap();
-            if let NodeKind::File(d) = &mut node.kind {
-                d.push(0xAB);
-            }
-            node.mtime = SystemTime::now();
-        }
-        match poll_until(Duration::from_secs(15), || {
-            std::fs::metadata(&probe).map(|md| md.len() == expect_len).unwrap_or(false)
-        }) {
-            Some(d) => lat.push(d),
-            None => to += 1,
-        }
-    }
+        m.edit(probe_ino, |d| d.push(0xAB));
+        poll_until(Duration::from_secs(15), || {
+            std::fs::metadata(&probe)
+                .map(|md| md.len() == expect_len)
+                .unwrap_or(false)
+        })
+    });
     println!("{}", stats_line("noattrcache attr-noinval", &mut lat, to));
 
     // Staleness horizon for already-cached data: hold the file open and read
     // it so the client caches pages, then change it remotely and see how long
     // until the change lands — once with a single invalidation, once without.
-    use std::os::unix::fs::FileExt as _;
     let held = std::fs::File::open(&probe).expect("open probe");
-    let read_first = |f: &std::fs::File| -> Option<u8> {
-        let mut b = [0u8; 1];
-        f.read_at(&mut b, 0).ok().map(|_| b[0])
-    };
     for (label, fire_inval) in [("with-inval", true), ("no-inval", false)] {
         let _ = read_first(&held);
         std::thread::sleep(Duration::from_millis(500));
         let pattern = if fire_inval { 0x51 } else { 0x52 };
-        {
-            let mut s = m.store.lock().unwrap();
-            let node = s.nodes.get_mut(&probe_ino).unwrap();
-            if let NodeKind::File(d) = &mut node.kind {
-                d.fill(pattern);
-            }
-            node.mtime = SystemTime::now();
-        }
+        m.edit(probe_ino, |d| d.fill(pattern));
         if fire_inval {
-            m.notifier.inval_inode(probe_ino, 0, -1).expect("inval_inode");
+            m.notifier
+                .inval_inode(probe_ino, 0, -1)
+                .expect("inval_inode");
         }
-        match poll_until(Duration::from_secs(300), || read_first(&held) == Some(pattern)) {
+        match poll_until(Duration::from_secs(300), || {
+            read_first(&held) == Some(pattern)
+        }) {
             Some(d) => println!("cached-data horizon {label}: {:.1}s", d.as_secs_f64()),
             None => println!("cached-data horizon {label}: >300s (never converged)"),
         }
@@ -855,7 +856,11 @@ fn gate1c(mnt: &Path, ttl: Duration) {
             s.insert_file(ROOT_INO, OsStr::new("big.dat"), vec![0x5Au8; SIZE]);
         });
         let big = m.mnt.join("big.dat");
-        let label = if opts.is_empty() { "default    " } else { "noattrcache" };
+        let label = if opts.is_empty() {
+            "default    "
+        } else {
+            "noattrcache"
+        };
         for pass in ["cold", "warm"] {
             let t0 = Instant::now();
             let data = std::fs::read(&big).expect("read big");
@@ -890,21 +895,23 @@ fn gate2(mnt: &Path, iters: usize, ttl: Duration) {
     for i in 0..iters {
         let name = format!("cc_{i}.dat");
         let pattern = (i % 251 + 1) as u8;
-        {
-            let mut s = m.store.lock().unwrap();
-            s.insert_file(ROOT_INO, OsStr::new(&name), vec![pattern; 256]);
-            let node = s.nodes.get_mut(&shared_ino).unwrap();
-            if let NodeKind::File(d) = &mut node.kind {
-                d.fill(pattern);
-            }
-            node.mtime = SystemTime::now();
-        }
-        m.notifier.inval_entry(ROOT_INO, OsStr::new(&name)).expect("inval_entry");
-        m.notifier.inval_inode(shared_ino, 0, -1).expect("inval_inode");
+        m.store
+            .lock()
+            .unwrap()
+            .insert_file(ROOT_INO, OsStr::new(&name), vec![pattern; 256]);
+        m.edit(shared_ino, |d| d.fill(pattern));
+        m.notifier
+            .inval_entry(ROOT_INO, OsStr::new(&name))
+            .expect("inval_entry");
+        m.notifier
+            .inval_inode(shared_ino, 0, -1)
+            .expect("inval_inode");
         let path = m.mnt.join(&name);
         let ok = poll_until(Duration::from_secs(2), || {
             std::fs::metadata(&path).is_ok()
-                && std::fs::read(&shared).map(|d| d.first() == Some(&pattern)).unwrap_or(false)
+                && std::fs::read(&shared)
+                    .map(|d| d.first() == Some(&pattern))
+                    .unwrap_or(false)
         })
         .is_some();
         if !ok {
@@ -1078,8 +1085,19 @@ fn gate3(mnt: &Path, iters: usize, ttl: Duration) {
     if let Some(sample) = s.ops.renames.first() {
         println!("first rename callback: {sample}");
     }
-    let verdict_ok = torn == 0 && missing == 0 && short == 0 && errors == 0 && write_errs == 0;
-    println!("atomicity verdict: {}", if verdict_ok { "PASS" } else { "FAIL" });
+    // A rename-name fallback hit means the harness had to guess the source of
+    // a rename — a resurrected truncation bug must fail the gate, not pass
+    // silently under the guessed name.
+    let verdict_ok = torn == 0
+        && missing == 0
+        && short == 0
+        && errors == 0
+        && write_errs == 0
+        && s.ops.rename_name_fallbacks == 0;
+    println!(
+        "atomicity verdict: {}",
+        if verdict_ok { "PASS" } else { "FAIL" }
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1088,7 +1106,9 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let cmd = args.get(1).map(String::as_str).unwrap_or("all");
     let flag = |name: &str| -> Option<String> {
-        args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
+        args.iter()
+            .position(|a| a == name)
+            .and_then(|i| args.get(i + 1).cloned())
     };
     let iters: usize = flag("--iters").and_then(|v| v.parse().ok()).unwrap_or(0);
     let ttl = Duration::from_secs(flag("--ttl").and_then(|v| v.parse().ok()).unwrap_or(3600));
@@ -1096,7 +1116,10 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("hwgates-mnt"));
 
-    println!("FUSE-T hardware gates (issue #644) — mount at {}", mnt.display());
+    println!(
+        "FUSE-T hardware gates (issue #644) — mount at {}",
+        mnt.display()
+    );
     match cmd {
         "gate1" => gate1(&mnt, if iters == 0 { 30 } else { iters }, ttl),
         "gate1b" => gate1b(&mnt, ttl),

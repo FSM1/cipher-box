@@ -9,6 +9,9 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
+[build-dependencies]
+pkg-config = "0.3"
+
 [dependencies]
 # The v1 socket-read-patched fuser (FUSE-T speaks FUSE over a Unix socket
 # that fragments messages; stock fuser assumes atomic reads).
