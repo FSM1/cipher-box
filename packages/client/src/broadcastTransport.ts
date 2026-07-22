@@ -8,6 +8,11 @@
  * leader-dead transport **rejects** every pending request, never hangs — so a
  * command caught in flight at a leadership swap surfaces a retry to the UI
  * rather than silently disappearing.
+ *
+ * A follower authenticates the leader by an unguessable per-leadership `token`
+ * carried on the `cb:leader` beacon: it stamps every accepted response/event and
+ * lets the follower reject forged acks/events from a non-leader same-origin
+ * context.
  */
 
 import { hoistContent, type BroadcastChannelLike, type LeaderMessage } from './broadcast.js';
@@ -17,8 +22,13 @@ import type { CommandDescriptor } from './worker/protocol.js';
 export class BroadcastTransport extends CorrelatedTransport {
   private closed = false;
 
-  private leaderPresent = false;
-  private readonly leaderReady: Promise<void>;
+  // The active leadership's capability token; `null` when no leader is known
+  // (start, or after the leader stepped down). Only messages bearing this exact
+  // token are accepted.
+  private leaderToken: string | null = null;
+  // Re-armed on every leadership change so a command posted while no leader is
+  // present awaits the *next* leader instead of resolving against a dead one.
+  private leaderReady!: Promise<void>;
   private resolveLeaderReady!: () => void;
   private rejectLeaderReady!: (error: Error) => void;
 
@@ -29,25 +39,19 @@ export class BroadcastTransport extends CorrelatedTransport {
     private readonly clientId: string
   ) {
     super();
-    this.leaderReady = new Promise<void>((resolve, reject) => {
-      this.resolveLeaderReady = resolve;
-      this.rejectLeaderReady = reject;
-    });
-    this.leaderReady.catch(() => undefined);
+    this.armLeaderReady();
     this.channel.addEventListener('message', this.onMessage);
     // Announce ourselves so a live leader replies with a `leader` beacon.
     this.channel.postMessage({ type: 'cb:hello', clientId: this.clientId });
   }
 
   /**
-   * A follower never transmits the login secret — the leader's engine already
-   * owns key derivation. This **consumes and scrubs** the secret: it zeroes the
-   * caller's buffer so the plaintext never lingers in the keyless follower realm.
-   * A caller MUST re-derive a fresh buffer via `SecretSource` for any retry
-   * (e.g. failover cold-start) — never reuse this buffer, whose bytes are now 0.
+   * A follower holds no keys and never receives the login secret — the leader's
+   * engine already owns key derivation. Starting a follower is just awaiting a
+   * live leader; the secret is scrubbed by its terminal owner (`EngineClient`),
+   * never handed to this keyless transport.
    */
-  start(secret: ArrayBuffer): Promise<void> {
-    new Uint8Array(secret).fill(0);
+  start(): Promise<void> {
     if (this.terminalError) return Promise.reject(this.terminalError);
     return this.leaderReady;
   }
@@ -84,25 +88,67 @@ export class BroadcastTransport extends CorrelatedTransport {
     this.channel.removeEventListener('message', this.onMessage);
   }
 
+  private armLeaderReady(): void {
+    this.leaderReady = new Promise<void>((resolve, reject) => {
+      this.resolveLeaderReady = resolve;
+      this.rejectLeaderReady = reject;
+    });
+    // A request re-observes this rejection; swallow the unobserved-rejection warn.
+    this.leaderReady.catch(() => undefined);
+  }
+
   private receive(message: LeaderMessage | { type?: string }): void {
+    if (this.closed) return;
     switch (message.type) {
       case 'cb:leader':
-        if (!this.leaderPresent) {
-          this.leaderPresent = true;
-          this.resolveLeaderReady();
-        }
+        this.onLeader((message as Extract<LeaderMessage, { type: 'cb:leader' }>).token);
+        return;
+      case 'cb:leaderGone':
+        this.onLeaderGone((message as Extract<LeaderMessage, { type: 'cb:leaderGone' }>).token);
         return;
       case 'cb:response': {
         const response = message as Extract<LeaderMessage, { type: 'cb:response' }>;
         if (response.clientId !== this.clientId) return;
+        if (!this.fromActiveLeader(response.token)) return; // forged / stale ack
         this.settle(response.requestId, response.ok, response.ok ? undefined : response.error);
         return;
       }
       case 'cb:event': {
-        const { event } = message as Extract<LeaderMessage, { type: 'cb:event' }>;
-        this.emit(event);
+        const event = message as Extract<LeaderMessage, { type: 'cb:event' }>;
+        if (!this.fromActiveLeader(event.token)) return; // forged / stale event
+        this.emit(event.event);
         return;
       }
     }
   }
+
+  private fromActiveLeader(token: string): boolean {
+    return this.leaderToken !== null && token === this.leaderToken;
+  }
+
+  private onLeader(token: string): void {
+    if (this.leaderToken === token) return; // duplicate beacon from the same leadership
+    if (this.leaderToken !== null) {
+      // Leadership moved to a new tab without a graceful step-down (the old
+      // leader crashed): reject requests bound to it so the UI retries the new
+      // leader. New commands go to the new leader once the token is adopted.
+      this.rejectPending(retryError());
+    }
+    this.leaderToken = token;
+    this.resolveLeaderReady();
+  }
+
+  private onLeaderGone(token: string): void {
+    // Only the current leader may step us down; ignore a stale/forged farewell.
+    if (this.leaderToken === null || token !== this.leaderToken) return;
+    this.leaderToken = null;
+    this.rejectPending(retryError());
+    // Re-arm so subsequent commands await the next leader rather than resolving
+    // against the departed one.
+    this.armLeaderReady();
+  }
+}
+
+function retryError(): Error {
+  return new Error('leader changed; retry');
 }

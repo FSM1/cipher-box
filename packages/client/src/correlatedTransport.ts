@@ -91,10 +91,20 @@ export abstract class CorrelatedTransport implements EngineTransport {
     else pending.reject(new Error(error));
   }
 
+  /**
+   * Rejects every in-flight request without latching a terminal error, so the
+   * transport stays usable. Used when leadership moves under a follower: the
+   * requests bound to the departed leader reject retryably while the transport
+   * awaits the next leader.
+   */
+  protected rejectPending(error: Error): void {
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+  }
+
   /** Latches terminal failure and rejects every in-flight request. */
   protected fail(error: Error): void {
     this.terminalError ??= error;
-    for (const pending of this.pending.values()) pending.reject(error);
-    this.pending.clear();
+    this.rejectPending(error);
   }
 }

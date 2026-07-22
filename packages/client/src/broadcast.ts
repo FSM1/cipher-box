@@ -4,8 +4,10 @@
  * plus the one-way event stream back, all over a single `BroadcastChannel`.
  *
  * Security shape, structural not by discipline:
- * - The login **secret never crosses** — a follower scrubs it locally and lets
- *   the leader's already-started engine own key derivation.
+ * - The login **secret never crosses** — the keyless follower transport takes no
+ *   secret at all (its `start` has no secret parameter); `EngineClient`, the
+ *   secret's terminal owner, scrubs the buffer it chose not to use and lets the
+ *   leader's already-started engine own key derivation.
  * - Leader → follower carries only key-free, plaintext-free `EventDescriptor`s
  *   (the facade's event surface exposes no key bytes by construction).
  * - Follower → leader commands may carry the user's own upload bytes as a
@@ -44,15 +46,31 @@ export type FollowerMessage =
   /** A follower is leaving (tab close / transport teardown). */
   | { type: 'cb:bye'; clientId: string };
 
-/** Leader → follower messages. */
+/**
+ * Leader → follower messages. Every one carries the current leadership's
+ * `token` — an unguessable per-leadership capability minted at election. Same
+ * origin is the trust boundary, but any same-origin context can observe a
+ * follower's `clientId`/`requestId` and post a forged `cb:response`/`cb:event`;
+ * followers reject any leader message whose token isn't the active leader's, so
+ * a non-leader cannot forge an ack or inject an event.
+ */
 export type LeaderMessage =
   /** The current leader announces itself (on election and on demand). */
-  | { type: 'cb:leader' }
+  | { type: 'cb:leader'; token: string }
+  /** The current leader is stepping down (graceful teardown); re-arm the gate. */
+  | { type: 'cb:leaderGone'; token: string }
   /** The correlated result of a follower's command. */
-  | { type: 'cb:response'; clientId: string; requestId: number; ok: true }
-  | { type: 'cb:response'; clientId: string; requestId: number; ok: false; error: string }
+  | { type: 'cb:response'; token: string; clientId: string; requestId: number; ok: true }
+  | {
+      type: 'cb:response';
+      token: string;
+      clientId: string;
+      requestId: number;
+      ok: false;
+      error: string;
+    }
   /** One engine event, fanned out to every follower in emission order. */
-  | { type: 'cb:event'; event: EventDescriptor };
+  | { type: 'cb:event'; token: string; event: EventDescriptor };
 
 export type BroadcastMessage = FollowerMessage | LeaderMessage;
 

@@ -126,6 +126,61 @@ describe('EngineClient leadership + transport swap', () => {
     await follower.dispose();
   });
 
+  it('scrubs the secret at the client seam and hands none to the keyless follower transport (P1-1)', async () => {
+    const { tab } = origin();
+    const leader = tab();
+    const follower = tab();
+    await tick();
+    expect(follower.currentRole()).toBe('follower');
+
+    // The follower holds no keys: the EngineClient (the secret's terminal owner)
+    // scrubs the buffer it decided not to use, and the BroadcastTransport — a
+    // callee — never receives it (its `start` takes no secret argument).
+    const secret = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer;
+    await follower.facade.start(secret);
+    expect([...new Uint8Array(secret)]).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+
+    await leader.dispose();
+    await follower.dispose();
+  });
+
+  it('does not advertise leadership or start the worker until the cold-start secret resolves (P1-2)', async () => {
+    const { tab, workers } = origin();
+    let releaseSecret!: () => void;
+    const secretSource = {
+      provideSecret: (): Promise<ArrayBuffer> =>
+        new Promise<ArrayBuffer>((resolve) => {
+          releaseSecret = () => resolve(new Uint8Array([1]).buffer);
+        }),
+    };
+    const leader = tab();
+    const follower = tab({ secretSource });
+    await tick();
+    await follower.facade.start(new Uint8Array([2]).buffer);
+
+    // Promote the follower, but stall it on the pending re-derived secret.
+    await leader.dispose();
+    await tick();
+    await tick();
+
+    // Promotion has spawned the fresh worker but is stalled on the secret.
+    expect(workers.length).toBe(2);
+    const promoted = workers[workers.length - 1];
+    // Leadership is not yet advertised and the worker has not been cold-started:
+    // a command in this window cannot reach an uninitialized worker.
+    expect(follower.currentRole()).not.toBe('leader');
+    expect(promoted.posted.some((m) => (m as { type?: string }).type === 'start')).toBe(false);
+
+    // The secret resolves → the worker cold-starts → only now is leadership live.
+    releaseSecret();
+    await tick();
+    await tick();
+    expect(follower.currentRole()).toBe('leader');
+    expect(promoted.posted.some((m) => (m as { type?: string }).type === 'start')).toBe(true);
+
+    await follower.dispose();
+  });
+
   it('rejects a command in flight at a leadership swap so the UI can retry', async () => {
     const { tab } = origin();
     const secretSource = {
@@ -136,11 +191,13 @@ describe('EngineClient leadership + transport swap', () => {
     await tick();
     await follower.facade.start(new Uint8Array([2]).buffer);
 
-    // Issue a follower command, then kill the leader before it can respond.
+    // Issue a follower command, then kill the leader before it can respond. The
+    // command rejects retryably (the leader stepped down / the transport closed)
+    // so the UI retries against the new leader instead of hanging forever.
     const inFlight = follower.facade.manualRefresh();
     await leader.dispose();
 
-    await expect(inFlight).rejects.toThrow(/closed/);
+    await expect(inFlight).rejects.toThrow(/retry|closed/);
     await follower.dispose();
   });
 });

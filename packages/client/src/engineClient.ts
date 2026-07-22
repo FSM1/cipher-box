@@ -67,9 +67,9 @@ export class EngineClient implements EngineTransport {
   private readonly election: LeaderElection;
 
   private role: EngineClientRole = 'follower';
-  private current: EngineTransport;
+  private current!: EngineTransport;
   private relay: LeaderRelay | null = null;
-  private innerUnsub: () => void;
+  private innerUnsub!: () => void;
   private readonly listeners = new Set<EngineEventListener>();
 
   // The vault is active (user logged in). A follower promoted while active must
@@ -81,9 +81,7 @@ export class EngineClient implements EngineTransport {
     this.clientId = config.clientId ?? newClientId();
     this.channel = (config.createChannel ?? defaultChannel)();
 
-    const follower = new BroadcastTransport(this.channel, this.clientId);
-    this.current = follower;
-    this.innerUnsub = follower.subscribe((event) => this.fanOut(event));
+    this.installFollower();
 
     this.election = new LeaderElection(
       config.locks,
@@ -103,6 +101,12 @@ export class EngineClient implements EngineTransport {
 
   start(secret: ArrayBuffer): Promise<void> {
     if (this.role === 'closed') return Promise.reject(new Error('engine client closed'));
+    // This seam is the secret's terminal owner (security rule 7). On the leader
+    // path the worker becomes the terminal owner — `LocalTransport.start`
+    // transfers the buffer in (neutered), never copied. On the follower path the
+    // keyless transport gets no secret: we scrub the buffer we decided not to use
+    // right here, rather than in a callee that would be zeroing someone else's.
+    if (this.role !== 'leader') new Uint8Array(secret).fill(0);
     return this.current.start(secret).then(() => {
       this.started = true;
     });
@@ -141,40 +145,81 @@ export class EngineClient implements EngineTransport {
     this.channel.close();
   }
 
+  private installFollower(): BroadcastTransport {
+    const follower = new BroadcastTransport(this.channel, this.clientId);
+    this.current = follower;
+    this.innerUnsub = follower.subscribe((event) => this.fanOut(event));
+    return follower;
+  }
+
   private becomeLeader(): void {
     if (this.role === 'closed') return;
-    const wasActiveFollower = this.started;
-    this.role = 'leader';
+    void this.promote();
+  }
 
-    // Drop the follower transport: any command in flight rejects so the UI
-    // retries it against the new leader rather than losing it silently.
+  /**
+   * Win the lock → become the engine host. The worker is spawned and (on
+   * failover) cold-started with a re-derived secret **before** we advertise
+   * leadership: we do not install the local transport, route commands, or
+   * register the relay until the worker start resolves, so a command in the
+   * promotion window never reaches an uninitialized worker. If startup fails we
+   * release the lock (a healthy tab takes over) and surface via `onError` rather
+   * than holding a dead-leader lock.
+   */
+  private async promote(): Promise<void> {
+    if (this.role === 'closed') return;
+    const wasActiveFollower = this.started;
+
+    // Drop the follower transport now: a command in flight rejects so the UI
+    // retries it against the new leader, and a command issued during the
+    // promotion window hits this closed transport and rejects (never hangs).
     this.innerUnsub();
     this.current.close();
 
     const worker = this.config.spawnWorker();
     const local = new LocalTransport(worker);
+
+    if (wasActiveFollower) {
+      try {
+        const secret = await this.provideFailoverSecret();
+        await local.start(secret);
+      } catch (error) {
+        this.abortPromotion(local, error);
+        return;
+      }
+      // `dispose()` may have latched `closed` during the awaited startup.
+      if ((this.role as EngineClientRole) === 'closed') {
+        local.close();
+        return;
+      }
+    }
+
+    // Startup resolved: only now install the transport as active, wire events,
+    // and announce the relay so followers route commands to a live worker.
+    this.role = 'leader';
     this.current = local;
     this.innerUnsub = local.subscribe((event) => this.fanOut(event));
     this.relay = new LeaderRelay(this.channel, local);
     if (this.ownFocus) this.relay.reportLocalFocus(this.clientId, this.ownFocus);
-
-    // A promoted active follower must cold-start the fresh worker with a
-    // re-derived secret; a first-ever leader waits for the UI's explicit start.
-    if (wasActiveFollower) this.coldStartOnFailover(local);
   }
 
-  private coldStartOnFailover(local: LocalTransport): void {
+  private async provideFailoverSecret(): Promise<ArrayBuffer> {
     const source = this.config.secretSource;
-    if (!source) {
-      this.config.onError?.(new Error('failover leader has no SecretSource; engine cannot start'));
-      return;
+    if (!source) throw new Error('failover leader has no SecretSource; engine cannot start');
+    return source.provideSecret();
+  }
+
+  private abortPromotion(local: LocalTransport, error: unknown): void {
+    // Never advertise a dead leader: tear down the half-built worker, release
+    // the lock so a healthy tab is elected, and fall back to a follower that
+    // mirrors the next leader.
+    local.close();
+    if (this.role !== 'closed') {
+      this.role = 'follower';
+      this.installFollower();
+      void this.election.close();
     }
-    void source
-      .provideSecret()
-      .then((secret) => local.start(secret))
-      .catch((error: unknown) => {
-        this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
-      });
+    this.config.onError?.(error instanceof Error ? error : new Error(String(error)));
   }
 
   private fanOut(event: Parameters<EngineEventListener>[0]): void {

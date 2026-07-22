@@ -65,6 +65,10 @@ export class LeaderRelay {
   private readonly focus = new FocusRegistry();
   private readonly unsubscribe: () => void;
   private closed = false;
+  // An unguessable per-leadership capability. It stamps every leader→follower
+  // message so followers reject forged acks/events from a non-leader same-origin
+  // context (integrity defense-in-depth; same-origin is the trust boundary).
+  private readonly token = globalThis.crypto.randomUUID();
   private readonly onMessage = (event: MessageEvent): void => this.receive(event.data);
 
   constructor(
@@ -73,10 +77,10 @@ export class LeaderRelay {
   ) {
     this.channel.addEventListener('message', this.onMessage);
     this.unsubscribe = this.transport.subscribe((event) => {
-      this.post({ type: 'cb:event', event });
+      this.post({ type: 'cb:event', token: this.token, event });
     });
     // Announce leadership so followers (existing or newly-elected-away) reconnect.
-    this.post({ type: 'cb:leader' });
+    this.post({ type: 'cb:leader', token: this.token });
   }
 
   /** Folds the leader tab's own open folder into the focus-window union. */
@@ -87,6 +91,11 @@ export class LeaderRelay {
 
   close(): void {
     if (this.closed) return;
+    // Announce the graceful step-down before latching closed so followers re-arm
+    // their readiness gate and reject in-flight work instead of hanging on a
+    // leader that is gone. A crashed leader can't send this; the next leader's
+    // fresh token covers that path.
+    this.post({ type: 'cb:leaderGone', token: this.token });
     this.closed = true;
     this.unsubscribe();
     this.channel.removeEventListener('message', this.onMessage);
@@ -96,7 +105,7 @@ export class LeaderRelay {
     if (this.closed) return;
     switch (message.type) {
       case 'cb:hello':
-        this.post({ type: 'cb:leader' });
+        this.post({ type: 'cb:leader', token: this.token });
         return;
       case 'cb:command':
         void this.forward(message as Extract<FollowerMessage, { type: 'cb:command' }>);
@@ -119,10 +128,11 @@ export class LeaderRelay {
     try {
       const { command, transfer } = await lowerContent(wire);
       await this.transport.command(command, transfer);
-      this.post({ type: 'cb:response', clientId, requestId, ok: true });
+      this.post({ type: 'cb:response', token: this.token, clientId, requestId, ok: true });
     } catch (error) {
       this.post({
         type: 'cb:response',
+        token: this.token,
         clientId,
         requestId,
         ok: false,

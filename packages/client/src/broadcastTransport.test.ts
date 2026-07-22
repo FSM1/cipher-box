@@ -22,7 +22,7 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(engine.commands.map((c) => c.kind)).toEqual(['delete']);
   });
 
-  it('never transmits the login secret and scrubs the follower copy', async () => {
+  it('takes no secret: start just awaits a live leader, wire carries only a hello', async () => {
     const bus = new FakeBus();
     const posted: unknown[] = [];
     const leaderChannel = bus.channel();
@@ -31,13 +31,15 @@ describe('broadcast transport ↔ leader relay', () => {
     new LeaderRelay(leaderChannel, new FakeEngineTransport());
     const follower = new BroadcastTransport(bus.channel(), 'f');
 
-    const secret = new Uint8Array([1, 2, 3, 4, 5]).buffer;
-    await follower.start(secret);
+    // The keyless follower transport receives no secret at all — `start` has no
+    // secret parameter; it resolves once a leader beacon arrives.
+    await follower.start();
 
-    // The secret buffer was zeroed in place and no command carried its bytes.
-    expect([...new Uint8Array(secret)]).toEqual([0, 0, 0, 0, 0]);
-    const carriedSecret = posted.some((m) => JSON.stringify(m).includes('"1,2,3,4,5"'));
-    expect(carriedSecret).toBe(false);
+    // The only thing the follower put on the wire is its self-announcing hello.
+    const followerPosts = posted.filter(
+      (m) => (m as { clientId?: string }).clientId === 'f'
+    ) as Array<{ type: string }>;
+    expect(followerPosts.map((m) => m.type)).toEqual(['cb:hello']);
   });
 
   it('leaks no key-shaped sentinel on any leader→follower message (structural)', async () => {
@@ -52,10 +54,9 @@ describe('broadcast transport ↔ leader relay', () => {
 
     const follower = new BroadcastTransport(bus.channel(), 'f');
     // A key-shaped sentinel: distinctive 32-byte key material that must never
-    // appear on the keyless leader→follower wire. Plant it as this follower's
-    // secret (the follower scrubs it) so it genuinely exists in the test realm.
+    // appear on the keyless leader→follower wire.
     const sentinel = Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + 3) & 0xff);
-    await follower.start(sentinel.slice().buffer);
+    await follower.start();
 
     // Drive the full leader→follower surface: a correlated response plus every
     // EventDescriptor variant, including the byte- and string-bearing ones.
@@ -130,5 +131,79 @@ describe('broadcast transport ↔ leader relay', () => {
 
     const hints = engine.commands.slice(before).filter((c) => c.kind === 'manualRefresh');
     expect(hints.length).toBe(1);
+  });
+
+  it('re-arms on leadership change: an in-flight command rejects retryably, later commands await the next leader (P1-3)', async () => {
+    const bus = new FakeBus();
+    const engineA = new FakeEngineTransport();
+    engineA.respond = () => new Promise(() => undefined); // leader A never answers
+    const relayA = new LeaderRelay(bus.channel(), engineA);
+    const follower = new BroadcastTransport(bus.channel(), 'f');
+    await follower.start(); // leader A present
+
+    const inFlight = follower.command({ kind: 'manualRefresh' }, []);
+    await tick();
+
+    // Leader A steps down: the in-flight command rejects retryably, never hangs.
+    relayA.close();
+    await expect(inFlight).rejects.toThrow(/retry/);
+
+    // A command issued while no leader is present parks on the re-armed gate.
+    const queued = follower.command({ kind: 'manualRefresh' }, []);
+    let settled = false;
+    void queued.then(
+      () => (settled = true),
+      () => (settled = true)
+    );
+    await tick();
+    expect(settled).toBe(false);
+
+    // A fresh leader is elected → the queued command resolves against it.
+    const engineB = new FakeEngineTransport();
+    new LeaderRelay(bus.channel(), engineB);
+    await queued;
+    expect(engineB.commands.map((c) => c.kind)).toEqual(['manualRefresh']);
+  });
+
+  it('rejects a forged response/event bearing a wrong or absent leader token (P1-4)', async () => {
+    const bus = new FakeBus();
+    const engine = new FakeEngineTransport();
+    engine.respond = () => new Promise(() => undefined); // the real leader never answers
+    new LeaderRelay(bus.channel(), engine);
+    const follower = new BroadcastTransport(bus.channel(), 'f');
+    await follower.start();
+
+    const pending = follower.command({ kind: 'manualRefresh' }, []);
+    let settled = false;
+    void pending.then(
+      () => (settled = true),
+      () => (settled = true)
+    );
+    await tick();
+
+    // A same-origin attacker forges an ok response for the follower's request —
+    // once with a wrong token, once with none. Neither may settle the command.
+    const attacker = bus.channel();
+    attacker.postMessage({
+      type: 'cb:response',
+      token: 'forged-token',
+      clientId: 'f',
+      requestId: 1,
+      ok: true,
+    });
+    attacker.postMessage({ type: 'cb:response', clientId: 'f', requestId: 1, ok: true });
+
+    // A forged event with a wrong token must not reach subscribers either.
+    const events: EventDescriptor[] = [];
+    follower.subscribe((event) => events.push(event));
+    attacker.postMessage({
+      type: 'cb:event',
+      token: 'forged-token',
+      event: { kind: 'snapshotUpdated' },
+    });
+    await tick();
+
+    expect(settled).toBe(false);
+    expect(events).toEqual([]);
   });
 });
