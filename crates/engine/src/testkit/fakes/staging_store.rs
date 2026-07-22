@@ -10,6 +10,7 @@ struct Inner {
     ops: Vec<(OpId, Vec<u8>)>,
     staged: BTreeMap<Vec<u8>, Vec<u8>>,
     fail_queued_ops: bool,
+    fail_remove_op: bool,
 }
 
 impl Default for Inner {
@@ -19,6 +20,7 @@ impl Default for Inner {
             ops: Vec::new(),
             staged: BTreeMap::new(),
             fail_queued_ops: false,
+            fail_remove_op: false,
         }
     }
 }
@@ -35,6 +37,13 @@ impl InMemoryStagingStore {
     /// precondition guard runs before the staging read.
     pub fn fail_queued_ops(&self) {
         self.inner.lock().expect("lock").fail_queued_ops = true;
+    }
+
+    /// Makes `remove_op` return a seam error without dropping the record, so
+    /// tests can prove a durable removal that fails after a successful
+    /// dead-letter send leaves the op queued for the next boot.
+    pub fn fail_remove_op(&self) {
+        self.inner.lock().expect("lock").fail_remove_op = true;
     }
 }
 
@@ -56,11 +65,11 @@ impl StagingStore for InMemoryStagingStore {
     }
 
     async fn remove_op(&self, op_id: OpId) -> SeamResult<()> {
-        self.inner
-            .lock()
-            .expect("lock")
-            .ops
-            .retain(|(id, _)| *id != op_id);
+        let mut inner = self.inner.lock().expect("lock");
+        if inner.fail_remove_op {
+            return Err(SeamError::new("remove_op unavailable"));
+        }
+        inner.ops.retain(|(id, _)| *id != op_id);
         Ok(())
     }
 

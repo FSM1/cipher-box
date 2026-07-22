@@ -472,7 +472,9 @@ impl<T: SeamTypes> Engine<T> {
     /// sequence): vault-pointer resolve → floor cold-seed (fail-closed on
     /// regression) → current root name adoption through the gate → first
     /// [`Event::SnapshotUpdated`] with the pending-op overlay, cache-first from
-    /// the snapshot cache.
+    /// the snapshot cache. Any queue entry that fails to decode is surfaced as
+    /// an [`Event::DeadLetter`] and dropped from the durable queue before the
+    /// chain runs, so a corrupt entry is not re-emitted on the next boot.
     ///
     /// Reads every seam from the engine, the login secret from
     /// [`session`](Self::session), and the pending ops from the durable staging
@@ -510,10 +512,33 @@ impl<T: SeamTypes> Engine<T> {
             .queued_ops()
             .await
             .map_err(ColdStartError::Seam)?;
-        // `_undecodable` dead-letters are dropped here; surfacing them (and
-        // replay dead-letters) as `Event::DeadLetter` on boot is deferred to #768.
-        let (decoded, _undecodable) = decode_queue(&raw);
+        let (decoded, undecodable) = decode_queue(&raw);
         let pending: Vec<_> = decoded.into_iter().map(|(_id, op)| op).collect();
+
+        // Surface every undecodable queue entry as `Event::DeadLetter` and drop
+        // its op record from the durable queue so a corrupt/forward-version
+        // entry is not re-decoded and re-emitted on every boot (#768). Staged
+        // upload bytes live in a separate plane keyed by staging keys — never
+        // touched here, so they are retained per the dead-letter contract
+        // (blueprint/engine.md #33 D6).
+        //
+        // `DeadLetter` delivery is best-effort over a non-durable in-process
+        // channel, so hosts MUST dedup by `op_id`. Gate the durable removal on a
+        // successful send: a receiver dropped mid-teardown must not silently
+        // purge an unsurfaced entry — preserved, the next boot re-surfaces it.
+        for (op_id, _reason) in &undecodable {
+            if self
+                .events
+                .unbounded_send(Event::DeadLetter { op_id: *op_id })
+                .is_ok()
+            {
+                self.seams
+                    .staging_store
+                    .remove_op(*op_id)
+                    .await
+                    .map_err(ColdStartError::Seam)?;
+            }
+        }
 
         let params = ColdStartParams {
             login_secret: session.login_secret(),
@@ -732,7 +757,7 @@ mod tests {
         use cipherbox_core::suite::ed25519::Ed25519Signer;
 
         use crate::gate::Adopted;
-        use crate::seams::{EndpointId, SeamResult};
+        use crate::seams::{EndpointId, OpId, SeamResult, StagingStore};
         use crate::sync::boot::RootResolve;
         use crate::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
         use crate::testkit::FakeDevice;
@@ -942,6 +967,119 @@ mod tests {
                 NodeId([0xAB; 16]),
             ));
             assert_eq!(out, Err(ColdStartError::NotStarted));
+        }
+
+        #[test]
+        fn undecodable_queue_entry_surfaces_as_dead_letter_on_cold_start() {
+            let (mut engine, mut events, pointers) = started_at(UnixMillis(123_456));
+            // A corrupt op record that `Op::decode` rejects.
+            let op_id = block_on(engine.seams.staging_store.enqueue_op(b"not-a-valid-op"))
+                .expect("enqueue");
+            assert_eq!(op_id, OpId(1));
+
+            drive(&mut engine, &pointers);
+
+            // The dead-letter surfaces on the host stream ahead of the first paint.
+            assert_eq!(
+                block_on(events.next()),
+                Some(Event::DeadLetter { op_id: OpId(1) })
+            );
+            assert_eq!(block_on(events.next()), Some(Event::SnapshotUpdated));
+            // The op record was dropped from the durable queue.
+            assert!(
+                block_on(engine.seams.staging_store.queued_ops())
+                    .unwrap()
+                    .is_empty(),
+                "the dead-lettered op is removed from the durable queue"
+            );
+        }
+
+        #[test]
+        fn dead_lettered_entry_is_not_re_emitted_on_a_second_boot() {
+            let (mut engine, mut events, pointers) = started_at(UnixMillis(123_456));
+            block_on(engine.seams.staging_store.enqueue_op(b"not-a-valid-op")).expect("enqueue");
+
+            // First boot: surfaces the dead-letter, then paints.
+            drive(&mut engine, &pointers);
+            assert_eq!(
+                block_on(events.next()),
+                Some(Event::DeadLetter { op_id: OpId(1) })
+            );
+            assert_eq!(block_on(events.next()), Some(Event::SnapshotUpdated));
+
+            // Second boot over the same durable store: the corrupt entry is gone,
+            // so only the paint event fires — no re-emitted dead-letter.
+            drive(&mut engine, &pointers);
+            assert_eq!(block_on(events.next()), Some(Event::SnapshotUpdated));
+        }
+
+        #[test]
+        fn dropped_receiver_preserves_unsurfaced_dead_letter_across_a_boot() {
+            let (mut engine, events, pointers) = started_at(UnixMillis(123_456));
+            block_on(engine.seams.staging_store.enqueue_op(b"not-a-valid-op")).expect("enqueue");
+            // Receiver gone mid-teardown: the `DeadLetter` send fails, so the
+            // durable removal is gated off and the entry survives for next boot.
+            drop(events);
+
+            drive(&mut engine, &pointers);
+
+            assert_eq!(
+                block_on(engine.seams.staging_store.queued_ops())
+                    .unwrap()
+                    .len(),
+                1,
+                "an unsurfaced dead-letter is retained when the send fails"
+            );
+        }
+
+        #[test]
+        fn remove_op_failure_after_send_re_surfaces_the_dead_letter_next_boot() {
+            let (mut engine, mut events, pointers) = started_at(UnixMillis(123_456));
+            block_on(engine.seams.staging_store.enqueue_op(b"not-a-valid-op")).expect("enqueue");
+            // Send lands in the buffer but the durable removal fails: the gated
+            // `?` aborts cold-start with `Seam` before the paint, leaving the op
+            // queued. The receiver stays alive, so the `DeadLetter` is observable.
+            engine.seams.staging_store.fail_remove_op();
+
+            let first = block_on(engine.cold_start_data_path(
+                &pointers,
+                &AdoptingAdopter,
+                &owner().verifying_key(),
+                ROOT_SCOPE,
+                VERSION,
+                NodeId([0xAB; 16]),
+            ));
+            assert!(
+                matches!(first, Err(ColdStartError::Seam(_))),
+                "a failed durable removal aborts cold-start as a retryable Seam error"
+            );
+            assert_eq!(
+                block_on(events.next()),
+                Some(Event::DeadLetter { op_id: OpId(1) })
+            );
+            assert_eq!(
+                block_on(engine.seams.staging_store.queued_ops())
+                    .unwrap()
+                    .len(),
+                1,
+                "a removal failure after a successful send retains the op"
+            );
+
+            // Next boot re-surfaces the same op_id — hosts dedup by it — proving
+            // the best-effort contract holds under a partial seam failure.
+            let second = block_on(engine.cold_start_data_path(
+                &pointers,
+                &AdoptingAdopter,
+                &owner().verifying_key(),
+                ROOT_SCOPE,
+                VERSION,
+                NodeId([0xAB; 16]),
+            ));
+            assert!(matches!(second, Err(ColdStartError::Seam(_))));
+            assert_eq!(
+                block_on(events.next()),
+                Some(Event::DeadLetter { op_id: OpId(1) })
+            );
         }
     }
 }
