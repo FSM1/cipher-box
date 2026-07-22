@@ -90,7 +90,6 @@ use super::rotate::{
     ResealedScopeRoot, RotateScopePlan, ScopeRootPublishError, ScopeRootPublisher,
 };
 use crate::entropy::Entropy;
-use crate::grants::child_index::canonicalize;
 use crate::hex::hex_lower;
 use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
 
@@ -483,9 +482,9 @@ where
     visited.insert(root_scope_id);
 
     let mut frontier = canonicalize_frontier(
-        canonicalize(root_child_index)
-            .into_iter()
-            .map(|child| (child, root_fresh_seed.clone()))
+        root_child_index
+            .iter()
+            .map(|child| (child.clone(), root_fresh_seed.clone()))
             .collect(),
     );
     drop(root_fresh_seed);
@@ -544,8 +543,8 @@ where
             outcome.rekeyed.push(rekeyed);
 
             // Enqueue this child's children, threaded on THIS child's fresh seed.
-            for grandchild in canonicalize(&target.direct_child_scope_index) {
-                next.push((grandchild, child_fresh_seed.clone()));
+            for grandchild in &target.direct_child_scope_index {
+                next.push((grandchild.clone(), child_fresh_seed.clone()));
             }
         }
         frontier = canonicalize_frontier(next);
@@ -562,8 +561,10 @@ where
 
 /// Sort a threaded frontier by `child.scope_id` (stable) and dedup by
 /// `scope_id`, keeping the **first-seen** `(child, parent_seed)` pair. Matches
-/// [`canonicalize`]'s convention so the walk — and thus which parent's fresh seed
-/// threads a diamond descendant — is permutation-independent.
+/// [`canonicalize`](crate::grants::child_index::canonicalize)'s convention so the
+/// walk — and thus which parent's fresh seed threads a diamond descendant — is
+/// permutation-independent. This is the frontier's sole normalization, so the
+/// resolver-supplied child indexes feed in verbatim.
 fn canonicalize_frontier(
     mut pairs: Vec<(ChildScopeRef, Zeroizing<[u8; SECRET_LEN]>)>,
 ) -> Vec<(ChildScopeRef, Zeroizing<[u8; SECRET_LEN]>)> {
@@ -624,6 +625,38 @@ mod tests {
                 grantee: X25519Secret::from_scalar([0x77; 32]),
             }
         }
+
+        /// The committed set for scope `byte`: one owner-signed read grant to the
+        /// shared grantee at `ipns-{byte}`. Shared by every scope fixture (both the
+        /// descendant `FakeNet::scope` and the root `RootFx`) so the commitment
+        /// shape lives in one place.
+        #[allow(clippy::type_complexity)]
+        fn committed(
+            &self,
+            byte: u8,
+        ) -> (
+            GrantSetCommitment,
+            [u8; ECDSA_SIG_LEN],
+            Vec<GrantLedgerEntry>,
+        ) {
+            let tag = [byte.wrapping_add(0xa0); 32];
+            let commitment = GrantSetCommitment {
+                ipns_name: format!("ipns-{byte:02x}").into_bytes(),
+                owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
+                entries: vec![GrantSetEntry::new(tag, Permission::Read, [0x02; 32])],
+                unknown: Vec::new(),
+            };
+            let commitment_sig = sign_grant_set(&self.ecdsa, &commitment)
+                .unwrap()
+                .to_compact();
+            let grant_ledger = vec![GrantLedgerEntry::new(
+                [0x02; 33],
+                self.grantee.public().to_bytes(),
+                Permission::Read,
+                tag,
+            )];
+            (commitment, commitment_sig, grant_ledger)
+        }
     }
 
     /// The immutable per-scope material a descendant resolves to, plus the mutable
@@ -668,22 +701,7 @@ mod tests {
         /// as its direct-child index, published at `current_epoch`, pre-cascade
         /// override seed `[byte; 32]`.
         fn scope(self, byte: u8, current_epoch: u64, children: &[u8]) -> Self {
-            let tag = [byte.wrapping_add(0xa0); 32];
-            let commitment = GrantSetCommitment {
-                ipns_name: format!("ipns-{byte:02x}").into_bytes(),
-                owner_pseudonym_pk: self.owner.pseudonym.verifying_key().to_bytes(),
-                entries: vec![GrantSetEntry::new(tag, Permission::Read, [0x02; 32])],
-                unknown: Vec::new(),
-            };
-            let commitment_sig = sign_grant_set(&self.owner.ecdsa, &commitment)
-                .unwrap()
-                .to_compact();
-            let grant_ledger = vec![GrantLedgerEntry::new(
-                [0x02; 33],
-                self.owner.grantee.public().to_bytes(),
-                Permission::Read,
-                tag,
-            )];
+            let (commitment, commitment_sig, grant_ledger) = self.owner.committed(byte);
             self.scopes.borrow_mut().insert(
                 sid(byte),
                 NetScope {
@@ -849,22 +867,7 @@ mod tests {
     impl RootFx {
         fn new(net: FakeNet) -> Self {
             let owner_pub = net.owner.enc.public();
-            let tag = [0xa0; 32];
-            let commitment = GrantSetCommitment {
-                ipns_name: b"ipns-00".to_vec(),
-                owner_pseudonym_pk: net.owner.pseudonym.verifying_key().to_bytes(),
-                entries: vec![GrantSetEntry::new(tag, Permission::Read, [0x02; 32])],
-                unknown: Vec::new(),
-            };
-            let commitment_sig = sign_grant_set(&net.owner.ecdsa, &commitment)
-                .unwrap()
-                .to_compact();
-            let grant_ledger = vec![GrantLedgerEntry::new(
-                [0x02; 33],
-                net.owner.grantee.public().to_bytes(),
-                Permission::Read,
-                tag,
-            )];
+            let (commitment, commitment_sig, grant_ledger) = net.owner.committed(0x00);
             Self {
                 net,
                 owner_pub,
