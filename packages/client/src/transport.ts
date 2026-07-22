@@ -55,6 +55,10 @@ export class LocalTransport implements EngineTransport {
   private readonly ready: Promise<void>;
   private nextId = 1;
   private closed = false;
+  // A fatal worker message, `error` event, or teardown latches this. Once set,
+  // the worker is dead, so every request rejects here instead of posting and
+  // waiting forever for a response that can never arrive.
+  private terminalError: Error | null = null;
 
   constructor(private readonly worker: EngineWorkerLike) {
     this.ready = new Promise<void>((resolveReady, rejectReady) => {
@@ -73,7 +77,13 @@ export class LocalTransport implements EngineTransport {
             return;
           }
           case 'event':
-            for (const listener of this.listeners) listener(message.event);
+            for (const listener of this.listeners) {
+              try {
+                listener(message.event);
+              } catch {
+                // One throwing subscriber must not drop the event for the rest.
+              }
+            }
             return;
           case 'fatal':
             rejectReady(new Error(message.error));
@@ -115,18 +125,26 @@ export class LocalTransport implements EngineTransport {
     return this.ready.then(
       () =>
         new Promise<void>((resolve, reject) => {
-          if (this.closed) {
-            reject(new Error('engine transport closed'));
+          if (this.terminalError) {
+            reject(this.terminalError);
             return;
           }
           const id = this.nextId++;
           this.pending.set(id, { resolve, reject });
-          this.worker.postMessage(build(id), transfer);
+          try {
+            this.worker.postMessage(build(id), transfer);
+          } catch (error) {
+            // A synchronous post failure (detached buffer, bad transferable)
+            // must not strand the pending entry.
+            this.pending.delete(id);
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
         })
     );
   }
 
   private fail(error: Error): void {
+    this.terminalError ??= error;
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
   }

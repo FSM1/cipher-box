@@ -132,6 +132,62 @@ describe('LocalTransport', () => {
     expect(posted.transfer).toEqual([secret]);
   });
 
+  it('latches terminal failure on fatal: in-flight and later requests both reject, not hang', async () => {
+    const worker = new FakeWorker();
+    const transport = new LocalTransport(worker);
+    worker.emit({ type: 'ready' });
+
+    const inFlight = transport.command({ kind: 'manualRefresh' }, []);
+    await tick();
+    worker.emit({ type: 'fatal', error: 'engine construction failed' });
+
+    // The request outstanding at fatal time rejects.
+    await expect(inFlight).rejects.toThrow('engine construction failed');
+
+    // A request issued after fatal rejects promptly rather than posting to the
+    // dead worker and waiting forever for a response.
+    const postFatal = transport.command({ kind: 'manualRefresh' }, []);
+    await expect(postFatal).rejects.toThrow('engine construction failed');
+  });
+
+  it('keeps fanning out an event after a subscriber throws', async () => {
+    const worker = new FakeWorker();
+    const transport = new LocalTransport(worker);
+    worker.emit({ type: 'ready' });
+
+    const received: string[] = [];
+    transport.subscribe(() => received.push('first'));
+    transport.subscribe(() => {
+      throw new Error('subscriber boom');
+    });
+    transport.subscribe(() => received.push('third'));
+
+    worker.emit({ type: 'event', event: { kind: 'snapshotUpdated' } });
+
+    expect(received).toEqual(['first', 'third']);
+  });
+
+  it('does not strand a pending entry when postMessage throws synchronously', async () => {
+    const worker = new FakeWorker();
+    worker.postMessage = () => {
+      throw new DOMException('detached ArrayBuffer', 'DataCloneError');
+    };
+    const transport = new LocalTransport(worker);
+    worker.emit({ type: 'ready' });
+
+    const failing = transport.command({ kind: 'manualRefresh' }, []);
+
+    await expect(failing).rejects.toThrow('detached ArrayBuffer');
+    // A later post succeeds and correlates, proving no id/pending was stranded.
+    worker.postMessage = FakeWorker.prototype.postMessage;
+    const ok = transport.command({ kind: 'manualRefresh' }, []);
+    await tick();
+    const posted = worker.posted.at(-1);
+    expect(posted).toBeDefined();
+    worker.emit({ type: 'response', id: posted!.message.id, ok: true });
+    await expect(ok).resolves.toBeUndefined();
+  });
+
   it('rejects pending requests when the worker errors', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
