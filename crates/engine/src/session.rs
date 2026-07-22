@@ -137,6 +137,7 @@ impl fmt::Debug for SessionIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secret_util::ct_eq_32;
 
     fn identity(secret: &[u8]) -> SessionIdentity {
         SessionIdentity::derive(&LoginSecret::new(secret.to_vec()))
@@ -164,9 +165,12 @@ mod tests {
             a.scope_pointer_signer(&scope).verifying_key().to_bytes(),
             b.scope_pointer_signer(&scope).verifying_key().to_bytes(),
         );
-        assert_eq!(
-            a.pointer_read_key(&scope).as_bytes(),
-            b.pointer_read_key(&scope).as_bytes(),
+        assert!(
+            ct_eq_32(
+                a.pointer_read_key(&scope).as_bytes(),
+                b.pointer_read_key(&scope).as_bytes(),
+            ),
+            "same secret must yield the same pointer read key",
         );
         assert_eq!(
             a.write_name_signer(&write_scope_seed, &node)
