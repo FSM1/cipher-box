@@ -31,10 +31,20 @@
 use cipherbox_engine::facade;
 use wasm_bindgen::prelude::*;
 
+// Shared JS-seam → engine-seam adapters (browser wasm target only): both the
+// production engine host and the test-only conformance bridge build on them.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+mod seams_bridge;
+
+// The production engine host: constructs the one engine instance over the
+// browser seams and exposes `start`/`command`/`nextEvent` to the worker.
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+mod host;
+
 // Test-only browser seam conformance bridge. Compiled only for the browser
 // suite's WASM build (`--features conformance` on the wasm target); the
 // production artifact never pulls the engine test kit or these bindings.
-#[cfg(all(feature = "conformance", target_family = "wasm"))]
+#[cfg(all(feature = "conformance", target_family = "wasm", target_os = "unknown"))]
 mod conformance;
 
 // ---------------------------------------------------------------------------

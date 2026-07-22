@@ -13,6 +13,8 @@ export { NoopCredentialStore } from './credentialStore.js';
 export { WorkerScheduler } from './scheduler.js';
 export { FetchRecordTransport } from './recordTransport.js';
 export { FetchHttp } from './http.js';
+export { ApiMailbox } from './mailbox.js';
+export { QueueRefreshHintSource } from './refreshHint.js';
 export type {
   FloorStoreSeam,
   SnapshotCacheSeam,
@@ -23,4 +25,7 @@ export type {
   HttpSeam,
   HttpRequestData,
   HttpResponseData,
+  MailboxSeam,
+  MailboxItemData,
+  RefreshHintSourceSeam,
 } from './types.js';

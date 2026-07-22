@@ -48,9 +48,12 @@ export class OpfsStagingStore implements StagingStoreSeam {
   }
 
   async enqueueOp(op: Uint8Array): Promise<number> {
+    // Copy before the first await: `op` may be a view into WASM linear memory
+    // that a concurrent task's `Memory.grow()` can detach across the await (#717).
+    const staged = op.slice();
     const db = await this.open();
     const tx = db.transaction(OPS_STORE, 'readwrite');
-    const key = await requestResult<IDBValidKey>(tx.objectStore(OPS_STORE).add(op.slice()));
+    const key = await requestResult<IDBValidKey>(tx.objectStore(OPS_STORE).add(staged));
     await transactionDone(tx);
     return Number(key);
   }
@@ -74,12 +77,18 @@ export class OpfsStagingStore implements StagingStoreSeam {
   }
 
   async putStagedBytes(stagingKey: Uint8Array, bytes: Uint8Array): Promise<void> {
+    // Encode the key and copy the value before the first await: both may be
+    // views into WASM linear memory that a concurrent task's `Memory.grow()`
+    // can detach across the awaits below — a detached key hexes to '' and a
+    // detached value truncates or throws on `handle.write` (#717).
+    const fileName = toHex(stagingKey);
+    const staged = bytes.slice();
     const dir = await this.stagedDir();
-    const fileHandle = await dir.getFileHandle(toHex(stagingKey), { create: true });
+    const fileHandle = await dir.getFileHandle(fileName, { create: true });
     const handle = await fileHandle.createSyncAccessHandle();
     try {
       handle.truncate(0);
-      handle.write(bytes, { at: 0 });
+      handle.write(staged, { at: 0 });
       handle.flush();
     } finally {
       handle.close();
@@ -87,10 +96,13 @@ export class OpfsStagingStore implements StagingStoreSeam {
   }
 
   async stagedBytes(stagingKey: Uint8Array): Promise<Uint8Array | null> {
+    // Hex the key before the first await: a WASM-backed view detached by a
+    // concurrent `Memory.grow()` across the await would hex to '' (#717).
+    const fileName = toHex(stagingKey);
     const dir = await this.stagedDir();
     let fileHandle: FileSystemFileHandle;
     try {
-      fileHandle = await dir.getFileHandle(toHex(stagingKey));
+      fileHandle = await dir.getFileHandle(fileName);
     } catch (error) {
       if (error instanceof DOMException && error.name === 'NotFoundError') return null;
       throw error;
@@ -107,9 +119,12 @@ export class OpfsStagingStore implements StagingStoreSeam {
   }
 
   async removeStagedBytes(stagingKey: Uint8Array): Promise<void> {
+    // Hex the key before the first await: a WASM-backed view detached by a
+    // concurrent `Memory.grow()` across the await would hex to '' (#717).
+    const fileName = toHex(stagingKey);
     const dir = await this.stagedDir();
     try {
-      await dir.removeEntry(toHex(stagingKey));
+      await dir.removeEntry(fileName);
     } catch (error) {
       if (error instanceof DOMException && error.name === 'NotFoundError') return;
       throw error;
