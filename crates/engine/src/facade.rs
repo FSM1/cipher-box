@@ -14,16 +14,19 @@
 //! resolves to [`EngineError::Unimplemented`] until the pipeline slices
 //! land.
 
+use core::cell::{Cell, RefCell};
 use core::fmt;
 use core::pin::Pin;
+use std::rc::Rc;
 
 use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::entropy::Entropy;
+use crate::net::{HeldRecord, LivenessControl, RE_PUT_INTERVAL, keyless_re_put, run_liveness_loop};
 use crate::profile::SyncTimingProfile;
-use crate::seams::{OpId, SeamSet, SeamTypes};
+use crate::seams::{OpId, Scheduler, SeamSet, SeamTypes};
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
 /// non-secret, and location-independent — routes and commands key on it,
@@ -356,9 +359,8 @@ impl EventStream {
 /// `Send` requirement, so one implementation links natively on desktop and
 /// compiles to worker-hosted WASM on web.
 pub struct Engine<T: SeamTypes> {
-    /// Wired by the pipeline slices; injection is the contract this slice
-    /// freezes.
-    #[allow(dead_code)]
+    /// Injection is the contract this slice freezes; the cold-start liveness
+    /// loop is the first live use (the rest wire with the pipeline slices).
     seams: SeamSet<T>,
     /// Wired by the pipeline slices (seeds, nonces, jitter).
     #[allow(dead_code)]
@@ -367,6 +369,13 @@ pub struct Engine<T: SeamTypes> {
     /// Held by the engine; every emit site lands with its pipeline slice.
     #[allow(dead_code)]
     events: mpsc::UnboundedSender<Event>,
+    /// The session's live held-record set: the resolve slice pushes each
+    /// gate-passing record here, and the cold-start liveness loop keyless
+    /// re-PUTs the set on the hourly cadence. Empty until resolve lands.
+    held_records: Rc<RefCell<Vec<HeldRecord>>>,
+    /// Session-alive latch: cleared on drop so the spawned liveness loop
+    /// stops at its next wake instead of re-PUTting after the engine is gone.
+    alive: Rc<Cell<bool>>,
     started: bool,
 }
 
@@ -385,6 +394,8 @@ impl<T: SeamTypes> Engine<T> {
                 entropy,
                 profile,
                 events,
+                held_records: Rc::new(RefCell::new(Vec::new())),
+                alive: Rc::new(Cell::new(true)),
                 started: false,
             },
             EventStream { receiver },
@@ -398,7 +409,11 @@ impl<T: SeamTypes> Engine<T> {
     /// with the pipeline slices; the lifecycle contract — exactly one
     /// successful `start` per instance, secret zeroized on consumption — is
     /// in force now.
-    pub async fn start(&mut self, secret: LoginSecret) -> Result<(), EngineError> {
+    pub async fn start(&mut self, secret: LoginSecret) -> Result<(), EngineError>
+    where
+        T::Scheduler: Clone + 'static,
+        T::RecordTransport: Clone + 'static,
+    {
         if self.started {
             return Err(EngineError::AlreadyStarted);
         }
@@ -408,8 +423,37 @@ impl<T: SeamTypes> Engine<T> {
         // Derivation lands with the pipeline slices; the secret zeroizes on
         // drop here, at its terminal owner.
         drop(secret);
+        self.spawn_liveness_loop();
         self.started = true;
         Ok(())
+    }
+
+    /// Spawn the ~hourly keyless re-PUT loop (blueprint/engine.md "Liveness"):
+    /// actively-used vaults keep their own records alive off the injected
+    /// scheduler, so no client depends on the API republisher. The task holds
+    /// only `Rc`/seam-handle clones, so the engine may drop while it is parked;
+    /// the alive latch then stops it. The sub-EOL seq+1 renewal joins this same
+    /// loop once cold-start derives the per-name signers it needs.
+    fn spawn_liveness_loop(&self)
+    where
+        T::Scheduler: Clone + 'static,
+        T::RecordTransport: Clone + 'static,
+    {
+        let scheduler = self.seams.scheduler.clone();
+        let transport = self.seams.record_transport.clone();
+        let held = self.held_records.clone();
+        let alive = self.alive.clone();
+        self.seams.scheduler.spawn(Box::pin(async move {
+            run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
+                if !alive.get() {
+                    return LivenessControl::Stop;
+                }
+                let records = held.borrow().clone();
+                keyless_re_put(&transport, &records).await;
+                LivenessControl::Continue
+            })
+            .await;
+        }));
     }
 
     /// Executes one command. The single write entry point: every mutation,
@@ -426,6 +470,14 @@ impl<T: SeamTypes> Engine<T> {
     /// The sync timing profile this engine runs under.
     pub fn profile(&self) -> &SyncTimingProfile {
         &self.profile
+    }
+}
+
+impl<T: SeamTypes> Drop for Engine<T> {
+    fn drop(&mut self) {
+        // Signal the spawned liveness loop to stop; it holds only `Rc` clones,
+        // so it outlives the engine unless the latch is cleared here.
+        self.alive.set(false);
     }
 }
 

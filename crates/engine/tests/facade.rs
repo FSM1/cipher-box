@@ -1,6 +1,8 @@
 //! Facade skeleton surface: lifecycle law, typed unimplemented commands,
 //! and event-stream plumbing over a fully faked seam set.
 
+use cipherbox_engine::net::RE_PUT_INTERVAL;
+use cipherbox_engine::seams::{Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     Command, Engine, EngineError, EventStream, LoginSecret, NodeId, NodeKind, Permission,
@@ -177,6 +179,57 @@ fn the_event_stream_ends_when_the_engine_drops() {
 }
 
 #[test]
+fn cold_start_spawns_exactly_the_hourly_liveness_loop() {
+    let world = FakeWorld::new();
+    // Auto-advance so the spawned loop's sleep resolves without a manual driver;
+    // every clone shares this one inner clock.
+    let scheduler = world.scheduler.clone().with_auto_advance();
+    let device = world.device(b"me");
+    let (mut engine, _events) = new_engine(&device);
+
+    assert!(
+        scheduler.take_spawned_tasks().is_empty(),
+        "no background loop is spawned before start"
+    );
+
+    block_on(engine.start(secret())).unwrap();
+    let tasks = scheduler.take_spawned_tasks();
+    assert_eq!(
+        tasks.len(),
+        1,
+        "cold-start spawns exactly the liveness loop"
+    );
+
+    // Dropping the engine clears the alive latch, so the loop stops at its next
+    // wake instead of re-PUTting forever after the session is gone.
+    drop(engine);
+    for task in tasks {
+        block_on(task);
+    }
+    assert_eq!(
+        scheduler.now(),
+        UnixMillis(u64::try_from(RE_PUT_INTERVAL.as_millis()).unwrap()),
+        "the loop slept one hourly interval before the drop latch stopped it"
+    );
+}
+
+#[test]
+fn a_rejected_start_spawns_no_liveness_loop() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let (mut engine, _events) = new_engine(&device);
+
+    assert_eq!(
+        block_on(engine.start(LoginSecret::new(Vec::new()))),
+        Err(EngineError::InvalidSecret)
+    );
+    assert!(
+        device.scheduler.take_spawned_tasks().is_empty(),
+        "a rejected start wires no background work"
+    );
+}
+
+#[test]
 fn the_engine_runs_under_the_injected_profile() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
@@ -192,7 +245,6 @@ fn two_devices_on_one_world_share_network_and_clock() {
     let bob = world.device(b"bob-pk");
 
     // Shared clock.
-    use cipherbox_engine::seams::Scheduler;
     world
         .scheduler
         .advance(core::time::Duration::from_millis(250));
