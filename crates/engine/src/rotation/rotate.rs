@@ -143,6 +143,10 @@ pub enum RotateError {
     /// The durable epoch floor could not be raised after a confirmed publish. The
     /// record is published (no lockout); the cut completes on retry.
     Floor(SeamError),
+    /// The read epoch is exhausted (`current_read_epoch == u64::MAX`). Rotating
+    /// would reuse the epoch with fresh key material, violating key-regression
+    /// monotonicity, so nothing is minted or published. Unreachable in practice.
+    EpochExhausted,
 }
 
 impl core::fmt::Display for RotateError {
@@ -151,6 +155,7 @@ impl core::fmt::Display for RotateError {
             RotateError::Reseal(e) => write!(f, "re-seal failed: {e}"),
             RotateError::Publish(e) => write!(f, "publish failed: {e}"),
             RotateError::Floor(e) => write!(f, "epoch-floor raise failed: {e}"),
+            RotateError::EpochExhausted => f.write_str("read epoch exhausted (u64::MAX)"),
         }
     }
 }
@@ -164,6 +169,7 @@ impl RotateError {
             RotateError::Reseal(_) => "reseal-failed",
             RotateError::Publish(_) => "publish-failed",
             RotateError::Floor(_) => "floor-raise-failed",
+            RotateError::EpochExhausted => "epoch-exhausted",
         }
     }
 }
@@ -202,7 +208,13 @@ where
     P: ScopeRootPublisher,
     Mk: FnOnce() -> BoxedTask,
 {
-    let new_read_epoch = plan.current_read_epoch.saturating_add(1);
+    // Fail-closed BEFORE minting: a saturating bump at u64::MAX would republish
+    // fresh key material under the same epoch (a key-regression violation), so an
+    // exhausted epoch is rejected rather than silently reused.
+    let new_read_epoch = plan
+        .current_read_epoch
+        .checked_add(1)
+        .ok_or(RotateError::EpochExhausted)?;
 
     // Mint the fresh random override seed at the scope root (the read-plane cut).
     // `rotate_scope` is this seed's terminal owner: `Zeroizing` wipes it on every
@@ -609,5 +621,68 @@ mod tests {
             0,
             "no sweep enqueued when the floor raise fails after publish"
         );
+    }
+
+    #[test]
+    fn exhausted_epoch_fails_closed_without_publishing() {
+        // current_read_epoch == u64::MAX: a bump would reuse the epoch with fresh
+        // key material, so the rotation fails closed before minting or publishing.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let floors = InMemoryFloorStore::default();
+        let scheduler = VirtualScheduler::new();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let publisher = FakePublisher {
+            result: Ok(()),
+            seen: Rc::clone(&seen),
+            floor_at_publish: Rc::new(RefCell::new(None)),
+            floors: floors.clone(),
+        };
+        let current_seed = [0xaa; 32];
+
+        let outcome = block_on(async {
+            let mut entropy = SeededEntropy::new(9);
+            let plan = RotateScopePlan {
+                identity: ScopeRootIdentity {
+                    v: 2,
+                    scope_id: SCOPE,
+                    ipns_name: b"scope-root",
+                    owner_enc_pub: &owner_pub,
+                    parent_node_seed: None,
+                    pseudonym_signer: &fx.pseudonym,
+                },
+                committed: CommittedSet {
+                    commitment: &commitment,
+                    commitment_sig: &sig,
+                    grant_ledger: &ledger,
+                    write_history_link: b"",
+                    direct_child_scope_index: &[],
+                },
+                current_override_seed: &current_seed,
+                current_read_epoch: u64::MAX,
+                write_scope_seed: &fx.write_scope_seed,
+                write_epoch: 3,
+                pointer_read_key: &fx.pointer_read_key,
+                carried_history_links: &[],
+            };
+            rotate_scope(&mut entropy, &floors, &scheduler, &publisher, &plan, || {
+                Box::pin(async {})
+            })
+            .await
+        });
+
+        assert_eq!(outcome.unwrap_err().check(), "epoch-exhausted");
+        assert_eq!(
+            seen.borrow().len(),
+            0,
+            "nothing published on an exhausted epoch"
+        );
+        assert_eq!(
+            block_on(floors.epoch_floor(&SCOPE)).unwrap(),
+            None,
+            "no floor raised"
+        );
+        assert_eq!(scheduler.take_spawned_tasks().len(), 0, "no sweep enqueued");
     }
 }

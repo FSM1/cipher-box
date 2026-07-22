@@ -243,7 +243,7 @@ pub fn reseal_scope_root<E: Entropy>(
     for entry in committed.grant_ledger {
         let recipient_pub = X25519Public::from_bytes(entry.recipient_enc_pk)
             .ok_or(ResealError::UnusableRecipientKey)?;
-        let write_seed = match entry.permission {
+        let mut write_seed = match entry.permission {
             Permission::Write => Some(*seeds.write_scope_seed),
             Permission::Read => None,
         };
@@ -253,6 +253,9 @@ pub fn reseal_scope_root<E: Entropy>(
             read_epoch,
             *seeds.pointer_read_key,
         );
+        // Terminal-owner cleanup: the payload owns its own zeroizing copy, so wipe
+        // this local write-seed copy before the next iteration.
+        write_seed.zeroize();
         let ephemeral = fill::<32, E>(entropy)?;
         let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_GRANT_BLOB);
         let sealed = seal_grant_blob(&recipient_pub, &ephemeral, &ctx, &payload);
@@ -720,8 +723,12 @@ mod tests {
         ];
 
         // Revoke: the read-revoke trigger's committed-set cut.
+        let commitment_sig = sign_grant_set(&fx.owner_ecdsa, &commitment)
+            .unwrap()
+            .to_compact();
         let cut = super::super::trigger::revoke_read_grant(
             &commitment,
+            &commitment_sig,
             &ledger,
             &revoked_tag,
             &fx.owner_ecdsa,

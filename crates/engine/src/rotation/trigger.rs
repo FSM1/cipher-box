@@ -24,8 +24,10 @@
 //! blobs: that absence **is** the revocation ("they keep what they saw; they lose
 //! everything new, now").
 
-use cipherbox_core::seal::{GrantLedgerEntry, GrantSetCommitment, sign_grant_set};
-use cipherbox_core::suite::ecdsa::{EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
+use cipherbox_core::seal::{
+    GrantLedgerEntry, GrantSetCommitment, sign_grant_set, verify_grant_set,
+};
+use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
 
 /// Which trigger fired a rotation — a host-facing classifier carrying no key
 /// material. Scope-exit and manual rotations re-seal the unchanged committed set;
@@ -68,6 +70,11 @@ pub struct RevokedCommittedSet {
 /// A fail-closed read-revoke failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RevokeError {
+    /// `owner_signer` did not sign the current commitment, so it is not the owner
+    /// identity that authorized the set. Re-signing under it would mint a
+    /// commitment the adoption gate rejects (an unreadable root); the encode-side
+    /// mirror of the gate's owner-identity verify (fail-closed symmetry).
+    UnauthorizedSigner,
     /// `revoked_tag` is not in the committed set — there is no grant to revoke.
     /// Rotating anyway would be a no-op cut, so this is rejected, not silent.
     NotGranted,
@@ -79,6 +86,9 @@ pub enum RevokeError {
 impl core::fmt::Display for RevokeError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            RevokeError::UnauthorizedSigner => {
+                f.write_str("owner signer did not authorize the current commitment")
+            }
             RevokeError::NotGranted => f.write_str("no grant committed under the revoked tag"),
             RevokeError::Sign(e) => write!(f, "commitment re-sign failed: {}", e.check()),
         }
@@ -91,6 +101,7 @@ impl RevokeError {
     /// A stable, key-material-free classification name.
     pub fn check(&self) -> &'static str {
         match self {
+            RevokeError::UnauthorizedSigner => "unauthorized-signer",
             RevokeError::NotGranted => "not-granted",
             RevokeError::Sign(_) => "commitment-sign-failed",
         }
@@ -102,16 +113,30 @@ impl RevokeError {
 /// owner-re-sign the pruned commitment with `owner_signer`.
 ///
 /// Owner-only by construction: it requires the owner's identity signer, and only
-/// the commitment (owner-signed) authorises the set. The `revoked_tag` MUST be
-/// committed (fail-closed [`RevokeError::NotGranted`] otherwise). The result is
-/// the input a subsequent `rotate_scope` re-seals — after which the revokee has
-/// no grant blob at the new epoch.
+/// the commitment (owner-signed) authorises the set. `commitment_sig` is the
+/// current owner signature over `commitment`; `owner_signer` MUST be the identity
+/// that produced it (fail-closed [`RevokeError::UnauthorizedSigner`] otherwise).
+/// The `revoked_tag` MUST be committed (fail-closed [`RevokeError::NotGranted`]
+/// otherwise). The result is the input a subsequent `rotate_scope` re-seals —
+/// after which the revokee has no grant blob at the new epoch.
 pub fn revoke_read_grant(
     commitment: &GrantSetCommitment,
+    commitment_sig: &[u8; ECDSA_SIG_LEN],
     grant_ledger: &[GrantLedgerEntry],
     revoked_tag: &[u8; 32],
     owner_signer: &EcdsaSigner,
 ) -> Result<RevokedCommittedSet, RevokeError> {
+    // Fail-closed BEFORE the cut: `owner_signer` MUST be the identity that signed
+    // the current commitment, else the re-signed cut mints a commitment the
+    // adoption gate rejects (an unreadable root). Encode-side mirror of the gate's
+    // owner-identity verify (fail-closed symmetry). The current commitment is
+    // owner-authentic (it passed the gate to resolve), so binding the new signer
+    // to it transitively anchors the cut to the owner identity.
+    let current_sig =
+        EcdsaSignature::from_compact(commitment_sig).ok_or(RevokeError::UnauthorizedSigner)?;
+    verify_grant_set(&owner_signer.verifying_key(), commitment, &current_sig)
+        .map_err(|_| RevokeError::UnauthorizedSigner)?;
+
     // The commitment is the authoritative set; a tag absent there is not a grant.
     if !commitment.entries.iter().any(|e| &e.tag == revoked_tag) {
         return Err(RevokeError::NotGranted);
@@ -146,7 +171,11 @@ mod tests {
         EcdsaSigner::from_scalar(&[0x33; 32]).unwrap()
     }
 
-    fn commitment() -> (GrantSetCommitment, Vec<GrantLedgerEntry>) {
+    fn commitment() -> (
+        GrantSetCommitment,
+        [u8; ECDSA_SIG_LEN],
+        Vec<GrantLedgerEntry>,
+    ) {
         let entries = vec![
             GrantSetEntry::new([0xa1; 32], Permission::Read, [0x02; 32]),
             GrantSetEntry::new([0xb2; 32], Permission::Read, [0x04; 32]),
@@ -158,19 +187,20 @@ mod tests {
             entries,
             unknown: Vec::new(),
         };
+        let sig = sign_grant_set(&owner(), &c).unwrap().to_compact();
         let ledger = vec![
             GrantLedgerEntry::new([0x02; 33], [0x11; 32], Permission::Read, [0xa1; 32]),
             GrantLedgerEntry::new([0x04; 33], [0x12; 32], Permission::Read, [0xb2; 32]),
             GrantLedgerEntry::new([0x03; 33], [0x13; 32], Permission::Write, [0xc3; 32]),
         ];
-        (c, ledger)
+        (c, sig, ledger)
     }
 
     #[test]
     fn revoke_removes_tag_from_both_and_resigns() {
         let owner = owner();
-        let (c, ledger) = commitment();
-        let cut = revoke_read_grant(&c, &ledger, &[0xb2; 32], &owner).expect("revoke");
+        let (c, sig, ledger) = commitment();
+        let cut = revoke_read_grant(&c, &sig, &ledger, &[0xb2; 32], &owner).expect("revoke");
 
         assert!(!cut.commitment.entries.iter().any(|e| e.tag == [0xb2; 32]));
         assert!(!cut.grant_ledger.iter().any(|e| e.tag == [0xb2; 32]));
@@ -185,8 +215,8 @@ mod tests {
     #[test]
     fn revoke_preserves_survivors_and_owner_fields() {
         let owner = owner();
-        let (c, ledger) = commitment();
-        let cut = revoke_read_grant(&c, &ledger, &[0xc3; 32], &owner).expect("revoke");
+        let (c, sig, ledger) = commitment();
+        let cut = revoke_read_grant(&c, &sig, &ledger, &[0xc3; 32], &owner).expect("revoke");
         assert!(cut.commitment.entries.iter().any(|e| e.tag == [0xa1; 32]));
         assert!(cut.commitment.entries.iter().any(|e| e.tag == [0xb2; 32]));
         assert_eq!(cut.commitment.ipns_name, c.ipns_name);
@@ -196,9 +226,21 @@ mod tests {
     #[test]
     fn revoke_unknown_tag_fails_closed() {
         let owner = owner();
-        let (c, ledger) = commitment();
-        let err = revoke_read_grant(&c, &ledger, &[0xff; 32], &owner).expect_err("not granted");
+        let (c, sig, ledger) = commitment();
+        let err =
+            revoke_read_grant(&c, &sig, &ledger, &[0xff; 32], &owner).expect_err("not granted");
         assert_eq!(err.check(), "not-granted");
+    }
+
+    #[test]
+    fn revoke_wrong_signer_fails_closed() {
+        // A signer that did not sign the current commitment is rejected before the
+        // cut — the encode-side mirror of the gate's owner-identity verify.
+        let (c, sig, ledger) = commitment();
+        let wrong_owner = EcdsaSigner::from_scalar(&[0x44; 32]).unwrap();
+        let err = revoke_read_grant(&c, &sig, &ledger, &[0xb2; 32], &wrong_owner)
+            .expect_err("unauthorized signer");
+        assert_eq!(err.check(), "unauthorized-signer");
     }
 
     #[test]
