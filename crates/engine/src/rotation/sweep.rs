@@ -439,6 +439,16 @@ where
 /// [`SweepOutcome::dropped_lost_race`], so a host racing a persistently hot
 /// writer sees the residual rather than a false "complete".
 ///
+/// # Caller contract
+///
+/// An `Ok` outcome is convergence-complete **only when
+/// [`SweepOutcome::dropped_lost_race`] is empty** — a caller that retires the
+/// sweep job must inspect that bucket, not just `is_ok()`, and re-enqueue on a
+/// non-empty residual (the production-caller assert lands with #752). The
+/// returned outcome reflects the **final** pass; `converged`/`flagged_indexes`
+/// from earlier passes are durable on the network but are not aggregated into it
+/// (cumulative reporting is #754).
+///
 /// Scheduling is engineering judgment (blueprint/engine.md L275-278): the cadence
 /// and attempt cap are the host's, injected here; time enters only through the
 /// scheduler seam so the harness runs multi-tick timelines in virtual time.
