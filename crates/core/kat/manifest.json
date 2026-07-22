@@ -360,6 +360,20 @@
         "invalid-permission",
         "invalid-field-length"
       ]
+    },
+    "sectionAccept": {
+      "file": "vectors/grant/section_accept.json",
+      "count": 2
+    },
+    "sectionReject": {
+      "file": "vectors/grant/section_reject.json",
+      "count": 4,
+      "checks": [
+        "duplicate-grant-tag",
+        "unexpected-type",
+        "missing-field",
+        "invalid-field-length"
+      ]
     }
   },
   "content": {

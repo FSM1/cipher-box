@@ -307,6 +307,36 @@ describe('RegistryService', () => {
       expect(result).toEqual({ retired: 1, unpinned: 0 });
       expect(pins.rows.filter((r) => r.cid === 'bafyUnpinFails')).toHaveLength(0);
     });
+
+    it('does not count a CID whose physical unpin the seam reports as a no-op (returns false)', async () => {
+      const acct = await account();
+      await service.register(acct, [{ ipnsName: 'k51f', contentCids: ['bafyUnpinNoop'] }]);
+
+      // A refcount-zero CID whose unpin is swallowed (Kubo hiccup / unconfigured
+      // store) returns false — the row delete still commits, but the count must
+      // reflect the seam, not assume a release happened (#729).
+      const noopStore = new (class extends FakePinStore {
+        override async unpin(): Promise<boolean> {
+          return false;
+        }
+      })();
+      service = new RegistryService(
+        pins as never,
+        users as never,
+        fakeDataSource([
+          [User, users],
+          [NameInventory, names],
+          [PinnedCid, pins],
+        ]),
+        noopStore,
+        fakeConfig({}).service
+      );
+
+      const result = await service.retire(acct, ['bafyUnpinNoop']);
+
+      expect(result).toEqual({ retired: 1, unpinned: 0 });
+      expect(pins.rows.filter((r) => r.cid === 'bafyUnpinNoop')).toHaveLength(0);
+    });
   });
 
   describe('quota — arithmetic, override, hosted vs BYO advisory', () => {

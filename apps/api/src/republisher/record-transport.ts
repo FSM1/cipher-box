@@ -80,22 +80,45 @@ export class RoutingV1RecordTransport extends RecordTransport {
     if (!response.ok) {
       throw new Error(`routing GET ${response.status} for ${ipnsName}`);
     }
-    // Reject an honestly-declared oversized body before buffering it; the
-    // post-buffer assert is the real backstop since Content-Length may be absent
-    // or lie.
+    // Reject an honestly-declared oversized body before reading any of it.
     const declared = response.headers.get('content-length');
     if (declared !== null && Number(declared) > MAX_RECORD_BYTES) {
       // Release the connection instead of leaking an unread body stream.
       await response.body?.cancel();
       throw new Error(`routing GET body ${declared}B exceeds ${MAX_RECORD_BYTES}B for ${ipnsName}`);
     }
-    const body = Buffer.from(await response.arrayBuffer());
-    if (body.byteLength > MAX_RECORD_BYTES) {
-      throw new Error(
-        `routing GET body ${body.byteLength}B exceeds ${MAX_RECORD_BYTES}B for ${ipnsName}`
-      );
+    return this.readCapped(response, ipnsName);
+  }
+
+  /**
+   * Read the body enforcing the cap as bytes arrive, so heap stays bounded to
+   * ~the cap plus one chunk even when Content-Length is absent or lies (#722).
+   * Buffering the whole body first would let a misbehaving routing endpoint spike
+   * heap to GBs before any post-facto assert could reject it.
+   */
+  private async readCapped(response: Response, ipnsName: string): Promise<Buffer> {
+    const reader = response.body?.getReader();
+    if (!reader) {
+      return Buffer.alloc(0);
     }
-    return body;
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value) {
+        continue;
+      }
+      total += value.byteLength;
+      if (total > MAX_RECORD_BYTES) {
+        await reader.cancel();
+        throw new Error(`routing GET body exceeds ${MAX_RECORD_BYTES}B for ${ipnsName}`);
+      }
+      chunks.push(Buffer.from(value));
+    }
+    return Buffer.concat(chunks);
   }
 
   async republish(ipnsName: string, record: Buffer): Promise<void> {

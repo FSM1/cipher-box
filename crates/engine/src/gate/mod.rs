@@ -18,6 +18,6 @@ pub mod floor;
 mod adoption;
 
 pub use adoption::{
-    Adopted, AscentCheck, Candidate, FLOOR_VERDICTS, GateError, GateRejection, GateStage,
-    ReaderContext, RejectionReason, SeedBlob, SignedStructure, adopt,
+    Adopted, Candidate, FLOOR_VERDICTS, GateError, GateRejection, GateStage, PendingAdoption,
+    ReaderContext, RejectionReason, SeedBlob, adopt, adopt_deferred,
 };

@@ -4,8 +4,8 @@
 use crate::seams::{EndpointId, SeamSet, SeamTypes};
 use crate::testkit::fakes::{
     InMemoryCredentialStore, InMemoryFloorStore, InMemoryMailbox, InMemoryMailboxHub,
-    InMemoryRecordStore, InMemorySnapshotCache, InMemoryStagingStore, ManualHintSource,
-    ScriptedHttp, VirtualScheduler,
+    InMemoryReceivedShareStore, InMemoryRecordStore, InMemorySnapshotCache, InMemoryStagingStore,
+    ManualHintSource, ScriptedHttp, VirtualScheduler,
 };
 
 /// The [`SeamTypes`] family binding every fake — the test kit's host.
@@ -63,6 +63,7 @@ impl FakeWorld {
             http: ScriptedHttp::default(),
             hints: ManualHintSource::default(),
             mailbox: self.mailbox_hub.mailbox_for(recipient_public_key),
+            received_share_store: InMemoryReceivedShareStore::default(),
             scheduler: self.scheduler.clone(),
             record_store: self.record_store.clone(),
         }
@@ -93,6 +94,9 @@ pub struct FakeDevice {
     pub hints: ManualHintSource,
     /// This device's inbox on the shared hub.
     pub mailbox: InMemoryMailbox,
+    /// Device-local durable received-shares bookmark (the grants accept flow's
+    /// [`ReceivedShareStore`](crate::grants::ReceivedShareStore)).
+    pub received_share_store: InMemoryReceivedShareStore,
     /// The shared virtual clock.
     pub scheduler: VirtualScheduler,
     /// The shared record store.

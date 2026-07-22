@@ -42,10 +42,10 @@ use cipherbox_core::error::{CodecError, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, AscentLink, Envelope, GrantSetCommitment, Permission, ReadBody,
-    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_OWNER_BLOB, StructureSigInput,
-    open_ascent_link, open_grant_blob, open_owner_blob, open_read_body, verify_grant_set,
-    verify_structure,
+    AadContext, AscentLink, Envelope, GrantSection, GrantSetCommitment, Permission, ReadBody,
+    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_WRITE_BODY, StructureSigInput, open_ascent_link, open_grant_blob, open_owner_blob,
+    open_read_body, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -54,6 +54,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 
 use crate::gate::floor;
 use crate::seams::{FloorStore, SeamError};
+use crate::secret_util::ct_eq_32;
 
 /// The six ordered stages of the adoption gate. The stage a rejection names is
 /// the first stage that failed; earlier stages all passed.
@@ -199,38 +200,6 @@ impl GateError {
     }
 }
 
-/// One seed-bearing structure presented for stage-3 authentication: the exact
-/// [`StructureSigInput`] it was detached-signed over and the signature. It
-/// carries **no** trusted author — the gate authenticates it against the
-/// committed writer-pseudonym set, so a signature under a non-committed key is
-/// rejected.
-#[derive(Clone)]
-pub struct SignedStructure {
-    /// The signed input `{scope, epoch, structTag, recipientTag?, H(ciphertext)}`.
-    pub input: StructureSigInput,
-    /// The detached pseudonym signature over [`structure_sig_preimage`] of the
-    /// input.
-    ///
-    /// [`structure_sig_preimage`]: cipherbox_core::seal::structure_sig_preimage
-    pub signature: Ed25519Signature,
-}
-
-/// A network-supplied ascent link presented for the stage-3 derive-and-verify
-/// (`ascent-link-mismatch`). Present only when the reader descends through the
-/// link from an ancestor scope; a same-scope holder passes `None`. The seed the
-/// expected keypair re-derives from is **reader state**
-/// ([`ReaderContext::parent_node_seed`]), never carried here — the candidate
-/// producer must not supply its own verification key (blueprint/engine.md:
-/// "Ancestor readers derive the expected ascent keypair from the parent node
-/// seed").
-#[derive(Clone)]
-pub struct AscentCheck {
-    /// The published ascent link (plaintext public half + HPKE-sealed seed).
-    pub link: AscentLink,
-    /// The structured AAD the link was sealed under.
-    pub aad: AadContext,
-}
-
 /// The reader's HPKE seed source, opened at the unseal stage to prove the
 /// reader can obtain the scope seed (`hpke-open-failed` on tamper). The public
 /// `enc`/`ciphertext` are the envelope grant-section blob addressed to this
@@ -271,14 +240,12 @@ pub struct Candidate {
     pub name: IpnsName,
     /// The raw IPNS record protobuf bytes.
     pub record_bytes: Vec<u8>,
-    /// The scope root's grant-set commitment.
-    pub commitment: GrantSetCommitment,
-    /// The owner's identity signature over the commitment.
-    pub commitment_sig: EcdsaSignature,
-    /// The seed-bearing structures presented for stage-3 authentication.
-    pub structures: Vec<SignedStructure>,
-    /// The ascent link derive-and-verify, for an ancestor reader.
-    pub ascent: Option<AscentCheck>,
+    /// The scope root's grant section — the commitment (+ its owner signature)
+    /// and every seed-bearing structure with its detached structure signature.
+    /// The gate enumerates its structures for stage-3 authentication **from this
+    /// record's own bytes**, recomputing each `H(ciphertext)` (#687), so
+    /// completeness is gate-enforced and never caller-asserted.
+    pub grant_section: GrantSection,
     /// The scope root's envelope (carries the plaintext epoch tag and the
     /// sealed read-body).
     pub envelope: Envelope,
@@ -295,8 +262,9 @@ pub struct ReaderContext<'a> {
     /// The reader's own derived scope read key for the read-body unseal.
     pub read_key: &'a [u8; 32],
     /// The reader's cached ancestor node seed — the trusted secret the expected
-    /// ascent keypair re-derives from. Required whenever `candidate.ascent` is
-    /// `Some`; a `None` here against a present ascent link is fail-closed
+    /// ascent keypair re-derives from. Required whenever
+    /// `candidate.grant_section.ascent_link` is `Some`; a `None` here against a
+    /// present ascent link is fail-closed
     /// (cannot verify).
     pub parent_node_seed: Option<[u8; 32]>,
     /// The reader's HPKE seed source, opened at the unseal stage; `None` for a
@@ -314,6 +282,48 @@ pub struct Adopted {
     pub sequence: u64,
     /// The authenticated epoch tag (the new read-epoch floor).
     pub epoch: u64,
+}
+
+/// A gate pass whose floor-law advance is **deferred**: all six stages
+/// succeeded and the read-body unsealed, but the durable floors have not moved
+/// yet. A caller that must durably persist accepted state (the accept flow's
+/// received-shares bookmark) persists first, then calls [`commit`] — so a
+/// persist failure leaves the floors untouched and the record re-adopts cleanly
+/// on redelivery instead of being stranded below an already-advanced sequence
+/// floor. The durability of the floor advance is thus gated on the durability
+/// of the accepted state.
+///
+/// [`commit`]: PendingAdoption::commit
+#[must_use = "the deferred floor advance must be committed once the accepted state is durable"]
+pub struct PendingAdoption {
+    adopted: Adopted,
+    scope_id: [u8; 16],
+    ipns_name: Vec<u8>,
+}
+
+impl PendingAdoption {
+    /// Commit the deferred floor-law advance (the AAD-confirmed-unseal rule),
+    /// then yield the [`Adopted`] result. Call only after the accepted state is
+    /// durably persisted.
+    ///
+    /// The stage-4/5 floor reads and this advance are not a CAS pair and do not
+    /// need to be: the engine is the single writer (blueprint/engine.md
+    /// "Facade" — one live instance), so no concurrent adopt races this device's
+    /// floors between the read and the advance. Cross-writer contention is
+    /// resolved on the publish/RecordTransport plane (CAS), never on the local
+    /// floor read. `advance_on_unseal` itself orders its two raises fail-safe.
+    pub async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, GateError> {
+        floor::advance_on_unseal(
+            floors,
+            &self.scope_id,
+            &self.ipns_name,
+            self.adopted.sequence,
+            self.adopted.epoch,
+        )
+        .await
+        .map_err(GateError::Seam)?;
+        Ok(self.adopted)
+    }
 }
 
 /// The committed write-capable pseudonyms of a scope root: the owner pseudonym
@@ -335,15 +345,28 @@ fn committed_write_pseudonyms(commitment: &GrantSetCommitment) -> Vec<Ed25519Ver
 }
 
 /// Authenticate one seed-bearing structure against the committed write-capable
-/// pseudonyms. The structure is trusted iff its signature verifies under at
-/// least one committed pseudonym; otherwise the whole record is a
-/// `structure-signature-invalid` trust violation.
+/// pseudonyms, recomputing the signed input **from the record's actual sealed
+/// bytes** (#687): the `ciphertext_hash` is `H(ciphertext)` over `ciphertext`,
+/// and `scope`/`epoch` come from the authenticated envelope — never a
+/// caller-supplied [`StructureSigInput`]. A signature therefore proves "the
+/// committed writer signed *these* bytes at *this* scope/epoch", not merely "the
+/// writer once signed some hash". The structure is trusted iff the recomputed
+/// input verifies under at least one committed pseudonym; otherwise the whole
+/// record is a `structure-signature-invalid` trust violation.
 fn authenticate_structure(
     committed: &[Ed25519Verifier],
-    structure: &SignedStructure,
+    scope: [u8; 16],
+    epoch: u64,
+    struct_tag: u8,
+    recipient_tag: Option<[u8; 32]>,
+    ciphertext: &[u8],
+    signature: &[u8; 64],
 ) -> Result<(), CodecError> {
+    let input =
+        StructureSigInput::over_ciphertext(scope, epoch, struct_tag, recipient_tag, ciphertext);
+    let sig = Ed25519Signature::from_bytes(*signature);
     for pseudonym in committed {
-        if verify_structure(pseudonym, &structure.input, &structure.signature).is_ok() {
+        if verify_structure(pseudonym, &input, &sig).is_ok() {
             return Ok(());
         }
     }
@@ -396,26 +419,18 @@ fn open_seed_blob(blob: &SeedBlob<'_>) -> Result<SecretBytes, CodecError> {
     }
 }
 
-/// Constant-time 32-byte equality: no data-dependent early exit, so a mismatch
-/// between a candidate-derived key and the caller-owned read key is never a
-/// timing oracle over the reader's secret.
-fn ct_eq_secret(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    core::hint::black_box(diff) == 0
-}
-
 /// Run the adoption gate over one hand-fed [`Candidate`] for one
-/// [`ReaderContext`]. On success the floor law has advanced (per the
-/// AAD-confirmed-unseal rule) and the unsealed read-body is returned; on
-/// failure nothing durable changed and the caller pins last-known-good.
-pub async fn adopt<F: FloorStore>(
+/// [`ReaderContext`], **deferring** the floor-law advance. On success all six
+/// stages passed and the read-body unsealed, but the durable floors have not
+/// moved: the caller persists any accepted state, then calls
+/// [`PendingAdoption::commit`] to advance them. On failure nothing durable
+/// changed and the caller pins last-known-good. Use [`adopt`] for the eager
+/// path that has no accepted state to persist first.
+pub async fn adopt_deferred<F: FloorStore>(
     floors: &F,
     reader: &ReaderContext<'_>,
     candidate: &Candidate,
-) -> Result<Adopted, GateError> {
+) -> Result<PendingAdoption, GateError> {
     // Stage 1 — record verify (Ed25519 key from the name itself).
     let verified = IpnsRecord::unmarshal(&candidate.record_bytes)
         .and_then(|record| record.verify(&candidate.name))
@@ -424,81 +439,109 @@ pub async fn adopt<F: FloorStore>(
     // Stage 2 — commitment verify against the contact-anchored owner identity,
     // and its binding to this record's name (the name is inside the signed
     // commitment preimage; a commitment for a different scope root is invalid
-    // here).
-    verify_grant_set(
-        reader.owner_identity,
-        &candidate.commitment,
-        &candidate.commitment_sig,
-    )
-    .map_err(|e| reject(GateStage::CommitmentVerify, RejectionReason::Trust(e)))?;
-    if candidate.commitment.ipns_name != candidate.name.as_str().as_bytes() {
+    // here). The commitment and its signature live in the record's grant section.
+    let section = &candidate.grant_section;
+    let commitment_sig =
+        EcdsaSignature::from_compact(&section.commitment_sig).ok_or_else(|| {
+            reject(
+                GateStage::CommitmentVerify,
+                RejectionReason::Trust(TrustViolation::CommitmentInvalid.into()),
+            )
+        })?;
+    verify_grant_set(reader.owner_identity, &section.commitment, &commitment_sig)
+        .map_err(|e| reject(GateStage::CommitmentVerify, RejectionReason::Trust(e)))?;
+    if section.commitment.ipns_name != candidate.name.as_str().as_bytes() {
         return Err(reject(
             GateStage::CommitmentVerify,
             RejectionReason::Trust(TrustViolation::CommitmentInvalid.into()),
         ));
     }
 
-    // Stage 3 — grant-section authentication under committed write pseudonyms.
-    let committed = committed_write_pseudonyms(&candidate.commitment);
-    for structure in &candidate.structures {
-        // Bind every structure to THIS envelope: an authentically-signed
-        // structure from another scope/epoch is a cross-epoch replay, not
-        // adoption material, and any grant-section failure rejects the whole
-        // record (blueprint/engine.md §"Adoption gate and floors", #39 D3).
-        // TODO(grant-section): recompute ciphertext_hash from record bytes, don't trust structure.input
-        if structure.input.scope_id != candidate.envelope.scope
-            || structure.input.epoch != candidate.envelope.epoch
-        {
-            return Err(reject(
-                GateStage::GrantSection,
-                RejectionReason::Trust(TrustViolation::StructureSignatureInvalid.into()),
-            ));
-        }
-        authenticate_structure(&committed, structure)
-            .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
+    // Stage 3 — grant-section authentication. Enumerate every seed-bearing
+    // structure **from this record's grant section** and recompute each
+    // `H(ciphertext)` over the actual sealed bytes with `scope`/`epoch` taken
+    // from the authenticated envelope (#687): a signature proves the committed
+    // writer signed *these* bytes at *this* rotation, so a swapped ciphertext or
+    // a cross-epoch replay recomputes a preimage the signature never covered.
+    // Any failure rejects the whole record (#39 D3).
+    let committed = committed_write_pseudonyms(&section.commitment);
+    let scope = candidate.envelope.scope;
+    let epoch = candidate.envelope.epoch;
+    let authenticate = |tag: u8, recipient: Option<[u8; 32]>, ct: &[u8], sig: &[u8; 64]| {
+        authenticate_structure(&committed, scope, epoch, tag, recipient, ct, sig)
+            .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))
+    };
+    authenticate(
+        STRUCT_TAG_OWNER_BLOB,
+        None,
+        &section.owner_blob.ciphertext,
+        &section.owner_blob.signature,
+    )?;
+    for blob in &section.grant_blobs {
+        authenticate(
+            STRUCT_TAG_GRANT_BLOB,
+            Some(blob.tag),
+            &blob.ciphertext,
+            &blob.signature,
+        )?;
     }
-    if let Some(ascent) = &candidate.ascent {
-        // Ascent authority is reader-derived: the expected keypair comes from
-        // the reader's cached ancestor node seed, never the network-supplied
-        // candidate (blueprint/engine.md: "Ancestor readers derive the expected
-        // ascent keypair from the parent node seed"). No reader seed ⇒ cannot
-        // verify ⇒ fail closed.
+    for link in &section.history_links {
+        authenticate(STRUCT_TAG_HISTORY_LINK, None, &link.sealed, &link.signature)?;
+    }
+    authenticate(
+        STRUCT_TAG_WRITE_BODY,
+        None,
+        &section.write_body.sealed,
+        &section.write_body.signature,
+    )?;
+    if let Some(ascent) = &section.ascent_link {
+        // The ascent link is doubly checked: its structure signature proves the
+        // committed writer authored it (recomputed above's convention), and the
+        // derive-and-verify proves the sealed seed is *this* scope root's.
+        authenticate(
+            STRUCT_TAG_ASCENT_LINK,
+            None,
+            &ascent.ciphertext,
+            &ascent.signature,
+        )?;
+        // Ascent authority is reader-derived: the expected keypair comes from the
+        // reader's cached ancestor node seed, never the network-supplied record
+        // (blueprint/engine.md: "Ancestor readers derive the expected ascent
+        // keypair from the parent node seed"). No reader seed ⇒ cannot verify ⇒
+        // fail closed. The AAD is rebuilt from the authenticated envelope, so a
+        // link sealed under a foreign context fails the HPKE tag on open.
         let parent_node_seed = reader.parent_node_seed.ok_or_else(|| {
             reject(
                 GateStage::GrantSection,
                 RejectionReason::Trust(TrustViolation::AscentLinkMismatch.into()),
             )
         })?;
-        // Bind the link's AAD to THIS envelope: a link valid under the same
-        // parent seed for another node/scope/epoch/version is a replay, not this
-        // record's ascent (blueprint/engine.md:405-406 — derive-and-verify
-        // against the current node). Fail closed before opening.
-        if ascent.aad.scope != reader.scope_id
-            || ascent.aad.id != candidate.envelope.id
-            || ascent.aad.epoch != candidate.envelope.epoch
-            || ascent.aad.v != candidate.envelope.v
-            || ascent.aad.struct_tag != STRUCT_TAG_ASCENT_LINK
-        {
-            return Err(reject(
-                GateStage::GrantSection,
-                RejectionReason::Trust(TrustViolation::AscentLinkMismatch.into()),
-            ));
-        }
+        let aad = AadContext {
+            v: candidate.envelope.v,
+            id: candidate.envelope.id,
+            scope: candidate.envelope.scope,
+            epoch: candidate.envelope.epoch,
+            struct_tag: STRUCT_TAG_ASCENT_LINK,
+        };
+        let link = AscentLink {
+            ascent_public: ascent.ascent_public,
+            enc: ascent.enc,
+            ciphertext: ascent.ciphertext.clone(),
+            unknown: Vec::new(),
+        };
         // Cross-check the recovered override seed: the ascent public key is
         // published, so anyone can seal a rogue payload to it. The seed the link
         // carries is this scope root's current override seed (CONTEXT.md "Ascent
         // link"/"Override seed"), so it must belong to this epoch and derive this
-        // node's read key — the ascent-link half of engine.md:406-408 (owner-blob
-        // seed vs ascent-link seed vs actual unseal; any disagreement is
-        // attributable abuse). The recovered `OverrideSeedPayload` and derived
-        // `SecretBytes` are gate-owned and zeroize on drop; `reader.read_key` is
-        // caller-owned and never zeroized.
-        let payload = open_ascent_link(&parent_node_seed, &ascent.aad, &ascent.link)
+        // node's read key — the ascent-link half of engine.md:406-408. The
+        // recovered `OverrideSeedPayload` and derived `SecretBytes` are gate-owned
+        // and zeroize on drop; `reader.read_key` is caller-owned and never zeroized.
+        let payload = open_ascent_link(&parent_node_seed, &aad, &link)
             .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
         let node_seed = kdf::node_seed(payload.override_seed(), &candidate.envelope.id);
         let derived_read_key = kdf::read_key(node_seed.as_bytes());
         if payload.epoch != candidate.envelope.epoch
-            || !ct_eq_secret(derived_read_key.as_bytes(), reader.read_key)
+            || !ct_eq_32(derived_read_key.as_bytes(), reader.read_key)
         {
             return Err(reject(
                 GateStage::GrantSection,
@@ -580,7 +623,7 @@ pub async fn adopt<F: FloorStore>(
             .map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
         let node_seed = kdf::node_seed(seed.as_bytes(), &candidate.envelope.id);
         let derived_read_key = kdf::read_key(node_seed.as_bytes());
-        if !ct_eq_secret(derived_read_key.as_bytes(), reader.read_key) {
+        if !ct_eq_32(derived_read_key.as_bytes(), reader.read_key) {
             return Err(reject(
                 GateStage::Unseal,
                 RejectionReason::Trust(TrustViolation::SealOpenFailed.into()),
@@ -590,29 +633,34 @@ pub async fn adopt<F: FloorStore>(
     let read_body = open_read_body(&candidate.envelope, reader.read_key)
         .map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
 
-    // Floor law — advance ONLY now, after the AAD-confirmed unseal.
-    //
-    // The stage-4/5 reads above and this advance are not a CAS pair, and they
-    // do not need to be: the engine is the single writer (blueprint/engine.md
-    // "Facade" — one live instance), so no concurrent adopt races this device's
-    // floors between the read and the advance. Cross-writer contention is
-    // resolved on the publish/RecordTransport plane (CAS), never on the local
-    // floor read. `advance_on_unseal` itself orders its two raises fail-safe.
-    floor::advance_on_unseal(
-        floors,
-        &reader.scope_id,
-        name_bytes,
-        verified.sequence,
-        epoch,
-    )
-    .await
-    .map_err(GateError::Seam)?;
-
-    Ok(Adopted {
-        read_body,
-        sequence: verified.sequence,
-        epoch,
+    // The read-body unsealed (stage 6). The floor-law advance is DEFERRED to
+    // [`PendingAdoption::commit`] so a caller that must persist accepted state
+    // first advances the floors only after that state is durable.
+    Ok(PendingAdoption {
+        adopted: Adopted {
+            read_body,
+            sequence: verified.sequence,
+            epoch,
+        },
+        scope_id: reader.scope_id,
+        ipns_name: name_bytes.to_vec(),
     })
+}
+
+/// Run the adoption gate and, on success, immediately advance the floor law
+/// (the AAD-confirmed-unseal rule). The eager path for callers that hold no
+/// accepted state to persist first (e.g. a plain resolve); a caller that must
+/// make the floor advance atomic with a durable write uses [`adopt_deferred`]
+/// plus [`PendingAdoption::commit`].
+pub async fn adopt<F: FloorStore>(
+    floors: &F,
+    reader: &ReaderContext<'_>,
+    candidate: &Candidate,
+) -> Result<Adopted, GateError> {
+    adopt_deferred(floors, reader, candidate)
+        .await?
+        .commit(floors)
+        .await
 }
 
 /// Build a `GateError::Rejected` from a stage and reason.

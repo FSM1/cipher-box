@@ -18,6 +18,7 @@ pub mod aad;
 pub mod body;
 pub mod envelope;
 pub mod grant;
+pub mod section;
 pub mod structure;
 pub mod write_body;
 
@@ -38,6 +39,10 @@ pub use grant::{
     encode_history_link_payload, encode_override_seed_payload, open_ascent_link, open_grant_blob,
     open_history_link, open_owner_blob, seal_ascent_link, seal_grant_blob, seal_history_link,
     seal_owner_blob, sign_grant_set, verify_grant_set,
+};
+pub use section::{
+    GrantSection, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed,
+    decode_grant_section, encode_grant_section,
 };
 pub use structure::{StructureSigInput, sign_structure, structure_sig_preimage, verify_structure};
 pub use write_body::{

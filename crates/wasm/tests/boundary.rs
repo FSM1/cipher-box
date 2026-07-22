@@ -11,6 +11,8 @@
 use cipherbox_engine::facade;
 use cipherbox_engine::seams::OpId;
 use cipherbox_wasm::{Command, Event, NodeId, NodeKind, Permission, Staleness};
+use js_sys::{BigInt, Reflect, Uint8Array};
+use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_test::wasm_bindgen_test;
 
 /// getrandom's `wasm_js` backend must reach `crypto.getRandomValues` in the
@@ -27,22 +29,51 @@ fn getrandom_wires_to_crypto_get_random_values() {
 }
 
 /// A `u64` op id (> Number.MAX_SAFE_INTEGER) must survive the boundary as a
-/// `bigint` — the u64/BigInt parity surface.
+/// JS `bigint` — the u64/BigInt parity surface. Read through the generated
+/// `#[wasm_bindgen(getter)]` glue (not the Rust field) so a wasm-bindgen ABI
+/// regression that marshalled it as an f64 `number` — truncating at 2^53 — is
+/// observed, not hidden.
 #[wasm_bindgen_test]
 fn op_id_u64_crosses_as_bigint() {
-    let event = Event::from_facade(facade::Event::DeadLetter {
+    let event: JsValue = Event::from_facade(facade::Event::DeadLetter {
         op_id: OpId(u64::MAX),
-    });
-    assert_eq!(event.kind(), "deadLetter");
-    assert_eq!(event.op_id(), Some(u64::MAX));
+    })
+    .into();
+    let op_id = Reflect::get(&event, &JsValue::from_str("opId")).expect("opId getter is readable");
+
+    assert_eq!(
+        op_id.js_typeof(),
+        JsValue::from_str("bigint"),
+        "opId must cross as a JS bigint, never a number"
+    );
+    // A number (f64) marshalling would round u64::MAX to 2^64; assert the exact
+    // value survived, in JS's own decimal rendering.
+    let decimal = String::from(
+        op_id
+            .unchecked_into::<BigInt>()
+            .to_string(10)
+            .expect("bigint renders in base 10"),
+    );
+    assert_eq!(decimal, u64::MAX.to_string());
 }
 
-/// Binary payloads cross as `Uint8Array` in both directions.
+/// Binary payloads cross as a JS `Uint8Array`. Read the `bytes` getter through
+/// the wasm-bindgen glue and assert the JS-observed type and contents; a
+/// wrong-length constructor returns a `JsError` (surfaced as a JS throw at the
+/// call site).
 #[wasm_bindgen_test]
-fn node_id_bytes_round_trip_and_reject_bad_length() {
+fn node_id_bytes_cross_as_uint8array_and_reject_bad_length() {
     let bytes: Vec<u8> = (0..16).collect();
-    let node = NodeId::from_bytes(&bytes).expect("16 bytes is a valid node id");
-    assert_eq!(node.bytes(), bytes);
+    let node: JsValue = NodeId::from_bytes(&bytes)
+        .expect("16 bytes is a valid node id")
+        .into();
+    let out = Reflect::get(&node, &JsValue::from_str("bytes")).expect("bytes getter is readable");
+
+    assert!(
+        out.is_instance_of::<Uint8Array>(),
+        "node id bytes must cross as a Uint8Array"
+    );
+    assert_eq!(out.unchecked_into::<Uint8Array>().to_vec(), bytes);
     assert!(
         NodeId::from_bytes(&[0u8; 20]).is_err(),
         "a wrong-length node id must throw at the boundary"

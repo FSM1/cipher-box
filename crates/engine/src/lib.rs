@@ -29,9 +29,14 @@ pub mod content;
 pub mod entropy;
 pub mod facade;
 pub mod gate;
+pub mod grants;
+mod hex;
+pub mod mailbox;
 pub mod net;
 pub mod profile;
+pub mod rotation;
 pub mod seams;
+pub mod secret_util;
 pub mod sync;
 #[cfg(feature = "test-kit")]
 pub mod testkit;
@@ -53,14 +58,27 @@ pub use facade::{
     PlaintextContent, Staleness,
 };
 pub use gate::{
-    Adopted, AscentCheck, Candidate, GateError, GateRejection, GateStage, ReaderContext,
-    RejectionReason, SeedBlob, SignedStructure, adopt,
+    Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,
+    SeedBlob, adopt,
 };
+pub use grants::{
+    AbuseEvent, AcceptError, AcceptOutcome, AuthorityViolation, Contact, OwnerEntry,
+    OwnerSeedCache, PublishedGrantBlob, ReceivedShare, ReceivedShareStore, ReceivedSharesList,
+    ResolutionClass, ResolutionFacts, SentIndex, SentShare, SharePointer, accept_share,
+    cross_check, enforce_committed_ledger, import_contact, recipient_blinded_tag, self_locate,
+};
+pub use mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 pub use net::{
     Adopter, HeldRecord, PublishError, PublishOutcome, PublishRequest, RePutResult, ResolveOutcome,
     Resolved, ReviveError, ReviveRequest, publish, resolve, revive,
 };
 pub use profile::SyncTimingProfile;
+pub use rotation::{
+    ChildIndexResolver, CommittedSet, EagerSet, EnumerationError, PrevEpochSeed, ResealError,
+    ResealSeeds, ResealedScopeRoot, ResolveFailure, RevokeError, RevokedCommittedSet, RotateError,
+    RotateScopePlan, RotationOutcome, RotationTrigger, ScopeRootIdentity, ScopeRootPublishError,
+    ScopeRootPublisher, enumerate_eager_set, reseal_scope_root, revoke_read_grant, rotate_scope,
+};
 pub use seams::{SeamError, SeamResult, SeamSet, SeamTypes};
 pub use sync::{
     AppliedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow,
