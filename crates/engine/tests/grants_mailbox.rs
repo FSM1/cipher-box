@@ -792,6 +792,155 @@ fn a_persist_failure_leaves_the_floor_unadvanced_and_redelivery_recovers() {
     );
 }
 
+/// The commit-succeeds-but-ack-fails window: after the floor advanced and the
+/// bookmark is durable, a transient ack failure leaves the item pending. On
+/// redelivery `adopt_deferred` hits the strict-sequence anti-replay reject, but
+/// the durable bookmark proves prior adoption, so the flow re-acks idempotently
+/// (no re-adopt, no re-persist) instead of redelivering-and-failing forever.
+#[test]
+fn a_failed_ack_after_commit_recovers_via_idempotent_reack() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let poster = world.device(b"owner-inbox");
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+    let contact = import_contact(&fx.owner_contact).unwrap();
+    let name_bytes = fx.name.as_str().as_bytes();
+
+    // First delivery: the durable persist and the floor commit both succeed, but
+    // the ack fails transiently.
+    recipient.mailbox.set_ack_failing(true);
+    let mut received = ReceivedSharesList::new();
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .unwrap_err();
+    assert!(matches!(err, AcceptError::Ack(_)), "got {err}");
+
+    // The share IS durably recorded and the floor DID advance to the record's
+    // sequence — the accepted state is committed.
+    assert!(received.contains(name_bytes));
+    assert_eq!(recipient.received_share_store.persist_count(), 1);
+    assert_eq!(
+        block_on(recipient.floor_store.sequence_floor(name_bytes)).unwrap(),
+        Some(1)
+    );
+    // ...but the item stays pending because the ack failed.
+    assert_eq!(
+        inbox_len(&fx, &recipient),
+        1,
+        "the ack failed: the item is still pending"
+    );
+
+    // Redelivery with a working mailbox: stage 4 rejects (sequence not newer than
+    // the floor), but the durable bookmark short-circuits to an idempotent ack.
+    recipient.mailbox.set_ack_failing(false);
+    let redelivered = block_on(poll_verified(&recipient.mailbox, &fx.recipient_enc, V))
+        .unwrap()
+        .remove(0);
+    let outcome = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &redelivered,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .expect("redelivery takes the idempotent ack-only path");
+
+    assert!(
+        !outcome.newly_added,
+        "already-accepted no-op, not a fresh add"
+    );
+    assert_eq!(outcome.sequence, 1, "reports the held sequence");
+    assert_eq!(outcome.permission, Permission::Read);
+    // No re-adopt and no re-persist: the bookmark and floor are untouched.
+    assert_eq!(received.len(), 1, "the bookmark is unchanged");
+    assert_eq!(
+        recipient.received_share_store.persist_count(),
+        1,
+        "no re-persist on the ack-only path"
+    );
+    assert_eq!(
+        block_on(recipient.floor_store.sequence_floor(name_bytes)).unwrap(),
+        Some(1),
+        "the floor is unchanged"
+    );
+    assert_eq!(
+        inbox_len(&fx, &recipient),
+        0,
+        "the stuck item is finally acked"
+    );
+}
+
+/// Anti-replay stays intact: a strict-sequence reject for a scope NOT in the
+/// durable bookmark is a genuine replay and returns the gate error un-acked — the
+/// idempotent ack-only short-circuit fires ONLY with durable proof of prior
+/// adoption for that scope.
+#[test]
+fn a_sequence_replay_for_an_unheld_scope_stays_rejected() {
+    let fx = GrantFixture::new();
+    let world = FakeWorld::new();
+    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let poster = world.device(b"owner-inbox");
+    let item = deliver_pointer(
+        &fx,
+        &recipient,
+        &poster,
+        &fx.owner_identity,
+        &fx.share_pointer(),
+    );
+    let contact = import_contact(&fx.owner_contact).unwrap();
+    let name_bytes = fx.name.as_str().as_bytes();
+
+    // The sequence floor is already at the record's sequence, but we hold NO
+    // bookmark for this scope — a genuine replay, not a lost ack.
+    block_on(recipient.floor_store.raise_sequence_floor(name_bytes, 1)).unwrap();
+
+    let mut received = ReceivedSharesList::new();
+    let err = block_on(accept_share(
+        &recipient.floor_store,
+        &recipient.mailbox,
+        &recipient.received_share_store,
+        &item,
+        &contact,
+        &fx.recipient_enc,
+        &fx.candidate(),
+        &fx.grant_blobs(),
+        &mut received,
+    ))
+    .unwrap_err();
+
+    let rejection = match &err {
+        AcceptError::Gate(e) => e.rejection().expect("a fail-closed gate rejection"),
+        other => panic!("expected a gate rejection, got {other}"),
+    };
+    assert_eq!(rejection.check(), "sequence-not-newer");
+    assert!(received.is_empty(), "no bookmark was created for a replay");
+    assert_eq!(
+        inbox_len(&fx, &recipient),
+        1,
+        "un-acked: a genuine replay is not swallowed"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Self-healing bookmark: a re-accept with drifted authority heals (P1-2).
 // ---------------------------------------------------------------------------

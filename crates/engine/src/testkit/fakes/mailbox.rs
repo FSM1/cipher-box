@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use crate::seams::{Mailbox, MailboxItem, SeamResult};
+use crate::seams::{Mailbox, MailboxItem, SeamError, SeamResult};
 
 #[derive(Default)]
 struct HubInner {
@@ -25,6 +25,7 @@ impl InMemoryMailboxHub {
         InMemoryMailbox {
             hub: self.clone(),
             recipient_public_key: recipient_public_key.to_vec(),
+            ack_failing: Arc::new(Mutex::new(false)),
         }
     }
 }
@@ -35,6 +36,17 @@ impl InMemoryMailboxHub {
 pub struct InMemoryMailbox {
     hub: InMemoryMailboxHub,
     recipient_public_key: Vec<u8>,
+    /// When set, every `ack` fails — models a transient ack outage so a test can
+    /// prove a redelivered accept takes the idempotent ack-only path. Shared
+    /// across clones so a toggle on one handle affects the borrowed handle.
+    ack_failing: Arc<Mutex<bool>>,
+}
+
+impl InMemoryMailbox {
+    /// Make every `ack` fail, or clear the failure.
+    pub fn set_ack_failing(&self, failing: bool) {
+        *self.ack_failing.lock().expect("lock") = failing;
+    }
 }
 
 impl Mailbox for InMemoryMailbox {
@@ -75,6 +87,9 @@ impl Mailbox for InMemoryMailbox {
     }
 
     async fn ack(&self, item_id: &str) -> SeamResult<()> {
+        if *self.ack_failing.lock().expect("lock") {
+            return Err(SeamError::new("mailbox ack transient outage"));
+        }
         if let Some(queue) = self
             .hub
             .inner

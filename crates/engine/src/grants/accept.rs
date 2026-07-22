@@ -28,7 +28,7 @@ use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
-use crate::gate::{Candidate, GateError, ReaderContext, SeedBlob, adopt_deferred};
+use crate::gate::{Candidate, GateError, ReaderContext, RejectionReason, SeedBlob, adopt_deferred};
 use crate::mailbox::VerifiedMailboxItem;
 use crate::seams::{FloorStore, Mailbox, SeamError, SeamResult};
 
@@ -394,7 +394,11 @@ impl std::error::Error for AcceptError {}
 /// **durably persist it via [`ReceivedShareStore`]**, and **only then** ack. Any
 /// failure before the durable persist returns without acking; a persist failure
 /// rolls the in-memory bookmark back and returns un-acked, so an undelivered
-/// accept redelivers and re-runs idempotently (the bookmark self-heals).
+/// accept redelivers and re-runs idempotently (the bookmark self-heals). If a
+/// redelivery's strict-sequence anti-replay reject names a scope already in the
+/// durable bookmark (a prior ack that failed after the floor advanced), the flow
+/// idempotently re-acks that item without re-adopting — clearing a mailbox item
+/// that could otherwise redeliver forever.
 ///
 /// `candidate` is the resolved record (hand-fed here; the resolve pipeline is a
 /// sibling slice); `grant_blobs` is its published grant section for self-
@@ -485,9 +489,37 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     // floor must not move ahead of the bookmark it accepts. If the persist below
     // fails the floor stays put, so redelivery re-adopts cleanly instead of being
     // stranded below an already-advanced floor (a permanently-lost share).
-    let pending = adopt_deferred(floors, &reader, candidate)
-        .await
-        .map_err(AcceptError::Gate)?;
+    let pending = match adopt_deferred(floors, &reader, candidate).await {
+        Ok(pending) => pending,
+        Err(e) => {
+            // Idempotent ack-only short-circuit. A strict-sequence anti-replay
+            // reject for a scope we ALREADY durably hold is a redelivery whose
+            // floor advance already committed (e.g. a prior ack failed): the
+            // bookmark is proof of prior adoption, so just re-ack and never
+            // re-adopt or downgrade it. Any OTHER rejection, a scope we do not
+            // hold (a genuine replay), or a retryable `GateError::Seam` (whose
+            // `rejection()` is `None`) falls through and propagates unchanged —
+            // anti-replay stays intact.
+            if let Some(RejectionReason::SequenceNotNewer { floor, .. }) =
+                e.rejection().map(|r| &r.reason)
+            {
+                if let Some(permission) = received
+                    .iter()
+                    .find(|s| s.scope_root_name == pointer.scope_root_name)
+                    .map(|s| s.permission)
+                {
+                    mailbox.ack(&item.item_id).await.map_err(AcceptError::Ack)?;
+                    return Ok(AcceptOutcome {
+                        scope_id: candidate.envelope.scope,
+                        sequence: *floor,
+                        permission,
+                        newly_added: false,
+                    });
+                }
+            }
+            return Err(AcceptError::Gate(e));
+        }
+    };
 
     // Reconcile the self-healing bookmark: append if new, heal in place if the
     // committed permission or pointer read key drifted, no-op if byte-identical.
