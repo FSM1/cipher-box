@@ -251,6 +251,11 @@ recorded results — they precede `crates/fuse` work, and they are not CI:
 Results are recorded alongside the profile constants they feed; a failed
 gate reopens the driver decision (#32), not this doc.
 
+Executed 2026-07-22 (#644): harness and recorded results live in
+`tools/hw-gates/`. Gates 1–3 pass (gate 1 requires the `noattrcache`
+mount option), gate 4 is conditional on a commercial license, gate 5 is
+blocked on macOS 27 beta hardware.
+
 ## Coverage policy
 
 No blanket line-coverage thresholds as merge gates. v1's record: the

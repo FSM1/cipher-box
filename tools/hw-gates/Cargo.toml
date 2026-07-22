@@ -1,0 +1,16 @@
+# Standalone workspace on purpose: the hardware gates (issue #644) are
+# task-shaped, run-by-hand tools — not CI, not part of the frozen product
+# workspace, so the root Cargo.lock never moves for them.
+[workspace]
+
+[package]
+name = "hw-gates"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# The v1 socket-read-patched fuser (FUSE-T speaks FUSE over a Unix socket
+# that fragments messages; stock fuser assumes atomic reads).
+fuser = { path = "vendor/fuser", default-features = false, features = ["libfuse"] }
+libc = "0.2"

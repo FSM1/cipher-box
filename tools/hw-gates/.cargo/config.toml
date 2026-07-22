@@ -1,0 +1,4 @@
+# libfuse-t's install name is @rpath-relative; cargo drops the -Wl,-rpath from
+# fuse-t.pc, so set it here or the binary only loads under dyld fallback luck.
+[target.'cfg(target_os = "macos")']
+rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/local/lib"]
