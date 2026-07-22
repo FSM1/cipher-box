@@ -8,6 +8,8 @@
 
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
+use crate::hex::hex_lower;
+
 /// Produces the two hex fields the `/auth/challenge` + `/auth/login` flow
 /// needs: the identity public key and a signature over a challenge string.
 ///
@@ -52,17 +54,6 @@ impl ChallengeSigner for IdentityChallengeSigner {
     }
 }
 
-/// Lowercase hex encoding. Not crypto — a wire encoding of already-public
-/// bytes (the SEC1 public key and the compact signature).
-pub(crate) fn hex_lower(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(char::from_digit((byte >> 4) as u32, 16).expect("high nibble is < 16"));
-        out.push(char::from_digit((byte & 0x0f) as u32, 16).expect("low nibble is < 16"));
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -97,10 +88,5 @@ mod tests {
     #[test]
     fn zero_scalar_is_rejected() {
         assert!(IdentityChallengeSigner::from_scalar(&[0u8; 32]).is_none());
-    }
-
-    #[test]
-    fn hex_lower_pads_each_byte() {
-        assert_eq!(hex_lower(&[0x00, 0x0f, 0xa0, 0xff]), "000fa0ff");
     }
 }

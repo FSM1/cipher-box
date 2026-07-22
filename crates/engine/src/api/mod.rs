@@ -12,7 +12,7 @@
 
 mod client;
 mod error;
-pub(crate) mod signer;
+mod signer;
 mod types;
 
 pub use client::ApiClient;

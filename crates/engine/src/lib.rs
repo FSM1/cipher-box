@@ -30,6 +30,7 @@ pub mod entropy;
 pub mod facade;
 pub mod gate;
 pub mod grants;
+mod hex;
 pub mod mailbox;
 pub mod net;
 pub mod profile;
