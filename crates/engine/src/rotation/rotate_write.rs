@@ -123,17 +123,6 @@ pub enum RepointChannel {
     Tombstone,
 }
 
-impl RepointChannel {
-    /// A stable, host-facing channel name (no key material).
-    pub fn name(&self) -> &'static str {
-        match self {
-            RepointChannel::ScopePointer => "scope-pointer",
-            RepointChannel::Mailbox => "mailbox",
-            RepointChannel::Tombstone => "tombstone",
-        }
-    }
-}
-
 /// The three channels in canonical publish order: pointer first (the authoritative
 /// switch), then the two accelerators.
 const REPOINT_CHANNELS: [RepointChannel; 3] = [
