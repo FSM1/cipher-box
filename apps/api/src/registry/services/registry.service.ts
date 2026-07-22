@@ -257,8 +257,9 @@ export class RegistryService {
             if (survivors.length > 0) {
               return false;
             }
-            await this.pinStore.unpin(cid);
-            return true;
+            // Count only seam-confirmed releases; a no-op/swallowed unpin (Kubo
+            // hiccup, unconfigured store) returns false and must not be counted.
+            return this.pinStore.unpin(cid);
           }
         );
         if (didUnpin) {
