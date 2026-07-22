@@ -70,7 +70,7 @@ export async function createHttpIntegrationApp(
     useValue: options.db.dataSource.getRepository(entity),
   }));
 
-  let app: INestApplication;
+  let app: INestApplication | undefined;
   try {
     const moduleRef = await Test.createTestingModule({
       imports: [
@@ -94,17 +94,30 @@ export async function createHttpIntegrationApp(
     await app.init();
   } catch (err) {
     // Fail-closed: a boot failure must not leak the harness secret to the next
-    // test file — the integration suite runs one sequential worker.
+    // test file — the integration suite runs one sequential worker. Close any
+    // partially-initialized app first (guarded so its own error can't mask the
+    // original), then restore the env before rethrowing.
+    if (app) {
+      try {
+        await app.close();
+      } catch {
+        /* keep the original boot error */
+      }
+    }
     restorePriorJwtSecret();
     throw err;
   }
 
+  const bootedApp = app;
   const close = async () => {
-    await app.close();
-    restorePriorJwtSecret();
+    try {
+      await bootedApp.close();
+    } finally {
+      restorePriorJwtSecret();
+    }
   };
 
-  return { app, http: app.getHttpServer(), close };
+  return { app: bootedApp, http: bootedApp.getHttpServer(), close };
 }
 
 /** A throwaway compressed secp256k1 public key; the private key is zeroized. */
@@ -127,10 +140,10 @@ export async function seedAccount(
   jwt: JwtService,
   overrides: Partial<User> = {}
 ): Promise<{ publicKey: string; token: string; userId: string }> {
-  const publicKey = randomCompressedPublicKey();
+  const publicKey = overrides.publicKey ?? randomCompressedPublicKey();
   const user = await db.dataSource
     .getRepository(User)
-    .save({ publicKey, byo: false, ...overrides });
+    .save({ byo: false, ...overrides, publicKey });
   const token = await jwt.signAsync({ sub: user.id, publicKey });
   return { publicKey, token, userId: user.id };
 }
