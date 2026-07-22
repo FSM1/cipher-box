@@ -44,7 +44,6 @@
 //! This module composes existing machinery only and holds no crypto of its own.
 
 use cipherbox_core::error::CodecError;
-use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission, SignedSealed,
@@ -61,13 +60,13 @@ use zeroize::Zeroizing;
 
 use crate::entropy::{Entropy, EntropyError};
 use crate::grants::SharePointer;
-use crate::grants::child_index::{insert_child, remove_child};
+use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::hex::hex_lower;
 use crate::mailbox::post_sealed;
 use crate::rotation::{
     CommittedSet, ResealError, ResealSeeds, ResealedScopeRoot, ScopeRootIdentity,
-    ScopeRootPublishError, ScopeRootPublisher, SweepError, SweepResolver, reseal_scope_root,
-    sweep_pass,
+    ScopeRootPublishError, ScopeRootPublisher, SweepError, SweepResolver, derive_write_name,
+    reseal_scope_root, sweep_pass,
 };
 use crate::seams::{FloorStore, Mailbox, SeamError};
 
@@ -101,6 +100,10 @@ pub struct GranteeScopePlan<'a> {
     pub pointer_read_key: &'a [u8; SECRET_LEN],
     /// The descendant scope roots inside the folder: converged before minting
     /// and reparented into the new scope's direct-child-scope index.
+    ///
+    /// Descent re-key of these descendants under the fresh grantee override seed
+    /// is deferred (fail-safe under-share) pending blueprint confirmation —
+    /// tracked in #770.
     pub subtree_child_index: &'a [ChildScopeRef],
 }
 
@@ -270,11 +273,7 @@ where
     // name, and the recipient re-derives the same name from the record it
     // resolves; deriving here (never trusting a passed name) keeps that binding
     // fail-closed at the mint.
-    let ipns_name = {
-        let write_seed = kdf::write_seed(grantee.write_scope_seed, &grantee.scope_id);
-        let ipns_signer = kdf::ipns_keypair(write_seed.as_bytes());
-        IpnsName::from_public_key(&ipns_signer.verifying_key())
-    };
+    let ipns_name = derive_write_name(grantee.write_scope_seed, &grantee.scope_id);
     let name_bytes = ipns_name.as_str().as_bytes();
 
     // 3) Build the committed set for the recipient. The blinded tag and the
@@ -335,12 +334,16 @@ where
             write_epoch: grantee.write_epoch,
             pointer_read_key: grantee.pointer_read_key,
         };
+        // Mint-canonical: the adopted index carries the same canonicalization the
+        // sweep's self-heal enforces (sweep.rs), so the grantee root never lands a
+        // shape the convergence pass would later have to repair.
+        let grantee_child_index = canonicalize(grantee.subtree_child_index);
         let committed = CommittedSet {
             commitment: &commitment,
             commitment_sig: &commitment_sig,
             grant_ledger: &ledger,
             write_history_link: &[],
-            direct_child_scope_index: grantee.subtree_child_index,
+            direct_child_scope_index: &grantee_child_index,
         };
         reseal_scope_root(entropy, &identity, &seeds, &committed, &[])
             .map_err(CreateGrantError::Mint)?
@@ -410,12 +413,17 @@ where
         display_name: recipient.display_name.clone(),
         permission: Permission::Read,
     };
-    let mut ephemeral = [0u8; 32];
+    let mut ephemeral = Zeroizing::new([0u8; 32]);
     entropy
-        .fill(&mut ephemeral)
+        .fill(&mut *ephemeral)
         .map_err(CreateGrantError::Entropy)?;
     let recipient_address = recipient.enc_pub.to_bytes();
-    let idempotency_key = format!("grant:{}", hex_lower(&grantee.scope_id));
+    // Key off the per-recipient blinded tag, not the shared scope_id: the API
+    // stores sha256(senderPublicKey : idempotencyKey) per recipient, so a
+    // scope-derived key would be identical across two recipients of the same
+    // folder and let the server correlate the sharing edge. The tag is
+    // deterministic (retry-safe), 32-byte high-entropy, and differs per recipient.
+    let idempotency_key = format!("grant:{}", hex_lower(&tag));
     post_sealed(
         mailbox,
         recipient.enc_pub,
@@ -464,9 +472,7 @@ mod tests {
     /// The grantee scope root's ipnsName, derived exactly as the primitive does
     /// (from the folder's write material) so assertions bind the real name.
     fn grantee_name() -> Vec<u8> {
-        let write_seed = kdf::write_seed(&GRANTEE_WRITE_SCOPE_SEED, &GRANTEE_SCOPE);
-        let signer = kdf::ipns_keypair(write_seed.as_bytes());
-        IpnsName::from_public_key(&signer.verifying_key())
+        derive_write_name(&GRANTEE_WRITE_SCOPE_SEED, &GRANTEE_SCOPE)
             .as_str()
             .as_bytes()
             .to_vec()
@@ -555,6 +561,125 @@ mod tests {
                 Err(e) => Err(e.clone()),
             }
         }
+    }
+
+    /// A `Mailbox` fake that records the idempotency key of every post, so a test
+    /// can assert two recipients of the same folder get distinct keys.
+    #[derive(Clone, Default)]
+    struct RecordingMailbox {
+        idempotency_keys: Rc<RefCell<Vec<String>>>,
+    }
+
+    impl Mailbox for RecordingMailbox {
+        async fn post(
+            &self,
+            _recipient_public_key: &[u8],
+            _sealed_payload: &[u8],
+            idempotency_key: &str,
+        ) -> crate::seams::SeamResult<()> {
+            self.idempotency_keys
+                .borrow_mut()
+                .push(idempotency_key.to_owned());
+            Ok(())
+        }
+        async fn poll(&self) -> crate::seams::SeamResult<Vec<crate::seams::MailboxItem>> {
+            Ok(Vec::new())
+        }
+        async fn ack(&self, _item_id: &str) -> crate::seams::SeamResult<()> {
+            Ok(())
+        }
+    }
+
+    /// The mailbox idempotency key the primitive posts for `recipient_enc` over
+    /// the fixed grantee folder (empty subtree, converged, publishing OK).
+    fn idempotency_key_for(recipient_enc: &X25519Secret) -> String {
+        let floors = InMemoryFloorStore::default();
+        let net = FakeNet::new(Ok(()));
+        let recorder = RecordingMailbox::default();
+
+        let owner_enc = owner_enc();
+        let owner_enc_pub = owner_enc.public();
+        let owner_identity = owner_identity();
+        let owner_pseudonym = owner_pseudonym();
+        let recipient_pub = recipient_enc.public();
+
+        let parent_node_seed = [0x44; SECRET_LEN];
+        let grantee_write_scope_seed = GRANTEE_WRITE_SCOPE_SEED;
+        let grantee_pointer_read_key = [0x66; SECRET_LEN];
+        let parent_override_seed = [0x0a; SECRET_LEN];
+        let parent_write_scope_seed = [0x0b; SECRET_LEN];
+        let parent_pointer_read_key = [0x0c; SECRET_LEN];
+        let parent_commitment = GrantSetCommitment {
+            ipns_name: PARENT_NAME.to_vec(),
+            owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+            entries: Vec::new(),
+            unknown: Vec::new(),
+        };
+        let parent_commitment_sig = sign_grant_set(&owner_identity, &parent_commitment)
+            .unwrap()
+            .to_compact();
+
+        let mut entropy = SeededEntropy::new(7);
+        let grantee = GranteeScopePlan {
+            v: V,
+            scope_id: GRANTEE_SCOPE,
+            parent_node_seed: &parent_node_seed,
+            owner_enc_pub: &owner_enc_pub,
+            write_scope_seed: &grantee_write_scope_seed,
+            write_epoch: 1,
+            pointer_read_key: &grantee_pointer_read_key,
+            subtree_child_index: &[],
+        };
+        let recipient = GrantRecipient {
+            identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
+            enc_pub: &recipient_pub,
+            display_name: "Shared Folder".to_string(),
+        };
+        let owner = OwnerGrantKeys {
+            enc_secret: &owner_enc,
+            identity_signer: &owner_identity,
+            pseudonym_signer: &owner_pseudonym,
+        };
+        let parent = ParentScopePlan {
+            identity: ScopeRootIdentity {
+                v: V,
+                scope_id: PARENT_SCOPE,
+                ipns_name: PARENT_NAME,
+                owner_enc_pub: &owner_enc_pub,
+                parent_node_seed: None,
+                pseudonym_signer: &owner_pseudonym,
+            },
+            seeds: ResealSeeds {
+                override_seed: &parent_override_seed,
+                read_epoch: 3,
+                prev: None::<PrevEpochSeed<'_>>,
+                write_scope_seed: &parent_write_scope_seed,
+                write_epoch: 2,
+                pointer_read_key: &parent_pointer_read_key,
+            },
+            commitment: &parent_commitment,
+            commitment_sig: &parent_commitment_sig,
+            grant_ledger: &[],
+            write_history_link: &[],
+            current_child_index: &[],
+            carried_history_links: &[],
+        };
+        block_on(create_read_grant(
+            &mut entropy,
+            &floors,
+            &net,
+            &net,
+            &recorder,
+            &grantee,
+            &recipient,
+            &owner,
+            &parent,
+        ))
+        .expect("grant creation succeeds");
+
+        let keys = recorder.idempotency_keys.borrow();
+        assert_eq!(keys.len(), 1, "exactly one mailbox post per grant");
+        keys[0].clone()
     }
 
     /// A read grant with the given subtree, run against fresh fakes on seed
@@ -774,5 +899,20 @@ mod tests {
         let (b_outcome, b_pub, _) = run(42, &[], None, Ok(()));
         assert_eq!(a_outcome.unwrap(), b_outcome.unwrap());
         assert_eq!(a_pub, b_pub, "same seed → byte-identical published records");
+    }
+
+    #[test]
+    fn idempotency_key_differs_per_recipient_for_the_same_folder() {
+        // The mailbox idempotency key binds the per-recipient blinded tag, not the
+        // shared scope_id: two recipients of the SAME folder must post distinct
+        // keys so the server can't correlate the sharing edge via
+        // sha256(sender : key).
+        let key_a = idempotency_key_for(&recipient_enc());
+        let key_b = idempotency_key_for(&X25519Secret::from_scalar([0x77; 32]));
+        assert!(key_a.starts_with("grant:"));
+        assert_ne!(
+            key_a, key_b,
+            "same folder, different recipients → different idempotency keys"
+        );
     }
 }
