@@ -1023,6 +1023,82 @@ fn simulation_n_engines_one_record_store_adversarial() {
     );
 }
 
+#[test]
+fn non_empty_history_link_authenticates_and_rejects_tamper_and_replay() {
+    // Every other fixture leaves history_links empty, so the STRUCT_TAG_HISTORY_LINK
+    // recompute-and-verify loop is exercised here over a populated list (#687): a
+    // valid link authenticates, a tampered sealed body is rejected, and a link
+    // validly signed for a different epoch (cross-epoch replay) recomputes a
+    // preimage the authenticated envelope epoch never covered.
+    let fx = Fixture::new();
+    let sealed = b"prior-write-epoch-history-link".to_vec();
+    let sign_link = |epoch: u64, bytes: &[u8]| -> [u8; 64] {
+        sign_structure(
+            &fx.owner_pseudonym,
+            &StructureSigInput::over_ciphertext(
+                fx.scope_id,
+                epoch,
+                STRUCT_TAG_HISTORY_LINK,
+                None,
+                bytes,
+            ),
+        )
+        .to_bytes()
+    };
+
+    // Valid link signed over the envelope epoch passes through the loop.
+    let mut candidate = fx.candidate(1);
+    candidate.grant_section.history_links.push(SignedSealed {
+        sealed: sealed.clone(),
+        signature: sign_link(fx.epoch, &sealed),
+        unknown: Vec::new(),
+    });
+    block_on(adopt(
+        &InMemoryFloorStore::default(),
+        &fx.reader(),
+        &candidate,
+    ))
+    .expect("valid non-empty history link adopts");
+
+    // Tamper: mutate the sealed bytes but keep the old signature — the recomputed
+    // preimage no longer matches, rejecting the whole record.
+    let mut tampered = fx.candidate(1);
+    let mut bad = sealed.clone();
+    bad[0] ^= 0xFF;
+    tampered.grant_section.history_links.push(SignedSealed {
+        sealed: bad,
+        signature: sign_link(fx.epoch, &sealed),
+        unknown: Vec::new(),
+    });
+    let rej = block_on(adopt(
+        &InMemoryFloorStore::default(),
+        &fx.reader(),
+        &tampered,
+    ))
+    .unwrap_err();
+    let rej = rej.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "structure-signature-invalid");
+
+    // Cross-epoch replay: a link validly signed for a neighbouring epoch fails the
+    // gate's recompute at the authenticated envelope epoch.
+    let mut replayed = fx.candidate(1);
+    replayed.grant_section.history_links.push(SignedSealed {
+        sealed: sealed.clone(),
+        signature: sign_link(fx.epoch + 1, &sealed),
+        unknown: Vec::new(),
+    });
+    let rej = block_on(adopt(
+        &InMemoryFloorStore::default(),
+        &fx.reader(),
+        &replayed,
+    ))
+    .unwrap_err();
+    let rej = rej.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "structure-signature-invalid");
+}
+
 // ---------------------------------------------------------------------------
 // Trust-boundary hardening: ascent authority, cross-epoch structure replay, and
 // seed-blob envelope binding + read-key cross-check (blueprint/engine.md §405-408).

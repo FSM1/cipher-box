@@ -36,19 +36,28 @@
 //!
 //! Entries are ordered by `scope_id` ([u8; 16]) using Rust's byte-slice `Ord`
 //! (the documented cross-platform total order) so replayed / multi-writer runs
-//! converge to identical bytes. A `scope_id` names exactly one child, so the
-//! index is deduplicated on `scope_id`, keeping the **first-seen** entry for a
-//! given id (see [`canonicalize`]).
+//! converge to identical bytes. A `scope_id` names exactly one child, so
+//! permutation-independence holds over any set of **distinct** ids, and the
+//! index is deduplicated on `scope_id`. Two entries sharing an id but differing
+//! in `ipns_name`/unknown fields is an invariant violation the maintenance ops
+//! never emit; the **first-seen** dedup is the deliberate replace-wins operation
+//! policy ([`insert_child`] prepends the authoritative entry so it wins), not a
+//! content-level convergence tie-break (see [`canonicalize`]).
 
 use cipherbox_core::seal::ChildScopeRef;
 
 /// Order `entries` by `scope_id` byte `Ord` and dedup by `scope_id`, keeping the
 /// **first-seen** entry for each id. This is the deterministic-convergence
-/// primitive: any permutation of the same id set yields byte-identical output.
+/// primitive: any permutation of a set of **distinct** `scope_id`s yields
+/// byte-identical output.
 ///
 /// First-seen (not last) is the dedup rule because the maintenance ops
 /// ([`insert_child`], [`repair_observed`]) prepend the authoritative entry
-/// before canonicalizing, so a fresh add wins over a stale duplicate.
+/// before canonicalizing, so a fresh add wins over a stale duplicate. Because a
+/// `scope_id` names exactly one child, differing-content duplicates are an
+/// invariant violation the ops never produce; first-seen is the replace-wins
+/// operation policy, not a content tie-break, so a permutation-blind full-entry
+/// order would wrongly override that policy.
 pub fn canonicalize(entries: &[ChildScopeRef]) -> Vec<ChildScopeRef> {
     let mut sorted: Vec<ChildScopeRef> = entries.to_vec();
     // Stable sort keeps first-seen order among equal ids, so the retain below
@@ -184,6 +193,43 @@ mod tests {
         let out = insert_child(&[stale], fresh.clone());
         assert_eq!(out.len(), 1);
         assert_eq!(out[0], fresh, "fresh add wins over stale duplicate");
+    }
+
+    #[test]
+    fn reversed_duplicate_inserts_converge_on_last_authoritative_write() {
+        // CR #741: differing-content dups are resolved by the op (last insert
+        // wins), not by a permutation-blind tie-break. Convergence tracks the
+        // latest authoritative write, independent of prior content or sibling
+        // build order.
+        let sib = child(0x10, "sib");
+        let stale = ChildScopeRef::new([0x42; 16], b"stale".to_vec());
+        let fresh = ChildScopeRef::new([0x42; 16], b"fresh".to_vec());
+
+        // Two writers both end with `fresh` inserted last over the same siblings,
+        // reached via different prior content / build order → identical bytes.
+        let a = insert_child(&insert_child(&[stale.clone()], sib.clone()), fresh.clone());
+        let b = insert_child(&insert_child(&[], sib.clone()), fresh.clone());
+        assert_eq!(
+            a, b,
+            "converged bytes independent of prior content and order"
+        );
+        let entry = |v: &[ChildScopeRef]| {
+            v.iter()
+                .find(|e| e.scope_id == [0x42; 16])
+                .unwrap()
+                .ipns_name
+                .clone()
+        };
+        assert_eq!(
+            entry(&a),
+            b"fresh",
+            "last-inserted authoritative entry wins"
+        );
+
+        // Inserting `stale` last instead keeps `stale` — replace-wins is the op
+        // policy a full-entry canonicalize tie-break would wrongly override.
+        let c = insert_child(&insert_child(&[fresh.clone()], sib.clone()), stale.clone());
+        assert_eq!(entry(&c), b"stale");
     }
 
     #[test]
