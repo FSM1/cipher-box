@@ -31,6 +31,7 @@
 //! trigger event ([`rebase::ReplayReport::scope_exit_triggers`]); the rotation
 //! primitives themselves land with the rotation slice.
 
+pub mod boot;
 pub mod model;
 pub mod op;
 pub mod overlay;
@@ -40,6 +41,7 @@ pub mod staging;
 pub mod staleness;
 pub mod tick;
 
+pub use boot::{ColdStartError, ColdStartOutcome, ColdStartParams, RootResolve, cold_start};
 pub use model::{Link, NodeMeta, Snapshot, collation_key, suffix_name};
 pub use op::{Op, OpDecodeError, OpKind};
 pub use overlay::apply_overlay;

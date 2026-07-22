@@ -19,15 +19,21 @@ use core::fmt;
 use core::pin::Pin;
 use std::rc::Rc;
 
+use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::entropy::Entropy;
-use crate::net::{HeldRecord, LivenessControl, RE_PUT_INTERVAL, keyless_re_put, run_liveness_loop};
+use crate::net::{
+    Adopter, HeldRecord, LivenessControl, RE_PUT_INTERVAL, keyless_re_put, run_liveness_loop,
+};
 use crate::profile::SyncTimingProfile;
-use crate::seams::{OpId, Scheduler, SeamSet, SeamTypes};
+use crate::seams::{OpId, Scheduler, SeamSet, SeamTypes, StagingStore};
 use crate::session::SessionIdentity;
+use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
+use crate::sync::pointer::PointerFetch;
+use crate::sync::rebase::decode_queue;
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
 /// non-secret, and location-independent — routes and commands key on it,
@@ -461,6 +467,76 @@ impl<T: SeamTypes> Engine<T> {
         self.session.as_ref()
     }
 
+    /// Run the cold-start live-session data path — the ordered chain composed on
+    /// top of the derived [`SessionIdentity`] (blueprint/engine.md cold-start
+    /// sequence): vault-pointer resolve → floor cold-seed (fail-closed on
+    /// regression) → current root name adoption through the gate → first
+    /// [`Event::SnapshotUpdated`] with the pending-op overlay, cache-first from
+    /// the snapshot cache.
+    ///
+    /// Reads every seam from the engine, the login secret from
+    /// [`session`](Self::session), and the pending ops from the durable staging
+    /// store; emits no clock/RNG-derived value, so the whole chain is
+    /// deterministic off the injected seams. The record-plane fetchers enter as
+    /// the two seam traits the resolver slices (#745/#746) implement:
+    /// [`PointerFetch`] for the pointer block and [`Adopter`] for the root record.
+    ///
+    /// `owner_identity` is the auth-provided contact-code-anchored identity that
+    /// signs the re-point object — the vault-pointer walk's fail-closed anchor.
+    // Live composition consumed by the facade cold-start test; the resolver slice
+    // (#745/#746) supplies the concrete `PointerFetch`/`Adopter` at the `start`
+    // call site.
+    #[allow(dead_code)]
+    pub(crate) async fn cold_start_data_path<Pf, Ad>(
+        &mut self,
+        pointer_fetch: &Pf,
+        adopter: &Ad,
+        owner_identity: &EcdsaVerifier,
+        root_scope_id: [u8; 16],
+        payload_version: u64,
+        root: NodeId,
+    ) -> Result<ColdStartOutcome, ColdStartError>
+    where
+        Pf: PointerFetch,
+        Ad: Adopter,
+    {
+        let raw = self
+            .seams
+            .staging_store
+            .queued_ops()
+            .await
+            .map_err(ColdStartError::Seam)?;
+        let (decoded, _undecodable) = decode_queue(&raw);
+        let pending: Vec<_> = decoded.into_iter().map(|(_id, op)| op).collect();
+
+        let session = self
+            .session
+            .as_ref()
+            .expect("cold start runs after start derives the session");
+        let params = ColdStartParams {
+            login_secret: session.login_secret(),
+            owner_identity,
+            root_scope_id,
+            payload_version,
+            root,
+            pending_ops: &pending,
+        };
+        let events = self.events.clone();
+        let mut emit = |event: Event| {
+            let _ = events.unbounded_send(event);
+        };
+        cold_start(
+            pointer_fetch,
+            adopter,
+            &self.seams.floor_store,
+            &self.seams.record_transport,
+            &self.seams.snapshot_cache,
+            &params,
+            &mut emit,
+        )
+        .await
+    }
+
     /// Spawn the ~hourly keyless re-PUT loop (blueprint/engine.md "Liveness"):
     /// actively-used vaults keep their own records alive off the injected
     /// scheduler, so no client depends on the API republisher. The task holds
@@ -637,5 +713,193 @@ mod tests {
             "command not implemented yet: create"
         );
         assert_eq!(EngineError::NotStarted.to_string(), "engine not started");
+    }
+
+    // --- cold-start data path composition ---
+
+    mod cold_start {
+        use super::*;
+
+        use std::sync::{Arc, Mutex};
+
+        use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+        use cipherbox_core::kdf;
+        use cipherbox_core::payload::RepointObject;
+        use cipherbox_core::seal::ReadBody;
+        use cipherbox_core::suite::ecdsa::EcdsaSigner;
+        use cipherbox_core::suite::ed25519::Ed25519Signer;
+
+        use crate::gate::Adopted;
+        use crate::seams::{EndpointId, SeamResult};
+        use crate::sync::boot::RootResolve;
+        use crate::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
+        use crate::testkit::FakeDevice;
+
+        const SECRET: &[u8] = b"facade-cold-start-secret-fixture";
+        const ROOT_SCOPE: [u8; 16] = [0u8; 16];
+        const VERSION: u64 = 1;
+
+        fn owner() -> EcdsaSigner {
+            EcdsaSigner::from_scalar(&[3u8; 32]).expect("valid scalar")
+        }
+
+        fn root_signer() -> Ed25519Signer {
+            kdf::ipns_keypair(&[9u8; 32])
+        }
+
+        fn root_name() -> IpnsName {
+            IpnsName::from_public_key(&root_signer().verifying_key())
+        }
+
+        /// A scripted vault-pointer network keyed by the login secret's indexed
+        /// names.
+        #[derive(Clone, Default)]
+        struct ScriptedPointers {
+            blocks: Arc<Mutex<std::collections::HashMap<String, Vec<u8>>>>,
+        }
+
+        impl ScriptedPointers {
+            fn seal_index(&self, index: u64, min_read_epoch: u64, write_epoch: u64) {
+                let read_key =
+                    kdf::pointer_read_key(kdf::owner_pointer_seed(SECRET).as_bytes(), &ROOT_SCOPE);
+                let object = RepointObject {
+                    scope_id: ROOT_SCOPE,
+                    current_root: root_name(),
+                    write_epoch,
+                    min_read_epoch,
+                    prev_root: None,
+                };
+                let mut entropy = SeededEntropy::new(index);
+                let block = seal_repoint(
+                    SessionRole::Owner,
+                    &mut entropy,
+                    read_key.as_bytes(),
+                    VERSION,
+                    &owner(),
+                    &object,
+                )
+                .unwrap();
+                self.blocks
+                    .lock()
+                    .unwrap()
+                    .insert(vault_pointer_name(SECRET, index).as_str().to_owned(), block);
+            }
+        }
+
+        impl PointerFetch for ScriptedPointers {
+            async fn fetch(&self, name: &IpnsName) -> SeamResult<Option<Vec<u8>>> {
+                Ok(self.blocks.lock().unwrap().get(name.as_str()).cloned())
+            }
+        }
+
+        #[derive(Clone)]
+        struct AdoptingAdopter;
+
+        impl Adopter for AdoptingAdopter {
+            async fn adopt(
+                &self,
+                _name: &IpnsName,
+                _record_bytes: &[u8],
+            ) -> Result<Adopted, crate::gate::GateError> {
+                Ok(Adopted {
+                    read_body: ReadBody::Folder {
+                        created_at: 0,
+                        modified_at: 0,
+                        children: Vec::new(),
+                        unknown: Vec::new(),
+                    },
+                    sequence: 1,
+                    epoch: 1,
+                })
+            }
+        }
+
+        /// Seed a valid signed IPNS record at the root name across the device's
+        /// endpoints so the gated resolve fetches a record to adopt.
+        fn seed_root_record(device: &FakeDevice) {
+            let record = IpnsRecord::create_v2(
+                &root_signer(),
+                b"/ipfs/bafyrootmeta",
+                1,
+                0,
+                "2099-01-01T00:00:00Z",
+            )
+            .marshal();
+            for endpoint in [
+                EndpointId::new("fake:someguy"),
+                EndpointId::new("fake:public-routing"),
+            ] {
+                device
+                    .record_store
+                    .seed_record(&endpoint, root_name().as_str(), record.clone());
+            }
+        }
+
+        /// A started engine on a world whose clock sits at `clock`, with a valid
+        /// vault pointer and root record already published.
+        fn started_at(clock: UnixMillis) -> (Engine<FakeSeamTypes>, EventStream, ScriptedPointers) {
+            let world = FakeWorld::new();
+            world.scheduler.advance_to(clock);
+            let device = world.device(b"alice-pk");
+            seed_root_record(&device);
+            let (mut engine, events) = Engine::new(
+                device.seam_set(),
+                Box::new(SeededEntropy::new(42)),
+                SyncTimingProfile::CI,
+            );
+            block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).unwrap();
+            let pointers = ScriptedPointers::default();
+            pointers.seal_index(0, 1, 1);
+            pointers.seal_index(1, 3, 2);
+            (engine, events, pointers)
+        }
+
+        fn drive(
+            engine: &mut Engine<FakeSeamTypes>,
+            pointers: &ScriptedPointers,
+        ) -> ColdStartOutcome {
+            block_on(engine.cold_start_data_path(
+                pointers,
+                &AdoptingAdopter,
+                &owner().verifying_key(),
+                ROOT_SCOPE,
+                VERSION,
+                NodeId([0xAB; 16]),
+            ))
+            .unwrap()
+        }
+
+        #[test]
+        fn runs_the_full_sequence_and_emits_on_the_event_stream() {
+            let (mut engine, mut events, pointers) = started_at(UnixMillis(123_456));
+            let outcome = drive(&mut engine, &pointers);
+
+            assert_eq!(
+                outcome.vault_pointer.unwrap().index,
+                1,
+                "highest valid index"
+            );
+            assert_eq!(outcome.root_resolve, Some(RootResolve::Adopted));
+            // Floors seeded from the owner-vouched re-point.
+            assert_eq!(
+                block_on(crate::gate::floor::read_epoch_floor(
+                    &engine.seams.floor_store,
+                    &ROOT_SCOPE
+                ))
+                .unwrap(),
+                Some(3)
+            );
+            // The first snapshot event reached the host's stream.
+            assert_eq!(block_on(events.next()), Some(Event::SnapshotUpdated));
+        }
+
+        #[test]
+        fn reads_no_clock_two_engines_on_independent_clocks_agree() {
+            let (mut a, _ea, pa) = started_at(UnixMillis(0));
+            let (mut b, _eb, pb) = started_at(UnixMillis(5_000_000));
+            // The data path is a pure function of the seams + session: the two
+            // outcomes match despite the engines' clocks sitting far apart.
+            assert_eq!(drive(&mut a, &pa), drive(&mut b, &pb));
+        }
     }
 }
