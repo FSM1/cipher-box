@@ -5,6 +5,7 @@ import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { User } from '../auth/entities/user.entity';
 import { MailboxMessage } from '../mailbox/entities/mailbox-message.entity';
 import { AddMailboxMessages1784519962991 } from '../migrations/1784519962991-AddMailboxMessages';
+import { AddMailboxReceivedAtIndex1784692000000 } from '../migrations/1784692000000-AddMailboxReceivedAtIndex';
 import { AddNameInventoryAndPinnedCids1784566605863 } from '../migrations/1784566605863-AddNameInventoryAndPinnedCids';
 import { AddRecordCache1784600557946 } from '../migrations/1784600557946-AddRecordCache';
 import { InitAuthSchema1784513040045 } from '../migrations/1784513040045-InitAuthSchema';
@@ -40,6 +41,7 @@ const MIGRATIONS = [
   AddMailboxMessages1784519962991,
   AddNameInventoryAndPinnedCids1784566605863,
   AddRecordCache1784600557946,
+  AddMailboxReceivedAtIndex1784692000000,
 ];
 
 export interface IntegrationDatabase {
