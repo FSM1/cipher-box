@@ -1,0 +1,44 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "e93b68a81be2",
+  "strategy": "manual-commit",
+  "branch": "chore/desktop-hw-gates",
+  "checkpoints_count": 7,
+  "files_touched": [
+    "blueprint/desktop.md",
+    "blueprint/testing.md",
+    "tools/hw-gates/RESULTS.md",
+    "tools/hw-gates/fskit-spike/.gitignore",
+    "tools/hw-gates/fskit-spike/Makefile",
+    "tools/hw-gates/fskit-spike/README.md",
+    "tools/hw-gates/fskit-spike/RESULTS.md",
+    "tools/hw-gates/fskit-spike/client/client.entitlements",
+    "tools/hw-gates/fskit-spike/client/g5mount.m",
+    "tools/hw-gates/fskit-spike/harness/g5inval.c",
+    "tools/hw-gates/fskit-spike/harness/g5probe.c",
+    "tools/hw-gates/fskit-spike/harness/g5sweep.c",
+    "tools/hw-gates/fskit-spike/host/Info.plist",
+    "tools/hw-gates/fskit-spike/host/main.c",
+    "tools/hw-gates/fskit-spike/module/Gate5FS.h",
+    "tools/hw-gates/fskit-spike/module/Gate5FS.m",
+    "tools/hw-gates/fskit-spike/module/Info.plist",
+    "tools/hw-gates/fskit-spike/module/main.swift",
+    "tools/hw-gates/fskit-spike/module/module.entitlements"
+  ],
+  "sessions": [
+    {
+      "metadata": "/e9/3b68a81be2/0/metadata.json",
+      "transcript": "/e9/3b68a81be2/0/full.jsonl",
+      "compact_transcript": "/e9/3b68a81be2/0/transcript.jsonl",
+      "content_hash": "/e9/3b68a81be2/0/content_hash.txt",
+      "prompt": "/e9/3b68a81be2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 382,
+    "cache_creation_tokens": 310839,
+    "cache_read_tokens": 33402679,
+    "output_tokens": 181464,
+    "api_call_count": 191
+  }
+}

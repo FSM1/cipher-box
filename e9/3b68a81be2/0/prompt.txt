@@ -1,0 +1,25 @@
+so I have gotten macos 27 beta installed and guess we can now handle gate 5
+
+---
+
+gate 5 is the fskit spike on https://github.com/FSM1/cipher-box/issues/644
+
+---
+
+how do I do a recovery boot on a utm vm?
+
+---
+
+ok shutting the vm down now.
+
+---
+
+ok, is any of this code going to be reused when implementing the desktop macos client app? basically trying to gate whether it's worth burning a 1/h coderabbit review cycle on this code now.
+
+---
+
+makes sense - regarding the SIP disable step that was necessary to test the fskit backend, would this be required when macos 27 is released for a production version of the desktop app utilizing this backend?
+
+---
+
+ok great, merging the PR now.
