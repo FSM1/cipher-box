@@ -520,18 +520,24 @@ impl<T: SeamTypes> Engine<T> {
         // entry is not re-decoded and re-emitted on every boot (#768). Staged
         // upload bytes live in a separate plane keyed by staging keys — never
         // touched here, so they are retained per the dead-letter contract
-        // (blueprint/engine.md #33 D6). `replay()` does not run on the
-        // cold-start happy path (it composes `apply_overlay`), so `decode_queue`
-        // is the only dead-letter source on boot at this stage.
+        // (blueprint/engine.md #33 D6).
+        //
+        // `DeadLetter` delivery is best-effort over a non-durable in-process
+        // channel, so hosts MUST dedup by `op_id`. Gate the durable removal on a
+        // successful send: a receiver dropped mid-teardown must not silently
+        // purge an unsurfaced entry — preserved, the next boot re-surfaces it.
         for (op_id, _reason) in &undecodable {
-            let _ = self
+            if self
                 .events
-                .unbounded_send(Event::DeadLetter { op_id: *op_id });
-            self.seams
-                .staging_store
-                .remove_op(*op_id)
-                .await
-                .map_err(ColdStartError::Seam)?;
+                .unbounded_send(Event::DeadLetter { op_id: *op_id })
+                .is_ok()
+            {
+                self.seams
+                    .staging_store
+                    .remove_op(*op_id)
+                    .await
+                    .map_err(ColdStartError::Seam)?;
+            }
         }
 
         let params = ColdStartParams {
@@ -1005,6 +1011,25 @@ mod tests {
             // so only the paint event fires — no re-emitted dead-letter.
             drive(&mut engine, &pointers);
             assert_eq!(block_on(events.next()), Some(Event::SnapshotUpdated));
+        }
+
+        #[test]
+        fn dropped_receiver_preserves_unsurfaced_dead_letter_across_a_boot() {
+            let (mut engine, events, pointers) = started_at(UnixMillis(123_456));
+            block_on(engine.seams.staging_store.enqueue_op(b"not-a-valid-op")).expect("enqueue");
+            // Receiver gone mid-teardown: the `DeadLetter` send fails, so the
+            // durable removal is gated off and the entry survives for next boot.
+            drop(events);
+
+            drive(&mut engine, &pointers);
+
+            assert_eq!(
+                block_on(engine.seams.staging_store.queued_ops())
+                    .unwrap()
+                    .len(),
+                1,
+                "an unsurfaced dead-letter is retained when the send fails"
+            );
         }
     }
 }
