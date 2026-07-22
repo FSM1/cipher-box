@@ -272,4 +272,48 @@ mod tests {
             "identity-signature-invalid"
         );
     }
+
+    #[test]
+    fn per_recipient_binding_both_verify() {
+        // The binding is per-recipient, not pinned to one key: a sender seals
+        // separately to R1 and R2 and both verify, while a cross-open fails
+        // HPKE rather than silently verifying (#712).
+        let s = sender();
+        let r1 = recipient();
+        let r2 = X25519Secret::from_scalar([0x42; 32]);
+        let b1 = seal_mailbox_payload(&r1.public(), &[0x51; 32], 2, &s, b"to-r1");
+        let b2 = seal_mailbox_payload(&r2.public(), &[0x52; 32], 2, &s, b"to-r2");
+        assert_eq!(open_mailbox_payload(&r1, 2, &b1).unwrap().payload, b"to-r1");
+        assert_eq!(open_mailbox_payload(&r2, 2, &b2).unwrap().payload, b"to-r2");
+        assert_eq!(
+            open_mailbox_payload(&r2, 2, &b1).unwrap_err().check(),
+            "hpke-open-failed"
+        );
+    }
+
+    #[test]
+    fn same_recipient_reseal_still_verifies() {
+        // The reject is specifically cross-recipient (#712), not "any re-seal
+        // breaks": R1 re-seals its own item to itself under a fresh ephemeral
+        // and it still verifies — the recipient tag, not the reseal act, is
+        // what the signature binds.
+        let r1 = recipient();
+        let block = seal_mailbox_payload(&r1.public(), &[0x54; 32], 2, &sender(), b"relayed");
+
+        let info = build_aad(&mailbox_ctx(2));
+        let m = decode(&block).unwrap().as_map().unwrap().clone();
+        let ct = m.get("ct").unwrap().as_bytes().unwrap().to_vec();
+        let enc = bytes_fixed::<{ hpke::ENC_LEN }>(m.get("enc").unwrap(), "enc").unwrap();
+        let inner = hpke_open(&r1, &enc, &info, &[], &ct).unwrap();
+
+        let resealed = hpke_seal(&r1.public(), &[0x55; 32], &info, &[], &inner);
+        let mut block2 = Map::new();
+        block2.insert("ct", Value::Bytes(resealed.ciphertext));
+        block2.insert("enc", Value::Bytes(resealed.enc.to_vec()));
+        let block2_bytes = encode(&Value::Map(block2));
+
+        let item = open_mailbox_payload(&r1, 2, &block2_bytes).unwrap();
+        assert_eq!(item.payload, b"relayed");
+        assert_eq!(item.sender_identity, sender().verifying_key());
+    }
 }
