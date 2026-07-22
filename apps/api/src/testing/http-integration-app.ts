@@ -27,6 +27,13 @@ export interface HttpIntegrationOptions {
   imports?: ModuleMetadata['imports'];
   controllers?: ModuleMetadata['controllers'];
   providers?: Provider[];
+  /**
+   * Import OpsModule — the global throttler + metrics. Default `true`. Set
+   * `false` for suites that exercise a rate-limited surface past its own limit
+   * (e.g. the auth flows fire far more than the auth surface's 10-request cap),
+   * where the throttler is not under test and would otherwise 429 valid calls.
+   */
+  withOps?: boolean;
 }
 
 /**
@@ -51,7 +58,7 @@ export async function createHttpIntegrationApp(
   const moduleRef = await Test.createTestingModule({
     imports: [
       ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
-      OpsModule,
+      ...(options.withOps === false ? [] : [OpsModule]),
       JwtModule.register({ secret: options.jwtSecret, signOptions: { expiresIn: 900 } }),
       ...(options.imports ?? []),
     ],
