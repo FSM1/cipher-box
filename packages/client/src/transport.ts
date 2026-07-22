@@ -9,6 +9,7 @@
  * changes when leadership swaps the transport underneath it.
  */
 
+import { CorrelatedTransport } from './correlatedTransport.js';
 import type {
   CommandDescriptor,
   EventDescriptor,
@@ -38,32 +39,21 @@ export interface EngineWorkerLike {
   terminate(): void;
 }
 
-interface Pending {
-  resolve: () => void;
-  reject: (error: Error) => void;
-}
-
 /**
  * UI ↔ own engine worker over `postMessage`. Correlates responses to requests
  * by a monotonic request id, so concurrent calls answered in any order never
  * confuse — the id is assigned here and echoed by the worker, never derived from
  * anything the worker controls.
  */
-export class LocalTransport implements EngineTransport {
-  private readonly pending = new Map<number, Pending>();
-  private readonly listeners = new Set<EngineEventListener>();
+export class LocalTransport extends CorrelatedTransport {
   private readonly ready: Promise<void>;
-  private nextId = 1;
   private closed = false;
-  // A fatal worker message, `error` event, or teardown latches this. Once set,
-  // the worker is dead, so every request rejects here instead of posting and
-  // waiting forever for a response that can never arrive.
-  private terminalError: Error | null = null;
   // Settles `ready` on teardown so a request awaiting cold start before the
   // worker's `ready` rejects instead of hanging forever.
   private rejectReady!: (error: Error) => void;
 
   constructor(private readonly worker: EngineWorkerLike) {
+    super();
     this.ready = new Promise<void>((resolveReady, rejectReady) => {
       this.rejectReady = rejectReady;
       this.worker.addEventListener('message', (event) => {
@@ -72,22 +62,11 @@ export class LocalTransport implements EngineTransport {
           case 'ready':
             resolveReady();
             return;
-          case 'response': {
-            const pending = this.pending.get(message.id);
-            if (!pending) return;
-            this.pending.delete(message.id);
-            if (message.ok) pending.resolve();
-            else pending.reject(new Error(message.error));
+          case 'response':
+            this.settle(message.id, message.ok, message.ok ? undefined : message.error);
             return;
-          }
           case 'event':
-            for (const listener of this.listeners) {
-              try {
-                listener(message.event);
-              } catch {
-                // One throwing subscriber must not drop the event for the rest.
-              }
-            }
+            this.emit(message.event);
             return;
           case 'fatal':
             rejectReady(new Error(message.error));
@@ -106,16 +85,15 @@ export class LocalTransport implements EngineTransport {
   }
 
   start(secret: ArrayBuffer): Promise<void> {
-    return this.request((id) => ({ type: 'start', id, secret }), [secret]);
+    return this.dispatch(this.ready, (id) =>
+      this.worker.postMessage({ type: 'start', id, secret }, [secret])
+    );
   }
 
   command(command: CommandDescriptor, transfer: Transferable[]): Promise<void> {
-    return this.request((id) => ({ type: 'command', id, command }), transfer);
-  }
-
-  subscribe(listener: EngineEventListener): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return this.dispatch(this.ready, (id) =>
+      this.worker.postMessage({ type: 'command', id, command }, transfer)
+    );
   }
 
   close(): void {
@@ -127,34 +105,5 @@ export class LocalTransport implements EngineTransport {
     this.rejectReady(error);
     this.fail(error);
     this.worker.terminate();
-  }
-
-  private request(build: (id: number) => WorkerRequest, transfer: Transferable[]): Promise<void> {
-    if (this.terminalError) return Promise.reject(this.terminalError);
-    return this.ready.then(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          if (this.terminalError) {
-            reject(this.terminalError);
-            return;
-          }
-          const id = this.nextId++;
-          this.pending.set(id, { resolve, reject });
-          try {
-            this.worker.postMessage(build(id), transfer);
-          } catch (error) {
-            // A synchronous post failure (detached buffer, bad transferable)
-            // must not strand the pending entry.
-            this.pending.delete(id);
-            reject(error instanceof Error ? error : new Error(String(error)));
-          }
-        })
-    );
-  }
-
-  private fail(error: Error): void {
-    this.terminalError ??= error;
-    for (const pending of this.pending.values()) pending.reject(error);
-    this.pending.clear();
   }
 }
