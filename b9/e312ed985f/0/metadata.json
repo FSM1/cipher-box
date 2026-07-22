@@ -58,6 +58,37 @@
         "label": "Skill: simplify",
         "default_collapsed": true
       }
+    },
+    {
+      "id": "claude-skill-toolu_01EzMrB2yLPx7cXYFwENA7ij",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "83545396f586",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 698,
+        "end": 699,
+        "entry_ids": [
+          "28f3b29a-97c2-4774-be11-a8a221b180a4"
+        ],
+        "tool_use_id": "toolu_01EzMrB2yLPx7cXYFwENA7ij"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01EzMrB2yLPx7cXYFwENA7ij"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security-review",
+        "default_collapsed": true
+      }
     }
   ],
   "session_metrics": {
