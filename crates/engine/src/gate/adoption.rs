@@ -262,8 +262,9 @@ pub struct ReaderContext<'a> {
     /// The reader's own derived scope read key for the read-body unseal.
     pub read_key: &'a [u8; 32],
     /// The reader's cached ancestor node seed — the trusted secret the expected
-    /// ascent keypair re-derives from. Required whenever `candidate.ascent` is
-    /// `Some`; a `None` here against a present ascent link is fail-closed
+    /// ascent keypair re-derives from. Required whenever
+    /// `candidate.grant_section.ascent_link` is `Some`; a `None` here against a
+    /// present ascent link is fail-closed
     /// (cannot verify).
     pub parent_node_seed: Option<[u8; 32]>,
     /// The reader's HPKE seed source, opened at the unseal stage; `None` for a
