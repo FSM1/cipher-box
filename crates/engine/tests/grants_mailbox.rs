@@ -1126,7 +1126,7 @@ fn owner_entry_seed_disagreement_raises_an_abuse_event() {
     // → a confirmed owner read (no abuse).
     match cross_check(&unseal_seed, Some(&unseal_seed), &unseal_seed, fx.epoch) {
         OwnerEntry::Confirmed { seed, epoch } => {
-            assert_eq!(seed, unseal_seed);
+            assert_eq!(*seed, unseal_seed);
             assert_eq!(epoch, fx.epoch);
         }
         OwnerEntry::Abuse(_) => panic!("agreement must confirm"),

@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 
 use cipherbox_core::suite::secret::SecretBytes;
+use zeroize::Zeroizing;
 
 use crate::secret_util::ct_eq_32;
 
@@ -58,11 +59,11 @@ impl OwnerSeedCache {
 
     /// Record a confirmed `{seed, epoch}` as canonical for a scope, replacing any
     /// prior entry (the confirmed read is authoritative).
-    pub fn refresh(&mut self, scope_id: [u8; 16], seed: [u8; 32], epoch: u64) {
+    pub fn refresh(&mut self, scope_id: [u8; 16], seed: Zeroizing<[u8; 32]>, epoch: u64) {
         self.by_scope.insert(
             scope_id,
             OwnerSeedEntry {
-                seed: SecretBytes::new(seed),
+                seed: SecretBytes::new(*seed),
                 epoch,
             },
         );
@@ -91,7 +92,7 @@ pub enum OwnerEntry {
     /// canonical `{seed, epoch}`.
     Confirmed {
         /// The agreed override seed.
-        seed: [u8; 32],
+        seed: Zeroizing<[u8; 32]>,
         /// The epoch it belongs to.
         epoch: u64,
     },
@@ -127,7 +128,7 @@ pub fn cross_check(
         }
     }
     OwnerEntry::Confirmed {
-        seed: *unseal_seed,
+        seed: Zeroizing::new(*unseal_seed),
         epoch,
     }
 }
@@ -146,7 +147,7 @@ mod tests {
         let mut cache = OwnerSeedCache::new();
         match outcome {
             OwnerEntry::Confirmed { seed, epoch } => {
-                assert_eq!(seed, SEED);
+                assert_eq!(*seed, SEED);
                 assert_eq!(epoch, 4);
                 cache.refresh(SCOPE, seed, epoch);
             }
@@ -186,8 +187,8 @@ mod tests {
     #[test]
     fn refresh_replaces_the_prior_canonical_entry() {
         let mut cache = OwnerSeedCache::new();
-        cache.refresh(SCOPE, SEED, 1);
-        cache.refresh(SCOPE, OTHER, 2);
+        cache.refresh(SCOPE, Zeroizing::new(SEED), 1);
+        cache.refresh(SCOPE, Zeroizing::new(OTHER), 2);
         assert_eq!(cache.get(&SCOPE).unwrap().seed(), &OTHER);
         assert_eq!(cache.get(&SCOPE).unwrap().epoch, 2);
     }

@@ -121,7 +121,7 @@ impl ReceivedShare {
         self.sharer_identity_pk == other.sharer_identity_pk
             && self.display_name == other.display_name
             && self.permission == other.permission
-            && self.pointer_read_key() == other.pointer_read_key()
+            && crate::secret_util::ct_eq_32(self.pointer_read_key(), other.pointer_read_key())
     }
 }
 
