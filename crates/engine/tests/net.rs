@@ -26,9 +26,9 @@ use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
 use cipherbox_engine::net::eol;
 use cipherbox_engine::net::{
-    Adopter, HeldRecord, PublishError, PublishOutcome, PublishRequest, RE_PUT_INTERVAL,
-    ResolveOutcome, ReviveError, ReviveRequest, eol_republish, keyless_re_put, publish, resolve,
-    revive,
+    Adopter, HeldRecord, LivenessControl, PublishError, PublishOutcome, PublishRequest,
+    RE_PUT_INTERVAL, ResolveOutcome, ReviveError, ReviveRequest, eol_republish, keyless_re_put,
+    publish, resolve, revive, run_liveness_loop,
 };
 use cipherbox_engine::seams::{
     FloorStore, HttpResponse, RecordTransport, Scheduler, SeamError, SeamResult, SnapshotCache,
@@ -992,4 +992,65 @@ fn multi_day_eol_timeline_publish_renew_lapse_revive() {
     .expect("revive after lapse");
     assert_eq!(outcome, PublishOutcome::Published { sequence: 3 });
     assert_all_endpoints_at(&world.record_store, &name, 3);
+}
+
+#[test]
+fn run_liveness_loop_fires_a_pass_per_interval_off_the_injected_clock() {
+    let world = FakeWorld::new();
+    let scheduler = world.scheduler.clone().with_auto_advance();
+    let passes = Arc::new(Mutex::new(0u32));
+
+    let counter = passes.clone();
+    block_on(run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || {
+        let counter = counter.clone();
+        async move {
+            let mut n = counter.lock().unwrap();
+            *n += 1;
+            // Third pass ends the loop — the driver stops on `Stop`, not on a
+            // hardcoded count of its own.
+            if *n == 3 {
+                LivenessControl::Stop
+            } else {
+                LivenessControl::Continue
+            }
+        }
+    }));
+
+    assert_eq!(*passes.lock().unwrap(), 3, "one pass per hourly interval");
+    assert_eq!(
+        scheduler.now(),
+        UnixMillis(3 * 60 * 60 * 1000),
+        "three hourly intervals elapsed on virtual time, no direct clock"
+    );
+}
+
+#[test]
+fn run_liveness_loop_keyless_re_puts_the_held_set_each_pass() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(14);
+    let name = name_of(&s);
+    let endpoints = world.record_store.endpoints();
+
+    // One endpoint dropped the record; the session still holds it.
+    let bytes = record(&s, VALUE, 1, 0);
+    world
+        .record_store
+        .seed_record(&endpoints[1], name.as_str(), bytes.clone());
+    let held = vec![HeldRecord {
+        routing_key: name.as_str().to_owned(),
+        record_bytes: bytes,
+    }];
+
+    let scheduler = world.scheduler.clone().with_auto_advance();
+    let transport = device.record_store.clone();
+    block_on(run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
+        keyless_re_put(&transport, &held).await;
+        LivenessControl::Stop
+    }));
+
+    // The loop drove the job body: the dropped record is alive on every
+    // endpoint again after one interval.
+    assert_all_endpoints_at(&world.record_store, &name, 1);
+    assert_eq!(scheduler.now(), UnixMillis(60 * 60 * 1000));
 }
