@@ -244,12 +244,14 @@ impl StagingStore for StagingStoreAdapter {
 
     async fn queued_ops(&self) -> SeamResult<Vec<(OpId, Vec<u8>)>> {
         let value = self.js.queued_ops().await.map_err(seam_error)?;
-        let array: Array = value.dyn_into().expect("queuedOps must return an array");
+        let array: Array = value
+            .dyn_into()
+            .map_err(|_| SeamError::new("queuedOps must return an array"))?;
         let mut ops = Vec::with_capacity(array.length() as usize);
         for entry in array.iter() {
             let pair: Array = entry
                 .dyn_into()
-                .expect("each queued op must be a [id, bytes] pair");
+                .map_err(|_| SeamError::new("each queued op must be a [id, bytes] pair"))?;
             let op_id = OpId(required_u64(pair.get(0)));
             let bytes = pair.get(1).unchecked_into::<Uint8Array>().to_vec();
             ops.push((op_id, bytes));
@@ -292,7 +294,9 @@ impl StagingStore for StagingStoreAdapter {
 
     async fn staged_keys(&self) -> SeamResult<Vec<Vec<u8>>> {
         let value = self.js.staged_keys().await.map_err(seam_error)?;
-        let array: Array = value.dyn_into().expect("stagedKeys must return an array");
+        let array: Array = value
+            .dyn_into()
+            .map_err(|_| SeamError::new("stagedKeys must return an array"))?;
         Ok(array
             .iter()
             .map(|item| item.unchecked_into::<Uint8Array>().to_vec())
