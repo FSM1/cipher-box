@@ -123,13 +123,7 @@ pub struct VaultPointerAdoption {
 /// reaches beyond it, so a forged record cannot truncate the chain *below* an
 /// already-adopted valid index.
 ///
-/// The `login_secret` stays a raw read-only borrow rather than a pre-derived
-/// probe capability: the walk needs two *distinct* frozen KDF edges keyed on
-/// the secret itself — `owner-pointer-seed` (for the read key) and the
-/// per-index `vault-pointer-index` signer, unbounded across the probe — with no
-/// shared intermediate seed to hand off instead. The secret is already
-/// `Zeroizing` at its terminal owner (the session identity); this borrow is
-/// read-only, never logged, and this is its sole consumer.
+/// `login_secret` is a read-only borrow; sole consumer; zeroized at the session owner.
 pub async fn resolve_vault_pointer<F: PointerFetch>(
     fetch: &F,
     login_secret: &[u8],

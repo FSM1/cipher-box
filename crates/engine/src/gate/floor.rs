@@ -117,12 +117,12 @@ impl std::error::Error for ColdSeedError {}
 /// behind the `Root` arm alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnchorRole {
-    /// The vault/root anchor: the read epoch is owner-authored, so the
-    /// read-epoch regression check is sound and runs (alongside write-epoch).
+    /// The vault/root anchor: read-epoch check runs (alongside write-epoch).
     Root,
-    /// A shared scope: the read-epoch floor is unseal-advanced by legitimate
-    /// grantee rotation, so only the unconditionally-sound write-epoch check
-    /// runs — the read-epoch check is skipped by construction.
+    /// A shared scope: read-epoch check skipped; only write-epoch runs.
+    ///
+    /// A production `Shared` caller MUST select this role from authenticated
+    /// scope identity, never a network/`RepointObject` field (#775).
     Shared,
 }
 
@@ -238,12 +238,8 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
 /// boundary), a trust violation never mere staleness. Only when nothing
 /// regresses does it advance the floors via the monotonic-max [`cold_seed`].
 ///
-/// The **write-epoch** check is unconditionally sound and runs for every
-/// [`AnchorRole`]. The **read-epoch** (revocation) check is sound only at the
-/// root/vault anchor and runs only under [`AnchorRole::Root`] — see
-/// [`AnchorRole`] for why a shared scope's read-epoch floor legitimately
-/// advances past `minReadEpoch`, making the check a self-inflicted DoS there
-/// (#763). The role gate makes the unsound combination unrepresentable.
+/// The read-epoch check runs under [`AnchorRole::Root`] only; the write-epoch
+/// check is unconditional — see [`AnchorRole`] for why.
 ///
 /// The single-writer engine reads the floors and advances them with no
 /// concurrent adopt in between (blueprint/engine.md "Facade" — one live
