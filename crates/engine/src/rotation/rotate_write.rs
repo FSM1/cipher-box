@@ -485,7 +485,12 @@ where
     for node in descendants.iter().rev() {
         let new_name = derive_write_name(&write_scope_seed, &node.node_id);
         republish_node(publisher, node.node_id, &new_name, new_write_epoch, false).await?;
-        interior_old_names.push(node.current_name.clone());
+        // Retire only a superseded name, never one a node still lives at: on a
+        // post-flip resume the resolver reports the already-migrated (new) name as
+        // current, and retiring it would orphan a live descendant (never orphan).
+        if node.current_name != new_name {
+            interior_old_names.push(node.current_name.clone());
+        }
     }
 
     // 6) Root LAST: republish the root at its new name. The old root name is NOT
@@ -709,6 +714,29 @@ mod tests {
             Ok(WriteScopeNode {
                 node_id: *node_id,
                 current_name: old_name_of(node_id),
+                child_node_ids: children,
+            })
+        }
+    }
+
+    /// A resolver modelling a resume AFTER the pointer already flipped: every node
+    /// reports its NEW (post-rotation) name as current, as a resolver walking the
+    /// flipped pointer would. Retiring any of these would orphan a live descendant.
+    struct PostFlipResolver {
+        nodes: HashMap<[u8; 16], Vec<[u8; 16]>>,
+        seed: [u8; 32],
+    }
+
+    impl WriteSubtreeResolver for PostFlipResolver {
+        async fn resolve_node(&self, node_id: &[u8; 16]) -> Result<WriteScopeNode, ResolveFailure> {
+            let children = self
+                .nodes
+                .get(node_id)
+                .ok_or(ResolveFailure::Unavailable)?
+                .clone();
+            Ok(WriteScopeNode {
+                node_id: *node_id,
+                current_name: derive_write_name(&self.seed, node_id),
                 child_node_ids: children,
             })
         }
@@ -1090,6 +1118,56 @@ mod tests {
         assert!(
             !state.retired.borrow().contains(current_root.as_str()),
             "root lingers"
+        );
+    }
+
+    #[test]
+    fn resume_after_flip_never_retires_a_live_name() {
+        // A resume AFTER the pointer already flipped: the resolver reports every
+        // node's NEW name as current (the migrated records the flipped pointer now
+        // reaches). The wave must retire NONE of them — retiring a name a node still
+        // lives at would orphan a live descendant. Without the orphan guard this
+        // batch-retires the four live interior names.
+        let owner = owner();
+        let (c, sig) = commitment(&owner);
+        let recovered_seed = [0x77u8; 32];
+        let mut nodes = HashMap::new();
+        nodes.insert(SCOPE, vec![nid(0x02), nid(0x03)]);
+        nodes.insert(nid(0x02), vec![nid(0x04), nid(0x05)]);
+        nodes.insert(nid(0x03), Vec::new());
+        nodes.insert(nid(0x04), Vec::new());
+        nodes.insert(nid(0x05), Vec::new());
+        let resolver = PostFlipResolver {
+            nodes,
+            seed: recovered_seed,
+        };
+        let state = WaveState::default();
+        // The fully-migrated published state: every new name already landed.
+        for id in [SCOPE, nid(0x02), nid(0x03), nid(0x04), nid(0x05)] {
+            let name = derive_write_name(&recovered_seed, &id);
+            state
+                .published
+                .borrow_mut()
+                .insert(name.as_str().to_owned());
+        }
+        let publisher = FakePublisher::new(state.clone());
+        let current_root = old_name_of(&SCOPE);
+
+        block_on(async {
+            let mut e = SeededEntropy::new(50);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &publisher,
+                &plan(&owner, &c, &sig, &current_root, Some(&recovered_seed)),
+            )
+            .await
+        })
+        .expect("the resumed wave completes");
+
+        assert!(
+            state.retired.borrow().is_empty(),
+            "no live (already-migrated) name is retired on a post-flip resume"
         );
     }
 
