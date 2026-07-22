@@ -13,9 +13,11 @@
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, Envelope, GrantBlobPayload, GrantSetCommitment, GrantSetEntry, Permission,
-    ReadBody, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_WRITE_BODY, StructureSigInput, WriteBody,
-    encode_write_body, seal, seal_grant_blob, seal_read_body, sign_grant_set, sign_structure,
+    AadContext, Envelope, GrantBlobPayload, GrantSection, GrantSetCommitment, GrantSetEntry,
+    OverrideSeedPayload, Permission, ReadBody, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_WRITE_BODY, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput,
+    WriteBody, encode_write_body, seal, seal_grant_blob, seal_owner_blob, seal_read_body,
+    sign_grant_set, sign_structure,
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{
@@ -25,7 +27,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use cipherbox_engine::api::ApiClient;
-use cipherbox_engine::gate::{Candidate, SignedStructure};
+use cipherbox_engine::gate::Candidate;
 use cipherbox_engine::grants::owner_entry::{OwnerEntry, cross_check};
 use cipherbox_engine::grants::revocation::{ResolutionClass, ResolutionFacts, classify};
 use cipherbox_engine::grants::{
@@ -47,6 +49,7 @@ const NONCE_READ_BODY: [u8; 24] = [11u8; 24];
 const NONCE_WRITE_BODY: [u8; 24] = [22u8; 24];
 const EPH_GRANT: [u8; 32] = [5u8; 32];
 const EPH_GRANT_2: [u8; 32] = [6u8; 32];
+const EPH_OWNER: [u8; 32] = [8u8; 32];
 const EPH_MAILBOX: [u8; 32] = [7u8; 32];
 const POINTER_READ_KEY: [u8; 32] = [0x8A; 32];
 
@@ -67,7 +70,9 @@ struct GrantFixture {
     grant_blob_ct: Vec<u8>,
     commitment: GrantSetCommitment,
     commitment_sig: EcdsaSignature,
-    structures: Vec<SignedStructure>,
+    /// The record's grant section (commitment, grant blob, owner blob, write-body
+    /// with real structure signatures) the gate enumerates and recomputes (#687).
+    grant_section: GrantSection,
     envelope: Envelope,
     owner_contact: Vec<u8>,
 }
@@ -116,16 +121,39 @@ impl GrantFixture {
             &grant_aad,
             &grant_payload,
         );
-        let grant_blob_input = StructureSigInput::over_ciphertext(
-            scope_id,
+        // Sign a seed-bearing structure's ciphertext with the owner pseudonym.
+        let sign = |tag: u8, recipient: Option<[u8; 32]>, ct: &[u8]| -> [u8; 64] {
+            let input = StructureSigInput::over_ciphertext(scope_id, epoch, tag, recipient, ct);
+            sign_structure(&owner_pseudonym, &input).to_bytes()
+        };
+        let grant_blob_signed = SignedGrantBlob {
+            tag,
+            enc: grant_blob.enc,
+            ciphertext: grant_blob.ciphertext.clone(),
+            signature: sign(STRUCT_TAG_GRANT_BLOB, Some(tag), &grant_blob.ciphertext),
+            unknown: Vec::new(),
+        };
+
+        // The owner blob (a mandatory scope-root structure): the override seed
+        // sealed to the owner enc subkey, structure-signed by the owner pseudonym.
+        let owner_blob_aad = AadContext {
+            v: V,
+            id: root_id,
+            scope: scope_id,
             epoch,
-            STRUCT_TAG_GRANT_BLOB,
-            Some(tag),
-            &grant_blob.ciphertext,
+            struct_tag: STRUCT_TAG_OWNER_BLOB,
+        };
+        let owner_blob = seal_owner_blob(
+            &owner_enc.public(),
+            &EPH_OWNER,
+            &owner_blob_aad,
+            &OverrideSeedPayload::new(scope_seed, epoch),
         );
-        let grant_blob_structure = SignedStructure {
-            signature: sign_structure(&owner_pseudonym, &grant_blob_input),
-            input: grant_blob_input,
+        let owner_blob_signed = SignedOwnerBlob {
+            enc: owner_blob.enc,
+            ciphertext: owner_blob.ciphertext.clone(),
+            signature: sign(STRUCT_TAG_OWNER_BLOB, None, &owner_blob.ciphertext),
+            unknown: Vec::new(),
         };
 
         // A write-body structure, to exercise the multi-structure loop.
@@ -148,16 +176,10 @@ impl GrantFixture {
             &write_body_aad,
             &encode_write_body(&write_body).expect("encodes"),
         );
-        let write_body_input = StructureSigInput::over_ciphertext(
-            scope_id,
-            epoch,
-            STRUCT_TAG_WRITE_BODY,
-            None,
-            &write_body_sealed,
-        );
-        let write_body_structure = SignedStructure {
-            signature: sign_structure(&owner_pseudonym, &write_body_input),
-            input: write_body_input,
+        let write_body_signed = SignedSealed {
+            signature: sign(STRUCT_TAG_WRITE_BODY, None, &write_body_sealed),
+            sealed: write_body_sealed,
+            unknown: Vec::new(),
         };
 
         // The owner-signed commitment: the recipient's tag is committed as a read
@@ -170,6 +192,16 @@ impl GrantFixture {
             unknown: Vec::new(),
         };
         let commitment_sig = sign_grant_set(&owner_identity, &commitment).expect("signs");
+        let grant_section = GrantSection {
+            commitment: commitment.clone(),
+            commitment_sig: commitment_sig.to_compact(),
+            grant_blobs: vec![grant_blob_signed],
+            owner_blob: owner_blob_signed,
+            ascent_link: None,
+            history_links: Vec::new(),
+            write_body: write_body_signed,
+            unknown: Vec::new(),
+        };
 
         let folder = ReadBody::Folder {
             created_at: 0,
@@ -204,7 +236,7 @@ impl GrantFixture {
             grant_blob_ct: grant_blob.ciphertext,
             commitment,
             commitment_sig,
-            structures: vec![grant_blob_structure, write_body_structure],
+            grant_section,
             envelope,
             owner_contact,
         }
@@ -218,10 +250,7 @@ impl GrantFixture {
         Candidate {
             name: self.name.clone(),
             record_bytes,
-            commitment: self.commitment.clone(),
-            commitment_sig: self.commitment_sig.clone(),
-            structures: self.structures.clone(),
-            ascent: None,
+            grant_section: self.grant_section.clone(),
             envelope: self.envelope.clone(),
         }
     }
@@ -276,32 +305,38 @@ impl GrantFixture {
             &grant_aad,
             &grant_payload,
         );
-        let grant_blob_input = StructureSigInput::over_ciphertext(
-            self.scope_id,
-            self.epoch,
-            STRUCT_TAG_GRANT_BLOB,
-            Some(self.tag),
-            &grant_blob.ciphertext,
-        );
-        let grant_blob_structure = SignedStructure {
-            signature: sign_structure(&owner_pseudonym, &grant_blob_input),
-            input: grant_blob_input,
+        let grant_blob_signed = SignedGrantBlob {
+            tag: self.tag,
+            enc: grant_blob.enc,
+            ciphertext: grant_blob.ciphertext.clone(),
+            signature: sign_structure(
+                &owner_pseudonym,
+                &StructureSigInput::over_ciphertext(
+                    self.scope_id,
+                    self.epoch,
+                    STRUCT_TAG_GRANT_BLOB,
+                    Some(self.tag),
+                    &grant_blob.ciphertext,
+                ),
+            )
+            .to_bytes(),
+            unknown: Vec::new(),
         };
 
         let mut commitment = self.commitment.clone();
         commitment.entries = vec![GrantSetEntry::new(self.tag, permission, [0xC0; 32])];
         let commitment_sig = sign_grant_set(&self.owner_identity, &commitment).expect("signs");
 
-        // Keep the write-body structure; swap the re-sealed grant blob structure.
-        let structures = vec![grant_blob_structure, self.structures[1].clone()];
+        // Keep the owner blob + write-body; swap the re-sealed grant blob.
+        let mut grant_section = self.grant_section.clone();
+        grant_section.commitment = commitment;
+        grant_section.commitment_sig = commitment_sig.to_compact();
+        grant_section.grant_blobs = vec![grant_blob_signed];
 
         let candidate = Candidate {
             name: self.name.clone(),
             record_bytes: self.record_bytes(2),
-            commitment,
-            commitment_sig,
-            structures,
-            ascent: None,
+            grant_section,
             envelope: self.envelope.clone(),
         };
         let blobs = vec![PublishedGrantBlob {
@@ -490,8 +525,11 @@ fn uncommitted_tag_is_rejected_before_the_gate() {
     // A blob is present at the recipient's tag, but the owner never committed
     // that tag: the recipient refuses to trust the grant.
     let mut candidate = fx.candidate();
-    candidate.commitment.entries.clear();
-    candidate.commitment_sig = sign_grant_set(&fx.owner_identity, &candidate.commitment).unwrap();
+    candidate.grant_section.commitment.entries.clear();
+    candidate.grant_section.commitment_sig =
+        sign_grant_set(&fx.owner_identity, &candidate.grant_section.commitment)
+            .unwrap()
+            .to_compact();
 
     let mut received = ReceivedSharesList::new();
     let err = block_on(accept_share(
@@ -1151,7 +1189,10 @@ fn tampered_commitment_is_rejected_at_the_gate_and_unacked() {
 
     let attacker = EcdsaSigner::from_scalar(&[0x9E; 32]).unwrap();
     let mut candidate = fx.candidate();
-    candidate.commitment_sig = sign_grant_set(&attacker, &candidate.commitment).unwrap();
+    candidate.grant_section.commitment_sig =
+        sign_grant_set(&attacker, &candidate.grant_section.commitment)
+            .unwrap()
+            .to_compact();
 
     let mut received = ReceivedSharesList::new();
     let err = block_on(accept_share(

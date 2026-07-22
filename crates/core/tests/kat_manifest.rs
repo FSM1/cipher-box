@@ -30,11 +30,12 @@ use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, NodeKind, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
     STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY,
     STRUCT_TAGS, StructureSigInput, build_aad, decode_ascent_link, decode_envelope,
-    decode_grant_blob_payload, decode_grant_set_commitment, decode_history_link_payload,
-    decode_override_seed_payload, decode_read_body, decode_write_body, encode_ascent_link,
-    encode_envelope, encode_grant_set_commitment, encode_override_seed_payload, encode_read_body,
-    encode_write_body, open_ascent_link, open_grant_blob, open_owner_blob, open_read_body,
-    structure_sig_preimage, verify_grant_set, verify_structure,
+    decode_grant_blob_payload, decode_grant_section, decode_grant_set_commitment,
+    decode_history_link_payload, decode_override_seed_payload, decode_read_body, decode_write_body,
+    encode_ascent_link, encode_envelope, encode_grant_section, encode_grant_set_commitment,
+    encode_override_seed_payload, encode_read_body, encode_write_body, open_ascent_link,
+    open_grant_blob, open_owner_blob, open_read_body, structure_sig_preimage, verify_grant_set,
+    verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
@@ -197,6 +198,14 @@ const FIXTURES: &[(&str, &str)] = &[
     (
         "vectors/grant/grant_set_reject.json",
         include_str!("../kat/vectors/grant/grant_set_reject.json"),
+    ),
+    (
+        "vectors/grant/section_accept.json",
+        include_str!("../kat/vectors/grant/section_accept.json"),
+    ),
+    (
+        "vectors/grant/section_reject.json",
+        include_str!("../kat/vectors/grant/section_reject.json"),
     ),
     (
         "vectors/content/seal.json",
@@ -433,6 +442,8 @@ struct GrantManifest {
     structure_sig_reject: RejectSection,
     grant_set_accept: FileCount,
     grant_set_reject: RejectSection,
+    section_accept: FileCount,
+    section_reject: RejectSection,
 }
 
 #[derive(Deserialize)]
@@ -442,6 +453,16 @@ struct WriteBodyAcceptVector {
     hex: String,
     ledger_count: usize,
     child_scope_count: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SectionAcceptVector {
+    name: String,
+    hex: String,
+    grant_blob_count: usize,
+    history_link_count: usize,
+    has_ascent_link: bool,
 }
 
 #[derive(Deserialize)]
@@ -1000,6 +1021,14 @@ fn grant_set_reject_vectors(m: &Manifest) -> Vec<GrantSetRejectVector> {
     serde_json::from_str(fixture(&m.grant.grant_set_reject.file)).expect("grant_set_reject shape")
 }
 
+fn section_accept_vectors(m: &Manifest) -> Vec<SectionAcceptVector> {
+    serde_json::from_str(fixture(&m.grant.section_accept.file)).expect("section_accept shape")
+}
+
+fn section_reject_vectors(m: &Manifest) -> Vec<RejectVector> {
+    serde_json::from_str(fixture(&m.grant.section_reject.file)).expect("section_reject shape")
+}
+
 fn unhex(name: &str, hex: &str) -> Vec<u8> {
     let bytes = hex::decode(hex).unwrap_or_else(|e| panic!("vector {name}: bad hex: {e}"));
     // Lowercase hex is part of the fixture contract.
@@ -1084,6 +1113,8 @@ fn fixture_table_matches_manifest_files() {
         m.grant.structure_sig_reject.file.as_str(),
         m.grant.grant_set_accept.file.as_str(),
         m.grant.grant_set_reject.file.as_str(),
+        m.grant.section_accept.file.as_str(),
+        m.grant.section_reject.file.as_str(),
         m.content.seal.file.as_str(),
         m.content.seal_reject.file.as_str(),
         m.content.cid.file.as_str(),
@@ -1264,6 +1295,7 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
             .map(|v| v.check),
     );
     covered.extend(grant_set_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(section_reject_vectors(&m).into_iter().map(|v| v.check));
     // Content plane (ticket #691): the content-open and content-CID reject
     // families pin `seal-open-failed`/`truncated` and `content-cid-mismatch`.
     covered.extend(content_seal_reject_vectors(&m).into_iter().map(|v| v.check));
@@ -2901,6 +2933,85 @@ fn write_body_reject_vectors_fire_the_named_check() {
             .iter()
             .any(|c| c == "invalid-permission"),
         "write-body reject must cover the grant-permission check"
+    );
+}
+
+#[test]
+fn grant_section_accept_vectors_decode_and_round_trip() {
+    let m = manifest();
+    let vectors = section_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.section_accept.count,
+        "grant-section accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "grant-section accept family must not be empty"
+    );
+
+    let mut names = BTreeSet::new();
+    let mut saw_full = false;
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate grant-section accept {}",
+            v.name
+        );
+        let bytes = unhex(&v.name, &v.hex);
+        let section = decode_grant_section(&bytes)
+            .unwrap_or_else(|e| panic!("grant-section accept {}: rejected: {e}", v.name));
+        assert_eq!(
+            hex::encode(encode_grant_section(&section).expect("accept vector re-encodes")),
+            v.hex,
+            "grant-section accept {}: re-encode must be byte-identical",
+            v.name
+        );
+        assert_eq!(
+            section.grant_blobs.len(),
+            v.grant_blob_count,
+            "grant-section accept {}: grant-blob count",
+            v.name
+        );
+        assert_eq!(
+            section.history_links.len(),
+            v.history_link_count,
+            "grant-section accept {}: history-link count",
+            v.name
+        );
+        assert_eq!(
+            section.ascent_link.is_some(),
+            v.has_ascent_link,
+            "grant-section accept {}: ascent-link presence",
+            v.name
+        );
+        if v.grant_blob_count > 0 && v.has_ascent_link {
+            saw_full = true;
+        }
+    }
+    assert!(
+        saw_full,
+        "a grant-section accept vector must exercise the full bundle (grants + ascent link)"
+    );
+}
+
+#[test]
+fn grant_section_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = section_reject_vectors(&m);
+    check_reject_family(
+        "grant-section",
+        &vectors,
+        &m.grant.section_reject,
+        decode_grant_section,
+    );
+    assert!(
+        m.grant
+            .section_reject
+            .checks
+            .iter()
+            .any(|c| c == "duplicate-grant-tag"),
+        "grant-section reject must cover the duplicate-tag confused-deputy check"
     );
 }
 

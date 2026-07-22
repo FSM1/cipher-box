@@ -448,6 +448,7 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     // A blob at your tag is not enough: the tag must be in the owner-signed
     // commitment, whose permission — not the untrusted pointer's — is authority.
     let permission = candidate
+        .grant_section
         .commitment
         .entries
         .iter()
