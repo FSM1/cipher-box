@@ -33,6 +33,7 @@ pub mod grants;
 pub mod mailbox;
 pub mod net;
 pub mod profile;
+pub mod rotation;
 pub mod seams;
 pub mod secret_util;
 pub mod sync;
@@ -71,6 +72,9 @@ pub use net::{
     Resolved, ReviveError, ReviveRequest, publish, resolve, revive,
 };
 pub use profile::SyncTimingProfile;
+pub use rotation::{
+    ChildIndexResolver, EagerSet, EnumerationError, ResolveFailure, enumerate_eager_set,
+};
 pub use seams::{SeamError, SeamResult, SeamSet, SeamTypes};
 pub use sync::{
     AppliedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow,
