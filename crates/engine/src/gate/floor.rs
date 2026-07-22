@@ -434,6 +434,23 @@ mod tests {
         });
     }
 
+    /// Skipping the read-epoch *check* for a shared scope must not skip the
+    /// unconditional `cold_seed`: a fresh (None) shared scope still seeds its
+    /// read-epoch floor to `minReadEpoch` via the monotonic-max raise, exactly
+    /// as `Root` does. Guards a future refactor from dropping the seed for
+    /// `Shared`.
+    #[test]
+    fn cold_seed_checked_shared_scope_seeds_a_fresh_read_epoch_floor() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            cold_seed_checked(&floors, &repoint(SCOPE, 5, 3), AnchorRole::Shared)
+                .await
+                .expect("a fresh shared scope seeds without running the read-epoch check");
+            assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(5));
+            assert_eq!(write_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(3));
+        });
+    }
+
     /// The write-epoch check stays unconditionally active — a shared-scope
     /// cold-seed still fails closed on a write-epoch rollback.
     #[test]
