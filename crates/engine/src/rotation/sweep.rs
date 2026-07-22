@@ -177,8 +177,9 @@ pub struct SweepOutcome {
     /// fresher record for them already landed, so they re-resolve as converged.
     pub dropped_lost_race: Vec<[u8; 16]>,
     /// Descendants whose stored direct-child-scope index was non-canonical and
-    /// was repaired (canonicalized) on re-seal — the index self-heal, surfaced
-    /// to the host (#38 D6 "repaired and flagged").
+    /// was repaired (canonicalized) on re-seal **and durably published** — the
+    /// index self-heal, surfaced to the host (#38 D6 "repaired and flagged"). A
+    /// repair that loses the CAS is not flagged (it never landed).
     pub flagged_indexes: Vec<[u8; 16]>,
 }
 
@@ -358,9 +359,10 @@ where
         // the resolver/tree wiring's job (#745/#746);
         // this slice heals each re-sealed node's own index.
         let canonical_index = canonicalize(&target.direct_child_scope_index);
-        if canonical_index != target.direct_child_scope_index {
-            outcome.flagged_indexes.push(scope_id);
-        }
+        // Flagged only after the canonical index durably publishes below — a
+        // repair that loses the CAS never landed, so it must not be reported
+        // (fail-closed, symmetric with `converged`).
+        let index_repaired = canonical_index != target.direct_child_scope_index;
 
         let identity = ScopeRootIdentity {
             v: target.v,
@@ -407,7 +409,12 @@ where
         };
 
         match publisher.publish_scope_root(&record).await {
-            Ok(()) => outcome.converged.push(scope_id),
+            Ok(()) => {
+                outcome.converged.push(scope_id);
+                if index_repaired {
+                    outcome.flagged_indexes.push(scope_id);
+                }
+            }
             // A concurrent write won the sequence CAS: no clobber, and this pass
             // does not advance the node. The single spec-mandated non-abort
             // per-node path — but the winner may be a non-advancing ordinary
@@ -1070,6 +1077,27 @@ mod tests {
         // A converged canonical index is not re-flagged on a subsequent sweep.
         let again = run(&net, &floors, 1, 0x00, &[0x01]).expect("second");
         assert!(again.flagged_indexes.is_empty());
+    }
+
+    #[test]
+    fn lost_race_does_not_flag_an_unpublished_index_repair() {
+        // A(01)'s stored index is non-canonical, but its publish loses the CAS:
+        // the canonical index never landed, so A must surface only in
+        // `dropped_lost_race`, never in `flagged_indexes` (fail-closed).
+        let net = FakeNet::new()
+            .scope(0x00, 5, &[0x01])
+            .scope_with_index(0x01, 1, &[0x02], true)
+            .scope(0x02, 1, &[])
+            .fault(0x01, ScopeRootPublishError::LostRace);
+        let floors = InMemoryFloorStore::default();
+        raise_floors(&floors, &[0x01, 0x02], 5);
+
+        let outcome = run(&net, &floors, 1, 0x00, &[0x01]).expect("sweep");
+        assert_eq!(outcome.dropped_lost_race, vec![sid(0x01)]);
+        assert!(
+            outcome.flagged_indexes.is_empty(),
+            "an index repair that lost the CAS was never published, so must not be flagged"
+        );
     }
 
     #[test]
