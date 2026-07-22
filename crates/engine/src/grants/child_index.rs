@@ -1,48 +1,32 @@
 //! Direct-child-scope index maintenance (blueprint/engine.md "Enumeration walks
 //! the write-body's direct-child-scope index", #38 D6).
 //!
-//! The direct-child-scope index enumerates a scope root's directly-descendant
-//! scope roots. Later slices (rotate/sweep) walk it as the enumeration
-//! substrate for the F-4 cascade; this module builds only the index and its
-//! maintenance semantics, not any rotation or sweep.
-//!
-//! # Persistence
-//!
-//! The index's durable substrate is the write-body's `direct_child_scope_index`
-//! field ([`ChildScopeRef`]), already sealed under the root's `writeKey`,
-//! published, gate-authenticated, and snapshot-cached via the normal envelope
-//! path. This module introduces **no** new seam and **no** separate store — it
-//! is the pure maintenance/ordering logic over `Vec<ChildScopeRef>`; durability
-//! rides the existing sealed write-body. (A separate SnapshotCache/StagingStore
-//! entry is wrong: SnapshotCache is ciphertext-only by contract, and the
-//! write-body already *is* the canonical index.)
+//! The index enumerates a scope root's directly-descendant scope roots; later
+//! rotate/sweep slices walk it for the F-4 cascade. This module is the pure
+//! maintenance/ordering logic over `Vec<ChildScopeRef>` — no new seam, no separate
+//! store: durability rides the write-body's `direct_child_scope_index` field
+//! ([`ChildScopeRef`]), already sealed under the root's `writeKey`, published, and
+//! gate-authenticated.
 //!
 //! # Maintenance semantics
 //!
-//! The ops that change scope parentage — grant, scope dissolution, cross-scope
-//! moves of a scope root — maintain the index under **dest-first +
-//! observed-repair** move semantics (#38 D6):
+//! Parentage-changing ops (grant, scope dissolution, cross-scope move) maintain
+//! the index under **dest-first + observed-repair** (#38 D6):
 //!
-//! - **Dest-first**: publish the add into the destination parent's index before
-//!   the presence-conditional remove from the source — so no window leaves the
-//!   child absent from both, and orphans are structurally impossible. A race
-//!   loser compensates by undoing its dest-add ([`undo_dest_add`]).
-//! - **Observed repair**: any write-capable client that sees a child missing
-//!   from its parent's index repairs it ([`repair_observed`]) — the sweep
-//!   self-heal for "a scope root encountered but missing from its parent's index
-//!   is repaired and flagged".
+//! - **Dest-first**: add into the destination parent's index before the
+//!   presence-conditional remove from the source, so no window leaves the child
+//!   absent from both — orphans are structurally impossible. A race loser undoes
+//!   its dest-add ([`undo_dest_add`]).
+//! - **Observed repair**: any write-capable client that sees a child missing from
+//!   its parent's index repairs it ([`repair_observed`]).
 //!
 //! # Deterministic convergence
 //!
-//! Entries are ordered by `scope_id` ([u8; 16]) using Rust's byte-slice `Ord`
-//! (the documented cross-platform total order) so replayed / multi-writer runs
-//! converge to identical bytes. A `scope_id` names exactly one child, so
-//! permutation-independence holds over any set of **distinct** ids, and the
-//! index is deduplicated on `scope_id`. Two entries sharing an id but differing
-//! in `ipns_name`/unknown fields is an invariant violation the maintenance ops
-//! never emit; the **first-seen** dedup is the deliberate replace-wins operation
-//! policy ([`insert_child`] prepends the authoritative entry so it wins), not a
-//! content-level convergence tie-break (see [`canonicalize`]).
+//! Entries are ordered and deduped by `scope_id` byte `Ord` so replayed /
+//! multi-writer runs converge to identical bytes. A `scope_id` names exactly one
+//! child, so **first-seen** dedup is the deliberate replace-wins operation policy
+//! (ops prepend the authoritative entry), not a content tie-break — see
+//! [`canonicalize`].
 
 use cipherbox_core::seal::ChildScopeRef;
 
@@ -51,13 +35,12 @@ use cipherbox_core::seal::ChildScopeRef;
 /// primitive: any permutation of a set of **distinct** `scope_id`s yields
 /// byte-identical output.
 ///
-/// First-seen (not last) is the dedup rule because the maintenance ops
-/// ([`insert_child`], [`repair_observed`]) prepend the authoritative entry
-/// before canonicalizing, so a fresh add wins over a stale duplicate. Because a
-/// `scope_id` names exactly one child, differing-content duplicates are an
-/// invariant violation the ops never produce; first-seen is the replace-wins
-/// operation policy, not a content tie-break, so a permutation-blind full-entry
-/// order would wrongly override that policy.
+/// First-seen (not last) is the rule because the maintenance ops
+/// ([`insert_child`], [`repair_observed`]) prepend the authoritative entry, so a
+/// fresh add wins over a stale duplicate. A `scope_id` names exactly one child, so
+/// differing-content duplicates are an invariant violation the ops never produce;
+/// first-seen is the replace-wins operation policy, not a content tie-break a
+/// permutation-blind full-entry order could wrongly override.
 pub fn canonicalize(entries: &[ChildScopeRef]) -> Vec<ChildScopeRef> {
     let mut sorted: Vec<ChildScopeRef> = entries.to_vec();
     // Stable sort keeps first-seen order among equal ids, so the retain below

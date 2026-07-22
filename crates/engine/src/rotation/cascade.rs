@@ -4,71 +4,51 @@
 //!
 //! # What the cascade is
 //!
-//! On an **owner read-revocation**, `rotateScope` must fully re-key the rotated
+//! On an owner read-revocation, [`cascade_rotate_scope`] re-keys the rotated
 //! scope root **plus every transitively-reachable descendant scope root**, each
-//! with a **fresh random override seed** — grant blobs re-sealed for the
-//! committed set, owner blob, history-link ratchet, and ascent link under the
-//! **parent's new derivation**. Cost is O(descendant scope count), never tree
-//! size. This module is that whole rotation: [`cascade_rotate_scope`] re-keys the
-//! root (the thread head) and then walks the descendant tree top-down, re-keying
-//! every descendant through the shared [`reseal_scope_root`] helper with
-//! `prev = Some(fresh seed)`.
+//! with a **fresh random override seed**, re-sealing through [`reseal_scope_root`]
+//! with `prev = Some(fresh seed)`. Cost is O(descendant scope count), never tree
+//! size.
 //!
-//! # Why the fresh-seed cascade — and only it — completes a revoke
+//! # Why only the fresh-seed cascade completes a revoke
 //!
-//! A party who cached a *descendant* scope root's override seed can open that
-//! descendant's records at **any** epoch: the descendant's structure keys derive
-//! from its own override seed, and the epoch lives only in the AAD. Raising the
-//! epoch floor and letting the **sweep** converge each descendant does **not**
-//! lock that party out — the sweep re-seals metadata reusing each descendant's
-//! **existing** seed (`prev = None`), so a floor-raise + sweep merely walks the
-//! revoked reader's cached seed forward to the new epoch. Only minting a
-//! **fresh** seed per descendant — this cascade — actually revokes the cached
-//! access. This is the cross-slice invariant: **revocation re-keys descendants
-//! via the fresh-seed cascade, never via floor-raise + sweep** (the seed changes;
-//! it is not an epoch bump over the same seed).
+//! A party who cached a *descendant* scope root's override seed opens that
+//! descendant at **any** epoch — its structure keys derive from the seed and the
+//! epoch is only AAD. A floor-raise + **sweep** reuses each descendant's existing
+//! seed (`prev = None`), merely walking the revoked reader's cached seed forward;
+//! only minting a **fresh** seed per descendant revokes the cached access. This
+//! is the cross-slice invariant: revocation re-keys descendants via the
+//! fresh-seed cascade, never via floor-raise + sweep.
 //!
 //! # Top-down seed threading
 //!
-//! A descendant's ascent link is sealed to a keypair derived from its **parent
-//! node seed** = `node_seed(parent_override_seed, child_scope_id)`
-//! (`crates/engine/src/gate/adoption.rs`, the ascent-authority derive-and-verify).
-//! When the parent is re-keyed to a fresh override seed, that parent node seed
-//! changes, so the child's ascent link **must** be re-sealed under the parent's
-//! **new** derivation — else an ancestor descending with the parent's new seed
-//! could not reach the child, and (worse) the child's ascent link would still
-//! open under the parent's *stale* seed, leaving a revoked ancestor a path in.
-//! The cascade therefore walks **top-down**, minting the root's fresh seed first
-//! and threading each parent's freshly-minted seed to its children. The
-//! [`CascadeTarget`] a descendant resolves to deliberately carries **no**
-//! `parent_node_seed`: it is always threaded, never taken from the descendant's
-//! own (stale) published record.
+//! A descendant's ascent link is sealed to a keypair derived from its parent node
+//! seed `node_seed(parent_override_seed, child_scope_id)`
+//! (`crates/engine/src/gate/adoption.rs`). Re-keying the parent changes that
+//! derivation, so the walk runs **top-down**, threading each parent's
+//! freshly-minted seed so the child's ascent link re-seals under the parent's
+//! **new** seed — else the link still opens under the stale seed, leaving a
+//! revoked ancestor a path in. [`CascadeTarget`] carries **no** `parent_node_seed`:
+//! it is always threaded, never taken from the descendant's own stale record.
 //!
 //! # Fail-closed completeness
 //!
-//! An owner-revocation rotation that skips any reachable descendant is a **silent
-//! revocation hole**, not staleness. The walk mirrors [`enumerate_eager_set`]'s
-//! discipline — canonicalized frontiers, a `scope_id`-keyed visited set for
-//! diamond/cycle termination, and a **hard abort** naming the first descendant it
-//! cannot resolve, re-seal, publish, or floor-raise. It never returns a partial
-//! [`CascadeOutcome`] a caller could mistake for a complete revoke. Some durable
-//! re-keys may already have landed before an abort (there is no distributed
-//! transaction); that is safe and retryable — every re-key is monotonic (a fresh
-//! seed at a higher epoch) — and the `Err` tells the caller the revoke is
-//! incomplete and must be retried, so success is never *claimed* on a partial
-//! cascade. A retry re-resolves current network state and rebuilds the plan; it
-//! must not replay a plan whose root/descendants already advanced, or the stale
-//! epoch transition loses CAS.
+//! Skipping any reachable descendant is a silent revocation hole, not staleness.
+//! The walk mirrors [`enumerate_eager_set`] — canonicalized frontiers, a
+//! `scope_id`-keyed visited set for diamond/cycle termination, and a hard abort
+//! naming the first descendant it cannot resolve, re-seal, publish, or
+//! floor-raise, never a partial [`CascadeOutcome`] mistakable for a complete
+//! revoke. Some re-keys may land before an abort (no distributed transaction) —
+//! safe and retryable, since every re-key is monotonic (a fresh seed at a higher
+//! epoch); the retry re-resolves current state and rebuilds the plan rather than
+//! replaying one whose nodes already advanced (which would lose CAS).
 //!
 //! # Determinism
 //!
-//! Entropy enters only through the [`Entropy`] seam (every fresh seed) and time
-//! only through the [`Scheduler`] seam (the enqueued sweep); the walk itself reads
-//! no clock and samples no randomness of its own. The sole impure edges are the
-//! injected [`CascadeResealResolver`] (resolve + gate + unseal a descendant's
-//! re-seal material) and [`ScopeRootPublisher`] (CAS-publish) — the same two
-//! edges `rotate_scope` and the sweep carry. The real network/gate wiring of the
-//! resolver is #745/#746; this slice fakes it and proves the cascade in
+//! Entropy enters only through [`Entropy`] and time only through [`Scheduler`];
+//! the sole impure edges are the injected [`CascadeResealResolver`] and
+//! [`ScopeRootPublisher`] (as `rotate_scope` and the sweep also carry). Real
+//! resolver wiring is #745/#746; this slice fakes it and proves the cascade in
 //! simulation.
 //!
 //! [`enumerate_eager_set`]: super::eager_set::enumerate_eager_set

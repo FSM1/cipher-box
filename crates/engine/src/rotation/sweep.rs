@@ -8,54 +8,43 @@
 //! eager set from a rotated root and, for every descendant scope root whose
 //! published record epoch lags its scope's durable epoch floor, re-seals that
 //! scope root's **metadata** up to the floor epoch — reusing the scope's
-//! **existing** override seed, `prev = None`, minting no new seed, no new epoch,
-//! and no new history link. Content bytes are never re-encrypted (#26 D6).
+//! **existing** override seed, `prev = None`, minting no new seed, epoch, or
+//! history link. Content bytes are never re-encrypted (#26 D6).
 //!
-//! It deliberately does **not** mint fresh descendant seeds. Fresh-seed
-//! descendant re-keying — the part that defeats a revokee's *cached descendant
-//! seeds* — is `rotateScope`'s **eager-set republish** on an owner-revocation
-//! rotation (blueprint/engine.md "rotateScope", L243-252: "mint a random override
-//! seed at the scope root, republish the eager set, enqueue the sweep"; each
-//! descendant "fully rotated — fresh override seed"). That eager cascade is a
-//! separate piece, currently deferred pending the resolver/tree wiring
-//! (#745/#746). The sweep completes only the **epoch-lag convergence** and the
-//! direct-child-scope index self-heal; it does not, on its own, complete a read
-//! revoke, and re-sealing a descendant with its existing seed does not revoke a
-//! cached descendant seed.
+//! It deliberately does **not** mint fresh descendant seeds — that fresh-seed
+//! eager-set republish, the part that defeats a revokee's cached descendant
+//! seeds, is the [`cascade`](super::cascade)'s job (blueprint/engine.md
+//! "rotateScope", L243-252). The sweep completes only epoch-lag convergence and
+//! the direct-child-scope index self-heal, so re-sealing a descendant with its
+//! existing seed does not on its own complete a read revoke.
 //!
 //! # Completeness is fail-closed
 //!
-//! The work-list is computed purely from **published records** (the epoch-lag
-//! predicate: record epoch `<` the scope's durable epoch floor). There is no
-//! pending-rotation store, no job record, and no checkpoint — published records
-//! are the sole source of truth, so a re-run reconstructs the identical
+//! The work-list is computed purely from **published records** (epoch-lag
+//! predicate: record epoch `<` the scope's durable floor) — no pending-rotation
+//! store, job record, or checkpoint — so a re-run reconstructs the identical
 //! work-list and the pass is idempotent.
 //!
 //! A lagging descendant that cannot be enumerated, resolved, re-sealed, or
-//! published is **never silently skipped** — under-enumeration is a silent hole,
-//! not staleness. Mirroring the eager-set walk's hard-abort posture
-//! ([`enumerate_eager_set`]), a pass aborts with a [`SweepError`] naming the
-//! offending scope rather than returning a partial "converged" claim. The one
-//! spec-mandated per-node exception is a **lost CAS race**: a concurrent write
-//! won the sequence CAS for that node, so the loser drops it and re-resolves
-//! (blueprint/engine.md L276-278). The winner is not necessarily a *sweeper* —
-//! an ordinary metadata write bumps the sequence without advancing the read
-//! epoch — so a dropped node is **not** proven converged by the drop alone. The
-//! idle-cadence driver ([`run_sweep`]) therefore re-runs the idempotent pass
-//! until a pass drops nothing (or the attempt cap is hit), which is what
-//! actually confirms convergence. Availability failures (unavailable resolve,
-//! transport `NotPublished`, floor-read error) abort the pass but are likewise
-//! **retryable**. Trust failures (a rejected record, a divergent ledger, an
+//! published is **never silently skipped** — mirroring the eager-set walk's
+//! hard-abort posture ([`enumerate_eager_set`]), a pass aborts with a
+//! [`SweepError`] naming the offending scope rather than a partial "converged"
+//! claim. The one spec-mandated per-node exception is a **lost CAS race**: a
+//! concurrent write won the sequence CAS, so the loser drops it and re-resolves
+//! (blueprint/engine.md L276-278). The winner may be an ordinary metadata write
+//! (bumps the sequence without advancing the read epoch), so a dropped node is
+//! **not** proven converged by the drop alone — the idle-cadence driver
+//! ([`run_sweep`]) re-runs the idempotent pass until one drops nothing (or the
+//! cap is hit), which is what confirms convergence. Availability failures
+//! (unavailable resolve, transport `NotPublished`, floor-read) abort but are
+//! **retryable**; trust failures (a rejected record, a divergent ledger, an
 //! uncommitted signer) are fatal.
 //!
 //! # Determinism
 //!
-//! Time (the idle cadence) enters only through the [`Scheduler`] seam and entropy
-//! only through the [`Entropy`] seam; the pass itself reads no clock and samples
-//! no randomness of its own beyond what `reseal_scope_root` draws from the
-//! injected entropy. The sole impure edges are the injected [`SweepResolver`]
-//! (resolve + gate + unseal a scope root's re-seal material) and
-//! [`ScopeRootPublisher`] (CAS-publish), mirroring `rotate_scope`; the real
+//! Time (the idle cadence) enters only through [`Scheduler`] and entropy only
+//! through [`Entropy`]; the sole impure edges are the injected [`SweepResolver`]
+//! and [`ScopeRootPublisher`] (CAS-publish), mirroring `rotate_scope`. The real
 //! network wiring is #745/#746 and tests fake both.
 
 use core::time::Duration;

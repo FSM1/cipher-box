@@ -1,35 +1,30 @@
 //! The shared scope-root re-seal helper (blueprint/engine.md "Rotation
 //! primitives: rotateScope", "sweep"; CONTEXT.md "Grant section").
 //!
-//! [`reseal_scope_root`] is the one primitive that assembles a scope root's
-//! signed [`GrantSection`] — its grant blobs (re-wrapped for the committed set),
-//! owner blob, ascent link, per-epoch history links, and sealed write-body —
-//! each detached-signed by the rotator's writer pseudonym. It is deliberately a
-//! **pure composition** of `crates/core`'s seal primitives: it holds no crypto,
-//! samples no entropy of its own (the injected [`Entropy`] seam supplies every
-//! HPKE ephemeral scalar and every seal nonce), and reads no clock.
-//!
-//! It is parameterised on its [`ResealSeeds`] source so both rotation callers use
-//! the same code:
+//! [`reseal_scope_root`] assembles a scope root's signed [`GrantSection`] — its
+//! grant blobs (re-wrapped for the committed set), owner blob, ascent link,
+//! per-epoch history links, and sealed write-body — each detached-signed by the
+//! rotator's writer pseudonym. It is a **pure composition** of `crates/core`'s
+//! seal primitives: no crypto of its own, it samples no entropy (the injected
+//! [`Entropy`] seam supplies every HPKE ephemeral scalar and seal nonce), and
+//! reads no clock. Its [`ResealSeeds`] source is the axis both callers share:
 //!
 //! - **`rotateScope`** passes a fresh random override seed at a new read epoch
 //!   plus the prior seed for a fresh history link — the read-plane root cut.
-//! - **the sweep** (Slice 3) passes the scope's *existing* override seed at the
-//!   *current* epoch with `prev = None` — a metadata-only catch-up that mints no
-//!   new seed and no new history link (blueprint/engine.md "Sweeps re-seal
-//!   metadata only").
+//! - **the sweep** passes the scope's *existing* seed at the *current* epoch with
+//!   `prev = None` — a metadata-only catch-up minting no new seed or history link
+//!   (blueprint/engine.md "Sweeps re-seal metadata only").
 //!
 //! # Revocation completeness is the point
 //!
 //! A grant blob is re-wrapped for **exactly** the committed set: one blob per
 //! grant-ledger entry, and the ledger MUST equal the owner-signed commitment
-//! (`(tag → permission)`) — enforced fail-closed up front via
-//! [`enforce_committed_ledger`], the same invariant the adoption gate checks on
-//! resolve (encode/decode fail-closed symmetry, AGENTS.md rule 8). A revoked
-//! grantee, having been removed from the commitment and the ledger by the
-//! read-revoke trigger, is therefore **absent** from the re-wrapped blobs — that
-//! absence is the revocation. A write-grantee re-wrapping cannot add or drop a
-//! tag: a divergent ledger is rejected here, never sealed.
+//! (`(tag → permission)`), enforced fail-closed up front via
+//! [`enforce_committed_ledger`] — the encode-side mirror of the adoption gate's
+//! resolve check (AGENTS.md rule 8). A grantee removed from the commitment and
+//! ledger by the read-revoke trigger is therefore **absent** from the re-wrapped
+//! blobs — that absence is the revocation; a divergent ledger is rejected here,
+//! never sealed.
 
 use zeroize::Zeroize;
 

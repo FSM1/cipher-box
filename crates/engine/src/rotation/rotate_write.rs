@@ -1,89 +1,63 @@
 //! `rotateScopeWrite` — the owner-only write-plane rotation (blueprint/engine.md
 //! "Rotation primitives: rotateScopeWrite", #26 D3, #38 D3, #34 D4).
 //!
-//! The third rotation primitive. Where [`rotate_scope`](super::rotate::rotate_scope)
-//! cuts the **read** plane (a fresh override seed, `minReadEpoch` moves) and the
-//! [`cascade`](super::cascade) re-keys descendant read scopes, this cuts the
-//! **write** plane: a fresh **write override seed**, a bumped `writeEpoch`, and a
-//! background **child-first name wave** that republishes the write scope's subtree
-//! under freshly derived names — the **root re-pointed last**, so a resolver
-//! following the stable scope pointer always reaches a live chain mid-wave.
+//! The third rotation primitive: where [`rotate_scope`](super::rotate::rotate_scope)
+//! cuts the read plane and [`cascade`](super::cascade) re-keys descendant read
+//! scopes, this cuts the **write** plane — a fresh write override seed, a bumped
+//! `writeEpoch`, and a background child-first name wave.
 //!
-//! # What changes on a write rotation (and what does not)
+//! # What changes (and what does not)
 //!
-//! A node's `ipnsName`, its IPNS signing keypair, and its `writeKey` all derive
-//! from its write seed `writeSeed(node) = KDF(writeScopeSeed, node.id)`
-//! (CONTEXT.md "Write seed"). Minting a fresh **write scope seed** therefore moves
-//! every node to a fresh name under a fresh signing key. The **read plane is
-//! untouched**: override seeds, read keys, and `minReadEpoch` are carried verbatim
-//! (content bytes are never re-encrypted by any rotation path, #26 D6). Surviving
-//! write-grantees derive every new name locally (zero re-discovery); read-only
-//! survivors follow the owner-signed re-point object.
+//! `ipnsName`, the IPNS signing keypair, and `writeKey` all derive from
+//! `writeSeed(node) = KDF(writeScopeSeed, node.id)` (CONTEXT.md "Write seed"), so a
+//! fresh write scope seed moves every node to a fresh name under a fresh signing
+//! key. The read plane is untouched — override seeds, read keys, and `minReadEpoch`
+//! carry verbatim, and no rotation path re-encrypts content bytes (#26 D6).
+//! Write-grantees derive the new names locally; read-only survivors follow the
+//! owner-signed re-point object.
 //!
-//! # Ordering is the safety property (child-first, root-last, linger)
+//! # Ordering is the safety property (#34 D4)
 //!
-//! The wave republishes **descendants first** at their new names, then the root
-//! **last**, and only then re-points the stable scope pointer at the new root.
-//! Old names **linger** — interior old names batch-retire at completion, the old
-//! root name lingers past the migration window (#34 D4). Composed:
-//!
-//! - A new name is **registered before** its predecessor is retired (register-
-//!   first, never orphan a name — the same pin/name-registry quota discipline the
-//!   API enforces). Interior retirement happens only **after** the root re-point.
-//! - Because old names stay live until the switch and the pointer flips last, at
-//!   every instant a resolver reaches every node by **at least one** live name:
-//!   via the old root → old names before the flip, via the new root → new names
-//!   after it. There is never a window with no live pointer to a descendant.
+//! Republish descendants first at their new names, the root last, then flip the
+//! stable scope pointer. A new name is **registered before** its predecessor is
+//! retired (register-first, never orphan a live name — the API's pin/name-registry
+//! quota discipline); interior old names batch-retire only **after** the root
+//! re-point, and the old root name lingers past the migration window. Old names
+//! stay live until the flip and the pointer flips last, so at every instant a
+//! resolver reaches every node by at least one live name.
 //!
 //! # Three-channel re-point (#38 D3)
 //!
 //! The owner-identity-signed re-point object `{scopeId, currentRootName,
-//! writeEpoch, minReadEpoch, prevRootName}` publishes to three channels: the
-//! scope pointer record (canonical), the mailbox (accelerator, verifiable), and
-//! the old root name's tombstone (accelerator, feeding the depth-guarded
-//! `movedTo` chase). `writeEpoch` advances here; `minReadEpoch` is carried
-//! unchanged (only owner read rotations move it), so each plane's clock is
-//! authored by the authority that owns it (#38 D1).
+//! writeEpoch, minReadEpoch, prevRootName}` publishes to the scope pointer record
+//! (canonical), the mailbox, and the old root name's tombstone (feeding the
+//! depth-guarded `movedTo` chase). `writeEpoch` advances here; `minReadEpoch` is
+//! carried unchanged, so each plane's clock is authored by its owning authority
+//! (#38 D1).
 //!
 //! # Crash recovery from published records only (#26 D8)
 //!
-//! No job records, no checkpoints: this orchestrator holds no state across a
-//! crash. A pre-publish crash changed nothing durable; a resumed wave re-derives
-//! every node's deterministic new name and **skips** any already-republished node
-//! by querying published state ([`WriteWavePublisher::is_republished`]) — never an
-//! in-memory work-list. The fresh write scope seed a resumed wave re-uses is
-//! recovered from the published root (the write-plane history link); that recovery
-//! is the deferred #745/#746 resolver wiring, so callers thread it back in via
-//! [`RotateScopeWritePlan::resume_write_scope_seed`] and this slice's tests fake
-//! the recovery. register/republish/retire/re-point are all idempotent, so a
-//! resumed wave converges to the same terminal state.
+//! No cross-crash state: a resumed wave re-derives each node's deterministic new
+//! name and skips already-republished nodes via
+//! [`WriteWavePublisher::is_republished`]; register/republish/retire/re-point are
+//! idempotent, so it converges to the same terminal state. The fresh write scope
+//! seed is recovered from the published root (the write-plane history link) — the
+//! deferred #745/#746 resolver wiring, faked here and threaded via
+//! [`RotateScopeWritePlan::resume_write_scope_seed`]. Accepted limitation: a crash
+//! after the pointer flip but before interior retirement orphans the prior run's
+//! interior old names — the fail-safe direction (leaking a registration beats
+//! retiring a live name); reclaim is tracked in #764.
 //!
-//! One accepted limitation: a crash **after** the pointer flips but **before**
-//! interior retirement orphans the prior run's interior old names. Post-flip the
-//! resolver reports every node's new name as current, so the never-orphan-a-live-
-//! name guard finds nothing to retire and no durable read can rediscover the
-//! superseded names. This is the fail-safe direction (leaking a name registration
-//! beats retiring a live one); reclaiming the orphans is tracked in #764.
+//! # Owner-only, fail-closed, deterministic
 //!
-//! # Owner-only, fail-closed
-//!
-//! `rotateScopeWrite` is owner-only: the caller must present the owner identity
-//! signer that authored the current grant-set commitment, verified up front
-//! ([`WriteRotateError::NotOwner`]) — the same owner-identity binding
-//! [`revoke_read_grant`](super::trigger::revoke_read_grant) enforces, and the
-//! encode-side mirror of the pointer read path's owner-signature verify. A
+//! The caller must present the owner identity signer that authored the current
+//! grant-set commitment, verified up front ([`WriteRotateError::NotOwner`]). A
 //! non-advancing `writeEpoch` or an identity re-point is rejected release-active
 //! ([`build_repoint_object`]), never a `debug_assert!` — the encode-side mirror of
-//! the floor law's monotonic write-epoch reject (AGENTS.md rule 8).
-//!
-//! # Determinism
-//!
-//! Entropy enters only through the [`Entropy`] seam (the fresh write scope seed
-//! and the re-point nonce); the wave reads no clock and samples no randomness of
-//! its own. The impure edges are the injected [`WriteSubtreeResolver`] (resolve
-//! the subtree from published records) and [`WriteWavePublisher`] (register /
-//! republish / retire / re-point) — the network wiring behind them is #745/#746;
-//! this slice fakes them and proves the primitive in simulation.
+//! the floor law's monotonic write-epoch reject (AGENTS.md rule 8). Entropy enters
+//! only through the [`Entropy`] seam (fresh seed + re-point nonce); the impure edges
+//! are the injected [`WriteSubtreeResolver`] and [`WriteWavePublisher`] (network
+//! wiring is #745/#746, faked in this slice).
 
 use std::collections::{BTreeSet, VecDeque};
 

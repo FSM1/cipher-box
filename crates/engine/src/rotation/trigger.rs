@@ -15,25 +15,20 @@
 //! root **and every transitively-reachable descendant scope root** are re-keyed
 //! with a fresh override seed (blueprint/engine.md "rotateScope", L243-252).
 //! **That cascade — not the sweep — completes a read revoke**: a revokee who
-//! cached a descendant scope root's override seed can open that descendant at any
-//! epoch, so only minting a fresh seed per descendant locks them out. The sweep
-//! ([`super::sweep`]) does only metadata-only epoch-lag convergence and the index
-//! self-heal — it reuses the existing seed and never re-keys, so a floor-raise +
-//! sweep would merely walk the revokee's cached seed forward to the new epoch.
-//! [`revoke_read_grant`] performs the owner-only committed-set cut that feeds the
-//! cascade for the root; the cascade re-seals each descendant's own unchanged
-//! committed set. The cascade is proven in simulation against faked seams; the
-//! production resolver/tree wiring of its per-descendant resolve edge is #745/#746.
+//! cached a descendant's override seed can open it at any epoch, so only a fresh
+//! seed per descendant locks them out; a floor-raise + sweep ([`super::sweep`])
+//! would merely walk the cached seed forward. The cascade is proven in simulation
+//! against faked seams; the production per-descendant resolver wiring is #745/#746.
 //!
 //! Scope-exit and manual rotations re-seal the **unchanged** committed set: a
 //! grantee re-wraps blobs verbatim and can neither extend nor shrink the tag set
 //! (#26 D5), so they feed the current commitment/ledger straight into
-//! `rotate_scope`. The read-revoke trigger is the only one that mutates the set —
+//! `rotate_scope`. Read-revoke is the only trigger that mutates the set —
 //! [`revoke_read_grant`] performs the owner-only cut (remove the revokee from the
-//! commitment and the ledger, owner-re-sign) whose result then feeds
-//! `rotate_scope`. The removed grantee is thereby absent from the re-wrapped grant
-//! blobs: that absence **is** the revocation ("they keep what they saw; they lose
-//! everything new, now").
+//! commitment and ledger, owner-re-sign) that then feeds the cascade; each
+//! descendant re-seals its own unchanged set. The removed grantee is thereby
+//! absent from the re-wrapped grant blobs: that absence **is** the revocation
+//! ("they keep what they saw; they lose everything new, now").
 
 use cipherbox_core::seal::{
     GrantLedgerEntry, GrantSetCommitment, sign_grant_set, verify_grant_set,

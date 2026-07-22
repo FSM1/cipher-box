@@ -13,27 +13,27 @@
 //! # Effect ordering is crash-safety
 //!
 //! The three durable effects run in a fixed order — **publish → raise floor →
-//! enqueue sweep** — and a failure at any step returns before the next runs, so
-//! no partially-rotated, fail-open, or locked-out state is ever left behind:
+//! enqueue sweep** — each returning before the next on failure, so no
+//! partially-rotated, fail-open, or locked-out state is left behind:
 //!
 //! - Publishing the new-epoch record **before** raising the floor means a crash
 //!   between them leaves the old-epoch records still gate-passing (the floor has
 //!   not moved) rather than demanding an epoch no published record satisfies — a
 //!   lockout. The rotation simply re-runs; it is monotonic (a fresh seed, a
 //!   higher epoch) and idempotent-safe under CAS. Raising the floor first would
-//!   invert this into the lockout the two-phase-adopt lesson warns against.
-//! - The residual window this ordering accepts — a revoked reader whose old-epoch
-//!   forgeries still pass until the floor rises on the completing run — is exactly
-//!   the documented read-only-survivor residual (#38, "~one pointer-consult
+//!   invert this into that lockout.
+//! - The residual window this accepts — a revoked reader whose old-epoch
+//!   forgeries still pass until the floor rises on the completing run — is the
+//!   documented read-only-survivor residual (#38, "~one pointer-consult
 //!   interval"), never a lost revocation boundary.
 //! - The sweep is enqueued **last**, only after the cut is durable; it is
 //!   best-effort and idempotent, so losing it to a crash costs only a delayed
-//!   lazy wave, which the next ordinary write or scheduled sweep advances anyway.
+//!   lazy wave the next ordinary write or scheduled sweep advances.
 //!
-//! The eager-set descendant scope roots (#744's enumeration) are each re-sealed
-//! through this same [`reseal_scope_root`] helper by the cascade orchestration
-//! once the resolver/tree wiring lands (#745/#746); this primitive lands the root
-//! cut and its crash-safe effect ordering.
+//! The eager-set descendant scope roots (#744's enumeration) are re-sealed
+//! through this same [`reseal_scope_root`] helper by the cascade once the
+//! resolver/tree wiring lands (#745/#746); this primitive lands the root cut and
+//! its crash-safe effect ordering.
 
 use zeroize::Zeroizing;
 

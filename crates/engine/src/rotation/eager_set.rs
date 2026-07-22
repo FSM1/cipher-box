@@ -5,61 +5,46 @@
 //! # What it computes
 //!
 //! Given a scope root, the eager set is **every transitively-reachable
-//! descendant scope root** — the F-4 cascade set. The root's level-1 adjacency
-//! is its own write-body `direct_child_scope_index` (already in the rotator's
-//! hand); every deeper level is read from *each descendant's own* write-body
-//! index (blueprint/engine.md: "Enumeration walks the write-body's
-//! direct-child-scope index", #38 D6). Cost is O(descendant scope count), never
-//! tree size — a scope-less subtree contributes nothing to walk.
-//!
-//! The returned [`EagerSet`] holds the **descendants only**: the rotator already
-//! holds the root and rotates it directly, so re-emitting it here would be
-//! redundant. The root is still tracked internally so a back-edge to it
-//! terminates.
+//! descendant scope root** — the F-4 cascade set. The root's level-1 adjacency is
+//! its own write-body `direct_child_scope_index` (caller-held); each deeper level
+//! is read from *each descendant's own* write-body index (#38 D6). Cost is
+//! O(descendant scope count), never tree size. The returned [`EagerSet`] holds
+//! the **descendants only** — the rotator holds and rotates the root directly —
+//! though the root is tracked internally so a back-edge to it terminates.
 //!
 //! # Why completeness is a security property
 //!
-//! Read-plane rotation is how a revocation takes effect: an owner-revocation
-//! rotation must re-seal *every* reachable descendant so no cached descendant
-//! seed survives (blueprint/engine.md: "Cached descendant seeds are why
-//! ascent-re-seal alone is insufficient"). A descendant silently missing from
-//! the eager set is a **silent revocation hole**, not staleness — the revoked
-//! party keeps a live seed. Completeness is therefore enforced fail-closed:
-//!
-//! - The walk resolves *every* discovered descendant. If any reachable
-//!   descendant's index cannot be authoritatively obtained (its record fails the
-//!   adoption gate, or is unavailable), the walk returns [`EnumerationError`]
-//!   naming that scope — it **never** returns a partial set a caller could
-//!   mistake for complete. `EagerSet` has no public constructor other than a
-//!   successful walk, so "an incomplete eager set" is unrepresentable.
-//! - This mirrors the adoption gate's own split (`GateError::Rejected` vs
-//!   `Seam`): a trust rejection and a host-I/O failure are distinct
-//!   ([`ResolveFailure`]) but *both* block a claim of completeness. A resolve
-//!   failure is a fail-closed trust boundary, never mere staleness
-//!   (AGENTS.md critical security rule 6).
+//! A revocation rotation must re-seal *every* reachable descendant so no cached
+//! descendant seed survives; a descendant silently missing from the eager set is
+//! a **silent revocation hole**, not staleness — the revoked party keeps a live
+//! seed. Completeness is therefore fail-closed: the walk resolves every
+//! discovered descendant, and any that cannot be authoritatively obtained (its
+//! record fails the adoption gate, or is unavailable) returns [`EnumerationError`]
+//! naming that scope, never a partial set. `EagerSet` has no public constructor
+//! other than a successful walk, so an incomplete set is unrepresentable.
+//! [`ResolveFailure`] mirrors the adoption gate's `Rejected` vs `Seam` split — a
+//! trust rejection and a host-I/O failure are distinct but *both* block a
+//! completeness claim; a resolve failure is a fail-closed trust boundary, never
+//! staleness (AGENTS.md critical security rule 6).
 //!
 //! # Termination and bounding
 //!
-//! The graph is walked with a visited set keyed by `scope_id`: a scope root is
-//! resolved at most once, so a cycle (a corrupt or adversarial index claiming a
-//! back-edge) is skipped, not followed — the walk always terminates. No depth or
-//! count cap is imposed: the eager set of a legitimately large owner tree must
-//! not be rejected. A compromised descendant index that injects fake children
-//! cannot amplify unboundedly either — each frontier is canonicalized and the
-//! walk aborts at the first resolve that fails the gate, so at most the scopes
-//! ordered before the first forgery's canonical position are resolved (bounded
-//! by the genuinely gate-passing scopes the attacker controls), never an
-//! unbounded injected fan-out.
+//! A `scope_id`-keyed visited set resolves each scope root at most once, so a
+//! cycle (a corrupt/adversarial back-edge) is skipped, not followed — the walk
+//! always terminates. No depth or count cap is imposed (a legitimately large
+//! owner tree must not be rejected); an injected fake fan-out cannot amplify
+//! unboundedly either, since each frontier is canonicalized and the walk aborts
+//! at the first gate-failing resolve, bounding resolves to the gate-passing
+//! scopes ordered before the first forgery.
 //!
 //! # Determinism
 //!
-//! The walk is pure: no clock, RNG, or I/O of its own — the sole impure edge is
-//! the injected [`ChildIndexResolver`]. Output is ordered by `scope_id` byte
-//! `Ord` (a [`BTreeMap`] keyed by `scope_id`, matching Slice 1's
-//! [`canonicalize`](crate::grants::child_index::canonicalize) convention), and
-//! each level is canonicalized before descent, so the first-seen entry for any
-//! shared descendant is fixed regardless of input permutation. Replayed or
-//! multi-writer runs converge to byte-identical output.
+//! The walk is pure — the sole impure edge is the injected [`ChildIndexResolver`].
+//! Output is ordered by `scope_id` (a [`BTreeMap`], matching Slice 1's
+//! [`canonicalize`](crate::grants::child_index::canonicalize) convention) and each
+//! level is canonicalized before descent, so the first-seen entry for any shared
+//! descendant is permutation-independent. Replayed or multi-writer runs converge
+//! to byte-identical output.
 
 use std::collections::{BTreeMap, BTreeSet};
 
