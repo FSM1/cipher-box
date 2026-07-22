@@ -54,6 +54,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 
 use crate::gate::floor;
 use crate::seams::{FloorStore, SeamError};
+use crate::secret_util::ct_eq_32;
 
 /// The six ordered stages of the adoption gate. The stage a rejection names is
 /// the first stage that failed; earlier stages all passed.
@@ -316,6 +317,48 @@ pub struct Adopted {
     pub epoch: u64,
 }
 
+/// A gate pass whose floor-law advance is **deferred**: all six stages
+/// succeeded and the read-body unsealed, but the durable floors have not moved
+/// yet. A caller that must durably persist accepted state (the accept flow's
+/// received-shares bookmark) persists first, then calls [`commit`] — so a
+/// persist failure leaves the floors untouched and the record re-adopts cleanly
+/// on redelivery instead of being stranded below an already-advanced sequence
+/// floor. The durability of the floor advance is thus gated on the durability
+/// of the accepted state.
+///
+/// [`commit`]: PendingAdoption::commit
+#[must_use = "the deferred floor advance must be committed once the accepted state is durable"]
+pub struct PendingAdoption {
+    adopted: Adopted,
+    scope_id: [u8; 16],
+    ipns_name: Vec<u8>,
+}
+
+impl PendingAdoption {
+    /// Commit the deferred floor-law advance (the AAD-confirmed-unseal rule),
+    /// then yield the [`Adopted`] result. Call only after the accepted state is
+    /// durably persisted.
+    ///
+    /// The stage-4/5 floor reads and this advance are not a CAS pair and do not
+    /// need to be: the engine is the single writer (blueprint/engine.md
+    /// "Facade" — one live instance), so no concurrent adopt races this device's
+    /// floors between the read and the advance. Cross-writer contention is
+    /// resolved on the publish/RecordTransport plane (CAS), never on the local
+    /// floor read. `advance_on_unseal` itself orders its two raises fail-safe.
+    pub async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, GateError> {
+        floor::advance_on_unseal(
+            floors,
+            &self.scope_id,
+            &self.ipns_name,
+            self.adopted.sequence,
+            self.adopted.epoch,
+        )
+        .await
+        .map_err(GateError::Seam)?;
+        Ok(self.adopted)
+    }
+}
+
 /// The committed write-capable pseudonyms of a scope root: the owner pseudonym
 /// plus every write-permission entry's pseudonym. Read-only entries never
 /// authorize a seed-bearing structure.
@@ -396,26 +439,18 @@ fn open_seed_blob(blob: &SeedBlob<'_>) -> Result<SecretBytes, CodecError> {
     }
 }
 
-/// Constant-time 32-byte equality: no data-dependent early exit, so a mismatch
-/// between a candidate-derived key and the caller-owned read key is never a
-/// timing oracle over the reader's secret.
-fn ct_eq_secret(a: &[u8; 32], b: &[u8; 32]) -> bool {
-    let mut diff = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        diff |= x ^ y;
-    }
-    core::hint::black_box(diff) == 0
-}
-
 /// Run the adoption gate over one hand-fed [`Candidate`] for one
-/// [`ReaderContext`]. On success the floor law has advanced (per the
-/// AAD-confirmed-unseal rule) and the unsealed read-body is returned; on
-/// failure nothing durable changed and the caller pins last-known-good.
-pub async fn adopt<F: FloorStore>(
+/// [`ReaderContext`], **deferring** the floor-law advance. On success all six
+/// stages passed and the read-body unsealed, but the durable floors have not
+/// moved: the caller persists any accepted state, then calls
+/// [`PendingAdoption::commit`] to advance them. On failure nothing durable
+/// changed and the caller pins last-known-good. Use [`adopt`] for the eager
+/// path that has no accepted state to persist first.
+pub async fn adopt_deferred<F: FloorStore>(
     floors: &F,
     reader: &ReaderContext<'_>,
     candidate: &Candidate,
-) -> Result<Adopted, GateError> {
+) -> Result<PendingAdoption, GateError> {
     // Stage 1 — record verify (Ed25519 key from the name itself).
     let verified = IpnsRecord::unmarshal(&candidate.record_bytes)
         .and_then(|record| record.verify(&candidate.name))
@@ -498,7 +533,7 @@ pub async fn adopt<F: FloorStore>(
         let node_seed = kdf::node_seed(payload.override_seed(), &candidate.envelope.id);
         let derived_read_key = kdf::read_key(node_seed.as_bytes());
         if payload.epoch != candidate.envelope.epoch
-            || !ct_eq_secret(derived_read_key.as_bytes(), reader.read_key)
+            || !ct_eq_32(derived_read_key.as_bytes(), reader.read_key)
         {
             return Err(reject(
                 GateStage::GrantSection,
@@ -580,7 +615,7 @@ pub async fn adopt<F: FloorStore>(
             .map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
         let node_seed = kdf::node_seed(seed.as_bytes(), &candidate.envelope.id);
         let derived_read_key = kdf::read_key(node_seed.as_bytes());
-        if !ct_eq_secret(derived_read_key.as_bytes(), reader.read_key) {
+        if !ct_eq_32(derived_read_key.as_bytes(), reader.read_key) {
             return Err(reject(
                 GateStage::Unseal,
                 RejectionReason::Trust(TrustViolation::SealOpenFailed.into()),
@@ -590,29 +625,34 @@ pub async fn adopt<F: FloorStore>(
     let read_body = open_read_body(&candidate.envelope, reader.read_key)
         .map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
 
-    // Floor law — advance ONLY now, after the AAD-confirmed unseal.
-    //
-    // The stage-4/5 reads above and this advance are not a CAS pair, and they
-    // do not need to be: the engine is the single writer (blueprint/engine.md
-    // "Facade" — one live instance), so no concurrent adopt races this device's
-    // floors between the read and the advance. Cross-writer contention is
-    // resolved on the publish/RecordTransport plane (CAS), never on the local
-    // floor read. `advance_on_unseal` itself orders its two raises fail-safe.
-    floor::advance_on_unseal(
-        floors,
-        &reader.scope_id,
-        name_bytes,
-        verified.sequence,
-        epoch,
-    )
-    .await
-    .map_err(GateError::Seam)?;
-
-    Ok(Adopted {
-        read_body,
-        sequence: verified.sequence,
-        epoch,
+    // The read-body unsealed (stage 6). The floor-law advance is DEFERRED to
+    // [`PendingAdoption::commit`] so a caller that must persist accepted state
+    // first advances the floors only after that state is durable.
+    Ok(PendingAdoption {
+        adopted: Adopted {
+            read_body,
+            sequence: verified.sequence,
+            epoch,
+        },
+        scope_id: reader.scope_id,
+        ipns_name: name_bytes.to_vec(),
     })
+}
+
+/// Run the adoption gate and, on success, immediately advance the floor law
+/// (the AAD-confirmed-unseal rule). The eager path for callers that hold no
+/// accepted state to persist first (e.g. a plain resolve); a caller that must
+/// make the floor advance atomic with a durable write uses [`adopt_deferred`]
+/// plus [`PendingAdoption::commit`].
+pub async fn adopt<F: FloorStore>(
+    floors: &F,
+    reader: &ReaderContext<'_>,
+    candidate: &Candidate,
+) -> Result<Adopted, GateError> {
+    adopt_deferred(floors, reader, candidate)
+        .await?
+        .commit(floors)
+        .await
 }
 
 /// Build a `GateError::Rejected` from a stage and reason.

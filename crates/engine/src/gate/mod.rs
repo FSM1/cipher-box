@@ -19,5 +19,6 @@ mod adoption;
 
 pub use adoption::{
     Adopted, AscentCheck, Candidate, FLOOR_VERDICTS, GateError, GateRejection, GateStage,
-    ReaderContext, RejectionReason, SeedBlob, SignedStructure, adopt,
+    PendingAdoption, ReaderContext, RejectionReason, SeedBlob, SignedStructure, adopt,
+    adopt_deferred,
 };
