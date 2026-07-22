@@ -141,7 +141,6 @@ pub fn import_contact_code(bytes: &[u8]) -> Result<ContactCode, CodecError> {
     let binding_sig =
         EcdsaSignature::from_compact(sig_bytes).ok_or(Malformed::InvalidBindingSigEncoding)?;
 
-    // Mandatory, fail-closed: never construct a ContactCode past a failed verify.
     if !verify_subkey_binding(&identity_pk, &enc_subkey, &binding_sig) {
         return Err(TrustViolation::SubkeyBindingInvalid.into());
     }

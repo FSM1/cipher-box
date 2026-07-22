@@ -68,9 +68,8 @@ pub const CONTENT_CID_LEN: usize = CID_PREFIX_LEN + DIGEST_LEN;
 /// must pass a single-byte multicodec; the guard fails closed (panics in every
 /// build) rather than silently emitting a malformed one-byte-truncated CID.
 pub fn compute_cid(codec: u8, bytes: &[u8]) -> Vec<u8> {
-    // A malformed content CID is a content-addressing hazard, so this holds in
-    // release too, not only debug (core.md:56). The frozen content-plane set is
-    // single-byte (raw 0x55, dag-cbor 0x71), so it never fires in correct use.
+    // `assert!` (not `debug_assert!`): a one-byte-truncated CID from a
+    // multi-byte codec must fail closed in release too (core.md:56).
     assert!(
         codec < 0x80,
         "content-plane multicodec must be single-byte (< 0x80, core.md:56)"

@@ -36,9 +36,9 @@ pub const AAD_DOMAIN: &str = "cipherbox/v2/aad";
 // ---------------------------------------------------------------------------
 // Structure-tag registry: the domain-separation byte-space, frozen here and in
 // the KAT manifest. Every sealed/signed structure has exactly one tag; the tag
-// is bound into the AAD (and, in later slices, the structure-signature
-// preimage). Bytes are assigned once and never reused — a fresh v2 space (the
-// v1 content self-seal role `0x03` has no v2 analog and is not carried).
+// is bound into the AAD and the structure-signature preimage. Bytes are assigned
+// once and never reused — a fresh v2 space (the v1 content self-seal role `0x03`
+// has no v2 analog and is not carried).
 // ---------------------------------------------------------------------------
 
 /// `read-body` — the sealed node body (folder children / file versions). The
@@ -124,9 +124,7 @@ pub struct AadContext {
 
 /// Build the AAD bytes for a seal: the det-CBOR encoding of
 /// `[AAD_DOMAIN, v, id, scope, epoch, structTag]`. Deterministic and
-/// unambiguous; the array positions are frozen by the KAT, so this is never
-/// decoded back — it is only handed to the AEAD as additional authenticated
-/// data.
+/// unambiguous; the array positions are frozen by the KAT.
 pub fn build_aad(ctx: &AadContext) -> Vec<u8> {
     encode(&Value::Array(vec![
         Value::Text(AAD_DOMAIN.to_string()),

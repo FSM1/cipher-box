@@ -7,11 +7,10 @@
 //! the read-body, so observers cannot distinguish them. The scope id is the
 //! scope root's node UUID; `epochTag` is the plaintext, AAD-bound membership.
 //!
-//! This slice lands `{v, id, epochTag, readSealed}`. The write-body and grant
-//! section are later slices — but an envelope that carries them (written by a
-//! newer client) must round-trip byte-stable through this decoder, so they ride
-//! the unknown-field tolerance (#27 D10): `writeSealed`/`grantSection` are
-//! preserved in [`Envelope::unknown`], never stripped on rewrite.
+//! This codec models only `{v, id, epochTag, readSealed}` as typed fields;
+//! `writeSealed`/`grantSection` are carried through the unknown-field tolerance
+//! (#27 D10), preserved in [`Envelope::unknown`] and never stripped on rewrite,
+//! so an envelope written by a newer client round-trips byte-stable here.
 
 use zeroize::Zeroize;
 
@@ -92,8 +91,8 @@ pub fn encode_envelope(env: &Envelope) -> Vec<u8> {
 /// Seal a read-body into a fresh envelope under the read key + injected nonce.
 ///
 /// The struct tag is fixed to `read-body`; the AAD binds `(v, id, scope, epoch,
-/// read-body)`. `nonce` must be unique per `key` (XChaCha20-Poly1305 nonce
-/// reuse under one key is a break) and is caller-injected entropy the KATs pin.
+/// read-body)`. `nonce` must be unique per `key` (see [`super::seal`]) and is
+/// caller-injected entropy the KATs pin.
 ///
 /// The body is [`ReadBody::validate`]d first, so this never persists a folder
 /// with duplicate child ids/ipnsNames that decode would refuse to reopen —

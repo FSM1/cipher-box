@@ -384,17 +384,11 @@ pub fn encode_read_body(body: &ReadBody) -> Vec<u8> {
             merge_unknown(&mut m, unknown);
         }
     }
-    // The transient `Value` tree just built carries a verbatim copy of every
-    // inline content key (one `Value::Bytes` per file version, produced by
-    // `Version::to_value`). We own that tree, so we are its terminal owner
-    // (blueprint/core.md "Crypto suite": key material lives only in zeroizing
-    // owners). Scrub it through a drop guard, not an explicit trailing call, so
-    // the wipe runs whether `encode` returns or unwinds: `write_value`'s
-    // `debug_assert!(depth < MAX_DEPTH)` can panic in debug/test builds, and a
-    // bare post-`encode` scrub would be skipped on that unwind, leaving a
-    // freed-but-uncleared key copy on the heap. The returned buffer carries the
-    // same key bytes and is the seal path's
-    // ([`seal_read_body`](super::seal_read_body)) to zeroize — it does.
+    // The transient tree carries a verbatim copy of every inline content key
+    // (one `Value::Bytes` per version). Scrub it through the drop guard so the
+    // wipe runs on both return and panic-unwind (terminal-owner rule; see
+    // [`ScrubOnDrop`]). The returned buffer stays the seal path's
+    // ([`seal_read_body`](super::seal_read_body)) to zeroize.
     let mut value = Value::Map(m);
     let guard = ScrubOnDrop(&mut value);
     encode(guard.0)
