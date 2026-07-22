@@ -47,6 +47,13 @@ describe('EngineFacade', () => {
     expect(transport.closed).toBe(true);
   });
 
+  it('tears the transport down even when the logout command rejects', async () => {
+    const transport = new FakeTransport();
+    transport.command = () => Promise.reject(new Error('logout unimplemented'));
+    await expect(new EngineFacade(transport).logout()).resolves.toBeUndefined();
+    expect(transport.closed).toBe(true);
+  });
+
   it('transfers file content on create and marks it as a file', async () => {
     const transport = new FakeTransport();
     const content = new Uint8Array([1, 2, 3]).buffer;

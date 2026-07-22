@@ -28,7 +28,6 @@ function permission(wasm: EngineWasm, level: Permission): number {
   return level === 'read' ? wasm.Permission.Read : wasm.Permission.Write;
 }
 
-/** Rebuilds a wasm-bindgen `Command` from its wire descriptor. */
 export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): WasmCommand {
   switch (descriptor.kind) {
     case 'create':
@@ -93,6 +92,8 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
 
 function staleness(wasm: EngineWasm, level: number): Staleness {
   switch (level) {
+    case wasm.Staleness.Fresh:
+      return 'fresh';
     case wasm.Staleness.Reconciling:
       return 'reconciling';
     case wasm.Staleness.Stale:
@@ -100,13 +101,16 @@ function staleness(wasm: EngineWasm, level: number): Staleness {
     case wasm.Staleness.Offline:
       return 'offline';
     default:
-      return 'fresh';
+      // Fail closed: an unmapped value means a JS/WASM version mismatch, not a
+      // safe-to-ignore state (the event pump turns this throw into a fatal).
+      throw new Error(`unknown WASM staleness value: ${level}`);
   }
 }
 
-/** Reads a wasm-bindgen `Event`'s key-free getters into a wire descriptor. */
 export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
   switch (event.kind) {
+    case 'snapshotUpdated':
+      return { kind: 'snapshotUpdated' };
     case 'stalenessChanged':
       return {
         kind: 'stalenessChanged',
@@ -119,6 +123,8 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
     case 'attributableAbuse':
       return { kind: 'attributableAbuse', description: event.description ?? '' };
     default:
-      return { kind: 'snapshotUpdated' };
+      // Fail closed: an unmapped kind means a JS/WASM version mismatch, not a
+      // safe-to-ignore event (the event pump turns this throw into a fatal).
+      throw new Error(`unknown WASM event kind: ${event.kind}`);
   }
 }

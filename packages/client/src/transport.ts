@@ -59,9 +59,13 @@ export class LocalTransport implements EngineTransport {
   // the worker is dead, so every request rejects here instead of posting and
   // waiting forever for a response that can never arrive.
   private terminalError: Error | null = null;
+  // Settles `ready` on teardown so a request awaiting cold start before the
+  // worker's `ready` rejects instead of hanging forever.
+  private rejectReady!: (error: Error) => void;
 
   constructor(private readonly worker: EngineWorkerLike) {
     this.ready = new Promise<void>((resolveReady, rejectReady) => {
+      this.rejectReady = rejectReady;
       this.worker.addEventListener('message', (event) => {
         const message = event.data;
         switch (message.type) {
@@ -117,11 +121,16 @@ export class LocalTransport implements EngineTransport {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.fail(new Error('engine transport closed'));
+    const error = new Error('engine transport closed');
+    // Reject `ready` first so a request parked on cold start unblocks with the
+    // teardown error rather than hanging; `fail` then rejects in-flight requests.
+    this.rejectReady(error);
+    this.fail(error);
     this.worker.terminate();
   }
 
   private request(build: (id: number) => WorkerRequest, transfer: Transferable[]): Promise<void> {
+    if (this.terminalError) return Promise.reject(this.terminalError);
     return this.ready.then(
       () =>
         new Promise<void>((resolve, reject) => {

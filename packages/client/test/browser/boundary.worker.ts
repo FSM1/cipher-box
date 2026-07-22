@@ -47,61 +47,69 @@ async function runBigint(): Promise<void> {
 }
 
 async function runStagingDetachment(): Promise<void> {
-  const dirName = `boundary-staging-${Date.now()}`;
+  const dirName = `boundary-staging-${Date.now()}-${crypto.randomUUID()}`;
   await clearOpfsDir(`${dirName}-staged`);
   const store = new OpfsStagingStore(dirName);
+  try {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const view = new Uint8Array(memory.buffer, 0, 32);
+    for (let i = 0; i < view.length; i += 1) view[i] = (i * 7 + 1) & 0xff;
+    const expected = view.slice();
+    const key = new Uint8Array([0xab, 0xcd]);
 
-  const memory = new WebAssembly.Memory({ initial: 1 });
-  const view = new Uint8Array(memory.buffer, 0, 32);
-  for (let i = 0; i < view.length; i += 1) view[i] = (i * 7 + 1) & 0xff;
-  const expected = view.slice();
-  const key = new Uint8Array([0xab, 0xcd]);
+    // Start the write, then detach the source view before its awaits resolve.
+    const writing = store.putStagedBytes(key, view);
+    memory.grow(1); // detaches memory.buffer → `view` is now zero-length
+    if (view.byteLength !== 0) throw new Error('precondition: view was not detached by grow');
+    await writing;
 
-  // Start the write, then detach the source view before its awaits resolve.
-  const writing = store.putStagedBytes(key, view);
-  memory.grow(1); // detaches memory.buffer → `view` is now zero-length
-  if (view.byteLength !== 0) throw new Error('precondition: view was not detached by grow');
-  await writing;
-
-  const stored = await store.stagedBytes(key);
-  if (!stored || stored.length !== expected.length) {
-    throw new Error(`stored length ${stored?.length ?? 'null'} != ${expected.length}`);
-  }
-  for (let i = 0; i < expected.length; i += 1) {
-    if (stored[i] !== expected[i]) throw new Error(`byte ${i}: ${stored[i]} != ${expected[i]}`);
+    const stored = await store.stagedBytes(key);
+    if (!stored || stored.length !== expected.length) {
+      throw new Error(`stored length ${stored?.length ?? 'null'} != ${expected.length}`);
+    }
+    for (let i = 0; i < expected.length; i += 1) {
+      if (stored[i] !== expected[i]) throw new Error(`byte ${i}: ${stored[i]} != ${expected[i]}`);
+    }
+  } finally {
+    await clearOpfsDir(`${dirName}-staged`);
   }
 }
 
 async function runStagingKeyDetachment(): Promise<void> {
-  const dirName = `boundary-staging-key-${Date.now()}`;
+  const dirName = `boundary-staging-key-${Date.now()}-${crypto.randomUUID()}`;
   await clearOpfsDir(`${dirName}-staged`);
   const store = new OpfsStagingStore(dirName);
+  try {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    const keyView = new Uint8Array(memory.buffer, 0, 8);
+    for (let i = 0; i < keyView.length; i += 1) keyView[i] = (i * 13 + 3) & 0xff;
+    const expectedKey = keyView.slice();
+    const bytes = new Uint8Array([1, 2, 3, 4]);
 
-  const memory = new WebAssembly.Memory({ initial: 1 });
-  const keyView = new Uint8Array(memory.buffer, 0, 8);
-  for (let i = 0; i < keyView.length; i += 1) keyView[i] = (i * 13 + 3) & 0xff;
-  const expectedKey = keyView.slice();
-  const bytes = new Uint8Array([1, 2, 3, 4]);
+    // Start the write, then detach the KEY view before its awaits resolve.
+    const writing = store.putStagedBytes(keyView, bytes);
+    memory.grow(1); // detaches memory.buffer → `keyView` is now zero-length
+    if (keyView.byteLength !== 0) {
+      throw new Error('precondition: key view was not detached by grow');
+    }
+    await writing;
 
-  // Start the write, then detach the KEY view before its awaits resolve.
-  const writing = store.putStagedBytes(keyView, bytes);
-  memory.grow(1); // detaches memory.buffer → `keyView` is now zero-length
-  if (keyView.byteLength !== 0) throw new Error('precondition: key view was not detached by grow');
-  await writing;
-
-  // Read back under the real key. A key hexed after the await would be '',
-  // storing the entry under the wrong name and missing here.
-  const stored = await store.stagedBytes(expectedKey);
-  if (!stored || stored.length !== bytes.length) {
-    throw new Error(`stored length ${stored?.length ?? 'null'} != ${bytes.length}`);
-  }
-  for (let i = 0; i < bytes.length; i += 1) {
-    if (stored[i] !== bytes[i]) throw new Error(`byte ${i}: ${stored[i]} != ${bytes[i]}`);
+    // Read back under the real key. A key hexed after the await would be '',
+    // storing the entry under the wrong name and missing here.
+    const stored = await store.stagedBytes(expectedKey);
+    if (!stored || stored.length !== bytes.length) {
+      throw new Error(`stored length ${stored?.length ?? 'null'} != ${bytes.length}`);
+    }
+    for (let i = 0; i < bytes.length; i += 1) {
+      if (stored[i] !== bytes[i]) throw new Error(`byte ${i}: ${stored[i]} != ${bytes[i]}`);
+    }
+  } finally {
+    await clearOpfsDir(`${dirName}-staged`);
   }
 }
 
 async function runSnapshotKeyDetachment(): Promise<void> {
-  const cache = new IdbSnapshotCache(`boundary-snapshot-key-${Date.now()}`);
+  const cache = new IdbSnapshotCache(`boundary-snapshot-key-${Date.now()}-${crypto.randomUUID()}`);
   try {
     const memory = new WebAssembly.Memory({ initial: 1 });
     const keyView = new Uint8Array(memory.buffer, 0, 8);
