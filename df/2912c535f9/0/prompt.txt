@@ -31,3 +31,7 @@ thats fine, my frustration is with the fact that my messages were ignored twice 
 <status>completed</status>
 <summary>Background command "Build and run gate1b (may take up to ~12 min)" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+sorry please try commit now - i was afk
