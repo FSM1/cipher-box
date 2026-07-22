@@ -452,6 +452,22 @@ jobs:
       - name: WASM facade boundary tests (wasm32-unknown-unknown)
         run: cargo test -p cipherbox-wasm --target wasm32-unknown-unknown
 
+      # getrandom tripwire (#718): core is pure — entropy is injected, never
+      # sourced in-tree (blueprint/core.md "Doctrine"). The global
+      # getrandom_backend cfg in .cargo/config.toml defeats getrandom-0.3's
+      # no-backend compile error, so a getrandom that sneaked into core's
+      # production graph would silently link a live crypto.getRandomValues
+      # backend. Fail closed: core's normal-edge wasm graph must pull no
+      # getrandom (its dev-only proptest RNG is fine). Capture first so a
+      # cargo-tree failure fails the step rather than skipping the check.
+      - name: getrandom stays out of core's production graph (wasm)
+        run: |
+          graph=$(cargo tree -p cipherbox-core --target wasm32-unknown-unknown --edges normal)
+          if echo "$graph" | grep -qi getrandom; then
+            echo "::error::getrandom entered cipherbox-core's production graph — core must source no entropy (blueprint/core.md)."
+            exit 1
+          fi
+
       # The single wasm-bindgen ES module and its generated .d.ts contract must
       # build (blueprint/web-client.md); packages/client hosts and fingerprints
       # it later.
