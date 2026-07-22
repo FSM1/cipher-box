@@ -1018,6 +1018,12 @@ fn gate3(mnt: &Path, iters: usize, ttl: Duration) {
             let mut short = 0u64;
             let mut errors = 0u64;
             let mut examples: Vec<String> = Vec::new();
+            // Track which uniform byte values the reader actually observed. The
+            // initial file is all-zero and the writer only publishes patterns in
+            // 1..=251, so a run that never sees ≥2 distinct writer patterns
+            // proves no overwrite propagated — a frozen stale cache would pass
+            // the torn/short/missing checks vacuously.
+            let mut seen = [false; 256];
             while !stop.load(Ordering::Relaxed) {
                 reads += 1;
                 match std::fs::read(&target) {
@@ -1035,6 +1041,8 @@ fn gate3(mnt: &Path, iters: usize, ttl: Duration) {
                                 let other = d.iter().find(|b| **b != v).unwrap();
                                 examples.push(format!("torn read: mixed {v} and {other}"));
                             }
+                        } else {
+                            seen[v as usize] = true;
                         }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => missing += 1,
@@ -1046,7 +1054,16 @@ fn gate3(mnt: &Path, iters: usize, ttl: Duration) {
                     }
                 }
             }
-            (reads, torn, missing, short, errors, examples)
+            let writer_patterns_seen = (1u16..=251).filter(|v| seen[*v as usize]).count() as u64;
+            (
+                reads,
+                torn,
+                missing,
+                short,
+                errors,
+                writer_patterns_seen,
+                examples,
+            )
         })
     };
 
@@ -1065,9 +1082,10 @@ fn gate3(mnt: &Path, iters: usize, ttl: Duration) {
         }
     }
     stop.store(true, Ordering::Relaxed);
-    let (reads, torn, missing, short, errors, examples) = reader.join().unwrap();
+    let (reads, torn, missing, short, errors, writer_patterns_seen, examples) =
+        reader.join().unwrap();
     println!(
-        "reads={reads} torn={torn} missing(ENOENT)={missing} short={short} io-errors={errors} write-errors={write_errs}"
+        "reads={reads} torn={torn} missing(ENOENT)={missing} short={short} io-errors={errors} write-errors={write_errs} writer-patterns-observed={writer_patterns_seen}"
     );
     for e in &examples {
         println!("  example anomaly: {e}");
@@ -1088,12 +1106,16 @@ fn gate3(mnt: &Path, iters: usize, ttl: Duration) {
     // A rename-name fallback hit means the harness had to guess the source of
     // a rename — a resurrected truncation bug must fail the gate, not pass
     // silently under the guessed name.
+    // ≥2 distinct writer patterns proves the reader actually observed
+    // overwrites propagate — otherwise a frozen stale cache would pass the
+    // torn/short/missing checks without ever seeing an overwrite land.
     let verdict_ok = torn == 0
         && missing == 0
         && short == 0
         && errors == 0
         && write_errs == 0
-        && s.ops.rename_name_fallbacks == 0;
+        && s.ops.rename_name_fallbacks == 0
+        && writer_patterns_seen >= 2;
     println!(
         "atomicity verdict: {}",
         if verdict_ok { "PASS" } else { "FAIL" }

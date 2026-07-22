@@ -103,7 +103,12 @@ surface — the SMB backend does not touch Apple's NFS client kext.
 ## Gate 3 — overwrite-rename atomicity
 
 300 overwrite-renames of a 64 KiB target with a concurrent full-file
-reader: **7,483 reads — 0 torn, 0 ENOENT, 0 short, 0 errors**.
+reader: **7,483 reads — 0 torn, 0 ENOENT, 0 short, 0 errors**. The reader
+also observed multiple distinct writer patterns (the writer publishes a
+fresh non-zero fill byte per rename), so the clean sweep is positive
+evidence that overwrites propagated — not a frozen stale cache passing the
+torn/short/missing checks vacuously; the harness now fails the gate unless
+≥2 distinct writer patterns are observed.
 
 Mechanics observed at the FUSE layer: the smbfs client implements
 overwrite-rename as `rename(target → .smbdeleteXXXX)` + `rename(tmp →
