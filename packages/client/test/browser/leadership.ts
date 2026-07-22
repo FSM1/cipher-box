@@ -25,6 +25,7 @@ declare global {
     cbCreateFile(name: string): Promise<string>;
     cbDispose(): Promise<void>;
     cbJournalCount(): Promise<number>;
+    cbJournalRecords(): Promise<unknown[]>;
     cbHeldLocks(lockName: string): Promise<number>;
     cbResetJournal(): Promise<void>;
   }
@@ -102,6 +103,20 @@ window.cbJournalCount = async (): Promise<number> => {
       const count = tx.objectStore(JOURNAL_STORE).count();
       count.onsuccess = () => resolve(count.result);
       count.onerror = () => reject(count.error ?? new Error('journal count failed'));
+    });
+  } finally {
+    db.close();
+  }
+};
+
+window.cbJournalRecords = async (): Promise<unknown[]> => {
+  const db = await openJournal();
+  try {
+    return await new Promise<unknown[]>((resolve, reject) => {
+      const tx = db.transaction(JOURNAL_STORE, 'readonly');
+      const all = tx.objectStore(JOURNAL_STORE).getAll();
+      all.onsuccess = () => resolve(all.result);
+      all.onerror = () => reject(all.error ?? new Error('journal read failed'));
     });
   } finally {
     db.close();

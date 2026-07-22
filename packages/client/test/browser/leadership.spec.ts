@@ -17,6 +17,7 @@ interface LeadershipHarness {
   cbCreateFile(name: string): Promise<string>;
   cbDispose(): Promise<void>;
   cbJournalCount(): Promise<number>;
+  cbJournalRecords(): Promise<unknown[]>;
   cbHeldLocks(lockName: string): Promise<number>;
   cbResetJournal(): Promise<void>;
 }
@@ -40,6 +41,7 @@ function harness(page: Page): {
   createFile(name: string): Promise<string>;
   dispose(): Promise<void>;
   journalCount(): Promise<number>;
+  journalRecords(): Promise<unknown[]>;
   heldLocks(lockName: string): Promise<number>;
   resetJournal(): Promise<void>;
   waitForRole(role: string): Promise<void>;
@@ -57,6 +59,8 @@ function harness(page: Page): {
     dispose: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbDispose()),
     journalCount: () =>
       page.evaluate(() => (window as unknown as LeadershipHarness).cbJournalCount()),
+    journalRecords: () =>
+      page.evaluate(() => (window as unknown as LeadershipHarness).cbJournalRecords()),
     heldLocks: (lockName) =>
       page.evaluate((n) => (window as unknown as LeadershipHarness).cbHeldLocks(n), lockName),
     resetJournal: () =>
@@ -117,6 +121,18 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     expect(await follower.createFile('from-follower.txt')).toBe('ok');
 
     expect(await leader.journalCount()).toBe(2);
+
+    // No plaintext at rest: the durable journal records only {kind, at} — never
+    // the upload content or any byte-array field the write command carried.
+    const records = await leader.journalRecords();
+    for (const record of records) {
+      const row = record as Record<string, unknown>;
+      expect(Object.keys(row).sort()).toEqual(['at', 'kind']);
+      expect('content' in row).toBe(false);
+      expect(
+        Object.values(row).some((v) => v instanceof Uint8Array || v instanceof ArrayBuffer)
+      ).toBe(false);
+    }
 
     await a.dispose();
     await b.dispose();

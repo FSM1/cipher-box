@@ -40,6 +40,46 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(carriedSecret).toBe(false);
   });
 
+  it('leaks no key-shaped sentinel on any leader→follower message (structural)', async () => {
+    const bus = new FakeBus();
+    const engine = new FakeEngineTransport();
+    new LeaderRelay(bus.channel(), engine);
+
+    // Capture everything the leader broadcasts to followers (events + responses).
+    const leaderPosts: unknown[] = [];
+    const spy = bus.channel();
+    spy.addEventListener('message', (event) => leaderPosts.push(event.data));
+
+    const follower = new BroadcastTransport(bus.channel(), 'f');
+    // A key-shaped sentinel: distinctive 32-byte key material that must never
+    // appear on the keyless leader→follower wire. Plant it as this follower's
+    // secret (the follower scrubs it) so it genuinely exists in the test realm.
+    const sentinel = Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + 3) & 0xff);
+    await follower.start(sentinel.slice().buffer);
+
+    // Drive the full leader→follower surface: a correlated response plus every
+    // EventDescriptor variant, including the byte- and string-bearing ones.
+    await follower.command({ kind: 'manualRefresh' }, []);
+    engine.emit({ kind: 'snapshotUpdated' });
+    engine.emit({ kind: 'stalenessChanged', staleness: 'stale' });
+    engine.emit({ kind: 'withheldUpdateEscalation', ipnsName: new Uint8Array([1, 2, 3]) });
+    engine.emit({ kind: 'deadLetter', opId: 9n });
+    engine.emit({ kind: 'attributableAbuse', description: 'abuse' });
+    await tick();
+
+    // Serialize every leader post (bytes as csv, bigint as string) and assert the
+    // sentinel never rode along — a future variant echoing key bytes would fail.
+    const serialize = (value: unknown): string =>
+      JSON.stringify(value, (_key, v) =>
+        v instanceof Uint8Array ? [...v].join(',') : typeof v === 'bigint' ? v.toString() : v
+      );
+    const sentinelCsv = [...sentinel].join(',');
+    const leaked = leaderPosts.some((message) => serialize(message).includes(sentinelCsv));
+    expect(leaked).toBe(false);
+    // Sanity: the leader actually broadcast the events + response we drove.
+    expect(leaderPosts.length).toBeGreaterThanOrEqual(6);
+  });
+
   it('shares upload content as a Blob and rebuilds identical bytes on the leader', async () => {
     const { engine, follower } = wire();
     const bytes = new Uint8Array([9, 8, 7, 6]);
