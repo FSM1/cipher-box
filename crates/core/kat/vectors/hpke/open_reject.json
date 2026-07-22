@@ -18,5 +18,15 @@
     "ciphertext": "14a967daaa0abaf4e187b4602b109ae3537e1e6a0892e8",
     "check": "hpke-open-failed",
     "class": "trust"
+  },
+  {
+    "name": "low-order-enc",
+    "recipientSecret": "101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f",
+    "enc": "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+    "info": "696e666f",
+    "aad": "616164",
+    "ciphertext": "14a967daaa0abaf4e187b4602b109ae3537e1e6a0892e8",
+    "check": "hpke-non-contributory",
+    "class": "trust"
   }
 ]

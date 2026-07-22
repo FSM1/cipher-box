@@ -118,36 +118,39 @@ impl Value {
         }
     }
 
-    /// Scrub every owned byte buffer in this value tree in place: each
-    /// [`Value::Bytes`] has its contents wiped from memory and is cleared to
-    /// empty (`Vec::zeroize` semantics), while the tree's shape and every
-    /// non-byte value are left intact.
+    /// Scrub every owned byte and text buffer in this value tree in place: each
+    /// [`Value::Bytes`] and each [`Value::Text`] has its contents wiped from
+    /// memory and is cleared to empty (`Vec`/`String` `zeroize` semantics),
+    /// while the tree's shape and every other value are left intact.
     ///
-    /// The sealed-body encode path builds a transient `Value` tree that carries
-    /// verbatim copies of inline **content-key** material — one
-    /// [`Value::Bytes`] per file version ([`encode_read_body`]). That tree is
-    /// built and owned by the encoder, so the encoder is its terminal owner and
-    /// wipes it here before it drops, closing the window where a
-    /// freed-but-uncleared `Value::Bytes` copy of key material would linger on
-    /// the heap (blueprint/core.md "Crypto suite": key material lives only in
-    /// zeroizing owners). Non-secret byte buffers (ids, cids, ipnsNames) are
-    /// wiped too: they are all encoder-owned transient copies, so a whole-tree
-    /// wipe needs no per-field secret classification and stays correct as later
-    /// sealed bodies add secret byte fields (grant/owner/history seed material).
-    /// This only ever touches the encoder's own transient copies — the caller's
+    /// A sealed-body encode/decode path builds a transient `Value` tree that
+    /// carries verbatim copies of secret material — inline **content-key** bytes
+    /// (one [`Value::Bytes`] per file version, [`encode_read_body`]) and scope
+    /// **seed** bytes (grant/owner/history payloads). That tree is built and
+    /// owned by the codec layer, so the codec is its terminal owner and wipes it
+    /// here before it drops, closing the window where a freed-but-uncleared copy
+    /// of key material would linger on the heap (blueprint/core.md "Crypto
+    /// suite": key material lives only in zeroizing owners). Non-secret buffers
+    /// (ids, cids, ipnsNames) are wiped too: they are all transient copies, so a
+    /// whole-tree wipe needs no per-field secret classification and stays correct
+    /// as later bodies add secret fields. [`Value::Text`] is wiped for the same
+    /// reason — a transient copy of a filename is user-private metadata in a ZK
+    /// system, so it never lingers uncleared either. This only ever touches the
+    /// codec's own transient copies — the caller's
     /// [`SecretBytes`](crate::suite::secret::SecretBytes) inputs are untouched.
     ///
     /// [`encode_read_body`]: crate::seal::encode_read_body
     pub(crate) fn zeroize_bytes(&mut self) {
         match self {
             Self::Bytes(b) => b.zeroize(),
+            Self::Text(s) => s.zeroize(),
             Self::Array(items) => {
                 for item in items {
                     item.zeroize_bytes();
                 }
             }
             Self::Map(map) => map.zeroize_bytes(),
-            Self::Unsigned(_) | Self::Negative(_) | Self::Text(_) | Self::Bool(_) | Self::Null => {}
+            Self::Unsigned(_) | Self::Negative(_) | Self::Bool(_) | Self::Null => {}
         }
     }
 }
@@ -373,12 +376,13 @@ mod tests {
 
         tree.zeroize_bytes();
 
-        // `Vec::zeroize` wipes the whole buffer (contents scrubbed from memory)
-        // and clears it to empty; the tree keeps its shape and every non-byte
-        // value is untouched.
+        // `Vec`/`String` `zeroize` wipes the whole buffer (contents scrubbed
+        // from memory) and clears it to empty; the tree keeps its shape and
+        // every non-byte, non-text value is untouched. Text (filename metadata)
+        // is scrubbed alongside bytes.
         let root = tree.as_map().unwrap();
         assert_eq!(root.get("id"), Some(&Value::Bytes(Vec::new())));
-        assert_eq!(root.get("kind"), Some(&Value::Text("file".into())));
+        assert_eq!(root.get("kind"), Some(&Value::Text(String::new())));
         let versions = root.get("versions").unwrap().as_array().unwrap();
         let ver = versions[0].as_map().unwrap();
         assert_eq!(

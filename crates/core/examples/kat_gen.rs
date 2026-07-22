@@ -2937,6 +2937,16 @@ fn build_hpke_seal() -> Vec<HpkeSealVector> {
     out
 }
 
+/// An hpke open-reject case: (name, enc, ciphertext, aad, expected check).
+type HpkeOpenRejectCase = (&'static str, [u8; 32], Vec<u8>, &'static [u8], &'static str);
+
+/// An RFC 7748 order-8 X25519 u-coordinate: a low-order point that forces an
+/// all-zero ECDH, so a grant blob sealed to it would be world-readable (#708).
+const LOW_ORDER_X25519: [u8; 32] = [
+    0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4, 0x6a,
+    0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00,
+];
+
 fn build_hpke_open_reject() -> Vec<HpkeOpenRejectVector> {
     let recipient_scalar: [u8; 32] = std::array::from_fn(|i| (0x10 + i) as u8);
     let recipient = X25519Secret::from_scalar(recipient_scalar);
@@ -2951,29 +2961,53 @@ fn build_hpke_open_reject() -> Vec<HpkeOpenRejectVector> {
 
     let mut tampered = sealed.ciphertext.clone();
     tampered[0] ^= 0x01;
-    let cases: Vec<(&str, Vec<u8>, &[u8])> = vec![
-        ("tampered-ciphertext", tampered, aad),
-        ("wrong-aad", sealed.ciphertext.clone(), b"other-aad"),
+    // A low-order `enc` (RFC 7748 order-8 point): decap rejects it as
+    // non-contributory before the AEAD open, so the ciphertext is never reached
+    // (RFC 9180 §7.1.4).
+    let low_order_enc = LOW_ORDER_X25519;
+    // (name, enc, ciphertext, aad, check).
+    let cases: Vec<HpkeOpenRejectCase> = vec![
+        (
+            "tampered-ciphertext",
+            sealed.enc,
+            tampered,
+            aad,
+            "hpke-open-failed",
+        ),
+        (
+            "wrong-aad",
+            sealed.enc,
+            sealed.ciphertext.clone(),
+            b"other-aad",
+            "hpke-open-failed",
+        ),
+        (
+            "low-order-enc",
+            low_order_enc,
+            sealed.ciphertext.clone(),
+            aad,
+            "hpke-non-contributory",
+        ),
     ];
 
     let mut names = BTreeSet::new();
     let mut out = Vec::with_capacity(cases.len());
-    for (name, ct, open_aad) in cases {
+    for (name, enc, ct, open_aad, check) in cases {
         assert!(
             names.insert(name),
             "duplicate hpke open-reject vector {name}"
         );
-        let err = hpke_open(&recipient, &sealed.enc, info, open_aad, &ct)
-            .expect_err("open must fail closed");
-        assert_eq!(err.check(), "hpke-open-failed", "hpke open-reject {name}");
+        let err =
+            hpke_open(&recipient, &enc, info, open_aad, &ct).expect_err("open must fail closed");
+        assert_eq!(err.check(), check, "hpke open-reject {name}");
         out.push(HpkeOpenRejectVector {
             name: name.to_string(),
             recipient_secret: hexstr(&recipient_scalar),
-            enc: hexstr(&sealed.enc),
+            enc: hexstr(&enc),
             info: hexstr(info),
             aad: hexstr(open_aad),
             ciphertext: hexstr(&ct),
-            check: "hpke-open-failed".to_string(),
+            check: check.to_string(),
             class: "trust".to_string(),
         });
     }
@@ -3021,9 +3055,19 @@ fn build_contact_accept() -> Vec<ContactAcceptVector> {
     out
 }
 
+/// The 65-byte uncompressed SEC1 encoding of a compressed secp256k1 key: a
+/// byte-distinct re-encoding of the same point that the frozen 33-byte identity
+/// width must reject (issue #709).
+fn uncompressed_sec1(compressed: &[u8]) -> Vec<u8> {
+    use k256::elliptic_curve::sec1::ToEncodedPoint;
+    let pk = k256::PublicKey::from_sec1_bytes(compressed).expect("valid compressed key");
+    pk.to_encoded_point(false).as_bytes().to_vec()
+}
+
 fn build_contact_reject() -> Vec<RejectVector> {
     let signer = EcdsaSigner::from_scalar(&[0x22; 32]).expect("valid scalar");
     let good_id = signer.verifying_key().to_sec1().to_vec();
+    let uncompressed_id = uncompressed_sec1(&good_id);
     let enc_public = X25519Secret::from_scalar([0x33; 32]).public();
     let good_enc = enc_public.to_bytes().to_vec();
     let good_sig = ContactCode::create(&signer, enc_public)
@@ -3075,10 +3119,35 @@ fn build_contact_reject() -> Vec<RejectVector> {
             "malformed",
         ),
         (
+            // A valid identity point re-encoded uncompressed (65 bytes): the
+            // frozen 33-byte width rejects it before the binding verify runs.
+            "identity-pk-uncompressed",
+            bytes_of(
+                Some(b(&uncompressed_id)),
+                Some(b(&good_enc)),
+                Some(b(&good_sig)),
+            ),
+            "invalid-identity-key",
+            "malformed",
+        ),
+        (
             "enc-subkey-wrong-length",
             bytes_of(Some(b(&good_id)), Some(b(&[0u8; 31])), Some(b(&good_sig))),
             "invalid-enc-subkey",
             "malformed",
+        ),
+        (
+            // A 32-byte but low-order enc subkey (RFC 7748 order-8 point): the
+            // bytes are structurally fine, so it fails closed as a chosen-key
+            // trust violation, rejected before the binding verify.
+            "enc-subkey-low-order",
+            bytes_of(
+                Some(b(&good_id)),
+                Some(b(&LOW_ORDER_X25519)),
+                Some(b(&good_sig)),
+            ),
+            "hpke-non-contributory",
+            "trust",
         ),
         (
             "binding-sig-wrong-length",
@@ -3821,6 +3890,35 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
     forged.insert("enc", Value::Bytes(sealed.enc.to_vec()));
     let forged_block = encode(&Value::Map(forged));
 
+    // A block that opens but whose senderIdentityPk is the 65-byte uncompressed
+    // re-encoding of the sender key: the frozen 33-byte identity width rejects it
+    // as identity-signature-invalid, and — because sig_preimage hashes the raw
+    // sender key — an uncompressed re-encode is byte-distinct from the authentic
+    // block, so admitting it would forge a distinct signed preimage (issue #709).
+    let uncompressed_eph = [0x57u8; 32];
+    let mut uncompressed_inner = Map::new();
+    uncompressed_inner.insert("payload", Value::Bytes(b"uncompressed".to_vec()));
+    uncompressed_inner.insert(
+        "senderIdentityPk",
+        Value::Bytes(uncompressed_sec1(&sender_pk)),
+    );
+    uncompressed_inner.insert(
+        "senderSig",
+        Value::Bytes(sender.sign_detcbor(b"any").to_compact().to_vec()),
+    );
+    let uncompressed_inner_bytes = encode(&Value::Map(uncompressed_inner));
+    let sealed_uncompressed = hpke_seal(
+        &recipient.public(),
+        &uncompressed_eph,
+        &info,
+        &[],
+        &uncompressed_inner_bytes,
+    );
+    let mut uncompressed_block_map = Map::new();
+    uncompressed_block_map.insert("ct", Value::Bytes(sealed_uncompressed.ciphertext));
+    uncompressed_block_map.insert("enc", Value::Bytes(sealed_uncompressed.enc.to_vec()));
+    let uncompressed_block = encode(&Value::Map(uncompressed_block_map));
+
     // (name, recipient_secret, v, block, check).
     let wrong_recipient = [0x41u8; 32];
     let cases: Vec<MailboxRejectCase> = vec![
@@ -3850,6 +3948,13 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
             recipient_scalar,
             v,
             forged_block,
+            "identity-signature-invalid",
+        ),
+        (
+            "sender-pk-uncompressed",
+            recipient_scalar,
+            v,
+            uncompressed_block,
             "identity-signature-invalid",
         ),
     ];
@@ -4003,12 +4108,12 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
     let mut out = Vec::with_capacity(cases.len());
     for (name, body) in cases {
         assert!(names.insert(name), "duplicate write-body accept {name}");
-        let bytes = encode_write_body(&body);
+        let bytes = encode_write_body(&body).expect("write-body accept encodes");
         let decoded = decode_write_body(&bytes)
             .unwrap_or_else(|e| panic!("write-body accept {name}: rejected: {e}"));
         assert_eq!(decoded, body, "write-body accept {name}: decode != source");
         assert_eq!(
-            encode_write_body(&decoded),
+            encode_write_body(&decoded).unwrap(),
             bytes,
             "write-body accept {name}: not byte-stable"
         );
@@ -4088,6 +4193,21 @@ fn build_write_body_reject() -> Vec<RejectVector> {
             body(vec![good_entry()], Value::Unsigned(0)),
             "unexpected-type",
             "malformed",
+        ),
+        (
+            // Confused-deputy: one blinded tag committed twice, `read` then
+            // `write`, with a different recipientEncPk — the shared-write holder
+            // injecting a second ledger row for a victim's tag.
+            "ledger-duplicate-tag",
+            body(
+                vec![
+                    ledger_entry_map(vec![0x02; 33], vec![0x11; 32], "read", vec![0x21; 32]),
+                    ledger_entry_map(vec![0x03; 33], vec![0x99; 32], "write", vec![0x21; 32]),
+                ],
+                Value::Bytes(vec![]),
+            ),
+            "duplicate-grant-tag",
+            "trust",
         ),
     ];
 
@@ -4670,15 +4790,15 @@ fn grant_set_sample() -> GrantSetCommitment {
 fn build_grant_set_accept() -> Vec<GrantSetAcceptVector> {
     let owner = EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid identity scalar");
     let c = grant_set_sample();
-    let bytes = encode_grant_set_commitment(&c);
+    let bytes = encode_grant_set_commitment(&c).expect("commitment encodes");
     let decoded = decode_grant_set_commitment(&bytes).expect("commitment decodes");
     assert_eq!(decoded, c, "grant-set accept: decode != source");
     assert_eq!(
-        encode_grant_set_commitment(&decoded),
+        encode_grant_set_commitment(&decoded).unwrap(),
         bytes,
         "grant-set accept: not byte-stable"
     );
-    let sig = sign_grant_set(&owner, &c);
+    let sig = sign_grant_set(&owner, &c).expect("commitment signs");
     assert!(
         verify_grant_set(&owner.verifying_key(), &c, &sig).is_ok(),
         "grant-set accept: must verify"
@@ -4759,13 +4879,41 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
         });
     }
 
+    // A trust decode-reject: one blinded tag committed twice, `read` then
+    // `write`, with a different pseudonym — the confused-deputy shape. It rejects
+    // at decode (no signature exercised), so its signature stays empty.
+    let dup_tag_bytes = commitment_of(
+        vec![
+            grant_set_entry_map(vec![0x01; 32], "read", vec![0x02; 32]),
+            grant_set_entry_map(vec![0x01; 32], "write", vec![0x09; 32]),
+        ],
+        false,
+    );
+    let err = decode_grant_set_commitment(&dup_tag_bytes)
+        .expect_err("duplicate grant-set tag must reject");
+    assert_eq!(
+        err.check(),
+        "duplicate-grant-tag",
+        "grant-set dup-tag reject"
+    );
+    assert_eq!(err.class(), "trust", "grant-set dup-tag class");
+    assert!(names.insert("entries-duplicate-tag"));
+    out.push(GrantSetRejectVector {
+        name: "entries-duplicate-tag".to_string(),
+        owner_identity_pk: String::new(),
+        commitment: hexstr(&dup_tag_bytes),
+        signature: String::new(),
+        check: "duplicate-grant-tag".to_string(),
+        class: "trust".to_string(),
+    });
+
     // A verify reject: a well-formed low-S signature over a *different*
     // commitment never verifies against this one (commitment-invalid).
     let this = grant_set_sample();
     let mut other = grant_set_sample();
     other.entries[0].permission = Permission::Write;
-    let sig_over_other = sign_grant_set(&owner, &other);
-    let this_bytes = encode_grant_set_commitment(&this);
+    let sig_over_other = sign_grant_set(&owner, &other).expect("other commitment signs");
+    let this_bytes = encode_grant_set_commitment(&this).expect("this commitment encodes");
     let decoded = decode_grant_set_commitment(&this_bytes).expect("this commitment decodes");
     let err = verify_grant_set(&owner.verifying_key(), &decoded, &sig_over_other)
         .expect_err("mismatched-signature must fail closed");

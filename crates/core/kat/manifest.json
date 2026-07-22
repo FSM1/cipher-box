@@ -139,7 +139,7 @@
       "sealFile": "vectors/hpke/seal.json",
       "sealCount": 3,
       "openRejectFile": "vectors/hpke/open_reject.json",
-      "openRejectCount": 2
+      "openRejectCount": 3
     },
     "contact": {
       "accept": {
@@ -148,9 +148,10 @@
       },
       "reject": {
         "file": "vectors/contact/reject.json",
-        "count": 7,
+        "count": 9,
         "checks": [
           "subkey-binding-invalid",
+          "hpke-non-contributory",
           "unexpected-type",
           "missing-field",
           "invalid-identity-key",
@@ -255,7 +256,7 @@
     },
     "mailboxReject": {
       "file": "vectors/payload/mailbox_reject.json",
-      "count": 4,
+      "count": 5,
       "checks": [
         "hpke-open-failed",
         "identity-signature-invalid"
@@ -274,8 +275,9 @@
     },
     "writeBodyReject": {
       "file": "vectors/grant/write_body_reject.json",
-      "count": 4,
+      "count": 5,
       "checks": [
+        "duplicate-grant-tag",
         "unexpected-type",
         "missing-field",
         "invalid-permission",
@@ -350,8 +352,9 @@
     },
     "grantSetReject": {
       "file": "vectors/grant/grant_set_reject.json",
-      "count": 4,
+      "count": 5,
       "checks": [
+        "duplicate-grant-tag",
         "commitment-invalid",
         "missing-field",
         "invalid-permission",

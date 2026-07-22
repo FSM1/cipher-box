@@ -131,7 +131,11 @@ pub fn import_contact_code(bytes: &[u8]) -> Result<ContactCode, CodecError> {
     let enc_array: [u8; 32] = enc_bytes
         .try_into()
         .map_err(|_| Malformed::InvalidEncSubkey)?;
-    let enc_subkey = X25519Public::from_bytes(enc_array);
+    // A wrong length is malformed; a correct-length but low-order point is a
+    // chosen-key attack (grant blobs sealed to it would be world-readable), so
+    // it fails closed as a trust violation, not a parse error.
+    let enc_subkey =
+        X25519Public::from_bytes(enc_array).ok_or(TrustViolation::HpkeNonContributory)?;
 
     let sig_bytes = field_bytes(map, FIELD_BINDING_SIG)?;
     let binding_sig =

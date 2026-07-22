@@ -43,26 +43,15 @@ use crate::suite::secret::{SECRET_LEN, SecretBytes};
 use crate::suite::x25519::{X25519Public, X25519Secret};
 
 use super::aad::{AadContext, build_aad};
-use super::body::{bytes_fixed, collect_unknown, merge_unknown, req};
+use super::body::{
+    ScrubOnDrop, ScrubOwned, assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown,
+    req,
+};
 
 /// The HPKE `info` for every grant-section seal. The structured AAD already
 /// binds `(v, id, scope, epoch, structTag)`, so no additional info label is
 /// needed; it is fixed empty and frozen by the KAT.
 const GRANT_HPKE_INFO: &[u8] = b"";
-
-/// Zeroize the temporary `Value::Bytes` seed copies an `encode_*` helper
-/// materialized under `secret_keys`. The encoder is the terminal owner of these
-/// intermediate heap copies, which the codec `Map` would otherwise free without
-/// wiping; the returned encoded buffer stays the seal path's to zeroize.
-fn zeroize_secret_bytes(value: Value, secret_keys: &[&str]) {
-    if let Value::Map(mut m) = value {
-        for key in secret_keys.iter().copied() {
-            if let Some(Value::Bytes(mut b)) = m.remove(key) {
-                b.zeroize();
-            }
-        }
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Permission — the grant-ledger / grant-set discriminant.
@@ -187,9 +176,14 @@ impl PartialEq for GrantBlobPayload {
 impl Eq for GrantBlobPayload {}
 
 /// Decode a grant-blob plaintext (strict det-CBOR, unknown fields preserved).
+///
+/// The transient decoded tree carries verbatim copies of the read/write scope
+/// seeds and the pointer read key; those bytes land in zeroizing owners, but the
+/// tree itself is scrubbed on drop via [`ScrubOwned`] (terminal-owner rule,
+/// symmetric with [`encode_grant_blob_payload`]).
 pub fn decode_grant_blob_payload(bytes: &[u8]) -> Result<GrantBlobPayload, CodecError> {
-    let value = decode(bytes)?;
-    let map = value.as_map()?;
+    let value = ScrubOwned(decode(bytes)?);
+    let map = value.value().as_map()?;
     let read_scope_seed = bytes_fixed::<SECRET_LEN>(req(map, "readScopeSeed")?, "readScopeSeed")?;
     let write_scope_seed = match map.get("writeScopeSeed") {
         Some(v) => Some(bytes_fixed::<SECRET_LEN>(v, "writeScopeSeed")?),
@@ -226,13 +220,12 @@ pub fn encode_grant_blob_payload(payload: &GrantBlobPayload) -> Vec<u8> {
         m.insert("writeScopeSeed", Value::Bytes(w.as_bytes().to_vec()));
     }
     merge_unknown(&mut m, &payload.unknown);
-    let value = Value::Map(m);
-    let out = encode(&value);
-    zeroize_secret_bytes(
-        value,
-        &["pointerReadKey", "readScopeSeed", "writeScopeSeed"],
-    );
-    out
+    // The transient tree carries verbatim seed copies; scrub the whole tree
+    // through the drop guard so the wipe runs on return and on panic-unwind
+    // (terminal-owner rule). The returned buffer stays the seal path's to zero.
+    let mut value = Value::Map(m);
+    let guard = ScrubOnDrop(&mut value);
+    encode(guard.0)
 }
 
 /// HPKE-seal a grant blob to `recipient_pub` under the grant-blob AAD for `ctx`
@@ -333,9 +326,14 @@ impl PartialEq for OverrideSeedPayload {
 impl Eq for OverrideSeedPayload {}
 
 /// Decode an override-seed plaintext (strict det-CBOR, unknown fields preserved).
+///
+/// The transient decoded tree carries a verbatim copy of the override seed; it
+/// lands in a zeroizing owner, but the tree itself is scrubbed on drop via
+/// [`ScrubOwned`] (terminal-owner rule, symmetric with
+/// [`encode_override_seed_payload`]).
 pub fn decode_override_seed_payload(bytes: &[u8]) -> Result<OverrideSeedPayload, CodecError> {
-    let value = decode(bytes)?;
-    let map = value.as_map()?;
+    let value = ScrubOwned(decode(bytes)?);
+    let map = value.value().as_map()?;
     let override_seed = bytes_fixed::<SECRET_LEN>(req(map, "overrideSeed")?, "overrideSeed")?;
     let epoch = req(map, "epoch")?.as_unsigned()?;
     Ok(OverrideSeedPayload {
@@ -356,10 +354,11 @@ pub fn encode_override_seed_payload(payload: &OverrideSeedPayload) -> Vec<u8> {
         Value::Bytes(payload.override_seed.as_bytes().to_vec()),
     );
     merge_unknown(&mut m, &payload.unknown);
-    let value = Value::Map(m);
-    let out = encode(&value);
-    zeroize_secret_bytes(value, &["overrideSeed"]);
-    out
+    // Whole-tree scrub via the drop guard (terminal-owner rule); the returned
+    // buffer stays the seal path's to zeroize.
+    let mut value = Value::Map(m);
+    let guard = ScrubOnDrop(&mut value);
+    encode(guard.0)
 }
 
 /// HPKE-seal an owner blob to the owner's encryption subkey under the owner-blob
@@ -563,9 +562,14 @@ impl PartialEq for HistoryLinkPayload {
 impl Eq for HistoryLinkPayload {}
 
 /// Decode a history-link plaintext (strict det-CBOR, unknown fields preserved).
+///
+/// The transient decoded tree carries a verbatim copy of the previous epoch's
+/// seed; it lands in a zeroizing owner, but the tree itself is scrubbed on drop
+/// via [`ScrubOwned`] (terminal-owner rule, symmetric with
+/// [`encode_history_link_payload`]).
 pub fn decode_history_link_payload(bytes: &[u8]) -> Result<HistoryLinkPayload, CodecError> {
-    let value = decode(bytes)?;
-    let map = value.as_map()?;
+    let value = ScrubOwned(decode(bytes)?);
+    let map = value.value().as_map()?;
     let prev_seed = bytes_fixed::<SECRET_LEN>(req(map, "prevSeed")?, "prevSeed")?;
     let prev_epoch = req(map, "prevEpoch")?.as_unsigned()?;
     Ok(HistoryLinkPayload {
@@ -586,10 +590,11 @@ pub fn encode_history_link_payload(payload: &HistoryLinkPayload) -> Vec<u8> {
         Value::Bytes(payload.prev_seed.as_bytes().to_vec()),
     );
     merge_unknown(&mut m, &payload.unknown);
-    let value = Value::Map(m);
-    let out = encode(&value);
-    zeroize_secret_bytes(value, &["prevSeed"]);
-    out
+    // Whole-tree scrub via the drop guard (terminal-owner rule); the returned
+    // buffer stays the seal path's to zeroize.
+    let mut value = Value::Map(m);
+    let guard = ScrubOnDrop(&mut value);
+    encode(guard.0)
 }
 
 /// Symmetrically seal a history link under the current epoch's structure `key`
@@ -712,6 +717,7 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
     for item in req(map, "entries")?.as_array()? {
         entries.push(GrantSetEntry::from_value(item)?);
     }
+    assert_grant_tags_unique(entries.iter().map(|e| e.tag))?;
     Ok(GrantSetCommitment {
         ipns_name,
         owner_pseudonym_pk,
@@ -722,7 +728,12 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
 
 /// Encode a grant-set commitment to its canonical det-CBOR form — the exact
 /// preimage the owner ECDSA-signs and a recipient verifies.
-pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Vec<u8> {
+///
+/// Fails closed on a duplicate-tag commitment with the same `duplicate-grant-tag`
+/// verdict `decode_grant_set_commitment` raises, so the sign path never attests
+/// bytes every recipient rejects.
+pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, CodecError> {
+    assert_grant_tags_unique(c.entries.iter().map(|e| e.tag))?;
     let mut m = Map::new();
     m.insert(
         "entries",
@@ -734,12 +745,17 @@ pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Vec<u8> {
         Value::Bytes(c.owner_pseudonym_pk.to_vec()),
     );
     merge_unknown(&mut m, &c.unknown);
-    encode(&Value::Map(m))
+    Ok(encode(&Value::Map(m)))
 }
 
 /// Owner-sign a grant-set commitment: RFC 6979 ECDSA over the det-CBOR preimage.
-pub fn sign_grant_set(signer: &EcdsaSigner, c: &GrantSetCommitment) -> EcdsaSignature {
-    signer.sign_detcbor(&encode_grant_set_commitment(c))
+/// Fails closed before signing on a duplicate-tag commitment, so a release build
+/// never publishes an attestation every recipient rejects.
+pub fn sign_grant_set(
+    signer: &EcdsaSigner,
+    c: &GrantSetCommitment,
+) -> Result<EcdsaSignature, CodecError> {
+    Ok(signer.sign_detcbor(&encode_grant_set_commitment(c)?))
 }
 
 /// Verify a grant-set commitment's owner signature. Fails closed with
@@ -752,7 +768,7 @@ pub fn verify_grant_set(
     c: &GrantSetCommitment,
     sig: &EcdsaSignature,
 ) -> Result<(), CodecError> {
-    if verifier.verify_detcbor(&encode_grant_set_commitment(c), sig) {
+    if verifier.verify_detcbor(&encode_grant_set_commitment(c)?, sig) {
         Ok(())
     } else {
         Err(TrustViolation::CommitmentInvalid.into())
@@ -811,6 +827,20 @@ mod tests {
                 .check(),
             "hpke-open-failed"
         );
+    }
+
+    #[test]
+    fn decode_grant_blob_payload_scrub_preserves_secret_outputs() {
+        // The decoder wraps its transient `Value` tree in `ScrubOwned`, which
+        // wipes only that tree on drop. The caller-owned `SecretBytes` outputs
+        // must survive intact (terminal-owner rule: never zero a caller's
+        // buffer). Ok path: decode returns the exact seeds it read.
+        let payload = GrantBlobPayload::new([0x11; 32], Some([0x44; 32]), 7, [0x22; 32]);
+        let bytes = encode_grant_blob_payload(&payload);
+        let decoded = decode_grant_blob_payload(&bytes).expect("decodes");
+        assert_eq!(decoded.read_scope_seed(), &[0x11; 32]);
+        assert_eq!(decoded.write_scope_seed(), Some(&[0x44; 32]));
+        assert_eq!(decoded.pointer_read_key(), &[0x22; 32]);
     }
 
     #[test]
@@ -900,14 +930,14 @@ mod tests {
             ],
             unknown: Vec::new(),
         };
-        let bytes = encode_grant_set_commitment(&c);
+        let bytes = encode_grant_set_commitment(&c).expect("encodes");
         assert_eq!(decode_grant_set_commitment(&bytes).unwrap(), c);
         assert_eq!(
-            encode_grant_set_commitment(&decode_grant_set_commitment(&bytes).unwrap()),
+            encode_grant_set_commitment(&decode_grant_set_commitment(&bytes).unwrap()).unwrap(),
             bytes,
             "byte-stable"
         );
-        let sig = sign_grant_set(&owner, &c);
+        let sig = sign_grant_set(&owner, &c).expect("signs");
         assert!(verify_grant_set(&owner.verifying_key(), &c, &sig).is_ok());
         // Tampering with a committed entry fails the commitment.
         let mut tampered = c.clone();
@@ -917,6 +947,55 @@ mod tests {
                 .unwrap_err()
                 .check(),
             "commitment-invalid"
+        );
+    }
+
+    #[test]
+    fn duplicate_grant_set_tag_rejects() {
+        // The confused-deputy shape: one tag committed twice with a different
+        // permission and pseudonym. Hand-built CBOR, the way a hostile peer's
+        // bytes arrive, so decode is what rejects it here.
+        let mut a = Map::new();
+        a.insert("permission", Value::Text("read".into()));
+        a.insert("pseudonymPk", Value::Bytes(vec![0x02; 32]));
+        a.insert("tag", Value::Bytes(vec![0x01; 32]));
+        let mut b = Map::new();
+        b.insert("permission", Value::Text("write".into()));
+        b.insert("pseudonymPk", Value::Bytes(vec![0x09; 32]));
+        b.insert("tag", Value::Bytes(vec![0x01; 32])); // same tag as `a`
+        let mut m = Map::new();
+        m.insert("entries", Value::Array(vec![Value::Map(a), Value::Map(b)]));
+        m.insert("ipnsName", Value::Bytes(b"n".to_vec()));
+        m.insert("ownerPseudonymPk", Value::Bytes(vec![0x88; 32]));
+        let bytes = encode(&Value::Map(m));
+        assert_eq!(
+            decode_grant_set_commitment(&bytes).unwrap_err().check(),
+            "duplicate-grant-tag"
+        );
+    }
+
+    #[test]
+    fn encode_and_sign_reject_duplicate_tags() {
+        // Release-active guard: a caller-built dup-tag commitment never encodes
+        // or gets signed, so the sign path cannot publish bytes decode rejects.
+        // Exercised without relying on a `debug_assert`.
+        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+        let c = GrantSetCommitment {
+            ipns_name: b"n".to_vec(),
+            owner_pseudonym_pk: [0x88; 32],
+            entries: vec![
+                GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
+                GrantSetEntry::new([0x01; 32], Permission::Write, [0x04; 32]),
+            ],
+            unknown: Vec::new(),
+        };
+        assert_eq!(
+            encode_grant_set_commitment(&c).unwrap_err().check(),
+            "duplicate-grant-tag"
+        );
+        assert_eq!(
+            sign_grant_set(&owner, &c).unwrap_err().check(),
+            "duplicate-grant-tag"
         );
     }
 

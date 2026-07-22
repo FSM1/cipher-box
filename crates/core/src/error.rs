@@ -55,6 +55,15 @@ pub enum TrustViolation {
     /// signature of tampering or an AAD/enc transplant, not a retryable fetch
     /// error.
     HpkeOpenFailed,
+    /// A low-order X25519 peer/recipient key forced a non-contributory (all-zero)
+    /// DHKEM shared secret, or a contact code's `encSubkey` was such a low-order
+    /// point (RFC 9180 §7.1.4). *Trust*: the bytes are structurally a valid
+    /// 32-byte key, so this is not malformation — it is a **chosen-key** attack,
+    /// a degenerate point picked so the derived AEAD key depends only on public
+    /// material (the sealed seed becomes openable by anyone). Fires before any
+    /// open at HPKE decap and at contact import, distinct from a mere tag
+    /// mismatch ([`Self::HpkeOpenFailed`]).
+    HpkeNonContributory,
     /// A symmetric sealed body failed to open: the XChaCha20-Poly1305 tag did
     /// not verify under the read/structure key and the structured AAD
     /// `(v, id, scope, epoch, structTag)`. *Trust*, not availability — the
@@ -80,6 +89,14 @@ pub enum TrustViolation {
     /// scope's child listing is the transplant closure the AAD deliberately
     /// leaves the name out for — rejected here instead of by the tag.
     DuplicateIpnsName,
+    /// Two rows of a grant ledger or grant-set commitment carried the same
+    /// blinded `tag`. The exact analog of [`Self::DuplicateId`] (#39 D7): a
+    /// recipient's tag locates its grant blob and its committed
+    /// `(permission, pseudonymPk)`, so a duplicate is a confused-deputy over
+    /// read-vs-write authority (a second row injecting the victim's tag with a
+    /// different permission/enc key makes the lookup ambiguous). Fail-closed at
+    /// decode, never first-match.
+    DuplicateGrantTag,
     /// An IPNS record's `signatureV2` did not verify over
     /// `"ipns-signature:" || data` under the Ed25519 key **extracted from the
     /// name itself** (#24). *Trust*: the record is structurally a well-formed
@@ -130,10 +147,12 @@ impl TrustViolation {
         "duplicate-map-key",
         "subkey-binding-invalid",
         "hpke-open-failed",
+        "hpke-non-contributory",
         "seal-open-failed",
         "content-cid-mismatch",
         "duplicate-id",
         "duplicate-ipns-name",
+        "duplicate-grant-tag",
         "ipns-signature-invalid",
         "ipns-value-mismatch",
         "identity-signature-invalid",
@@ -152,10 +171,12 @@ impl TrustViolation {
             Self::DuplicateMapKey { .. } => "duplicate-map-key",
             Self::SubkeyBindingInvalid => "subkey-binding-invalid",
             Self::HpkeOpenFailed => "hpke-open-failed",
+            Self::HpkeNonContributory => "hpke-non-contributory",
             Self::SealOpenFailed => "seal-open-failed",
             Self::ContentCidMismatch => "content-cid-mismatch",
             Self::DuplicateId => "duplicate-id",
             Self::DuplicateIpnsName => "duplicate-ipns-name",
+            Self::DuplicateGrantTag => "duplicate-grant-tag",
             Self::IpnsSignatureInvalid => "ipns-signature-invalid",
             Self::IpnsValueMismatch => "ipns-value-mismatch",
             Self::IdentitySignatureInvalid => "identity-signature-invalid",
@@ -186,10 +207,12 @@ impl fmt::Display for TrustViolation {
             // not a position in the encoded stream.
             Self::SubkeyBindingInvalid
             | Self::HpkeOpenFailed
+            | Self::HpkeNonContributory
             | Self::SealOpenFailed
             | Self::ContentCidMismatch
             | Self::DuplicateId
             | Self::DuplicateIpnsName
+            | Self::DuplicateGrantTag
             | Self::IpnsSignatureInvalid
             | Self::IpnsValueMismatch
             | Self::IdentitySignatureInvalid
