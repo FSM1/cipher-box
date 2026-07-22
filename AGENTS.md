@@ -61,6 +61,8 @@ Two recurring shapes of this smell go beyond excusing a hack — avoid both:
 
 State genuine non-obvious domain rationale **once**, at its home (the type or definition), not restated on every caller. These cost real review cycles — `/simplify`, CodeRabbit, and Greptile all flag them.
 
+Length discipline for the permitted domain-rationale exception: state each invariant **once** and prefer a one-line cross-reference to the blueprint / `CONTEXT.md` over re-deriving it in prose. Do not narrate the happy path — the code is the narrative, and a comment restating what the next lines plainly do rots out of sync and misleads. A module header past ~25 lines is almost always restating the spec: keep only the rationale that is non-obvious _from the code itself_ and cite the blueprint for the rest.
+
 ## Architecture Pillars
 
 - **Auth:** Web3Auth key derivation; challenge-signature login; short-lived JWT + rotating refresh
