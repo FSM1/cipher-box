@@ -33,8 +33,6 @@ import { TokenService } from './services/token.service';
  * which is proven separately in the ops integration suite.
  */
 
-const SECRET = 'auth-http-integration-secret';
-
 function newIdentity() {
   const privateKey = secp256k1.utils.randomPrivateKey();
   return {
@@ -57,19 +55,14 @@ describe('auth HTTP flows (real Postgres)', () => {
   let db: IntegrationDatabase;
   let ctx: HttpIntegrationApp;
   let configValues: Record<string, string | undefined>;
-  let priorJwtSecret: string | undefined;
 
   beforeAll(async () => {
-    priorJwtSecret = process.env.JWT_SECRET;
-    process.env.JWT_SECRET = SECRET;
-
     db = await createIntegrationDatabase({ poolMax: 10 });
     const config = fakeConfig({ NODE_ENV: 'test', TEST_LOGIN_SECRET: 'e2e-secret' });
     configValues = config.values;
 
     ctx = await createHttpIntegrationApp({
       db,
-      jwtSecret: SECRET,
       withOps: false,
       entities: [User, AuthMethod, RefreshToken],
       controllers: [AuthController],
@@ -89,10 +82,8 @@ describe('auth HTTP flows (real Postgres)', () => {
   });
 
   afterAll(async () => {
-    await ctx?.app.close();
+    await ctx?.close();
     await db?.teardown();
-    if (priorJwtSecret === undefined) delete process.env.JWT_SECRET;
-    else process.env.JWT_SECRET = priorJwtSecret;
   });
 
   beforeEach(async () => {

@@ -28,21 +28,14 @@ import { THROTTLE_SURFACES } from './throttling';
  * guard rejects before the handler, so the DB is untouched on these paths.
  */
 
-const SECRET = 'ops-http-integration-secret';
-
 describe('ops HTTP surface (real Postgres)', () => {
   let db: IntegrationDatabase;
   let ctx: HttpIntegrationApp;
-  let priorJwtSecret: string | undefined;
 
   beforeAll(async () => {
-    priorJwtSecret = process.env.JWT_SECRET;
-    process.env.JWT_SECRET = SECRET;
-
     db = await createIntegrationDatabase({ poolMax: 10 });
     ctx = await createHttpIntegrationApp({
       db,
-      jwtSecret: SECRET,
       entities: [User, AuthMethod, RefreshToken],
       controllers: [AuthController],
       providers: [
@@ -61,10 +54,8 @@ describe('ops HTTP surface (real Postgres)', () => {
   });
 
   afterAll(async () => {
-    await ctx?.app.close();
+    await ctx?.close();
     await db?.teardown();
-    if (priorJwtSecret === undefined) delete process.env.JWT_SECRET;
-    else process.env.JWT_SECRET = priorJwtSecret;
   });
 
   const http = () => ctx.http;

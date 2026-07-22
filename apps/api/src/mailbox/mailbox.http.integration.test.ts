@@ -1,6 +1,5 @@
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { secp256k1 } from '@noble/curves/secp256k1';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../auth/entities/user.entity';
@@ -9,7 +8,12 @@ import { IdentityService } from '../auth/services/identity.service';
 import { Clock, SystemClock } from '../common/clock';
 import { THROTTLE_SURFACES } from '../ops/throttling';
 import { fakeConfig } from '../testing/fakes';
-import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
+import {
+  createHttpIntegrationApp,
+  HttpIntegrationApp,
+  randomCompressedPublicKey,
+  seedAccount,
+} from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { MailboxMessage } from './entities/mailbox-message.entity';
 import { MailboxController } from './mailbox.controller';
@@ -25,36 +29,21 @@ import { MailboxService } from './services/mailbox.service';
  * service integration suite; here the wire contract runs end-to-end on real DB.
  */
 
-const SECRET = 'mailbox-http-integration-secret';
 const PENDING_CAP = 3;
 
 function base64Blob(bytes: number): string {
   return Buffer.alloc(bytes, 42).toString('base64');
 }
 
-function newPublicKey(): string {
-  const priv = secp256k1.utils.randomPrivateKey();
-  try {
-    return Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
-  } finally {
-    priv.fill(0);
-  }
-}
-
 describe('mailbox HTTP surface (real Postgres)', () => {
   let db: IntegrationDatabase;
   let ctx: HttpIntegrationApp;
   let jwt: JwtService;
-  let priorJwtSecret: string | undefined;
 
   beforeAll(async () => {
-    priorJwtSecret = process.env.JWT_SECRET;
-    process.env.JWT_SECRET = SECRET;
-
     db = await createIntegrationDatabase({ poolMax: 10 });
     ctx = await createHttpIntegrationApp({
       db,
-      jwtSecret: SECRET,
       entities: [User, MailboxMessage],
       controllers: [MailboxController],
       providers: [
@@ -75,13 +64,8 @@ describe('mailbox HTTP surface (real Postgres)', () => {
   });
 
   afterAll(async () => {
-    await ctx?.app.close();
+    await ctx?.close();
     await db?.teardown();
-    if (priorJwtSecret === undefined) {
-      delete process.env.JWT_SECRET;
-    } else {
-      process.env.JWT_SECRET = priorJwtSecret;
-    }
   });
 
   beforeEach(async () => {
@@ -92,10 +76,7 @@ describe('mailbox HTTP surface (real Postgres)', () => {
 
   /** Seed a user account and mint a valid access token for it. */
   async function account(): Promise<{ publicKey: string; token: string }> {
-    const publicKey = newPublicKey();
-    const user = await db.dataSource.getRepository(User).save({ publicKey, byo: false });
-    const token = await jwt.signAsync({ sub: user.id, publicKey }, { secret: SECRET });
-    return { publicKey, token };
+    return seedAccount(db, jwt);
   }
 
   describe('post → poll → ack lifecycle', () => {
@@ -168,7 +149,11 @@ describe('mailbox HTTP surface (real Postgres)', () => {
       await request(http())
         .post('/mailbox/messages')
         .set('Authorization', `Bearer ${sender.token}`)
-        .send({ recipientPublicKey: newPublicKey(), blob: base64Blob(64), idempotencyKey: 'x' })
+        .send({
+          recipientPublicKey: randomCompressedPublicKey(),
+          blob: base64Blob(64),
+          idempotencyKey: 'x',
+        })
         .expect(404);
     });
 
@@ -295,7 +280,7 @@ describe('mailbox HTTP surface (real Postgres)', () => {
           .post('/mailbox/messages')
           .set('Authorization', `Bearer ${sender.token}`)
           .send({
-            recipientPublicKey: newPublicKey(),
+            recipientPublicKey: randomCompressedPublicKey(),
             blob: base64Blob(16),
             idempotencyKey: `o${i}`,
           })
@@ -304,7 +289,11 @@ describe('mailbox HTTP surface (real Postgres)', () => {
       const throttled = await request(http())
         .post('/mailbox/messages')
         .set('Authorization', `Bearer ${sender.token}`)
-        .send({ recipientPublicKey: newPublicKey(), blob: base64Blob(16), idempotencyKey: 'last' })
+        .send({
+          recipientPublicKey: randomCompressedPublicKey(),
+          blob: base64Blob(16),
+          idempotencyKey: 'last',
+        })
         .expect(429);
       expect(throttled.headers['retry-after']).toBeDefined();
     });

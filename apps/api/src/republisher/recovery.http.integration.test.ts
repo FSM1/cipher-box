@@ -1,11 +1,14 @@
 import { JwtService } from '@nestjs/jwt';
-import { secp256k1 } from '@noble/curves/secp256k1';
 import { randomUUID } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { THROTTLE_SURFACES } from '../ops/throttling';
-import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
+import {
+  createHttpIntegrationApp,
+  HttpIntegrationApp,
+  randomCompressedPublicKey,
+} from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { RecordCache } from './entities/record-cache.entity';
 import { RecoveryController } from './recovery.controller';
@@ -19,7 +22,6 @@ import { RecordCacheService } from './services/record-cache.service';
  * malformed-name path is proven not to fault the query.
  */
 
-const SECRET = 'recovery-http-integration-secret';
 const IPNS_RECORD_MEDIA_TYPE = 'application/vnd.ipfs.ipns-record';
 
 /** Collect a binary response body for byte-exact assertions. */
@@ -33,16 +35,11 @@ describe('recovery HTTP surface (real Postgres)', () => {
   let db: IntegrationDatabase;
   let ctx: HttpIntegrationApp;
   let jwt: JwtService;
-  let priorJwtSecret: string | undefined;
 
   beforeAll(async () => {
-    priorJwtSecret = process.env.JWT_SECRET;
-    process.env.JWT_SECRET = SECRET;
-
     db = await createIntegrationDatabase({ poolMax: 10 });
     ctx = await createHttpIntegrationApp({
       db,
-      jwtSecret: SECRET,
       entities: [RecordCache],
       controllers: [RecoveryController],
       providers: [RecordCacheService, JwtAuthGuard],
@@ -51,10 +48,8 @@ describe('recovery HTTP surface (real Postgres)', () => {
   });
 
   afterAll(async () => {
-    await ctx?.app.close();
+    await ctx?.close();
     await db?.teardown();
-    if (priorJwtSecret === undefined) delete process.env.JWT_SECRET;
-    else process.env.JWT_SECRET = priorJwtSecret;
   });
 
   beforeEach(async () => {
@@ -65,13 +60,7 @@ describe('recovery HTTP surface (real Postgres)', () => {
 
   /** A valid access token; recovery is stateless w.r.t. the users table. */
   async function token(): Promise<string> {
-    const priv = secp256k1.utils.randomPrivateKey();
-    try {
-      const publicKey = Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
-      return jwt.signAsync({ sub: randomUUID(), publicKey }, { secret: SECRET });
-    } finally {
-      priv.fill(0);
-    }
+    return jwt.signAsync({ sub: randomUUID(), publicKey: randomCompressedPublicKey() });
   }
 
   async function seedCache(ipnsName: string, record: Buffer): Promise<void> {

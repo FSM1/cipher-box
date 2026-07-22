@@ -1,12 +1,15 @@
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { secp256k1 } from '@noble/curves/secp256k1';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { User } from '../auth/entities/user.entity';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { fakeConfig } from '../testing/fakes';
-import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
+import {
+  createHttpIntegrationApp,
+  HttpIntegrationApp,
+  seedAccount,
+} from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { AccountController } from './account.controller';
 import { NameInventory } from './entities/name-inventory.entity';
@@ -26,7 +29,6 @@ import { RegistryService } from './services/registry.service';
  * verified together.
  */
 
-const SECRET = 'registry-http-integration-secret';
 const GIB = 1024 * 1024 * 1024;
 
 /** Records physical unpins so the refcount-zero decision is observable. */
@@ -43,17 +45,12 @@ describe('registry HTTP surface (real Postgres)', () => {
   let ctx: HttpIntegrationApp;
   let jwt: JwtService;
   let pinStore: FakePinStore;
-  let priorJwtSecret: string | undefined;
 
   beforeAll(async () => {
-    priorJwtSecret = process.env.JWT_SECRET;
-    process.env.JWT_SECRET = SECRET;
-
     db = await createIntegrationDatabase({ poolMax: 10 });
     pinStore = new FakePinStore();
     ctx = await createHttpIntegrationApp({
       db,
-      jwtSecret: SECRET,
       entities: [User, NameInventory, PinnedCid],
       controllers: [RegistryController, AccountController],
       providers: [
@@ -74,13 +71,8 @@ describe('registry HTTP surface (real Postgres)', () => {
   });
 
   afterAll(async () => {
-    await ctx?.app.close();
+    await ctx?.close();
     await db?.teardown();
-    if (priorJwtSecret === undefined) {
-      delete process.env.JWT_SECRET;
-    } else {
-      process.env.JWT_SECRET = priorJwtSecret;
-    }
   });
 
   afterEach(async () => {
@@ -92,17 +84,8 @@ describe('registry HTTP surface (real Postgres)', () => {
 
   /** Seed an account row and mint a valid access token for it. */
   async function account(overrides: Partial<User> = {}): Promise<{ id: string; token: string }> {
-    const priv = secp256k1.utils.randomPrivateKey();
-    try {
-      const publicKey = Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
-      const user = await db.dataSource
-        .getRepository(User)
-        .save({ publicKey, byo: false, ...overrides });
-      const token = await jwt.signAsync({ sub: user.id, publicKey }, { secret: SECRET });
-      return { id: user.id, token };
-    } finally {
-      priv.fill(0);
-    }
+    const { userId, token } = await seedAccount(db, jwt, overrides);
+    return { id: userId, token };
   }
 
   async function pinsFor(accountId: string): Promise<PinnedCid[]> {

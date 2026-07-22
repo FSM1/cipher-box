@@ -1,6 +1,5 @@
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { secp256k1 } from '@noble/curves/secp256k1';
 import { createHash } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
@@ -9,7 +8,12 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { PinnedCid } from '../registry/entities/pinned-cid.entity';
 import { PinStore } from '../registry/pin-store';
 import { fakeConfig } from '../testing/fakes';
-import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
+import {
+  createHttpIntegrationApp,
+  HttpIntegrationApp,
+  randomCompressedPublicKey,
+  seedAccount,
+} from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { ContentController } from './content.controller';
 import { ContentService } from './content.service';
@@ -23,7 +27,6 @@ import { ContentService } from './content.service';
  * quota gate and the 413/503 mapping are proven end-to-end, not stubbed.
  */
 
-const SECRET = 'content-http-integration-secret';
 const GIB = 1024 * 1024 * 1024;
 
 /** Deterministic CID from bytes so hash() and pin() always agree; records effects. */
@@ -52,15 +55,6 @@ class FakePinStore extends PinStore {
   }
 }
 
-function seedPublicKey(): string {
-  const priv = secp256k1.utils.randomPrivateKey();
-  try {
-    return Buffer.from(secp256k1.getPublicKey(priv, true)).toString('hex');
-  } finally {
-    priv.fill(0);
-  }
-}
-
 describe('content HTTP (real Postgres)', () => {
   let db: IntegrationDatabase;
 
@@ -76,15 +70,11 @@ describe('content HTTP (real Postgres)', () => {
     let ctx: HttpIntegrationApp;
     let jwt: JwtService;
     let pinStore: FakePinStore;
-    let priorJwtSecret: string | undefined;
 
     beforeAll(async () => {
-      priorJwtSecret = process.env.JWT_SECRET;
-      process.env.JWT_SECRET = SECRET;
       pinStore = new FakePinStore();
       ctx = await createHttpIntegrationApp({
         db,
-        jwtSecret: SECRET,
         entities: [User, PinnedCid],
         controllers: [ContentController],
         providers: [
@@ -104,9 +94,7 @@ describe('content HTTP (real Postgres)', () => {
     });
 
     afterAll(async () => {
-      await ctx?.app.close();
-      if (priorJwtSecret === undefined) delete process.env.JWT_SECRET;
-      else process.env.JWT_SECRET = priorJwtSecret;
+      await ctx?.close();
     });
 
     afterEach(async () => {
@@ -118,12 +106,8 @@ describe('content HTTP (real Postgres)', () => {
 
     /** Seed a hosted account and mint a valid access token for it. */
     async function account(overrides: Partial<User> = {}): Promise<{ id: string; token: string }> {
-      const publicKey = seedPublicKey();
-      const user = await db.dataSource
-        .getRepository(User)
-        .save({ publicKey, byo: false, ...overrides });
-      const token = await jwt.signAsync({ sub: user.id, publicKey }, { secret: SECRET });
-      return { id: user.id, token };
+      const { userId, token } = await seedAccount(db, jwt, overrides);
+      return { id: userId, token };
     }
 
     function post(token: string) {
@@ -202,17 +186,13 @@ describe('content HTTP (real Postgres)', () => {
     const MAX = 16;
     let ctx: HttpIntegrationApp;
     let jwt: JwtService;
-    let priorJwtSecret: string | undefined;
     let priorMax: string | undefined;
 
     beforeAll(async () => {
-      priorJwtSecret = process.env.JWT_SECRET;
       priorMax = process.env.MAX_UPLOAD_BYTES;
-      process.env.JWT_SECRET = SECRET;
       process.env.MAX_UPLOAD_BYTES = String(MAX);
       ctx = await createHttpIntegrationApp({
         db,
-        jwtSecret: SECRET,
         entities: [User, PinnedCid],
         controllers: [ContentController],
         providers: [
@@ -232,9 +212,7 @@ describe('content HTTP (real Postgres)', () => {
     });
 
     afterAll(async () => {
-      await ctx?.app.close();
-      if (priorJwtSecret === undefined) delete process.env.JWT_SECRET;
-      else process.env.JWT_SECRET = priorJwtSecret;
+      await ctx?.close();
       if (priorMax === undefined) delete process.env.MAX_UPLOAD_BYTES;
       else process.env.MAX_UPLOAD_BYTES = priorMax;
     });
@@ -244,9 +222,9 @@ describe('content HTTP (real Postgres)', () => {
     });
 
     async function authToken(expiresIn = 900): Promise<string> {
-      const publicKey = seedPublicKey();
+      const publicKey = randomCompressedPublicKey();
       const user = await db.dataSource.getRepository(User).save({ publicKey, byo: false });
-      return jwt.signAsync({ sub: user.id, publicKey }, { secret: SECRET, expiresIn });
+      return jwt.signAsync({ sub: user.id, publicKey }, { expiresIn });
     }
 
     it('answers an over-cap authenticated upload with a real 413 JSON body (no connection reset)', async () => {
