@@ -1,0 +1,31 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b9e312ed985f",
+  "strategy": "manual-commit",
+  "branch": "chore/desktop-hw-gates",
+  "checkpoints_count": 5,
+  "files_touched": [
+    "blueprint/desktop.md",
+    "blueprint/testing.md",
+    "tools/hw-gates/.cargo/config.toml",
+    "tools/hw-gates/Cargo.toml",
+    "tools/hw-gates/build.rs",
+    "tools/hw-gates/src/main.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b9/e312ed985f/0/metadata.json",
+      "transcript": "/b9/e312ed985f/0/full.jsonl",
+      "compact_transcript": "/b9/e312ed985f/0/transcript.jsonl",
+      "content_hash": "/b9/e312ed985f/0/content_hash.txt",
+      "prompt": "/b9/e312ed985f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 218,
+    "cache_creation_tokens": 346869,
+    "cache_read_tokens": 13352603,
+    "output_tokens": 107950,
+    "api_call_count": 109
+  }
+}
