@@ -266,6 +266,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::seams::SeamResult;
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
     use crate::testkit::{SeededEntropy, block_on};
     use cipherbox_core::seal::{
@@ -299,6 +300,26 @@ mod tests {
             *self.floor_at_publish.borrow_mut() = Some(floor);
             self.seen.borrow_mut().push(record.clone());
             self.result.clone()
+        }
+    }
+
+    /// A floor store whose epoch-floor raise always fails — drives the documented
+    /// crash window (publish landed, floor raise failed). The other methods stay
+    /// benign so it can also back the publisher's snapshot if needed.
+    struct FailingFloorStore;
+
+    impl FloorStore for FailingFloorStore {
+        async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
+            Ok(None)
+        }
+        async fn raise_epoch_floor(&self, _scope_id: &[u8], _epoch: u64) -> SeamResult<u64> {
+            Err(SeamError::new("floor raise failed"))
+        }
+        async fn sequence_floor(&self, _ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+            Ok(None)
+        }
+        async fn raise_sequence_floor(&self, _ipns_name: &[u8], _sequence: u64) -> SeamResult<u64> {
+            Err(SeamError::new("floor raise failed"))
         }
     }
 
@@ -524,6 +545,69 @@ mod tests {
         assert!(
             !ct_eq_32(payload.override_seed(), &current_seed),
             "rotation minted a fresh seed, not the current one"
+        );
+    }
+
+    #[test]
+    fn floor_raise_failure_after_publish_returns_floor_error_and_skips_sweep() {
+        // The documented crash window: publish lands, the floor raise fails. The
+        // record WAS published (old records still gate-pass — no lockout), the error
+        // is RotateError::Floor, and the sweep is NOT enqueued (spawn count == 0).
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let floors = FailingFloorStore;
+        let scheduler = VirtualScheduler::new();
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let publisher = FakePublisher {
+            result: Ok(()),
+            seen: Rc::clone(&seen),
+            floor_at_publish: Rc::new(RefCell::new(None)),
+            floors: InMemoryFloorStore::default(),
+        };
+        let current_seed = [0xaa; 32];
+
+        let outcome = block_on(async {
+            let mut entropy = SeededEntropy::new(9);
+            let plan = RotateScopePlan {
+                identity: ScopeRootIdentity {
+                    v: 2,
+                    scope_id: SCOPE,
+                    ipns_name: b"scope-root",
+                    owner_enc_pub: &owner_pub,
+                    parent_node_seed: None,
+                    pseudonym_signer: &fx.pseudonym,
+                },
+                committed: CommittedSet {
+                    commitment: &commitment,
+                    commitment_sig: &sig,
+                    grant_ledger: &ledger,
+                    write_history_link: b"",
+                    direct_child_scope_index: &[],
+                },
+                current_override_seed: &current_seed,
+                current_read_epoch: 4,
+                write_scope_seed: &fx.write_scope_seed,
+                write_epoch: 3,
+                pointer_read_key: &fx.pointer_read_key,
+                carried_history_links: &[],
+            };
+            rotate_scope(&mut entropy, &floors, &scheduler, &publisher, &plan, || {
+                Box::pin(async {})
+            })
+            .await
+        });
+
+        assert_eq!(outcome.unwrap_err().check(), "floor-raise-failed");
+        assert_eq!(
+            seen.borrow().len(),
+            1,
+            "record WAS published before the floor raise"
+        );
+        assert_eq!(
+            scheduler.take_spawned_tasks().len(),
+            0,
+            "no sweep enqueued when the floor raise fails after publish"
         );
     }
 }

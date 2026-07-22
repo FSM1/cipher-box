@@ -127,6 +127,12 @@ pub enum ResealError {
     /// invariant the adoption gate rejects on resolve, enforced here so a re-seal
     /// never seals a section the gate would refuse (fail-closed symmetry).
     LedgerDivergesFromCommitment,
+    /// The rotator's pseudonym signer is not the owner-committed pseudonym key.
+    /// Detach-signing every structure under an uncommitted key mints a scope root
+    /// the adoption gate always rejects (an unopenable root); the same
+    /// signer-binding invariant the gate checks on resolve, enforced here so a
+    /// re-seal never signs a section the gate would refuse (fail-closed symmetry).
+    SignerNotCommitted,
     /// A grant-ledger entry's recipient encryption key is unusable (malformed or
     /// low-order X25519). A grant can never be wrapped to an unopenable key.
     UnusableRecipientKey,
@@ -142,6 +148,9 @@ impl core::fmt::Display for ResealError {
         match self {
             ResealError::LedgerDivergesFromCommitment => {
                 f.write_str("grant ledger diverges from the owner-signed committed set")
+            }
+            ResealError::SignerNotCommitted => {
+                f.write_str("rotator signer is not the owner-committed pseudonym key")
             }
             ResealError::UnusableRecipientKey => {
                 f.write_str("grant-ledger recipient encryption key is unusable")
@@ -159,6 +168,7 @@ impl ResealError {
     pub fn check(&self) -> &'static str {
         match self {
             ResealError::LedgerDivergesFromCommitment => "ledger-diverges-from-commitment",
+            ResealError::SignerNotCommitted => "signer-not-committed",
             ResealError::UnusableRecipientKey => "unusable-recipient-key",
             ResealError::Entropy(_) => "entropy-error",
             ResealError::WriteBodyEncode(_) => "write-body-encode-failed",
@@ -195,9 +205,22 @@ pub fn reseal_scope_root<E: Entropy>(
     committed: &CommittedSet<'_>,
     carried_history_links: &[SignedSealed],
 ) -> Result<GrantSection, ResealError> {
+    // Fail-closed BEFORE any seal: the rotator's pseudonym signer MUST be the
+    // owner-committed pseudonym key, else every detach-signature is minted under a
+    // key the commitment does not name — an unopenable root the gate always
+    // rejects (encode-side mirror of the gate's signer check). The pseudonym pubkey
+    // is public, so a plain byte compare is correct.
+    if identity.pseudonym_signer.verifying_key().to_bytes()
+        != committed.commitment.owner_pseudonym_pk
+    {
+        return Err(ResealError::SignerNotCommitted);
+    }
+
     // Fail-closed BEFORE any seal: the re-wrap set must equal the owner-signed
     // committed set. This is the revocation-completeness guarantee and the
     // encode-side mirror of the gate's `enforce_committed_ledger` resolve check.
+    // Reseal trusts each entry's `recipient_enc_pk` verbatim from the committed
+    // ledger; the tag<->enc_pk binding is enforced at resolve time (#745).
     enforce_committed_ledger(committed.commitment, committed.grant_ledger)
         .map_err(|_| ResealError::LedgerDivergesFromCommitment)?;
 
@@ -783,6 +806,32 @@ mod tests {
         let mut e = SeededEntropy::new(5);
         let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("diverging ledger");
         assert_eq!(err.check(), "ledger-diverges-from-commitment");
+    }
+
+    #[test]
+    fn signer_not_committed_fails_closed_release_active() {
+        // The rotator's pseudonym signer differs from the owner-committed pseudonym
+        // key. The re-seal rejects it with a runtime `Err` (not a debug_assert) — so
+        // a release build never signs a scope root the gate would reject as
+        // signer-mismatched (an unopenable root). This test is active in release.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let wrong_signer = Ed25519Signer::from_seed([0x99; 32]);
+        let id = ScopeRootIdentity {
+            v: V,
+            scope_id: SCOPE,
+            ipns_name: b"scope-root-name",
+            owner_enc_pub: &owner_pub,
+            parent_node_seed: None,
+            pseudonym_signer: &wrong_signer,
+        };
+        let seed = [0x01; 32];
+        let s = seeds(&seed, 1, None, &fx.write_scope_seed, &fx.pointer_read_key);
+        let cs = committed_set(&commitment, &sig, &ledger);
+        let mut e = SeededEntropy::new(7);
+        let err = reseal_scope_root(&mut e, &id, &s, &cs, &[]).expect_err("signer mismatch");
+        assert_eq!(err.check(), "signer-not-committed");
     }
 
     #[test]

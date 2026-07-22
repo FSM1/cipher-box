@@ -4,11 +4,15 @@
 //! A read-plane rotation fires from three sources, all driving the one
 //! [`rotate_scope`](super::rotate::rotate_scope) primitive:
 //!
-//! | Trigger      | Committed-set change | Cascade                              |
-//! | ------------ | -------------------- | ------------------------------------ |
-//! | Scope exit   | none (grantee flat)  | flat — the single root re-publishes  |
-//! | Read revoke  | revokee removed      | full eager-set cascade (owner action)|
-//! | Manual       | none                 | per-scope, same primitive            |
+//! | Trigger      | Committed-set change | Cascade                                 |
+//! | ------------ | -------------------- | --------------------------------------- |
+//! | Scope exit   | none (grantee flat)  | flat — the single root re-publishes     |
+//! | Read revoke  | revokee removed      | root cut here; eager-set via the sweep  |
+//! | Manual       | none                 | per-scope, same primitive               |
+//!
+//! This slice wires only the **root cut** for a read revoke; the descendant
+//! eager-set scope-root re-key is delivered by the sweep (Slice 3) and the
+//! resolver/tree wiring (#745/#746). Read-revoke is not end-to-end complete here.
 //!
 //! Scope-exit and manual rotations re-seal the **unchanged** committed set: a
 //! grantee re-wraps blobs verbatim and can neither extend nor shrink the tag set
