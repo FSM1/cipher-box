@@ -18,6 +18,7 @@
 
 import { BROADCAST_CHANNEL_NAME, newClientId, type BroadcastChannelLike } from './broadcast.js';
 import { BroadcastTransport } from './broadcastTransport.js';
+import { fanOut } from './correlatedTransport.js';
 import { EngineFacade } from './facade.js';
 import { LeaderRelay } from './leaderRelay.js';
 import { LeaderElection, type LockManagerLike } from './leadership.js';
@@ -177,13 +178,7 @@ export class EngineClient implements EngineTransport {
   }
 
   private fanOut(event: Parameters<EngineEventListener>[0]): void {
-    for (const listener of this.listeners) {
-      try {
-        listener(event);
-      } catch {
-        // One throwing subscriber must not drop the event for the rest.
-      }
-    }
+    fanOut(this.listeners, event);
   }
 }
 

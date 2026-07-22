@@ -25,7 +25,7 @@ import type { EngineTransport } from './transport.js';
  * Tracks each tab's open folder and derives the union — the set of distinct
  * folders any tab has open. Nodes are compared by their bytes (hex-keyed).
  */
-export class FocusRegistry {
+class FocusRegistry {
   private readonly perClient = new Map<string, string | null>();
   private union = new Set<string>();
 

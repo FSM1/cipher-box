@@ -1,0 +1,100 @@
+/**
+ * Shared request-correlation machinery for the two `EngineTransport`s
+ * (`LocalTransport` over a worker, `BroadcastTransport` over a channel). Both
+ * correlate responses to requests by a monotonic id and honor the same teardown
+ * contract hardened in #728: a torn-down or dead transport **rejects** every
+ * pending request instead of hanging.
+ *
+ * A subclass supplies only its readiness gate and its send primitive; this base
+ * owns the pending map, the no-hang request skeleton, response settlement, the
+ * terminal-failure latch, and the event fan-out.
+ */
+
+import type { EngineEventListener, EngineTransport } from './transport.js';
+import type { CommandDescriptor, EventDescriptor } from './worker/protocol.js';
+
+interface Pending {
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
+/**
+ * Delivers one event to every listener, isolating a throwing subscriber so it
+ * cannot drop the event for the rest.
+ */
+export function fanOut(listeners: Iterable<EngineEventListener>, event: EventDescriptor): void {
+  for (const listener of listeners) {
+    try {
+      listener(event);
+    } catch {
+      // One throwing subscriber must not drop the event for the rest.
+    }
+  }
+}
+
+export abstract class CorrelatedTransport implements EngineTransport {
+  private readonly pending = new Map<number, Pending>();
+  private readonly listeners = new Set<EngineEventListener>();
+  private nextId = 1;
+  // A fatal message, transport error, or teardown latches this. Once set, every
+  // request rejects here instead of dispatching and waiting for a response that
+  // can never arrive.
+  protected terminalError: Error | null = null;
+
+  abstract start(secret: ArrayBuffer): Promise<void>;
+  abstract command(command: CommandDescriptor, transfer: Transferable[]): Promise<void>;
+  abstract close(): void;
+
+  subscribe(listener: EngineEventListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  /** Fans one engine event out to this transport's subscribers. */
+  protected emit(event: EventDescriptor): void {
+    fanOut(this.listeners, event);
+  }
+
+  /**
+   * The no-hang request skeleton: short-circuit on `terminalError` before
+   * awaiting the readiness gate, register the pending entry, then `send`. A
+   * synchronous `send` failure deletes the pending entry before rejecting so it
+   * is never stranded.
+   */
+  protected dispatch(readyGate: Promise<void>, send: (id: number) => void): Promise<void> {
+    if (this.terminalError) return Promise.reject(this.terminalError);
+    return readyGate.then(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          if (this.terminalError) {
+            reject(this.terminalError);
+            return;
+          }
+          const id = this.nextId++;
+          this.pending.set(id, { resolve, reject });
+          try {
+            send(id);
+          } catch (error) {
+            this.pending.delete(id);
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        })
+    );
+  }
+
+  /** Correlates a response to its request id, resolving or rejecting it. */
+  protected settle(id: number, ok: boolean, error?: string): void {
+    const pending = this.pending.get(id);
+    if (!pending) return;
+    this.pending.delete(id);
+    if (ok) pending.resolve();
+    else pending.reject(new Error(error));
+  }
+
+  /** Latches terminal failure and rejects every in-flight request. */
+  protected fail(error: Error): void {
+    this.terminalError ??= error;
+    for (const pending of this.pending.values()) pending.reject(error);
+    this.pending.clear();
+  }
+}

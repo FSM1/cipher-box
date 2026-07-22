@@ -24,7 +24,7 @@ export type { EngineClientConfig, EngineClientRole, SecretSource } from './engin
 export { LeaderElection } from './leadership.js';
 export type { LockManagerLike, LockGrant, ElectionRole } from './leadership.js';
 export { BroadcastTransport } from './broadcastTransport.js';
-export { LeaderRelay, FocusRegistry } from './leaderRelay.js';
+export { LeaderRelay } from './leaderRelay.js';
 export { BROADCAST_CHANNEL_NAME, newClientId } from './broadcast.js';
 export type { BroadcastChannelLike } from './broadcast.js';
 

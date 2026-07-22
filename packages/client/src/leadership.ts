@@ -23,7 +23,7 @@ export type LockRequestCallback = (lock: LockGrant | null) => Promise<unknown>;
 export interface LockManagerLike {
   request(
     name: string,
-    options: { signal?: AbortSignal; mode?: 'exclusive' | 'shared' },
+    options: { signal?: AbortSignal; mode?: 'exclusive' },
     callback: LockRequestCallback
   ): Promise<unknown>;
 }

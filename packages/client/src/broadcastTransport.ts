@@ -11,20 +11,11 @@
  */
 
 import { hoistContent, type BroadcastChannelLike, type LeaderMessage } from './broadcast.js';
-import type { EngineEventListener, EngineTransport } from './transport.js';
+import { CorrelatedTransport } from './correlatedTransport.js';
 import type { CommandDescriptor } from './worker/protocol.js';
 
-interface Pending {
-  resolve: () => void;
-  reject: (error: Error) => void;
-}
-
-export class BroadcastTransport implements EngineTransport {
-  private readonly pending = new Map<number, Pending>();
-  private readonly listeners = new Set<EngineEventListener>();
-  private nextId = 1;
+export class BroadcastTransport extends CorrelatedTransport {
   private closed = false;
-  private terminalError: Error | null = null;
 
   private leaderPresent = false;
   private readonly leaderReady: Promise<void>;
@@ -37,6 +28,7 @@ export class BroadcastTransport implements EngineTransport {
     private readonly channel: BroadcastChannelLike,
     private readonly clientId: string
   ) {
+    super();
     this.leaderReady = new Promise<void>((resolve, reject) => {
       this.resolveLeaderReady = resolve;
       this.rejectLeaderReady = reject;
@@ -49,8 +41,10 @@ export class BroadcastTransport implements EngineTransport {
 
   /**
    * A follower never transmits the login secret — the leader's engine already
-   * owns key derivation. Scrub this tab's copy and resolve once a leader is
-   * confirmed present.
+   * owns key derivation. This **consumes and scrubs** the secret: it zeroes the
+   * caller's buffer so the plaintext never lingers in the keyless follower realm.
+   * A caller MUST re-derive a fresh buffer via `SecretSource` for any retry
+   * (e.g. failover cold-start) — never reuse this buffer, whose bytes are now 0.
    */
   start(secret: ArrayBuffer): Promise<void> {
     new Uint8Array(secret).fill(0);
@@ -59,34 +53,14 @@ export class BroadcastTransport implements EngineTransport {
   }
 
   command(command: CommandDescriptor, _transfer: Transferable[]): Promise<void> {
-    if (this.terminalError) return Promise.reject(this.terminalError);
-    return this.leaderReady.then(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          if (this.terminalError) {
-            reject(this.terminalError);
-            return;
-          }
-          const requestId = this.nextId++;
-          this.pending.set(requestId, { resolve, reject });
-          try {
-            this.channel.postMessage({
-              type: 'cb:command',
-              clientId: this.clientId,
-              requestId,
-              wire: hoistContent(command),
-            });
-          } catch (error) {
-            this.pending.delete(requestId);
-            reject(error instanceof Error ? error : new Error(String(error)));
-          }
-        })
+    return this.dispatch(this.leaderReady, (requestId) =>
+      this.channel.postMessage({
+        type: 'cb:command',
+        clientId: this.clientId,
+        requestId,
+        wire: hoistContent(command),
+      })
     );
-  }
-
-  subscribe(listener: EngineEventListener): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
   }
 
   /** Reports this tab's open folder to the leader's focus-window union. */
@@ -121,30 +95,14 @@ export class BroadcastTransport implements EngineTransport {
       case 'cb:response': {
         const response = message as Extract<LeaderMessage, { type: 'cb:response' }>;
         if (response.clientId !== this.clientId) return;
-        const pending = this.pending.get(response.requestId);
-        if (!pending) return;
-        this.pending.delete(response.requestId);
-        if (response.ok) pending.resolve();
-        else pending.reject(new Error(response.error));
+        this.settle(response.requestId, response.ok, response.ok ? undefined : response.error);
         return;
       }
       case 'cb:event': {
         const { event } = message as Extract<LeaderMessage, { type: 'cb:event' }>;
-        for (const listener of this.listeners) {
-          try {
-            listener(event);
-          } catch {
-            // One throwing subscriber must not drop the event for the rest.
-          }
-        }
+        this.emit(event);
         return;
       }
     }
-  }
-
-  private fail(error: Error): void {
-    this.terminalError ??= error;
-    for (const pending of this.pending.values()) pending.reject(error);
-    this.pending.clear();
   }
 }

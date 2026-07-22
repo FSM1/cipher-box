@@ -73,7 +73,7 @@ export class FakeLockManager implements LockManagerLike {
 
   request(
     name: string,
-    options: { signal?: AbortSignal; mode?: 'exclusive' | 'shared' },
+    options: { signal?: AbortSignal; mode?: 'exclusive' },
     callback: LockRequestCallback
   ): Promise<unknown> {
     return new Promise<unknown>((resolveRequest, rejectRequest) => {
