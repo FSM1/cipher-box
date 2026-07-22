@@ -37,6 +37,7 @@ pub mod profile;
 pub mod rotation;
 pub mod seams;
 pub mod secret_util;
+mod session;
 pub mod sync;
 #[cfg(feature = "test-kit")]
 pub mod testkit;
