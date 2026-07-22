@@ -10,9 +10,17 @@
 //! | Read revoke  | revokee removed      | root cut here; eager-set via the sweep  |
 //! | Manual       | none                 | per-scope, same primitive               |
 //!
-//! This slice wires only the **root cut** for a read revoke; the descendant
-//! eager-set scope-root re-key is delivered by the sweep (Slice 3) and the
-//! resolver/tree wiring (#745/#746). Read-revoke is not end-to-end complete here.
+//! This slice wires only the **root cut** for a read revoke. On an
+//! owner-revocation rotation the fresh-seed descendant re-key is
+//! `rotateScope`'s **eager-set republish** — every transitively-reachable
+//! descendant scope root fully rotated with a fresh override seed
+//! (blueprint/engine.md "rotateScope", L243-252) — currently deferred pending
+//! the resolver/tree wiring (#745/#746). That eager cascade, not the sweep, is
+//! what defeats a revokee's cached descendant seeds. The sweep
+//! ([`super::sweep`]) does only metadata-only epoch-lag convergence and the
+//! index self-heal; it reuses the existing seed and never re-keys, so it does
+//! not on its own complete a read revoke. Read-revoke is not end-to-end
+//! complete here.
 //!
 //! Scope-exit and manual rotations re-seal the **unchanged** committed set: a
 //! grantee re-wraps blobs verbatim and can neither extend nor shrink the tag set
@@ -240,6 +248,35 @@ mod tests {
         let wrong_owner = EcdsaSigner::from_scalar(&[0x44; 32]).unwrap();
         let err = revoke_read_grant(&c, &sig, &ledger, &[0xb2; 32], &wrong_owner)
             .expect_err("unauthorized signer");
+        assert_eq!(err.check(), "unauthorized-signer");
+    }
+
+    #[test]
+    fn revoke_tampered_commitment_preimage_fails_closed() {
+        // The engine-layer preimage-binding lock (#747 F1): a real owner signer
+        // presents a signature it genuinely produced, but over a *different*
+        // (tampered) commitment than the one being revoked. verify_grant_set binds
+        // the signature to THIS commitment's preimage, so the mismatch is rejected
+        // as UnauthorizedSigner — a mutated commitment cannot ride a valid
+        // signature over a sibling commitment. Complements the key-identity case
+        // (`revoke_wrong_signer_fails_closed`) and the core-layer tamper KAT.
+        let owner = owner();
+        let (commitment, _sig, ledger) = commitment();
+
+        // A genuinely owner-signed signature, but over a mutated commitment.
+        let mut tampered = commitment.clone();
+        tampered.ipns_name = b"tampered".to_vec();
+        let tampered_sig = sign_grant_set(&owner, &tampered).unwrap().to_compact();
+        assert_ne!(
+            tampered_sig,
+            sign_grant_set(&owner, &commitment).unwrap().to_compact(),
+            "the tampered-preimage signature differs from the authentic one"
+        );
+
+        // Revoking the ORIGINAL commitment while presenting the tampered-preimage
+        // signature must fail closed: the signature does not authorize this set.
+        let err = revoke_read_grant(&commitment, &tampered_sig, &ledger, &[0xb2; 32], &owner)
+            .expect_err("tampered commitment preimage");
         assert_eq!(err.check(), "unauthorized-signer");
     }
 
