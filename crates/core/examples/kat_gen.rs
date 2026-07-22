@@ -3774,66 +3774,6 @@ fn build_mailbox_accept() -> Vec<MailboxAcceptVector> {
         });
     }
 
-    // Relay (recipient-non-binding) accept vector: R1 opens an item sealed to it,
-    // then re-seals the untouched inner plaintext — the sender's original
-    // signature included — to a different recipient R2, and it still verifies.
-    // The sender signature covers [domain, v, senderIdentityPk, payload] with no
-    // recipient, so relaying cannot break it. Ticket #712 adds recipient
-    // binding; when it lands this relay self-check fails and the vector must be
-    // removed — a conscious KAT break.
-    let relay_payload: &[u8] = b"relayed discovery ping";
-    let r2_scalar = [0x42u8; 32];
-    let r2 = X25519Secret::from_scalar(r2_scalar);
-    // R1's inbound item and R2's relayed item seal to different recipients, each
-    // under its own ephemeral — no ephemeral is shared across seals.
-    let r1_eph = [0x54u8; 32];
-    let relay_eph = [0x53u8; 32];
-    let info = build_aad(&AadContext {
-        v,
-        id: [0; 16],
-        scope: [0; 16],
-        epoch: 0,
-        struct_tag: STRUCT_TAG_MAILBOX_PAYLOAD,
-    });
-    let block_to_r1 = seal_mailbox_payload(&recipient_public, &r1_eph, v, &sender, relay_payload);
-    let r1_map = decode(&block_to_r1).unwrap().as_map().unwrap().clone();
-    let ct1 = r1_map.get("ct").unwrap().as_bytes().unwrap().to_vec();
-    let enc1: [u8; 32] = r1_map
-        .get("enc")
-        .unwrap()
-        .as_bytes()
-        .unwrap()
-        .try_into()
-        .unwrap();
-    // R1 recovers the inner plaintext exactly as received, then relays it to R2.
-    let inner = hpke_open(&recipient, &enc1, &info, &[], &ct1).expect("R1 opens the relayed item");
-    let sealed_to_r2 = hpke_seal(&r2.public(), &relay_eph, &info, &[], &inner);
-    let mut relay_block_map = Map::new();
-    relay_block_map.insert("ct", Value::Bytes(sealed_to_r2.ciphertext));
-    relay_block_map.insert("enc", Value::Bytes(sealed_to_r2.enc.to_vec()));
-    let relay_block = encode(&Value::Map(relay_block_map));
-    // R2 still verifies the original sender — the property #712 will break.
-    let item = open_mailbox_payload(&r2, v, &relay_block).expect("relay verifies for R2");
-    assert_eq!(item.payload, relay_payload, "relay: payload");
-    assert_eq!(
-        item.sender_identity,
-        sender.verifying_key(),
-        "relay: sender identity"
-    );
-    assert!(
-        names.insert("relay-to-other-recipient-still-verifies"),
-        "duplicate mailbox-accept relay"
-    );
-    out.push(MailboxAcceptVector {
-        name: "relay-to-other-recipient-still-verifies".to_string(),
-        recipient_secret: hexstr(&r2_scalar),
-        recipient_public: hexstr(&r2.public().to_bytes()),
-        ephemeral_scalar: hexstr(&relay_eph),
-        v,
-        sender_scalar: hexstr(&sender_scalar),
-        payload: hexstr(relay_payload),
-        block: hexstr(&relay_block),
-    });
     out
 }
 
@@ -3919,6 +3859,31 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
     uncompressed_block_map.insert("enc", Value::Bytes(sealed_uncompressed.enc.to_vec()));
     let uncompressed_block = encode(&Value::Map(uncompressed_block_map));
 
+    // Cross-recipient relay lift (#712): R1 opens an item sealed to it and
+    // re-seals the untouched inner — sender signature included — to R2. Recipient
+    // binding in the signature preimage makes R2's identity check fail.
+    let r2_scalar = [0x42u8; 32];
+    let r2 = X25519Secret::from_scalar(r2_scalar);
+    let r1_relay_eph = [0x54u8; 32];
+    let relay_eph = [0x53u8; 32];
+    let block_to_r1 =
+        seal_mailbox_payload(&recipient.public(), &r1_relay_eph, v, &sender, b"relayed");
+    let r1_map = decode(&block_to_r1).unwrap().as_map().unwrap().clone();
+    let ct1 = r1_map.get("ct").unwrap().as_bytes().unwrap().to_vec();
+    let enc1: [u8; 32] = r1_map
+        .get("enc")
+        .unwrap()
+        .as_bytes()
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let relayed_inner = hpke_open(&recipient, &enc1, &info, &[], &ct1).expect("R1 opens the item");
+    let sealed_to_r2 = hpke_seal(&r2.public(), &relay_eph, &info, &[], &relayed_inner);
+    let mut relay_block_map = Map::new();
+    relay_block_map.insert("ct", Value::Bytes(sealed_to_r2.ciphertext));
+    relay_block_map.insert("enc", Value::Bytes(sealed_to_r2.enc.to_vec()));
+    let relay_block = encode(&Value::Map(relay_block_map));
+
     // (name, recipient_secret, v, block, check).
     let wrong_recipient = [0x41u8; 32];
     let cases: Vec<MailboxRejectCase> = vec![
@@ -3955,6 +3920,13 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
             recipient_scalar,
             v,
             uncompressed_block,
+            "identity-signature-invalid",
+        ),
+        (
+            "relay-to-other-recipient",
+            r2_scalar,
+            v,
+            relay_block,
             "identity-signature-invalid",
         ),
     ];

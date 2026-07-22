@@ -11,9 +11,11 @@
 //! Wire shape. The HPKE plaintext is det-CBOR
 //! `{payload, senderIdentityPk, senderSig}`: the opaque application `payload`,
 //! the sender's 33-byte compressed secp256k1 identity key, and the 64-byte
-//! ECDSA signature over `[domain, v, senderIdentityPk, payload]` (domain-,
-//! version-, and key-bound so a signature can never be lifted onto a different
-//! sender or protocol version). That plaintext is HPKE-sealed with the
+//! ECDSA signature over `[domain, v, recipientEncPk, senderIdentityPk, payload]`
+//! (domain-, version-, recipient-, and key-bound so a signature can never be
+//! lifted onto a different sender, recipient, or protocol version — a recipient
+//! cannot relay-lift an opened item's `{payload, senderSig}` onto a second
+//! recipient). That plaintext is HPKE-sealed with the
 //! `mailbox-payload` AAD as the RFC 9180 `info`, and the published block is
 //! det-CBOR `{enc, ct}`. The recipient supplies the protocol version `v`
 //! out-of-band, so a version downgrade recomputes a different key schedule and
@@ -31,7 +33,7 @@ use crate::suite::x25519::{X25519Public, X25519Secret};
 use super::{bytes_fixed, req};
 
 /// The sender-signature domain separator: the signature covers
-/// `[MAILBOX_SIG_DOMAIN, v, senderIdentityPk, payload]`.
+/// `[MAILBOX_SIG_DOMAIN, v, recipientEncPk, senderIdentityPk, payload]`.
 const MAILBOX_SIG_DOMAIN: &str = "cipherbox/v2/mailbox-sig";
 
 /// An opened, sender-verified mailbox item.
@@ -56,11 +58,14 @@ fn mailbox_ctx(v: u64) -> AadContext {
     }
 }
 
-/// The sender-signature preimage.
-fn sig_preimage(v: u64, sender_pk: &[u8], payload: &[u8]) -> Vec<u8> {
+/// The sender-signature preimage. Binding `recipient_pk` closes the
+/// cross-recipient relay lift: an opened item cannot be re-sealed to a second
+/// recipient and still verify.
+fn sig_preimage(v: u64, recipient_pk: &[u8], sender_pk: &[u8], payload: &[u8]) -> Vec<u8> {
     encode(&Value::Array(vec![
         Value::Text(MAILBOX_SIG_DOMAIN.to_string()),
         Value::Unsigned(v),
+        Value::Bytes(recipient_pk.to_vec()),
         Value::Bytes(sender_pk.to_vec()),
         Value::Bytes(payload.to_vec()),
     ]))
@@ -79,7 +84,7 @@ pub fn seal_mailbox_payload(
     payload: &[u8],
 ) -> Vec<u8> {
     let sender_pk = sender_signer.verifying_key().to_sec1();
-    let mut preimage = sig_preimage(v, &sender_pk, payload);
+    let mut preimage = sig_preimage(v, &recipient_enc_pub.to_bytes(), &sender_pk, payload);
     let sender_sig = sender_signer.sign_detcbor(&preimage);
     preimage.zeroize();
 
@@ -117,12 +122,13 @@ pub fn open_mailbox_payload(
 
     let info = build_aad(&mailbox_ctx(v));
     let mut inner = hpke_open(recipient_secret, &enc, &info, &[], ct).map_err(CodecError::from)?;
-    let result = verify_inner(&inner, v);
+    let recipient_pk = recipient_secret.public().to_bytes();
+    let result = verify_inner(&inner, v, &recipient_pk);
     inner.zeroize();
     result
 }
 
-fn verify_inner(inner: &[u8], v: u64) -> Result<MailboxItem, CodecError> {
+fn verify_inner(inner: &[u8], v: u64, recipient_pk: &[u8]) -> Result<MailboxItem, CodecError> {
     let value = decode(inner)?;
     let map = value.as_map()?;
     let payload = req(map, "payload")?.as_bytes()?.to_vec();
@@ -135,7 +141,7 @@ fn verify_inner(inner: &[u8], v: u64) -> Result<MailboxItem, CodecError> {
         EcdsaVerifier::from_sec1(sender_pk).ok_or(TrustViolation::IdentitySignatureInvalid)?;
     let sig =
         EcdsaSignature::from_compact(sig_bytes).ok_or(TrustViolation::IdentitySignatureInvalid)?;
-    let mut preimage = sig_preimage(v, sender_pk, &payload);
+    let mut preimage = sig_preimage(v, recipient_pk, sender_pk, &payload);
     let verified = sender_identity.verify_detcbor(&preimage, &sig);
     preimage.zeroize();
     if !verified {
@@ -236,5 +242,78 @@ mod tests {
                 .check(),
             "identity-signature-invalid"
         );
+    }
+
+    #[test]
+    fn relay_to_other_recipient_fails_identity_check() {
+        // R1 opens an item sealed to it, then re-seals the untouched inner
+        // plaintext — sender signature included — to a second recipient R2.
+        // Recipient binding makes R2's signature check fail (#712).
+        let r1 = recipient();
+        let r2 = X25519Secret::from_scalar([0x42; 32]);
+        let block = seal_mailbox_payload(&r1.public(), &[0x54; 32], 2, &sender(), b"relayed");
+
+        let info = build_aad(&mailbox_ctx(2));
+        let m = decode(&block).unwrap().as_map().unwrap().clone();
+        let ct = m.get("ct").unwrap().as_bytes().unwrap().to_vec();
+        let enc = bytes_fixed::<{ hpke::ENC_LEN }>(m.get("enc").unwrap(), "enc").unwrap();
+        let inner = hpke_open(&r1, &enc, &info, &[], &ct).unwrap();
+
+        let sealed = hpke_seal(&r2.public(), &[0x53; 32], &info, &[], &inner);
+        let mut relay = Map::new();
+        relay.insert("ct", Value::Bytes(sealed.ciphertext));
+        relay.insert("enc", Value::Bytes(sealed.enc.to_vec()));
+        let relay_block = encode(&Value::Map(relay));
+
+        assert_eq!(
+            open_mailbox_payload(&r2, 2, &relay_block)
+                .unwrap_err()
+                .check(),
+            "identity-signature-invalid"
+        );
+    }
+
+    #[test]
+    fn per_recipient_binding_both_verify() {
+        // The binding is per-recipient, not pinned to one key: a sender seals
+        // separately to R1 and R2 and both verify, while a cross-open fails
+        // HPKE rather than silently verifying (#712).
+        let s = sender();
+        let r1 = recipient();
+        let r2 = X25519Secret::from_scalar([0x42; 32]);
+        let b1 = seal_mailbox_payload(&r1.public(), &[0x51; 32], 2, &s, b"to-r1");
+        let b2 = seal_mailbox_payload(&r2.public(), &[0x52; 32], 2, &s, b"to-r2");
+        assert_eq!(open_mailbox_payload(&r1, 2, &b1).unwrap().payload, b"to-r1");
+        assert_eq!(open_mailbox_payload(&r2, 2, &b2).unwrap().payload, b"to-r2");
+        assert_eq!(
+            open_mailbox_payload(&r2, 2, &b1).unwrap_err().check(),
+            "hpke-open-failed"
+        );
+    }
+
+    #[test]
+    fn same_recipient_reseal_still_verifies() {
+        // The reject is specifically cross-recipient (#712), not "any re-seal
+        // breaks": R1 re-seals its own item to itself under a fresh ephemeral
+        // and it still verifies — the recipient tag, not the reseal act, is
+        // what the signature binds.
+        let r1 = recipient();
+        let block = seal_mailbox_payload(&r1.public(), &[0x54; 32], 2, &sender(), b"relayed");
+
+        let info = build_aad(&mailbox_ctx(2));
+        let m = decode(&block).unwrap().as_map().unwrap().clone();
+        let ct = m.get("ct").unwrap().as_bytes().unwrap().to_vec();
+        let enc = bytes_fixed::<{ hpke::ENC_LEN }>(m.get("enc").unwrap(), "enc").unwrap();
+        let inner = hpke_open(&r1, &enc, &info, &[], &ct).unwrap();
+
+        let resealed = hpke_seal(&r1.public(), &[0x55; 32], &info, &[], &inner);
+        let mut block2 = Map::new();
+        block2.insert("ct", Value::Bytes(resealed.ciphertext));
+        block2.insert("enc", Value::Bytes(resealed.enc.to_vec()));
+        let block2_bytes = encode(&Value::Map(block2));
+
+        let item = open_mailbox_payload(&r1, 2, &block2_bytes).unwrap();
+        assert_eq!(item.payload, b"relayed");
+        assert_eq!(item.sender_identity, sender().verifying_key());
     }
 }

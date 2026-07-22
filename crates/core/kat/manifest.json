@@ -252,11 +252,11 @@
     },
     "mailboxAccept": {
       "file": "vectors/payload/mailbox_accept.json",
-      "count": 3
+      "count": 2
     },
     "mailboxReject": {
       "file": "vectors/payload/mailbox_reject.json",
-      "count": 5,
+      "count": 6,
       "checks": [
         "hpke-open-failed",
         "identity-signature-invalid"
