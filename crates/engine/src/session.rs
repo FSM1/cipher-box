@@ -74,6 +74,14 @@ impl SessionIdentity {
         self.enc_subkey.public()
     }
 
+    /// The retained login secret, for the runtime vault-pointer index probe
+    /// (cold start and per tick). Owner-plane name/read-key derivation happens
+    /// inside the pointer walk, which needs the raw secret; secret-bearing, so
+    /// in-crate only.
+    pub(crate) fn login_secret(&self) -> &[u8] {
+        &self.login_secret
+    }
+
     /// The encryption subkey itself — the sealing key the grant/mailbox paths
     /// use. Secret-bearing, so in-crate only.
     pub(crate) fn enc_subkey(&self) -> &X25519Secret {

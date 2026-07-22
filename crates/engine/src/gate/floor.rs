@@ -30,7 +30,74 @@
 
 use cipherbox_core::payload::RepointObject;
 
-use crate::seams::{FloorRaise, FloorStore, SeamResult};
+use crate::seams::{FloorRaise, FloorStore, SeamError, SeamResult};
+
+/// An owner-vouched epoch that regressed below a durable floor at cold-seed — a
+/// rolled-back re-point object, a fail-closed trust violation and never mere
+/// staleness (the floor law: revocation boundaries cannot be rolled back).
+///
+/// The comparison is sound at the vault/root anchor: the root scope's read
+/// epoch is authored only by the owner (no grantee rotation advances the
+/// envelope read epoch past `minReadEpoch` there), so `min_read_epoch` and the
+/// durable read-epoch floor share the owner's authorship, and `write_epoch` is
+/// owner-vouched and never unseal-advanced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloorRegression {
+    /// The re-point's `minReadEpoch` is strictly below the durable read-epoch
+    /// (revocation) floor — an attempt to roll back a revocation boundary.
+    ReadEpoch {
+        /// The durable read-epoch floor.
+        floor: u64,
+        /// The re-point's owner-vouched `minReadEpoch`.
+        vouched: u64,
+    },
+    /// The re-point's `writeEpoch` is strictly below the durable write-epoch
+    /// floor — a rolled-back owner-vouched write clock.
+    WriteEpoch {
+        /// The durable write-epoch floor.
+        floor: u64,
+        /// The re-point's owner-vouched `writeEpoch`.
+        vouched: u64,
+    },
+}
+
+impl core::fmt::Display for FloorRegression {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            FloorRegression::ReadEpoch { floor, vouched } => write!(
+                f,
+                "read-epoch floor regression: vouched {vouched} below durable floor {floor}"
+            ),
+            FloorRegression::WriteEpoch { floor, vouched } => write!(
+                f,
+                "write-epoch floor regression: vouched {vouched} below durable floor {floor}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FloorRegression {}
+
+/// A cold-seed failure: a host floor-store I/O error (availability), or a
+/// fail-closed [`FloorRegression`] (a trust violation).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ColdSeedError {
+    /// A [`FloorStore`] seam failure — host I/O, retryable, never a trust verdict.
+    Seam(SeamError),
+    /// A fail-closed floor regression.
+    Regression(FloorRegression),
+}
+
+impl core::fmt::Display for ColdSeedError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            ColdSeedError::Seam(e) => write!(f, "{e}"),
+            ColdSeedError::Regression(r) => write!(f, "{r}"),
+        }
+    }
+}
+
+impl std::error::Error for ColdSeedError {}
 
 /// Suffix that distinguishes a scope's write-epoch floor key from its
 /// read-epoch floor key inside the [`FloorStore`] epoch namespace. The
@@ -134,6 +201,50 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
     Ok(())
 }
 
+/// Cold-seed a scope's floors **fail-closed on regression** (the floor law).
+///
+/// Reads the durable read- and write-epoch floors and rejects before any write
+/// if the owner-vouched re-point would move either backward: a re-point whose
+/// `minReadEpoch` or `writeEpoch` is strictly below the durable floor is a
+/// rolled-back pointer (a replay past a revocation boundary), a trust violation
+/// never mere staleness. Only when neither regresses does it advance the floors
+/// via the monotonic-max [`cold_seed`].
+///
+/// The single-writer engine reads the floors and advances them with no
+/// concurrent adopt in between (blueprint/engine.md "Facade" — one live
+/// instance), so the check-then-advance is not a CAS pair; the monotonic-max
+/// store is the backstop either way.
+pub async fn cold_seed_checked<F: FloorStore>(
+    floors: &F,
+    repoint: &RepointObject,
+) -> Result<(), ColdSeedError> {
+    if let Some(floor) = read_epoch_floor(floors, &repoint.scope_id)
+        .await
+        .map_err(ColdSeedError::Seam)?
+    {
+        if repoint.min_read_epoch < floor {
+            return Err(ColdSeedError::Regression(FloorRegression::ReadEpoch {
+                floor,
+                vouched: repoint.min_read_epoch,
+            }));
+        }
+    }
+    if let Some(floor) = write_epoch_floor(floors, &repoint.scope_id)
+        .await
+        .map_err(ColdSeedError::Seam)?
+    {
+        if repoint.write_epoch < floor {
+            return Err(ColdSeedError::Regression(FloorRegression::WriteEpoch {
+                floor,
+                vouched: repoint.write_epoch,
+            }));
+        }
+    }
+    cold_seed(floors, repoint)
+        .await
+        .map_err(ColdSeedError::Seam)
+}
+
 /// Advance the write-epoch floor on sight of an owner-vouched pointer
 /// `writeEpoch`. Monotonic-max: a value at or below the durable floor is a
 /// no-op that reports the stored floor. Returns the resulting floor.
@@ -172,6 +283,82 @@ mod tests {
                 .unwrap();
             assert_eq!(sequence_floor(&floors, NAME).await.unwrap(), Some(5));
             assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(3));
+        });
+    }
+
+    fn repoint(scope_id: [u8; 16], min_read_epoch: u64, write_epoch: u64) -> RepointObject {
+        use cipherbox_core::ipns::IpnsName;
+        use cipherbox_core::kdf;
+        RepointObject {
+            scope_id,
+            current_root: IpnsName::from_public_key(
+                &kdf::vault_pointer_index(b"root", 0).verifying_key(),
+            ),
+            write_epoch,
+            min_read_epoch,
+            prev_root: None,
+        }
+    }
+
+    #[test]
+    fn cold_seed_checked_seeds_a_fresh_scope_then_is_monotonic() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            // A fresh (unseeded) scope adopts the owner-vouched anchor.
+            cold_seed_checked(&floors, &repoint(SCOPE, 5, 3))
+                .await
+                .unwrap();
+            assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(5));
+            assert_eq!(write_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(3));
+            // Re-seeding at or above the floor advances monotonically.
+            cold_seed_checked(&floors, &repoint(SCOPE, 7, 3))
+                .await
+                .unwrap();
+            assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(7));
+        });
+    }
+
+    #[test]
+    fn cold_seed_checked_rejects_a_read_epoch_regression_fail_closed() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            cold_seed_checked(&floors, &repoint(SCOPE, 5, 3))
+                .await
+                .unwrap();
+            // A rolled-back re-point vouching a lower minReadEpoch is fail-closed.
+            let err = cold_seed_checked(&floors, &repoint(SCOPE, 4, 3))
+                .await
+                .expect_err("read-epoch regression is a trust violation");
+            assert_eq!(
+                err,
+                ColdSeedError::Regression(FloorRegression::ReadEpoch {
+                    floor: 5,
+                    vouched: 4
+                })
+            );
+            // The durable floor is untouched by the rejected seed.
+            assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(5));
+        });
+    }
+
+    #[test]
+    fn cold_seed_checked_rejects_a_write_epoch_regression_fail_closed() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            cold_seed_checked(&floors, &repoint(SCOPE, 5, 6))
+                .await
+                .unwrap();
+            let err = cold_seed_checked(&floors, &repoint(SCOPE, 5, 4))
+                .await
+                .expect_err("write-epoch regression is a trust violation");
+            assert_eq!(
+                err,
+                ColdSeedError::Regression(FloorRegression::WriteEpoch {
+                    floor: 6,
+                    vouched: 4
+                })
+            );
+            assert_eq!(write_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(6));
         });
     }
 
