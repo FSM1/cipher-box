@@ -35,4 +35,8 @@ export type {
   Permission,
   NodeKind,
   Staleness,
+  OpProgressPhase,
+  SnapshotDescriptor,
+  SnapshotChildDescriptor,
+  BreadcrumbDescriptor,
 } from './worker/protocol.js';

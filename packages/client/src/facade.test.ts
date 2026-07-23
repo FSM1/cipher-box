@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { EngineFacade } from './facade.js';
+import { emptySnapshot } from './testkit.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
-import type { CommandDescriptor } from './worker/protocol.js';
+import type { CommandDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 
 class FakeTransport implements EngineTransport {
   started: ArrayBuffer[] = [];
   commands: Array<{ command: CommandDescriptor; transfer: Transferable[] }> = [];
+  snapshots: Uint8Array[] = [];
+  downloads: Uint8Array[] = [];
   listeners: EngineEventListener[] = [];
   closed = false;
 
@@ -18,6 +21,16 @@ class FakeTransport implements EngineTransport {
   command(command: CommandDescriptor, transfer: Transferable[]): Promise<void> {
     this.commands.push({ command, transfer });
     return Promise.resolve();
+  }
+
+  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
+    this.snapshots.push(folder);
+    return Promise.resolve(emptySnapshot(folder));
+  }
+
+  download(node: Uint8Array): Promise<ArrayBuffer> {
+    this.downloads.push(node);
+    return Promise.resolve(new Uint8Array([1, 2, 3]).buffer);
   }
 
   subscribe(listener: EngineEventListener): () => void {
@@ -93,6 +106,21 @@ describe('EngineFacade', () => {
       permission: 'write',
       recipientIdentityPublicKey: recipient,
     });
+  });
+
+  it('delegates snapshot and download reads to the transport', async () => {
+    const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
+    const folder = new Uint8Array(16).fill(2);
+    const node = new Uint8Array(16).fill(3);
+
+    const view = await facade.snapshot(folder);
+    expect(view.folder).toBe(folder);
+    expect(transport.snapshots).toEqual([folder]);
+
+    const content = await facade.download(node);
+    expect([...new Uint8Array(content)]).toEqual([1, 2, 3]);
+    expect(transport.downloads).toEqual([node]);
   });
 
   it('delegates event subscription to the transport', () => {

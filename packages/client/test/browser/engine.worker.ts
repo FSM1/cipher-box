@@ -9,6 +9,7 @@ import init, {
   EngineHandle,
   NodeId,
   NodeKind,
+  OpPhase,
   Permission,
   Staleness,
 } from './pkg/cipherbox_wasm.js';
@@ -28,6 +29,7 @@ async function boot(): Promise<void> {
     Command,
     NodeId,
     NodeKind,
+    OpPhase,
     Permission,
     Staleness,
   } as unknown as EngineWasm;

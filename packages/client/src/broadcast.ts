@@ -15,7 +15,7 @@
  *   cross-tab hop copies no bytes (blueprint "no byte copies for uploads").
  */
 
-import type { CommandDescriptor, EventDescriptor } from './worker/protocol.js';
+import type { CommandDescriptor, EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 
 /** The subset of `BroadcastChannel` the transport/relay drive (injectable). */
 export interface BroadcastChannelLike {
@@ -35,12 +35,19 @@ export interface WireCommand {
   content?: Blob;
 }
 
+/** A follower read intent: served by the leader's engine, answered by value. */
+export type WireRead =
+  | { kind: 'snapshot'; folder: Uint8Array }
+  | { kind: 'download'; node: Uint8Array };
+
 /** Follower → leader messages. */
 export type FollowerMessage =
   /** A follower announces itself so the leader replies with a `leader` beacon. */
   | { type: 'cb:hello'; clientId: string }
   /** A correlated command; the leader answers with a matching `response`. */
   | { type: 'cb:command'; clientId: string; requestId: number; wire: WireCommand }
+  /** A correlated read; the leader answers with a value-bearing `response`. */
+  | { type: 'cb:read'; clientId: string; requestId: number; read: WireRead }
   /** This tab's currently open folder (for the leader's focus-window union). */
   | { type: 'cb:focus'; clientId: string; node: Uint8Array | null }
   /** A follower is leaving (tab close / transport teardown). */
@@ -59,8 +66,21 @@ export type LeaderMessage =
   | { type: 'cb:leader'; token: string }
   /** The current leader is stepping down (graceful teardown); re-arm the gate. */
   | { type: 'cb:leaderGone'; token: string }
-  /** The correlated result of a follower's command. */
-  | { type: 'cb:response'; token: string; clientId: string; requestId: number; ok: true }
+  /**
+   * The correlated result of a follower's command or read. A snapshot read's
+   * ok carries `result`; a download's carries `content` as a `Blob` — the
+   * structured clone per receiver shares the immutable backing store, so the
+   * cross-tab hop copies no bytes (same rationale as `hoistContent`).
+   */
+  | {
+      type: 'cb:response';
+      token: string;
+      clientId: string;
+      requestId: number;
+      ok: true;
+      result?: SnapshotDescriptor;
+      content?: Blob;
+    }
   | {
       type: 'cb:response';
       token: string;

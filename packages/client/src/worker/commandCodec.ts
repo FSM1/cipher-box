@@ -11,10 +11,18 @@ import type {
   CommandDescriptor,
   EventDescriptor,
   NodeKind,
+  OpProgressPhase,
   Permission,
+  SnapshotDescriptor,
   Staleness,
 } from './protocol.js';
-import type { EngineWasm, WasmCommand, WasmEvent, WasmNodeId } from './engineWasm.js';
+import type {
+  EngineWasm,
+  WasmCommand,
+  WasmEvent,
+  WasmNodeId,
+  WasmSnapshotView,
+} from './engineWasm.js';
 
 function nodeId(wasm: EngineWasm, bytes: Uint8Array): WasmNodeId {
   return wasm.NodeId.fromBytes(bytes);
@@ -107,6 +115,33 @@ function staleness(wasm: EngineWasm, level: number): Staleness {
   }
 }
 
+function opPhase(wasm: EngineWasm, phase: number | undefined): OpProgressPhase {
+  switch (phase) {
+    case wasm.OpPhase.DownloadStarted:
+      return 'downloadStarted';
+    case wasm.OpPhase.DownloadCompleted:
+      return 'downloadCompleted';
+    case wasm.OpPhase.DownloadFailed:
+      return 'downloadFailed';
+    default:
+      // Fail closed: an unmapped value means a JS/WASM version mismatch, not a
+      // safe-to-ignore state (the event pump turns this throw into a fatal).
+      throw new Error(`unknown WASM op phase value: ${phase}`);
+  }
+}
+
+function nodeKindFrom(wasm: EngineWasm, kind: number): NodeKind {
+  switch (kind) {
+    case wasm.NodeKind.File:
+      return 'file';
+    case wasm.NodeKind.Folder:
+      return 'folder';
+    default:
+      // Fail closed: an unmapped value means a JS/WASM version mismatch.
+      throw new Error(`unknown WASM node kind value: ${kind}`);
+  }
+}
+
 export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
   switch (event.kind) {
     case 'snapshotUpdated':
@@ -122,9 +157,44 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
       return { kind: 'deadLetter', opId: event.opId ?? 0n };
     case 'attributableAbuse':
       return { kind: 'attributableAbuse', description: event.description ?? '' };
+    case 'renewalFailed':
+      return {
+        kind: 'renewalFailed',
+        routingKey: event.routingKey ?? '',
+        detail: event.detail ?? '',
+      };
+    case 'opProgress':
+      return {
+        kind: 'opProgress',
+        opId: event.opId ?? null,
+        node: event.node ?? new Uint8Array(),
+        phase: opPhase(wasm, event.phase),
+        error: event.error ?? null,
+      };
     default:
       // Fail closed: an unmapped kind means a JS/WASM version mismatch, not a
       // safe-to-ignore event (the event pump turns this throw into a fatal).
       throw new Error(`unknown WASM event kind: ${event.kind}`);
   }
+}
+
+/** Reads a wasm-bindgen `SnapshotView`'s key-free getters into a descriptor. */
+export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): SnapshotDescriptor {
+  return {
+    root: view.root,
+    folder: view.folder,
+    children: view.children.map((child) => ({
+      id: child.id,
+      name: child.name,
+      kind: nodeKindFrom(wasm, child.kind),
+      size: child.size ?? null,
+      mtime: child.mtime ?? null,
+      pending: child.pending,
+      deadLetter: child.deadLetter,
+      contentVersion: child.contentVersion,
+    })),
+    ancestors: view.ancestors.map((ancestor) => ({ id: ancestor.id, name: ancestor.name })),
+    deadLetters: [...view.deadLetters],
+    staleness: staleness(wasm, view.staleness),
+  };
 }

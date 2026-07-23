@@ -21,9 +21,27 @@ interface BoundaryOutcome {
   error?: string;
 }
 
+/** A page.evaluate-safe projection of the snapshot read surface. */
+interface SnapshotSuiteResult {
+  rootEchoed: boolean;
+  children: Array<{
+    name: string;
+    kind: string;
+    pending: boolean;
+    deadLetter: boolean;
+    sizeNull: boolean;
+    mtimeNull: boolean;
+  }>;
+  nestedAncestors: Array<{ idHex: string; name: string }>;
+  rootHex: string;
+  unknownError: string;
+  downloadError: string;
+}
+
 declare global {
   interface Window {
     runRealEngine(): Promise<RealEngineResult>;
+    runSnapshotSuite(): Promise<SnapshotSuiteResult>;
     runFakeOutOfOrder(): Promise<{ order: string[] }>;
     runFakeEvents(): Promise<{ events: number[] }>;
     runBoundary(name: string): Promise<BoundaryOutcome>;
@@ -83,6 +101,62 @@ window.runRealEngine = async (): Promise<RealEngineResult> => {
   });
 
   return result;
+};
+
+function hex(bytes: Uint8Array): string {
+  let out = '';
+  for (const byte of bytes) out += byte.toString(16).padStart(2, '0');
+  return out;
+}
+
+window.runSnapshotSuite = async (): Promise<SnapshotSuiteResult> => {
+  const { facade, transport } = facadeOver(realWorker());
+  try {
+    await facade.start(new Uint8Array(32).fill(1).buffer);
+
+    // Metadata-only creates: pending overlay entries with no content plane.
+    const root = new Uint8Array(16);
+    await facade.create(root, 'docs', 'folder');
+    await facade.create(root, 'pending.txt', 'file', null);
+
+    const view = await facade.snapshot(root);
+    const docs = view.children.find((child) => child.name === 'docs');
+    const file = view.children.find((child) => child.name === 'pending.txt');
+    if (!docs || !file) throw new Error('created children missing from the root snapshot');
+
+    const nested = await facade.snapshot(docs.id);
+
+    let unknownError = '';
+    await facade.snapshot(new Uint8Array(16).fill(0x5a)).catch((error: unknown) => {
+      unknownError = message(error);
+    });
+
+    let downloadError = '';
+    await facade.download(file.id).catch((error: unknown) => {
+      downloadError = message(error);
+    });
+
+    return {
+      rootEchoed: hex(view.folder) === hex(view.root) && hex(view.root) === hex(root),
+      children: view.children.map((child) => ({
+        name: child.name,
+        kind: child.kind,
+        pending: child.pending,
+        deadLetter: child.deadLetter,
+        sizeNull: child.size === null,
+        mtimeNull: child.mtime === null,
+      })),
+      nestedAncestors: nested.ancestors.map((ancestor) => ({
+        idHex: hex(ancestor.id),
+        name: ancestor.name,
+      })),
+      rootHex: hex(view.root),
+      unknownError,
+      downloadError,
+    };
+  } finally {
+    transport.close();
+  }
 };
 
 window.runFakeOutOfOrder = async (): Promise<{ order: string[] }> => {

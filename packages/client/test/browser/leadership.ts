@@ -15,6 +15,24 @@ const JOURNAL_STORE = 'ops';
 interface HarnessOptions {
   lockName: string;
   channelName: string;
+  /** Which engine worker the leader spawns: the journal fake (default) or the real WASM engine. */
+  worker?: 'journal' | 'engine';
+}
+
+/** A page.evaluate-safe snapshot projection (bytes as hex, bigints dropped). */
+interface SnapshotResult {
+  error?: string;
+  rootHex?: string;
+  folderHex?: string;
+  children?: Array<{
+    idHex: string;
+    name: string;
+    kind: string;
+    pending: boolean;
+    sizeNull: boolean;
+    mtimeNull: boolean;
+  }>;
+  ancestors?: Array<{ idHex: string; name: string }>;
 }
 
 declare global {
@@ -23,6 +41,9 @@ declare global {
     cbRole(): string;
     cbStart(): Promise<string>;
     cbCreateFile(name: string): Promise<string>;
+    cbCreateNode(name: string, kind: 'file' | 'folder'): Promise<string>;
+    cbSnapshot(folderHex: string): Promise<SnapshotResult>;
+    cbDownload(nodeHex: string): Promise<{ bytes?: number[]; error?: string }>;
     cbDispose(): Promise<void>;
     cbJournalCount(): Promise<number>;
     cbJournalRecords(): Promise<unknown[]>;
@@ -40,16 +61,33 @@ function settle(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-window.cbCreate = ({ lockName, channelName }: HarnessOptions): Promise<void> => {
+// A valid secp256k1 identity scalar placeholder (the journal fake ignores it).
+const secret = (): ArrayBuffer => new Uint8Array(32).fill(1).buffer;
+
+function hex(bytes: Uint8Array): string {
+  let out = '';
+  for (const byte of bytes) out += byte.toString(16).padStart(2, '0');
+  return out;
+}
+
+function unhex(text: string): Uint8Array {
+  const bytes = new Uint8Array(text.length / 2);
+  for (let i = 0; i < bytes.length; i += 1) bytes[i] = parseInt(text.slice(i * 2, i * 2 + 2), 16);
+  return bytes;
+}
+
+window.cbCreate = ({ lockName, channelName, worker }: HarnessOptions): Promise<void> => {
+  const workerUrl =
+    worker === 'engine'
+      ? new URL('./engine.worker.ts', import.meta.url)
+      : new URL('./journalEngine.worker.ts', import.meta.url);
   client = new EngineClient({
     locks: navigator.locks,
     lockName,
     createChannel: () => new BroadcastChannel(channelName),
-    spawnWorker: () =>
-      new Worker(new URL('./journalEngine.worker.ts', import.meta.url), { type: 'module' }),
-    // Failover re-derivation: a real login re-exports this from Core Kit; the
-    // suite only needs a non-key placeholder to drive the cold-start path.
-    secretSource: { provideSecret: () => Promise.resolve(new ArrayBuffer(8)) },
+    spawnWorker: () => new Worker(workerUrl, { type: 'module' }),
+    // Failover re-derivation: a real login re-exports this from Core Kit.
+    secretSource: { provideSecret: () => Promise.resolve(secret()) },
   });
   // Let the lock election settle so role() is meaningful to the caller.
   return new Promise<void>((resolve) => setTimeout(resolve, 50));
@@ -59,7 +97,7 @@ window.cbRole = (): string => client?.currentRole() ?? 'none';
 
 window.cbStart = async (): Promise<string> => {
   try {
-    await client!.facade.start(new ArrayBuffer(8));
+    await client!.facade.start(secret());
     return 'ok';
   } catch (error) {
     return settle(error);
@@ -72,6 +110,48 @@ window.cbCreateFile = async (name: string): Promise<string> => {
     return 'ok';
   } catch (error) {
     return settle(error);
+  }
+};
+
+window.cbCreateNode = async (name: string, kind: 'file' | 'folder'): Promise<string> => {
+  try {
+    await client!.facade.create(rootNode, name, kind, null);
+    return 'ok';
+  } catch (error) {
+    return settle(error);
+  }
+};
+
+window.cbSnapshot = async (folderHex: string): Promise<SnapshotResult> => {
+  try {
+    const view = await client!.facade.snapshot(unhex(folderHex));
+    return {
+      rootHex: hex(view.root),
+      folderHex: hex(view.folder),
+      children: view.children.map((child) => ({
+        idHex: hex(child.id),
+        name: child.name,
+        kind: child.kind,
+        pending: child.pending,
+        sizeNull: child.size === null,
+        mtimeNull: child.mtime === null,
+      })),
+      ancestors: view.ancestors.map((ancestor) => ({
+        idHex: hex(ancestor.id),
+        name: ancestor.name,
+      })),
+    };
+  } catch (error) {
+    return { error: settle(error) };
+  }
+};
+
+window.cbDownload = async (nodeHex: string): Promise<{ bytes?: number[]; error?: string }> => {
+  try {
+    const content = await client!.facade.download(unhex(nodeHex));
+    return { bytes: [...new Uint8Array(content)] };
+  } catch (error) {
+    return { error: settle(error) };
   }
 };
 

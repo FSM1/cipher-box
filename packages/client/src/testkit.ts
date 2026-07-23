@@ -9,7 +9,24 @@
 import type { BroadcastChannelLike } from './broadcast.js';
 import type { LockManagerLike, LockRequestCallback } from './leadership.js';
 import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './transport.js';
-import type { CommandDescriptor, EventDescriptor, WorkerMessage } from './worker/protocol.js';
+import type {
+  CommandDescriptor,
+  EventDescriptor,
+  SnapshotDescriptor,
+  WorkerMessage,
+} from './worker/protocol.js';
+
+/** A minimal empty snapshot descriptor for transport-plumbing assertions. */
+export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): SnapshotDescriptor {
+  return {
+    root: new Uint8Array(16),
+    folder,
+    children: [],
+    ancestors: [],
+    deadLetters: [],
+    staleness: 'fresh',
+  };
+}
 
 /** A same-origin broadcast bus: a posted message reaches every *other* channel. */
 export class FakeBus {
@@ -128,9 +145,15 @@ export class FakeLockManager implements LockManagerLike {
 /** A minimal in-process EngineTransport for relay/orchestrator tests. */
 export class FakeEngineTransport implements EngineTransport {
   readonly commands: CommandDescriptor[] = [];
+  readonly snapshots: Uint8Array[] = [];
+  readonly downloads: Uint8Array[] = [];
   started: ArrayBuffer[] = [];
   closed = false;
   respond: (command: CommandDescriptor) => Promise<void> = () => Promise.resolve();
+  respondSnapshot: (folder: Uint8Array) => Promise<SnapshotDescriptor> = (folder) =>
+    Promise.resolve(emptySnapshot(folder));
+  respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
+    Promise.resolve(new ArrayBuffer(0));
   private readonly listeners = new Set<EngineEventListener>();
 
   start(secret: ArrayBuffer): Promise<void> {
@@ -141,6 +164,16 @@ export class FakeEngineTransport implements EngineTransport {
   command(command: CommandDescriptor): Promise<void> {
     this.commands.push(command);
     return this.respond(command);
+  }
+
+  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
+    this.snapshots.push(folder);
+    return this.respondSnapshot(folder);
+  }
+
+  download(node: Uint8Array): Promise<ArrayBuffer> {
+    this.downloads.push(node);
+    return this.respondDownload(node);
   }
 
   subscribe(listener: EngineEventListener): () => void {
