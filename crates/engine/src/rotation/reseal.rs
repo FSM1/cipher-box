@@ -253,9 +253,10 @@ pub fn reseal_scope_root<E: Entropy>(
         // Terminal-owner cleanup: the payload owns its own zeroizing copy, so wipe
         // this local write-seed copy before the next iteration.
         write_seed.zeroize();
-        let ephemeral = fill::<32, E>(entropy)?;
+        let mut ephemeral = fill::<32, E>(entropy)?;
         let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_GRANT_BLOB);
         let sealed = seal_grant_blob(&recipient_pub, &ephemeral, &ctx, &payload);
+        ephemeral.zeroize();
         let signature = sign_over(
             STRUCT_TAG_GRANT_BLOB,
             Some(entry.tag),
@@ -275,9 +276,10 @@ pub fn reseal_scope_root<E: Entropy>(
     // --- Owner blob: the override seed wrapped to the owner. ---
     let owner_blob = {
         let payload = OverrideSeedPayload::new(*seeds.override_seed, read_epoch);
-        let ephemeral = fill::<32, E>(entropy)?;
+        let mut ephemeral = fill::<32, E>(entropy)?;
         let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_OWNER_BLOB);
         let sealed = seal_owner_blob(identity.owner_enc_pub, &ephemeral, &ctx, &payload);
+        ephemeral.zeroize();
         let signature = sign_over(STRUCT_TAG_OWNER_BLOB, None, &sealed.ciphertext, read_epoch);
         SignedOwnerBlob {
             enc: sealed.enc,
@@ -294,7 +296,7 @@ pub fn reseal_scope_root<E: Entropy>(
     // authenticates from the envelope. ---
     let owner_write_blob = {
         let payload = OwnerWriteBlobPayload::new(*seeds.write_scope_seed, seeds.write_epoch);
-        let ephemeral = fill::<32, E>(entropy)?;
+        let mut ephemeral = fill::<32, E>(entropy)?;
         let ctx = ctx_for(
             identity.v,
             scope_id,
@@ -302,6 +304,7 @@ pub fn reseal_scope_root<E: Entropy>(
             STRUCT_TAG_OWNER_WRITE_BLOB,
         );
         let sealed = seal_owner_write_blob(identity.owner_enc_pub, &ephemeral, &ctx, &payload);
+        ephemeral.zeroize();
         let signature = sign_over(
             STRUCT_TAG_OWNER_WRITE_BLOB,
             None,
@@ -321,9 +324,10 @@ pub fn reseal_scope_root<E: Entropy>(
     let ascent_link = match identity.parent_node_seed {
         Some(parent_node_seed) => {
             let payload = OverrideSeedPayload::new(*seeds.override_seed, read_epoch);
-            let ephemeral = fill::<32, E>(entropy)?;
+            let mut ephemeral = fill::<32, E>(entropy)?;
             let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_ASCENT_LINK);
             let link = seal_ascent_link(parent_node_seed, &ephemeral, &ctx, &payload);
+            ephemeral.zeroize();
             let signature = sign_over(STRUCT_TAG_ASCENT_LINK, None, &link.ciphertext, read_epoch);
             Some(SignedAscentLink {
                 ascent_public: link.ascent_public,
