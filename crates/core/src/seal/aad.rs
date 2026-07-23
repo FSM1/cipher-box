@@ -58,6 +58,10 @@ pub const STRUCT_TAG_HISTORY_LINK: u8 = 0x06;
 pub const STRUCT_TAG_POINTER_PAYLOAD: u8 = 0x07;
 /// `mailbox-payload` — the HPKE-sealed mailbox item (later slice).
 pub const STRUCT_TAG_MAILBOX_PAYLOAD: u8 = 0x08;
+/// `owner-write-blob` — the write-scope seed HPKE-sealed to the owner's enc
+/// subkey, the write-plane mirror of the owner blob (owner cold-start write-seed
+/// recovery; blueprint/core.md "Grant section").
+pub const STRUCT_TAG_OWNER_WRITE_BLOB: u8 = 0x09;
 
 /// One registry entry's frozen, machine-checkable metadata: the structure's
 /// stable name and its domain-separation byte. The KAT manifest freezes this
@@ -68,7 +72,7 @@ pub struct StructTagSpec {
     pub tag: u8,
 }
 
-/// The eight structure tags, in registry (byte) order. Every new tag extends
+/// The nine structure tags, in registry (byte) order. Every new tag extends
 /// this table and its manifest vectors before merge (blueprint/core.md); this
 /// slice populates and exercises only `read-body`.
 pub const STRUCT_TAGS: &[StructTagSpec] = &[
@@ -103,6 +107,10 @@ pub const STRUCT_TAGS: &[StructTagSpec] = &[
     StructTagSpec {
         name: "mailbox-payload",
         tag: STRUCT_TAG_MAILBOX_PAYLOAD,
+    },
+    StructTagSpec {
+        name: "owner-write-blob",
+        tag: STRUCT_TAG_OWNER_WRITE_BLOB,
     },
 ];
 
@@ -161,7 +169,7 @@ mod tests {
             // Registry order is byte order, and bytes are 1-based dense.
             assert_eq!(s.tag as usize, i + 1, "tag {} out of byte order", s.name);
         }
-        assert_eq!(STRUCT_TAGS.len(), 8, "the frozen byte-space is eight tags");
+        assert_eq!(STRUCT_TAGS.len(), 9, "the frozen byte-space is nine tags");
     }
 
     #[test]

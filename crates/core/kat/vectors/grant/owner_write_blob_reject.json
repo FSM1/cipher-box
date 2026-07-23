@@ -1,0 +1,92 @@
+[
+  {
+    "name": "write-scope-seed-wrong-length",
+    "hex": "a26a777269746545706f6368036e777269746553636f706553656564581f66666666666666666666666666666666666666666666666666666666666666",
+    "check": "invalid-field-length",
+    "class": "malformed"
+  },
+  {
+    "name": "missing-write-epoch",
+    "hex": "a16e777269746553636f70655365656458206666666666666666666666666666666666666666666666666666666666666666",
+    "check": "missing-field",
+    "class": "malformed"
+  },
+  {
+    "name": "tampered-ciphertext",
+    "recipientSecret": "32333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f5051",
+    "enc": "a6244664d91d63fce62edf776cbfda72c88b68025f05cb0ca76c460d37fb8d30",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 3,
+    "structTag": 9,
+    "ciphertext": "0a2f4bb0479ef3f7f60a66d4b4d3b577a471a80dd8e87073622c6f35e21f5147db59dd02aebbb439fb71725dbc1f94242bad7f55d3a5e2174d9afae6c6fa5186cacabf83d6e6253e33d9570ec913",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "tampered-tag",
+    "recipientSecret": "32333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f5051",
+    "enc": "a6244664d91d63fce62edf776cbfda72c88b68025f05cb0ca76c460d37fb8d30",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 3,
+    "structTag": 9,
+    "ciphertext": "0b2f4bb0479ef3f7f60a66d4b4d3b577a471a80dd8e87073622c6f35e21f5147db59dd02aebbb439fb71725dbc1f94242bad7f55d3a5e2174d9afae6c6fa5186cacabf83d6e6253e33d9570ec912",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "truncated-ciphertext",
+    "recipientSecret": "32333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f5051",
+    "enc": "a6244664d91d63fce62edf776cbfda72c88b68025f05cb0ca76c460d37fb8d30",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 3,
+    "structTag": 9,
+    "ciphertext": "0b2f4bb0479ef3f7f60a66d4b4d3b577a471a80dd8e87073622c6f35e21f5147db59dd02aebbb439fb71725dbc1f94242bad7f55d3a5e2174d9afae6c6fa5186cacabf83d6e6",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "struct-tag-transplant",
+    "recipientSecret": "32333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f5051",
+    "enc": "a6244664d91d63fce62edf776cbfda72c88b68025f05cb0ca76c460d37fb8d30",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 3,
+    "structTag": 4,
+    "ciphertext": "0b2f4bb0479ef3f7f60a66d4b4d3b577a471a80dd8e87073622c6f35e21f5147db59dd02aebbb439fb71725dbc1f94242bad7f55d3a5e2174d9afae6c6fa5186cacabf83d6e6253e33d9570ec913",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "scope-transplant",
+    "recipientSecret": "32333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f5051",
+    "enc": "a6244664d91d63fce62edf776cbfda72c88b68025f05cb0ca76c460d37fb8d30",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+    "epoch": 3,
+    "structTag": 9,
+    "ciphertext": "0b2f4bb0479ef3f7f60a66d4b4d3b577a471a80dd8e87073622c6f35e21f5147db59dd02aebbb439fb71725dbc1f94242bad7f55d3a5e2174d9afae6c6fa5186cacabf83d6e6253e33d9570ec913",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "write-epoch-transplant",
+    "recipientSecret": "32333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f5051",
+    "enc": "a6244664d91d63fce62edf776cbfda72c88b68025f05cb0ca76c460d37fb8d30",
+    "v": 2,
+    "id": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "scope": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+    "epoch": 4,
+    "structTag": 9,
+    "ciphertext": "0b2f4bb0479ef3f7f60a66d4b4d3b577a471a80dd8e87073622c6f35e21f5147db59dd02aebbb439fb71725dbc1f94242bad7f55d3a5e2174d9afae6c6fa5186cacabf83d6e6253e33d9570ec913",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  }
+]

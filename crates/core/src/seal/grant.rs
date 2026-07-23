@@ -403,6 +403,147 @@ pub fn open_owner_blob(
 }
 
 // ---------------------------------------------------------------------------
+// Owner-write-blob payload: the write-scope seed HPKE-sealed to the owner enc
+// subkey (the write-plane mirror of the owner blob).
+// ---------------------------------------------------------------------------
+
+/// An owner-write-blob's sealed plaintext: the scope's random `writeScopeSeed`
+/// (a KDF non-edge, not derivable from the login secret) plus the write epoch it
+/// belongs to. It hands an owner cold-starting on a fresh device the one input
+/// they cannot re-derive, so they can source `write_name_signer` and renew their
+/// own records (blueprint/core.md "Grant section"). Sealed to the owner's own enc
+/// subkey; never shared with the ascent link (which would leak write capability
+/// to ancestor read-only readers). The seed is secret material in a zeroizing
+/// owning type; read it through [`Self::write_scope_seed`].
+#[derive(Clone)]
+pub struct OwnerWriteBlobPayload {
+    write_scope_seed: SecretBytes,
+    /// The write epoch this write-scope seed belongs to.
+    pub write_epoch: u64,
+    /// Preserved unknown fields (never any of the known keys).
+    pub unknown: Vec<(String, Value)>,
+}
+
+const OWNER_WRITE_BLOB_KNOWN: &[&str] = &["writeEpoch", "writeScopeSeed"];
+
+impl OwnerWriteBlobPayload {
+    /// An owner-write-blob payload with no preserved unknown fields.
+    pub fn new(write_scope_seed: [u8; SECRET_LEN], write_epoch: u64) -> Self {
+        Self {
+            write_scope_seed: SecretBytes::new(write_scope_seed),
+            write_epoch,
+            unknown: Vec::new(),
+        }
+    }
+
+    /// Borrow the write-scope seed.
+    pub fn write_scope_seed(&self) -> &[u8; SECRET_LEN] {
+        self.write_scope_seed.as_bytes()
+    }
+}
+
+impl fmt::Debug for OwnerWriteBlobPayload {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OwnerWriteBlobPayload")
+            .field("write_scope_seed", &"<redacted>")
+            .field("write_epoch", &self.write_epoch)
+            .field("unknown", &self.unknown)
+            .finish()
+    }
+}
+
+impl PartialEq for OwnerWriteBlobPayload {
+    fn eq(&self, other: &Self) -> bool {
+        self.write_scope_seed.as_bytes() == other.write_scope_seed.as_bytes()
+            && self.write_epoch == other.write_epoch
+            && self.unknown == other.unknown
+    }
+}
+
+impl Eq for OwnerWriteBlobPayload {}
+
+/// Decode an owner-write-blob plaintext (strict det-CBOR, unknown fields
+/// preserved).
+///
+/// The transient decoded tree carries a verbatim copy of the write-scope seed; it
+/// lands in a zeroizing owner, but the tree itself is scrubbed on drop via
+/// [`ScrubOwned`] (terminal-owner rule, symmetric with
+/// [`encode_owner_write_blob_payload`]).
+pub fn decode_owner_write_blob_payload(bytes: &[u8]) -> Result<OwnerWriteBlobPayload, CodecError> {
+    let value = ScrubOwned(decode(bytes)?);
+    let map = value.value().as_map()?;
+    let write_scope_seed =
+        bytes_fixed::<SECRET_LEN>(req(map, "writeScopeSeed")?, "writeScopeSeed")?;
+    let write_epoch = req(map, "writeEpoch")?.as_unsigned()?;
+    Ok(OwnerWriteBlobPayload {
+        write_scope_seed: SecretBytes::new(write_scope_seed),
+        write_epoch,
+        unknown: collect_unknown(map, OWNER_WRITE_BLOB_KNOWN),
+    })
+}
+
+/// Encode an owner-write-blob payload to its canonical det-CBOR plaintext. The
+/// buffer carries the seed verbatim; its caller is the terminal owner and must
+/// zeroize it ([`seal_owner_write_blob`] does).
+pub fn encode_owner_write_blob_payload(payload: &OwnerWriteBlobPayload) -> Vec<u8> {
+    let mut m = Map::new();
+    m.insert("writeEpoch", Value::Unsigned(payload.write_epoch));
+    m.insert(
+        "writeScopeSeed",
+        Value::Bytes(payload.write_scope_seed.as_bytes().to_vec()),
+    );
+    merge_unknown(&mut m, &payload.unknown);
+    // Whole-tree scrub via the drop guard (terminal-owner rule); the returned
+    // buffer stays the seal path's to zeroize.
+    let mut value = Value::Map(m);
+    let guard = ScrubOnDrop(&mut value);
+    encode(guard.0)
+}
+
+/// HPKE-seal an owner-write-blob to the owner's encryption subkey under the
+/// owner-write-blob AAD for `ctx` (`struct_tag` must be
+/// [`super::STRUCT_TAG_OWNER_WRITE_BLOB`], `epoch` the **write** epoch). The
+/// encoded plaintext (carrying the write-scope seed) is zeroized here.
+pub fn seal_owner_write_blob(
+    owner_enc_pub: &X25519Public,
+    ephemeral_scalar: &[u8; 32],
+    ctx: &AadContext,
+    payload: &OwnerWriteBlobPayload,
+) -> HpkeCiphertext {
+    let mut plaintext = encode_owner_write_blob_payload(payload);
+    let sealed = hpke::hpke_seal(
+        owner_enc_pub,
+        ephemeral_scalar,
+        GRANT_HPKE_INFO,
+        &build_aad(ctx),
+        &plaintext,
+    );
+    plaintext.zeroize();
+    sealed
+}
+
+/// Open an owner-write-blob with the owner's encryption subkey secret. Fails
+/// closed with [`TrustViolation::HpkeOpenFailed`] on a tag mismatch (tampering,
+/// or an `enc`/AAD transplant across struct-tag/scope/writeEpoch).
+pub fn open_owner_write_blob(
+    owner_enc_secret: &X25519Secret,
+    enc: &[u8; ENC_LEN],
+    ctx: &AadContext,
+    ciphertext: &[u8],
+) -> Result<OwnerWriteBlobPayload, CodecError> {
+    // `hpke_open` returns `Zeroizing<Vec<u8>>`, so this seed-bearing plaintext is
+    // wiped on drop — no explicit zeroize needed at this terminal owner.
+    let plaintext = hpke::hpke_open(
+        owner_enc_secret,
+        enc,
+        GRANT_HPKE_INFO,
+        &build_aad(ctx),
+        ciphertext,
+    )?;
+    decode_owner_write_blob_payload(&plaintext)
+}
+
+// ---------------------------------------------------------------------------
 // Ascent link: plaintext public half + HPKE-sealed override seed.
 // ---------------------------------------------------------------------------
 
@@ -851,6 +992,49 @@ mod tests {
         let sealed = seal_owner_blob(&owner.public(), &[0x56; 32], &ctx, &payload);
         let opened = open_owner_blob(&owner, &sealed.enc, &ctx, &sealed.ciphertext).unwrap();
         assert_eq!(opened, payload);
+    }
+
+    #[test]
+    fn owner_write_blob_payload_round_trips_byte_stable() {
+        let payload = OwnerWriteBlobPayload::new([0x66; 32], 9);
+        let bytes = encode_owner_write_blob_payload(&payload);
+        let decoded = decode_owner_write_blob_payload(&bytes).expect("decodes");
+        assert_eq!(decoded, payload);
+        assert_eq!(
+            encode_owner_write_blob_payload(&decoded),
+            bytes,
+            "byte-stable"
+        );
+        assert_eq!(decoded.write_scope_seed(), &[0x66; 32]);
+    }
+
+    #[test]
+    fn owner_write_blob_seal_open_round_trip_and_transplant_fails() {
+        let owner = X25519Secret::from_scalar([0x32; 32]);
+        // The AAD binds the WRITE epoch (the write plane's own clock).
+        let ctx = grant_ctx(super::super::STRUCT_TAG_OWNER_WRITE_BLOB);
+        let payload = OwnerWriteBlobPayload::new([0x66; 32], 9);
+        let sealed = seal_owner_write_blob(&owner.public(), &[0x58; 32], &ctx, &payload);
+        let opened = open_owner_write_blob(&owner, &sealed.enc, &ctx, &sealed.ciphertext).unwrap();
+        assert_eq!(opened, payload);
+        // A struct-tag transplant recomputes a different AAD → the tag fails.
+        let mut wrong = ctx;
+        wrong.struct_tag = super::super::STRUCT_TAG_OWNER_BLOB;
+        assert_eq!(
+            open_owner_write_blob(&owner, &sealed.enc, &wrong, &sealed.ciphertext)
+                .unwrap_err()
+                .check(),
+            "hpke-open-failed"
+        );
+        // A writeEpoch (AAD epoch) transplant also fails the tag.
+        let mut wrong_epoch = ctx;
+        wrong_epoch.epoch += 1;
+        assert_eq!(
+            open_owner_write_blob(&owner, &sealed.enc, &wrong_epoch, &sealed.ciphertext)
+                .unwrap_err()
+                .check(),
+            "hpke-open-failed"
+        );
     }
 
     #[test]

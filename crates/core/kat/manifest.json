@@ -51,6 +51,7 @@
     "history-link": 6,
     "mailbox-payload": 8,
     "owner-blob": 4,
+    "owner-write-blob": 9,
     "pointer-payload": 7,
     "read-body": 1,
     "write-body": 2
@@ -267,6 +268,7 @@
     "writeBodyStructTag": 2,
     "grantBlobStructTag": 3,
     "ownerBlobStructTag": 4,
+    "ownerWriteBlobStructTag": 9,
     "ascentLinkStructTag": 5,
     "historyLinkStructTag": 6,
     "writeBodyAccept": {
@@ -311,6 +313,19 @@
         "invalid-field-length"
       ]
     },
+    "ownerWriteBlobAccept": {
+      "file": "vectors/grant/owner_write_blob_accept.json",
+      "count": 1
+    },
+    "ownerWriteBlobReject": {
+      "file": "vectors/grant/owner_write_blob_reject.json",
+      "count": 8,
+      "checks": [
+        "hpke-open-failed",
+        "missing-field",
+        "invalid-field-length"
+      ]
+    },
     "ascentLinkAccept": {
       "file": "vectors/grant/ascent_link_accept.json",
       "count": 1
@@ -337,11 +352,11 @@
     },
     "structureSigAccept": {
       "file": "vectors/grant/structure_sig_accept.json",
-      "count": 2
+      "count": 3
     },
     "structureSigReject": {
       "file": "vectors/grant/structure_sig_reject.json",
-      "count": 3,
+      "count": 4,
       "checks": [
         "structure-signature-invalid"
       ]
