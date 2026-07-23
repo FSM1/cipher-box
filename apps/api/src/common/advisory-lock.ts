@@ -146,6 +146,19 @@ export async function acquireAdvisoryLocks(manager: EntityManager, keys: bigint[
 }
 
 /**
+ * Set the transaction-local wait bound and acquire a batch of advisory locks in
+ * one call — the pairing every lock-guarded transaction opens with.
+ */
+export async function boundedAcquire(
+  manager: EntityManager,
+  keys: bigint[],
+  timeoutMs: number
+): Promise<void> {
+  await setAdvisoryLockTimeout(manager, timeoutMs);
+  await acquireAdvisoryLocks(manager, keys);
+}
+
+/**
  * Run `work` in a transaction, mapping any `lock_timeout` abort (55P03) — the
  * advisory acquire OR any row lock taken later under the same bound — to the
  * retryable 503, so a contended caller degrades gracefully instead of escaping

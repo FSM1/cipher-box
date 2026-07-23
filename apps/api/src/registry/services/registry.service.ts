@@ -4,12 +4,11 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 import {
-  acquireAdvisoryLocks,
   advisoryLockKey,
+  boundedAcquire,
   pinDurabilityLockKey,
   resolveAdvisoryLockTimeoutMs,
   runLockGuardedTransaction,
-  setAdvisoryLockTimeout,
   withSessionAdvisoryLock,
 } from '../../common/advisory-lock';
 import { NameInventory } from '../entities/name-inventory.entity';
@@ -31,8 +30,7 @@ async function lockTokens(
   tokens: string[],
   timeoutMs: number
 ): Promise<void> {
-  await setAdvisoryLockTimeout(manager, timeoutMs);
-  await acquireAdvisoryLocks(manager, tokens.map(advisoryLockKey));
+  await boundedAcquire(manager, tokens.map(advisoryLockKey), timeoutMs);
 }
 
 export interface RegisterEntry {
@@ -172,11 +170,12 @@ export class RegistryService {
           : [];
         const knownCids = new Set(existingPins.map((row) => row.cid));
         // Idempotent: a CID already counted keeps its size and advisory origin.
+        // All-new rows, so one multi-row INSERT instead of per-row saves.
         const pinWrites = cidOrder
           .filter((cid) => !knownCids.has(cid))
           .map((cid) => ({ accountId, cid, size: '0', advisory }));
         if (pinWrites.length) {
-          await pinRepo.save(pinWrites);
+          await pinRepo.insert(pinWrites);
         }
       });
     }
@@ -211,9 +210,7 @@ export class RegistryService {
 
         const held = await pinRepo.find({ where: { accountId, cid: In(targets) } });
         const heldByCaller = new Set(held.map((row) => row.cid));
-        const heldCids = targets.filter(
-          (target, index) => targets.indexOf(target) === index && heldByCaller.has(target)
-        );
+        const heldCids = [...new Set(targets)].filter((target) => heldByCaller.has(target));
 
         const nameDeleted = await nameRepo.delete({ accountId, ipnsName: In(targets) });
         const pinDeleted = await pinRepo.delete({ accountId, cid: In(targets) });

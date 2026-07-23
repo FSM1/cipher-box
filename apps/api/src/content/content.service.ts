@@ -12,12 +12,11 @@ import { DataSource, EntityManager } from 'typeorm';
 import { User } from '../auth/entities/user.entity';
 import {
   accountLockKey,
-  acquireAdvisoryLocks,
   advisoryLockKey,
+  boundedAcquire,
   pinDurabilityLockKey,
   resolveAdvisoryLockTimeoutMs,
   runLockGuardedTransaction,
-  setAdvisoryLockTimeout,
   withSessionAdvisoryLock,
 } from '../common/advisory-lock';
 import { resolveDbPoolSize } from '../common/db-pool';
@@ -77,7 +76,6 @@ export function resolvePinConcurrency(configService: ConfigService): ResolvedPin
  * revert just the size charge on that pre-existing row rather than delete it.
  */
 interface RegisterOutcome {
-  cid: string;
   size: number;
   created: boolean;
   promoted: boolean;
@@ -168,10 +166,7 @@ export class ContentService {
     // so an unbounded burst would otherwise exhaust the DB pool; the ceiling
     // reserves connections for every other route while the pin is in flight.
     return this.pinSlots.run(() =>
-      // Serialize the whole commit → pin → compensate span per CID with a
-      // session lock, so a concurrent same-CID upload cannot observe a
-      // committed-but-not-yet-pinned row and return success for it (the in-tx
-      // xact lock releases at commit, too early to cover the post-commit pin).
+      // Per-CID session lock spans commit → pin → compensate (see class doc).
       withSessionAdvisoryLock(this.dataSource, pinDurabilityLockKey(cid), this.lockTimeoutMs, () =>
         this.registerAndPin(accountId, cid, size, bytes)
       )
@@ -209,7 +204,7 @@ export class ContentService {
       }
     }
 
-    return { cid: outcome.cid, size: outcome.size };
+    return { cid, size: outcome.size };
   }
 
   private async registerPin(
@@ -218,10 +213,13 @@ export class ContentService {
     cid: string,
     size: number
   ): Promise<RegisterOutcome> {
-    await setAdvisoryLockTimeout(manager, this.lockTimeoutMs);
     // Account key serializes the quota check-then-act; the CID key serializes the
     // pin-row insert against a concurrent register/retire of the same CID.
-    await acquireAdvisoryLocks(manager, [accountLockKey(accountId), advisoryLockKey(cid)]);
+    await boundedAcquire(
+      manager,
+      [accountLockKey(accountId), advisoryLockKey(cid)],
+      this.lockTimeoutMs
+    );
 
     const userRepo = manager.getRepository(User);
     const pinRepo = manager.getRepository(PinnedCid);
@@ -257,7 +255,7 @@ export class ContentService {
     // rather than trusted for content Kubo never held.
     if (existing && BigInt(existing.size) > 0n) {
       // Idempotent re-upload: the CID already counts — no gate, no new charge.
-      return { cid, size: Number(existing.size), created: false, promoted: false };
+      return { size: Number(existing.size), created: false, promoted: false };
     }
 
     // Gate against AUTHORITATIVE rows only: stale advisory rows an account kept
@@ -275,11 +273,11 @@ export class ContentService {
       // authoritative so the charge lands in the hosted sum, then drive the
       // durable pin (`created`) exactly as a fresh insert would.
       await pinRepo.update({ accountId, cid }, { size: size.toString(), advisory: false });
-      return { cid, size, created: true, promoted: true };
+      return { size, created: true, promoted: true };
     }
 
     await pinRepo.insert({ accountId, cid, size: size.toString(), advisory: false });
-    return { cid, size, created: true, promoted: false };
+    return { size, created: true, promoted: false };
   }
 
   /**
@@ -295,8 +293,7 @@ export class ContentService {
   private async compensate(accountId: string, cid: string, promoted: boolean): Promise<void> {
     try {
       const unpin = await runLockGuardedTransaction(this.dataSource, async (manager) => {
-        await setAdvisoryLockTimeout(manager, this.lockTimeoutMs);
-        await acquireAdvisoryLocks(manager, [advisoryLockKey(cid)]);
+        await boundedAcquire(manager, [advisoryLockKey(cid)], this.lockTimeoutMs);
         const pinRepo = manager.getRepository(PinnedCid);
         if (promoted) {
           await pinRepo.update({ accountId, cid }, { size: '0' });

@@ -77,6 +77,16 @@ export class FakeRepository<T extends { id: string }> {
     return row;
   }
 
+  async insert(partials: Partial<T> | Partial<T>[]): Promise<void> {
+    for (const partial of Array.isArray(partials) ? partials : [partials]) {
+      this.rows.push({
+        createdAt: new Date(),
+        ...partial,
+        id: partial.id ?? randomUUID(),
+      } as unknown as T);
+    }
+  }
+
   async update(criteria: Where, patch: Partial<T>): Promise<{ affected: number }> {
     let affected = 0;
     for (const row of this.rows) {
