@@ -19,9 +19,10 @@
 //! crosses as `bigint` and lives in `lib.rs`, not here.
 
 use cipherbox_engine::seams::{
-    BoxedTask, CredentialStore, EndpointId, FloorStore, Http, HttpMethod, HttpRequest,
-    HttpResponse, Mailbox, MailboxItem, OpId, RecordTransport, RefreshHint, RefreshHintSource,
-    Scheduler, SeamError, SeamResult, SnapshotCache, StagingStore, UnixMillis,
+    BoxedTask, CONTENT_LENGTH, CappedFetchError, CredentialStore, EndpointId, FloorStore, Http,
+    HttpMethod, HttpRequest, HttpResponse, Mailbox, MailboxItem, OpId, RecordTransport,
+    RefreshHint, RefreshHintSource, Scheduler, SeamError, SeamResult, SnapshotCache, StagingStore,
+    UnixMillis,
 };
 use core::time::Duration;
 use js_sys::{Array, Object, Reflect, Uint8Array};
@@ -556,6 +557,45 @@ impl Http for HttpAdapter {
             .await
             .map_err(seam_error)?;
         http_response_from_js(response)
+    }
+
+    async fn send_capped(
+        &self,
+        request: HttpRequest,
+        max_bytes: usize,
+    ) -> Result<HttpResponse, CappedFetchError> {
+        // Residual (#787): the JS `HttpSeam.send` materializes the whole body
+        // before it returns here, so this bounds one already-buffered response,
+        // not peak memory. The Content-Length reject and the body-length check
+        // both fail closed on an over-cap block; the true streaming bound must
+        // live in the JS seam (enforce `maxBytes` while reading `Response.body`).
+        let response = self
+            .js
+            .send(http_request_to_js(&request))
+            .await
+            .map_err(|err| CappedFetchError::Transport(seam_error(err)))?;
+        let response = http_response_from_js(response).map_err(CappedFetchError::Transport)?;
+
+        let declared = response
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(CONTENT_LENGTH))
+            .and_then(|(_, value)| value.parse::<u64>().ok());
+        if let Some(declared) = declared {
+            if declared > max_bytes as u64 {
+                return Err(CappedFetchError::BodyTooLarge {
+                    observed: usize::try_from(declared).unwrap_or(usize::MAX),
+                    limit: max_bytes,
+                });
+            }
+        }
+        if response.body.len() > max_bytes {
+            return Err(CappedFetchError::BodyTooLarge {
+                observed: response.body.len(),
+                limit: max_bytes,
+            });
+        }
+        Ok(response)
     }
 }
 

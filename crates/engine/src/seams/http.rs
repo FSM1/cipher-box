@@ -2,7 +2,31 @@
 
 use core::fmt;
 
-use super::SeamResult;
+use super::{SeamError, SeamResult};
+
+/// The `Content-Length` response header, consulted by [`Http::send_capped`] for
+/// an up-front reject before any body bytes are read.
+pub const CONTENT_LENGTH: &str = "content-length";
+
+/// Why a size-capped fetch ([`Http::send_capped`]) did not return a body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CappedFetchError {
+    /// Transport-level failure (unreachable, aborted) — the seam's reserved
+    /// `Err`, an availability signal, not a trust or size decision.
+    Transport(SeamError),
+    /// The response body would exceed `max_bytes`, rejected at the transport
+    /// before the whole body is buffered so a lying/huge gateway cannot force an
+    /// unbounded allocation (the peak-memory bound of #787). Fail-closed and
+    /// terminal: an over-cap block is never adoptable from any source.
+    BodyTooLarge {
+        /// The observed lower bound on the body size — the declared
+        /// `Content-Length` if that alone exceeded the cap, else the bytes
+        /// accumulated when the streaming read passed the cap.
+        observed: usize,
+        /// The enforced ceiling (`max_bytes`).
+        limit: usize,
+    },
+}
 
 /// Formats headers as their names only. Header values ride this seam
 /// carrying live credentials (`Authorization` bearer JWTs, refresh
@@ -111,6 +135,36 @@ impl fmt::Debug for HttpResponse {
 pub trait Http {
     /// Sends one request and resolves with the complete response.
     async fn send(&self, request: HttpRequest) -> SeamResult<HttpResponse>;
+
+    /// Like [`send`](Self::send), but fails closed if the response body would
+    /// exceed `max_bytes`. A conforming transport enforces the bound *while*
+    /// reading the body (a `Content-Length` pre-check plus a capped streaming
+    /// read), so a malicious gateway cannot force an allocation larger than the
+    /// cap — the true peak-memory bound at the content fetch boundary (#787).
+    ///
+    /// The default implementation only backstops: it buffers the whole body via
+    /// [`send`](Self::send) and then checks the length, which bounds nothing.
+    /// The real content-read transports (desktop `reqwest`, the WASM fetch
+    /// bridge) override this with a streaming bound; the default is for seams
+    /// that never carry untrusted content bodies (the fakes, the API-only
+    /// contract transport).
+    async fn send_capped(
+        &self,
+        request: HttpRequest,
+        max_bytes: usize,
+    ) -> Result<HttpResponse, CappedFetchError> {
+        let response = self
+            .send(request)
+            .await
+            .map_err(CappedFetchError::Transport)?;
+        if response.body.len() > max_bytes {
+            return Err(CappedFetchError::BodyTooLarge {
+                observed: response.body.len(),
+                limit: max_bytes,
+            });
+        }
+        Ok(response)
+    }
 }
 
 #[cfg(test)]

@@ -19,7 +19,8 @@ use cipherbox_core::error::{CodecError, TrustViolation};
 use zeroize::Zeroizing;
 
 use super::dag::DAG_ROOT_CODEC;
-use crate::seams::{Http, HttpMethod, HttpRequest};
+use super::limits::MAX_RESOLVED_RECORD_BYTES;
+use crate::seams::{CappedFetchError, Http, HttpMethod, HttpRequest};
 
 const AUTHORIZATION: &str = "Authorization";
 const ACCEPT: &str = "Accept";
@@ -27,17 +28,6 @@ const ACCEPT: &str = "Accept";
 const RAW_BLOCK: &str = "application/vnd.ipld.raw";
 /// Byte offset of the multicodec in the fixed CIDv1 framing (version at 0).
 const CID_CODEC_INDEX: usize = 1;
-
-/// Hard ceiling on a fetched content block, enforced at this fetch boundary
-/// before the block is hashed, decoded, or gated. A resolved record's
-/// envelope-content (grant blobs, history links) rides in an IPFS block fetched
-/// by CID, and the adoption gate then hashes and verifies every structure it
-/// carries — gate work is linear in the fetched byte count. Capping the block
-/// here bounds that work to a fixed budget and fails closed on anything larger,
-/// before any per-structure cost is paid (#742; blueprint/engine.md "Content
-/// plane"). Must exceed the 1 MiB content chunk size; a legitimate leaf or
-/// flat-DAG root fits only up to the flat-DAG ceiling (~108 GiB); see #788.
-const MAX_RESOLVED_RECORD_BYTES: usize = 4 * 1024 * 1024;
 
 /// Which content-plane a fetched CID must address. Core's [`verify_cid`] accepts
 /// any single-byte multicodec (`< 0x80`), not just the frozen content-plane set,
@@ -161,16 +151,26 @@ pub async fn read_block(
         ));
     }
     for source in gateway.sources() {
-        let Some(response) = fetch(source, http, cid_str).await else {
-            continue; // transport-level failure: try the next source
+        let response = match fetch(source, http, cid_str).await {
+            Ok(response) => response,
+            // Transport-level failure is availability: rotate to the next source.
+            Err(CappedFetchError::Transport(_)) => continue,
+            // An over-cap body is terminal and fail-closed — the transport bounds
+            // peak memory before buffering the whole body (#787), and the same
+            // block is over-cap from any source, so it is never retried.
+            Err(CappedFetchError::BodyTooLarge { observed, limit }) => {
+                return Err(ReadError::TooLarge {
+                    size: observed,
+                    limit,
+                });
+            }
         };
         if !(200..300).contains(&response.status) {
             continue; // availability (not found / server error): next source
         }
-        // Fail closed on an oversized block before it is hashed or decoded: gate
-        // work is linear in these bytes, so this cap bounds it at the fetch
-        // boundary (#742), ahead of the verify hash below and all downstream
-        // decode/gate work.
+        // Defense-in-depth backstop behind the transport cap: a seam using the
+        // buffering default (or one that mis-sizes) still cannot slip an over-cap
+        // body past this before it is hashed, decoded, or gated (#742).
         if response.body.len() > MAX_RESOLVED_RECORD_BYTES {
             return Err(ReadError::TooLarge {
                 size: response.body.len(),
@@ -202,13 +202,17 @@ fn is_canonical_content_cid_str(cid_str: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || (b'2'..=b'7').contains(&c))
 }
 
-/// Send the raw-block GET to one source; `None` on a transport-level failure
-/// (the seam's reserved `Err`), which is an availability signal, not a trust one.
+/// Send the raw-block GET to one source under the block-size cap. The transport
+/// bounds peak memory while reading the body (#787): a `Content-Length`
+/// pre-check plus a capped streaming read, so an over-cap body fails closed
+/// ([`CappedFetchError::BodyTooLarge`]) before it is fully allocated. A
+/// transport-level failure ([`CappedFetchError::Transport`]) is an availability
+/// signal, not a trust one.
 async fn fetch(
     source: &GatewaySource,
     http: &impl Http,
     cid_str: &str,
-) -> Option<crate::seams::HttpResponse> {
+) -> Result<crate::seams::HttpResponse, CappedFetchError> {
     let base = source.base_url.trim_end_matches('/');
     let mut headers = vec![(ACCEPT.to_owned(), RAW_BLOCK.to_owned())];
     if let Some(bearer) = &source.bearer {
@@ -223,7 +227,7 @@ async fn fetch(
         headers,
         body: None,
     };
-    http.send(request).await.ok()
+    http.send_capped(request, MAX_RESOLVED_RECORD_BYTES).await
 }
 
 /// The leaf-index range covering the plaintext byte range `[offset, offset +

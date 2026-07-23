@@ -94,4 +94,29 @@ mod tests {
         let http = ScriptedHttp::default();
         assert!(block_on(http.send(request("https://api.test/oops"))).is_err());
     }
+
+    #[test]
+    fn send_capped_rejects_an_over_cap_body_and_admits_one_at_the_cap() {
+        use crate::seams::CappedFetchError;
+
+        let body = |len: usize| HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: vec![0u8; len],
+        };
+        let http = ScriptedHttp::default();
+        http.enqueue_response(body(9)); // over the cap
+        http.enqueue_response(body(8)); // exactly at the cap
+
+        let err = block_on(http.send_capped(request("https://api.test/big"), 8)).unwrap_err();
+        assert_eq!(
+            err,
+            CappedFetchError::BodyTooLarge {
+                observed: 9,
+                limit: 8
+            }
+        );
+        let ok = block_on(http.send_capped(request("https://api.test/ok"), 8)).unwrap();
+        assert_eq!(ok.body.len(), 8, "a body exactly at the cap is admitted");
+    }
 }
