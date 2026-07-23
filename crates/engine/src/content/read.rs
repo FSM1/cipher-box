@@ -28,6 +28,17 @@ const RAW_BLOCK: &str = "application/vnd.ipld.raw";
 /// Byte offset of the multicodec in the fixed CIDv1 framing (version at 0).
 const CID_CODEC_INDEX: usize = 1;
 
+/// Hard ceiling on a fetched content block, enforced at this fetch boundary
+/// before the block is hashed, decoded, or gated. A resolved record's
+/// envelope-content (grant blobs, history links) rides in an IPFS block fetched
+/// by CID, and the adoption gate then hashes and verifies every structure it
+/// carries — gate work is linear in the fetched byte count. Capping the block
+/// here bounds that work to a fixed budget and fails closed on anything larger,
+/// before any per-structure cost is paid (#742; blueprint/engine.md "Content
+/// plane"). Must stay above the production content chunk size (1 MiB) so a
+/// legitimate leaf or root block always fits.
+const MAX_RESOLVED_RECORD_BYTES: usize = 4 * 1024 * 1024;
+
 /// Which content-plane a fetched CID must address. Core's [`verify_cid`] accepts
 /// any single-byte multicodec (`< 0x80`), not just the frozen content-plane set,
 /// so the engine pins the expected codec here and fails closed on a valid-but-
@@ -96,6 +107,16 @@ pub enum ReadError {
     /// integrity violation, surfaced verbatim from core. Terminal — never
     /// retried against another source, never degraded to staleness.
     TrustViolation(CodecError),
+    /// The fetched block exceeded [`MAX_RESOLVED_RECORD_BYTES`]: rejected at the
+    /// fetch boundary before any hash/decode/gate work. Terminal and fail-closed
+    /// — a record over the size bound is never adoptable, so it is not retried
+    /// against another source (#742).
+    TooLarge {
+        /// The oversized response body length.
+        size: usize,
+        /// The enforced ceiling ([`MAX_RESOLVED_RECORD_BYTES`]).
+        limit: usize,
+    },
     /// No source served the block: every gateway failed at the transport or
     /// status level (unreachable, aborted, or non-2xx). Availability, not
     /// integrity — the caller may retry later.
@@ -145,6 +166,16 @@ pub async fn read_block(
         };
         if !(200..300).contains(&response.status) {
             continue; // availability (not found / server error): next source
+        }
+        // Fail closed on an oversized block before it is hashed or decoded: gate
+        // work is linear in these bytes, so this cap bounds it at the fetch
+        // boundary (#742), ahead of the verify hash below and all downstream
+        // decode/gate work.
+        if response.body.len() > MAX_RESOLVED_RECORD_BYTES {
+            return Err(ReadError::TooLarge {
+                size: response.body.len(),
+                limit: MAX_RESOLVED_RECORD_BYTES,
+            });
         }
         // Every 2xx body is verified before it can be returned. A mismatch is a
         // fail-closed trust violation, not a reason to try another source.
@@ -333,6 +364,62 @@ mod tests {
             1,
             "a mismatch does not rotate sources"
         );
+    }
+
+    #[test]
+    fn an_over_cap_block_is_rejected_before_any_hash_or_rotation() {
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        // An over-cap body that would NOT content-address to `leaf.cid`: getting
+        // TooLarge (not a content-cid-mismatch) proves the size gate fired
+        // before verify_cid hashed the body, and before any decode/gate work.
+        http.enqueue_response(raw_response(vec![0u8; MAX_RESOLVED_RECORD_BYTES + 1]));
+        // A good block is queued behind it; a terminal rejection must not consume it.
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+
+        let err = block_on(read_block(
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap_err();
+        assert_eq!(
+            err,
+            ReadError::TooLarge {
+                size: MAX_RESOLVED_RECORD_BYTES + 1,
+                limit: MAX_RESOLVED_RECORD_BYTES,
+            }
+        );
+        assert_eq!(
+            http.requests().len(),
+            1,
+            "an over-cap block is terminal — it does not rotate to another source"
+        );
+    }
+
+    #[test]
+    fn a_block_at_the_cap_passes_the_size_gate_and_reaches_verify() {
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        // Exactly at the cap: the boundary is exclusive (`>`), so this passes the
+        // size gate and reaches verify_cid, which then rejects the garbage bytes
+        // as a content-cid-mismatch — proving at-cap content proceeds.
+        http.enqueue_response(raw_response(vec![0u8; MAX_RESOLVED_RECORD_BYTES]));
+
+        let err = block_on(read_block(
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap_err();
+        match err {
+            ReadError::TrustViolation(e) => assert_eq!(e.check(), "content-cid-mismatch"),
+            other => panic!("expected a content-cid-mismatch, got {other:?}"),
+        }
     }
 
     #[test]
