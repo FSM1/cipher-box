@@ -16,6 +16,8 @@
 //! cross-check is a later slice; a tampered owner blob still fails closed here at
 //! the grant-section structure signature and the read-body unseal.
 
+use core::cell::RefCell;
+
 use cipherbox_core::content::decode_content_cid_str;
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -57,6 +59,10 @@ pub struct RootAdopter<'a, H, F> {
     /// key). A resolved root whose envelope scope disagrees is a scope transplant
     /// the gate rejects fail-closed.
     root_scope_id: [u8; 16],
+    /// The candidate a rejected [`Adopter::adopt`] assembled, kept so the
+    /// equal-floor `Current` recovery ([`Adopter::recover_own_write_seed`])
+    /// reuses it instead of re-fetching the same head block per resolve tick.
+    assembled: RefCell<Option<Candidate>>,
 }
 
 impl<'a, H, F> RootAdopter<'a, H, F> {
@@ -77,6 +83,7 @@ impl<'a, H, F> RootAdopter<'a, H, F> {
             owner_enc_secret,
             owner_identity,
             root_scope_id,
+            assembled: RefCell::new(None),
         }
     }
 }
@@ -180,7 +187,15 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         // Step 7 — the gate owns all trust; the owner reader surfaces no gate write
         // seed (that arm is the write-grantee's). The owner's own write-scope seed
         // is recovered from the owner-write-blob below for cold-start self-renewal.
-        let (adopted, _) = adopt(self.floors, &reader, &candidate).await?;
+        let (adopted, _) = match adopt(self.floors, &reader, &candidate).await {
+            Ok(pass) => pass,
+            Err(err) => {
+                // Keep the candidate for the equal-floor recovery path — it
+                // re-resolves the same head CID otherwise.
+                *self.assembled.borrow_mut() = Some(candidate);
+                return Err(err);
+            }
+        };
 
         let write_scope_seed = match &candidate.grant_section.owner_write_blob {
             // Re-authorable, NOT a trust failure — held keyless.
@@ -201,10 +216,20 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
     ) -> Result<Option<([u8; 16], Zeroizing<[u8; 32]>)>, SeamError> {
         // Recovery is fail-open, never a trust verdict: an unopenable/absent blob
         // yields `Ok(None)`, held keyless (#752 F3: a Current never hardens).
-        let candidate = match self.assemble_candidate(name, record_bytes).await {
-            Ok(candidate) => candidate,
-            Err(GateError::Seam(seam)) => return Err(seam),
-            Err(GateError::Rejected(_)) => return Ok(None),
+        // Reuse the candidate the rejected `adopt` assembled for these same
+        // bytes; assembling again re-fetches the head block.
+        let cached = self
+            .assembled
+            .borrow_mut()
+            .take()
+            .filter(|c| c.name == *name && c.record_bytes == record_bytes);
+        let candidate = match cached {
+            Some(candidate) => candidate,
+            None => match self.assemble_candidate(name, record_bytes).await {
+                Ok(candidate) => candidate,
+                Err(GateError::Seam(seam)) => return Err(seam),
+                Err(GateError::Rejected(_)) => return Ok(None),
+            },
         };
         let Some(owb) = &candidate.grant_section.owner_write_blob else {
             return Ok(None);
@@ -742,6 +767,36 @@ mod tests {
         // The recovered seed reproduces the record's IPNS routing name.
         let signer = SessionIdentity::write_name_signer(&seed, &fx.root_id);
         assert_eq!(IpnsName::from_public_key(&signer.verifying_key()), fx.name);
+    }
+
+    #[test]
+    fn equal_floor_recovery_reuses_the_candidate_adopt_assembled() {
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        // Steady state: the durable sequence floor already sits at the record's
+        // sequence, so adopt rejects equal-floor and recovery runs next.
+        block_on(floors.raise_sequence_floor(fx.name.as_str().as_bytes(), 1)).unwrap();
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+
+        let record = fx.record(1);
+        match block_on(adopter.adopt(&fx.name, &record)) {
+            Err(GateError::Rejected(r)) => assert_eq!(r.check(), "sequence-not-newer"),
+            Ok(_) => panic!("an equal-floor record must reject at the sequence stage"),
+            Err(GateError::Seam(e)) => panic!("expected a rejection, got seam {e}"),
+        }
+        let (_, seed) = block_on(adopter.recover_own_write_seed(&fx.name, &record))
+            .expect("recovery is fail-open, never an error")
+            .expect("the owner recovers its write seed from the reused candidate");
+        assert_eq!(*seed, WRITE_SCOPE_SEED);
+        assert_eq!(
+            http.requests().len(),
+            1,
+            "the head block is fetched once; recovery reuses adopt's candidate"
+        );
     }
 
     #[test]
