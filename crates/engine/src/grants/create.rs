@@ -397,18 +397,12 @@ where
         .await
         .map_err(CreateGrantError::Publish)?;
 
-    // 5b) Re-key the reparented descendants under the fresh grantee derivation
-    // (blueprint/engine.md "subtree swept in"). Each descendant's ascent link
-    // seals its own override seed to a keypair derived from its parent node seed;
-    // the parent is now the grantee scope, so re-seal each under
-    // `node_seed(override_seed, descendant.scope_id)` — metadata-only (existing
-    // seed, current epoch, `prev = None`), threaded top-down exactly as the eager
-    // cascade does (rotation/cascade.rs). Without this the grantee holds only the
-    // fresh seed and cannot open a descendant sealed at the old parent derivation.
-    // Only the reparented direct children move parent; deeper descendants keep
-    // their unchanged parent's derivation. Register-first: the grantee root (which
-    // already lists these descendants) is published above, so a descendant now
-    // points back at a parent that exists.
+    // 5b) Re-key the reparented direct children so each ascent link re-seals under
+    // the fresh grantee derivation (see `GranteeScopePlan::subtree_child_index`;
+    // blueprint/engine.md "subtree swept in"). Metadata-only (existing seed,
+    // current epoch, `prev = None`), threaded top-down as the eager cascade does
+    // (rotation/cascade.rs). Register-first: the grantee root published above
+    // already lists these descendants, so each points back at a parent that exists.
     for descendant in grantee.subtree_child_index {
         let target = sweep_resolver.resolve(descendant).await.map_err(|reason| {
             CreateGrantError::DescendantResolve {
@@ -1060,9 +1054,53 @@ mod tests {
     }
 
     #[test]
+    fn descendant_publish_failure_leaves_the_grantee_root_committed_and_no_share() {
+        // Post-publish partial commit on the re-key step (5b): the grantee root
+        // publishes (call 0), then the reparented descendant's re-keyed record
+        // (call 1) loses the CAS race. Fail-safe under-share — the grantee root is
+        // committed but NO share pointer is posted, so the recipient never learns
+        // where to look and sees zero exposure (orphan cleanup: #745/#746).
+        let subtree = vec![ChildScopeRef::new(
+            DESCENDANT_SCOPE,
+            DESCENDANT_NAME.to_vec(),
+        )];
+        let (outcome, published, hub) = run(
+            7,
+            &subtree,
+            None,
+            FakeNet::new_fail_after(1, ScopeRootPublishError::LostRace),
+        );
+
+        assert_eq!(
+            outcome.unwrap_err().check(),
+            "descendant-publish-failed",
+            "the reparented descendant's re-key publish is the failing step"
+        );
+        // Only the grantee root landed (call 0); the descendant (call 1) failed and
+        // the parent index (call 2) was never attempted.
+        assert_eq!(published.len(), 1, "grantee root committed, descendant not");
+        assert_eq!(published[0].scope_id, GRANTEE_SCOPE);
+        // Fail-safe: with no share pointer the recipient cannot locate the grantee
+        // root, so the partial commit exposes nothing.
+        let recip_box = hub.mailbox_for(&recipient_enc().public().to_bytes());
+        let items = block_on(poll_verified(&recip_box, &recipient_enc(), V)).unwrap();
+        assert!(
+            items.is_empty(),
+            "no share pointer on a failed descendant re-key"
+        );
+    }
+
+    #[test]
     fn creation_is_deterministic_under_a_fixed_entropy_seed() {
-        let (a_outcome, a_pub, _) = run(42, &[], None, FakeNet::new(Ok(())));
-        let (b_outcome, b_pub, _) = run(42, &[], None, FakeNet::new(Ok(())));
+        // A non-empty subtree drives step 5b's entropy draws (HPKE ephemerals,
+        // seal nonces in the descendant re-key), proving they too are byte-identical
+        // under a fixed seed.
+        let subtree = vec![ChildScopeRef::new(
+            DESCENDANT_SCOPE,
+            DESCENDANT_NAME.to_vec(),
+        )];
+        let (a_outcome, a_pub, _) = run(42, &subtree, None, FakeNet::new(Ok(())));
+        let (b_outcome, b_pub, _) = run(42, &subtree, None, FakeNet::new(Ok(())));
         assert_eq!(a_outcome.unwrap(), b_outcome.unwrap());
         assert_eq!(a_pub, b_pub, "same seed → byte-identical published records");
     }
@@ -1084,13 +1122,13 @@ mod tests {
 
     #[test]
     fn grantee_can_descend_into_a_reparented_descendant() {
-        // The #770 fix: a reparented descendant's ascent link must re-seal under
-        // `node_seed(fresh_grantee_seed, descendant.scope_id)` so the grantee —
-        // holding only the fresh seed from its grant blob — can descend the shared
-        // subtree. No floor is raised, so the pre-mint sweep publishes nothing
-        // (the descendant is already converged); the descendant record below is
-        // published solely by the re-key step. Pre-fix, no descendant record is
-        // published, so the lookup below finds nothing and this test fails.
+        // The #770 fix: a reparented descendant re-keys under the fresh grantee
+        // derivation (see `GranteeScopePlan::subtree_child_index`) so the grantee,
+        // holding only its grant-blob seed, can descend the shared subtree. No
+        // floor is raised, so the pre-mint sweep publishes nothing (the descendant
+        // is already converged); the descendant record below is published solely by
+        // the re-key step. Pre-fix, no descendant record is published, so the lookup
+        // below finds nothing and this test fails.
         let subtree = vec![ChildScopeRef::new(
             DESCENDANT_SCOPE,
             DESCENDANT_NAME.to_vec(),
