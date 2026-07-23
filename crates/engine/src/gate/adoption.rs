@@ -457,11 +457,10 @@ pub async fn adopt_deferred<F: FloorStore>(
         &section.owner_blob.ciphertext,
         &section.owner_blob.signature,
     )?;
-    // The owner-write-blob is optional on the wire (additive evolution), but a
-    // present one must carry a valid structure signature — a missing or invalid
-    // sig is a whole-record trust violation, never staleness. Its sealed AAD
-    // binds the write epoch, but its structure signature — like every structure
-    // authenticated here — is recomputed at the authenticated envelope epoch.
+    // Recipient-tag `None` — owner-scoped, not per-grantee. Its sealed AAD binds
+    // the write epoch, yet its structure signature is recomputed at the read
+    // epoch off the authenticated envelope (dual-epoch rationale stated once at
+    // rotation/reseal.rs owner-write-blob).
     if let Some(owner_write) = &section.owner_write_blob {
         authenticate(
             STRUCT_TAG_OWNER_WRITE_BLOB,

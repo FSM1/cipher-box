@@ -254,7 +254,11 @@ pub struct GrantSection {
     pub owner_blob: SignedOwnerBlob,
     /// The owner-write-blob — the write-plane mirror of the owner blob, present
     /// at every write-scope root the owner owns (`None` on records predating the
-    /// tag, or read-only records).
+    /// tag, or read-only records). Its presence is not covered by the owner-signed
+    /// `GrantSetCommitment`: a stripped blob adopts as `None` (availability-only
+    /// loss of owner fresh-device write-recovery), so the owner cold-start consume
+    /// path treats a missing blob on an owner-owned scope as re-authorable, not a
+    /// hard failure.
     pub owner_write_blob: Option<SignedOwnerWriteBlob>,
     /// The ascent link, present only when the scope has a parent.
     pub ascent_link: Option<SignedAscentLink>,
