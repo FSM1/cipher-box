@@ -168,7 +168,10 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
 
         // The derived read key is secret; this fn is its terminal owner, so it
         // zeroizes on drop (the gate borrows it and never zeroizes a caller buffer).
-        let node_seed = kdf::node_seed(payload.override_seed(), &env.id);
+        // The recovered scope read seed rides the outcome on a gate pass — the
+        // engine's per-scope seed cell feeds the child read pipeline from it.
+        let read_scope_seed = Zeroizing::new(*payload.override_seed());
+        let node_seed = kdf::node_seed(&read_scope_seed, &env.id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
 
         let reader = ReaderContext {
@@ -206,6 +209,7 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
             adopted,
             write_scope_seed,
             node_id: env.id,
+            read_scope_seed: Some(read_scope_seed),
         })
     }
 
@@ -298,11 +302,11 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
 /// untrustworthy. Assembly runs before the gate's six stages, so it surfaces as
 /// a `RecordVerify` rejection carrying the verbatim core check (the check name
 /// carries the real detail).
-fn assembly_reject(e: CodecError) -> GateError {
+pub(super) fn assembly_reject(e: CodecError) -> GateError {
     reject(GateStage::RecordVerify, e)
 }
 
-fn reject(stage: GateStage, e: CodecError) -> GateError {
+pub(super) fn reject(stage: GateStage, e: CodecError) -> GateError {
     GateError::Rejected(GateRejection {
         stage,
         reason: RejectionReason::Trust(e),
@@ -312,7 +316,7 @@ fn reject(stage: GateStage, e: CodecError) -> GateError {
 /// Map a content-read failure: a CID mismatch/tamper is a fail-closed trust
 /// violation surfaced verbatim; no source or an over-cap body is availability (a
 /// retryable seam), never a trust verdict (`content/read.rs`).
-fn map_read_error(e: ReadError) -> GateError {
+pub(super) fn map_read_error(e: ReadError) -> GateError {
     match e {
         ReadError::TrustViolation(codec) => assembly_reject(codec),
         ReadError::Unavailable => GateError::Seam(SeamError::new("head block unavailable")),
@@ -636,6 +640,11 @@ mod tests {
         assert!(
             outcome.write_scope_seed.is_none(),
             "the owner arm surfaces no write seed (held keyless)"
+        );
+        assert_eq!(
+            outcome.read_scope_seed.as_deref(),
+            Some(&[0x66u8; 32]),
+            "a gate pass surfaces the owner-blob scope read seed"
         );
     }
 

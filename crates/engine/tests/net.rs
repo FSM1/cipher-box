@@ -175,6 +175,7 @@ impl Adopter for StubAdopter {
                 },
                 write_scope_seed: None,
                 node_id: [0u8; 16],
+                read_scope_seed: None,
             }),
             Verdict::TrustViolation => Err(GateError::Rejected(GateRejection {
                 stage: GateStage::RecordVerify,

@@ -73,6 +73,12 @@ pub struct AdoptOutcome {
     /// The scope-root node id (`id16`, the envelope id) — the held-set key and
     /// signer-derivation input for a gate-surfaced write grant.
     pub node_id: [u8; 16],
+    /// The scope read seed a gate-passing owner adopt recovered from the owner
+    /// blob. Transient like [`write_scope_seed`](Self::write_scope_seed): the
+    /// engine deposits it in its in-memory per-scope seed map (never persisted,
+    /// never on the public [`Resolved`]); the child read pipeline derives
+    /// per-node read keys from it. `None` for a non-owner adopter.
+    pub read_scope_seed: Option<Zeroizing<[u8; 32]>>,
 }
 
 /// What a resolve produced for the freshest fetched record.
@@ -127,26 +133,57 @@ where
     S: SnapshotCache,
     A: Adopter,
 {
-    // The public resolve drops the transient hold material — only the liveness
-    // driver ([`resolve_and_hold`]) consumes it.
+    // The public resolve drops the transient hold/seed material — only the
+    // engine drivers ([`resolve_and_hold`], [`resolve_with_read_seed`]) consume
+    // it.
     Ok(resolve_gated(transport, snapshot_cache, adopter, name)
         .await?
-        .0)
+        .resolved)
+}
+
+/// [`resolve`], additionally surfacing the scope read seed a gate-passing owner
+/// adopt recovered (see [`AdoptOutcome::read_scope_seed`]). Crate-internal so
+/// the seed never rides the public surface; the cold-start driver deposits it.
+pub(crate) async fn resolve_with_read_seed<T, S, A>(
+    transport: &T,
+    snapshot_cache: &S,
+    adopter: &A,
+    name: &IpnsName,
+) -> Result<(Resolved, Option<Zeroizing<[u8; 32]>>), SeamError>
+where
+    T: RecordTransport,
+    S: SnapshotCache,
+    A: Adopter,
+{
+    let gated = resolve_gated(transport, snapshot_cache, adopter, name).await?;
+    Ok((gated.resolved, gated.read_scope_seed))
 }
 
 /// The (node id, write scope seed) a gate-surfaced write grant contributes to
 /// the held set. `Some` only on a gate pass that carried a write seed.
 type AdoptHold = ([u8; 16], Zeroizing<[u8; 32]>);
 
-/// The gated resolve, returning the outcome plus, on a gate pass that surfaced a
-/// write seed, the transient hold material the held set consumes. Kept internal
-/// so the write seed never rides the public [`Resolved`].
+/// The internal gated-resolve product: the public outcome plus the transient
+/// material the engine drivers consume — kept off the public [`Resolved`] so no
+/// seed ever rides the facade-visible surface.
+struct GatedResolve {
+    /// The public resolve result.
+    resolved: Resolved,
+    /// The held-set (node id, write scope seed) from a gate-surfaced write grant.
+    hold: Option<AdoptHold>,
+    /// The verified record bytes an alive-worthy outcome rides to the hold.
+    held_bytes: Option<Vec<u8>>,
+    /// The scope read seed a gate-passing owner adopt recovered.
+    read_scope_seed: Option<Zeroizing<[u8; 32]>>,
+}
+
+/// The gated resolve behind [`resolve`]/[`resolve_and_hold`].
 async fn resolve_gated<T, S, A>(
     transport: &T,
     snapshot_cache: &S,
     adopter: &A,
     name: &IpnsName,
-) -> Result<(Resolved, Option<AdoptHold>, Option<Vec<u8>>), SeamError>
+) -> Result<GatedResolve, SeamError>
 where
     T: RecordTransport,
     S: SnapshotCache,
@@ -156,54 +193,63 @@ where
     // Cache-first: last-known-good renders immediately, reconcile runs behind it.
     let last_known_good = snapshot_cache.get(cache_key).await?;
 
-    let (outcome, hold, held_bytes) = match fanout_get_verify(transport, name).await {
-        None => (ResolveOutcome::NoUpdate, None, None),
-        Some((_sequence, bytes)) => match adopter.adopt(name, &bytes).await {
-            Ok(AdoptOutcome {
-                adopted,
-                write_scope_seed,
-                node_id,
-            }) => {
-                // Only gate-passing records touch the snapshot; the same verified
-                // bytes ride out to the liveness hold, so no re-fetch/re-get.
-                snapshot_cache.put(cache_key, &bytes).await?;
-                let hold = write_scope_seed.map(|seed| (node_id, seed));
-                (ResolveOutcome::Adopted(adopted), hold, Some(bytes))
-            }
-            // A record at exactly the durable sequence floor is our own current
-            // record re-fetched — no update, never a violation; its verified
-            // bytes ride out so the liveness loop holds them without a re-fetch.
-            // A strictly older sequence is a replay/rollback and stays a
-            // fail-closed trust violation, as does every other gate rejection.
-            Err(GateError::Rejected(rejection)) => match &rejection.reason {
-                RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {
-                    // Our own current root at exactly the floor: recover the
-                    // owner's write seed (fail-open) so the liveness loop can
-                    // hold+renew it before its EOL lapses (#752 F3). A non-owner
-                    // record or an unopenable owner-write-blob yields no hold.
-                    let hold = adopter.recover_own_write_seed(name, &bytes).await?;
+    let (outcome, hold, held_bytes, read_scope_seed) =
+        match fanout_get_verify(transport, name).await {
+            None => (ResolveOutcome::NoUpdate, None, None, None),
+            Some((_sequence, bytes)) => match adopter.adopt(name, &bytes).await {
+                Ok(AdoptOutcome {
+                    adopted,
+                    write_scope_seed,
+                    node_id,
+                    read_scope_seed,
+                }) => {
+                    // Only gate-passing records touch the snapshot; the same verified
+                    // bytes ride out to the liveness hold, so no re-fetch/re-get.
+                    snapshot_cache.put(cache_key, &bytes).await?;
+                    let hold = write_scope_seed.map(|seed| (node_id, seed));
                     (
-                        ResolveOutcome::Current {
-                            record_bytes: bytes.clone(),
-                        },
+                        ResolveOutcome::Adopted(adopted),
                         hold,
                         Some(bytes),
+                        read_scope_seed,
                     )
                 }
-                _ => (ResolveOutcome::TrustViolation(rejection), None, None),
+                // A record at exactly the durable sequence floor is our own current
+                // record re-fetched — no update, never a violation; its verified
+                // bytes ride out so the liveness loop holds them without a re-fetch.
+                // A strictly older sequence is a replay/rollback and stays a
+                // fail-closed trust violation, as does every other gate rejection.
+                Err(GateError::Rejected(rejection)) => match &rejection.reason {
+                    RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {
+                        // Our own current root at exactly the floor: recover the
+                        // owner's write seed (fail-open) so the liveness loop can
+                        // hold+renew it before its EOL lapses (#752 F3). A non-owner
+                        // record or an unopenable owner-write-blob yields no hold.
+                        let hold = adopter.recover_own_write_seed(name, &bytes).await?;
+                        (
+                            ResolveOutcome::Current {
+                                record_bytes: bytes.clone(),
+                            },
+                            hold,
+                            Some(bytes),
+                            None,
+                        )
+                    }
+                    _ => (ResolveOutcome::TrustViolation(rejection), None, None, None),
+                },
+                Err(GateError::Seam(error)) => return Err(error),
             },
-            Err(GateError::Seam(error)) => return Err(error),
-        },
-    };
+        };
 
-    Ok((
-        Resolved {
+    Ok(GatedResolve {
+        resolved: Resolved {
             last_known_good,
             outcome,
         },
         hold,
         held_bytes,
-    ))
+        read_scope_seed,
+    })
 }
 
 /// The transient insert-time input for a held record: the resolve/gate path has
@@ -231,6 +277,8 @@ pub(crate) struct HeldMaterial {
 /// same node) a [`HeldRecord`] so the keyless re-PUT loop keeps it alive. Only a
 /// gate-passing record enters the set — a `TrustViolation`/`NoUpdate` never
 /// does (blueprint/engine.md "Liveness": never re-PUT a stale record).
+/// Additionally surfaces the recovered scope read seed (see
+/// [`AdoptOutcome::read_scope_seed`]) for the tick driver's deposit.
 pub(crate) async fn resolve_and_hold<T, S, A>(
     transport: &T,
     snapshot_cache: &S,
@@ -238,14 +286,18 @@ pub(crate) async fn resolve_and_hold<T, S, A>(
     name: &IpnsName,
     held: &RefCell<HeldRecords>,
     material: &HeldMaterial,
-) -> Result<Resolved, SeamError>
+) -> Result<(Resolved, Option<Zeroizing<[u8; 32]>>), SeamError>
 where
     T: RecordTransport,
     S: SnapshotCache,
     A: Adopter,
 {
-    let (resolved, adopt_hold, held_bytes) =
-        resolve_gated(transport, snapshot_cache, adopter, name).await?;
+    let GatedResolve {
+        resolved,
+        hold: adopt_hold,
+        held_bytes,
+        read_scope_seed,
+    } = resolve_gated(transport, snapshot_cache, adopter, name).await?;
     // A gate-passing adopt (`Adopted`) and our own current record (`Current`)
     // are both alive-worthy and ride their verified bytes back here; a
     // `TrustViolation`/`NoUpdate` holds nothing (blueprint/engine.md "Liveness").
@@ -260,7 +312,7 @@ where
             .ok()
             .and_then(|verified| head_cid_from_value(&verified.value))
         else {
-            return Ok(resolved);
+            return Ok((resolved, read_scope_seed));
         };
         // The renewal (node id, write seed) comes from the gate for a write
         // grantee, else from the caller for an own-scope record. No seed on
@@ -272,7 +324,7 @@ where
                 .as_ref()
                 .map(|seed| (material.node_id, seed.clone()))
         }) else {
-            return Ok(resolved);
+            return Ok((resolved, read_scope_seed));
         };
         // Derive the narrow per-name signer once from the transient seed and hold
         // only it — the seed drops at this scope's end. Fail-closed encode-side
@@ -281,7 +333,7 @@ where
         // the hold rather than store a mismatched signer.
         let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
         if IpnsName::from_public_key(&signer.verifying_key()) != *name {
-            return Ok(resolved);
+            return Ok((resolved, read_scope_seed));
         }
         // Content re-pin on renewal is a deferred slice; the record still
         // republishes validly under its head CID (only re-pinning is deferred).
@@ -296,7 +348,7 @@ where
             },
         );
     }
-    Ok(resolved)
+    Ok((resolved, read_scope_seed))
 }
 
 /// Fold a completed resolve's verdict into the shared base cell. A gate-passing
@@ -411,6 +463,7 @@ mod tests {
                     },
                     write_scope_seed: self.grant.map(|(seed, _)| Zeroizing::new(seed)),
                     node_id: self.grant.map(|(_, id)| id).unwrap_or([0u8; 16]),
+                    read_scope_seed: None,
                 }),
                 Verdict::TrustViolation => Err(GateError::Rejected(GateRejection {
                     stage: GateStage::RecordVerify,
@@ -463,7 +516,7 @@ mod tests {
             write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
             content_cids: vec!["bafycontent".into()],
         };
-        let resolved = block_on(resolve_and_hold(
+        let (resolved, _) = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::new(Verdict::Accept),
@@ -504,7 +557,7 @@ mod tests {
 
         // A fail-closed trust violation is never held.
         let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
-        let out = block_on(resolve_and_hold(
+        let (out, _) = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::new(Verdict::TrustViolation),
@@ -539,7 +592,7 @@ mod tests {
             write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
             content_cids: Vec::new(),
         };
-        let resolved = block_on(resolve_and_hold(
+        let (resolved, _) = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::new(Verdict::EqualSequence),
@@ -602,7 +655,7 @@ mod tests {
             write_scope_seed: None,
             content_cids: Vec::new(),
         };
-        let resolved = block_on(resolve_and_hold(
+        let (resolved, _) = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::own_current(write_scope_seed, node_id),
@@ -683,7 +736,7 @@ mod tests {
             write_scope_seed: None,
             content_cids: Vec::new(),
         };
-        let resolved = block_on(resolve_and_hold(
+        let (resolved, _) = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::new(Verdict::EqualSequence),

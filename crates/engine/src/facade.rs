@@ -23,25 +23,31 @@ use core::pin::Pin;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use cipherbox_core::content::{encode_content_cid_str, open_chunk};
 use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::seal::ReadBody;
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
-use crate::content::{Gateway, GatewayConfig};
+use crate::content::{ContentPlane, Gateway, GatewayConfig, ReadError, decode_root, read_block};
 use crate::entropy::Entropy;
+use crate::gate::GateError;
 use crate::hex::hex_lower;
 use crate::net::{
-    Adopter, EolRenewResult, HeldMaterial, HeldRecord, HeldRecords, LivenessControl, PublishError,
-    PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch, ResolveOutcome, RootAdopter,
-    eol_renew_pass, keyless_re_put, refresh_base_from_outcome, resolve_and_hold, run_liveness_loop,
+    Adopter, ChildAdopter, EolRenewResult, HeldMaterial, HeldRecord, HeldRecords, LivenessControl,
+    PublishError, PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch, ResolveOutcome, RootAdopter,
+    eol_renew_pass, keyless_re_put, refresh_base_from_outcome, resolve, resolve_and_hold,
+    run_liveness_loop,
 };
 use crate::profile::SyncTimingProfile;
 use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore, UnixMillis};
 use crate::session::SessionIdentity;
-use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
+use crate::sync::boot::{
+    ColdStartError, ColdStartOutcome, ColdStartParams, ColdStartSinks, cold_start,
+};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
 use crate::sync::op::Op;
 use crate::sync::overlay::apply_overlay;
@@ -453,6 +459,22 @@ pub enum EngineError {
     UnknownNode,
     /// A folder read named a file node.
     NotAFolder,
+    /// A content read named a folder node.
+    NotAFile,
+    /// The content plane could not serve the read — an unpublished pending
+    /// node, no reachable source, or an over-cap block. Availability,
+    /// retryable; never a trust verdict.
+    ContentUnavailable {
+        /// Diagnostic message; never carries key material.
+        message: String,
+    },
+    /// A fail-closed trust violation on the read path — a rejected child
+    /// record, or a CID/manifest/unseal disagreement. Never retried, never
+    /// rendered (rule 6).
+    TrustViolation {
+        /// The verdict classification; never carries key material.
+        message: String,
+    },
     /// The command's pipeline slice has not landed yet (scaffold state).
     Unimplemented {
         /// [`Command::name`] of the rejected command.
@@ -503,6 +525,35 @@ impl EngineError {
         }
     }
 
+    /// Map a child-pipeline gate error: a rejection is a fail-closed trust
+    /// verdict; a seam failure is availability.
+    fn from_gate(err: GateError) -> Self {
+        match err {
+            GateError::Rejected(rejection) => EngineError::TrustViolation {
+                message: rejection.to_string(),
+            },
+            GateError::Seam(seam) => EngineError::ContentUnavailable {
+                message: seam.message().to_owned(),
+            },
+        }
+    }
+
+    /// Map a content-block read failure: a CID mismatch is a fail-closed trust
+    /// verdict; no source or an over-cap body is availability.
+    fn from_read(err: ReadError) -> Self {
+        match err {
+            ReadError::TrustViolation(e) => EngineError::TrustViolation {
+                message: format!("content block rejected: [{}]", e.check()),
+            },
+            ReadError::Unavailable => EngineError::ContentUnavailable {
+                message: "content block unavailable".to_owned(),
+            },
+            ReadError::TooLarge { size, limit } => EngineError::ContentUnavailable {
+                message: format!("content block exceeds the cap ({size} > {limit})"),
+            },
+        }
+    }
+
     /// Map a cold-start failure onto the facade error: every trust arm (forged
     /// pointer, regressed floor, rejected root) collapses to the single
     /// fail-closed [`ColdStart`](EngineError::ColdStart) — never retryable
@@ -528,6 +579,11 @@ impl fmt::Display for EngineError {
             }
             EngineError::UnknownNode => f.write_str("unknown node"),
             EngineError::NotAFolder => f.write_str("not a folder"),
+            EngineError::NotAFile => f.write_str("not a file"),
+            EngineError::ContentUnavailable { message } => {
+                write!(f, "content unavailable: {message}")
+            }
+            EngineError::TrustViolation { message } => write!(f, "trust violation: {message}"),
             EngineError::Unimplemented { command } => {
                 write!(f, "command not implemented yet: {command}")
             }
@@ -670,6 +726,10 @@ struct SyncStatus {
     reported: Option<Staleness>,
 }
 
+/// The engine's in-memory per-scope read-seed cell: scope id → the recovered
+/// scope read seed (zeroized on removal/drop).
+type ScopeReadSeeds = BTreeMap<[u8; 16], Zeroizing<[u8; 32]>>;
+
 /// The re-point pointer-payload wire version the owner's own vault seals under
 /// and the cold-start walk verifies against (`crates/core` pointer payload) — the
 /// sole v2 version (CONTEXT.md "Vault pointer").
@@ -715,6 +775,11 @@ pub struct Engine<T: SeamTypes> {
     /// successes and reports rung changes; [`snapshot`](Self::snapshot)
     /// classifies at read time off the same cell.
     sync_status: Rc<RefCell<SyncStatus>>,
+    /// Per-scope read seeds recovered by gate-passing adopts (the owner-blob
+    /// override seed), keyed by scope id. In-memory only — never persisted,
+    /// never crossing the facade (security rules 1/3); the child read pipeline
+    /// derives per-node read keys from them (`node-seed` → `read-key`).
+    scope_read_seeds: Rc<RefCell<ScopeReadSeeds>>,
     /// Retained dead-lettered ops, mapped to the target node when known
     /// (`None` for an undecodable queue entry). Feeds [`SnapshotView`]'s
     /// dead-letter surface (#33 D6: dead letters are retained, never silent).
@@ -759,6 +824,7 @@ impl<T: SeamTypes> Engine<T> {
                 snapshot: Rc::new(RefCell::new(Snapshot::new(NodeId([0u8; 16])))),
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
                 sync_status: Rc::new(RefCell::new(SyncStatus::default())),
+                scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
@@ -983,6 +1049,16 @@ impl<T: SeamTypes> Engine<T> {
         let mut emit = |event: Event| {
             let _ = events.unbounded_send(event);
         };
+        // A gate-passing root adopt surfaces the scope read seed; deposit it in
+        // the in-memory per-scope cell the child read pipeline derives from.
+        let seeds = self.scope_read_seeds.clone();
+        let mut deposit_read_seed = |seed: Zeroizing<[u8; 32]>| {
+            seeds.borrow_mut().insert(root_scope_id, seed);
+        };
+        let mut sinks = ColdStartSinks {
+            emit: &mut emit,
+            deposit_read_seed: &mut deposit_read_seed,
+        };
         cold_start(
             pointer_fetch,
             adopter,
@@ -990,7 +1066,7 @@ impl<T: SeamTypes> Engine<T> {
             &self.seams.record_transport,
             &self.seams.snapshot_cache,
             &params,
-            &mut emit,
+            &mut sinks,
         )
         .await
     }
@@ -1072,6 +1148,7 @@ impl<T: SeamTypes> Engine<T> {
         let events = self.events.clone();
         let alive = self.alive.clone();
         let sync_status = self.sync_status.clone();
+        let scope_read_seeds = self.scope_read_seeds.clone();
         let profile = self.profile;
         let interval = self.profile.poll_cadence;
         let owner_identity = session.owner_identity();
@@ -1117,7 +1194,15 @@ impl<T: SeamTypes> Engine<T> {
                     &held,
                     &material,
                 )
-                .await;
+                .await
+                .map(|(resolved, read_scope_seed)| {
+                    // A gate-passing adopt re-surfaces the scope read seed:
+                    // refresh the in-memory per-scope cell.
+                    if let Some(seed) = read_scope_seed {
+                        scope_read_seeds.borrow_mut().insert(root_id, seed);
+                    }
+                    resolved
+                });
                 if let Ok(resolved) = &resolved {
                     if refresh_base_from_outcome(&base, NodeId(root_id), &resolved.outcome) {
                         let _ = events.unbounded_send(Event::SnapshotUpdated);
@@ -1298,6 +1383,197 @@ impl<T: SeamTypes> Engine<T> {
             dead_letters,
             staleness,
         })
+    }
+
+    /// Read one file node's full plaintext content (blueprint/engine.md
+    /// "Content plane": verified reads). Resolves the child record cache-first
+    /// through the [`ChildAdopter`] pipeline, fetches the head version's DAG
+    /// (root manifest + leaves) CID-verified fail-closed, unseals each leaf
+    /// under the version content key, and reassembles the plaintext with
+    /// length cross-checks. Emits [`Event::OpProgress`] on entry, success, and
+    /// failure; on success folds the head version's size/mtime into the base
+    /// snapshot and emits [`Event::SnapshotUpdated`].
+    pub async fn read_content(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
+        if !self.started {
+            return Err(EngineError::NotStarted);
+        }
+        self.emit_op_progress(node, OpPhase::DownloadStarted, None);
+        match self.read_content_inner(node).await {
+            Ok((plaintext, size, modified_at)) => {
+                // The verified head version is gate-passing state, so it may
+                // legally touch the base node's projected size/mtime.
+                if let Some(meta) = self.snapshot.borrow_mut().node_mut(node) {
+                    meta.size = Some(size);
+                    meta.mtime = Some(modified_at);
+                }
+                let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+                self.emit_op_progress(node, OpPhase::DownloadCompleted, None);
+                Ok(plaintext)
+            }
+            Err(err) => {
+                self.emit_op_progress(node, OpPhase::DownloadFailed, Some(err.to_string()));
+                Err(err)
+            }
+        }
+    }
+
+    /// The verified read pipeline behind [`read_content`](Self::read_content):
+    /// rendered-view lookup → gated child resolve → version-DAG fetch and
+    /// per-leaf unseal → length cross-checks. Returns the plaintext plus the
+    /// head version's `(size, modifiedAt)`.
+    async fn read_content_inner(&self, node: NodeId) -> Result<(Vec<u8>, u64, u64), EngineError> {
+        let name = {
+            let rendered = self.render().await?;
+            let meta = rendered.node(node).ok_or(EngineError::UnknownNode)?;
+            if meta.kind == NodeKind::Folder {
+                return Err(EngineError::NotAFile);
+            }
+            let name_bytes =
+                meta.ipns_name
+                    .as_ref()
+                    .ok_or_else(|| EngineError::ContentUnavailable {
+                        message: "content not yet published".to_owned(),
+                    })?;
+            // The bytes are the UTF-8 of the canonical base36 name; anything
+            // else is a malformed child ref, fail-closed.
+            core::str::from_utf8(name_bytes)
+                .ok()
+                .and_then(|s| IpnsName::parse(s).ok())
+                .ok_or_else(|| EngineError::TrustViolation {
+                    message: "child ipnsName is not a canonical IPNS name".to_owned(),
+                })?
+        };
+        // The node's scope is the vault root scope (subscope reads are a later
+        // slice). A clone of the seed keeps the cell borrow from spanning the
+        // awaits below; the clone zeroizes when the adopter drops.
+        let scope_id = self.snapshot.borrow().root.0;
+        let scope_read_seed = self
+            .scope_read_seeds
+            .borrow()
+            .get(&scope_id)
+            .cloned()
+            .ok_or_else(|| EngineError::TrustViolation {
+                message: "no read seed held for the node's scope".to_owned(),
+            })?;
+        let adopter = ChildAdopter::new(
+            &self.gateway,
+            &self.seams.http,
+            &self.seams.floor_store,
+            scope_id,
+            scope_read_seed,
+            node.0,
+        );
+        let resolved = resolve(
+            &self.seams.record_transport,
+            &self.seams.snapshot_cache,
+            &adopter,
+            &name,
+        )
+        .await
+        .map_err(|e| EngineError::ContentUnavailable {
+            message: e.message().to_owned(),
+        })?;
+        let adopted = match resolved.outcome {
+            ResolveOutcome::Adopted(adopted) => adopted,
+            // Our own current record at the floor: re-open without a floor
+            // advance (cache-first steady state, not an update).
+            ResolveOutcome::Current { record_bytes } => adopter
+                .open_at_floor(&name, &record_bytes)
+                .await
+                .map_err(EngineError::from_gate)?,
+            ResolveOutcome::NoUpdate => match &resolved.last_known_good {
+                Some(bytes) => adopter
+                    .open_at_floor(&name, bytes)
+                    .await
+                    .map_err(EngineError::from_gate)?,
+                None => {
+                    return Err(EngineError::ContentUnavailable {
+                        message: "no record source reachable and no cached record".to_owned(),
+                    });
+                }
+            },
+            ResolveOutcome::TrustViolation(rejection) => {
+                return Err(EngineError::TrustViolation {
+                    message: rejection.to_string(),
+                });
+            }
+        };
+
+        let ReadBody::File { versions, .. } = adopted.read_body else {
+            // The parent's child ref said file: a sealed folder body is a kind
+            // transplant, fail-closed.
+            return Err(EngineError::TrustViolation {
+                message: "sealed body kind disagrees with the child ref".to_owned(),
+            });
+        };
+        // Newest-first; head is current (crates/core/src/seal/body.rs).
+        let Some(version) = versions.first() else {
+            return Err(EngineError::ContentUnavailable {
+                message: "file has no published content version".to_owned(),
+            });
+        };
+
+        let root_cid_str = encode_content_cid_str(&version.content_cid);
+        let root_block = read_block(
+            &self.gateway,
+            &self.seams.http,
+            &root_cid_str,
+            &version.content_cid,
+            ContentPlane::Root,
+        )
+        .await
+        .map_err(EngineError::from_read)?;
+        let manifest = decode_root(&root_block).map_err(|e| EngineError::TrustViolation {
+            message: format!("content DAG root rejected: {e:?}"),
+        })?;
+        if manifest.size != version.size {
+            return Err(EngineError::TrustViolation {
+                message: format!(
+                    "manifest size {} disagrees with version size {}",
+                    manifest.size, version.size
+                ),
+            });
+        }
+
+        let mut plaintext = Vec::new();
+        for leaf_cid in &manifest.leaf_cids {
+            let leaf_cid_str = encode_content_cid_str(leaf_cid);
+            let sealed = read_block(
+                &self.gateway,
+                &self.seams.http,
+                &leaf_cid_str,
+                leaf_cid,
+                ContentPlane::Leaf,
+            )
+            .await
+            .map_err(EngineError::from_read)?;
+            let chunk = open_chunk(version.content_key(), &sealed).map_err(|e| {
+                EngineError::TrustViolation {
+                    message: format!("leaf unseal rejected: [{}]", e.check()),
+                }
+            })?;
+            plaintext.extend_from_slice(&chunk);
+        }
+        if plaintext.len() as u64 != manifest.size {
+            return Err(EngineError::TrustViolation {
+                message: format!(
+                    "reassembled length {} disagrees with manifest size {}",
+                    plaintext.len(),
+                    manifest.size
+                ),
+            });
+        }
+        Ok((plaintext, version.size, version.modified_at))
+    }
+
+    /// Best-effort [`Event::OpProgress`] emission (a dropped receiver is fine).
+    fn emit_op_progress(&self, node: NodeId, phase: OpPhase, error: Option<String>) {
+        let _ = self.events.unbounded_send(Event::OpProgress {
+            op_id: None,
+            node,
+            phase,
+            error,
+        });
     }
 
     /// The current base snapshot's root node id — the FUSE mount anchor. The
@@ -2113,6 +2389,7 @@ mod tests {
                     },
                     write_scope_seed: None,
                     node_id: [0u8; 16],
+                    read_scope_seed: None,
                 })
             }
         }
@@ -2509,6 +2786,12 @@ mod tests {
             EcdsaSigner::from_scalar(&CAP_SECRET).expect("valid scalar")
         }
 
+        /// The child's write-plane IPNS name (`write-seed` → `ipns-keypair`).
+        fn child_name() -> IpnsName {
+            let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &CHILD_ID);
+            IpnsName::from_public_key(&kdf::ipns_keypair(write_seed.as_bytes()).verifying_key())
+        }
+
         /// The owner-root head block (one child) and its content-CID string, plus
         /// the root record's write-plane IPNS name. Keyed off `CAP_SECRET` so the
         /// engine's session-derived owner identity + enc subkey open it, and scoped
@@ -2627,7 +2910,7 @@ mod tests {
                 children: vec![ChildRef {
                     id: CHILD_ID,
                     name: CHILD_NAME.into(),
-                    ipns_name: vec![0x2C],
+                    ipns_name: child_name().as_str().as_bytes().to_vec(),
                     kind: CoreNodeKind::File,
                     link_counter: 1,
                     unknown: Vec::new(),
@@ -2876,6 +3159,11 @@ mod tests {
             assert_eq!(held.len(), 1, "the resolve tick held the owner root");
             let record = held.get(&ROOT.0).expect("held under the root node id");
             assert_eq!(record.routing_key, root_name.as_str());
+            assert_eq!(
+                engine.scope_read_seeds.borrow().get(&SCOPE).map(|s| **s),
+                Some(SCOPE_SEED),
+                "the tick adopt deposited the recovered scope read seed"
+            );
         }
 
         #[test]
@@ -3007,6 +3295,401 @@ mod tests {
                 after.iter().all(Poll::is_ready),
                 "both loops stop after the engine drops"
             );
+        }
+
+        // --- Engine::read_content over the ChildAdopter pipeline ---
+
+        mod read_content {
+            use super::*;
+
+            use cipherbox_core::seal::Version;
+
+            use crate::content::{
+                ContentDag, ContentKey, ContentProfile, SealedChunk, assemble, frame_and_seal,
+            };
+
+            const CONTENT_KEY: [u8; 32] = [0x99; 32];
+            const CHILD_MTIME: u64 = 777;
+            /// 24 bytes → two leaves at the CI profile's 16-byte chunk size.
+            const PLAINTEXT: &[u8] = b"two-leaf plaintext bytes";
+
+            /// The child's sealed content DAG: leaves + root manifest block.
+            fn content_dag(plaintext: &[u8]) -> (Vec<SealedChunk>, ContentDag) {
+                let key = ContentKey::from_bytes(CONTENT_KEY);
+                let leaves = frame_and_seal(
+                    plaintext,
+                    &key,
+                    &mut SeededEntropy::new(5),
+                    &ContentProfile::CI,
+                )
+                .unwrap();
+                let dag = assemble(&leaves, plaintext.len() as u64, &ContentProfile::CI).unwrap();
+                (leaves, dag)
+            }
+
+            fn head_version(dag: &ContentDag, size: u64) -> Version {
+                Version::new(dag.content_cid.clone(), CONTENT_KEY, size, CHILD_MTIME)
+            }
+
+            /// A child file head block sealed under the node's derived read key.
+            /// The knobs drive the fail-closed tests: the envelope id
+            /// (transplant), the version list (empty / size-lying), and a
+            /// bolted-on grant section.
+            fn child_head(
+                envelope_id: [u8; 16],
+                versions: Vec<Version>,
+                with_grant_section: bool,
+            ) -> (Vec<u8>, String) {
+                let node_seed = kdf::node_seed(&SCOPE_SEED, &envelope_id);
+                let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
+                let body = ReadBody::File {
+                    created_at: 0,
+                    modified_at: CHILD_MTIME,
+                    versions,
+                    unknown: Vec::new(),
+                };
+                let mut envelope =
+                    seal_read_body(&read_key, &[13u8; 24], 1, envelope_id, SCOPE, EPOCH, &body)
+                        .unwrap();
+                if with_grant_section {
+                    envelope
+                        .unknown
+                        .push(("grantSection".to_string(), Value::Bytes(vec![1, 2, 3])));
+                }
+                let head_block = encode_envelope(&envelope);
+                let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
+                (head_block, cid)
+            }
+
+            /// Seed the child record (signed by the child's own write-plane
+            /// signer) at every endpoint.
+            fn seed_child_record(device: &FakeDevice, head_cid_str: &str, sequence: u64) {
+                let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &CHILD_ID);
+                let signer = kdf::ipns_keypair(write_seed.as_bytes());
+                let value = format!("/ipfs/{head_cid_str}");
+                let record =
+                    IpnsRecord::create_v2(&signer, value.as_bytes(), sequence, TTL_NANOS, EOL)
+                        .marshal();
+                for endpoint in device.record_store.endpoints() {
+                    device.record_store.seed_record(
+                        &endpoint,
+                        child_name().as_str(),
+                        record.clone(),
+                    );
+                }
+            }
+
+            /// A started engine over the full cold-start fixture (pointer +
+            /// root record + root head block), drained past the first paint.
+            fn started(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
+                let (head_block, head_cid, root_name) = owner_root();
+                seed_vault_pointer(device, &root_name);
+                for endpoint in device.record_store.endpoints() {
+                    seed_root_record_at(device, &endpoint, &root_name, &head_cid);
+                }
+                device.http.enqueue_response(head_response(&head_block));
+                let (mut engine, mut events) = engine_on(device);
+                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+                assert_eq!(drain(&mut events), vec![Event::SnapshotUpdated]);
+                (engine, events)
+            }
+
+            fn progress(node: NodeId, phase: OpPhase) -> Event {
+                Event::OpProgress {
+                    op_id: None,
+                    node,
+                    phase,
+                    error: None,
+                }
+            }
+
+            /// Script the full download fetch order: child head, DAG root, then
+            /// each leaf.
+            fn enqueue_download(
+                device: &FakeDevice,
+                head_block: &[u8],
+                dag: &ContentDag,
+                leaves: &[SealedChunk],
+            ) {
+                device.http.enqueue_response(head_response(head_block));
+                device.http.enqueue_response(head_response(&dag.root_block));
+                for leaf in leaves {
+                    device.http.enqueue_response(head_response(&leaf.sealed));
+                }
+            }
+
+            #[test]
+            fn happy_path_reads_the_exact_plaintext_and_folds_metadata() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, mut events) = started(&device);
+
+                let (leaves, dag) = content_dag(PLAINTEXT);
+                assert_eq!(leaves.len(), 2, "the fixture spans two leaves");
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                enqueue_download(&device, &head_block, &dag, &leaves);
+
+                let node = NodeId(CHILD_ID);
+                let bytes = block_on(engine.read_content(node)).expect("read succeeds");
+                assert_eq!(bytes, PLAINTEXT, "the exact plaintext round-trips");
+                assert_eq!(
+                    drain(&mut events),
+                    vec![
+                        progress(node, OpPhase::DownloadStarted),
+                        Event::SnapshotUpdated,
+                        progress(node, OpPhase::DownloadCompleted),
+                    ],
+                );
+                let view = block_on(engine.snapshot(ROOT)).unwrap();
+                let child = view
+                    .children
+                    .iter()
+                    .find(|c| c.id == node)
+                    .expect("child listed");
+                assert_eq!(child.size, Some(PLAINTEXT.len() as u64));
+                assert_eq!(child.mtime, Some(CHILD_MTIME));
+
+                // A second read re-serves the same record, now at the durable
+                // floor: the at-floor re-open yields the identical plaintext.
+                enqueue_download(&device, &head_block, &dag, &leaves);
+                assert_eq!(block_on(engine.read_content(node)).unwrap(), PLAINTEXT);
+            }
+
+            #[test]
+            fn a_tampered_leaf_fails_closed_with_no_partial_bytes() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, mut events) = started(&device);
+
+                let (leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+                device.http.enqueue_response(head_response(&dag.root_block));
+                // The first leaf does not content-address to its CID.
+                let mut tampered = leaves[0].sealed.clone();
+                *tampered.last_mut().unwrap() ^= 0x01;
+                device.http.enqueue_response(head_response(&tampered));
+
+                let node = NodeId(CHILD_ID);
+                let err = block_on(engine.read_content(node)).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::TrustViolation { .. }),
+                    "a leaf CID mismatch is a fail-closed trust violation: {err:?}"
+                );
+                assert_eq!(
+                    drain(&mut events),
+                    vec![
+                        progress(node, OpPhase::DownloadStarted),
+                        Event::OpProgress {
+                            op_id: None,
+                            node,
+                            phase: OpPhase::DownloadFailed,
+                            error: Some(err.to_string()),
+                        },
+                    ],
+                    "started then failed; no snapshot fold"
+                );
+                let view = block_on(engine.snapshot(ROOT)).unwrap();
+                let child = view.children.iter().find(|c| c.id == node).unwrap();
+                assert_eq!(child.size, None, "no partial state reaches the view");
+            }
+
+            #[test]
+            fn a_transplanted_child_envelope_rejects_fail_closed() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // The envelope names a DIFFERENT node id, served under the
+                // child's name: an id transplant.
+                let (_leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    [0xEE; 16],
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::TrustViolation { .. }),
+                    "an id transplant rejects fail-closed: {err:?}"
+                );
+            }
+
+            #[test]
+            fn a_child_envelope_bearing_a_grant_section_rejects() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                let (_leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    true,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::TrustViolation { .. }),
+                    "a grant-section-bearing child rejects fail-closed: {err:?}"
+                );
+            }
+
+            #[test]
+            fn folder_unknown_and_pending_nodes_map_to_their_errors() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (mut engine, _events) = started(&device);
+
+                assert_eq!(
+                    block_on(engine.read_content(ROOT)),
+                    Err(EngineError::NotAFile),
+                    "a folder node is not readable content"
+                );
+                assert_eq!(
+                    block_on(engine.read_content(NodeId([0x5A; 16]))),
+                    Err(EngineError::UnknownNode)
+                );
+
+                // A staged (pending-only) create has no ipnsName yet:
+                // availability, not trust — content is simply not published.
+                block_on(engine.command(Command::Create {
+                    parent: ROOT,
+                    name: "pending.txt".into(),
+                    kind: NodeKind::File,
+                    content: None,
+                }))
+                .unwrap();
+                let pending = block_on(engine.view())
+                    .unwrap()
+                    .lookup(ROOT, "pending.txt")
+                    .unwrap()
+                    .id;
+                assert!(
+                    matches!(
+                        block_on(engine.read_content(pending)),
+                        Err(EngineError::ContentUnavailable { .. })
+                    ),
+                    "a pending-only node is availability, not trust"
+                );
+            }
+
+            #[test]
+            fn an_empty_version_list_is_an_error() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                let (head_block, head_cid) = child_head(CHILD_ID, Vec::new(), false);
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+
+                assert!(
+                    matches!(
+                        block_on(engine.read_content(NodeId(CHILD_ID))),
+                        Err(EngineError::ContentUnavailable { .. })
+                    ),
+                    "no published version yields no content"
+                );
+            }
+
+            #[test]
+            fn a_manifest_size_disagreement_fails_closed() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // The version lies about its size relative to the manifest.
+                let (_leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64 + 1)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+                device.http.enqueue_response(head_response(&dag.root_block));
+
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::TrustViolation { .. }),
+                    "a size disagreement is fail-closed: {err:?}"
+                );
+            }
+
+            #[test]
+            fn a_replayed_lower_sequence_rejects_after_adoption() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                let (leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 2);
+                enqueue_download(&device, &head_block, &dag, &leaves);
+                block_on(engine.read_content(NodeId(CHILD_ID))).expect("adopts at sequence 2");
+
+                // Replay: re-serve sequence 1 for the same child. The per-name
+                // floor advanced to 2, so the replay rejects fail-closed.
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                match &err {
+                    EngineError::TrustViolation { message } => assert!(
+                        message.contains("sequence-not-newer"),
+                        "the replay names the sequence floor: {message}"
+                    ),
+                    other => panic!("a replay must reject fail-closed, got {other:?}"),
+                }
+            }
+
+            #[test]
+            fn an_unreachable_content_plane_is_availability_not_trust() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // No child record anywhere and a cold cache: nothing resolvable.
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::ContentUnavailable { .. }),
+                    "an unpublished child is availability: {err:?}"
+                );
+
+                // The record appears but no gateway response is scripted: every
+                // source transport-fails, which stays availability, never trust.
+                let (_leaves, dag) = content_dag(PLAINTEXT);
+                let (_head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::ContentUnavailable { .. }),
+                    "an unreachable gateway is availability: {err:?}"
+                );
+            }
         }
     }
 }
