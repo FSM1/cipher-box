@@ -181,9 +181,9 @@ where
 /// The transient insert-time input for a held record: the resolve/gate path has
 /// already unsealed the scope's write seed for this node, so the held set
 /// derives the narrow per-name signer from it once at insert and drops the seed
-/// (never persisting it — see [`HeldRecord`]). Not yet wired in production
-/// (only the #752 resolve-tick driver constructs it), hence crate-internal.
-#[allow(dead_code)] // wired by the #752 resolve-tick driver
+/// (never persisting it — see [`HeldRecord`]). Constructed by the resolve-tick
+/// driver ([`Engine::spawn_resolve_tick_loop`](crate::facade)), hence
+/// crate-internal.
 pub(crate) struct HeldMaterial {
     /// The node id (`id16`) — the held-set key and a signer-derivation input for
     /// an own-scope record. A gate-surfaced write grant overrides it with the
@@ -205,7 +205,6 @@ pub(crate) struct HeldMaterial {
 /// same node) a [`HeldRecord`] so the keyless re-PUT loop keeps it alive. Only a
 /// gate-passing record enters the set — a `TrustViolation`/`NoUpdate` never
 /// does (blueprint/engine.md "Liveness": never re-PUT a stale record).
-#[allow(dead_code)] // wired by the #752 resolve-tick driver
 pub(crate) async fn resolve_and_hold<T, S, A>(
     transport: &T,
     snapshot_cache: &S,

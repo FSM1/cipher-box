@@ -151,6 +151,7 @@ impl FloorStore for FloorStoreAdapter {
 #[wasm_bindgen]
 extern "C" {
     /// JS `SnapshotCacheSeam` (packages/client).
+    #[derive(Clone)]
     pub type JsSnapshotCacheSeam;
 
     #[wasm_bindgen(method, catch, js_name = put)]
@@ -167,6 +168,7 @@ extern "C" {
     async fn clear(this: &JsSnapshotCacheSeam) -> Result<JsValue, JsValue>;
 }
 
+#[derive(Clone)]
 pub(crate) struct SnapshotCacheAdapter {
     pub(crate) js: JsSnapshotCacheSeam,
 }

@@ -17,7 +17,6 @@ use crate::sync::model::{NodeMeta, Snapshot};
 /// child id/ipnsName uniqueness at unseal — so child uniqueness is trusted and
 /// not re-validated. `link_counter` is carried verbatim (feeds the dual-link
 /// tiebreak in [`Snapshot::winning_link`]).
-#[allow(dead_code)] // wired in start() (E4)
 pub(crate) fn project_root(root: NodeId, adopted: &Adopted) -> Snapshot {
     let mut snapshot = Snapshot::new(root);
     if let Some(node) = snapshot.node_mut(root) {
