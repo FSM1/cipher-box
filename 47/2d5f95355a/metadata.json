@@ -1,0 +1,34 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "472d5f95355a",
+  "strategy": "manual-commit",
+  "branch": "refactor/api-lock-helper-consolidation",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "apps/api/src/common/advisory-lock.ts",
+    "apps/api/src/content/content.service.ts",
+    "apps/api/src/mailbox/services/mailbox.service.integration.test.ts",
+    "apps/api/src/mailbox/services/mailbox.service.ts",
+    "apps/api/src/registry/pin-store.ts",
+    "apps/api/src/registry/services/account.service.integration.test.ts",
+    "apps/api/src/registry/services/registry.service.integration.test.ts",
+    "apps/api/src/registry/services/registry.service.ts",
+    "apps/api/src/testing/fake-repo.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/47/2d5f95355a/0/metadata.json",
+      "transcript": "/47/2d5f95355a/0/full.jsonl",
+      "compact_transcript": "/47/2d5f95355a/0/transcript.jsonl",
+      "content_hash": "/47/2d5f95355a/0/content_hash.txt",
+      "prompt": "/47/2d5f95355a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 86,
+    "cache_creation_tokens": 95040,
+    "cache_read_tokens": 3809306,
+    "output_tokens": 25035,
+    "api_call_count": 43
+  }
+}

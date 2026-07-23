@@ -1,0 +1,1 @@
+can you please implement the relevant api cleanups proposed in #712
