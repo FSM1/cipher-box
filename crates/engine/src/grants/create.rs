@@ -2,9 +2,10 @@
 //! Grant creation"; #635).
 //!
 //! Mints the owner-only **read** sharing path in the sequence the blueprint
-//! fixes: converge the subtree, mint the grantee scope at read epoch 1, reparent
-//! the descendant scope roots, publish grantee-first, then post the sealed share
-//! pointer. Convergence is the load-bearing correctness rule — a grant over a
+//! fixes: converge the subtree, mint the grantee scope at read epoch 1, publish
+//! grantee-first, re-key the reparented descendants under the fresh derivation,
+//! then post the sealed share pointer. Convergence is the load-bearing
+//! correctness rule — a grant over a
 //! subtree that cannot be proven epoch-converged is refused **fail-closed**, so a
 //! new grantee can never regress through an ancestor scope's history (CONTEXT.md
 //! "Epoch-converged"). Each step carries its rationale inline.
@@ -46,7 +47,7 @@ use crate::grants::child_index::{canonicalize, insert_child, remove_child};
 use crate::hex::hex_lower;
 use crate::mailbox::post_sealed;
 use crate::rotation::{
-    CommittedSet, ResealError, ResealSeeds, ResealedScopeRoot, ScopeRootIdentity,
+    CommittedSet, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, ScopeRootIdentity,
     ScopeRootPublishError, ScopeRootPublisher, SweepError, SweepResolver, derive_write_name,
     reseal_scope_root, sweep_pass,
 };
@@ -80,12 +81,10 @@ pub struct GranteeScopePlan<'a> {
     pub write_epoch: u64,
     /// The scope's pointer read key.
     pub pointer_read_key: &'a [u8; SECRET_LEN],
-    /// The descendant scope roots inside the folder: converged before minting
-    /// and reparented into the new scope's direct-child-scope index.
-    ///
-    /// Descent re-key of these descendants under the fresh grantee override seed
-    /// is deferred (fail-safe under-share) pending blueprint confirmation —
-    /// tracked in #770.
+    /// The descendant scope roots inside the folder: converged before minting,
+    /// reparented into the new scope's direct-child-scope index, and re-keyed so
+    /// each one's ascent link seals under `node_seed(fresh_override_seed,
+    /// descendant.scope_id)` (blueprint/engine.md "subtree swept in").
     pub subtree_child_index: &'a [ChildScopeRef],
 }
 
@@ -181,6 +180,33 @@ pub enum CreateGrantError {
     /// Publishing the grantee scope root failed (register-first: nothing was
     /// pushed, so this is still fail-closed).
     Publish(ScopeRootPublishError),
+    /// Resolving a reparented descendant for its re-key failed. Post-publish: the
+    /// grantee root is already on the network; the descendant keeps its old parent
+    /// derivation (grantee cannot yet descend into it) — reconciled by #745/#746.
+    DescendantResolve {
+        /// The descendant that could not be resolved.
+        scope_id: [u8; 16],
+        /// The fail-closed resolve failure.
+        reason: ResolveFailure,
+    },
+    /// Re-sealing a reparented descendant's ascent link under the fresh grantee
+    /// derivation failed. Post-publish: same partial-commit surface as
+    /// `DescendantResolve`.
+    DescendantMint {
+        /// The descendant that could not be re-sealed.
+        scope_id: [u8; 16],
+        /// The underlying re-seal rejection.
+        error: ResealError,
+    },
+    /// Publishing a re-keyed descendant failed. Post-publish: the grantee root and
+    /// any earlier-re-keyed descendants are committed; this one keeps its old
+    /// parent derivation — reconciled by #745/#746.
+    DescendantPublish {
+        /// The descendant whose re-keyed record did not land.
+        scope_id: [u8; 16],
+        /// The publish failure.
+        error: ScopeRootPublishError,
+    },
     /// Re-sealing the reparented parent scope root failed. Post-publish: the
     /// grantee root is already on the network with no parent reference — an
     /// orphan reconciled by #745/#746.
@@ -207,6 +233,9 @@ impl CreateGrantError {
             Self::Entropy(_) => "entropy-error",
             Self::Mint(_) => "mint-failed",
             Self::Publish(_) => "publish-failed",
+            Self::DescendantResolve { .. } => "descendant-resolve-failed",
+            Self::DescendantMint { .. } => "descendant-mint-failed",
+            Self::DescendantPublish { .. } => "descendant-publish-failed",
             Self::ParentMint(_) => "parent-mint-failed",
             Self::ParentPublish(_) => "parent-publish-failed",
             Self::Mailbox(_) => "mailbox-post-failed",
@@ -224,9 +253,10 @@ impl std::error::Error for CreateGrantError {}
 
 /// Mint a read grant for one recipient over `grantee`'s folder.
 ///
-/// Converge → mint (epoch 1) → reparent + parent index update → publish
-/// (grantee first) → post the mailbox share pointer. Fail-closed **through the
-/// grantee publish** (step 5): any earlier error mints and shares nothing. Past
+/// Converge → mint (epoch 1) → publish (grantee first) → re-key the reparented
+/// descendants under the fresh grantee derivation → parent index update → post
+/// the mailbox share pointer. Fail-closed **through the grantee publish** (step
+/// 5): any earlier error mints and shares nothing. Past
 /// that point the sequence is not atomic — see [`CreateGrantError`] for what
 /// each post-publish variant leaves committed (orphan cleanup is deferred to
 /// #745/#746). See the module docs for the full sequence and the deferred
@@ -367,6 +397,78 @@ where
         .await
         .map_err(CreateGrantError::Publish)?;
 
+    // 5b) Re-key the reparented descendants under the fresh grantee derivation
+    // (blueprint/engine.md "subtree swept in"). Each descendant's ascent link
+    // seals its own override seed to a keypair derived from its parent node seed;
+    // the parent is now the grantee scope, so re-seal each under
+    // `node_seed(override_seed, descendant.scope_id)` — metadata-only (existing
+    // seed, current epoch, `prev = None`), threaded top-down exactly as the eager
+    // cascade does (rotation/cascade.rs). Without this the grantee holds only the
+    // fresh seed and cannot open a descendant sealed at the old parent derivation.
+    // Only the reparented direct children move parent; deeper descendants keep
+    // their unchanged parent's derivation. Register-first: the grantee root (which
+    // already lists these descendants) is published above, so a descendant now
+    // points back at a parent that exists.
+    for descendant in grantee.subtree_child_index {
+        let target = sweep_resolver.resolve(descendant).await.map_err(|reason| {
+            CreateGrantError::DescendantResolve {
+                scope_id: descendant.scope_id,
+                reason,
+            }
+        })?;
+        let parent_node_seed =
+            Zeroizing::new(*kdf::node_seed(&override_seed, &descendant.scope_id).as_bytes());
+        let identity = ScopeRootIdentity {
+            v: target.v,
+            scope_id: descendant.scope_id,
+            ipns_name: &target.ipns_name,
+            owner_enc_pub: &target.owner_enc_pub,
+            parent_node_seed: Some(&parent_node_seed),
+            pseudonym_signer: &target.pseudonym_signer,
+        };
+        let seeds = ResealSeeds {
+            override_seed: &target.override_seed,
+            read_epoch: target.current_read_epoch,
+            prev: None,
+            write_scope_seed: &target.write_scope_seed,
+            write_epoch: target.write_epoch,
+            pointer_read_key: &target.pointer_read_key,
+        };
+        let canonical_index = canonicalize(&target.direct_child_scope_index);
+        let committed = CommittedSet {
+            commitment: &target.commitment,
+            commitment_sig: &target.commitment_sig,
+            grant_ledger: &target.grant_ledger,
+            write_history_link: &target.write_history_link,
+            direct_child_scope_index: &canonical_index,
+        };
+        let section = reseal_scope_root(
+            entropy,
+            &identity,
+            &seeds,
+            &committed,
+            &target.carried_history_links,
+        )
+        .map_err(|error| CreateGrantError::DescendantMint {
+            scope_id: descendant.scope_id,
+            error,
+        })?;
+        let record = ResealedScopeRoot {
+            scope_id: descendant.scope_id,
+            ipns_name: target.ipns_name.clone(),
+            read_epoch: target.current_read_epoch,
+            write_epoch: target.write_epoch,
+            section,
+        };
+        publisher
+            .publish_scope_root(&record)
+            .await
+            .map_err(|error| CreateGrantError::DescendantPublish {
+                scope_id: descendant.scope_id,
+                error,
+            })?;
+    }
+
     // 6) Parent index update — a metadata-only re-seal at the same epoch.
     let mut parent_index = parent.current_child_index.to_vec();
     for descendant in grantee.subtree_child_index {
@@ -453,8 +555,13 @@ mod tests {
     use crate::grants::recipient_blinded_tag;
     use crate::mailbox::poll_verified;
     use crate::rotation::{PrevEpochSeed, ResolveFailure, SweepTarget};
+    use crate::secret_util::ct_eq_32;
     use crate::testkit::fakes::{InMemoryFloorStore, InMemoryMailboxHub};
     use crate::testkit::{SeededEntropy, block_on};
+    use cipherbox_core::seal::{
+        AadContext, AscentLink, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, open_ascent_link,
+        open_grant_blob,
+    };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
     use cipherbox_core::suite::x25519::X25519Secret;
@@ -972,6 +1079,90 @@ mod tests {
         assert_ne!(
             key_a, key_b,
             "same folder, different recipients → different idempotency keys"
+        );
+    }
+
+    #[test]
+    fn grantee_can_descend_into_a_reparented_descendant() {
+        // The #770 fix: a reparented descendant's ascent link must re-seal under
+        // `node_seed(fresh_grantee_seed, descendant.scope_id)` so the grantee —
+        // holding only the fresh seed from its grant blob — can descend the shared
+        // subtree. No floor is raised, so the pre-mint sweep publishes nothing
+        // (the descendant is already converged); the descendant record below is
+        // published solely by the re-key step. Pre-fix, no descendant record is
+        // published, so the lookup below finds nothing and this test fails.
+        let subtree = vec![ChildScopeRef::new(
+            DESCENDANT_SCOPE,
+            DESCENDANT_NAME.to_vec(),
+        )];
+        let (outcome, published, _hub) = run(7, &subtree, None, FakeNet::new(Ok(())));
+        outcome.expect("grant creation succeeds over a converged subtree");
+
+        // The grantee opens its grant blob to recover the fresh override seed.
+        let grantee_record = published
+            .iter()
+            .find(|r| r.scope_id == GRANTEE_SCOPE)
+            .expect("grantee root published");
+        let grantee_tag =
+            recipient_blinded_tag(&recipient_enc(), &owner_enc().public(), &grantee_name())
+                .unwrap();
+        let grant_blob = grantee_record
+            .section
+            .grant_blobs
+            .iter()
+            .find(|b| b.tag == grantee_tag)
+            .expect("grantee grant blob present");
+        let grant_ctx = AadContext {
+            v: V,
+            id: GRANTEE_SCOPE,
+            scope: GRANTEE_SCOPE,
+            epoch: 1,
+            struct_tag: STRUCT_TAG_GRANT_BLOB,
+        };
+        let grant_payload = open_grant_blob(
+            &recipient_enc(),
+            &grant_blob.enc,
+            &grant_ctx,
+            &grant_blob.ciphertext,
+        )
+        .expect("grantee opens its grant blob");
+        let grantee_seed = *grant_payload.read_scope_seed();
+
+        // The descendant was re-keyed and published; its ascent link opens under
+        // the grantee's derivation and yields the descendant's own override seed
+        // ([0x71; _] from the resolver) — proving the grantee can descend.
+        let descendant_record = published
+            .iter()
+            .find(|r| r.scope_id == DESCENDANT_SCOPE)
+            .expect("descendant re-keyed and published");
+        assert_eq!(
+            descendant_record.read_epoch, 1,
+            "metadata-only re-key: no epoch bump"
+        );
+        let ascent = descendant_record
+            .section
+            .ascent_link
+            .as_ref()
+            .expect("reparented descendant carries an ascent link");
+        let parent_node_seed = *kdf::node_seed(&grantee_seed, &DESCENDANT_SCOPE).as_bytes();
+        let ascent_ctx = AadContext {
+            v: V,
+            id: DESCENDANT_SCOPE,
+            scope: DESCENDANT_SCOPE,
+            epoch: 1,
+            struct_tag: STRUCT_TAG_ASCENT_LINK,
+        };
+        let link = AscentLink {
+            ascent_public: ascent.ascent_public,
+            enc: ascent.enc,
+            ciphertext: ascent.ciphertext.clone(),
+            unknown: Vec::new(),
+        };
+        let descend = open_ascent_link(&parent_node_seed, &ascent_ctx, &link)
+            .expect("grantee derivation opens the descendant ascent link");
+        assert!(
+            ct_eq_32(descend.override_seed(), &[0x71; SECRET_LEN]),
+            "ascent link yields the descendant override seed under the grantee derivation"
         );
     }
 }
