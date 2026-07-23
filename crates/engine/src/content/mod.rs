@@ -36,7 +36,11 @@ pub use read::{
 };
 pub use retention::{ContentVersion, PrunePlan, QuotaExceeded, plan_prune, pre_flight_quota_check};
 
+use cipherbox_core::content::{encode_content_cid_str, open_chunk};
+use cipherbox_core::seal::Version;
+
 use crate::entropy::{Entropy, EntropyError};
+use crate::seams::Http;
 
 /// A fully sealed content version, ready to pin and register: the version's
 /// `contentCid`, the DAG root block it addresses, and every sealed leaf block.
@@ -94,11 +98,89 @@ pub fn seal_content(
     })
 }
 
+/// Why a verified content read failed — the read dual of [`SealError`]. The
+/// classification is fail-closed: a CID, manifest, or unseal disagreement is
+/// trust; no reachable source or an over-cap block is availability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OpenError {
+    /// A fail-closed trust violation; the message names the check, never key
+    /// material.
+    Trust(String),
+    /// Availability — retryable, never a trust verdict.
+    Unavailable(String),
+}
+
+/// Map a content-block read failure onto the [`OpenError`] classification.
+fn open_read_error(e: ReadError) -> OpenError {
+    match e {
+        ReadError::TrustViolation(e) => {
+            OpenError::Trust(format!("content block rejected: [{}]", e.check()))
+        }
+        ReadError::Unavailable => OpenError::Unavailable("content block unavailable".to_owned()),
+        ReadError::TooLarge { size, limit } => {
+            OpenError::Unavailable(format!("content block exceeds the cap ({size} > {limit})"))
+        }
+    }
+}
+
+/// Fetch, verify, and reassemble one content version's plaintext — the read
+/// dual of [`seal_content`]: DAG root fetch (CID-verified fail-closed) →
+/// manifest-vs-version size cross-check → per-leaf CID-verified fetch + unseal
+/// under the version content key → reassembled-length cross-check.
+pub async fn open_content<H: Http>(
+    gateway: &Gateway,
+    http: &H,
+    version: &Version,
+) -> Result<Vec<u8>, OpenError> {
+    let root_cid_str = encode_content_cid_str(&version.content_cid);
+    let root_block = read_block(
+        gateway,
+        http,
+        &root_cid_str,
+        &version.content_cid,
+        ContentPlane::Root,
+    )
+    .await
+    .map_err(open_read_error)?;
+    let manifest = decode_root(&root_block)
+        .map_err(|e| OpenError::Trust(format!("content DAG root rejected: {e:?}")))?;
+    if manifest.size != version.size {
+        return Err(OpenError::Trust(format!(
+            "manifest size {} disagrees with version size {}",
+            manifest.size, version.size
+        )));
+    }
+
+    // Preallocate up to a fixed budget, then grow as leaves arrive: the size is
+    // authenticated but unproven until every leaf is fetched, so a large size
+    // field must not commit an outsized allocation upfront (on wasm32 it would
+    // also truncate). The reassembled-length cross-check below is the gate.
+    let prealloc = manifest.size.min(limits::MAX_RESOLVED_RECORD_BYTES as u64) as usize;
+    let mut plaintext = Vec::with_capacity(prealloc);
+    for leaf_cid in &manifest.leaf_cids {
+        let leaf_cid_str = encode_content_cid_str(leaf_cid);
+        let sealed = read_block(gateway, http, &leaf_cid_str, leaf_cid, ContentPlane::Leaf)
+            .await
+            .map_err(open_read_error)?;
+        let chunk = open_chunk(version.content_key(), &sealed)
+            .map_err(|e| OpenError::Trust(format!("leaf unseal rejected: [{}]", e.check())))?;
+        plaintext.extend_from_slice(&chunk);
+    }
+    if plaintext.len() as u64 != manifest.size {
+        return Err(OpenError::Trust(format!(
+            "reassembled length {} disagrees with manifest size {}",
+            plaintext.len(),
+            manifest.size
+        )));
+    }
+    Ok(plaintext)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testkit::SeededEntropy;
-    use cipherbox_core::content::{open_chunk, verify_cid};
+    use cipherbox_core::content::verify_cid;
     use cipherbox_core::suite::aead::KEY_LEN;
 
     #[test]

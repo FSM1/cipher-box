@@ -13,6 +13,7 @@ import { CorrelatedTransport } from './correlatedTransport.js';
 import type {
   CommandDescriptor,
   EventDescriptor,
+  SnapshotDescriptor,
   WorkerMessage,
   WorkerRequest,
 } from './worker/protocol.js';
@@ -25,6 +26,10 @@ export interface EngineTransport {
   start(secret: ArrayBuffer): Promise<void>;
   /** Sends one command; `transfer` lists any owned buffers to move, not copy. */
   command(command: CommandDescriptor, transfer: Transferable[]): Promise<void>;
+  /** Reads a key-free snapshot of `folder` for a UI paint. */
+  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor>;
+  /** Downloads one file node's plaintext through the verified read pipeline. */
+  download(node: Uint8Array): Promise<ArrayBuffer>;
   /** Subscribes to the one-way event stream; returns an unsubscribe. */
   subscribe(listener: EngineEventListener): () => void;
   /** Tears the transport down; pending requests reject. */
@@ -63,7 +68,8 @@ export class LocalTransport extends CorrelatedTransport {
             resolveReady();
             return;
           case 'response':
-            this.settle(message.id, message.ok, message.ok ? undefined : message.error);
+            if (message.ok) this.settle(message.id, true, undefined, message.result);
+            else this.settle(message.id, false, message.error, undefined, message.code);
             return;
           case 'event':
             this.emit(message.event);
@@ -93,6 +99,18 @@ export class LocalTransport extends CorrelatedTransport {
   command(command: CommandDescriptor, transfer: Transferable[]): Promise<void> {
     return this.dispatch(this.ready, (id) =>
       this.worker.postMessage({ type: 'command', id, command }, transfer)
+    );
+  }
+
+  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
+    return this.request<SnapshotDescriptor>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'snapshot', id, folder }, [])
+    );
+  }
+
+  download(node: Uint8Array): Promise<ArrayBuffer> {
+    return this.request<ArrayBuffer>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'download', id, node }, [])
     );
   }
 

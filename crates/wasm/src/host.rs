@@ -1,10 +1,12 @@
 //! The production engine host: constructs the one engine instance over the
-//! browser seams and exposes `start` / `command` / `nextEvent` to the worker.
+//! browser seams and exposes `start` / `command` / `snapshot` / `download` /
+//! `nextEvent` to the worker.
 //!
 //! Loaded inside `packages/client`'s dedicated engine worker (never the UI
-//! realm). `start` and `command` mutate the single engine writer behind an
-//! async mutex, so concurrent calls queue rather than race; `nextEvent` reads
-//! the independent event stream and runs concurrently with a command.
+//! realm). The single engine sits behind an async RwLock: `start`/`command`
+//! take the write lock and serialize, while the reads (`snapshot`, `download`)
+//! share the read lock — a long download never blocks a snapshot. `nextEvent`
+//! reads the independent event stream and runs concurrently with a command.
 //!
 //! Key material lives only in this worker's WASM linear memory: the login
 //! secret enters once through `start` (copied into the engine's `Zeroizing`
@@ -14,12 +16,12 @@
 
 use std::rc::Rc;
 
-use cipherbox_engine::facade::{Engine, EventStream, LoginSecret};
+use async_lock::{Mutex, RwLock};
+use cipherbox_engine::facade::{Engine, EngineError, EventStream, LoginSecret};
 use cipherbox_engine::{
     Entropy, EntropyError, GatewayConfig, GatewaySource, SeamSet, SeamTypes, SyncTimingProfile,
 };
-use futures_util::lock::Mutex;
-use js_sys::{Promise, Reflect};
+use js_sys::{Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 use zeroize::Zeroizing;
@@ -31,7 +33,7 @@ use crate::seams_bridge::{
     RecordTransportAdapter, RefreshHintSourceAdapter, SchedulerAdapter, SnapshotCacheAdapter,
     StagingStoreAdapter,
 };
-use crate::{Command, Event};
+use crate::{Command, Event, NodeId, SnapshotView};
 
 /// The web host's concrete seam family (blueprint/engine.md `SeamTypes`): every
 /// engine seam is a JS-object adapter from `seams_bridge`.
@@ -74,7 +76,7 @@ fn take_seam<T: JsCast>(bag: &JsValue, key: &str) -> Result<T, JsError> {
 /// The one long-lived engine instance for this origin, hosted in the worker.
 #[wasm_bindgen]
 pub struct EngineHandle {
-    engine: Rc<Mutex<Engine<WebSeamTypes>>>,
+    engine: Rc<RwLock<Engine<WebSeamTypes>>>,
     events: Rc<Mutex<EventStream>>,
 }
 
@@ -167,7 +169,7 @@ impl EngineHandle {
             gateway,
         );
         Ok(EngineHandle {
-            engine: Rc::new(Mutex::new(engine)),
+            engine: Rc::new(RwLock::new(engine)),
             events: Rc::new(Mutex::new(events)),
         })
     }
@@ -181,7 +183,7 @@ impl EngineHandle {
         let engine = self.engine.clone();
         future_to_promise(async move {
             engine
-                .lock()
+                .write()
                 .await
                 .start(LoginSecret::new(secret))
                 .await
@@ -197,12 +199,45 @@ impl EngineHandle {
         let facade_command = command.into_facade();
         future_to_promise(async move {
             engine
-                .lock()
+                .write()
                 .await
                 .command(facade_command)
                 .await
                 .map_err(engine_error)?;
             Ok(JsValue::UNDEFINED)
+        })
+    }
+
+    /// Reads a key-free [`SnapshotView`] of `folder` for a UI paint. Resolves
+    /// with the view; rejects with the engine error.
+    pub fn snapshot(&self, folder: &NodeId) -> Promise {
+        let engine = self.engine.clone();
+        let folder = folder.facade();
+        future_to_promise(async move {
+            let view = engine
+                .read()
+                .await
+                .snapshot(folder)
+                .await
+                .map_err(engine_error)?;
+            Ok(SnapshotView::from_facade(view).into())
+        })
+    }
+
+    /// Downloads and decrypts one file node's content through the verified
+    /// read pipeline. Resolves with the plaintext bytes as a `Uint8Array`;
+    /// rejects with the engine error.
+    pub fn download(&self, node: &NodeId) -> Promise {
+        let engine = self.engine.clone();
+        let node = node.facade();
+        future_to_promise(async move {
+            let bytes = engine
+                .read()
+                .await
+                .read_content(node)
+                .await
+                .map_err(engine_error)?;
+            Ok(Uint8Array::from(bytes.as_slice()).into())
         })
     }
 
@@ -221,8 +256,28 @@ impl EngineHandle {
     }
 }
 
-/// Renders an engine error as a rejection value (diagnostic string, no key
-/// material — the engine's `Display` is redacted by construction).
-fn engine_error(error: cipherbox_engine::facade::EngineError) -> JsValue {
-    JsError::new(&error.to_string()).into()
+/// Renders an engine error as a rejection value: a `js_sys::Error` whose
+/// message is the diagnostic `Display` string (no key material — redacted by
+/// construction) and whose `code` property is the stable camelCase variant
+/// name the client matches on instead of the prose.
+fn engine_error(error: EngineError) -> JsValue {
+    let code = match &error {
+        EngineError::NotStarted => "notStarted",
+        EngineError::AlreadyStarted => "alreadyStarted",
+        EngineError::InvalidSecret => "invalidSecret",
+        EngineError::UnknownNode => "unknownNode",
+        EngineError::NotAFolder => "notAFolder",
+        EngineError::NotAFile => "notAFile",
+        EngineError::ContentUnavailable { .. } => "contentUnavailable",
+        EngineError::TrustViolation { .. } => "trustViolation",
+        EngineError::Unimplemented { .. } => "unimplemented",
+        EngineError::Seam { .. } => "seam",
+        EngineError::Entropy { .. } => "entropy",
+        EngineError::Auth { .. } => "auth",
+        EngineError::ColdStart { .. } => "coldStart",
+    };
+    let js = js_sys::Error::new(&error.to_string());
+    // Setting a plain property on a fresh `Error` cannot fail.
+    let _ = Reflect::set(&js, &JsValue::from_str("code"), &JsValue::from_str(code));
+    js.into()
 }

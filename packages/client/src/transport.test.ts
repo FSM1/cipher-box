@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
+import { emptySnapshot } from './testkit.js';
 import { LocalTransport, type EngineWorkerLike } from './transport.js';
-import type { EventDescriptor, WorkerMessage, WorkerRequest } from './worker/protocol.js';
+import type {
+  EventDescriptor,
+  SnapshotDescriptor,
+  WorkerMessage,
+  WorkerRequest,
+} from './worker/protocol.js';
 
 /** A worker stand-in: records posted requests, replays worker→UI messages. */
 class FakeWorker implements EngineWorkerLike {
@@ -92,10 +98,15 @@ describe('LocalTransport', () => {
       id: idA,
       ok: false,
       error: 'command not implemented yet: manualRefresh',
+      code: 'unimplemented',
     });
     worker.emit({ type: 'response', id: idB, ok: true });
 
-    await expect(failing).rejects.toThrow('not implemented');
+    // The stable code crosses alongside the human-readable message.
+    await expect(failing).rejects.toMatchObject({
+      code: 'unimplemented',
+      message: 'command not implemented yet: manualRefresh',
+    });
     await expect(ok).resolves.toBeUndefined();
   });
 
@@ -112,6 +123,97 @@ describe('LocalTransport', () => {
       { kind: 'stalenessChanged', staleness: 'stale' },
       { kind: 'deadLetter', opId: 7n },
       { kind: 'snapshotUpdated' },
+    ];
+    for (const event of sent) worker.emit({ type: 'event', event });
+
+    expect(received).toEqual(sent);
+  });
+
+  it('resolves a snapshot request with its result payload', async () => {
+    const worker = new FakeWorker();
+    const transport = new LocalTransport(worker);
+    worker.emit({ type: 'ready' });
+
+    const folder = new Uint8Array(16).fill(5);
+    const pending = transport.snapshot(folder);
+    await tick();
+
+    const { message } = worker.posted[0];
+    expect(message).toMatchObject({ type: 'snapshot', folder });
+    const result: SnapshotDescriptor = {
+      ...emptySnapshot(folder),
+      deadLetters: [1n],
+      staleness: 'stale',
+    };
+    worker.emit({ type: 'response', id: message.id, ok: true, result });
+
+    await expect(pending).resolves.toEqual(result);
+  });
+
+  it('correlates interleaved command, snapshot, and download answered out of order', async () => {
+    const worker = new FakeWorker();
+    const transport = new LocalTransport(worker);
+    worker.emit({ type: 'ready' });
+
+    const snapshotResult = emptySnapshot();
+    const downloadResult = new Uint8Array([4, 5, 6]).buffer;
+
+    const command = transport.command({ kind: 'manualRefresh' }, []);
+    const snapshot = transport.snapshot(new Uint8Array(16));
+    const download = transport.download(new Uint8Array(16));
+    await tick();
+
+    const [commandId, snapshotId, downloadId] = worker.posted.map((entry) => entry.message.id);
+    // Answer in reverse issue order; each promise must get its own value.
+    worker.emit({ type: 'response', id: downloadId, ok: true, result: downloadResult });
+    worker.emit({ type: 'response', id: snapshotId, ok: true, result: snapshotResult });
+    worker.emit({ type: 'response', id: commandId, ok: true });
+
+    await expect(command).resolves.toBeUndefined();
+    await expect(snapshot).resolves.toEqual(snapshotResult);
+    expect([...new Uint8Array(await download)]).toEqual([4, 5, 6]);
+  });
+
+  it('rejects only the matching read on an error response', async () => {
+    const worker = new FakeWorker();
+    const transport = new LocalTransport(worker);
+    worker.emit({ type: 'ready' });
+
+    const failing = transport.download(new Uint8Array(16));
+    const ok = transport.snapshot(new Uint8Array(16));
+    await tick();
+    const [idA, idB] = worker.posted.map((entry) => entry.message.id);
+
+    worker.emit({
+      type: 'response',
+      id: idA,
+      ok: false,
+      error: 'content unavailable: pending',
+      code: 'contentUnavailable',
+    });
+    worker.emit({ type: 'response', id: idB, ok: true, result: emptySnapshot() });
+
+    await expect(failing).rejects.toMatchObject({ code: 'contentUnavailable' });
+    await expect(ok).resolves.toMatchObject({ staleness: 'fresh' });
+  });
+
+  it('delivers renewalFailed and opProgress events to subscribers', async () => {
+    const worker = new FakeWorker();
+    const transport = new LocalTransport(worker);
+    worker.emit({ type: 'ready' });
+
+    const received: EventDescriptor[] = [];
+    transport.subscribe((event) => received.push(event));
+
+    const sent: EventDescriptor[] = [
+      { kind: 'renewalFailed', routingKey: 'k51abc', detail: 'republish rejected' },
+      {
+        kind: 'opProgress',
+        opId: null,
+        node: new Uint8Array(16),
+        phase: 'downloadStarted',
+        error: null,
+      },
     ];
     for (const event of sent) worker.emit({ type: 'event', event });
 

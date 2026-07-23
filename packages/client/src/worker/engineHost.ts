@@ -4,9 +4,9 @@
  * never leaves it.
  */
 
-import type { CommandDescriptor, EventDescriptor } from './protocol.js';
+import type { CommandDescriptor, EventDescriptor, SnapshotDescriptor } from './protocol.js';
 import type { EngineWasm } from './engineWasm.js';
-import { buildCommand, readEvent } from './commandCodec.js';
+import { buildCommand, readEvent, readSnapshot } from './commandCodec.js';
 
 /**
  * The engine-facing surface the protocol server ([`serveEngine`]) drives. The
@@ -16,6 +16,8 @@ import { buildCommand, readEvent } from './commandCodec.js';
 export interface EngineHostLike {
   start(secret: ArrayBuffer): Promise<void>;
   command(command: CommandDescriptor): Promise<void>;
+  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor>;
+  download(node: Uint8Array): Promise<ArrayBuffer>;
   nextEvent(): Promise<EventDescriptor | null>;
 }
 
@@ -43,6 +45,20 @@ export class EngineHost implements EngineHostLike {
 
   async command(command: CommandDescriptor): Promise<void> {
     await this.handle.command(buildCommand(this.wasm, command));
+  }
+
+  async snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
+    const view = await this.handle.snapshot(this.wasm.NodeId.fromBytes(folder));
+    return readSnapshot(this.wasm, view);
+  }
+
+  async download(node: Uint8Array): Promise<ArrayBuffer> {
+    const bytes = await this.handle.download(this.wasm.NodeId.fromBytes(node));
+    // The handle returns a JS-owned copy (never a WASM-memory view); reuse its
+    // exact backing buffer for the transfer, re-slicing only a partial view.
+    return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+      ? (bytes.buffer as ArrayBuffer)
+      : (bytes.slice().buffer as ArrayBuffer);
   }
 
   async nextEvent(): Promise<EventDescriptor | null> {

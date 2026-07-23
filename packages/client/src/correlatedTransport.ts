@@ -11,11 +11,27 @@
  */
 
 import type { EngineEventListener, EngineTransport } from './transport.js';
-import type { CommandDescriptor, EventDescriptor } from './worker/protocol.js';
+import type { CommandDescriptor, EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 
 interface Pending {
-  resolve: () => void;
+  resolve: (result: unknown) => void;
   reject: (error: Error) => void;
+}
+
+/**
+ * A rejected engine request. `code` is the engine's stable machine-readable
+ * error code (the wasm host's camelCase `EngineError` variant name, e.g.
+ * `'unknownNode'`, `'contentUnavailable'`) when the failure crossed from the
+ * engine; absent for transport-level failures.
+ */
+export class EngineRequestError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = 'EngineRequestError';
+    this.code = code;
+  }
 }
 
 /**
@@ -43,6 +59,8 @@ export abstract class CorrelatedTransport implements EngineTransport {
 
   abstract start(secret: ArrayBuffer): Promise<void>;
   abstract command(command: CommandDescriptor, transfer: Transferable[]): Promise<void>;
+  abstract snapshot(folder: Uint8Array): Promise<SnapshotDescriptor>;
+  abstract download(node: Uint8Array): Promise<ArrayBuffer>;
   abstract close(): void;
 
   subscribe(listener: EngineEventListener): () => void {
@@ -59,19 +77,20 @@ export abstract class CorrelatedTransport implements EngineTransport {
    * The no-hang request skeleton: short-circuit on `terminalError` before
    * awaiting the readiness gate, register the pending entry, then `send`. A
    * synchronous `send` failure deletes the pending entry before rejecting so it
-   * is never stranded.
+   * is never stranded. Resolves with the response's result value (`undefined`
+   * for a plain ack).
    */
-  protected dispatch(readyGate: Promise<void>, send: (id: number) => void): Promise<void> {
+  protected request<T>(readyGate: Promise<void>, send: (id: number) => void): Promise<T> {
     if (this.terminalError) return Promise.reject(this.terminalError);
     return readyGate.then(
       () =>
-        new Promise<void>((resolve, reject) => {
+        new Promise<T>((resolve, reject) => {
           if (this.terminalError) {
             reject(this.terminalError);
             return;
           }
           const id = this.nextId++;
-          this.pending.set(id, { resolve, reject });
+          this.pending.set(id, { resolve: resolve as (result: unknown) => void, reject });
           try {
             send(id);
           } catch (error) {
@@ -82,13 +101,18 @@ export abstract class CorrelatedTransport implements EngineTransport {
     );
   }
 
+  /** The void-ack variant of [`request`](CorrelatedTransport.request). */
+  protected dispatch(readyGate: Promise<void>, send: (id: number) => void): Promise<void> {
+    return this.request<void>(readyGate, send);
+  }
+
   /** Correlates a response to its request id, resolving or rejecting it. */
-  protected settle(id: number, ok: boolean, error?: string): void {
+  protected settle(id: number, ok: boolean, error?: string, result?: unknown, code?: string): void {
     const pending = this.pending.get(id);
     if (!pending) return;
     this.pending.delete(id);
-    if (ok) pending.resolve();
-    else pending.reject(new Error(error));
+    if (ok) pending.resolve(result);
+    else pending.reject(new EngineRequestError(error ?? 'engine request failed', code));
   }
 
   /**

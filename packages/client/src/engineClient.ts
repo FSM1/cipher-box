@@ -24,7 +24,7 @@ import { LeaderRelay } from './leaderRelay.js';
 import { LeaderElection, type LockManagerLike } from './leadership.js';
 import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './transport.js';
 import { LocalTransport } from './transport.js';
-import type { CommandDescriptor } from './worker/protocol.js';
+import type { CommandDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 
 /**
  * Re-derives the login secret when this tab is promoted to leader mid-session
@@ -114,6 +114,14 @@ export class EngineClient implements EngineTransport {
 
   command(command: CommandDescriptor, transfer: Transferable[]): Promise<void> {
     return this.current.command(command, transfer);
+  }
+
+  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
+    return this.current.snapshot(folder);
+  }
+
+  download(node: Uint8Array): Promise<ArrayBuffer> {
+    return this.current.download(node);
   }
 
   subscribe(listener: EngineEventListener): () => void {

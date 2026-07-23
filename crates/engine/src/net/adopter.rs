@@ -98,30 +98,12 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<Candidate, GateError> {
-        // Step 1 — verify to read the signed `/ipfs/<cid>` value (the head
-        // anchor). Trust is the gate's; this only extracts the anchor.
-        let verified = IpnsRecord::unmarshal(record_bytes)
-            .and_then(|record| record.verify(name))
-            .map_err(assembly_reject)?;
+        // Steps 1-4 are the shared head-envelope assembly; the sequence is
+        // discarded — the gate re-verifies the record from scratch.
+        let (_sequence, envelope) =
+            assemble_head_envelope(self.gateway, self.http, name, record_bytes).await?;
 
-        // Step 2/3 — recover the head CID string and the binary CIDv1 anchor.
-        let cid_str = head_cid_from_value(&verified.value)
-            .ok_or_else(|| assembly_reject(Malformed::ContentCidStrMalformed.into()))?;
-        let expected_cid = decode_content_cid_str(&cid_str).map_err(assembly_reject)?;
-
-        // Step 4 — fetch the head block (dag-cbor root), fail-closed on mismatch.
-        let block = read_block(
-            self.gateway,
-            self.http,
-            &cid_str,
-            &expected_cid,
-            ContentPlane::Root,
-        )
-        .await
-        .map_err(map_read_error)?;
-
-        // Step 5 — decode the envelope and its grant section.
-        let envelope = decode_envelope(&block).map_err(assembly_reject)?;
+        // Step 5 — decode the grant section.
         let section_bytes = grant_section_bytes(&envelope).ok_or_else(|| {
             assembly_reject(
                 Malformed::MissingField {
@@ -168,7 +150,10 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
 
         // The derived read key is secret; this fn is its terminal owner, so it
         // zeroizes on drop (the gate borrows it and never zeroizes a caller buffer).
-        let node_seed = kdf::node_seed(payload.override_seed(), &env.id);
+        // The recovered scope read seed rides the outcome on a gate pass — the
+        // engine's per-scope seed cell feeds the child read pipeline from it.
+        let read_scope_seed = Zeroizing::new(*payload.override_seed());
+        let node_seed = kdf::node_seed(&read_scope_seed, &env.id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
 
         let reader = ReaderContext {
@@ -206,6 +191,7 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
             adopted,
             write_scope_seed,
             node_id: env.id,
+            read_scope_seed: Some(read_scope_seed),
         })
     }
 
@@ -293,16 +279,42 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     }
 }
 
+/// The head-envelope assembly shared by both adopters: verify the record to
+/// read its signed `/ipfs/<cid>` head anchor (trust is the gate's — this only
+/// extracts the anchor), fetch the head block fail-closed on a CID mismatch,
+/// and decode the envelope. Returns the verified record sequence alongside it.
+pub(super) async fn assemble_head_envelope<H: Http>(
+    gateway: &Gateway,
+    http: &H,
+    name: &IpnsName,
+    record_bytes: &[u8],
+) -> Result<(u64, Envelope), GateError> {
+    let verified = IpnsRecord::unmarshal(record_bytes)
+        .and_then(|record| record.verify(name))
+        .map_err(assembly_reject)?;
+
+    let cid_str = head_cid_from_value(&verified.value)
+        .ok_or_else(|| assembly_reject(Malformed::ContentCidStrMalformed.into()))?;
+    let expected_cid = decode_content_cid_str(&cid_str).map_err(assembly_reject)?;
+
+    let block = read_block(gateway, http, &cid_str, &expected_cid, ContentPlane::Root)
+        .await
+        .map_err(map_read_error)?;
+
+    let envelope = decode_envelope(&block).map_err(assembly_reject)?;
+    Ok((verified.sequence, envelope))
+}
+
 /// A fail-closed content-plane assembly failure: the head the signed record
 /// anchors is malformed or tampered, so the record's content anchor is
 /// untrustworthy. Assembly runs before the gate's six stages, so it surfaces as
 /// a `RecordVerify` rejection carrying the verbatim core check (the check name
 /// carries the real detail).
-fn assembly_reject(e: CodecError) -> GateError {
+pub(super) fn assembly_reject(e: CodecError) -> GateError {
     reject(GateStage::RecordVerify, e)
 }
 
-fn reject(stage: GateStage, e: CodecError) -> GateError {
+pub(super) fn reject(stage: GateStage, e: CodecError) -> GateError {
     GateError::Rejected(GateRejection {
         stage,
         reason: RejectionReason::Trust(e),
@@ -312,7 +324,7 @@ fn reject(stage: GateStage, e: CodecError) -> GateError {
 /// Map a content-read failure: a CID mismatch/tamper is a fail-closed trust
 /// violation surfaced verbatim; no source or an over-cap body is availability (a
 /// retryable seam), never a trust verdict (`content/read.rs`).
-fn map_read_error(e: ReadError) -> GateError {
+pub(super) fn map_read_error(e: ReadError) -> GateError {
     match e {
         ReadError::TrustViolation(codec) => assembly_reject(codec),
         ReadError::Unavailable => GateError::Seam(SeamError::new("head block unavailable")),
@@ -636,6 +648,11 @@ mod tests {
         assert!(
             outcome.write_scope_seed.is_none(),
             "the owner arm surfaces no write seed (held keyless)"
+        );
+        assert_eq!(
+            outcome.read_scope_seed.as_deref(),
+            Some(&[0x66u8; 32]),
+            "a gate pass surfaces the owner-blob scope read seed"
         );
     }
 

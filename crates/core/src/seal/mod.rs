@@ -30,7 +30,8 @@ pub use body::{
     ChildRef, NodeKind, ReadBody, Version, decode_read_body, encode_read_body, name_cmp,
 };
 pub use envelope::{
-    Envelope, decode_envelope, encode_envelope, grant_section_bytes, open_read_body, seal_read_body,
+    Envelope, decode_envelope, encode_envelope, grant_section_bytes, has_grant_section,
+    open_read_body, seal_read_body,
 };
 pub use grant::{
     AscentLink, GrantBlobPayload, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload,

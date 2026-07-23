@@ -13,12 +13,18 @@ import type { WorkerMessage, WorkerRequest } from './protocol.js';
 
 /** The subset of a worker global scope (or `MessagePort`) the server needs. */
 export interface WorkerScopeLike {
-  postMessage(message: WorkerMessage): void;
+  postMessage(message: WorkerMessage, transfer?: Transferable[]): void;
   addEventListener(type: 'message', listener: (event: MessageEvent<WorkerRequest>) => void): void;
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The engine's stable error code, when the thrown value carries one. */
+function errorCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' ? code : undefined;
 }
 
 /** Wires `scope` to `host`, then signals readiness. */
@@ -27,16 +33,36 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
 
   const handle = async (request: WorkerRequest): Promise<void> => {
     try {
-      if (request.type === 'start') {
-        await host.start(request.secret);
-      } else if (request.type === 'command') {
-        await host.command(request.command);
-      } else {
-        return; // ignore non-request messages (e.g. a bootstrap handshake)
+      switch (request.type) {
+        case 'start':
+          await host.start(request.secret);
+          break;
+        case 'command':
+          await host.command(request.command);
+          break;
+        case 'snapshot': {
+          const result = await host.snapshot(request.folder);
+          post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
+        case 'download': {
+          const result = await host.download(request.node);
+          // Transfer the plaintext buffer: no byte copy through the boundary.
+          scope.postMessage({ type: 'response', id: request.id, ok: true, result }, [result]);
+          return;
+        }
+        default:
+          return; // ignore non-request messages (e.g. a bootstrap handshake)
       }
       post({ type: 'response', id: request.id, ok: true });
     } catch (error) {
-      post({ type: 'response', id: request.id, ok: false, error: errorMessage(error) });
+      post({
+        type: 'response',
+        id: request.id,
+        ok: false,
+        error: errorMessage(error),
+        code: errorCode(error),
+      });
     }
   };
 

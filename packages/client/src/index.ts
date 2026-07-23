@@ -14,6 +14,7 @@ export const CLIENT_PACKAGE = '@cipherbox/client';
 // and imports its collaborators by relative path, so nothing outside this
 // package consumes the worker-realm internals through the barrel.
 export { EngineFacade } from './facade.js';
+export { EngineRequestError } from './correlatedTransport.js';
 export { LocalTransport } from './transport.js';
 export type { EngineTransport, EngineWorkerLike, EngineEventListener } from './transport.js';
 
@@ -35,4 +36,8 @@ export type {
   Permission,
   NodeKind,
   Staleness,
+  OpProgressPhase,
+  SnapshotDescriptor,
+  SnapshotChildDescriptor,
+  BreadcrumbDescriptor,
 } from './worker/protocol.js';

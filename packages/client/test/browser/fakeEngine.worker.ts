@@ -11,7 +11,11 @@
  */
 import { serveEngine, type WorkerScopeLike } from '../../src/worker/serve.js';
 import type { EngineHostLike } from '../../src/worker/engineHost.js';
-import type { CommandDescriptor, EventDescriptor } from '../../src/worker/protocol.js';
+import type {
+  CommandDescriptor,
+  EventDescriptor,
+  SnapshotDescriptor,
+} from '../../src/worker/protocol.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -33,6 +37,14 @@ class FakeHost implements EngineHostLike {
     }
     // First call is slow, later calls fast → responses arrive out of order.
     await sleep(this.commandCount === 1 ? 40 : 5);
+  }
+
+  snapshot(): Promise<SnapshotDescriptor> {
+    return Promise.reject(new Error('fake host serves no snapshots'));
+  }
+
+  download(): Promise<ArrayBuffer> {
+    return Promise.reject(new Error('fake host serves no downloads'));
   }
 
   nextEvent(): Promise<EventDescriptor | null> {

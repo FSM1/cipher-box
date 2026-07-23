@@ -21,11 +21,12 @@
 //! the fail-closed points; the concrete fetchers plug in behind these traits.
 
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
+use zeroize::Zeroizing;
 
 use crate::facade::{Event, NodeId};
 use crate::gate::GateRejection;
 use crate::gate::floor::{self, ColdSeedError, FloorRegression};
-use crate::net::{Adopter, ResolveOutcome, resolve};
+use crate::net::{Adopter, GatedResolve, ResolveOutcome, resolve_gated};
 use crate::seams::{FloorStore, RecordTransport, SeamError, SnapshotCache};
 use crate::sync::model::Snapshot;
 use crate::sync::op::Op;
@@ -102,7 +103,11 @@ pub enum RootResolve {
 }
 
 /// What the cold-start data path produced.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is hand-written: [`read_scope_seed`](Self::read_scope_seed) is key
+/// material and must never reach a log site (security rule 2), including a
+/// test-assertion `{:?}`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ColdStartOutcome {
     /// The adopted vault pointer, or `None` on an empty chain (a first-run vault
     /// with no pointer yet — cold start adopts nothing).
@@ -119,6 +124,26 @@ pub struct ColdStartOutcome {
     /// The rendered view emitted on the first snapshot event: `base` ⊕ the
     /// pending-op overlay.
     pub rendered: Snapshot,
+    /// The root-scope read seed a gate-passing adopt recovered from the owner
+    /// blob; `None` when nothing adopted. The engine deposits it in its
+    /// in-memory per-scope seed cell (never persisted).
+    pub read_scope_seed: Option<Zeroizing<[u8; 32]>>,
+}
+
+impl core::fmt::Debug for ColdStartOutcome {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ColdStartOutcome")
+            .field("vault_pointer", &self.vault_pointer)
+            .field("root_resolve", &self.root_resolve)
+            .field("rehydrated", &self.rehydrated)
+            .field("base", &self.base)
+            .field("rendered", &self.rendered)
+            .field(
+                "read_scope_seed",
+                &self.read_scope_seed.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 /// Run the cold-start live-session data path off the injected seams, emitting
@@ -168,6 +193,7 @@ where
             rehydrated: false,
             base,
             rendered,
+            read_scope_seed: None,
         });
     };
 
@@ -187,7 +213,11 @@ where
     // resolve: last-known-good rehydrates the first paint (step 5) while the
     // fan-out GET + adoption gate reconcile behind it (step 3). Every resolved
     // record passes the gate; a rejection is fail-closed.
-    let resolved = resolve(
+    let GatedResolve {
+        resolved,
+        read_scope_seed,
+        ..
+    } = resolve_gated(
         transport,
         snapshot_cache,
         adopter,
@@ -221,6 +251,7 @@ where
         rehydrated: resolved.last_known_good.is_some(),
         base,
         rendered,
+        read_scope_seed,
     })
 }
 
@@ -338,6 +369,7 @@ mod tests {
                     adopted,
                     write_scope_seed: None,
                     node_id: [0u8; 16],
+                    read_scope_seed: None,
                 })
         }
     }
@@ -404,13 +436,16 @@ mod tests {
             root: root_id(),
             pending_ops: pending,
         };
-        let out = {
-            let mut emit = |e: Event| events.borrow_mut().push(e);
-            cold_start(
-                pointers, adopter, floors, transport, cache, &params, &mut emit,
-            )
-            .await
-        };
+        let out = cold_start(
+            pointers,
+            adopter,
+            floors,
+            transport,
+            cache,
+            &params,
+            &mut |e: Event| events.borrow_mut().push(e),
+        )
+        .await;
         (out, events.into_inner())
     }
 

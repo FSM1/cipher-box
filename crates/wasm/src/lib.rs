@@ -14,14 +14,8 @@
 //! IPNS sequence numbers) cross as `bigint`, binary payloads as `Uint8Array`,
 //! and no secret key material crosses at all — the command surface exposes
 //! only intent (a grant carries the recipient's *public* identity key, never
-//! a secret), and the event surface only key-free view state.
-//!
-//! Scope of this slice: the facade's **command builders** and **event
-//! readers** plus their boundary value types. The live engine handle
-//! (`start`, `command`, the event-stream reader) and the login-secret ingress
-//! bind once their host seams and worker transport land (blueprint/web-client.md
-//! "Engine hosting"); they are deliberately absent here — this crate lands no
-//! seams, no transports, and no worker hosting.
+//! a secret), and the event and read surfaces only key-free view state and
+//! decrypted user content (snapshot views, downloaded plaintext bytes).
 
 // wasm-bindgen's macro-generated glue is unsafe by nature and exempt; this
 // forbids only unsafe we would hand-write (there is none).
@@ -37,7 +31,8 @@ use wasm_bindgen::prelude::*;
 mod seams_bridge;
 
 // The production engine host: constructs the one engine instance over the
-// browser seams and exposes `start`/`command`/`nextEvent` to the worker.
+// browser seams and exposes `start`/`command`/`snapshot`/`download`/`nextEvent`
+// to the worker.
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 mod host;
 
@@ -104,6 +99,15 @@ impl From<NodeKind> for facade::NodeKind {
     }
 }
 
+impl From<facade::NodeKind> for NodeKind {
+    fn from(kind: facade::NodeKind) -> Self {
+        match kind {
+            facade::NodeKind::File => NodeKind::File,
+            facade::NodeKind::Folder => NodeKind::Folder,
+        }
+    }
+}
+
 /// Grant permission level.
 #[wasm_bindgen]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +151,193 @@ impl From<facade::Staleness> for Staleness {
             facade::Staleness::Stale => Staleness::Stale,
             facade::Staleness::Offline => Staleness::Offline,
         }
+    }
+}
+
+/// The phase an `opProgress` event reports.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpPhase {
+    /// A content download started.
+    DownloadStarted,
+    /// A content download completed.
+    DownloadCompleted,
+    /// A content download failed.
+    DownloadFailed,
+}
+
+impl From<facade::OpPhase> for OpPhase {
+    fn from(phase: facade::OpPhase) -> Self {
+        match phase {
+            facade::OpPhase::DownloadStarted => OpPhase::DownloadStarted,
+            facade::OpPhase::DownloadCompleted => OpPhase::DownloadCompleted,
+            facade::OpPhase::DownloadFailed => OpPhase::DownloadFailed,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Snapshot read surface — key-free view state projected by the engine. Ids
+// cross as raw 16-byte `Uint8Array`s (the `NodeId.bytes` shape), `u64`s as
+// `bigint`, absent projections as `undefined`.
+// ---------------------------------------------------------------------------
+
+/// One ancestor step in a [`SnapshotView`]'s breadcrumb trail.
+#[wasm_bindgen]
+pub struct Breadcrumb {
+    inner: facade::Breadcrumb,
+}
+
+#[wasm_bindgen]
+impl Breadcrumb {
+    /// The 16 raw bytes of the ancestor's node id.
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> Vec<u8> {
+        self.inner.id.0.to_vec()
+    }
+
+    /// Display name, as entered (empty for the root).
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+}
+
+impl Breadcrumb {
+    /// Wraps an engine breadcrumb. Never exported to JS.
+    pub fn from_facade(inner: facade::Breadcrumb) -> Self {
+        Self { inner }
+    }
+}
+
+/// One direct child in a [`SnapshotView`].
+#[wasm_bindgen]
+pub struct SnapshotChild {
+    inner: facade::SnapshotChild,
+}
+
+#[wasm_bindgen]
+impl SnapshotChild {
+    /// The 16 raw bytes of the child's node id.
+    #[wasm_bindgen(getter)]
+    pub fn id(&self) -> Vec<u8> {
+        self.inner.id.0.to_vec()
+    }
+
+    /// Display name, as entered.
+    #[wasm_bindgen(getter)]
+    pub fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+
+    /// File or folder.
+    #[wasm_bindgen(getter)]
+    pub fn kind(&self) -> NodeKind {
+        self.inner.kind.into()
+    }
+
+    /// Plaintext content size in bytes (a `bigint`), or `undefined` until the
+    /// content plane projects it.
+    #[wasm_bindgen(getter)]
+    pub fn size(&self) -> Option<u64> {
+        self.inner.size
+    }
+
+    /// Modification time in Unix millis (a `bigint`), or `undefined` until
+    /// projected.
+    #[wasm_bindgen(getter)]
+    pub fn mtime(&self) -> Option<u64> {
+        self.inner.mtime
+    }
+
+    /// Whether a queued pending op targets this node.
+    #[wasm_bindgen(getter)]
+    pub fn pending(&self) -> bool {
+        self.inner.pending
+    }
+
+    /// Whether a retained dead-lettered op maps to this node.
+    #[wasm_bindgen(getter, js_name = deadLetter)]
+    pub fn dead_letter(&self) -> bool {
+        self.inner.dead_letter
+    }
+
+    /// Current content version (a `bigint`, bumped per `updateContent`).
+    #[wasm_bindgen(getter, js_name = contentVersion)]
+    pub fn content_version(&self) -> u64 {
+        self.inner.content_version
+    }
+}
+
+impl SnapshotChild {
+    /// Wraps an engine snapshot child. Never exported to JS.
+    pub fn from_facade(inner: facade::SnapshotChild) -> Self {
+        Self { inner }
+    }
+}
+
+/// A key-free snapshot of one folder for a host UI paint: children, breadcrumb
+/// trail, retained dead letters, and the staleness rung.
+#[wasm_bindgen]
+pub struct SnapshotView {
+    inner: facade::SnapshotView,
+}
+
+#[wasm_bindgen]
+impl SnapshotView {
+    /// The 16 raw bytes of the rendered root node id.
+    #[wasm_bindgen(getter)]
+    pub fn root(&self) -> Vec<u8> {
+        self.inner.root.0.to_vec()
+    }
+
+    /// The 16 raw bytes of the folder this view lists.
+    #[wasm_bindgen(getter)]
+    pub fn folder(&self) -> Vec<u8> {
+        self.inner.folder.0.to_vec()
+    }
+
+    /// Direct children, deterministically ordered by node id.
+    #[wasm_bindgen(getter)]
+    pub fn children(&self) -> Vec<SnapshotChild> {
+        self.inner
+            .children
+            .iter()
+            .cloned()
+            .map(SnapshotChild::from_facade)
+            .collect()
+    }
+
+    /// Ancestor trail from the folder's parent up to and including the root,
+    /// nearest first.
+    #[wasm_bindgen(getter)]
+    pub fn ancestors(&self) -> Vec<Breadcrumb> {
+        self.inner
+            .ancestors
+            .iter()
+            .cloned()
+            .map(Breadcrumb::from_facade)
+            .collect()
+    }
+
+    /// Every retained dead-lettered op id (`u64`s, crossing as `bigint`s).
+    #[wasm_bindgen(getter, js_name = deadLetters)]
+    pub fn dead_letters(&self) -> Vec<u64> {
+        self.inner.dead_letters.iter().map(|op| op.0).collect()
+    }
+
+    /// The staleness rung at read time.
+    #[wasm_bindgen(getter)]
+    pub fn staleness(&self) -> Staleness {
+        self.inner.staleness.into()
+    }
+}
+
+impl SnapshotView {
+    /// Wraps an engine snapshot view for the boundary. For the engine handle
+    /// and the boundary tests; never exported to JS.
+    pub fn from_facade(inner: facade::SnapshotView) -> Self {
+        Self { inner }
     }
 }
 
@@ -344,6 +535,7 @@ impl Event {
             facade::Event::DeadLetter { .. } => "deadLetter",
             facade::Event::AttributableAbuse { .. } => "attributableAbuse",
             facade::Event::RenewalFailed { .. } => "renewalFailed",
+            facade::Event::OpProgress { .. } => "opProgress",
         }
         .to_string()
     }
@@ -367,12 +559,42 @@ impl Event {
         }
     }
 
-    /// `deadLetter`: the op id (a `u64`, crossing as `bigint`); otherwise
-    /// `undefined`.
+    /// `deadLetter` or `opProgress`: the op id (a `u64`, crossing as
+    /// `bigint`); otherwise (or for an op-less transfer) `undefined`.
     #[wasm_bindgen(getter, js_name = opId)]
     pub fn op_id(&self) -> Option<u64> {
         match self.inner {
             facade::Event::DeadLetter { op_id } => Some(op_id.0),
+            facade::Event::OpProgress { op_id, .. } => op_id.map(|op| op.0),
+            _ => None,
+        }
+    }
+
+    /// `opProgress`: the 16 raw bytes of the transferring node's id; otherwise
+    /// `undefined`.
+    #[wasm_bindgen(getter)]
+    pub fn node(&self) -> Option<Vec<u8>> {
+        match self.inner {
+            facade::Event::OpProgress { node, .. } => Some(node.0.to_vec()),
+            _ => None,
+        }
+    }
+
+    /// `opProgress`: the phase reached; otherwise `undefined`.
+    #[wasm_bindgen(getter)]
+    pub fn phase(&self) -> Option<OpPhase> {
+        match self.inner {
+            facade::Event::OpProgress { phase, .. } => Some(phase.into()),
+            _ => None,
+        }
+    }
+
+    /// `opProgress`: the key-free failure classification for a failed phase;
+    /// otherwise `undefined`.
+    #[wasm_bindgen(getter)]
+    pub fn error(&self) -> Option<String> {
+        match &self.inner {
+            facade::Event::OpProgress { error, .. } => error.clone(),
             _ => None,
         }
     }
@@ -495,5 +717,105 @@ mod tests {
             ipns_name: vec![1, 2, 3],
         });
         assert_eq!(withheld.ipns_name(), Some(vec![1, 2, 3]));
+
+        let progress = Event::from_facade(facade::Event::OpProgress {
+            op_id: None,
+            node: facade::NodeId([0u8; 16]),
+            phase: facade::OpPhase::DownloadStarted,
+            error: None,
+        });
+        assert_eq!(progress.kind(), "opProgress");
+    }
+
+    #[test]
+    fn op_progress_getters_map_the_payload_and_stay_undefined_off_variant() {
+        let progress = Event::from_facade(facade::Event::OpProgress {
+            op_id: Some(OpId(7)),
+            node: facade::NodeId([3u8; 16]),
+            phase: facade::OpPhase::DownloadFailed,
+            error: Some("unavailable".into()),
+        });
+        assert_eq!(progress.op_id(), Some(7));
+        assert_eq!(progress.node(), Some(vec![3u8; 16]));
+        assert_eq!(progress.phase(), Some(OpPhase::DownloadFailed));
+        assert_eq!(progress.error(), Some("unavailable".into()));
+
+        let op_less = Event::from_facade(facade::Event::OpProgress {
+            op_id: None,
+            node: facade::NodeId([0u8; 16]),
+            phase: facade::OpPhase::DownloadStarted,
+            error: None,
+        });
+        assert!(op_less.op_id().is_none());
+        assert_eq!(op_less.phase(), Some(OpPhase::DownloadStarted));
+        assert!(op_less.error().is_none());
+
+        let other = Event::from_facade(facade::Event::SnapshotUpdated);
+        assert!(other.node().is_none());
+        assert!(other.phase().is_none());
+        assert!(other.error().is_none());
+    }
+
+    // Constructs the facade structs literally so a new engine field breaks this
+    // test at compile time, mirroring the exhaustive-match guard for enums.
+    #[test]
+    fn snapshot_view_getters_map_every_field() {
+        let view = SnapshotView::from_facade(facade::SnapshotView {
+            root: facade::NodeId([1u8; 16]),
+            folder: facade::NodeId([2u8; 16]),
+            children: vec![
+                facade::SnapshotChild {
+                    id: facade::NodeId([3u8; 16]),
+                    name: "photo.jpg".into(),
+                    kind: facade::NodeKind::File,
+                    size: Some(1024),
+                    mtime: Some(1_700_000_000_000),
+                    pending: true,
+                    dead_letter: false,
+                    content_version: 2,
+                },
+                facade::SnapshotChild {
+                    id: facade::NodeId([4u8; 16]),
+                    name: "docs".into(),
+                    kind: facade::NodeKind::Folder,
+                    size: None,
+                    mtime: None,
+                    pending: false,
+                    dead_letter: true,
+                    content_version: 0,
+                },
+            ],
+            ancestors: vec![facade::Breadcrumb {
+                id: facade::NodeId([1u8; 16]),
+                name: String::new(),
+            }],
+            dead_letters: vec![OpId(9), OpId(11)],
+            staleness: facade::Staleness::Reconciling,
+        });
+
+        assert_eq!(view.root(), vec![1u8; 16]);
+        assert_eq!(view.folder(), vec![2u8; 16]);
+        assert_eq!(view.dead_letters(), vec![9, 11]);
+        assert_eq!(view.staleness(), Staleness::Reconciling);
+
+        let children = view.children();
+        assert_eq!(children.len(), 2);
+        assert_eq!(children[0].id(), vec![3u8; 16]);
+        assert_eq!(children[0].name(), "photo.jpg");
+        assert_eq!(children[0].kind(), NodeKind::File);
+        assert_eq!(children[0].size(), Some(1024));
+        assert_eq!(children[0].mtime(), Some(1_700_000_000_000));
+        assert!(children[0].pending());
+        assert!(!children[0].dead_letter());
+        assert_eq!(children[0].content_version(), 2);
+        assert_eq!(children[1].kind(), NodeKind::Folder);
+        assert!(children[1].size().is_none());
+        assert!(children[1].mtime().is_none());
+        assert!(children[1].dead_letter());
+
+        let ancestors = view.ancestors();
+        assert_eq!(ancestors.len(), 1);
+        assert_eq!(ancestors[0].id(), vec![1u8; 16]);
+        assert_eq!(ancestors[0].name(), "");
     }
 }

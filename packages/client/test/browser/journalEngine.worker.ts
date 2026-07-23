@@ -11,7 +11,11 @@
  */
 import { serveEngine, type WorkerScopeLike } from '../../src/worker/serve.js';
 import type { EngineHostLike } from '../../src/worker/engineHost.js';
-import type { CommandDescriptor, EventDescriptor } from '../../src/worker/protocol.js';
+import type {
+  CommandDescriptor,
+  EventDescriptor,
+  SnapshotDescriptor,
+} from '../../src/worker/protocol.js';
 
 const DB_NAME = 'cb-leadership-journal';
 const STORE = 'ops';
@@ -52,6 +56,14 @@ class JournalHost implements EngineHostLike {
     if (command.kind !== 'manualRefresh' && command.kind !== 'setFocus') {
       await journal(command);
     }
+  }
+
+  snapshot(): Promise<SnapshotDescriptor> {
+    return Promise.reject(new Error('journal host serves no snapshots'));
+  }
+
+  download(): Promise<ArrayBuffer> {
+    return Promise.reject(new Error('journal host serves no downloads'));
   }
 
   nextEvent(): Promise<EventDescriptor | null> {

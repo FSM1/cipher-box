@@ -552,38 +552,19 @@ pub async fn adopt_deferred<F: FloorStore>(
         }
     }
 
-    // Stage 4 — strictly newer than the durable per-name sequence floor.
+    // Stages 4/5 — the durable floor law ([`floor::check`]): strictly-newer
+    // sequence vs the per-name floor, epoch tag at or above the scope's
+    // read-epoch floor.
     let name_bytes = candidate.name.as_str().as_bytes();
-    let sequence_floor = floors
-        .sequence_floor(name_bytes)
-        .await
-        .map_err(GateError::Seam)?
-        .unwrap_or(0);
-    if verified.sequence <= sequence_floor {
-        return Err(reject(
-            GateStage::Sequence,
-            RejectionReason::SequenceNotNewer {
-                floor: sequence_floor,
-                sequence: verified.sequence,
-            },
-        ));
-    }
-
-    // Stage 5 — epoch tag at or above the scope's durable read-epoch floor.
-    let epoch = candidate.envelope.epoch;
-    let epoch_floor = floor::read_epoch_floor(floors, &reader.scope_id)
-        .await
-        .map_err(GateError::Seam)?
-        .unwrap_or(0);
-    if epoch < epoch_floor {
-        return Err(reject(
-            GateStage::Epoch,
-            RejectionReason::EpochBelowFloor {
-                floor: epoch_floor,
-                epoch,
-            },
-        ));
-    }
+    floor::check(
+        floors,
+        name_bytes,
+        &reader.scope_id,
+        verified.sequence,
+        epoch,
+        floor::Strictness::StrictlyNewer,
+    )
+    .await?;
 
     // Stage 6 — unseal success required (AAD-confirmed). The HPKE seed source
     // (if any) opens first, then the symmetric read-body; the read-body decode

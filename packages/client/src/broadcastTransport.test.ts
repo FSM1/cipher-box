@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import { BroadcastTransport } from './broadcastTransport.js';
+import { EngineRequestError } from './correlatedTransport.js';
 import { LeaderRelay } from './leaderRelay.js';
-import { FakeBus, FakeEngineTransport } from './testkit.js';
-import type { EventDescriptor } from './worker/protocol.js';
+import { emptySnapshot, FakeBus, FakeEngineTransport } from './testkit.js';
+import type { EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -148,6 +149,122 @@ describe('broadcast transport ↔ leader relay', () => {
 
     const hints = engine.commands.slice(before).filter((c) => c.kind === 'manualRefresh');
     expect(hints.length).toBe(1);
+  });
+
+  it('round-trips a follower snapshot through the leader engine', async () => {
+    const { engine, follower } = wire();
+    const view: SnapshotDescriptor = {
+      root: new Uint8Array(16).fill(1),
+      folder: new Uint8Array(16).fill(2),
+      children: [
+        {
+          id: new Uint8Array(16).fill(3),
+          name: 'photo.jpg',
+          kind: 'file',
+          size: 1024n,
+          mtime: null,
+          pending: true,
+          deadLetter: false,
+          contentVersion: 9_007_199_254_740_993n,
+        },
+      ],
+      ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],
+      deadLetters: [7n],
+      staleness: 'reconciling',
+    };
+    engine.respondSnapshot = () => Promise.resolve(view);
+
+    const folder = new Uint8Array(16).fill(2);
+    // Structured clone across the bus must preserve bytes and bigints intact.
+    await expect(follower.snapshot(folder)).resolves.toEqual(view);
+    expect(engine.snapshots).toEqual([folder]);
+  });
+
+  it('serves a follower download as a Blob and rebuilds identical bytes', async () => {
+    const { engine, follower } = wire();
+    const plaintext = Uint8Array.from({ length: 64 }, (_, i) => (i * 11 + 5) & 0xff);
+    engine.respondDownload = () => Promise.resolve(plaintext.buffer.slice(0));
+
+    const node = new Uint8Array(16).fill(6);
+    const content = await follower.download(node);
+    expect([...new Uint8Array(content)]).toEqual([...plaintext]);
+    expect(engine.downloads).toEqual([node]);
+  });
+
+  it('propagates a read rejection back to the follower with the stable code', async () => {
+    const { engine, follower } = wire();
+    engine.respondSnapshot = () =>
+      Promise.reject(new EngineRequestError('unknown node', 'unknownNode'));
+    engine.respondDownload = () =>
+      Promise.reject(new EngineRequestError('content unavailable: pending', 'contentUnavailable'));
+
+    // The code crosses the broadcast wire alongside the human-readable message.
+    await expect(follower.snapshot(new Uint8Array(16))).rejects.toMatchObject({
+      code: 'unknownNode',
+      message: 'unknown node',
+    });
+    await expect(follower.download(new Uint8Array(16))).rejects.toMatchObject({
+      code: 'contentUnavailable',
+    });
+  });
+
+  it('rejects a forged read response bearing a wrong or absent leader token', async () => {
+    const bus = new FakeBus();
+    const engine = new FakeEngineTransport();
+    engine.respondSnapshot = () => new Promise(() => undefined); // the real leader never answers
+    new LeaderRelay(bus.channel(), engine);
+    const follower = new BroadcastTransport(bus.channel(), 'f');
+    await follower.start();
+
+    const pending = follower.snapshot(new Uint8Array(16));
+    let settled = false;
+    void pending.then(
+      () => (settled = true),
+      () => (settled = true)
+    );
+    await tick();
+
+    const forgedView: SnapshotDescriptor = emptySnapshot();
+    const attacker = bus.channel();
+    attacker.postMessage({
+      type: 'cb:response',
+      token: 'forged-token',
+      clientId: 'f',
+      requestId: 1,
+      ok: true,
+      result: forgedView,
+    });
+    attacker.postMessage({
+      type: 'cb:response',
+      clientId: 'f',
+      requestId: 1,
+      ok: true,
+      result: forgedView,
+    });
+    await tick();
+
+    expect(settled).toBe(false);
+  });
+
+  it('rejects an in-flight read retryably when the leader steps down', async () => {
+    const bus = new FakeBus();
+    const engineA = new FakeEngineTransport();
+    engineA.respondSnapshot = () => new Promise(() => undefined); // leader A never answers
+    const relayA = new LeaderRelay(bus.channel(), engineA);
+    const follower = new BroadcastTransport(bus.channel(), 'f');
+    await follower.start();
+
+    const inFlight = follower.snapshot(new Uint8Array(16));
+    await tick();
+    relayA.close();
+    await expect(inFlight).rejects.toThrow(/retry/);
+
+    // A read issued with no leader parks, then resolves against the next leader.
+    const queued = follower.snapshot(new Uint8Array(16).fill(4));
+    const engineB = new FakeEngineTransport();
+    new LeaderRelay(bus.channel(), engineB);
+    await expect(queued).resolves.toMatchObject({ staleness: 'fresh' });
+    expect(engineB.snapshots).toHaveLength(1);
   });
 
   it('re-arms on leadership change: an in-flight command rejects retryably, later commands await the next leader (P1-3)', async () => {

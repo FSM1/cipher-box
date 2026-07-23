@@ -28,6 +28,7 @@
 //! [`publish::PublishOutcome::LostRace`] for the rebase slice.
 
 mod adopter;
+mod child;
 mod fanout;
 mod pointer_fetch;
 
@@ -39,6 +40,7 @@ pub mod retire;
 pub mod revival;
 
 pub use adopter::RootAdopter;
+pub use child::ChildAdopter;
 pub(crate) use liveness::eol_renew_pass;
 pub use liveness::{
     EolRenewResult, HeldRecord, HeldRecords, LivenessControl, RE_PUT_INTERVAL, RePutResult,
@@ -47,6 +49,8 @@ pub use liveness::{
 pub use pointer_fetch::RecordPointerFetch;
 pub use publish::{PublishError, PublishOutcome, PublishRequest, publish};
 pub use resolve::{AdoptOutcome, Adopter, ResolveOutcome, Resolved, resolve};
-pub(crate) use resolve::{HeldMaterial, refresh_base_from_outcome, resolve_and_hold};
+pub(crate) use resolve::{
+    GatedResolve, HeldMaterial, refresh_base_from_outcome, resolve_and_hold, resolve_gated,
+};
 pub use retire::{retire, root_retire_ready};
 pub use revival::{ReviveError, ReviveRequest, revive};

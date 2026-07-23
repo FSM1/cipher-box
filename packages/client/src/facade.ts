@@ -11,7 +11,12 @@
  */
 
 import type { EngineEventListener, EngineTransport } from './transport.js';
-import type { CommandDescriptor, NodeKind, Permission } from './worker/protocol.js';
+import type {
+  CommandDescriptor,
+  NodeKind,
+  Permission,
+  SnapshotDescriptor,
+} from './worker/protocol.js';
 
 export class EngineFacade {
   constructor(private readonly transport: EngineTransport) {}
@@ -47,6 +52,16 @@ export class EngineFacade {
   /** Subscribes to the one-way engine event stream; returns an unsubscribe. */
   subscribe(listener: EngineEventListener): () => void {
     return this.transport.subscribe(listener);
+  }
+
+  /** Reads a key-free snapshot of `folder` for a UI paint. */
+  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
+    return this.transport.snapshot(folder);
+  }
+
+  /** Downloads one file node's plaintext through the verified read pipeline. */
+  download(node: Uint8Array): Promise<ArrayBuffer> {
+    return this.transport.download(node);
   }
 
   create(

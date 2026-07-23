@@ -20,33 +20,39 @@
 use core::cell::{Cell, RefCell};
 use core::fmt;
 use core::pin::Pin;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::seal::ReadBody;
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
-use crate::content::{Gateway, GatewayConfig};
+use crate::content::{Gateway, GatewayConfig, OpenError, open_content};
 use crate::entropy::Entropy;
+use crate::gate::GateError;
 use crate::hex::hex_lower;
 use crate::net::{
-    Adopter, EolRenewResult, HeldMaterial, HeldRecord, HeldRecords, LivenessControl, PublishError,
-    PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch, RootAdopter, eol_renew_pass,
-    keyless_re_put, refresh_base_from_outcome, resolve_and_hold, run_liveness_loop,
+    Adopter, ChildAdopter, EolRenewResult, HeldMaterial, HeldRecord, HeldRecords, LivenessControl,
+    PublishError, PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch, ResolveOutcome, RootAdopter,
+    eol_renew_pass, keyless_re_put, refresh_base_from_outcome, resolve, resolve_and_hold,
+    run_liveness_loop,
 };
 use crate::profile::SyncTimingProfile;
-use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore};
+use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore, UnixMillis};
 use crate::session::SessionIdentity;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
 use crate::sync::op::Op;
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
+use crate::sync::project::project_child_version;
 use crate::sync::rebase::decode_queue;
 use crate::sync::staging::{StageOutcome, stage_op};
+use crate::sync::staleness::{Connectivity, classify};
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
 /// non-secret, and location-independent — routes and commands key on it,
@@ -106,6 +112,57 @@ pub struct NodeAttrs {
 pub struct StatFs {
     /// Nodes reachable from the root in the rendered view.
     pub nodes: u64,
+}
+
+/// One ancestor step in a [`SnapshotView`]'s breadcrumb trail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Breadcrumb {
+    /// Stable node id.
+    pub id: NodeId,
+    /// Display name, as entered (empty for the root).
+    pub name: String,
+}
+
+/// One direct child in a [`SnapshotView`], projected key-free from the
+/// rendered view plus the op-queue/dead-letter bookkeeping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotChild {
+    /// Stable node id.
+    pub id: NodeId,
+    /// Display name, as entered.
+    pub name: String,
+    /// File or folder.
+    pub kind: NodeKind,
+    /// Plaintext content size in bytes, once the content plane projects it.
+    pub size: Option<u64>,
+    /// Modification time (Unix millis), once projected.
+    pub mtime: Option<u64>,
+    /// Whether a queued pending op targets this node.
+    pub pending: bool,
+    /// Whether a retained dead-lettered op maps to this node.
+    pub dead_letter: bool,
+    /// Current content version (bumped per `updateContent`).
+    pub content_version: u64,
+}
+
+/// A key-free snapshot of one folder for a host UI paint: its children, its
+/// breadcrumb trail, the retained dead letters, and the staleness rung — one
+/// internally-consistent read of the rendered view (state law).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotView {
+    /// The rendered root node id.
+    pub root: NodeId,
+    /// The folder this view lists.
+    pub folder: NodeId,
+    /// Direct children, deterministically ordered by node id.
+    pub children: Vec<SnapshotChild>,
+    /// Ancestor trail from the folder's parent up to and including the root,
+    /// nearest first.
+    pub ancestors: Vec<Breadcrumb>,
+    /// Every retained dead-lettered op id.
+    pub dead_letters: Vec<OpId>,
+    /// The staleness rung at read time.
+    pub staleness: Staleness,
 }
 
 /// Grant permission level.
@@ -361,6 +418,30 @@ pub enum Event {
         /// Human-readable classification (no key material).
         detail: String,
     },
+    /// Progress of a content-plane transfer for one node: the driving op (if
+    /// any), the phase reached, and the failure classification on a failed
+    /// phase.
+    OpProgress {
+        /// The queued op driving the transfer, if any.
+        op_id: Option<OpId>,
+        /// The node the transfer is for.
+        node: NodeId,
+        /// The phase reached.
+        phase: OpPhase,
+        /// Failure classification for a failed phase (no key material).
+        error: Option<String>,
+    },
+}
+
+/// The phase an [`Event::OpProgress`] reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpPhase {
+    /// A content download started.
+    DownloadStarted,
+    /// A content download completed.
+    DownloadCompleted,
+    /// A content download failed.
+    DownloadFailed,
 }
 
 /// Errors returned by facade calls.
@@ -373,6 +454,26 @@ pub enum EngineError {
     AlreadyStarted,
     /// The login secret was empty or not a valid 32-byte identity scalar.
     InvalidSecret,
+    /// A read named a node absent from the rendered view.
+    UnknownNode,
+    /// A folder read named a file node.
+    NotAFolder,
+    /// A content read named a folder node.
+    NotAFile,
+    /// The content plane could not serve the read — an unpublished pending
+    /// node, no reachable source, or an over-cap block. Availability,
+    /// retryable; never a trust verdict.
+    ContentUnavailable {
+        /// Diagnostic message; never carries key material.
+        message: String,
+    },
+    /// A fail-closed trust violation on the read path — a rejected child
+    /// record, or a CID/manifest/unseal disagreement. Never retried, never
+    /// rendered (rule 6).
+    TrustViolation {
+        /// The verdict classification; never carries key material.
+        message: String,
+    },
     /// The command's pipeline slice has not landed yet (scaffold state).
     Unimplemented {
         /// [`Command::name`] of the rejected command.
@@ -423,6 +524,19 @@ impl EngineError {
         }
     }
 
+    /// Map a child-pipeline gate error: a rejection is a fail-closed trust
+    /// verdict; a seam failure is availability.
+    fn from_gate(err: GateError) -> Self {
+        match err {
+            GateError::Rejected(rejection) => EngineError::TrustViolation {
+                message: rejection.to_string(),
+            },
+            GateError::Seam(seam) => EngineError::ContentUnavailable {
+                message: seam.message().to_owned(),
+            },
+        }
+    }
+
     /// Map a cold-start failure onto the facade error: every trust arm (forged
     /// pointer, regressed floor, rejected root) collapses to the single
     /// fail-closed [`ColdStart`](EngineError::ColdStart) — never retryable
@@ -446,6 +560,13 @@ impl fmt::Display for EngineError {
             EngineError::InvalidSecret => {
                 f.write_str("login secret is not a valid identity scalar")
             }
+            EngineError::UnknownNode => f.write_str("unknown node"),
+            EngineError::NotAFolder => f.write_str("not a folder"),
+            EngineError::NotAFile => f.write_str("not a file"),
+            EngineError::ContentUnavailable { message } => {
+                write!(f, "content unavailable: {message}")
+            }
+            EngineError::TrustViolation { message } => write!(f, "trust violation: {message}"),
             EngineError::Unimplemented { command } => {
                 write!(f, "command not implemented yet: {command}")
             }
@@ -578,6 +699,20 @@ fn count_nodes(snapshot: &Snapshot) -> u64 {
     seen.len() as u64
 }
 
+/// Staleness-ladder inputs (#33 D4): the last successful reconcile, whether one
+/// is in flight, and the last rung reported — [`Event::StalenessChanged`] fires
+/// only on a rung change.
+#[derive(Default)]
+struct SyncStatus {
+    last_success: Option<UnixMillis>,
+    reconcile_in_flight: bool,
+    reported: Option<Staleness>,
+}
+
+/// The engine's in-memory per-scope read-seed cell: scope id → the recovered
+/// scope read seed (zeroized on removal/drop).
+type ScopeReadSeeds = BTreeMap<[u8; 16], Zeroizing<[u8; 32]>>;
+
 /// The re-point pointer-payload wire version the owner's own vault seals under
 /// and the cold-start walk verifies against (`crates/core` pointer payload) — the
 /// sole v2 version (CONTEXT.md "Vault pointer").
@@ -619,6 +754,19 @@ pub struct Engine<T: SeamTypes> {
     /// re-PUTs the map's values on the hourly cadence. Empty until the resolve
     /// tick driver (next slice) wires it in.
     held_records: Rc<RefCell<HeldRecords>>,
+    /// Staleness bookkeeping shared with the resolve-tick loop: it stamps
+    /// successes and reports rung changes; [`snapshot`](Self::snapshot)
+    /// classifies at read time off the same cell.
+    sync_status: Rc<RefCell<SyncStatus>>,
+    /// Per-scope read seeds recovered by gate-passing adopts (the owner-blob
+    /// override seed), keyed by scope id. In-memory only — never persisted,
+    /// never crossing the facade (security rules 1/3); the child read pipeline
+    /// derives per-node read keys from them (`node-seed` → `read-key`).
+    scope_read_seeds: Rc<RefCell<ScopeReadSeeds>>,
+    /// Retained dead-lettered ops, mapped to the target node when known
+    /// (`None` for an undecodable queue entry). Feeds [`SnapshotView`]'s
+    /// dead-letter surface (#33 D6: dead letters are retained, never silent).
+    dead_letters: Rc<RefCell<BTreeMap<OpId, Option<NodeId>>>>,
     /// Session-alive latch: cleared on drop so the spawned liveness loop
     /// stops at its next wake instead of re-PUTting after the engine is gone.
     alive: Rc<Cell<bool>>,
@@ -658,6 +806,9 @@ impl<T: SeamTypes> Engine<T> {
                 // the base snapshot; children come from the pending-op overlay.
                 snapshot: Rc::new(RefCell::new(Snapshot::new(NodeId([0u8; 16])))),
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
+                sync_status: Rc::new(RefCell::new(SyncStatus::default())),
+                scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
+                dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
                 api: None,
@@ -728,11 +879,11 @@ impl<T: SeamTypes> Engine<T> {
         // no derived key material stays resident and nothing runs past an unadopted
         // root (rules 4/6). An empty chain (a first-run vault with no pointer yet)
         // degrades to the anchored root with no error.
+        let root = self.snapshot.borrow().root;
+        let root_scope_id = root.0;
         let cold_start = {
             let session = self.session.as_ref().expect("session set above");
             let owner_identity = session.owner_identity();
-            let root = self.snapshot.borrow().root;
-            let root_scope_id = root.0;
             let pointer_fetch = RecordPointerFetch::new(&self.seams.record_transport);
             let adopter = RootAdopter::new(
                 &self.gateway,
@@ -752,7 +903,7 @@ impl<T: SeamTypes> Engine<T> {
             )
             .await
         };
-        let outcome = match cold_start {
+        let mut outcome = match cold_start {
             Ok(outcome) => outcome,
             Err(err) => {
                 // Fail-closed symmetry with the login path: clear the derived
@@ -762,6 +913,13 @@ impl<T: SeamTypes> Engine<T> {
                 return Err(EngineError::from_cold_start(err));
             }
         };
+        // A gate-passing root adopt surfaced the scope read seed: deposit it in
+        // the in-memory per-scope cell the child read pipeline derives from.
+        if let Some(seed) = outcome.read_scope_seed.take() {
+            self.scope_read_seeds
+                .borrow_mut()
+                .insert(root_scope_id, seed);
+        }
 
         // The gate-passing base becomes the state law's left operand (reads render
         // this ⊕ the pending-op overlay). The resolved root name — the vault
@@ -772,6 +930,9 @@ impl<T: SeamTypes> Engine<T> {
             .as_ref()
             .map(|vp| vp.repoint.current_root.clone());
         *self.snapshot.borrow_mut() = outcome.base;
+        // A successful cold start is a successful reconcile: stamp it so the
+        // ladder starts Fresh rather than Reconciling.
+        self.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
 
         self.spawn_liveness_loop(api.clone());
         self.spawn_resolve_tick_loop(root_name);
@@ -850,6 +1011,9 @@ impl<T: SeamTypes> Engine<T> {
         // successful send: a receiver dropped mid-teardown must not silently
         // purge an unsurfaced entry — preserved, the next boot re-surfaces it.
         for (op_id, _reason) in &undecodable {
+            // Retain the dead letter (target unknown for an undecodable entry)
+            // so the read surface keeps reporting it.
+            self.dead_letters.borrow_mut().insert(*op_id, None);
             if self
                 .events
                 .unbounded_send(Event::DeadLetter { op_id: *op_id })
@@ -872,9 +1036,6 @@ impl<T: SeamTypes> Engine<T> {
             pending_ops: &pending,
         };
         let events = self.events.clone();
-        let mut emit = |event: Event| {
-            let _ = events.unbounded_send(event);
-        };
         cold_start(
             pointer_fetch,
             adopter,
@@ -882,7 +1043,9 @@ impl<T: SeamTypes> Engine<T> {
             &self.seams.record_transport,
             &self.seams.snapshot_cache,
             &params,
-            &mut emit,
+            &mut |event: Event| {
+                let _ = events.unbounded_send(event);
+            },
         )
         .await
     }
@@ -963,6 +1126,9 @@ impl<T: SeamTypes> Engine<T> {
         let base = self.snapshot.clone();
         let events = self.events.clone();
         let alive = self.alive.clone();
+        let sync_status = self.sync_status.clone();
+        let scope_read_seeds = self.scope_read_seeds.clone();
+        let profile = self.profile;
         let interval = self.profile.poll_cadence;
         let owner_identity = session.owner_identity();
         // The vault's own root scope and root node are the anchored all-zero id16
@@ -998,7 +1164,8 @@ impl<T: SeamTypes> Engine<T> {
                 // A gate-passing `Adopted` repaints the shared base cell and emits
                 // `SnapshotUpdated`; `Current`/`NoUpdate`/`TrustViolation` leave
                 // last-known-good intact (fail-closed for data). (surfacing: #796)
-                if let Ok(resolved) = resolve_and_hold(
+                sync_status.borrow_mut().reconcile_in_flight = true;
+                let resolved = resolve_and_hold(
                     &transport,
                     &snapshot_cache,
                     &adopter,
@@ -1007,11 +1174,46 @@ impl<T: SeamTypes> Engine<T> {
                     &material,
                 )
                 .await
-                {
+                .map(|(resolved, read_scope_seed)| {
+                    // A gate-passing adopt re-surfaces the scope read seed:
+                    // refresh the in-memory per-scope cell.
+                    if let Some(seed) = read_scope_seed {
+                        scope_read_seeds.borrow_mut().insert(root_id, seed);
+                    }
+                    resolved
+                });
+                if let Ok(resolved) = &resolved {
                     if refresh_base_from_outcome(&base, NodeId(root_id), &resolved.outcome) {
                         let _ = events.unbounded_send(Event::SnapshotUpdated);
                     }
                 }
+                // `Adopted`/`Current` are the reconciled outcomes: both prove the
+                // record plane answered with gate-passing state, so both stamp
+                // the ladder's `last_success` (#33 D4).
+                let reconciled = matches!(
+                    &resolved,
+                    Ok(r) if matches!(
+                        r.outcome,
+                        ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. }
+                    )
+                );
+                let mut status = sync_status.borrow_mut();
+                status.reconcile_in_flight = false;
+                if reconciled {
+                    status.last_success = Some(scheduler.now());
+                }
+                let rung = classify(
+                    scheduler.now(),
+                    status.last_success,
+                    status.reconcile_in_flight,
+                    Connectivity::Online,
+                    &profile,
+                );
+                if status.reported != Some(rung) {
+                    status.reported = Some(rung);
+                    let _ = events.unbounded_send(Event::StalenessChanged { level: rung });
+                }
+                drop(status);
                 LivenessControl::Continue
             })
             .await;
@@ -1096,6 +1298,234 @@ impl<T: SeamTypes> Engine<T> {
         Ok(EngineView {
             rendered: self.render().await?,
         })
+    }
+
+    /// A key-free [`SnapshotView`] of `folder` — its children (with pending/
+    /// dead-letter flags), breadcrumb trail, retained dead letters, and the
+    /// staleness rung. A pure read over the same rendered view [`view`](Self::view)
+    /// serves (state law): one pending-ops read feeds both the overlay and the
+    /// pending flags, so the flags and the rendered children never disagree.
+    pub async fn snapshot(&self, folder: NodeId) -> Result<SnapshotView, EngineError> {
+        if !self.started {
+            return Err(EngineError::NotStarted);
+        }
+        let ops = self.pending_ops().await?;
+        let rendered = {
+            let base = self.snapshot.borrow();
+            apply_overlay(&base, &ops)
+        };
+        let meta = rendered.node(folder).ok_or(EngineError::UnknownNode)?;
+        if meta.kind != NodeKind::Folder {
+            return Err(EngineError::NotAFolder);
+        }
+        let pending: BTreeSet<NodeId> = ops.iter().map(|op| op.target).collect();
+        let dead = self.dead_letters.borrow();
+        let dead_nodes: BTreeSet<NodeId> = dead.values().flatten().copied().collect();
+        let children = rendered
+            .children(folder)
+            .into_iter()
+            .map(|child| SnapshotChild {
+                id: child.id,
+                name: child.name.clone(),
+                kind: child.kind,
+                size: child.size,
+                mtime: child.mtime,
+                pending: pending.contains(&child.id),
+                dead_letter: dead_nodes.contains(&child.id),
+                content_version: child.content_version,
+            })
+            .collect();
+        let ancestors = rendered
+            .ancestors(folder)
+            .into_iter()
+            .map(|id| Breadcrumb {
+                id,
+                name: rendered
+                    .node(id)
+                    .map(|meta| meta.name.clone())
+                    .unwrap_or_default(),
+            })
+            .collect();
+        let dead_letters = dead.keys().copied().collect();
+        let status = self.sync_status.borrow();
+        let staleness = classify(
+            self.seams.scheduler.now(),
+            status.last_success,
+            status.reconcile_in_flight,
+            Connectivity::Online,
+            &self.profile,
+        );
+        Ok(SnapshotView {
+            root: rendered.root,
+            folder,
+            children,
+            ancestors,
+            dead_letters,
+            staleness,
+        })
+    }
+
+    /// Read one file node's full plaintext content (blueprint/engine.md
+    /// "Content plane": verified reads). Resolves the child record cache-first
+    /// through the [`ChildAdopter`] pipeline, fetches the head version's DAG
+    /// (root manifest + leaves) CID-verified fail-closed, unseals each leaf
+    /// under the version content key, and reassembles the plaintext with
+    /// length cross-checks. Emits [`Event::OpProgress`] on entry, success, and
+    /// failure; on success folds the head version's size/mtime into the base
+    /// snapshot, emitting [`Event::SnapshotUpdated`] only when they changed.
+    pub async fn read_content(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
+        if !self.started {
+            return Err(EngineError::NotStarted);
+        }
+        self.emit_op_progress(node, OpPhase::DownloadStarted, None);
+        match self.read_content_inner(node).await {
+            Ok((plaintext, size, modified_at)) => {
+                // The verified head version is gate-passing state, so it may
+                // legally touch the base node's projected size/mtime. Repaint
+                // only on a real change — a repeat read must not cascade.
+                if project_child_version(&mut self.snapshot.borrow_mut(), node, size, modified_at) {
+                    let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+                }
+                self.emit_op_progress(node, OpPhase::DownloadCompleted, None);
+                Ok(plaintext)
+            }
+            Err(err) => {
+                self.emit_op_progress(node, OpPhase::DownloadFailed, Some(err.to_string()));
+                Err(err)
+            }
+        }
+    }
+
+    /// The verified read pipeline behind [`read_content`](Self::read_content):
+    /// base-snapshot lookup → gated child resolve →
+    /// [`open_content`] (version-DAG fetch, per-leaf unseal, length
+    /// cross-checks). Returns the plaintext plus the head version's
+    /// `(size, modifiedAt)`.
+    async fn read_content_inner(&self, node: NodeId) -> Result<(Vec<u8>, u64, u64), EngineError> {
+        // The base snapshot alone answers the lookup (kind and ipnsName never
+        // come from the overlay) — no full render for a single node. The borrow
+        // never spans an await.
+        let base_meta = {
+            let base = self.snapshot.borrow();
+            base.node(node)
+                .map(|meta| (meta.kind, meta.ipns_name.clone()))
+        };
+        let (kind, ipns_name) = match base_meta {
+            Some(meta) => meta,
+            None => {
+                // Absent from gate-passing state: a queued op targeting the node
+                // means a pending (unpublished) create; anything else is unknown.
+                let pending = self.pending_ops().await?;
+                return Err(if pending.iter().any(|op| op.target == node) {
+                    EngineError::ContentUnavailable {
+                        message: "content not yet published".to_owned(),
+                    }
+                } else {
+                    EngineError::UnknownNode
+                });
+            }
+        };
+        if kind == NodeKind::Folder {
+            return Err(EngineError::NotAFile);
+        }
+        let name_bytes = ipns_name.ok_or_else(|| EngineError::ContentUnavailable {
+            message: "content not yet published".to_owned(),
+        })?;
+        // The bytes are the UTF-8 of the canonical base36 name; anything
+        // else is a malformed child ref, fail-closed.
+        let name = core::str::from_utf8(&name_bytes)
+            .ok()
+            .and_then(|s| IpnsName::parse(s).ok())
+            .ok_or_else(|| EngineError::TrustViolation {
+                message: "child ipnsName is not a canonical IPNS name".to_owned(),
+            })?;
+        // The node's scope is the vault root scope (subscope reads are a later
+        // slice). A clone of the seed keeps the cell borrow from spanning the
+        // awaits below; the clone zeroizes when the adopter drops.
+        let scope_id = self.snapshot.borrow().root.0;
+        // No untrusted input was judged here — a missing seed is missing held
+        // material (availability), never a trust verdict.
+        let scope_read_seed = self
+            .scope_read_seeds
+            .borrow()
+            .get(&scope_id)
+            .cloned()
+            .ok_or_else(|| EngineError::ContentUnavailable {
+                message: "no read seed held for the node's scope".to_owned(),
+            })?;
+        let adopter = ChildAdopter::new(
+            &self.gateway,
+            &self.seams.http,
+            &self.seams.floor_store,
+            scope_id,
+            scope_read_seed,
+            node.0,
+        );
+        let resolved = resolve(
+            &self.seams.record_transport,
+            &self.seams.snapshot_cache,
+            &adopter,
+            &name,
+        )
+        .await
+        .map_err(|e| EngineError::ContentUnavailable {
+            message: e.message().to_owned(),
+        })?;
+        // One at-floor re-open serves both non-adopt outcomes: `Current` carries
+        // the re-fetched bytes, `NoUpdate` falls back to the cached
+        // last-known-good; neither advances a floor.
+        let adopted = 'adopted: {
+            let record_bytes = match resolved.outcome {
+                ResolveOutcome::Adopted(adopted) => break 'adopted adopted,
+                ResolveOutcome::TrustViolation(rejection) => {
+                    return Err(EngineError::from_gate(GateError::Rejected(rejection)));
+                }
+                ResolveOutcome::Current { record_bytes } => record_bytes,
+                ResolveOutcome::NoUpdate => {
+                    resolved
+                        .last_known_good
+                        .ok_or_else(|| EngineError::ContentUnavailable {
+                            message: "no record source reachable and no cached record".to_owned(),
+                        })?
+                }
+            };
+            adopter
+                .open_at_floor(&name, &record_bytes)
+                .await
+                .map_err(EngineError::from_gate)?
+        };
+
+        let ReadBody::File { versions, .. } = adopted.read_body else {
+            // The parent's child ref said file: a sealed folder body is a kind
+            // transplant, fail-closed.
+            return Err(EngineError::TrustViolation {
+                message: "sealed body kind disagrees with the child ref".to_owned(),
+            });
+        };
+        // Newest-first; head is current (crates/core/src/seal/body.rs).
+        let Some(version) = versions.first() else {
+            return Err(EngineError::ContentUnavailable {
+                message: "file has no published content version".to_owned(),
+            });
+        };
+
+        let plaintext = open_content(&self.gateway, &self.seams.http, version)
+            .await
+            .map_err(|e| match e {
+                OpenError::Trust(message) => EngineError::TrustViolation { message },
+                OpenError::Unavailable(message) => EngineError::ContentUnavailable { message },
+            })?;
+        Ok((plaintext, version.size, version.modified_at))
+    }
+
+    /// Best-effort [`Event::OpProgress`] emission (a dropped receiver is fine).
+    fn emit_op_progress(&self, node: NodeId, phase: OpPhase, error: Option<String>) {
+        let _ = self.events.unbounded_send(Event::OpProgress {
+            op_id: None,
+            node,
+            phase,
+            error,
+        });
     }
 
     /// The current base snapshot's root node id — the FUSE mount anchor. The
@@ -1490,6 +1920,15 @@ mod tests {
         (engine, events)
     }
 
+    /// Every event currently buffered on the stream, without blocking.
+    fn drain(events: &mut EventStream) -> Vec<Event> {
+        let mut out = Vec::new();
+        while let Ok(event) = events.receiver.try_recv() {
+            out.push(event);
+        }
+        out
+    }
+
     fn create(engine: &mut Engine<FakeSeamTypes>, parent: NodeId, name: &str, kind: NodeKind) {
         block_on(engine.command(Command::Create {
             parent,
@@ -1648,6 +2087,161 @@ mod tests {
         );
     }
 
+    // --- snapshot read surface ---
+
+    mod snapshot_read {
+        use super::*;
+
+        use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind, ReadBody};
+
+        use crate::gate::Adopted;
+        use crate::net::{ResolveOutcome, refresh_base_from_outcome};
+
+        /// A gate-passing adopted root folder with the given children, mirroring
+        /// what a live resolve repaints the base with.
+        fn adopted_folder(children: Vec<ChildRef>) -> Adopted {
+            Adopted {
+                read_body: ReadBody::Folder {
+                    created_at: 0,
+                    modified_at: 456,
+                    children,
+                    unknown: Vec::new(),
+                },
+                sequence: 2,
+                epoch: 1,
+            }
+        }
+
+        fn child_ref(id: u8, name: &str, kind: CoreNodeKind) -> ChildRef {
+            ChildRef {
+                id: [id; 16],
+                name: name.to_string(),
+                ipns_name: vec![id],
+                kind,
+                link_counter: 1,
+                unknown: Vec::new(),
+            }
+        }
+
+        #[test]
+        fn snapshot_lists_base_children_with_no_pending_flags() {
+            let (engine, _events) = started();
+            let root = engine.root();
+            refresh_base_from_outcome(
+                &engine.snapshot,
+                root,
+                &ResolveOutcome::Adopted(adopted_folder(vec![
+                    child_ref(1, "a", CoreNodeKind::Folder),
+                    child_ref(2, "b.txt", CoreNodeKind::File),
+                ])),
+            );
+
+            let view = block_on(engine.snapshot(root)).unwrap();
+            assert_eq!(view.root, root);
+            assert_eq!(view.folder, root);
+            let by: Vec<(NodeId, &str, NodeKind, bool, u64)> = view
+                .children
+                .iter()
+                .map(|c| (c.id, c.name.as_str(), c.kind, c.pending, c.content_version))
+                .collect();
+            assert_eq!(
+                by,
+                vec![
+                    (NodeId([1; 16]), "a", NodeKind::Folder, false, 0),
+                    (NodeId([2; 16]), "b.txt", NodeKind::File, false, 0),
+                ],
+                "base children render id-sorted, none pending"
+            );
+            assert!(view.children.iter().all(|c| !c.dead_letter));
+            assert!(view.dead_letters.is_empty());
+            assert!(view.ancestors.is_empty(), "the root has no ancestors");
+        }
+
+        #[test]
+        fn staged_create_appears_with_pending_true() {
+            let (mut engine, _events) = started();
+            let root = engine.root();
+            create(&mut engine, root, "notes.txt", NodeKind::File);
+
+            let view = block_on(engine.snapshot(root)).unwrap();
+            assert_eq!(view.children.len(), 1);
+            assert_eq!(view.children[0].name, "notes.txt");
+            assert!(
+                view.children[0].pending,
+                "a queued op targeting the node flags it pending"
+            );
+            assert!(!view.children[0].dead_letter);
+        }
+
+        #[test]
+        fn breadcrumbs_walk_nearest_first_to_the_root() {
+            let (mut engine, _events) = started();
+            let root = engine.root();
+            create(&mut engine, root, "dir", NodeKind::Folder);
+            let dir = block_on(engine.view())
+                .unwrap()
+                .lookup(root, "dir")
+                .unwrap()
+                .id;
+            create(&mut engine, dir, "sub", NodeKind::Folder);
+            let sub = block_on(engine.view())
+                .unwrap()
+                .lookup(dir, "sub")
+                .unwrap()
+                .id;
+
+            let view = block_on(engine.snapshot(sub)).unwrap();
+            assert_eq!(
+                view.ancestors,
+                vec![
+                    Breadcrumb {
+                        id: dir,
+                        name: "dir".to_owned(),
+                    },
+                    Breadcrumb {
+                        id: root,
+                        name: String::new(),
+                    },
+                ],
+                "nearest first, ending at the root"
+            );
+        }
+
+        #[test]
+        fn unknown_folder_is_unknown_node() {
+            let (engine, _events) = started();
+            assert_eq!(
+                block_on(engine.snapshot(NodeId([9; 16]))),
+                Err(EngineError::UnknownNode)
+            );
+        }
+
+        #[test]
+        fn file_node_is_not_a_folder() {
+            let (mut engine, _events) = started();
+            let root = engine.root();
+            create(&mut engine, root, "f.txt", NodeKind::File);
+            let file = block_on(engine.view())
+                .unwrap()
+                .lookup(root, "f.txt")
+                .unwrap()
+                .id;
+            assert_eq!(
+                block_on(engine.snapshot(file)),
+                Err(EngineError::NotAFolder)
+            );
+        }
+
+        #[test]
+        fn snapshot_before_start_returns_not_started() {
+            let (engine, _events) = new_engine();
+            assert_eq!(
+                block_on(engine.snapshot(NodeId([0; 16]))),
+                Err(EngineError::NotStarted)
+            );
+        }
+    }
+
     // --- cold-start data path composition ---
 
     mod cold_start {
@@ -1747,6 +2341,7 @@ mod tests {
                     },
                     write_scope_seed: None,
                     node_id: [0u8; 16],
+                    read_scope_seed: None,
                 })
             }
         }
@@ -1991,6 +2586,26 @@ mod tests {
         }
 
         #[test]
+        fn retained_dead_letter_surfaces_in_the_snapshot_view() {
+            let (mut engine, _events, pointers) = started_at(UnixMillis(123_456));
+            block_on(engine.seams.staging_store.enqueue_op(b"not-a-valid-op")).expect("enqueue");
+
+            drive(&mut engine, &pointers);
+
+            let view = block_on(engine.snapshot(engine.root())).unwrap();
+            assert_eq!(
+                view.dead_letters,
+                vec![OpId(1)],
+                "the retained dead letter stays on the read surface after removal \
+                 from the durable queue"
+            );
+            assert!(
+                view.children.iter().all(|c| !c.dead_letter),
+                "an undecodable entry maps to no node"
+            );
+        }
+
+        #[test]
         fn dead_lettered_entry_is_not_re_emitted_on_a_second_boot() {
             let (mut engine, mut events, pointers) = started_at(UnixMillis(123_456));
             block_on(engine.seams.staging_store.enqueue_op(b"not-a-valid-op")).expect("enqueue");
@@ -2123,6 +2738,12 @@ mod tests {
             EcdsaSigner::from_scalar(&CAP_SECRET).expect("valid scalar")
         }
 
+        /// The child's write-plane IPNS name (`write-seed` → `ipns-keypair`).
+        fn child_name() -> IpnsName {
+            let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &CHILD_ID);
+            IpnsName::from_public_key(&kdf::ipns_keypair(write_seed.as_bytes()).verifying_key())
+        }
+
         /// The owner-root head block (one child) and its content-CID string, plus
         /// the root record's write-plane IPNS name. Keyed off `CAP_SECRET` so the
         /// engine's session-derived owner identity + enc subkey open it, and scoped
@@ -2241,7 +2862,7 @@ mod tests {
                 children: vec![ChildRef {
                     id: CHILD_ID,
                     name: CHILD_NAME.into(),
-                    ipns_name: vec![0x2C],
+                    ipns_name: child_name().as_str().as_bytes().to_vec(),
                     kind: CoreNodeKind::File,
                     link_counter: 1,
                     unknown: Vec::new(),
@@ -2490,6 +3111,88 @@ mod tests {
             assert_eq!(held.len(), 1, "the resolve tick held the owner root");
             let record = held.get(&ROOT.0).expect("held under the root node id");
             assert_eq!(record.routing_key, root_name.as_str());
+            assert_eq!(
+                engine.scope_read_seeds.borrow().get(&SCOPE).map(|s| **s),
+                Some(SCOPE_SEED),
+                "the tick adopt deposited the recovered scope read seed"
+            );
+        }
+
+        #[test]
+        fn staleness_rungs_transition_and_emit_once_per_change() {
+            use core::time::Duration;
+
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (head_block, head_cid, root_name) = owner_root();
+            seed_vault_pointer(&device, &root_name);
+            for endpoint in device.record_store.endpoints() {
+                seed_root_record_at(&device, &endpoint, &root_name, &head_cid);
+            }
+            device.http.enqueue_response(head_response(&head_block));
+            let (mut engine, mut events) = engine_on(&device);
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+            assert_eq!(
+                drain(&mut events),
+                vec![Event::SnapshotUpdated],
+                "cold start paints once and stamps last_success"
+            );
+
+            let mut tasks = world.scheduler.take_spawned_tasks();
+            poll_each(&mut tasks); // park each loop at its first sleep
+
+            // CI profile: 1 s poll, 3 s stale_after. With no reachable head
+            // block, each tick fails to reconcile and last_success stays at 0.
+            world.scheduler.advance(Duration::from_secs(1));
+            poll_each(&mut tasks);
+            assert_eq!(
+                drain(&mut events),
+                vec![Event::StalenessChanged {
+                    level: Staleness::Fresh
+                }],
+                "the first classified rung is reported"
+            );
+            world.scheduler.advance(Duration::from_secs(1));
+            poll_each(&mut tasks);
+            assert_eq!(drain(&mut events), vec![], "no re-emit within a rung");
+            world.scheduler.advance(Duration::from_secs(1)); // t=3 s ≥ stale_after
+            poll_each(&mut tasks);
+            assert_eq!(
+                drain(&mut events),
+                vec![Event::StalenessChanged {
+                    level: Staleness::Stale
+                }]
+            );
+            world.scheduler.advance(Duration::from_secs(1));
+            poll_each(&mut tasks);
+            assert_eq!(drain(&mut events), vec![], "stale reported exactly once");
+
+            // The record plane recovers with a newer root: the adopt stamps
+            // last_success and the rung steps back to Fresh.
+            for endpoint in device.record_store.endpoints() {
+                device.record_store.seed_record(
+                    &endpoint,
+                    root_name.as_str(),
+                    root_record(&head_cid, 2),
+                );
+            }
+            device.http.enqueue_response(head_response(&head_block));
+            world.scheduler.advance(Duration::from_secs(1));
+            poll_each(&mut tasks);
+            assert_eq!(
+                drain(&mut events),
+                vec![
+                    Event::SnapshotUpdated,
+                    Event::StalenessChanged {
+                        level: Staleness::Fresh
+                    },
+                ],
+                "a reconciled tick repaints and steps the ladder back to Fresh"
+            );
+
+            // The read surface classifies off the same state.
+            let view = block_on(engine.snapshot(ROOT)).unwrap();
+            assert_eq!(view.staleness, Staleness::Fresh);
         }
 
         #[test]
@@ -2544,6 +3247,640 @@ mod tests {
                 after.iter().all(Poll::is_ready),
                 "both loops stop after the engine drops"
             );
+        }
+
+        // --- Engine::read_content over the ChildAdopter pipeline ---
+
+        mod read_content {
+            use super::*;
+
+            use cipherbox_core::seal::Version;
+
+            use crate::content::{
+                ContentDag, ContentKey, ContentProfile, SealedChunk, assemble, frame_and_seal,
+            };
+            use crate::gate::floor;
+            use crate::seams::SnapshotCache;
+
+            const CONTENT_KEY: [u8; 32] = [0x99; 32];
+            const CHILD_MTIME: u64 = 777;
+            /// 24 bytes → two leaves at the CI profile's 16-byte chunk size.
+            const PLAINTEXT: &[u8] = b"two-leaf plaintext bytes";
+
+            /// The child's sealed content DAG: leaves + root manifest block.
+            fn content_dag(plaintext: &[u8]) -> (Vec<SealedChunk>, ContentDag) {
+                let key = ContentKey::from_bytes(CONTENT_KEY);
+                let leaves = frame_and_seal(
+                    plaintext,
+                    &key,
+                    &mut SeededEntropy::new(5),
+                    &ContentProfile::CI,
+                )
+                .unwrap();
+                let dag = assemble(&leaves, plaintext.len() as u64, &ContentProfile::CI).unwrap();
+                (leaves, dag)
+            }
+
+            fn head_version(dag: &ContentDag, size: u64) -> Version {
+                Version::new(dag.content_cid.clone(), CONTENT_KEY, size, CHILD_MTIME)
+            }
+
+            fn file_body(versions: Vec<Version>) -> ReadBody {
+                ReadBody::File {
+                    created_at: 0,
+                    modified_at: CHILD_MTIME,
+                    versions,
+                    unknown: Vec::new(),
+                }
+            }
+
+            /// A child head block sealed under the node's derived read key. The
+            /// knobs drive the fail-closed tests: the envelope id/scope/epoch
+            /// (transplants, epoch inflation), the body (kind transplant, empty
+            /// / size-lying version list), and a bolted-on grant section.
+            fn sealed_child_head(
+                envelope_id: [u8; 16],
+                scope: [u8; 16],
+                epoch: u64,
+                body: &ReadBody,
+                with_grant_section: bool,
+            ) -> (Vec<u8>, String) {
+                let node_seed = kdf::node_seed(&SCOPE_SEED, &envelope_id);
+                let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
+                let mut envelope =
+                    seal_read_body(&read_key, &[13u8; 24], 1, envelope_id, scope, epoch, body)
+                        .unwrap();
+                if with_grant_section {
+                    envelope
+                        .unknown
+                        .push(("grantSection".to_string(), Value::Bytes(vec![1, 2, 3])));
+                }
+                let head_block = encode_envelope(&envelope);
+                let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
+                (head_block, cid)
+            }
+
+            /// A child file head block at the fixture scope/epoch.
+            fn child_head(
+                envelope_id: [u8; 16],
+                versions: Vec<Version>,
+                with_grant_section: bool,
+            ) -> (Vec<u8>, String) {
+                sealed_child_head(
+                    envelope_id,
+                    SCOPE,
+                    EPOCH,
+                    &file_body(versions),
+                    with_grant_section,
+                )
+            }
+
+            /// The child record, signed by the child's own write-plane signer.
+            fn child_record(head_cid_str: &str, sequence: u64) -> Vec<u8> {
+                let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &CHILD_ID);
+                let signer = kdf::ipns_keypair(write_seed.as_bytes());
+                let value = format!("/ipfs/{head_cid_str}");
+                IpnsRecord::create_v2(&signer, value.as_bytes(), sequence, TTL_NANOS, EOL).marshal()
+            }
+
+            /// Seed the child record at every endpoint.
+            fn seed_child_record(device: &FakeDevice, head_cid_str: &str, sequence: u64) {
+                let record = child_record(head_cid_str, sequence);
+                for endpoint in device.record_store.endpoints() {
+                    device.record_store.seed_record(
+                        &endpoint,
+                        child_name().as_str(),
+                        record.clone(),
+                    );
+                }
+            }
+
+            /// A started engine over the full cold-start fixture (pointer +
+            /// root record + root head block), drained past the first paint.
+            fn started(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
+                let (head_block, head_cid, root_name) = owner_root();
+                seed_vault_pointer(device, &root_name);
+                for endpoint in device.record_store.endpoints() {
+                    seed_root_record_at(device, &endpoint, &root_name, &head_cid);
+                }
+                device.http.enqueue_response(head_response(&head_block));
+                let (mut engine, mut events) = engine_on(device);
+                block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+                assert_eq!(drain(&mut events), vec![Event::SnapshotUpdated]);
+                (engine, events)
+            }
+
+            fn progress(node: NodeId, phase: OpPhase) -> Event {
+                Event::OpProgress {
+                    op_id: None,
+                    node,
+                    phase,
+                    error: None,
+                }
+            }
+
+            /// Script the full download fetch order: child head, DAG root, then
+            /// each leaf.
+            fn enqueue_download(
+                device: &FakeDevice,
+                head_block: &[u8],
+                dag: &ContentDag,
+                leaves: &[SealedChunk],
+            ) {
+                device.http.enqueue_response(head_response(head_block));
+                device.http.enqueue_response(head_response(&dag.root_block));
+                for leaf in leaves {
+                    device.http.enqueue_response(head_response(&leaf.sealed));
+                }
+            }
+
+            #[test]
+            fn happy_path_reads_the_exact_plaintext_and_folds_metadata() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, mut events) = started(&device);
+
+                let (leaves, dag) = content_dag(PLAINTEXT);
+                assert_eq!(leaves.len(), 2, "the fixture spans two leaves");
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                enqueue_download(&device, &head_block, &dag, &leaves);
+
+                let node = NodeId(CHILD_ID);
+                let bytes = block_on(engine.read_content(node)).expect("read succeeds");
+                assert_eq!(bytes, PLAINTEXT, "the exact plaintext round-trips");
+                assert_eq!(
+                    drain(&mut events),
+                    vec![
+                        progress(node, OpPhase::DownloadStarted),
+                        Event::SnapshotUpdated,
+                        progress(node, OpPhase::DownloadCompleted),
+                    ],
+                );
+                let view = block_on(engine.snapshot(ROOT)).unwrap();
+                let child = view
+                    .children
+                    .iter()
+                    .find(|c| c.id == node)
+                    .expect("child listed");
+                assert_eq!(child.size, Some(PLAINTEXT.len() as u64));
+                assert_eq!(child.mtime, Some(CHILD_MTIME));
+
+                // A second read re-serves the same record, now at the durable
+                // floor: the at-floor re-open yields the identical plaintext,
+                // and the unchanged size/mtime fold repaints nothing.
+                enqueue_download(&device, &head_block, &dag, &leaves);
+                assert_eq!(block_on(engine.read_content(node)).unwrap(), PLAINTEXT);
+                assert_eq!(
+                    drain(&mut events),
+                    vec![
+                        progress(node, OpPhase::DownloadStarted),
+                        progress(node, OpPhase::DownloadCompleted),
+                    ],
+                    "an identical second read emits no SnapshotUpdated"
+                );
+            }
+
+            #[test]
+            fn a_tampered_leaf_fails_closed_with_no_partial_bytes() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, mut events) = started(&device);
+
+                let (leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+                device.http.enqueue_response(head_response(&dag.root_block));
+                // The first leaf does not content-address to its CID.
+                let mut tampered = leaves[0].sealed.clone();
+                *tampered.last_mut().unwrap() ^= 0x01;
+                device.http.enqueue_response(head_response(&tampered));
+
+                let node = NodeId(CHILD_ID);
+                let err = block_on(engine.read_content(node)).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::TrustViolation { .. }),
+                    "a leaf CID mismatch is a fail-closed trust violation: {err:?}"
+                );
+                assert_eq!(
+                    drain(&mut events),
+                    vec![
+                        progress(node, OpPhase::DownloadStarted),
+                        Event::OpProgress {
+                            op_id: None,
+                            node,
+                            phase: OpPhase::DownloadFailed,
+                            error: Some(err.to_string()),
+                        },
+                    ],
+                    "started then failed; no snapshot fold"
+                );
+                let view = block_on(engine.snapshot(ROOT)).unwrap();
+                let child = view.children.iter().find(|c| c.id == node).unwrap();
+                assert_eq!(child.size, None, "no partial state reaches the view");
+            }
+
+            #[test]
+            fn a_transplanted_child_envelope_rejects_fail_closed() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // The envelope names a DIFFERENT node id, served under the
+                // child's name: an id transplant.
+                let (_leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    [0xEE; 16],
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::TrustViolation { .. }),
+                    "an id transplant rejects fail-closed: {err:?}"
+                );
+            }
+
+            #[test]
+            fn a_child_envelope_bearing_a_grant_section_rejects() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                let (_leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    true,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::TrustViolation { .. }),
+                    "a grant-section-bearing child rejects fail-closed: {err:?}"
+                );
+            }
+
+            #[test]
+            fn folder_unknown_and_pending_nodes_map_to_their_errors() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (mut engine, _events) = started(&device);
+
+                assert_eq!(
+                    block_on(engine.read_content(ROOT)),
+                    Err(EngineError::NotAFile),
+                    "a folder node is not readable content"
+                );
+                assert_eq!(
+                    block_on(engine.read_content(NodeId([0x5A; 16]))),
+                    Err(EngineError::UnknownNode)
+                );
+
+                // A staged (pending-only) create has no ipnsName yet:
+                // availability, not trust — content is simply not published.
+                block_on(engine.command(Command::Create {
+                    parent: ROOT,
+                    name: "pending.txt".into(),
+                    kind: NodeKind::File,
+                    content: None,
+                }))
+                .unwrap();
+                let pending = block_on(engine.view())
+                    .unwrap()
+                    .lookup(ROOT, "pending.txt")
+                    .unwrap()
+                    .id;
+                assert!(
+                    matches!(
+                        block_on(engine.read_content(pending)),
+                        Err(EngineError::ContentUnavailable { .. })
+                    ),
+                    "a pending-only node is availability, not trust"
+                );
+            }
+
+            #[test]
+            fn an_empty_version_list_is_an_error() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                let (head_block, head_cid) = child_head(CHILD_ID, Vec::new(), false);
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+
+                assert!(
+                    matches!(
+                        block_on(engine.read_content(NodeId(CHILD_ID))),
+                        Err(EngineError::ContentUnavailable { .. })
+                    ),
+                    "no published version yields no content"
+                );
+            }
+
+            #[test]
+            fn a_manifest_size_disagreement_fails_closed() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // The version lies about its size relative to the manifest.
+                let (_leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64 + 1)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+                device.http.enqueue_response(head_response(&dag.root_block));
+
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::TrustViolation { .. }),
+                    "a size disagreement is fail-closed: {err:?}"
+                );
+            }
+
+            #[test]
+            fn a_replayed_lower_sequence_rejects_after_adoption() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                let (leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 2);
+                enqueue_download(&device, &head_block, &dag, &leaves);
+                block_on(engine.read_content(NodeId(CHILD_ID))).expect("adopts at sequence 2");
+
+                // Replay: re-serve sequence 1 for the same child. The per-name
+                // floor advanced to 2, so the replay rejects fail-closed.
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                match &err {
+                    EngineError::TrustViolation { message } => assert!(
+                        message.contains("sequence-not-newer"),
+                        "the replay names the sequence floor: {message}"
+                    ),
+                    other => panic!("a replay must reject fail-closed, got {other:?}"),
+                }
+            }
+
+            #[test]
+            fn an_unreachable_content_plane_is_availability_not_trust() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // No child record anywhere and a cold cache: nothing resolvable.
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::ContentUnavailable { .. }),
+                    "an unpublished child is availability: {err:?}"
+                );
+
+                // The record appears but no gateway response is scripted: every
+                // source transport-fails, which stays availability, never trust.
+                let (_leaves, dag) = content_dag(PLAINTEXT);
+                let (_head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::ContentUnavailable { .. }),
+                    "an unreachable gateway is availability: {err:?}"
+                );
+            }
+
+            #[test]
+            fn an_inflated_child_epoch_cannot_poison_the_scope_epoch_floor() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // A write-capable party seals the child claiming a far-future
+                // epoch (the read key does not bind epoch, so it unseals fine).
+                let (leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = sealed_child_head(
+                    CHILD_ID,
+                    SCOPE,
+                    EPOCH + 1000,
+                    &file_body(vec![head_version(&dag, PLAINTEXT.len() as u64)]),
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                enqueue_download(&device, &head_block, &dag, &leaves);
+                assert_eq!(
+                    block_on(engine.read_content(NodeId(CHILD_ID))).unwrap(),
+                    PLAINTEXT,
+                    "the inflated-epoch child still reads"
+                );
+
+                // The child's sequence floor advanced...
+                assert_eq!(
+                    block_on(floor::sequence_floor(
+                        &device.floor_store,
+                        child_name().as_str().as_bytes(),
+                    ))
+                    .unwrap(),
+                    Some(1),
+                );
+                // ...but the scope read-epoch floor did not move: it advances
+                // only from gate-adopted roots.
+                assert_eq!(
+                    block_on(floor::read_epoch_floor(&device.floor_store, &SCOPE)).unwrap(),
+                    Some(EPOCH),
+                    "a child unseal must not raise the scope read-epoch floor"
+                );
+
+                // A subsequent honest root at the real epoch still adopts — the
+                // child could not poison the root path into EpochBelowFloor.
+                let (root_head_block, root_head_cid, root_name) = owner_root();
+                for endpoint in device.record_store.endpoints() {
+                    device.record_store.seed_record(
+                        &endpoint,
+                        root_name.as_str(),
+                        root_record(&root_head_cid, 2),
+                    );
+                }
+                device
+                    .http
+                    .enqueue_response(head_response(&root_head_block));
+                let mut tasks = world.scheduler.take_spawned_tasks();
+                poll_each(&mut tasks); // park each loop at its first sleep
+                world.scheduler.advance(engine.profile().poll_cadence);
+                poll_each(&mut tasks); // the resolve tick runs one pass
+                assert_eq!(
+                    block_on(floor::sequence_floor(
+                        &device.floor_store,
+                        root_name.as_str().as_bytes(),
+                    ))
+                    .unwrap(),
+                    Some(2),
+                    "the honest root adopted at the real epoch"
+                );
+            }
+
+            #[test]
+            fn at_floor_reopen_rejects_a_cached_record_above_the_floor() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // A cached child record at sequence 2 while this device's
+                // per-name floor never advanced (no prior adopt): the at-floor
+                // re-open admits only the exact floor.
+                let (_leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                block_on(device.snapshot_cache.put(
+                    child_name().as_str().as_bytes(),
+                    &child_record(&head_cid, 2),
+                ))
+                .unwrap();
+                for endpoint in device.record_store.endpoints() {
+                    device.record_store.fail_endpoint(&endpoint);
+                }
+                device.http.enqueue_response(head_response(&head_block));
+
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                match &err {
+                    EngineError::TrustViolation { message } => assert!(
+                        message.contains("sequence-not-newer"),
+                        "an above-floor re-open is a sequence rejection: {message}"
+                    ),
+                    other => panic!("an above-floor re-open must reject fail-closed: {other:?}"),
+                }
+            }
+
+            #[test]
+            fn a_scope_transplanted_child_envelope_rejects_fail_closed() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // The envelope carries the expected node id but a FOREIGN scope,
+                // sealed consistently (AAD scope == envelope scope, and the read
+                // key binds no scope) — only the explicit scope check can fire.
+                let (_leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = sealed_child_head(
+                    CHILD_ID,
+                    [0xAB; 16],
+                    EPOCH,
+                    &file_body(vec![head_version(&dag, PLAINTEXT.len() as u64)]),
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::TrustViolation { .. }),
+                    "a scope transplant rejects fail-closed: {err:?}"
+                );
+            }
+
+            #[test]
+            fn a_kind_transplanted_child_body_rejects_fail_closed() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // A sealed FOLDER body at a node the parent lists as a file.
+                let folder_body = ReadBody::Folder {
+                    created_at: 0,
+                    modified_at: 0,
+                    children: Vec::new(),
+                    unknown: Vec::new(),
+                };
+                let (head_block, head_cid) =
+                    sealed_child_head(CHILD_ID, SCOPE, EPOCH, &folder_body, false);
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                match &err {
+                    EngineError::TrustViolation { message } => assert!(
+                        message.contains("kind disagrees"),
+                        "the rejection names the kind transplant: {message}"
+                    ),
+                    other => panic!("a kind transplant must reject fail-closed: {other:?}"),
+                }
+            }
+
+            #[test]
+            fn no_update_serves_the_cached_record_without_moving_floors() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                let (leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                enqueue_download(&device, &head_block, &dag, &leaves);
+                assert_eq!(
+                    block_on(engine.read_content(NodeId(CHILD_ID))).unwrap(),
+                    PLAINTEXT,
+                    "the adopt seeds the cache and floors"
+                );
+
+                // Every record source unreachable: NoUpdate falls back to the
+                // cached last-known-good, re-opened at the floor.
+                for endpoint in device.record_store.endpoints() {
+                    device.record_store.fail_endpoint(&endpoint);
+                }
+                enqueue_download(&device, &head_block, &dag, &leaves);
+                assert_eq!(
+                    block_on(engine.read_content(NodeId(CHILD_ID))).unwrap(),
+                    PLAINTEXT,
+                    "the cached record serves the exact plaintext"
+                );
+                assert_eq!(
+                    block_on(floor::sequence_floor(
+                        &device.floor_store,
+                        child_name().as_str().as_bytes(),
+                    ))
+                    .unwrap(),
+                    Some(1),
+                    "the at-floor re-open advanced no sequence floor"
+                );
+                assert_eq!(
+                    block_on(floor::read_epoch_floor(&device.floor_store, &SCOPE)).unwrap(),
+                    Some(EPOCH),
+                    "the at-floor re-open advanced no epoch floor"
+                );
+            }
         }
     }
 }

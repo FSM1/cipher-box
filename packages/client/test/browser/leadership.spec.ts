@@ -1,5 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
+import type { DownloadResult, SnapshotResult } from './leadership.js';
+
 /**
  * The tab-leadership slice of the merge-blocking browser suite
  * (blueprint/testing.md law 1, blueprint/web-client.md "Engine hosting and tab
@@ -11,10 +13,17 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test';
  */
 
 interface LeadershipHarness {
-  cbCreate(options: { lockName: string; channelName: string }): Promise<void>;
+  cbCreate(options: {
+    lockName: string;
+    channelName: string;
+    worker?: 'journal' | 'engine';
+  }): Promise<void>;
   cbRole(): string;
   cbStart(): Promise<string>;
   cbCreateFile(name: string): Promise<string>;
+  cbCreateNode(name: string, kind: 'file' | 'folder'): Promise<string>;
+  cbSnapshot(folderHex: string): Promise<SnapshotResult>;
+  cbDownload(nodeHex: string): Promise<DownloadResult>;
   cbDispose(): Promise<void>;
   cbJournalCount(): Promise<number>;
   cbJournalRecords(): Promise<unknown[]>;
@@ -35,10 +44,13 @@ async function openTab(context: BrowserContext): Promise<Page> {
 }
 
 function harness(page: Page): {
-  create(lockName: string, channelName: string): Promise<void>;
+  create(lockName: string, channelName: string, worker?: 'journal' | 'engine'): Promise<void>;
   role(): Promise<string>;
   start(): Promise<string>;
   createFile(name: string): Promise<string>;
+  createNode(name: string, kind: 'file' | 'folder'): Promise<string>;
+  snapshot(folderHex: string): Promise<SnapshotResult>;
+  download(nodeHex: string): Promise<DownloadResult>;
   dispose(): Promise<void>;
   journalCount(): Promise<number>;
   journalRecords(): Promise<unknown[]>;
@@ -47,15 +59,25 @@ function harness(page: Page): {
   waitForRole(role: string): Promise<void>;
 } {
   return {
-    create: (lockName, channelName) =>
+    create: (lockName, channelName, worker) =>
       page.evaluate((opts) => (window as unknown as LeadershipHarness).cbCreate(opts), {
         lockName,
         channelName,
+        worker,
       }),
     role: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbRole()),
     start: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbStart()),
     createFile: (name) =>
       page.evaluate((n) => (window as unknown as LeadershipHarness).cbCreateFile(n), name),
+    createNode: (name, kind) =>
+      page.evaluate(
+        (args) => (window as unknown as LeadershipHarness).cbCreateNode(args.name, args.kind),
+        { name, kind }
+      ),
+    snapshot: (folderHex) =>
+      page.evaluate((f) => (window as unknown as LeadershipHarness).cbSnapshot(f), folderHex),
+    download: (nodeHex) =>
+      page.evaluate((n) => (window as unknown as LeadershipHarness).cbDownload(n), nodeHex),
     dispose: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbDispose()),
     journalCount: () =>
       page.evaluate(() => (window as unknown as LeadershipHarness).cbJournalCount()),
@@ -133,6 +155,51 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
         Object.values(row).some((v) => v instanceof Uint8Array || v instanceof ArrayBuffer)
       ).toBe(false);
     }
+
+    await a.dispose();
+    await b.dispose();
+  });
+
+  test('a follower reads snapshot and download through the real leader engine', async ({
+    context,
+  }) => {
+    const { lockName, channelName } = names();
+    const a = harness(await openTab(context));
+    const b = harness(await openTab(context));
+
+    await a.create(lockName, channelName, 'engine');
+    await b.create(lockName, channelName, 'engine');
+    const leader = (await a.role()) === 'leader' ? a : b;
+    const follower = leader === a ? b : a;
+
+    expect(await leader.start()).toBe('ok');
+    expect(await follower.start()).toBe('ok');
+
+    // Metadata-only creates via the leader's real engine.
+    expect(await leader.createNode('docs', 'folder')).toBe('ok');
+    expect(await leader.createNode('pending.txt', 'file')).toBe('ok');
+
+    // The follower's snapshot rides the broadcast wire to the leader engine.
+    const rootHex = '00'.repeat(16);
+    const view = await follower.snapshot(rootHex);
+    expect(view.error).toBeUndefined();
+    expect(view.rootHex).toBe(rootHex);
+    expect(view.folderHex).toBe(rootHex);
+    const docs = view.children!.find((child) => child.name === 'docs');
+    const file = view.children!.find((child) => child.name === 'pending.txt');
+    expect(docs).toMatchObject({ kind: 'folder', pending: true });
+    expect(file).toMatchObject({ kind: 'file', pending: true, sizeNull: true, mtimeNull: true });
+
+    // The nested snapshot's breadcrumb trail ends at the root.
+    const nested = await follower.snapshot(docs!.idHex);
+    expect(nested.error).toBeUndefined();
+    expect(nested.ancestors!.at(-1)!.idHex).toBe(rootHex);
+
+    // A pending-only file's download rejection propagates to the follower with
+    // the engine's stable code intact across both wire hops.
+    const download = await follower.download(file!.idHex);
+    expect(download.bytes).toBeUndefined();
+    expect(download.code).toBe('contentUnavailable');
 
     await a.dispose();
     await b.dispose();

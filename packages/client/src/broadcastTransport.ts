@@ -15,9 +15,14 @@
  * context.
  */
 
-import { hoistContent, type BroadcastChannelLike, type LeaderMessage } from './broadcast.js';
+import {
+  hoistContent,
+  type BroadcastChannelLike,
+  type LeaderMessage,
+  type WireRead,
+} from './broadcast.js';
 import { CorrelatedTransport } from './correlatedTransport.js';
-import type { CommandDescriptor } from './worker/protocol.js';
+import type { CommandDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 
 export class BroadcastTransport extends CorrelatedTransport {
   private closed = false;
@@ -67,6 +72,23 @@ export class BroadcastTransport extends CorrelatedTransport {
     );
   }
 
+  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
+    return this.read<SnapshotDescriptor>({ kind: 'snapshot', folder });
+  }
+
+  async download(node: Uint8Array): Promise<ArrayBuffer> {
+    // The leader answers with a `Blob` handle (shared backing, no byte copy);
+    // materialize the bytes only here, in the requesting follower.
+    const content = await this.read<Blob>({ kind: 'download', node });
+    return content.arrayBuffer();
+  }
+
+  private read<T>(read: WireRead): Promise<T> {
+    return this.request<T>(this.leaderReady, (requestId) =>
+      this.channel.postMessage({ type: 'cb:read', clientId: this.clientId, requestId, read })
+    );
+  }
+
   /** Reports this tab's open folder to the leader's focus-window union. */
   reportFocus(node: Uint8Array | null): void {
     if (this.closed) return;
@@ -110,7 +132,11 @@ export class BroadcastTransport extends CorrelatedTransport {
         const response = message as Extract<LeaderMessage, { type: 'cb:response' }>;
         if (response.clientId !== this.clientId) return;
         if (!this.fromActiveLeader(response.token)) return; // forged / stale ack
-        this.settle(response.requestId, response.ok, response.ok ? undefined : response.error);
+        if (response.ok) {
+          this.settle(response.requestId, true, undefined, response.result);
+        } else {
+          this.settle(response.requestId, false, response.error, undefined, response.code);
+        }
         return;
       }
       case 'cb:event': {

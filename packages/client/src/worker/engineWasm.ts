@@ -24,12 +24,47 @@ export interface WasmEvent {
   readonly ipnsName?: Uint8Array;
   readonly opId?: bigint;
   readonly description?: string;
+  readonly node?: Uint8Array;
+  readonly phase?: number;
+  readonly error?: string;
+  readonly routingKey?: string;
+  readonly detail?: string;
+}
+
+/** wasm-bindgen `Breadcrumb` — one ancestor step in a snapshot view. */
+export interface WasmBreadcrumb {
+  readonly id: Uint8Array;
+  readonly name: string;
+}
+
+/** wasm-bindgen `SnapshotChild` — one direct child in a snapshot view. */
+export interface WasmSnapshotChild {
+  readonly id: Uint8Array;
+  readonly name: string;
+  readonly kind: number;
+  readonly size?: bigint;
+  readonly mtime?: bigint;
+  readonly pending: boolean;
+  readonly deadLetter: boolean;
+  readonly contentVersion: bigint;
+}
+
+/** wasm-bindgen `SnapshotView` — a key-free folder snapshot for a UI paint. */
+export interface WasmSnapshotView {
+  readonly root: Uint8Array;
+  readonly folder: Uint8Array;
+  readonly children: WasmSnapshotChild[];
+  readonly ancestors: WasmBreadcrumb[];
+  readonly deadLetters: BigUint64Array;
+  readonly staleness: number;
 }
 
 /** wasm-bindgen `EngineHandle` — the one engine instance. */
 export interface WasmEngineHandle {
   start(secret: Uint8Array): Promise<unknown>;
   command(command: WasmCommand): Promise<unknown>;
+  snapshot(folder: WasmNodeId): Promise<WasmSnapshotView>;
+  download(node: WasmNodeId): Promise<Uint8Array>;
   nextEvent(): Promise<WasmEvent | undefined>;
 }
 
@@ -61,6 +96,11 @@ export interface EngineWasm {
   };
   NodeKind: { readonly File: number; readonly Folder: number };
   Permission: { readonly Read: number; readonly Write: number };
+  OpPhase: {
+    readonly DownloadStarted: number;
+    readonly DownloadCompleted: number;
+    readonly DownloadFailed: number;
+  };
   Staleness: {
     readonly Fresh: number;
     readonly Reconciling: number;

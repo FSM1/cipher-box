@@ -1,5 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
+import type { BoundaryOutcome, RealEngineResult, SnapshotSuiteResult } from './engineHarness.js';
+
 /**
  * The engine-worker slice of the merge-blocking browser suite
  * (blueprint/testing.md law 1, blueprint/web-client.md "Engine hosting"). It
@@ -8,19 +10,12 @@ import { expect, test, type Page } from '@playwright/test';
  * real seams, the protocol fake where the engine cannot yet drive a property.
  */
 
-interface RealEngineResult {
-  beforeStart: string;
-  startOk: boolean;
-  secretDetached: boolean;
-  afterStart: string;
-  afterLogout: string;
-}
-
 interface EngineHarness {
   runRealEngine(): Promise<RealEngineResult>;
+  runSnapshotSuite(): Promise<SnapshotSuiteResult>;
   runFakeOutOfOrder(): Promise<{ order: string[] }>;
   runFakeEvents(): Promise<{ events: number[] }>;
-  runBoundary(name: string): Promise<{ ok: boolean; error?: string }>;
+  runBoundary(name: string): Promise<BoundaryOutcome>;
 }
 
 test.describe('engine worker host', () => {
@@ -51,6 +46,39 @@ test.describe('engine worker host', () => {
     expect(result.afterStart).toContain('not implemented');
     // After logout the transport is torn down and rejects further work.
     expect(result.afterLogout).toContain('closed');
+  });
+
+  test('snapshot and download reads over the real engine', async ({ page }) => {
+    const result: SnapshotSuiteResult = await page.evaluate(() =>
+      (window as unknown as EngineHarness).runSnapshotSuite()
+    );
+
+    // The snapshot echoes the anchored all-zero root as both root and folder.
+    expect(result.rootEchoed).toBe(true);
+
+    // Both metadata creates project as pending children with no content plane.
+    expect(result.children).toHaveLength(2);
+    const docs = result.children.find((child) => child.name === 'docs');
+    const file = result.children.find((child) => child.name === 'pending.txt');
+    expect(docs).toMatchObject({ kind: 'folder', pending: true, deadLetter: false });
+    expect(file).toMatchObject({
+      kind: 'file',
+      pending: true,
+      deadLetter: false,
+      sizeNull: true,
+      mtimeNull: true,
+    });
+
+    // The nested folder's breadcrumb trail ends at the root.
+    expect(result.nestedAncestors.length).toBeGreaterThanOrEqual(1);
+    expect(result.nestedAncestors.at(-1)!.idHex).toBe(result.rootHex);
+
+    // An unknown node fails with the engine's stable code, crossed intact —
+    // plus the human-readable message alongside it.
+    expect(result.unknownCode).toBe('unknownNode');
+    expect(result.unknownError).toContain('unknown node');
+    // A pending-only file has no published content: availability, not trust.
+    expect(result.downloadCode).toBe('contentUnavailable');
   });
 
   test('RPC responses correlate by id even when answered out of order', async ({ page }) => {
@@ -98,7 +126,7 @@ test.describe('engine worker host', () => {
   });
 });
 
-function runBoundary(page: Page, name: string): Promise<{ ok: boolean; error?: string }> {
+function runBoundary(page: Page, name: string): Promise<BoundaryOutcome> {
   return page.evaluate(
     (boundary) => (window as unknown as EngineHarness).runBoundary(boundary),
     name

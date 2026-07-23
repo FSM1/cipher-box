@@ -7,8 +7,9 @@
 import { EngineFacade } from '../../src/facade.js';
 import { LocalTransport } from '../../src/transport.js';
 import type { EventDescriptor } from '../../src/worker/protocol.js';
+import { hex } from './hexUtil.js';
 
-interface RealEngineResult {
+export interface RealEngineResult {
   beforeStart: string;
   startOk: boolean;
   secretDetached: boolean;
@@ -16,14 +17,34 @@ interface RealEngineResult {
   afterLogout: string;
 }
 
-interface BoundaryOutcome {
+export interface BoundaryOutcome {
   ok: boolean;
   error?: string;
+}
+
+/** A page.evaluate-safe projection of the snapshot read surface. */
+export interface SnapshotSuiteResult {
+  rootEchoed: boolean;
+  children: Array<{
+    name: string;
+    kind: string;
+    pending: boolean;
+    deadLetter: boolean;
+    sizeNull: boolean;
+    mtimeNull: boolean;
+  }>;
+  nestedAncestors: Array<{ idHex: string; name: string }>;
+  rootHex: string;
+  unknownError: string;
+  unknownCode: string;
+  downloadError: string;
+  downloadCode: string;
 }
 
 declare global {
   interface Window {
     runRealEngine(): Promise<RealEngineResult>;
+    runSnapshotSuite(): Promise<SnapshotSuiteResult>;
     runFakeOutOfOrder(): Promise<{ order: string[] }>;
     runFakeEvents(): Promise<{ events: number[] }>;
     runBoundary(name: string): Promise<BoundaryOutcome>;
@@ -45,6 +66,12 @@ function facadeOver(worker: Worker): { facade: EngineFacade; transport: LocalTra
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The engine's stable error code as crossed on the rejection, '' if absent. */
+function code(error: unknown): string {
+  const value = (error as { code?: unknown } | null)?.code;
+  return typeof value === 'string' ? value : '';
 }
 
 window.runRealEngine = async (): Promise<RealEngineResult> => {
@@ -83,6 +110,62 @@ window.runRealEngine = async (): Promise<RealEngineResult> => {
   });
 
   return result;
+};
+
+window.runSnapshotSuite = async (): Promise<SnapshotSuiteResult> => {
+  const { facade, transport } = facadeOver(realWorker());
+  try {
+    await facade.start(new Uint8Array(32).fill(1).buffer);
+
+    // Metadata-only creates: pending overlay entries with no content plane.
+    const root = new Uint8Array(16);
+    await facade.create(root, 'docs', 'folder');
+    await facade.create(root, 'pending.txt', 'file', null);
+
+    const view = await facade.snapshot(root);
+    const docs = view.children.find((child) => child.name === 'docs');
+    const file = view.children.find((child) => child.name === 'pending.txt');
+    if (!docs || !file) throw new Error('created children missing from the root snapshot');
+
+    const nested = await facade.snapshot(docs.id);
+
+    let unknownError = '';
+    let unknownCode = '';
+    await facade.snapshot(new Uint8Array(16).fill(0x5a)).catch((error: unknown) => {
+      unknownError = message(error);
+      unknownCode = code(error);
+    });
+
+    let downloadError = '';
+    let downloadCode = '';
+    await facade.download(file.id).catch((error: unknown) => {
+      downloadError = message(error);
+      downloadCode = code(error);
+    });
+
+    return {
+      rootEchoed: hex(view.folder) === hex(view.root) && hex(view.root) === hex(root),
+      children: view.children.map((child) => ({
+        name: child.name,
+        kind: child.kind,
+        pending: child.pending,
+        deadLetter: child.deadLetter,
+        sizeNull: child.size === null,
+        mtimeNull: child.mtime === null,
+      })),
+      nestedAncestors: nested.ancestors.map((ancestor) => ({
+        idHex: hex(ancestor.id),
+        name: ancestor.name,
+      })),
+      rootHex: hex(view.root),
+      unknownError,
+      unknownCode,
+      downloadError,
+      downloadCode,
+    };
+  } finally {
+    transport.close();
+  }
 };
 
 window.runFakeOutOfOrder = async (): Promise<{ order: string[] }> => {

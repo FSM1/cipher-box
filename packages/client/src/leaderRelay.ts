@@ -19,7 +19,16 @@ import {
   type FollowerMessage,
   type LeaderMessage,
 } from './broadcast.js';
+import { EngineRequestError } from './correlatedTransport.js';
 import type { EngineTransport } from './transport.js';
+
+/** Projects a caught failure onto the wire's `error`/`code` fields. */
+function wireError(error: unknown): { error: string; code?: string } {
+  return {
+    error: error instanceof Error ? error.message : String(error),
+    code: error instanceof EngineRequestError ? error.code : undefined,
+  };
+}
 
 /**
  * Tracks each tab's open folder and derives the union — the set of distinct
@@ -110,6 +119,9 @@ export class LeaderRelay {
       case 'cb:command':
         void this.forward(message as Extract<FollowerMessage, { type: 'cb:command' }>);
         return;
+      case 'cb:read':
+        void this.serveRead(message as Extract<FollowerMessage, { type: 'cb:read' }>);
+        return;
       case 'cb:focus': {
         const { clientId, node } = message as Extract<FollowerMessage, { type: 'cb:focus' }>;
         if (this.focus.set(clientId, node)) this.refreshHint();
@@ -136,8 +148,26 @@ export class LeaderRelay {
         clientId,
         requestId,
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        ...wireError(error),
       });
+    }
+  }
+
+  private async serveRead(message: Extract<FollowerMessage, { type: 'cb:read' }>): Promise<void> {
+    const { clientId, requestId, read } = message;
+    const ack = { type: 'cb:response', token: this.token, clientId, requestId } as const;
+    try {
+      if (read.kind === 'snapshot') {
+        const result = await this.transport.snapshot(read.folder);
+        this.post({ ...ack, ok: true, result });
+      } else {
+        // Wrap the plaintext in a `Blob` so the per-receiver structured clone
+        // shares the immutable backing store instead of copying the bytes.
+        const bytes = await this.transport.download(read.node);
+        this.post({ ...ack, ok: true, result: new Blob([bytes]) });
+      }
+    } catch (error) {
+      this.post({ ...ack, ok: false, ...wireError(error) });
     }
   }
 

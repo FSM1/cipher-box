@@ -6,10 +6,11 @@
 //! is the *only* place that advances them, and it advances them only the four
 //! ways the law admits:
 //!
-//! 1. **Advance on AAD-confirmed unseal** ([`advance_on_unseal`]) — the sole
-//!    record-sourced path. A record's sequence/epoch move the floors only after
-//!    its body cryptographically unsealed (the adoption gate's stage 6), never
-//!    from a claimed-but-unconfirmed field.
+//! 1. **Advance on AAD-confirmed unseal** ([`advance_on_unseal`] for
+//!    gate-adopted roots, [`advance_sequence_on_unseal`] for child records) —
+//!    the sole record-sourced paths. A record's sequence/epoch move the floors
+//!    only after its body cryptographically unsealed (the adoption gate's
+//!    stage 6), never from a claimed-but-unconfirmed field.
 //! 2. **Cold-seed from a re-point object** ([`cold_seed`]) — the cold-start
 //!    anchor. The owner-vouched `minReadEpoch` seeds the read-epoch floor (the
 //!    revocation boundary) and `writeEpoch` the write-epoch floor. The
@@ -27,6 +28,7 @@
 
 use cipherbox_core::payload::RepointObject;
 
+use crate::gate::{GateError, GateRejection, GateStage, RejectionReason};
 use crate::seams::{FloorRaise, FloorStore, SeamError, SeamResult};
 
 /// An owner-vouched epoch that regressed below a durable floor at cold-seed — a
@@ -166,15 +168,68 @@ pub async fn sequence_floor<F: FloorStore>(
     floors.sequence_floor(ipns_name).await
 }
 
-/// Advance floors after an AAD-confirmed unseal — the only record-sourced
-/// advancement. Raises the per-scope read-epoch floor to `epoch` and the
-/// per-name sequence floor to `sequence`, both monotonic-max. Callers invoke
-/// this exactly once, at the adoption gate's successful unseal stage (the gate
-/// commits it — eagerly via [`adopt`](crate::gate::adopt), or deferred via
-/// [`PendingAdoption::commit`](crate::gate::PendingAdoption::commit) — after a
-/// confirmed unseal), so a record whose body never unsealed can never move a
-/// floor — the provenance the plain scalar arguments cannot express is enforced
-/// at that single call site.
+/// How [`check`]'s sequence comparison treats a record at exactly the durable
+/// floor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Strictness {
+    /// The adopt path: the sequence must be strictly above the floor (a record
+    /// at the floor is our own current record, not an update).
+    StrictlyNewer,
+    /// The at-floor re-open path (our own current record / cached
+    /// last-known-good): only exact equality is admitted — lower is a
+    /// fail-closed replay, higher is a record that never passed an adopt.
+    AtFloor,
+}
+
+/// The durable floor checks — gate stages 4/5: the per-name sequence floor
+/// (per `strictness`) and the scope's read-epoch floor (the revocation
+/// boundary, always `>=`). Shared by the root gate and the child pipeline.
+pub async fn check<F: FloorStore>(
+    floors: &F,
+    ipns_name: &[u8],
+    scope_id: &[u8; 16],
+    sequence: u64,
+    epoch: u64,
+    strictness: Strictness,
+) -> Result<(), GateError> {
+    let floor = sequence_floor(floors, ipns_name)
+        .await
+        .map_err(GateError::Seam)?
+        .unwrap_or(0);
+    let replayed = match strictness {
+        Strictness::StrictlyNewer => sequence <= floor,
+        Strictness::AtFloor => sequence != floor,
+    };
+    if replayed {
+        return Err(GateError::Rejected(GateRejection {
+            stage: GateStage::Sequence,
+            reason: RejectionReason::SequenceNotNewer { floor, sequence },
+        }));
+    }
+    let epoch_floor = read_epoch_floor(floors, scope_id)
+        .await
+        .map_err(GateError::Seam)?
+        .unwrap_or(0);
+    if epoch < epoch_floor {
+        return Err(GateError::Rejected(GateRejection {
+            stage: GateStage::Epoch,
+            reason: RejectionReason::EpochBelowFloor {
+                floor: epoch_floor,
+                epoch,
+            },
+        }));
+    }
+    Ok(())
+}
+
+/// Advance floors after an AAD-confirmed **root** unseal. Raises the per-scope
+/// read-epoch floor to `epoch` and the per-name sequence floor to `sequence`,
+/// both monotonic-max. Callers invoke this only after a successful unseal
+/// behind the six-stage root gate: eagerly via [`adopt`](crate::gate::adopt),
+/// or deferred via [`PendingAdoption::commit`](crate::gate::PendingAdoption::commit)
+/// — so a record whose body never unsealed can never move a floor; the
+/// provenance the plain scalar arguments cannot express is enforced at those
+/// call sites. Child unseals go through [`advance_sequence_on_unseal`] instead.
 ///
 /// **Fail-safe ordering.** The read-epoch (revocation) and sequence floors are
 /// distinctly keyed. The batch lists the trust-critical **read-epoch
@@ -199,6 +254,20 @@ pub async fn advance_on_unseal<F: FloorStore>(
             FloorRaise::sequence(ipns_name, sequence),
         ])
         .await?;
+    Ok(())
+}
+
+/// Advance only the per-name sequence floor after an AAD-confirmed **child**
+/// unseal. The scope read-epoch floor advances only from gate-adopted roots
+/// ([`advance_on_unseal`]): a child's epoch is attested only by the
+/// epoch-independent read key, so it must never move the revocation boundary
+/// (blueprint/engine.md floor law).
+pub async fn advance_sequence_on_unseal<F: FloorStore>(
+    floors: &F,
+    ipns_name: &[u8],
+    sequence: u64,
+) -> SeamResult<()> {
+    floors.raise_sequence_floor(ipns_name, sequence).await?;
     Ok(())
 }
 
@@ -314,6 +383,52 @@ mod tests {
                 .unwrap();
             assert_eq!(sequence_floor(&floors, NAME).await.unwrap(), Some(5));
             assert_eq!(read_epoch_floor(&floors, &SCOPE).await.unwrap(), Some(3));
+        });
+    }
+
+    #[test]
+    fn advance_sequence_on_unseal_never_touches_the_epoch_floor() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            advance_sequence_on_unseal(&floors, NAME, 7).await.unwrap();
+            assert_eq!(sequence_floor(&floors, NAME).await.unwrap(), Some(7));
+            assert_eq!(
+                read_epoch_floor(&floors, &SCOPE).await.unwrap(),
+                None,
+                "a child unseal must not move the scope read-epoch floor"
+            );
+        });
+    }
+
+    #[test]
+    fn at_floor_admits_only_the_exact_floor() {
+        let floors = InMemoryFloorStore::default();
+        block_on(async {
+            advance_on_unseal(&floors, &SCOPE, NAME, 5, 1)
+                .await
+                .unwrap();
+            check(&floors, NAME, &SCOPE, 5, 1, Strictness::AtFloor)
+                .await
+                .expect("the exact floor re-opens");
+            for above_or_below in [4, 6] {
+                let err = check(
+                    &floors,
+                    NAME,
+                    &SCOPE,
+                    above_or_below,
+                    1,
+                    Strictness::AtFloor,
+                )
+                .await
+                .expect_err("anything but the exact floor is fail-closed");
+                assert!(matches!(
+                    err,
+                    GateError::Rejected(GateRejection {
+                        stage: GateStage::Sequence,
+                        reason: RejectionReason::SequenceNotNewer { floor: 5, .. },
+                    })
+                ));
+            }
         });
     }
 
