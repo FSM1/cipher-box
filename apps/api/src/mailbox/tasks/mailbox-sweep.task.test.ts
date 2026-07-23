@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { PeriodicTask } from '../../common/worker-scheduler';
 import { fakeConfig } from '../../testing/fakes';
@@ -37,5 +38,17 @@ describe('MailboxSweepTask', () => {
     const { task, sweepExpired } = buildTask({});
     await task.runOnce();
     expect(sweepExpired).toHaveBeenCalledOnce();
+  });
+
+  it('logs the deleted-row count so operators can see sweep activity', async () => {
+    const { task, sweepExpired } = buildTask({});
+    sweepExpired.mockResolvedValue(7);
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    try {
+      await task.runOnce();
+      expect(log).toHaveBeenCalledWith('mailbox-sweep: deleted 7 expired rows');
+    } finally {
+      log.mockRestore();
+    }
   });
 });

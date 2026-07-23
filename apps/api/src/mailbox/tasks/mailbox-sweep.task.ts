@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { positiveIntConfig } from '../../common/config-int';
 import { PeriodicTask } from '../../common/worker-scheduler';
@@ -25,6 +25,7 @@ const DEFAULT_INTERVAL_MS = 12 * 60 * 60 * 1000;
 export class MailboxSweepTask implements PeriodicTask {
   readonly taskName = 'mailbox-sweep';
   readonly intervalMs: number;
+  private readonly logger = new Logger(MailboxSweepTask.name);
 
   constructor(
     private readonly mailbox: MailboxService,
@@ -37,6 +38,7 @@ export class MailboxSweepTask implements PeriodicTask {
   }
 
   async runOnce(): Promise<void> {
-    await this.mailbox.sweepExpired();
+    const deleted = await this.mailbox.sweepExpired();
+    this.logger.log(`mailbox-sweep: deleted ${deleted} expired rows`);
   }
 }
