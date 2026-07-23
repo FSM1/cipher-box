@@ -16,10 +16,8 @@
 //! - **Dest-first**: add into the destination parent's index before the
 //!   presence-conditional remove from the source, so no window leaves the child
 //!   absent from both — orphans are structurally impossible. A race loser undoes
-//!   its dest-add. At a distributed publish boundary that undo is a **versioned
-//!   compare-and-remove** ([`undo_dest_add_versioned`]): it removes only when the
-//!   dest index is still at the seq-CAS base the add read, so it never clobbers a
-//!   concurrent authoritative write (#743, deferred from #741).
+//!   its dest-add at a distributed publish boundary via the versioned
+//!   compare-and-remove ([`undo_dest_add_versioned`]).
 //! - **Observed repair**: any write-capable client that sees a child missing from
 //!   its parent's index repairs it ([`repair_observed`]).
 //!
@@ -106,12 +104,9 @@ pub fn repair_observed(index: &[ChildScopeRef], child: ChildScopeRef) -> Vec<Chi
     insert_child(index, child)
 }
 
-/// Race-loser compensation for the dest-first path: undo a dest-add by removing
-/// `scope_id`. Semantically identical to [`remove_child`]; named for the
-/// compensation call site. This is the **unversioned** local primitive — a
-/// distributed publish boundary must gate it with [`undo_dest_add_versioned`],
-/// which fails closed on a concurrent write.
-pub fn undo_dest_add(dest: &[ChildScopeRef], scope_id: &[u8; 16]) -> Vec<ChildScopeRef> {
+/// Unversioned local dest-add compensation; a distributed publish boundary must
+/// use the fail-closed [`undo_dest_add_versioned`] instead.
+pub(crate) fn undo_dest_add(dest: &[ChildScopeRef], scope_id: &[u8; 16]) -> Vec<ChildScopeRef> {
     remove_child(dest, scope_id)
 }
 
@@ -127,8 +122,7 @@ pub enum UndoDestAdd {
     /// removed cleanly. Carries the recomputed index to publish.
     Removed(Vec<ChildScopeRef>),
     /// A concurrent authoritative writer advanced the dest index past the CAS
-    /// base: a blind remove would clobber the winner. Fail-closed — the caller
-    /// re-reads the current dest index at its new version and re-derives.
+    /// base: a blind remove would clobber the winner. Fail-closed.
     Conflict,
 }
 

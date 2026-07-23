@@ -23,7 +23,7 @@ pub use accept::{
 };
 pub use child_index::{
     DestIndexVersion, UndoDestAdd, canonicalize, insert_child, move_child, remove_child,
-    repair_observed, undo_dest_add, undo_dest_add_versioned,
+    repair_observed, undo_dest_add_versioned,
 };
 pub use contact::{Contact, import_contact};
 pub use create::{
