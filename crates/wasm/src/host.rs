@@ -138,10 +138,14 @@ impl EngineHandle {
         // Dormant until the config slice (E4) supplies real endpoints: with no
         // accelerator base URL and no fallbacks the gateway is empty, and reads
         // fail closed as `Unavailable` (availability, never a trust violation).
+        // Zeroize the bearer before branching on the base URL: if no accelerator
+        // base URL is supplied the source closure never runs, so wrapping inside
+        // it would drop the Rust-owned bearer String unzeroized (security rule 7).
+        let accelerator_bearer = accelerator_bearer.map(Zeroizing::new);
         let gateway = GatewayConfig {
             accelerator: accelerator_base_url.map(|base_url| GatewaySource {
                 base_url,
-                bearer: accelerator_bearer.map(Zeroizing::new),
+                bearer: accelerator_bearer,
             }),
             public_fallbacks: public_gateways
                 .unwrap_or_default()
