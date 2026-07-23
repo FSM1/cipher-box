@@ -168,7 +168,10 @@ where
 
     // Step 2 — floor cold-seed, fail-closed on regression: a re-point that would
     // move either floor backward is a rolled-back pointer, a trust violation.
-    floor::cold_seed_checked(floors, &adoption.repoint)
+    // The vault pointer is the root/vault anchor, so the read-epoch check is
+    // sound here (`AnchorRole::Root`); a shared-scope cold-seed would pass
+    // `Shared` (#763).
+    floor::cold_seed_checked(floors, &adoption.repoint, floor::AnchorRole::Root)
         .await
         .map_err(|e| match e {
             ColdSeedError::Seam(seam) => ColdStartError::Seam(seam),

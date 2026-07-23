@@ -8,8 +8,10 @@
 //! re-point object is owner-identity-signed and sealed under the scope's stable
 //! `pointerReadKey`; core owns the codec, sign, and verify
 //! ([`seal_pointer_payload`]/[`open_pointer_payload`]) — this module owns name
-//! derivation, the vault-pointer index walk, the owner-plane write gate, the
-//! consult discipline, and the cold-start floor cold-seed.
+//! derivation, the vault-pointer index walk, the owner-plane write gate, and
+//! the consult discipline. The floor cold-seed itself is the floor law's
+//! ([`floor::cold_seed_checked`](crate::gate::floor::cold_seed_checked)) — cold
+//! start feeds it the re-point this walk authenticated.
 //!
 //! **Consult discipline: polled, not fallback** (#38 D4). A revokee's forged
 //! old-epoch record passes every *other* gate stage (valid old-key signature,
@@ -27,8 +29,7 @@ use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 
 use crate::entropy::{Entropy, EntropyError};
-use crate::gate::floor;
-use crate::seams::{FloorStore, SeamError, SeamResult};
+use crate::seams::{SeamError, SeamResult};
 
 /// A safety bound on the vault-pointer index walk. The chain length is
 /// owner-authored (each index needs the owner's identity signature to open),
@@ -121,6 +122,8 @@ pub struct VaultPointerAdoption {
 /// walk fail-closed at that index: it is never adopted and the walk never
 /// reaches beyond it, so a forged record cannot truncate the chain *below* an
 /// already-adopted valid index.
+///
+/// `login_secret` is a read-only borrow; sole consumer; zeroized at the session owner.
 pub async fn resolve_vault_pointer<F: PointerFetch>(
     fetch: &F,
     login_secret: &[u8],
@@ -203,24 +206,6 @@ pub fn open_repoint(
         block,
     )
     .map_err(PointerError::Open)
-}
-
-/// Cold-seed a scope's floors from an authenticated re-point object — the
-/// cold-start anchor. Delegates to the floor law's [`floor::cold_seed`]: the
-/// owner-vouched `minReadEpoch` seeds the read-epoch (revocation) floor and
-/// `writeEpoch` the write-epoch floor, both monotonic-max.
-///
-/// **Cold start adopts nothing** until this runs: before the floor store seeds
-/// from the owner-signed anchor, every scope's read-epoch floor is unseeded and
-/// the gate can be shown any old-epoch record (the non-circular sequence,
-/// #38 D3).
-pub async fn cold_seed_floors<F: FloorStore>(
-    floors: &F,
-    repoint: &RepointObject,
-) -> Result<(), PointerError> {
-    floor::cold_seed(floors, repoint)
-        .await
-        .map_err(PointerError::Seam)
 }
 
 /// Whether to consult the scope pointer now — the polled discipline, decided
@@ -382,33 +367,6 @@ mod tests {
         let result = resolve_vault_pointer(&pointers, SECRET, &owner_identity, &ROOT_SCOPE, 1);
         let err = block_on(result).expect_err("a forged index is fail-closed");
         assert!(matches!(err, PointerError::Open(_)));
-    }
-
-    #[test]
-    fn cold_seed_floors_then_old_epoch_records_are_below_floor() {
-        use crate::testkit::fakes::InMemoryFloorStore;
-        let floors = InMemoryFloorStore::default();
-        block_on(async {
-            // Before cold-seed the read-epoch floor is unseeded (adopts anything).
-            assert_eq!(
-                floor::read_epoch_floor(&floors, &ROOT_SCOPE).await.unwrap(),
-                None
-            );
-            cold_seed_floors(&floors, &repoint(ROOT_SCOPE, 5, 3))
-                .await
-                .unwrap();
-            assert_eq!(
-                floor::read_epoch_floor(&floors, &ROOT_SCOPE).await.unwrap(),
-                Some(5),
-                "minReadEpoch seeds the revocation floor"
-            );
-            assert_eq!(
-                floor::write_epoch_floor(&floors, &ROOT_SCOPE)
-                    .await
-                    .unwrap(),
-                Some(3)
-            );
-        });
     }
 
     #[test]
