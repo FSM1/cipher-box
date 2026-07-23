@@ -103,6 +103,7 @@ extern "C" {
 /// The JS `FloorStoreSeam` exposes only per-key methods, so this adapter does
 /// not override `commit_floors`: web batches ride the seam's ordered fail-safe
 /// fallback (#682-safe; web-atomic is deferred — see the trait doc).
+#[derive(Clone)]
 pub(crate) struct FloorStoreAdapter {
     pub(crate) js: JsFloorStoreSeam,
 }
@@ -331,6 +332,7 @@ extern "C" {
     async fn clear_refresh_token(this: &JsCredentialStoreSeam) -> Result<JsValue, JsValue>;
 }
 
+#[derive(Clone)]
 pub(crate) struct CredentialStoreAdapter {
     pub(crate) js: JsCredentialStoreSeam,
 }
@@ -545,6 +547,7 @@ fn http_response_from_js(value: JsValue) -> SeamResult<HttpResponse> {
     })
 }
 
+#[derive(Clone)]
 pub(crate) struct HttpAdapter {
     pub(crate) js: JsHttpSeam,
 }

@@ -36,9 +36,10 @@ pub mod resolve;
 pub mod retire;
 pub mod revival;
 
+pub(crate) use liveness::eol_renew_pass;
 pub use liveness::{
-    HeldRecord, HeldRecords, LivenessControl, RE_PUT_INTERVAL, RePutResult, eol_republish,
-    keyless_re_put, run_liveness_loop,
+    EolRenewResult, HeldRecord, HeldRecords, LivenessControl, RE_PUT_INTERVAL, RePutResult,
+    eol_republish, keyless_re_put, run_liveness_loop,
 };
 pub use publish::{PublishError, PublishOutcome, PublishRequest, publish};
 pub use resolve::{Adopter, HeldMaterial, ResolveOutcome, Resolved, resolve, resolve_and_hold};

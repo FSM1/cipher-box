@@ -20,7 +20,7 @@ use core::future::Future;
 use core::time::Duration;
 use std::collections::BTreeMap;
 
-use cipherbox_core::ipns::IpnsRecord;
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use zeroize::Zeroizing;
 
 use super::eol::{self, EOL_RENEW_THRESHOLD};
@@ -29,6 +29,7 @@ use super::publish::{PublishError, PublishOutcome, PublishRequest, publish};
 use crate::api::ApiClient;
 use crate::profile::SyncTimingProfile;
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
+use crate::session::SessionIdentity;
 
 /// The ~hourly cadence of the keyless re-PUT job (blueprint: "an ~hourly
 /// Scheduler job keyless-re-PUTs every record the session holds").
@@ -203,4 +204,261 @@ where
     publish(transport, api, floors, scheduler, profile, request)
         .await
         .map(Some)
+}
+
+/// One held record's sub-EOL renewal outcome.
+#[derive(Debug)]
+pub struct EolRenewResult {
+    /// The routing key considered for renewal.
+    pub routing_key: String,
+    /// `Ok(None)` when the record was comfortably ahead of the threshold (no
+    /// renewal), `Ok(Some(_))` on a seq+1 republish (including a reported lost
+    /// CAS race), `Err` on a fail-closed publish failure.
+    pub outcome: Result<Option<PublishOutcome>, PublishError>,
+}
+
+/// Run one sub-EOL renewal pass over the held set: for each record still live
+/// but within [`EOL_RENEW_THRESHOLD`], republish the same CID at seq+1 through
+/// the CAS path with a fresh 90-day EOL (blueprint/engine.md "Liveness"). A
+/// record comfortably ahead of the threshold no-ops in [`eol_republish`]; a
+/// lost CAS race is reported (never silently overwritten) for a later rebase
+/// slice.
+///
+/// This is the renewal-pass **body**; the ~hourly [`Scheduler`] loop that drives
+/// it alongside [`keyless_re_put`] is wired by the facade.
+pub(crate) async fn eol_renew_pass<T, H, C, F, Sch>(
+    transport: &T,
+    api: &ApiClient<H, C>,
+    floors: &F,
+    scheduler: &Sch,
+    profile: &SyncTimingProfile,
+    session: &SessionIdentity,
+    held: &[HeldRecord],
+) -> Vec<EolRenewResult>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
+    let mut results = Vec::with_capacity(held.len());
+    for hr in held {
+        // A routing key that no longer parses to its IPNS name is not renewable
+        // — skip fail-closed rather than publish under a malformed name.
+        let Ok(name) = IpnsName::parse(&hr.routing_key) else {
+            continue;
+        };
+        // Re-derive the per-name signer into a short-lived local: `PublishRequest`
+        // borrows it, and it zeroizes at the end of this iteration, so no signing
+        // key ever lingers in the held set. The name and signer are the same
+        // Ed25519 key by the held-set invariant (#751 built the record from the
+        // same write-scope seed + node id).
+        let signer = session.write_name_signer(&hr.write_scope_seed, &hr.node_id);
+        let request = PublishRequest {
+            name: &name,
+            signer: &signer,
+            head_cid: hr.head_cid.clone(),
+            content_cids: hr.content_cids.clone(),
+            // Renewal is a normal CAS write: the sequence comes from the durable
+            // floor + 1, not a recovered revival sequence.
+            min_current_sequence: None,
+        };
+        let outcome = eol_republish(transport, api, floors, scheduler, profile, &request).await;
+        results.push(EolRenewResult {
+            routing_key: hr.routing_key.clone(),
+            outcome,
+        });
+    }
+    results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EolRenewResult, HeldRecord, eol_renew_pass, keyless_re_put};
+
+    use core::time::Duration;
+
+    use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+    use cipherbox_core::suite::ed25519::Ed25519Signer;
+    use zeroize::Zeroizing;
+
+    use super::super::eol;
+    use super::super::publish::PublishOutcome;
+    use crate::api::ApiClient;
+    use crate::facade::LoginSecret;
+    use crate::profile::SyncTimingProfile;
+    use crate::seams::{FloorStore, HttpResponse, RecordTransport, UnixMillis};
+    use crate::session::SessionIdentity;
+    use crate::testkit::{FakeDevice, FakeWorld, block_on};
+
+    const DAY: u64 = 24 * 60 * 60;
+    const TTL_NANOS: u64 = 2_000_000_000;
+
+    /// A held record for a per-name signer the pass re-derives from
+    /// `(write_scope_seed, node_id)`, carrying a record minted at `mint_millis`
+    /// with a 90-day EOL.
+    fn seeded_held(
+        device: &FakeDevice,
+        session: &SessionIdentity,
+        write_scope_seed: [u8; 32],
+        node_id: [u8; 16],
+        head_cid: &str,
+        mint_millis: u64,
+    ) -> (IpnsName, HeldRecord) {
+        let signer: Ed25519Signer = session.write_name_signer(&write_scope_seed, &node_id);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let value = format!("/ipfs/{head_cid}").into_bytes();
+        let validity = eol::eol_from(UnixMillis(mint_millis));
+        let bytes = IpnsRecord::create_v2(&signer, &value, 1, TTL_NANOS, &validity).marshal();
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), bytes.clone());
+        }
+        // Model the gate's job: the durable floor sits at the adopted sequence.
+        block_on(
+            device
+                .floor_store
+                .raise_sequence_floor(name.as_str().as_bytes(), 1),
+        )
+        .unwrap();
+        let held = HeldRecord {
+            routing_key: name.as_str().to_owned(),
+            record_bytes: bytes,
+            node_id,
+            write_scope_seed: Zeroizing::new(write_scope_seed),
+            head_cid: head_cid.to_owned(),
+            content_cids: Vec::new(),
+        };
+        (name, held)
+    }
+
+    fn ok_200() -> HttpResponse {
+        HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: Vec::new(),
+        }
+    }
+
+    fn outcome_of<'a>(results: &'a [EolRenewResult], name: &IpnsName) -> &'a EolRenewResult {
+        results
+            .iter()
+            .find(|r| r.routing_key == name.as_str())
+            .expect("held name has a result")
+    }
+
+    fn seq_at(device: &FakeDevice, name: &IpnsName) -> u64 {
+        let endpoint = device.record_store.endpoints()[0].clone();
+        let bytes = device
+            .record_store
+            .record_at(&endpoint, name.as_str())
+            .expect("record present");
+        IpnsRecord::unmarshal(&bytes)
+            .unwrap()
+            .verify(name)
+            .unwrap()
+            .sequence
+    }
+
+    #[test]
+    fn renews_only_the_below_threshold_name_and_runs_beside_keyless() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let scheduler = world.scheduler.clone(); // virtual clock, now = 0
+        let session = SessionIdentity::derive(&LoginSecret::new(vec![7u8; 32]));
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let profile = SyncTimingProfile::CI;
+
+        // Two held names, both at seq 1 with a 90-day EOL: one minted at T0
+        // (25 days left at T+65d — inside the renewal window) and one minted at
+        // T+60d (85 days left at T+65d — comfortably ahead).
+        let (below, below_held) =
+            seeded_held(&device, &session, [1u8; 32], [2u8; 16], "bafybelow", 0);
+        let (ahead, ahead_held) = seeded_held(
+            &device,
+            &session,
+            [3u8; 32],
+            [4u8; 16],
+            "bafyahead",
+            60 * DAY * 1000,
+        );
+        let held = vec![below_held, ahead_held];
+
+        // At T0 both records are far from EOL: the pass no-ops for both, proving
+        // the renewal decision is driven purely off the injected scheduler clock.
+        let at_zero = block_on(eol_renew_pass(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &scheduler,
+            &profile,
+            &session,
+            &held,
+        ));
+        assert_eq!(
+            outcome_of(&at_zero, &below).outcome.as_ref().unwrap(),
+            &None
+        );
+        assert_eq!(
+            outcome_of(&at_zero, &ahead).outcome.as_ref().unwrap(),
+            &None
+        );
+
+        // Advance the injected clock into the below name's renewal window.
+        scheduler.advance(Duration::from_secs(65 * DAY));
+
+        // Keyless re-PUT runs in the same pass and keeps every held record alive.
+        let keyless = block_on(keyless_re_put(&device.record_store, &held));
+        assert!(
+            keyless.iter().all(|r| r.kept_alive),
+            "keyless keeps both names alive"
+        );
+
+        // The renewal pass then republishes only the near-expiry name at seq+1.
+        device.http.enqueue_response(ok_200()); // register-first for the one renewal
+        let results = block_on(eol_renew_pass(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &scheduler,
+            &profile,
+            &session,
+            &held,
+        ));
+        assert_eq!(
+            outcome_of(&results, &below).outcome.as_ref().unwrap(),
+            &Some(PublishOutcome::Published { sequence: 2 }),
+            "the near-expiry name is republished at seq+1",
+        );
+        assert_eq!(
+            outcome_of(&results, &ahead).outcome.as_ref().unwrap(),
+            &None,
+            "the comfortably-ahead name is not renewed",
+        );
+
+        // The renewed record is live at seq 2 with a fresh, strictly-later EOL;
+        // the ahead name is untouched at seq 1.
+        assert_eq!(seq_at(&device, &below), 2);
+        let endpoint = device.record_store.endpoints()[0].clone();
+        let renewed = device
+            .record_store
+            .record_at(&endpoint, below.as_str())
+            .unwrap();
+        let renewed_validity = IpnsRecord::unmarshal(&renewed)
+            .unwrap()
+            .verify(&below)
+            .unwrap()
+            .validity;
+        assert!(
+            renewed_validity > eol::eol_from(UnixMillis(0)).into_bytes(),
+            "renewal stamps a fresh, later EOL",
+        );
+        assert_eq!(seq_at(&device, &ahead), 1);
+    }
 }

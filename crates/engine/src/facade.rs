@@ -27,10 +27,11 @@ use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
 
+use crate::api::ApiClient;
 use crate::entropy::Entropy;
 use crate::net::{
-    Adopter, HeldRecord, HeldRecords, LivenessControl, RE_PUT_INTERVAL, keyless_re_put,
-    run_liveness_loop,
+    Adopter, HeldRecord, HeldRecords, LivenessControl, RE_PUT_INTERVAL, eol_renew_pass,
+    keyless_re_put, run_liveness_loop,
 };
 use crate::profile::SyncTimingProfile;
 use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore};
@@ -522,8 +523,9 @@ pub struct Engine<T: SeamTypes> {
     /// The cold-start session identity, derived from the login secret at
     /// [`start`](Self::start). `None` until then; the single place derived key
     /// material lives once the engine is live. The resolve/publish/rotation
-    /// slices and the liveness loop read every signer from here.
-    session: Option<SessionIdentity>,
+    /// slices read every signer from here. Behind an [`Rc`] so the spawned
+    /// liveness loop shares it for the sub-EOL renewal's per-name signers.
+    session: Option<Rc<SessionIdentity>>,
     started: bool,
 }
 
@@ -572,6 +574,9 @@ impl<T: SeamTypes> Engine<T> {
     where
         T::Scheduler: Clone + 'static,
         T::RecordTransport: Clone + 'static,
+        T::Http: Clone + 'static,
+        T::CredentialStore: Clone + 'static,
+        T::FloorStore: Clone + 'static,
     {
         if self.started {
             return Err(EngineError::AlreadyStarted);
@@ -581,7 +586,7 @@ impl<T: SeamTypes> Engine<T> {
         }
         // Pure derivation from the injected secret — no clock, no RNG — then
         // the secret zeroizes on drop here, at its terminal owner.
-        self.session = Some(SessionIdentity::derive(&secret));
+        self.session = Some(Rc::new(SessionIdentity::derive(&secret)));
         drop(secret);
         self.spawn_liveness_loop();
         self.started = true;
@@ -592,11 +597,11 @@ impl<T: SeamTypes> Engine<T> {
     /// `pub(crate)`: the in-crate pipeline (resolve, publish, rotation, the
     /// liveness loop) reads its signers here; hosts wrap the facade and never
     /// hold key material.
-    // Read by the pipeline slices that consume the session (resolve #745/#746,
-    // liveness composition #750/#751); the hook is live now, its callers land next.
+    // Read by the pipeline slices that consume the session (resolve #745/#746);
+    // the liveness loop (#750) shares the `Rc` directly.
     #[allow(dead_code)]
     pub(crate) fn session(&self) -> Option<&SessionIdentity> {
-        self.session.as_ref()
+        self.session.as_deref()
     }
 
     /// Run the cold-start live-session data path — the ordered chain composed on
@@ -696,21 +701,38 @@ impl<T: SeamTypes> Engine<T> {
         .await
     }
 
-    /// Spawn the ~hourly keyless re-PUT loop (blueprint/engine.md "Liveness"):
+    /// Spawn the ~hourly liveness loop (blueprint/engine.md "Liveness"):
     /// actively-used vaults keep their own records alive off the injected
-    /// scheduler, so no client depends on the API republisher. The task holds
-    /// only `Rc`/seam-handle clones, so the engine may drop while it is parked;
-    /// the alive latch then stops it. The sub-EOL seq+1 renewal joins this same
-    /// loop once cold-start derives the per-name signers it needs.
+    /// scheduler, so no client depends on the API republisher. Each pass runs
+    /// the keyless re-PUT (every held record, byte-for-byte) and then the
+    /// sub-EOL seq+1 renewal (any name inside the 30-day EOL window). The task
+    /// holds only `Rc`/seam-handle clones, so the engine may drop while it is
+    /// parked; the alive latch then stops it.
     fn spawn_liveness_loop(&self)
     where
         T::Scheduler: Clone + 'static,
         T::RecordTransport: Clone + 'static,
+        T::Http: Clone + 'static,
+        T::CredentialStore: Clone + 'static,
+        T::FloorStore: Clone + 'static,
     {
         let scheduler = self.seams.scheduler.clone();
         let transport = self.seams.record_transport.clone();
+        let floors = self.seams.floor_store.clone();
+        let profile = self.profile;
         let held = self.held_records.clone();
         let alive = self.alive.clone();
+        let session = self.session.clone();
+        // One API client for the whole task: register-first renewal needs the
+        // API, and the refresh token lives in the credential store, so the client
+        // self-heals its access token on a 401 across the session's lifetime.
+        // The base URL is supplied by the facade auth/config slice; the renewal
+        // pass only fires once the resolve-tick driver populates the held set.
+        let api = ApiClient::new(
+            self.seams.http.clone(),
+            self.seams.credential_store.clone(),
+            String::new(),
+        );
         self.seams.scheduler.spawn(Box::pin(async move {
             run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
                 if !alive.get() {
@@ -718,6 +740,12 @@ impl<T: SeamTypes> Engine<T> {
                 }
                 let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
                 keyless_re_put(&transport, &records).await;
+                if let Some(session) = session.as_deref() {
+                    eol_renew_pass(
+                        &transport, &api, &floors, &scheduler, &profile, session, &records,
+                    )
+                    .await;
+                }
                 LivenessControl::Continue
             })
             .await;
