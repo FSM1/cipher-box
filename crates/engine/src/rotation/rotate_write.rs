@@ -53,8 +53,7 @@
 //! The caller must present the owner identity signer that authored the current
 //! grant-set commitment, verified up front ([`WriteRotateError::NotOwner`]), and
 //! that commitment must name this scope's current root
-//! ([`WriteRotateError::CommitmentScopeMismatch`]) — binding the owner-auth token
-//! to the exact rotated scope, the same binding the adoption gate enforces. A
+//! ([`WriteRotateError::CommitmentScopeMismatch`]). A
 //! non-advancing `writeEpoch` or an identity re-point is rejected release-active
 //! ([`build_repoint_object`]), never a `debug_assert!` — the encode-side mirror of
 //! the floor law's monotonic write-epoch reject (AGENTS.md rule 8). Entropy enters
