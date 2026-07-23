@@ -5,12 +5,11 @@ import { DataSource, In, Repository } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 import {
   accountLockKey,
-  acquireAdvisoryLocks,
   advisoryLockKey,
+  boundedAcquire,
   pinDurabilityLockKey,
   resolveAdvisoryLockTimeoutMs,
   runLockGuardedTransaction,
-  setAdvisoryLockTimeout,
   withSessionAdvisoryLock,
 } from '../../common/advisory-lock';
 import { MailboxMessage } from '../../mailbox/entities/mailbox-message.entity';
@@ -189,17 +188,20 @@ export class AccountService {
     chunkCids: string[]
   ): Promise<ChunkOutcome> {
     return runLockGuardedTransaction(this.dataSource, async (manager) => {
-      await setAdvisoryLockTimeout(manager, this.lockTimeoutMs);
       // The residue step (empty chunk) also takes `advisoryLockKey(publicKey)` —
       // the recipient key a mailbox POST holds across its existence re-check and
       // insert — so a post racing the mailbox purge + user delete observes the
       // committed deletion and fails closed rather than resurrecting an orphan
       // row (mailbox rows have no FK to cascade them).
-      await acquireAdvisoryLocks(manager, [
-        accountLockKey(accountId),
-        ...(chunkCids.length === 0 ? [advisoryLockKey(publicKey)] : []),
-        ...chunkCids.map(advisoryLockKey),
-      ]);
+      await boundedAcquire(
+        manager,
+        [
+          accountLockKey(accountId),
+          ...(chunkCids.length === 0 ? [advisoryLockKey(publicKey)] : []),
+          ...chunkCids.map(advisoryLockKey),
+        ],
+        this.lockTimeoutMs
+      );
 
       const locked = await manager
         .getRepository(User)

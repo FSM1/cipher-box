@@ -49,23 +49,6 @@ export async function setAdvisoryLockTimeout(
 }
 
 /**
- * Acquire one transaction-scoped advisory lock, mapping a `lock_timeout` abort
- * to a retryable 503 so a contended caller degrades gracefully instead of
- * holding its connection until the pool starves. The lock auto-releases at
- * commit or rollback.
- */
-export async function acquireAdvisoryLock(manager: EntityManager, key: bigint): Promise<void> {
-  try {
-    await manager.query('SELECT pg_advisory_xact_lock($1::bigint)', [key.toString()]);
-  } catch (error) {
-    if (isLockNotAvailable(error)) {
-      throw new ServiceUnavailableException('Contended resource; retry shortly');
-    }
-    throw error;
-  }
-}
-
-/**
  * A Postgres `lock_not_available` (55P03) — a statement aborted by
  * `lock_timeout`, whether the advisory-lock acquire or a row lock taken later
  * under the same transaction-scoped bound. TypeORM wraps it as a

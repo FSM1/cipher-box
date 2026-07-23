@@ -169,8 +169,8 @@ export class RegistryService {
           ? await pinRepo.find({ where: { accountId, cid: In(cidOrder) } })
           : [];
         const knownCids = new Set(existingPins.map((row) => row.cid));
-        // Idempotent: a CID already counted keeps its size and advisory origin.
-        // All-new rows, so one multi-row INSERT instead of per-row saves.
+        // Idempotent: a CID already counted keeps its size and advisory origin;
+        // the rest are all-new, so one multi-row insert.
         const pinWrites = cidOrder
           .filter((cid) => !knownCids.has(cid))
           .map((cid) => ({ accountId, cid, size: '0', advisory }));
