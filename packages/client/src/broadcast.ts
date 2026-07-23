@@ -68,9 +68,9 @@ export type LeaderMessage =
   | { type: 'cb:leaderGone'; token: string }
   /**
    * The correlated result of a follower's command or read. A snapshot read's
-   * ok carries `result`; a download's carries `content` as a `Blob` — the
-   * structured clone per receiver shares the immutable backing store, so the
-   * cross-tab hop copies no bytes (same rationale as `hoistContent`).
+   * ok carries the descriptor in `result`; a download's carries a `Blob` there
+   * — the structured clone per receiver shares the immutable backing store, so
+   * the cross-tab hop copies no bytes (same rationale as `hoistContent`).
    */
   | {
       type: 'cb:response';
@@ -78,9 +78,13 @@ export type LeaderMessage =
       clientId: string;
       requestId: number;
       ok: true;
-      result?: SnapshotDescriptor;
-      content?: Blob;
+      result?: SnapshotDescriptor | Blob;
     }
+  /**
+   * A failed command/read. `error` is the human-readable diagnostic; `code` is
+   * the engine's stable machine-readable error code when the failure came from
+   * the engine.
+   */
   | {
       type: 'cb:response';
       token: string;
@@ -88,6 +92,7 @@ export type LeaderMessage =
       requestId: number;
       ok: false;
       error: string;
+      code?: string;
     }
   /** One engine event, fanned out to every follower in emission order. */
   | { type: 'cb:event'; token: string; event: EventDescriptor };

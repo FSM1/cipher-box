@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { fakeWasmEnums } from '../testkit.js';
 import { readEvent, readSnapshot } from './commandCodec.js';
 import type { EngineWasm, WasmEvent, WasmSnapshotView } from './engineWasm.js';
 
@@ -7,12 +8,7 @@ import type { EngineWasm, WasmEvent, WasmSnapshotView } from './engineWasm.js';
  * A structural stand-in for the wasm-bindgen namespace: only the mirror-enum
  * value tables the codec's read paths consult.
  */
-const fakeWasm = {
-  NodeKind: { File: 0, Folder: 1 },
-  Permission: { Read: 0, Write: 1 },
-  Staleness: { Fresh: 0, Reconciling: 1, Stale: 2, Offline: 3 },
-  OpPhase: { DownloadStarted: 0, DownloadCompleted: 1, DownloadFailed: 2 },
-} as unknown as EngineWasm;
+const fakeWasm = fakeWasmEnums as unknown as EngineWasm;
 
 describe('readEvent', () => {
   it('maps renewalFailed instead of throwing (the transport-bricking bug)', () => {

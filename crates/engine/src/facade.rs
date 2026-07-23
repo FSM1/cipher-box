@@ -23,7 +23,6 @@ use core::pin::Pin;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use cipherbox_core::content::{encode_content_cid_str, open_chunk};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::ReadBody;
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
@@ -32,7 +31,7 @@ use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
-use crate::content::{ContentPlane, Gateway, GatewayConfig, ReadError, decode_root, read_block};
+use crate::content::{Gateway, GatewayConfig, OpenError, open_content};
 use crate::entropy::Entropy;
 use crate::gate::GateError;
 use crate::hex::hex_lower;
@@ -45,13 +44,12 @@ use crate::net::{
 use crate::profile::SyncTimingProfile;
 use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore, UnixMillis};
 use crate::session::SessionIdentity;
-use crate::sync::boot::{
-    ColdStartError, ColdStartOutcome, ColdStartParams, ColdStartSinks, cold_start,
-};
+use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
 use crate::sync::op::Op;
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
+use crate::sync::project::project_child_version;
 use crate::sync::rebase::decode_queue;
 use crate::sync::staging::{StageOutcome, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
@@ -420,8 +418,9 @@ pub enum Event {
         /// Human-readable classification (no key material).
         detail: String,
     },
-    /// Progress of a content-plane transfer for one node. Emitters land with
-    /// the content pipeline slice; the variant is the contract.
+    /// Progress of a content-plane transfer for one node: the driving op (if
+    /// any), the phase reached, and the failure classification on a failed
+    /// phase.
     OpProgress {
         /// The queued op driving the transfer, if any.
         op_id: Option<OpId>,
@@ -534,22 +533,6 @@ impl EngineError {
             },
             GateError::Seam(seam) => EngineError::ContentUnavailable {
                 message: seam.message().to_owned(),
-            },
-        }
-    }
-
-    /// Map a content-block read failure: a CID mismatch is a fail-closed trust
-    /// verdict; no source or an over-cap body is availability.
-    fn from_read(err: ReadError) -> Self {
-        match err {
-            ReadError::TrustViolation(e) => EngineError::TrustViolation {
-                message: format!("content block rejected: [{}]", e.check()),
-            },
-            ReadError::Unavailable => EngineError::ContentUnavailable {
-                message: "content block unavailable".to_owned(),
-            },
-            ReadError::TooLarge { size, limit } => EngineError::ContentUnavailable {
-                message: format!("content block exceeds the cap ({size} > {limit})"),
             },
         }
     }
@@ -896,11 +879,11 @@ impl<T: SeamTypes> Engine<T> {
         // no derived key material stays resident and nothing runs past an unadopted
         // root (rules 4/6). An empty chain (a first-run vault with no pointer yet)
         // degrades to the anchored root with no error.
+        let root = self.snapshot.borrow().root;
+        let root_scope_id = root.0;
         let cold_start = {
             let session = self.session.as_ref().expect("session set above");
             let owner_identity = session.owner_identity();
-            let root = self.snapshot.borrow().root;
-            let root_scope_id = root.0;
             let pointer_fetch = RecordPointerFetch::new(&self.seams.record_transport);
             let adopter = RootAdopter::new(
                 &self.gateway,
@@ -920,7 +903,7 @@ impl<T: SeamTypes> Engine<T> {
             )
             .await
         };
-        let outcome = match cold_start {
+        let mut outcome = match cold_start {
             Ok(outcome) => outcome,
             Err(err) => {
                 // Fail-closed symmetry with the login path: clear the derived
@@ -930,6 +913,13 @@ impl<T: SeamTypes> Engine<T> {
                 return Err(EngineError::from_cold_start(err));
             }
         };
+        // A gate-passing root adopt surfaced the scope read seed: deposit it in
+        // the in-memory per-scope cell the child read pipeline derives from.
+        if let Some(seed) = outcome.read_scope_seed.take() {
+            self.scope_read_seeds
+                .borrow_mut()
+                .insert(root_scope_id, seed);
+        }
 
         // The gate-passing base becomes the state law's left operand (reads render
         // this ⊕ the pending-op overlay). The resolved root name — the vault
@@ -1046,19 +1036,6 @@ impl<T: SeamTypes> Engine<T> {
             pending_ops: &pending,
         };
         let events = self.events.clone();
-        let mut emit = |event: Event| {
-            let _ = events.unbounded_send(event);
-        };
-        // A gate-passing root adopt surfaces the scope read seed; deposit it in
-        // the in-memory per-scope cell the child read pipeline derives from.
-        let seeds = self.scope_read_seeds.clone();
-        let mut deposit_read_seed = |seed: Zeroizing<[u8; 32]>| {
-            seeds.borrow_mut().insert(root_scope_id, seed);
-        };
-        let mut sinks = ColdStartSinks {
-            emit: &mut emit,
-            deposit_read_seed: &mut deposit_read_seed,
-        };
         cold_start(
             pointer_fetch,
             adopter,
@@ -1066,7 +1043,9 @@ impl<T: SeamTypes> Engine<T> {
             &self.seams.record_transport,
             &self.seams.snapshot_cache,
             &params,
-            &mut sinks,
+            &mut |event: Event| {
+                let _ = events.unbounded_send(event);
+            },
         )
         .await
     }
@@ -1341,6 +1320,7 @@ impl<T: SeamTypes> Engine<T> {
         }
         let pending: BTreeSet<NodeId> = ops.iter().map(|op| op.target).collect();
         let dead = self.dead_letters.borrow();
+        let dead_nodes: BTreeSet<NodeId> = dead.values().flatten().copied().collect();
         let children = rendered
             .children(folder)
             .into_iter()
@@ -1351,7 +1331,7 @@ impl<T: SeamTypes> Engine<T> {
                 size: child.size,
                 mtime: child.mtime,
                 pending: pending.contains(&child.id),
-                dead_letter: dead.values().any(|node| *node == Some(child.id)),
+                dead_letter: dead_nodes.contains(&child.id),
                 content_version: child.content_version,
             })
             .collect();
@@ -1392,7 +1372,7 @@ impl<T: SeamTypes> Engine<T> {
     /// under the version content key, and reassembles the plaintext with
     /// length cross-checks. Emits [`Event::OpProgress`] on entry, success, and
     /// failure; on success folds the head version's size/mtime into the base
-    /// snapshot and emits [`Event::SnapshotUpdated`].
+    /// snapshot, emitting [`Event::SnapshotUpdated`] only when they changed.
     pub async fn read_content(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
         if !self.started {
             return Err(EngineError::NotStarted);
@@ -1401,12 +1381,11 @@ impl<T: SeamTypes> Engine<T> {
         match self.read_content_inner(node).await {
             Ok((plaintext, size, modified_at)) => {
                 // The verified head version is gate-passing state, so it may
-                // legally touch the base node's projected size/mtime.
-                if let Some(meta) = self.snapshot.borrow_mut().node_mut(node) {
-                    meta.size = Some(size);
-                    meta.mtime = Some(modified_at);
+                // legally touch the base node's projected size/mtime. Repaint
+                // only on a real change — a repeat read must not cascade.
+                if project_child_version(&mut self.snapshot.borrow_mut(), node, size, modified_at) {
+                    let _ = self.events.unbounded_send(Event::SnapshotUpdated);
                 }
-                let _ = self.events.unbounded_send(Event::SnapshotUpdated);
                 self.emit_op_progress(node, OpPhase::DownloadCompleted, None);
                 Ok(plaintext)
             }
@@ -1418,31 +1397,48 @@ impl<T: SeamTypes> Engine<T> {
     }
 
     /// The verified read pipeline behind [`read_content`](Self::read_content):
-    /// rendered-view lookup → gated child resolve → version-DAG fetch and
-    /// per-leaf unseal → length cross-checks. Returns the plaintext plus the
-    /// head version's `(size, modifiedAt)`.
+    /// base-snapshot lookup → gated child resolve →
+    /// [`open_content`] (version-DAG fetch, per-leaf unseal, length
+    /// cross-checks). Returns the plaintext plus the head version's
+    /// `(size, modifiedAt)`.
     async fn read_content_inner(&self, node: NodeId) -> Result<(Vec<u8>, u64, u64), EngineError> {
-        let name = {
-            let rendered = self.render().await?;
-            let meta = rendered.node(node).ok_or(EngineError::UnknownNode)?;
-            if meta.kind == NodeKind::Folder {
-                return Err(EngineError::NotAFile);
-            }
-            let name_bytes =
-                meta.ipns_name
-                    .as_ref()
-                    .ok_or_else(|| EngineError::ContentUnavailable {
-                        message: "content not yet published".to_owned(),
-                    })?;
-            // The bytes are the UTF-8 of the canonical base36 name; anything
-            // else is a malformed child ref, fail-closed.
-            core::str::from_utf8(name_bytes)
-                .ok()
-                .and_then(|s| IpnsName::parse(s).ok())
-                .ok_or_else(|| EngineError::TrustViolation {
-                    message: "child ipnsName is not a canonical IPNS name".to_owned(),
-                })?
+        // The base snapshot alone answers the lookup (kind and ipnsName never
+        // come from the overlay) — no full render for a single node. The borrow
+        // never spans an await.
+        let base_meta = {
+            let base = self.snapshot.borrow();
+            base.node(node)
+                .map(|meta| (meta.kind, meta.ipns_name.clone()))
         };
+        let (kind, ipns_name) = match base_meta {
+            Some(meta) => meta,
+            None => {
+                // Absent from gate-passing state: a queued op targeting the node
+                // means a pending (unpublished) create; anything else is unknown.
+                let pending = self.pending_ops().await?;
+                return Err(if pending.iter().any(|op| op.target == node) {
+                    EngineError::ContentUnavailable {
+                        message: "content not yet published".to_owned(),
+                    }
+                } else {
+                    EngineError::UnknownNode
+                });
+            }
+        };
+        if kind == NodeKind::Folder {
+            return Err(EngineError::NotAFile);
+        }
+        let name_bytes = ipns_name.ok_or_else(|| EngineError::ContentUnavailable {
+            message: "content not yet published".to_owned(),
+        })?;
+        // The bytes are the UTF-8 of the canonical base36 name; anything
+        // else is a malformed child ref, fail-closed.
+        let name = core::str::from_utf8(&name_bytes)
+            .ok()
+            .and_then(|s| IpnsName::parse(s).ok())
+            .ok_or_else(|| EngineError::TrustViolation {
+                message: "child ipnsName is not a canonical IPNS name".to_owned(),
+            })?;
         // The node's scope is the vault root scope (subscope reads are a later
         // slice). A clone of the seed keeps the cell borrow from spanning the
         // awaits below; the clone zeroizes when the adopter drops.
@@ -1473,30 +1469,28 @@ impl<T: SeamTypes> Engine<T> {
         .map_err(|e| EngineError::ContentUnavailable {
             message: e.message().to_owned(),
         })?;
-        let adopted = match resolved.outcome {
-            ResolveOutcome::Adopted(adopted) => adopted,
-            // Our own current record at the floor: re-open without a floor
-            // advance (cache-first steady state, not an update).
-            ResolveOutcome::Current { record_bytes } => adopter
+        // One at-floor re-open serves both non-adopt outcomes: `Current` carries
+        // the re-fetched bytes, `NoUpdate` falls back to the cached
+        // last-known-good; neither advances a floor.
+        let adopted = 'adopted: {
+            let record_bytes = match resolved.outcome {
+                ResolveOutcome::Adopted(adopted) => break 'adopted adopted,
+                ResolveOutcome::TrustViolation(rejection) => {
+                    return Err(EngineError::from_gate(GateError::Rejected(rejection)));
+                }
+                ResolveOutcome::Current { record_bytes } => record_bytes,
+                ResolveOutcome::NoUpdate => {
+                    resolved
+                        .last_known_good
+                        .ok_or_else(|| EngineError::ContentUnavailable {
+                            message: "no record source reachable and no cached record".to_owned(),
+                        })?
+                }
+            };
+            adopter
                 .open_at_floor(&name, &record_bytes)
                 .await
-                .map_err(EngineError::from_gate)?,
-            ResolveOutcome::NoUpdate => match &resolved.last_known_good {
-                Some(bytes) => adopter
-                    .open_at_floor(&name, bytes)
-                    .await
-                    .map_err(EngineError::from_gate)?,
-                None => {
-                    return Err(EngineError::ContentUnavailable {
-                        message: "no record source reachable and no cached record".to_owned(),
-                    });
-                }
-            },
-            ResolveOutcome::TrustViolation(rejection) => {
-                return Err(EngineError::TrustViolation {
-                    message: rejection.to_string(),
-                });
-            }
+                .map_err(EngineError::from_gate)?
         };
 
         let ReadBody::File { versions, .. } = adopted.read_body else {
@@ -1513,56 +1507,12 @@ impl<T: SeamTypes> Engine<T> {
             });
         };
 
-        let root_cid_str = encode_content_cid_str(&version.content_cid);
-        let root_block = read_block(
-            &self.gateway,
-            &self.seams.http,
-            &root_cid_str,
-            &version.content_cid,
-            ContentPlane::Root,
-        )
-        .await
-        .map_err(EngineError::from_read)?;
-        let manifest = decode_root(&root_block).map_err(|e| EngineError::TrustViolation {
-            message: format!("content DAG root rejected: {e:?}"),
-        })?;
-        if manifest.size != version.size {
-            return Err(EngineError::TrustViolation {
-                message: format!(
-                    "manifest size {} disagrees with version size {}",
-                    manifest.size, version.size
-                ),
-            });
-        }
-
-        let mut plaintext = Vec::new();
-        for leaf_cid in &manifest.leaf_cids {
-            let leaf_cid_str = encode_content_cid_str(leaf_cid);
-            let sealed = read_block(
-                &self.gateway,
-                &self.seams.http,
-                &leaf_cid_str,
-                leaf_cid,
-                ContentPlane::Leaf,
-            )
+        let plaintext = open_content(&self.gateway, &self.seams.http, version)
             .await
-            .map_err(EngineError::from_read)?;
-            let chunk = open_chunk(version.content_key(), &sealed).map_err(|e| {
-                EngineError::TrustViolation {
-                    message: format!("leaf unseal rejected: [{}]", e.check()),
-                }
+            .map_err(|e| match e {
+                OpenError::Trust(message) => EngineError::TrustViolation { message },
+                OpenError::Unavailable(message) => EngineError::ContentUnavailable { message },
             })?;
-            plaintext.extend_from_slice(&chunk);
-        }
-        if plaintext.len() as u64 != manifest.size {
-            return Err(EngineError::TrustViolation {
-                message: format!(
-                    "reassembled length {} disagrees with manifest size {}",
-                    plaintext.len(),
-                    manifest.size
-                ),
-            });
-        }
         Ok((plaintext, version.size, version.modified_at))
     }
 
@@ -3455,9 +3405,18 @@ mod tests {
                 assert_eq!(child.mtime, Some(CHILD_MTIME));
 
                 // A second read re-serves the same record, now at the durable
-                // floor: the at-floor re-open yields the identical plaintext.
+                // floor: the at-floor re-open yields the identical plaintext,
+                // and the unchanged size/mtime fold repaints nothing.
                 enqueue_download(&device, &head_block, &dag, &leaves);
                 assert_eq!(block_on(engine.read_content(node)).unwrap(), PLAINTEXT);
+                assert_eq!(
+                    drain(&mut events),
+                    vec![
+                        progress(node, OpPhase::DownloadStarted),
+                        progress(node, OpPhase::DownloadCompleted),
+                    ],
+                    "an identical second read emits no SnapshotUpdated"
+                );
             }
 
             #[test]

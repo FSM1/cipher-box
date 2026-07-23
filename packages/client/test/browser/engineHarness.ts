@@ -7,8 +7,9 @@
 import { EngineFacade } from '../../src/facade.js';
 import { LocalTransport } from '../../src/transport.js';
 import type { EventDescriptor } from '../../src/worker/protocol.js';
+import { hex } from './hexUtil.js';
 
-interface RealEngineResult {
+export interface RealEngineResult {
   beforeStart: string;
   startOk: boolean;
   secretDetached: boolean;
@@ -16,13 +17,13 @@ interface RealEngineResult {
   afterLogout: string;
 }
 
-interface BoundaryOutcome {
+export interface BoundaryOutcome {
   ok: boolean;
   error?: string;
 }
 
 /** A page.evaluate-safe projection of the snapshot read surface. */
-interface SnapshotSuiteResult {
+export interface SnapshotSuiteResult {
   rootEchoed: boolean;
   children: Array<{
     name: string;
@@ -35,7 +36,9 @@ interface SnapshotSuiteResult {
   nestedAncestors: Array<{ idHex: string; name: string }>;
   rootHex: string;
   unknownError: string;
+  unknownCode: string;
   downloadError: string;
+  downloadCode: string;
 }
 
 declare global {
@@ -63,6 +66,12 @@ function facadeOver(worker: Worker): { facade: EngineFacade; transport: LocalTra
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** The engine's stable error code as crossed on the rejection, '' if absent. */
+function code(error: unknown): string {
+  const value = (error as { code?: unknown } | null)?.code;
+  return typeof value === 'string' ? value : '';
 }
 
 window.runRealEngine = async (): Promise<RealEngineResult> => {
@@ -103,12 +112,6 @@ window.runRealEngine = async (): Promise<RealEngineResult> => {
   return result;
 };
 
-function hex(bytes: Uint8Array): string {
-  let out = '';
-  for (const byte of bytes) out += byte.toString(16).padStart(2, '0');
-  return out;
-}
-
 window.runSnapshotSuite = async (): Promise<SnapshotSuiteResult> => {
   const { facade, transport } = facadeOver(realWorker());
   try {
@@ -127,13 +130,17 @@ window.runSnapshotSuite = async (): Promise<SnapshotSuiteResult> => {
     const nested = await facade.snapshot(docs.id);
 
     let unknownError = '';
+    let unknownCode = '';
     await facade.snapshot(new Uint8Array(16).fill(0x5a)).catch((error: unknown) => {
       unknownError = message(error);
+      unknownCode = code(error);
     });
 
     let downloadError = '';
+    let downloadCode = '';
     await facade.download(file.id).catch((error: unknown) => {
       downloadError = message(error);
+      downloadCode = code(error);
     });
 
     return {
@@ -152,7 +159,9 @@ window.runSnapshotSuite = async (): Promise<SnapshotSuiteResult> => {
       })),
       rootHex: hex(view.root),
       unknownError,
+      unknownCode,
       downloadError,
+      downloadCode,
     };
   } finally {
     transport.close();

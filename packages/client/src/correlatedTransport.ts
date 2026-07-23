@@ -19,6 +19,22 @@ interface Pending {
 }
 
 /**
+ * A rejected engine request. `code` is the engine's stable machine-readable
+ * error code (the wasm host's camelCase `EngineError` variant name, e.g.
+ * `'unknownNode'`, `'contentUnavailable'`) when the failure crossed from the
+ * engine; absent for transport-level failures.
+ */
+export class EngineRequestError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = 'EngineRequestError';
+    this.code = code;
+  }
+}
+
+/**
  * Delivers one event to every listener, isolating a throwing subscriber so it
  * cannot drop the event for the rest.
  */
@@ -91,12 +107,12 @@ export abstract class CorrelatedTransport implements EngineTransport {
   }
 
   /** Correlates a response to its request id, resolving or rejecting it. */
-  protected settle(id: number, ok: boolean, error?: string, result?: unknown): void {
+  protected settle(id: number, ok: boolean, error?: string, result?: unknown, code?: string): void {
     const pending = this.pending.get(id);
     if (!pending) return;
     this.pending.delete(id);
     if (ok) pending.resolve(result);
-    else pending.reject(new Error(error));
+    else pending.reject(new EngineRequestError(error ?? 'engine request failed', code));
   }
 
   /**

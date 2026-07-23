@@ -44,6 +44,24 @@ pub(crate) fn project_root(root: NodeId, adopted: &Adopted) -> Snapshot {
     snapshot
 }
 
+/// Fold a verified head version's plaintext `(size, mtime)` into the base
+/// node. Returns whether either value actually changed, so the caller repaints
+/// only on a real change (a repeat read of the same version is a no-op).
+pub(crate) fn project_child_version(
+    snapshot: &mut Snapshot,
+    node: NodeId,
+    size: u64,
+    mtime: u64,
+) -> bool {
+    let Some(meta) = snapshot.node_mut(node) else {
+        return false;
+    };
+    let changed = meta.size != Some(size) || meta.mtime != Some(mtime);
+    meta.size = Some(size);
+    meta.mtime = Some(mtime);
+    changed
+}
+
 /// Map the core wire node kind onto the structurally-identical facade kind.
 fn map_kind(kind: CoreNodeKind) -> NodeKind {
     match kind {
@@ -153,6 +171,22 @@ mod tests {
             Some(vec![1]),
             "the ChildRef ipnsName rides into the projected meta"
         );
+    }
+
+    #[test]
+    fn project_child_version_reports_change_once() {
+        let root = node_id(0);
+        let adopted = adopted_folder(vec![child(1, "a", CoreNodeKind::File, 1)], 1);
+        let mut snap = project_root(root, &adopted);
+
+        assert!(project_child_version(&mut snap, node_id(1), 10, 99));
+        assert_eq!(snap.node(node_id(1)).unwrap().size, Some(10));
+        assert_eq!(snap.node(node_id(1)).unwrap().mtime, Some(99));
+        // The identical fold changes nothing; a differing one does.
+        assert!(!project_child_version(&mut snap, node_id(1), 10, 99));
+        assert!(project_child_version(&mut snap, node_id(1), 11, 99));
+        // An absent node folds nothing.
+        assert!(!project_child_version(&mut snap, node_id(7), 1, 1));
     }
 
     #[test]

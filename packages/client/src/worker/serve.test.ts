@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { emptySnapshot, fakeWasmEnums } from '../testkit.js';
 import { LocalTransport, type EngineWorkerLike } from '../transport.js';
 import { EngineHost, type EngineHostLike } from './engineHost.js';
 import type { EngineWasm, WasmEngineHandle, WasmEvent } from './engineWasm.js';
@@ -50,12 +51,9 @@ function loopback(): {
 }
 
 const SNAPSHOT: SnapshotDescriptor = {
+  ...emptySnapshot(new Uint8Array(16).fill(2)),
   root: new Uint8Array(16).fill(1),
-  folder: new Uint8Array(16).fill(2),
-  children: [],
-  ancestors: [],
   deadLetters: [3n],
-  staleness: 'fresh',
 };
 
 class ReadHost implements EngineHostLike {
@@ -116,16 +114,29 @@ describe('serveEngine read requests', () => {
     expect(response!.transfer).toEqual([content]);
   });
 
-  it('maps a rejected read to a correlated error response', async () => {
+  it('maps a rejected read to a correlated error response with the stable code', async () => {
     const { scope, worker } = loopback();
     const host = new ReadHost();
-    host.respondSnapshot = () => Promise.reject(new Error('unknown node'));
-    host.respondDownload = () => Promise.reject(new Error('content unavailable: not published'));
+    // The wasm host rejects with an Error carrying the stable `code` property.
+    host.respondSnapshot = () =>
+      Promise.reject(Object.assign(new Error('unknown node'), { code: 'unknownNode' }));
+    host.respondDownload = () =>
+      Promise.reject(
+        Object.assign(new Error('content unavailable: not published'), {
+          code: 'contentUnavailable',
+        })
+      );
     serveEngine(scope, host);
     const transport = new LocalTransport(worker);
 
-    await expect(transport.snapshot(new Uint8Array(16))).rejects.toThrow('unknown node');
-    await expect(transport.download(new Uint8Array(16))).rejects.toThrow('content unavailable');
+    // The code crosses intact alongside the human-readable message.
+    await expect(transport.snapshot(new Uint8Array(16))).rejects.toMatchObject({
+      code: 'unknownNode',
+      message: 'unknown node',
+    });
+    await expect(transport.download(new Uint8Array(16))).rejects.toMatchObject({
+      code: 'contentUnavailable',
+    });
     // The failures were per-request, never fatal: the next read still answers.
     await expect(transport.command({ kind: 'manualRefresh' }, [])).resolves.toBeUndefined();
   });
@@ -198,10 +209,7 @@ describe('serveEngine event pump over the real EngineHost', () => {
       },
       NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
       Command: { manualRefresh: () => ({}) },
-      NodeKind: { File: 0, Folder: 1 },
-      Permission: { Read: 0, Write: 1 },
-      Staleness: { Fresh: 0, Reconciling: 1, Stale: 2, Offline: 3 },
-      OpPhase: { DownloadStarted: 0, DownloadCompleted: 1, DownloadFailed: 2 },
+      ...fakeWasmEnums,
     } as unknown as EngineWasm;
 
     const { scope, worker, toUi } = loopback();

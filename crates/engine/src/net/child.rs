@@ -12,18 +12,16 @@
 
 use core::cell::RefCell;
 
-use cipherbox_core::content::decode_content_cid_str;
 use cipherbox_core::error::{Malformed, TrustViolation};
-use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
-use cipherbox_core::seal::{Envelope, ReadBody, decode_envelope, open_read_body};
+use cipherbox_core::seal::{Envelope, ReadBody, has_grant_section, open_read_body};
 use zeroize::Zeroizing;
 
-use super::adopter::{assembly_reject, map_read_error, reject};
-use super::publish::head_cid_from_value;
+use super::adopter::{assemble_head_envelope, reject};
 use super::resolve::{AdoptOutcome, Adopter};
-use crate::content::{ContentPlane, Gateway, read_block};
-use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason, floor};
+use crate::content::Gateway;
+use crate::gate::{Adopted, GateError, GateStage, floor};
 use crate::seams::{FloorStore, Http};
 
 /// The child-record [`Adopter`] for one non-root node of an owned scope.
@@ -83,39 +81,19 @@ impl<'a, H, F> ChildAdopter<'a, H, F> {
 }
 
 impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
-    /// Record verify, CID-verified head fetch, envelope decode, and the child
-    /// bindings — every step fail-closed as a trust violation; a missing source
-    /// stays availability ([`map_read_error`]).
+    /// The shared head-envelope assembly ([`assemble_head_envelope`]) plus the
+    /// child bindings — every step fail-closed as a trust violation; a missing
+    /// source stays availability.
     async fn assemble_envelope(
         &self,
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<(u64, Envelope), GateError> {
-        let verified = IpnsRecord::unmarshal(record_bytes)
-            .and_then(|record| record.verify(name))
-            .map_err(assembly_reject)?;
-
-        let cid_str = head_cid_from_value(&verified.value)
-            .ok_or_else(|| assembly_reject(Malformed::ContentCidStrMalformed.into()))?;
-        let expected_cid = decode_content_cid_str(&cid_str).map_err(assembly_reject)?;
-        let block = read_block(
-            self.gateway,
-            self.http,
-            &cid_str,
-            &expected_cid,
-            ContentPlane::Root,
-        )
-        .await
-        .map_err(map_read_error)?;
-
-        let envelope = decode_envelope(&block).map_err(assembly_reject)?;
+        let (sequence, envelope) =
+            assemble_head_envelope(self.gateway, self.http, name, record_bytes).await?;
         // A grant section marks a scope root; granted-subscope reads are a
         // later slice — fail closed, no partial support.
-        if envelope
-            .unknown
-            .iter()
-            .any(|(key, _)| key == "grantSection")
-        {
+        if has_grant_section(&envelope) {
             return Err(reject(
                 GateStage::GrantSection,
                 Malformed::UnexpectedType {
@@ -134,52 +112,7 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
                 TrustViolation::SealOpenFailed.into(),
             ));
         }
-        Ok((verified.sequence, envelope))
-    }
-
-    /// The child floor checks (root-gate stages 4/5). `strict` requires a
-    /// strictly newer sequence (the adopt path); the at-floor path admits
-    /// equality (our own current record) while a strictly lower sequence stays
-    /// a fail-closed replay.
-    async fn check_floors(
-        &self,
-        name: &IpnsName,
-        sequence: u64,
-        epoch: u64,
-        strict: bool,
-    ) -> Result<(), GateError> {
-        let sequence_floor = floor::sequence_floor(self.floors, name.as_str().as_bytes())
-            .await
-            .map_err(GateError::Seam)?
-            .unwrap_or(0);
-        let replayed = if strict {
-            sequence <= sequence_floor
-        } else {
-            sequence < sequence_floor
-        };
-        if replayed {
-            return Err(GateError::Rejected(GateRejection {
-                stage: GateStage::Sequence,
-                reason: RejectionReason::SequenceNotNewer {
-                    floor: sequence_floor,
-                    sequence,
-                },
-            }));
-        }
-        let epoch_floor = floor::read_epoch_floor(self.floors, &self.scope_id)
-            .await
-            .map_err(GateError::Seam)?
-            .unwrap_or(0);
-        if epoch < epoch_floor {
-            return Err(GateError::Rejected(GateRejection {
-                stage: GateStage::Epoch,
-                reason: RejectionReason::EpochBelowFloor {
-                    floor: epoch_floor,
-                    epoch,
-                },
-            }));
-        }
-        Ok(())
+        Ok((sequence, envelope))
     }
 
     /// Unseal the read-body under the per-node read key derived from the scope
@@ -210,8 +143,15 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
             Some(cached) => (cached.sequence, cached.envelope),
             None => self.assemble_envelope(name, record_bytes).await?,
         };
-        self.check_floors(name, sequence, envelope.epoch, false)
-            .await?;
+        floor::check(
+            self.floors,
+            name.as_str().as_bytes(),
+            &self.scope_id,
+            sequence,
+            envelope.epoch,
+            floor::Strictness::AtFloor,
+        )
+        .await?;
         let read_body = self.unseal(&envelope)?;
         Ok(Adopted {
             read_body,
@@ -224,9 +164,15 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
 impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
     async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<AdoptOutcome, GateError> {
         let (sequence, envelope) = self.assemble_envelope(name, record_bytes).await?;
-        if let Err(err) = self
-            .check_floors(name, sequence, envelope.epoch, true)
-            .await
+        if let Err(err) = floor::check(
+            self.floors,
+            name.as_str().as_bytes(),
+            &self.scope_id,
+            sequence,
+            envelope.epoch,
+            floor::Strictness::StrictlyNewer,
+        )
+        .await
         {
             // Keep the assembled head for the equal-floor re-open path — it
             // re-fetches the same head block otherwise.

@@ -98,30 +98,12 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<Candidate, GateError> {
-        // Step 1 — verify to read the signed `/ipfs/<cid>` value (the head
-        // anchor). Trust is the gate's; this only extracts the anchor.
-        let verified = IpnsRecord::unmarshal(record_bytes)
-            .and_then(|record| record.verify(name))
-            .map_err(assembly_reject)?;
+        // Steps 1-4 are the shared head-envelope assembly; the sequence is
+        // discarded — the gate re-verifies the record from scratch.
+        let (_sequence, envelope) =
+            assemble_head_envelope(self.gateway, self.http, name, record_bytes).await?;
 
-        // Step 2/3 — recover the head CID string and the binary CIDv1 anchor.
-        let cid_str = head_cid_from_value(&verified.value)
-            .ok_or_else(|| assembly_reject(Malformed::ContentCidStrMalformed.into()))?;
-        let expected_cid = decode_content_cid_str(&cid_str).map_err(assembly_reject)?;
-
-        // Step 4 — fetch the head block (dag-cbor root), fail-closed on mismatch.
-        let block = read_block(
-            self.gateway,
-            self.http,
-            &cid_str,
-            &expected_cid,
-            ContentPlane::Root,
-        )
-        .await
-        .map_err(map_read_error)?;
-
-        // Step 5 — decode the envelope and its grant section.
-        let envelope = decode_envelope(&block).map_err(assembly_reject)?;
+        // Step 5 — decode the grant section.
         let section_bytes = grant_section_bytes(&envelope).ok_or_else(|| {
             assembly_reject(
                 Malformed::MissingField {
@@ -295,6 +277,32 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         }
         Ok(Some(Zeroizing::new(*payload.write_scope_seed())))
     }
+}
+
+/// The head-envelope assembly shared by both adopters: verify the record to
+/// read its signed `/ipfs/<cid>` head anchor (trust is the gate's — this only
+/// extracts the anchor), fetch the head block fail-closed on a CID mismatch,
+/// and decode the envelope. Returns the verified record sequence alongside it.
+pub(super) async fn assemble_head_envelope<H: Http>(
+    gateway: &Gateway,
+    http: &H,
+    name: &IpnsName,
+    record_bytes: &[u8],
+) -> Result<(u64, Envelope), GateError> {
+    let verified = IpnsRecord::unmarshal(record_bytes)
+        .and_then(|record| record.verify(name))
+        .map_err(assembly_reject)?;
+
+    let cid_str = head_cid_from_value(&verified.value)
+        .ok_or_else(|| assembly_reject(Malformed::ContentCidStrMalformed.into()))?;
+    let expected_cid = decode_content_cid_str(&cid_str).map_err(assembly_reject)?;
+
+    let block = read_block(gateway, http, &cid_str, &expected_cid, ContentPlane::Root)
+        .await
+        .map_err(map_read_error)?;
+
+    let envelope = decode_envelope(&block).map_err(assembly_reject)?;
+    Ok((verified.sequence, envelope))
 }
 
 /// A fail-closed content-plane assembly failure: the head the signed record

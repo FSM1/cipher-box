@@ -27,6 +27,7 @@
 
 use cipherbox_core::payload::RepointObject;
 
+use crate::gate::{GateError, GateRejection, GateStage, RejectionReason};
 use crate::seams::{FloorRaise, FloorStore, SeamError, SeamResult};
 
 /// An owner-vouched epoch that regressed below a durable floor at cold-seed — a
@@ -164,6 +165,60 @@ pub async fn sequence_floor<F: FloorStore>(
     ipns_name: &[u8],
 ) -> SeamResult<Option<u64>> {
     floors.sequence_floor(ipns_name).await
+}
+
+/// How [`check`]'s sequence comparison treats a record at exactly the durable
+/// floor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Strictness {
+    /// The adopt path: the sequence must be strictly above the floor (a record
+    /// at the floor is our own current record, not an update).
+    StrictlyNewer,
+    /// The at-floor re-open path (our own current record / cached
+    /// last-known-good): equality is admitted; a strictly lower sequence stays
+    /// a fail-closed replay.
+    AtFloor,
+}
+
+/// The durable floor checks — gate stages 4/5: the per-name sequence floor
+/// (per `strictness`) and the scope's read-epoch floor (the revocation
+/// boundary, always `>=`). Shared by the root gate and the child pipeline.
+pub async fn check<F: FloorStore>(
+    floors: &F,
+    ipns_name: &[u8],
+    scope_id: &[u8; 16],
+    sequence: u64,
+    epoch: u64,
+    strictness: Strictness,
+) -> Result<(), GateError> {
+    let floor = sequence_floor(floors, ipns_name)
+        .await
+        .map_err(GateError::Seam)?
+        .unwrap_or(0);
+    let replayed = match strictness {
+        Strictness::StrictlyNewer => sequence <= floor,
+        Strictness::AtFloor => sequence < floor,
+    };
+    if replayed {
+        return Err(GateError::Rejected(GateRejection {
+            stage: GateStage::Sequence,
+            reason: RejectionReason::SequenceNotNewer { floor, sequence },
+        }));
+    }
+    let epoch_floor = read_epoch_floor(floors, scope_id)
+        .await
+        .map_err(GateError::Seam)?
+        .unwrap_or(0);
+    if epoch < epoch_floor {
+        return Err(GateError::Rejected(GateRejection {
+            stage: GateStage::Epoch,
+            reason: RejectionReason::EpochBelowFloor {
+                floor: epoch_floor,
+                epoch,
+            },
+        }));
+    }
+    Ok(())
 }
 
 /// Advance floors after an AAD-confirmed unseal — the only record-sourced

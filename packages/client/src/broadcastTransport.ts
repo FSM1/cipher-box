@@ -133,9 +133,9 @@ export class BroadcastTransport extends CorrelatedTransport {
         if (response.clientId !== this.clientId) return;
         if (!this.fromActiveLeader(response.token)) return; // forged / stale ack
         if (response.ok) {
-          this.settle(response.requestId, true, undefined, response.content ?? response.result);
+          this.settle(response.requestId, true, undefined, response.result);
         } else {
-          this.settle(response.requestId, false, response.error);
+          this.settle(response.requestId, false, response.error, undefined, response.code);
         }
         return;
       }

@@ -8,19 +8,27 @@
  * kill-the-leader failover with no accepted-op loss.
  */
 import { EngineClient } from '../../src/engineClient.js';
+import { hex, unhex } from './hexUtil.js';
 
 const JOURNAL_DB = 'cb-leadership-journal';
 const JOURNAL_STORE = 'ops';
 
-interface HarnessOptions {
+export interface HarnessOptions {
   lockName: string;
   channelName: string;
   /** Which engine worker the leader spawns: the journal fake (default) or the real WASM engine. */
   worker?: 'journal' | 'engine';
 }
 
+/** A page.evaluate-safe download projection; `code` is the engine's stable error code. */
+export interface DownloadResult {
+  bytes?: number[];
+  error?: string;
+  code?: string;
+}
+
 /** A page.evaluate-safe snapshot projection (bytes as hex, bigints dropped). */
-interface SnapshotResult {
+export interface SnapshotResult {
   error?: string;
   rootHex?: string;
   folderHex?: string;
@@ -43,7 +51,7 @@ declare global {
     cbCreateFile(name: string): Promise<string>;
     cbCreateNode(name: string, kind: 'file' | 'folder'): Promise<string>;
     cbSnapshot(folderHex: string): Promise<SnapshotResult>;
-    cbDownload(nodeHex: string): Promise<{ bytes?: number[]; error?: string }>;
+    cbDownload(nodeHex: string): Promise<DownloadResult>;
     cbDispose(): Promise<void>;
     cbJournalCount(): Promise<number>;
     cbJournalRecords(): Promise<unknown[]>;
@@ -63,18 +71,6 @@ function settle(error: unknown): string {
 
 // A valid secp256k1 identity scalar placeholder (the journal fake ignores it).
 const secret = (): ArrayBuffer => new Uint8Array(32).fill(1).buffer;
-
-function hex(bytes: Uint8Array): string {
-  let out = '';
-  for (const byte of bytes) out += byte.toString(16).padStart(2, '0');
-  return out;
-}
-
-function unhex(text: string): Uint8Array {
-  const bytes = new Uint8Array(text.length / 2);
-  for (let i = 0; i < bytes.length; i += 1) bytes[i] = parseInt(text.slice(i * 2, i * 2 + 2), 16);
-  return bytes;
-}
 
 window.cbCreate = ({ lockName, channelName, worker }: HarnessOptions): Promise<void> => {
   const workerUrl =
@@ -146,12 +142,13 @@ window.cbSnapshot = async (folderHex: string): Promise<SnapshotResult> => {
   }
 };
 
-window.cbDownload = async (nodeHex: string): Promise<{ bytes?: number[]; error?: string }> => {
+window.cbDownload = async (nodeHex: string): Promise<DownloadResult> => {
   try {
     const content = await client!.facade.download(unhex(nodeHex));
     return { bytes: [...new Uint8Array(content)] };
   } catch (error) {
-    return { error: settle(error) };
+    const code = (error as { code?: unknown } | null)?.code;
+    return { error: settle(error), code: typeof code === 'string' ? code : undefined };
   }
 };
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { emptySnapshot } from './testkit.js';
 import { LocalTransport, type EngineWorkerLike } from './transport.js';
 import type {
   EventDescriptor,
@@ -97,10 +98,15 @@ describe('LocalTransport', () => {
       id: idA,
       ok: false,
       error: 'command not implemented yet: manualRefresh',
+      code: 'unimplemented',
     });
     worker.emit({ type: 'response', id: idB, ok: true });
 
-    await expect(failing).rejects.toThrow('not implemented');
+    // The stable code crosses alongside the human-readable message.
+    await expect(failing).rejects.toMatchObject({
+      code: 'unimplemented',
+      message: 'command not implemented yet: manualRefresh',
+    });
     await expect(ok).resolves.toBeUndefined();
   });
 
@@ -135,10 +141,7 @@ describe('LocalTransport', () => {
     const { message } = worker.posted[0];
     expect(message).toMatchObject({ type: 'snapshot', folder });
     const result: SnapshotDescriptor = {
-      root: new Uint8Array(16),
-      folder,
-      children: [],
-      ancestors: [],
+      ...emptySnapshot(folder),
       deadLetters: [1n],
       staleness: 'stale',
     };
@@ -152,14 +155,7 @@ describe('LocalTransport', () => {
     const transport = new LocalTransport(worker);
     worker.emit({ type: 'ready' });
 
-    const snapshotResult: SnapshotDescriptor = {
-      root: new Uint8Array(16),
-      folder: new Uint8Array(16),
-      children: [],
-      ancestors: [],
-      deadLetters: [],
-      staleness: 'fresh',
-    };
+    const snapshotResult = emptySnapshot();
     const downloadResult = new Uint8Array([4, 5, 6]).buffer;
 
     const command = transport.command({ kind: 'manualRefresh' }, []);
@@ -188,22 +184,16 @@ describe('LocalTransport', () => {
     await tick();
     const [idA, idB] = worker.posted.map((entry) => entry.message.id);
 
-    worker.emit({ type: 'response', id: idA, ok: false, error: 'content unavailable: pending' });
     worker.emit({
       type: 'response',
-      id: idB,
-      ok: true,
-      result: {
-        root: new Uint8Array(16),
-        folder: new Uint8Array(16),
-        children: [],
-        ancestors: [],
-        deadLetters: [],
-        staleness: 'fresh',
-      },
+      id: idA,
+      ok: false,
+      error: 'content unavailable: pending',
+      code: 'contentUnavailable',
     });
+    worker.emit({ type: 'response', id: idB, ok: true, result: emptySnapshot() });
 
-    await expect(failing).rejects.toThrow('content unavailable');
+    await expect(failing).rejects.toMatchObject({ code: 'contentUnavailable' });
     await expect(ok).resolves.toMatchObject({ staleness: 'fresh' });
   });
 

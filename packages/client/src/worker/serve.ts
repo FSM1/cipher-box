@@ -21,6 +21,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** The engine's stable error code, when the thrown value carries one. */
+function errorCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' ? code : undefined;
+}
+
 /** Wires `scope` to `host`, then signals readiness. */
 export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void {
   const post = (message: WorkerMessage): void => scope.postMessage(message);
@@ -50,7 +56,13 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
       }
       post({ type: 'response', id: request.id, ok: true });
     } catch (error) {
-      post({ type: 'response', id: request.id, ok: false, error: errorMessage(error) });
+      post({
+        type: 'response',
+        id: request.id,
+        ok: false,
+        error: errorMessage(error),
+        code: errorCode(error),
+      });
     }
   };
 

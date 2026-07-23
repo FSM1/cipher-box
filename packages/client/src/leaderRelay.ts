@@ -19,7 +19,16 @@ import {
   type FollowerMessage,
   type LeaderMessage,
 } from './broadcast.js';
+import { EngineRequestError } from './correlatedTransport.js';
 import type { EngineTransport } from './transport.js';
+
+/** Projects a caught failure onto the wire's `error`/`code` fields. */
+function wireError(error: unknown): { error: string; code?: string } {
+  return {
+    error: error instanceof Error ? error.message : String(error),
+    code: error instanceof EngineRequestError ? error.code : undefined,
+  };
+}
 
 /**
  * Tracks each tab's open folder and derives the union — the set of distinct
@@ -139,7 +148,7 @@ export class LeaderRelay {
         clientId,
         requestId,
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        ...wireError(error),
       });
     }
   }
@@ -155,14 +164,10 @@ export class LeaderRelay {
         // Wrap the plaintext in a `Blob` so the per-receiver structured clone
         // shares the immutable backing store instead of copying the bytes.
         const bytes = await this.transport.download(read.node);
-        this.post({ ...ack, ok: true, content: new Blob([bytes]) });
+        this.post({ ...ack, ok: true, result: new Blob([bytes]) });
       }
     } catch (error) {
-      this.post({
-        ...ack,
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      this.post({ ...ack, ok: false, ...wireError(error) });
     }
   }
 

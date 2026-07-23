@@ -126,7 +126,12 @@ export type WorkerMessage =
    * `ArrayBuffer` (transferred, not copied) for `download`.
    */
   | { type: 'response'; id: number; ok: true; result?: SnapshotDescriptor | ArrayBuffer }
-  | { type: 'response'; id: number; ok: false; error: string }
+  /**
+   * A failed request. `error` is the human-readable diagnostic; `code` is the
+   * engine's stable machine-readable error code (the wasm host's camelCase
+   * `EngineError` variant name) when the failure came from the engine.
+   */
+  | { type: 'response'; id: number; ok: false; error: string; code?: string }
   /** One engine event, in emission order. */
   | { type: 'event'; event: EventDescriptor }
   /** Construction or event-pump failure; the worker is unusable. */

@@ -16,6 +16,17 @@ import type {
   WorkerMessage,
 } from './worker/protocol.js';
 
+/**
+ * The wasm-bindgen mirror-enum value tables (as `crates/wasm` exports them),
+ * shared by the codec and worker test stubs.
+ */
+export const fakeWasmEnums = {
+  NodeKind: { File: 0, Folder: 1 },
+  Permission: { Read: 0, Write: 1 },
+  Staleness: { Fresh: 0, Reconciling: 1, Stale: 2, Offline: 3 },
+  OpPhase: { DownloadStarted: 0, DownloadCompleted: 1, DownloadFailed: 2 },
+} as const;
+
 /** A minimal empty snapshot descriptor for transport-plumbing assertions. */
 export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): SnapshotDescriptor {
   return {

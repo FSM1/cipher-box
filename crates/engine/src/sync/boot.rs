@@ -26,7 +26,7 @@ use zeroize::Zeroizing;
 use crate::facade::{Event, NodeId};
 use crate::gate::GateRejection;
 use crate::gate::floor::{self, ColdSeedError, FloorRegression};
-use crate::net::{Adopter, ResolveOutcome, resolve_with_read_seed};
+use crate::net::{Adopter, GatedResolve, ResolveOutcome, resolve_gated};
 use crate::seams::{FloorStore, RecordTransport, SeamError, SnapshotCache};
 use crate::sync::model::Snapshot;
 use crate::sync::op::Op;
@@ -55,16 +55,6 @@ pub struct ColdStartParams<'a> {
     pub root: NodeId,
     /// The durable pending-op queue, applied as the overlay on first paint.
     pub pending_ops: &'a [Op],
-}
-
-/// The out-channels the cold-start chain writes besides its return value: host
-/// events, and the in-memory deposit for the root-scope read seed a
-/// gate-passing adopt recovered (never persisted, never on the outcome).
-pub struct ColdStartSinks<'a> {
-    /// Event emitter (the first [`Event::SnapshotUpdated`] rides here).
-    pub emit: &'a mut dyn FnMut(Event),
-    /// Deposit for the recovered root-scope read seed.
-    pub deposit_read_seed: &'a mut dyn FnMut(Zeroizing<[u8; 32]>),
 }
 
 /// A fail-closed cold-start failure. [`ColdStartError::Seam`] is availability
@@ -113,7 +103,11 @@ pub enum RootResolve {
 }
 
 /// What the cold-start data path produced.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Debug` is hand-written: [`read_scope_seed`](Self::read_scope_seed) is key
+/// material and must never reach a log site (security rule 2), including a
+/// test-assertion `{:?}`.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ColdStartOutcome {
     /// The adopted vault pointer, or `None` on an empty chain (a first-run vault
     /// with no pointer yet — cold start adopts nothing).
@@ -130,6 +124,26 @@ pub struct ColdStartOutcome {
     /// The rendered view emitted on the first snapshot event: `base` ⊕ the
     /// pending-op overlay.
     pub rendered: Snapshot,
+    /// The root-scope read seed a gate-passing adopt recovered from the owner
+    /// blob; `None` when nothing adopted. The engine deposits it in its
+    /// in-memory per-scope seed cell (never persisted).
+    pub read_scope_seed: Option<Zeroizing<[u8; 32]>>,
+}
+
+impl core::fmt::Debug for ColdStartOutcome {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ColdStartOutcome")
+            .field("vault_pointer", &self.vault_pointer)
+            .field("root_resolve", &self.root_resolve)
+            .field("rehydrated", &self.rehydrated)
+            .field("base", &self.base)
+            .field("rendered", &self.rendered)
+            .field(
+                "read_scope_seed",
+                &self.read_scope_seed.as_ref().map(|_| "<redacted>"),
+            )
+            .finish()
+    }
 }
 
 /// Run the cold-start live-session data path off the injected seams, emitting
@@ -145,7 +159,7 @@ pub async fn cold_start<Pf, Ad, Fl, T, Sc>(
     transport: &T,
     snapshot_cache: &Sc,
     params: &ColdStartParams<'_>,
-    sinks: &mut ColdStartSinks<'_>,
+    emit: &mut dyn FnMut(Event),
 ) -> Result<ColdStartOutcome, ColdStartError>
 where
     Pf: PointerFetch,
@@ -172,13 +186,14 @@ where
         // nothing (no floor seeds, no root), but the empty base ⊕ overlay still
         // paints so pending ops render.
         let rendered = apply_overlay(&base, params.pending_ops);
-        (sinks.emit)(Event::SnapshotUpdated);
+        emit(Event::SnapshotUpdated);
         return Ok(ColdStartOutcome {
             vault_pointer: None,
             root_resolve: None,
             rehydrated: false,
             base,
             rendered,
+            read_scope_seed: None,
         });
     };
 
@@ -198,7 +213,11 @@ where
     // resolve: last-known-good rehydrates the first paint (step 5) while the
     // fan-out GET + adoption gate reconcile behind it (step 3). Every resolved
     // record passes the gate; a rejection is fail-closed.
-    let (resolved, read_scope_seed) = resolve_with_read_seed(
+    let GatedResolve {
+        resolved,
+        read_scope_seed,
+        ..
+    } = resolve_gated(
         transport,
         snapshot_cache,
         adopter,
@@ -206,11 +225,6 @@ where
     )
     .await
     .map_err(ColdStartError::Seam)?;
-    // A gate-passing adopt recovered the root-scope read seed: deposit it so
-    // the child read pipeline can derive per-node read keys this session.
-    if let Some(seed) = read_scope_seed {
-        (sinks.deposit_read_seed)(seed);
-    }
     // Project the gate-passing root read-body to its direct children (E7); an
     // availability-stale current record leaves the base at the anchored root.
     let (root_resolve, base) = match resolved.outcome {
@@ -229,7 +243,7 @@ where
 
     // Step 4 — first snapshot event with the pending-op overlay applied.
     let rendered = apply_overlay(&base, params.pending_ops);
-    (sinks.emit)(Event::SnapshotUpdated);
+    emit(Event::SnapshotUpdated);
 
     Ok(ColdStartOutcome {
         vault_pointer: Some(adoption),
@@ -237,6 +251,7 @@ where
         rehydrated: resolved.last_known_good.is_some(),
         base,
         rendered,
+        read_scope_seed,
     })
 }
 
@@ -421,18 +436,16 @@ mod tests {
             root: root_id(),
             pending_ops: pending,
         };
-        let out = {
-            let mut emit = |e: Event| events.borrow_mut().push(e);
-            let mut deposit = |_seed: Zeroizing<[u8; 32]>| {};
-            let mut sinks = ColdStartSinks {
-                emit: &mut emit,
-                deposit_read_seed: &mut deposit,
-            };
-            cold_start(
-                pointers, adopter, floors, transport, cache, &params, &mut sinks,
-            )
-            .await
-        };
+        let out = cold_start(
+            pointers,
+            adopter,
+            floors,
+            transport,
+            cache,
+            &params,
+            &mut |e: Event| events.borrow_mut().push(e),
+        )
+        .await;
         (out, events.into_inner())
     }
 

@@ -69,7 +69,7 @@ export class LocalTransport extends CorrelatedTransport {
             return;
           case 'response':
             if (message.ok) this.settle(message.id, true, undefined, message.result);
-            else this.settle(message.id, false, message.error);
+            else this.settle(message.id, false, message.error, undefined, message.code);
             return;
           case 'event':
             this.emit(message.event);

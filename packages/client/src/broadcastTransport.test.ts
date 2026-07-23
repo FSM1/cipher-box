@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import { BroadcastTransport } from './broadcastTransport.js';
+import { EngineRequestError } from './correlatedTransport.js';
 import { LeaderRelay } from './leaderRelay.js';
-import { FakeBus, FakeEngineTransport } from './testkit.js';
+import { emptySnapshot, FakeBus, FakeEngineTransport } from './testkit.js';
 import type { EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -190,13 +191,21 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(engine.downloads).toEqual([node]);
   });
 
-  it('propagates a read rejection back to the follower', async () => {
+  it('propagates a read rejection back to the follower with the stable code', async () => {
     const { engine, follower } = wire();
-    engine.respondSnapshot = () => Promise.reject(new Error('unknown node'));
-    engine.respondDownload = () => Promise.reject(new Error('content unavailable: pending'));
+    engine.respondSnapshot = () =>
+      Promise.reject(new EngineRequestError('unknown node', 'unknownNode'));
+    engine.respondDownload = () =>
+      Promise.reject(new EngineRequestError('content unavailable: pending', 'contentUnavailable'));
 
-    await expect(follower.snapshot(new Uint8Array(16))).rejects.toThrow('unknown node');
-    await expect(follower.download(new Uint8Array(16))).rejects.toThrow('content unavailable');
+    // The code crosses the broadcast wire alongside the human-readable message.
+    await expect(follower.snapshot(new Uint8Array(16))).rejects.toMatchObject({
+      code: 'unknownNode',
+      message: 'unknown node',
+    });
+    await expect(follower.download(new Uint8Array(16))).rejects.toMatchObject({
+      code: 'contentUnavailable',
+    });
   });
 
   it('rejects a forged read response bearing a wrong or absent leader token', async () => {
@@ -215,14 +224,7 @@ describe('broadcast transport ↔ leader relay', () => {
     );
     await tick();
 
-    const forgedView: SnapshotDescriptor = {
-      root: new Uint8Array(16),
-      folder: new Uint8Array(16),
-      children: [],
-      ancestors: [],
-      deadLetters: [],
-      staleness: 'fresh',
-    };
+    const forgedView: SnapshotDescriptor = emptySnapshot();
     const attacker = bus.channel();
     attacker.postMessage({
       type: 'cb:response',

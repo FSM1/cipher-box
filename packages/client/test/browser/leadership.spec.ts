@@ -1,5 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
+import type { DownloadResult, SnapshotResult } from './leadership.js';
+
 /**
  * The tab-leadership slice of the merge-blocking browser suite
  * (blueprint/testing.md law 1, blueprint/web-client.md "Engine hosting and tab
@@ -9,21 +11,6 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test';
  * accepted-op loss, and that both facade transports (leader-local and
  * follower-broadcast) reach the single engine worker.
  */
-
-interface SnapshotResult {
-  error?: string;
-  rootHex?: string;
-  folderHex?: string;
-  children?: Array<{
-    idHex: string;
-    name: string;
-    kind: string;
-    pending: boolean;
-    sizeNull: boolean;
-    mtimeNull: boolean;
-  }>;
-  ancestors?: Array<{ idHex: string; name: string }>;
-}
 
 interface LeadershipHarness {
   cbCreate(options: {
@@ -36,7 +23,7 @@ interface LeadershipHarness {
   cbCreateFile(name: string): Promise<string>;
   cbCreateNode(name: string, kind: 'file' | 'folder'): Promise<string>;
   cbSnapshot(folderHex: string): Promise<SnapshotResult>;
-  cbDownload(nodeHex: string): Promise<{ bytes?: number[]; error?: string }>;
+  cbDownload(nodeHex: string): Promise<DownloadResult>;
   cbDispose(): Promise<void>;
   cbJournalCount(): Promise<number>;
   cbJournalRecords(): Promise<unknown[]>;
@@ -63,7 +50,7 @@ function harness(page: Page): {
   createFile(name: string): Promise<string>;
   createNode(name: string, kind: 'file' | 'folder'): Promise<string>;
   snapshot(folderHex: string): Promise<SnapshotResult>;
-  download(nodeHex: string): Promise<{ bytes?: number[]; error?: string }>;
+  download(nodeHex: string): Promise<DownloadResult>;
   dispose(): Promise<void>;
   journalCount(): Promise<number>;
   journalRecords(): Promise<unknown[]>;
@@ -208,10 +195,11 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     expect(nested.error).toBeUndefined();
     expect(nested.ancestors!.at(-1)!.idHex).toBe(rootHex);
 
-    // A pending-only file's download rejection propagates to the follower.
+    // A pending-only file's download rejection propagates to the follower with
+    // the engine's stable code intact across both wire hops.
     const download = await follower.download(file!.idHex);
     expect(download.bytes).toBeUndefined();
-    expect(download.error).toContain('content unavailable');
+    expect(download.code).toBe('contentUnavailable');
 
     await a.dispose();
     await b.dispose();

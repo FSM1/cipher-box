@@ -134,51 +134,33 @@ where
     A: Adopter,
 {
     // The public resolve drops the transient hold/seed material — only the
-    // engine drivers ([`resolve_and_hold`], [`resolve_with_read_seed`]) consume
-    // it.
+    // engine drivers ([`resolve_gated`], [`resolve_and_hold`]) consume it.
     Ok(resolve_gated(transport, snapshot_cache, adopter, name)
         .await?
         .resolved)
 }
 
-/// [`resolve`], additionally surfacing the scope read seed a gate-passing owner
-/// adopt recovered (see [`AdoptOutcome::read_scope_seed`]). Crate-internal so
-/// the seed never rides the public surface; the cold-start driver deposits it.
-pub(crate) async fn resolve_with_read_seed<T, S, A>(
-    transport: &T,
-    snapshot_cache: &S,
-    adopter: &A,
-    name: &IpnsName,
-) -> Result<(Resolved, Option<Zeroizing<[u8; 32]>>), SeamError>
-where
-    T: RecordTransport,
-    S: SnapshotCache,
-    A: Adopter,
-{
-    let gated = resolve_gated(transport, snapshot_cache, adopter, name).await?;
-    Ok((gated.resolved, gated.read_scope_seed))
-}
-
 /// The (node id, write scope seed) a gate-surfaced write grant contributes to
 /// the held set. `Some` only on a gate pass that carried a write seed.
-type AdoptHold = ([u8; 16], Zeroizing<[u8; 32]>);
+pub(crate) type AdoptHold = ([u8; 16], Zeroizing<[u8; 32]>);
 
 /// The internal gated-resolve product: the public outcome plus the transient
 /// material the engine drivers consume — kept off the public [`Resolved`] so no
 /// seed ever rides the facade-visible surface.
-struct GatedResolve {
+pub(crate) struct GatedResolve {
     /// The public resolve result.
-    resolved: Resolved,
+    pub(crate) resolved: Resolved,
     /// The held-set (node id, write scope seed) from a gate-surfaced write grant.
-    hold: Option<AdoptHold>,
+    pub(crate) hold: Option<AdoptHold>,
     /// The verified record bytes an alive-worthy outcome rides to the hold.
-    held_bytes: Option<Vec<u8>>,
+    pub(crate) held_bytes: Option<Vec<u8>>,
     /// The scope read seed a gate-passing owner adopt recovered.
-    read_scope_seed: Option<Zeroizing<[u8; 32]>>,
+    pub(crate) read_scope_seed: Option<Zeroizing<[u8; 32]>>,
 }
 
-/// The gated resolve behind [`resolve`]/[`resolve_and_hold`].
-async fn resolve_gated<T, S, A>(
+/// The gated resolve behind [`resolve`]/[`resolve_and_hold`] and the cold-start
+/// driver.
+pub(crate) async fn resolve_gated<T, S, A>(
     transport: &T,
     snapshot_cache: &S,
     adopter: &A,

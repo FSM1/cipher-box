@@ -85,6 +85,13 @@ pub fn grant_section_bytes(env: &Envelope) -> Option<&[u8]> {
         .and_then(|(_, value)| value.as_bytes().ok())
 }
 
+/// Whether the envelope carries a `grantSection` key at all, regardless of its
+/// value — the scope-root marker (a child envelope must carry none). Stricter
+/// than [`grant_section_bytes`], which also requires a byte-string value.
+pub fn has_grant_section(env: &Envelope) -> bool {
+    env.unknown.iter().any(|(key, _)| key == "grantSection")
+}
+
 /// Encode an envelope to its canonical det-CBOR plaintext.
 pub fn encode_envelope(env: &Envelope) -> Vec<u8> {
     let mut epoch_tag = Map::new();
@@ -288,6 +295,26 @@ mod tests {
             None,
             "a non-bytes grantSection is not returned"
         );
+    }
+
+    #[test]
+    fn has_grant_section_detects_the_raw_key_regardless_of_value() {
+        let key = [3u8; KEY_LEN];
+        let nonce = [4u8; NONCE_LEN];
+        let mut env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
+        assert!(!has_grant_section(&env), "absent without the field");
+
+        // A non-bytes value still marks the key present (stricter than
+        // grant_section_bytes, which requires a byte string).
+        env.unknown
+            .push(("grantSection".to_string(), Value::Unsigned(7)));
+        assert!(has_grant_section(&env));
+        assert_eq!(grant_section_bytes(&env), None);
+
+        let mut env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
+        env.unknown
+            .push(("grantSection".to_string(), Value::Bytes(b"s".to_vec())));
+        assert!(has_grant_section(&env));
     }
 
     #[test]
