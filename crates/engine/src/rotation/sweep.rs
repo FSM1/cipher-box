@@ -79,8 +79,6 @@ use crate::seams::{FloorStore, Scheduler, SeamError};
 pub struct SweepTarget {
     /// The envelope format+suite version.
     pub v: u64,
-    /// The scope-root node id (== scope id).
-    pub scope_id: [u8; 16],
     /// The scope root's opaque `ipnsName` bytes.
     pub ipns_name: Vec<u8>,
     /// The published record's current read epoch — the epoch-lag operand.
@@ -139,16 +137,15 @@ pub trait SweepResolver {
     ///
     /// # Binding contract (obligation on the real resolver, #745/#746)
     ///
-    /// The same edge discipline [`ChildIndexResolver`] carries applies: `scope`'s
-    /// `ipns_name` is the **sole gated identity edge** (the adoption gate binds
-    /// `ipns_name -> record` via the Ed25519 key derived from the name), and the
-    /// returned `SweepTarget.ipns_name` — the CAS **publish** destination — MUST be
-    /// that gated name, equal to `commitment.ipns_name`, and MUST NOT be swayed by
-    /// any network-supplied hint. The sweep re-seals and CAS-publishes under the
-    /// enumerated parent-index `scope_id` (never a resolver-returned `scope_id`),
-    /// so a resolver that returned a mismatched name/commitment could only mint a
-    /// record its own resolve-time gate rejects — but binding the two here keeps
-    /// that fail-closed at the source.
+    /// The same edge discipline [`ChildIndexResolver`] carries applies. The
+    /// resolver MUST gate `scope`'s record under the enumerated `scope.scope_id`,
+    /// take `ipns_name` solely from `scope.ipns_name`, and return **no** independent
+    /// `scope_id` — the sweep re-seals and CAS-publishes under the enumerated
+    /// `scope.scope_id` alone ([`SweepTarget`] carries none). `scope.ipns_name` is
+    /// the **sole gated identity edge** (the adoption gate binds `ipns_name ->
+    /// record` via the Ed25519 key derived from the name); the returned
+    /// `SweepTarget.ipns_name` — the CAS publish destination — MUST equal it and
+    /// `commitment.ipns_name`, never swayed by a network-supplied hint.
     async fn resolve(&self, scope: &ChildScopeRef) -> Result<SweepTarget, ResolveFailure>;
 }
 
@@ -237,11 +234,15 @@ impl SweepError {
 
     /// Whether re-running the idempotent pass could clear this failure — an
     /// availability stall (unavailable resolve, floor-read I/O, transport
-    /// not-published) — versus a trust violation (a gate-rejected record, a
-    /// divergent ledger / uncommitted signer), which no retry can fix.
+    /// not-published) or a C2 label conflict that the re-point wave repairs —
+    /// versus a trust violation (a gate-rejected record, a divergent ledger /
+    /// uncommitted signer), which no retry can fix.
     pub fn is_retryable(&self) -> bool {
         match self {
-            SweepError::Enumeration(e) => e.reason == ResolveFailure::Unavailable,
+            SweepError::Enumeration(e) => matches!(
+                e.reason,
+                ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel
+            ),
             SweepError::Floor(_) => true,
             SweepError::Publish { .. } => true,
             SweepError::Reseal { .. } => false,
@@ -721,7 +722,6 @@ mod tests {
                 .ok_or(ResolveFailure::Unavailable)?;
             Ok(SweepTarget {
                 v: V,
-                scope_id: scope.scope_id,
                 ipns_name: scope.ipns_name.clone(),
                 current_read_epoch: s.current_epoch,
                 owner_enc_pub: self.owner.enc.public(),

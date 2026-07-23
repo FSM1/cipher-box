@@ -53,7 +53,7 @@
 //!
 //! [`enumerate_eager_set`]: super::eager_set::enumerate_eager_set
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use zeroize::Zeroizing;
 
@@ -64,7 +64,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Public;
 
-use super::eager_set::ResolveFailure;
+use super::eager_set::{ResolveFailure, bind_child_labels};
 use super::reseal::{
     CommittedSet, PrevEpochSeed, ResealError, ResealSeeds, ScopeRootIdentity, reseal_scope_root,
 };
@@ -72,21 +72,26 @@ use super::rotate::{
     ResealedScopeRoot, RotateScopePlan, ScopeRootPublishError, ScopeRootPublisher,
 };
 use crate::entropy::Entropy;
+use crate::grants::child_index::canonicalize;
 use crate::hex::hex_lower;
 use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
 
 /// One descendant scope root's current re-seal material, as resolved from its
 /// published record — everything [`reseal_scope_root`] needs **except** the
-/// parent node seed.
+/// parent node seed and any self-identifying scope id.
 ///
-/// The omission is deliberate and load-bearing: the cascade re-seals each
+/// Both omissions are deliberate and load-bearing. The cascade re-seals each
 /// descendant's ascent link under its **parent's freshly-minted** derivation
 /// (`node_seed(parent_fresh_seed, child_scope_id)`), threaded top-down — never
-/// under the descendant's own stale published parent seed. Carrying a
+/// under the descendant's own stale published parent seed; carrying a
 /// `parent_node_seed` here would invite re-sealing under the wrong (stale)
-/// derivation, the exact bug the cascade exists to avoid (contrast
-/// [`SweepTarget`](super::sweep::SweepTarget), which *does* carry it because the
-/// sweep reuses the published derivation rather than threading a new one).
+/// derivation (contrast [`SweepTarget`](super::sweep::SweepTarget), which *does*
+/// carry it because the sweep reuses the published derivation). A resolved
+/// scope-root record likewise carries no cryptographically self-identifying
+/// `scope_id` — the id lives only in the sealed-structure AAD — so a returned
+/// `scope_id` would be unbound trust: the re-seal, publish, and floor-raise run
+/// under the **enumerated** `child.scope_id` alone (see
+/// [`CascadeResealResolver::resolve`]), making the #756 divergence unrepresentable.
 ///
 /// Owns its secrets so the cascade is their terminal owner: the seed fields are
 /// [`Zeroizing`] and the pseudonym signer zeroizes on drop. Seeds are handed to
@@ -95,10 +100,6 @@ use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
 pub struct CascadeTarget {
     /// The envelope format+suite version.
     pub v: u64,
-    /// The scope-root node id (== scope id). This is the id the re-seal, publish,
-    /// and floor-raise run under; the production resolver MUST return it equal to
-    /// the enumerated `child.scope_id` (see [`CascadeResealResolver::resolve`]).
-    pub scope_id: [u8; 16],
     /// The scope root's opaque `ipnsName` bytes.
     pub ipns_name: Vec<u8>,
     /// The published record's current read epoch — the new record publishes at
@@ -146,21 +147,18 @@ pub trait CascadeResealResolver {
     ///
     /// # Binding contract (obligation on the real resolver, #745/#746)
     ///
-    /// `scope`'s `ipns_name` is the **sole gated identity edge** (the adoption
-    /// gate binds `ipns_name -> record` via the Ed25519 key derived from the
-    /// name). The returned material's `ipns_name` — the CAS **publish**
-    /// destination — MUST be that gated name, equal to `commitment.ipns_name`, and
-    /// MUST NOT be swayed by any network-supplied hint.
-    ///
-    /// The enumerated `child.scope_id` drives the parent-node-seed derivation
-    /// (`node_seed(parent_fresh_seed, child.scope_id)`) and the visited/dedup key,
-    /// but the re-seal identity, CAS publish, and epoch-floor raise all run under
-    /// the resolver-returned `target.scope_id`. The production resolver therefore
-    /// MUST guarantee `target.scope_id == child.scope_id` — the same equality that
-    /// keeps `ipns_name`/`commitment.ipns_name` gate-consistent — so the enumerated
-    /// id it was asked to resolve is the id it re-keys and publishes under. This
-    /// binding obligation is on the #745/#746 resolver wiring (tracked by #756); in
-    /// this slice the resolver is faked and always returns the equal id.
+    /// The resolver MUST gate `scope`'s record under the enumerated
+    /// `scope.scope_id`, take `ipns_name` solely from `scope.ipns_name`, and return
+    /// **no** independent `scope_id`. The enumerated `scope.scope_id` is the sole
+    /// authority for parent-node-seed derivation
+    /// (`node_seed(parent_fresh_seed, scope.scope_id)`), the visited/dedup key, and
+    /// the re-seal identity, CAS publish, and epoch-floor raise — there is no
+    /// second `scope_id` for the engine to trust ([`CascadeTarget`] carries none),
+    /// so #756's divergence is unrepresentable. `scope.ipns_name` is the **sole
+    /// gated identity edge** (the adoption gate binds `ipns_name -> record` via the
+    /// Ed25519 key derived from the name); the returned `ipns_name` — the CAS
+    /// publish destination — MUST equal it and `commitment.ipns_name`, never swayed
+    /// by a network-supplied hint. In this slice the resolver is faked.
     async fn resolve(&self, scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure>;
 }
 
@@ -199,9 +197,10 @@ impl CascadeOutcome {
 /// trust violation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CascadeError {
-    /// A reachable descendant's re-seal material could not be authoritatively
-    /// resolved (gate rejection or host unavailability), so the cascade is not
-    /// provably complete.
+    /// A reachable descendant could not be authoritatively resolved — a gate
+    /// rejection, host unavailability, or a C2 label conflict (the same
+    /// `scope_id` reached via two parents with different `ipns_name`, #746) — so
+    /// the cascade is not provably complete.
     Resolve {
         /// The descendant scope root that could not be resolved.
         scope_id: [u8; 16],
@@ -304,12 +303,15 @@ impl CascadeError {
 
     /// Whether re-running the cascade could clear this failure — an availability
     /// stall (unavailable resolve, publish not-landed/lost-race, floor-read I/O,
-    /// or an entropy hiccup) — versus a trust violation (a gate-rejected record,
-    /// a divergent ledger / uncommitted signer, an exhausted epoch), which no
-    /// retry can fix.
+    /// or an entropy hiccup), or a C2 label conflict the re-point wave repairs —
+    /// versus a trust violation (a gate-rejected record, a divergent ledger /
+    /// uncommitted signer, an exhausted epoch), which no retry can fix.
     pub fn is_retryable(&self) -> bool {
         match self {
-            CascadeError::Resolve { reason, .. } => *reason == ResolveFailure::Unavailable,
+            CascadeError::Resolve { reason, .. } => matches!(
+                reason,
+                ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel
+            ),
             CascadeError::Reseal { error, .. } => matches!(error, ResealError::Entropy(_)),
             CascadeError::Publish { .. } => true,
             CascadeError::Floor { .. } => true,
@@ -465,12 +467,25 @@ where
     // 2) Top-down threaded walk over the descendant tree. Each frontier entry
     //    carries its parent's freshly-minted override seed so the child's ascent
     //    link re-seals under the parent's NEW derivation. Mirrors
-    //    `enumerate_eager_set`: canonicalized frontiers (permutation-independent,
-    //    first-seen parent wins a diamond) and a `scope_id`-keyed visited set that
-    //    terminates diamonds and cycles. The re-key needs these ordered edges,
-    //    which the flat `EagerSet` does not carry.
+    //    `enumerate_eager_set`: canonicalized frontiers, a `scope_id`-keyed visited
+    //    set that terminates diamonds and cycles, and a `scope_id -> ipns_name`
+    //    label map that aborts a same-`scope_id`/different-`ipns_name` conflict
+    //    (C2, #746) rather than picking a coin-flip first-seen name. The re-key
+    //    needs these ordered edges, which the flat `EagerSet` does not carry.
     let mut visited: BTreeSet<[u8; 16]> = BTreeSet::new();
     visited.insert(root_scope_id);
+
+    let mut labels: BTreeMap<[u8; 16], Vec<u8>> = BTreeMap::new();
+    let conflict = |scope_id| CascadeError::Resolve {
+        scope_id,
+        reason: ResolveFailure::ConflictingChildLabel,
+    };
+    bind_child_labels(
+        &mut labels,
+        canonicalize(root_plan.committed.direct_child_scope_index).iter(),
+        root_scope_id,
+    )
+    .map_err(conflict)?;
 
     let mut frontier = canonicalize_frontier(
         root_plan
@@ -502,6 +517,16 @@ where
                     reason,
                 })?;
 
+            // Bind this one parent's index (canonicalized: its own duplicate
+            // self-heals) into the cross-parent label map — a same-`scope_id`
+            // disagreement with an earlier parent is the C2 conflict.
+            bind_child_labels(
+                &mut labels,
+                canonicalize(&target.direct_child_scope_index).iter(),
+                root_scope_id,
+            )
+            .map_err(conflict)?;
+
             // Thread: the child's ascent link re-seals under the parent's NEW
             // derivation, `node_seed(parent_fresh_seed, child_scope_id)`.
             let parent_seed_ref: &[u8; SECRET_LEN] = parent_seed;
@@ -511,7 +536,10 @@ where
             let plan = RotateScopePlan {
                 identity: ScopeRootIdentity {
                     v: target.v,
-                    scope_id: target.scope_id,
+                    // The enumerated id is the sole authority: re-seal, publish, and
+                    // floor-raise all run under `child.scope_id`, never a
+                    // resolver-returned one (#756).
+                    scope_id: child.scope_id,
                     ipns_name: &target.ipns_name,
                     owner_enc_pub: &target.owner_enc_pub,
                     parent_node_seed: Some(&child_parent_node_seed),
@@ -598,6 +626,13 @@ mod tests {
 
     fn childref(byte: u8) -> ChildScopeRef {
         ChildScopeRef::new(sid(byte), format!("ipns-{byte:02x}").into_bytes())
+    }
+
+    /// A child ref for scope `byte` carrying a caller-chosen `ipns_name` — to build
+    /// a diamond where one `scope_id` is reached with differing labels (C2), or an
+    /// attacker-chosen label the resolver's gate rejects.
+    fn childref_named(byte: u8, ipns_name: &str) -> ChildScopeRef {
+        ChildScopeRef::new(sid(byte), ipns_name.as_bytes().to_vec())
     }
 
     /// The single vault owner/pseudonym identity every scope commits to, so
@@ -694,6 +729,14 @@ mod tests {
         /// as its direct-child index, published at `current_epoch`, pre-cascade
         /// override seed `[byte; 32]`.
         fn scope(self, byte: u8, current_epoch: u64, children: &[u8]) -> Self {
+            let refs: Vec<ChildScopeRef> = children.iter().map(|b| childref(*b)).collect();
+            self.scope_refs(byte, current_epoch, refs)
+        }
+
+        /// Like [`Self::scope`] but with caller-chosen child refs, so a parent can
+        /// list a descendant under a specific (possibly conflicting or attacker)
+        /// `ipns_name`.
+        fn scope_refs(self, byte: u8, current_epoch: u64, children: Vec<ChildScopeRef>) -> Self {
             let (commitment, commitment_sig, grant_ledger) = self.owner.committed(byte);
             self.scopes.borrow_mut().insert(
                 sid(byte),
@@ -704,7 +747,7 @@ mod tests {
                     commitment,
                     commitment_sig,
                     grant_ledger,
-                    children: children.iter().map(|b| childref(*b)).collect(),
+                    children,
                     current_epoch,
                 },
             );
@@ -804,9 +847,15 @@ mod tests {
             let s = scopes
                 .get(&scope.scope_id)
                 .ok_or(ResolveFailure::Unavailable)?;
+            // Fidelity to the gate contract: the record's owner-signed commitment
+            // binds its ipns_name (adoption gate stage 2). A child ref whose
+            // ipns_name is not the committed name has no commitment binding it —
+            // the gate rejects, so an attacker-chosen label cannot resolve.
+            if scope.ipns_name != s.commitment.ipns_name {
+                return Err(ResolveFailure::Rejected);
+            }
             Ok(CascadeTarget {
                 v: V,
-                scope_id: scope.scope_id,
                 ipns_name: scope.ipns_name.clone(),
                 current_read_epoch: s.current_epoch,
                 owner_enc_pub: self.owner.enc.public(),
@@ -910,10 +959,24 @@ mod tests {
         InMemoryFloorStore,
         usize,
     ) {
+        let root_index: Vec<ChildScopeRef> = root_children.iter().map(|b| childref(*b)).collect();
+        run_with_index(net, root_index)
+    }
+
+    /// [`run`] with a caller-chosen root child index (custom `ipns_name` labels).
+    #[allow(clippy::type_complexity)]
+    fn run_with_index(
+        net: FakeNet,
+        root_index: Vec<ChildScopeRef>,
+    ) -> (
+        Result<CascadeOutcome, CascadeError>,
+        FakeNet,
+        InMemoryFloorStore,
+        usize,
+    ) {
         let fx = RootFx::new(net.clone());
         let floors = InMemoryFloorStore::default();
         let scheduler = VirtualScheduler::new();
-        let root_index: Vec<ChildScopeRef> = root_children.iter().map(|b| childref(*b)).collect();
         let outcome = block_on(async {
             let mut entropy = SeededEntropy::new(0xCA5CADE);
             let plan = fx.plan(&root_index);
@@ -1051,8 +1114,9 @@ mod tests {
 
     #[test]
     fn diamond_descendant_rekeyed_once_under_first_seen_parent() {
-        // root -> A(0x0a), B(0x0b); both A and B list D(0x0d). D is re-keyed exactly
-        // once, threaded from the canonically-first parent A (0x0a < 0x0b).
+        // Test E (regression): root -> A(0x0a), B(0x0b); both A and B list D(0x0d)
+        // with the SAME ipns_name (childref). D is re-keyed exactly once, threaded
+        // from the canonically-first parent A (0x0a < 0x0b) — no C2 abort.
         let net = FakeNet::new()
             .scope(0x0a, 4, &[0x0d])
             .scope(0x0b, 4, &[0x0d])
@@ -1080,6 +1144,91 @@ mod tests {
                 .is_none(),
             "D does not thread from the later parent B"
         );
+    }
+
+    #[test]
+    fn c2_conflicting_ipns_name_aborts_fail_closed_permutation_independent() {
+        // Test B (C2, #746): root -> A(0x0a), B(0x0b); both list D(0x0d) but under
+        // DIFFERENT ipns_name labels. First-seen would be a coin-flip that could
+        // re-key a dead name and leave the real D unrotated — a revocation hole —
+        // so the walk aborts fail-closed naming D, identically under either parent
+        // order (the frontier is canonicalized, so A is always seen before B).
+        let build = || {
+            FakeNet::new()
+                .scope_refs(0x0a, 4, vec![childref_named(0x0d, "ipns-0d")])
+                .scope_refs(0x0b, 4, vec![childref_named(0x0d, "ipns-old")])
+                .scope(0x0d, 4, &[])
+        };
+        let forward = run_with_index(build(), vec![childref(0x0a), childref(0x0b)]).0;
+        let reversed = run_with_index(build(), vec![childref(0x0b), childref(0x0a)]).0;
+
+        let fwd = forward.expect_err("conflict aborts");
+        let rev = reversed.expect_err("conflict aborts");
+        assert_eq!(fwd, rev, "abort is permutation-independent");
+        assert_eq!(fwd.check(), "resolve-failed");
+        assert_eq!(fwd.scope_id(), sid(0x0d), "the conflict names scope D");
+        assert!(
+            fwd.is_retryable(),
+            "a label conflict is retryable (re-point wave)"
+        );
+    }
+
+    #[test]
+    fn c2_conflict_is_retryable_and_succeeds_after_repoint_wave() {
+        // Test C (legitimate mid-wave): parent A points D at its new name while B is
+        // not-yet-repaired (still the stale name) -> C2 abort, retryable. Once the
+        // re-point wave repairs B to the same name, a retried walk resolves D once.
+        let mid_wave = FakeNet::new()
+            .scope_refs(0x0a, 4, vec![childref_named(0x0d, "ipns-0d")])
+            .scope_refs(0x0b, 4, vec![childref_named(0x0d, "ipns-old")])
+            .scope(0x0d, 4, &[]);
+        let (out, _net, _f, spawned) =
+            run_with_index(mid_wave, vec![childref(0x0a), childref(0x0b)]);
+        let err = out.expect_err("mid-wave conflict aborts");
+        assert_eq!(err.scope_id(), sid(0x0d));
+        assert!(
+            err.is_retryable(),
+            "converges once the re-point wave repairs B"
+        );
+        assert_eq!(spawned, 0, "no sweep enqueued on a fail-closed abort");
+
+        // After the wave: both parents agree on D's current committed name.
+        let repaired = FakeNet::new()
+            .scope_refs(0x0a, 4, vec![childref_named(0x0d, "ipns-0d")])
+            .scope_refs(0x0b, 4, vec![childref_named(0x0d, "ipns-0d")])
+            .scope(0x0d, 4, &[]);
+        let (out, net, _f, spawned) =
+            run_with_index(repaired, vec![childref(0x0a), childref(0x0b)]);
+        let outcome = out.expect("repaired walk completes");
+        let d_rekeys = outcome
+            .rekeyed
+            .iter()
+            .filter(|r| r.scope_id == sid(0x0d))
+            .count();
+        assert_eq!(d_rekeys, 1, "D re-keyed exactly once at the agreed name");
+        assert!(
+            !ct_eq_32(&net.published_seed(0x0d), &[0x0d; 32]),
+            "D got a fresh seed"
+        );
+        assert_eq!(spawned, 1, "the repaired cascade enqueues the sweep");
+    }
+
+    #[test]
+    fn attacker_label_without_commitment_binding_is_fatal() {
+        // Test D: A lists D(0x0d) under an attacker-chosen ipns_name that no
+        // owner-signed commitment binds. There is no conflict (a single label), so
+        // the record resolves — and the gate rejects it because the commitment does
+        // not bind that name. Trust rests on the owner-signed commitment, not the
+        // parent label: the reject is FATAL, not a retryable stall.
+        let net = FakeNet::new()
+            .scope_refs(0x0a, 4, vec![childref_named(0x0d, "ipns-attacker")])
+            .scope(0x0d, 4, &[]);
+        let (out, _net, _f, spawned) = run_with_index(net, vec![childref(0x0a)]);
+        let err = out.expect_err("attacker label is rejected");
+        assert_eq!(err.check(), "resolve-failed");
+        assert_eq!(err.scope_id(), sid(0x0d));
+        assert!(!err.is_retryable(), "a commitment-gate rejection is fatal");
+        assert_eq!(spawned, 0);
     }
 
     #[test]

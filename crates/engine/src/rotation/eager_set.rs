@@ -42,9 +42,11 @@
 //! The walk is pure — the sole impure edge is the injected [`ChildIndexResolver`].
 //! Output is ordered by `scope_id` (a [`BTreeMap`], matching Slice 1's
 //! [`canonicalize`](crate::grants::child_index::canonicalize) convention) and each
-//! level is canonicalized before descent, so the first-seen entry for any shared
-//! descendant is permutation-independent. Replayed or multi-writer runs converge
-//! to byte-identical output.
+//! level is canonicalized before descent, so a shared descendant reached via
+//! multiple parents is recorded once, permutation-independently — or, if those
+//! parents disagree on its `ipns_name`, the walk aborts fail-closed (C2, #746;
+//! [`ResolveFailure::ConflictingChildLabel`]). Replayed or multi-writer runs
+//! converge to byte-identical output.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -66,6 +68,15 @@ pub enum ResolveFailure {
     /// The descendant's record could not be fetched or read — host I/O or
     /// availability. Retryable; not a trust verdict.
     Unavailable,
+    /// The same `scope_id` was reached via two parents carrying **different**
+    /// `ipns_name` labels (C2, #746). A [`ChildScopeRef`] carries no ordering
+    /// signal, so first-seen-wins would be a coin-flip; picking the stale name in a
+    /// revocation cascade re-keys a dead name and leaves the real descendant
+    /// unrotated — a silent revocation hole. The walk aborts fail-closed instead.
+    /// Retryable: converges once the write-rotation re-point wave repairs both
+    /// parent indexes (engine.md #38 D6). The accept-freshest alternative needs a
+    /// core schema change and is deferred to #778.
+    ConflictingChildLabel,
 }
 
 impl core::fmt::Display for ResolveFailure {
@@ -73,6 +84,9 @@ impl core::fmt::Display for ResolveFailure {
         match self {
             ResolveFailure::Rejected => f.write_str("descendant record rejected by adoption gate"),
             ResolveFailure::Unavailable => f.write_str("descendant record unavailable"),
+            ResolveFailure::ConflictingChildLabel => {
+                f.write_str("descendant scope_id reached with conflicting ipns_name labels")
+            }
         }
     }
 }
@@ -164,6 +178,38 @@ pub trait ChildIndexResolver {
     ) -> Result<Vec<ChildScopeRef>, ResolveFailure>;
 }
 
+/// Bind each ref's `scope_id -> ipns_name` label into `labels`, aborting
+/// fail-closed on the C2 conflict: a `scope_id` already bound to a **different**
+/// `ipns_name` (#746). Returns the conflicting `scope_id` on abort. The root is
+/// skipped — a back-edge to it is ignored by the walk, never a labeled
+/// descendant. Rationale for the hard abort lives on
+/// [`ResolveFailure::ConflictingChildLabel`].
+///
+/// Call once **per parent index** (each already canonicalized), never over a
+/// merged frontier. A single parent's own duplicate `scope_id` is crash residue
+/// the [`canonicalize`] self-heal repairs first-seen (#38 D6) — only a
+/// **cross-parent** disagreement, where neither parent is authoritative over the
+/// other's label, is the revocation-hole conflict this abort exists to catch.
+pub(super) fn bind_child_labels<'a>(
+    labels: &mut BTreeMap<[u8; 16], Vec<u8>>,
+    refs: impl Iterator<Item = &'a ChildScopeRef>,
+    root_scope_id: [u8; 16],
+) -> Result<(), [u8; 16]> {
+    for child in refs {
+        if child.scope_id == root_scope_id {
+            continue;
+        }
+        match labels.get(&child.scope_id) {
+            Some(name) if name != &child.ipns_name => return Err(child.scope_id),
+            Some(_) => {}
+            None => {
+                labels.insert(child.scope_id, child.ipns_name.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Enumerate the eager set: the transitive closure of descendant scope roots
 /// reachable from `root_scope_id`, whose level-1 adjacency is `root_child_index`
 /// (the root's own, caller-held write-body index) and whose deeper levels the
@@ -171,8 +217,10 @@ pub trait ChildIndexResolver {
 ///
 /// Fail-closed and complete: returns [`EagerSet`] only if *every* reachable
 /// descendant resolved; otherwise [`EnumerationError`] names the first
-/// unresolved scope. Deterministic: output is ascending by `scope_id`,
-/// permutation-independent, and terminates on any cyclic input.
+/// unresolved scope, or the first C2 label conflict
+/// ([`ResolveFailure::ConflictingChildLabel`]). Deterministic: output is
+/// ascending by `scope_id`, permutation-independent, and terminates on any cyclic
+/// input.
 pub async fn enumerate_eager_set<R: ChildIndexResolver>(
     root_scope_id: [u8; 16],
     root_child_index: &[ChildScopeRef],
@@ -188,10 +236,21 @@ pub async fn enumerate_eager_set<R: ChildIndexResolver>(
     // ascending-scope_id order for free.
     let mut discovered: BTreeMap<[u8; 16], ChildScopeRef> = BTreeMap::new();
 
+    // The single authoritative `scope_id -> ipns_name` binding. Registered once
+    // per parent index (each canonicalized), so two parents that disagree on a
+    // descendant's `ipns_name` conflict (C2), while one parent's own duplicate
+    // self-heals.
+    let mut labels: BTreeMap<[u8; 16], Vec<u8>> = BTreeMap::new();
+    let conflict = |scope_id| EnumerationError {
+        scope_id,
+        reason: ResolveFailure::ConflictingChildLabel,
+    };
+
     // Canonicalize each level (sort + dedup by scope_id) before descending so
     // traversal order — and thus the first-seen entry for any shared descendant
     // reachable via multiple parents — is fixed independent of input order.
     let mut frontier = canonicalize(root_child_index);
+    bind_child_labels(&mut labels, frontier.iter(), root_scope_id).map_err(conflict)?;
 
     while !frontier.is_empty() {
         let mut next: Vec<ChildScopeRef> = Vec::new();
@@ -214,6 +273,11 @@ pub async fn enumerate_eager_set<R: ChildIndexResolver>(
                         scope_id: child.scope_id,
                         reason,
                     })?;
+            // Bind this one parent's index (canonicalized: its own duplicate
+            // self-heals) into the cross-parent label map — a same-`scope_id`
+            // disagreement with an earlier parent is the C2 conflict.
+            let canon = canonicalize(&grandchildren);
+            bind_child_labels(&mut labels, canon.iter(), root_scope_id).map_err(conflict)?;
             next.extend(grandchildren);
         }
         frontier = canonicalize(&next);
@@ -412,40 +476,52 @@ mod tests {
     }
 
     #[test]
-    fn determinism_diamond_records_first_seen_ipns_name() {
-        // root -> A(0x01), B(0x02); both parents list the same descendant scope
-        // D(0x04) but carry DIFFERING ipns_name values. D is recorded exactly
-        // once, and the recorded ChildScopeRef is the canonically-first
-        // (lowest-scope_id, thus earliest-visited) parent A's ipns_name —
-        // deterministically and independent of the root-index permutation.
+    fn c2_conflicting_ipns_name_aborts_fail_closed_permutation_independent() {
+        // C2 (#746): root -> A(0x01), B(0x02); both parents list the same
+        // descendant scope D(0x04) but carry DIFFERING ipns_name values. A
+        // ChildScopeRef has no ordering signal, so first-seen would be a coin-flip
+        // and picking the stale name is a silent revocation hole — the walk aborts
+        // fail-closed naming D, identically under forward and reversed parent order.
         let build = |root_index: Vec<ChildScopeRef>| {
             let resolver = FakeResolver::new()
                 .with_refs(0x01, vec![child_named(0x04, "via-a")])
                 .with_refs(0x02, vec![child_named(0x04, "via-b")]);
+            block_on(enumerate_eager_set(sid(0x00), &root_index, &resolver))
+        };
+
+        let forward = build(vec![child(0x01), child(0x02)]).expect_err("conflict aborts");
+        let reversed = build(vec![child(0x02), child(0x01)]).expect_err("conflict aborts");
+
+        assert_eq!(forward, reversed, "abort is permutation-independent");
+        assert_eq!(forward.scope_id, sid(0x04), "the conflict names scope D");
+        assert_eq!(forward.reason, ResolveFailure::ConflictingChildLabel);
+    }
+
+    #[test]
+    fn diamond_same_scope_and_ipns_name_resolves_once_no_abort() {
+        // Regression (test E): a legitimate diamond — both parents list D(0x04) with
+        // the SAME ipns_name — resolves D exactly once with no conflict abort.
+        let build = |root_index: Vec<ChildScopeRef>| {
+            let resolver = FakeResolver::new()
+                .with_refs(0x01, vec![child_named(0x04, "via-shared")])
+                .with_refs(0x02, vec![child_named(0x04, "via-shared")]);
             block_on(enumerate_eager_set(sid(0x00), &root_index, &resolver)).expect("enumerates")
         };
-        let d_name = |set: &EagerSet| {
-            set.descendants()
-                .iter()
-                .find(|c| c.scope_id == sid(0x04))
-                .expect("D present")
-                .ipns_name
-                .clone()
-        };
-
         let forward = build(vec![child(0x01), child(0x02)]);
         let reversed = build(vec![child(0x02), child(0x01)]);
-
         assert_eq!(
             forward, reversed,
-            "first-seen content is permutation-independent"
-        );
-        assert_eq!(
-            d_name(&forward),
-            b"via-a",
-            "canonically-first parent's ipns_name wins the first-seen record"
+            "shared-name diamond is order-independent"
         );
         assert_eq!(ids(&forward), vec![sid(0x01), sid(0x02), sid(0x04)]);
+        let d_name = forward
+            .descendants()
+            .iter()
+            .find(|c| c.scope_id == sid(0x04))
+            .expect("D present")
+            .ipns_name
+            .clone();
+        assert_eq!(d_name, b"via-shared");
     }
 
     #[test]
