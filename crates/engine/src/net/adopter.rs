@@ -10,9 +10,10 @@
 //! logic: it only assembles inputs; every trust decision (commitment, structure
 //! signatures, seed cross-checks, read-body unseal, floor law) stays in the gate.
 //!
-//! Minimal cold-start scope (#789): read-only. The write-plane owner-write-blob
-//! recovery (owner self-renewal) and the owner-seed-cache tri-way abuse
-//! cross-check are later slices; a tampered owner blob still fails closed here at
+//! Cold-start scope (#789): read-plane assembly plus owner cold-start
+//! write-plane recovery (E8) — the owner-write-blob hands the owner the
+//! write-scope seed it cannot re-derive. The owner-seed-cache tri-way abuse
+//! cross-check is a later slice; a tampered owner blob still fails closed here at
 //! the grant-section structure signature and the read-body unseal.
 
 use cipherbox_core::content::decode_content_cid_str;
@@ -20,8 +21,9 @@ use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, STRUCT_TAG_OWNER_BLOB, decode_envelope, decode_grant_section, grant_section_bytes,
-    open_owner_blob,
+    AadContext, Envelope, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, SignedOwnerWriteBlob,
+    decode_envelope, decode_grant_section, grant_section_bytes, open_owner_blob,
+    open_owner_write_blob,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -31,7 +33,8 @@ use super::publish::head_cid_from_value;
 use super::resolve::{AdoptOutcome, Adopter};
 use crate::content::{ContentPlane, Gateway, ReadError, read_block};
 use crate::gate::{
-    Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob, adopt,
+    Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob,
+    adopt, floor,
 };
 use crate::seams::{FloorStore, Http, SeamError};
 
@@ -174,15 +177,67 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
             }),
         };
 
-        // Step 7 — the gate owns all trust. The owner arm surfaces no write seed
-        // (owner self-renewal is a later slice), so the record is held keyless and
-        // `node_id` rides only as the scope-root id.
-        let (adopted, write_scope_seed) = adopt(self.floors, &reader, &candidate).await?;
+        // Step 7 — the gate owns all trust; the owner reader surfaces no gate write
+        // seed (that arm is the write-grantee's). The owner's own write-scope seed
+        // is recovered from the owner-write-blob below for cold-start self-renewal.
+        let (adopted, _) = adopt(self.floors, &reader, &candidate).await?;
+
+        let write_scope_seed = match &candidate.grant_section.owner_write_blob {
+            // Re-authorable, NOT a trust failure — held keyless.
+            None => None,
+            Some(owb) => self.recover_write_scope_seed(env, owb).await?,
+        };
         Ok(AdoptOutcome {
             adopted,
             write_scope_seed,
             node_id: env.id,
         })
+    }
+}
+
+impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
+    /// Recover the owner's write-scope seed (a KDF non-edge the owner cannot
+    /// re-derive) from the record's owner-write-blob for cold-start write-plane
+    /// self-renewal (blueprint/core.md "Grant section").
+    ///
+    /// The AAD binds the durable, monotonic write-epoch floor — cold-seeded from
+    /// the owner-vouched pointer before `resolve` runs (`sync/boot.rs`). A stale
+    /// owner-write-blob authored below the floor cannot open under the newer
+    /// floor's AAD, so an older write epoch can never be replayed (#752 rollback
+    /// defense). No known write floor, an open failure, or an epoch mismatch ⇒
+    /// re-authorable, held keyless — never a `Rejected` verdict, no abuse event.
+    /// The gate independently authenticates this blob's structure signature at the
+    /// read epoch (`gate/adoption.rs`); this only reads the seed it wraps.
+    async fn recover_write_scope_seed(
+        &self,
+        env: &Envelope,
+        owb: &SignedOwnerWriteBlob,
+    ) -> Result<Option<Zeroizing<[u8; 32]>>, GateError> {
+        let Some(wf) = floor::write_epoch_floor(self.floors, &self.root_scope_id)
+            .await
+            .map_err(GateError::Seam)?
+        else {
+            return Ok(None);
+        };
+        let aad = AadContext {
+            v: env.v,
+            id: env.id,
+            scope: env.scope,
+            epoch: wf,
+            struct_tag: STRUCT_TAG_OWNER_WRITE_BLOB,
+        };
+        let Ok(payload) =
+            open_owner_write_blob(self.owner_enc_secret, &owb.enc, &aad, &owb.ciphertext)
+        else {
+            return Ok(None);
+        };
+        // Belt-and-suspenders: the HPKE AAD already binds `epoch == wf`, so a
+        // successful open implies equality; a mismatch means something is off —
+        // treat as re-authorable, never adopt the seed.
+        if payload.write_epoch != wf {
+            return Ok(None);
+        }
+        Ok(Some(Zeroizing::new(*payload.write_scope_seed())))
     }
 }
 
@@ -222,16 +277,17 @@ mod tests {
     use cipherbox_core::codec::Value;
     use cipherbox_core::content::{compute_cid, encode_content_cid_str};
     use cipherbox_core::seal::{
-        Envelope, GrantSection, GrantSetCommitment, OverrideSeedPayload, ReadBody,
-        STRUCT_TAG_WRITE_BODY, SignedOwnerBlob, SignedSealed, StructureSigInput, WriteBody,
-        encode_envelope, encode_grant_section, encode_write_body, seal, seal_owner_blob,
-        seal_read_body, sign_grant_set, sign_structure,
+        Envelope, GrantSection, GrantSetCommitment, OverrideSeedPayload, OwnerWriteBlobPayload,
+        ReadBody, STRUCT_TAG_WRITE_BODY, SignedOwnerBlob, SignedSealed, StructureSigInput,
+        WriteBody, encode_envelope, encode_grant_section, encode_write_body, seal, seal_owner_blob,
+        seal_owner_write_blob, seal_read_body, sign_grant_set, sign_structure,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
 
     use crate::content::{DAG_ROOT_CODEC, GatewaySource};
     use crate::seams::HttpResponse;
+    use crate::session::SessionIdentity;
     use crate::testkit::block_on;
     use crate::testkit::fakes::{InMemoryFloorStore, ScriptedHttp};
 
@@ -241,6 +297,12 @@ mod tests {
     const NONCE_READ_BODY: [u8; 24] = [11u8; 24];
     const NONCE_WRITE_BODY: [u8; 24] = [22u8; 24];
     const EPH_OWNER: [u8; 32] = [3u8; 32];
+    const EPH_OWNER_WRITE: [u8; 32] = [4u8; 32];
+    /// The write-scope seed the fixture's owner-write-blob wraps (matches the seed
+    /// that derives the record's IPNS name).
+    const WRITE_SCOPE_SEED: [u8; 32] = [0x77; 32];
+    /// The write epoch the fixture authors its owner-write-blob at.
+    const OWB_WRITE_EPOCH: u64 = 3;
 
     /// A valid owner-root scope fixture: the owner keys plus the head block (an
     /// envelope carrying its grant section) the record anchors.
@@ -258,6 +320,13 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            Self::build(None)
+        }
+
+        /// Build the fixture, optionally authoring a real owner-write-blob at
+        /// `owb_write_epoch` (the write plane's own clock; its AAD binds that
+        /// epoch, its structure signature the read epoch — mirrors reseal).
+        fn build(owb_write_epoch: Option<u64>) -> Self {
             let owner_identity = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
             let owner_identity_verifier = owner_identity.verifying_key();
             let owner_pseudonym = Ed25519Signer::from_seed([0x22; 32]);
@@ -329,6 +398,31 @@ mod tests {
                 unknown: Vec::new(),
             };
 
+            // Owner-write-blob — the write-scope seed sealed to the owner. AAD
+            // binds the WRITE epoch; the structure signature binds the read epoch.
+            let owner_write_blob = owb_write_epoch.map(|we| {
+                let payload = OwnerWriteBlobPayload::new(write_scope_seed, we);
+                let owb_aad = AadContext {
+                    v: V,
+                    id: root_id,
+                    scope: scope_id,
+                    epoch: we,
+                    struct_tag: STRUCT_TAG_OWNER_WRITE_BLOB,
+                };
+                let sealed = seal_owner_write_blob(
+                    &owner_enc.public(),
+                    &EPH_OWNER_WRITE,
+                    &owb_aad,
+                    &payload,
+                );
+                SignedOwnerWriteBlob {
+                    signature: sign(STRUCT_TAG_OWNER_WRITE_BLOB, &sealed.ciphertext),
+                    enc: sealed.enc,
+                    ciphertext: sealed.ciphertext,
+                    unknown: Vec::new(),
+                }
+            });
+
             let commitment = GrantSetCommitment {
                 ipns_name: name.as_str().as_bytes().to_vec(),
                 owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
@@ -343,7 +437,7 @@ mod tests {
                 commitment_sig,
                 grant_blobs: Vec::new(),
                 owner_blob,
-                owner_write_blob: None,
+                owner_write_blob,
                 ascent_link: None,
                 history_links: Vec::new(),
                 write_body,
@@ -515,5 +609,91 @@ mod tests {
             }
             Err(GateError::Seam(e)) => panic!("expected a gate rejection, got seam {e}"),
         }
+    }
+
+    /// Seed the write-epoch floor to `epoch` (the cold-start seeding `sync/boot`
+    /// does from the owner-vouched pointer before `resolve`).
+    fn seed_write_floor(floors: &InMemoryFloorStore, scope_id: &[u8; 16], epoch: u64) {
+        block_on(floor::advance_write_epoch_on_sight(floors, scope_id, epoch)).unwrap();
+    }
+
+    #[test]
+    fn owner_root_with_owner_write_blob_recovers_the_write_scope_seed() {
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+
+        let outcome = block_on(adopter.adopt(&fx.name, &fx.record(1))).expect("adopts");
+        let seed = outcome
+            .write_scope_seed
+            .expect("the owner recovers its write-scope seed from the owner-write-blob");
+        assert_eq!(*seed, WRITE_SCOPE_SEED);
+        // The recovered seed reproduces the record's IPNS routing name.
+        let signer = SessionIdentity::write_name_signer(&seed, &fx.root_id);
+        assert_eq!(IpnsName::from_public_key(&signer.verifying_key()), fx.name);
+    }
+
+    #[test]
+    fn missing_owner_write_blob_is_held_keyless_not_a_trust_failure() {
+        let fx = Fixture::new(); // owner_write_blob: None
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+
+        let outcome = block_on(adopter.adopt(&fx.name, &fx.record(1)))
+            .expect("a record without an owner-write-blob still adopts");
+        assert!(
+            outcome.write_scope_seed.is_none(),
+            "no owner-write-blob ⇒ held keyless, never a trust failure"
+        );
+    }
+
+    #[test]
+    fn stale_owner_write_blob_below_the_write_floor_is_ignored() {
+        // Blob authored one write epoch below the durable floor: its AAD under the
+        // newer floor cannot open it (#752 rollback defense) — a stale owner-write
+        // -blob is re-authorable, not a rejection. This invariant holds in release.
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH - 1));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+
+        let outcome = block_on(adopter.adopt(&fx.name, &fx.record(1)))
+            .expect("a stale owner-write-blob is re-authorable, never a rejection");
+        assert!(
+            outcome.write_scope_seed.is_none(),
+            "a stale owner-write-blob below the floor yields no seed"
+        );
+    }
+
+    #[test]
+    fn owner_write_blob_transplanted_across_write_epoch_fails_open() {
+        // The floor names a different write epoch than the blob was sealed under:
+        // the recomputed AAD never opens it (adopter-layer mirror of the core
+        // transplant test) ⇒ Ok(None), no rejection, no abuse event.
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH + 1);
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+
+        let outcome = block_on(adopter.adopt(&fx.name, &fx.record(1)))
+            .expect("a write-epoch-transplanted owner-write-blob fails open, not closed");
+        assert!(
+            outcome.write_scope_seed.is_none(),
+            "a transplanted owner-write-blob yields no seed"
+        );
     }
 }
