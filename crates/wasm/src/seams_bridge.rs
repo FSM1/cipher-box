@@ -80,6 +80,7 @@ pub(crate) fn optional_bytes(value: JsValue) -> Option<Vec<u8>> {
 extern "C" {
     /// JS `FloorStoreSeam` (packages/client) — opaque handle, methods called
     /// structurally.
+    #[derive(Clone)]
     pub type JsFloorStoreSeam;
 
     #[wasm_bindgen(method, catch, js_name = epochFloor)]
@@ -319,6 +320,7 @@ impl StagingStore for StagingStoreAdapter {
 #[wasm_bindgen]
 extern "C" {
     /// JS `CredentialStoreSeam` (packages/client).
+    #[derive(Clone)]
     pub type JsCredentialStoreSeam;
 
     #[wasm_bindgen(method, catch, js_name = storeRefreshToken)]
@@ -468,6 +470,7 @@ impl RecordTransport for RecordTransportAdapter {
 #[wasm_bindgen]
 extern "C" {
     /// JS `HttpSeam` (packages/client) — `send(HttpRequestData)`.
+    #[derive(Clone)]
     pub type JsHttpSeam;
 
     #[wasm_bindgen(method, catch, js_name = send)]
