@@ -7,9 +7,9 @@
 //! run through [`cipherbox_core::content::verify_cid`] against the requested
 //! CID, and a mismatch fails **closed** as a [`TrustViolation`] — never a silent
 //! degrade to staleness (AGENTS.md rule 6). Only availability (transport error,
-//! non-2xx) rotates to the next source; a mismatch is terminal, because a
-//! content-address disagreement is an integrity signal to surface, not a
-//! retryable fetch miss.
+//! non-2xx, or an over-cap body) rotates to the next source; a mismatch is
+//! terminal, because a content-address disagreement is an integrity signal to
+//! surface, not a retryable fetch miss.
 
 use core::fmt;
 use core::ops::Range;
@@ -97,10 +97,12 @@ pub enum ReadError {
     /// integrity violation, surfaced verbatim from core. Terminal — never
     /// retried against another source, never degraded to staleness.
     TrustViolation(CodecError),
-    /// The fetched block exceeded [`MAX_RESOLVED_RECORD_BYTES`]: rejected at the
-    /// fetch boundary before any hash/decode/gate work. Terminal and fail-closed
-    /// — a record over the size bound is never adoptable, so it is not retried
-    /// against another source (#742).
+    /// Every source that responded served an over-cap body (rejected at the
+    /// fetch boundary before any hash/decode/gate work), and the source set was
+    /// exhausted with no correctly-sized block. An oversized body is an
+    /// availability failure that rotates to the next source (a non-authoritative
+    /// source can serve an arbitrary huge body for any CID); this surfaces only
+    /// once every source is exhausted having hit that (#742).
     TooLarge {
         /// The oversized response body length.
         size: usize,
@@ -131,9 +133,11 @@ pub enum ReadError {
 ///
 /// Tries each source in [`Gateway`] order; returns the first block that
 /// verifies. A CID mismatch on any response is terminal
-/// ([`ReadError::TrustViolation`]); only availability failures rotate to the
-/// next source. All sources exhausted without a verified block is
-/// [`ReadError::Unavailable`].
+/// ([`ReadError::TrustViolation`]); every availability failure — transport
+/// error, non-2xx, or an over-cap body — rotates to the next source. All
+/// sources exhausted without a verified block is [`ReadError::Unavailable`],
+/// unless at least one source served an over-cap body, which surfaces as
+/// [`ReadError::TooLarge`].
 pub async fn read_block(
     gateway: &Gateway,
     http: &impl Http,
@@ -150,19 +154,23 @@ pub async fn read_block(
             TrustViolation::ContentCidMismatch.into(),
         ));
     }
+    // An over-cap body at any source is an availability failure that rotates;
+    // remembered so an exhausted source set surfaces TooLarge rather than a plain
+    // no-source Unavailable.
+    let mut over_cap: Option<(usize, usize)> = None;
     for source in gateway.sources() {
         let response = match fetch(source, http, cid_str).await {
             Ok(response) => response,
             // Transport-level failure is availability: rotate to the next source.
             Err(CappedFetchError::Transport(_)) => continue,
-            // An over-cap body is terminal and fail-closed — the transport bounds
-            // peak memory before buffering the whole body (#787), and the same
-            // block is over-cap from any source, so it is never retried.
+            // Rotate: a non-authoritative source's oversized body does not prove
+            // the block is over-cap (a malicious source can serve an arbitrary
+            // huge body — e.g. a non-2xx error page — for any CID), so a healthy
+            // source may still serve the correctly-sized block. Terminal only
+            // once every source is exhausted (#742).
             Err(CappedFetchError::BodyTooLarge { observed, limit }) => {
-                return Err(ReadError::TooLarge {
-                    size: observed,
-                    limit,
-                });
+                over_cap = Some((observed, limit));
+                continue;
             }
         };
         if !(200..300).contains(&response.status) {
@@ -170,12 +178,11 @@ pub async fn read_block(
         }
         // Defense-in-depth backstop behind the transport cap: a seam using the
         // buffering default (or one that mis-sizes) still cannot slip an over-cap
-        // body past this before it is hashed, decoded, or gated (#742).
+        // body past this before it is hashed, decoded, or gated (#742). Same
+        // rotation as the transport cap — an oversized body is not authoritative.
         if response.body.len() > MAX_RESOLVED_RECORD_BYTES {
-            return Err(ReadError::TooLarge {
-                size: response.body.len(),
-                limit: MAX_RESOLVED_RECORD_BYTES,
-            });
+            over_cap = Some((response.body.len(), MAX_RESOLVED_RECORD_BYTES));
+            continue;
         }
         // Every 2xx body is verified before it can be returned. A mismatch is a
         // fail-closed trust violation, not a reason to try another source.
@@ -183,7 +190,10 @@ pub async fn read_block(
             .map(|()| response.body)
             .map_err(ReadError::TrustViolation);
     }
-    Err(ReadError::Unavailable)
+    match over_cap {
+        Some((size, limit)) => Err(ReadError::TooLarge { size, limit }),
+        None => Err(ReadError::Unavailable),
+    }
 }
 
 /// Whether `cid_str` is the canonical CIDv1 base32 string of a content CID: the
@@ -371,15 +381,15 @@ mod tests {
     }
 
     #[test]
-    fn an_over_cap_block_is_rejected_before_any_hash_or_rotation() {
+    fn all_sources_over_cap_is_terminal_too_large_once_exhausted() {
         let leaf = one_leaf();
         let http = ScriptedHttp::default();
-        // An over-cap body that would NOT content-address to `leaf.cid`: getting
-        // TooLarge (not a content-cid-mismatch) proves the size gate fired
-        // before verify_cid hashed the body, and before any decode/gate work.
+        // Both sources serve an over-cap body that would NOT content-address to
+        // `leaf.cid`: getting TooLarge (not a content-cid-mismatch) proves the
+        // size gate fired before verify_cid hashed the body, before any
+        // decode/gate work. Terminal only once the source set is exhausted.
         http.enqueue_response(raw_response(vec![0u8; MAX_RESOLVED_RECORD_BYTES + 1]));
-        // A good block is queued behind it; a terminal rejection must not consume it.
-        http.enqueue_response(raw_response(leaf.sealed.clone()));
+        http.enqueue_response(raw_response(vec![0u8; MAX_RESOLVED_RECORD_BYTES + 1]));
 
         let err = block_on(read_block(
             &accelerator_only(),
@@ -398,8 +408,38 @@ mod tests {
         );
         assert_eq!(
             http.requests().len(),
-            1,
-            "an over-cap block is terminal — it does not rotate to another source"
+            2,
+            "an over-cap body rotates through every source before failing closed"
+        );
+    }
+
+    #[test]
+    fn an_over_cap_body_rotates_to_a_healthy_source() {
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        // The accelerator serves an over-cap body (which would NOT content-address
+        // to `leaf.cid`); the public fallback serves the real block. The read
+        // succeeds via rotation, and the over-cap body is never hashed/verified —
+        // returning `leaf.sealed` (not a trust violation) proves it was rejected
+        // at the size gate before verify_cid ran.
+        http.enqueue_response(raw_response(vec![0u8; MAX_RESOLVED_RECORD_BYTES + 1]));
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+
+        let out = block_on(read_block(
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap();
+        assert_eq!(out, leaf.sealed);
+
+        let urls: Vec<_> = http.requests().iter().map(|r| r.url.clone()).collect();
+        assert_eq!(urls.len(), 2);
+        assert!(
+            urls[1].starts_with("https://public.gw.test/ipfs/"),
+            "rotated to the public fallback after the over-cap body"
         );
     }
 
