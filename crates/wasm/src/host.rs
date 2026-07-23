@@ -84,7 +84,11 @@ impl EngineHandle {
     /// sync timing policy (`"ci"` for the compressed e2e cadences, production
     /// otherwise).
     #[wasm_bindgen(constructor)]
-    pub fn new(seams: JsValue, profile: Option<String>) -> Result<EngineHandle, JsError> {
+    pub fn new(
+        seams: JsValue,
+        profile: Option<String>,
+        api_base_url: Option<String>,
+    ) -> Result<EngineHandle, JsError> {
         console_error_panic_hook::set_once();
 
         let seam_set = SeamSet::<WebSeamTypes> {
@@ -122,7 +126,14 @@ impl EngineHandle {
             _ => SyncTimingProfile::PRODUCTION,
         };
 
-        let (engine, events) = Engine::new(seam_set, Box::new(GetrandomEntropy), profile);
+        // Empty until the auth/config slice supplies the real API base URL; the
+        // register-first renewal is inert against an empty base until then.
+        let (engine, events) = Engine::new(
+            seam_set,
+            Box::new(GetrandomEntropy),
+            profile,
+            api_base_url.unwrap_or_default(),
+        );
         Ok(EngineHandle {
             engine: Rc::new(Mutex::new(engine)),
             events: Rc::new(Mutex::new(events)),

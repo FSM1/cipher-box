@@ -505,6 +505,10 @@ pub struct Engine<T: SeamTypes> {
     /// Seeds, nonces, jitter, and command-path node-id minting.
     entropy: Box<dyn Entropy>,
     profile: SyncTimingProfile,
+    /// The API base URL the liveness loop's [`ApiClient`] registers renewals
+    /// against. Empty until the auth/config slice supplies it; the register-first
+    /// renewal is a no-op against an empty base until then.
+    api_base_url: String,
     events: mpsc::UnboundedSender<Event>,
     /// The last-known-good gate-passing base snapshot (state law's left
     /// operand). Seeded at the anchored root; cold-start/resolve replace it
@@ -536,6 +540,7 @@ impl<T: SeamTypes> Engine<T> {
         seams: SeamSet<T>,
         entropy: Box<dyn Entropy>,
         profile: SyncTimingProfile,
+        api_base_url: String,
     ) -> (Self, EventStream) {
         let (events, receiver) = mpsc::unbounded();
         (
@@ -543,6 +548,7 @@ impl<T: SeamTypes> Engine<T> {
                 seams,
                 entropy,
                 profile,
+                api_base_url,
                 events,
                 // The anchored all-zero root until cold-start/resolve replaces
                 // the base snapshot; children come from the pending-op overlay.
@@ -724,13 +730,13 @@ impl<T: SeamTypes> Engine<T> {
         let alive = self.alive.clone();
         // One API client for the whole task: register-first renewal needs the
         // API, and the refresh token lives in the credential store, so the client
-        // self-heals its access token on a 401 across the session's lifetime.
-        // The base URL is supplied by the facade auth/config slice; the renewal
-        // pass only fires once the resolve-tick driver populates the held set.
+        // self-heals its access token on a 401 across the session's lifetime. The
+        // renewal pass only fires once the resolve-tick driver populates the held
+        // set.
         let api = ApiClient::new(
             self.seams.http.clone(),
             self.seams.credential_store.clone(),
-            String::new(),
+            self.api_base_url.clone(),
         );
         self.seams.scheduler.spawn(Box::pin(async move {
             run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
@@ -913,6 +919,7 @@ mod tests {
             device.seam_set(),
             Box::new(SeededEntropy::new(42)),
             SyncTimingProfile::CI,
+            String::new(),
         )
     }
 
@@ -926,6 +933,7 @@ mod tests {
             device.seam_set(),
             Box::new(SeededEntropy::new(42)),
             SyncTimingProfile::CI,
+            String::new(),
         );
         block_on(engine.start(LoginSecret::new(vec![secret_byte; 32]))).unwrap();
         engine
@@ -1316,6 +1324,7 @@ mod tests {
                 device.seam_set(),
                 Box::new(SeededEntropy::new(42)),
                 SyncTimingProfile::CI,
+                String::new(),
             );
             block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).unwrap();
             let pointers = ScriptedPointers::default();
@@ -1399,6 +1408,7 @@ mod tests {
                 device.seam_set(),
                 Box::new(SeededEntropy::new(42)),
                 SyncTimingProfile::CI,
+                String::new(),
             );
             assert!(engine.session().is_none(), "no identity before start");
             let out = block_on(engine.cold_start_data_path(
