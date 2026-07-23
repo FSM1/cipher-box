@@ -1202,4 +1202,34 @@ mod tests {
             "ascent link yields the descendant override seed under the grantee derivation"
         );
     }
+
+    #[test]
+    fn descendant_scope_root_publishes_under_the_enumerated_ref_name() {
+        // The re-key step 5b must publish/reseal the reparented descendant under
+        // the name from the enumerated `ChildScopeRef` (`descendant.ipns_name`),
+        // not the resolved target's — the scope-root publication binding #779
+        // fixed in sweep.rs. A regression to any other name (e.g. the parent's)
+        // is caught here.
+        let subtree = vec![ChildScopeRef::new(
+            DESCENDANT_SCOPE,
+            DESCENDANT_NAME.to_vec(),
+        )];
+        let (outcome, published, _hub) = run(7, &subtree, None, FakeNet::new(Ok(())));
+        outcome.expect("grant creation succeeds over a converged subtree");
+
+        let descendant_record = published
+            .iter()
+            .find(|r| r.scope_id == DESCENDANT_SCOPE)
+            .expect("descendant re-keyed and published");
+        assert_eq!(
+            descendant_record.ipns_name,
+            DESCENDANT_NAME.to_vec(),
+            "published under the enumerated ChildScopeRef name"
+        );
+        assert_ne!(
+            descendant_record.ipns_name,
+            PARENT_NAME.to_vec(),
+            "never republished under the parent scope-root name"
+        );
+    }
 }
