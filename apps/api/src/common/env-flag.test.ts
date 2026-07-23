@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { isDisabled } from './republisher.module';
+import { isDisabled } from './env-flag';
 
-describe('isDisabled (republisher default-on opt-out parse)', () => {
+describe('isDisabled (default-on env-flag opt-out parse)', () => {
   it('treats every explicit falsey token as disabled, case-insensitively', () => {
     for (const raw of ['false', 'False', 'FALSE', '0', 'no', 'NO', 'off', 'OFF', ' false ']) {
       expect(isDisabled(raw)).toBe(true);

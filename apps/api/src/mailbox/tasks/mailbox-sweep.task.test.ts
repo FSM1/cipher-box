@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PeriodicTask } from '../../common/worker-scheduler';
 import { fakeConfig } from '../../testing/fakes';
 import { MailboxService } from '../services/mailbox.service';
 import { MailboxSweepTask } from './mailbox-sweep.task';
@@ -14,29 +15,22 @@ function buildTask(env: Record<string, string | undefined>): {
 }
 
 describe('MailboxSweepTask', () => {
-  it('defaults to a ~12h cadence and a 1h run bound', () => {
+  it('defaults to a ~12h cadence and inherits the scheduler run bound', () => {
     const { task } = buildTask({});
     expect(task.taskName).toBe('mailbox-sweep');
     expect(task.intervalMs).toBe(12 * 60 * 60 * 1000);
-    expect(task.runTimeoutMs).toBe(60 * 60 * 1000);
+    // No per-task timeout: the scheduler's DEFAULT_RUN_TIMEOUT_MS applies.
+    expect((task as PeriodicTask).runTimeoutMs).toBeUndefined();
   });
 
-  it('honors positive-integer overrides', () => {
-    const { task } = buildTask({
-      MAILBOX_SWEEP_INTERVAL_MS: '5000',
-      MAILBOX_SWEEP_RUN_TIMEOUT_MS: '2500',
-    });
+  it('honors a positive-integer cadence override', () => {
+    const { task } = buildTask({ MAILBOX_SWEEP_INTERVAL_MS: '5000' });
     expect(task.intervalMs).toBe(5000);
-    expect(task.runTimeoutMs).toBe(2500);
   });
 
-  it('fails closed to the defaults for garbage config', () => {
-    const { task } = buildTask({
-      MAILBOX_SWEEP_INTERVAL_MS: 'not-a-number',
-      MAILBOX_SWEEP_RUN_TIMEOUT_MS: '-1',
-    });
+  it('fails closed to the default cadence for garbage config', () => {
+    const { task } = buildTask({ MAILBOX_SWEEP_INTERVAL_MS: 'not-a-number' });
     expect(task.intervalMs).toBe(12 * 60 * 60 * 1000);
-    expect(task.runTimeoutMs).toBe(60 * 60 * 1000);
   });
 
   it('runOnce delegates to the service sweep', async () => {

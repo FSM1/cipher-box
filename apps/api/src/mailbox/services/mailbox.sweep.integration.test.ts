@@ -8,7 +8,7 @@ import { FakeRepository } from '../../testing/fake-repo';
 import { FakeClock, fakeConfig } from '../../testing/fakes';
 import { createIntegrationDatabase, IntegrationDatabase } from '../../testing/integration-db';
 import { MailboxMessage } from '../entities/mailbox-message.entity';
-import { MailboxService } from './mailbox.service';
+import { MailboxService, SWEEP_MAX_BATCHES } from './mailbox.service';
 
 /**
  * The global dormant-mailbox TTL sweep (#667) proven against a REAL Postgres.
@@ -79,6 +79,17 @@ describe('MailboxService global TTL sweep (real Postgres)', () => {
     return saved.id;
   }
 
+  /** Bulk-seed `count` already-expired rows for a recipient in one INSERT. */
+  async function seedExpiredBatch(recipient: string, count: number): Promise<void> {
+    const receivedAt = new Date(clock.now().getTime() - (TTL_MS + 60_000));
+    await db.dataSource.query(
+      `INSERT INTO mailbox_messages (recipient_public_key, idempotency_scope, blob, received_at)
+       SELECT $1, lpad(g::text, 64, '0'), '\\x01'::bytea, $2::timestamptz
+       FROM generate_series(1, $3) AS g`,
+      [recipient, receivedAt.toISOString(), count]
+    );
+  }
+
   it('deletes rows older than 90 days and keeps fresh ones, with no recipient activity', async () => {
     const dormant = compressedPublicKey();
     const active = compressedPublicKey();
@@ -131,24 +142,22 @@ describe('MailboxService global TTL sweep (real Postgres)', () => {
     expect(survivors).toEqual([fresh]);
   });
 
-  it('respects the per-run batch cap, leaving the remainder for the next run', async () => {
+  it('respects the internal SWEEP_MAX_BATCHES cap, leaving the remainder for the next run', async () => {
     const recipient = compressedPublicKey();
-    // 2 batches of 5 = at most 10 rows deleted this run; the 11th+ waits.
-    const { service } = buildService({
-      MAILBOX_SWEEP_BATCH_SIZE: '5',
-      MAILBOX_SWEEP_MAX_BATCHES: '2',
-    });
+    // batchSize=1 means each batch deletes one row and never short-circuits on
+    // drain, so a run is bounded solely by the SWEEP_MAX_BATCHES const. Seed a
+    // few rows past the cap: the first run stops at the cap, the next drains.
+    const REMAINDER = 3;
+    const { service } = buildService({ MAILBOX_SWEEP_BATCH_SIZE: '1' });
 
-    for (let i = 0; i < 13; i += 1) {
-      await seedRow(recipient, TTL_MS + 60_000 + i);
-    }
+    await seedExpiredBatch(recipient, SWEEP_MAX_BATCHES + REMAINDER);
 
     const firstRun = await service.sweepExpired();
-    expect(firstRun).toBe(10);
-    expect(await repo.count()).toBe(3);
+    expect(firstRun).toBe(SWEEP_MAX_BATCHES);
+    expect(await repo.count()).toBe(REMAINDER);
 
     const secondRun = await service.sweepExpired();
-    expect(secondRun).toBe(3);
+    expect(secondRun).toBe(REMAINDER);
     expect(await repo.count()).toBe(0);
   });
 

@@ -86,6 +86,9 @@ export async function createIntegrationDatabase(
     database: name,
     entities: ENTITIES,
     migrations: MIGRATIONS,
+    // Match data-source.ts so a migration opting out (transaction = false) for
+    // CONCURRENTLY DDL runs identically here as under the CLI/drift check.
+    migrationsTransactionMode: 'each',
     synchronize: false,
     uuidExtension: 'pgcrypto',
     extra: options.poolMax ? { max: options.poolMax } : undefined,

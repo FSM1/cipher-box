@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { buildJwtOptions } from '../auth/auth.module';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { isDisabled } from '../common/env-flag';
 import { SchedulerModule } from '../common/scheduler.module';
 import { WorkerScheduler } from '../common/worker-scheduler';
 import { OpsModule } from '../ops/ops.module';
@@ -15,11 +16,6 @@ import { RecoveryController } from './recovery.controller';
 import { LoggingRepublisherAlerter, RepublisherAlerter } from './republisher.alerter';
 import { RepublisherTask } from './republisher.task';
 import { RecordCacheService } from './services/record-cache.service';
-
-// Re-exported so the one implementation lives in common; existing importers keep
-// resolving `isDisabled` from this module.
-export { isDisabled } from '../common/env-flag';
-import { isDisabled } from '../common/env-flag';
 
 /**
  * The republisher slice (blueprint/api.md, Republisher module and recovery): the

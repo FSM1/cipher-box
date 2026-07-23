@@ -29,8 +29,12 @@ const TTL_MS = 90 * 24 * 60 * 60 * 1000;
 /** Rows deleted per global-sweep batch; via MAILBOX_SWEEP_BATCH_SIZE. */
 const DEFAULT_SWEEP_BATCH_SIZE = 1000;
 
-/** Safety bound on batches per sweep run so a huge backlog can't loop unbounded; via MAILBOX_SWEEP_MAX_BATCHES. */
-const DEFAULT_SWEEP_MAX_BATCHES = 1000;
+/**
+ * Internal "don't loop forever" guard on batches per sweep run — not a per-deploy
+ * knob. The loop already drains on `deleted < batchSize`; this only caps a
+ * pathological backlog, leaving any remainder for the next scheduled run.
+ */
+export const SWEEP_MAX_BATCHES = 1000;
 
 /**
  * Canonical RFC 4122 UUID — the form `gen_random_uuid()` mints for the id
@@ -71,7 +75,6 @@ export class MailboxService {
   private readonly pollLimit: number;
   private readonly lockTimeoutMs: number;
   private readonly sweepBatchSize: number;
-  private readonly sweepMaxBatches: number;
 
   constructor(
     @InjectRepository(MailboxMessage)
@@ -90,10 +93,6 @@ export class MailboxService {
     this.sweepBatchSize = positiveIntConfig(
       configService.get('MAILBOX_SWEEP_BATCH_SIZE'),
       DEFAULT_SWEEP_BATCH_SIZE
-    );
-    this.sweepMaxBatches = positiveIntConfig(
-      configService.get('MAILBOX_SWEEP_MAX_BATCHES'),
-      DEFAULT_SWEEP_MAX_BATCHES
     );
   }
 
@@ -286,7 +285,7 @@ export class MailboxService {
   async sweepExpired(): Promise<number> {
     const cutoff = new Date(this.clock.now().getTime() - TTL_MS);
     let total = 0;
-    for (let batch = 0; batch < this.sweepMaxBatches; batch += 1) {
+    for (let batch = 0; batch < SWEEP_MAX_BATCHES; batch += 1) {
       const deleted = await this.deleteExpiredBatch(cutoff);
       total += deleted;
       if (deleted < this.sweepBatchSize) {
