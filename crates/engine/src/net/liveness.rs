@@ -32,8 +32,7 @@ use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler
 ///
 /// Designed-for cadence, not yet a frozen profile constant — like the sweep
 /// cadence (blueprint/engine.md "Open edges"), it joins the sync timing profile
-/// once measured. The facade slice wraps the job body below in a
-/// `Scheduler`-driven loop at this cadence.
+/// once measured.
 pub const RE_PUT_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// One held record to keep alive: its routing key (the `ipnsName`) and the exact

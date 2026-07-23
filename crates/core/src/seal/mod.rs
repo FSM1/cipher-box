@@ -2,11 +2,9 @@
 //! structures").
 //!
 //! AAD construction, symmetric seal/unseal, the kind-uniform envelope codec,
-//! and the read-body tagged union. Pure and deterministic: the sealing key and
-//! the nonce are injected (KATs pin them); core samples no entropy and reads no
-//! clock. Structure signatures, the write-body, the grant section, and the
-//! pointer/mailbox payloads are later slices — this slice lands the symmetric
-//! read-plane path end to end.
+//! the read-body tagged union, the grant section, and the structure signatures.
+//! Pure and deterministic: the sealing key and the nonce are injected (KATs pin
+//! them); core samples no entropy and reads no clock.
 //!
 //! The wire framing of a sealed body is `nonce(24) || ciphertext||tag`: the
 //! XChaCha20-Poly1305 24-byte nonce is prefixed so [`unseal`] can recover it,

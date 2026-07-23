@@ -1,35 +1,15 @@
 //! The adoption gate — the six-stage trust pipeline every resolved record
 //! passes before it touches the snapshot (blueprint/engine.md "Adoption gate
-//! and floors"; CONTEXT.md "Adoption gate").
+//! and floors"; CONTEXT.md "Adoption gate"). It composes the #33 pipeline with
+//! the #39 D3 seal-auth stage and the D4 floor law. The six stages are
+//! enumerated on [`GateStage`] and documented at each stage below.
 //!
 //! The gate is a **pure composition of `crates/core`'s verify/unseal
-//! functions** plus the engine's durable floors. It defines no crypto, no
-//! codec, and no cryptographic error code of its own: every cryptographic
-//! verdict is a core [`CodecError`] surfaced verbatim through
-//! [`RejectionReason::Trust`]. The only engine-domain verdicts are the two
-//! floor comparisons (stages 4 and 5), which are the [`FloorStore`] seam's
-//! territory by construction.
-//!
-//! Stage order (composes the #33 pipeline with the #39 D3 seal-auth stage and
-//! the D4 floor law):
-//!
-//! 1. **Record verify** — core's full IPNS chain: the Ed25519 key is taken from
-//!    the [`IpnsName`] itself, `signatureV2` verifies, and the signed
-//!    `data.Value` must equal the top-level value. Yields the authenticated
-//!    sequence/epoch/EOL.
-//! 2. **Commitment verify** — the owner-signed grant-set commitment against the
-//!    contact-code-anchored owner identity, and its binding to this record's
-//!    name.
-//! 3. **Grant-section authentication** — every seed-bearing structure verifies
-//!    under a *committed write-capable pseudonym*; an ancestor reader also
-//!    derives-and-verifies the ascent link. Any failure rejects the **whole
-//!    record**.
-//! 4. **Sequence** — strictly newer than the durable per-name sequence floor.
-//! 5. **Epoch** — the envelope epoch tag at or above the scope's durable
-//!    read-epoch floor.
-//! 6. **Unseal** — the reader's HPKE seed source (if any) and the symmetric
-//!    read-body must open; the read-body decode also enforces child
-//!    id/`ipnsName` uniqueness fail-closed.
+//! functions** plus the engine's durable floors: no crypto, no codec, and no
+//! cryptographic error code of its own. Every cryptographic verdict is a core
+//! [`CodecError`] surfaced verbatim through [`RejectionReason::Trust`]; the only
+//! engine-domain verdicts are the two floor comparisons (stages 4 and 5), the
+//! [`FloorStore`] seam's territory.
 //!
 //! Every failure is fail-closed and whole-record: the caller pins last-known-
 //! good and never renders the rejected record. Floors advance (via
@@ -439,7 +419,7 @@ pub async fn adopt_deferred<F: FloorStore>(
     // Stage 2 — commitment verify against the contact-anchored owner identity,
     // and its binding to this record's name (the name is inside the signed
     // commitment preimage; a commitment for a different scope root is invalid
-    // here). The commitment and its signature live in the record's grant section.
+    // here).
     let section = &candidate.grant_section;
     let commitment_sig =
         EcdsaSignature::from_compact(&section.commitment_sig).ok_or_else(|| {
@@ -533,9 +513,7 @@ pub async fn adopt_deferred<F: FloorStore>(
         // published, so anyone can seal a rogue payload to it. The seed the link
         // carries is this scope root's current override seed (CONTEXT.md "Ascent
         // link"/"Override seed"), so it must belong to this epoch and derive this
-        // node's read key — the ascent-link half of engine.md:406-408. The
-        // recovered `OverrideSeedPayload` and derived `SecretBytes` are gate-owned
-        // and zeroize on drop; `reader.read_key` is caller-owned and never zeroized.
+        // node's read key — the ascent-link half of engine.md:406-408.
         let payload = open_ascent_link(&parent_node_seed, &aad, &link)
             .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
         let node_seed = kdf::node_seed(payload.override_seed(), &candidate.envelope.id);
@@ -616,9 +594,7 @@ pub async fn adopt_deferred<F: FloorStore>(
         }
         // Cross-check: the recovered seed must derive the reader's read key, or
         // the blob-seed and the actual-unseal key disagree — an attributable
-        // abuse event (blueprint/engine.md), never a silent staleness. The
-        // derived `SecretBytes` are gate-owned and zeroize on drop here;
-        // `reader.read_key` is caller-owned and never zeroized.
+        // abuse event (blueprint/engine.md), never a silent staleness.
         let seed = open_seed_blob(blob)
             .map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
         let node_seed = kdf::node_seed(seed.as_bytes(), &candidate.envelope.id);
@@ -633,9 +609,8 @@ pub async fn adopt_deferred<F: FloorStore>(
     let read_body = open_read_body(&candidate.envelope, reader.read_key)
         .map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
 
-    // The read-body unsealed (stage 6). The floor-law advance is DEFERRED to
-    // [`PendingAdoption::commit`] so a caller that must persist accepted state
-    // first advances the floors only after that state is durable.
+    // All six stages passed; the floor-law advance is DEFERRED to
+    // [`PendingAdoption::commit`] (see that type's contract).
     Ok(PendingAdoption {
         adopted: Adopted {
             read_body,

@@ -1,21 +1,16 @@
 //! The share-accept flow and the self-healing share bookmarks (blueprint/
 //! engine.md "Grants and ledger — Accept flow", #25 D3).
 //!
-//! Accepting a share is: a sender-verified mailbox pointer → resolve the name →
-//! the adoption gate (commitment verified against the contact-anchored owner) →
-//! self-locate the grant blob by blinded tag → unseal the seeds → reconcile
-//! `{name, sharerPub, displayName, permission, pointerReadKey}` into the
-//! recipient's received-shares list → **durably persist that list** → **only
-//! then** ack. The owner keeps a denormalized sent-index. Both lists are
-//! self-healing bookmarks keyed by scope-root name: the published metadata is
-//! the authority, so a re-accept heals a drifted permission or rotated pointer
-//! read key in place, and only a byte-identical re-accept is a true no-op.
+//! Trust flows from the resolved record and the verified [`Contact`], never the
+//! untrusted pointer: the pointer only says *which name to resolve*, and the gate
+//! re-verifies everything against the contact-anchored owner. The blinded-tag
+//! ECDH peer is the verified contact's encryption subkey, not the pointer's
+//! claimed `sharerPub`.
 //!
-//! Trust flows from the resolved record and the verified [`Contact`], never from
-//! the untrusted pointer: the pointer only says *which name to resolve*, and the
-//! gate re-verifies everything against the contact-anchored owner identity. The
-//! blinded-tag ECDH peer is taken from the verified contact's encryption subkey,
-//! not the pointer's claimed `sharerPub`.
+//! Both share lists are self-healing bookmarks keyed by scope-root name: the
+//! published metadata is authority, so a re-accept heals a drifted permission or
+//! rotated pointer read key in place; only a byte-identical re-accept is a true
+//! no-op. Persist durably before ack (the flow order lives on [`accept_share`]).
 
 use core::fmt;
 
@@ -159,13 +154,10 @@ impl ReceivedSharesList {
     }
 
     /// Reconcile a freshly-verified share into the self-healing bookmark: append
-    /// if the scope is absent, heal the stored entry in place if its authority
-    /// or pointer key drifted, or no-op if it is byte-identical. The published
-    /// metadata is always the authority, so a re-accept that carries a changed
-    /// committed permission or a rotated pointer read key must overwrite the
-    /// stale entry — never keep it (blueprint/engine.md "self-healing
-    /// bookmarks"). The returned [`Reconciled`] carries the pre-image needed to
-    /// [`revert`](Self::revert) if the durable persist then fails.
+    /// if absent, heal in place if the committed permission or pointer read key
+    /// drifted, no-op if byte-identical (blueprint/engine.md "self-healing
+    /// bookmarks"). The returned [`Reconciled`] carries the pre-image
+    /// [`revert`](Self::revert) needs if the durable persist then fails.
     fn reconcile(&mut self, share: ReceivedShare) -> Reconciled {
         match self
             .entries
@@ -246,16 +238,13 @@ impl Reconciled {
 /// Durable persistence for the recipient's received-shares bookmark — the seam
 /// the accept flow writes through before it acks the mailbox item.
 ///
-/// The engine acks **only** after this returns `Ok` (blueprint/engine.md
-/// "Mailbox logic — ack after durable"), and the durable sequence floor is
-/// advanced only after this returns `Ok` too: were the floor to advance first, a
-/// persist failure would strand the share for good, because the redelivered
-/// record is now below the floor and rejected. Persisting the whole list first,
-/// then advancing the floor and acking, keeps redelivery safe — a persist failure
-/// returns un-acked with the floor untouched and the item re-accepts idempotently
-/// (the bookmark self-heals). Injected as a grants-layer seam, not one of the
-/// nine host seams; the facade wires a concrete store when the accept flow is
-/// mounted (#635).
+/// Both the ack and the durable sequence-floor advance happen **only** after this
+/// returns `Ok` (blueprint/engine.md "Mailbox logic — ack after durable"): a floor
+/// that advanced ahead of a failed persist would strand the share below it forever.
+/// Persist-fail returns un-acked with the floor untouched, so the item redelivers
+/// and re-accepts idempotently (the bookmark self-heals). Injected as a grants-layer
+/// seam, not one of the nine host seams; the facade wires a concrete store when the
+/// accept flow is mounted (#635).
 pub trait ReceivedShareStore {
     /// Durably persist the whole received-shares list. A failure returns a
     /// [`SeamError`] and the accept flow does not ack.

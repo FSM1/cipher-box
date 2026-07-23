@@ -130,9 +130,8 @@ pub async fn read_block(
     expected_cid: &[u8],
     plane: ContentPlane,
 ) -> Result<Vec<u8>, ReadError> {
-    // Reject a non-anchor request before touching the network, fail-closed: an
-    // expected CID whose codec is out of the frozen set or is valid but for the
-    // wrong plane, or an address that is not a canonical content-CID string.
+    // Reject a non-anchor request before any fetch, fail-closed (codec
+    // out-of-set/wrong-plane, or a non-canonical address).
     let codec_ok =
         expected_cid.len() == CONTENT_CID_LEN && expected_cid[CID_CODEC_INDEX] == plane.codec();
     if !codec_ok || !is_canonical_content_cid_str(cid_str) {

@@ -183,8 +183,7 @@ const WRITE_BODY_KNOWN: &[&str] = &["directChildScopeIndex", "grantLedger", "wri
 ///
 /// The write-body is a scope-root-only structure; this codec does not (and
 /// cannot) enforce that — whether a node is a scope root is the engine's
-/// decision. Interior nodes simply never carry a `writeSealed` for this to
-/// decode.
+/// decision.
 pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
     let value = decode(bytes)?;
     let map = value.as_map()?;

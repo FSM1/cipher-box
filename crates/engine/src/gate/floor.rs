@@ -12,12 +12,9 @@
 //!    from a claimed-but-unconfirmed field.
 //! 2. **Cold-seed from a re-point object** ([`cold_seed`]) — the cold-start
 //!    anchor. The owner-vouched `minReadEpoch` seeds the read-epoch floor (the
-//!    revocation boundary) and `writeEpoch` the write-epoch floor. The caller
-//!    passes a [`RepointObject`] it already authenticated with
-//!    [`open_pointer_payload`](cipherbox_core::payload::open_pointer_payload):
-//!    the object type is only obtainable from that verified open, so an
-//!    unsigned or non-owner re-point never reaches this function and no floor
-//!    moves (fail-closed by construction).
+//!    revocation boundary) and `writeEpoch` the write-epoch floor. The
+//!    [`RepointObject`] is authenticated by construction, so no floor moves on
+//!    an unsigned or non-owner re-point (see [`cold_seed`]).
 //! 3. **Pointer `writeEpoch` advances on sight** ([`advance_write_epoch_on_sight`])
 //!    — an owner-vouched write epoch above the durable floor raises it the
 //!    moment it is seen (#38 D4).

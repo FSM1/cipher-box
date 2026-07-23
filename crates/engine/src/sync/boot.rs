@@ -118,13 +118,11 @@ pub struct ColdStartOutcome {
 }
 
 /// Run the cold-start live-session data path off the injected seams, emitting
-/// the first [`Event::SnapshotUpdated`]. Fail-closed at every trust boundary:
-/// a forged vault-pointer index, an owner-vouched floor regression, and an
-/// adoption-gate rejection all return `Err` — never silent staleness.
-///
-/// Reads no clock and no RNG: the sequence is a pure function of the injected
-/// seams and the [`ColdStartParams`], so a deterministic virtual-time test pins
-/// it and two engines on independent clocks produce the identical outcome.
+/// the first [`Event::SnapshotUpdated`]. Fail-closed at every trust boundary
+/// (see [`ColdStartError`]): a trust violation returns `Err`, never silent
+/// staleness. Reads no clock and no RNG — the sequence is a pure function of the
+/// injected seams and [`ColdStartParams`], so two engines on independent clocks
+/// produce the identical outcome.
 pub async fn cold_start<Pf, Ad, Fl, T, Sc>(
     pointer_fetch: &Pf,
     adopter: &Ad,
@@ -141,9 +139,8 @@ where
     T: RecordTransport,
     Sc: SnapshotCache,
 {
-    // Step 1 — vault-pointer resolve (the first act): probe one past the highest
-    // known index and adopt the highest valid owner-signed payload. A forged
-    // index is fail-closed inside the walk.
+    // Step 1 — vault-pointer resolve (the first act). A forged index is
+    // fail-closed inside the walk.
     let adoption = resolve_vault_pointer(
         pointer_fetch,
         params.login_secret,
@@ -169,9 +166,8 @@ where
         });
     };
 
-    // Step 2 — floor cold-seed, fail-closed on regression. The owner-vouched
-    // epochs seed the durable floors; a re-point that would move either floor
-    // backward is a rolled-back pointer, a trust violation.
+    // Step 2 — floor cold-seed, fail-closed on regression: a re-point that would
+    // move either floor backward is a rolled-back pointer, a trust violation.
     // The vault pointer is the root/vault anchor, so the read-epoch check is
     // sound here (`AnchorRole::Root`); a shared-scope cold-seed would pass
     // `Shared` (#763).

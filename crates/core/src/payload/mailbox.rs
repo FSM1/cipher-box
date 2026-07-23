@@ -135,8 +135,6 @@ fn verify_inner(inner: &[u8], v: u64, recipient_pk: &[u8]) -> Result<MailboxItem
     let sender_pk = req(map, "senderIdentityPk")?.as_bytes()?;
     let sig_bytes = req(map, "senderSig")?.as_bytes()?;
 
-    // A bad key encoding, a non-canonical signature, or a mismatch are all the
-    // one trust check: the claimed sender did not author this item.
     let sender_identity =
         EcdsaVerifier::from_sec1(sender_pk).ok_or(TrustViolation::IdentitySignatureInvalid)?;
     let sig =

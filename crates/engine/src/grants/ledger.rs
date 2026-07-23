@@ -2,23 +2,20 @@
 //! (blueprint/engine.md "Grants and ledger", #25 D1/D7, #26 D5, #39 D1).
 //!
 //! Grants live in the published scope root: grant blobs keyed by blinded tags,
-//! the authoritative ledger `(recipientIdentityPk, recipientEncPk, permission,
-//! tag)` in the write-body, and the epoch-free owner-signed grant-set
-//! commitment. This module composes core's codecs/KDF over those three; it
-//! mints nothing (grant creation needs the rotation primitives of #635) and
-//! holds no crypto.
+//! the authoritative write-body ledger, and the epoch-free owner-signed grant-set
+//! commitment. This module composes core's codecs/KDF over those three; it mints
+//! nothing (grant creation rides the #635 rotation primitives) and holds no crypto.
 //!
 //! Two boundary rules it enforces:
 //!
 //! - **Self-location** — a recipient re-derives its own blinded tag from the
 //!   pairwise ECDH of its encryption subkey with the sharer's, plus the scope
-//!   root's `ipnsName`, then locates its grant blob by that public tag. Tags are
-//!   public, so the lookup needs no constant-time guarantee.
-//! - **Owner-only authority** — sharing, revoking, and every commitment change
-//!   are owner-only; a write-grantee re-wraps blobs for the committed set during
-//!   a re-seal but can neither add nor drop a tag. [`enforce_committed_ledger`]
-//!   is the resolve-side check that a re-sealed write-body's ledger still
-//!   matches the owner-signed committed set exactly.
+//!   root's `ipnsName`, then locates its blob by that public tag. Tags are public,
+//!   so the lookup needs no constant-time guarantee.
+//! - **Owner-only authority** — sharing, revoking, and every commitment change are
+//!   owner-only; a write-grantee re-wraps blobs for the committed set but can
+//!   neither add nor drop a tag. [`enforce_committed_ledger`] is the resolve-side
+//!   check that a re-sealed ledger still matches the owner-signed committed set.
 
 use std::collections::BTreeMap;
 

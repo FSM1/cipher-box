@@ -67,8 +67,7 @@ impl StructureSigInput {
 }
 
 /// Build the det-CBOR structure-signature preimage. The `recipientTag` key is
-/// present iff `recipient_tag` is `Some`; the array positions are frozen by the
-/// KAT, so this is never decoded — only signed and verified.
+/// present iff `recipient_tag` is `Some`.
 pub fn structure_sig_preimage(input: &StructureSigInput) -> Vec<u8> {
     let mut m = Map::new();
     m.insert(

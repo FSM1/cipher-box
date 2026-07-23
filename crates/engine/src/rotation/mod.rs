@@ -17,11 +17,10 @@
 //!   seeds — that fresh-seed eager-set republish is the [`cascade`]'s job.
 //! - [`cascade`] — the owner-revocation eager cascade (`rotateScope` on a read
 //!   revoke): re-key the root **and every transitively-reachable descendant scope
-//!   root** with a **fresh** override seed (`prev = Some`), threaded top-down so
-//!   each descendant's ascent link re-seals under its parent's new derivation.
+//!   root** with a **fresh** override seed (`prev = Some`), threaded top-down.
 //!   This — not the sweep — completes a read revoke by locking out cached
-//!   descendant seeds. Proven in simulation against faked seams; the production
-//!   resolver wiring is #745/#746.
+//!   descendant seeds. Proven in simulation; production resolver wiring is
+//!   #745/#746.
 //!
 //! - [`rotate_write`] — `rotateScopeWrite`, the owner-only write-plane rotation:
 //!   a fresh write override seed, a bumped `writeEpoch`, and a child-first name
