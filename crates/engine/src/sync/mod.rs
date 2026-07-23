@@ -36,6 +36,7 @@ pub mod model;
 pub mod op;
 pub mod overlay;
 pub mod pointer;
+pub(crate) mod project;
 pub mod rebase;
 pub mod staging;
 pub mod staleness;
