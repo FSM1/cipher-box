@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { positiveIntConfig } from '../../common/config-int';
-import { PeriodicTask } from '../../common/worker-scheduler';
+import { MAX_TIMER_DELAY_MS, PeriodicTask } from '../../common/worker-scheduler';
 import { MailboxService } from '../services/mailbox.service';
 
 /** ~12h cadence, a sibling of the republisher walk; via MAILBOX_SWEEP_INTERVAL_MS. */
@@ -33,7 +33,8 @@ export class MailboxSweepTask implements PeriodicTask {
   ) {
     this.intervalMs = positiveIntConfig(
       configService.get('MAILBOX_SWEEP_INTERVAL_MS'),
-      DEFAULT_INTERVAL_MS
+      DEFAULT_INTERVAL_MS,
+      MAX_TIMER_DELAY_MS
     );
   }
 

@@ -4,7 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Clock } from '../common/clock';
 import { positiveIntConfig } from '../common/config-int';
-import { PeriodicTask } from '../common/worker-scheduler';
+import { MAX_TIMER_DELAY_MS, PeriodicTask } from '../common/worker-scheduler';
 import { NameInventory } from '../registry/entities/name-inventory.entity';
 import { RecordSequenceReader } from './record-sequence-reader';
 import { RecordTransport } from './record-transport';
@@ -55,7 +55,8 @@ export class RepublisherTask implements PeriodicTask {
   ) {
     this.intervalMs = positiveIntConfig(
       configService.get('REPUBLISHER_INTERVAL_MS'),
-      DEFAULT_INTERVAL_MS
+      DEFAULT_INTERVAL_MS,
+      MAX_TIMER_DELAY_MS
     );
     this.staleAlertMs = positiveIntConfig(
       configService.get('REPUBLISHER_STALE_ALERT_MS'),
@@ -63,7 +64,8 @@ export class RepublisherTask implements PeriodicTask {
     );
     this.runTimeoutMs = positiveIntConfig(
       configService.get('REPUBLISHER_RUN_TIMEOUT_MS'),
-      DEFAULT_RUN_TIMEOUT_MS
+      DEFAULT_RUN_TIMEOUT_MS,
+      MAX_TIMER_DELAY_MS
     );
     this.concurrency = positiveIntConfig(
       configService.get('REPUBLISHER_CONCURRENCY'),

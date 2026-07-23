@@ -34,6 +34,11 @@ describe('MailboxSweepTask', () => {
     expect(task.intervalMs).toBe(12 * 60 * 60 * 1000);
   });
 
+  it('fails closed to the default cadence for a delay above Node maximum', () => {
+    const { task } = buildTask({ MAILBOX_SWEEP_INTERVAL_MS: '2147483648' });
+    expect(task.intervalMs).toBe(12 * 60 * 60 * 1000);
+  });
+
   it('runOnce delegates to the service sweep', async () => {
     const { task, sweepExpired } = buildTask({});
     await task.runOnce();

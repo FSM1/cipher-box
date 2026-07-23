@@ -1,6 +1,13 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 /**
+ * Node coerces a `setTimeout`/`setInterval` delay above 2^31-1 ms to 1ms, so an
+ * over-range cadence or run bound would fire near-continuously. Configured delays
+ * are clamped to this ceiling (fail closed to the default) at their parse sites.
+ */
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/**
  * A unit of periodic background work. The scheduler owns the cadence; the task
  * owns one sweep. Deliberately capability-free so it is reusable: the
  * republisher's inventory walk is the first implementer, and the dormant-mailbox
