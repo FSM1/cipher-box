@@ -199,9 +199,8 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<Option<([u8; 16], Zeroizing<[u8; 32]>)>, SeamError> {
-        // The record already assembled during `adopt` on this same Current path
-        // (content-addressed, deterministic); a re-assembly failure is fail-open —
-        // held keyless, never a trust verdict (#752 F3: a Current never hardens).
+        // Recovery is fail-open, never a trust verdict: an unopenable/absent blob
+        // yields `Ok(None)`, held keyless (#752 F3: a Current never hardens).
         let candidate = match self.assemble_candidate(name, record_bytes).await {
             Ok(candidate) => candidate,
             Err(GateError::Seam(seam)) => return Err(seam),
@@ -210,7 +209,7 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         let Some(owb) = &candidate.grant_section.owner_write_blob else {
             return Ok(None);
         };
-        // The E8 recovery only ever yields Ok/Seam; map its seam to availability.
+        // Map a recovery seam to availability, never a trust verdict.
         let seed = match self
             .recover_write_scope_seed(&candidate.envelope, owb)
             .await

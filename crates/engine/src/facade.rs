@@ -995,13 +995,9 @@ impl<T: SeamTypes> Engine<T> {
                     write_scope_seed: None,
                     content_cids: Vec::new(),
                 };
-                // A gate-passing resolve repaints the shared base cell and emits
-                // `SnapshotUpdated`; a steady-state `TrustViolation`/`Current`/
-                // `NoUpdate` leaves last-known-good intact (fail-closed for data:
-                // a forged record is never held or rendered). Surfacing the
-                // violation as a staleness-ladder / `AttributableAbuse` event, and
-                // a resolve `SeamError` as availability, are later slices — the
-                // error stays swallowed here.
+                // A gate-passing `Adopted` repaints the shared base cell and emits
+                // `SnapshotUpdated`; `Current`/`NoUpdate`/`TrustViolation` leave
+                // last-known-good intact (fail-closed for data). (surfacing: #796)
                 if let Ok(resolved) = resolve_and_hold(
                     &transport,
                     &snapshot_cache,
