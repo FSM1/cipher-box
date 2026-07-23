@@ -360,7 +360,6 @@ fn two_instance_share_accept_end_to_end() {
     let owner_device = world.device(b"owner-inbox");
     let recipient_device = world.device(&recipient_address);
 
-    // Owner posts the sealed share pointer to the recipient's mailbox.
     block_on(post_sealed(
         &owner_device.mailbox,
         &fx.recipient_enc.public(),
@@ -383,7 +382,6 @@ fn two_instance_share_accept_end_to_end() {
     });
     assert_eq!(sent.len(), 1);
 
-    // Owner publishes the scope root record to the shared network.
     let endpoint = world.record_store.endpoints()[0].clone();
     world
         .record_store
@@ -404,7 +402,6 @@ fn two_instance_share_accept_end_to_end() {
     );
     assert_eq!(items[0].sender_identity, fx.owner_identity_pub);
 
-    // Recipient resolves the name off the shared store and runs accept.
     let bytes = block_on(
         recipient_device
             .record_store
