@@ -564,7 +564,7 @@ impl Http for HttpAdapter {
         request: HttpRequest,
         max_bytes: usize,
     ) -> Result<HttpResponse, CappedFetchError> {
-        // Residual (#787): the JS `HttpSeam.send` materializes the whole body
+        // Residual (#641): the JS `HttpSeam.send` materializes the whole body
         // before it returns here, so this bounds one already-buffered response,
         // not peak memory. The Content-Length reject and the body-length check
         // both fail closed on an over-cap block; the true streaming bound must

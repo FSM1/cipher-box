@@ -122,9 +122,7 @@ pub fn assemble(
     root.insert(SIZE_KEY, Value::Unsigned(plaintext_len));
     root.insert(LINKS_KEY, Value::Array(links));
     let root_block = encode(&Value::Map(root));
-    // Fail closed rather than emit a root `read_block` would reject on fetch:
-    // the flat root inlines every leaf CID, so past the flat-DAG ceiling it
-    // exceeds the block cap (AGENTS.md rule 8 — encode/decode symmetry; #788).
+    // fail closed: an over-cap root would be unreadable — see DagError::RootTooLarge.
     if root_block.len() > MAX_RESOLVED_RECORD_BYTES {
         return Err(DagError::RootTooLarge {
             size: root_block.len(),
