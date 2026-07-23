@@ -63,7 +63,8 @@ window.runRealEngine = async (): Promise<RealEngineResult> => {
     result.beforeStart = message(error);
   });
 
-  const secret = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]).buffer;
+  // A valid secp256k1 identity scalar: 32 bytes, non-zero, well below the curve order n.
+  const secret = new Uint8Array(32).fill(1).buffer;
   await facade.start(secret);
   result.startOk = true;
   result.secretDetached = secret.byteLength === 0;
