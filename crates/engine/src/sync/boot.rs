@@ -317,8 +317,16 @@ mod tests {
             &self,
             _name: &IpnsName,
             _record_bytes: &[u8],
-        ) -> Result<Adopted, GateError> {
-            self.verdict.lock().unwrap().clone()
+        ) -> Result<crate::net::AdoptOutcome, GateError> {
+            self.verdict
+                .lock()
+                .unwrap()
+                .clone()
+                .map(|adopted| crate::net::AdoptOutcome {
+                    adopted,
+                    write_scope_seed: None,
+                    node_id: [0u8; 16],
+                })
         }
     }
 

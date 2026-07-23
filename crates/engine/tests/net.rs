@@ -27,7 +27,7 @@ use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
 use cipherbox_engine::net::eol;
 use cipherbox_engine::net::{
-    Adopter, HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome,
+    AdoptOutcome, Adopter, HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome,
     PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, ReviveError, ReviveRequest, eol_republish,
     keyless_re_put, publish, resolve, revive, run_liveness_loop,
 };
@@ -158,19 +158,23 @@ impl StubAdopter {
 }
 
 impl Adopter for StubAdopter {
-    async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<Adopted, GateError> {
+    async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<AdoptOutcome, GateError> {
         let sequence = verify_seq(name, record_bytes);
         self.seen.lock().unwrap().push(sequence);
         match self.verdict {
-            Verdict::Accept => Ok(Adopted {
-                read_body: ReadBody::Folder {
-                    created_at: 0,
-                    modified_at: 0,
-                    children: Vec::new(),
-                    unknown: Vec::new(),
+            Verdict::Accept => Ok(AdoptOutcome {
+                adopted: Adopted {
+                    read_body: ReadBody::Folder {
+                        created_at: 0,
+                        modified_at: 0,
+                        children: Vec::new(),
+                        unknown: Vec::new(),
+                    },
+                    sequence,
+                    epoch: 1,
                 },
-                sequence,
-                epoch: 1,
+                write_scope_seed: None,
+                node_id: [0u8; 16],
             }),
             Verdict::TrustViolation => Err(GateError::Rejected(GateRejection {
                 stage: GateStage::RecordVerify,

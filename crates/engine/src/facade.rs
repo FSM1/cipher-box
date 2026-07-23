@@ -1266,16 +1266,20 @@ mod tests {
                 &self,
                 _name: &IpnsName,
                 _record_bytes: &[u8],
-            ) -> Result<Adopted, crate::gate::GateError> {
-                Ok(Adopted {
-                    read_body: ReadBody::Folder {
-                        created_at: 0,
-                        modified_at: 0,
-                        children: Vec::new(),
-                        unknown: Vec::new(),
+            ) -> Result<crate::net::AdoptOutcome, crate::gate::GateError> {
+                Ok(crate::net::AdoptOutcome {
+                    adopted: Adopted {
+                        read_body: ReadBody::Folder {
+                            created_at: 0,
+                            modified_at: 0,
+                            children: Vec::new(),
+                            unknown: Vec::new(),
+                        },
+                        sequence: 1,
+                        epoch: 1,
                     },
-                    sequence: 1,
-                    epoch: 1,
+                    write_scope_seed: None,
+                    node_id: [0u8; 16],
                 })
             }
         }

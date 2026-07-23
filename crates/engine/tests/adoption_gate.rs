@@ -612,7 +612,9 @@ fn run_matrix_case(name: &str) -> Result<Adopted, GateError> {
         parent_node_seed: reader_parent_seed,
         seed_blob: Some(fx.owner_seed_blob(tamper_seed_blob)),
     };
-    block_on(adopt(&floors, &reader, &candidate))
+    // Drop the transient write-grantee seed the gate now surfaces; the matrix
+    // asserts only the adoption verdict.
+    block_on(adopt(&floors, &reader, &candidate)).map(|(adopted, _)| adopted)
 }
 
 #[test]
@@ -970,7 +972,7 @@ fn simulation_n_engines_one_record_store_adversarial() {
             .unwrap()
             .expect("record present on the shared store");
         let candidate = fx.candidate_with_record(bytes);
-        let adopted = block_on(adopt(&device.floor_store, &fx.reader(), &candidate))
+        let (adopted, _) = block_on(adopt(&device.floor_store, &fx.reader(), &candidate))
             .expect("a shared valid record adopts on every device");
         assert_eq!(adopted.sequence, 1);
     }
@@ -1207,7 +1209,7 @@ fn ascent_adopts_when_reader_seed_matches_sealed_link() {
     candidate.grant_section.ascent_link = Some(fx.ascent_link_under(&parent_seed));
     let mut reader = fx.reader();
     reader.parent_node_seed = Some(parent_seed);
-    let adopted = block_on(adopt(&floors, &reader, &candidate)).expect("valid ascent adopts");
+    let (adopted, _) = block_on(adopt(&floors, &reader, &candidate)).expect("valid ascent adopts");
     assert_eq!(adopted.sequence, 1);
 }
 
@@ -1363,7 +1365,8 @@ fn absent_owner_write_blob_still_adopts() {
     let floors = InMemoryFloorStore::default();
     let mut candidate = fx.candidate(1);
     candidate.grant_section.owner_write_blob = None;
-    let adopted = block_on(adopt(&floors, &fx.reader(), &candidate)).expect("adopts without it");
+    let (adopted, _) =
+        block_on(adopt(&floors, &fx.reader(), &candidate)).expect("adopts without it");
     assert_eq!(adopted.sequence, 1);
 }
 
@@ -1412,7 +1415,7 @@ fn seed_blob_correct_seed_derives_read_key_and_adopts() {
     // scope/epoch/v AAD — the cross-check passes and the record adopts.
     let fx = Fixture::new();
     let floors = InMemoryFloorStore::default();
-    let adopted = block_on(adopt(&floors, &fx.reader(), &fx.candidate(1))).expect("adopts");
+    let (adopted, _) = block_on(adopt(&floors, &fx.reader(), &fx.candidate(1))).expect("adopts");
     assert_eq!(adopted.sequence, 1);
     assert_eq!(adopted.epoch, 1);
 }
