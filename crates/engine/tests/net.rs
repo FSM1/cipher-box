@@ -21,16 +21,15 @@ use cipherbox_core::error::TrustViolation;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::seal::ReadBody;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
-use zeroize::Zeroizing;
 
 use cipherbox_engine::SyncTimingProfile;
 use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
 use cipherbox_engine::net::eol;
 use cipherbox_engine::net::{
-    Adopter, HeldMaterial, HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome,
+    Adopter, HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome,
     PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, ReviveError, ReviveRequest, eol_republish,
-    keyless_re_put, publish, resolve, resolve_and_hold, revive, run_liveness_loop,
+    keyless_re_put, publish, resolve, revive, run_liveness_loop,
 };
 use cipherbox_engine::seams::{
     FloorStore, HttpResponse, RecordTransport, Scheduler, SeamError, SeamResult, SnapshotCache,
@@ -61,15 +60,14 @@ fn record(signer: &Ed25519Signer, value: &[u8], sequence: u64, mint_millis: u64)
     IpnsRecord::create_v2(signer, value, sequence, TTL_NANOS, &validity).marshal()
 }
 
-/// A held record for `name` carrying `bytes` plus placeholder renewal inputs
-/// (#750 exercises the seed/node-id/CID fields; the keyless re-PUT layer reads
-/// only routing key + bytes).
+/// A held record for `name` carrying `bytes` plus a placeholder renewal signer
+/// (#750 exercises the signer/CID fields; the keyless re-PUT layer reads only
+/// routing key + bytes).
 fn held_record(name: &IpnsName, bytes: Vec<u8>) -> HeldRecord {
     HeldRecord {
         routing_key: name.as_str().to_owned(),
         record_bytes: bytes,
-        node_id: [0u8; 16],
-        write_scope_seed: Zeroizing::new([0u8; 32]),
+        signer: Ed25519Signer::from_seed([0u8; 32]),
         head_cid: "bafyhead".into(),
         content_cids: Vec::new(),
     }
@@ -735,91 +733,6 @@ fn keyless_re_put_runs_as_an_hourly_scheduler_job_on_virtual_time() {
 }
 
 #[test]
-fn resolve_and_hold_holds_a_gate_passing_record() {
-    let world = FakeWorld::new();
-    let device = world.device(b"me");
-    let s = signer(31);
-    let name = name_of(&s);
-    let endpoints = world.record_store.endpoints();
-    world
-        .record_store
-        .seed_record(&endpoints[0], name.as_str(), record(&s, VALUE, 1, 0));
-
-    let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
-    let material = HeldMaterial {
-        node_id: [7u8; 16],
-        write_scope_seed: Zeroizing::new([9u8; 32]),
-        head_cid: "bafyhead".into(),
-        content_cids: vec!["bafycontent".into()],
-    };
-    let resolved = block_on(resolve_and_hold(
-        &device.record_store,
-        &device.snapshot_cache,
-        &StubAdopter::new(Verdict::Accept),
-        &name,
-        &held,
-        &material,
-    ))
-    .expect("resolve_and_hold");
-
-    assert!(matches!(resolved.outcome, ResolveOutcome::Adopted(_)));
-    let map = held.borrow();
-    assert_eq!(map.len(), 1, "the adopted record is held, keyed by node id");
-    let record = map.get(&[7u8; 16]).expect("held under its node id");
-    assert_eq!(record.routing_key, name.as_str());
-    assert_eq!(record.head_cid, "bafyhead");
-    assert_eq!(record.content_cids, vec!["bafycontent".to_owned()]);
-    // The held bytes are exactly the record the gate adopted.
-    assert_eq!(verify_seq(&name, &record.record_bytes), 1);
-}
-
-#[test]
-fn resolve_and_hold_does_not_hold_a_non_gate_passing_record() {
-    let world = FakeWorld::new();
-    let device = world.device(b"me");
-    let s = signer(32);
-    let name = name_of(&s);
-    let endpoints = world.record_store.endpoints();
-    world
-        .record_store
-        .seed_record(&endpoints[0], name.as_str(), record(&s, VALUE, 5, 0));
-    let material = HeldMaterial {
-        node_id: [1u8; 16],
-        write_scope_seed: Zeroizing::new([0u8; 32]),
-        head_cid: "h".into(),
-        content_cids: Vec::new(),
-    };
-
-    // A fail-closed trust violation is never held.
-    let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
-    let out = block_on(resolve_and_hold(
-        &device.record_store,
-        &device.snapshot_cache,
-        &StubAdopter::new(Verdict::TrustViolation),
-        &name,
-        &held,
-        &material,
-    ))
-    .unwrap();
-    assert!(matches!(out.outcome, ResolveOutcome::TrustViolation(_)));
-    assert!(held.borrow().is_empty(), "a trust violation is never held");
-
-    // A no-update (nothing newer than our current record) is never held.
-    let held2: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
-    let out2 = block_on(resolve_and_hold(
-        &device.record_store,
-        &device.snapshot_cache,
-        &StubAdopter::new(Verdict::EqualSequence),
-        &name,
-        &held2,
-        &material,
-    ))
-    .unwrap();
-    assert_eq!(out2.outcome, ResolveOutcome::NoUpdate);
-    assert!(held2.borrow().is_empty(), "a no-update is never held");
-}
-
-#[test]
 fn a_held_record_dropped_from_an_endpoint_is_alive_again_after_one_interval() {
     let world = FakeWorld::new();
     let device = world.device(b"me");
@@ -886,21 +799,21 @@ fn an_evicted_record_is_not_re_put() {
 }
 
 #[test]
-fn held_record_debug_redacts_the_write_seed() {
+fn held_record_debug_redacts_the_signer() {
     let s = signer(35);
     let name = name_of(&s);
     let mut hr = held_record(&name, record(&s, VALUE, 1, 0));
-    hr.write_scope_seed = Zeroizing::new([0xAB; 32]);
+    hr.signer = Ed25519Signer::from_seed([0xAB; 32]);
 
     let debug = format!("{hr:?}");
     let seed_debug = format!("{:?}", [0xABu8; 32]);
     assert!(
         !debug.contains(&seed_debug),
-        "the raw write-seed bytes must never appear in Debug"
+        "the raw signing-key bytes must never appear in Debug"
     );
     assert!(
-        debug.contains("<redacted>"),
-        "the write seed field must be redacted"
+        debug.contains("Ed25519Signer(redacted)"),
+        "the held signer must be redacted"
     );
     // Non-secret routing metadata is still visible for diagnostics.
     assert!(debug.contains(name.as_str()));

@@ -111,11 +111,11 @@ impl SessionIdentity {
 
     /// The per-name write-plane IPNS signer for a node: `writeSeed(node) =
     /// KDF(writeScopeSeed, node.id)` then the `ipns-keypair` edge. This is the
-    /// per-name `Ed25519Signer` the liveness loop's sub-EOL `seq+1` renewal
-    /// (#750) and the held-set republish (#751) sign with — the resolve/gate
-    /// path supplies the unsealed `write_scope_seed`.
+    /// per-name `Ed25519Signer` the held set stores for its sub-EOL `seq+1`
+    /// renewal (#750/#751) — the resolve/gate path supplies the unsealed
+    /// `write_scope_seed`. Keyed solely by its arguments (no session field), so
+    /// it is an associated function the held-set insert can call directly.
     pub(crate) fn write_name_signer(
-        &self,
         write_scope_seed: &[u8; 32],
         node_id: &[u8; 16],
     ) -> Ed25519Signer {
@@ -184,13 +184,13 @@ mod tests {
             "same secret must yield the same pointer read key",
         );
         assert_eq!(
-            a.write_name_signer(&write_scope_seed, &node)
+            SessionIdentity::write_name_signer(&write_scope_seed, &node)
                 .verifying_key()
                 .to_bytes(),
-            b.write_name_signer(&write_scope_seed, &node)
+            SessionIdentity::write_name_signer(&write_scope_seed, &node)
                 .verifying_key()
                 .to_bytes(),
-            "same secret must yield the same per-name write signer",
+            "the per-name write signer is a pure function of seed + node id",
         );
     }
 
@@ -230,21 +230,19 @@ mod tests {
 
     #[test]
     fn per_name_write_signers_bind_scope_seed_and_node_id() {
-        let id = identity(&[7u8; 32]);
-        let base = id
-            .write_name_signer(&[5u8; 32], &[4u8; 16])
+        let base = SessionIdentity::write_name_signer(&[5u8; 32], &[4u8; 16])
             .verifying_key()
             .to_bytes();
         assert_ne!(
             base,
-            id.write_name_signer(&[6u8; 32], &[4u8; 16])
+            SessionIdentity::write_name_signer(&[6u8; 32], &[4u8; 16])
                 .verifying_key()
                 .to_bytes(),
             "a different write scope seed is a different name",
         );
         assert_ne!(
             base,
-            id.write_name_signer(&[5u8; 32], &[9u8; 16])
+            SessionIdentity::write_name_signer(&[5u8; 32], &[9u8; 16])
                 .verifying_key()
                 .to_bytes(),
             "a different node id is a different name",

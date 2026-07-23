@@ -722,7 +722,6 @@ impl<T: SeamTypes> Engine<T> {
         let profile = self.profile;
         let held = self.held_records.clone();
         let alive = self.alive.clone();
-        let session = self.session.clone();
         // One API client for the whole task: register-first renewal needs the
         // API, and the refresh token lives in the credential store, so the client
         // self-heals its access token on a 401 across the session's lifetime.
@@ -740,12 +739,11 @@ impl<T: SeamTypes> Engine<T> {
                 }
                 let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
                 keyless_re_put(&transport, &records).await;
-                if let Some(session) = session.as_deref() {
-                    eol_renew_pass(
-                        &transport, &api, &floors, &scheduler, &profile, session, &records,
-                    )
-                    .await;
-                }
+                // The renewal outcomes (LostRace/PublishError) are dropped until
+                // the resolve-tick driver surfaces them via Event/dead-letter
+                // (#752); the held set is empty until that slice populates it.
+                let _ =
+                    eol_renew_pass(&transport, &api, &floors, &scheduler, &profile, &records).await;
                 LivenessControl::Continue
             })
             .await;
@@ -949,22 +947,12 @@ mod tests {
             .session()
             .expect("start derives the session identity");
 
-        // The per-name signers #750/#751 need are reachable and match the pure
-        // derivation from the same secret — start invents no key material.
+        // Start derives the same identity as the pure derivation from the same
+        // secret — it invents no key material.
         let expected = SessionIdentity::derive(&LoginSecret::new(vec![7u8; 32]));
         assert_eq!(
             session.vault_pointer_signer(0).verifying_key().to_bytes(),
             expected.vault_pointer_signer(0).verifying_key().to_bytes(),
-        );
-        assert_eq!(
-            session
-                .write_name_signer(&[5u8; 32], &[4u8; 16])
-                .verifying_key()
-                .to_bytes(),
-            expected
-                .write_name_signer(&[5u8; 32], &[4u8; 16])
-                .verifying_key()
-                .to_bytes(),
         );
     }
 

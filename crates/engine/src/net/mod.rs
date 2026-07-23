@@ -42,6 +42,6 @@ pub use liveness::{
     eol_republish, keyless_re_put, run_liveness_loop,
 };
 pub use publish::{PublishError, PublishOutcome, PublishRequest, publish};
-pub use resolve::{Adopter, HeldMaterial, ResolveOutcome, Resolved, resolve, resolve_and_hold};
+pub use resolve::{Adopter, ResolveOutcome, Resolved, resolve};
 pub use retire::{retire, root_retire_ready};
 pub use revival::{ReviveError, ReviveRequest, revive};

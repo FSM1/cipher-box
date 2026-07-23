@@ -24,6 +24,7 @@ use super::fanout::fanout_get_verify;
 use super::liveness::{HeldRecord, HeldRecords};
 use crate::gate::{Adopted, GateError, GateRejection, RejectionReason};
 use crate::seams::{RecordTransport, SeamError, SnapshotCache};
+use crate::session::SessionIdentity;
 
 /// Runs the adoption gate over a fetched record. The concrete implementation
 /// assembles the content-plane candidate and the reader's private context and
@@ -114,14 +115,17 @@ where
     })
 }
 
-/// The per-name material the held set carries beyond the fetched record: the
-/// derivation **inputs** #750's seq+1 renewal rebuilds a `PublishRequest` from
-/// (never a live signer — see [`HeldRecord`]). Supplied by the resolve/gate
-/// path, which already unsealed the scope's write seed for this node.
-pub struct HeldMaterial {
+/// The transient insert-time input for a held record: the resolve/gate path has
+/// already unsealed the scope's write seed for this node, so the held set
+/// derives the narrow per-name signer from it once at insert and drops the seed
+/// (never persisting it — see [`HeldRecord`]). Not yet wired in production
+/// (only the #752 resolve-tick driver constructs it), hence crate-internal.
+#[allow(dead_code)] // wired by the #752 resolve-tick driver
+pub(crate) struct HeldMaterial {
     /// The node id (`id16`) — the held-set key and a signer-derivation input.
     pub node_id: [u8; 16],
-    /// The scope's unsealed write seed — a derivation input, not a signer.
+    /// The scope's unsealed write seed — an insert-time derivation input, never
+    /// persisted in the held set.
     pub write_scope_seed: Zeroizing<[u8; 32]>,
     /// The head/metadata CID the renewal record points at.
     pub head_cid: String,
@@ -134,7 +138,8 @@ pub struct HeldMaterial {
 /// same node) a [`HeldRecord`] so the keyless re-PUT loop keeps it alive. Only a
 /// gate-passing record enters the set — a `TrustViolation`/`NoUpdate` never
 /// does (blueprint/engine.md "Liveness": never re-PUT a stale record).
-pub async fn resolve_and_hold<T, S, A>(
+#[allow(dead_code)] // wired by the #752 resolve-tick driver
+pub(crate) async fn resolve_and_hold<T, S, A>(
     transport: &T,
     snapshot_cache: &S,
     adopter: &A,
@@ -149,6 +154,16 @@ where
 {
     let resolved = resolve(transport, snapshot_cache, adopter, name).await?;
     if matches!(resolved.outcome, ResolveOutcome::Adopted(_)) {
+        // Derive the narrow per-name signer once from the transient seed and
+        // hold only it — the scope seed is dropped with `material`. Fail-closed
+        // encode-side bind (security rule 8): the derived signer must sign for
+        // exactly the adopted name, or the held record could never renew under
+        // its routing key — skip the hold rather than store a mismatched signer.
+        let signer =
+            SessionIdentity::write_name_signer(&material.write_scope_seed, &material.node_id);
+        if IpnsName::from_public_key(&signer.verifying_key()) != *name {
+            return Ok(resolved);
+        }
         // The adopted record is now the snapshot cache's last-known-good; hold
         // exactly those bytes for a byte-stable keyless re-PUT. A cache that
         // dropped what it just adopted is a broken durable seam — fail closed.
@@ -162,12 +177,181 @@ where
             HeldRecord {
                 routing_key: name.as_str().to_owned(),
                 record_bytes,
-                node_id: material.node_id,
-                write_scope_seed: material.write_scope_seed.clone(),
+                signer,
                 head_cid: material.head_cid.clone(),
                 content_cids: material.content_cids.clone(),
             },
         );
     }
     Ok(resolved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HeldMaterial, ResolveOutcome, resolve_and_hold};
+
+    use core::cell::RefCell;
+
+    use cipherbox_core::error::TrustViolation;
+    use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+    use cipherbox_core::seal::ReadBody;
+    use cipherbox_core::suite::ed25519::Ed25519Signer;
+    use zeroize::Zeroizing;
+
+    use super::super::eol;
+    use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
+    use crate::net::HeldRecords;
+    use crate::seams::{RecordTransport, UnixMillis};
+    use crate::session::SessionIdentity;
+    use crate::testkit::{FakeWorld, block_on};
+
+    const TTL_NANOS: u64 = 2_000_000_000;
+    const VALUE: &[u8] = b"/ipfs/bafyfixturehead";
+
+    #[derive(Clone, Copy)]
+    enum Verdict {
+        Accept,
+        TrustViolation,
+        EqualSequence,
+    }
+
+    struct StubAdopter {
+        verdict: Verdict,
+    }
+
+    impl super::Adopter for StubAdopter {
+        async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<Adopted, GateError> {
+            let sequence = IpnsRecord::unmarshal(record_bytes)
+                .unwrap()
+                .verify(name)
+                .unwrap()
+                .sequence;
+            match self.verdict {
+                Verdict::Accept => Ok(Adopted {
+                    read_body: ReadBody::Folder {
+                        created_at: 0,
+                        modified_at: 0,
+                        children: Vec::new(),
+                        unknown: Vec::new(),
+                    },
+                    sequence,
+                    epoch: 1,
+                }),
+                Verdict::TrustViolation => Err(GateError::Rejected(GateRejection {
+                    stage: GateStage::RecordVerify,
+                    reason: RejectionReason::Trust(TrustViolation::IpnsSignatureInvalid.into()),
+                })),
+                Verdict::EqualSequence => Err(GateError::Rejected(GateRejection {
+                    stage: GateStage::Sequence,
+                    reason: RejectionReason::SequenceNotNewer {
+                        floor: sequence,
+                        sequence,
+                    },
+                })),
+            }
+        }
+    }
+
+    fn record(signer: &Ed25519Signer, sequence: u64) -> Vec<u8> {
+        let validity = eol::eol_from(UnixMillis(0));
+        IpnsRecord::create_v2(signer, VALUE, sequence, TTL_NANOS, &validity).marshal()
+    }
+
+    #[test]
+    fn resolve_and_hold_holds_a_gate_passing_record() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        // The held name is the one the material's (seed, node id) derives, so the
+        // insert-time signer<->name bind passes.
+        let write_scope_seed = [9u8; 32];
+        let node_id = [7u8; 16];
+        let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let endpoints = world.record_store.endpoints();
+        world
+            .record_store
+            .seed_record(&endpoints[0], name.as_str(), record(&signer, 1));
+
+        let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+        let material = HeldMaterial {
+            node_id,
+            write_scope_seed: Zeroizing::new(write_scope_seed),
+            head_cid: "bafyhead".into(),
+            content_cids: vec!["bafycontent".into()],
+        };
+        let resolved = block_on(resolve_and_hold(
+            &device.record_store,
+            &device.snapshot_cache,
+            &StubAdopter {
+                verdict: Verdict::Accept,
+            },
+            &name,
+            &held,
+            &material,
+        ))
+        .expect("resolve_and_hold");
+
+        assert!(matches!(resolved.outcome, ResolveOutcome::Adopted(_)));
+        let map = held.borrow();
+        assert_eq!(map.len(), 1, "the adopted record is held, keyed by node id");
+        let record = map.get(&node_id).expect("held under its node id");
+        assert_eq!(record.routing_key, name.as_str());
+        assert_eq!(record.head_cid, "bafyhead");
+        assert_eq!(record.content_cids, vec!["bafycontent".to_owned()]);
+        // The held signer signs for the routing key (the insert-time bind).
+        assert_eq!(
+            IpnsName::from_public_key(&record.signer.verifying_key()),
+            name
+        );
+    }
+
+    #[test]
+    fn resolve_and_hold_does_not_hold_a_non_gate_passing_record() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let signer = Ed25519Signer::from_seed([32u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let endpoints = world.record_store.endpoints();
+        world
+            .record_store
+            .seed_record(&endpoints[0], name.as_str(), record(&signer, 5));
+        let material = HeldMaterial {
+            node_id: [1u8; 16],
+            write_scope_seed: Zeroizing::new([0u8; 32]),
+            head_cid: "h".into(),
+            content_cids: Vec::new(),
+        };
+
+        // A fail-closed trust violation is never held.
+        let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+        let out = block_on(resolve_and_hold(
+            &device.record_store,
+            &device.snapshot_cache,
+            &StubAdopter {
+                verdict: Verdict::TrustViolation,
+            },
+            &name,
+            &held,
+            &material,
+        ))
+        .unwrap();
+        assert!(matches!(out.outcome, ResolveOutcome::TrustViolation(_)));
+        assert!(held.borrow().is_empty(), "a trust violation is never held");
+
+        // A no-update (nothing newer than our current record) is never held.
+        let held2: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+        let out2 = block_on(resolve_and_hold(
+            &device.record_store,
+            &device.snapshot_cache,
+            &StubAdopter {
+                verdict: Verdict::EqualSequence,
+            },
+            &name,
+            &held2,
+            &material,
+        ))
+        .unwrap();
+        assert_eq!(out2.outcome, ResolveOutcome::NoUpdate);
+        assert!(held2.borrow().is_empty(), "a no-update is never held");
+    }
 }

@@ -70,9 +70,8 @@ pub use grants::{
 };
 pub use mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 pub use net::{
-    Adopter, HeldMaterial, HeldRecord, HeldRecords, PublishError, PublishOutcome, PublishRequest,
-    RePutResult, ResolveOutcome, Resolved, ReviveError, ReviveRequest, publish, resolve,
-    resolve_and_hold, revive,
+    Adopter, HeldRecord, HeldRecords, PublishError, PublishOutcome, PublishRequest, RePutResult,
+    ResolveOutcome, Resolved, ReviveError, ReviveRequest, publish, resolve, revive,
 };
 pub use profile::SyncTimingProfile;
 pub use rotation::{

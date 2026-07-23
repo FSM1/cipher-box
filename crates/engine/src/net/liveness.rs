@@ -21,7 +21,7 @@ use core::time::Duration;
 use std::collections::BTreeMap;
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
-use zeroize::Zeroizing;
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::eol::{self, EOL_RENEW_THRESHOLD};
 use super::fanout::{fanout_get_verify, fanout_put};
@@ -29,7 +29,6 @@ use super::publish::{PublishError, PublishOutcome, PublishRequest, publish};
 use crate::api::ApiClient;
 use crate::profile::SyncTimingProfile;
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
-use crate::session::SessionIdentity;
 
 /// The ~hourly cadence of the keyless re-PUT job (blueprint: "an ~hourly
 /// Scheduler job keyless-re-PUTs every record the session holds").
@@ -43,24 +42,23 @@ pub const RE_PUT_INTERVAL: Duration = Duration::from_secs(60 * 60);
 ///
 /// [`keyless_re_put`] needs only [`routing_key`](Self::routing_key) +
 /// [`record_bytes`](Self::record_bytes); the sub-EOL seq+1 renewal (#750)
-/// rebuilds a [`PublishRequest`] from the rest. It stores the derivation
-/// **inputs**, never a live signer: the per-name signer is re-derived on demand
-/// via `SessionIdentity::write_name_signer(write_scope_seed, node_id)` at
-/// renewal, so no session key material lingers in the held set
-/// (blueprint/engine.md "Liveness").
+/// rebuilds a [`PublishRequest`] from the rest. It stores the **narrow per-name
+/// signer** the renewal signs with — not the scope's write seed, which would
+/// derive the full write plane (content + IPNS) for every node in the scope
+/// (least privilege; security rules 2 and 5). The signer is derived once at
+/// insert from the scope seed + node id (see `HeldMaterial`) and the seed is
+/// dropped there — it never lingers in the held set (blueprint/engine.md
+/// "Liveness").
 #[derive(Clone)]
 pub struct HeldRecord {
     /// The routing key — the record's `ipnsName`.
     pub routing_key: String,
     /// The signed record bytes (re-PUT verbatim; keyless).
     pub record_bytes: Vec<u8>,
-    /// The node id (`id16`) — the held-set key and the write-seed input the
-    /// renewal signer re-derives from.
-    pub node_id: [u8; 16],
-    /// The scope's unsealed write seed — a derivation input, not a signer.
-    /// Zeroized on drop and redacted from [`Debug`]; never printed or logged
-    /// (security rule 2).
-    pub write_scope_seed: Zeroizing<[u8; 32]>,
+    /// The per-name IPNS signer the sub-EOL seq+1 renewal signs with. Zeroizes
+    /// on drop and its `Debug` is redacted; never printed or logged (security
+    /// rule 2).
+    pub signer: Ed25519Signer,
     /// The head/metadata CID the renewal record points at.
     pub head_cid: String,
     /// The content CIDs to re-register/pin at renewal.
@@ -69,16 +67,15 @@ pub struct HeldRecord {
 
 impl fmt::Debug for HeldRecord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // The write seed is secret: redact it, and print record bytes by length
-        // only (they are large, not secret).
+        // The signer redacts itself in Debug; print record bytes by length only
+        // (they are large, not secret).
         f.debug_struct("HeldRecord")
             .field("routing_key", &self.routing_key)
             .field(
                 "record_bytes",
                 &format_args!("<{} bytes>", self.record_bytes.len()),
             )
-            .field("node_id", &self.node_id)
-            .field("write_scope_seed", &"<redacted>")
+            .field("signer", &self.signer)
             .field("head_cid", &self.head_cid)
             .field("content_cids", &self.content_cids)
             .finish()
@@ -208,6 +205,7 @@ where
 
 /// One held record's sub-EOL renewal outcome.
 #[derive(Debug)]
+#[must_use = "renewal outcomes carry LostRace/PublishError; surface them when the held set is live"]
 pub struct EolRenewResult {
     /// The routing key considered for renewal.
     pub routing_key: String,
@@ -226,13 +224,13 @@ pub struct EolRenewResult {
 ///
 /// This is the renewal-pass **body**; the ~hourly [`Scheduler`] loop that drives
 /// it alongside [`keyless_re_put`] is wired by the facade.
+#[must_use = "renewal outcomes carry LostRace/PublishError; surface them when the held set is live"]
 pub(crate) async fn eol_renew_pass<T, H, C, F, Sch>(
     transport: &T,
     api: &ApiClient<H, C>,
     floors: &F,
     scheduler: &Sch,
     profile: &SyncTimingProfile,
-    session: &SessionIdentity,
     held: &[HeldRecord],
 ) -> Vec<EolRenewResult>
 where
@@ -249,15 +247,12 @@ where
         let Ok(name) = IpnsName::parse(&hr.routing_key) else {
             continue;
         };
-        // Re-derive the per-name signer into a short-lived local: `PublishRequest`
-        // borrows it, and it zeroizes at the end of this iteration, so no signing
-        // key ever lingers in the held set. The name and signer are the same
-        // Ed25519 key by the held-set invariant (#751 built the record from the
-        // same write-scope seed + node id).
-        let signer = session.write_name_signer(&hr.write_scope_seed, &hr.node_id);
+        // The held signer signs for this name by the insert-time bind (#751:
+        // resolve_and_hold rejects a signer whose derived name is not the
+        // routing key), so no signing key is derived in the loop.
         let request = PublishRequest {
             name: &name,
-            signer: &signer,
+            signer: &hr.signer,
             head_cid: hr.head_cid.clone(),
             content_cids: hr.content_cids.clone(),
             // Renewal is a normal CAS write: the sequence comes from the durable
@@ -281,12 +276,10 @@ mod tests {
 
     use cipherbox_core::ipns::{IpnsName, IpnsRecord};
     use cipherbox_core::suite::ed25519::Ed25519Signer;
-    use zeroize::Zeroizing;
 
     use super::super::eol;
     use super::super::publish::PublishOutcome;
     use crate::api::ApiClient;
-    use crate::facade::LoginSecret;
     use crate::profile::SyncTimingProfile;
     use crate::seams::{FloorStore, HttpResponse, RecordTransport, UnixMillis};
     use crate::session::SessionIdentity;
@@ -295,18 +288,17 @@ mod tests {
     const DAY: u64 = 24 * 60 * 60;
     const TTL_NANOS: u64 = 2_000_000_000;
 
-    /// A held record for a per-name signer the pass re-derives from
-    /// `(write_scope_seed, node_id)`, carrying a record minted at `mint_millis`
-    /// with a 90-day EOL.
+    /// A held record carrying the per-name signer derived from
+    /// `(write_scope_seed, node_id)` and a record minted at `mint_millis` with a
+    /// 90-day EOL.
     fn seeded_held(
         device: &FakeDevice,
-        session: &SessionIdentity,
         write_scope_seed: [u8; 32],
         node_id: [u8; 16],
         head_cid: &str,
         mint_millis: u64,
     ) -> (IpnsName, HeldRecord) {
-        let signer: Ed25519Signer = session.write_name_signer(&write_scope_seed, &node_id);
+        let signer: Ed25519Signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
         let name = IpnsName::from_public_key(&signer.verifying_key());
         let value = format!("/ipfs/{head_cid}").into_bytes();
         let validity = eol::eol_from(UnixMillis(mint_millis));
@@ -326,8 +318,7 @@ mod tests {
         let held = HeldRecord {
             routing_key: name.as_str().to_owned(),
             record_bytes: bytes,
-            node_id,
-            write_scope_seed: Zeroizing::new(write_scope_seed),
+            signer,
             head_cid: head_cid.to_owned(),
             content_cids: Vec::new(),
         };
@@ -367,7 +358,6 @@ mod tests {
         let world = FakeWorld::new();
         let device = world.device(b"me");
         let scheduler = world.scheduler.clone(); // virtual clock, now = 0
-        let session = SessionIdentity::derive(&LoginSecret::new(vec![7u8; 32]));
         let api = ApiClient::new(
             device.http.clone(),
             device.credential_store.clone(),
@@ -378,16 +368,9 @@ mod tests {
         // Two held names, both at seq 1 with a 90-day EOL: one minted at T0
         // (25 days left at T+65d — inside the renewal window) and one minted at
         // T+60d (85 days left at T+65d — comfortably ahead).
-        let (below, below_held) =
-            seeded_held(&device, &session, [1u8; 32], [2u8; 16], "bafybelow", 0);
-        let (ahead, ahead_held) = seeded_held(
-            &device,
-            &session,
-            [3u8; 32],
-            [4u8; 16],
-            "bafyahead",
-            60 * DAY * 1000,
-        );
+        let (below, below_held) = seeded_held(&device, [1u8; 32], [2u8; 16], "bafybelow", 0);
+        let (ahead, ahead_held) =
+            seeded_held(&device, [3u8; 32], [4u8; 16], "bafyahead", 60 * DAY * 1000);
         let held = vec![below_held, ahead_held];
 
         // At T0 both records are far from EOL: the pass no-ops for both, proving
@@ -398,7 +381,6 @@ mod tests {
             &device.floor_store,
             &scheduler,
             &profile,
-            &session,
             &held,
         ));
         assert_eq!(
@@ -428,7 +410,6 @@ mod tests {
             &device.floor_store,
             &scheduler,
             &profile,
-            &session,
             &held,
         ));
         assert_eq!(
