@@ -5,8 +5,8 @@ use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::seams::{Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    Command, Engine, EngineError, EventStream, LoginSecret, NodeId, NodeKind, Permission,
-    PlaintextContent, SyncTimingProfile,
+    Command, Engine, EngineError, EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind,
+    Permission, PlaintextContent, SyncTimingProfile,
 };
 
 fn new_engine(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
@@ -15,6 +15,7 @@ fn new_engine(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
         Box::new(SeededEntropy::new(42)),
         SyncTimingProfile::CI,
         String::new(),
+        GatewayConfig::disabled(),
     )
 }
 

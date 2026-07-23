@@ -28,6 +28,7 @@ use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
+use crate::content::{Gateway, GatewayConfig};
 use crate::entropy::Entropy;
 use crate::hex::hex_lower;
 use crate::net::{
@@ -565,6 +566,12 @@ pub struct Engine<T: SeamTypes> {
     /// against. Empty until the auth/config slice supplies it; the register-first
     /// renewal is a no-op against an empty base until then.
     api_base_url: String,
+    /// The resolved content read-source set, built once from the injected
+    /// [`GatewayConfig`] at construction. Empty (dormant) until the host supplies
+    /// endpoints; reads then fail closed as [`ReadError`](crate::ReadError)`::Unavailable`.
+    // Consumed by start()/RootAdopter (E4).
+    #[allow(dead_code)]
+    gateway: Gateway,
     events: mpsc::UnboundedSender<Event>,
     /// The last-known-good gate-passing base snapshot (state law's left
     /// operand). Seeded at the anchored root; cold-start/resolve replace it
@@ -601,6 +608,7 @@ impl<T: SeamTypes> Engine<T> {
         entropy: Box<dyn Entropy>,
         profile: SyncTimingProfile,
         api_base_url: String,
+        gateway: GatewayConfig,
     ) -> (Self, EventStream) {
         let (events, receiver) = mpsc::unbounded();
         (
@@ -609,6 +617,7 @@ impl<T: SeamTypes> Engine<T> {
                 entropy,
                 profile,
                 api_base_url,
+                gateway: gateway.into_gateway(),
                 events,
                 // The anchored all-zero root until cold-start/resolve replaces
                 // the base snapshot; children come from the pending-op overlay.
@@ -1019,6 +1028,7 @@ mod tests {
             Box::new(SeededEntropy::new(42)),
             SyncTimingProfile::CI,
             base_url.to_owned(),
+            GatewayConfig::disabled(),
         );
         (engine, events, device)
     }
@@ -1030,6 +1040,7 @@ mod tests {
             Box::new(SeededEntropy::new(42)),
             SyncTimingProfile::CI,
             String::new(),
+            GatewayConfig::disabled(),
         )
     }
 
@@ -1044,6 +1055,7 @@ mod tests {
             Box::new(SeededEntropy::new(42)),
             SyncTimingProfile::CI,
             String::new(),
+            GatewayConfig::disabled(),
         );
         block_on(engine.start(LoginSecret::new(vec![secret_byte; 32]))).unwrap();
         engine
@@ -1593,6 +1605,7 @@ mod tests {
                 Box::new(SeededEntropy::new(42)),
                 SyncTimingProfile::CI,
                 String::new(),
+                GatewayConfig::disabled(),
             );
             block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).unwrap();
             let pointers = ScriptedPointers::default();
@@ -1677,6 +1690,7 @@ mod tests {
                 Box::new(SeededEntropy::new(42)),
                 SyncTimingProfile::CI,
                 String::new(),
+                GatewayConfig::disabled(),
             );
             assert!(engine.session().is_none(), "no identity before start");
             let out = block_on(engine.cold_start_data_path(

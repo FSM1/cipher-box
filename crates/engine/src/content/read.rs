@@ -90,6 +90,40 @@ impl Gateway {
     }
 }
 
+/// The content-gateway configuration handed to [`Engine::new`](crate::Engine),
+/// resolved into a [`Gateway`] once at construction. [`disabled`](Self::disabled)
+/// yields an empty source set whose reads fail closed as
+/// [`ReadError::Unavailable`] (retryable availability, never a trust violation) —
+/// the dormant default until the host supplies real endpoints.
+///
+/// `Debug` derives the redaction from [`GatewaySource`]: the bearer never renders.
+#[derive(Clone, Debug)]
+pub struct GatewayConfig {
+    /// The member accelerator (token-authed), consulted first when present.
+    pub accelerator: Option<GatewaySource>,
+    /// Public trustless-gateway fallbacks, tried in order after the accelerator.
+    pub public_fallbacks: Vec<GatewaySource>,
+}
+
+impl GatewayConfig {
+    /// The dormant default: no accelerator, no fallbacks. Reads over the
+    /// resulting [`Gateway`] fail closed as [`ReadError::Unavailable`].
+    pub fn disabled() -> Self {
+        Self {
+            accelerator: None,
+            public_fallbacks: Vec::new(),
+        }
+    }
+
+    /// Resolve into the read-plane [`Gateway`], preserving accelerator-first order.
+    pub fn into_gateway(self) -> Gateway {
+        Gateway {
+            accelerator: self.accelerator,
+            public_fallbacks: self.public_fallbacks,
+        }
+    }
+}
+
 /// Why a verified read did not return bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadError {
@@ -639,6 +673,63 @@ mod tests {
         assert!(
             !debug.contains("super-secret-token"),
             "bearer must never render"
+        );
+        assert!(debug.contains("<redacted>"));
+    }
+
+    fn a_config() -> GatewayConfig {
+        GatewayConfig {
+            accelerator: Some(GatewaySource {
+                base_url: "https://gw.cipherbox.test/".into(),
+                bearer: Some(Zeroizing::new("member-token".to_owned())),
+            }),
+            public_fallbacks: vec![GatewaySource {
+                base_url: "https://public.gw.test".into(),
+                bearer: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn disabled_gateway_config_yields_an_empty_gateway() {
+        // No source: reads fail closed as availability, never a trust violation.
+        let gateway = GatewayConfig::disabled().into_gateway();
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        let err = block_on(read_block(
+            &gateway,
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap_err();
+        assert_eq!(err, ReadError::Unavailable);
+        assert!(
+            http.requests().is_empty(),
+            "an empty gateway consults no source"
+        );
+    }
+
+    #[test]
+    fn gateway_config_round_trips_source_ordering() {
+        let gateway = a_config().into_gateway();
+        let urls: Vec<_> = gateway.sources().map(|s| s.base_url.as_str()).collect();
+        assert_eq!(
+            urls,
+            vec!["https://gw.cipherbox.test/", "https://public.gw.test"],
+            "accelerator-first ordering is preserved"
+        );
+    }
+
+    #[test]
+    fn gateway_config_debug_never_renders_the_bearer() {
+        // Release-active behavioral assert (not a debug_assert): the derived
+        // `Debug` inherits `GatewaySource`'s redaction.
+        let debug = format!("{:?}", a_config());
+        assert!(
+            !debug.contains("member-token"),
+            "bearer must never render in GatewayConfig Debug"
         );
         assert!(debug.contains("<redacted>"));
     }
