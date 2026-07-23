@@ -734,6 +734,7 @@ impl<T: SeamTypes> Engine<T> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
+        let command_name = command.name();
         match command {
             Command::Create {
                 parent,
@@ -745,7 +746,9 @@ impl<T: SeamTypes> Engine<T> {
                 // staged bytes), a later slice; only metadata creates (folders
                 // and empty files) stage here.
                 if content.is_some() {
-                    return Err(EngineError::Unimplemented { command: "create" });
+                    return Err(EngineError::Unimplemented {
+                        command: command_name,
+                    });
                 }
                 let target = self.mint_node_id()?;
                 let base_sequence = self.base_sequence_for(parent).await?;
@@ -765,10 +768,9 @@ impl<T: SeamTypes> Engine<T> {
             }
             Command::Relink { node, new_parent } => {
                 let rendered = self.render().await?;
-                // Intra-scope pure relink: cross-scope detection and scope-exit
-                // rotation triggering are later slices.
                 let from_parent = rendered.parent_of(node).unwrap_or(self.snapshot.root);
                 let base_sequence = rendered.record_sequence(node).unwrap_or(1);
+                // trailing bools: cross_scope=false, exits_granted_source=false — intra-scope pure relink
                 let op = Op::relink(node, from_parent, new_parent, base_sequence, false, false);
                 self.stage_and_notify(&op).await
             }
@@ -838,10 +840,7 @@ impl<T: SeamTypes> Engine<T> {
 
     /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success.
     async fn stage_and_notify(&mut self, op: &Op) -> Result<(), EngineError> {
-        // Metadata ops carry no upload, so `stage_op` journals them unbounded
-        // and never budget-rejects — `Queued` is the only success. A rejection
-        // here would mean a content op reached this metadata-only path; fail
-        // closed rather than silently swallow it.
+        // metadata ops never budget-reject; a rejection means a content op reached this path — fail closed
         match stage_op(&self.seams.staging_store, &self.profile, op, None)
             .await
             .map_err(EngineError::from_seam)?
