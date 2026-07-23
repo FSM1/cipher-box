@@ -27,8 +27,9 @@ use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
 
-use crate::api::ApiClient;
+use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
 use crate::entropy::Entropy;
+use crate::hex::hex_lower;
 use crate::net::{
     Adopter, EolRenewResult, HeldRecord, HeldRecords, LivenessControl, PublishError,
     PublishOutcome, RE_PUT_INTERVAL, eol_renew_pass, keyless_re_put, run_liveness_loop,
@@ -386,12 +387,26 @@ pub enum EngineError {
         /// Diagnostic message; never carries key material.
         message: String,
     },
+    /// An authenticated API call failed (cold-start login or SIWE): a rejected
+    /// credential or an unreachable API. Fail-closed — `start` propagates it
+    /// rather than running unauthenticated. The message is the API's own
+    /// diagnostic, never key material.
+    Auth {
+        /// Diagnostic message; never carries key material.
+        message: String,
+    },
 }
 
 impl EngineError {
     fn from_seam(err: SeamError) -> Self {
         EngineError::Seam {
             message: err.message().to_owned(),
+        }
+    }
+
+    fn from_api(err: ApiError) -> Self {
+        EngineError::Auth {
+            message: err.to_string(),
         }
     }
 }
@@ -409,6 +424,7 @@ impl fmt::Display for EngineError {
             }
             EngineError::Seam { message } => write!(f, "seam error: {message}"),
             EngineError::Entropy { message } => write!(f, "entropy error: {message}"),
+            EngineError::Auth { message } => write!(f, "auth error: {message}"),
         }
     }
 }
@@ -570,6 +586,10 @@ pub struct Engine<T: SeamTypes> {
     /// slices read every signer from here. Behind an [`Rc`] so the spawned
     /// liveness loop shares it for the sub-EOL renewal's per-name signers.
     session: Option<Rc<SessionIdentity>>,
+    /// The one shared API client, built and logged in at [`start`](Self::start)
+    /// and handed to the liveness loop so the access JWT is shared across
+    /// publish/renew (no redundant 401→refresh). `None` until then.
+    api: Option<Rc<ApiClient<T::Http, T::CredentialStore>>>,
     started: bool,
 }
 
@@ -596,6 +616,7 @@ impl<T: SeamTypes> Engine<T> {
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
+                api: None,
                 started: false,
             },
             EventStream { receiver },
@@ -632,9 +653,30 @@ impl<T: SeamTypes> Engine<T> {
         }
         // Pure derivation from the injected secret — no clock, no RNG — then
         // the secret zeroizes on drop here, at its terminal owner.
-        self.session = Some(Rc::new(SessionIdentity::derive(&secret)?));
+        let session = Rc::new(SessionIdentity::derive(&secret)?);
         drop(secret);
-        self.spawn_liveness_loop();
+
+        // The one shared client for login, publish, and renewal. Login is
+        // fail-closed: on any error `start` returns before it commits the
+        // session or spawns the liveness loop, so no half-initialized state
+        // survives and the loop never runs unauthenticated (rules 3/6). An
+        // empty base URL is the pre-integration dormant state (field doc) — no
+        // API to authenticate against, so login is skipped.
+        let api = Rc::new(ApiClient::new(
+            self.seams.http.clone(),
+            self.seams.credential_store.clone(),
+            self.api_base_url.clone(),
+        ));
+        if !self.api_base_url.is_empty() {
+            let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
+            api.login_identity(&signer)
+                .await
+                .map_err(EngineError::from_api)?;
+        }
+
+        self.session = Some(session);
+        self.spawn_liveness_loop(api.clone());
+        self.api = Some(api);
         self.started = true;
         Ok(())
     }
@@ -754,7 +796,7 @@ impl<T: SeamTypes> Engine<T> {
     /// sub-EOL seq+1 renewal (any name inside the 30-day EOL window). The task
     /// holds only `Rc`/seam-handle clones, so the engine may drop while it is
     /// parked; the alive latch then stops it.
-    fn spawn_liveness_loop(&self)
+    fn spawn_liveness_loop(&self, api: Rc<ApiClient<T::Http, T::CredentialStore>>)
     where
         T::Scheduler: Clone + 'static,
         T::RecordTransport: Clone + 'static,
@@ -769,16 +811,11 @@ impl<T: SeamTypes> Engine<T> {
         let held = self.held_records.clone();
         let alive = self.alive.clone();
         let events = self.events.clone();
-        // One API client for the whole task: register-first renewal needs the
-        // API, and the refresh token lives in the credential store, so the client
-        // self-heals its access token on a 401 across the session's lifetime. The
+        // The shared client from `start`: its access JWT is already live from the
+        // cold-start login, so the renewal pass reuses it (no redundant
+        // 401→refresh) and self-heals on expiry via the credential store. The
         // renewal pass only fires once the resolve-tick driver populates the held
         // set.
-        let api = ApiClient::new(
-            self.seams.http.clone(),
-            self.seams.credential_store.clone(),
-            self.api_base_url.clone(),
-        );
         self.seams.scheduler.spawn(Box::pin(async move {
             run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
                 if !alive.get() {
@@ -850,6 +887,13 @@ impl<T: SeamTypes> Engine<T> {
                 // trailing bools: cross_scope=false, exits_granted_source=false — intra-scope pure relink
                 let op = Op::relink(node, from_parent, new_parent, base_sequence, false, false);
                 self.stage_and_notify(&op).await
+            }
+            Command::SiweLogin { message, signature } => {
+                let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+                api.siwe_login(&message, &hex_lower(&signature))
+                    .await
+                    .map_err(EngineError::from_api)?;
+                Ok(())
             }
             other => Err(EngineError::Unimplemented {
                 command: other.name(),
@@ -952,8 +996,32 @@ impl<T: SeamTypes> Drop for Engine<T> {
 mod tests {
     use super::*;
 
-    use crate::seams::UnixMillis;
-    use crate::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
+    use serde_json::{Value, json};
+
+    use crate::seams::{CredentialStore, HttpResponse, UnixMillis};
+    use crate::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
+
+    /// A JSON HTTP response the scripted client decodes as a Nest body.
+    fn json_response(status: u16, body: Value) -> HttpResponse {
+        HttpResponse {
+            status,
+            headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
+            body: serde_json::to_vec(&body).unwrap(),
+        }
+    }
+
+    /// An engine over a retained device (so the test scripts HTTP and inspects
+    /// the credential store), against `base_url`.
+    fn engine_over(base_url: &str) -> (Engine<FakeSeamTypes>, EventStream, FakeDevice) {
+        let device = FakeWorld::new().device(b"alice-pk");
+        let (engine, events) = Engine::new(
+            device.seam_set(),
+            Box::new(SeededEntropy::new(42)),
+            SyncTimingProfile::CI,
+            base_url.to_owned(),
+        );
+        (engine, events, device)
+    }
 
     fn new_engine() -> (Engine<FakeSeamTypes>, EventStream) {
         let device = FakeWorld::new().device(b"alice-pk");
@@ -1023,6 +1091,108 @@ mod tests {
             a.session().unwrap().enc_subkey_public().to_bytes(),
             c.session().unwrap().enc_subkey_public().to_bytes(),
             "a different secret is a different identity",
+        );
+    }
+
+    #[test]
+    fn start_performs_identity_login_and_persists_a_refresh_token() {
+        let (mut engine, _events, device) = engine_over("http://api.test");
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": "cipherbox-login:v2:abc", "expiresAt": "2099-01-01T00:00:00Z" }),
+        ));
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "accessToken": "jwt-1", "refreshToken": "a".repeat(64), "isNewUser": true }),
+        ));
+
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("start logs in");
+
+        // The refresh token from the token response persisted via CredentialStore.
+        let stored = block_on(device.credential_store.load_refresh_token())
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored, "a".repeat(64).as_bytes());
+
+        // The login signed the server challenge with the session identity signer:
+        // the wire signature equals the identity's own deterministic signature.
+        let requests = device.http.requests();
+        assert_eq!(requests[1].url, "http://api.test/auth/login");
+        let login_body: Value = serde_json::from_slice(requests[1].body.as_ref().unwrap()).unwrap();
+        let identity = engine.session().unwrap().identity();
+        let expected = hex_lower(
+            &identity
+                .sign_detcbor(b"cipherbox-login:v2:abc")
+                .to_compact(),
+        );
+        assert_eq!(login_body["signature"], expected);
+    }
+
+    #[test]
+    fn start_login_failure_is_fail_closed() {
+        let (mut engine, _events, device) = engine_over("http://api.test");
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": "c", "expiresAt": "2099-01-01T00:00:00Z" }),
+        ));
+        device.http.enqueue_response(json_response(
+            401,
+            json!({ "message": "Invalid challenge signature" }),
+        ));
+        // Clear any pre-start bookkeeping so the spawn assertion is unambiguous.
+        let _ = device.scheduler.take_spawned_tasks();
+
+        let out = block_on(engine.start(LoginSecret::new(vec![7u8; 32])));
+
+        assert!(
+            matches!(out, Err(EngineError::Auth { .. })),
+            "a rejected login is a hard error, not a start"
+        );
+        assert!(
+            engine.session().is_none(),
+            "session not left half-initialized on login failure"
+        );
+        assert!(
+            device.scheduler.take_spawned_tasks().is_empty(),
+            "no liveness loop spawned before authentication succeeds"
+        );
+        assert_eq!(
+            block_on(engine.command(Command::ManualRefresh)),
+            Err(EngineError::NotStarted),
+            "the engine stays unstarted after a failed login"
+        );
+    }
+
+    #[test]
+    fn siwe_login_command_forwards_message_and_hex_signature() {
+        // Empty base: `start` skips cold-start login, so only the SIWE exchange
+        // is scripted here.
+        let (mut engine, _events, device) = engine_over("");
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        device.http.enqueue_response(json_response(
+            200,
+            json!({ "accessToken": "jwt-siwe", "refreshToken": "b".repeat(64) }),
+        ));
+
+        let signature = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        block_on(engine.command(Command::SiweLogin {
+            message: "siwe-message".to_owned(),
+            signature: signature.clone(),
+        }))
+        .expect("siwe login");
+
+        let request = device
+            .http
+            .requests()
+            .pop()
+            .expect("a SIWE request was sent");
+        assert_eq!(request.url, "/auth/siwe/login");
+        let body: Value = serde_json::from_slice(request.body.as_ref().unwrap()).unwrap();
+        assert_eq!(body["message"], "siwe-message");
+        assert_eq!(
+            body["signature"],
+            hex_lower(&signature),
+            "the wallet signature crosses the wire hex-encoded"
         );
     }
 

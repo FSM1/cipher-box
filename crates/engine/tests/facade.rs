@@ -91,13 +91,6 @@ fn unimplemented_commands() -> Vec<(Command, &'static str)> {
             "acceptShare",
         ),
         (Command::RotateNow { node }, "rotateNow"),
-        (
-            Command::SiweLogin {
-                message: "siwe message".into(),
-                signature: b"wallet-sig".to_vec(),
-            },
-            "siweLogin",
-        ),
         (Command::Logout, "logout"),
     ]
 }

@@ -42,6 +42,12 @@ impl IdentityChallengeSigner {
     pub fn from_scalar(scalar: &[u8; 32]) -> Option<Self> {
         EcdsaSigner::from_scalar(scalar).map(|signer| Self { signer })
     }
+
+    /// Adopts the session's already-derived identity signer, so cold-start
+    /// login reuses the derived key instead of re-reading the raw login secret.
+    pub fn from_signer(signer: EcdsaSigner) -> Self {
+        Self { signer }
+    }
 }
 
 impl ChallengeSigner for IdentityChallengeSigner {
