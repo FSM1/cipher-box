@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "6780c98b67dc",
+  "strategy": "manual-commit",
+  "branch": "fix/engine-sweeptarget-ipns-compile",
+  "checkpoints_count": 290,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/67/80c98b67dc/0/metadata.json",
+      "transcript": "/67/80c98b67dc/0/full.jsonl",
+      "compact_transcript": "/67/80c98b67dc/0/transcript.jsonl",
+      "content_hash": "/67/80c98b67dc/0/content_hash.txt",
+      "prompt": "/67/80c98b67dc/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1972,
+    "cache_creation_tokens": 3620948,
+    "cache_read_tokens": 216300702,
+    "output_tokens": 1473855,
+    "api_call_count": 991
+  }
+}
