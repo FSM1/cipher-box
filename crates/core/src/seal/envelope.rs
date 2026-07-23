@@ -72,6 +72,19 @@ pub fn decode_envelope(bytes: &[u8]) -> Result<Envelope, CodecError> {
     })
 }
 
+/// The `grantSection` bytes carried in the envelope's preserved unknown
+/// top-level fields (#27 D10 — `grantSection` rides `unknown`, never a typed
+/// field, so an envelope stays kind-uniform and byte-stable on rewrite). A
+/// non-crypto accessor: it hands the raw section bytes to the caller (see
+/// [`super::decode_grant_section`]) so the engine never matches raw `Value`s.
+/// `None` when the field is absent or not a byte string.
+pub fn grant_section_bytes(env: &Envelope) -> Option<&[u8]> {
+    env.unknown
+        .iter()
+        .find(|(key, _)| key == "grantSection")
+        .and_then(|(_, value)| value.as_bytes().ok())
+}
+
 /// Encode an envelope to its canonical det-CBOR plaintext.
 pub fn encode_envelope(env: &Envelope) -> Vec<u8> {
     let mut epoch_tag = Map::new();
@@ -243,6 +256,38 @@ mod tests {
         assert_eq!(encode_envelope(&decoded), bytes, "unknown field preserved");
         // The read-body still opens despite the extra field.
         assert!(open_read_body(&decoded, &key).is_ok());
+    }
+
+    #[test]
+    fn grant_section_bytes_pulls_the_unknown_field() {
+        let key = [3u8; KEY_LEN];
+        let nonce = [4u8; NONCE_LEN];
+        let mut env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
+        assert_eq!(grant_section_bytes(&env), None, "absent without the field");
+
+        env.unknown.push((
+            "grantSection".to_string(),
+            Value::Bytes(b"section-bytes".to_vec()),
+        ));
+        assert_eq!(
+            grant_section_bytes(&env),
+            Some(b"section-bytes".as_slice()),
+            "pulls the grantSection bytes out of unknown"
+        );
+    }
+
+    #[test]
+    fn grant_section_bytes_none_when_not_a_byte_string() {
+        let key = [3u8; KEY_LEN];
+        let nonce = [4u8; NONCE_LEN];
+        let mut env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
+        env.unknown
+            .push(("grantSection".to_string(), Value::Unsigned(7)));
+        assert_eq!(
+            grant_section_bytes(&env),
+            None,
+            "a non-bytes grantSection is not returned"
+        );
     }
 
     #[test]

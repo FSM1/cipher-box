@@ -29,7 +29,9 @@ pub use aad::{
 pub use body::{
     ChildRef, NodeKind, ReadBody, Version, decode_read_body, encode_read_body, name_cmp,
 };
-pub use envelope::{Envelope, decode_envelope, encode_envelope, open_read_body, seal_read_body};
+pub use envelope::{
+    Envelope, decode_envelope, encode_envelope, grant_section_bytes, open_read_body, seal_read_body,
+};
 pub use grant::{
     AscentLink, GrantBlobPayload, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload,
     OverrideSeedPayload, OwnerWriteBlobPayload, Permission, decode_ascent_link,
