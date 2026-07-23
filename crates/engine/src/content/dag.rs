@@ -22,6 +22,7 @@ use cipherbox_core::content::{
 use cipherbox_core::error::{CodecError, Malformed};
 
 use super::chunk::SealedChunk;
+use super::limits::MAX_RESOLVED_RECORD_BYTES;
 use super::profile::ContentProfile;
 
 /// The multicodec of the DAG-root `contentCid`: `dag-cbor` (0x71). Engine-owned
@@ -49,6 +50,17 @@ pub enum DagError {
     InvalidManifest {
         /// Which invariant failed.
         reason: &'static str,
+    },
+    /// The assembled root manifest exceeded [`MAX_RESOLVED_RECORD_BYTES`]: the
+    /// flat root inlines every leaf CID, so a file past the flat-DAG ceiling
+    /// (~108 GiB) produces a root [`read_block`](super::read::read_block) would
+    /// reject on fetch. Fails closed here so the encoder never emits an
+    /// unreadable root (AGENTS.md rule 8; #788).
+    RootTooLarge {
+        /// The encoded root size.
+        size: usize,
+        /// The enforced ceiling ([`MAX_RESOLVED_RECORD_BYTES`]).
+        limit: usize,
     },
 }
 
@@ -110,6 +122,15 @@ pub fn assemble(
     root.insert(SIZE_KEY, Value::Unsigned(plaintext_len));
     root.insert(LINKS_KEY, Value::Array(links));
     let root_block = encode(&Value::Map(root));
+    // Fail closed rather than emit a root `read_block` would reject on fetch:
+    // the flat root inlines every leaf CID, so past the flat-DAG ceiling it
+    // exceeds the block cap (AGENTS.md rule 8 — encode/decode symmetry; #788).
+    if root_block.len() > MAX_RESOLVED_RECORD_BYTES {
+        return Err(DagError::RootTooLarge {
+            size: root_block.len(),
+            limit: MAX_RESOLVED_RECORD_BYTES,
+        });
+    }
     let content_cid = compute_cid(DAG_ROOT_CODEC, &root_block);
     Ok(ContentDag {
         content_cid,
@@ -324,6 +345,52 @@ mod tests {
         let manifest = decode_root(&dag.root_block).unwrap();
         assert_eq!(manifest.size, 0);
         assert_eq!(manifest.leaf_cids.len(), 1);
+    }
+
+    /// `count` dummy leaves with 36-byte (`CONTENT_CID_LEN`) CIDs and empty
+    /// sealed bytes, framed to match a `chunk_size`-16 profile — enough to size
+    /// the root manifest without materializing any file bytes. `assemble` only
+    /// reads `leaf.cid`, so the sealed payload can stay empty.
+    fn dummy_leaves(count: usize) -> Vec<SealedChunk> {
+        (0..count)
+            .map(|_| SealedChunk {
+                cid: vec![0u8; CONTENT_CID_LEN],
+                sealed: Vec::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn assemble_fails_closed_when_the_root_exceeds_the_block_cap() {
+        // Each inlined 36-byte CID costs ~38 CBOR bytes, so ~120k links push the
+        // flat root over the 4 MiB cap; `assemble` must fail closed in every
+        // build (not a release-stripped assert) rather than emit an unreadable
+        // root (AGENTS.md rule 8). `plaintext_len = count * chunkSize` keeps the
+        // leaf-count invariant satisfied so the size guard is what fires.
+        let profile = ContentProfile::CI;
+        let chunk_size = profile.chunk_size() as u64;
+        let count = 120_000;
+        let leaves = dummy_leaves(count);
+        match assemble(&leaves, count as u64 * chunk_size, &profile) {
+            Err(DagError::RootTooLarge { size, limit }) => {
+                assert!(size > limit, "reported size exceeds the cap");
+                assert_eq!(limit, 4 * 1024 * 1024);
+            }
+            other => panic!("expected RootTooLarge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn assemble_accepts_a_root_just_under_the_block_cap() {
+        // ~100k links keep the root comfortably under 4 MiB; it assembles Ok and
+        // content-addresses, proving the guard rejects only over-cap roots.
+        let profile = ContentProfile::CI;
+        let chunk_size = profile.chunk_size() as u64;
+        let count = 100_000;
+        let leaves = dummy_leaves(count);
+        let dag = assemble(&leaves, count as u64 * chunk_size, &profile).unwrap();
+        assert!(dag.root_block.len() <= 4 * 1024 * 1024);
+        assert!(verify_cid(&dag.content_cid, &dag.root_block).is_ok());
     }
 
     #[test]
