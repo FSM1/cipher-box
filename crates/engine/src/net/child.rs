@@ -6,9 +6,11 @@
 //! fetch fail-closed on a CID mismatch → envelope binding (id + scope; a
 //! transplant rejects) → the per-name sequence and scope read-epoch floors →
 //! the AAD-bound read-body unseal under `read-key(node-seed(scopeReadSeed,
-//! id))` — the same KDF edges the root walks, one level down. Floors advance
-//! only after a successful unseal (the floor law). No new crypto: pure
-//! composition of core verify/unseal plus the frozen KDF catalog.
+//! id))` — the same KDF edges the root walks, one level down. The sequence
+//! floor advances only after a successful unseal (the floor law); the scope
+//! epoch floor never moves from a child
+//! ([`floor::advance_sequence_on_unseal`]). No new crypto: pure composition of
+//! core verify/unseal plus the frozen KDF catalog.
 
 use core::cell::RefCell;
 
@@ -185,16 +187,10 @@ impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
             return Err(err);
         }
         let read_body = self.unseal(&envelope)?;
-        // Floors advance only after the AAD-confirmed unseal (the floor law).
-        floor::advance_on_unseal(
-            self.floors,
-            &self.scope_id,
-            name.as_str().as_bytes(),
-            sequence,
-            envelope.epoch,
-        )
-        .await
-        .map_err(GateError::Seam)?;
+        // Sequence floor only, after the AAD-confirmed unseal (the floor law).
+        floor::advance_sequence_on_unseal(self.floors, name.as_str().as_bytes(), sequence)
+            .await
+            .map_err(GateError::Seam)?;
         Ok(AdoptOutcome {
             adopted: Adopted {
                 read_body,

@@ -1443,12 +1443,14 @@ impl<T: SeamTypes> Engine<T> {
         // slice). A clone of the seed keeps the cell borrow from spanning the
         // awaits below; the clone zeroizes when the adopter drops.
         let scope_id = self.snapshot.borrow().root.0;
+        // No untrusted input was judged here — a missing seed is missing held
+        // material (availability), never a trust verdict.
         let scope_read_seed = self
             .scope_read_seeds
             .borrow()
             .get(&scope_id)
             .cloned()
-            .ok_or_else(|| EngineError::TrustViolation {
+            .ok_or_else(|| EngineError::ContentUnavailable {
                 message: "no read seed held for the node's scope".to_owned(),
             })?;
         let adopter = ChildAdopter::new(
@@ -3257,6 +3259,8 @@ mod tests {
             use crate::content::{
                 ContentDag, ContentKey, ContentProfile, SealedChunk, assemble, frame_and_seal,
             };
+            use crate::gate::floor;
+            use crate::seams::SnapshotCache;
 
             const CONTENT_KEY: [u8; 32] = [0x99; 32];
             const CHILD_MTIME: u64 = 777;
@@ -3281,25 +3285,30 @@ mod tests {
                 Version::new(dag.content_cid.clone(), CONTENT_KEY, size, CHILD_MTIME)
             }
 
-            /// A child file head block sealed under the node's derived read key.
-            /// The knobs drive the fail-closed tests: the envelope id
-            /// (transplant), the version list (empty / size-lying), and a
-            /// bolted-on grant section.
-            fn child_head(
-                envelope_id: [u8; 16],
-                versions: Vec<Version>,
-                with_grant_section: bool,
-            ) -> (Vec<u8>, String) {
-                let node_seed = kdf::node_seed(&SCOPE_SEED, &envelope_id);
-                let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
-                let body = ReadBody::File {
+            fn file_body(versions: Vec<Version>) -> ReadBody {
+                ReadBody::File {
                     created_at: 0,
                     modified_at: CHILD_MTIME,
                     versions,
                     unknown: Vec::new(),
-                };
+                }
+            }
+
+            /// A child head block sealed under the node's derived read key. The
+            /// knobs drive the fail-closed tests: the envelope id/scope/epoch
+            /// (transplants, epoch inflation), the body (kind transplant, empty
+            /// / size-lying version list), and a bolted-on grant section.
+            fn sealed_child_head(
+                envelope_id: [u8; 16],
+                scope: [u8; 16],
+                epoch: u64,
+                body: &ReadBody,
+                with_grant_section: bool,
+            ) -> (Vec<u8>, String) {
+                let node_seed = kdf::node_seed(&SCOPE_SEED, &envelope_id);
+                let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
                 let mut envelope =
-                    seal_read_body(&read_key, &[13u8; 24], 1, envelope_id, SCOPE, EPOCH, &body)
+                    seal_read_body(&read_key, &[13u8; 24], 1, envelope_id, scope, epoch, body)
                         .unwrap();
                 if with_grant_section {
                     envelope
@@ -3311,15 +3320,32 @@ mod tests {
                 (head_block, cid)
             }
 
-            /// Seed the child record (signed by the child's own write-plane
-            /// signer) at every endpoint.
-            fn seed_child_record(device: &FakeDevice, head_cid_str: &str, sequence: u64) {
+            /// A child file head block at the fixture scope/epoch.
+            fn child_head(
+                envelope_id: [u8; 16],
+                versions: Vec<Version>,
+                with_grant_section: bool,
+            ) -> (Vec<u8>, String) {
+                sealed_child_head(
+                    envelope_id,
+                    SCOPE,
+                    EPOCH,
+                    &file_body(versions),
+                    with_grant_section,
+                )
+            }
+
+            /// The child record, signed by the child's own write-plane signer.
+            fn child_record(head_cid_str: &str, sequence: u64) -> Vec<u8> {
                 let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &CHILD_ID);
                 let signer = kdf::ipns_keypair(write_seed.as_bytes());
                 let value = format!("/ipfs/{head_cid_str}");
-                let record =
-                    IpnsRecord::create_v2(&signer, value.as_bytes(), sequence, TTL_NANOS, EOL)
-                        .marshal();
+                IpnsRecord::create_v2(&signer, value.as_bytes(), sequence, TTL_NANOS, EOL).marshal()
+            }
+
+            /// Seed the child record at every endpoint.
+            fn seed_child_record(device: &FakeDevice, head_cid_str: &str, sequence: u64) {
+                let record = child_record(head_cid_str, sequence);
                 for endpoint in device.record_store.endpoints() {
                     device.record_store.seed_record(
                         &endpoint,
@@ -3647,6 +3673,212 @@ mod tests {
                 assert!(
                     matches!(err, EngineError::ContentUnavailable { .. }),
                     "an unreachable gateway is availability: {err:?}"
+                );
+            }
+
+            #[test]
+            fn an_inflated_child_epoch_cannot_poison_the_scope_epoch_floor() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // A write-capable party seals the child claiming a far-future
+                // epoch (the read key does not bind epoch, so it unseals fine).
+                let (leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = sealed_child_head(
+                    CHILD_ID,
+                    SCOPE,
+                    EPOCH + 1000,
+                    &file_body(vec![head_version(&dag, PLAINTEXT.len() as u64)]),
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                enqueue_download(&device, &head_block, &dag, &leaves);
+                assert_eq!(
+                    block_on(engine.read_content(NodeId(CHILD_ID))).unwrap(),
+                    PLAINTEXT,
+                    "the inflated-epoch child still reads"
+                );
+
+                // The child's sequence floor advanced...
+                assert_eq!(
+                    block_on(floor::sequence_floor(
+                        &device.floor_store,
+                        child_name().as_str().as_bytes(),
+                    ))
+                    .unwrap(),
+                    Some(1),
+                );
+                // ...but the scope read-epoch floor did not move: it advances
+                // only from gate-adopted roots.
+                assert_eq!(
+                    block_on(floor::read_epoch_floor(&device.floor_store, &SCOPE)).unwrap(),
+                    Some(EPOCH),
+                    "a child unseal must not raise the scope read-epoch floor"
+                );
+
+                // A subsequent honest root at the real epoch still adopts — the
+                // child could not poison the root path into EpochBelowFloor.
+                let (root_head_block, root_head_cid, root_name) = owner_root();
+                for endpoint in device.record_store.endpoints() {
+                    device.record_store.seed_record(
+                        &endpoint,
+                        root_name.as_str(),
+                        root_record(&root_head_cid, 2),
+                    );
+                }
+                device
+                    .http
+                    .enqueue_response(head_response(&root_head_block));
+                let mut tasks = world.scheduler.take_spawned_tasks();
+                poll_each(&mut tasks); // park each loop at its first sleep
+                world.scheduler.advance(engine.profile().poll_cadence);
+                poll_each(&mut tasks); // the resolve tick runs one pass
+                assert_eq!(
+                    block_on(floor::sequence_floor(
+                        &device.floor_store,
+                        root_name.as_str().as_bytes(),
+                    ))
+                    .unwrap(),
+                    Some(2),
+                    "the honest root adopted at the real epoch"
+                );
+            }
+
+            #[test]
+            fn at_floor_reopen_rejects_a_cached_record_above_the_floor() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // A cached child record at sequence 2 while this device's
+                // per-name floor never advanced (no prior adopt): the at-floor
+                // re-open admits only the exact floor.
+                let (_leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                block_on(device.snapshot_cache.put(
+                    child_name().as_str().as_bytes(),
+                    &child_record(&head_cid, 2),
+                ))
+                .unwrap();
+                for endpoint in device.record_store.endpoints() {
+                    device.record_store.fail_endpoint(&endpoint);
+                }
+                device.http.enqueue_response(head_response(&head_block));
+
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                match &err {
+                    EngineError::TrustViolation { message } => assert!(
+                        message.contains("sequence-not-newer"),
+                        "an above-floor re-open is a sequence rejection: {message}"
+                    ),
+                    other => panic!("an above-floor re-open must reject fail-closed: {other:?}"),
+                }
+            }
+
+            #[test]
+            fn a_scope_transplanted_child_envelope_rejects_fail_closed() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // The envelope carries the expected node id but a FOREIGN scope,
+                // sealed consistently (AAD scope == envelope scope, and the read
+                // key binds no scope) — only the explicit scope check can fire.
+                let (_leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = sealed_child_head(
+                    CHILD_ID,
+                    [0xAB; 16],
+                    EPOCH,
+                    &file_body(vec![head_version(&dag, PLAINTEXT.len() as u64)]),
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                assert!(
+                    matches!(err, EngineError::TrustViolation { .. }),
+                    "a scope transplant rejects fail-closed: {err:?}"
+                );
+            }
+
+            #[test]
+            fn a_kind_transplanted_child_body_rejects_fail_closed() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                // A sealed FOLDER body at a node the parent lists as a file.
+                let folder_body = ReadBody::Folder {
+                    created_at: 0,
+                    modified_at: 0,
+                    children: Vec::new(),
+                    unknown: Vec::new(),
+                };
+                let (head_block, head_cid) =
+                    sealed_child_head(CHILD_ID, SCOPE, EPOCH, &folder_body, false);
+                seed_child_record(&device, &head_cid, 1);
+                device.http.enqueue_response(head_response(&head_block));
+
+                let err = block_on(engine.read_content(NodeId(CHILD_ID))).unwrap_err();
+                match &err {
+                    EngineError::TrustViolation { message } => assert!(
+                        message.contains("kind disagrees"),
+                        "the rejection names the kind transplant: {message}"
+                    ),
+                    other => panic!("a kind transplant must reject fail-closed: {other:?}"),
+                }
+            }
+
+            #[test]
+            fn no_update_serves_the_cached_record_without_moving_floors() {
+                let world = FakeWorld::new();
+                let device = world.device(b"alice-pk");
+                let (engine, _events) = started(&device);
+
+                let (leaves, dag) = content_dag(PLAINTEXT);
+                let (head_block, head_cid) = child_head(
+                    CHILD_ID,
+                    vec![head_version(&dag, PLAINTEXT.len() as u64)],
+                    false,
+                );
+                seed_child_record(&device, &head_cid, 1);
+                enqueue_download(&device, &head_block, &dag, &leaves);
+                assert_eq!(
+                    block_on(engine.read_content(NodeId(CHILD_ID))).unwrap(),
+                    PLAINTEXT,
+                    "the adopt seeds the cache and floors"
+                );
+
+                // Every record source unreachable: NoUpdate falls back to the
+                // cached last-known-good, re-opened at the floor.
+                for endpoint in device.record_store.endpoints() {
+                    device.record_store.fail_endpoint(&endpoint);
+                }
+                enqueue_download(&device, &head_block, &dag, &leaves);
+                assert_eq!(
+                    block_on(engine.read_content(NodeId(CHILD_ID))).unwrap(),
+                    PLAINTEXT,
+                    "the cached record serves the exact plaintext"
+                );
+                assert_eq!(
+                    block_on(floor::sequence_floor(
+                        &device.floor_store,
+                        child_name().as_str().as_bytes(),
+                    ))
+                    .unwrap(),
+                    Some(1),
+                    "the at-floor re-open advanced no sequence floor"
+                );
+                assert_eq!(
+                    block_on(floor::read_epoch_floor(&device.floor_store, &SCOPE)).unwrap(),
+                    Some(EPOCH),
+                    "the at-floor re-open advanced no epoch floor"
                 );
             }
         }
