@@ -134,10 +134,13 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   payload det-CBOR `{writeEpoch, writeScopeSeed}`. It hands an owner
   cold-starting on a fresh device the one write-plane input they cannot
   re-derive, so they can source `write_name_signer` and renew their own records
-  (the read/consume wiring lands later, on the facade slice). Its AAD binds the
-  **writeEpoch** (the write plane's own clock), never the read epoch; the seed is
-  never folded into the ascent link's shared override-seed payload (that would
-  leak write capability to ancestor read-only readers).
+  (the read/consume wiring lands later, on the facade slice). It carries a
+  deliberate dual-epoch binding: its HPKE **AAD** binds the **writeEpoch** (the
+  write plane's own clock), while its **structure signature** binds the
+  **read/envelope epoch** like every other structure, so the adoption gate
+  authenticates it uniformly at `envelope.epoch`. The seed is never folded into
+  the ascent link's shared override-seed payload (that would leak write
+  capability to ancestor read-only readers).
 - **Structure signatures** (#39 D2/D3): the rotator's pseudonym Ed25519
   signature over det-CBOR `{scopeId, epoch, structTag, recipientTag?,
 H(ciphertext)}` — covering grant blobs, owner blob, owner-write-blob, ascent
