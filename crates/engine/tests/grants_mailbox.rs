@@ -197,6 +197,7 @@ impl GrantFixture {
             commitment_sig: commitment_sig.to_compact(),
             grant_blobs: vec![grant_blob_signed],
             owner_blob: owner_blob_signed,
+            owner_write_blob: None,
             ascent_link: None,
             history_links: Vec::new(),
             write_body: write_body_signed,

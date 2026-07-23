@@ -24,8 +24,8 @@ use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, AscentLink, Envelope, GrantSection, GrantSetCommitment, Permission, ReadBody,
     STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_WRITE_BODY, StructureSigInput, open_ascent_link, open_grant_blob, open_owner_blob,
-    open_read_body, verify_grant_set, verify_structure,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, StructureSigInput, open_ascent_link,
+    open_grant_blob, open_owner_blob, open_read_body, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -457,6 +457,19 @@ pub async fn adopt_deferred<F: FloorStore>(
         &section.owner_blob.ciphertext,
         &section.owner_blob.signature,
     )?;
+    // The owner-write-blob is optional on the wire (additive evolution), but a
+    // present one must carry a valid structure signature — a missing or invalid
+    // sig is a whole-record trust violation, never staleness. Its sealed AAD
+    // binds the write epoch, but its structure signature — like every structure
+    // authenticated here — is recomputed at the authenticated envelope epoch.
+    if let Some(owner_write) = &section.owner_write_blob {
+        authenticate(
+            STRUCT_TAG_OWNER_WRITE_BLOB,
+            None,
+            &owner_write.ciphertext,
+            &owner_write.signature,
+        )?;
+    }
     for blob in &section.grant_blobs {
         authenticate(
             STRUCT_TAG_GRANT_BLOB,
