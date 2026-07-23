@@ -1,0 +1,32 @@
+<task-notification>
+<task-id>a390f2502dc0a03da</task-id>
+<tool-use-id>toolu_01Ax6Axsfizz5vYFzGf89Emv</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/deb6cfab-6446-43c9-85e7-8dbd9ee6f4d3/tasks/a390f2502dc0a03da.output</output-file>
+<status>completed</status>
+<summary>Agent "WP4 wasm boundary surface" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>WP4 complete. Not committed; branch `feat/engine-snapshot-and-read-surface`; crates/wasm only.
+
+## Files changed
+
+- `/Users/myankelev/Code/random/cipher-box/crates/wasm/src/lib.rs` — new boundary types `SnapshotView`, `SnapshotChild`, `Breadcrumb`, new `OpPhase` mirror enum, `From&lt;facade::NodeKind&gt; for NodeKind`, Event OpProgress getters (`opId` extended, `node`, `phase`, `error`), non-exported `from_facade` constructors matching `Event::from_facade`, header doc updated to cover the read surface (and dropped the stale "engine handle deliberately absent" paragraph, which `mod host` already contradicted at HEAD).
+- `/Users/myankelev/Code/random/cipher-box/crates/wasm/src/host.rs` — `EngineHandle::snapshot(&amp;NodeId) -&gt; Promise` (resolves a `SnapshotView`) and `EngineHandle::download(&amp;NodeId) -&gt; Promise` (resolves a `Uint8Array` from `read_content`), both under the existing engine async mutex, errors via the existing `engine_error` (Display → `JsError`) exactly as `start`/`command`.
+- `/Users/myankelev/Code/random/cipher-box/crates/wasm/tests/boundary.rs` — two new wasm-bindgen tests.
+
+## Shape decisions (deviations from the prompt, with evidence)
+
+1. **`SnapshotChild.kind()` returns the existing `NodeKind` enum, not a `"file"|"folder"` string.** NodeKind is stringified nowhere in the crate; the only precedent for an enum payload crossing via a getter is `Event::staleness() -&gt; Option&lt;Staleness&gt;` (mirror enum, lib.rs), and `NodeKind` already crosses as an enum in `Command::create`. A string would have introduced a second representation of the same domain enum.
+2. **`Event::phase()` returns `Option&lt;OpPhase&gt;` (new mirror enum), not `Option&lt;String&gt;`** — same precedent (`staleness()` getter); camelCase strings are used only for the `kind` discriminant, and phase is a payload enum, not a discriminant.
+3. **Node ids cross as raw bytes** (`root()`/`folder()`/`id()`/`node()` → `Vec&lt;u8&gt;`/`Uint8Array`), matching the established read pattern (`NodeId.bytes`, `Event::ipns_name`); `NodeId` objects remain the command-side input shape via `fromBytes`.
+4. `deadLetters()` returns `Vec&lt;u64&gt;` → JS `BigUint64Array` (bigints), consistent with the u64→bigint rule.
+
+## Tests
+
+- Native (`cargo test -p cipherbox-wasm`): 6 passed — added `op_progress_getters_map_the_payload_and_stay_undefined_off_variant` and `snapshot_view_getters_map_every_field`; the latter constructs `facade::SnapshotView`/`SnapshotChild`/`Breadcrumb` literally so a new engine field breaks compile, mirroring the existing exhaustive-match guard (the `OpPhase`/`NodeKind` `From` matches are themselves exhaustive).
+- WASM boundary (`cargo test -p cipherbox-wasm --target wasm32-unknown-unknown`, the exact CI invocation, run locally under wasm-bindgen-test-runner → Node): 7 passed — new `op_progress_getters_cross_and_stay_undefined_off_variant` (bigint opId, Uint8Array node, undefined for absent optionals and off-variant) and `snapshot_view_getters_cross_with_boundary_shapes` (Uint8Array ids, `u64::MAX` size survives as bigint, undefined size/mtime, BigUint64Array deadLetters, JS Arrays of SnapshotChild/Breadcrumb with field round-trip).
+
+## Gates
+
+`cargo fmt --all` applied; `cargo clippy -p cipherbox-wasm --all-targets` zero warnings; `cargo check --workspace` clean; both native and wasm32-unknown-unknown test suites green.</result>
+<usage><subagent_tokens>81010</subagent_tokens><tool_uses>15</tool_uses><duration_ms>182915</duration_ms></usage>
+</task-notification>
