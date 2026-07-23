@@ -26,7 +26,7 @@
 //! the claimed CID's *own* codec byte, validating both a raw leaf and a DAG root
 //! while the version, multihash, and length framing stay fixed and fail-closed.
 
-use crate::error::{CodecError, TrustViolation};
+use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::suite::hash::hash;
 use crate::suite::secret::SECRET_LEN;
 
@@ -102,6 +102,133 @@ pub fn verify_cid(claimed_cid: &[u8], bytes: &[u8]) -> Result<(), CodecError> {
         Ok(())
     } else {
         Err(TrustViolation::ContentCidMismatch.into())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Content-CID string codec (blueprint/core.md "Content-CID string codec"). A
+// scope's metadata IPNS record carries `/ipfs/<head_cid>` where `<head_cid>` is
+// the binary CIDv1 above rendered in base32-lowercase multibase (leading `b`),
+// the form IPFS emits. The Adopter must recover the binary anchor from that
+// string before `read_block` can trust-check the fetched head, so encode + strict
+// decode are core exports — mirroring the base36 name codec ([`crate::ipns::name`]).
+// ---------------------------------------------------------------------------
+
+/// The multibase prefix for lowercase base32 (RFC 4648 `base32`, no padding).
+const MULTIBASE_BASE32: char = 'b';
+
+/// The RFC 4648 base32 lowercase alphabet (`a`=0 … `z`=25, `2`=26 … `7`=31).
+const BASE32_ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+
+/// Whether `cid` is the frozen content-plane CIDv1 framing: 36 bytes,
+/// `version=1`, a single-byte multicodec (`< 0x80`, engine-owned #630), the
+/// BLAKE3 multihash code, and the 32-byte digest length. The invariant both the
+/// encoder guards (release-active) and the decoder rejects on, kept symmetric.
+fn is_wellformed_content_cid(cid: &[u8]) -> bool {
+    cid.len() == CONTENT_CID_LEN
+        && cid[0] == CID_VERSION
+        && cid[CID_CODEC_INDEX] < 0x80
+        && cid[2] == CONTENT_CID_MULTIHASH
+        && cid[3] == DIGEST_LEN as u8
+}
+
+/// Encode a binary content CIDv1 as its canonical base32-lowercase multibase
+/// string (leading `b`). Every valid content CID has exactly one such string.
+///
+/// `assert!` (release-active, like [`compute_cid`]): emitting a `b…` string over
+/// bytes the decoder rejects would publish an unresolvable scope head (AGENTS.md
+/// rule 8 encode/decode symmetry), so a malformed CID fails closed in every build.
+pub fn encode_content_cid_str(cid: &[u8]) -> String {
+    assert!(
+        is_wellformed_content_cid(cid),
+        "content CID must be the frozen CIDv1 framing (core.md)"
+    );
+    let mut out = String::with_capacity(1 + base32_len(cid.len()));
+    out.push(MULTIBASE_BASE32);
+    base32_encode_into(cid, &mut out);
+    out
+}
+
+/// Strictly decode a base32-lowercase multibase content-CID string into its
+/// binary CIDv1 bytes, fail-closed ([`Malformed::ContentCidStrMalformed`]).
+/// Rejects a wrong/missing `b` prefix, a non-base32 or non-canonical body, and
+/// anything that is not the frozen content-plane CIDv1 framing — the recovered
+/// anchor must be trustworthy before a fetch trusts it (AGENTS.md rule 6).
+pub fn decode_content_cid_str(s: &str) -> Result<Vec<u8>, CodecError> {
+    // Fixed-width anchor: reject an over-long string up front (cheap, never
+    // rejects a real 36-byte CID — the base32 bound always exceeds its width).
+    if s.len() > 1 + base32_len(CONTENT_CID_LEN) {
+        return Err(malformed_cid_str());
+    }
+    let mut chars = s.chars();
+    if chars.next() != Some(MULTIBASE_BASE32) {
+        return Err(malformed_cid_str());
+    }
+    let cid = base32_decode(chars.as_str()).ok_or_else(malformed_cid_str)?;
+    if !is_wellformed_content_cid(&cid) {
+        return Err(malformed_cid_str());
+    }
+    // Re-derive the canonical string and byte-compare: a body that decoded but
+    // is not the byte-exact canonical rendering (e.g. a dangling zero-bit char)
+    // never survives as a distinct string (mirrors ipns/name.rs).
+    if encode_content_cid_str(&cid) != s {
+        return Err(malformed_cid_str());
+    }
+    Ok(cid)
+}
+
+fn malformed_cid_str() -> CodecError {
+    Malformed::ContentCidStrMalformed.into()
+}
+
+/// A loose upper bound on the base32 length of `n` bytes: 8 bits/byte over
+/// 5 bits/char is 1.6, so `2*n` always suffices (for capacity and the cap).
+fn base32_len(n: usize) -> usize {
+    2 * n
+}
+
+/// Append the canonical base32-lowercase (no-padding) rendering of `input`.
+fn base32_encode_into(input: &[u8], out: &mut String) {
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for &b in input {
+        acc = (acc << 8) | u32::from(b);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            out.push(BASE32_ALPHABET[((acc >> bits) & 0x1f) as usize] as char);
+        }
+    }
+    if bits > 0 {
+        out.push(BASE32_ALPHABET[((acc << (5 - bits)) & 0x1f) as usize] as char);
+    }
+}
+
+/// Decode a canonical base32-lowercase (no-padding) body. Returns `None` on any
+/// non-alphabet char or a non-zero trailing-bit remainder (a non-canonical tail).
+fn base32_decode(text: &str) -> Option<Vec<u8>> {
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    let mut out = Vec::with_capacity(text.len() * 5 / 8);
+    for c in text.chars() {
+        acc = (acc << 5) | u32::from(base32_digit(c)?);
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xff) as u8);
+        }
+    }
+    if bits > 0 && (acc & ((1 << bits) - 1)) != 0 {
+        return None;
+    }
+    Some(out)
+}
+
+fn base32_digit(c: char) -> Option<u8> {
+    match c {
+        'a'..='z' => Some(c as u8 - b'a'),
+        '2'..='7' => Some(c as u8 - b'2' + 26),
+        _ => None,
     }
 }
 
@@ -254,5 +381,70 @@ mod tests {
             verify_cid(b"not a cid", bytes).unwrap_err().check(),
             "content-cid-mismatch"
         );
+    }
+
+    #[test]
+    fn content_cid_str_round_trips_and_is_lowercase_b_prefixed() {
+        for codec in [CONTENT_CID_CODEC, 0x71u8] {
+            let cid = compute_cid(codec, b"head block bytes");
+            let s = encode_content_cid_str(&cid);
+            assert!(s.starts_with('b'), "base32-lower multibase prefix");
+            assert!(
+                s.bytes()
+                    .skip(1)
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()),
+                "base32-lower body: {s}"
+            );
+            assert_eq!(
+                decode_content_cid_str(&s).expect("own string decodes"),
+                cid,
+                "string codec round-trips byte-for-byte"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_rejects_foreign_and_non_canonical_strings() {
+        let cid = compute_cid(CONTENT_CID_CODEC, b"anchor");
+        let s = encode_content_cid_str(&cid);
+        for bad in [
+            String::new(),                // empty
+            "b".to_string(),              // prefix only
+            format!("k{}", &s[1..]),      // wrong multibase (base36 k)
+            format!("z{}", &s[1..]),      // wrong multibase (base58 z)
+            s.to_uppercase(),             // uppercase (base32 upper 'B…')
+            format!("{s}a"),              // trailing extra char
+            s[..s.len() - 1].to_string(), // truncated
+            format!("b1{}", &s[1..]),     // '1' not in base32 alphabet
+        ] {
+            assert_eq!(
+                decode_content_cid_str(&bad).unwrap_err().check(),
+                "content-cid-str-malformed",
+                "must reject {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_rejects_wrong_framing_even_when_base32_canonical() {
+        // A canonical base32 body over 36 bytes with a corrupted multihash code:
+        // valid base32, wrong CIDv1 framing → fail closed.
+        let mut cid = compute_cid(CONTENT_CID_CODEC, b"anchor");
+        cid[2] ^= 0xff;
+        let mut s = String::from("b");
+        super::base32_encode_into(&cid, &mut s);
+        assert_eq!(
+            decode_content_cid_str(&s).unwrap_err().check(),
+            "content-cid-str-malformed"
+        );
+    }
+
+    // Native-only: the always-on encode guard fires in every build; `#[should_panic]`
+    // is unsafe on the panic=abort wasm legs (mirrors compute_cid's guard test).
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    #[should_panic(expected = "frozen CIDv1 framing")]
+    fn encode_guards_malformed_cid_fail_closed() {
+        let _ = encode_content_cid_str(b"not a well-framed content cid");
     }
 }

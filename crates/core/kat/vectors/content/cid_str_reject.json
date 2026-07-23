@@ -1,0 +1,56 @@
+[
+  {
+    "name": "empty",
+    "text": "",
+    "check": "content-cid-str-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "prefix-only",
+    "text": "b",
+    "check": "content-cid-str-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "wrong-multibase-base36-k",
+    "text": "kafkr4ihrcmbmwxxzhi2wtw2ej4h4sy3kbr5tbf4q6ciabphxzkug7dfvfe",
+    "check": "content-cid-str-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "wrong-multibase-base58-z",
+    "text": "zafkr4ihrcmbmwxxzhi2wtw2ej4h4sy3kbr5tbf4q6ciabphxzkug7dfvfe",
+    "check": "content-cid-str-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "uppercase-base32-upper",
+    "text": "BAFKR4IHRCMBMWXXZHI2WTW2EJ4H4SY3KBR5TBF4Q6CIABPHXZKUG7DFVFE",
+    "check": "content-cid-str-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "non-base32-char-1",
+    "text": "b1afkr4ihrcmbmwxxzhi2wtw2ej4h4sy3kbr5tbf4q6ciabphxzkug7dfvfe",
+    "check": "content-cid-str-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "truncated",
+    "text": "bafkr4ihrcmbmwxxzhi2wtw2ej4h4sy3kbr5tbf4q6ciabphxzkug7dfvf",
+    "check": "content-cid-str-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "trailing-extra-char",
+    "text": "bafkr4ihrcmbmwxxzhi2wtw2ej4h4sy3kbr5tbf4q6ciabphxzkug7dfvfea",
+    "check": "content-cid-str-malformed",
+    "class": "malformed"
+  },
+  {
+    "name": "wrong-cid-framing",
+    "text": "bafk6cihrcmbmwxxzhi2wtw2ej4h4sy3kbr5tbf4q6ciabphxzkug7dfvfe",
+    "check": "content-cid-str-malformed",
+    "class": "malformed"
+  }
+]
