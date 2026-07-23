@@ -29,6 +29,7 @@
 
 mod adopter;
 mod fanout;
+mod pointer_fetch;
 
 pub mod eol;
 pub mod liveness;
@@ -43,6 +44,7 @@ pub use liveness::{
     EolRenewResult, HeldRecord, HeldRecords, LivenessControl, RE_PUT_INTERVAL, RePutResult,
     eol_republish, keyless_re_put, run_liveness_loop,
 };
+pub use pointer_fetch::RecordPointerFetch;
 pub use publish::{PublishError, PublishOutcome, PublishRequest, publish};
 pub use resolve::{AdoptOutcome, Adopter, ResolveOutcome, Resolved, resolve};
 pub use retire::{retire, root_retire_ready};
