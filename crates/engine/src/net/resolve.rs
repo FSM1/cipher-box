@@ -43,6 +43,20 @@ pub trait Adopter {
     /// `Err(GateError::Rejected)` is a fail-closed trust violation;
     /// `Err(GateError::Seam)` is host I/O.
     async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<AdoptOutcome, GateError>;
+
+    /// Recover the OWNER's own write-scope seed for an equal-floor `Current` own
+    /// record so the liveness loop can hold+renew it (#752 F3). `Ok(None)` when
+    /// not our own / no owner-write-blob / the blob won't open under the durable
+    /// write floor — held keyless, never force-held. Fail-OPEN: returns a
+    /// [`SeamError`], never a `Rejected` verdict (a `Current` must never harden
+    /// into a trust error). The default suits every non-owner adopter stub.
+    async fn recover_own_write_seed(
+        &self,
+        _name: &IpnsName,
+        _record_bytes: &[u8],
+    ) -> Result<Option<([u8; 16], Zeroizing<[u8; 32]>)>, SeamError> {
+        Ok(None)
+    }
 }
 
 /// A gate pass plus the transient write material a write-capable holder needs to
@@ -162,13 +176,20 @@ where
             // A strictly older sequence is a replay/rollback and stays a
             // fail-closed trust violation, as does every other gate rejection.
             Err(GateError::Rejected(rejection)) => match &rejection.reason {
-                RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => (
-                    ResolveOutcome::Current {
-                        record_bytes: bytes.clone(),
-                    },
-                    None,
-                    Some(bytes),
-                ),
+                RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {
+                    // Our own current root at exactly the floor: recover the
+                    // owner's write seed (fail-open) so the liveness loop can
+                    // hold+renew it before its EOL lapses (#752 F3). A non-owner
+                    // record or an unopenable owner-write-blob yields no hold.
+                    let hold = adopter.recover_own_write_seed(name, &bytes).await?;
+                    (
+                        ResolveOutcome::Current {
+                            record_bytes: bytes.clone(),
+                        },
+                        hold,
+                        Some(bytes),
+                    )
+                }
                 _ => (ResolveOutcome::TrustViolation(rejection), None, None),
             },
             Err(GateError::Seam(error)) => return Err(error),
@@ -332,6 +353,10 @@ mod tests {
         /// The (write scope seed, node id) a gate-surfaced write grant contributes
         /// on an `Accept` — `None` models a read-only/own-scope adopt.
         grant: Option<([u8; 32], [u8; 16])>,
+        /// The (node id, write scope seed) the owner recovers for its own
+        /// equal-floor `Current` record (#752 F3) — `None` models a non-owner
+        /// record with no recoverable seed (held keyless).
+        own_seed: Option<([u8; 16], [u8; 32])>,
     }
 
     impl StubAdopter {
@@ -339,6 +364,7 @@ mod tests {
             Self {
                 verdict,
                 grant: None,
+                own_seed: None,
             }
         }
 
@@ -346,6 +372,16 @@ mod tests {
             Self {
                 verdict: Verdict::Accept,
                 grant: Some((seed, node_id)),
+                own_seed: None,
+            }
+        }
+
+        /// An own equal-floor `Current` record whose write seed the owner recovers.
+        fn own_current(seed: [u8; 32], node_id: [u8; 16]) -> Self {
+            Self {
+                verdict: Verdict::EqualSequence,
+                grant: None,
+                own_seed: Some((node_id, seed)),
             }
         }
     }
@@ -388,6 +424,16 @@ mod tests {
                     },
                 })),
             }
+        }
+
+        async fn recover_own_write_seed(
+            &self,
+            _name: &IpnsName,
+            _record_bytes: &[u8],
+        ) -> Result<Option<([u8; 16], Zeroizing<[u8; 32]>)>, crate::seams::SeamError> {
+            Ok(self
+                .own_seed
+                .map(|(node_id, seed)| (node_id, Zeroizing::new(seed))))
         }
     }
 
@@ -519,6 +565,138 @@ mod tests {
             "held bytes are the in-hand Current bytes"
         );
         assert_eq!(hr.routing_key, name.as_str());
+    }
+
+    #[test]
+    fn own_current_root_is_held_with_a_valid_signer_and_real_head_cid() {
+        use core::time::Duration;
+
+        use crate::api::ApiClient;
+        use crate::net::eol_renew_pass;
+        use crate::net::publish::PublishOutcome;
+        use crate::profile::SyncTimingProfile;
+        use crate::seams::FloorStore;
+
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let scheduler = world.scheduler.clone(); // manual clock, now = 0
+
+        // Our own current root: the seed the owner recovers derives the routing
+        // name (the insert-time signer<->name bind passes for our own record).
+        let write_scope_seed = [5u8; 32];
+        let node_id = [6u8; 16];
+        let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let bytes = record(&signer, 1);
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), bytes.clone());
+        }
+
+        // The gate rejects on sequence (equal-floor Current); the adopter recovers
+        // the owner's write seed, so the caller carries none of its own.
+        let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+        let material = HeldMaterial {
+            node_id: [0u8; 16],
+            write_scope_seed: None,
+            content_cids: Vec::new(),
+        };
+        let resolved = block_on(resolve_and_hold(
+            &device.record_store,
+            &device.snapshot_cache,
+            &StubAdopter::own_current(write_scope_seed, node_id),
+            &name,
+            &held,
+            &material,
+        ))
+        .expect("resolve_and_hold");
+        assert!(matches!(resolved.outcome, ResolveOutcome::Current { .. }));
+
+        let hr = held
+            .borrow()
+            .get(&node_id)
+            .cloned()
+            .expect("own current root is held by its recovered node id");
+        // Held under a valid signer that signs for exactly the routing key.
+        assert_eq!(IpnsName::from_public_key(&hr.signer.verifying_key()), name);
+        // A real, non-empty head CID from the signed record value (never /ipfs/).
+        let value = IpnsRecord::unmarshal(&bytes)
+            .unwrap()
+            .verify(&name)
+            .unwrap()
+            .value;
+        assert_eq!(Some(hr.head_cid.clone()), head_cid_from_value(&value));
+        assert!(!hr.head_cid.is_empty());
+
+        // The held record renews: model adoption (floor → 1), advance into the EOL
+        // window, and prove the recovered signer republishes at seq+1.
+        block_on(
+            device
+                .floor_store
+                .raise_sequence_floor(name.as_str().as_bytes(), 1),
+        )
+        .unwrap();
+        scheduler.advance(Duration::from_secs(65 * 24 * 60 * 60));
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        device.http.enqueue_response(crate::seams::HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: Vec::new(),
+        });
+        let results = block_on(eol_renew_pass(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &scheduler,
+            &SyncTimingProfile::CI,
+            &[hr],
+        ));
+        assert_eq!(
+            results[0].outcome.as_ref().unwrap(),
+            &Some(PublishOutcome::Published { sequence: 2 }),
+            "the held own current root renews at seq+1 under its recovered signer",
+        );
+    }
+
+    #[test]
+    fn non_owner_current_is_not_force_held() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let signer = Ed25519Signer::from_seed([21u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), record(&signer, 4));
+        }
+
+        // Equal-floor Current, but no recoverable owner write seed and no caller
+        // material seed: the record is never force-held (#752 F3 least-privilege).
+        let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+        let material = HeldMaterial {
+            node_id: [0u8; 16],
+            write_scope_seed: None,
+            content_cids: Vec::new(),
+        };
+        let resolved = block_on(resolve_and_hold(
+            &device.record_store,
+            &device.snapshot_cache,
+            &StubAdopter::new(Verdict::EqualSequence),
+            &name,
+            &held,
+            &material,
+        ))
+        .expect("resolve_and_hold");
+        assert!(matches!(resolved.outcome, ResolveOutcome::Current { .. }));
+        assert!(
+            held.borrow().is_empty(),
+            "a non-owner current record is never force-held"
+        );
     }
 
     #[test]

@@ -193,6 +193,34 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
             node_id: env.id,
         })
     }
+
+    async fn recover_own_write_seed(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> Result<Option<([u8; 16], Zeroizing<[u8; 32]>)>, SeamError> {
+        // The record already assembled during `adopt` on this same Current path
+        // (content-addressed, deterministic); a re-assembly failure is fail-open —
+        // held keyless, never a trust verdict (#752 F3: a Current never hardens).
+        let candidate = match self.assemble_candidate(name, record_bytes).await {
+            Ok(candidate) => candidate,
+            Err(GateError::Seam(seam)) => return Err(seam),
+            Err(GateError::Rejected(_)) => return Ok(None),
+        };
+        let Some(owb) = &candidate.grant_section.owner_write_blob else {
+            return Ok(None);
+        };
+        // The E8 recovery only ever yields Ok/Seam; map its seam to availability.
+        let seed = match self
+            .recover_write_scope_seed(&candidate.envelope, owb)
+            .await
+        {
+            Ok(seed) => seed,
+            Err(GateError::Seam(seam)) => return Err(seam),
+            Err(GateError::Rejected(_)) => return Ok(None),
+        };
+        Ok(seed.map(|seed| (candidate.envelope.id, seed)))
+    }
 }
 
 impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
@@ -694,6 +722,75 @@ mod tests {
         assert!(
             outcome.write_scope_seed.is_none(),
             "a transplanted owner-write-blob yields no seed"
+        );
+    }
+
+    #[test]
+    fn recover_own_write_seed_returns_the_seed_for_our_own_current_root() {
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+
+        let (node_id, seed) = block_on(adopter.recover_own_write_seed(&fx.name, &fx.record(1)))
+            .expect("recovery is fail-open, never an error")
+            .expect("the owner recovers its own write seed on the Current path");
+        assert_eq!(node_id, fx.root_id, "keyed by the envelope id");
+        assert_eq!(*seed, WRITE_SCOPE_SEED);
+        // The recovered seed reproduces the record's IPNS routing name.
+        let signer = SessionIdentity::write_name_signer(&seed, &fx.root_id);
+        assert_eq!(IpnsName::from_public_key(&signer.verifying_key()), fx.name);
+    }
+
+    #[test]
+    fn recover_own_write_seed_is_none_when_the_blob_is_absent_stale_or_transplanted() {
+        // Missing owner-write-blob → held keyless, never a seed.
+        let fx = Fixture::new();
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+        assert!(
+            block_on(adopter.recover_own_write_seed(&fx.name, &fx.record(1)))
+                .expect("fail-open")
+                .is_none(),
+            "no owner-write-blob ⇒ no recovered seed"
+        );
+
+        // Stale blob one write epoch below the floor → won't open → None.
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH - 1));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+        assert!(
+            block_on(adopter.recover_own_write_seed(&fx.name, &fx.record(1)))
+                .expect("fail-open")
+                .is_none(),
+            "a stale owner-write-blob below the floor recovers no seed"
+        );
+
+        // Transplanted: the floor names a different write epoch than the blob was
+        // sealed under → the recomputed AAD never opens it → None.
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH + 1);
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+        assert!(
+            block_on(adopter.recover_own_write_seed(&fx.name, &fx.record(1)))
+                .expect("fail-open")
+                .is_none(),
+            "a transplanted owner-write-blob recovers no seed"
         );
     }
 }
