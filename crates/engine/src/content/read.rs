@@ -7,9 +7,9 @@
 //! run through [`cipherbox_core::content::verify_cid`] against the requested
 //! CID, and a mismatch fails **closed** as a [`TrustViolation`] — never a silent
 //! degrade to staleness (AGENTS.md rule 6). Only availability (transport error,
-//! non-2xx) rotates to the next source; a mismatch is terminal, because a
-//! content-address disagreement is an integrity signal to surface, not a
-//! retryable fetch miss.
+//! non-2xx, or an over-cap body) rotates to the next source; a mismatch is
+//! terminal, because a content-address disagreement is an integrity signal to
+//! surface, not a retryable fetch miss.
 
 use core::fmt;
 use core::ops::Range;
@@ -19,7 +19,8 @@ use cipherbox_core::error::{CodecError, TrustViolation};
 use zeroize::Zeroizing;
 
 use super::dag::DAG_ROOT_CODEC;
-use crate::seams::{Http, HttpMethod, HttpRequest};
+use super::limits::MAX_RESOLVED_RECORD_BYTES;
+use crate::seams::{CappedFetchError, Http, HttpMethod, HttpRequest};
 
 const AUTHORIZATION: &str = "Authorization";
 const ACCEPT: &str = "Accept";
@@ -96,6 +97,18 @@ pub enum ReadError {
     /// integrity violation, surfaced verbatim from core. Terminal — never
     /// retried against another source, never degraded to staleness.
     TrustViolation(CodecError),
+    /// Every source that responded served an over-cap body (rejected at the
+    /// fetch boundary before any hash/decode/gate work), and the source set was
+    /// exhausted with no correctly-sized block. An oversized body is an
+    /// availability failure that rotates to the next source (a non-authoritative
+    /// source can serve an arbitrary huge body for any CID); this surfaces only
+    /// once every source is exhausted having hit that (#742).
+    TooLarge {
+        /// The oversized response body length.
+        size: usize,
+        /// The enforced ceiling ([`MAX_RESOLVED_RECORD_BYTES`]).
+        limit: usize,
+    },
     /// No source served the block: every gateway failed at the transport or
     /// status level (unreachable, aborted, or non-2xx). Availability, not
     /// integrity — the caller may retry later.
@@ -120,9 +133,11 @@ pub enum ReadError {
 ///
 /// Tries each source in [`Gateway`] order; returns the first block that
 /// verifies. A CID mismatch on any response is terminal
-/// ([`ReadError::TrustViolation`]); only availability failures rotate to the
-/// next source. All sources exhausted without a verified block is
-/// [`ReadError::Unavailable`].
+/// ([`ReadError::TrustViolation`]); every availability failure — transport
+/// error, non-2xx, or an over-cap body — rotates to the next source. All
+/// sources exhausted without a verified block is [`ReadError::Unavailable`],
+/// unless at least one source served an over-cap body, which surfaces as
+/// [`ReadError::TooLarge`].
 pub async fn read_block(
     gateway: &Gateway,
     http: &impl Http,
@@ -139,12 +154,35 @@ pub async fn read_block(
             TrustViolation::ContentCidMismatch.into(),
         ));
     }
+    // An over-cap body at any source is an availability failure that rotates;
+    // remembered so an exhausted source set surfaces TooLarge rather than a plain
+    // no-source Unavailable.
+    let mut over_cap: Option<(usize, usize)> = None;
     for source in gateway.sources() {
-        let Some(response) = fetch(source, http, cid_str).await else {
-            continue; // transport-level failure: try the next source
+        let response = match fetch(source, http, cid_str).await {
+            Ok(response) => response,
+            // Transport-level failure is availability: rotate to the next source.
+            Err(CappedFetchError::Transport(_)) => continue,
+            // Rotate: a non-authoritative source's oversized body does not prove
+            // the block is over-cap (a malicious source can serve an arbitrary
+            // huge body — e.g. a non-2xx error page — for any CID), so a healthy
+            // source may still serve the correctly-sized block. Terminal only
+            // once every source is exhausted (#742).
+            Err(CappedFetchError::BodyTooLarge { observed, limit }) => {
+                over_cap = Some((observed, limit));
+                continue;
+            }
         };
         if !(200..300).contains(&response.status) {
             continue; // availability (not found / server error): next source
+        }
+        // Defense-in-depth backstop behind the transport cap: a seam using the
+        // buffering default (or one that mis-sizes) still cannot slip an over-cap
+        // body past this before it is hashed, decoded, or gated (#742). Same
+        // rotation as the transport cap — an oversized body is not authoritative.
+        if response.body.len() > MAX_RESOLVED_RECORD_BYTES {
+            over_cap = Some((response.body.len(), MAX_RESOLVED_RECORD_BYTES));
+            continue;
         }
         // Every 2xx body is verified before it can be returned. A mismatch is a
         // fail-closed trust violation, not a reason to try another source.
@@ -152,7 +190,10 @@ pub async fn read_block(
             .map(|()| response.body)
             .map_err(ReadError::TrustViolation);
     }
-    Err(ReadError::Unavailable)
+    match over_cap {
+        Some((size, limit)) => Err(ReadError::TooLarge { size, limit }),
+        None => Err(ReadError::Unavailable),
+    }
 }
 
 /// Whether `cid_str` is the canonical CIDv1 base32 string of a content CID: the
@@ -171,13 +212,17 @@ fn is_canonical_content_cid_str(cid_str: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || (b'2'..=b'7').contains(&c))
 }
 
-/// Send the raw-block GET to one source; `None` on a transport-level failure
-/// (the seam's reserved `Err`), which is an availability signal, not a trust one.
+/// Send the raw-block GET to one source under the block-size cap. The transport
+/// bounds peak memory while reading the body (#787): a `Content-Length`
+/// pre-check plus a capped streaming read, so an over-cap body fails closed
+/// ([`CappedFetchError::BodyTooLarge`]) before it is fully allocated. A
+/// transport-level failure ([`CappedFetchError::Transport`]) is an availability
+/// signal, not a trust one.
 async fn fetch(
     source: &GatewaySource,
     http: &impl Http,
     cid_str: &str,
-) -> Option<crate::seams::HttpResponse> {
+) -> Result<crate::seams::HttpResponse, CappedFetchError> {
     let base = source.base_url.trim_end_matches('/');
     let mut headers = vec![(ACCEPT.to_owned(), RAW_BLOCK.to_owned())];
     if let Some(bearer) = &source.bearer {
@@ -192,7 +237,7 @@ async fn fetch(
         headers,
         body: None,
     };
-    http.send(request).await.ok()
+    http.send_capped(request, MAX_RESOLVED_RECORD_BYTES).await
 }
 
 /// The leaf-index range covering the plaintext byte range `[offset, offset +
@@ -333,6 +378,92 @@ mod tests {
             1,
             "a mismatch does not rotate sources"
         );
+    }
+
+    #[test]
+    fn all_sources_over_cap_is_terminal_too_large_once_exhausted() {
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        // Both sources serve an over-cap body that would NOT content-address to
+        // `leaf.cid`: getting TooLarge (not a content-cid-mismatch) proves the
+        // size gate fired before verify_cid hashed the body, before any
+        // decode/gate work. Terminal only once the source set is exhausted.
+        http.enqueue_response(raw_response(vec![0u8; MAX_RESOLVED_RECORD_BYTES + 1]));
+        http.enqueue_response(raw_response(vec![0u8; MAX_RESOLVED_RECORD_BYTES + 1]));
+
+        let err = block_on(read_block(
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap_err();
+        assert_eq!(
+            err,
+            ReadError::TooLarge {
+                size: MAX_RESOLVED_RECORD_BYTES + 1,
+                limit: MAX_RESOLVED_RECORD_BYTES,
+            }
+        );
+        assert_eq!(
+            http.requests().len(),
+            2,
+            "an over-cap body rotates through every source before failing closed"
+        );
+    }
+
+    #[test]
+    fn an_over_cap_body_rotates_to_a_healthy_source() {
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        // The accelerator serves an over-cap body (which would NOT content-address
+        // to `leaf.cid`); the public fallback serves the real block. The read
+        // succeeds via rotation, and the over-cap body is never hashed/verified —
+        // returning `leaf.sealed` (not a trust violation) proves it was rejected
+        // at the size gate before verify_cid ran.
+        http.enqueue_response(raw_response(vec![0u8; MAX_RESOLVED_RECORD_BYTES + 1]));
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+
+        let out = block_on(read_block(
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap();
+        assert_eq!(out, leaf.sealed);
+
+        let urls: Vec<_> = http.requests().iter().map(|r| r.url.clone()).collect();
+        assert_eq!(urls.len(), 2);
+        assert!(
+            urls[1].starts_with("https://public.gw.test/ipfs/"),
+            "rotated to the public fallback after the over-cap body"
+        );
+    }
+
+    #[test]
+    fn a_block_at_the_cap_passes_the_size_gate_and_reaches_verify() {
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        // Exactly at the cap: the boundary is exclusive (`>`), so this passes the
+        // size gate and reaches verify_cid, which then rejects the garbage bytes
+        // as a content-cid-mismatch — proving at-cap content proceeds.
+        http.enqueue_response(raw_response(vec![0u8; MAX_RESOLVED_RECORD_BYTES]));
+
+        let err = block_on(read_block(
+            &accelerator_only(),
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap_err();
+        match err {
+            ReadError::TrustViolation(e) => assert_eq!(e.check(), "content-cid-mismatch"),
+            other => panic!("expected a content-cid-mismatch, got {other:?}"),
+        }
     }
 
     #[test]

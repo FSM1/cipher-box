@@ -416,7 +416,7 @@ where
         let identity = ScopeRootIdentity {
             v: target.v,
             scope_id: descendant.scope_id,
-            ipns_name: &target.ipns_name,
+            ipns_name: &descendant.ipns_name,
             owner_enc_pub: &target.owner_enc_pub,
             parent_node_seed: Some(&parent_node_seed),
             pseudonym_signer: &target.pseudonym_signer,
@@ -450,7 +450,7 @@ where
         })?;
         let record = ResealedScopeRoot {
             scope_id: descendant.scope_id,
-            ipns_name: target.ipns_name.clone(),
+            ipns_name: descendant.ipns_name.clone(),
             read_epoch: target.current_read_epoch,
             write_epoch: target.write_epoch,
             section,
@@ -1200,6 +1200,36 @@ mod tests {
         assert!(
             ct_eq_32(descend.override_seed(), &[0x71; SECRET_LEN]),
             "ascent link yields the descendant override seed under the grantee derivation"
+        );
+    }
+
+    #[test]
+    fn descendant_scope_root_publishes_under_the_enumerated_ref_name() {
+        // The re-key step 5b must publish/reseal the reparented descendant under
+        // the name from the enumerated `ChildScopeRef` (`descendant.ipns_name`),
+        // not the resolved target's — the scope-root publication binding #779
+        // fixed in sweep.rs. A regression to any other name (e.g. the parent's)
+        // is caught here.
+        let subtree = vec![ChildScopeRef::new(
+            DESCENDANT_SCOPE,
+            DESCENDANT_NAME.to_vec(),
+        )];
+        let (outcome, published, _hub) = run(7, &subtree, None, FakeNet::new(Ok(())));
+        outcome.expect("grant creation succeeds over a converged subtree");
+
+        let descendant_record = published
+            .iter()
+            .find(|r| r.scope_id == DESCENDANT_SCOPE)
+            .expect("descendant re-keyed and published");
+        assert_eq!(
+            descendant_record.ipns_name,
+            DESCENDANT_NAME.to_vec(),
+            "published under the enumerated ChildScopeRef name"
+        );
+        assert_ne!(
+            descendant_record.ipns_name,
+            PARENT_NAME.to_vec(),
+            "never republished under the parent scope-root name"
         );
     }
 }

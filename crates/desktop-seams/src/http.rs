@@ -2,7 +2,9 @@
 
 use core::time::Duration;
 
-use cipherbox_engine::seams::{Http, HttpMethod, HttpRequest, HttpResponse, SeamError, SeamResult};
+use cipherbox_engine::seams::{
+    CappedFetchError, Http, HttpMethod, HttpRequest, HttpResponse, SeamError, SeamResult,
+};
 
 /// Plain HTTP for the hand-written API client, the trustless gateway read
 /// path, and BYO providers (blueprint/engine.md "Http", desktop column).
@@ -42,8 +44,13 @@ impl ReqwestHttp {
     }
 }
 
-impl Http for ReqwestHttp {
-    async fn send(&self, request: HttpRequest) -> SeamResult<HttpResponse> {
+impl ReqwestHttp {
+    /// Send the request and return the status, headers, and the not-yet-read
+    /// `reqwest` response — the shared prelude for buffered and capped reads.
+    async fn dispatch(
+        &self,
+        request: HttpRequest,
+    ) -> SeamResult<(u16, Vec<(String, String)>, reqwest::Response)> {
         let mut builder = self
             .client
             .request(map_method(request.method), &request.url);
@@ -72,11 +79,59 @@ impl Http for ReqwestHttp {
                 )
             })
             .collect();
+        Ok((status, headers, response))
+    }
+}
+
+impl Http for ReqwestHttp {
+    async fn send(&self, request: HttpRequest) -> SeamResult<HttpResponse> {
+        let (status, headers, response) = self.dispatch(request).await?;
         let body = response
             .bytes()
             .await
             .map_err(|err| SeamError::new(format!("http body: {err}")))?
             .to_vec();
+        Ok(HttpResponse {
+            status,
+            headers,
+            body,
+        })
+    }
+
+    async fn send_capped(
+        &self,
+        request: HttpRequest,
+        max_bytes: usize,
+    ) -> Result<HttpResponse, CappedFetchError> {
+        let (status, headers, mut response) = self
+            .dispatch(request)
+            .await
+            .map_err(CappedFetchError::Transport)?;
+
+        // Reject a body that declares itself over the cap before reading a byte;
+        // a missing or lying Content-Length is still bounded by the streaming
+        // cap below, which is the true peak-memory bound (#787).
+        if let Some(declared) = response.content_length() {
+            if declared > max_bytes as u64 {
+                return Err(CappedFetchError::BodyTooLarge {
+                    observed: usize::try_from(declared).unwrap_or(usize::MAX),
+                    limit: max_bytes,
+                });
+            }
+        }
+
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|err| {
+            CappedFetchError::Transport(SeamError::new(format!("http body: {err}")))
+        })? {
+            if body.len() + chunk.len() > max_bytes {
+                return Err(CappedFetchError::BodyTooLarge {
+                    observed: body.len() + chunk.len(),
+                    limit: max_bytes,
+                });
+            }
+            body.extend_from_slice(&chunk);
+        }
 
         Ok(HttpResponse {
             status,
