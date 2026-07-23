@@ -402,6 +402,17 @@
       "checks": [
         "content-cid-mismatch"
       ]
+    },
+    "cidStrAccept": {
+      "file": "vectors/content/cid_str_accept.json",
+      "count": 3
+    },
+    "cidStrReject": {
+      "file": "vectors/content/cid_str_reject.json",
+      "count": 9,
+      "checks": [
+        "content-cid-str-malformed"
+      ]
     }
   }
 }

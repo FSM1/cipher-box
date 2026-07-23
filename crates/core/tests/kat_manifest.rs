@@ -18,8 +18,8 @@ use wasm_bindgen_test::wasm_bindgen_test as test;
 
 use cipherbox_core::codec::{decode, decode_map_partial, encode, encode_map_partial};
 use cipherbox_core::content::{
-    CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid, open_chunk, seal_chunk,
-    verify_cid,
+    CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid, decode_content_cid_str,
+    encode_content_cid_str, open_chunk, seal_chunk, verify_cid,
 };
 use cipherbox_core::error::{Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -223,6 +223,14 @@ const FIXTURES: &[(&str, &str)] = &[
         "vectors/content/cid_reject.json",
         include_str!("../kat/vectors/content/cid_reject.json"),
     ),
+    (
+        "vectors/content/cid_str_accept.json",
+        include_str!("../kat/vectors/content/cid_str_accept.json"),
+    ),
+    (
+        "vectors/content/cid_str_reject.json",
+        include_str!("../kat/vectors/content/cid_str_reject.json"),
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -256,6 +264,16 @@ struct ContentManifest {
     seal_reject: RejectSection,
     cid: FileCount,
     cid_reject: RejectSection,
+    cid_str_accept: FileCount,
+    cid_str_reject: RejectSection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ContentCidStrAcceptVector {
+    name: String,
+    cid: String,
+    cid_str: String,
 }
 
 #[derive(Deserialize)]
@@ -941,6 +959,16 @@ fn content_cid_reject_vectors(m: &Manifest) -> Vec<ContentCidRejectVector> {
         .expect("content cid_reject.json shape")
 }
 
+fn content_cid_str_accept_vectors(m: &Manifest) -> Vec<ContentCidStrAcceptVector> {
+    serde_json::from_str(fixture(&m.content.cid_str_accept.file))
+        .expect("content cid_str_accept.json shape")
+}
+
+fn content_cid_str_reject_vectors(m: &Manifest) -> Vec<TextRejectVector> {
+    serde_json::from_str(fixture(&m.content.cid_str_reject.file))
+        .expect("content cid_str_reject.json shape")
+}
+
 fn read_body_accept_vectors(m: &Manifest) -> Vec<ReadBodyAcceptVector> {
     serde_json::from_str(fixture(&m.seal.read_body_accept.file))
         .expect("read_body_accept.json shape")
@@ -1119,6 +1147,8 @@ fn fixture_table_matches_manifest_files() {
         m.content.seal_reject.file.as_str(),
         m.content.cid.file.as_str(),
         m.content.cid_reject.file.as_str(),
+        m.content.cid_str_accept.file.as_str(),
+        m.content.cid_str_reject.file.as_str(),
     ];
     let referenced_set: BTreeSet<&str> = referenced.iter().copied().collect();
     assert_eq!(
@@ -1300,6 +1330,12 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
     // families pin `seal-open-failed`/`truncated` and `content-cid-mismatch`.
     covered.extend(content_seal_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(content_cid_reject_vectors(&m).into_iter().map(|v| v.check));
+    // The content-CID string codec's strict decode pins `content-cid-str-malformed`.
+    covered.extend(
+        content_cid_str_reject_vectors(&m)
+            .into_iter()
+            .map(|v| v.check),
+    );
 
     let surface: BTreeSet<String> = TrustViolation::CHECKS
         .iter()
@@ -3813,5 +3849,100 @@ fn content_cid_reject_vectors_fail_closed() {
             v.name
         );
         assert_eq!(err.class(), v.class, "content cid-reject {}: class", v.name);
+    }
+}
+
+#[test]
+fn content_cid_str_accept_vectors_round_trip() {
+    let m = manifest();
+    let vectors = content_cid_str_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.content.cid_str_accept.count,
+        "content cid-str-accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "content cid-str-accept family must not be empty"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate content cid-str {}",
+            v.name
+        );
+        let cid = unhex(&v.name, &v.cid);
+        // Encode: the binary CID renders to its one canonical base32-lower string.
+        assert_eq!(
+            encode_content_cid_str(&cid),
+            v.cid_str,
+            "content cid-str {}: encode drift",
+            v.name
+        );
+        assert!(
+            v.cid_str.starts_with('b'),
+            "content cid-str {}: base32 multibase prefix",
+            v.name
+        );
+        // Strict decode recovers the binary anchor byte-for-byte.
+        let decoded = decode_content_cid_str(&v.cid_str)
+            .unwrap_or_else(|e| panic!("content cid-str {}: decode rejected: {e}", v.name));
+        assert_eq!(decoded, cid, "content cid-str {}: decode drift", v.name);
+    }
+}
+
+#[test]
+fn content_cid_str_reject_vectors_fail_closed() {
+    let m = manifest();
+    let vectors = content_cid_str_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.content.cid_str_reject.count,
+        "content cid-str-reject count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "content cid-str-reject family must not be empty"
+    );
+
+    let listed: BTreeSet<&str> = m
+        .content
+        .cid_str_reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs content cid_str_reject.json"
+    );
+    assert!(
+        listed.contains("content-cid-str-malformed"),
+        "content cid-str-reject covers content-cid-str-malformed"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate content cid-str-reject {}",
+            v.name
+        );
+        let err = decode_content_cid_str(&v.text).expect_err("cid-str-reject must fail closed");
+        assert_eq!(
+            err.check(),
+            v.check,
+            "content cid-str-reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "content cid-str-reject {}: class",
+            v.name
+        );
     }
 }

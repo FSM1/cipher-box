@@ -192,6 +192,12 @@ byte movers injected by the engine.
 - **Name codec**: `ipnsName` = base36 CIDv1 libp2p-key of the Ed25519 public
   key. Encode + strict decode are core exports; everything downstream treats
   names as opaque.
+- **Content-CID string codec**: a scope's IPNS record value `/ipfs/<head_cid>`
+  carries the head block's binary CIDv1 in base32-lowercase multibase (`b…`).
+  Encode + strict decode are core exports; decode fail-closes on a wrong/missing
+  `b` prefix, a non-base32 or non-canonical body, or any bytes that are not the
+  frozen content-plane CIDv1 framing — the Adopter recovers the trust anchor from
+  the record string before `read_block` verifies the fetched head.
 - **Keyless re-PUT** is a first-class shape: marshal/unmarshal round-trips a
   foreign signed record byte-stable without key material (the republisher and
   every accelerator depend on this).
