@@ -1,10 +1,12 @@
 //! The production engine host: constructs the one engine instance over the
-//! browser seams and exposes `start` / `command` / `nextEvent` to the worker.
+//! browser seams and exposes `start` / `command` / `snapshot` / `download` /
+//! `nextEvent` to the worker.
 //!
 //! Loaded inside `packages/client`'s dedicated engine worker (never the UI
-//! realm). `start` and `command` mutate the single engine writer behind an
-//! async mutex, so concurrent calls queue rather than race; `nextEvent` reads
-//! the independent event stream and runs concurrently with a command.
+//! realm). `start`, `command`, and the reads (`snapshot`, `download`) share
+//! the single engine behind an async mutex, so concurrent calls queue rather
+//! than race; `nextEvent` reads the independent event stream and runs
+//! concurrently with a command.
 //!
 //! Key material lives only in this worker's WASM linear memory: the login
 //! secret enters once through `start` (copied into the engine's `Zeroizing`
@@ -19,7 +21,7 @@ use cipherbox_engine::{
     Entropy, EntropyError, GatewayConfig, GatewaySource, SeamSet, SeamTypes, SyncTimingProfile,
 };
 use futures_util::lock::Mutex;
-use js_sys::{Promise, Reflect};
+use js_sys::{Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 use zeroize::Zeroizing;
@@ -31,7 +33,7 @@ use crate::seams_bridge::{
     RecordTransportAdapter, RefreshHintSourceAdapter, SchedulerAdapter, SnapshotCacheAdapter,
     StagingStoreAdapter,
 };
-use crate::{Command, Event};
+use crate::{Command, Event, NodeId, SnapshotView};
 
 /// The web host's concrete seam family (blueprint/engine.md `SeamTypes`): every
 /// engine seam is a JS-object adapter from `seams_bridge`.
@@ -203,6 +205,39 @@ impl EngineHandle {
                 .await
                 .map_err(engine_error)?;
             Ok(JsValue::UNDEFINED)
+        })
+    }
+
+    /// Reads a key-free [`SnapshotView`] of `folder` for a UI paint. Resolves
+    /// with the view; rejects with the engine error.
+    pub fn snapshot(&self, folder: &NodeId) -> Promise {
+        let engine = self.engine.clone();
+        let folder = folder.facade();
+        future_to_promise(async move {
+            let view = engine
+                .lock()
+                .await
+                .snapshot(folder)
+                .await
+                .map_err(engine_error)?;
+            Ok(SnapshotView::from_facade(view).into())
+        })
+    }
+
+    /// Downloads and decrypts one file node's content through the verified
+    /// read pipeline. Resolves with the plaintext bytes as a `Uint8Array`;
+    /// rejects with the engine error.
+    pub fn download(&self, node: &NodeId) -> Promise {
+        let engine = self.engine.clone();
+        let node = node.facade();
+        future_to_promise(async move {
+            let bytes = engine
+                .lock()
+                .await
+                .read_content(node)
+                .await
+                .map_err(engine_error)?;
+            Ok(Uint8Array::from(bytes.as_slice()).into())
         })
     }
 
