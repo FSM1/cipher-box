@@ -28,6 +28,40 @@
     "output_tokens": 25035,
     "api_call_count": 43
   },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01PzVtJdyTrgLNKwWbFFUZDc",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "b62ff2f9d033",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 433,
+        "end": 434,
+        "entry_ids": [
+          "e5c5994b-bb43-439a-af76-f18ae5fc6f8b"
+        ],
+        "tool_use_id": "toolu_01PzVtJdyTrgLNKwWbFFUZDc"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01PzVtJdyTrgLNKwWbFFUZDc"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    }
+  ],
   "summary": {
     "intent": "Implement the API cleanups proposed in GitHub issue #712 (cross-referencing the related #719 concurrency-cleanup triage) across the mailbox, registry, content, and pin-store services.",
     "outcome": "Applied cleanup edits to advisory-lock.ts, registry.service.ts, content.service.ts, mailbox.service.ts, pin-store.ts, and fake-repo.ts; fixed two integration test hooks broken by the change, added a regression test for a new 503 mapping (verified via negative control), ran typecheck/lint/full unit suite (65/65 passing) and relevant integration tests, then created a feature branch and committed the work with a signed commit.",
