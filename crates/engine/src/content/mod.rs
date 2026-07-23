@@ -151,9 +151,12 @@ pub async fn open_content<H: Http>(
         )));
     }
 
-    // The capacity is safe to trust: the manifest size was just cross-checked
-    // against the sealed version's.
-    let mut plaintext = Vec::with_capacity(manifest.size as usize);
+    // Preallocate up to a fixed budget, then grow as leaves arrive: the size is
+    // authenticated but unproven until every leaf is fetched, so a large size
+    // field must not commit an outsized allocation upfront (on wasm32 it would
+    // also truncate). The reassembled-length cross-check below is the gate.
+    let prealloc = manifest.size.min(limits::MAX_RESOLVED_RECORD_BYTES as u64) as usize;
+    let mut plaintext = Vec::with_capacity(prealloc);
     for leaf_cid in &manifest.leaf_cids {
         let leaf_cid_str = encode_content_cid_str(leaf_cid);
         let sealed = read_block(gateway, http, &leaf_cid_str, leaf_cid, ContentPlane::Leaf)
