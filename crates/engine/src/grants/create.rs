@@ -1,43 +1,25 @@
 //! Owner-side read-grant creation (blueprint/engine.md "Grants and ledger:
 //! Grant creation"; #635).
 //!
-//! Minting the owner-only sharing path for a **read** grant, as the exact
-//! sequence the blueprint fixes:
-//!
-//! 1. **Converge** the subtree — run the [`sweep_pass`] over the granted
-//!    folder's descendant scope roots. A grant over a subtree that cannot be
-//!    proven epoch-converged is rejected **fail-closed** ([`CreateGrantError::
-//!    SubtreeNotConverged`] / [`CreateGrantError::Converge`]); a new grantee must
-//!    never be able to regress through an ancestor scope's history (CONTEXT.md
-//!    "Epoch-converged"). This is the load-bearing correctness rule.
-//! 2. **Mint the scope at read epoch 1** — a fresh **random** override seed (via
-//!    the injected [`Entropy`] seam, never KDF-derived), assembled into the
-//!    grantee scope root by [`reseal_scope_root`] with `prev = None` (the new
-//!    grantee needs no history).
-//! 3. **Parent index update** — move the folder's descendant scope roots into the
-//!    new scope's direct-child-scope index and insert the new scope root into the
-//!    parent's, under the dest-first / never-orphan discipline of
-//!    [`child_index`](super::child_index).
-//! 4. **Publish** — the grantee scope root first (register-first: it exists
-//!    before anything references it), then the reparented parent.
-//! 5. **Mailbox share pointer** — the sealed [`SharePointer`] posted to the
-//!    recipient's mailbox (sender signature inside the seal), with a fresh
-//!    HPKE ephemeral scalar drawn from entropy.
+//! Mints the owner-only **read** sharing path in the sequence the blueprint
+//! fixes: converge the subtree, mint the grantee scope at read epoch 1, reparent
+//! the descendant scope roots, publish grantee-first, then post the sealed share
+//! pointer. Convergence is the load-bearing correctness rule — a grant over a
+//! subtree that cannot be proven epoch-converged is refused **fail-closed**, so a
+//! new grantee can never regress through an ancestor scope's history (CONTEXT.md
+//! "Epoch-converged"). Each step carries its rationale inline.
 //!
 //! # Simulation boundary
 //!
-//! This is a deterministic-simulation slice: entropy is the injected
-//! [`Entropy`] seam and the read/floor/publish/mailbox effects are the faked
-//! seams (`SweepResolver`, `FloorStore`, `ScopeRootPublisher`, `Mailbox`). No
-//! clock or RNG is read. Production resolver/publisher wiring is deferred to
-//! #745/#746, mirroring the rotation primitives (#744/#747/#749/#760).
+//! Deterministic-simulation slice: entropy is the injected [`Entropy`] seam and
+//! the read/floor/publish/mailbox effects are faked. Production resolver/
+//! publisher wiring is deferred to #745/#746 (mirroring #744/#747/#749/#760).
 //!
 //! # Deferred (follow-on slices of #635)
 //!
 //! - **Write grants**: the write-scope cut via [`rotate_scope_write`](super::
-//!   super::rotation::rotate_scope_write) plus the both-seeds grant blob. Read
-//!   grant creation is the clean cut point; write grants layer the write-scope
-//!   cut on top of this identical skeleton.
+//!   super::rotation::rotate_scope_write) plus the both-seeds grant blob, layered
+//!   on this identical skeleton.
 //! - **Invites**: ephemeral-key blobs, bearer write-link flagging, claim
 //!   conversion.
 //!
@@ -385,8 +367,7 @@ where
         .await
         .map_err(CreateGrantError::Publish)?;
 
-    // 6) Parent index update: remove the reparented descendants, insert the new
-    // scope root, then re-seal + publish the parent (metadata-only, same epoch).
+    // 6) Parent index update — a metadata-only re-seal at the same epoch.
     let mut parent_index = parent.current_child_index.to_vec();
     for descendant in grantee.subtree_child_index {
         parent_index = remove_child(&parent_index, &descendant.scope_id);
