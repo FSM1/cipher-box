@@ -423,9 +423,8 @@ impl EngineError {
         }
     }
 
-    /// Map a cold-start failure onto the facade error. A host seam stays
-    /// availability; the caller-ordering precondition maps verbatim; every trust
-    /// arm (forged pointer, regressed floor, rejected root) surfaces as the
+    /// Map a cold-start failure onto the facade error: every trust arm (forged
+    /// pointer, regressed floor, rejected root) collapses to the single
     /// fail-closed [`ColdStart`](EngineError::ColdStart) — never retryable
     /// availability.
     fn from_cold_start(err: ColdStartError) -> Self {
@@ -581,9 +580,7 @@ fn count_nodes(snapshot: &Snapshot) -> u64 {
 
 /// The re-point pointer-payload wire version the owner's own vault seals under
 /// and the cold-start walk verifies against (`crates/core` pointer payload) — the
-/// sole v2 version. The vault's own root scope and root node are the anchored
-/// all-zero `id16`: the bootstrap anchor a cold start knows from the login secret
-/// alone, before any record resolves (CONTEXT.md "Vault pointer").
+/// sole v2 version (CONTEXT.md "Vault pointer").
 const POINTER_PAYLOAD_VERSION: u64 = 1;
 
 /// The engine — the single stateful brain behind the facade.
@@ -703,10 +700,9 @@ impl<T: SeamTypes> Engine<T> {
         drop(secret);
 
         // The one shared client for login, publish, and renewal. Login is
-        // fail-closed: on any error `start` returns before it commits the
-        // session or spawns the liveness loop, so no half-initialized state
-        // survives and the loop never runs unauthenticated (rules 3/6). An
-        // empty base URL is the pre-integration dormant state (field doc) — no
+        // fail-closed: a rejected login returns before the session is committed
+        // or any loop spawns, so the loop never runs unauthenticated (rules 3/6).
+        // An empty base URL is the pre-integration dormant state (field doc) — no
         // API to authenticate against, so login is skipped.
         let api = Rc::new(ApiClient::new(
             self.seams.http.clone(),
@@ -725,13 +721,12 @@ impl<T: SeamTypes> Engine<T> {
         // Cold-start data path (E4/E7): resolve the owner vault pointer, cold-seed
         // the floors, adopt the current root through the gate, and project its base
         // snapshot — all off the production `RecordPointerFetch`/`RootAdopter` over
-        // the engine's own gateway/seams. Fail-closed: a trust violation returns
-        // here, before either background loop spawns, so nothing runs past an
-        // unadopted root (rules 4/6). An empty chain (a first-run vault with no
-        // pointer yet) degrades to the anchored root with no error. The adopter and
-        // pointer fetch borrow `&self`, so they live only inside this block and
-        // release before the base snapshot is assigned.
-        let outcome = {
+        // the engine's own gateway/seams. Fail-closed: a trust violation clears the
+        // just-derived session and returns before either background loop spawns, so
+        // no derived key material stays resident and nothing runs past an unadopted
+        // root (rules 4/6). An empty chain (a first-run vault with no pointer yet)
+        // degrades to the anchored root with no error.
+        let cold_start = {
             let session = self.session.as_ref().expect("session set above");
             let owner_identity = session.owner_identity();
             let root = self.snapshot.root;
@@ -754,7 +749,16 @@ impl<T: SeamTypes> Engine<T> {
                 root,
             )
             .await
-            .map_err(EngineError::from_cold_start)?
+        };
+        let outcome = match cold_start {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                // Fail-closed symmetry with the login path: clear the derived
+                // session so no key material stays resident and the engine reports
+                // unstarted.
+                self.session = None;
+                return Err(EngineError::from_cold_start(err));
+            }
         };
 
         // The gate-passing base becomes the state law's left operand (reads render
@@ -903,11 +907,8 @@ impl<T: SeamTypes> Engine<T> {
         let held = self.held_records.clone();
         let alive = self.alive.clone();
         let events = self.events.clone();
-        // The shared client from `start`: its access JWT is already live from the
-        // cold-start login, so the renewal pass reuses it (no redundant
-        // 401→refresh) and self-heals on expiry via the credential store. The
-        // renewal pass only fires once the resolve-tick driver populates the held
-        // set.
+        // The shared client from `start` (see the `api` field): the renewal pass
+        // only fires once the resolve-tick driver populates the held set.
         self.seams.scheduler.spawn(Box::pin(async move {
             run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
                 if !alive.get() {
@@ -2304,6 +2305,43 @@ mod tests {
             assert_eq!(children[0].id, NodeId(CHILD_ID));
             assert_eq!(children[0].name, CHILD_NAME);
             assert_eq!(children[0].kind, NodeKind::File);
+        }
+
+        #[test]
+        fn start_cold_start_trust_failure_is_fail_closed() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (_head_block, head_cid, root_name) = owner_root();
+            seed_vault_pointer(&device, &root_name);
+            for endpoint in device.record_store.endpoints() {
+                seed_root_record_at(&device, &endpoint, &root_name, &head_cid);
+            }
+            // The adopt fetches the head block over the gateway, but the returned
+            // bytes do not hash to the record's head CID: a fail-closed trust
+            // violation surfaces as `ColdStart`.
+            device
+                .http
+                .enqueue_response(head_response(b"forged head block"));
+
+            let (mut engine, _events) = engine_on(&device);
+            let out = block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec())));
+
+            assert!(
+                matches!(out, Err(EngineError::ColdStart { .. })),
+                "a forged cold-start root is a hard trust failure, not a start: {out:?}"
+            );
+            // Mirrors `start_login_failure_is_fail_closed`: the derived session is
+            // cleared, so no key material stays resident and the engine reports
+            // unstarted.
+            assert!(
+                engine.session().is_none(),
+                "a fail-closed cold start leaves no derived session resident"
+            );
+            assert_eq!(
+                block_on(engine.command(Command::ManualRefresh)),
+                Err(EngineError::NotStarted),
+                "the engine stays unstarted after a cold-start trust failure"
+            );
         }
 
         #[test]
