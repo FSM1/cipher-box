@@ -17,6 +17,9 @@ export default new DataSource({
   database: process.env.DB_DATABASE ?? 'cipherbox',
   entities: ['src/**/*.entity.ts'],
   migrations: ['src/migrations/*.ts'],
+  // Per-migration transaction: each migration wraps in its own txn by default,
+  // so a migration may opt out (transaction = false) to run CONCURRENTLY DDL.
+  migrationsTransactionMode: 'each',
   uuidExtension: 'pgcrypto',
   logging: false,
 });

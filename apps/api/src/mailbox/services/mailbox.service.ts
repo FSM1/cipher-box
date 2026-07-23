@@ -17,6 +17,7 @@ import {
   setAdvisoryLockTimeout,
 } from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
+import { positiveIntConfig } from '../../common/config-int';
 import { MailboxMessage } from '../entities/mailbox-message.entity';
 
 /** Spec-fixed hard bound on the sealed blob (blueprint/api.md: <= ~8 KB). */
@@ -25,6 +26,16 @@ const MAX_BLOB_BYTES = 8192;
 /** 90-day unacked TTL, aligned with record EOLs (blueprint/api.md, Mailbox). */
 const TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
+/** Rows deleted per global-sweep batch; via MAILBOX_SWEEP_BATCH_SIZE. */
+const DEFAULT_SWEEP_BATCH_SIZE = 1000;
+
+/**
+ * Internal "don't loop forever" guard on batches per sweep run — not a per-deploy
+ * knob. The loop already drains on `deleted < batchSize`; this only caps a
+ * pathological backlog, leaving any remainder for the next scheduled run.
+ */
+export const SWEEP_MAX_BATCHES = 1000;
+
 /**
  * Canonical RFC 4122 UUID — the form `gen_random_uuid()` mints for the id
  * column. Ids are always server-minted uuids, so any other shape can never
@@ -32,17 +43,6 @@ const TTL_MS = 90 * 24 * 60 * 60 * 1000;
  * reaching the `uuid`-typed column (Postgres would raise 22P02 → a 500).
  */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * Read a positive-integer bound from config, falling back to the default for
- * an unset OR garbage value. Both bounds are DoS controls (the pending cap and
- * the poll batch size), so a misconfigured env var must fail closed to the
- * safe default, never silently to NaN (which would disable the cap entirely).
- */
-function positiveIntConfig(raw: unknown, fallback: number): number {
-  const value = Number(raw);
-  return Number.isInteger(value) && value > 0 ? value : fallback;
-}
 
 export interface PostMessageInput {
   recipientPublicKey: string;
@@ -74,6 +74,7 @@ export class MailboxService {
   private readonly pendingCap: number;
   private readonly pollLimit: number;
   private readonly lockTimeoutMs: number;
+  private readonly sweepBatchSize: number;
 
   constructor(
     @InjectRepository(MailboxMessage)
@@ -89,6 +90,10 @@ export class MailboxService {
     this.pendingCap = positiveIntConfig(configService.get('MAILBOX_PENDING_CAP'), 1000);
     this.pollLimit = positiveIntConfig(configService.get('MAILBOX_POLL_LIMIT'), 100);
     this.lockTimeoutMs = resolveAdvisoryLockTimeoutMs(configService);
+    this.sweepBatchSize = positiveIntConfig(
+      configService.get('MAILBOX_SWEEP_BATCH_SIZE'),
+      DEFAULT_SWEEP_BATCH_SIZE
+    );
   }
 
   /**
@@ -258,6 +263,55 @@ export class MailboxService {
   ): Promise<void> {
     const cutoff = new Date(this.clock.now().getTime() - TTL_MS);
     await repo.delete({ recipientPublicKey, receivedAt: LessThan(cutoff) });
+  }
+
+  /**
+   * The global, recipient-less TTL sweep the scheduled worker drives (#667): the
+   * lazy `purgeExpired` only fires on a recipient's own post/poll, so a dormant
+   * mailbox keeps expired rows forever. This makes the 90-day bound a hard
+   * guarantee independent of activity.
+   *
+   * The cutoff is one Clock snapshot for the whole run (deterministic, testable),
+   * and deletes are batched by `ctid` — bounded rows per statement, looping until
+   * a short batch signals drained — so the sweep never takes a long table lock or
+   * bloats a single transaction on a large backlog. It is safe to interleave with
+   * post/poll/lazy purge: a concurrent post writes a fresh `received_at` (>=
+   * cutoff) that this WHERE can never match, and a row another path already
+   * deleted simply isn't re-counted. Overlap is prevented in-process by the
+   * scheduler's in-flight guard (the republisher's mechanism); a cross-instance
+   * overlap is harmless because the delete is idempotent. Returns the number of
+   * rows deleted.
+   */
+  async sweepExpired(): Promise<number> {
+    const cutoff = new Date(this.clock.now().getTime() - TTL_MS);
+    let total = 0;
+    for (let batch = 0; batch < SWEEP_MAX_BATCHES; batch += 1) {
+      const deleted = await this.deleteExpiredBatch(cutoff);
+      total += deleted;
+      if (deleted < this.sweepBatchSize) {
+        break;
+      }
+    }
+    return total;
+  }
+
+  /**
+   * Delete up to one batch of globally-expired rows. Postgres has no
+   * `DELETE ... LIMIT`, so the batch is bounded by selecting `ctid`s under the
+   * cutoff and deleting exactly those; `received_at` ordering lets the
+   * `idx_mailbox_received_at` index drive the scan. Returns the rows deleted.
+   */
+  private async deleteExpiredBatch(cutoff: Date): Promise<number> {
+    const result = await this.messageRepository
+      .createQueryBuilder()
+      .delete()
+      .from(MailboxMessage)
+      .where(
+        'ctid IN (SELECT ctid FROM mailbox_messages WHERE received_at < :cutoff ORDER BY received_at LIMIT :limit)',
+        { cutoff, limit: this.sweepBatchSize }
+      )
+      .execute();
+    return result.affected ?? 0;
   }
 
   private scopeIdempotency(senderPublicKey: string, idempotencyKey: string): string {

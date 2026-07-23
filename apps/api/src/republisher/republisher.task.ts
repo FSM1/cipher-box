@@ -3,7 +3,8 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Clock } from '../common/clock';
-import { PeriodicTask } from '../common/worker-scheduler';
+import { positiveIntConfig } from '../common/config-int';
+import { MAX_TIMER_DELAY_MS, PeriodicTask } from '../common/worker-scheduler';
 import { NameInventory } from '../registry/entities/name-inventory.entity';
 import { RecordSequenceReader } from './record-sequence-reader';
 import { RecordTransport } from './record-transport';
@@ -20,12 +21,6 @@ const DEFAULT_RUN_TIMEOUT_MS = 60 * 60 * 1000;
 const DEFAULT_CONCURRENCY = 8;
 /** The monotonic floor a record with no readable sequence caches at (see walkName). */
 const SEQUENCE_FLOOR = 0n;
-
-/** Read a positive integer, failing closed to `fallback` for unset/garbage. */
-function positiveInt(raw: unknown, fallback: number): number {
-  const value = Number(raw);
-  return Number.isInteger(value) && value > 0 ? value : fallback;
-}
 
 /**
  * The republisher inventory walk (blueprint/api.md, Republisher module and
@@ -58,19 +53,21 @@ export class RepublisherTask implements PeriodicTask {
     private readonly clock: Clock,
     configService: ConfigService
   ) {
-    this.intervalMs = positiveInt(
+    this.intervalMs = positiveIntConfig(
       configService.get('REPUBLISHER_INTERVAL_MS'),
-      DEFAULT_INTERVAL_MS
+      DEFAULT_INTERVAL_MS,
+      MAX_TIMER_DELAY_MS
     );
-    this.staleAlertMs = positiveInt(
+    this.staleAlertMs = positiveIntConfig(
       configService.get('REPUBLISHER_STALE_ALERT_MS'),
       DEFAULT_STALE_ALERT_MS
     );
-    this.runTimeoutMs = positiveInt(
+    this.runTimeoutMs = positiveIntConfig(
       configService.get('REPUBLISHER_RUN_TIMEOUT_MS'),
-      DEFAULT_RUN_TIMEOUT_MS
+      DEFAULT_RUN_TIMEOUT_MS,
+      MAX_TIMER_DELAY_MS
     );
-    this.concurrency = positiveInt(
+    this.concurrency = positiveIntConfig(
       configService.get('REPUBLISHER_CONCURRENCY'),
       DEFAULT_CONCURRENCY
     );

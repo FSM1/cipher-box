@@ -32,6 +32,9 @@ import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
   unique: true,
 })
 @Index('idx_mailbox_recipient_received', ['recipientPublicKey', 'receivedAt'])
+// Recipient-less `received_at` index serving the global TTL sweep's scan (#667);
+// idx_mailbox_recipient_received leads with the recipient and can't drive it.
+@Index('idx_mailbox_received_at', ['receivedAt'])
 export class MailboxMessage {
   @PrimaryGeneratedColumn('uuid')
   id: string;

@@ -1,10 +1,12 @@
-import { Module, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
+import { Module, OnModuleInit } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { buildJwtOptions } from '../auth/auth.module';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { TimerWorkerScheduler, WorkerScheduler } from '../common/worker-scheduler';
+import { isDisabled } from '../common/env-flag';
+import { SchedulerModule } from '../common/scheduler.module';
+import { WorkerScheduler } from '../common/worker-scheduler';
 import { OpsModule } from '../ops/ops.module';
 import { NameInventory } from '../registry/entities/name-inventory.entity';
 import { RecordCache } from './entities/record-cache.entity';
@@ -15,14 +17,6 @@ import { LoggingRepublisherAlerter, RepublisherAlerter } from './republisher.ale
 import { RepublisherTask } from './republisher.task';
 import { RecordCacheService } from './services/record-cache.service';
 
-/** Disabled tokens for a default-on flag; case-insensitive so `False`/`0`/`OFF` all count. */
-const DISABLED_TOKENS = new Set(['false', '0', 'no', 'off']);
-
-/** A default-on env flag is disabled only by an explicit falsey token; unset stays on. */
-export function isDisabled(raw: unknown): boolean {
-  return DISABLED_TOKENS.has(String(raw).trim().toLowerCase());
-}
-
 /**
  * The republisher slice (blueprint/api.md, Republisher module and recovery): the
  * in-process, worker-shaped, cleanly extractable liveness backstop and its
@@ -32,16 +26,17 @@ export function isDisabled(raw: unknown): boolean {
  * network transport, the sequence read, alerting, and the scheduler — is a seam,
  * so the walk is deterministic under test and the module extracts cleanly.
  *
- * The scheduler and its {@link RepublisherTask} are wired here, but the loop is
- * generic. The {@link WorkerScheduler} provider is scoped to this module, not a
- * shared instance — when the dormant-mailbox scheduled sweep (#667) lands, one
- * shared loop means exporting this provider (or hoisting it into a shared
- * module) and registering the mailbox PeriodicTask on it, not binding a second.
+ * The {@link RepublisherTask} registers on the shared {@link SchedulerModule}
+ * loop, not a scheduler bound here — one loop carries every PeriodicTask (the
+ * dormant-mailbox sweep, #667, is the sibling). Registration happens in
+ * `onModuleInit`; the shared module owns `start()`/`stop()`, so the loop runs
+ * even when this slice opts out.
  */
 @Module({
   imports: [
     TypeOrmModule.forFeature([RecordCache, NameInventory]),
     OpsModule,
+    SchedulerModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -53,30 +48,24 @@ export function isDisabled(raw: unknown): boolean {
     RecordCacheService,
     RepublisherTask,
     JwtAuthGuard,
-    { provide: WorkerScheduler, useClass: TimerWorkerScheduler },
     { provide: RecordTransport, useClass: RoutingV1RecordTransport },
     { provide: RecordSequenceReader, useClass: MinimalIpnsSequenceReader },
     { provide: RepublisherAlerter, useClass: LoggingRepublisherAlerter },
   ],
 })
-export class RepublisherModule implements OnApplicationBootstrap, OnModuleDestroy {
+export class RepublisherModule implements OnModuleInit {
   constructor(
     private readonly scheduler: WorkerScheduler,
     private readonly task: RepublisherTask,
     private readonly configService: ConfigService
   ) {}
 
-  onApplicationBootstrap(): void {
+  onModuleInit(): void {
     // Opt-out for deployments that run the republisher out of process (or none),
     // defaulting on. Absent, the loop is a no-op cost — an unref'd 12h timer.
     if (isDisabled(this.configService.get('REPUBLISHER_ENABLED'))) {
       return;
     }
     this.scheduler.register(this.task);
-    this.scheduler.start();
-  }
-
-  async onModuleDestroy(): Promise<void> {
-    await this.scheduler.stop();
   }
 }
