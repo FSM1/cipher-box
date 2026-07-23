@@ -16,7 +16,10 @@
 //! - **Dest-first**: add into the destination parent's index before the
 //!   presence-conditional remove from the source, so no window leaves the child
 //!   absent from both — orphans are structurally impossible. A race loser undoes
-//!   its dest-add ([`undo_dest_add`]).
+//!   its dest-add. At a distributed publish boundary that undo is a **versioned
+//!   compare-and-remove** ([`undo_dest_add_versioned`]): it removes only when the
+//!   dest index is still at the seq-CAS base the add read, so it never clobbers a
+//!   concurrent authoritative write (#743, deferred from #741).
 //! - **Observed repair**: any write-capable client that sees a child missing from
 //!   its parent's index repairs it ([`repair_observed`]).
 //!
@@ -105,9 +108,46 @@ pub fn repair_observed(index: &[ChildScopeRef], child: ChildScopeRef) -> Vec<Chi
 
 /// Race-loser compensation for the dest-first path: undo a dest-add by removing
 /// `scope_id`. Semantically identical to [`remove_child`]; named for the
-/// compensation call site.
+/// compensation call site. This is the **unversioned** local primitive — a
+/// distributed publish boundary must gate it with [`undo_dest_add_versioned`],
+/// which fails closed on a concurrent write.
 pub fn undo_dest_add(dest: &[ChildScopeRef], scope_id: &[u8; 16]) -> Vec<ChildScopeRef> {
     remove_child(dest, scope_id)
+}
+
+/// The read-version a dest-add was derived against: the dest parent scope root's
+/// published record sequence — the same monotonic seq-CAS key the net publish
+/// path mints against (`net::publish`, blueprint/engine.md "CAS sequencing").
+pub type DestIndexVersion = u64;
+
+/// Outcome of a versioned dest-add compensation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UndoDestAdd {
+    /// The dest index was still at the CAS base the add read: the dest-add was
+    /// removed cleanly. Carries the recomputed index to publish.
+    Removed(Vec<ChildScopeRef>),
+    /// A concurrent authoritative writer advanced the dest index past the CAS
+    /// base: a blind remove would clobber the winner. Fail-closed — the caller
+    /// re-reads the current dest index at its new version and re-derives.
+    Conflict,
+}
+
+/// Versioned compare-and-remove race-loser compensation for the dest-first path:
+/// undo the dest-add **only** when the dest index is unchanged since the add read
+/// (`observed == cas_base`). Any version divergence fails closed with
+/// [`UndoDestAdd::Conflict`] rather than blind-removing, so a concurrent
+/// authoritative write always wins and the caller re-reads + re-derives instead
+/// of clobbering it (#743, deferred from #741; blueprint/engine.md).
+pub fn undo_dest_add_versioned(
+    dest: &[ChildScopeRef],
+    scope_id: &[u8; 16],
+    cas_base: DestIndexVersion,
+    observed: DestIndexVersion,
+) -> UndoDestAdd {
+    if observed != cas_base {
+        return UndoDestAdd::Conflict;
+    }
+    UndoDestAdd::Removed(undo_dest_add(dest, scope_id))
 }
 
 #[cfg(test)]
@@ -280,5 +320,26 @@ mod tests {
         let added = insert_child(&dest, moving.clone());
         let undone = undo_dest_add(&added, &[0x44; 16]);
         assert_eq!(undone, canonicalize(&dest));
+    }
+
+    #[test]
+    fn versioned_compensation_removes_only_when_the_version_is_unchanged() {
+        // The loser added itself to the dest index it read at CAS base seq 7.
+        let moving = child(0x44, "x");
+        let base = vec![child(0x10, "d1")];
+        let added = insert_child(&base, moving.clone());
+        let cas_base: DestIndexVersion = 7;
+
+        // Dest index still at seq 7: the compensation removes its own add.
+        let unchanged = undo_dest_add_versioned(&added, &[0x44; 16], cas_base, 7);
+        assert_eq!(unchanged, UndoDestAdd::Removed(canonicalize(&base)));
+
+        // A concurrent authoritative writer bumped the dest to seq 8: fail closed,
+        // never remove — the winner's newer state stands untouched.
+        let raced = undo_dest_add_versioned(&added, &[0x44; 16], cas_base, 8);
+        assert_eq!(raced, UndoDestAdd::Conflict);
+        // A stale/lower observed version is a divergence too — also fail-closed.
+        let stale = undo_dest_add_versioned(&added, &[0x44; 16], cas_base, 6);
+        assert_eq!(stale, UndoDestAdd::Conflict);
     }
 }
