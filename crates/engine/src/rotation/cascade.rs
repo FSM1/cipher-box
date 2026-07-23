@@ -78,20 +78,21 @@ use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
 
 /// One descendant scope root's current re-seal material, as resolved from its
 /// published record — everything [`reseal_scope_root`] needs **except** the
-/// parent node seed and any self-identifying scope id.
+/// parent node seed and any self-identifying `scope_id`/`ipns_name`.
 ///
-/// Both omissions are deliberate and load-bearing. The cascade re-seals each
+/// Those omissions are deliberate and load-bearing. The cascade re-seals each
 /// descendant's ascent link under its **parent's freshly-minted** derivation
 /// (`node_seed(parent_fresh_seed, child_scope_id)`), threaded top-down — never
 /// under the descendant's own stale published parent seed; carrying a
 /// `parent_node_seed` here would invite re-sealing under the wrong (stale)
 /// derivation (contrast [`SweepTarget`](super::sweep::SweepTarget), which *does*
 /// carry it because the sweep reuses the published derivation). A resolved
-/// scope-root record likewise carries no cryptographically self-identifying
-/// `scope_id` — the id lives only in the sealed-structure AAD — so a returned
-/// `scope_id` would be unbound trust: the re-seal, publish, and floor-raise run
-/// under the **enumerated** `child.scope_id` alone (see
-/// [`CascadeResealResolver::resolve`]), making the #756 divergence unrepresentable.
+/// record carries no self-identifying `scope_id` or `ipns_name` either: the
+/// re-seal identity, CAS-publish destination, parent-seed derivation, and
+/// floor-raise all run under the **enumerated** [`ChildScopeRef`]
+/// (`child.scope_id` / `child.ipns_name`) alone — there is no second copy for a
+/// network hint to diverge from, so the #756 divergence class is
+/// unrepresentable.
 ///
 /// Owns its secrets so the cascade is their terminal owner: the seed fields are
 /// [`Zeroizing`] and the pseudonym signer zeroizes on drop. Seeds are handed to
@@ -100,8 +101,6 @@ use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
 pub struct CascadeTarget {
     /// The envelope format+suite version.
     pub v: u64,
-    /// The scope root's opaque `ipnsName` bytes.
-    pub ipns_name: Vec<u8>,
     /// The published record's current read epoch — the new record publishes at
     /// `+ 1`, and this seed+epoch become the fresh history link's prior.
     pub current_read_epoch: u64,
@@ -148,17 +147,14 @@ pub trait CascadeResealResolver {
     /// # Binding contract (obligation on the real resolver, #745/#746)
     ///
     /// The resolver MUST gate `scope`'s record under the enumerated
-    /// `scope.scope_id`, take `ipns_name` solely from `scope.ipns_name`, and return
-    /// **no** independent `scope_id`. The enumerated `scope.scope_id` is the sole
-    /// authority for parent-node-seed derivation
-    /// (`node_seed(parent_fresh_seed, scope.scope_id)`), the visited/dedup key, and
-    /// the re-seal identity, CAS publish, and epoch-floor raise — there is no
-    /// second `scope_id` for the engine to trust ([`CascadeTarget`] carries none),
-    /// so #756's divergence is unrepresentable. `scope.ipns_name` is the **sole
-    /// gated identity edge** (the adoption gate binds `ipns_name -> record` via the
-    /// Ed25519 key derived from the name); the returned `ipns_name` — the CAS
-    /// publish destination — MUST equal it and `commitment.ipns_name`, never swayed
-    /// by a network-supplied hint. In this slice the resolver is faked.
+    /// `scope.scope_id` and `scope.ipns_name` — the adoption gate binds
+    /// `ipns_name -> record` via the Ed25519 key derived from the name, and the
+    /// gated record's `commitment.ipns_name` MUST equal `scope.ipns_name`. It
+    /// returns **no** self-identifying `scope_id` or `ipns_name`: the engine
+    /// re-seals, derives the parent node seed, CAS-publishes, and floor-raises
+    /// under the enumerated [`ChildScopeRef`] alone (see [`CascadeTarget`], which
+    /// carries neither, making the #756 divergence unrepresentable). In this
+    /// slice the resolver is faked.
     async fn resolve(&self, scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure>;
 }
 
@@ -517,9 +513,7 @@ where
                     reason,
                 })?;
 
-            // Bind this one parent's index (canonicalized: its own duplicate
-            // self-heals) into the cross-parent label map — a same-`scope_id`
-            // disagreement with an earlier parent is the C2 conflict.
+            // Bind per-parent (see bind_child_labels).
             bind_child_labels(
                 &mut labels,
                 canonicalize(&target.direct_child_scope_index).iter(),
@@ -536,11 +530,12 @@ where
             let plan = RotateScopePlan {
                 identity: ScopeRootIdentity {
                     v: target.v,
-                    // The enumerated id is the sole authority: re-seal, publish, and
-                    // floor-raise all run under `child.scope_id`, never a
-                    // resolver-returned one (#756).
+                    // The enumerated ChildScopeRef is the sole identity authority:
+                    // re-seal, publish, and floor-raise all run under
+                    // `child.scope_id`/`child.ipns_name`, never a resolver-returned
+                    // copy (#756; see CascadeTarget).
                     scope_id: child.scope_id,
-                    ipns_name: &target.ipns_name,
+                    ipns_name: &child.ipns_name,
                     owner_enc_pub: &target.owner_enc_pub,
                     parent_node_seed: Some(&child_parent_node_seed),
                     pseudonym_signer: &target.pseudonym_signer,
@@ -856,7 +851,6 @@ mod tests {
             }
             Ok(CascadeTarget {
                 v: V,
-                ipns_name: scope.ipns_name.clone(),
                 current_read_epoch: s.current_epoch,
                 owner_enc_pub: self.owner.enc.public(),
                 pseudonym_signer: self.owner.pseudonym.clone(),

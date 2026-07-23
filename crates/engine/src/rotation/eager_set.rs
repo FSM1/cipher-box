@@ -236,10 +236,8 @@ pub async fn enumerate_eager_set<R: ChildIndexResolver>(
     // ascending-scope_id order for free.
     let mut discovered: BTreeMap<[u8; 16], ChildScopeRef> = BTreeMap::new();
 
-    // The single authoritative `scope_id -> ipns_name` binding. Registered once
-    // per parent index (each canonicalized), so two parents that disagree on a
-    // descendant's `ipns_name` conflict (C2), while one parent's own duplicate
-    // self-heals.
+    // The single authoritative `scope_id -> ipns_name` binding, bound per parent
+    // index (see bind_child_labels).
     let mut labels: BTreeMap<[u8; 16], Vec<u8>> = BTreeMap::new();
     let conflict = |scope_id| EnumerationError {
         scope_id,
@@ -273,9 +271,7 @@ pub async fn enumerate_eager_set<R: ChildIndexResolver>(
                         scope_id: child.scope_id,
                         reason,
                     })?;
-            // Bind this one parent's index (canonicalized: its own duplicate
-            // self-heals) into the cross-parent label map — a same-`scope_id`
-            // disagreement with an earlier parent is the C2 conflict.
+            // Bind per-parent (see bind_child_labels).
             let canon = canonicalize(&grandchildren);
             bind_child_labels(&mut labels, canon.iter(), root_scope_id).map_err(conflict)?;
             next.extend(grandchildren);

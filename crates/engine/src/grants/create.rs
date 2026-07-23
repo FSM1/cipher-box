@@ -548,7 +548,6 @@ mod tests {
                 .to_compact();
             Ok(SweepTarget {
                 v: V,
-                ipns_name: DESCENDANT_NAME.to_vec(),
                 current_read_epoch: 1,
                 owner_enc_pub: owner_enc().public(),
                 parent_node_seed: None,
