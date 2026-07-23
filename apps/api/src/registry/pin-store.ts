@@ -32,10 +32,9 @@ export abstract class PinStore {
   }
 }
 
-/** One Kubo `add` result line: `{ Name, Hash, Size }` (Size is a decimal string). */
+/** One Kubo `add` result line; only `Hash` is consumed. */
 interface KuboAddResult {
   Hash: string;
-  Size: string;
 }
 
 /**

@@ -91,7 +91,7 @@ interface GateHooks {
   stripSessionLock?: boolean;
   afterUserRead?: () => Promise<void>;
   afterPinFind?: () => Promise<void>;
-  afterPinSave?: () => Promise<void>;
+  afterPinInsert?: () => Promise<void>;
 }
 
 /**
@@ -126,11 +126,11 @@ function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
             return rows;
           };
         }
-        if (prop === 'save') {
-          return async (entities: never, options?: never) => {
-            const saved = await target.save(entities, options);
-            if (hooks.afterPinSave) await hooks.afterPinSave();
-            return saved;
+        if (prop === 'insert') {
+          return async (entities: never) => {
+            const result = await target.insert(entities);
+            if (hooks.afterPinInsert) await hooks.afterPinInsert();
+            return result;
           };
         }
         const value = Reflect.get(target, prop, receiver);
@@ -326,7 +326,7 @@ describe('RegistryService concurrency (real Postgres)', () => {
       const gate = makeGate();
       const pinStore = new RecordingPinStore();
       const registerB = buildService(
-        gatedDataSource(db.dataSource, { afterPinSave: gate.onReach }),
+        gatedDataSource(db.dataSource, { afterPinInsert: gate.onReach }),
         pinStore
       ).register(b, [{ ipnsName: token(), contentCids: [cid] }]);
 
@@ -371,7 +371,7 @@ describe('RegistryService concurrency (real Postgres)', () => {
       const pinStore = new RecordingPinStore();
       // Both paths skip the advisory lock (the pre-#677 code path).
       const registerB = buildService(
-        gatedDataSource(db.dataSource, { stripLock: true, afterPinSave: gate.onReach }),
+        gatedDataSource(db.dataSource, { stripLock: true, afterPinInsert: gate.onReach }),
         pinStore
       ).register(b, [{ ipnsName: token(), contentCids: [cid] }]);
 

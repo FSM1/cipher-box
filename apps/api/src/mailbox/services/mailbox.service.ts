@@ -11,10 +11,10 @@ import { DataSource, LessThan, QueryFailedError, Repository } from 'typeorm';
 import { User } from '../../auth/entities/user.entity';
 import { IdentityService } from '../../auth/services/identity.service';
 import {
-  acquireAdvisoryLock,
   advisoryLockKey,
+  boundedAcquire,
   resolveAdvisoryLockTimeoutMs,
-  setAdvisoryLockTimeout,
+  runLockGuardedTransaction,
 } from '../../common/advisory-lock';
 import { Clock } from '../../common/clock';
 import { positiveIntConfig } from '../../common/config-int';
@@ -167,15 +167,19 @@ export class MailboxService {
    * scoped: Postgres releases it automatically on commit or rollback. The wait
    * is bounded by `lock_timeout` so sustained same-recipient contention cannot
    * fill the pool with blocked waiters (a timed-out waiter surfaces as a 503).
+   * The count-sees-committed-writer reasoning assumes READ COMMITTED.
    */
   private async enforceCapAndInsert(
     recipientPublicKey: string,
     idempotencyScope: string,
     blob: Buffer
   ): Promise<PostMessageResult> {
-    return this.dataSource.transaction(async (manager) => {
-      await setAdvisoryLockTimeout(manager, this.lockTimeoutMs);
-      await acquireAdvisoryLock(manager, this.recipientLockKey(recipientPublicKey));
+    return runLockGuardedTransaction(this.dataSource, async (manager) => {
+      await boundedAcquire(
+        manager,
+        [this.recipientLockKey(recipientPublicKey)],
+        this.lockTimeoutMs
+      );
       const repo = manager.getRepository(MailboxMessage);
 
       // Re-check idempotency now that we hold the lock: a same-scope writer that

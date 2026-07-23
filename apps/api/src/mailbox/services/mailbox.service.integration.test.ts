@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, ServiceUnavailableException } from '@nestjs/common';
 import { secp256k1 } from '@noble/curves/secp256k1';
 import { randomBytes } from 'node:crypto';
 import { Repository } from 'typeorm';
@@ -154,5 +154,52 @@ describe('MailboxService pending-cap concurrency (real Postgres)', () => {
     const finalCount = await repo.count({ where: { recipientPublicKey: recipient } });
     expect(finalCount).toBe(CAP);
     expect(finalCount).toBeLessThanOrEqual(CAP);
+  });
+
+  it('a row-lock wait past lock_timeout inside the cap window surfaces a retryable 503, not a 500', async () => {
+    const clock = new FakeClock();
+    const users = new FakeRepository<User>();
+    const recipient = compressedPublicKey();
+    const sender = compressedPublicKey();
+    void users.save({ publicKey: recipient } as never);
+    const service = new MailboxService(
+      repo,
+      users as never,
+      db.dataSource,
+      new IdentityService(),
+      clock,
+      fakeConfig({ DB_ADVISORY_LOCK_TIMEOUT_MS: '200' }).service
+    );
+
+    // An expired row (past the 90-day TTL relative to the FakeClock) that the
+    // cap window's purge DELETE must touch.
+    const expired = await repo.save({
+      recipientPublicKey: recipient,
+      idempotencyScope: randomBytes(32).toString('hex'),
+      blob: Buffer.alloc(16, 1),
+      receivedAt: new Date('2025-09-01T00:00:00Z'),
+    });
+
+    // Hold that row locked elsewhere: the advisory acquire succeeds (no
+    // contention on the recipient key), then the purge DELETE waits past the
+    // transaction-scoped lock_timeout and aborts with 55P03 — which must map
+    // to the retryable 503, not escape post()'s dedup catch as a 500.
+    const holder = db.dataSource.createQueryRunner();
+    await holder.connect();
+    await holder.startTransaction();
+    await holder.query('SELECT id FROM mailbox_messages WHERE id = $1 FOR UPDATE', [expired.id]);
+
+    try {
+      await expect(
+        service.post(sender, {
+          recipientPublicKey: recipient,
+          blob: base64Blob(64),
+          idempotencyKey: 'row-lock-timeout',
+        })
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    } finally {
+      await holder.rollbackTransaction();
+      await holder.release();
+    }
   });
 });

@@ -20,11 +20,19 @@ function matches(row: Record<string, unknown>, where: Where): boolean {
 }
 
 /**
- * In-memory stand-in for the narrow TypeORM Repository surface the auth
- * services use (findOne/save/update/delete with plain equality + IsNull).
+ * In-memory stand-in for the narrow TypeORM Repository surface the API
+ * services use (findOne/save/insert/update/delete with plain equality + IsNull).
  */
 export class FakeRepository<T extends { id: string }> {
   rows: T[] = [];
+
+  private makeRow(partial: Partial<T>): T {
+    return {
+      createdAt: new Date(),
+      ...partial,
+      id: partial.id ?? randomUUID(),
+    } as unknown as T;
+  }
 
   async findOne(options: { where: Where }): Promise<T | null> {
     return this.rows.find((row) => matches(row as Record<string, unknown>, options.where)) ?? null;
@@ -68,13 +76,15 @@ export class FakeRepository<T extends { id: string }> {
         return existing;
       }
     }
-    const row = {
-      createdAt: new Date(),
-      ...partial,
-      id: partial.id ?? randomUUID(),
-    } as unknown as T;
+    const row = this.makeRow(partial);
     this.rows.push(row);
     return row;
+  }
+
+  async insert(partials: Partial<T> | Partial<T>[]): Promise<void> {
+    for (const partial of Array.isArray(partials) ? partials : [partials]) {
+      this.rows.push(this.makeRow(partial));
+    }
   }
 
   async update(criteria: Where, patch: Partial<T>): Promise<{ affected: number }> {

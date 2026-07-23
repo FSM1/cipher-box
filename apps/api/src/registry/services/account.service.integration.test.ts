@@ -102,7 +102,7 @@ interface GateHooks {
    * unserialized pre-fix path. */
   stripLock?: boolean;
   /** Pause the register path after it inserts its pin row (still holding the lock). */
-  afterPinSave?: () => Promise<void>;
+  afterPinInsert?: () => Promise<void>;
   /** No-op the post-commit session advisory lock so the cascade's unpin does not
    * serialize on `pinDurabilityLockKey` — the pre-fix post-commit path. */
   stripDurabilityLock?: boolean;
@@ -129,11 +129,11 @@ function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
   const wrapPinRepo = (repo: Repository<PinnedCid>): Repository<PinnedCid> =>
     new Proxy(repo, {
       get(target, prop, receiver) {
-        if (prop === 'save') {
-          return async (entities: never, options?: never) => {
-            const saved = await target.save(entities, options);
-            if (hooks.afterPinSave) await hooks.afterPinSave();
-            return saved;
+        if (prop === 'insert') {
+          return async (entities: never) => {
+            const result = await target.insert(entities);
+            if (hooks.afterPinInsert) await hooks.afterPinInsert();
+            return result;
           };
         }
         const value = Reflect.get(target, prop, receiver);
@@ -295,7 +295,7 @@ describe('AccountService cascade (real Postgres)', () => {
       const gate = makeGate();
       const pinStore = new RecordingPinStore();
       const registerB = registerService(
-        gatedDataSource(db.dataSource, { afterPinSave: gate.onReach }),
+        gatedDataSource(db.dataSource, { afterPinInsert: gate.onReach }),
         pinStore
       ).register(b.id, [{ ipnsName: token(), contentCids: [cid] }]);
 
@@ -335,7 +335,7 @@ describe('AccountService cascade (real Postgres)', () => {
       const gate = makeGate();
       const pinStore = new RecordingPinStore();
       const registerB = registerService(
-        gatedDataSource(db.dataSource, { stripLock: true, afterPinSave: gate.onReach }),
+        gatedDataSource(db.dataSource, { stripLock: true, afterPinInsert: gate.onReach }),
         pinStore
       ).register(b.id, [{ ipnsName: token(), contentCids: [cid] }]);
 
