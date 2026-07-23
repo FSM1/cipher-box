@@ -22,7 +22,8 @@ pub use accept::{
     SentShare, SharePointer, accept_share,
 };
 pub use child_index::{
-    canonicalize, insert_child, move_child, remove_child, repair_observed, undo_dest_add,
+    DestIndexVersion, UndoDestAdd, canonicalize, insert_child, move_child, remove_child,
+    repair_observed, undo_dest_add_versioned,
 };
 pub use contact::{Contact, import_contact};
 pub use create::{
