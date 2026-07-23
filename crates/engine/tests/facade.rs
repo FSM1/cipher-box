@@ -21,7 +21,12 @@ fn secret() -> LoginSecret {
     LoginSecret::new(vec![7u8; 32])
 }
 
-fn all_commands() -> Vec<(Command, &'static str)> {
+/// Commands whose pipeline slice has not landed: the still-unimplemented
+/// surface. The metadata intent ops (delete/rename/relink and metadata-only
+/// create) are wired and covered by the inline facade tests; a *content*-
+/// bearing create and `updateContent` still need the content plane, so they
+/// remain unimplemented here.
+fn unimplemented_commands() -> Vec<(Command, &'static str)> {
     let node = NodeId([1; 16]);
     let parent = NodeId([2; 16]);
     vec![
@@ -33,21 +38,6 @@ fn all_commands() -> Vec<(Command, &'static str)> {
                 content: Some(PlaintextContent(b"hello".to_vec())),
             },
             "create",
-        ),
-        (Command::Delete { node }, "delete"),
-        (
-            Command::Rename {
-                node,
-                new_name: "renamed.txt".into(),
-            },
-            "rename",
-        ),
-        (
-            Command::Relink {
-                node,
-                new_parent: parent,
-            },
-            "relink",
         ),
         (
             Command::UpdateContent {
@@ -150,20 +140,20 @@ fn an_empty_secret_is_rejected() {
 }
 
 #[test]
-fn every_command_returns_its_typed_unimplemented_error() {
+fn unimplemented_commands_return_their_typed_error() {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = new_engine(&device);
     block_on(engine.start(secret())).unwrap();
 
-    for (command, expected_name) in all_commands() {
+    for (command, expected_name) in unimplemented_commands() {
         let result = block_on(engine.command(command));
         assert_eq!(
             result,
             Err(EngineError::Unimplemented {
                 command: expected_name
             }),
-            "scaffold facade: `{expected_name}` must reject as typed-unimplemented"
+            "`{expected_name}` must reject as typed-unimplemented until its slice lands"
         );
     }
 }

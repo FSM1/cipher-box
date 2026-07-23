@@ -8,11 +8,14 @@
 //! the single writer, and every trust decision already happened below the
 //! facade — hosts render, they never decide.
 //!
-//! This is the skeleton slice: the surface shape (constructor over the
-//! whole seam set, `start(secret)`, the [`Command`] enum, the [`Event`]
-//! stream) is real and frozen; command execution is not — every command
-//! resolves to [`EngineError::Unimplemented`] until the pipeline slices
-//! land.
+//! The surface shape (constructor over the whole seam set, `start(secret)`,
+//! the [`Command`] enum, the [`Event`] stream) is frozen. This slice wires the
+//! facade onto the sync core: the metadata intent ops (create/delete/rename/
+//! relink) stage through the durable op queue, reads render the gate-passing
+//! base snapshot ⊕ pending-op overlay (blueprint/engine.md "Sync core: State
+//! law"), and every successful stage emits [`Event::SnapshotUpdated`]. The
+//! non-metadata commands (grants, rotation, auth, content seal) stay
+//! [`EngineError::Unimplemented`] until their slices land.
 
 use core::cell::{Cell, RefCell};
 use core::fmt;
@@ -29,11 +32,15 @@ use crate::net::{
     Adopter, HeldRecord, LivenessControl, RE_PUT_INTERVAL, keyless_re_put, run_liveness_loop,
 };
 use crate::profile::SyncTimingProfile;
-use crate::seams::{OpId, Scheduler, SeamSet, SeamTypes, StagingStore};
+use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore};
 use crate::session::SessionIdentity;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
+use crate::sync::model::{NodeMeta, Snapshot, collation_key};
+use crate::sync::op::Op;
+use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::rebase::decode_queue;
+use crate::sync::staging::{StageOutcome, stage_op};
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
 /// non-secret, and location-independent — routes and commands key on it,
@@ -69,6 +76,30 @@ pub enum NodeKind {
     File,
     /// A folder node.
     Folder,
+}
+
+/// A node's host-facing attributes, projected from the rendered view for a
+/// FUSE getattr/readdir. Kind-uniform metadata only — content size and
+/// timestamps land with the content-plane slice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeAttrs {
+    /// Stable node id.
+    pub id: NodeId,
+    /// Display name, as entered.
+    pub name: String,
+    /// File or folder.
+    pub kind: NodeKind,
+    /// Current content version (bumped per `updateContent`).
+    pub content_version: u64,
+}
+
+/// Minimal filesystem-level counters for a FUSE statfs. Node count only:
+/// quota and byte accounting live on the API client and are not wired at the
+/// facade.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StatFs {
+    /// Nodes reachable from the root in the rendered view.
+    pub nodes: u64,
 }
 
 /// Grant permission level.
@@ -332,6 +363,26 @@ pub enum EngineError {
         /// [`Command::name`] of the rejected command.
         command: &'static str,
     },
+    /// A host seam failed (durable op-queue I/O). Availability, never a trust
+    /// decision — trust classification happens below the facade.
+    Seam {
+        /// Diagnostic message; never carries key material.
+        message: String,
+    },
+    /// Entropy acquisition failed while minting a node id (fail closed — never
+    /// a predictable id).
+    Entropy {
+        /// Diagnostic message; never carries key material.
+        message: String,
+    },
+}
+
+impl EngineError {
+    fn from_seam(err: SeamError) -> Self {
+        EngineError::Seam {
+            message: err.message().to_owned(),
+        }
+    }
 }
 
 impl fmt::Display for EngineError {
@@ -343,6 +394,8 @@ impl fmt::Display for EngineError {
             EngineError::Unimplemented { command } => {
                 write!(f, "command not implemented yet: {command}")
             }
+            EngineError::Seam { message } => write!(f, "seam error: {message}"),
+            EngineError::Entropy { message } => write!(f, "entropy error: {message}"),
         }
     }
 }
@@ -364,6 +417,80 @@ impl EventStream {
     }
 }
 
+/// A rendered read of the engine's state: the gate-passing base snapshot with
+/// the pending-op overlay applied (state law, blueprint/engine.md "Sync core:
+/// State law"). Reads project off this — never off raw or ungated records.
+/// One render backs a whole FUSE readdir+getattr batch, so the view is
+/// internally consistent.
+pub struct EngineView {
+    rendered: Snapshot,
+}
+
+impl EngineView {
+    /// The rendered root node id — the FUSE mount anchor.
+    pub fn root(&self) -> NodeId {
+        self.rendered.root
+    }
+
+    /// The children under `parent`, deterministically ordered by node id.
+    pub fn children(&self, parent: NodeId) -> Vec<NodeAttrs> {
+        self.rendered
+            .children(parent)
+            .into_iter()
+            .map(node_attrs)
+            .collect()
+    }
+
+    /// The child of `parent` whose name folds equal to `name` under the strict
+    /// comparator, if any (FUSE lookup).
+    pub fn lookup(&self, parent: NodeId, name: &str) -> Option<NodeAttrs> {
+        let key = collation_key(name);
+        self.rendered
+            .children(parent)
+            .into_iter()
+            .find(|child| collation_key(&child.name) == key)
+            .map(node_attrs)
+    }
+
+    /// The node's attributes, if present in the rendered view (FUSE getattr).
+    pub fn attrs(&self, node: NodeId) -> Option<NodeAttrs> {
+        self.rendered.node(node).map(node_attrs)
+    }
+
+    /// Minimal statfs: the node count reachable from the root. Byte/quota
+    /// accounting is API-client-side and not wired here.
+    pub fn statfs(&self) -> StatFs {
+        StatFs {
+            nodes: count_nodes(&self.rendered),
+        }
+    }
+}
+
+fn node_attrs(meta: &NodeMeta) -> NodeAttrs {
+    NodeAttrs {
+        id: meta.id,
+        name: meta.name.clone(),
+        kind: meta.kind,
+        content_version: meta.content_version,
+    }
+}
+
+/// Count nodes reachable from the root via the link graph, cycle-guarded (a
+/// malformed link cycle terminates rather than looping).
+fn count_nodes(snapshot: &Snapshot) -> u64 {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![snapshot.root];
+    seen.insert(snapshot.root);
+    while let Some(id) = stack.pop() {
+        for child in snapshot.children(id) {
+            if seen.insert(child.id) {
+                stack.push(child.id);
+            }
+        }
+    }
+    seen.len() as u64
+}
+
 /// The engine — the single stateful brain behind the facade.
 ///
 /// Constructed over the whole seam set (missing seam = compile error), an
@@ -373,12 +500,15 @@ impl EventStream {
 /// compiles to worker-hosted WASM on web.
 pub struct Engine<T: SeamTypes> {
     seams: SeamSet<T>,
-    /// Wired by the pipeline slices (seeds, nonces, jitter).
-    #[allow(dead_code)]
+    /// Seeds, nonces, jitter, and command-path node-id minting.
     entropy: Box<dyn Entropy>,
     profile: SyncTimingProfile,
-    #[allow(dead_code)]
     events: mpsc::UnboundedSender<Event>,
+    /// The last-known-good gate-passing base snapshot (state law's left
+    /// operand). Seeded at the anchored root; cold-start/resolve replace it
+    /// with the resolved remote state. Reads render this ⊕ the pending-op
+    /// overlay; commands never mutate it — only the op queue diverges locally.
+    snapshot: Snapshot,
     /// The session's live held-record set: the resolve slice pushes each
     /// gate-passing record here, and the cold-start liveness loop keyless
     /// re-PUTs the set on the hourly cadence. Empty until resolve lands.
@@ -409,6 +539,9 @@ impl<T: SeamTypes> Engine<T> {
                 entropy,
                 profile,
                 events,
+                // The anchored all-zero root until cold-start/resolve replaces
+                // the base snapshot; children come from the pending-op overlay.
+                snapshot: Snapshot::new(NodeId([0u8; 16])),
                 held_records: Rc::new(RefCell::new(Vec::new())),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
@@ -590,13 +723,139 @@ impl<T: SeamTypes> Engine<T> {
 
     /// Executes one command. The single write entry point: every mutation,
     /// share action, auth call, and manual refresh comes through here.
+    ///
+    /// The metadata intent ops (create/delete/rename/relink) stage onto the
+    /// durable op queue via [`stage_op`] and emit [`Event::SnapshotUpdated`];
+    /// the base sequence each op carries is read from the rendered view (state
+    /// law), so an op rebases against the state the host saw. Content sealing,
+    /// grants, rotation, and auth land with their own slices and stay
+    /// [`EngineError::Unimplemented`].
     pub async fn command(&mut self, command: Command) -> Result<(), EngineError> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
-        Err(EngineError::Unimplemented {
-            command: command.name(),
+        match command {
+            Command::Create {
+                parent,
+                name,
+                kind,
+                content,
+            } => {
+                // A content-bearing create needs the content plane (sealing +
+                // staged bytes), a later slice; only metadata creates (folders
+                // and empty files) stage here.
+                if content.is_some() {
+                    return Err(EngineError::Unimplemented { command: "create" });
+                }
+                let target = self.mint_node_id()?;
+                let base_sequence = self.base_sequence_for(parent).await?;
+                let op = Op::create(target, parent, name, kind, base_sequence, None);
+                self.stage_and_notify(&op).await
+            }
+            Command::Delete { node } => {
+                // Both anchors snapshot the target's own sequence for the
+                // conditional-delete rebase rule.
+                let seq = self.base_sequence_for(node).await?;
+                self.stage_and_notify(&Op::delete(node, seq, seq)).await
+            }
+            Command::Rename { node, new_name } => {
+                let seq = self.base_sequence_for(node).await?;
+                self.stage_and_notify(&Op::rename(node, new_name, seq))
+                    .await
+            }
+            Command::Relink { node, new_parent } => {
+                let rendered = self.render().await?;
+                // Intra-scope pure relink: cross-scope detection and scope-exit
+                // rotation triggering are later slices.
+                let from_parent = rendered.parent_of(node).unwrap_or(self.snapshot.root);
+                let base_sequence = rendered.record_sequence(node).unwrap_or(1);
+                let op = Op::relink(node, from_parent, new_parent, base_sequence, false, false);
+                self.stage_and_notify(&op).await
+            }
+            other => Err(EngineError::Unimplemented {
+                command: other.name(),
+            }),
+        }
+    }
+
+    /// A rendered read of the current state — the gate-passing base snapshot ⊕
+    /// the pending-op overlay — for FUSE-shaped reads (children/lookup/attrs/
+    /// statfs). Fails `NotStarted` before [`start`](Self::start).
+    pub async fn view(&self) -> Result<EngineView, EngineError> {
+        if !self.started {
+            return Err(EngineError::NotStarted);
+        }
+        Ok(EngineView {
+            rendered: self.render().await?,
         })
+    }
+
+    /// The current base snapshot's root node id — the FUSE mount anchor. The
+    /// seeded all-zero root until cold-start/resolve replaces the base snapshot.
+    pub fn root(&self) -> NodeId {
+        self.snapshot.root
+    }
+
+    /// Render the base snapshot with the pending-op overlay applied.
+    async fn render(&self) -> Result<Snapshot, EngineError> {
+        let ops = self.pending_ops().await?;
+        Ok(apply_overlay(&self.snapshot, &ops))
+    }
+
+    /// The pending ops from the durable staging store, decoded FIFO. Undecodable
+    /// entries are dropped from the render here; the cold-start path dead-letters
+    /// and removes them from the durable queue.
+    async fn pending_ops(&self) -> Result<Vec<Op>, EngineError> {
+        let raw = self
+            .seams
+            .staging_store
+            .queued_ops()
+            .await
+            .map_err(EngineError::from_seam)?;
+        let (decoded, _undecodable) = decode_queue(&raw);
+        Ok(decoded.into_iter().map(|(_id, op)| op).collect())
+    }
+
+    /// The base sequence to anchor an op at: the target's own record sequence in
+    /// the rendered view, defaulting to 1 for a node not yet in gate-passing
+    /// state (a pending create).
+    async fn base_sequence_for(&self, node: NodeId) -> Result<u64, EngineError> {
+        Ok(self.render().await?.record_sequence(node).unwrap_or(1))
+    }
+
+    /// Mint a fresh random 16-byte node id from the injected entropy seam
+    /// (id16, non-secret; blueprint/core.md). Fails closed on entropy failure —
+    /// never a predictable id.
+    fn mint_node_id(&mut self) -> Result<NodeId, EngineError> {
+        let mut id = [0u8; 16];
+        self.entropy
+            .fill(&mut id)
+            .map_err(|e| EngineError::Entropy {
+                message: e.message().to_owned(),
+            })?;
+        Ok(NodeId(id))
+    }
+
+    /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success.
+    async fn stage_and_notify(&mut self, op: &Op) -> Result<(), EngineError> {
+        // Metadata ops carry no upload, so `stage_op` journals them unbounded
+        // and never budget-rejects — `Queued` is the only success. A rejection
+        // here would mean a content op reached this metadata-only path; fail
+        // closed rather than silently swallow it.
+        match stage_op(&self.seams.staging_store, &self.profile, op, None)
+            .await
+            .map_err(EngineError::from_seam)?
+        {
+            StageOutcome::Queued { .. } => {
+                // Best-effort push-invalidation trigger; a dropped receiver
+                // (host torn down) is fine.
+                let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+                Ok(())
+            }
+            StageOutcome::RejectedOverBudget { .. } => Err(EngineError::Seam {
+                message: "metadata op unexpectedly rejected over budget".to_owned(),
+            }),
+        }
     }
 
     /// The sync timing profile this engine runs under.
@@ -736,6 +995,172 @@ mod tests {
             "command not implemented yet: create"
         );
         assert_eq!(EngineError::NotStarted.to_string(), "engine not started");
+    }
+
+    // --- facade wiring: reads, command execution, event emission ---
+
+    fn started() -> (Engine<FakeSeamTypes>, EventStream) {
+        let (mut engine, events) = new_engine();
+        block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
+        (engine, events)
+    }
+
+    fn create(engine: &mut Engine<FakeSeamTypes>, parent: NodeId, name: &str, kind: NodeKind) {
+        block_on(engine.command(Command::Create {
+            parent,
+            name: name.into(),
+            kind,
+            content: None,
+        }))
+        .unwrap();
+    }
+
+    #[test]
+    fn command_before_start_returns_not_started() {
+        let (mut engine, _events) = new_engine();
+        let out = block_on(engine.command(Command::Delete {
+            node: NodeId([1; 16]),
+        }));
+        assert_eq!(out, Err(EngineError::NotStarted));
+    }
+
+    #[test]
+    fn view_before_start_returns_not_started() {
+        let (engine, _events) = new_engine();
+        assert!(matches!(
+            block_on(engine.view()),
+            Err(EngineError::NotStarted)
+        ));
+    }
+
+    #[test]
+    fn create_is_visible_through_the_read_surface_and_emits() {
+        let (mut engine, mut events) = started();
+        let root = engine.root();
+        create(&mut engine, root, "notes.txt", NodeKind::File);
+
+        let view = block_on(engine.view()).unwrap();
+        let children = view.children(root);
+        assert_eq!(children.len(), 1, "the pending create renders");
+        assert_eq!(children[0].name, "notes.txt");
+        assert_eq!(children[0].kind, NodeKind::File);
+
+        let found = view.lookup(root, "notes.txt").expect("lookup finds it");
+        assert_eq!(found.id, children[0].id);
+        assert_eq!(view.attrs(found.id).unwrap().name, "notes.txt");
+
+        assert_eq!(
+            block_on(events.next()),
+            Some(Event::SnapshotUpdated),
+            "a successful stage emits SnapshotUpdated"
+        );
+    }
+
+    #[test]
+    fn content_bearing_create_is_unimplemented_pending_the_content_plane() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        let out = block_on(engine.command(Command::Create {
+            parent: root,
+            name: "f".into(),
+            kind: NodeKind::File,
+            content: Some(PlaintextContent(b"x".to_vec())),
+        }));
+        assert_eq!(out, Err(EngineError::Unimplemented { command: "create" }));
+        // Nothing staged: the read surface stays empty.
+        assert!(block_on(engine.view()).unwrap().children(root).is_empty());
+    }
+
+    #[test]
+    fn delete_removes_the_node_from_the_view() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        create(&mut engine, root, "f", NodeKind::File);
+        let id = block_on(engine.view()).unwrap().children(root)[0].id;
+
+        block_on(engine.command(Command::Delete { node: id })).unwrap();
+        assert!(
+            block_on(engine.view()).unwrap().children(root).is_empty(),
+            "the pending delete renders"
+        );
+    }
+
+    #[test]
+    fn rename_updates_the_name_in_the_view() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        create(&mut engine, root, "old.txt", NodeKind::File);
+        let id = block_on(engine.view()).unwrap().children(root)[0].id;
+
+        block_on(engine.command(Command::Rename {
+            node: id,
+            new_name: "new.txt".into(),
+        }))
+        .unwrap();
+
+        let view = block_on(engine.view()).unwrap();
+        assert!(view.lookup(root, "old.txt").is_none());
+        assert_eq!(view.lookup(root, "new.txt").unwrap().id, id);
+    }
+
+    #[test]
+    fn relink_moves_the_node_between_folders_in_the_view() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        create(&mut engine, root, "dir", NodeKind::Folder);
+        let dir = block_on(engine.view())
+            .unwrap()
+            .lookup(root, "dir")
+            .unwrap()
+            .id;
+        create(&mut engine, dir, "f", NodeKind::File);
+        let file = block_on(engine.view())
+            .unwrap()
+            .lookup(dir, "f")
+            .unwrap()
+            .id;
+
+        block_on(engine.command(Command::Relink {
+            node: file,
+            new_parent: root,
+        }))
+        .unwrap();
+
+        let view = block_on(engine.view()).unwrap();
+        assert!(view.children(dir).is_empty(), "moved out of dir");
+        assert_eq!(
+            view.lookup(root, "f").unwrap().id,
+            file,
+            "now linked under root"
+        );
+    }
+
+    #[test]
+    fn statfs_counts_reachable_nodes() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        assert_eq!(
+            block_on(engine.view()).unwrap().statfs().nodes,
+            1,
+            "root only"
+        );
+        create(&mut engine, root, "a", NodeKind::Folder);
+        create(&mut engine, root, "b", NodeKind::File);
+        assert_eq!(block_on(engine.view()).unwrap().statfs().nodes, 3);
+    }
+
+    #[test]
+    fn non_metadata_commands_stay_unimplemented() {
+        let (mut engine, _events) = started();
+        let out = block_on(engine.command(Command::RotateNow {
+            node: NodeId([1; 16]),
+        }));
+        assert_eq!(
+            out,
+            Err(EngineError::Unimplemented {
+                command: "rotateNow"
+            })
+        );
     }
 
     // --- cold-start data path composition ---
