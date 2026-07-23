@@ -416,7 +416,7 @@ where
         let identity = ScopeRootIdentity {
             v: target.v,
             scope_id: descendant.scope_id,
-            ipns_name: &target.ipns_name,
+            ipns_name: &descendant.ipns_name,
             owner_enc_pub: &target.owner_enc_pub,
             parent_node_seed: Some(&parent_node_seed),
             pseudonym_signer: &target.pseudonym_signer,
@@ -450,7 +450,7 @@ where
         })?;
         let record = ResealedScopeRoot {
             scope_id: descendant.scope_id,
-            ipns_name: target.ipns_name.clone(),
+            ipns_name: descendant.ipns_name.clone(),
             read_epoch: target.current_read_epoch,
             write_epoch: target.write_epoch,
             section,
