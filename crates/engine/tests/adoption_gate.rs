@@ -19,11 +19,12 @@ use cipherbox_core::kdf;
 use cipherbox_core::payload::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
     AadContext, Envelope, GrantBlobPayload, GrantSection, GrantSetCommitment, OverrideSeedPayload,
-    ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
-    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, SignedAscentLink,
-    SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, WriteBody,
+    OwnerWriteBlobPayload, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
+    STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, SignedAscentLink, SignedGrantBlob,
+    SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody,
     encode_write_body, open_grant_blob, seal, seal_ascent_link, seal_grant_blob, seal_owner_blob,
-    seal_read_body, sign_grant_set, sign_structure,
+    seal_owner_write_blob, seal_read_body, sign_grant_set, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -160,6 +161,30 @@ impl Fixture {
             unknown: Vec::new(),
         };
 
+        // Owner-write-blob (the write-plane mirror of the owner blob): its AAD
+        // binds the write epoch, its structure signature the (here-equal) epoch
+        // the gate recomputes from the envelope.
+        let owner_write_payload = OwnerWriteBlobPayload::new(write_scope_seed, epoch);
+        let owner_write_aad = AadContext {
+            v: V,
+            id: root_id,
+            scope: scope_id,
+            epoch,
+            struct_tag: STRUCT_TAG_OWNER_WRITE_BLOB,
+        };
+        let owner_write = seal_owner_write_blob(
+            &owner_enc.public(),
+            &EPH_OWNER,
+            &owner_write_aad,
+            &owner_write_payload,
+        );
+        let signed_owner_write_blob = SignedOwnerWriteBlob {
+            signature: sign(STRUCT_TAG_OWNER_WRITE_BLOB, None, &owner_write.ciphertext),
+            enc: owner_write.enc,
+            ciphertext: owner_write.ciphertext,
+            unknown: Vec::new(),
+        };
+
         // Grant-set commitment (grant-less scope: the owner pseudonym is the
         // sole committed writer).
         let commitment = GrantSetCommitment {
@@ -176,6 +201,7 @@ impl Fixture {
             commitment_sig,
             grant_blobs: Vec::new(),
             owner_blob: signed_owner_blob,
+            owner_write_blob: Some(signed_owner_write_blob),
             ascent_link: None,
             history_links: Vec::new(),
             write_body: signed_write_body,
@@ -1310,6 +1336,38 @@ fn swapped_structure_ciphertext_rejected_at_grant_section() {
 }
 
 #[test]
+fn tampered_owner_write_blob_signature_rejected_at_grant_section() {
+    // A present owner-write-blob with a broken structure signature is a
+    // whole-record trust violation, never staleness — the gate authenticates it
+    // beside the owner blob.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let mut candidate = fx.candidate(1);
+    candidate
+        .grant_section
+        .owner_write_blob
+        .as_mut()
+        .expect("fixture authors an owner-write-blob")
+        .signature[0] ^= 0xFF;
+    let err = block_on(adopt(&floors, &fx.reader(), &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "structure-signature-invalid");
+}
+
+#[test]
+fn absent_owner_write_blob_still_adopts() {
+    // The field is optional (additive wire evolution): a record predating the tag
+    // carries `None` and adopts on its other structures unchanged.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let mut candidate = fx.candidate(1);
+    candidate.grant_section.owner_write_blob = None;
+    let adopted = block_on(adopt(&floors, &fx.reader(), &candidate)).expect("adopts without it");
+    assert_eq!(adopted.sequence, 1);
+}
+
+#[test]
 fn seed_blob_foreign_scope_aad_rejected_at_unseal() {
     // The seed blob is HPKE-wrapped to the reader's real enc subkey but sealed
     // under a foreign scope AAD — it would open, yet it is not this envelope's
@@ -1396,6 +1454,12 @@ fn envelope_scope_must_equal_reader_scope() {
     };
     let owner_ct = candidate.grant_section.owner_blob.ciphertext.clone();
     candidate.grant_section.owner_blob.signature = resign(STRUCT_TAG_OWNER_BLOB, &owner_ct);
+    let owner_write = candidate
+        .grant_section
+        .owner_write_blob
+        .as_mut()
+        .expect("fixture authors an owner-write-blob");
+    owner_write.signature = resign(STRUCT_TAG_OWNER_WRITE_BLOB, &owner_write.ciphertext.clone());
     let wb_sealed = candidate.grant_section.write_body.sealed.clone();
     candidate.grant_section.write_body.signature = resign(STRUCT_TAG_WRITE_BODY, &wb_sealed);
     let err = block_on(adopt(&floors, &fx.reader(), &candidate)).unwrap_err();

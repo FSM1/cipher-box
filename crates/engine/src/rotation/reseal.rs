@@ -2,7 +2,8 @@
 //! primitives: rotateScope", "sweep"; CONTEXT.md "Grant section").
 //!
 //! [`reseal_scope_root`] assembles a scope root's signed [`GrantSection`] — its
-//! grant blobs (re-wrapped for the committed set), owner blob, ascent link,
+//! grant blobs (re-wrapped for the committed set), owner blob, owner-write-blob
+//! (the write-plane mirror, authored beside the write-body), ascent link,
 //! per-epoch history links, and sealed write-body — each detached-signed by the
 //! rotator's writer pseudonym. It is a **pure composition** of `crates/core`'s
 //! seal primitives: no crypto of its own, it samples no entropy (the injected
@@ -31,11 +32,12 @@ use zeroize::Zeroize;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, GrantBlobPayload, GrantLedgerEntry, GrantSection, GrantSetCommitment,
-    HistoryLinkPayload, OverrideSeedPayload, Permission, STRUCT_TAG_ASCENT_LINK,
-    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_WRITE_BODY,
-    SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, WriteBody,
+    HistoryLinkPayload, OverrideSeedPayload, OwnerWriteBlobPayload, Permission,
+    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedAscentLink, SignedGrantBlob,
+    SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody,
     encode_write_body, seal, seal_ascent_link, seal_grant_blob, seal_history_link, seal_owner_blob,
-    sign_structure,
+    seal_owner_write_blob, sign_structure,
 };
 use cipherbox_core::suite::aead;
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
@@ -251,9 +253,10 @@ pub fn reseal_scope_root<E: Entropy>(
         // Terminal-owner cleanup: the payload owns its own zeroizing copy, so wipe
         // this local write-seed copy before the next iteration.
         write_seed.zeroize();
-        let ephemeral = fill::<32, E>(entropy)?;
+        let mut ephemeral = fill::<32, E>(entropy)?;
         let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_GRANT_BLOB);
         let sealed = seal_grant_blob(&recipient_pub, &ephemeral, &ctx, &payload);
+        ephemeral.zeroize();
         let signature = sign_over(
             STRUCT_TAG_GRANT_BLOB,
             Some(entry.tag),
@@ -273,9 +276,10 @@ pub fn reseal_scope_root<E: Entropy>(
     // --- Owner blob: the override seed wrapped to the owner. ---
     let owner_blob = {
         let payload = OverrideSeedPayload::new(*seeds.override_seed, read_epoch);
-        let ephemeral = fill::<32, E>(entropy)?;
+        let mut ephemeral = fill::<32, E>(entropy)?;
         let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_OWNER_BLOB);
         let sealed = seal_owner_blob(identity.owner_enc_pub, &ephemeral, &ctx, &payload);
+        ephemeral.zeroize();
         let signature = sign_over(STRUCT_TAG_OWNER_BLOB, None, &sealed.ciphertext, read_epoch);
         SignedOwnerBlob {
             enc: sealed.enc,
@@ -285,14 +289,45 @@ pub fn reseal_scope_root<E: Entropy>(
         }
     };
 
+    // --- Owner-write-blob: the write-scope seed wrapped to the owner (the
+    // write-plane mirror of the owner blob), authored wherever the write-body
+    // lives. Its AAD binds the write epoch (the write plane's own clock); its
+    // structure signature binds the read epoch, like every structure the gate
+    // authenticates from the envelope. ---
+    let owner_write_blob = {
+        let payload = OwnerWriteBlobPayload::new(*seeds.write_scope_seed, seeds.write_epoch);
+        let mut ephemeral = fill::<32, E>(entropy)?;
+        let ctx = ctx_for(
+            identity.v,
+            scope_id,
+            seeds.write_epoch,
+            STRUCT_TAG_OWNER_WRITE_BLOB,
+        );
+        let sealed = seal_owner_write_blob(identity.owner_enc_pub, &ephemeral, &ctx, &payload);
+        ephemeral.zeroize();
+        let signature = sign_over(
+            STRUCT_TAG_OWNER_WRITE_BLOB,
+            None,
+            &sealed.ciphertext,
+            read_epoch,
+        );
+        Some(SignedOwnerWriteBlob {
+            enc: sealed.enc,
+            ciphertext: sealed.ciphertext,
+            signature,
+            unknown: Vec::new(),
+        })
+    };
+
     // --- Ascent link: the override seed sealed to the parent-derived keypair
     // (interior scope roots only). ---
     let ascent_link = match identity.parent_node_seed {
         Some(parent_node_seed) => {
             let payload = OverrideSeedPayload::new(*seeds.override_seed, read_epoch);
-            let ephemeral = fill::<32, E>(entropy)?;
+            let mut ephemeral = fill::<32, E>(entropy)?;
             let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_ASCENT_LINK);
             let link = seal_ascent_link(parent_node_seed, &ephemeral, &ctx, &payload);
+            ephemeral.zeroize();
             let signature = sign_over(STRUCT_TAG_ASCENT_LINK, None, &link.ciphertext, read_epoch);
             Some(SignedAscentLink {
                 ascent_public: link.ascent_public,
@@ -354,6 +389,7 @@ pub fn reseal_scope_root<E: Entropy>(
         commitment_sig: *committed.commitment_sig,
         grant_blobs,
         owner_blob,
+        owner_write_blob,
         ascent_link,
         history_links,
         write_body,
@@ -380,7 +416,7 @@ mod tests {
     use crate::testkit::SeededEntropy;
     use cipherbox_core::seal::{
         GrantSetEntry, encode_grant_section, open_ascent_link, open_grant_blob, open_history_link,
-        open_owner_blob, sign_grant_set, verify_structure,
+        open_owner_blob, open_owner_write_blob, sign_grant_set, verify_structure,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -603,6 +639,30 @@ mod tests {
         )
         .unwrap();
         assert!(ct_eq_32(owner_payload.override_seed(), &override_seed));
+
+        // Owner-write-blob → write scope seed, AAD bound to the WRITE epoch (1),
+        // structure signature bound to the READ epoch (5, the envelope's).
+        let owb = section
+            .owner_write_blob
+            .as_ref()
+            .expect("owner-write-blob authored beside the write-body");
+        let owb_ctx = ctx_for(V, SCOPE, 1, STRUCT_TAG_OWNER_WRITE_BLOB);
+        let owb_payload =
+            open_owner_write_blob(&fx.owner_enc, &owb.enc, &owb_ctx, &owb.ciphertext).unwrap();
+        assert!(ct_eq_32(
+            owb_payload.write_scope_seed(),
+            &fx.write_scope_seed
+        ));
+        assert_eq!(owb_payload.write_epoch, 1);
+        let owb_sig_input = StructureSigInput::over_ciphertext(
+            SCOPE,
+            5,
+            STRUCT_TAG_OWNER_WRITE_BLOB,
+            None,
+            &owb.ciphertext,
+        );
+        verify_structure(&ver, &owb_sig_input, &blob_sig(&owb.signature))
+            .expect("owner-write-blob signed at the read epoch");
 
         // Ascent link → override seed, opened with the parent seed.
         let ascent = section

@@ -125,6 +125,46 @@ impl SignedOwnerBlob {
     }
 }
 
+/// The owner-write-blob: the write-scope seed HPKE-sealed to the owner enc
+/// subkey (the write-plane mirror of the owner blob), with its structure
+/// signature over `H(ciphertext)`. Present only where the record carries a
+/// write-scope root the owner owns (`Option` = additive wire evolution: older
+/// records that predate the tag decode with `None`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignedOwnerWriteBlob {
+    /// The HPKE encapsulated key.
+    pub enc: [u8; ENC_LEN],
+    /// The HPKE ciphertext (`ciphertext || tag`).
+    pub ciphertext: Vec<u8>,
+    /// The 64-byte Ed25519 structure signature over `H(ciphertext)`.
+    pub signature: [u8; ED_SIG_LEN],
+    /// Preserved unknown fields (never any of the known keys).
+    pub unknown: Vec<(String, Value)>,
+}
+
+const OWNER_WRITE_BLOB_KNOWN: &[&str] = &["ciphertext", "enc", "sig"];
+
+impl SignedOwnerWriteBlob {
+    fn from_value(v: &Value) -> Result<Self, CodecError> {
+        let map = v.as_map()?;
+        Ok(Self {
+            enc: bytes_fixed::<ENC_LEN>(req(map, "enc")?, "enc")?,
+            ciphertext: req(map, "ciphertext")?.as_bytes()?.to_vec(),
+            signature: bytes_fixed::<ED_SIG_LEN>(req(map, "sig")?, "sig")?,
+            unknown: collect_unknown(map, OWNER_WRITE_BLOB_KNOWN),
+        })
+    }
+
+    fn to_value(&self) -> Value {
+        let mut m = Map::new();
+        m.insert("ciphertext", Value::Bytes(self.ciphertext.clone()));
+        m.insert("enc", Value::Bytes(self.enc.to_vec()));
+        m.insert("sig", Value::Bytes(self.signature.to_vec()));
+        merge_unknown(&mut m, &self.unknown);
+        Value::Map(m)
+    }
+}
+
 /// The ascent link as published: the plaintext ascent public half, the HPKE
 /// `enc`/`ciphertext`, and the structure signature over `H(ciphertext)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,6 +252,14 @@ pub struct GrantSection {
     pub grant_blobs: Vec<SignedGrantBlob>,
     /// The owner blob (present at every scope root).
     pub owner_blob: SignedOwnerBlob,
+    /// The owner-write-blob — the write-plane mirror of the owner blob, present
+    /// at every write-scope root the owner owns (`None` on records predating the
+    /// tag, or read-only records). Its presence is not covered by the owner-signed
+    /// `GrantSetCommitment`: a stripped blob adopts as `None` (availability-only
+    /// loss of owner fresh-device write-recovery), so the owner cold-start consume
+    /// path treats a missing blob on an owner-owned scope as re-authorable, not a
+    /// hard failure.
+    pub owner_write_blob: Option<SignedOwnerWriteBlob>,
     /// The ascent link, present only when the scope has a parent.
     pub ascent_link: Option<SignedAscentLink>,
     /// The per-epoch history links (empty at epoch 1).
@@ -229,6 +277,7 @@ const GRANT_SECTION_KNOWN: &[&str] = &[
     "grantBlobs",
     "historyLinks",
     "ownerBlob",
+    "ownerWriteBlob",
     "writeBody",
 ];
 
@@ -251,6 +300,10 @@ pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
     assert_grant_tags_unique(grant_blobs.iter().map(|b| b.tag))?;
 
     let owner_blob = SignedOwnerBlob::from_value(req(map, "ownerBlob")?)?;
+    let owner_write_blob = match map.get("ownerWriteBlob") {
+        Some(v) => Some(SignedOwnerWriteBlob::from_value(v)?),
+        None => None,
+    };
     let ascent_link = match map.get("ascentLink") {
         Some(v) => Some(SignedAscentLink::from_value(v)?),
         None => None,
@@ -266,6 +319,7 @@ pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
         commitment_sig,
         grant_blobs,
         owner_blob,
+        owner_write_blob,
         ascent_link,
         history_links,
         write_body,
@@ -314,6 +368,9 @@ pub fn encode_grant_section(section: &GrantSection) -> Result<Vec<u8>, CodecErro
         ),
     );
     m.insert("ownerBlob", section.owner_blob.to_value());
+    if let Some(owner_write) = &section.owner_write_blob {
+        m.insert("ownerWriteBlob", owner_write.to_value());
+    }
     m.insert("writeBody", section.write_body.to_value());
     merge_unknown(&mut m, &section.unknown);
     Ok(encode(&Value::Map(m)))
@@ -357,6 +414,12 @@ mod tests {
                 signature: [0x23; ED_SIG_LEN],
                 unknown: Vec::new(),
             },
+            owner_write_blob: Some(SignedOwnerWriteBlob {
+                enc: [0x24; ENC_LEN],
+                ciphertext: vec![0x25, 0x26],
+                signature: [0x27; ED_SIG_LEN],
+                unknown: Vec::new(),
+            }),
             ascent_link: Some(SignedAscentLink {
                 ascent_public: [0x30; ENC_LEN],
                 enc: [0x31; ENC_LEN],
@@ -404,6 +467,7 @@ mod tests {
                 signature: [0x23; ED_SIG_LEN],
                 unknown: Vec::new(),
             },
+            owner_write_blob: None,
             ascent_link: None,
             history_links: Vec::new(),
             write_body: SignedSealed {

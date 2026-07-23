@@ -147,10 +147,14 @@ the #33 pipeline with the #39 D3 seal-auth stage and the D4 floor law:
 2. **Commitment verify** (scope roots) — the owner-signed grant-set commitment
    against the contact-code-anchored owner identity (#34 D6, #39 D1).
 3. **Grant-section authentication** (scope roots) — every seed-bearing
-   structure (grant blobs, owner blob, ascent link, history links, write-body)
-   verifies under a committed write-capable pseudonym via core's pure
-   per-structure checks; any failure rejects the **whole record** as a trust
-   violation (#39 D3).
+   structure (grant blobs, owner blob, the optional owner-write-blob, ascent
+   link, history links, write-body) verifies under a committed write-capable
+   pseudonym via core's pure per-structure checks; any failure rejects the
+   **whole record** as a trust violation (#39 D3). The owner-write-blob is
+   optional on the wire, but a **present** one with a missing or invalid
+   structure signature is a whole-record trust violation, never staleness (its
+   signature is recomputed at the authenticated envelope epoch like every other
+   structure, though its sealed AAD binds the write epoch).
 4. **Sequence** — strictly newer than the durable per-name floor.
 5. **Epoch** — epoch tag at or above the scope's durable epoch floor.
 6. **Unseal** — success required; core's trust-violation error class carries
@@ -411,6 +415,15 @@ the republish it already does.
   equivalent to the destructive power a write-grantee already holds; the
   guarantee is that a write-grantee can never lock the owner out of content
   the owner could already reach, and can never act deniably.
+- **Owner write-seed cold start**: a per-scope `writeScopeSeed` is random
+  KDF-non-edge material an owner cannot re-derive from the login secret, so a
+  fresh device that has lost its cache cannot renew its own records. Every
+  reseal authors an **owner-write-blob** — the `writeScopeSeed` sealed to the
+  owner's own enc subkey, beside the write-body (`reseal_scope_root`, so every
+  root/interior write-scope cut, rotation, cascade, and sweep carries one) — the
+  owner's recovery source for `write_name_signer`. This slice authors and
+  gate-verifies the blob; the owner read/consume that opens it into
+  `HeldMaterial.write_scope_seed` rides a later facade slice.
 
 ## Mailbox logic
 

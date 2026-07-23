@@ -28,14 +28,15 @@ use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payloa
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, NodeKind, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
-    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY,
-    STRUCT_TAGS, StructureSigInput, build_aad, decode_ascent_link, decode_envelope,
-    decode_grant_blob_payload, decode_grant_section, decode_grant_set_commitment,
-    decode_history_link_payload, decode_override_seed_payload, decode_read_body, decode_write_body,
-    encode_ascent_link, encode_envelope, encode_grant_section, encode_grant_set_commitment,
+    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
+    STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructureSigInput, build_aad,
+    decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_section,
+    decode_grant_set_commitment, decode_history_link_payload, decode_override_seed_payload,
+    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
+    encode_envelope, encode_grant_section, encode_grant_set_commitment,
     encode_override_seed_payload, encode_read_body, encode_write_body, open_ascent_link,
-    open_grant_blob, open_owner_blob, open_read_body, structure_sig_preimage, verify_grant_set,
-    verify_structure,
+    open_grant_blob, open_owner_blob, open_owner_write_blob, open_read_body,
+    structure_sig_preimage, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
@@ -166,6 +167,14 @@ const FIXTURES: &[(&str, &str)] = &[
     (
         "vectors/grant/owner_blob_reject.json",
         include_str!("../kat/vectors/grant/owner_blob_reject.json"),
+    ),
+    (
+        "vectors/grant/owner_write_blob_accept.json",
+        include_str!("../kat/vectors/grant/owner_write_blob_accept.json"),
+    ),
+    (
+        "vectors/grant/owner_write_blob_reject.json",
+        include_str!("../kat/vectors/grant/owner_write_blob_reject.json"),
     ),
     (
         "vectors/grant/ascent_link_accept.json",
@@ -426,6 +435,7 @@ struct GrantManifest {
     write_body_struct_tag: u8,
     grant_blob_struct_tag: u8,
     owner_blob_struct_tag: u8,
+    owner_write_blob_struct_tag: u8,
     ascent_link_struct_tag: u8,
     history_link_struct_tag: u8,
     write_body_accept: FileCount,
@@ -434,6 +444,8 @@ struct GrantManifest {
     grant_blob_reject: RejectSection,
     owner_blob_accept: FileCount,
     owner_blob_reject: RejectSection,
+    owner_write_blob_accept: FileCount,
+    owner_write_blob_reject: RejectSection,
     ascent_link_accept: FileCount,
     ascent_link_reject: RejectSection,
     history_link_accept: FileCount,
@@ -983,6 +995,16 @@ fn owner_blob_reject_vectors(m: &Manifest) -> Vec<BlobRejectVector> {
     serde_json::from_str(fixture(&m.grant.owner_blob_reject.file)).expect("owner_blob_reject shape")
 }
 
+fn owner_write_blob_accept_vectors(m: &Manifest) -> Vec<HpkeStructureVector> {
+    serde_json::from_str(fixture(&m.grant.owner_write_blob_accept.file))
+        .expect("owner_write_blob_accept shape")
+}
+
+fn owner_write_blob_reject_vectors(m: &Manifest) -> Vec<BlobRejectVector> {
+    serde_json::from_str(fixture(&m.grant.owner_write_blob_reject.file))
+        .expect("owner_write_blob_reject shape")
+}
+
 fn ascent_link_accept_vectors(m: &Manifest) -> Vec<AscentLinkAcceptVector> {
     serde_json::from_str(fixture(&m.grant.ascent_link_accept.file))
         .expect("ascent_link_accept shape")
@@ -1105,6 +1127,8 @@ fn fixture_table_matches_manifest_files() {
         m.grant.grant_blob_reject.file.as_str(),
         m.grant.owner_blob_accept.file.as_str(),
         m.grant.owner_blob_reject.file.as_str(),
+        m.grant.owner_write_blob_accept.file.as_str(),
+        m.grant.owner_write_blob_reject.file.as_str(),
         m.grant.ascent_link_accept.file.as_str(),
         m.grant.ascent_link_reject.file.as_str(),
         m.grant.history_link_accept.file.as_str(),
@@ -1284,6 +1308,11 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
     );
     covered.extend(
         owner_blob_reject_vectors(&m)
+            .iter()
+            .map(|v| v.check().to_string()),
+    );
+    covered.extend(
+        owner_write_blob_reject_vectors(&m)
             .iter()
             .map(|v| v.check().to_string()),
     );
@@ -1501,6 +1530,7 @@ const ALL_STRUCT_TAGS: &[(&str, u8)] = &[
     ("history-link", 6),
     ("pointer-payload", 7),
     ("mailbox-payload", 8),
+    ("owner-write-blob", 9),
 ];
 
 #[test]
@@ -2861,6 +2891,10 @@ fn grant_struct_tags_are_frozen() {
     assert_eq!(m.grant.write_body_struct_tag, STRUCT_TAG_WRITE_BODY);
     assert_eq!(m.grant.grant_blob_struct_tag, STRUCT_TAG_GRANT_BLOB);
     assert_eq!(m.grant.owner_blob_struct_tag, STRUCT_TAG_OWNER_BLOB);
+    assert_eq!(
+        m.grant.owner_write_blob_struct_tag,
+        STRUCT_TAG_OWNER_WRITE_BLOB
+    );
     assert_eq!(m.grant.ascent_link_struct_tag, STRUCT_TAG_ASCENT_LINK);
     assert_eq!(m.grant.history_link_struct_tag, STRUCT_TAG_HISTORY_LINK);
     // The frozen byte-space (mirrors ALL_STRUCT_TAGS).
@@ -2869,6 +2903,7 @@ fn grant_struct_tags_are_frozen() {
     assert_eq!(STRUCT_TAG_OWNER_BLOB, 4);
     assert_eq!(STRUCT_TAG_ASCENT_LINK, 5);
     assert_eq!(STRUCT_TAG_HISTORY_LINK, 6);
+    assert_eq!(STRUCT_TAG_OWNER_WRITE_BLOB, 9);
 }
 
 #[test]
@@ -3167,6 +3202,57 @@ fn owner_blob_reject_vectors_fire_the_named_check() {
                 .iter()
                 .any(|c| c == required),
             "owner-blob reject must cover the {required} check"
+        );
+    }
+}
+
+#[test]
+fn owner_write_blob_accept_vectors_seal_reproduce_open_and_decode() {
+    let m = manifest();
+    let vectors = owner_write_blob_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.grant.owner_write_blob_accept.count,
+        "owner-write-blob accept count drift"
+    );
+    assert!(
+        !vectors.is_empty(),
+        "owner-write-blob accept family must not be empty"
+    );
+    for v in &vectors {
+        assert_eq!(
+            v.struct_tag, STRUCT_TAG_OWNER_WRITE_BLOB,
+            "owner-write-blob accept {}: tag",
+            v.name
+        );
+        let plaintext = hpke_structure_reproduce_and_open(v);
+        assert!(
+            decode_owner_write_blob_payload(&plaintext).is_ok(),
+            "owner-write-blob accept {}: payload must decode",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn owner_write_blob_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = owner_write_blob_reject_vectors(&m);
+    check_blob_reject_family(
+        "owner-write-blob",
+        &vectors,
+        &m.grant.owner_write_blob_reject,
+        decode_owner_write_blob_payload,
+        open_owner_write_blob,
+    );
+    for required in ["missing-field", "invalid-field-length", "hpke-open-failed"] {
+        assert!(
+            m.grant
+                .owner_write_blob_reject
+                .checks
+                .iter()
+                .any(|c| c == required),
+            "owner-write-blob reject must cover the {required} check"
         );
     }
 }

@@ -120,15 +120,32 @@ history link, directChildScopeIndex}` sealed under the root's writeKey. The
 - **Grant section** (scope roots only): grant blobs keyed by blinded tag
   (`tag → HPKE{readScopeSeed[, writeScopeSeed], epoch, pointerReadKey}`), the
   epoch-free grant-set commitment (ECDSA over det-CBOR `{ipnsName,
-ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, ascent
-  link (public half plaintext, derive-and-verified by ancestor readers),
-  per-epoch history links, and a detached **structure signature** per
-  seed-bearing structure.
+ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
+  owner-write-blob (below), ascent link (public half plaintext,
+  derive-and-verified by ancestor readers), per-epoch history links, and a
+  detached **structure signature** per seed-bearing structure. On the wire the
+  grant-section map carries `ownerWriteBlob` as `{enc, ciphertext, sig}`
+  (`GrantSection.owner_write_blob: Option<SignedOwnerWriteBlob>`, `Option` = an
+  additive evolution: records predating the tag, and read-only records, decode
+  with `None`).
+- **Owner-write-blob** (`structTag` `owner-write-blob`): the write-plane mirror
+  of the owner blob — the scope's random `writeScopeSeed` (a KDF non-edge, not
+  derivable from the login secret) HPKE-sealed to the owner's **own** enc subkey,
+  payload det-CBOR `{writeEpoch, writeScopeSeed}`. It hands an owner
+  cold-starting on a fresh device the one write-plane input they cannot
+  re-derive, so they can source `write_name_signer` and renew their own records
+  (the read/consume wiring lands later, on the facade slice). It carries a
+  deliberate dual-epoch binding: its HPKE **AAD** binds the **writeEpoch** (the
+  write plane's own clock), while its **structure signature** binds the
+  **read/envelope epoch** like every other structure, so the adoption gate
+  authenticates it uniformly at `envelope.epoch`. The seed is never folded into
+  the ascent link's shared override-seed payload (that would leak write
+  capability to ancestor read-only readers).
 - **Structure signatures** (#39 D2/D3): the rotator's pseudonym Ed25519
   signature over det-CBOR `{scopeId, epoch, structTag, recipientTag?,
-H(ciphertext)}` — covering grant blobs, owner blob, ascent link, history
-  links, and the write-body. Verification is per-structure and pure; the
-  whole-record fail-closed policy is the engine's gate stage.
+H(ciphertext)}` — covering grant blobs, owner blob, owner-write-blob, ascent
+  link, history links, and the write-body. Verification is per-structure and
+  pure; the whole-record fail-closed policy is the engine's gate stage.
 - **Pointer payloads**: the re-point object `{scopeId, currentRootName,
 writeEpoch, minReadEpoch, prevRootName}`, owner-identity-signed inside the
   record, sealed under the scope's stable `pointerReadKey`. The vault pointer
@@ -142,9 +159,15 @@ writeEpoch, minReadEpoch, prevRootName}`, owner-identity-signed inside the
 ### Structure-tag registry
 
 The `structTag` byte-space is the domain-separation registry, frozen in the KAT
-manifest: `read-body`, `write-body`, `grant-blob`, `owner-blob`, `ascent-link`,
-`history-link`, `pointer-payload`, `mailbox-payload`. Every new tag extends the
-manifest and its vectors before merge.
+manifest: `read-body` (`0x01`), `write-body` (`0x02`), `grant-blob` (`0x03`),
+`owner-blob` (`0x04`), `ascent-link` (`0x05`), `history-link` (`0x06`),
+`pointer-payload` (`0x07`), `mailbox-payload` (`0x08`), `owner-write-blob`
+(`0x09`). Every new tag extends the manifest and its vectors before merge; the
+`owner-write-blob` KAT set is `owner_write_blob_accept` (seal/open round-trip
+under a fixed enc + ephemeral) and `owner_write_blob_reject` (decode: wrong-length
+seed, missing `writeEpoch`; HPKE fail-closed: tampered ciphertext/tag,
+truncation, and struct-tag / scope / writeEpoch AAD transplants), with the tag's
+structure-signature accept/reject riding the shared `structure_sig` families.
 
 ## KDF edge catalog
 

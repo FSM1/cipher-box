@@ -22,8 +22,9 @@ pub mod write_body;
 
 pub use aad::{
     AAD_DOMAIN, AadContext, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
-    STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_POINTER_PAYLOAD,
-    STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructTagSpec, build_aad,
+    STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
+    STRUCT_TAG_POINTER_PAYLOAD, STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS,
+    StructTagSpec, build_aad,
 };
 pub use body::{
     ChildRef, NodeKind, ReadBody, Version, decode_read_body, encode_read_body, name_cmp,
@@ -31,16 +32,18 @@ pub use body::{
 pub use envelope::{Envelope, decode_envelope, encode_envelope, open_read_body, seal_read_body};
 pub use grant::{
     AscentLink, GrantBlobPayload, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload,
-    OverrideSeedPayload, Permission, decode_ascent_link, decode_grant_blob_payload,
-    decode_grant_set_commitment, decode_history_link_payload, decode_override_seed_payload,
-    encode_ascent_link, encode_grant_blob_payload, encode_grant_set_commitment,
-    encode_history_link_payload, encode_override_seed_payload, open_ascent_link, open_grant_blob,
-    open_history_link, open_owner_blob, seal_ascent_link, seal_grant_blob, seal_history_link,
-    seal_owner_blob, sign_grant_set, verify_grant_set,
+    OverrideSeedPayload, OwnerWriteBlobPayload, Permission, decode_ascent_link,
+    decode_grant_blob_payload, decode_grant_set_commitment, decode_history_link_payload,
+    decode_override_seed_payload, decode_owner_write_blob_payload, encode_ascent_link,
+    encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
+    encode_override_seed_payload, encode_owner_write_blob_payload, open_ascent_link,
+    open_grant_blob, open_history_link, open_owner_blob, open_owner_write_blob, seal_ascent_link,
+    seal_grant_blob, seal_history_link, seal_owner_blob, seal_owner_write_blob, sign_grant_set,
+    verify_grant_set,
 };
 pub use section::{
-    GrantSection, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed,
-    decode_grant_section, encode_grant_section,
+    GrantSection, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob,
+    SignedSealed, decode_grant_section, encode_grant_section,
 };
 pub use structure::{StructureSigInput, sign_structure, structure_sig_preimage, verify_structure};
 pub use write_body::{
