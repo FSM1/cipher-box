@@ -51,7 +51,10 @@
 //! # Owner-only, fail-closed, deterministic
 //!
 //! The caller must present the owner identity signer that authored the current
-//! grant-set commitment, verified up front ([`WriteRotateError::NotOwner`]). A
+//! grant-set commitment, verified up front ([`WriteRotateError::NotOwner`]), and
+//! that commitment must name this scope's current root
+//! ([`WriteRotateError::CommitmentScopeMismatch`]) — binding the owner-auth token
+//! to the exact rotated scope, the same binding the adoption gate enforces. A
 //! non-advancing `writeEpoch` or an identity re-point is rejected release-active
 //! ([`build_repoint_object`]), never a `debug_assert!` — the encode-side mirror of
 //! the floor law's monotonic write-epoch reject (AGENTS.md rule 8). Entropy enters
@@ -255,6 +258,12 @@ pub enum WriteRotateError {
     /// The presented owner signer did not author the current commitment — not the
     /// owner. Owner-only, fail-closed before anything is minted or published.
     NotOwner,
+    /// The owner-authentic commitment names a different scope than the one under
+    /// rotation (`commitment.ipns_name != current_root_name`). Binds the owner-auth
+    /// token to the exact rotated scope, the same binding the adoption gate enforces
+    /// (`gate/adoption.rs`) — so a valid owner signature over another scope's
+    /// commitment cannot authorize this rotation. Fail-closed before any mint.
+    CommitmentScopeMismatch,
     /// The write epoch is exhausted (`current_write_epoch == u64::MAX`). Rotating
     /// would reuse the epoch with fresh key material (a key-regression violation),
     /// so nothing is minted. Unreachable in practice; release-active.
@@ -300,6 +309,9 @@ impl core::fmt::Display for WriteRotateError {
             WriteRotateError::NotOwner => {
                 f.write_str("presented signer did not author the current commitment (not owner)")
             }
+            WriteRotateError::CommitmentScopeMismatch => {
+                f.write_str("commitment names a different scope than the one under rotation")
+            }
             WriteRotateError::EpochExhausted => f.write_str("write epoch exhausted (u64::MAX)"),
             WriteRotateError::WriteEpochNotAdvancing => {
                 f.write_str("re-point write epoch does not advance past its predecessor")
@@ -334,6 +346,7 @@ impl WriteRotateError {
     pub fn check(&self) -> &'static str {
         match self {
             WriteRotateError::NotOwner => "not-owner",
+            WriteRotateError::CommitmentScopeMismatch => "commitment-scope-mismatch",
             WriteRotateError::EpochExhausted => "epoch-exhausted",
             WriteRotateError::WriteEpochNotAdvancing => "write-epoch-not-advancing",
             WriteRotateError::IdentityRepoint => "identity-repoint",
@@ -349,6 +362,7 @@ impl WriteRotateError {
     pub fn is_retryable(&self) -> bool {
         match self {
             WriteRotateError::NotOwner
+            | WriteRotateError::CommitmentScopeMismatch
             | WriteRotateError::EpochExhausted
             | WriteRotateError::WriteEpochNotAdvancing
             | WriteRotateError::IdentityRepoint => false,
@@ -431,6 +445,16 @@ where
         &current_sig,
     )
     .map_err(|_| WriteRotateError::NotOwner)?;
+
+    // 1a) Bind the owner-auth token to the exact scope under rotation: the
+    //     owner-authentic commitment MUST name this scope's current root. Same
+    //     binding the adoption gate enforces (`gate/adoption.rs`,
+    //     `commitment.ipns_name == candidate name`), so a valid owner signature over
+    //     a DIFFERENT scope's commitment cannot authorize this rotation. Fail-closed
+    //     before anything is minted or published.
+    if plan.commitment.ipns_name != plan.current_root_name.as_str().as_bytes() {
+        return Err(WriteRotateError::CommitmentScopeMismatch);
+    }
 
     // 2) Fail-closed BEFORE minting: a saturating bump at u64::MAX would republish
     //    fresh key material under the same write epoch (a key-regression violation),
@@ -654,17 +678,26 @@ mod tests {
         EcdsaSigner::from_scalar(&[0x33; 32]).unwrap()
     }
 
-    /// An owner-signed commitment naming `owner`'s identity — the owner-only
-    /// anchor. The write rotation only verifies the owner identity against it.
-    fn commitment(owner: &EcdsaSigner) -> (GrantSetCommitment, [u8; ECDSA_SIG_LEN]) {
+    /// An owner-signed commitment naming `name` as the scope root — matching the
+    /// scope's `current_root_name`, so the owner-gate scope-binding check passes.
+    fn commitment_for(
+        owner: &EcdsaSigner,
+        name: &IpnsName,
+    ) -> (GrantSetCommitment, [u8; ECDSA_SIG_LEN]) {
         let c = GrantSetCommitment {
-            ipns_name: b"scope-root".to_vec(),
+            ipns_name: name.as_str().as_bytes().to_vec(),
             owner_pseudonym_pk: [0x22; 32],
             entries: Vec::new(),
             unknown: Vec::new(),
         };
         let sig = sign_grant_set(owner, &c).unwrap().to_compact();
         (c, sig)
+    }
+
+    /// The default commitment: bound to the scope root every test rotates
+    /// (`old_name_of(SCOPE)`, each test's `current_root`).
+    fn commitment(owner: &EcdsaSigner) -> (GrantSetCommitment, [u8; ECDSA_SIG_LEN]) {
+        commitment_for(owner, &old_name_of(&SCOPE))
     }
 
     /// A node's old (pre-rotation) name — derived from the OLD write scope seed, so
@@ -1181,6 +1214,43 @@ mod tests {
         assert!(
             state.published.borrow().is_empty(),
             "nothing published on an owner-only rejection"
+        );
+    }
+
+    #[test]
+    fn commitment_naming_a_different_scope_is_rejected_fail_closed() {
+        // The owner correctly signs the commitment, but it names a DIFFERENT scope
+        // root than the one under rotation. The owner-gate binds the auth token to
+        // the exact rotated scope (the adoption gate's `commitment.ipns_name`
+        // binding), so a valid-but-wrong-scope commitment fails closed before any
+        // mint or publish — an owner cannot rotate scope B with scope A's token.
+        let owner = owner();
+        let other_root = old_name_of(&nid(0xaa));
+        let (c, sig) = commitment_for(&owner, &other_root);
+        let resolver = tree();
+        let state = WaveState::default();
+        let publisher = FakePublisher::new(state.clone());
+        let current_root = old_name_of(&SCOPE);
+
+        let err = block_on(async {
+            let mut e = SeededEntropy::new(7);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &publisher,
+                &plan(&owner, &c, &sig, &current_root, None),
+            )
+            .await
+        })
+        .expect_err("a commitment naming another scope is rejected");
+        assert_eq!(err.check(), "commitment-scope-mismatch");
+        assert!(
+            !err.is_retryable(),
+            "a scope-binding violation is not an availability stall"
+        );
+        assert!(
+            state.published.borrow().is_empty(),
+            "nothing published on a scope-mismatch rejection"
         );
     }
 
