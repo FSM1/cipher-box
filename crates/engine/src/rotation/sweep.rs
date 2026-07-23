@@ -68,8 +68,11 @@ use crate::hex::hex_lower;
 use crate::seams::{FloorStore, Scheduler, SeamError};
 
 /// One scope root's current re-seal material, as resolved from its published
-/// record: everything [`reseal_scope_root`] needs plus the record epoch the
-/// epoch-lag predicate compares against the floor.
+/// record: everything [`reseal_scope_root`] needs **except** a self-identifying
+/// `scope_id`/`ipns_name`, plus the record epoch the epoch-lag predicate compares
+/// against the floor. The re-seal identity and CAS-publish destination run under
+/// the **enumerated** [`ChildScopeRef`] (`scope_id`/`ipns_name`) alone — the
+/// target carries no second copy for a network hint to diverge from (#756).
 ///
 /// Owns its secrets so the sweep is their terminal owner: the seed fields are
 /// [`Zeroizing`] and the pseudonym signer zeroizes on drop, so a resolved target
@@ -79,10 +82,6 @@ use crate::seams::{FloorStore, Scheduler, SeamError};
 pub struct SweepTarget {
     /// The envelope format+suite version.
     pub v: u64,
-    /// The scope-root node id (== scope id).
-    pub scope_id: [u8; 16],
-    /// The scope root's opaque `ipnsName` bytes.
-    pub ipns_name: Vec<u8>,
     /// The published record's current read epoch — the epoch-lag operand.
     pub current_read_epoch: u64,
     /// The vault owner's X25519 encryption-subkey public (owner-blob recipient).
@@ -139,16 +138,14 @@ pub trait SweepResolver {
     ///
     /// # Binding contract (obligation on the real resolver, #745/#746)
     ///
-    /// The same edge discipline [`ChildIndexResolver`] carries applies: `scope`'s
-    /// `ipns_name` is the **sole gated identity edge** (the adoption gate binds
-    /// `ipns_name -> record` via the Ed25519 key derived from the name), and the
-    /// returned `SweepTarget.ipns_name` — the CAS **publish** destination — MUST be
-    /// that gated name, equal to `commitment.ipns_name`, and MUST NOT be swayed by
-    /// any network-supplied hint. The sweep re-seals and CAS-publishes under the
-    /// enumerated parent-index `scope_id` (never a resolver-returned `scope_id`),
-    /// so a resolver that returned a mismatched name/commitment could only mint a
-    /// record its own resolve-time gate rejects — but binding the two here keeps
-    /// that fail-closed at the source.
+    /// The same edge discipline [`ChildIndexResolver`] carries applies. The
+    /// resolver MUST gate `scope`'s record under the enumerated `scope.scope_id`
+    /// and `scope.ipns_name` — the adoption gate binds `ipns_name -> record` via
+    /// the Ed25519 key derived from the name, and the gated record's
+    /// `commitment.ipns_name` MUST equal `scope.ipns_name`. It returns **no**
+    /// self-identifying `scope_id` or `ipns_name`: the sweep re-seals and
+    /// CAS-publishes under the enumerated [`ChildScopeRef`] alone (see
+    /// [`SweepTarget`]).
     async fn resolve(&self, scope: &ChildScopeRef) -> Result<SweepTarget, ResolveFailure>;
 }
 
@@ -237,11 +234,15 @@ impl SweepError {
 
     /// Whether re-running the idempotent pass could clear this failure — an
     /// availability stall (unavailable resolve, floor-read I/O, transport
-    /// not-published) — versus a trust violation (a gate-rejected record, a
-    /// divergent ledger / uncommitted signer), which no retry can fix.
+    /// not-published) or a C2 label conflict that the re-point wave repairs —
+    /// versus a trust violation (a gate-rejected record, a divergent ledger /
+    /// uncommitted signer), which no retry can fix.
     pub fn is_retryable(&self) -> bool {
         match self {
-            SweepError::Enumeration(e) => e.reason == ResolveFailure::Unavailable,
+            SweepError::Enumeration(e) => matches!(
+                e.reason,
+                ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel
+            ),
             SweepError::Floor(_) => true,
             SweepError::Publish { .. } => true,
             SweepError::Reseal { .. } => false,
@@ -356,7 +357,9 @@ where
         let identity = ScopeRootIdentity {
             v: target.v,
             scope_id,
-            ipns_name: &target.ipns_name,
+            // The enumerated ChildScopeRef is the sole identity authority (#756;
+            // see SweepTarget).
+            ipns_name: &descendant.ipns_name,
             owner_enc_pub: &target.owner_enc_pub,
             parent_node_seed: target.parent_node_seed.as_deref(),
             pseudonym_signer: &target.pseudonym_signer,
@@ -389,9 +392,7 @@ where
 
         let record = ResealedScopeRoot {
             scope_id,
-            // `target`'s borrows (identity/seeds/committed) all end at the
-            // `reseal_scope_root` return above, so the name moves out here.
-            ipns_name: target.ipns_name,
+            ipns_name: descendant.ipns_name.clone(),
             read_epoch: floor_epoch,
             write_epoch: target.write_epoch,
             section,
@@ -721,8 +722,6 @@ mod tests {
                 .ok_or(ResolveFailure::Unavailable)?;
             Ok(SweepTarget {
                 v: V,
-                scope_id: scope.scope_id,
-                ipns_name: scope.ipns_name.clone(),
                 current_read_epoch: s.current_epoch,
                 owner_enc_pub: self.owner.enc.public(),
                 parent_node_seed: s.parent_node_seed.map(Zeroizing::new),

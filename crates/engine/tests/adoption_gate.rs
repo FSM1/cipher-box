@@ -658,6 +658,39 @@ fn matrix_table_and_reject_surface_mirror_one_to_one() {
 }
 
 #[test]
+fn foreign_scope_label_rejected_at_stage_six_binding() {
+    // Test A (resolver binding, #745/#756): the record is a fully valid scope root
+    // sealed for its own scope, and the reader's read_key opens it (the scope UUID
+    // is not in the read-key KDF). Only the reader's `scope_id` — the trusted
+    // parent-index label — is foreign. Adopting under it would dedup/rotate the
+    // WRONG scope key, a silent revocation hole. Stage 6 binds `envelope.scope` to
+    // `reader.scope_id` and rejects fail-closed. With the returned `scope_id`
+    // dropped from the rotation targets, a divergent label can no longer even reach
+    // a re-key: this gate check is the sole surviving edge, and it fails closed.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let candidate = fx.candidate(1);
+
+    let foreign_scope = [0xEE; 16];
+    assert_ne!(foreign_scope, fx.scope_id, "the label must actually differ");
+    let reader = ReaderContext {
+        owner_identity: &fx.owner_identity_verifier,
+        scope_id: foreign_scope,
+        read_key: &fx.read_key,
+        parent_node_seed: None,
+        seed_blob: Some(fx.owner_seed_blob(false)),
+    };
+
+    let err = block_on(adopt(&floors, &reader, &candidate))
+        .expect_err("a foreign scope label must be rejected");
+    let rejection = err
+        .rejection()
+        .expect("a trust rejection, not a seam error");
+    assert_eq!(rejection.stage, GateStage::Unseal, "stage-6 binding");
+    assert_eq!(rejection.check(), "seal-open-failed");
+}
+
+#[test]
 fn no_reject_check_is_an_engine_invented_crypto_code() {
     let core: BTreeSet<&str> = TrustViolation::CHECKS.iter().copied().collect();
     let floor: BTreeSet<&str> = FLOOR_VERDICTS.iter().copied().collect();
