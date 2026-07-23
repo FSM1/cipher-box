@@ -137,17 +137,22 @@ pub trait Http {
     async fn send(&self, request: HttpRequest) -> SeamResult<HttpResponse>;
 
     /// Like [`send`](Self::send), but fails closed if the response body would
-    /// exceed `max_bytes`. A conforming transport enforces the bound *while*
-    /// reading the body (a `Content-Length` pre-check plus a capped streaming
-    /// read), so a malicious gateway cannot force an allocation larger than the
-    /// cap — the true peak-memory bound at the content fetch boundary (#787).
+    /// exceed `max_bytes`, so a lying/huge gateway cannot force an over-cap
+    /// adoption. The strength of the bound differs by transport:
+    ///
+    /// - Desktop (`reqwest`) enforces it *while* reading the body — a
+    ///   `Content-Length` pre-check plus a capped streaming read that aborts
+    ///   past the cap — the true peak-memory bound at the content fetch
+    ///   boundary (#787).
+    /// - WASM (the JS fetch bridge) applies a `Content-Length` pre-check plus a
+    ///   post-buffer size check: it fails closed on size but is *not* a
+    ///   peak-memory bound, because the JS seam buffers the whole body before it
+    ///   reaches Rust. The streaming bound is tracked in #641.
     ///
     /// The default implementation only backstops: it buffers the whole body via
-    /// [`send`](Self::send) and then checks the length, which bounds nothing.
-    /// The real content-read transports (desktop `reqwest`, the WASM fetch
-    /// bridge) override this with a streaming bound; the default is for seams
-    /// that never carry untrusted content bodies (the fakes, the API-only
-    /// contract transport).
+    /// [`send`](Self::send) and then checks the length, which bounds nothing. It
+    /// is for seams that never carry untrusted content bodies (the fakes, the
+    /// API-only contract transport).
     async fn send_capped(
         &self,
         request: HttpRequest,
