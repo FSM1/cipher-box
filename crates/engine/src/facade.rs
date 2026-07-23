@@ -367,7 +367,7 @@ pub enum EngineError {
     /// [`Engine::start`] was called on an already-started engine (one live
     /// instance is the single writer).
     AlreadyStarted,
-    /// The login secret was empty.
+    /// The login secret was empty or not a valid 32-byte identity scalar.
     InvalidSecret,
     /// The command's pipeline slice has not landed yet (scaffold state).
     Unimplemented {
@@ -401,7 +401,9 @@ impl fmt::Display for EngineError {
         match self {
             EngineError::NotStarted => f.write_str("engine not started"),
             EngineError::AlreadyStarted => f.write_str("engine already started"),
-            EngineError::InvalidSecret => f.write_str("login secret must not be empty"),
+            EngineError::InvalidSecret => {
+                f.write_str("login secret is not a valid identity scalar")
+            }
             EngineError::Unimplemented { command } => {
                 write!(f, "command not implemented yet: {command}")
             }
@@ -630,7 +632,7 @@ impl<T: SeamTypes> Engine<T> {
         }
         // Pure derivation from the injected secret — no clock, no RNG — then
         // the secret zeroizes on drop here, at its terminal owner.
-        self.session = Some(Rc::new(SessionIdentity::derive(&secret)));
+        self.session = Some(Rc::new(SessionIdentity::derive(&secret)?));
         drop(secret);
         self.spawn_liveness_loop();
         self.started = true;
@@ -997,7 +999,8 @@ mod tests {
 
         // Start derives the same identity as the pure derivation from the same
         // secret — it invents no key material.
-        let expected = SessionIdentity::derive(&LoginSecret::new(vec![7u8; 32]));
+        let expected =
+            SessionIdentity::derive(&LoginSecret::new(vec![7u8; 32])).expect("valid identity");
         assert_eq!(
             session.vault_pointer_signer(0).verifying_key().to_bytes(),
             expected.vault_pointer_signer(0).verifying_key().to_bytes(),
