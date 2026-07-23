@@ -35,7 +35,7 @@ use crate::hex::hex_lower;
 use crate::net::{
     Adopter, EolRenewResult, HeldMaterial, HeldRecord, HeldRecords, LivenessControl, PublishError,
     PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch, RootAdopter, eol_renew_pass,
-    keyless_re_put, resolve_and_hold, run_liveness_loop,
+    keyless_re_put, refresh_base_from_outcome, resolve_and_hold, run_liveness_loop,
 };
 use crate::profile::SyncTimingProfile;
 use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore};
@@ -610,7 +610,9 @@ pub struct Engine<T: SeamTypes> {
     /// operand). Seeded at the anchored root; cold-start/resolve replace it
     /// with the resolved remote state. Reads render this ⊕ the pending-op
     /// overlay; commands never mutate it — only the op queue diverges locally.
-    snapshot: Snapshot,
+    /// Behind an [`Rc`]`<`[`RefCell`]`>` so the resolve-tick loop shares the one
+    /// cell and repaints it in place from a gate-passing live resolve.
+    snapshot: Rc<RefCell<Snapshot>>,
     /// The session's live held-record set, keyed by node id: the resolve path
     /// ([`resolve_and_hold`](crate::net::resolve_and_hold)) inserts each
     /// gate-passing record here, and the cold-start liveness loop keyless
@@ -654,7 +656,7 @@ impl<T: SeamTypes> Engine<T> {
                 events,
                 // The anchored all-zero root until cold-start/resolve replaces
                 // the base snapshot; children come from the pending-op overlay.
-                snapshot: Snapshot::new(NodeId([0u8; 16])),
+                snapshot: Rc::new(RefCell::new(Snapshot::new(NodeId([0u8; 16])))),
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
@@ -729,7 +731,7 @@ impl<T: SeamTypes> Engine<T> {
         let cold_start = {
             let session = self.session.as_ref().expect("session set above");
             let owner_identity = session.owner_identity();
-            let root = self.snapshot.root;
+            let root = self.snapshot.borrow().root;
             let root_scope_id = root.0;
             let pointer_fetch = RecordPointerFetch::new(&self.seams.record_transport);
             let adopter = RootAdopter::new(
@@ -769,7 +771,7 @@ impl<T: SeamTypes> Engine<T> {
             .vault_pointer
             .as_ref()
             .map(|vp| vp.repoint.current_root.clone());
-        self.snapshot = outcome.base;
+        *self.snapshot.borrow_mut() = outcome.base;
 
         self.spawn_liveness_loop(api.clone());
         self.spawn_resolve_tick_loop(root_name);
@@ -958,13 +960,15 @@ impl<T: SeamTypes> Engine<T> {
         let http = self.seams.http.clone();
         let gateway = self.gateway.clone();
         let held = self.held_records.clone();
+        let base = self.snapshot.clone();
+        let events = self.events.clone();
         let alive = self.alive.clone();
         let interval = self.profile.poll_cadence;
         let owner_identity = session.owner_identity();
         // The vault's own root scope and root node are the anchored all-zero id16
         // (the cold-start bootstrap anchor): the adopter's scope binding and the
         // held-set fallback key.
-        let root_id = self.snapshot.root.0;
+        let root_id = self.snapshot.borrow().root.0;
 
         self.seams.scheduler.spawn(Box::pin(async move {
             run_liveness_loop(&scheduler, interval, || async {
@@ -991,11 +995,14 @@ impl<T: SeamTypes> Engine<T> {
                     write_scope_seed: None,
                     content_cids: Vec::new(),
                 };
-                // The resolve outcome (incl. a steady-state `TrustViolation`) is
-                // dropped: fail-closed for data (a forged record is never held or
-                // rendered), but surfacing it as a staleness-ladder /
-                // `AttributableAbuse` event is a later slice.
-                let _ = resolve_and_hold(
+                // A gate-passing resolve repaints the shared base cell and emits
+                // `SnapshotUpdated`; a steady-state `TrustViolation`/`Current`/
+                // `NoUpdate` leaves last-known-good intact (fail-closed for data:
+                // a forged record is never held or rendered). Surfacing the
+                // violation as a staleness-ladder / `AttributableAbuse` event, and
+                // a resolve `SeamError` as availability, are later slices — the
+                // error stays swallowed here.
+                if let Ok(resolved) = resolve_and_hold(
                     &transport,
                     &snapshot_cache,
                     &adopter,
@@ -1003,7 +1010,12 @@ impl<T: SeamTypes> Engine<T> {
                     &held,
                     &material,
                 )
-                .await;
+                .await
+                {
+                    if refresh_base_from_outcome(&base, NodeId(root_id), &resolved.outcome) {
+                        let _ = events.unbounded_send(Event::SnapshotUpdated);
+                    }
+                }
                 LivenessControl::Continue
             })
             .await;
@@ -1057,7 +1069,9 @@ impl<T: SeamTypes> Engine<T> {
             }
             Command::Relink { node, new_parent } => {
                 let rendered = self.render().await?;
-                let from_parent = rendered.parent_of(node).unwrap_or(self.snapshot.root);
+                let from_parent = rendered
+                    .parent_of(node)
+                    .unwrap_or(self.snapshot.borrow().root);
                 let base_sequence = rendered.record_sequence(node).unwrap_or(1);
                 // trailing bools: cross_scope=false, exits_granted_source=false — intra-scope pure relink
                 let op = Op::relink(node, from_parent, new_parent, base_sequence, false, false);
@@ -1091,13 +1105,16 @@ impl<T: SeamTypes> Engine<T> {
     /// The current base snapshot's root node id — the FUSE mount anchor. The
     /// seeded all-zero root until cold-start/resolve replaces the base snapshot.
     pub fn root(&self) -> NodeId {
-        self.snapshot.root
+        self.snapshot.borrow().root
     }
 
     /// Render the base snapshot with the pending-op overlay applied.
     async fn render(&self) -> Result<Snapshot, EngineError> {
+        // Take the base borrow only after the await, and drop it at the end of
+        // this sync call — a `RefCell` borrow must never span an `.await`.
         let ops = self.pending_ops().await?;
-        Ok(apply_overlay(&self.snapshot, &ops))
+        let base = self.snapshot.borrow();
+        Ok(apply_overlay(&base, &ops))
     }
 
     /// The pending ops from the durable staging store, decoded FIFO. Undecodable
@@ -1831,6 +1848,83 @@ mod tests {
             // The data path is a pure function of the seams + session: the two
             // outcomes match despite the engines' clocks sitting far apart.
             assert_eq!(drive(&mut a, &pa), drive(&mut b, &pb));
+        }
+
+        /// A gate-passing `Adopted` folder carrying one child — the projected
+        /// material a newer live resolve folds into the shared base cell.
+        fn adopted_with_child(child_id: [u8; 16], name: &str) -> Adopted {
+            use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind};
+            Adopted {
+                read_body: ReadBody::Folder {
+                    created_at: 0,
+                    modified_at: 0,
+                    children: vec![ChildRef {
+                        id: child_id,
+                        name: name.to_string(),
+                        ipns_name: vec![1],
+                        kind: CoreNodeKind::File,
+                        link_counter: 1,
+                        unknown: Vec::new(),
+                    }],
+                    unknown: Vec::new(),
+                },
+                sequence: 2,
+                epoch: 1,
+            }
+        }
+
+        #[test]
+        fn a_newer_adopted_tick_repaints_the_view_and_emits() {
+            use crate::net::{ResolveOutcome, refresh_base_from_outcome};
+
+            let (engine, mut events, _pointers) = started_at(UnixMillis(123_456));
+            let root = engine.root();
+
+            // One resolve-tick pass over a gate-passing newer `Adopted`: fold it
+            // into the shared base cell and emit, exactly as the tick loop does.
+            assert!(refresh_base_from_outcome(
+                &engine.snapshot,
+                root,
+                &ResolveOutcome::Adopted(adopted_with_child([0xC1; 16], "live.txt")),
+            ));
+            let _ = engine.events.unbounded_send(Event::SnapshotUpdated);
+
+            let view = block_on(engine.view()).unwrap();
+            assert!(
+                view.lookup(root, "live.txt").is_some(),
+                "the view reflects the newly adopted child"
+            );
+            assert_eq!(view.children(root).len(), 1);
+            assert_eq!(block_on(events.next()), Some(Event::SnapshotUpdated));
+        }
+
+        #[test]
+        fn tick_repaint_is_clock_independent() {
+            use crate::net::{ResolveOutcome, refresh_base_from_outcome};
+
+            let (a, _ea, _pa) = started_at(UnixMillis(0));
+            let (b, _eb, _pb) = started_at(UnixMillis(5_000_000));
+            let root = a.root();
+            assert_eq!(root, b.root());
+
+            refresh_base_from_outcome(
+                &a.snapshot,
+                root,
+                &ResolveOutcome::Adopted(adopted_with_child([0xD2; 16], "clk.txt")),
+            );
+            refresh_base_from_outcome(
+                &b.snapshot,
+                root,
+                &ResolveOutcome::Adopted(adopted_with_child([0xD2; 16], "clk.txt")),
+            );
+
+            // Clock-independent: the two repainted bases are byte-identical, and
+            // both render the same post-pass view.
+            assert_eq!(*a.snapshot.borrow(), *b.snapshot.borrow());
+            let va = block_on(a.view()).unwrap();
+            let vb = block_on(b.view()).unwrap();
+            assert!(va.lookup(root, "clk.txt").is_some());
+            assert_eq!(va.children(root).len(), vb.children(root).len());
         }
 
         #[test]

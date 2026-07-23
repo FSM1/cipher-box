@@ -47,6 +47,6 @@ pub use liveness::{
 pub use pointer_fetch::RecordPointerFetch;
 pub use publish::{PublishError, PublishOutcome, PublishRequest, publish};
 pub use resolve::{AdoptOutcome, Adopter, ResolveOutcome, Resolved, resolve};
-pub(crate) use resolve::{HeldMaterial, resolve_and_hold};
+pub(crate) use resolve::{HeldMaterial, refresh_base_from_outcome, resolve_and_hold};
 pub use retire::{retire, root_retire_ready};
 pub use revival::{ReviveError, ReviveRequest, revive};

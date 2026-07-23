@@ -23,9 +23,12 @@ use zeroize::Zeroizing;
 use super::fanout::fanout_get_verify;
 use super::liveness::{HeldRecord, HeldRecords};
 use super::publish::head_cid_from_value;
+use crate::facade::NodeId;
 use crate::gate::{Adopted, GateError, GateRejection, RejectionReason};
 use crate::seams::{RecordTransport, SeamError, SnapshotCache};
 use crate::session::SessionIdentity;
+use crate::sync::model::Snapshot;
+use crate::sync::project::project_root;
 
 /// Runs the adoption gate over a fetched record. The concrete implementation
 /// assembles the content-plane candidate and the reader's private context and
@@ -273,6 +276,26 @@ where
         );
     }
     Ok(resolved)
+}
+
+/// Fold a completed resolve's verdict into the shared base cell. A gate-passing
+/// `Adopted` re-projects (`project_root`) and replaces the base, returning true
+/// (the caller emits `SnapshotUpdated`); `Current`/`NoUpdate`/`TrustViolation`
+/// leave last-known-good intact and return false. Non-await by construction — the
+/// short `borrow_mut` never spans an `.await` (facade single-threaded executor
+/// rule).
+pub(crate) fn refresh_base_from_outcome(
+    base: &RefCell<Snapshot>,
+    root: NodeId,
+    outcome: &ResolveOutcome,
+) -> bool {
+    match outcome {
+        ResolveOutcome::Adopted(adopted) => {
+            *base.borrow_mut() = project_root(root, adopted);
+            true
+        }
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -728,5 +751,87 @@ mod tests {
             "renewal preserves the head CID; never /ipfs/",
         );
         assert!(!expected_head.is_empty());
+    }
+
+    mod refresh_base {
+        use super::super::refresh_base_from_outcome;
+        use super::{GateRejection, GateStage, RejectionReason, ResolveOutcome};
+
+        use core::cell::RefCell;
+
+        use cipherbox_core::error::TrustViolation;
+        use cipherbox_core::seal::{ChildRef, NodeKind, ReadBody};
+
+        use crate::facade::NodeId;
+        use crate::gate::Adopted;
+        use crate::sync::model::Snapshot;
+        use crate::sync::overlay::apply_overlay;
+
+        fn adopted_with_one_child(child_id: [u8; 16]) -> Adopted {
+            Adopted {
+                read_body: ReadBody::Folder {
+                    created_at: 0,
+                    modified_at: 0,
+                    children: vec![ChildRef {
+                        id: child_id,
+                        name: "hello.txt".to_string(),
+                        ipns_name: vec![1],
+                        kind: NodeKind::File,
+                        link_counter: 1,
+                        unknown: Vec::new(),
+                    }],
+                    unknown: Vec::new(),
+                },
+                sequence: 2,
+                epoch: 1,
+            }
+        }
+
+        #[test]
+        fn refresh_base_from_a_newer_adopted_updates_the_cell() {
+            let root = NodeId([0u8; 16]);
+            let cell = RefCell::new(Snapshot::new(root));
+            let child_id = [7u8; 16];
+
+            assert!(refresh_base_from_outcome(
+                &cell,
+                root,
+                &ResolveOutcome::Adopted(adopted_with_one_child(child_id)),
+            ));
+
+            let base = cell.borrow();
+            let rendered = apply_overlay(&base, &[]);
+            let children = rendered.children(root);
+            assert_eq!(children.len(), 1, "the newer child is projected under root");
+            assert_eq!(children[0].id, NodeId(child_id));
+        }
+
+        #[test]
+        fn non_adopting_outcomes_leave_the_base_untouched() {
+            let root = NodeId([9u8; 16]);
+            let before = Snapshot::new(root);
+            let rejection = GateRejection {
+                stage: GateStage::RecordVerify,
+                reason: RejectionReason::Trust(TrustViolation::IpnsSignatureInvalid.into()),
+            };
+            for outcome in [
+                ResolveOutcome::NoUpdate,
+                ResolveOutcome::Current {
+                    record_bytes: vec![1, 2, 3],
+                },
+                ResolveOutcome::TrustViolation(rejection),
+            ] {
+                let cell = RefCell::new(before.clone());
+                assert!(
+                    !refresh_base_from_outcome(&cell, root, &outcome),
+                    "{outcome:?} must not repaint the base"
+                );
+                assert_eq!(
+                    *cell.borrow(),
+                    before,
+                    "{outcome:?} leaves last-known-good byte-identical"
+                );
+            }
+        }
     }
 }
