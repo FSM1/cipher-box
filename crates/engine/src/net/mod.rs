@@ -27,7 +27,9 @@
 //! the content/pointer/key assembly, and a lost race surfaces as
 //! [`publish::PublishOutcome::LostRace`] for the rebase slice.
 
+mod adopter;
 mod fanout;
+mod pointer_fetch;
 
 pub mod eol;
 pub mod liveness;
@@ -36,11 +38,15 @@ pub mod resolve;
 pub mod retire;
 pub mod revival;
 
+pub use adopter::RootAdopter;
+pub(crate) use liveness::eol_renew_pass;
 pub use liveness::{
-    HeldRecord, LivenessControl, RE_PUT_INTERVAL, RePutResult, eol_republish, keyless_re_put,
-    run_liveness_loop,
+    EolRenewResult, HeldRecord, HeldRecords, LivenessControl, RE_PUT_INTERVAL, RePutResult,
+    eol_republish, keyless_re_put, run_liveness_loop,
 };
+pub use pointer_fetch::RecordPointerFetch;
 pub use publish::{PublishError, PublishOutcome, PublishRequest, publish};
-pub use resolve::{Adopter, ResolveOutcome, Resolved, resolve};
+pub use resolve::{AdoptOutcome, Adopter, ResolveOutcome, Resolved, resolve};
+pub(crate) use resolve::{HeldMaterial, refresh_base_from_outcome, resolve_and_hold};
 pub use retire::{retire, root_retire_ready};
 pub use revival::{ReviveError, ReviveRequest, revive};

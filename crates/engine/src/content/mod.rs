@@ -31,7 +31,8 @@ pub use provider::{
     ByoIpfsConfig, ByoKind, PinMode, ProviderError, test_connection, validate_endpoint,
 };
 pub use read::{
-    ContentPlane, Gateway, GatewaySource, ReadError, leaf_range_for_byte_range, read_block,
+    ContentPlane, Gateway, GatewayConfig, GatewaySource, ReadError, leaf_range_for_byte_range,
+    read_block,
 };
 pub use retention::{ContentVersion, PrunePlan, QuotaExceeded, plan_prune, pre_flight_quota_check};
 

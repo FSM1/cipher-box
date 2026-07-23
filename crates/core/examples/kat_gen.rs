@@ -23,8 +23,8 @@ use cipherbox_core::codec::{
     MAX_DEPTH, Map, Value, decode, decode_map_partial, encode, encode_map_partial,
 };
 use cipherbox_core::content::{
-    CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid, open_chunk, seal_chunk,
-    verify_cid,
+    CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid, decode_content_cid_str,
+    encode_content_cid_str, open_chunk, seal_chunk, verify_cid,
 };
 use cipherbox_core::error::{CodecError, Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -228,6 +228,18 @@ struct ContentSection {
     seal_reject: RejectSection,
     cid: FileCount,
     cid_reject: RejectSection,
+    cid_str_accept: FileCount,
+    cid_str_reject: RejectSection,
+}
+
+/// A content-CID string accept vector: a binary CIDv1 and its canonical
+/// base32-lowercase multibase (`b…`) rendering, round-tripping byte-for-byte.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentCidStrAcceptVector {
+    name: String,
+    cid: String,
+    cid_str: String,
 }
 
 /// A content-seal accept vector: a fixed content key + nonce seal of
@@ -890,11 +902,21 @@ fn main() {
     let content_seal_reject = build_content_seal_reject();
     let content_cid = build_content_cid();
     let content_cid_reject = build_content_cid_reject();
+    let content_cid_str_accept = build_content_cid_str_accept();
+    let content_cid_str_reject = build_content_cid_str_reject();
 
     write_pretty(&content_dir.join("seal.json"), &content_seal);
     write_pretty(&content_dir.join("seal_reject.json"), &content_seal_reject);
     write_pretty(&content_dir.join("cid.json"), &content_cid);
     write_pretty(&content_dir.join("cid_reject.json"), &content_cid_reject);
+    write_pretty(
+        &content_dir.join("cid_str_accept.json"),
+        &content_cid_str_accept,
+    );
+    write_pretty(
+        &content_dir.join("cid_str_reject.json"),
+        &content_cid_str_reject,
+    );
 
     let manifest = build_manifest(ManifestInputs {
         accept: &accept,
@@ -925,6 +947,8 @@ fn main() {
         content_seal_reject: &content_seal_reject,
         content_cid: &content_cid,
         content_cid_reject: &content_cid_reject,
+        content_cid_str_accept: &content_cid_str_accept,
+        content_cid_str_reject: &content_cid_str_reject,
     });
     write_pretty(&kat_dir.join("manifest.json"), &manifest);
 
@@ -935,7 +959,8 @@ fn main() {
          {} name-accept, {} name-reject, {} record-accept, {} record-reject, {} record-reput, \
          {} pointer-accept, {} pointer-reject, {} mailbox-accept, {} mailbox-reject, \
          {} grant-family, {} content-seal, {} content-seal-reject, {} content-cid, \
-         {} content-cid-reject vectors + manifest.json",
+         {} content-cid-reject, {} content-cid-str-accept, {} content-cid-str-reject \
+         vectors + manifest.json",
         accept.len(),
         reject.len(),
         unknown.len(),
@@ -964,6 +989,8 @@ fn main() {
         content_seal_reject.len(),
         content_cid.len(),
         content_cid_reject.len(),
+        content_cid_str_accept.len(),
+        content_cid_str_reject.len(),
     );
 }
 
@@ -1718,6 +1745,8 @@ struct ManifestInputs<'a> {
     content_seal_reject: &'a [ContentSealRejectVector],
     content_cid: &'a [ContentCidVector],
     content_cid_reject: &'a [ContentCidRejectVector],
+    content_cid_str_accept: &'a [ContentCidStrAcceptVector],
+    content_cid_str_reject: &'a [TextRejectVector],
 }
 
 fn build_manifest(m: ManifestInputs) -> Manifest {
@@ -1929,6 +1958,17 @@ fn build_content_section(m: &ManifestInputs) -> ContentSection {
             count: m.content_cid_reject.len(),
             checks: checks_surface_ordered(
                 &m.content_cid_reject
+                    .iter()
+                    .map(|v| v.check.as_str())
+                    .collect(),
+            ),
+        },
+        cid_str_accept: file("cid_str_accept", m.content_cid_str_accept.len()),
+        cid_str_reject: RejectSection {
+            file: "vectors/content/cid_str_reject.json".to_string(),
+            count: m.content_cid_str_reject.len(),
+            checks: checks_surface_ordered(
+                &m.content_cid_str_reject
                     .iter()
                     .map(|v| v.check.as_str())
                     .collect(),
@@ -2297,6 +2337,126 @@ fn build_content_cid_reject() -> Vec<ContentCidRejectVector> {
         });
     }
     out
+}
+
+fn build_content_cid_str_accept() -> Vec<ContentCidStrAcceptVector> {
+    let key = content_key();
+    const DAG_CBOR_CODEC: u8 = 0x71;
+    // (name, codec, bytes) → binary CIDv1 → canonical base32-lower `b…` string.
+    // A raw leaf, the empty-input leaf, and the dag-cbor DAG root (the head-block
+    // codec a scope's `/ipfs/<head_cid>` record actually carries).
+    let cases: Vec<(&str, u8, Vec<u8>)> = vec![
+        (
+            "cid-str-sealed-chunk",
+            CONTENT_CID_CODEC,
+            seal_chunk(&key, &content_nonce(0x11), b"caller-framed chunk bytes"),
+        ),
+        ("cid-str-empty-input", CONTENT_CID_CODEC, Vec::new()),
+        (
+            "cid-str-dag-root-nonraw-codec",
+            DAG_CBOR_CODEC,
+            b"assembled dag-root node bytes".to_vec(),
+        ),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, codec, sealed) in cases {
+        assert!(
+            names.insert(name),
+            "duplicate content cid-str vector {name}"
+        );
+        let cid = compute_cid(codec, &sealed);
+        let cid_str = encode_content_cid_str(&cid);
+        // Self-checks: canonical `b` prefix and a byte-stable strict round-trip.
+        assert!(
+            cid_str.starts_with('b'),
+            "content cid-str {name}: base32 multibase prefix"
+        );
+        assert_eq!(
+            decode_content_cid_str(&cid_str).expect("own string decodes"),
+            cid,
+            "content cid-str {name}: decode recovers the binary CID"
+        );
+        out.push(ContentCidStrAcceptVector {
+            name: name.to_string(),
+            cid: hexstr(&cid),
+            cid_str,
+        });
+    }
+    out
+}
+
+fn build_content_cid_str_reject() -> Vec<TextRejectVector> {
+    let good = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, b"anchor bytes"));
+    let body = &good[1..];
+
+    // A canonical base32 body over a 36-byte string whose multihash code is
+    // corrupted: valid base32, wrong CIDv1 framing → must fail closed.
+    let mut wrong_framing = compute_cid(CONTENT_CID_CODEC, b"anchor bytes");
+    wrong_framing[2] ^= 0xff;
+    let mut wrong_framing_str = String::from("b");
+    base32_encode_into_ref(&wrong_framing, &mut wrong_framing_str);
+
+    // (name, string). Every string is not the one canonical `b…` CIDv1.
+    let cases: Vec<(&str, String)> = vec![
+        ("empty", String::new()),
+        ("prefix-only", "b".to_string()),
+        ("wrong-multibase-base36-k", format!("k{body}")),
+        ("wrong-multibase-base58-z", format!("z{body}")),
+        ("uppercase-base32-upper", good.to_uppercase()),
+        ("non-base32-char-1", format!("b1{body}")),
+        ("truncated", good[..good.len() - 1].to_string()),
+        ("trailing-extra-char", format!("{good}a")),
+        ("wrong-cid-framing", wrong_framing_str),
+    ];
+
+    let mut names = BTreeSet::new();
+    let mut out = Vec::with_capacity(cases.len());
+    for (name, text) in cases {
+        assert!(
+            names.insert(name),
+            "duplicate content cid-str-reject {name}"
+        );
+        let err = decode_content_cid_str(&text).expect_err("cid-str-reject must fail closed");
+        assert_eq!(
+            err.check(),
+            "content-cid-str-malformed",
+            "content cid-str-reject {name}: check ({err})"
+        );
+        assert_eq!(
+            err.class(),
+            "malformed",
+            "content cid-str-reject {name}: class ({err})"
+        );
+        out.push(TextRejectVector {
+            name: name.to_string(),
+            text,
+            check: err.check().to_string(),
+            class: err.class().to_string(),
+        });
+    }
+    out
+}
+
+/// Canonical base32-lowercase (no-padding) of `input` appended to `out` — the
+/// same transform the codec applies, used only to hand-craft the wrong-framing
+/// reject vector's body from arbitrary (non-CID) bytes.
+fn base32_encode_into_ref(input: &[u8], out: &mut String) {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+    let mut acc: u32 = 0;
+    let mut bits: u32 = 0;
+    for &b in input {
+        acc = (acc << 8) | u32::from(b);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            out.push(ALPHABET[((acc >> bits) & 0x1f) as usize] as char);
+        }
+    }
+    if bits > 0 {
+        out.push(ALPHABET[((acc << (5 - bits)) & 0x1f) as usize] as char);
+    }
 }
 
 /// A frozen sample folder read-body, used as the read-body-tag plaintext.

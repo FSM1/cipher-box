@@ -479,8 +479,10 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     // floor must not move ahead of the bookmark it accepts. If the persist below
     // fails the floor stays put, so redelivery re-adopts cleanly instead of being
     // stranded below an already-advanced floor (a permanently-lost share).
+    // The share-accept flow does not hold the scope for liveness here, so the
+    // write-grantee seed the gate surfaces is dropped (the `_`).
     let pending = match adopt_deferred(floors, &reader, candidate).await {
-        Ok(pending) => pending,
+        Ok((pending, _)) => pending,
         Err(e) => {
             // Idempotent ack-only short-circuit. A strict-sequence anti-replay
             // reject for a scope we ALREADY durably hold is a redelivery whose

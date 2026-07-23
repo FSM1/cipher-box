@@ -33,6 +33,7 @@ use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::{
     PointerError, PointerFetch, VaultPointerAdoption, resolve_vault_pointer,
 };
+use crate::sync::project::project_root;
 
 /// The session inputs the cold-start chain needs, all read from the derived
 /// [`SessionIdentity`](crate::session::SessionIdentity) and the auth-provided
@@ -110,10 +111,13 @@ pub struct ColdStartOutcome {
     pub root_resolve: Option<RootResolve>,
     /// Whether cache-first rehydrate found last-known-good for the current root.
     pub rehydrated: bool,
-    /// The rendered view emitted on the first snapshot event: the gate-passing
-    /// base snapshot with the pending-op overlay applied. The read-body →
-    /// snapshot projection lands with a later slice, so the base is the anchored
-    /// root; the overlay renders the user's pending ops immediately.
+    /// The gate-passing base snapshot the engine adopts as the state law's left
+    /// operand: the adopted root read-body projected to its direct children
+    /// ([`project_root`], E7) when a pointer resolved to a gate-passing record,
+    /// else the anchored root ([`Snapshot::new`]) on an empty/degenerate chain.
+    pub base: Snapshot,
+    /// The rendered view emitted on the first snapshot event: `base` ⊕ the
+    /// pending-op overlay.
     pub rendered: Snapshot,
 }
 
@@ -162,6 +166,7 @@ where
             vault_pointer: None,
             root_resolve: None,
             rehydrated: false,
+            base,
             rendered,
         });
     };
@@ -190,9 +195,17 @@ where
     )
     .await
     .map_err(ColdStartError::Seam)?;
-    let root_resolve = match resolved.outcome {
-        ResolveOutcome::Adopted(_) => RootResolve::Adopted,
-        ResolveOutcome::NoUpdate => RootResolve::NoUpdate,
+    // Project the gate-passing root read-body to its direct children (E7); an
+    // availability-stale current record leaves the base at the anchored root.
+    let (root_resolve, base) = match resolved.outcome {
+        ResolveOutcome::Adopted(adopted) => {
+            (RootResolve::Adopted, project_root(params.root, &adopted))
+        }
+        // Cold start paints, it does not hold: our own current record at the
+        // floor is availability staleness here, same as nothing newer fetched.
+        ResolveOutcome::NoUpdate | ResolveOutcome::Current { .. } => {
+            (RootResolve::NoUpdate, Snapshot::new(params.root))
+        }
         ResolveOutcome::TrustViolation(rejection) => {
             return Err(ColdStartError::RootAdoption(rejection));
         }
@@ -206,6 +219,7 @@ where
         vault_pointer: Some(adoption),
         root_resolve: Some(root_resolve),
         rehydrated: resolved.last_known_good.is_some(),
+        base,
         rendered,
     })
 }
@@ -315,8 +329,16 @@ mod tests {
             &self,
             _name: &IpnsName,
             _record_bytes: &[u8],
-        ) -> Result<Adopted, GateError> {
-            self.verdict.lock().unwrap().clone()
+        ) -> Result<crate::net::AdoptOutcome, GateError> {
+            self.verdict
+                .lock()
+                .unwrap()
+                .clone()
+                .map(|adopted| crate::net::AdoptOutcome {
+                    adopted,
+                    write_scope_seed: None,
+                    node_id: [0u8; 16],
+                })
         }
     }
 

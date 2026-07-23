@@ -48,10 +48,10 @@ pub use api::{
 };
 pub use content::{
     ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
-    DAG_ROOT_CODEC, DagError, Gateway, GatewaySource, PinMode, ProviderError, PrunePlan,
-    QuotaExceeded, ReadError, RootManifest, SealError, SealedChunk, SealedContent, assemble,
-    decode_root, frame_and_seal, leaf_range_for_byte_range, plan_prune, pre_flight_quota_check,
-    read_block, seal_content, test_connection, validate_endpoint,
+    DAG_ROOT_CODEC, DagError, Gateway, GatewayConfig, GatewaySource, PinMode, ProviderError,
+    PrunePlan, QuotaExceeded, ReadError, RootManifest, SealError, SealedChunk, SealedContent,
+    assemble, decode_root, frame_and_seal, leaf_range_for_byte_range, plan_prune,
+    pre_flight_quota_check, read_block, seal_content, test_connection, validate_endpoint,
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{
@@ -70,8 +70,9 @@ pub use grants::{
 };
 pub use mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 pub use net::{
-    Adopter, HeldRecord, PublishError, PublishOutcome, PublishRequest, RePutResult, ResolveOutcome,
-    Resolved, ReviveError, ReviveRequest, publish, resolve, revive,
+    AdoptOutcome, Adopter, HeldRecord, HeldRecords, PublishError, PublishOutcome, PublishRequest,
+    RePutResult, RecordPointerFetch, ResolveOutcome, Resolved, ReviveError, ReviveRequest,
+    RootAdopter, publish, resolve, revive,
 };
 pub use profile::SyncTimingProfile;
 pub use rotation::{

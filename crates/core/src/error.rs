@@ -325,6 +325,14 @@ pub enum Malformed {
     /// slot, not a non-canonical encoding of a real name (the strict decode keeps
     /// the Rust side fail-closed).
     IpnsNameMalformed,
+    /// A content-CID string was not the one canonical base32-lowercase multibase
+    /// (`b`-prefixed) CIDv1 with the frozen content-plane framing (version 1, a
+    /// single-byte multicodec, the BLAKE3 multihash code, 32-byte digest length):
+    /// wrong/missing multibase prefix, a non-base32 or non-canonical body, a wrong
+    /// length, or wrong framing bytes. *Malformed*: foreign bytes in a content-CID
+    /// slot, not a non-canonical encoding of a real CID — the strict decode keeps
+    /// the recovered head anchor fail-closed before a fetch trusts it.
+    ContentCidStrMalformed,
     /// An IPNS record's protobuf could not be parsed, or it was missing a field
     /// the V2 verify chain requires (`value`, `signatureV2`, or `data`), or its
     /// `data` field was not the frozen det-CBOR shape. *Malformed*: structurally
@@ -358,6 +366,7 @@ impl Malformed {
         "invalid-permission",
         "invalid-field-length",
         "ipns-name-malformed",
+        "content-cid-str-malformed",
         "ipns-record-malformed",
     ];
 
@@ -384,6 +393,7 @@ impl Malformed {
             Self::InvalidPermission => "invalid-permission",
             Self::InvalidFieldLength { .. } => "invalid-field-length",
             Self::IpnsNameMalformed => "ipns-name-malformed",
+            Self::ContentCidStrMalformed => "content-cid-str-malformed",
             Self::IpnsRecordMalformed => "ipns-record-malformed",
         }
     }
@@ -421,6 +431,7 @@ impl fmt::Display for Malformed {
             | Self::InvalidNodeKind
             | Self::InvalidPermission
             | Self::IpnsNameMalformed
+            | Self::ContentCidStrMalformed
             | Self::IpnsRecordMalformed => Ok(()),
         }
     }

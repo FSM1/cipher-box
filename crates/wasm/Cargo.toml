@@ -40,6 +40,9 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 # `start`/`command` queue rather than double-borrowing), and bounds `nextEvent`
 # to one outstanding stream read.
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
+# Wraps the accelerator bearer token in a zeroizing buffer before it reaches the
+# engine's `GatewaySource` — the credential never sits in a plain `String`.
+zeroize.workspace = true
 
 # The boundary tests run under wasm-bindgen-test-runner.
 [target.'cfg(all(target_family = "wasm", target_os = "unknown"))'.dev-dependencies]

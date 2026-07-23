@@ -80,6 +80,7 @@ pub(crate) fn optional_bytes(value: JsValue) -> Option<Vec<u8>> {
 extern "C" {
     /// JS `FloorStoreSeam` (packages/client) — opaque handle, methods called
     /// structurally.
+    #[derive(Clone)]
     pub type JsFloorStoreSeam;
 
     #[wasm_bindgen(method, catch, js_name = epochFloor)]
@@ -103,6 +104,7 @@ extern "C" {
 /// The JS `FloorStoreSeam` exposes only per-key methods, so this adapter does
 /// not override `commit_floors`: web batches ride the seam's ordered fail-safe
 /// fallback (#682-safe; web-atomic is deferred — see the trait doc).
+#[derive(Clone)]
 pub(crate) struct FloorStoreAdapter {
     pub(crate) js: JsFloorStoreSeam,
 }
@@ -149,6 +151,7 @@ impl FloorStore for FloorStoreAdapter {
 #[wasm_bindgen]
 extern "C" {
     /// JS `SnapshotCacheSeam` (packages/client).
+    #[derive(Clone)]
     pub type JsSnapshotCacheSeam;
 
     #[wasm_bindgen(method, catch, js_name = put)]
@@ -165,6 +168,7 @@ extern "C" {
     async fn clear(this: &JsSnapshotCacheSeam) -> Result<JsValue, JsValue>;
 }
 
+#[derive(Clone)]
 pub(crate) struct SnapshotCacheAdapter {
     pub(crate) js: JsSnapshotCacheSeam,
 }
@@ -318,6 +322,7 @@ impl StagingStore for StagingStoreAdapter {
 #[wasm_bindgen]
 extern "C" {
     /// JS `CredentialStoreSeam` (packages/client).
+    #[derive(Clone)]
     pub type JsCredentialStoreSeam;
 
     #[wasm_bindgen(method, catch, js_name = storeRefreshToken)]
@@ -331,6 +336,7 @@ extern "C" {
     async fn clear_refresh_token(this: &JsCredentialStoreSeam) -> Result<JsValue, JsValue>;
 }
 
+#[derive(Clone)]
 pub(crate) struct CredentialStoreAdapter {
     pub(crate) js: JsCredentialStoreSeam,
 }
@@ -466,6 +472,7 @@ impl RecordTransport for RecordTransportAdapter {
 #[wasm_bindgen]
 extern "C" {
     /// JS `HttpSeam` (packages/client) — `send(HttpRequestData)`.
+    #[derive(Clone)]
     pub type JsHttpSeam;
 
     #[wasm_bindgen(method, catch, js_name = send)]
@@ -545,6 +552,7 @@ fn http_response_from_js(value: JsValue) -> SeamResult<HttpResponse> {
     })
 }
 
+#[derive(Clone)]
 pub(crate) struct HttpAdapter {
     pub(crate) js: JsHttpSeam,
 }

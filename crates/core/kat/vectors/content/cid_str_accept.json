@@ -1,0 +1,17 @@
+[
+  {
+    "name": "cid-str-sealed-chunk",
+    "cid": "01551e2013ae00f54c9c89553f94e187896df002878d65519d7edebb3b2b60f9b140bf64",
+    "cidStr": "bafkr4iatvyapkte4rfkt7fhbq6ew34acq6gwkum5p3plwozlmd43cqf7mq"
+  },
+  {
+    "name": "cid-str-empty-input",
+    "cid": "01551e20af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262",
+    "cidStr": "bafkr4ifpcne3t5pzugtkaqcn5i3nzskjtpfslsnnyejlpte2spfoihzsmi"
+  },
+  {
+    "name": "cid-str-dag-root-nonraw-codec",
+    "cid": "01711e20469f95275785ff4265858b4963283402fbcfb0c73b90d085f6ed61e4b741fdb7",
+    "cidStr": "bafyr4icgt6ksov4f75bglbmljfrsqnac7ph3brz3sdiil5xnmhsloqp5w4"
+  }
+]

@@ -15,11 +15,14 @@
 use std::rc::Rc;
 
 use cipherbox_engine::facade::{Engine, EventStream, LoginSecret};
-use cipherbox_engine::{Entropy, EntropyError, SeamSet, SeamTypes, SyncTimingProfile};
+use cipherbox_engine::{
+    Entropy, EntropyError, GatewayConfig, GatewaySource, SeamSet, SeamTypes, SyncTimingProfile,
+};
 use futures_util::lock::Mutex;
 use js_sys::{Promise, Reflect};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
+use zeroize::Zeroizing;
 
 use crate::seams_bridge::{
     CredentialStoreAdapter, FloorStoreAdapter, HttpAdapter, JsCredentialStoreSeam,
@@ -82,9 +85,19 @@ impl EngineHandle {
     /// `mailbox`, `refreshHints`, `scheduler`, `stagingStore`, `snapshotCache`,
     /// `credentialStore`); a missing seam fails closed. `profile` selects the
     /// sync timing policy (`"ci"` for the compressed e2e cadences, production
-    /// otherwise).
+    /// otherwise). The content gateway is configured from `acceleratorBaseUrl`
+    /// (+ optional `acceleratorBearer`) and `publicGateways`; all absent leaves
+    /// it dormant (reads fail closed as `Unavailable`) until E4 wires real
+    /// endpoints.
     #[wasm_bindgen(constructor)]
-    pub fn new(seams: JsValue, profile: Option<String>) -> Result<EngineHandle, JsError> {
+    pub fn new(
+        seams: JsValue,
+        profile: Option<String>,
+        api_base_url: Option<String>,
+        accelerator_base_url: Option<String>,
+        accelerator_bearer: Option<String>,
+        public_gateways: Option<Vec<String>>,
+    ) -> Result<EngineHandle, JsError> {
         console_error_panic_hook::set_once();
 
         let seam_set = SeamSet::<WebSeamTypes> {
@@ -122,7 +135,37 @@ impl EngineHandle {
             _ => SyncTimingProfile::PRODUCTION,
         };
 
-        let (engine, events) = Engine::new(seam_set, Box::new(GetrandomEntropy), profile);
+        // Dormant until the config slice (E4) supplies real endpoints: with no
+        // accelerator base URL and no fallbacks the gateway is empty, and reads
+        // fail closed as `Unavailable` (availability, never a trust violation).
+        // Zeroize the bearer before branching on the base URL: if no accelerator
+        // base URL is supplied the source closure never runs, so wrapping inside
+        // it would drop the Rust-owned bearer String unzeroized (security rule 7).
+        let accelerator_bearer = accelerator_bearer.map(Zeroizing::new);
+        let gateway = GatewayConfig {
+            accelerator: accelerator_base_url.map(|base_url| GatewaySource {
+                base_url,
+                bearer: accelerator_bearer,
+            }),
+            public_fallbacks: public_gateways
+                .unwrap_or_default()
+                .into_iter()
+                .map(|base_url| GatewaySource {
+                    base_url,
+                    bearer: None,
+                })
+                .collect(),
+        };
+
+        // Empty until the auth/config slice supplies the real API base URL; the
+        // register-first renewal is inert against an empty base until then.
+        let (engine, events) = Engine::new(
+            seam_set,
+            Box::new(GetrandomEntropy),
+            profile,
+            api_base_url.unwrap_or_default(),
+            gateway,
+        );
         Ok(EngineHandle {
             engine: Rc::new(Mutex::new(engine)),
             events: Rc::new(Mutex::new(events)),

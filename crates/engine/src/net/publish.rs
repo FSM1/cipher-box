@@ -103,6 +103,11 @@ pub enum PublishError {
     /// fail-closed trust event, never "no floor": publish stops rather than mint
     /// a sequence from assumed-empty state (blueprint/engine.md floor law).
     FloorRead(SeamError),
+    /// The request carried an empty head CID, which would sign `/ipfs/` — a
+    /// value the decode side ([`head_cid_from_value`]) always rejects. Refused
+    /// release-active so no path can ever PUT an unopenable pointer (security
+    /// rule 8; encode/decode fail-closed symmetry).
+    EmptyHeadCid,
 }
 
 /// Run the publish pipeline for `request`. Register-first and fail-closed:
@@ -122,6 +127,13 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
+    // Encode/decode fail-closed symmetry (security rule 8): head_cid_from_value
+    // rejects an empty CID, so refuse to sign+PUT `/ipfs/` here — release-active,
+    // never a debug_assert stripped in release.
+    if request.head_cid.is_empty() {
+        return Err(PublishError::EmptyHeadCid);
+    }
+
     // Register-first, fail-closed: the record never reaches the transport unless
     // the registration succeeds (#24 D6 / #34 D2).
     api.register(std::slice::from_ref(&request.registration()))

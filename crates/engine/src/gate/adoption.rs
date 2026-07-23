@@ -31,6 +31,7 @@ use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
 use cipherbox_core::suite::secret::SecretBytes;
 use cipherbox_core::suite::x25519::X25519Secret;
+use zeroize::Zeroizing;
 
 use crate::gate::floor;
 use crate::seams::{FloorStore, SeamError};
@@ -373,10 +374,17 @@ impl SeedBlob<'_> {
     }
 }
 
-/// Open the reader's HPKE seed source, returning the recovered scope seed so the
-/// gate can cross-check it derives the reader's read key. The returned
-/// [`SecretBytes`] zeroizes on drop at the gate (the terminal owner).
-fn open_seed_blob(blob: &SeedBlob<'_>) -> Result<SecretBytes, CodecError> {
+/// The two seeds a seed blob yields: the recovered read scope seed (always) and,
+/// for a write-grantee, the scope write seed the held set derives its renewal
+/// signer from (`None` for a read-only grant and the owner arm). Both zeroize on
+/// drop.
+type UnsealedSeeds = (SecretBytes, Option<Zeroizing<[u8; 32]>>);
+
+/// Open the reader's HPKE seed source, returning the recovered read scope seed
+/// (for the gate's read-key cross-check) and, for a write-grantee, the write
+/// scope seed. The write seed is consumed by the resolve/gate driver that keeps
+/// a write-capable scope alive (blueprint/engine.md "Liveness").
+fn open_seed_blob(blob: &SeedBlob<'_>) -> Result<UnsealedSeeds, CodecError> {
     match blob {
         SeedBlob::Owner {
             enc_secret,
@@ -385,7 +393,7 @@ fn open_seed_blob(blob: &SeedBlob<'_>) -> Result<SecretBytes, CodecError> {
             aad,
         } => {
             let payload = open_owner_blob(enc_secret, enc, aad, ciphertext)?;
-            Ok(SecretBytes::new(*payload.override_seed()))
+            Ok((SecretBytes::new(*payload.override_seed()), None))
         }
         SeedBlob::Grantee {
             enc_secret,
@@ -394,7 +402,11 @@ fn open_seed_blob(blob: &SeedBlob<'_>) -> Result<SecretBytes, CodecError> {
             aad,
         } => {
             let payload = open_grant_blob(enc_secret, enc, aad, ciphertext)?;
-            Ok(SecretBytes::new(*payload.read_scope_seed()))
+            let write_scope_seed = payload.write_scope_seed().copied().map(Zeroizing::new);
+            Ok((
+                SecretBytes::new(*payload.read_scope_seed()),
+                write_scope_seed,
+            ))
         }
     }
 }
@@ -410,7 +422,7 @@ pub async fn adopt_deferred<F: FloorStore>(
     floors: &F,
     reader: &ReaderContext<'_>,
     candidate: &Candidate,
-) -> Result<PendingAdoption, GateError> {
+) -> Result<(PendingAdoption, Option<Zeroizing<[u8; 32]>>), GateError> {
     // Stage 1 — record verify (Ed25519 key from the name itself).
     let verified = IpnsRecord::unmarshal(&candidate.record_bytes)
         .and_then(|record| record.verify(&candidate.name))
@@ -588,6 +600,10 @@ pub async fn adopt_deferred<F: FloorStore>(
             RejectionReason::Trust(TrustViolation::SealOpenFailed.into()),
         ));
     }
+    // A write-grantee's blob also carries the scope write seed the held set
+    // derives its per-name renewal signer from; `None` for a read-only grant,
+    // the owner arm, or a holder that passes no seed blob.
+    let mut write_scope_seed = None;
     if let Some(blob) = &reader.seed_blob {
         // Bind the blob to THIS envelope: a seed blob sealed under a different
         // scope/epoch/version is a transplant, not this record's seed source.
@@ -607,7 +623,7 @@ pub async fn adopt_deferred<F: FloorStore>(
         // Cross-check: the recovered seed must derive the reader's read key, or
         // the blob-seed and the actual-unseal key disagree — an attributable
         // abuse event (blueprint/engine.md), never a silent staleness.
-        let seed = open_seed_blob(blob)
+        let (seed, ws) = open_seed_blob(blob)
             .map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
         let node_seed = kdf::node_seed(seed.as_bytes(), &candidate.envelope.id);
         let derived_read_key = kdf::read_key(node_seed.as_bytes());
@@ -617,37 +633,42 @@ pub async fn adopt_deferred<F: FloorStore>(
                 RejectionReason::Trust(TrustViolation::SealOpenFailed.into()),
             ));
         }
+        write_scope_seed = ws;
     }
     let read_body = open_read_body(&candidate.envelope, reader.read_key)
         .map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
 
     // All six stages passed; the floor-law advance is DEFERRED to
     // [`PendingAdoption::commit`] (see that type's contract).
-    Ok(PendingAdoption {
-        adopted: Adopted {
-            read_body,
-            sequence: verified.sequence,
-            epoch,
+    Ok((
+        PendingAdoption {
+            adopted: Adopted {
+                read_body,
+                sequence: verified.sequence,
+                epoch,
+            },
+            scope_id: reader.scope_id,
+            ipns_name: name_bytes.to_vec(),
         },
-        scope_id: reader.scope_id,
-        ipns_name: name_bytes.to_vec(),
-    })
+        write_scope_seed,
+    ))
 }
 
 /// Run the adoption gate and, on success, immediately advance the floor law
 /// (the AAD-confirmed-unseal rule). The eager path for callers that hold no
 /// accepted state to persist first (e.g. a plain resolve); a caller that must
 /// make the floor advance atomic with a durable write uses [`adopt_deferred`]
-/// plus [`PendingAdoption::commit`].
+/// plus [`PendingAdoption::commit`]. Returns the adopted state and, for a
+/// write-grantee, the transient scope write seed the held set derives its
+/// renewal signer from (`None` for a read-only holder and the owner arm).
 pub async fn adopt<F: FloorStore>(
     floors: &F,
     reader: &ReaderContext<'_>,
     candidate: &Candidate,
-) -> Result<Adopted, GateError> {
-    adopt_deferred(floors, reader, candidate)
-        .await?
-        .commit(floors)
-        .await
+) -> Result<(Adopted, Option<Zeroizing<[u8; 32]>>), GateError> {
+    let (pending, write_scope_seed) = adopt_deferred(floors, reader, candidate).await?;
+    let adopted = pending.commit(floors).await?;
+    Ok((adopted, write_scope_seed))
 }
 
 /// Build a `GateError::Rejected` from a stage and reason.

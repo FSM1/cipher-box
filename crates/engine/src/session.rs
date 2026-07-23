@@ -23,12 +23,13 @@
 use core::fmt;
 
 use cipherbox_core::kdf;
+use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
-use cipherbox_core::suite::secret::SecretBytes;
+use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::Zeroizing;
 
-use crate::facade::LoginSecret;
+use crate::facade::{EngineError, LoginSecret};
 
 /// The session's seed-derived identity — the single place derived key material
 /// lives once the engine is live.
@@ -52,6 +53,11 @@ pub(crate) struct SessionIdentity {
     /// The owner pointer seed (`owner-pointer-seed` edge). Per-scope pointer
     /// signers and pointer read keys derive from it lazily. Zeroizes on drop.
     owner_pointer_seed: SecretBytes,
+    /// The owner ECDSA identity: the login-secret scalar adopted directly (v1
+    /// Web3Auth TSS export is the secp256k1 identity key), not a catalog edge.
+    /// Signs the login challenge and structure commitments; its verifier is the
+    /// owner-trust anchor the adoption gate checks. Zeroizes on drop.
+    identity: EcdsaSigner,
 }
 
 #[allow(dead_code)]
@@ -59,19 +65,42 @@ impl SessionIdentity {
     /// Derive the cold-start identity from the login secret — a pure function
     /// of the secret bytes (no clock, no RNG), composing only frozen catalog
     /// edges. Same secret in, same identity out.
-    pub(crate) fn derive(secret: &LoginSecret) -> Self {
+    ///
+    /// Fails closed ([`EngineError::InvalidSecret`]) when the secret is not a
+    /// 32-byte scalar in range: the owner identity is the scalar adopted
+    /// directly, so a wrong-length or out-of-range secret has no valid identity
+    /// and must never derive a silent default (a real Web3Auth key is always
+    /// valid, so this is a guard, not a live path).
+    pub(crate) fn derive(secret: &LoginSecret) -> Result<Self, EngineError> {
         let bytes = secret.expose();
-        Self {
+        let scalar: Zeroizing<[u8; SECRET_LEN]> =
+            Zeroizing::new(bytes.try_into().map_err(|_| EngineError::InvalidSecret)?);
+        let identity = EcdsaSigner::from_scalar(&scalar).ok_or(EngineError::InvalidSecret)?;
+        Ok(Self {
             login_secret: Zeroizing::new(bytes.to_vec()),
             enc_subkey: kdf::enc_subkey(bytes),
             owner_pointer_seed: kdf::owner_pointer_seed(bytes),
-        }
+            identity,
+        })
     }
 
     /// The public half of the encryption subkey — the sealing identity peers
     /// address. Non-secret; safe to publish and to compare in tests.
     pub fn enc_subkey_public(&self) -> X25519Public {
         self.enc_subkey.public()
+    }
+
+    /// The owner ECDSA identity signer — the login-challenge and structure
+    /// commitment signer. Secret-bearing, so in-crate only.
+    pub(crate) fn identity(&self) -> &EcdsaSigner {
+        &self.identity
+    }
+
+    /// The owner identity verifier — the owner-trust anchor a resolved record
+    /// is gated against (later slices pass this to `cold_start_data_path`).
+    /// Public material.
+    pub fn owner_identity(&self) -> EcdsaVerifier {
+        self.identity.verifying_key()
     }
 
     /// The retained login secret, for the runtime vault-pointer index probe
@@ -111,11 +140,11 @@ impl SessionIdentity {
 
     /// The per-name write-plane IPNS signer for a node: `writeSeed(node) =
     /// KDF(writeScopeSeed, node.id)` then the `ipns-keypair` edge. This is the
-    /// per-name `Ed25519Signer` the liveness loop's sub-EOL `seq+1` renewal
-    /// (#750) and the held-set republish (#751) sign with — the resolve/gate
-    /// path supplies the unsealed `write_scope_seed`.
+    /// per-name `Ed25519Signer` the held set stores for its sub-EOL `seq+1`
+    /// renewal (#750/#751) — the resolve/gate path supplies the unsealed
+    /// `write_scope_seed`. Keyed solely by its arguments (no session field), so
+    /// it is an associated function the held-set insert can call directly.
     pub(crate) fn write_name_signer(
-        &self,
         write_scope_seed: &[u8; 32],
         node_id: &[u8; 16],
     ) -> Ed25519Signer {
@@ -151,7 +180,7 @@ mod tests {
     use crate::secret_util::ct_eq_32;
 
     fn identity(secret: &[u8]) -> SessionIdentity {
-        SessionIdentity::derive(&LoginSecret::new(secret.to_vec()))
+        SessionIdentity::derive(&LoginSecret::new(secret.to_vec())).expect("valid identity")
     }
 
     #[test]
@@ -184,13 +213,13 @@ mod tests {
             "same secret must yield the same pointer read key",
         );
         assert_eq!(
-            a.write_name_signer(&write_scope_seed, &node)
+            SessionIdentity::write_name_signer(&write_scope_seed, &node)
                 .verifying_key()
                 .to_bytes(),
-            b.write_name_signer(&write_scope_seed, &node)
+            SessionIdentity::write_name_signer(&write_scope_seed, &node)
                 .verifying_key()
                 .to_bytes(),
-            "same secret must yield the same per-name write signer",
+            "the per-name write signer is a pure function of seed + node id",
         );
     }
 
@@ -230,21 +259,19 @@ mod tests {
 
     #[test]
     fn per_name_write_signers_bind_scope_seed_and_node_id() {
-        let id = identity(&[7u8; 32]);
-        let base = id
-            .write_name_signer(&[5u8; 32], &[4u8; 16])
+        let base = SessionIdentity::write_name_signer(&[5u8; 32], &[4u8; 16])
             .verifying_key()
             .to_bytes();
         assert_ne!(
             base,
-            id.write_name_signer(&[6u8; 32], &[4u8; 16])
+            SessionIdentity::write_name_signer(&[6u8; 32], &[4u8; 16])
                 .verifying_key()
                 .to_bytes(),
             "a different write scope seed is a different name",
         );
         assert_ne!(
             base,
-            id.write_name_signer(&[5u8; 32], &[9u8; 16])
+            SessionIdentity::write_name_signer(&[5u8; 32], &[9u8; 16])
                 .verifying_key()
                 .to_bytes(),
             "a different node id is a different name",
@@ -280,6 +307,45 @@ mod tests {
                 .verifying_key()
                 .to_bytes(),
             "a different scope is a different pseudonym",
+        );
+    }
+
+    #[test]
+    fn the_owner_verifier_is_the_identity_signers_public_key() {
+        let id = identity(&[7u8; 32]);
+        assert_eq!(
+            id.identity().verifying_key().to_sec1(),
+            id.owner_identity().to_sec1(),
+            "owner_identity() exposes the identity signer's verifier",
+        );
+    }
+
+    #[test]
+    fn a_signature_by_identity_verifies_under_the_owner_verifier() {
+        let id = identity(&[7u8; 32]);
+        let msg = b"cipherbox-login:v2:deadbeef";
+        let sig = id.identity().sign_detcbor(msg);
+        assert!(
+            id.owner_identity().verify_detcbor(msg, &sig),
+            "the owner verifier accepts the identity signer's signature",
+        );
+    }
+
+    #[test]
+    fn derive_fails_closed_on_a_wrong_length_secret() {
+        assert_eq!(
+            SessionIdentity::derive(&LoginSecret::new(vec![7u8; 31])).unwrap_err(),
+            EngineError::InvalidSecret,
+            "a non-32-byte secret has no valid identity scalar",
+        );
+    }
+
+    #[test]
+    fn derive_fails_closed_on_a_zero_scalar() {
+        assert_eq!(
+            SessionIdentity::derive(&LoginSecret::new(vec![0u8; 32])).unwrap_err(),
+            EngineError::InvalidSecret,
+            "the zero scalar is not a valid secp256k1 key",
         );
     }
 
