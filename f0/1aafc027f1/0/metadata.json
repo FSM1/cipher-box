@@ -1,0 +1,82 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f01aafc027f1",
+  "session_id": "45f67274-6cf9-4604-997c-a7fe610aa73f",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-23T17:46:27.74467Z",
+  "branch": "feat/engine-snapshot-and-read-surface",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/client/src/broadcast.ts",
+    "packages/client/src/broadcastTransport.test.ts",
+    "packages/client/src/broadcastTransport.ts",
+    "packages/client/src/correlatedTransport.ts",
+    "packages/client/src/engineClient.ts",
+    "packages/client/src/facade.test.ts",
+    "packages/client/src/facade.ts",
+    "packages/client/src/index.ts",
+    "packages/client/src/leaderRelay.ts",
+    "packages/client/src/testkit.ts",
+    "packages/client/src/transport.test.ts",
+    "packages/client/src/transport.ts",
+    "packages/client/src/worker/commandCodec.test.ts",
+    "packages/client/src/worker/commandCodec.ts",
+    "packages/client/src/worker/engineHost.ts",
+    "packages/client/src/worker/engineWasm.ts",
+    "packages/client/src/worker/protocol.ts",
+    "packages/client/src/worker/serve.test.ts",
+    "packages/client/src/worker/serve.ts",
+    "packages/client/test/browser/engine.spec.ts",
+    "packages/client/test/browser/engine.worker.ts",
+    "packages/client/test/browser/engineHarness.ts",
+    "packages/client/test/browser/fakeEngine.worker.ts",
+    "packages/client/test/browser/journalEngine.worker.ts",
+    "packages/client/test/browser/leadership.spec.ts",
+    "packages/client/test/browser/leadership.ts"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d8251fa438c9",
+  "checkpoint_transcript_start": 136,
+  "transcript_lines_at_start": 136,
+  "compact_transcript_start": 22,
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 6465,
+    "cache_read_tokens": 178081,
+    "output_tokens": 3645,
+    "api_call_count": 2
+  },
+  "session_metrics": {
+    "turn_count": 1
+  },
+  "summary": {
+    "intent": "Implement work packages 5 and 6 (client read paths) for the client package, covering broadcast/transport layers, worker-hosted engine communication, and leader election/relay logic.",
+    "outcome": "An agent implemented WP5+6 across the client package (broadcast, transport, correlated transport, engine client/facade, worker command codec/host/wasm/protocol/serve, and leadership/browser test harnesses), and the changes were committed.",
+    "learnings": {
+      "repo": [
+        "packages/client separates broadcast/transport concerns (broadcast.ts, broadcastTransport.ts, correlatedTransport.ts, transport.ts) from a worker subsystem (worker/commandCodec.ts, worker/engineHost.ts, worker/engineWasm.ts, worker/protocol.ts, worker/serve.ts)",
+        "leaderRelay.ts and test/browser/leadership.spec.ts indicate the client implements leader election across browser tabs/workers, backed by a WASM-hosted engine",
+        "facade.ts + engineClient.ts form the public client API surface, with testkit.ts providing test doubles"
+      ],
+      "code": [],
+      "workflow": [
+        "Work is tracked via numbered 'work packages' (WP5, WP6) delegated to a subagent, then committed as a unit"
+      ]
+    },
+    "friction": [],
+    "open_items": []
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-23T17:45:55.02426Z",
+    "agent_lines": 1342,
+    "agent_removed": 47,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1342,
+    "total_lines_changed": 1389,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}

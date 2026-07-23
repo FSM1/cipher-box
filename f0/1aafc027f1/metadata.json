@@ -1,0 +1,51 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f01aafc027f1",
+  "strategy": "manual-commit",
+  "branch": "feat/engine-snapshot-and-read-surface",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "packages/client/src/broadcast.ts",
+    "packages/client/src/broadcastTransport.test.ts",
+    "packages/client/src/broadcastTransport.ts",
+    "packages/client/src/correlatedTransport.ts",
+    "packages/client/src/engineClient.ts",
+    "packages/client/src/facade.test.ts",
+    "packages/client/src/facade.ts",
+    "packages/client/src/index.ts",
+    "packages/client/src/leaderRelay.ts",
+    "packages/client/src/testkit.ts",
+    "packages/client/src/transport.test.ts",
+    "packages/client/src/transport.ts",
+    "packages/client/src/worker/commandCodec.test.ts",
+    "packages/client/src/worker/commandCodec.ts",
+    "packages/client/src/worker/engineHost.ts",
+    "packages/client/src/worker/engineWasm.ts",
+    "packages/client/src/worker/protocol.ts",
+    "packages/client/src/worker/serve.test.ts",
+    "packages/client/src/worker/serve.ts",
+    "packages/client/test/browser/engine.spec.ts",
+    "packages/client/test/browser/engine.worker.ts",
+    "packages/client/test/browser/engineHarness.ts",
+    "packages/client/test/browser/fakeEngine.worker.ts",
+    "packages/client/test/browser/journalEngine.worker.ts",
+    "packages/client/test/browser/leadership.spec.ts",
+    "packages/client/test/browser/leadership.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f0/1aafc027f1/0/metadata.json",
+      "transcript": "/f0/1aafc027f1/0/full.jsonl",
+      "compact_transcript": "/f0/1aafc027f1/0/transcript.jsonl",
+      "content_hash": "/f0/1aafc027f1/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 4,
+    "cache_creation_tokens": 6465,
+    "cache_read_tokens": 178081,
+    "output_tokens": 3645,
+    "api_call_count": 2
+  }
+}
