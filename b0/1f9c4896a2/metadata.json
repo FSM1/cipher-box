@@ -1,0 +1,33 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b01f9c4896a2",
+  "strategy": "manual-commit",
+  "branch": "feat/engine-snapshot-and-read-surface",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/engine/src/facade.rs",
+    "crates/engine/src/gate/floor.rs",
+    "crates/engine/src/net/adopter.rs",
+    "crates/engine/src/net/child.rs",
+    "crates/engine/src/net/mod.rs",
+    "crates/engine/src/net/resolve.rs",
+    "crates/engine/src/sync/boot.rs",
+    "crates/engine/tests/net.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b0/1f9c4896a2/0/metadata.json",
+      "transcript": "/b0/1f9c4896a2/0/full.jsonl",
+      "compact_transcript": "/b0/1f9c4896a2/0/transcript.jsonl",
+      "content_hash": "/b0/1f9c4896a2/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 6342,
+    "cache_read_tokens": 229763,
+    "output_tokens": 3958,
+    "api_call_count": 3
+  }
+}

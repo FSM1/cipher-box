@@ -1,0 +1,65 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b01f9c4896a2",
+  "session_id": "45f67274-6cf9-4604-997c-a7fe610aa73f",
+  "strategy": "manual-commit",
+  "created_at": "2026-07-23T17:11:30.072776Z",
+  "branch": "feat/engine-snapshot-and-read-surface",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "crates/engine/src/facade.rs",
+    "crates/engine/src/gate/floor.rs",
+    "crates/engine/src/net/adopter.rs",
+    "crates/engine/src/net/child.rs",
+    "crates/engine/src/net/mod.rs",
+    "crates/engine/src/net/resolve.rs",
+    "crates/engine/src/sync/boot.rs",
+    "crates/engine/tests/net.rs"
+  ],
+  "agent": "Claude Code",
+  "model": "",
+  "turn_id": "d44c2ea0555b",
+  "checkpoint_transcript_start": 75,
+  "transcript_lines_at_start": 75,
+  "compact_transcript_start": 13,
+  "token_usage": {
+    "input_tokens": 6,
+    "cache_creation_tokens": 6342,
+    "cache_read_tokens": 229763,
+    "output_tokens": 3958,
+    "api_call_count": 3
+  },
+  "summary": {
+    "intent": "Continue a phased implementation effort (work packages) on a Rust engine crate, landing WP3 — the crypto-critical ChildAdopter and read_content functionality — after confirming WP2/prior work had committed successfully.",
+    "outcome": "WP3 was implemented via a delegated agent and committed, touching facade, gate/floor, net (adopter, child, mod, resolve), sync/boot, and net tests.",
+    "learnings": {
+      "repo": [
+        "In this engine crate, ChildAdopter and read_content are considered crypto-critical code, warranting extra care/review versus other work packages.",
+        "A commit-check timeout was identified as a known false-negative rather than an actual failure, consistent with prior observations that this test/verification pipeline produces spurious timeout signals."
+      ],
+      "code": [],
+      "workflow": [
+        "Work is being tracked as sequential work packages (WP1, WP2, WP3...), with each package delegated to a subagent and committed separately.",
+        "Before proceeding to the next work package, the assistant explicitly verified the previous commit had landed rather than assuming success."
+      ]
+    },
+    "friction": [
+      "Commit verification initially showed a timeout, requiring a manual check to confirm it was a known false-negative rather than a real failure."
+    ],
+    "open_items": [
+      "Subsequent work packages (WP4+) presumably remain to be implemented, though not detailed in this transcript."
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-07-23T17:11:14.276742Z",
+    "agent_lines": 1115,
+    "agent_removed": 80,
+    "human_added": 0,
+    "human_modified": 0,
+    "human_removed": 0,
+    "total_committed": 1115,
+    "total_lines_changed": 1195,
+    "agent_percentage": 100,
+    "metric_version": 2
+  }
+}
