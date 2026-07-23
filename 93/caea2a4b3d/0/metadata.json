@@ -23,6 +23,102 @@
     "output_tokens": 3154,
     "api_call_count": 5
   },
+  "skill_events_version": 1,
+  "skill_events": [
+    {
+      "id": "claude-skill-toolu_01QKvb1E9EXufxroeQsW5p5q",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "simplify"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d8251fa438c9",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 192,
+        "end": 193,
+        "entry_ids": [
+          "9109918c-b948-4e80-8ddd-5642b60e273c"
+        ],
+        "tool_use_id": "toolu_01QKvb1E9EXufxroeQsW5p5q"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_01QKvb1E9EXufxroeQsW5p5q"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: simplify",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_015o47BwvTE5bGgR554sEDxo",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "security-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d8251fa438c9",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 271,
+        "end": 272,
+        "entry_ids": [
+          "629ac824-8e16-4dfc-9c9c-fb55ce810568"
+        ],
+        "tool_use_id": "toolu_015o47BwvTE5bGgR554sEDxo"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_015o47BwvTE5bGgR554sEDxo"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: security-review",
+        "default_collapsed": true
+      }
+    },
+    {
+      "id": "claude-skill-toolu_018JyJhiPu2UXbxPRtwnfW12",
+      "event_type": "tool_invocation",
+      "skill": {
+        "name": "crypto-privacy-review"
+      },
+      "source": {
+        "agent": "claude-code",
+        "signal": "skill_tool_use",
+        "confidence": "explicit"
+      },
+      "turn_id": "d8251fa438c9",
+      "transcript_anchor": {
+        "unit": "line",
+        "start": 290,
+        "end": 291,
+        "entry_ids": [
+          "94ca251d-bc15-470b-92d5-c5e43c0751be"
+        ],
+        "tool_use_id": "toolu_018JyJhiPu2UXbxPRtwnfW12"
+      },
+      "native": {
+        "tool_name": "Skill",
+        "tool_use_id": "toolu_018JyJhiPu2UXbxPRtwnfW12"
+      },
+      "collapse": {
+        "target": "tool_pair",
+        "label": "Skill: crypto-privacy-review",
+        "default_collapsed": true
+      }
+    }
+  ],
   "session_metrics": {
     "turn_count": 1
   },
