@@ -343,6 +343,7 @@ impl Event {
             facade::Event::WithheldUpdateEscalation { .. } => "withheldUpdateEscalation",
             facade::Event::DeadLetter { .. } => "deadLetter",
             facade::Event::AttributableAbuse { .. } => "attributableAbuse",
+            facade::Event::RenewalFailed { .. } => "renewalFailed",
         }
         .to_string()
     }
@@ -381,6 +382,26 @@ impl Event {
     pub fn description(&self) -> Option<String> {
         match &self.inner {
             facade::Event::AttributableAbuse { description } => Some(description.clone()),
+            _ => None,
+        }
+    }
+
+    /// `renewalFailed`: the failed record's routing key (`ipnsName`); otherwise
+    /// `undefined`.
+    #[wasm_bindgen(getter, js_name = routingKey)]
+    pub fn routing_key(&self) -> Option<String> {
+        match &self.inner {
+            facade::Event::RenewalFailed { routing_key, .. } => Some(routing_key.clone()),
+            _ => None,
+        }
+    }
+
+    /// `renewalFailed`: the key-free failure classification; otherwise
+    /// `undefined`.
+    #[wasm_bindgen(getter)]
+    pub fn detail(&self) -> Option<String> {
+        match &self.inner {
+            facade::Event::RenewalFailed { detail, .. } => Some(detail.clone()),
             _ => None,
         }
     }

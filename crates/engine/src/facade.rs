@@ -30,8 +30,8 @@ use zeroize::Zeroizing;
 use crate::api::ApiClient;
 use crate::entropy::Entropy;
 use crate::net::{
-    Adopter, HeldRecord, HeldRecords, LivenessControl, RE_PUT_INTERVAL, eol_renew_pass,
-    keyless_re_put, run_liveness_loop,
+    Adopter, EolRenewResult, HeldRecord, HeldRecords, LivenessControl, PublishError,
+    PublishOutcome, RE_PUT_INTERVAL, eol_renew_pass, keyless_re_put, run_liveness_loop,
 };
 use crate::profile::SyncTimingProfile;
 use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore};
@@ -348,6 +348,15 @@ pub enum Event {
         /// Human-readable classification (no key material).
         description: String,
     },
+    /// A held record's sub-EOL renewal did not land — a lost CAS race or a
+    /// fail-closed publish failure. Surfaced, never silent (blueprint/engine.md
+    /// "never a silent failure"); a later rebase/retry slice acts on it.
+    RenewalFailed {
+        /// The record's routing key (`ipnsName`); non-secret.
+        routing_key: String,
+        /// Human-readable classification (no key material).
+        detail: String,
+    },
 }
 
 /// Errors returned by facade calls.
@@ -474,6 +483,35 @@ fn node_attrs(meta: &NodeMeta) -> NodeAttrs {
         name: meta.name.clone(),
         kind: meta.kind,
         content_version: meta.content_version,
+    }
+}
+
+/// Emit an [`Event::RenewalFailed`] for every sub-EOL renewal that did not land
+/// (a lost CAS race or a fail-closed publish failure). A comfortably-ahead or
+/// republished record emits nothing. Best-effort over the in-process channel: a
+/// dropped receiver (host torn down) is fine.
+fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRenewResult]) {
+    for result in results {
+        let detail = match &result.outcome {
+            Ok(Some(PublishOutcome::LostRace {
+                published_sequence,
+                observed_sequence,
+            })) => {
+                format!(
+                    "lost CAS race: published {published_sequence}, observed {observed_sequence}"
+                )
+            }
+            Err(PublishError::Register(_)) => "register-first publish failed".to_owned(),
+            Err(PublishError::AllEndpointsFailed) => "all record endpoints failed".to_owned(),
+            Err(PublishError::FloorRead(_)) => "sequence floor read failed".to_owned(),
+            // A no-renewal (comfortably ahead) or a clean republish is not a
+            // failure — nothing to surface.
+            Ok(Some(PublishOutcome::Published { .. })) | Ok(None) => continue,
+        };
+        let _ = events.unbounded_send(Event::RenewalFailed {
+            routing_key: result.routing_key.clone(),
+            detail,
+        });
     }
 }
 
@@ -728,6 +766,7 @@ impl<T: SeamTypes> Engine<T> {
         let profile = self.profile;
         let held = self.held_records.clone();
         let alive = self.alive.clone();
+        let events = self.events.clone();
         // One API client for the whole task: register-first renewal needs the
         // API, and the refresh token lives in the credential store, so the client
         // self-heals its access token on a 401 across the session's lifetime. The
@@ -745,11 +784,12 @@ impl<T: SeamTypes> Engine<T> {
                 }
                 let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
                 keyless_re_put(&transport, &records).await;
-                // The renewal outcomes (LostRace/PublishError) are dropped until
-                // the resolve-tick driver surfaces them via Event/dead-letter
-                // (#752); the held set is empty until that slice populates it.
-                let _ =
+                // Surface every renewal that did not land (LostRace/PublishError)
+                // as an Event — never a silent failure (blueprint/engine.md). The
+                // held set is empty until the resolve-tick driver populates it.
+                let renewals =
                     eol_renew_pass(&transport, &api, &floors, &scheduler, &profile, &records).await;
+                emit_renewal_failures(&events, &renewals);
                 LivenessControl::Continue
             })
             .await;
@@ -980,6 +1020,61 @@ mod tests {
             a.session().unwrap().enc_subkey_public().to_bytes(),
             c.session().unwrap().enc_subkey_public().to_bytes(),
             "a different secret is a different identity",
+        );
+    }
+
+    #[test]
+    fn renewal_lost_race_surfaces_an_event_not_silence() {
+        use crate::net::EolRenewResult;
+
+        let (events, mut receiver) = mpsc::unbounded();
+        let results = vec![
+            // A lost CAS race: surfaced.
+            EolRenewResult {
+                routing_key: "k12D-lost".to_owned(),
+                outcome: Ok(Some(PublishOutcome::LostRace {
+                    published_sequence: 2,
+                    observed_sequence: 3,
+                })),
+            },
+            // A fail-closed publish failure: surfaced.
+            EolRenewResult {
+                routing_key: "k12D-failed".to_owned(),
+                outcome: Err(PublishError::AllEndpointsFailed),
+            },
+            // A clean republish and a comfortably-ahead no-renewal: silent.
+            EolRenewResult {
+                routing_key: "k12D-ok".to_owned(),
+                outcome: Ok(Some(PublishOutcome::Published { sequence: 2 })),
+            },
+            EolRenewResult {
+                routing_key: "k12D-ahead".to_owned(),
+                outcome: Ok(None),
+            },
+        ];
+
+        emit_renewal_failures(&events, &results);
+        drop(events);
+
+        let mut emitted = Vec::new();
+        while let Some(event) = block_on(async {
+            core::future::poll_fn(|cx| Pin::new(&mut receiver).poll_next(cx)).await
+        }) {
+            emitted.push(event);
+        }
+        assert_eq!(
+            emitted,
+            vec![
+                Event::RenewalFailed {
+                    routing_key: "k12D-lost".to_owned(),
+                    detail: "lost CAS race: published 2, observed 3".to_owned(),
+                },
+                Event::RenewalFailed {
+                    routing_key: "k12D-failed".to_owned(),
+                    detail: "all record endpoints failed".to_owned(),
+                },
+            ],
+            "only the lost race and the publish failure surface; success is silent",
         );
     }
 
