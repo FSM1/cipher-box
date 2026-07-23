@@ -672,8 +672,8 @@ mod tests {
         EcdsaSigner::from_scalar(&[0x33; 32]).unwrap()
     }
 
-    /// An owner-signed commitment naming `name` as the scope root — matching the
-    /// scope's `current_root_name`, so the owner-gate scope-binding check passes.
+    /// An owner-signed commitment naming `name` as the scope root. The signature
+    /// binds `name` only; callers pass a mismatched name to exercise the reject path.
     fn commitment_for(
         owner: &EcdsaSigner,
         name: &IpnsName,
