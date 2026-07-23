@@ -181,8 +181,9 @@ pub enum CreateGrantError {
     /// pushed, so this is still fail-closed).
     Publish(ScopeRootPublishError),
     /// Resolving a reparented descendant for its re-key failed. Post-publish: the
-    /// grantee root is already on the network; the descendant keeps its old parent
-    /// derivation (grantee cannot yet descend into it) — reconciled by #745/#746.
+    /// grantee root and any earlier-re-keyed descendants are committed; this one
+    /// keeps its old parent derivation (grantee cannot yet descend into it) —
+    /// reconciled by #745/#746.
     DescendantResolve {
         /// The descendant that could not be resolved.
         scope_id: [u8; 16],
