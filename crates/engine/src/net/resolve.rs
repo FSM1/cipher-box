@@ -15,9 +15,13 @@
 //! now: **every** fetched record is routed through [`Adopter::adopt`] — there is
 //! no ungated path to the snapshot.
 
+use core::cell::RefCell;
+
 use cipherbox_core::ipns::IpnsName;
+use zeroize::Zeroizing;
 
 use super::fanout::fanout_get_verify;
+use super::liveness::{HeldRecord, HeldRecords};
 use crate::gate::{Adopted, GateError, GateRejection, RejectionReason};
 use crate::seams::{RecordTransport, SeamError, SnapshotCache};
 
@@ -108,4 +112,62 @@ where
         last_known_good,
         outcome,
     })
+}
+
+/// The per-name material the held set carries beyond the fetched record: the
+/// derivation **inputs** #750's seq+1 renewal rebuilds a `PublishRequest` from
+/// (never a live signer — see [`HeldRecord`]). Supplied by the resolve/gate
+/// path, which already unsealed the scope's write seed for this node.
+pub struct HeldMaterial {
+    /// The node id (`id16`) — the held-set key and a signer-derivation input.
+    pub node_id: [u8; 16],
+    /// The scope's unsealed write seed — a derivation input, not a signer.
+    pub write_scope_seed: Zeroizing<[u8; 32]>,
+    /// The head/metadata CID the renewal record points at.
+    pub head_cid: String,
+    /// The content CIDs to re-register/pin at renewal.
+    pub content_cids: Vec<String>,
+}
+
+/// [`resolve`] a name, then hold it for liveness **iff** it passed the gate:
+/// on [`ResolveOutcome::Adopted`], insert (replacing any prior entry for the
+/// same node) a [`HeldRecord`] so the keyless re-PUT loop keeps it alive. Only a
+/// gate-passing record enters the set — a `TrustViolation`/`NoUpdate` never
+/// does (blueprint/engine.md "Liveness": never re-PUT a stale record).
+pub async fn resolve_and_hold<T, S, A>(
+    transport: &T,
+    snapshot_cache: &S,
+    adopter: &A,
+    name: &IpnsName,
+    held: &RefCell<HeldRecords>,
+    material: &HeldMaterial,
+) -> Result<Resolved, SeamError>
+where
+    T: RecordTransport,
+    S: SnapshotCache,
+    A: Adopter,
+{
+    let resolved = resolve(transport, snapshot_cache, adopter, name).await?;
+    if matches!(resolved.outcome, ResolveOutcome::Adopted(_)) {
+        // The adopted record is now the snapshot cache's last-known-good; hold
+        // exactly those bytes for a byte-stable keyless re-PUT. A cache that
+        // dropped what it just adopted is a broken durable seam — fail closed.
+        let cache_key = name.as_str().as_bytes();
+        let record_bytes = snapshot_cache
+            .get(cache_key)
+            .await?
+            .ok_or_else(|| SeamError::new("snapshot cache dropped the adopted record"))?;
+        held.borrow_mut().insert(
+            material.node_id,
+            HeldRecord {
+                routing_key: name.as_str().to_owned(),
+                record_bytes,
+                node_id: material.node_id,
+                write_scope_seed: material.write_scope_seed.clone(),
+                head_cid: material.head_cid.clone(),
+                content_cids: material.content_cids.clone(),
+            },
+        );
+    }
+    Ok(resolved)
 }

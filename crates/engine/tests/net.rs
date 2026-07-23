@@ -13,6 +13,7 @@
 //! snapshot) without re-deriving the whole crypto fixture the adoption-gate
 //! suite already owns.
 
+use core::cell::RefCell;
 use core::time::Duration;
 use std::sync::{Arc, Mutex};
 
@@ -20,15 +21,16 @@ use cipherbox_core::error::TrustViolation;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::seal::ReadBody;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
+use zeroize::Zeroizing;
 
 use cipherbox_engine::SyncTimingProfile;
 use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
 use cipherbox_engine::net::eol;
 use cipherbox_engine::net::{
-    Adopter, HeldRecord, LivenessControl, PublishError, PublishOutcome, PublishRequest,
-    RE_PUT_INTERVAL, ResolveOutcome, ReviveError, ReviveRequest, eol_republish, keyless_re_put,
-    publish, resolve, revive, run_liveness_loop,
+    Adopter, HeldMaterial, HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome,
+    PublishRequest, RE_PUT_INTERVAL, ResolveOutcome, ReviveError, ReviveRequest, eol_republish,
+    keyless_re_put, publish, resolve, resolve_and_hold, revive, run_liveness_loop,
 };
 use cipherbox_engine::seams::{
     FloorStore, HttpResponse, RecordTransport, Scheduler, SeamError, SeamResult, SnapshotCache,
@@ -57,6 +59,20 @@ fn name_of(signer: &Ed25519Signer) -> IpnsName {
 fn record(signer: &Ed25519Signer, value: &[u8], sequence: u64, mint_millis: u64) -> Vec<u8> {
     let validity = eol::eol_from(UnixMillis(mint_millis));
     IpnsRecord::create_v2(signer, value, sequence, TTL_NANOS, &validity).marshal()
+}
+
+/// A held record for `name` carrying `bytes` plus placeholder renewal inputs
+/// (#750 exercises the seed/node-id/CID fields; the keyless re-PUT layer reads
+/// only routing key + bytes).
+fn held_record(name: &IpnsName, bytes: Vec<u8>) -> HeldRecord {
+    HeldRecord {
+        routing_key: name.as_str().to_owned(),
+        record_bytes: bytes,
+        node_id: [0u8; 16],
+        write_scope_seed: Zeroizing::new([0u8; 32]),
+        head_cid: "bafyhead".into(),
+        content_cids: Vec::new(),
+    }
 }
 
 fn verify_seq(name: &IpnsName, bytes: &[u8]) -> u64 {
@@ -670,10 +686,7 @@ fn keyless_re_put_reposts_held_records_to_every_endpoint() {
     world
         .record_store
         .seed_record(&endpoints[1], name.as_str(), bytes.clone());
-    let held = vec![HeldRecord {
-        routing_key: name.as_str().to_owned(),
-        record_bytes: bytes,
-    }];
+    let held = vec![held_record(&name, bytes)];
 
     let results = block_on(keyless_re_put(&device.record_store, &held));
     assert_eq!(results.len(), 1);
@@ -688,10 +701,7 @@ fn keyless_re_put_runs_as_an_hourly_scheduler_job_on_virtual_time() {
     let device = world.device(b"me");
     let s = signer(12);
     let name = name_of(&s);
-    let held = vec![HeldRecord {
-        routing_key: name.as_str().to_owned(),
-        record_bytes: record(&s, VALUE, 1, 0),
-    }];
+    let held = vec![held_record(&name, record(&s, VALUE, 1, 0))];
 
     let scheduler = world.scheduler.clone().with_auto_advance();
     let runs = Arc::new(Mutex::new(0u32));
@@ -722,6 +732,179 @@ fn keyless_re_put_runs_as_an_hourly_scheduler_job_on_virtual_time() {
         "three hours elapsed on virtual time"
     );
     assert_all_endpoints_at(&world.record_store, &name, 1);
+}
+
+#[test]
+fn resolve_and_hold_holds_a_gate_passing_record() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(31);
+    let name = name_of(&s);
+    let endpoints = world.record_store.endpoints();
+    world
+        .record_store
+        .seed_record(&endpoints[0], name.as_str(), record(&s, VALUE, 1, 0));
+
+    let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+    let material = HeldMaterial {
+        node_id: [7u8; 16],
+        write_scope_seed: Zeroizing::new([9u8; 32]),
+        head_cid: "bafyhead".into(),
+        content_cids: vec!["bafycontent".into()],
+    };
+    let resolved = block_on(resolve_and_hold(
+        &device.record_store,
+        &device.snapshot_cache,
+        &StubAdopter::new(Verdict::Accept),
+        &name,
+        &held,
+        &material,
+    ))
+    .expect("resolve_and_hold");
+
+    assert!(matches!(resolved.outcome, ResolveOutcome::Adopted(_)));
+    let map = held.borrow();
+    assert_eq!(map.len(), 1, "the adopted record is held, keyed by node id");
+    let record = map.get(&[7u8; 16]).expect("held under its node id");
+    assert_eq!(record.routing_key, name.as_str());
+    assert_eq!(record.head_cid, "bafyhead");
+    assert_eq!(record.content_cids, vec!["bafycontent".to_owned()]);
+    // The held bytes are exactly the record the gate adopted.
+    assert_eq!(verify_seq(&name, &record.record_bytes), 1);
+}
+
+#[test]
+fn resolve_and_hold_does_not_hold_a_non_gate_passing_record() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(32);
+    let name = name_of(&s);
+    let endpoints = world.record_store.endpoints();
+    world
+        .record_store
+        .seed_record(&endpoints[0], name.as_str(), record(&s, VALUE, 5, 0));
+    let material = HeldMaterial {
+        node_id: [1u8; 16],
+        write_scope_seed: Zeroizing::new([0u8; 32]),
+        head_cid: "h".into(),
+        content_cids: Vec::new(),
+    };
+
+    // A fail-closed trust violation is never held.
+    let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+    let out = block_on(resolve_and_hold(
+        &device.record_store,
+        &device.snapshot_cache,
+        &StubAdopter::new(Verdict::TrustViolation),
+        &name,
+        &held,
+        &material,
+    ))
+    .unwrap();
+    assert!(matches!(out.outcome, ResolveOutcome::TrustViolation(_)));
+    assert!(held.borrow().is_empty(), "a trust violation is never held");
+
+    // A no-update (nothing newer than our current record) is never held.
+    let held2: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+    let out2 = block_on(resolve_and_hold(
+        &device.record_store,
+        &device.snapshot_cache,
+        &StubAdopter::new(Verdict::EqualSequence),
+        &name,
+        &held2,
+        &material,
+    ))
+    .unwrap();
+    assert_eq!(out2.outcome, ResolveOutcome::NoUpdate);
+    assert!(held2.borrow().is_empty(), "a no-update is never held");
+}
+
+#[test]
+fn a_held_record_dropped_from_an_endpoint_is_alive_again_after_one_interval() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(33);
+    let name = name_of(&s);
+    let endpoints = world.record_store.endpoints();
+    // Only one endpoint still holds the record; the rest dropped it.
+    world
+        .record_store
+        .seed_record(&endpoints[1], name.as_str(), record(&s, VALUE, 1, 0));
+
+    let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+    held.borrow_mut()
+        .insert([1u8; 16], held_record(&name, record(&s, VALUE, 1, 0)));
+
+    // Drive exactly one interval over the populated set, then stop.
+    let scheduler = world.scheduler.clone().with_auto_advance();
+    block_on(run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
+        let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
+        keyless_re_put(&device.record_store, &records).await;
+        LivenessControl::Stop
+    }));
+
+    assert_all_endpoints_at(&world.record_store, &name, 1);
+    assert_eq!(
+        scheduler.now(),
+        UnixMillis(60 * 60 * 1000),
+        "one interval elapsed"
+    );
+}
+
+#[test]
+fn an_evicted_record_is_not_re_put() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let s = signer(34);
+    let name = name_of(&s);
+
+    let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+    held.borrow_mut()
+        .insert([1u8; 16], held_record(&name, record(&s, VALUE, 1, 0)));
+    // Eviction leaves the set before the loop runs.
+    held.borrow_mut().remove(&[1u8; 16]);
+    assert!(held.borrow().is_empty(), "eviction removes the record");
+
+    let scheduler = world.scheduler.clone().with_auto_advance();
+    block_on(run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
+        let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
+        keyless_re_put(&device.record_store, &records).await;
+        LivenessControl::Stop
+    }));
+
+    // No endpoint ever received the evicted record — the loop never re-PUTs it.
+    for endpoint in world.record_store.endpoints() {
+        assert!(
+            world
+                .record_store
+                .record_at(&endpoint, name.as_str())
+                .is_none(),
+            "endpoint {} must hold no record for an evicted name",
+            endpoint.0
+        );
+    }
+}
+
+#[test]
+fn held_record_debug_redacts_the_write_seed() {
+    let s = signer(35);
+    let name = name_of(&s);
+    let mut hr = held_record(&name, record(&s, VALUE, 1, 0));
+    hr.write_scope_seed = Zeroizing::new([0xAB; 32]);
+
+    let debug = format!("{hr:?}");
+    let seed_debug = format!("{:?}", [0xABu8; 32]);
+    assert!(
+        !debug.contains(&seed_debug),
+        "the raw write-seed bytes must never appear in Debug"
+    );
+    assert!(
+        debug.contains("<redacted>"),
+        "the write seed field must be redacted"
+    );
+    // Non-secret routing metadata is still visible for diagnostics.
+    assert!(debug.contains(name.as_str()));
+    assert!(debug.contains("bafyhead"));
 }
 
 #[test]
@@ -1037,10 +1220,7 @@ fn run_liveness_loop_keyless_re_puts_the_held_set_each_pass() {
     world
         .record_store
         .seed_record(&endpoints[1], name.as_str(), bytes.clone());
-    let held = vec![HeldRecord {
-        routing_key: name.as_str().to_owned(),
-        record_bytes: bytes,
-    }];
+    let held = vec![held_record(&name, bytes)];
 
     let scheduler = world.scheduler.clone().with_auto_advance();
     let transport = device.record_store.clone();

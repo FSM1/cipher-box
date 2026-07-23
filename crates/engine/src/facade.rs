@@ -29,7 +29,8 @@ use zeroize::Zeroizing;
 
 use crate::entropy::Entropy;
 use crate::net::{
-    Adopter, HeldRecord, LivenessControl, RE_PUT_INTERVAL, keyless_re_put, run_liveness_loop,
+    Adopter, HeldRecord, HeldRecords, LivenessControl, RE_PUT_INTERVAL, keyless_re_put,
+    run_liveness_loop,
 };
 use crate::profile::SyncTimingProfile;
 use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore};
@@ -509,10 +510,12 @@ pub struct Engine<T: SeamTypes> {
     /// with the resolved remote state. Reads render this ⊕ the pending-op
     /// overlay; commands never mutate it — only the op queue diverges locally.
     snapshot: Snapshot,
-    /// The session's live held-record set: the resolve slice pushes each
+    /// The session's live held-record set, keyed by node id: the resolve path
+    /// ([`resolve_and_hold`](crate::net::resolve_and_hold)) inserts each
     /// gate-passing record here, and the cold-start liveness loop keyless
-    /// re-PUTs the set on the hourly cadence. Empty until resolve lands.
-    held_records: Rc<RefCell<Vec<HeldRecord>>>,
+    /// re-PUTs the map's values on the hourly cadence. Empty until the resolve
+    /// tick driver (next slice) wires it in.
+    held_records: Rc<RefCell<HeldRecords>>,
     /// Session-alive latch: cleared on drop so the spawned liveness loop
     /// stops at its next wake instead of re-PUTting after the engine is gone.
     alive: Rc<Cell<bool>>,
@@ -542,7 +545,7 @@ impl<T: SeamTypes> Engine<T> {
                 // The anchored all-zero root until cold-start/resolve replaces
                 // the base snapshot; children come from the pending-op overlay.
                 snapshot: Snapshot::new(NodeId([0u8; 16])),
-                held_records: Rc::new(RefCell::new(Vec::new())),
+                held_records: Rc::new(RefCell::new(HeldRecords::new())),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
                 started: false,
@@ -713,7 +716,7 @@ impl<T: SeamTypes> Engine<T> {
                 if !alive.get() {
                     return LivenessControl::Stop;
                 }
-                let records = held.borrow().clone();
+                let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
                 keyless_re_put(&transport, &records).await;
                 LivenessControl::Continue
             })

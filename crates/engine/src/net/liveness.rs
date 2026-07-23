@@ -15,10 +15,13 @@
 //!
 //! The API republisher (~12 h inventory walk) backstops dormant vaults only.
 
+use core::fmt;
 use core::future::Future;
 use core::time::Duration;
+use std::collections::BTreeMap;
 
 use cipherbox_core::ipns::IpnsRecord;
+use zeroize::Zeroizing;
 
 use super::eol::{self, EOL_RENEW_THRESHOLD};
 use super::fanout::{fanout_get_verify, fanout_put};
@@ -35,15 +38,59 @@ use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler
 /// once measured.
 pub const RE_PUT_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
-/// One held record to keep alive: its routing key (the `ipnsName`) and the exact
-/// signed record bytes the session last held for it.
+/// One held record to keep alive across both re-PUT layers.
+///
+/// [`keyless_re_put`] needs only [`routing_key`](Self::routing_key) +
+/// [`record_bytes`](Self::record_bytes); the sub-EOL seq+1 renewal (#750)
+/// rebuilds a [`PublishRequest`] from the rest. It stores the derivation
+/// **inputs**, never a live signer: the per-name signer is re-derived on demand
+/// via `SessionIdentity::write_name_signer(write_scope_seed, node_id)` at
+/// renewal, so no session key material lingers in the held set
+/// (blueprint/engine.md "Liveness").
 #[derive(Clone)]
 pub struct HeldRecord {
     /// The routing key — the record's `ipnsName`.
     pub routing_key: String,
     /// The signed record bytes (re-PUT verbatim; keyless).
     pub record_bytes: Vec<u8>,
+    /// The node id (`id16`) — the held-set key and the write-seed input the
+    /// renewal signer re-derives from.
+    pub node_id: [u8; 16],
+    /// The scope's unsealed write seed — a derivation input, not a signer.
+    /// Zeroized on drop and redacted from [`Debug`]; never printed or logged
+    /// (security rule 2).
+    pub write_scope_seed: Zeroizing<[u8; 32]>,
+    /// The head/metadata CID the renewal record points at.
+    pub head_cid: String,
+    /// The content CIDs to re-register/pin at renewal.
+    pub content_cids: Vec<String>,
 }
+
+impl fmt::Debug for HeldRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The write seed is secret: redact it, and print record bytes by length
+        // only (they are large, not secret).
+        f.debug_struct("HeldRecord")
+            .field("routing_key", &self.routing_key)
+            .field(
+                "record_bytes",
+                &format_args!("<{} bytes>", self.record_bytes.len()),
+            )
+            .field("node_id", &self.node_id)
+            .field("write_scope_seed", &"<redacted>")
+            .field("head_cid", &self.head_cid)
+            .field("content_cids", &self.content_cids)
+            .finish()
+    }
+}
+
+/// The session's live held-record set, keyed by node id (`id16`): the resolve
+/// path inserts each gate-passing record and the liveness loop re-PUTs the
+/// map's values. Keyed by node id so a re-resolve replaces in place and an
+/// eviction removes in O(1) — the loop never re-PUTs a stale record
+/// (blueprint/engine.md "Liveness"). `BTreeMap` for a deterministic iteration
+/// order across platforms.
+pub type HeldRecords = BTreeMap<[u8; 16], HeldRecord>;
 
 /// The result of re-PUTting one held record.
 #[derive(Debug, Clone, PartialEq, Eq)]
