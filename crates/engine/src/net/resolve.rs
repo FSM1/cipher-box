@@ -45,13 +45,21 @@ pub enum ResolveOutcome {
     /// A newer record passed the adoption gate: its bytes are now the snapshot's
     /// last-known-good and the read-body is authenticated.
     Adopted(Adopted),
+    /// Our own current record re-fetched at exactly the durable sequence floor:
+    /// no update, but the (already-verified, public/signed) bytes are in hand so
+    /// the liveness loop can keep them alive without re-fetching. Carries no
+    /// secret.
+    Current {
+        /// The verified record bytes, byte-stable for a keyless re-PUT.
+        record_bytes: Vec<u8>,
+    },
     /// The freshest fetched record failed the gate — a fail-closed trust
     /// violation. Last-known-good is pinned; the rejected record is never
     /// rendered.
     TrustViolation(GateRejection),
-    /// No newer record was fetched: either nothing resolvable (network
-    /// unreachable / cold) or only a copy at or below the current record. This
-    /// is availability staleness, not an error — the cached view stays usable.
+    /// No newer record was fetched: nothing resolvable (network unreachable /
+    /// cold). This is availability staleness, not an error — the cached view
+    /// stays usable.
     NoUpdate,
 }
 
@@ -96,12 +104,15 @@ where
                 ResolveOutcome::Adopted(adopted)
             }
             // A record at exactly the durable sequence floor is our own current
-            // record re-fetched — no update, never a violation. A strictly older
-            // sequence is a replay/rollback and stays a fail-closed trust
-            // violation, as does every other gate rejection.
+            // record re-fetched — no update, never a violation; its verified
+            // bytes are handed back so the liveness loop holds them without a
+            // re-fetch. A strictly older sequence is a replay/rollback and stays
+            // a fail-closed trust violation, as does every other gate rejection.
             Err(GateError::Rejected(rejection)) => match &rejection.reason {
                 RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {
-                    ResolveOutcome::NoUpdate
+                    ResolveOutcome::Current {
+                        record_bytes: bytes,
+                    }
                 }
                 _ => ResolveOutcome::TrustViolation(rejection),
             },
@@ -153,25 +164,37 @@ where
     A: Adopter,
 {
     let resolved = resolve(transport, snapshot_cache, adopter, name).await?;
-    if matches!(resolved.outcome, ResolveOutcome::Adopted(_)) {
+    // A gate-passing adopt (`Adopted`) and our own current record (`Current`)
+    // are both alive-worthy; a `TrustViolation`/`NoUpdate` is never held. For
+    // `Adopted` the bytes are the cache's fresh last-known-good; for `Current`
+    // the verified bytes are already in hand, so no re-fetch (blueprint/engine.md
+    // "Liveness").
+    let record_bytes = match &resolved.outcome {
+        ResolveOutcome::Adopted(_) => {
+            // A cache that dropped what it just adopted is a broken durable seam
+            // — fail closed rather than hold nothing.
+            let cache_key = name.as_str().as_bytes();
+            Some(
+                snapshot_cache
+                    .get(cache_key)
+                    .await?
+                    .ok_or_else(|| SeamError::new("snapshot cache dropped the adopted record"))?,
+            )
+        }
+        ResolveOutcome::Current { record_bytes } => Some(record_bytes.clone()),
+        ResolveOutcome::TrustViolation(_) | ResolveOutcome::NoUpdate => None,
+    };
+    if let Some(record_bytes) = record_bytes {
         // Derive the narrow per-name signer once from the transient seed and
         // hold only it — the scope seed is dropped with `material`. Fail-closed
         // encode-side bind (security rule 8): the derived signer must sign for
-        // exactly the adopted name, or the held record could never renew under
-        // its routing key — skip the hold rather than store a mismatched signer.
+        // exactly this name, or the held record could never renew under its
+        // routing key — skip the hold rather than store a mismatched signer.
         let signer =
             SessionIdentity::write_name_signer(&material.write_scope_seed, &material.node_id);
         if IpnsName::from_public_key(&signer.verifying_key()) != *name {
             return Ok(resolved);
         }
-        // The adopted record is now the snapshot cache's last-known-good; hold
-        // exactly those bytes for a byte-stable keyless re-PUT. A cache that
-        // dropped what it just adopted is a broken durable seam — fail closed.
-        let cache_key = name.as_str().as_bytes();
-        let record_bytes = snapshot_cache
-            .get(cache_key)
-            .await?
-            .ok_or_else(|| SeamError::new("snapshot cache dropped the adopted record"))?;
         held.borrow_mut().insert(
             material.node_id,
             HeldRecord {
@@ -337,21 +360,58 @@ mod tests {
         .unwrap();
         assert!(matches!(out.outcome, ResolveOutcome::TrustViolation(_)));
         assert!(held.borrow().is_empty(), "a trust violation is never held");
+    }
 
-        // A no-update (nothing newer than our current record) is never held.
-        let held2: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
-        let out2 = block_on(resolve_and_hold(
+    #[test]
+    fn resolve_of_our_own_current_record_yields_current_and_is_held() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        // The held name is the one the material's (seed, node id) derives, so the
+        // insert-time signer<->name bind passes for our own record.
+        let write_scope_seed = [4u8; 32];
+        let node_id = [8u8; 16];
+        let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let endpoints = world.record_store.endpoints();
+        let bytes = record(&signer, 3);
+        world
+            .record_store
+            .seed_record(&endpoints[0], name.as_str(), bytes.clone());
+
+        let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+        let material = HeldMaterial {
+            node_id,
+            write_scope_seed: Zeroizing::new(write_scope_seed),
+            head_cid: "bafyhead".into(),
+            content_cids: Vec::new(),
+        };
+        let resolved = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter {
                 verdict: Verdict::EqualSequence,
             },
             &name,
-            &held2,
+            &held,
             &material,
         ))
-        .unwrap();
-        assert_eq!(out2.outcome, ResolveOutcome::NoUpdate);
-        assert!(held2.borrow().is_empty(), "a no-update is never held");
+        .expect("resolve_and_hold");
+
+        // Our own current record at the floor is `Current`, carrying the verified
+        // bytes verbatim (no re-fetch), and is held for the keyless re-PUT.
+        match &resolved.outcome {
+            ResolveOutcome::Current { record_bytes } => {
+                assert_eq!(record_bytes, &bytes, "Current carries the fetched bytes")
+            }
+            other => panic!("expected Current, got {other:?}"),
+        }
+        let map = held.borrow();
+        assert_eq!(map.len(), 1, "our own current record is held by node id");
+        let hr = map.get(&node_id).expect("held under its node id");
+        assert_eq!(
+            hr.record_bytes, bytes,
+            "held bytes are the in-hand Current bytes"
+        );
+        assert_eq!(hr.routing_key, name.as_str());
     }
 }

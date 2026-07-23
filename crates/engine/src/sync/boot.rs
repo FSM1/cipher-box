@@ -192,7 +192,9 @@ where
     .map_err(ColdStartError::Seam)?;
     let root_resolve = match resolved.outcome {
         ResolveOutcome::Adopted(_) => RootResolve::Adopted,
-        ResolveOutcome::NoUpdate => RootResolve::NoUpdate,
+        // Cold start paints, it does not hold: our own current record at the
+        // floor is availability staleness here, same as nothing newer fetched.
+        ResolveOutcome::NoUpdate | ResolveOutcome::Current { .. } => RootResolve::NoUpdate,
         ResolveOutcome::TrustViolation(rejection) => {
             return Err(ColdStartError::RootAdoption(rejection));
         }

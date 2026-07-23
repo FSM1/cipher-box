@@ -300,7 +300,7 @@ fn resolve_gate_rejection_pins_last_known_good_and_never_overwrites_the_snapshot
 }
 
 #[test]
-fn resolve_equal_sequence_is_no_update_not_a_trust_violation() {
+fn resolve_equal_sequence_is_current_not_a_trust_violation() {
     let world = FakeWorld::new();
     let device = world.device(b"me");
     let s = signer(4);
@@ -308,10 +308,11 @@ fn resolve_equal_sequence_is_no_update_not_a_trust_violation() {
     let key = name.as_str().as_bytes();
 
     block_on(device.snapshot_cache.put(key, b"current")).unwrap();
+    let bytes = record(&s, VALUE, 7, 0);
     world.record_store.seed_record(
         &world.record_store.endpoints()[0],
         name.as_str(),
-        record(&s, VALUE, 7, 0),
+        bytes.clone(),
     );
 
     let adopter = StubAdopter::new(Verdict::EqualSequence);
@@ -323,11 +324,16 @@ fn resolve_equal_sequence_is_no_update_not_a_trust_violation() {
     ))
     .expect("resolve");
 
-    assert_eq!(
-        resolved.outcome,
-        ResolveOutcome::NoUpdate,
-        "re-fetching our own current record is a no-update, never a violation"
-    );
+    // Re-fetching our own current record at the floor is a `Current` no-update
+    // (never a violation), and it carries the verified bytes verbatim so the
+    // liveness loop can hold them without a re-fetch.
+    match &resolved.outcome {
+        ResolveOutcome::Current { record_bytes } => {
+            assert_eq!(record_bytes, &bytes, "Current carries the fetched bytes")
+        }
+        other => panic!("expected Current, got {other:?}"),
+    }
+    // A `Current` never overwrites last-known-good.
     assert_eq!(
         block_on(device.snapshot_cache.get(key)).unwrap(),
         Some(b"current".to_vec())
