@@ -1,0 +1,18 @@
+<task-notification>
+<task-id>a3a73ee017bddfc4c</task-id>
+<tool-use-id>toolu_01R7APSEgXEidTuiFMbnbErR</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/deb6cfab-6446-43c9-85e7-8dbd9ee6f4d3/tasks/a3a73ee017bddfc4c.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify review: simplification angle" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Findings (SIMPLIFICATION angle):
+
+**1. apps/api/src/mailbox/services/mailbox.service.ts, ~line 171-172** — New doc-comment tail "The count-sees-committed-writer reasoning assumes READ COMMITTED (the Postgres default; not pinned here)." is an absence/apologia-shaped comment (the "not pinned here" defends a config the code does not set). Cost: restates a caveat about code that isn't present, will rot if isolation is ever pinned, burns review cycles — exactly the shape AGENTS.md bans. Simpler form: drop the parenthetical, or reduce to a bare "assumes READ COMMITTED" clause; state the invariant once without the defensive apologia.
+
+**2. apps/api/src/mailbox/services/mailbox.service.ts, ~line 182-183** — `enforceCapAndInsert` still hand-writes `await setAdvisoryLockTimeout(manager, this.lockTimeoutMs)` + `await acquireAdvisoryLock(manager, …)`, the exact set-timeout-then-acquire pairing that this PR introduced `boundedAcquire` to consolidate (and applied everywhere else: content.service.ts, registry.service.ts). The diff already edited this function (transaction → runLockGuardedTransaction), so leaving the manual pairing is an inconsistency the refactor missed. Cost: the one remaining copy of the pattern the PR set out to eliminate; keeps two now-otherwise-unused imports (`setAdvisoryLockTimeout`, `acquireAdvisoryLock`) alive. Simpler form: `await boundedAcquire(manager, [this.recipientLockKey(recipientPublicKey)], this.lockTimeoutMs)` (single-element array), then drop those two imports.
+
+**3. apps/api/src/registry/services/registry.service.ts, ~line 173** — New comment "// All-new rows, so one multi-row INSERT instead of per-row saves." narrates what the immediately following `.filter(...).insert(...)` plainly does. Cost: what-not-why restatement that rots; the preceding "Idempotent: a CID already counted keeps its size" line already carries the real rationale, and the filter makes "all-new rows" self-evident. Simpler form: delete the line.
+
+No other findings — the `RegisterOutcome.cid` field removal (derivable from the param), the content.service.ts comment condensation, and the `heldCids` dedup rewrite (`[...new Set(targets)].filter(...)` replacing the `indexOf === index` self-dedup) are all net simplifications, not regressions.</result>
+<usage><subagent_tokens>22891</subagent_tokens><tool_uses>5</tool_uses><duration_ms>59102</duration_ms></usage>
+</task-notification>
