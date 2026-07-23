@@ -1,0 +1,58 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "8ecc570c96e4",
+  "strategy": "manual-commit",
+  "branch": "feat/engine-snapshot-and-read-surface",
+  "checkpoints_count": 1,
+  "files_touched": [
+    "Cargo.lock",
+    "crates/core/src/seal/envelope.rs",
+    "crates/core/src/seal/mod.rs",
+    "crates/engine/src/content/mod.rs",
+    "crates/engine/src/facade.rs",
+    "crates/engine/src/gate/adoption.rs",
+    "crates/engine/src/gate/floor.rs",
+    "crates/engine/src/net/adopter.rs",
+    "crates/engine/src/net/child.rs",
+    "crates/engine/src/net/mod.rs",
+    "crates/engine/src/net/resolve.rs",
+    "crates/engine/src/sync/boot.rs",
+    "crates/engine/src/sync/project.rs",
+    "crates/wasm/Cargo.toml",
+    "crates/wasm/src/host.rs",
+    "packages/client/src/broadcast.ts",
+    "packages/client/src/broadcastTransport.test.ts",
+    "packages/client/src/broadcastTransport.ts",
+    "packages/client/src/correlatedTransport.ts",
+    "packages/client/src/index.ts",
+    "packages/client/src/leaderRelay.ts",
+    "packages/client/src/testkit.ts",
+    "packages/client/src/transport.test.ts",
+    "packages/client/src/transport.ts",
+    "packages/client/src/worker/commandCodec.test.ts",
+    "packages/client/src/worker/protocol.ts",
+    "packages/client/src/worker/serve.test.ts",
+    "packages/client/src/worker/serve.ts",
+    "packages/client/test/browser/engine.spec.ts",
+    "packages/client/test/browser/engineHarness.ts",
+    "packages/client/test/browser/hexUtil.ts",
+    "packages/client/test/browser/leadership.spec.ts",
+    "packages/client/test/browser/leadership.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/8e/cc570c96e4/0/metadata.json",
+      "transcript": "/8e/cc570c96e4/0/full.jsonl",
+      "compact_transcript": "/8e/cc570c96e4/0/transcript.jsonl",
+      "content_hash": "/8e/cc570c96e4/0/content_hash.txt",
+      "prompt": ""
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 22,
+    "cache_creation_tokens": 33882,
+    "cache_read_tokens": 1184839,
+    "output_tokens": 15512,
+    "api_call_count": 11
+  }
+}
