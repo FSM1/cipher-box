@@ -446,12 +446,7 @@ where
     )
     .map_err(|_| WriteRotateError::NotOwner)?;
 
-    // 1a) Bind the owner-auth token to the exact scope under rotation: the
-    //     owner-authentic commitment MUST name this scope's current root. Same
-    //     binding the adoption gate enforces (`gate/adoption.rs`,
-    //     `commitment.ipns_name == candidate name`), so a valid owner signature over
-    //     a DIFFERENT scope's commitment cannot authorize this rotation. Fail-closed
-    //     before anything is minted or published.
+    // 1a) bind commitment to the rotated scope — see CommitmentScopeMismatch
     if plan.commitment.ipns_name != plan.current_root_name.as_str().as_bytes() {
         return Err(WriteRotateError::CommitmentScopeMismatch);
     }
