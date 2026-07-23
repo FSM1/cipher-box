@@ -35,8 +35,8 @@ const CID_CODEC_INDEX: usize = 1;
 /// carries — gate work is linear in the fetched byte count. Capping the block
 /// here bounds that work to a fixed budget and fails closed on anything larger,
 /// before any per-structure cost is paid (#742; blueprint/engine.md "Content
-/// plane"). Must stay above the production content chunk size (1 MiB) so a
-/// legitimate leaf or root block always fits.
+/// plane"). Must exceed the 1 MiB content chunk size; a legitimate leaf or
+/// flat-DAG root fits only up to the flat-DAG ceiling (~108 GiB); see #788.
 const MAX_RESOLVED_RECORD_BYTES: usize = 4 * 1024 * 1024;
 
 /// Which content-plane a fetched CID must address. Core's [`verify_cid`] accepts
