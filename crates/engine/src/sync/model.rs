@@ -33,10 +33,20 @@ pub struct NodeMeta {
     /// Bumped on every `updateContent` (a fresh per-version content key seals
     /// each version, CONTEXT.md "Content key").
     pub content_version: u64,
+    /// Plaintext content size in bytes; `None` until the content plane
+    /// projects it.
+    pub size: Option<u64>,
+    /// Modification time (Unix millis) from the sealed read-body; `None`
+    /// until projected.
+    pub mtime: Option<u64>,
+    /// The node's opaque `ipnsName` bytes as carried by its parent's
+    /// `ChildRef`; `None` for nodes not yet in gate-passing state.
+    pub ipns_name: Option<Vec<u8>>,
 }
 
 impl NodeMeta {
-    /// A node at record sequence 1, content version 0.
+    /// A node at record sequence 1, content version 0, no projected
+    /// size/mtime/ipnsName.
     pub fn new(id: NodeId, name: impl Into<String>, kind: NodeKind) -> Self {
         Self {
             id,
@@ -44,6 +54,9 @@ impl NodeMeta {
             kind,
             record_sequence: 1,
             content_version: 0,
+            size: None,
+            mtime: None,
+            ipns_name: None,
         }
     }
 }

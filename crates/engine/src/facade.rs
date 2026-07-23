@@ -20,6 +20,7 @@
 use core::cell::{Cell, RefCell};
 use core::fmt;
 use core::pin::Pin;
+use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use cipherbox_core::ipns::IpnsName;
@@ -34,11 +35,11 @@ use crate::entropy::Entropy;
 use crate::hex::hex_lower;
 use crate::net::{
     Adopter, EolRenewResult, HeldMaterial, HeldRecord, HeldRecords, LivenessControl, PublishError,
-    PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch, RootAdopter, eol_renew_pass,
-    keyless_re_put, refresh_base_from_outcome, resolve_and_hold, run_liveness_loop,
+    PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch, ResolveOutcome, RootAdopter,
+    eol_renew_pass, keyless_re_put, refresh_base_from_outcome, resolve_and_hold, run_liveness_loop,
 };
 use crate::profile::SyncTimingProfile;
-use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore};
+use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore, UnixMillis};
 use crate::session::SessionIdentity;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
@@ -47,6 +48,7 @@ use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::rebase::decode_queue;
 use crate::sync::staging::{StageOutcome, stage_op};
+use crate::sync::staleness::{Connectivity, classify};
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
 /// non-secret, and location-independent — routes and commands key on it,
@@ -106,6 +108,57 @@ pub struct NodeAttrs {
 pub struct StatFs {
     /// Nodes reachable from the root in the rendered view.
     pub nodes: u64,
+}
+
+/// One ancestor step in a [`SnapshotView`]'s breadcrumb trail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Breadcrumb {
+    /// Stable node id.
+    pub id: NodeId,
+    /// Display name, as entered (empty for the root).
+    pub name: String,
+}
+
+/// One direct child in a [`SnapshotView`], projected key-free from the
+/// rendered view plus the op-queue/dead-letter bookkeeping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotChild {
+    /// Stable node id.
+    pub id: NodeId,
+    /// Display name, as entered.
+    pub name: String,
+    /// File or folder.
+    pub kind: NodeKind,
+    /// Plaintext content size in bytes, once the content plane projects it.
+    pub size: Option<u64>,
+    /// Modification time (Unix millis), once projected.
+    pub mtime: Option<u64>,
+    /// Whether a queued pending op targets this node.
+    pub pending: bool,
+    /// Whether a retained dead-lettered op maps to this node.
+    pub dead_letter: bool,
+    /// Current content version (bumped per `updateContent`).
+    pub content_version: u64,
+}
+
+/// A key-free snapshot of one folder for a host UI paint: its children, its
+/// breadcrumb trail, the retained dead letters, and the staleness rung — one
+/// internally-consistent read of the rendered view (state law).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotView {
+    /// The rendered root node id.
+    pub root: NodeId,
+    /// The folder this view lists.
+    pub folder: NodeId,
+    /// Direct children, deterministically ordered by node id.
+    pub children: Vec<SnapshotChild>,
+    /// Ancestor trail from the folder's parent up to and including the root,
+    /// nearest first.
+    pub ancestors: Vec<Breadcrumb>,
+    /// Every retained dead-lettered op id.
+    pub dead_letters: Vec<OpId>,
+    /// The staleness rung at read time.
+    pub staleness: Staleness,
 }
 
 /// Grant permission level.
@@ -361,6 +414,29 @@ pub enum Event {
         /// Human-readable classification (no key material).
         detail: String,
     },
+    /// Progress of a content-plane transfer for one node. Emitters land with
+    /// the content pipeline slice; the variant is the contract.
+    OpProgress {
+        /// The queued op driving the transfer, if any.
+        op_id: Option<OpId>,
+        /// The node the transfer is for.
+        node: NodeId,
+        /// The phase reached.
+        phase: OpPhase,
+        /// Failure classification for a failed phase (no key material).
+        error: Option<String>,
+    },
+}
+
+/// The phase an [`Event::OpProgress`] reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpPhase {
+    /// A content download started.
+    DownloadStarted,
+    /// A content download completed.
+    DownloadCompleted,
+    /// A content download failed.
+    DownloadFailed,
 }
 
 /// Errors returned by facade calls.
@@ -373,6 +449,10 @@ pub enum EngineError {
     AlreadyStarted,
     /// The login secret was empty or not a valid 32-byte identity scalar.
     InvalidSecret,
+    /// A read named a node absent from the rendered view.
+    UnknownNode,
+    /// A folder read named a file node.
+    NotAFolder,
     /// The command's pipeline slice has not landed yet (scaffold state).
     Unimplemented {
         /// [`Command::name`] of the rejected command.
@@ -446,6 +526,8 @@ impl fmt::Display for EngineError {
             EngineError::InvalidSecret => {
                 f.write_str("login secret is not a valid identity scalar")
             }
+            EngineError::UnknownNode => f.write_str("unknown node"),
+            EngineError::NotAFolder => f.write_str("not a folder"),
             EngineError::Unimplemented { command } => {
                 write!(f, "command not implemented yet: {command}")
             }
@@ -578,6 +660,16 @@ fn count_nodes(snapshot: &Snapshot) -> u64 {
     seen.len() as u64
 }
 
+/// Staleness-ladder inputs (#33 D4): the last successful reconcile, whether one
+/// is in flight, and the last rung reported — [`Event::StalenessChanged`] fires
+/// only on a rung change.
+#[derive(Default)]
+struct SyncStatus {
+    last_success: Option<UnixMillis>,
+    reconcile_in_flight: bool,
+    reported: Option<Staleness>,
+}
+
 /// The re-point pointer-payload wire version the owner's own vault seals under
 /// and the cold-start walk verifies against (`crates/core` pointer payload) — the
 /// sole v2 version (CONTEXT.md "Vault pointer").
@@ -619,6 +711,14 @@ pub struct Engine<T: SeamTypes> {
     /// re-PUTs the map's values on the hourly cadence. Empty until the resolve
     /// tick driver (next slice) wires it in.
     held_records: Rc<RefCell<HeldRecords>>,
+    /// Staleness bookkeeping shared with the resolve-tick loop: it stamps
+    /// successes and reports rung changes; [`snapshot`](Self::snapshot)
+    /// classifies at read time off the same cell.
+    sync_status: Rc<RefCell<SyncStatus>>,
+    /// Retained dead-lettered ops, mapped to the target node when known
+    /// (`None` for an undecodable queue entry). Feeds [`SnapshotView`]'s
+    /// dead-letter surface (#33 D6: dead letters are retained, never silent).
+    dead_letters: Rc<RefCell<BTreeMap<OpId, Option<NodeId>>>>,
     /// Session-alive latch: cleared on drop so the spawned liveness loop
     /// stops at its next wake instead of re-PUTting after the engine is gone.
     alive: Rc<Cell<bool>>,
@@ -658,6 +758,8 @@ impl<T: SeamTypes> Engine<T> {
                 // the base snapshot; children come from the pending-op overlay.
                 snapshot: Rc::new(RefCell::new(Snapshot::new(NodeId([0u8; 16])))),
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
+                sync_status: Rc::new(RefCell::new(SyncStatus::default())),
+                dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
                 api: None,
@@ -772,6 +874,9 @@ impl<T: SeamTypes> Engine<T> {
             .as_ref()
             .map(|vp| vp.repoint.current_root.clone());
         *self.snapshot.borrow_mut() = outcome.base;
+        // A successful cold start is a successful reconcile: stamp it so the
+        // ladder starts Fresh rather than Reconciling.
+        self.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
 
         self.spawn_liveness_loop(api.clone());
         self.spawn_resolve_tick_loop(root_name);
@@ -850,6 +955,9 @@ impl<T: SeamTypes> Engine<T> {
         // successful send: a receiver dropped mid-teardown must not silently
         // purge an unsurfaced entry — preserved, the next boot re-surfaces it.
         for (op_id, _reason) in &undecodable {
+            // Retain the dead letter (target unknown for an undecodable entry)
+            // so the read surface keeps reporting it.
+            self.dead_letters.borrow_mut().insert(*op_id, None);
             if self
                 .events
                 .unbounded_send(Event::DeadLetter { op_id: *op_id })
@@ -963,6 +1071,8 @@ impl<T: SeamTypes> Engine<T> {
         let base = self.snapshot.clone();
         let events = self.events.clone();
         let alive = self.alive.clone();
+        let sync_status = self.sync_status.clone();
+        let profile = self.profile;
         let interval = self.profile.poll_cadence;
         let owner_identity = session.owner_identity();
         // The vault's own root scope and root node are the anchored all-zero id16
@@ -998,7 +1108,8 @@ impl<T: SeamTypes> Engine<T> {
                 // A gate-passing `Adopted` repaints the shared base cell and emits
                 // `SnapshotUpdated`; `Current`/`NoUpdate`/`TrustViolation` leave
                 // last-known-good intact (fail-closed for data). (surfacing: #796)
-                if let Ok(resolved) = resolve_and_hold(
+                sync_status.borrow_mut().reconcile_in_flight = true;
+                let resolved = resolve_and_hold(
                     &transport,
                     &snapshot_cache,
                     &adopter,
@@ -1006,12 +1117,39 @@ impl<T: SeamTypes> Engine<T> {
                     &held,
                     &material,
                 )
-                .await
-                {
+                .await;
+                if let Ok(resolved) = &resolved {
                     if refresh_base_from_outcome(&base, NodeId(root_id), &resolved.outcome) {
                         let _ = events.unbounded_send(Event::SnapshotUpdated);
                     }
                 }
+                // `Adopted`/`Current` are the reconciled outcomes: both prove the
+                // record plane answered with gate-passing state, so both stamp
+                // the ladder's `last_success` (#33 D4).
+                let reconciled = matches!(
+                    &resolved,
+                    Ok(r) if matches!(
+                        r.outcome,
+                        ResolveOutcome::Adopted(_) | ResolveOutcome::Current { .. }
+                    )
+                );
+                let mut status = sync_status.borrow_mut();
+                status.reconcile_in_flight = false;
+                if reconciled {
+                    status.last_success = Some(scheduler.now());
+                }
+                let rung = classify(
+                    scheduler.now(),
+                    status.last_success,
+                    status.reconcile_in_flight,
+                    Connectivity::Online,
+                    &profile,
+                );
+                if status.reported != Some(rung) {
+                    status.reported = Some(rung);
+                    let _ = events.unbounded_send(Event::StalenessChanged { level: rung });
+                }
+                drop(status);
                 LivenessControl::Continue
             })
             .await;
@@ -1095,6 +1233,70 @@ impl<T: SeamTypes> Engine<T> {
         }
         Ok(EngineView {
             rendered: self.render().await?,
+        })
+    }
+
+    /// A key-free [`SnapshotView`] of `folder` — its children (with pending/
+    /// dead-letter flags), breadcrumb trail, retained dead letters, and the
+    /// staleness rung. A pure read over the same rendered view [`view`](Self::view)
+    /// serves (state law): one pending-ops read feeds both the overlay and the
+    /// pending flags, so the flags and the rendered children never disagree.
+    pub async fn snapshot(&self, folder: NodeId) -> Result<SnapshotView, EngineError> {
+        if !self.started {
+            return Err(EngineError::NotStarted);
+        }
+        let ops = self.pending_ops().await?;
+        let rendered = {
+            let base = self.snapshot.borrow();
+            apply_overlay(&base, &ops)
+        };
+        let meta = rendered.node(folder).ok_or(EngineError::UnknownNode)?;
+        if meta.kind != NodeKind::Folder {
+            return Err(EngineError::NotAFolder);
+        }
+        let pending: BTreeSet<NodeId> = ops.iter().map(|op| op.target).collect();
+        let dead = self.dead_letters.borrow();
+        let children = rendered
+            .children(folder)
+            .into_iter()
+            .map(|child| SnapshotChild {
+                id: child.id,
+                name: child.name.clone(),
+                kind: child.kind,
+                size: child.size,
+                mtime: child.mtime,
+                pending: pending.contains(&child.id),
+                dead_letter: dead.values().any(|node| *node == Some(child.id)),
+                content_version: child.content_version,
+            })
+            .collect();
+        let ancestors = rendered
+            .ancestors(folder)
+            .into_iter()
+            .map(|id| Breadcrumb {
+                id,
+                name: rendered
+                    .node(id)
+                    .map(|meta| meta.name.clone())
+                    .unwrap_or_default(),
+            })
+            .collect();
+        let dead_letters = dead.keys().copied().collect();
+        let status = self.sync_status.borrow();
+        let staleness = classify(
+            self.seams.scheduler.now(),
+            status.last_success,
+            status.reconcile_in_flight,
+            Connectivity::Online,
+            &self.profile,
+        );
+        Ok(SnapshotView {
+            root: rendered.root,
+            folder,
+            children,
+            ancestors,
+            dead_letters,
+            staleness,
         })
     }
 
@@ -1490,6 +1692,15 @@ mod tests {
         (engine, events)
     }
 
+    /// Every event currently buffered on the stream, without blocking.
+    fn drain(events: &mut EventStream) -> Vec<Event> {
+        let mut out = Vec::new();
+        while let Ok(event) = events.receiver.try_recv() {
+            out.push(event);
+        }
+        out
+    }
+
     fn create(engine: &mut Engine<FakeSeamTypes>, parent: NodeId, name: &str, kind: NodeKind) {
         block_on(engine.command(Command::Create {
             parent,
@@ -1646,6 +1857,161 @@ mod tests {
                 command: "rotateNow"
             })
         );
+    }
+
+    // --- snapshot read surface ---
+
+    mod snapshot_read {
+        use super::*;
+
+        use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind, ReadBody};
+
+        use crate::gate::Adopted;
+        use crate::net::{ResolveOutcome, refresh_base_from_outcome};
+
+        /// A gate-passing adopted root folder with the given children, mirroring
+        /// what a live resolve repaints the base with.
+        fn adopted_folder(children: Vec<ChildRef>) -> Adopted {
+            Adopted {
+                read_body: ReadBody::Folder {
+                    created_at: 0,
+                    modified_at: 456,
+                    children,
+                    unknown: Vec::new(),
+                },
+                sequence: 2,
+                epoch: 1,
+            }
+        }
+
+        fn child_ref(id: u8, name: &str, kind: CoreNodeKind) -> ChildRef {
+            ChildRef {
+                id: [id; 16],
+                name: name.to_string(),
+                ipns_name: vec![id],
+                kind,
+                link_counter: 1,
+                unknown: Vec::new(),
+            }
+        }
+
+        #[test]
+        fn snapshot_lists_base_children_with_no_pending_flags() {
+            let (engine, _events) = started();
+            let root = engine.root();
+            refresh_base_from_outcome(
+                &engine.snapshot,
+                root,
+                &ResolveOutcome::Adopted(adopted_folder(vec![
+                    child_ref(1, "a", CoreNodeKind::Folder),
+                    child_ref(2, "b.txt", CoreNodeKind::File),
+                ])),
+            );
+
+            let view = block_on(engine.snapshot(root)).unwrap();
+            assert_eq!(view.root, root);
+            assert_eq!(view.folder, root);
+            let by: Vec<(NodeId, &str, NodeKind, bool, u64)> = view
+                .children
+                .iter()
+                .map(|c| (c.id, c.name.as_str(), c.kind, c.pending, c.content_version))
+                .collect();
+            assert_eq!(
+                by,
+                vec![
+                    (NodeId([1; 16]), "a", NodeKind::Folder, false, 0),
+                    (NodeId([2; 16]), "b.txt", NodeKind::File, false, 0),
+                ],
+                "base children render id-sorted, none pending"
+            );
+            assert!(view.children.iter().all(|c| !c.dead_letter));
+            assert!(view.dead_letters.is_empty());
+            assert!(view.ancestors.is_empty(), "the root has no ancestors");
+        }
+
+        #[test]
+        fn staged_create_appears_with_pending_true() {
+            let (mut engine, _events) = started();
+            let root = engine.root();
+            create(&mut engine, root, "notes.txt", NodeKind::File);
+
+            let view = block_on(engine.snapshot(root)).unwrap();
+            assert_eq!(view.children.len(), 1);
+            assert_eq!(view.children[0].name, "notes.txt");
+            assert!(
+                view.children[0].pending,
+                "a queued op targeting the node flags it pending"
+            );
+            assert!(!view.children[0].dead_letter);
+        }
+
+        #[test]
+        fn breadcrumbs_walk_nearest_first_to_the_root() {
+            let (mut engine, _events) = started();
+            let root = engine.root();
+            create(&mut engine, root, "dir", NodeKind::Folder);
+            let dir = block_on(engine.view())
+                .unwrap()
+                .lookup(root, "dir")
+                .unwrap()
+                .id;
+            create(&mut engine, dir, "sub", NodeKind::Folder);
+            let sub = block_on(engine.view())
+                .unwrap()
+                .lookup(dir, "sub")
+                .unwrap()
+                .id;
+
+            let view = block_on(engine.snapshot(sub)).unwrap();
+            assert_eq!(
+                view.ancestors,
+                vec![
+                    Breadcrumb {
+                        id: dir,
+                        name: "dir".to_owned(),
+                    },
+                    Breadcrumb {
+                        id: root,
+                        name: String::new(),
+                    },
+                ],
+                "nearest first, ending at the root"
+            );
+        }
+
+        #[test]
+        fn unknown_folder_is_unknown_node() {
+            let (engine, _events) = started();
+            assert_eq!(
+                block_on(engine.snapshot(NodeId([9; 16]))),
+                Err(EngineError::UnknownNode)
+            );
+        }
+
+        #[test]
+        fn file_node_is_not_a_folder() {
+            let (mut engine, _events) = started();
+            let root = engine.root();
+            create(&mut engine, root, "f.txt", NodeKind::File);
+            let file = block_on(engine.view())
+                .unwrap()
+                .lookup(root, "f.txt")
+                .unwrap()
+                .id;
+            assert_eq!(
+                block_on(engine.snapshot(file)),
+                Err(EngineError::NotAFolder)
+            );
+        }
+
+        #[test]
+        fn snapshot_before_start_returns_not_started() {
+            let (engine, _events) = new_engine();
+            assert_eq!(
+                block_on(engine.snapshot(NodeId([0; 16]))),
+                Err(EngineError::NotStarted)
+            );
+        }
     }
 
     // --- cold-start data path composition ---
@@ -1987,6 +2353,26 @@ mod tests {
                     .unwrap()
                     .is_empty(),
                 "the dead-lettered op is removed from the durable queue"
+            );
+        }
+
+        #[test]
+        fn retained_dead_letter_surfaces_in_the_snapshot_view() {
+            let (mut engine, _events, pointers) = started_at(UnixMillis(123_456));
+            block_on(engine.seams.staging_store.enqueue_op(b"not-a-valid-op")).expect("enqueue");
+
+            drive(&mut engine, &pointers);
+
+            let view = block_on(engine.snapshot(engine.root())).unwrap();
+            assert_eq!(
+                view.dead_letters,
+                vec![OpId(1)],
+                "the retained dead letter stays on the read surface after removal \
+                 from the durable queue"
+            );
+            assert!(
+                view.children.iter().all(|c| !c.dead_letter),
+                "an undecodable entry maps to no node"
             );
         }
 
@@ -2490,6 +2876,83 @@ mod tests {
             assert_eq!(held.len(), 1, "the resolve tick held the owner root");
             let record = held.get(&ROOT.0).expect("held under the root node id");
             assert_eq!(record.routing_key, root_name.as_str());
+        }
+
+        #[test]
+        fn staleness_rungs_transition_and_emit_once_per_change() {
+            use core::time::Duration;
+
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (head_block, head_cid, root_name) = owner_root();
+            seed_vault_pointer(&device, &root_name);
+            for endpoint in device.record_store.endpoints() {
+                seed_root_record_at(&device, &endpoint, &root_name, &head_cid);
+            }
+            device.http.enqueue_response(head_response(&head_block));
+            let (mut engine, mut events) = engine_on(&device);
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+            assert_eq!(
+                drain(&mut events),
+                vec![Event::SnapshotUpdated],
+                "cold start paints once and stamps last_success"
+            );
+
+            let mut tasks = world.scheduler.take_spawned_tasks();
+            poll_each(&mut tasks); // park each loop at its first sleep
+
+            // CI profile: 1 s poll, 3 s stale_after. With no reachable head
+            // block, each tick fails to reconcile and last_success stays at 0.
+            world.scheduler.advance(Duration::from_secs(1));
+            poll_each(&mut tasks);
+            assert_eq!(
+                drain(&mut events),
+                vec![Event::StalenessChanged {
+                    level: Staleness::Fresh
+                }],
+                "the first classified rung is reported"
+            );
+            world.scheduler.advance(Duration::from_secs(1));
+            poll_each(&mut tasks);
+            assert_eq!(drain(&mut events), vec![], "no re-emit within a rung");
+            world.scheduler.advance(Duration::from_secs(1)); // t=3 s ≥ stale_after
+            poll_each(&mut tasks);
+            assert_eq!(
+                drain(&mut events),
+                vec![Event::StalenessChanged {
+                    level: Staleness::Stale
+                }]
+            );
+            world.scheduler.advance(Duration::from_secs(1));
+            poll_each(&mut tasks);
+            assert_eq!(drain(&mut events), vec![], "stale reported exactly once");
+
+            // The record plane recovers with a newer root: the adopt stamps
+            // last_success and the rung steps back to Fresh.
+            for endpoint in device.record_store.endpoints() {
+                device.record_store.seed_record(
+                    &endpoint,
+                    root_name.as_str(),
+                    root_record(&head_cid, 2),
+                );
+            }
+            device.http.enqueue_response(head_response(&head_block));
+            world.scheduler.advance(Duration::from_secs(1));
+            poll_each(&mut tasks);
+            assert_eq!(
+                drain(&mut events),
+                vec![
+                    Event::SnapshotUpdated,
+                    Event::StalenessChanged {
+                        level: Staleness::Fresh
+                    },
+                ],
+                "a reconciled tick repaints and steps the ladder back to Fresh"
+            );
+
+            // The read surface classifies off the same state.
+            let view = block_on(engine.snapshot(ROOT)).unwrap();
+            assert_eq!(view.staleness, Staleness::Fresh);
         }
 
         #[test]

@@ -55,8 +55,8 @@ pub use content::{
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{
-    Command, Engine, EngineError, Event, EventStream, LoginSecret, NodeId, NodeKind, Permission,
-    PlaintextContent, Staleness,
+    Breadcrumb, Command, Engine, EngineError, Event, EventStream, LoginSecret, NodeId, NodeKind,
+    OpPhase, Permission, PlaintextContent, SnapshotChild, SnapshotView, Staleness,
 };
 pub use gate::{
     Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,

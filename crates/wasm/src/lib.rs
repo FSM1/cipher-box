@@ -344,6 +344,7 @@ impl Event {
             facade::Event::DeadLetter { .. } => "deadLetter",
             facade::Event::AttributableAbuse { .. } => "attributableAbuse",
             facade::Event::RenewalFailed { .. } => "renewalFailed",
+            facade::Event::OpProgress { .. } => "opProgress",
         }
         .to_string()
     }
@@ -495,5 +496,13 @@ mod tests {
             ipns_name: vec![1, 2, 3],
         });
         assert_eq!(withheld.ipns_name(), Some(vec![1, 2, 3]));
+
+        let progress = Event::from_facade(facade::Event::OpProgress {
+            op_id: None,
+            node: facade::NodeId([0u8; 16]),
+            phase: facade::OpPhase::DownloadStarted,
+            error: None,
+        });
+        assert_eq!(progress.kind(), "opProgress");
     }
 }
