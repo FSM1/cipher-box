@@ -551,6 +551,7 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
             Err(PublishError::Register(_)) => "register-first publish failed".to_owned(),
             Err(PublishError::AllEndpointsFailed) => "all record endpoints failed".to_owned(),
             Err(PublishError::FloorRead(_)) => "sequence floor read failed".to_owned(),
+            Err(PublishError::EmptyHeadCid) => "empty head CID (never published)".to_owned(),
             // A no-renewal (comfortably ahead) or a clean republish is not a
             // failure — nothing to surface.
             Ok(Some(PublishOutcome::Published { .. })) | Ok(None) => continue,
@@ -987,9 +988,12 @@ impl<T: SeamTypes> Engine<T> {
                 let material = HeldMaterial {
                     node_id: root_id,
                     write_scope_seed: None,
-                    head_cid: String::new(),
                     content_cids: Vec::new(),
                 };
+                // The resolve outcome (incl. a steady-state `TrustViolation`) is
+                // dropped: fail-closed for data (a forged record is never held or
+                // rendered), but surfacing it as a staleness-ladder /
+                // `AttributableAbuse` event is a later slice.
                 let _ = resolve_and_hold(
                     &transport,
                     &snapshot_cache,

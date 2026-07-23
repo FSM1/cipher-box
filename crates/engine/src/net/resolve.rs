@@ -17,11 +17,12 @@
 
 use core::cell::RefCell;
 
-use cipherbox_core::ipns::IpnsName;
+use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use zeroize::Zeroizing;
 
 use super::fanout::fanout_get_verify;
 use super::liveness::{HeldRecord, HeldRecords};
+use super::publish::head_cid_from_value;
 use crate::gate::{Adopted, GateError, GateRejection, RejectionReason};
 use crate::seams::{RecordTransport, SeamError, SnapshotCache};
 use crate::session::SessionIdentity;
@@ -128,7 +129,7 @@ async fn resolve_gated<T, S, A>(
     snapshot_cache: &S,
     adopter: &A,
     name: &IpnsName,
-) -> Result<(Resolved, Option<AdoptHold>), SeamError>
+) -> Result<(Resolved, Option<AdoptHold>, Option<Vec<u8>>), SeamError>
 where
     T: RecordTransport,
     S: SnapshotCache,
@@ -138,32 +139,34 @@ where
     // Cache-first: last-known-good renders immediately, reconcile runs behind it.
     let last_known_good = snapshot_cache.get(cache_key).await?;
 
-    let (outcome, hold) = match fanout_get_verify(transport, name).await {
-        None => (ResolveOutcome::NoUpdate, None),
+    let (outcome, hold, held_bytes) = match fanout_get_verify(transport, name).await {
+        None => (ResolveOutcome::NoUpdate, None, None),
         Some((_sequence, bytes)) => match adopter.adopt(name, &bytes).await {
             Ok(AdoptOutcome {
                 adopted,
                 write_scope_seed,
                 node_id,
             }) => {
-                // Only gate-passing records touch the snapshot.
+                // Only gate-passing records touch the snapshot; the same verified
+                // bytes ride out to the liveness hold, so no re-fetch/re-get.
                 snapshot_cache.put(cache_key, &bytes).await?;
                 let hold = write_scope_seed.map(|seed| (node_id, seed));
-                (ResolveOutcome::Adopted(adopted), hold)
+                (ResolveOutcome::Adopted(adopted), hold, Some(bytes))
             }
             // A record at exactly the durable sequence floor is our own current
             // record re-fetched — no update, never a violation; its verified
-            // bytes are handed back so the liveness loop holds them without a
-            // re-fetch. A strictly older sequence is a replay/rollback and stays
-            // a fail-closed trust violation, as does every other gate rejection.
+            // bytes ride out so the liveness loop holds them without a re-fetch.
+            // A strictly older sequence is a replay/rollback and stays a
+            // fail-closed trust violation, as does every other gate rejection.
             Err(GateError::Rejected(rejection)) => match &rejection.reason {
                 RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => (
                     ResolveOutcome::Current {
-                        record_bytes: bytes,
+                        record_bytes: bytes.clone(),
                     },
                     None,
+                    Some(bytes),
                 ),
-                _ => (ResolveOutcome::TrustViolation(rejection), None),
+                _ => (ResolveOutcome::TrustViolation(rejection), None, None),
             },
             Err(GateError::Seam(error)) => return Err(error),
         },
@@ -175,6 +178,7 @@ where
             outcome,
         },
         hold,
+        held_bytes,
     ))
 }
 
@@ -194,8 +198,6 @@ pub(crate) struct HeldMaterial {
     /// instead (a write grantee). An insert-time derivation input, never
     /// persisted in the held set.
     pub write_scope_seed: Option<Zeroizing<[u8; 32]>>,
-    /// The head/metadata CID the renewal record points at.
-    pub head_cid: String,
     /// The content CIDs to re-register/pin at renewal.
     pub content_cids: Vec<String>,
 }
@@ -218,28 +220,24 @@ where
     S: SnapshotCache,
     A: Adopter,
 {
-    let (resolved, adopt_hold) = resolve_gated(transport, snapshot_cache, adopter, name).await?;
+    let (resolved, adopt_hold, held_bytes) =
+        resolve_gated(transport, snapshot_cache, adopter, name).await?;
     // A gate-passing adopt (`Adopted`) and our own current record (`Current`)
-    // are both alive-worthy; a `TrustViolation`/`NoUpdate` is never held. For
-    // `Adopted` the bytes are the cache's fresh last-known-good; for `Current`
-    // the verified bytes are already in hand, so no re-fetch (blueprint/engine.md
-    // "Liveness").
-    let record_bytes = match &resolved.outcome {
-        ResolveOutcome::Adopted(_) => {
-            // A cache that dropped what it just adopted is a broken durable seam
-            // — fail closed rather than hold nothing.
-            let cache_key = name.as_str().as_bytes();
-            Some(
-                snapshot_cache
-                    .get(cache_key)
-                    .await?
-                    .ok_or_else(|| SeamError::new("snapshot cache dropped the adopted record"))?,
-            )
-        }
-        ResolveOutcome::Current { record_bytes } => Some(record_bytes.clone()),
-        ResolveOutcome::TrustViolation(_) | ResolveOutcome::NoUpdate => None,
-    };
-    if let Some(record_bytes) = record_bytes {
+    // are both alive-worthy and ride their verified bytes back here; a
+    // `TrustViolation`/`NoUpdate` holds nothing (blueprint/engine.md "Liveness").
+    if let Some(record_bytes) = held_bytes {
+        // Renew under the record's own adopted head CID, not a caller-supplied
+        // one: parse it from the signed `/ipfs/<cid>` value. A gate-passing
+        // record always carries a valid value; if it does not, skip the hold
+        // rather than renew under `/ipfs/` — an empty head CID would clobber the
+        // tip (security rule 8, fail-closed).
+        let Some(head_cid) = IpnsRecord::unmarshal(&record_bytes)
+            .and_then(|record| record.verify(name))
+            .ok()
+            .and_then(|verified| head_cid_from_value(&verified.value))
+        else {
+            return Ok(resolved);
+        };
         // The renewal (node id, write seed) comes from the gate for a write
         // grantee, else from the caller for an own-scope record. No seed on
         // either side ⇒ nothing to renew with ⇒ held keyless is a later slice, so
@@ -261,13 +259,15 @@ where
         if IpnsName::from_public_key(&signer.verifying_key()) != *name {
             return Ok(resolved);
         }
+        // Content re-pin on renewal is a deferred slice; the record still
+        // republishes validly under its head CID (only re-pinning is deferred).
         held.borrow_mut().insert(
             node_id,
             HeldRecord {
                 routing_key: name.as_str().to_owned(),
                 record_bytes,
                 signer,
-                head_cid: material.head_cid.clone(),
+                head_cid,
                 content_cids: material.content_cids.clone(),
             },
         );
@@ -277,7 +277,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{HeldMaterial, ResolveOutcome, resolve_and_hold};
+    use super::{HeldMaterial, ResolveOutcome, head_cid_from_value, resolve_and_hold};
 
     use core::cell::RefCell;
 
@@ -392,7 +392,6 @@ mod tests {
         let material = HeldMaterial {
             node_id,
             write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
-            head_cid: "bafyhead".into(),
             content_cids: vec!["bafycontent".into()],
         };
         let resolved = block_on(resolve_and_hold(
@@ -410,7 +409,6 @@ mod tests {
         assert_eq!(map.len(), 1, "the adopted record is held, keyed by node id");
         let record = map.get(&node_id).expect("held under its node id");
         assert_eq!(record.routing_key, name.as_str());
-        assert_eq!(record.head_cid, "bafyhead");
         assert_eq!(record.content_cids, vec!["bafycontent".to_owned()]);
         // The held signer signs for the routing key (the insert-time bind).
         assert_eq!(
@@ -432,7 +430,6 @@ mod tests {
         let material = HeldMaterial {
             node_id: [1u8; 16],
             write_scope_seed: Some(Zeroizing::new([0u8; 32])),
-            head_cid: "h".into(),
             content_cids: Vec::new(),
         };
 
@@ -471,7 +468,6 @@ mod tests {
         let material = HeldMaterial {
             node_id,
             write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
-            head_cid: "bafyhead".into(),
             content_cids: Vec::new(),
         };
         let resolved = block_on(resolve_and_hold(
@@ -534,7 +530,6 @@ mod tests {
         let material = HeldMaterial {
             node_id: [0u8; 16],
             write_scope_seed: None,
-            head_cid: "bafyfixturehead".into(),
             content_cids: Vec::new(),
         };
         block_on(resolve_and_hold(
@@ -592,5 +587,146 @@ mod tests {
             &Some(PublishOutcome::Published { sequence: 2 }),
             "the held write grantee renews at seq+1 under its derived signer",
         );
+    }
+
+    #[test]
+    fn resolve_and_hold_takes_the_head_cid_from_the_adopted_record() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let write_scope_seed = [11u8; 32];
+        let node_id = [12u8; 16];
+        let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), record(&signer, 1));
+        }
+
+        // The caller supplies no head CID (HeldMaterial has none): the held
+        // record must take it from the adopted record's own signed value.
+        let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+        let material = HeldMaterial {
+            node_id,
+            write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
+            content_cids: Vec::new(),
+        };
+        block_on(resolve_and_hold(
+            &device.record_store,
+            &device.snapshot_cache,
+            &StubAdopter::new(Verdict::Accept),
+            &name,
+            &held,
+            &material,
+        ))
+        .expect("resolve_and_hold");
+
+        let expected = head_cid_from_value(VALUE).expect("fixture value has a head cid");
+        assert!(!expected.is_empty());
+        let map = held.borrow();
+        let record = map.get(&node_id).expect("held under its node id");
+        assert_eq!(
+            record.head_cid, expected,
+            "the held head CID is derived from the adopted record, never empty",
+        );
+    }
+
+    #[test]
+    fn renewal_republishes_under_the_real_head_cid() {
+        use core::time::Duration;
+
+        use crate::api::ApiClient;
+        use crate::net::eol_renew_pass;
+        use crate::net::publish::PublishOutcome;
+        use crate::profile::SyncTimingProfile;
+        use crate::seams::FloorStore;
+
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let scheduler = world.scheduler.clone(); // manual clock, now = 0
+
+        let write_scope_seed = [2u8; 32];
+        let node_id = [3u8; 16];
+        let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        for endpoint in device.record_store.endpoints() {
+            device
+                .record_store
+                .seed_record(&endpoint, name.as_str(), record(&signer, 1));
+        }
+
+        let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+        let material = HeldMaterial {
+            node_id,
+            write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
+            content_cids: Vec::new(),
+        };
+        block_on(resolve_and_hold(
+            &device.record_store,
+            &device.snapshot_cache,
+            &StubAdopter::new(Verdict::Accept),
+            &name,
+            &held,
+            &material,
+        ))
+        .expect("resolve_and_hold");
+        let hr = held
+            .borrow()
+            .get(&node_id)
+            .cloned()
+            .expect("held under its node id");
+        let expected_head = head_cid_from_value(VALUE).expect("fixture value has a head cid");
+        assert_eq!(hr.head_cid, expected_head);
+
+        // Advance into the EOL window and renew, then prove the republished
+        // record's value round-trips to the SAME non-empty head CID (never
+        // `/ipfs/`).
+        block_on(
+            device
+                .floor_store
+                .raise_sequence_floor(name.as_str().as_bytes(), 1),
+        )
+        .unwrap();
+        scheduler.advance(Duration::from_secs(65 * 24 * 60 * 60));
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        device.http.enqueue_response(crate::seams::HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: Vec::new(),
+        });
+        let results = block_on(eol_renew_pass(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &scheduler,
+            &SyncTimingProfile::CI,
+            &[hr],
+        ));
+        assert_eq!(
+            results[0].outcome.as_ref().unwrap(),
+            &Some(PublishOutcome::Published { sequence: 2 }),
+            "renewal republishes at seq+1",
+        );
+
+        let endpoint = device.record_store.endpoints()[0].clone();
+        let republished = device
+            .record_store
+            .record_at(&endpoint, name.as_str())
+            .expect("republished record present");
+        let value = IpnsRecord::unmarshal(&republished)
+            .unwrap()
+            .verify(&name)
+            .unwrap()
+            .value;
+        assert_eq!(
+            head_cid_from_value(&value).as_deref(),
+            Some(expected_head.as_str()),
+            "renewal preserves the head CID; never /ipfs/",
+        );
+        assert!(!expected_head.is_empty());
     }
 }

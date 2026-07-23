@@ -247,6 +247,13 @@ where
         let Ok(name) = IpnsName::parse(&hr.routing_key) else {
             continue;
         };
+        // Belt-and-suspenders (security rule 8): a held record with an empty head
+        // CID would encode `/ipfs/` and clobber the tip. The insert-time
+        // derivation makes this unreachable; the guard keeps the invariant
+        // explicit.
+        if hr.head_cid.is_empty() {
+            continue;
+        }
         // The held signer signs for this name by the insert-time bind (#751:
         // resolve_and_hold rejects a signer whose derived name is not the
         // routing key), so no signing key is derived in the loop.
@@ -278,7 +285,7 @@ mod tests {
     use cipherbox_core::suite::ed25519::Ed25519Signer;
 
     use super::super::eol;
-    use super::super::publish::PublishOutcome;
+    use super::super::publish::{PublishError, PublishOutcome, PublishRequest, publish};
     use crate::api::ApiClient;
     use crate::profile::SyncTimingProfile;
     use crate::seams::{FloorStore, HttpResponse, RecordTransport, UnixMillis};
@@ -338,6 +345,43 @@ mod tests {
             .iter()
             .find(|r| r.routing_key == name.as_str())
             .expect("held name has a result")
+    }
+
+    #[test]
+    fn publish_fails_closed_on_an_empty_head_cid() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let scheduler = world.scheduler.clone();
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        let signer = Ed25519Signer::from_seed([9u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let request = PublishRequest {
+            name: &name,
+            signer: &signer,
+            head_cid: String::new(),
+            content_cids: Vec::new(),
+            min_current_sequence: None,
+        };
+        // Encode/decode fail-closed symmetry (security rule 8): an empty head CID
+        // would sign `/ipfs/`, which head_cid_from_value always rejects — so
+        // publish refuses release-active, before any registration or PUT.
+        let out = block_on(publish(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &scheduler,
+            &SyncTimingProfile::CI,
+            &request,
+        ));
+        assert_eq!(out, Err(PublishError::EmptyHeadCid));
+        assert!(
+            device.http.requests().is_empty(),
+            "an empty head CID never reaches the API",
+        );
     }
 
     fn seq_at(device: &FakeDevice, name: &IpnsName) -> u64 {
