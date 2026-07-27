@@ -18,8 +18,13 @@ pub mod conformance;
 mod entropy;
 mod executor;
 pub mod fakes;
+mod owner_root;
 mod world;
 
 pub use entropy::SeededEntropy;
 pub use executor::block_on;
+pub use owner_root::{
+    OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture,
+    OwnerRootSpec, owner_root_fixture,
+};
 pub use world::{FakeDevice, FakeSeamTypes, FakeWorld};
