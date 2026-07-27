@@ -253,4 +253,21 @@ describe('EngineClient leadership + transport swap', () => {
     await follower.dispose();
     vi.unstubAllGlobals();
   });
+
+  it('routes a throwing storage-persistence callback to onError, not an unhandled rejection', async () => {
+    vi.stubGlobal('navigator', { storage: { persist: () => Promise.resolve(true) } });
+    const { tab } = origin();
+    const errors: Error[] = [];
+    const client = tab({
+      onStoragePersistence: () => {
+        throw new Error('host blew up');
+      },
+      onError: (error) => errors.push(error),
+    });
+    await tick();
+
+    expect(errors.map((error) => error.message)).toEqual(['host blew up']);
+    await client.dispose();
+    vi.unstubAllGlobals();
+  });
 });

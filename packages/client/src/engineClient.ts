@@ -88,7 +88,11 @@ export class EngineClient implements EngineTransport {
 
     // Requested before any tab can enqueue: an evicted origin loses the durable
     // op queue and every staged byte, not just cache.
-    void requestStoragePersistence().then((persisted) => config.onStoragePersistence?.(persisted));
+    void requestStoragePersistence()
+      .then((persisted) => config.onStoragePersistence?.(persisted))
+      .catch((error: unknown) =>
+        config.onError?.(error instanceof Error ? error : new Error(String(error)))
+      );
 
     this.election = new LeaderElection(
       config.locks,
