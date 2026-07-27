@@ -19,9 +19,9 @@ use super::error::ApiError;
 use super::signer::ChallengeSigner;
 use super::types::{
     ChallengeRequest, ChallengeResponse, ErrorBody, LoginOutcome, LoginRequest, MailboxItem,
-    MailboxItemWire, NameRegistration, Quota, RefreshRequest, SiweChallengeResponse,
-    SiweLoginRequest, SiweNonce, TestLoginOutcome, TestLoginRequest, TestLoginResponse,
-    TokenResponse, UploadResult,
+    MailboxPollWire, MailboxPostWire, NameRegistration, Quota, RefreshRequest,
+    SiweChallengeResponse, SiweLoginRequest, SiweNonce, TestLoginOutcome, TestLoginRequest,
+    TestLoginResponse, TokenResponse, UploadResult,
 };
 use crate::seams::{CredentialStore, Http, HttpMethod, HttpRequest, HttpResponse};
 
@@ -247,7 +247,6 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     }
 
     // --- pin/name registry, quota, content, mailbox, recovery, account ---
-    // Provisional until the matching API slices land (see types.rs).
 
     /// Batch register names (`[{ipnsName, headCid?, contentCids[]}]`).
     /// Register-first ordering is the publish pipeline's concern, not the
@@ -302,13 +301,15 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         decode(&response)
     }
 
-    /// Post a sealed blob to a recipient's mailbox with an idempotency key.
+    /// Post a sealed blob to a recipient's mailbox with an idempotency key,
+    /// returning the server-assigned message id (a replay of the same key
+    /// returns the original id).
     pub async fn mailbox_post(
         &self,
         recipient_public_key: &str,
         blob: &[u8],
         idempotency_key: &str,
-    ) -> Result<(), ApiError> {
+    ) -> Result<String, ApiError> {
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
         struct Body<'a> {
@@ -324,22 +325,25 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         let response = self
             .request_authed(
                 HttpMethod::Post,
-                "/mailbox",
+                "/mailbox/messages",
                 Some(APPLICATION_JSON),
                 Some(body),
             )
             .await?;
-        ok_or_err(response).map(drop)
+        let response = ok_or_err(response)?;
+        let wire: MailboxPostWire = decode(&response)?;
+        Ok(wire.id)
     }
 
     /// Poll pending mailbox items, decoding each sealed blob from base64.
     pub async fn mailbox_poll(&self) -> Result<Vec<MailboxItem>, ApiError> {
         let response = self
-            .request_authed(HttpMethod::Get, "/mailbox", None, None)
+            .request_authed(HttpMethod::Get, "/mailbox/messages", None, None)
             .await?;
         let response = ok_or_err(response)?;
-        let wire: Vec<MailboxItemWire> = decode(&response)?;
-        wire.into_iter()
+        let wire: MailboxPollWire = decode(&response)?;
+        wire.messages
+            .into_iter()
             .map(|item| {
                 let blob = BASE64
                     .decode(item.blob.as_bytes())
@@ -356,7 +360,12 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     /// Ack (delete) a mailbox item by id.
     pub async fn mailbox_ack(&self, id: &str) -> Result<(), ApiError> {
         let response = self
-            .request_authed(HttpMethod::Delete, &format!("/mailbox/{id}"), None, None)
+            .request_authed(
+                HttpMethod::Delete,
+                &format!("/mailbox/messages/{id}"),
+                None,
+                None,
+            )
             .await?;
         ok_or_err(response).map(drop)
     }
@@ -888,7 +897,9 @@ mod tests {
         let blob = b"sealed-payload-bytes";
         http.enqueue_response(json_response(
             200,
-            json!([{ "id": "m1", "receivedAt": "2026-01-01T00:00:00Z", "blob": BASE64.encode(blob) }]),
+            json!({ "messages": [
+                { "id": "m1", "receivedAt": "2026-01-01T00:00:00Z", "blob": BASE64.encode(blob) },
+            ] }),
         ));
 
         let items = block_on(client.mailbox_poll()).expect("poll");

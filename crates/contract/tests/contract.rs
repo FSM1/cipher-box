@@ -5,7 +5,8 @@
 //! that exists server-side today (#624): challenge-signature login and account
 //! identity, refresh rotation with reuse detection, test-login environment
 //! gating + deterministic keypair + cross-consistency with identity login,
-//! SIWE secondary surface, logout revocation, and a raw endpoint round-trip.
+//! SIWE secondary surface, logout revocation, the pin/name registry and quota,
+//! the mailbox lifecycle, and a raw endpoint round-trip.
 //!
 //! Each test skips (loudly) when `CONTRACT_API_URL` is unset — there is no
 //! stack to hit locally. The merge-blocking `contract-suite` CI job always
@@ -15,7 +16,9 @@ use cipherbox_contract::{
     MemoryCredentialStore, ReqwestHttp, api_url, hex_to_scalar, prod_api_url,
     random_identity_signer, test_login_secret,
 };
-use cipherbox_engine::api::{ApiClient, ApiError, IdentityChallengeSigner, NameRegistration};
+use cipherbox_engine::api::{
+    ApiClient, ApiError, ChallengeSigner, IdentityChallengeSigner, NameRegistration,
+};
 use cipherbox_engine::seams::{CredentialStore, Http, HttpMethod, HttpRequest};
 
 type Client = ApiClient<ReqwestHttp, MemoryCredentialStore>;
@@ -463,5 +466,107 @@ async fn quota_is_hosted_authoritative_and_byo_advisory() {
     assert!(
         !restored.advisory,
         "clearing BYO restores authoritative quota"
+    );
+}
+
+// --- mailbox (blueprint/api.md, Mailbox; #827) ------------------------------
+
+/// An account addressable as a mailbox recipient: the client plus its identity
+/// publicKey. Minted through test-login rather than a fresh identity login so
+/// the mailbox tests add no traffic to the per-IP `/auth/login` bucket.
+async fn addressable_account(base: &str, handle: &str) -> (Client, String) {
+    let client = new_client(base);
+    let outcome = client
+        .test_login(handle, &test_login_secret())
+        .await
+        .expect("test login");
+    (client, outcome.public_key)
+}
+
+/// The mailbox lifecycle (blueprint/api.md, Mailbox): post → poll → ack over
+/// the real routes.
+#[tokio::test]
+async fn mailbox_post_poll_ack_round_trips() {
+    let base = require_stack!("mailbox_post_poll_ack_round_trips");
+    let (sender, _) = addressable_account(&base, "contract-mailbox-sender").await;
+    let (recipient, recipient_key) = addressable_account(&base, "contract-mailbox-recipient").await;
+
+    let blob = b"contract-suite-sealed-blob".to_vec();
+    let posted = sender
+        .mailbox_post(&recipient_key, &blob, "contract-mailbox-idem")
+        .await
+        .expect("post to a known recipient");
+
+    let items = recipient.mailbox_poll().await.expect("poll");
+    assert_eq!(items.len(), 1, "one pending item");
+    assert_eq!(items[0].id, posted, "the polled id is the posted id");
+    assert_eq!(items[0].blob, blob, "the sealed blob round-trips opaquely");
+    assert!(!items[0].received_at.is_empty(), "receivedAt is populated");
+    assert!(
+        sender.mailbox_poll().await.expect("sender poll").is_empty(),
+        "a post lands only in the recipient's mailbox"
+    );
+
+    let replay = sender
+        .mailbox_post(&recipient_key, &blob, "contract-mailbox-idem")
+        .await
+        .expect("replayed post");
+    assert_eq!(replay, posted, "a replay returns the original message id");
+    assert_eq!(
+        recipient
+            .mailbox_poll()
+            .await
+            .expect("poll after replay")
+            .len(),
+        1,
+        "the replay delivered no second copy"
+    );
+
+    recipient.mailbox_ack(&posted).await.expect("ack");
+    assert!(
+        recipient
+            .mailbox_poll()
+            .await
+            .expect("poll after ack")
+            .is_empty(),
+        "ack removes the item"
+    );
+    recipient
+        .mailbox_ack(&posted)
+        .await
+        .expect("acking a gone id is a no-op");
+}
+
+/// The mailbox's two fail-closed post bounds (blueprint/api.md, Mailbox): the
+/// rate-limited existence oracle, and the 8 KiB sealed-blob cap.
+#[tokio::test]
+async fn mailbox_post_is_bounded_by_recipient_existence_and_blob_size() {
+    let base = require_stack!("mailbox_post_is_bounded_by_recipient_existence_and_blob_size");
+    let (sender, recipient_key) = addressable_account(&base, "contract-mailbox-bounds").await;
+
+    // A well-formed publicKey that has never logged in, so no account backs it.
+    let stranger = random_identity_signer().public_key_hex();
+    let error = sender
+        .mailbox_post(&stranger, b"blob", "contract-mailbox-unknown")
+        .await
+        .expect_err("an unknown recipient must be refused");
+    assert!(
+        matches!(error, ApiError::Status { status: 404, .. }),
+        "an unknown recipient is a 404, got {error:?}"
+    );
+
+    // One byte over the 8 KiB bound, and far short of the DTO's base64 length
+    // cap, so the refusal is the spec bound and not DTO validation.
+    let error = sender
+        .mailbox_post(
+            &recipient_key,
+            &vec![1u8; 8193],
+            "contract-mailbox-oversize",
+        )
+        .await
+        .expect_err("an oversized blob must be refused");
+    assert!(
+        matches!(error, ApiError::Status { status: 413, .. }),
+        "an oversized sealed blob is a 413, got {error:?}"
     );
 }

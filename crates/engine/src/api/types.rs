@@ -157,12 +157,9 @@ impl fmt::Debug for TestLoginOutcome {
 
 // --- pin/name registry, quota, content, mailbox, recovery ---
 //
-// These endpoints are not yet implemented server-side (only the auth surface
-// exists in the API today, #624); the wire shapes below follow blueprint/api.md
-// and are provisional until the registry/content/mailbox API slices land, at
-// which point the live contract suite binds and enforces them. The client
-// methods are unit-tested for request construction against the scripted Http
-// fake.
+// The wire shapes below follow blueprint/api.md and are bound to the live API
+// by the contract suite (`crates/contract`); the client methods are also
+// unit-tested for request construction against the scripted Http fake.
 
 /// One entry of a batch name registration
 /// (`[{ipnsName, headCid?, contentCids[]}]`, blueprint/api.md).
@@ -220,4 +217,16 @@ pub(crate) struct MailboxItemWire {
     pub id: String,
     pub received_at: String,
     pub blob: String,
+}
+
+/// The poll response envelope.
+#[derive(Deserialize)]
+pub(crate) struct MailboxPollWire {
+    pub messages: Vec<MailboxItemWire>,
+}
+
+/// The post response: the server-assigned message id.
+#[derive(Deserialize)]
+pub(crate) struct MailboxPostWire {
+    pub id: String,
 }
