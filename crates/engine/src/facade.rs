@@ -3199,7 +3199,7 @@ mod tests {
                         .unknown
                         .push(("grantSection".to_string(), Value::Bytes(vec![1, 2, 3])));
                 }
-                let head_block = encode_envelope(&envelope);
+                let head_block = encode_envelope(&envelope).unwrap();
                 let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
                 (head_block, cid)
             }

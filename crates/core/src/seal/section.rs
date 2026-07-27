@@ -373,7 +373,7 @@ pub fn encode_grant_section(section: &GrantSection) -> Result<Vec<u8>, CodecErro
     }
     m.insert("writeBody", section.write_body.to_value());
     merge_unknown(&mut m, &section.unknown);
-    Ok(encode(&Value::Map(m)))
+    encode(&Value::Map(m))
 }
 
 #[cfg(test)]
@@ -509,7 +509,7 @@ mod tests {
         m.insert("historyLinks", Value::Array(Vec::new()));
         m.insert("ownerBlob", section.owner_blob.to_value());
         m.insert("writeBody", section.write_body.to_value());
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             decode_grant_section(&bytes).unwrap_err().check(),
             "duplicate-grant-tag"
@@ -531,7 +531,7 @@ mod tests {
         m.insert("grantBlobs", Value::Array(Vec::new()));
         m.insert("historyLinks", Value::Array(Vec::new()));
         m.insert("writeBody", section.write_body.to_value());
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             decode_grant_section(&bytes).unwrap_err().check(),
             "missing-field"
@@ -556,7 +556,7 @@ mod tests {
         m.insert("historyLinks", Value::Array(Vec::new()));
         m.insert("ownerBlob", Value::Map(owner));
         m.insert("writeBody", section.write_body.to_value());
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             decode_grant_section(&bytes).unwrap_err().check(),
             "invalid-field-length"
@@ -569,7 +569,7 @@ mod tests {
         let bytes = encode_grant_section(&section).unwrap();
         let mut m = decode(&bytes).unwrap().as_map().unwrap().clone();
         m.insert("futureField", Value::Text("keep".into()));
-        let extended = encode(&Value::Map(m));
+        let extended = encode(&Value::Map(m)).unwrap();
         let decoded = decode_grant_section(&extended).expect("tolerant decode");
         assert_eq!(decoded.unknown.len(), 1);
         assert_eq!(

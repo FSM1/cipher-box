@@ -21,7 +21,7 @@
 
 use zeroize::Zeroize;
 
-use crate::codec::{Map, Value, decode, encode};
+use crate::codec::{Map, Value, decode, encode, encode_fixed_depth};
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::ipns::IpnsName;
 use crate::seal::{AadContext, STRUCT_TAG_POINTER_PAYLOAD};
@@ -106,14 +106,14 @@ pub fn seal_pointer_payload(
     object: &RepointObject,
 ) -> Vec<u8> {
     let object_value = object.to_value();
-    let mut object_bytes = encode(&object_value);
+    let mut object_bytes = encode_fixed_depth(&object_value);
     let owner_sig = owner_signer.sign_detcbor(&object_bytes);
     object_bytes.zeroize();
 
     let mut m = Map::new();
     m.insert("object", object_value);
     m.insert("ownerSig", Value::Bytes(owner_sig.to_compact().to_vec()));
-    let mut plaintext = encode(&Value::Map(m));
+    let mut plaintext = encode_fixed_depth(&Value::Map(m));
 
     let sealed = crate::seal::seal(
         pointer_read_key,
@@ -168,7 +168,7 @@ fn decode_and_verify(
 
     // The object bytes the owner signed are the verbatim canonical re-encoding
     // of the decoded (canonical) `object` value.
-    let mut object_bytes = encode(object_value);
+    let mut object_bytes = encode(object_value)?;
     let verified = owner_identity.verify_detcbor(&object_bytes, &sig);
     object_bytes.zeroize();
     if !verified {

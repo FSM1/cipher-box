@@ -1449,7 +1449,7 @@ fn accept_vectors_decode_reencode_and_render_diag() {
         let value = decode(&bytes)
             .unwrap_or_else(|e| panic!("accept vector {}: decoder rejected it: {e}", v.name));
         assert_eq!(
-            hex::encode(encode(&value)),
+            hex::encode(encode(&value).unwrap()),
             v.hex,
             "accept vector {}: re-encode must be byte-identical",
             v.name
@@ -1674,7 +1674,7 @@ fn seal_vectors_are_frozen_and_round_trip() {
             let body = decode_read_body(&plaintext)
                 .unwrap_or_else(|e| panic!("seal {}: read-body must decode: {e}", v.name));
             assert_eq!(
-                encode_read_body(&body),
+                encode_read_body(&body).unwrap(),
                 plaintext,
                 "seal {}: read-body stable",
                 v.name
@@ -1775,7 +1775,7 @@ fn read_body_accept_vectors_decode_and_round_trip() {
         let body = decode_read_body(&bytes)
             .unwrap_or_else(|e| panic!("read-body accept {}: rejected: {e}", v.name));
         assert_eq!(
-            hex::encode(encode_read_body(&body)),
+            hex::encode(encode_read_body(&body).unwrap()),
             v.hex,
             "read-body accept {}: re-encode must be byte-identical",
             v.name
@@ -1878,7 +1878,7 @@ fn envelope_accept_vectors_decode_open_and_round_trip() {
         let env = decode_envelope(&bytes)
             .unwrap_or_else(|e| panic!("envelope accept {}: rejected: {e}", v.name));
         assert_eq!(
-            hex::encode(encode_envelope(&env)),
+            hex::encode(encode_envelope(&env).unwrap()),
             v.envelope,
             "envelope accept {}: re-encode must be byte-identical",
             v.name
@@ -1888,7 +1888,7 @@ fn envelope_accept_vectors_decode_open_and_round_trip() {
         let body = open_read_body(&env, &key)
             .unwrap_or_else(|e| panic!("envelope accept {}: open: {e}", v.name));
         assert_eq!(
-            hex::encode(encode_read_body(&body)),
+            hex::encode(encode_read_body(&body).unwrap()),
             v.read_body,
             "envelope accept {}: opened read-body drift",
             v.name
@@ -3324,7 +3324,7 @@ fn ascent_link_accept_vectors_derive_verify_and_open() {
         let link = decode_ascent_link(&container)
             .unwrap_or_else(|e| panic!("ascent accept {}: container decode: {e}", v.name));
         assert_eq!(
-            hex::encode(encode_ascent_link(&link)),
+            hex::encode(encode_ascent_link(&link).unwrap()),
             v.container,
             "ascent accept {}: container re-encode",
             v.name
@@ -3362,7 +3362,7 @@ fn ascent_link_accept_vectors_derive_verify_and_open() {
         let payload = open_ascent_link(&parent_seed, &ctx, &link)
             .unwrap_or_else(|e| panic!("ascent accept {}: open: {e}", v.name));
         assert_eq!(
-            hex::encode(encode_override_seed_payload(&payload)),
+            hex::encode(encode_override_seed_payload(&payload).unwrap()),
             v.plaintext,
             "ascent accept {}: opened plaintext drift",
             v.name

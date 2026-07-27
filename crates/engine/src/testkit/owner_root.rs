@@ -112,7 +112,8 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         &EPH_OWNER,
         &aad(OWNER_ROOT_EPOCH, STRUCT_TAG_OWNER_BLOB),
         &OverrideSeedPayload::new(OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_EPOCH),
-    );
+    )
+    .unwrap();
     let owner_blob = SignedOwnerBlob {
         signature: sign(STRUCT_TAG_OWNER_BLOB, &sealed_owner.ciphertext),
         enc: sealed_owner.enc,
@@ -145,7 +146,8 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
             &EPH_OWNER_WRITE,
             &aad(write_epoch, STRUCT_TAG_OWNER_WRITE_BLOB),
             &OwnerWriteBlobPayload::new(OWNER_ROOT_WRITE_SCOPE_SEED, write_epoch),
-        );
+        )
+        .unwrap();
         SignedOwnerWriteBlob {
             signature: sign(STRUCT_TAG_OWNER_WRITE_BLOB, &sealed.ciphertext),
             enc: sealed.enc,
@@ -196,7 +198,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         Value::Bytes(encode_grant_section(&grant_section).unwrap()),
     ));
 
-    let head_block = encode_envelope(&envelope);
+    let head_block = encode_envelope(&envelope).unwrap();
     let head_cid_str = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
 
     OwnerRootFixture {

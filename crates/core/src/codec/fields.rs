@@ -102,7 +102,7 @@ pub fn encode_map_partial(known: &Map, unknown: &UnknownFields) -> Result<Vec<u8
             let (key, value) = k.next().expect("peeked");
             write_text(&mut out, key);
             // Depth 1: the emitted map is the enclosing item.
-            write_value(&mut out, value, 1);
+            write_value(&mut out, value, 1)?;
         } else {
             let (key, raw) = u.next().expect("peeked");
             write_text(&mut out, key);
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn unknown_fields_round_trip_byte_stable() {
-        let original = encode(&Value::Map(sample_map()));
+        let original = encode(&Value::Map(sample_map())).unwrap();
         let (known, unknown) = decode_map_partial(&original, known_key_set(&["v", "id"])).unwrap();
         assert_eq!(known.len(), 2);
         assert_eq!(unknown.len(), 2);
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn rewrite_of_known_field_keeps_unknowns_and_canonical_order() {
-        let original = encode(&Value::Map(sample_map()));
+        let original = encode(&Value::Map(sample_map())).unwrap();
         let (mut known, unknown) =
             decode_map_partial(&original, known_key_set(&["v", "id"])).unwrap();
         known.insert("v", Value::Unsigned(3));
@@ -154,7 +154,7 @@ mod tests {
 
         let mut expected = sample_map();
         expected.insert("v", Value::Unsigned(3));
-        assert_eq!(rewritten, encode(&Value::Map(expected)));
+        assert_eq!(rewritten, encode(&Value::Map(expected)).unwrap());
         // Still strict-profile decodable with everything present.
         let full = decode(&rewritten).unwrap();
         let m = full.as_map().unwrap();
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn collision_between_known_and_unknown_rejects() {
-        let original = encode(&Value::Map(sample_map()));
+        let original = encode(&Value::Map(sample_map())).unwrap();
         let (mut known, unknown) =
             decode_map_partial(&original, known_key_set(&["v", "id"])).unwrap();
         known.insert("future", Value::Unsigned(0));
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn non_map_top_level_rejects() {
-        let bytes = encode(&Value::Unsigned(1));
+        let bytes = encode(&Value::Unsigned(1)).unwrap();
         let err = decode_map_partial(&bytes, |_| true).unwrap_err();
         assert_eq!(err.check(), "unexpected-type");
     }

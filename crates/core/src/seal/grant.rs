@@ -205,7 +205,7 @@ pub fn decode_grant_blob_payload(bytes: &[u8]) -> Result<GrantBlobPayload, Codec
 ///
 /// The buffer carries seed material verbatim, so its caller is the terminal
 /// owner and must zeroize it after use ([`seal_grant_blob`] does exactly this).
-pub fn encode_grant_blob_payload(payload: &GrantBlobPayload) -> Vec<u8> {
+pub fn encode_grant_blob_payload(payload: &GrantBlobPayload) -> Result<Vec<u8>, CodecError> {
     let mut m = Map::new();
     m.insert("epoch", Value::Unsigned(payload.epoch));
     m.insert(
@@ -237,8 +237,8 @@ pub fn seal_grant_blob(
     ephemeral_scalar: &[u8; 32],
     ctx: &AadContext,
     payload: &GrantBlobPayload,
-) -> HpkeCiphertext {
-    let mut plaintext = encode_grant_blob_payload(payload);
+) -> Result<HpkeCiphertext, CodecError> {
+    let mut plaintext = encode_grant_blob_payload(payload)?;
     let sealed = hpke::hpke_seal(
         recipient_pub,
         ephemeral_scalar,
@@ -247,7 +247,7 @@ pub fn seal_grant_blob(
         &plaintext,
     );
     plaintext.zeroize();
-    sealed
+    Ok(sealed)
 }
 
 /// Open a grant blob with the recipient's encryption subkey secret. Fails closed
@@ -346,7 +346,7 @@ pub fn decode_override_seed_payload(bytes: &[u8]) -> Result<OverrideSeedPayload,
 /// Encode an override-seed payload to its canonical det-CBOR plaintext. The
 /// buffer carries the seed verbatim; its caller is the terminal owner and must
 /// zeroize it (the seal paths do).
-pub fn encode_override_seed_payload(payload: &OverrideSeedPayload) -> Vec<u8> {
+pub fn encode_override_seed_payload(payload: &OverrideSeedPayload) -> Result<Vec<u8>, CodecError> {
     let mut m = Map::new();
     m.insert("epoch", Value::Unsigned(payload.epoch));
     m.insert(
@@ -369,8 +369,8 @@ pub fn seal_owner_blob(
     ephemeral_scalar: &[u8; 32],
     ctx: &AadContext,
     payload: &OverrideSeedPayload,
-) -> HpkeCiphertext {
-    let mut plaintext = encode_override_seed_payload(payload);
+) -> Result<HpkeCiphertext, CodecError> {
+    let mut plaintext = encode_override_seed_payload(payload)?;
     let sealed = hpke::hpke_seal(
         owner_enc_pub,
         ephemeral_scalar,
@@ -379,7 +379,7 @@ pub fn seal_owner_blob(
         &plaintext,
     );
     plaintext.zeroize();
-    sealed
+    Ok(sealed)
 }
 
 /// Open an owner blob with the owner's encryption subkey secret. Fails closed
@@ -485,7 +485,9 @@ pub fn decode_owner_write_blob_payload(bytes: &[u8]) -> Result<OwnerWriteBlobPay
 /// Encode an owner-write-blob payload to its canonical det-CBOR plaintext. The
 /// buffer carries the seed verbatim; its caller is the terminal owner and must
 /// zeroize it ([`seal_owner_write_blob`] does).
-pub fn encode_owner_write_blob_payload(payload: &OwnerWriteBlobPayload) -> Vec<u8> {
+pub fn encode_owner_write_blob_payload(
+    payload: &OwnerWriteBlobPayload,
+) -> Result<Vec<u8>, CodecError> {
     let mut m = Map::new();
     m.insert("writeEpoch", Value::Unsigned(payload.write_epoch));
     m.insert(
@@ -509,8 +511,8 @@ pub fn seal_owner_write_blob(
     ephemeral_scalar: &[u8; 32],
     ctx: &AadContext,
     payload: &OwnerWriteBlobPayload,
-) -> HpkeCiphertext {
-    let mut plaintext = encode_owner_write_blob_payload(payload);
+) -> Result<HpkeCiphertext, CodecError> {
+    let mut plaintext = encode_owner_write_blob_payload(payload)?;
     let sealed = hpke::hpke_seal(
         owner_enc_pub,
         ephemeral_scalar,
@@ -519,7 +521,7 @@ pub fn seal_owner_write_blob(
         &plaintext,
     );
     plaintext.zeroize();
-    sealed
+    Ok(sealed)
 }
 
 /// Open an owner-write-blob with the owner's encryption subkey secret. Fails
@@ -581,7 +583,7 @@ pub fn decode_ascent_link(bytes: &[u8]) -> Result<AscentLink, CodecError> {
 }
 
 /// Encode an ascent-link container to its canonical det-CBOR form.
-pub fn encode_ascent_link(link: &AscentLink) -> Vec<u8> {
+pub fn encode_ascent_link(link: &AscentLink) -> Result<Vec<u8>, CodecError> {
     let mut m = Map::new();
     m.insert("enc", Value::Bytes(link.enc.to_vec()));
     m.insert("ciphertext", Value::Bytes(link.ciphertext.clone()));
@@ -599,10 +601,10 @@ pub fn seal_ascent_link(
     ephemeral_scalar: &[u8; 32],
     ctx: &AadContext,
     payload: &OverrideSeedPayload,
-) -> AscentLink {
+) -> Result<AscentLink, CodecError> {
     let ascent_secret = kdf::ascent_keypair(parent_node_seed);
     let ascent_public = ascent_secret.public();
-    let mut plaintext = encode_override_seed_payload(payload);
+    let mut plaintext = encode_override_seed_payload(payload)?;
     let sealed = hpke::hpke_seal(
         &ascent_public,
         ephemeral_scalar,
@@ -611,12 +613,12 @@ pub fn seal_ascent_link(
         &plaintext,
     );
     plaintext.zeroize();
-    AscentLink {
+    Ok(AscentLink {
         ascent_public: ascent_public.to_bytes(),
         enc: sealed.enc,
         ciphertext: sealed.ciphertext,
         unknown: Vec::new(),
-    }
+    })
 }
 
 /// Open an ascent link as an ancestor reader: re-derive the ascent keypair from
@@ -723,7 +725,7 @@ pub fn decode_history_link_payload(bytes: &[u8]) -> Result<HistoryLinkPayload, C
 /// Encode a history-link payload to its canonical det-CBOR plaintext. The buffer
 /// carries the seed verbatim; its caller is the terminal owner and must zeroize
 /// it ([`seal_history_link`] does).
-pub fn encode_history_link_payload(payload: &HistoryLinkPayload) -> Vec<u8> {
+pub fn encode_history_link_payload(payload: &HistoryLinkPayload) -> Result<Vec<u8>, CodecError> {
     let mut m = Map::new();
     m.insert("prevEpoch", Value::Unsigned(payload.prev_epoch));
     m.insert(
@@ -747,11 +749,11 @@ pub fn seal_history_link(
     nonce: &[u8; crate::suite::aead::NONCE_LEN],
     ctx: &AadContext,
     payload: &HistoryLinkPayload,
-) -> Vec<u8> {
-    let mut plaintext = encode_history_link_payload(payload);
+) -> Result<Vec<u8>, CodecError> {
+    let mut plaintext = encode_history_link_payload(payload)?;
     let sealed = super::seal(key, nonce, ctx, &plaintext);
     plaintext.zeroize();
-    sealed
+    Ok(sealed)
 }
 
 /// Open a history link under the current epoch's structure `key`. Fails closed
@@ -886,7 +888,7 @@ pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, Co
         Value::Bytes(c.owner_pseudonym_pk.to_vec()),
     );
     merge_unknown(&mut m, &c.unknown);
-    Ok(encode(&Value::Map(m)))
+    encode(&Value::Map(m))
 }
 
 /// Owner-sign a grant-set commitment: RFC 6979 ECDSA over the det-CBOR preimage.
@@ -943,10 +945,14 @@ mod tests {
     fn grant_blob_payload_round_trips_read_and_write() {
         for write in [None, Some([0x44; 32])] {
             let payload = GrantBlobPayload::new([0x11; 32], write, 7, [0x22; 32]);
-            let bytes = encode_grant_blob_payload(&payload);
+            let bytes = encode_grant_blob_payload(&payload).unwrap();
             let decoded = decode_grant_blob_payload(&bytes).expect("decodes");
             assert_eq!(decoded, payload);
-            assert_eq!(encode_grant_blob_payload(&decoded), bytes, "byte-stable");
+            assert_eq!(
+                encode_grant_blob_payload(&decoded).unwrap(),
+                bytes,
+                "byte-stable"
+            );
             assert_eq!(decoded.write_scope_seed().is_some(), write.is_some());
         }
     }
@@ -956,7 +962,7 @@ mod tests {
         let recipient = X25519Secret::from_scalar([0x30; 32]);
         let ctx = grant_ctx(super::super::STRUCT_TAG_GRANT_BLOB);
         let payload = GrantBlobPayload::new([0x11; 32], Some([0x44; 32]), 7, [0x22; 32]);
-        let sealed = seal_grant_blob(&recipient.public(), &[0x55; 32], &ctx, &payload);
+        let sealed = seal_grant_blob(&recipient.public(), &[0x55; 32], &ctx, &payload).unwrap();
         let opened = open_grant_blob(&recipient, &sealed.enc, &ctx, &sealed.ciphertext).unwrap();
         assert_eq!(opened, payload);
         // A struct-tag transplant recomputes a different AAD → the tag fails.
@@ -977,7 +983,7 @@ mod tests {
         // must survive intact (terminal-owner rule: never zero a caller's
         // buffer). Ok path: decode returns the exact seeds it read.
         let payload = GrantBlobPayload::new([0x11; 32], Some([0x44; 32]), 7, [0x22; 32]);
-        let bytes = encode_grant_blob_payload(&payload);
+        let bytes = encode_grant_blob_payload(&payload).unwrap();
         let decoded = decode_grant_blob_payload(&bytes).expect("decodes");
         assert_eq!(decoded.read_scope_seed(), &[0x11; 32]);
         assert_eq!(decoded.write_scope_seed(), Some(&[0x44; 32]));
@@ -989,7 +995,7 @@ mod tests {
         let owner = X25519Secret::from_scalar([0x31; 32]);
         let ctx = grant_ctx(super::super::STRUCT_TAG_OWNER_BLOB);
         let payload = OverrideSeedPayload::new([0x77; 32], 4);
-        let sealed = seal_owner_blob(&owner.public(), &[0x56; 32], &ctx, &payload);
+        let sealed = seal_owner_blob(&owner.public(), &[0x56; 32], &ctx, &payload).unwrap();
         let opened = open_owner_blob(&owner, &sealed.enc, &ctx, &sealed.ciphertext).unwrap();
         assert_eq!(opened, payload);
     }
@@ -997,11 +1003,11 @@ mod tests {
     #[test]
     fn owner_write_blob_payload_round_trips_byte_stable() {
         let payload = OwnerWriteBlobPayload::new([0x66; 32], 9);
-        let bytes = encode_owner_write_blob_payload(&payload);
+        let bytes = encode_owner_write_blob_payload(&payload).unwrap();
         let decoded = decode_owner_write_blob_payload(&bytes).expect("decodes");
         assert_eq!(decoded, payload);
         assert_eq!(
-            encode_owner_write_blob_payload(&decoded),
+            encode_owner_write_blob_payload(&decoded).unwrap(),
             bytes,
             "byte-stable"
         );
@@ -1014,7 +1020,7 @@ mod tests {
         // The AAD binds the WRITE epoch (the write plane's own clock).
         let ctx = grant_ctx(super::super::STRUCT_TAG_OWNER_WRITE_BLOB);
         let payload = OwnerWriteBlobPayload::new([0x66; 32], 9);
-        let sealed = seal_owner_write_blob(&owner.public(), &[0x58; 32], &ctx, &payload);
+        let sealed = seal_owner_write_blob(&owner.public(), &[0x58; 32], &ctx, &payload).unwrap();
         let opened = open_owner_write_blob(&owner, &sealed.enc, &ctx, &sealed.ciphertext).unwrap();
         assert_eq!(opened, payload);
         // A struct-tag transplant recomputes a different AAD → the tag fails.
@@ -1042,7 +1048,7 @@ mod tests {
         let parent_seed = [0x12; 32];
         let ctx = grant_ctx(super::super::STRUCT_TAG_ASCENT_LINK);
         let payload = OverrideSeedPayload::new([0x77; 32], 4);
-        let link = seal_ascent_link(&parent_seed, &[0x57; 32], &ctx, &payload);
+        let link = seal_ascent_link(&parent_seed, &[0x57; 32], &ctx, &payload).unwrap();
         // The plaintext public half is exactly the derived ascent public key.
         assert_eq!(
             link.ascent_public,
@@ -1051,10 +1057,10 @@ mod tests {
         let opened = open_ascent_link(&parent_seed, &ctx, &link).unwrap();
         assert_eq!(opened, payload);
         // Container codec is byte-stable.
-        let bytes = encode_ascent_link(&link);
+        let bytes = encode_ascent_link(&link).unwrap();
         assert_eq!(decode_ascent_link(&bytes).unwrap(), link);
         assert_eq!(
-            encode_ascent_link(&decode_ascent_link(&bytes).unwrap()),
+            encode_ascent_link(&decode_ascent_link(&bytes).unwrap()).unwrap(),
             bytes
         );
     }
@@ -1064,7 +1070,7 @@ mod tests {
         let parent_seed = [0x12; 32];
         let ctx = grant_ctx(super::super::STRUCT_TAG_ASCENT_LINK);
         let payload = OverrideSeedPayload::new([0x77; 32], 4);
-        let mut link = seal_ascent_link(&parent_seed, &[0x57; 32], &ctx, &payload);
+        let mut link = seal_ascent_link(&parent_seed, &[0x57; 32], &ctx, &payload).unwrap();
         // Flip the plaintext public half: derive-and-verify rejects it as a
         // mismatch, never reaching the HPKE open.
         link.ascent_public[0] ^= 0x01;
@@ -1075,7 +1081,7 @@ mod tests {
             "ascent-link-mismatch"
         );
         // A different parent seed derives a different keypair → also a mismatch.
-        let link2 = seal_ascent_link(&parent_seed, &[0x57; 32], &ctx, &payload);
+        let link2 = seal_ascent_link(&parent_seed, &[0x57; 32], &ctx, &payload).unwrap();
         assert_eq!(
             open_ascent_link(&[0x13; 32], &ctx, &link2)
                 .unwrap_err()
@@ -1090,7 +1096,7 @@ mod tests {
         let nonce = [0x10; NONCE_LEN];
         let ctx = grant_ctx(super::super::STRUCT_TAG_HISTORY_LINK);
         let payload = HistoryLinkPayload::new([0x99; 32], 3);
-        let sealed = seal_history_link(&key, &nonce, &ctx, &payload);
+        let sealed = seal_history_link(&key, &nonce, &ctx, &payload).unwrap();
         assert_eq!(open_history_link(&key, &ctx, &sealed).unwrap(), payload);
         let mut wrong = ctx;
         wrong.epoch += 1;
@@ -1151,7 +1157,7 @@ mod tests {
         m.insert("entries", Value::Array(vec![Value::Map(a), Value::Map(b)]));
         m.insert("ipnsName", Value::Bytes(b"n".to_vec()));
         m.insert("ownerPseudonymPk", Value::Bytes(vec![0x88; 32]));
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             decode_grant_set_commitment(&bytes).unwrap_err().check(),
             "duplicate-grant-tag"
@@ -1193,7 +1199,7 @@ mod tests {
         m.insert("entries", Value::Array(vec![Value::Map(entry)]));
         m.insert("ipnsName", Value::Bytes(b"n".to_vec()));
         m.insert("ownerPseudonymPk", Value::Bytes(vec![0x88; 32]));
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             decode_grant_set_commitment(&bytes).unwrap_err().check(),
             "invalid-permission"

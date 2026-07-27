@@ -15,7 +15,7 @@
 //! needs; a fan-out/balancing profile is the open edge deferred with the chunk
 //! size (blueprint/engine.md "Open edges").
 
-use cipherbox_core::codec::{Map, Value, decode, encode};
+use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::content::{
     CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid,
 };
@@ -121,7 +121,7 @@ pub fn assemble(
     root.insert(CHUNK_SIZE_KEY, Value::Unsigned(profile.chunk_size() as u64));
     root.insert(SIZE_KEY, Value::Unsigned(plaintext_len));
     root.insert(LINKS_KEY, Value::Array(links));
-    let root_block = encode(&Value::Map(root));
+    let root_block = encode_fixed_depth(&Value::Map(root));
     // fail closed: an over-cap root would be unreadable — see DagError::RootTooLarge.
     if root_block.len() > MAX_RESOLVED_RECORD_BYTES {
         return Err(DagError::RootTooLarge {
@@ -229,6 +229,7 @@ mod tests {
     use super::*;
     use crate::content::chunk::{ContentKey, frame_and_seal};
     use crate::testkit::SeededEntropy;
+    use cipherbox_core::codec::encode;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, verify_cid};
     use cipherbox_core::suite::aead::KEY_LEN;
 
@@ -250,7 +251,7 @@ mod tests {
             LINKS_KEY,
             Value::Array(links.iter().cloned().map(Value::Bytes).collect()),
         );
-        encode(&Value::Map(root))
+        encode(&Value::Map(root)).unwrap()
     }
 
     fn invalid_manifest_reason(block: &[u8]) -> &'static str {
@@ -306,7 +307,7 @@ mod tests {
     #[test]
     fn decode_rejects_a_non_root_block_fail_closed() {
         // A valid det-CBOR value that is not the root map shape.
-        let not_a_root = encode(&Value::Unsigned(7));
+        let not_a_root = encode(&Value::Unsigned(7)).unwrap();
         assert!(decode_root(&not_a_root).is_err());
     }
 

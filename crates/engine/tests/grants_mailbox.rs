@@ -120,7 +120,8 @@ impl GrantFixture {
             &EPH_GRANT,
             &grant_aad,
             &grant_payload,
-        );
+        )
+        .unwrap();
         // Sign a seed-bearing structure's ciphertext with the owner pseudonym.
         let sign = |tag: u8, recipient: Option<[u8; 32]>, ct: &[u8]| -> [u8; 64] {
             let input = StructureSigInput::over_ciphertext(scope_id, epoch, tag, recipient, ct);
@@ -148,7 +149,8 @@ impl GrantFixture {
             &EPH_OWNER,
             &owner_blob_aad,
             &OverrideSeedPayload::new(scope_seed, epoch),
-        );
+        )
+        .unwrap();
         let owner_blob_signed = SignedOwnerBlob {
             enc: owner_blob.enc,
             ciphertext: owner_blob.ciphertext.clone(),
@@ -305,7 +307,8 @@ impl GrantFixture {
             &EPH_GRANT_2,
             &grant_aad,
             &grant_payload,
-        );
+        )
+        .unwrap();
         let grant_blob_signed = SignedGrantBlob {
             tag: self.tag,
             enc: grant_blob.enc,

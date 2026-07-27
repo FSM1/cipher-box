@@ -333,8 +333,8 @@ mod tests {
         ];
         for x in &keys {
             for y in &keys {
-                let enc_x = crate::codec::encode(&Value::Text(x.clone()));
-                let enc_y = crate::codec::encode(&Value::Text(y.clone()));
+                let enc_x = crate::codec::encode(&Value::Text(x.clone())).unwrap();
+                let enc_y = crate::codec::encode(&Value::Text(y.clone())).unwrap();
                 assert_eq!(
                     canonical_key_cmp(x, y),
                     enc_x.cmp(&enc_y),

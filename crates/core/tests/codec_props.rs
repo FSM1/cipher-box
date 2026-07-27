@@ -98,10 +98,10 @@ proptest! {
     /// is byte-identical (canonical form is a fixed point).
     #[test]
     fn round_trip(v in arb_value()) {
-        let bytes = encode(&v);
+        let bytes = encode(&v).unwrap();
         let decoded = decode(&bytes).expect("own encoding must decode");
         prop_assert_eq!(&decoded, &v);
-        prop_assert_eq!(encode(&decoded), bytes);
+        prop_assert_eq!(encode(&decoded).unwrap(), bytes);
     }
 
     /// (b) unknown-field tolerance is byte-stable: split a map into known
@@ -110,7 +110,7 @@ proptest! {
     #[test]
     fn unknown_field_round_trip(entries in arb_flagged_entries(0)) {
         let (map, flags) = build_map_and_flags(&entries);
-        let bytes = encode(&Value::Map(map.clone()));
+        let bytes = encode(&Value::Map(map.clone())).unwrap();
         let (known, unknown) =
             decode_map_partial(&bytes, |k| flags.get(k).copied().unwrap_or(false))
                 .expect("canonical map must decode");
@@ -139,7 +139,7 @@ proptest! {
         // The rewritten key must be on the known side.
         flags.insert(target_key.clone(), true);
 
-        let bytes = encode(&Value::Map(map.clone()));
+        let bytes = encode(&Value::Map(map.clone())).unwrap();
         let (mut known, unknown) =
             decode_map_partial(&bytes, |k| flags.get(k).copied().unwrap_or(false))
                 .expect("canonical map must decode");
@@ -148,7 +148,7 @@ proptest! {
 
         let mut full = map;
         full.insert(target_key, replacement);
-        prop_assert_eq!(rewritten, encode(&Value::Map(full)));
+        prop_assert_eq!(rewritten, encode(&Value::Map(full)).unwrap());
     }
 
     /// (d) every single-defect mutation of a canonical encoding rejects
@@ -199,7 +199,7 @@ proptest! {
     /// backing store is freed un-zeroized to strand secret bytes.
     #[test]
     fn encoded_len_matches_emitted_bytes(v in arb_value()) {
-        prop_assert_eq!(encoded_len(&v), encode(&v).len());
+        prop_assert_eq!(encoded_len(&v).unwrap(), encode(&v).unwrap().len());
     }
 
     /// (e) `canonical_key_cmp` is a total order that agrees with bytewise
@@ -229,7 +229,7 @@ proptest! {
         // bytewise-lexicographic order over the full encoded key items.
         prop_assert_eq!(
             canonical_key_cmp(&a, &b),
-            encode(&Value::Text(a.clone())).cmp(&encode(&Value::Text(b.clone())))
+            encode(&Value::Text(a.clone())).unwrap().cmp(&encode(&Value::Text(b.clone())).unwrap())
         );
     }
 }

@@ -9,7 +9,7 @@
 //! a code whose binding does not verify is rejected as a trust violation, never
 //! imported and never treated as stale.
 
-use crate::codec::{Map, Value, decode, encode};
+use crate::codec::{Map, Value, decode, encode_fixed_depth};
 use crate::error::{CodecError, Malformed, TrustViolation};
 
 use super::ecdsa::{EcdsaSignature, EcdsaSigner, EcdsaVerifier};
@@ -35,7 +35,7 @@ pub fn subkey_binding_preimage(identity_pk: &EcdsaVerifier, enc_subkey: &X25519P
         FIELD_IDENTITY_PK,
         Value::Bytes(identity_pk.to_sec1().to_vec()),
     );
-    encode(&Value::Map(m))
+    encode_fixed_depth(&Value::Map(m))
 }
 
 /// Sign the subkey binding: the identity attests that `enc_subkey` is its
@@ -110,7 +110,7 @@ impl ContactCode {
             FIELD_IDENTITY_PK,
             Value::Bytes(self.identity_pk.to_sec1().to_vec()),
         );
-        encode(&Value::Map(m))
+        encode_fixed_depth(&Value::Map(m))
     }
 }
 

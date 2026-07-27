@@ -135,9 +135,9 @@ pub enum ResealError {
     UnusableRecipientKey,
     /// Entropy acquisition failed; no seal proceeds without fresh randomness.
     Entropy(EntropyError),
-    /// The write-body could not be encoded (a duplicate ledger tag — the
-    /// release-active guard in `encode_write_body`).
-    WriteBodyEncode(cipherbox_core::error::CodecError),
+    /// A re-sealed structure could not be encoded — a duplicate ledger tag, or
+    /// nesting past the codec's `MAX_DEPTH`.
+    Encode(cipherbox_core::error::CodecError),
 }
 
 impl core::fmt::Display for ResealError {
@@ -153,7 +153,7 @@ impl core::fmt::Display for ResealError {
                 f.write_str("grant-ledger recipient encryption key is unusable")
             }
             ResealError::Entropy(e) => write!(f, "entropy error: {e}"),
-            ResealError::WriteBodyEncode(e) => write!(f, "write-body encode failed: {}", e.check()),
+            ResealError::Encode(e) => write!(f, "structure encode failed: {}", e.check()),
         }
     }
 }
@@ -168,7 +168,7 @@ impl ResealError {
             ResealError::SignerNotCommitted => "signer-not-committed",
             ResealError::UnusableRecipientKey => "unusable-recipient-key",
             ResealError::Entropy(_) => "entropy-error",
-            ResealError::WriteBodyEncode(_) => "write-body-encode-failed",
+            ResealError::Encode(_) => "structure-encode-failed",
         }
     }
 }
@@ -257,6 +257,7 @@ pub fn reseal_scope_root<E: Entropy>(
         let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_GRANT_BLOB);
         let sealed = seal_grant_blob(&recipient_pub, &ephemeral, &ctx, &payload);
         ephemeral.zeroize();
+        let sealed = sealed.map_err(ResealError::Encode)?;
         let signature = sign_over(
             STRUCT_TAG_GRANT_BLOB,
             Some(entry.tag),
@@ -280,6 +281,7 @@ pub fn reseal_scope_root<E: Entropy>(
         let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_OWNER_BLOB);
         let sealed = seal_owner_blob(identity.owner_enc_pub, &ephemeral, &ctx, &payload);
         ephemeral.zeroize();
+        let sealed = sealed.map_err(ResealError::Encode)?;
         let signature = sign_over(STRUCT_TAG_OWNER_BLOB, None, &sealed.ciphertext, read_epoch);
         SignedOwnerBlob {
             enc: sealed.enc,
@@ -305,6 +307,7 @@ pub fn reseal_scope_root<E: Entropy>(
         );
         let sealed = seal_owner_write_blob(identity.owner_enc_pub, &ephemeral, &ctx, &payload);
         ephemeral.zeroize();
+        let sealed = sealed.map_err(ResealError::Encode)?;
         let signature = sign_over(
             STRUCT_TAG_OWNER_WRITE_BLOB,
             None,
@@ -328,6 +331,7 @@ pub fn reseal_scope_root<E: Entropy>(
             let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_ASCENT_LINK);
             let link = seal_ascent_link(parent_node_seed, &ephemeral, &ctx, &payload);
             ephemeral.zeroize();
+            let link = link.map_err(ResealError::Encode)?;
             let signature = sign_over(STRUCT_TAG_ASCENT_LINK, None, &link.ciphertext, read_epoch);
             Some(SignedAscentLink {
                 ascent_public: link.ascent_public,
@@ -347,7 +351,8 @@ pub fn reseal_scope_root<E: Entropy>(
         let nonce = fill::<{ aead::NONCE_LEN }, E>(entropy)?;
         let ctx = ctx_for(identity.v, scope_id, read_epoch, STRUCT_TAG_HISTORY_LINK);
         let payload = HistoryLinkPayload::new(*prev.seed, prev.epoch);
-        let sealed = seal_history_link(structure_key.as_bytes(), &nonce, &ctx, &payload);
+        let sealed = seal_history_link(structure_key.as_bytes(), &nonce, &ctx, &payload)
+            .map_err(ResealError::Encode)?;
         let signature = sign_over(STRUCT_TAG_HISTORY_LINK, None, &sealed, read_epoch);
         history_links.push(SignedSealed {
             sealed,
@@ -364,7 +369,7 @@ pub fn reseal_scope_root<E: Entropy>(
             direct_child_scope_index: committed.direct_child_scope_index.to_vec(),
             unknown: Vec::new(),
         };
-        let mut plaintext = encode_write_body(&wb).map_err(ResealError::WriteBodyEncode)?;
+        let mut plaintext = encode_write_body(&wb).map_err(ResealError::Encode)?;
         let write_seed = kdf::write_seed(seeds.write_scope_seed, &scope_id);
         let write_key = kdf::write_key(write_seed.as_bytes());
         let nonce = fill::<{ aead::NONCE_LEN }, E>(entropy)?;

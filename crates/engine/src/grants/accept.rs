@@ -14,7 +14,7 @@
 
 use core::fmt;
 
-use cipherbox_core::codec::{Map, Value, decode, encode};
+use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{AadContext, Permission, STRUCT_TAG_GRANT_BLOB, open_grant_blob};
@@ -62,7 +62,7 @@ impl SharePointer {
             "sharerIdentityPk",
             Value::Bytes(self.sharer_identity_pk.to_vec()),
         );
-        encode(&Value::Map(m))
+        encode_fixed_depth(&Value::Map(m))
     }
 
     /// Decode a share pointer (strict det-CBOR). A missing/mistyped field or an
@@ -568,6 +568,7 @@ fn fixed<const N: usize>(v: &Value, field: &'static str) -> Result<[u8; N], Code
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_core::codec::encode;
 
     fn pointer() -> SharePointer {
         SharePointer {
@@ -595,7 +596,7 @@ mod tests {
             .unwrap()
             .clone();
         m.insert("permission", Value::Text("admin".into()));
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             SharePointer::decode(&bytes).unwrap_err().check(),
             "invalid-permission"

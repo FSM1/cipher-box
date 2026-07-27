@@ -93,7 +93,7 @@ pub fn has_grant_section(env: &Envelope) -> bool {
 }
 
 /// Encode an envelope to its canonical det-CBOR plaintext.
-pub fn encode_envelope(env: &Envelope) -> Vec<u8> {
+pub fn encode_envelope(env: &Envelope) -> Result<Vec<u8>, CodecError> {
     let mut epoch_tag = Map::new();
     epoch_tag.insert("epoch", Value::Unsigned(env.epoch));
     epoch_tag.insert("scope", Value::Bytes(env.scope.to_vec()));
@@ -129,7 +129,7 @@ pub fn seal_read_body(
     body: &ReadBody,
 ) -> Result<Envelope, CodecError> {
     body.validate()?;
-    let mut plaintext = encode_read_body(body);
+    let mut plaintext = encode_read_body(body)?;
     let ctx = AadContext {
         v,
         id,
@@ -199,7 +199,7 @@ mod tests {
         let env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &body).unwrap();
         assert_eq!(
             env.read_sealed.len(),
-            NONCE_LEN + encode_read_body(&body).len() + 16
+            NONCE_LEN + encode_read_body(&body).unwrap().len() + 16
         );
         let opened = open_read_body(&env, &key).expect("opens");
         assert_eq!(opened, body);
@@ -210,10 +210,10 @@ mod tests {
         let key = [3u8; KEY_LEN];
         let nonce = [4u8; NONCE_LEN];
         let env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
-        let bytes = encode_envelope(&env);
+        let bytes = encode_envelope(&env).unwrap();
         let decoded = decode_envelope(&bytes).expect("decodes");
         assert_eq!(decoded, env);
-        assert_eq!(encode_envelope(&decoded), bytes, "byte-stable");
+        assert_eq!(encode_envelope(&decoded).unwrap(), bytes, "byte-stable");
     }
 
     #[test]
@@ -249,18 +249,22 @@ mod tests {
         let key = [3u8; KEY_LEN];
         let nonce = [4u8; NONCE_LEN];
         let env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
-        let mut m = decode(&encode_envelope(&env))
+        let mut m = decode(&encode_envelope(&env).unwrap())
             .unwrap()
             .as_map()
             .unwrap()
             .clone();
         m.insert("writeSealed", Value::Bytes(b"future-write-body".to_vec()));
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
 
         let decoded = decode_envelope(&bytes).expect("tolerant decode");
         assert_eq!(decoded.unknown.len(), 1);
         assert_eq!(decoded.unknown[0].0, "writeSealed");
-        assert_eq!(encode_envelope(&decoded), bytes, "unknown field preserved");
+        assert_eq!(
+            encode_envelope(&decoded).unwrap(),
+            bytes,
+            "unknown field preserved"
+        );
         // The read-body still opens despite the extra field.
         assert!(open_read_body(&decoded, &key).is_ok());
     }
@@ -322,13 +326,13 @@ mod tests {
         let key = [3u8; KEY_LEN];
         let nonce = [4u8; NONCE_LEN];
         let env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
-        let mut m = decode(&encode_envelope(&env))
+        let mut m = decode(&encode_envelope(&env).unwrap())
             .unwrap()
             .as_map()
             .unwrap()
             .clone();
         m.remove("v");
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             decode_envelope(&bytes).unwrap_err().check(),
             "missing-field"

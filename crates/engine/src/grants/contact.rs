@@ -89,7 +89,7 @@ mod tests {
         let mut map = decode(&good).unwrap().as_map().unwrap().clone();
         let bad_sig = sign_subkey_binding(&forger, &enc());
         map.insert("bindingSig", Value::Bytes(bad_sig.to_compact().to_vec()));
-        let tampered = encode(&Value::Map(map));
+        let tampered = encode(&Value::Map(map)).unwrap();
 
         let err = import_contact(&tampered).unwrap_err();
         assert_eq!(err.check(), "subkey-binding-invalid");
