@@ -2707,30 +2707,24 @@ mod tests {
         use cipherbox_core::kdf;
         use cipherbox_core::payload::RepointObject;
         use cipherbox_core::seal::{
-            AadContext, ChildRef, GrantSection, GrantSetCommitment, NodeKind as CoreNodeKind,
-            OverrideSeedPayload, OwnerWriteBlobPayload, ReadBody, STRUCT_TAG_OWNER_BLOB,
-            STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedOwnerBlob,
-            SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody, encode_envelope,
-            encode_grant_section, encode_write_body, seal, seal_owner_blob, seal_owner_write_blob,
-            seal_read_body, sign_grant_set, sign_structure,
+            ChildRef, NodeKind as CoreNodeKind, ReadBody, encode_envelope, seal_read_body,
         };
         use cipherbox_core::suite::ecdsa::EcdsaSigner;
-        use cipherbox_core::suite::ed25519::Ed25519Signer;
 
         use crate::content::{DAG_ROOT_CODEC, GatewaySource};
         use crate::net::RE_PUT_INTERVAL;
         use crate::seams::{BoxedTask, EndpointId, RecordTransport};
         use crate::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
-        use crate::testkit::FakeDevice;
+        use crate::testkit::{
+            FakeDevice, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_SCOPE_SEED as SCOPE_SEED,
+            OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED, OwnerRootSpec, owner_root_fixture,
+        };
 
         const CAP_SECRET: [u8; 32] = [7u8; 32];
         const SCOPE: [u8; 16] = [0u8; 16];
         const ROOT: NodeId = NodeId([0u8; 16]);
         const CHILD_ID: [u8; 16] = [0x2C; 16];
         const CHILD_NAME: &str = "hello.txt";
-        const SCOPE_SEED: [u8; 32] = [0x66; 32];
-        const WRITE_SCOPE_SEED: [u8; 32] = [0x77; 32];
-        const EPOCH: u64 = 1;
         const TTL_NANOS: u64 = 2_000_000_000;
         const EOL: &str = "2099-01-01T00:00:00Z";
 
@@ -2748,117 +2742,13 @@ mod tests {
         /// the root record's write-plane IPNS name. Keyed off `CAP_SECRET` so the
         /// engine's session-derived owner identity + enc subkey open it, and scoped
         /// to the all-zero bootstrap anchor (`SCOPE`/`ROOT`) so `start`'s cold-start
-        /// scope binding matches. Mirrors the E2 `RootAdopter` head-block fixture.
+        /// scope binding matches.
         fn owner_root() -> (Vec<u8>, String, IpnsName) {
-            let owner_identity = owner_identity();
-            let owner_pseudonym = Ed25519Signer::from_seed([0x22; 32]);
-            let owner_enc = kdf::enc_subkey(&CAP_SECRET);
-
-            let node_seed = kdf::node_seed(&SCOPE_SEED, &ROOT.0);
-            let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
-            let write_seed = kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0);
-            let name = IpnsName::from_public_key(
-                &kdf::ipns_keypair(write_seed.as_bytes()).verifying_key(),
-            );
-            let write_key = kdf::write_key(write_seed.as_bytes());
-
-            let sign = |tag: u8, ct: &[u8]| -> [u8; 64] {
-                let input = StructureSigInput::over_ciphertext(SCOPE, EPOCH, tag, None, ct);
-                sign_structure(&owner_pseudonym, &input).to_bytes()
-            };
-
-            let owner_blob_aad = AadContext {
-                v: 1,
-                id: ROOT.0,
-                scope: SCOPE,
-                epoch: EPOCH,
-                struct_tag: STRUCT_TAG_OWNER_BLOB,
-            };
-            let sealed_owner = seal_owner_blob(
-                &owner_enc.public(),
-                &[3u8; 32],
-                &owner_blob_aad,
-                &OverrideSeedPayload::new(SCOPE_SEED, EPOCH),
-            );
-            let owner_blob = SignedOwnerBlob {
-                signature: sign(STRUCT_TAG_OWNER_BLOB, &sealed_owner.ciphertext),
-                enc: sealed_owner.enc,
-                ciphertext: sealed_owner.ciphertext.clone(),
-                unknown: Vec::new(),
-            };
-
-            let write_body_aad = AadContext {
-                v: 1,
-                id: ROOT.0,
-                scope: SCOPE,
-                epoch: EPOCH,
-                struct_tag: STRUCT_TAG_WRITE_BODY,
-            };
-            let write_body_sealed = seal(
-                write_key.as_bytes(),
-                &[22u8; 24],
-                &write_body_aad,
-                &encode_write_body(&WriteBody {
-                    grant_ledger: Vec::new(),
-                    write_history_link: Vec::new(),
-                    direct_child_scope_index: Vec::new(),
-                    unknown: Vec::new(),
-                })
-                .unwrap(),
-            );
-            let write_body = SignedSealed {
-                signature: sign(STRUCT_TAG_WRITE_BODY, &write_body_sealed),
-                sealed: write_body_sealed,
-                unknown: Vec::new(),
-            };
-
-            // Owner-write-blob at the read epoch (write plane == read plane here), so
-            // the cold-seeded write floor opens it and the owner recovers its
-            // write-scope seed for the held-set renewal signer.
-            let owb_aad = AadContext {
-                v: 1,
-                id: ROOT.0,
-                scope: SCOPE,
-                epoch: EPOCH,
-                struct_tag: STRUCT_TAG_OWNER_WRITE_BLOB,
-            };
-            let sealed_owb = seal_owner_write_blob(
-                &owner_enc.public(),
-                &[4u8; 32],
-                &owb_aad,
-                &OwnerWriteBlobPayload::new(WRITE_SCOPE_SEED, EPOCH),
-            );
-            let owner_write_blob = Some(SignedOwnerWriteBlob {
-                signature: sign(STRUCT_TAG_OWNER_WRITE_BLOB, &sealed_owb.ciphertext),
-                enc: sealed_owb.enc,
-                ciphertext: sealed_owb.ciphertext,
-                unknown: Vec::new(),
-            });
-
-            let commitment = GrantSetCommitment {
-                ipns_name: name.as_str().as_bytes().to_vec(),
-                owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
-                entries: Vec::new(),
-                unknown: Vec::new(),
-            };
-            let commitment_sig = sign_grant_set(&owner_identity, &commitment)
-                .unwrap()
-                .to_compact();
-            let grant_section = GrantSection {
-                commitment,
-                commitment_sig,
-                grant_blobs: Vec::new(),
-                owner_blob,
-                owner_write_blob,
-                ascent_link: None,
-                history_links: Vec::new(),
-                write_body,
-                unknown: Vec::new(),
-            };
-
-            let folder = ReadBody::Folder {
-                created_at: 0,
-                modified_at: 0,
+            let fx = owner_root_fixture(OwnerRootSpec {
+                owner_identity: &owner_identity(),
+                owner_enc: &kdf::enc_subkey(&CAP_SECRET).public(),
+                scope_id: SCOPE,
+                root_id: ROOT.0,
                 children: vec![ChildRef {
                     id: CHILD_ID,
                     name: CHILD_NAME.into(),
@@ -2867,18 +2757,12 @@ mod tests {
                     link_counter: 1,
                     unknown: Vec::new(),
                 }],
-                unknown: Vec::new(),
-            };
-            let mut envelope =
-                seal_read_body(&read_key, &[11u8; 24], 1, ROOT.0, SCOPE, EPOCH, &folder).unwrap();
-            envelope.unknown.push((
-                "grantSection".to_string(),
-                Value::Bytes(encode_grant_section(&grant_section).unwrap()),
-            ));
-
-            let head_block = encode_envelope(&envelope);
-            let head_cid_str = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
-            (head_block, head_cid_str, name)
+                // At the read epoch (write plane == read plane here), so the
+                // cold-seeded write floor opens it and the owner recovers its
+                // write-scope seed for the held-set renewal signer.
+                owner_write_blob_epoch: Some(EPOCH),
+            });
+            (fx.head_block, fx.head_cid_str, fx.name)
         }
 
         fn root_record(head_cid_str: &str, sequence: u64) -> Vec<u8> {

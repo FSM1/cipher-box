@@ -338,38 +338,24 @@ pub(super) fn map_read_error(e: ReadError) -> GateError {
 mod tests {
     use super::*;
 
-    use cipherbox_core::codec::Value;
-    use cipherbox_core::content::{compute_cid, encode_content_cid_str};
-    use cipherbox_core::seal::{
-        Envelope, GrantSection, GrantSetCommitment, OverrideSeedPayload, OwnerWriteBlobPayload,
-        ReadBody, STRUCT_TAG_WRITE_BODY, SignedOwnerBlob, SignedSealed, StructureSigInput,
-        WriteBody, encode_envelope, encode_grant_section, encode_write_body, seal, seal_owner_blob,
-        seal_owner_write_blob, seal_read_body, sign_grant_set, sign_structure,
-    };
+    use cipherbox_core::seal::{Envelope, GrantSection};
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
-    use cipherbox_core::suite::ed25519::Ed25519Signer;
 
-    use crate::content::{DAG_ROOT_CODEC, GatewaySource};
+    use crate::content::GatewaySource;
     use crate::seams::HttpResponse;
     use crate::session::SessionIdentity;
-    use crate::testkit::block_on;
     use crate::testkit::fakes::{InMemoryFloorStore, ScriptedHttp};
+    use crate::testkit::{
+        OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec, block_on, owner_root_fixture,
+    };
 
-    const V: u64 = 1;
     const TTL_NANOS: u64 = 2_000_000_000;
     const EOL: &str = "2099-01-01T00:00:00Z";
-    const NONCE_READ_BODY: [u8; 24] = [11u8; 24];
-    const NONCE_WRITE_BODY: [u8; 24] = [22u8; 24];
-    const EPH_OWNER: [u8; 32] = [3u8; 32];
-    const EPH_OWNER_WRITE: [u8; 32] = [4u8; 32];
-    /// The write-scope seed the fixture's owner-write-blob wraps (matches the seed
-    /// that derives the record's IPNS name).
-    const WRITE_SCOPE_SEED: [u8; 32] = [0x77; 32];
     /// The write epoch the fixture authors its owner-write-blob at.
     const OWB_WRITE_EPOCH: u64 = 3;
 
-    /// A valid owner-root scope fixture: the owner keys plus the head block (an
-    /// envelope carrying its grant section) the record anchors.
+    /// A valid owner-root scope fixture: standalone owner keys (no session
+    /// derives them) plus the head block the record anchors.
     struct Fixture {
         owner_identity_verifier: EcdsaVerifier,
         owner_enc: X25519Secret,
@@ -388,152 +374,36 @@ mod tests {
         }
 
         /// Build the fixture, optionally authoring a real owner-write-blob at
-        /// `owb_write_epoch` (the write plane's own clock; its AAD binds that
-        /// epoch, its structure signature the read epoch — mirrors reseal).
+        /// `owb_write_epoch` (the write plane's own clock).
         fn build(owb_write_epoch: Option<u64>) -> Self {
             let owner_identity = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
-            let owner_identity_verifier = owner_identity.verifying_key();
-            let owner_pseudonym = Ed25519Signer::from_seed([0x22; 32]);
-            let owner_enc = X25519Secret::from_scalar([0x33; 32]);
-
+            // Distinct recipient key per authored write epoch — the owner-write-blob's
+            // HPKE key derives from `owner_enc` alone under a fixed ephemeral
+            // ([`OwnerRootSpec`]), so one key across epochs reuses the keystream.
+            let mut enc_scalar = [0x33u8; 32];
+            enc_scalar[0] = enc_scalar[0]
+                .wrapping_add(u8::try_from(owb_write_epoch.unwrap_or(0)).unwrap_or(u8::MAX));
+            let owner_enc = X25519Secret::from_scalar(enc_scalar);
             let scope_id = [0x44; 16];
             let root_id = [0x55; 16];
-            let scope_seed = [0x66; 32];
-            let write_scope_seed = [0x77; 32];
-            let epoch = 1;
 
-            let node_seed = kdf::node_seed(&scope_seed, &root_id);
-            let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
-            let write_seed = kdf::write_seed(&write_scope_seed, &root_id);
-            let ipns_signer = kdf::ipns_keypair(write_seed.as_bytes());
-            let name = IpnsName::from_public_key(&ipns_signer.verifying_key());
-            let write_key = kdf::write_key(write_seed.as_bytes());
-
-            let sign = |tag: u8, ct: &[u8]| -> [u8; 64] {
-                let input = StructureSigInput::over_ciphertext(scope_id, epoch, tag, None, ct);
-                sign_structure(&owner_pseudonym, &input).to_bytes()
-            };
-
-            // Owner blob — the seed-bearing structure AND the owner's seed source.
-            let override_payload = OverrideSeedPayload::new(scope_seed, epoch);
-            let owner_blob_aad = AadContext {
-                v: V,
-                id: root_id,
-                scope: scope_id,
-                epoch,
-                struct_tag: STRUCT_TAG_OWNER_BLOB,
-            };
-            let sealed_owner = seal_owner_blob(
-                &owner_enc.public(),
-                &EPH_OWNER,
-                &owner_blob_aad,
-                &override_payload,
-            );
-            let owner_blob = SignedOwnerBlob {
-                signature: sign(STRUCT_TAG_OWNER_BLOB, &sealed_owner.ciphertext),
-                enc: sealed_owner.enc,
-                ciphertext: sealed_owner.ciphertext.clone(),
-                unknown: Vec::new(),
-            };
-
-            // Write body — a second seed-bearing structure the gate authenticates.
-            let write_body_aad = AadContext {
-                v: V,
-                id: root_id,
-                scope: scope_id,
-                epoch,
-                struct_tag: STRUCT_TAG_WRITE_BODY,
-            };
-            let write_body_sealed = seal(
-                write_key.as_bytes(),
-                &NONCE_WRITE_BODY,
-                &write_body_aad,
-                &encode_write_body(&WriteBody {
-                    grant_ledger: Vec::new(),
-                    write_history_link: Vec::new(),
-                    direct_child_scope_index: Vec::new(),
-                    unknown: Vec::new(),
-                })
-                .unwrap(),
-            );
-            let write_body = SignedSealed {
-                signature: sign(STRUCT_TAG_WRITE_BODY, &write_body_sealed),
-                sealed: write_body_sealed,
-                unknown: Vec::new(),
-            };
-
-            // Owner-write-blob — the write-scope seed sealed to the owner. AAD
-            // binds the WRITE epoch; the structure signature binds the read epoch.
-            let owner_write_blob = owb_write_epoch.map(|we| {
-                let payload = OwnerWriteBlobPayload::new(write_scope_seed, we);
-                let owb_aad = AadContext {
-                    v: V,
-                    id: root_id,
-                    scope: scope_id,
-                    epoch: we,
-                    struct_tag: STRUCT_TAG_OWNER_WRITE_BLOB,
-                };
-                let sealed = seal_owner_write_blob(
-                    &owner_enc.public(),
-                    &EPH_OWNER_WRITE,
-                    &owb_aad,
-                    &payload,
-                );
-                SignedOwnerWriteBlob {
-                    signature: sign(STRUCT_TAG_OWNER_WRITE_BLOB, &sealed.ciphertext),
-                    enc: sealed.enc,
-                    ciphertext: sealed.ciphertext,
-                    unknown: Vec::new(),
-                }
+            let OwnerRootFixture {
+                name,
+                grant_section,
+                envelope,
+                head_block,
+                head_cid_str,
+            } = owner_root_fixture(OwnerRootSpec {
+                owner_identity: &owner_identity,
+                owner_enc: &owner_enc.public(),
+                scope_id,
+                root_id,
+                children: Vec::new(),
+                owner_write_blob_epoch: owb_write_epoch,
             });
 
-            let commitment = GrantSetCommitment {
-                ipns_name: name.as_str().as_bytes().to_vec(),
-                owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
-                entries: Vec::new(),
-                unknown: Vec::new(),
-            };
-            let commitment_sig = sign_grant_set(&owner_identity, &commitment)
-                .unwrap()
-                .to_compact();
-            let grant_section = GrantSection {
-                commitment,
-                commitment_sig,
-                grant_blobs: Vec::new(),
-                owner_blob,
-                owner_write_blob,
-                ascent_link: None,
-                history_links: Vec::new(),
-                write_body,
-                unknown: Vec::new(),
-            };
-
-            let folder = ReadBody::Folder {
-                created_at: 0,
-                modified_at: 0,
-                children: Vec::new(),
-                unknown: Vec::new(),
-            };
-            let mut envelope = seal_read_body(
-                &read_key,
-                &NONCE_READ_BODY,
-                V,
-                root_id,
-                scope_id,
-                epoch,
-                &folder,
-            )
-            .unwrap();
-            envelope.unknown.push((
-                "grantSection".to_string(),
-                Value::Bytes(encode_grant_section(&grant_section).unwrap()),
-            ));
-
-            let head_block = encode_envelope(&envelope);
-            let head_cid_str = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
-
             Self {
-                owner_identity_verifier,
+                owner_identity_verifier: owner_identity.verifying_key(),
                 owner_enc,
                 scope_id,
                 root_id,
@@ -547,10 +417,8 @@ mod tests {
 
         fn record(&self, sequence: u64) -> Vec<u8> {
             let value = format!("/ipfs/{}", self.head_cid_str);
-            let signer = {
-                let write_seed = kdf::write_seed(&[0x77; 32], &self.root_id);
-                kdf::ipns_keypair(write_seed.as_bytes())
-            };
+            let write_seed = kdf::write_seed(&OWNER_ROOT_WRITE_SCOPE_SEED, &self.root_id);
+            let signer = kdf::ipns_keypair(write_seed.as_bytes());
             IpnsRecord::create_v2(&signer, value.as_bytes(), sequence, TTL_NANOS, EOL).marshal()
         }
 
@@ -700,7 +568,7 @@ mod tests {
         let seed = outcome
             .write_scope_seed
             .expect("the owner recovers its write-scope seed from the owner-write-blob");
-        assert_eq!(*seed, WRITE_SCOPE_SEED);
+        assert_eq!(*seed, OWNER_ROOT_WRITE_SCOPE_SEED);
         // The recovered seed reproduces the record's IPNS routing name.
         let signer = SessionIdentity::write_name_signer(&seed, &fx.root_id);
         assert_eq!(IpnsName::from_public_key(&signer.verifying_key()), fx.name);
@@ -780,7 +648,7 @@ mod tests {
             .expect("recovery is fail-open, never an error")
             .expect("the owner recovers its own write seed on the Current path");
         assert_eq!(node_id, fx.root_id, "keyed by the envelope id");
-        assert_eq!(*seed, WRITE_SCOPE_SEED);
+        assert_eq!(*seed, OWNER_ROOT_WRITE_SCOPE_SEED);
         // The recovered seed reproduces the record's IPNS routing name.
         let signer = SessionIdentity::write_name_signer(&seed, &fx.root_id);
         assert_eq!(IpnsName::from_public_key(&signer.verifying_key()), fx.name);
@@ -808,7 +676,7 @@ mod tests {
         let (_, seed) = block_on(adopter.recover_own_write_seed(&fx.name, &record))
             .expect("recovery is fail-open, never an error")
             .expect("the owner recovers its write seed from the reused candidate");
-        assert_eq!(*seed, WRITE_SCOPE_SEED);
+        assert_eq!(*seed, OWNER_ROOT_WRITE_SCOPE_SEED);
         assert_eq!(
             http.requests().len(),
             1,
