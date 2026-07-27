@@ -22,6 +22,7 @@ import { fanOut } from './correlatedTransport.js';
 import { EngineFacade } from './facade.js';
 import { LeaderRelay } from './leaderRelay.js';
 import { LeaderElection, type LockManagerLike } from './leadership.js';
+import { requestStoragePersistence } from './storagePersistence.js';
 import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './transport.js';
 import { LocalTransport } from './transport.js';
 import type { CommandDescriptor, SnapshotDescriptor } from './worker/protocol.js';
@@ -51,6 +52,8 @@ export interface EngineClientConfig {
   lockName?: string;
   /** Surfaces election/failover faults (best-effort; the facade still works). */
   onError?: (error: Error) => void;
+  /** Reports the origin's storage-persistence grant (`storagePersistence`). */
+  onStoragePersistence?: (persisted: boolean) => void;
 }
 
 export type EngineClientRole = 'follower' | 'leader' | 'closed';
@@ -82,6 +85,14 @@ export class EngineClient implements EngineTransport {
     this.channel = (config.createChannel ?? defaultChannel)();
 
     this.installFollower();
+
+    // Requested before any tab can enqueue: an evicted origin loses the durable
+    // op queue and every staged byte, not just cache.
+    void requestStoragePersistence()
+      .then((persisted) => config.onStoragePersistence?.(persisted))
+      .catch((error: unknown) =>
+        config.onError?.(error instanceof Error ? error : new Error(String(error)))
+      );
 
     this.election = new LeaderElection(
       config.locks,

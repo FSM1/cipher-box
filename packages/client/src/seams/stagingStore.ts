@@ -18,6 +18,29 @@ import type { StagingStoreSeam } from './types.js';
 
 const OPS_STORE = 'ops';
 
+/**
+ * A staged-byte read or write that did not move every requested byte. OPFS sync
+ * access handles signal that either as a short count or as a thrown storage
+ * error, so this is the seam's fail-closed signal for both, never a recoverable
+ * partial result.
+ */
+export class StagingIoError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'StagingIoError';
+  }
+}
+
+/** Removes `name` from `dir`, treating an already-absent entry as success. */
+async function removeIfPresent(dir: FileSystemDirectoryHandle, name: string): Promise<void> {
+  try {
+    await dir.removeEntry(name);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'NotFoundError') return;
+    throw error;
+  }
+}
+
 export class OpfsStagingStore implements StagingStoreSeam {
   private readonly dbName: string;
   private readonly dirName: string;
@@ -86,13 +109,32 @@ export class OpfsStagingStore implements StagingStoreSeam {
     const dir = await this.stagedDir();
     const fileHandle = await dir.getFileHandle(fileName, { create: true });
     const handle = await fileHandle.createSyncAccessHandle();
+    let failure: { message: string; cause?: unknown } | undefined;
     try {
       handle.truncate(0);
-      handle.write(staged, { at: 0 });
+      const written = handle.write(staged, { at: 0 });
       handle.flush();
+      if (written !== staged.byteLength) {
+        failure = {
+          message: `staged write truncated: wrote ${written} of ${staged.byteLength} bytes`,
+        };
+      }
+    } catch (error) {
+      failure = { message: 'staged write failed', cause: error };
     } finally {
       handle.close();
     }
+    if (!failure) return;
+    // A constrained write either returns a short count or throws (the spec names
+    // QuotaExceededError). Either way `truncate(0)` has already landed, so a
+    // partial file is on disk; staging a truncated block would later upload
+    // bytes whose CID the engine's read path always rejects. Fail closed and
+    // drop the file so a retry starts from empty rather than resuming it.
+    const cleanupError = await removeIfPresent(dir, fileName).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    throw new StagingIoError(failure.message, { cause: failure.cause ?? cleanupError });
   }
 
   async stagedBytes(stagingKey: Uint8Array): Promise<Uint8Array | null> {
@@ -111,7 +153,12 @@ export class OpfsStagingStore implements StagingStoreSeam {
     try {
       const size = handle.getSize();
       const out = new Uint8Array(size);
-      handle.read(out, { at: 0 });
+      const read = handle.read(out, { at: 0 });
+      // A short read leaves the tail of `out` zeroed, indistinguishable from
+      // staged data; reject rather than hand the engine a silently padded block.
+      if (read !== size) {
+        throw new StagingIoError(`staged read truncated: read ${read} of ${size} bytes`);
+      }
       return out;
     } finally {
       handle.close();
@@ -123,12 +170,7 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // concurrent `Memory.grow()` across the await would hex to '' (#717).
     const fileName = toHex(stagingKey);
     const dir = await this.stagedDir();
-    try {
-      await dir.removeEntry(fileName);
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'NotFoundError') return;
-      throw error;
-    }
+    await removeIfPresent(dir, fileName);
   }
 
   async stagedKeys(): Promise<Uint8Array[]> {

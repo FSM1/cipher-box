@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { EngineClient, type EngineClientConfig } from './engineClient.js';
 import { FakeBus, FakeEngineWorker, FakeLockManager } from './testkit.js';
@@ -234,5 +234,40 @@ describe('EngineClient leadership + transport swap', () => {
 
     await expect(inFlight).rejects.toThrow(/retry|closed/);
     await follower.dispose();
+  });
+
+  it('reports the origin storage-persistence grant to the host, follower tabs included', async () => {
+    vi.stubGlobal('navigator', {
+      storage: { persisted: () => Promise.resolve(false), persist: () => Promise.resolve(true) },
+    });
+    const { tab } = origin();
+    const seen: boolean[] = [];
+    const leader = tab({ onStoragePersistence: (persisted) => seen.push(persisted) });
+    const follower = tab({ onStoragePersistence: (persisted) => seen.push(persisted) });
+    await tick();
+
+    expect(leader.currentRole()).toBe('leader');
+    expect(follower.currentRole()).toBe('follower');
+    expect(seen).toEqual([true, true]);
+    await leader.dispose();
+    await follower.dispose();
+    vi.unstubAllGlobals();
+  });
+
+  it('routes a throwing storage-persistence callback to onError, not an unhandled rejection', async () => {
+    vi.stubGlobal('navigator', { storage: { persist: () => Promise.resolve(true) } });
+    const { tab } = origin();
+    const errors: Error[] = [];
+    const client = tab({
+      onStoragePersistence: () => {
+        throw new Error('host blew up');
+      },
+      onError: (error) => errors.push(error),
+    });
+    await tick();
+
+    expect(errors.map((error) => error.message)).toEqual(['host blew up']);
+    await client.dispose();
+    vi.unstubAllGlobals();
   });
 });
