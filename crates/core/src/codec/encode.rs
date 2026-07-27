@@ -1,7 +1,7 @@
 //! The deterministic encoder. Canonical by construction: shortest-form
 //! arguments, definite lengths, and [`super::Map`]'s ordering invariant are
-//! the only forms this module can emit, so the one way encoding fails is a tree
-//! nested past [`super::MAX_DEPTH`].
+//! the only forms this module can emit, so [`check_depth`] is the one way
+//! encoding fails.
 
 use super::value::{Map, Value};
 use crate::error::{CodecError, Malformed};
@@ -25,9 +25,8 @@ pub(super) const SIMPLE_NULL: u8 = 22;
 /// intermediate backing store un-zeroized, stranding secret bytes (content keys,
 /// scope/override/history seeds) in freed heap; with one right-sized buffer only
 /// the terminal owner's plaintext ever holds them, and that owner zeroizes it.
-///
-/// A tree nested past [`super::MAX_DEPTH`] rejects as `depth-exceeded` rather
-/// than emitting bytes the decoder always refuses.
+/// Sizing first is also what makes [`check_depth`] fail closed instead of
+/// overflowing the stack: the deeper pass runs before anything is allocated.
 pub fn encode(value: &Value) -> Result<Vec<u8>, CodecError> {
     let mut out = Vec::with_capacity(encoded_len(value)?);
     write_value(&mut out, value, 0)?;
@@ -47,10 +46,9 @@ pub fn encode_fixed_depth(value: &Value) -> Vec<u8> {
 }
 
 /// The exact number of bytes [`encode`] emits for `value`. Mirrors
-/// [`write_value`] head-for-head — including the depth bound and the byte offset
-/// it reports; the codec property suite pins the two in lockstep
-/// (`encoded_len == encode().len()`), which is what makes [`encode`]'s single
-/// up-front reservation provably realloc-free.
+/// [`write_value`] head-for-head; the codec property suite pins the two in
+/// lockstep (`encoded_len == encode().len()`), which is what makes [`encode`]'s
+/// single up-front reservation provably realloc-free.
 pub fn encoded_len(value: &Value) -> Result<usize, CodecError> {
     let mut len = 0;
     count_value(&mut len, value, 0)?;
@@ -81,9 +79,9 @@ fn count_value(len: &mut usize, value: &Value, depth: usize) -> Result<(), Codec
     Ok(())
 }
 
-/// The produce-side half of the decoder's `depth-exceeded` reject: bytes nested
-/// past [`super::MAX_DEPTH`] are unopenable, so encoding fails closed instead of
-/// emitting them, and the bound doubles as the recursion guard on both passes.
+/// The produce-side half of the decoder's `depth-exceeded` reject (AGENTS.md
+/// encode/decode fail-closed symmetry), and the recursion guard on both passes.
+/// `offset` is the emitted-byte position the bound fired at.
 fn check_depth(depth: usize, offset: usize) -> Result<(), CodecError> {
     if depth >= super::MAX_DEPTH {
         return Err(Malformed::DepthExceeded { offset }.into());
@@ -236,7 +234,6 @@ mod tests {
         }
     }
 
-    /// Nesting arrays `n` deep around a scalar puts that scalar at depth `n`.
     fn nested(n: usize) -> Value {
         let mut v = Value::Null;
         for _ in 0..n {
@@ -246,17 +243,19 @@ mod tests {
     }
 
     /// The bound is release-active on both passes, at the same boundary the
-    /// decoder rejects: past `MAX_DEPTH` the encoder fails closed rather than
-    /// emit bytes decode always refuses.
+    /// decoder rejects.
     #[test]
     fn encode_rejects_past_max_depth() {
         let deep = nested(crate::codec::MAX_DEPTH);
         assert_eq!(encoded_len(&deep).unwrap_err().check(), "depth-exceeded");
         assert_eq!(encode(&deep).unwrap_err().check(), "depth-exceeded");
-        assert!(
-            encode(&nested(crate::codec::MAX_DEPTH - 1)).is_ok(),
-            "the deepest admissible tree still encodes"
-        );
+
+        // The other half of the boundary: what the encoder admits, the decoder
+        // reopens — an off-by-one either way would break one of these.
+        let deepest = nested(crate::codec::MAX_DEPTH - 1);
+        let bytes = encode(&deepest).expect("the deepest admissible tree encodes");
+        assert_eq!(encoded_len(&deepest).unwrap(), bytes.len());
+        assert_eq!(super::super::decode(&bytes).unwrap(), deepest);
     }
 
     /// The security invariant: encoding secret-bearing bytes performs a single
