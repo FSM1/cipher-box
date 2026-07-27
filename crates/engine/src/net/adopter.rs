@@ -377,7 +377,13 @@ mod tests {
         /// `owb_write_epoch` (the write plane's own clock).
         fn build(owb_write_epoch: Option<u64>) -> Self {
             let owner_identity = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
-            let owner_enc = X25519Secret::from_scalar([0x33; 32]);
+            // Distinct recipient key per authored write epoch — the owner-write-blob's
+            // HPKE key derives from `owner_enc` alone under a fixed ephemeral
+            // ([`OwnerRootSpec`]), so one key across epochs reuses the keystream.
+            let mut enc_scalar = [0x33u8; 32];
+            enc_scalar[0] = enc_scalar[0]
+                .wrapping_add(u8::try_from(owb_write_epoch.unwrap_or(0)).unwrap_or(u8::MAX));
+            let owner_enc = X25519Secret::from_scalar(enc_scalar);
             let scope_id = [0x44; 16];
             let root_id = [0x55; 16];
 
