@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f207c8eecfac",
+  "strategy": "manual-commit",
+  "branch": "research/content-format-freeze",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/research/content-format-freeze.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f2/07c8eecfac/0/metadata.json",
+      "transcript": "/f2/07c8eecfac/0/full.jsonl",
+      "compact_transcript": "/f2/07c8eecfac/0/transcript.jsonl",
+      "content_hash": "/f2/07c8eecfac/0/content_hash.txt",
+      "prompt": "/f2/07c8eecfac/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 30,
+    "cache_creation_tokens": 32637,
+    "cache_read_tokens": 2545059,
+    "output_tokens": 20433,
+    "api_call_count": 15
+  }
+}
