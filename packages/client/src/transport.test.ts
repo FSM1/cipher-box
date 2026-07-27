@@ -46,7 +46,7 @@ describe('LocalTransport', () => {
   it('correlates a response to its request by id (round-trip)', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const pending = transport.command({ kind: 'manualRefresh' }, []);
     await tick();
@@ -62,7 +62,7 @@ describe('LocalTransport', () => {
   it('is out-of-order safe: later-issued request answered first still correlates', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const resolved: string[] = [];
     const first = transport
@@ -86,7 +86,7 @@ describe('LocalTransport', () => {
   it('rejects only the matching request on an error response', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const failing = transport.command({ kind: 'manualRefresh' }, []);
     const ok = transport.command({ kind: 'manualRefresh' }, []);
@@ -113,7 +113,7 @@ describe('LocalTransport', () => {
   it('delivers events to subscribers in order, with no drops', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const received: EventDescriptor[] = [];
     transport.subscribe((event) => received.push(event));
@@ -132,7 +132,7 @@ describe('LocalTransport', () => {
   it('resolves a snapshot request with its result payload', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const folder = new Uint8Array(16).fill(5);
     const pending = transport.snapshot(folder);
@@ -153,7 +153,7 @@ describe('LocalTransport', () => {
   it('correlates interleaved command, snapshot, and download answered out of order', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const snapshotResult = emptySnapshot();
     const downloadResult = new Uint8Array([4, 5, 6]).buffer;
@@ -177,7 +177,7 @@ describe('LocalTransport', () => {
   it('rejects only the matching read on an error response', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const failing = transport.download(new Uint8Array(16));
     const ok = transport.snapshot(new Uint8Array(16));
@@ -200,7 +200,7 @@ describe('LocalTransport', () => {
   it('delivers renewalFailed and opProgress events to subscribers', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const received: EventDescriptor[] = [];
     transport.subscribe((event) => received.push(event));
@@ -223,7 +223,7 @@ describe('LocalTransport', () => {
   it('transfers the secret buffer on start', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const secret = new Uint8Array([1, 2, 3, 4]).buffer;
     void transport.start(secret);
@@ -237,7 +237,7 @@ describe('LocalTransport', () => {
   it('latches terminal failure on fatal: in-flight and later requests both reject, not hang', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const inFlight = transport.command({ kind: 'manualRefresh' }, []);
     await tick();
@@ -255,7 +255,7 @@ describe('LocalTransport', () => {
   it('keeps fanning out an event after a subscriber throws', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const received: string[] = [];
     transport.subscribe(() => received.push('first'));
@@ -275,7 +275,7 @@ describe('LocalTransport', () => {
       throw new DOMException('detached ArrayBuffer', 'DataCloneError');
     };
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const failing = transport.command({ kind: 'manualRefresh' }, []);
 
@@ -293,7 +293,7 @@ describe('LocalTransport', () => {
   it('rejects pending requests when the worker errors', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const pending = transport.command({ kind: 'manualRefresh' }, []);
     await tick();
@@ -305,7 +305,7 @@ describe('LocalTransport', () => {
   it('rejects pending requests and terminates the worker on close', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);
-    worker.emit({ type: 'ready' });
+    worker.emit({ type: 'ready', storagePersisted: false });
 
     const pending = transport.command({ kind: 'manualRefresh' }, []);
     await tick();

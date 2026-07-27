@@ -142,7 +142,6 @@ describe('OpfsStagingStore staged bytes', () => {
 
     const error = await store.putStagedBytes(key, payload).catch((thrown: unknown) => thrown);
     expect(error).toBeInstanceOf(StagingIoError);
-    expect((error as StagingIoError).code).toBe('stagingShortIo');
     expect((error as StagingIoError).cause).toBeInstanceOf(Error);
   });
 

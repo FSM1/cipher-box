@@ -9,15 +9,10 @@
  * instead of promising durability it does not have.
  */
 
-/** The subset of `StorageManager` this module drives (absent on old browsers). */
-interface StoragePersistence {
-  persisted?: () => Promise<boolean>;
-  persist?: () => Promise<boolean>;
-}
-
 /** Requests persistent storage for this origin; resolves the granted state. */
 export async function requestStoragePersistence(): Promise<boolean> {
-  const storage: StoragePersistence | undefined = globalThis.navigator?.storage;
+  // Typed as always present, but absent on browsers predating StorageManager.
+  const storage: StorageManager | undefined = globalThis.navigator?.storage;
   if (typeof storage?.persist !== 'function') return false;
   try {
     // Check first: a browser that prompts for the permission must not re-prompt

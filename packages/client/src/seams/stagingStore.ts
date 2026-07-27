@@ -24,8 +24,6 @@ const OPS_STORE = 'ops';
  * fail-closed signal, never a recoverable partial result.
  */
 export class StagingIoError extends Error {
-  readonly code = 'stagingShortIo';
-
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = 'StagingIoError';
@@ -123,15 +121,13 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // a truncated block would later upload bytes whose CID the engine's read
     // path always rejects, so fail closed here and drop the partial file so a
     // retry starts from empty rather than resuming a truncated one.
-    let cleanupError: unknown;
-    try {
-      await removeIfPresent(dir, fileName);
-    } catch (error) {
-      cleanupError = error;
-    }
+    const cause = await removeIfPresent(dir, fileName).then(
+      () => undefined,
+      (error: unknown) => error
+    );
     throw new StagingIoError(
       `staged write truncated: wrote ${written} of ${staged.byteLength} bytes`,
-      cleanupError === undefined ? undefined : { cause: cleanupError }
+      { cause }
     );
   }
 

@@ -8,7 +8,7 @@
 export { fromHex, toHex } from './bytes.js';
 export { IdbFloorStore } from './floorStore.js';
 export { IdbSnapshotCache } from './snapshotCache.js';
-export { OpfsStagingStore, StagingIoError } from './stagingStore.js';
+export { OpfsStagingStore } from './stagingStore.js';
 export { requestStoragePersistence } from './persistence.js';
 export { NoopCredentialStore } from './credentialStore.js';
 export { WorkerScheduler } from './scheduler.js';
