@@ -340,13 +340,12 @@ pub fn decode_read_body(bytes: &[u8]) -> Result<ReadBody, CodecError> {
 /// its caller is the terminal owner and must zeroize it after use (the seal
 /// path, [`seal_read_body`](super::seal_read_body), does exactly this).
 ///
-/// Encoding is infallible and does *not* re-check uniqueness — mirroring the
-/// codec's `encode`/`MAX_DEPTH` contract, a caller-built folder with duplicate
+/// Encoding does *not* re-check uniqueness: a caller-built folder with duplicate
 /// child ids/ipnsNames still encodes but its bytes reject on decode. Callers
 /// that *persist* a body must go through [`seal_read_body`](super::seal_read_body)
 /// (or call [`ReadBody::validate`] first), which refuses to seal a body that
 /// would not reopen; a `debug_assert` catches the divergence early in tests.
-pub fn encode_read_body(body: &ReadBody) -> Vec<u8> {
+pub fn encode_read_body(body: &ReadBody) -> Result<Vec<u8>, CodecError> {
     debug_assert!(
         body.validate().is_ok(),
         "encoding a read-body that violates child uniqueness; its bytes would reject on decode"
@@ -553,7 +552,7 @@ mod tests {
         );
         m.insert("createdAt", Value::Unsigned(100));
         m.insert("modifiedAt", Value::Unsigned(200));
-        encode(&Value::Map(m))
+        encode(&Value::Map(m)).unwrap()
     }
 
     #[test]
@@ -562,10 +561,14 @@ mod tests {
             child(1, "a.txt", b"name-1"),
             child(2, "b.txt", b"name-2"),
         ]);
-        let bytes = encode_read_body(&body);
+        let bytes = encode_read_body(&body).unwrap();
         let decoded = decode_read_body(&bytes).expect("decodes");
         assert_eq!(decoded, body);
-        assert_eq!(encode_read_body(&decoded), bytes, "re-encode byte-stable");
+        assert_eq!(
+            encode_read_body(&decoded).unwrap(),
+            bytes,
+            "re-encode byte-stable"
+        );
         assert_eq!(decoded.kind(), NodeKind::Folder);
     }
 
@@ -580,7 +583,7 @@ mod tests {
             ],
             unknown: Vec::new(),
         };
-        let bytes = encode_read_body(&body);
+        let bytes = encode_read_body(&body).unwrap();
         let decoded = decode_read_body(&bytes).expect("decodes");
         assert_eq!(decoded, body);
         if let ReadBody::File { versions, .. } = &decoded {
@@ -618,9 +621,13 @@ mod tests {
         m.insert("createdAt", Value::Unsigned(1));
         m.insert("modifiedAt", Value::Unsigned(2));
         m.insert("futureField", Value::Text("keep me".into()));
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         let decoded = decode_read_body(&bytes).expect("tolerant decode");
-        assert_eq!(encode_read_body(&decoded), bytes, "unknown field preserved");
+        assert_eq!(
+            encode_read_body(&decoded).unwrap(),
+            bytes,
+            "unknown field preserved"
+        );
         if let ReadBody::Folder { unknown, .. } = &decoded {
             assert_eq!(unknown.len(), 1);
             assert_eq!(unknown[0].0, "futureField");
@@ -636,7 +643,7 @@ mod tests {
         m.insert("children", Value::Array(vec![]));
         m.insert("createdAt", Value::Unsigned(1));
         m.insert("modifiedAt", Value::Unsigned(2));
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             decode_read_body(&bytes).unwrap_err().check(),
             "invalid-node-kind"
@@ -656,7 +663,7 @@ mod tests {
         m.insert("children", Value::Array(vec![Value::Map(cm)]));
         m.insert("createdAt", Value::Unsigned(1));
         m.insert("modifiedAt", Value::Unsigned(2));
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             decode_read_body(&bytes).unwrap_err().check(),
             "invalid-field-length"
@@ -669,7 +676,7 @@ mod tests {
         m.insert("children", Value::Array(vec![]));
         m.insert("createdAt", Value::Unsigned(1));
         m.insert("modifiedAt", Value::Unsigned(2));
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             decode_read_body(&bytes).unwrap_err().check(),
             "missing-field"
@@ -696,7 +703,7 @@ mod tests {
             children: Vec::new(),
             unknown: vec![("kind".to_string(), Value::Text("file".into()))],
         };
-        let bytes = encode_read_body(&body);
+        let bytes = encode_read_body(&body).unwrap();
         let decoded = decode_read_body(&bytes).expect("decodes");
         assert_eq!(
             decoded.kind(),
@@ -733,37 +740,28 @@ mod tests {
         );
     }
 
-    // Unwinding is a native/desktop concern: wasm builds are `panic=abort`, so
-    // a `debug_assert` there aborts the instance rather than unwinding past the
-    // guard — there is no scrub-skipping window to defend on that leg.
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
-    fn scrub_runs_when_encode_unwinds() {
-        // `write_value`'s `debug_assert!(depth < MAX_DEPTH)` fires in this
-        // (test) build for a tree nested past MAX_DEPTH; the guard's Drop must
-        // still scrub the content-key copy while the stack unwinds out of
-        // `encode`. The secret rides item 0 (written before the panic); the
-        // deep nest that trips the assert rides item 1.
+    fn scrub_runs_when_encode_fails_closed() {
+        // The guard's Drop must wipe the content-key copy on the error return
+        // too, not just the Ok one. The secret rides item 0; the nest that trips
+        // the release-active `MAX_DEPTH` bound rides item 1.
         let mut deep = Value::Null;
-        for _ in 0..=crate::codec::MAX_DEPTH {
+        for _ in 0..crate::codec::MAX_DEPTH {
             deep = Value::Array(vec![deep]);
         }
         let mut value = Value::Array(vec![Value::Bytes(vec![0xab; 32]), deep]);
 
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let err = {
             let guard = ScrubOnDrop(&mut value);
-            let _ = encode(guard.0);
-        }));
-        assert!(
-            result.is_err(),
-            "encode panics past MAX_DEPTH in test build"
-        );
+            encode(guard.0).unwrap_err()
+        };
+        assert_eq!(err.check(), "depth-exceeded");
 
         let items = value.as_array().unwrap();
         assert_eq!(
             items[0],
             Value::Bytes(Vec::new()),
-            "guard scrubbed the key copy on unwind"
+            "guard scrubbed the key copy on the error return"
         );
     }
 }

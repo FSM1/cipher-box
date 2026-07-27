@@ -1168,7 +1168,7 @@ fn build_accept_vectors() -> Vec<AcceptVector> {
     let mut out = Vec::with_capacity(specs.len());
     for (name, value, kinds) in specs {
         assert!(names.insert(name), "duplicate accept vector name {name}");
-        let bytes = encode(&value);
+        let bytes = encode(&value).unwrap();
         let decoded = decode(&bytes)
             .unwrap_or_else(|e| panic!("accept vector {name}: live decoder rejected it: {e}"));
         assert_eq!(
@@ -1176,7 +1176,7 @@ fn build_accept_vectors() -> Vec<AcceptVector> {
             "accept vector {name}: decode != source value"
         );
         assert_eq!(
-            encode(&decoded),
+            encode(&decoded).unwrap(),
             bytes,
             "accept vector {name}: re-encode not byte-stable"
         );
@@ -1676,7 +1676,7 @@ fn build_unknown_field_vectors() -> Vec<UnknownVector> {
             names.insert(name),
             "duplicate unknown-field vector name {name}"
         );
-        let bytes = encode(&value);
+        let bytes = encode(&value).unwrap();
         let known_set: BTreeSet<&str> = known_keys.iter().copied().collect();
         let (known, unknown) = decode_map_partial(&bytes, |k| known_set.contains(k))
             .unwrap_or_else(|e| panic!("unknown-field vector {name}: decode failed: {e}"));
@@ -2501,7 +2501,7 @@ fn sample_file() -> ReadBody {
 
 fn build_seal_vectors() -> Vec<SealVector> {
     let p = seal_probe();
-    let read_body_pt = encode_read_body(&sample_folder());
+    let read_body_pt = encode_read_body(&sample_folder()).unwrap();
 
     // (name, structTag, plaintext). read-body carries a real read-body; the
     // write-body tag reuses the primitive to prove per-tag AAD separation (its
@@ -2692,12 +2692,12 @@ fn build_read_body_accept() -> Vec<ReadBodyAcceptVector> {
             names.insert(name),
             "duplicate read-body accept vector {name}"
         );
-        let bytes = encode_read_body(&body);
+        let bytes = encode_read_body(&body).unwrap();
         let decoded = decode_read_body(&bytes)
             .unwrap_or_else(|e| panic!("read-body accept {name}: live decoder rejected it: {e}"));
         assert_eq!(decoded, body, "read-body accept {name}: decode != source");
         assert_eq!(
-            encode_read_body(&decoded),
+            encode_read_body(&decoded).unwrap(),
             bytes,
             "read-body accept {name}: re-encode not byte-stable"
         );
@@ -2836,7 +2836,7 @@ fn build_envelope_accept() -> Vec<EnvelopeAcceptVector> {
             name: name.to_string(),
             key: hexstr(&p.key),
             envelope: envelope_hex,
-            read_body: hexstr(&encode_read_body(&body)),
+            read_body: hexstr(&encode_read_body(&body).unwrap()),
         });
     }
 
@@ -2845,16 +2845,16 @@ fn build_envelope_accept() -> Vec<EnvelopeAcceptVector> {
     let body = sample_folder();
     let env = seal_read_body(&p.key, &p.nonce, p.v, p.id, p.scope, p.epoch, &body)
         .expect("sample folder is valid");
-    let mut m = decode(&encode_envelope(&env))
+    let mut m = decode(&encode_envelope(&env).unwrap())
         .unwrap()
         .as_map()
         .unwrap()
         .clone();
     m.insert("writeSealed", Value::Bytes(b"future-write-body".to_vec()));
-    let bytes = encode(&Value::Map(m));
+    let bytes = encode(&Value::Map(m)).unwrap();
     let decoded = decode_envelope(&bytes).expect("tolerant envelope decode");
     assert_eq!(
-        encode_envelope(&decoded),
+        encode_envelope(&decoded).unwrap(),
         bytes,
         "envelope accept with-unknown-field: not byte-stable"
     );
@@ -2876,7 +2876,7 @@ fn build_envelope_accept() -> Vec<EnvelopeAcceptVector> {
         name: "with-unknown-field".to_string(),
         key: hexstr(&p.key),
         envelope: hexstr(&bytes),
-        read_body: hexstr(&encode_read_body(&body)),
+        read_body: hexstr(&encode_read_body(&body).unwrap()),
     });
 
     out
@@ -2890,12 +2890,12 @@ fn envelope_accept_self_check(
     body: &ReadBody,
     key: &[u8; KEY_LEN],
 ) -> String {
-    let bytes = encode_envelope(env);
+    let bytes = encode_envelope(env).unwrap();
     let decoded = decode_envelope(&bytes)
         .unwrap_or_else(|e| panic!("envelope accept {name}: decode rejected it: {e}"));
     assert_eq!(&decoded, env, "envelope accept {name}: decode != source");
     assert_eq!(
-        encode_envelope(&decoded),
+        encode_envelope(&decoded).unwrap(),
         bytes,
         "envelope accept {name}: re-encode not byte-stable"
     );
@@ -2920,7 +2920,7 @@ fn build_envelope_reject() -> Vec<RejectVector> {
         &sample_folder(),
     )
     .expect("sample folder is valid");
-    let base = decode(&encode_envelope(&env))
+    let base = decode(&encode_envelope(&env).unwrap())
         .unwrap()
         .as_map()
         .unwrap()
@@ -2987,7 +2987,7 @@ where
             names.insert(name),
             "duplicate {family} reject vector {name}"
         );
-        let bytes = encode(&value);
+        let bytes = encode(&value).unwrap();
         let err = match decode_fn(&bytes) {
             Err(e) => e,
             Ok(_) => panic!("{family} reject {name}: decoder accepted it"),
@@ -3289,7 +3289,7 @@ fn build_contact_reject() -> Vec<RejectVector> {
         if let Some(v) = identity {
             m.insert("identityPk", v);
         }
-        encode(&Value::Map(m))
+        encode(&Value::Map(m)).unwrap()
     };
     let b = |v: &[u8]| Value::Bytes(v.to_vec());
 
@@ -3580,7 +3580,7 @@ fn ipns_data_cbor(
     m.insert("Sequence", Value::Unsigned(sequence));
     m.insert("Validity", Value::Bytes(validity.to_vec()));
     m.insert("ValidityType", Value::Unsigned(validity_type));
-    encode(&Value::Map(m))
+    encode(&Value::Map(m)).unwrap()
 }
 
 fn ipns_sign(signer: &Ed25519Signer, data: &[u8]) -> [u8; 64] {
@@ -3997,7 +3997,7 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
     let mut ct = m.get("ct").unwrap().as_bytes().unwrap().to_vec();
     ct[0] ^= 0x01;
     m.insert("ct", Value::Bytes(ct));
-    let tampered_block = encode(&Value::Map(m));
+    let tampered_block = encode(&Value::Map(m)).unwrap();
 
     // A block that opens (anyone can HPKE-seal) but whose sender signature does
     // not verify: build the inner with a wrong signature and seal it.
@@ -4014,7 +4014,7 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
                 .to_vec(),
         ),
     );
-    let inner_bytes = encode(&Value::Map(inner));
+    let inner_bytes = encode(&Value::Map(inner)).unwrap();
     let info = build_aad(&AadContext {
         v,
         id: [0; 16],
@@ -4026,7 +4026,7 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
     let mut forged = Map::new();
     forged.insert("ct", Value::Bytes(sealed.ciphertext));
     forged.insert("enc", Value::Bytes(sealed.enc.to_vec()));
-    let forged_block = encode(&Value::Map(forged));
+    let forged_block = encode(&Value::Map(forged)).unwrap();
 
     // A block that opens but whose senderIdentityPk is the 65-byte uncompressed
     // re-encoding of the sender key: the frozen 33-byte identity width rejects it
@@ -4044,7 +4044,7 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
         "senderSig",
         Value::Bytes(sender.sign_detcbor(b"any").to_compact().to_vec()),
     );
-    let uncompressed_inner_bytes = encode(&Value::Map(uncompressed_inner));
+    let uncompressed_inner_bytes = encode(&Value::Map(uncompressed_inner)).unwrap();
     let sealed_uncompressed = hpke_seal(
         &recipient.public(),
         &uncompressed_eph,
@@ -4055,7 +4055,7 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
     let mut uncompressed_block_map = Map::new();
     uncompressed_block_map.insert("ct", Value::Bytes(sealed_uncompressed.ciphertext));
     uncompressed_block_map.insert("enc", Value::Bytes(sealed_uncompressed.enc.to_vec()));
-    let uncompressed_block = encode(&Value::Map(uncompressed_block_map));
+    let uncompressed_block = encode(&Value::Map(uncompressed_block_map)).unwrap();
 
     // Cross-recipient relay lift (#712): R1 opens an item sealed to it and
     // re-seals the untouched inner — sender signature included — to R2. Recipient
@@ -4080,7 +4080,7 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
     let mut relay_block_map = Map::new();
     relay_block_map.insert("ct", Value::Bytes(sealed_to_r2.ciphertext));
     relay_block_map.insert("enc", Value::Bytes(sealed_to_r2.enc.to_vec()));
-    let relay_block = encode(&Value::Map(relay_block_map));
+    let relay_block = encode(&Value::Map(relay_block_map)).unwrap();
 
     // (name, recipient_secret, v, block, check).
     let wrong_recipient = [0x41u8; 32];
@@ -4624,10 +4624,12 @@ fn build_grant_blob_accept() -> Vec<HpkeStructureVector> {
     let mut out = Vec::with_capacity(cases.len());
     for (name, eph, payload) in cases {
         assert!(names.insert(name), "duplicate grant-blob accept {name}");
-        let plaintext = encode_grant_blob_payload(&payload);
-        let sealed = seal_grant_blob(&recipient.public(), &eph, &ctx, &payload);
+        let plaintext = encode_grant_blob_payload(&payload).unwrap();
+        let sealed = seal_grant_blob(&recipient.public(), &eph, &ctx, &payload).unwrap();
         assert_eq!(
-            seal_grant_blob(&recipient.public(), &eph, &ctx, &payload).ciphertext,
+            seal_grant_blob(&recipient.public(), &eph, &ctx, &payload)
+                .unwrap()
+                .ciphertext,
             sealed.ciphertext,
             "grant-blob {name}: not deterministic"
         );
@@ -4691,7 +4693,7 @@ fn build_grant_blob_reject() -> Vec<BlobRejectVector> {
     let recipient = X25519Secret::from_scalar(recipient_scalar);
     let ctx = grant_ctx(STRUCT_TAG_GRANT_BLOB);
     let payload = GrantBlobPayload::new([0x11; 32], Some([0x44; 32]), GRANT_EPOCH, [0x22; 32]);
-    let sealed = seal_grant_blob(&recipient.public(), &[0x68; 32], &ctx, &payload);
+    let sealed = seal_grant_blob(&recipient.public(), &[0x68; 32], &ctx, &payload).unwrap();
     out.extend(hpke_blob_reject_pair(
         recipient_scalar,
         &recipient,
@@ -4791,10 +4793,12 @@ fn build_owner_blob_accept() -> Vec<HpkeStructureVector> {
     let eph: [u8; 32] = std::array::from_fn(|i| (0x60 + i) as u8);
     let payload = OverrideSeedPayload::new([0x77; 32], GRANT_EPOCH);
 
-    let plaintext = encode_override_seed_payload(&payload);
-    let sealed = seal_owner_blob(&owner.public(), &eph, &ctx, &payload);
+    let plaintext = encode_override_seed_payload(&payload).unwrap();
+    let sealed = seal_owner_blob(&owner.public(), &eph, &ctx, &payload).unwrap();
     assert_eq!(
-        seal_owner_blob(&owner.public(), &eph, &ctx, &payload).ciphertext,
+        seal_owner_blob(&owner.public(), &eph, &ctx, &payload)
+            .unwrap()
+            .ciphertext,
         sealed.ciphertext,
         "owner-blob: not deterministic"
     );
@@ -4842,7 +4846,7 @@ fn build_owner_blob_reject() -> Vec<BlobRejectVector> {
     let owner = X25519Secret::from_scalar(owner_scalar);
     let ctx = grant_ctx(STRUCT_TAG_OWNER_BLOB);
     let payload = OverrideSeedPayload::new([0x77; 32], GRANT_EPOCH);
-    let sealed = seal_owner_blob(&owner.public(), &[0x69; 32], &ctx, &payload);
+    let sealed = seal_owner_blob(&owner.public(), &[0x69; 32], &ctx, &payload).unwrap();
     out.extend(hpke_blob_reject_pair(
         owner_scalar,
         &owner,
@@ -4909,10 +4913,12 @@ fn build_owner_write_blob_accept() -> Vec<HpkeStructureVector> {
     let eph: [u8; 32] = std::array::from_fn(|i| (0x62 + i) as u8);
     let payload = OwnerWriteBlobPayload::new([0x66; 32], GRANT_WRITE_EPOCH);
 
-    let plaintext = encode_owner_write_blob_payload(&payload);
-    let sealed = seal_owner_write_blob(&owner.public(), &eph, &ctx, &payload);
+    let plaintext = encode_owner_write_blob_payload(&payload).unwrap();
+    let sealed = seal_owner_write_blob(&owner.public(), &eph, &ctx, &payload).unwrap();
     assert_eq!(
-        seal_owner_write_blob(&owner.public(), &eph, &ctx, &payload).ciphertext,
+        seal_owner_write_blob(&owner.public(), &eph, &ctx, &payload)
+            .unwrap()
+            .ciphertext,
         sealed.ciphertext,
         "owner-write-blob: not deterministic"
     );
@@ -4961,7 +4967,7 @@ fn build_owner_write_blob_reject() -> Vec<BlobRejectVector> {
     let owner = X25519Secret::from_scalar(owner_scalar);
     let ctx = owner_write_blob_ctx();
     let payload = OwnerWriteBlobPayload::new([0x66; 32], GRANT_WRITE_EPOCH);
-    let sealed = seal_owner_write_blob(&owner.public(), &[0x6a; 32], &ctx, &payload);
+    let sealed = seal_owner_write_blob(&owner.public(), &[0x6a; 32], &ctx, &payload).unwrap();
 
     let mut tampered_ct = sealed.ciphertext.clone();
     tampered_ct[0] ^= 0x01;
@@ -5018,17 +5024,17 @@ fn build_ascent_link_accept() -> Vec<AscentLinkAcceptVector> {
     let eph: [u8; 32] = std::array::from_fn(|i| (0x70 + i) as u8);
     let ctx = grant_ctx(STRUCT_TAG_ASCENT_LINK);
     let payload = OverrideSeedPayload::new([0x88; 32], GRANT_EPOCH);
-    let plaintext = encode_override_seed_payload(&payload);
+    let plaintext = encode_override_seed_payload(&payload).unwrap();
 
-    let link = seal_ascent_link(&parent_node_seed, &eph, &ctx, &payload);
+    let link = seal_ascent_link(&parent_node_seed, &eph, &ctx, &payload).unwrap();
     // The ancestor re-derives the keypair, matches the public half, and opens.
     let opened = open_ascent_link(&parent_node_seed, &ctx, &link).expect("ascent open");
     assert_eq!(opened, payload, "ascent-link: round-trip");
-    let container = encode_ascent_link(&link);
+    let container = encode_ascent_link(&link).unwrap();
     let decoded = decode_ascent_link(&container).expect("ascent container decodes");
     assert_eq!(decoded, link, "ascent-link: container decode != source");
     assert_eq!(
-        encode_ascent_link(&decoded),
+        encode_ascent_link(&decoded).unwrap(),
         container,
         "ascent-link: container not byte-stable"
     );
@@ -5054,7 +5060,7 @@ fn build_ascent_link_reject() -> Vec<AscentLinkRejectVector> {
     let eph: [u8; 32] = std::array::from_fn(|i| (0x78 + i) as u8);
     let ctx = grant_ctx(STRUCT_TAG_ASCENT_LINK);
     let payload = OverrideSeedPayload::new([0x88; 32], GRANT_EPOCH);
-    let good = seal_ascent_link(&parent_node_seed, &eph, &ctx, &payload);
+    let good = seal_ascent_link(&parent_node_seed, &eph, &ctx, &payload).unwrap();
 
     // Mismatched public half: derive-and-verify rejects before the HPKE open.
     let mut mismatched = good.clone();
@@ -5078,7 +5084,7 @@ fn build_ascent_link_reject() -> Vec<AscentLinkRejectVector> {
     let mut out = Vec::with_capacity(cases.len());
     for (name, link, check, class) in cases {
         assert!(names.insert(name), "duplicate ascent-link reject {name}");
-        let container = encode_ascent_link(&link);
+        let container = encode_ascent_link(&link).unwrap();
         let err = open_ascent_link(&parent_node_seed, &ctx, &link)
             .expect_err("ascent-link reject must fail closed");
         assert_eq!(
@@ -5114,11 +5120,11 @@ fn build_history_link_accept() -> Vec<HistoryLinkAcceptVector> {
     let nonce: [u8; NONCE_LEN] = std::array::from_fn(|i| (0x10 + i) as u8);
     let ctx = grant_ctx(STRUCT_TAG_HISTORY_LINK);
     let payload = HistoryLinkPayload::new([0x99; 32], GRANT_EPOCH - 1);
-    let plaintext = encode_history_link_payload(&payload);
+    let plaintext = encode_history_link_payload(&payload).unwrap();
 
-    let sealed = seal_history_link(&key, &nonce, &ctx, &payload);
+    let sealed = seal_history_link(&key, &nonce, &ctx, &payload).unwrap();
     assert_eq!(
-        seal_history_link(&key, &nonce, &ctx, &payload),
+        seal_history_link(&key, &nonce, &ctx, &payload).unwrap(),
         sealed,
         "history-link: not deterministic"
     );
@@ -5361,7 +5367,7 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
         if !omit_entries {
             kv.push(("entries", Value::Array(entries)));
         }
-        encode(&map_of(kv))
+        encode(&map_of(kv)).unwrap()
     };
     let codec_cases: Vec<(&str, Vec<u8>, &str)> = vec![
         (

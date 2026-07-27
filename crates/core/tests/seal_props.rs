@@ -131,10 +131,10 @@ proptest! {
     /// inverse of encode, and re-encoding the decode is byte-identical.
     #[test]
     fn read_body_round_trip(body in arb_read_body()) {
-        let bytes = encode_read_body(&body);
+        let bytes = encode_read_body(&body).unwrap();
         let decoded = decode_read_body(&bytes).expect("own encoding must decode");
         prop_assert_eq!(&decoded, &body);
-        prop_assert_eq!(encode_read_body(&decoded), bytes);
+        prop_assert_eq!(encode_read_body(&decoded).unwrap(), bytes);
     }
 
     /// (b) the envelope codec round-trips byte-stable, and the sealed read-body
@@ -155,10 +155,10 @@ proptest! {
         let env = seal_read_body(&key, &nonce, v, id, scope, epoch, &body)
             .expect("a valid read-body must seal");
         // Envelope codec identity + byte stability.
-        let bytes = encode_envelope(&env);
+        let bytes = encode_envelope(&env).unwrap();
         let decoded = decode_envelope(&bytes).expect("own envelope must decode");
         prop_assert_eq!(&decoded, &env);
-        prop_assert_eq!(encode_envelope(&decoded), bytes);
+        prop_assert_eq!(encode_envelope(&decoded).unwrap(), bytes);
         // The read-body opens back to the original.
         let opened = open_read_body(&decoded, &key).expect("must open under the sealing key");
         prop_assert_eq!(opened, body);

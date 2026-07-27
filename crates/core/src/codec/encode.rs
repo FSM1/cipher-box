@@ -1,8 +1,10 @@
 //! The deterministic encoder. Canonical by construction: shortest-form
 //! arguments, definite lengths, and [`super::Map`]'s ordering invariant are
-//! the only forms this module can emit, so encoding is infallible.
+//! the only forms this module can emit, so the one way encoding fails is a tree
+//! nested past [`super::MAX_DEPTH`].
 
 use super::value::{Map, Value};
+use crate::error::{CodecError, Malformed};
 
 pub(super) const MAJOR_UNSIGNED: u8 = 0;
 pub(super) const MAJOR_NEGATIVE: u8 = 1;
@@ -24,37 +26,69 @@ pub(super) const SIMPLE_NULL: u8 = 22;
 /// scope/override/history seeds) in freed heap; with one right-sized buffer only
 /// the terminal owner's plaintext ever holds them, and that owner zeroizes it.
 ///
-/// Callers must respect [`super::MAX_DEPTH`]: a deeper `Value` still encodes
-/// (encoding is infallible), but its bytes reject as `depth-exceeded` on
-/// decode — debug builds assert the bound to catch that divergence early.
-pub fn encode(value: &Value) -> Vec<u8> {
-    let mut out = Vec::with_capacity(encoded_len(value));
-    write_value(&mut out, value, 0);
-    out
+/// A tree nested past [`super::MAX_DEPTH`] rejects as `depth-exceeded` rather
+/// than emitting bytes the decoder always refuses.
+pub fn encode(value: &Value) -> Result<Vec<u8>, CodecError> {
+    let mut out = Vec::with_capacity(encoded_len(value)?);
+    write_value(&mut out, value, 0)?;
+    Ok(out)
+}
+
+/// [`encode`] for a tree whose nesting is fixed by its construction site — an
+/// AAD or signature preimage, a schema map of scalars — so the bound is
+/// unreachable and the surrounding seal/sign surface stays infallible.
+///
+/// # Panics
+///
+/// If `value` nests to [`super::MAX_DEPTH`]. Use [`encode`] for any tree whose
+/// depth comes from input rather than from the schema.
+pub fn encode_fixed_depth(value: &Value) -> Vec<u8> {
+    encode(value).expect("fixed-shape tree is within MAX_DEPTH")
 }
 
 /// The exact number of bytes [`encode`] emits for `value`. Mirrors
-/// [`write_value`] head-for-head; the codec property suite pins the two in
-/// lockstep (`encoded_len == encode().len()`), which is what makes [`encode`]'s
-/// single up-front reservation provably realloc-free.
-pub fn encoded_len(value: &Value) -> usize {
+/// [`write_value`] head-for-head — including the depth bound and the byte offset
+/// it reports; the codec property suite pins the two in lockstep
+/// (`encoded_len == encode().len()`), which is what makes [`encode`]'s single
+/// up-front reservation provably realloc-free.
+pub fn encoded_len(value: &Value) -> Result<usize, CodecError> {
+    let mut len = 0;
+    count_value(&mut len, value, 0)?;
+    Ok(len)
+}
+
+fn count_value(len: &mut usize, value: &Value, depth: usize) -> Result<(), CodecError> {
+    check_depth(depth, *len)?;
     match value {
-        Value::Unsigned(n) | Value::Negative(n) => head_len(*n),
-        Value::Bytes(b) => head_len(b.len() as u64) + b.len(),
-        Value::Text(t) => text_len(t),
+        Value::Unsigned(n) | Value::Negative(n) => *len += head_len(*n),
+        Value::Bytes(b) => *len += head_len(b.len() as u64) + b.len(),
+        Value::Text(t) => *len += text_len(t),
         Value::Array(items) => {
-            head_len(items.len() as u64) + items.iter().map(encoded_len).sum::<usize>()
+            *len += head_len(items.len() as u64);
+            for item in items {
+                count_value(len, item, depth + 1)?;
+            }
         }
         Value::Map(map) => {
-            head_len(map.len() as u64)
-                + map
-                    .entries()
-                    .iter()
-                    .map(|(k, v)| text_len(k) + encoded_len(v))
-                    .sum::<usize>()
+            *len += head_len(map.len() as u64);
+            for (k, v) in map.entries() {
+                *len += text_len(k);
+                count_value(len, v, depth + 1)?;
+            }
         }
-        Value::Bool(_) | Value::Null => 1,
+        Value::Bool(_) | Value::Null => *len += 1,
     }
+    Ok(())
+}
+
+/// The produce-side half of the decoder's `depth-exceeded` reject: bytes nested
+/// past [`super::MAX_DEPTH`] are unopenable, so encoding fails closed instead of
+/// emitting them, and the bound doubles as the recursion guard on both passes.
+fn check_depth(depth: usize, offset: usize) -> Result<(), CodecError> {
+    if depth >= super::MAX_DEPTH {
+        return Err(Malformed::DepthExceeded { offset }.into());
+    }
+    Ok(())
 }
 
 /// The byte length of a text item: its head plus its UTF-8 bytes.
@@ -73,11 +107,12 @@ fn head_len(arg: u64) -> usize {
     }
 }
 
-pub(super) fn write_value(out: &mut Vec<u8>, value: &Value, depth: usize) {
-    debug_assert!(
-        depth < super::MAX_DEPTH,
-        "Value nesting exceeds MAX_DEPTH; the encoding would be undecodable"
-    );
+pub(super) fn write_value(
+    out: &mut Vec<u8>,
+    value: &Value,
+    depth: usize,
+) -> Result<(), CodecError> {
+    check_depth(depth, out.len())?;
     match value {
         Value::Unsigned(n) => write_head(out, MAJOR_UNSIGNED, *n),
         Value::Negative(n) => write_head(out, MAJOR_NEGATIVE, *n),
@@ -89,14 +124,15 @@ pub(super) fn write_value(out: &mut Vec<u8>, value: &Value, depth: usize) {
         Value::Array(items) => {
             write_head(out, MAJOR_ARRAY, items.len() as u64);
             for item in items {
-                write_value(out, item, depth + 1);
+                write_value(out, item, depth + 1)?;
             }
         }
-        Value::Map(map) => write_map_head_and_entries(out, map, depth),
+        Value::Map(map) => write_map_head_and_entries(out, map, depth)?,
         Value::Bool(false) => out.push((MAJOR_SIMPLE << 5) | SIMPLE_FALSE),
         Value::Bool(true) => out.push((MAJOR_SIMPLE << 5) | SIMPLE_TRUE),
         Value::Null => out.push((MAJOR_SIMPLE << 5) | SIMPLE_NULL),
     }
+    Ok(())
 }
 
 pub(super) fn write_text(out: &mut Vec<u8>, t: &str) {
@@ -104,12 +140,17 @@ pub(super) fn write_text(out: &mut Vec<u8>, t: &str) {
     out.extend_from_slice(t.as_bytes());
 }
 
-fn write_map_head_and_entries(out: &mut Vec<u8>, map: &Map, depth: usize) {
+fn write_map_head_and_entries(
+    out: &mut Vec<u8>,
+    map: &Map,
+    depth: usize,
+) -> Result<(), CodecError> {
     write_head(out, MAJOR_MAP, map.len() as u64);
     for (k, v) in map.entries() {
         write_text(out, k);
-        write_value(out, v, depth + 1);
+        write_value(out, v, depth + 1)?;
     }
+    Ok(())
 }
 
 /// Shortest-form head: the argument rides the initial byte below 24, then
@@ -187,8 +228,35 @@ mod tests {
             secret_shaped_value(40),
         ];
         for v in &cases {
-            assert_eq!(encoded_len(v), encode(v).len(), "len oracle diverged");
+            assert_eq!(
+                encoded_len(v).unwrap(),
+                encode(v).unwrap().len(),
+                "len oracle diverged"
+            );
         }
+    }
+
+    /// Nesting arrays `n` deep around a scalar puts that scalar at depth `n`.
+    fn nested(n: usize) -> Value {
+        let mut v = Value::Null;
+        for _ in 0..n {
+            v = Value::Array(vec![v]);
+        }
+        v
+    }
+
+    /// The bound is release-active on both passes, at the same boundary the
+    /// decoder rejects: past `MAX_DEPTH` the encoder fails closed rather than
+    /// emit bytes decode always refuses.
+    #[test]
+    fn encode_rejects_past_max_depth() {
+        let deep = nested(crate::codec::MAX_DEPTH);
+        assert_eq!(encoded_len(&deep).unwrap_err().check(), "depth-exceeded");
+        assert_eq!(encode(&deep).unwrap_err().check(), "depth-exceeded");
+        assert!(
+            encode(&nested(crate::codec::MAX_DEPTH - 1)).is_ok(),
+            "the deepest admissible tree still encodes"
+        );
     }
 
     /// The security invariant: encoding secret-bearing bytes performs a single
@@ -200,10 +268,10 @@ mod tests {
     #[test]
     fn secret_bearing_encode_never_reallocates() {
         let value = secret_shaped_value(64);
-        let mut out = Vec::with_capacity(encoded_len(&value));
+        let mut out = Vec::with_capacity(encoded_len(&value).unwrap());
         let ptr = out.as_ptr();
         let reserved_cap = out.capacity();
-        write_value(&mut out, &value, 0);
+        write_value(&mut out, &value, 0).unwrap();
         assert!(out.len() > 1024, "test payload must force multiple growths");
         assert_eq!(
             out.capacity(),
@@ -212,7 +280,7 @@ mod tests {
         );
         assert_eq!(out.as_ptr(), ptr, "backing store moved — a realloc ran");
         assert_eq!(
-            encode(&value),
+            encode(&value).unwrap(),
             out,
             "public two-pass path is byte-identical"
         );

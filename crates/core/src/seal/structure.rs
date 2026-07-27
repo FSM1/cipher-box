@@ -22,7 +22,7 @@
 //! verdicts (a missing or invalid signature is a whole-record trust violation)
 //! is the engine's adoption gate, which composes [`verify_structure`].
 
-use crate::codec::{Map, Value, encode};
+use crate::codec::{Map, Value, encode_fixed_depth};
 use crate::error::{CodecError, TrustViolation};
 use crate::suite::ed25519::{Ed25519Signature, Ed25519Signer, Ed25519Verifier};
 use crate::suite::hash::hash;
@@ -80,7 +80,7 @@ pub fn structure_sig_preimage(input: &StructureSigInput) -> Vec<u8> {
     }
     m.insert("scopeId", Value::Bytes(input.scope_id.to_vec()));
     m.insert("structTag", Value::Unsigned(u64::from(input.struct_tag)));
-    encode(&Value::Map(m))
+    encode_fixed_depth(&Value::Map(m))
 }
 
 /// Sign a structure with the rotator's writer-pseudonym Ed25519 key.

@@ -25,7 +25,7 @@
 //! wave. Name transplant is closed by duplicate-`ipnsName` rejection at decode
 //! ([`super::body`]) instead of by the tag.
 
-use crate::codec::{Value, encode};
+use crate::codec::{Value, encode_fixed_depth};
 
 /// The fresh `cipherbox/v2` AAD domain separator. Its presence as the first
 /// AAD element keeps CipherBox v2 seals from ever colliding with another
@@ -134,7 +134,7 @@ pub struct AadContext {
 /// `[AAD_DOMAIN, v, id, scope, epoch, structTag]`. Deterministic and
 /// unambiguous; the array positions are frozen by the KAT.
 pub fn build_aad(ctx: &AadContext) -> Vec<u8> {
-    encode(&Value::Array(vec![
+    encode_fixed_depth(&Value::Array(vec![
         Value::Text(AAD_DOMAIN.to_string()),
         Value::Unsigned(ctx.v),
         Value::Bytes(ctx.id.to_vec()),

@@ -51,7 +51,7 @@ fn write_text(out: &mut Vec<u8>, s: &str) {
 /// `value` is ever reached.
 pub fn widen_head(value: &Value) -> (Vec<u8>, &'static str) {
     let mut out = vec![0x82, 0x18, 0x00];
-    out.extend_from_slice(&encode(value));
+    out.extend_from_slice(&encode(value).unwrap());
     (out, "non-canonical-uint")
 }
 
@@ -61,7 +61,7 @@ pub fn widen_head(value: &Value) -> (Vec<u8>, &'static str) {
 /// integers but reject with their own check name.
 pub fn widen_length(value: &Value) -> (Vec<u8>, &'static str) {
     let mut out = vec![0x82, 0x78, 0x01, b'x'];
-    out.extend_from_slice(&encode(value));
+    out.extend_from_slice(&encode(value).unwrap());
     (out, "non-canonical-length")
 }
 
@@ -70,7 +70,7 @@ pub fn widen_length(value: &Value) -> (Vec<u8>, &'static str) {
 /// lengths only; rejection fires on the `0x9f` head before any element.
 pub fn indefinite_array(value: &Value) -> (Vec<u8>, &'static str) {
     let mut out = vec![0x9f];
-    out.extend_from_slice(&encode(value));
+    out.extend_from_slice(&encode(value).unwrap());
     out.push(0xff);
     (out, "indefinite-length")
 }
@@ -84,9 +84,9 @@ pub fn swap_map_keys(lo: &str, hi: &str, v1: &Value, v2: &Value) -> (Vec<u8>, &'
     let mut out = Vec::new();
     write_head(&mut out, MAJOR_MAP, 2);
     write_text(&mut out, hi);
-    out.extend_from_slice(&encode(v1));
+    out.extend_from_slice(&encode(v1).unwrap());
     write_text(&mut out, lo);
-    out.extend_from_slice(&encode(v2));
+    out.extend_from_slice(&encode(v2).unwrap());
     (out, "unsorted-map-keys")
 }
 
@@ -97,9 +97,9 @@ pub fn duplicate_key(k: &str, v1: &Value, v2: &Value) -> (Vec<u8>, &'static str)
     let mut out = Vec::new();
     write_head(&mut out, MAJOR_MAP, 2);
     write_text(&mut out, k);
-    out.extend_from_slice(&encode(v1));
+    out.extend_from_slice(&encode(v1).unwrap());
     write_text(&mut out, k);
-    out.extend_from_slice(&encode(v2));
+    out.extend_from_slice(&encode(v2).unwrap());
     (out, "duplicate-map-key")
 }
 
@@ -108,7 +108,7 @@ pub fn duplicate_key(k: &str, v1: &Value, v2: &Value) -> (Vec<u8>, &'static str)
 /// number; rejection fires on the initial byte.
 pub fn wrap_tag(value: &Value) -> (Vec<u8>, &'static str) {
     let mut out = vec![0xc6];
-    out.extend_from_slice(&encode(value));
+    out.extend_from_slice(&encode(value).unwrap());
     (out, "tag-forbidden")
 }
 
@@ -117,14 +117,14 @@ pub fn wrap_tag(value: &Value) -> (Vec<u8>, &'static str) {
 /// are forbidden whatever their width or value.
 pub fn inject_float(value: &Value) -> (Vec<u8>, &'static str) {
     let mut out = vec![0x82, 0xf9, 0x3c, 0x00];
-    out.extend_from_slice(&encode(value));
+    out.extend_from_slice(&encode(value).unwrap());
     (out, "float-forbidden")
 }
 
 /// A canonical item followed by one extra `0x00` byte: decode must consume
 /// the input as exactly one item spanning the whole slice.
 pub fn trailing_junk(value: &Value) -> (Vec<u8>, &'static str) {
-    let mut out = encode(value);
+    let mut out = encode(value).unwrap();
     out.push(0x00);
     (out, "trailing-bytes")
 }
@@ -134,7 +134,7 @@ pub fn trailing_junk(value: &Value) -> (Vec<u8>, &'static str) {
 /// last read short (an empty result — one-byte encodings — still rejects
 /// as truncated at offset 0).
 pub fn truncate(value: &Value) -> (Vec<u8>, &'static str) {
-    let mut out = encode(value);
+    let mut out = encode(value).unwrap();
     out.pop();
     (out, "truncated")
 }

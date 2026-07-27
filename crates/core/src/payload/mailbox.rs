@@ -23,7 +23,7 @@
 
 use zeroize::Zeroize;
 
-use crate::codec::{Map, Value, decode, encode};
+use crate::codec::{Map, Value, decode, encode_fixed_depth};
 use crate::error::{CodecError, TrustViolation};
 use crate::seal::{AadContext, STRUCT_TAG_MAILBOX_PAYLOAD, build_aad};
 use crate::suite::ecdsa::{EcdsaSignature, EcdsaSigner, EcdsaVerifier};
@@ -62,7 +62,7 @@ fn mailbox_ctx(v: u64) -> AadContext {
 /// cross-recipient relay lift: an opened item cannot be re-sealed to a second
 /// recipient and still verify.
 fn sig_preimage(v: u64, recipient_pk: &[u8], sender_pk: &[u8], payload: &[u8]) -> Vec<u8> {
-    encode(&Value::Array(vec![
+    encode_fixed_depth(&Value::Array(vec![
         Value::Text(MAILBOX_SIG_DOMAIN.to_string()),
         Value::Unsigned(v),
         Value::Bytes(recipient_pk.to_vec()),
@@ -92,7 +92,7 @@ pub fn seal_mailbox_payload(
     inner_map.insert("payload", Value::Bytes(payload.to_vec()));
     inner_map.insert("senderIdentityPk", Value::Bytes(sender_pk.to_vec()));
     inner_map.insert("senderSig", Value::Bytes(sender_sig.to_compact().to_vec()));
-    let mut inner = encode(&Value::Map(inner_map));
+    let mut inner = encode_fixed_depth(&Value::Map(inner_map));
 
     let info = build_aad(&mailbox_ctx(v));
     let sealed = hpke_seal(recipient_enc_pub, ephemeral_scalar, &info, &[], &inner);
@@ -101,7 +101,7 @@ pub fn seal_mailbox_payload(
     let mut block = Map::new();
     block.insert("ct", Value::Bytes(sealed.ciphertext));
     block.insert("enc", Value::Bytes(sealed.enc.to_vec()));
-    encode(&Value::Map(block))
+    encode_fixed_depth(&Value::Map(block))
 }
 
 /// Open + verify a mailbox payload. HPKE-open under `recipient_secret` and the
@@ -154,6 +154,7 @@ fn verify_inner(inner: &[u8], v: u64, recipient_pk: &[u8]) -> Result<MailboxItem
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::encode;
 
     fn recipient() -> X25519Secret {
         X25519Secret::from_scalar([0x40; 32])
@@ -182,7 +183,7 @@ mod tests {
         let mut ct = m.get("ct").unwrap().as_bytes().unwrap().to_vec();
         ct[0] ^= 0x01;
         m.insert("ct", Value::Bytes(ct));
-        let tampered = encode(&Value::Map(m));
+        let tampered = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             open_mailbox_payload(&recipient(), 2, &tampered)
                 .unwrap_err()
@@ -227,13 +228,13 @@ mod tests {
         // A valid-encoding but wrong signature (sign a different message).
         let wrong = sender().sign_detcbor(b"not the preimage");
         inner.insert("senderSig", Value::Bytes(wrong.to_compact().to_vec()));
-        let inner_bytes = encode(&Value::Map(inner));
+        let inner_bytes = encode(&Value::Map(inner)).unwrap();
         let info = build_aad(&mailbox_ctx(2));
         let sealed = hpke_seal(&recipient().public(), &eph, &info, &[], &inner_bytes);
         let mut block = Map::new();
         block.insert("ct", Value::Bytes(sealed.ciphertext));
         block.insert("enc", Value::Bytes(sealed.enc.to_vec()));
-        let block_bytes = encode(&Value::Map(block));
+        let block_bytes = encode(&Value::Map(block)).unwrap();
         assert_eq!(
             open_mailbox_payload(&recipient(), 2, &block_bytes)
                 .unwrap_err()
@@ -261,7 +262,7 @@ mod tests {
         let mut relay = Map::new();
         relay.insert("ct", Value::Bytes(sealed.ciphertext));
         relay.insert("enc", Value::Bytes(sealed.enc.to_vec()));
-        let relay_block = encode(&Value::Map(relay));
+        let relay_block = encode(&Value::Map(relay)).unwrap();
 
         assert_eq!(
             open_mailbox_payload(&r2, 2, &relay_block)
@@ -308,7 +309,7 @@ mod tests {
         let mut block2 = Map::new();
         block2.insert("ct", Value::Bytes(resealed.ciphertext));
         block2.insert("enc", Value::Bytes(resealed.enc.to_vec()));
-        let block2_bytes = encode(&Value::Map(block2));
+        let block2_bytes = encode(&Value::Map(block2)).unwrap();
 
         let item = open_mailbox_payload(&r1, 2, &block2_bytes).unwrap();
         assert_eq!(item.payload, b"relayed");

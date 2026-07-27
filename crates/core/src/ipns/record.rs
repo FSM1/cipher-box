@@ -26,7 +26,7 @@
 
 use zeroize::Zeroize;
 
-use crate::codec::{Map, Value, decode, encode};
+use crate::codec::{Map, Value, decode, encode_fixed_depth};
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::suite::ed25519::{Ed25519Signature, Ed25519Signer, SIGNATURE_LEN};
 
@@ -233,7 +233,7 @@ fn encode_data(
     m.insert("Sequence", Value::Unsigned(sequence));
     m.insert("Validity", Value::Bytes(validity.to_vec()));
     m.insert("ValidityType", Value::Unsigned(validity_type));
-    encode(&Value::Map(m))
+    encode_fixed_depth(&Value::Map(m))
 }
 
 /// Decode + shape-check the signed `data`. Any structural defect (non-canonical

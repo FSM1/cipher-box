@@ -243,7 +243,7 @@ pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
         Value::Bytes(body.write_history_link.clone()),
     );
     merge_unknown(&mut m, &body.unknown);
-    Ok(encode(&Value::Map(m)))
+    encode(&Value::Map(m))
 }
 
 #[cfg(test)]
@@ -297,7 +297,7 @@ mod tests {
         m.insert("directChildScopeIndex", Value::Array(vec![]));
         m.insert("grantLedger", Value::Array(vec![Value::Map(entry)]));
         m.insert("writeHistoryLink", Value::Bytes(vec![]));
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             decode_write_body(&bytes).unwrap_err().check(),
             "invalid-permission"
@@ -315,7 +315,7 @@ mod tests {
         m.insert("directChildScopeIndex", Value::Array(vec![]));
         m.insert("grantLedger", Value::Array(vec![Value::Map(entry)]));
         m.insert("writeHistoryLink", Value::Bytes(vec![]));
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             decode_write_body(&bytes).unwrap_err().check(),
             "invalid-field-length"
@@ -346,7 +346,7 @@ mod tests {
             Value::Array(vec![Value::Map(a), Value::Map(b)]),
         );
         m.insert("writeHistoryLink", Value::Bytes(vec![]));
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             decode_write_body(&bytes).unwrap_err().check(),
             "duplicate-grant-tag"
@@ -358,7 +358,7 @@ mod tests {
         let mut m = Map::new();
         m.insert("directChildScopeIndex", Value::Array(vec![]));
         m.insert("writeHistoryLink", Value::Bytes(vec![]));
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         assert_eq!(
             decode_write_body(&bytes).unwrap_err().check(),
             "missing-field"
@@ -372,7 +372,7 @@ mod tests {
         m.insert("grantLedger", Value::Array(vec![]));
         m.insert("writeHistoryLink", Value::Bytes(vec![]));
         m.insert("futureField", Value::Text("keep".into()));
-        let bytes = encode(&Value::Map(m));
+        let bytes = encode(&Value::Map(m)).unwrap();
         let decoded = decode_write_body(&bytes).expect("tolerant decode");
         assert_eq!(decoded.unknown.len(), 1);
         assert_eq!(

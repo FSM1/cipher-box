@@ -119,7 +119,8 @@ impl Fixture {
             &EPH_OWNER,
             &owner_blob_aad,
             &override_payload,
-        );
+        )
+        .unwrap();
         let owner_blob_ct = owner_blob.ciphertext.clone();
         let owner_blob_enc = owner_blob.enc;
         // Sign a seed-bearing structure's ciphertext with the owner pseudonym —
@@ -177,7 +178,8 @@ impl Fixture {
             &EPH_OWNER,
             &owner_write_aad,
             &owner_write_payload,
-        );
+        )
+        .unwrap();
         let signed_owner_write_blob = SignedOwnerWriteBlob {
             signature: sign(STRUCT_TAG_OWNER_WRITE_BLOB, None, &owner_write.ciphertext),
             enc: owner_write.enc,
@@ -356,7 +358,7 @@ impl Fixture {
         aad: AadContext,
         payload: OverrideSeedPayload,
     ) -> SignedAscentLink {
-        let link = seal_ascent_link(parent_node_seed, &EPH_ASCENT, &aad, &payload);
+        let link = seal_ascent_link(parent_node_seed, &EPH_ASCENT, &aad, &payload).unwrap();
         let input = StructureSigInput::over_ciphertext(
             self.scope_id,
             self.epoch,
@@ -390,7 +392,7 @@ impl Fixture {
     /// that opens but must fail the envelope cross-check.
     fn owner_seed_blob_with_aad(&self, aad: AadContext) -> SeedBlob<'_> {
         let payload = OverrideSeedPayload::new(self.scope_seed, self.epoch);
-        let blob = seal_owner_blob(&self.owner_enc.public(), &EPH_OWNER, &aad, &payload);
+        let blob = seal_owner_blob(&self.owner_enc.public(), &EPH_OWNER, &aad, &payload).unwrap();
         SeedBlob::Owner {
             enc_secret: &self.owner_enc,
             enc: blob.enc,
@@ -408,7 +410,8 @@ impl Fixture {
             &EPH_OWNER,
             &self.owner_blob_aad,
             &payload,
-        );
+        )
+        .unwrap();
         SeedBlob::Owner {
             enc_secret: &self.owner_enc,
             enc: blob.enc,
@@ -437,7 +440,7 @@ fn raw_folder_plaintext(children: Vec<Value>) -> Vec<u8> {
     m.insert("children", Value::Array(children));
     m.insert("createdAt", Value::Unsigned(0));
     m.insert("modifiedAt", Value::Unsigned(0));
-    encode(&Value::Map(m))
+    encode(&Value::Map(m)).unwrap()
 }
 
 fn duplicate_id_plaintext() -> Vec<u8> {
@@ -871,7 +874,8 @@ fn run_floor_scenario(rule: &str) {
                 struct_tag: STRUCT_TAG_GRANT_BLOB,
             };
             let payload = GrantBlobPayload::new(fx.scope_seed, None, 99, [0x7B; 32]);
-            let blob = seal_grant_blob(&fx.owner_enc.public(), &EPH_GRANT, &grant_aad, &payload);
+            let blob =
+                seal_grant_blob(&fx.owner_enc.public(), &EPH_GRANT, &grant_aad, &payload).unwrap();
             let input = StructureSigInput::over_ciphertext(
                 fx.scope_id,
                 fx.epoch,
