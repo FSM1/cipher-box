@@ -1,7 +1,8 @@
 /**
- * Short-count behaviour of the OPFS staging store against a fake sync access
- * handle. The real OPFS round trip is covered by the browser conformance suite;
- * a constrained write or read cannot be provoked there, so it is faked here.
+ * Constrained-IO behaviour of the OPFS staging store against a fake sync access
+ * handle — both the short-count and the thrown-storage-error signals. The real
+ * OPFS round trip is covered by the browser conformance suite; neither failure
+ * can be provoked there, so both are faked here.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -13,6 +14,8 @@ interface Limits {
   maxWrite?: number;
   /** Cap on bytes one `read` returns (a short read). */
   maxRead?: number;
+  /** Handle method that raises `QuotaExceededError` instead of succeeding. */
+  throwFrom?: 'truncate' | 'write' | 'flush';
 }
 
 class FakeFile {
@@ -27,11 +30,19 @@ class FakeSyncHandle {
     private readonly limits: Limits
   ) {}
 
+  private quotaGuard(method: Limits['throwFrom']): void {
+    if (this.limits.throwFrom === method) {
+      throw new DOMException('quota exceeded', 'QuotaExceededError');
+    }
+  }
+
   truncate(size: number): void {
+    this.quotaGuard('truncate');
     this.file.bytes = this.file.bytes.slice(0, size);
   }
 
   write(buffer: ArrayBufferView, options?: { at?: number }): number {
+    this.quotaGuard('write');
     const source = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
     const at = options?.at ?? 0;
     const count = Math.min(source.byteLength, this.limits.maxWrite ?? source.byteLength);
@@ -59,7 +70,9 @@ class FakeSyncHandle {
     return this.file.bytes.byteLength;
   }
 
-  flush(): void {}
+  flush(): void {
+    this.quotaGuard('flush');
+  }
 
   close(): void {
     this.closed = true;
@@ -143,6 +156,33 @@ describe('OpfsStagingStore staged bytes', () => {
     const error = await store.putStagedBytes(key, payload).catch((thrown: unknown) => thrown);
     expect(error).toBeInstanceOf(StagingIoError);
     expect((error as StagingIoError).cause).toBeInstanceOf(Error);
+  });
+
+  it.each(['truncate', 'write', 'flush'] as const)(
+    'rejects a throwing %s and drops the partial file',
+    async (method) => {
+      const dir = mount();
+      dir.limits.throwFrom = method;
+      const store = new OpfsStagingStore('test');
+
+      const error = await store.putStagedBytes(key, payload).catch((thrown: unknown) => thrown);
+      expect(error).toBeInstanceOf(StagingIoError);
+      expect((error as StagingIoError).cause).toBeInstanceOf(DOMException);
+      expect(dir.files.size).toBe(0);
+      expect(dir.handles.every((handle) => handle.closed)).toBe(true);
+    }
+  );
+
+  it('keeps the storage error as the cause when dropping the partial file also fails', async () => {
+    const dir = mount();
+    dir.limits.throwFrom = 'write';
+    dir.removeFails = true;
+    const store = new OpfsStagingStore('test');
+
+    const error = await store.putStagedBytes(key, payload).catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(StagingIoError);
+    expect((error as StagingIoError).cause).toBeInstanceOf(DOMException);
+    expect((error as StagingIoError).cause).toMatchObject({ name: 'QuotaExceededError' });
   });
 
   it('rejects a short read rather than returning zero-padded bytes', async () => {

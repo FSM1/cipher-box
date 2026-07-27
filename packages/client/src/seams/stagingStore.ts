@@ -19,9 +19,10 @@ import type { StagingStoreSeam } from './types.js';
 const OPS_STORE = 'ops';
 
 /**
- * A staged-byte read or write that moved fewer bytes than requested. OPFS sync
- * access handles report a short count instead of throwing, so this is the seam's
- * fail-closed signal, never a recoverable partial result.
+ * A staged-byte read or write that did not move every requested byte. OPFS sync
+ * access handles signal that either as a short count or as a thrown storage
+ * error, so this is the seam's fail-closed signal for both, never a recoverable
+ * partial result.
  */
 export class StagingIoError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -108,27 +109,32 @@ export class OpfsStagingStore implements StagingStoreSeam {
     const dir = await this.stagedDir();
     const fileHandle = await dir.getFileHandle(fileName, { create: true });
     const handle = await fileHandle.createSyncAccessHandle();
-    let written: number;
+    let failure: { message: string; cause?: unknown } | undefined;
     try {
       handle.truncate(0);
-      written = handle.write(staged, { at: 0 });
+      const written = handle.write(staged, { at: 0 });
       handle.flush();
+      if (written !== staged.byteLength) {
+        failure = {
+          message: `staged write truncated: wrote ${written} of ${staged.byteLength} bytes`,
+        };
+      }
+    } catch (error) {
+      failure = { message: 'staged write failed', cause: error };
     } finally {
       handle.close();
     }
-    if (written === staged.byteLength) return;
-    // A quota-constrained write returns a short count without throwing. Staging
-    // a truncated block would later upload bytes whose CID the engine's read
-    // path always rejects, so fail closed here and drop the partial file so a
-    // retry starts from empty rather than resuming a truncated one.
-    const cause = await removeIfPresent(dir, fileName).then(
+    if (!failure) return;
+    // A constrained write either returns a short count or throws (the spec names
+    // QuotaExceededError). Either way `truncate(0)` has already landed, so a
+    // partial file is on disk; staging a truncated block would later upload
+    // bytes whose CID the engine's read path always rejects. Fail closed and
+    // drop the file so a retry starts from empty rather than resuming it.
+    const cleanupError = await removeIfPresent(dir, fileName).then(
       () => undefined,
       (error: unknown) => error
     );
-    throw new StagingIoError(
-      `staged write truncated: wrote ${written} of ${staged.byteLength} bytes`,
-      { cause }
-    );
+    throw new StagingIoError(failure.message, { cause: failure.cause ?? cleanupError });
   }
 
   async stagedBytes(stagingKey: Uint8Array): Promise<Uint8Array | null> {
