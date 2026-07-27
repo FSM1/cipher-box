@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b51d769d2d31",
+  "strategy": "manual-commit",
+  "branch": "research/content-format-freeze",
+  "checkpoints_count": 3,
+  "files_touched": [
+    ".planning/research/pin-row-ingress.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/b5/1d769d2d31/0/metadata.json",
+      "transcript": "/b5/1d769d2d31/0/full.jsonl",
+      "compact_transcript": "/b5/1d769d2d31/0/transcript.jsonl",
+      "content_hash": "/b5/1d769d2d31/0/content_hash.txt",
+      "prompt": "/b5/1d769d2d31/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 92,
+    "cache_creation_tokens": 122641,
+    "cache_read_tokens": 4380533,
+    "output_tokens": 44849,
+    "api_call_count": 46
+  }
+}
