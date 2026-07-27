@@ -1,0 +1,7 @@
+<task-notification>
+<task-id>bt1orvm6l</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/8267f28c-a642-4499-8ed8-0ab37af2bee1/tasks/bt1orvm6l.output</output-file>
+<status>completed</status>
+<summary>Background command "Poll 839 mergeability after rebase" completed (exit code 0)</summary>
+</task-notification>

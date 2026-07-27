@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "fb92484078ef",
+  "strategy": "manual-commit",
+  "branch": "research/staging-budget",
+  "checkpoints_count": 28,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/fb/92484078ef/0/metadata.json",
+      "transcript": "/fb/92484078ef/0/full.jsonl",
+      "compact_transcript": "/fb/92484078ef/0/transcript.jsonl",
+      "content_hash": "/fb/92484078ef/0/content_hash.txt",
+      "prompt": "/fb/92484078ef/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 796,
+    "cache_creation_tokens": 871595,
+    "cache_read_tokens": 71556859,
+    "output_tokens": 401569,
+    "api_call_count": 401
+  }
+}
