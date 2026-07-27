@@ -1,7 +1,259 @@
+one more rundown of the pros/cons of the various journaling options
+
+---
+
+and on with the next frontier please
+
+---
+
+I have no understanding of which part of the upload flow were are talking about, and the pros/cons of the various options.
+
+---
+
+I am kind-of leaning towards the `also cache the sealed blocks` option, but only longer term. 
+
+Regarding the `also seed the record cache` option and the extent of the contract change: what did you mean by `gate-passing-records`? which gates are being referred to?
+
+---
+
+so pros/cons of the the various options? specifically worried about the technical complexity, cache invalidation, etc.
+
+---
+
+ok lets handle content key custody then.
+
+---
+
+alright, lets go
+
+---
+
+pro's / con's of the options?
+
+---
+
+kick off the publish port frontier
+
+---
+
+please provide some more high-level context for the various pros / cons of B vs B`
+
+---
+
+leaning towards entirely custody free - what advantages are there to the additions?
+
+---
+
+how much benefit to the 2nd A option with publish private, vs how much work?
+
+---
+
+yeah please create an issue, background a worker to /implement #issueNum 
+
+also any other engine tickets to deal with on the backlog?
+
+---
+
+ok please fire off all 3 that are startable.
+
+---
+
+ok last grilling before I need to be AFK
+
+---
+
+Core side seems much cleaner, but what advantages are there to engine-side?
+
+---
+
+while I am afk, pelase ensure all the issues have the /ship #issue workflow run in full.
+
+---
+
 <task-notification>
-<task-id>bt1orvm6l</task-id>
+<task-id>a6d8407594356844e</task-id>
 <tool-use-id>REDACTED</tool-use-id>
-<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/8267f28c-a642-4499-8ed8-0ab37af2bee1/tasks/bt1orvm6l.output</output-file>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/8267f28c-a642-4499-8ed8-0ab37af2bee1/tasks/a6d8407594356844e.output</output-file>
 <status>completed</status>
-<summary>Background command "Poll 839 mergeability after rebase" completed (exit code 0)</summary>
+<summary>Agent "Implement issue 827" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. Stopped at the draft PR + CodeRabbit CLI, as instructed — did not run `gh pr ready`.
+
+## Result
+
+- **Branch:** `fix/engine-mailbox-route-prefix` (forked from `origin/main` @ `b91633b35`), commit `fe959d32d`, pushed.
+- **PR:** https://github.com/FSM1/cipher-box/pull/835 — **draft**, body references `Closes #827`, no AI attribution.
+
+## The three corrected routes
+
+| Method | Was | Now |
+| --- | --- | --- |
+| `mailbox_post` | `POST /mailbox` | `POST /mailbox/messages` |
+| `mailbox_poll` | `GET /mailbox` | `GET /mailbox/messages` |
+| `mailbox_ack` | `DELETE /mailbox/{id}` | `DELETE /mailbox/messages/{id}` |
+
+Verified against `apps/api/src/mailbox/mailbox.controller.ts` and `apps/api/openapi.json` (which declares only those two paths), not the issue text.
+
+**Two extra mismatches the issue did not mention**, both behind the same untested surface and both fatal on first live call: `mailbox_poll` decoded a bare array where the API returns a `{ "messages": [...] }` envelope, and `mailbox_post` dropped the `{ "id": ... }` response body — that id is the idempotent-replay contract. `mailbox_post` now returns `String`; there are no production callers, so nothing breaks.
+
+## Contract coverage added
+
+`crates/contract/tests/contract.rs`:
+- `mailbox_post_poll_ack_round_trips` — post → poll → ack against a real API: blob round-trips byte-identical, mail is recipient-scoped (sender's own poll is empty), a replayed idempotency key returns the original id and delivers no second copy, ack hard-deletes and re-ack is a no-op.
+- `mailbox_post_is_bounded_by_recipient_existence_and_blob_size` — existence-oracle 404 and the 8 KiB blob cap's 413.
+
+**A live API was genuinely available.** Postgres, Kubo and `mock-ipns-routing` were already up in Docker; I created a fresh `cipherbox_contract_827` database, ran migrations, built the API and booted it on `:3300` (`:3000` was another project). Real output:
+
+```
+running 13 tests ... test result: ok. 13 passed; 0 failed; 0 ignored
+cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract
+  → 799 passed; 0 failed; 2 ignored
+cargo fmt --all --check → clean; clippy (both scopes, -D warnings) → clean
+```
+
+I also **proved the gate is real**: reverting just the three path strings makes both new tests FAIL; restoring makes them pass. Ran the full suite three times consecutively against one database to confirm rerun-safety.
+
+Not run locally: the WASM legs of Core KATs — the diff touches neither `crates/core` nor the WASM boundary.
+
+## Review gates
+
+- **`/simplify`** — 5 findings folded in. The material one: the oversize-blob fixture at 9000 bytes encoded to *exactly* the DTO's 12000-char `@MaxLength`, so any tightening would silently flip the test from 413 to 400; now 8193 bytes. Rest were comment duplication and a redundant assertion. **1 rejected**: a claim that deterministic test-login accounts break on re-run — refuted empirically.
+- **`/security-review`** — **no findings**. Blob stays an opaque passthrough, all three methods still go through `request_authed`, `JwtAuthGuard` is class-scoped so the sub-path change stays inside it, and `mailbox_post` is now *more* fail-closed (decodes instead of dropping). Path-interpolated ack id cannot control host or protocol.
+- **`/crypto-privacy-review`** — skipped; ship.md's grep surfaces no crypto/privacy-adjacent files.
+- **CodeRabbit CLI** (`--agent --base main --type committed`) — `"findings": 0` across all five files. No cooldown hit.
+
+**Triage tally:** 5 fixed / 1 issue filed / 1 rejected.
+
+## Issue filed
+
+**#836** — the browser mailbox seam (`packages/client/src/seams/mailbox.ts`) has the same defect and worse: it posts `application/octet-stream` with `x-recipient`/`idempotency-key` *headers* to `POST /mailbox` where the API serves a JSON DTO on `/mailbox/messages`, and its `ack` treats the resulting 404 as success — so the engine would record "acked" for a delete that never happened. Kept out of this PR deliberately: the Rust fix is contract-gated, a TS fix has no gate until the browser conformance switch runs the mailbox kit. Filed with a dependency edge to #827/#835.
+
+## One thing worth flagging
+
+The contract suite has **zero headroom** on the per-IP `POST /auth/challenge` and `POST /auth/login` throttle buckets — it sits at exactly 10/10. That is pre-existing, not from this change, but it is why the new tests mint accounts via `test_login` (3/10 → 6/10 on its own bucket) rather than `fresh_account`. One more identity login anywhere in that file will 429 the whole suite.
+
+Docker stack left running; I killed only the API I spawned on `:3300`.</result>
+<usage><subagent_tokens>205394</subagent_tokens><tool_uses>121</tool_uses><duration_ms>1234741</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a6d8407594356844e</worktreePath><worktreeBranch>worktree-agent-a6d8407594356844e</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a750561399b9f0fa1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/8267f28c-a642-4499-8ed8-0ab37af2bee1/tasks/a750561399b9f0fa1.output</output-file>
+<status>completed</status>
+<summary>Agent "Resolve PR 835 reviews" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Steps 7 and 8 complete for PR #835. Not merged — left ready-for-review and green.
+
+## Review pass — genuine, not just a walkthrough
+
+CodeRabbit submitted a **real review** (`review 4789565634`, `COMMENTED`, body starts `Actionable comments posted: 1`), separate from the earlier walkthrough comment. Confirmed via `pulls/835/reviews`.
+
+**Greptile did not review this PR.** It posted only: *"Greptile has paused reviews on this repository — it used its 100 free open-source review credits for this billing period. Reviews resume automatically on August 18."* So this slice got one automated reviewer, not two. Noted in the PR body.
+
+## Triage — 1 finding: 0 fixed / 0 issues filed / 1 discarded
+
+The single finding (`crates/contract/tests/contract.rs:514`, "Make the idempotency key run-scoped") was **discarded** — its premise is factually wrong for this API, verified against source rather than assumed:
+
+- Idempotency is not a retained side record. It rides the message row as `idempotency_scope = sha256(sender:key)` under the unique `uq_mailbox_recipient_idempotency` index — `/Users/myankelev/Code/random/cipher-box/apps/api/src/mailbox/entities/mailbox-message.entity.ts`.
+- Ack is a hard delete of that row — `MailboxService.ack()` is `await this.messageRepository.delete({ id, recipientPublicKey })` in `/Users/myankelev/Code/random/cipher-box/apps/api/src/mailbox/services/mailbox.service.ts`. Nothing survives a completed run.
+- The interrupted-run case CodeRabbit was reaching for is **self-healing, not sticky**: a leftover un-acked row collapses onto the same scope, the reposted key returns that row's id, and all three poll assertions still hold on the identical constant blob — then the test acks it away.
+
+This lands in ship.md's discard bucket (test-only suggestion, no demonstrated impact), and the PR already had three consecutive green `cargo test -p cipherbox-contract` runs against one database as empirical refutation. Nothing filed. No code changed, so no re-review cycle.
+
+## Threads: 1/1 resolved
+
+Replied via `addPullRequestReviewThreadReply` with the reasoning above, then `resolveReviewThread`. Re-queried `reviewThreads` with no author filter: `total: 1, unresolved: 0`, thread has exactly 2 comments (`coderabbitai` + one `FSM1` reply) — no duplicates.
+
+## PR body updated
+
+Patched via `gh api -X PATCH` (`gh pr edit` is broken here): added the CodeRabbit triage record, the Greptile credit-exhaustion note, and **`#837`** under a renamed "Follow-ups filed" section — it was filed but the body only referenced `#836`. Both issues confirmed OPEN; nothing new filed, nothing duplicated.
+
+## Final state
+
+- **Final commit SHA:** `fe959d32dbae6fe1fe34436c3870382f350cc82d` (unchanged — no fix commits were needed, so no push and no signing was required)
+- **CI: all green.** 14 checks SUCCESS incl. `CodeRabbit`, `Contract Suite`, `Core KATs (native + WASM)`, all three `Cargo Check &amp; Test` legs, `Client Browser Suite`, `Engine Tests`, `Lint`, `lint-pr-title`, `zizmor static audit`. 8 SKIPPED are path-filtered non-runs (API/Build/Typecheck/Test/Desktop/Migration Drift/OpenAPI Freshness) — the diff touches no TS or API source; both aggregate gates (`Contract Suite Result`, `Desktop Build Result`) pass.
+- `mergeable: MERGEABLE / CLEAN`, `isDraft: false`, state OPEN.
+
+One caveat worth flagging: because Greptile was credit-blocked, the only independent automated review on this PR was CodeRabbit's single pass. Given the slice is routing plus tests with no crypto surface, I judged that sufficient rather than blocking, but the second-reviewer coverage this repo normally gets was not present.</result>
+<usage><subagent_tokens>70167</subagent_tokens><tool_uses>33</tool_uses><duration_ms>332979</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a173c8fccd76d618d</task-id>
+<tool-use-id>toolu_01ErnWoPrjBSigtCyDTjBgtx</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/8267f28c-a642-4499-8ed8-0ab37af2bee1/tasks/a173c8fccd76d618d.output</output-file>
+<status>completed</status>
+<summary>Agent "Implement issue 798" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done through the draft PR + CodeRabbit CLI. Stopped before `gh pr ready` as instructed.
+
+## Result
+
+- **Branch:** `refactor/engine-owner-root-fixture-testkit` (forked from `origin/main` @ `b91633b35`)
+- **PR:** https://github.com/FSM1/cipher-box/pull/838 — **draft**, head `f0cd6bd46`, `Closes #798`
+
+## Extracted builder
+
+New file `crates/engine/src/testkit/owner_root.rs`, exported from `crates/engine/src/testkit/mod.rs`:
+
+```rust
+pub fn owner_root_fixture(spec: OwnerRootSpec&lt;'_&gt;) -&gt; OwnerRootFixture
+
+pub struct OwnerRootSpec&lt;'a&gt; {
+    pub owner_identity: &amp;'a EcdsaSigner,
+    pub owner_enc: &amp;'a X25519Public,
+    pub scope_id: [u8; 16],
+    pub root_id: [u8; 16],
+    pub children: Vec&lt;ChildRef&gt;,
+    pub owner_write_blob_epoch: Option&lt;u64&gt;,
+}
+pub struct OwnerRootFixture { name, grant_section, envelope, head_block, head_cid_str }
+pub const OWNER_ROOT_SCOPE_SEED / OWNER_ROOT_WRITE_SCOPE_SEED / OWNER_ROOT_EPOCH
+```
+
+It takes the X25519 **public** key, not the secret — no secret crosses the new boundary, so there is no caller-owned buffer for the callee to zeroize.
+
+**LOC removed:** `net/adopter.rs` −158, `facade.rs` −128. Net across the PR: −298 / +256.
+
+## Assertions did not weaken
+
+Mechanically diffed against `origin/main`: `#[test]` fn sets identical (11 adopter / 58 facade), assert-macro counts identical, all 148 `facade.rs` assertion lines byte-identical. Only change is three renames to the identically-valued `OWNER_ROOT_WRITE_SCOPE_SEED`.
+
+Stronger: a throwaway test reproduced both pre-refactor inline builders verbatim from `origin/main` and asserted **byte-identical** head blocks, head CIDs and IPNS names across all four owner-write-blob variants. Both passed; the scratch test was deleted before commit.
+
+## `cargo test -p cipherbox-engine` (verbatim, final SHA)
+
+```
+427 passed; 0 failed   (unittests src/lib.rs)
+ 25 passed; 0 failed   (tests/adoption_gate.rs)
+  7 passed; 0 failed   (tests/conformance_fakes.rs)
+  9 passed; 0 failed   (tests/facade.rs)
+  3 passed; 0 failed   (tests/floor_atomic.rs)
+ 17 passed; 0 failed   (tests/grants_mailbox.rs)
+ 22 passed; 0 failed   (tests/net.rs)
+ 15 passed; 0 failed   (tests/sync.rs)
+```
+
+Also green: `cargo fmt --all --check`; `cargo clippy --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets -- -D warnings`; `cargo test --workspace --exclude …` (24 suites, 0 failed); `cargo check -p cipherbox-wasm --features conformance --target wasm32-unknown-unknown`. Browser/contract suites aren't gated by this diff — no WASM boundary, seam, or API surface touched.
+
+## Review triage — 3 fixed, 0 issues filed, 5 discarded
+
+- **security-review:** no findings. Verified the test-only claim holds — every hunk sits inside `#[cfg(test)] mod tests`, and `testkit` is behind the non-default `test-kit` feature whose only enablers are dev-deps.
+- **crypto-privacy-review:** zeroize ownership clean, determinism clean, field-by-field cryptographic equivalence confirmed. One LOW: the extraction *widens* a latent keystream hazard by promoting the varying inputs to a `pub` API. **Fixed** by documenting the constraint on `OwnerRootSpec`.
+- **simplify:** confirmed not over-parameterized. **Fixed** two: replaced `facade.rs` alias consts with `use … as`, and cut rationale restated at a caller. **Discarded** 5 nits (comment shape; folding in the IPNS record builders — out of #798's scope).
+- **CodeRabbit CLI** (`--agent --base main --type committed`): 1 major, **fixed**. My keystream note treated `owner_enc` and `root_id` as interchangeable; they're independent axes (read-body key from `root_id` alone, owner-write-blob HPKE key from `owner_enc` alone). Corrected, amended, force-pushed.
+
+## Not completed
+
+The confirming CodeRabbit re-run hit the **org rate limit — 48 minutes**. Per your instruction (one retry max, no detached sleep) I stopped rather than wait it out, so the clean-pass re-review is outstanding; it's noted in the PR body. The first pass did complete and its single finding is fixed.
+
+`gh pr ready` not run and no web review triggered, as instructed.</result>
+<usage><subagent_tokens>174542</subagent_tokens><tool_uses>101</tool_uses><duration_ms>1808385</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a173c8fccd76d618d</worktreePath><worktreeBranch>worktree-agent-a173c8fccd76d618d</worktreeBranch></worktree>
 </task-notification>
