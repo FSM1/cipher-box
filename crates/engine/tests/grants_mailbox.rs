@@ -1456,14 +1456,15 @@ fn mailbox_lifecycle_through_the_api_client() {
     let client = ApiClient::new(http.clone(), creds, "http://api.test");
 
     // post → poll → ack, the mailbox surface the contract suite exercises.
-    http.enqueue_response(json_ok(b"{}"));
+    http.enqueue_response(json_ok(br#"{"id":"m1"}"#));
     // "hi" base64 is "aGk=" — hard-coded so the test needs no base64 dep.
     http.enqueue_response(json_ok(
-        br#"[{"id":"m1","receivedAt":"2026-01-01T00:00:00Z","blob":"aGk="}]"#,
+        br#"{"messages":[{"id":"m1","receivedAt":"2026-01-01T00:00:00Z","blob":"aGk="}]}"#,
     ));
-    http.enqueue_response(json_ok(b"{}"));
+    http.enqueue_response(json_ok(br#"{"success":true}"#));
 
-    block_on(client.mailbox_post("02abc-recipient", b"hi", "idem-1")).expect("post");
+    let posted = block_on(client.mailbox_post("02abc-recipient", b"hi", "idem-1")).expect("post");
+    assert_eq!(posted, "m1", "post returns the server-assigned id");
     let items = block_on(client.mailbox_poll()).expect("poll");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].id, "m1");
@@ -1474,7 +1475,7 @@ fn mailbox_lifecycle_through_the_api_client() {
     assert_eq!(requests.len(), 3);
 
     // post: JSON body carries the base64 blob and the idempotency key.
-    assert_eq!(requests[0].url, "http://api.test/mailbox");
+    assert_eq!(requests[0].url, "http://api.test/mailbox/messages");
     assert_eq!(requests[0].method, HttpMethod::Post);
     let post_body = String::from_utf8(requests[0].body.clone().unwrap()).unwrap();
     assert!(
@@ -1488,10 +1489,10 @@ fn mailbox_lifecycle_through_the_api_client() {
     );
 
     // poll: a GET on the mailbox collection.
-    assert_eq!(requests[1].url, "http://api.test/mailbox");
+    assert_eq!(requests[1].url, "http://api.test/mailbox/messages");
     assert_eq!(requests[1].method, HttpMethod::Get);
 
     // ack: a DELETE on the item.
-    assert_eq!(requests[2].url, "http://api.test/mailbox/m1");
+    assert_eq!(requests[2].url, "http://api.test/mailbox/messages/m1");
     assert_eq!(requests[2].method, HttpMethod::Delete);
 }
