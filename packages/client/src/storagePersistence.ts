@@ -7,6 +7,10 @@
  * cache — breaking the offline-parity premise the staging design rests on. The
  * grant is best-effort: a denial is reported, never thrown, so the host can warn
  * instead of promising durability it does not have.
+ *
+ * `StorageManager.persist()` is `[Exposed=Window]` — it is absent in the engine
+ * worker's realm, so the request is made from the UI realm. The grant is
+ * origin-wide and covers the worker's IndexedDB and OPFS regardless.
  */
 
 /** Requests persistent storage for this origin; resolves the granted state. */
@@ -16,7 +20,7 @@ export async function requestStoragePersistence(): Promise<boolean> {
   if (typeof storage?.persist !== 'function') return false;
   try {
     // Check first: a browser that prompts for the permission must not re-prompt
-    // on every worker start once the origin is already persistent.
+    // in every tab once the origin is already persistent.
     if (typeof storage.persisted === 'function' && (await storage.persisted())) return true;
     return await storage.persist();
   } catch {

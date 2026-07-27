@@ -56,10 +56,6 @@ export class LocalTransport extends CorrelatedTransport {
   // Settles `ready` on teardown so a request awaiting cold start before the
   // worker's `ready` rejects instead of hanging forever.
   private rejectReady!: (error: Error) => void;
-  private persisted = false;
-
-  /** The worker's storage-persistence grant; `false` if it never reached ready. */
-  readonly storagePersisted: Promise<boolean>;
 
   constructor(private readonly worker: EngineWorkerLike) {
     super();
@@ -69,7 +65,6 @@ export class LocalTransport extends CorrelatedTransport {
         const message = event.data;
         switch (message.type) {
           case 'ready':
-            this.persisted = message.storagePersisted === true;
             resolveReady();
             return;
           case 'response':
@@ -93,10 +88,6 @@ export class LocalTransport extends CorrelatedTransport {
     });
     // A never-observed rejection would warn; the request path re-observes it.
     this.ready.catch(() => undefined);
-    this.storagePersisted = this.ready.then(
-      () => this.persisted,
-      () => false
-    );
   }
 
   start(secret: ArrayBuffer): Promise<void> {

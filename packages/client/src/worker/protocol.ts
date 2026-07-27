@@ -118,11 +118,8 @@ export type WorkerRequest =
 
 /** A worker → UI message. */
 export type WorkerMessage =
-  /**
-   * The worker has instantiated the engine and is ready for requests.
-   * `storagePersisted` is the origin's persistent-storage grant (`seams/persistence`).
-   */
-  | { type: 'ready'; storagePersisted: boolean }
+  /** The worker has instantiated the engine and is ready for requests. */
+  | { type: 'ready' }
   /**
    * The correlated result of a request. A read request's ok response carries
    * its value: a `SnapshotDescriptor` for `snapshot`, the plaintext

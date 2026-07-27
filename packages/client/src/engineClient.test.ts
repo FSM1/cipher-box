@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { EngineClient, type EngineClientConfig } from './engineClient.js';
 import { FakeBus, FakeEngineWorker, FakeLockManager } from './testkit.js';
@@ -236,24 +236,21 @@ describe('EngineClient leadership + transport swap', () => {
     await follower.dispose();
   });
 
-  it('reports the leader worker storage-persistence grant to the host', async () => {
-    const locks = new FakeLockManager();
-    const bus = new FakeBus();
-    const seen: boolean[] = [];
-    const leader = new EngineClient({
-      locks,
-      createChannel: () => bus.channel(),
-      spawnWorker: () => {
-        const worker = new FakeEngineWorker();
-        setTimeout(() => worker.ready(true), 0);
-        return worker;
-      },
-      onStoragePersistence: (persisted) => seen.push(persisted),
+  it('reports the origin storage-persistence grant to the host, follower tabs included', async () => {
+    vi.stubGlobal('navigator', {
+      storage: { persisted: () => Promise.resolve(false), persist: () => Promise.resolve(true) },
     });
-    await tick();
+    const { tab } = origin();
+    const seen: boolean[] = [];
+    const leader = tab({ onStoragePersistence: (persisted) => seen.push(persisted) });
+    const follower = tab({ onStoragePersistence: (persisted) => seen.push(persisted) });
     await tick();
 
-    expect(seen).toEqual([true]);
+    expect(leader.currentRole()).toBe('leader');
+    expect(follower.currentRole()).toBe('follower');
+    expect(seen).toEqual([true, true]);
     await leader.dispose();
+    await follower.dispose();
+    vi.unstubAllGlobals();
   });
 });

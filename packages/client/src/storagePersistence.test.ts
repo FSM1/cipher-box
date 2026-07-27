@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { requestStoragePersistence } from './persistence.js';
+import { requestStoragePersistence } from './storagePersistence.js';
 
 function mount(storage: unknown): void {
   vi.stubGlobal('navigator', { storage });
