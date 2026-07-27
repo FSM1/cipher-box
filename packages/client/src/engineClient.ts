@@ -51,6 +51,12 @@ export interface EngineClientConfig {
   lockName?: string;
   /** Surfaces election/failover faults (best-effort; the facade still works). */
   onError?: (error: Error) => void;
+  /**
+   * Reports whether this tab's engine worker holds persistent storage. `false`
+   * means the browser may evict the durable op queue and staged bytes, so the
+   * host should warn rather than promise offline parity.
+   */
+  onStoragePersistence?: (persisted: boolean) => void;
 }
 
 export type EngineClientRole = 'follower' | 'leader' | 'closed';
@@ -213,6 +219,8 @@ export class EngineClient implements EngineTransport {
       this.innerUnsub = local.subscribe((event) => this.fanOut(event));
       this.relay = new LeaderRelay(this.channel, local);
       if (this.ownFocus) this.relay.reportLocalFocus(this.clientId, this.ownFocus);
+      const onStoragePersistence = this.config.onStoragePersistence;
+      if (onStoragePersistence) void local.storagePersisted.then(onStoragePersistence);
     } catch (error) {
       this.abortPromotion(local, error);
     }

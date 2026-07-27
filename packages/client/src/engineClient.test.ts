@@ -235,4 +235,25 @@ describe('EngineClient leadership + transport swap', () => {
     await expect(inFlight).rejects.toThrow(/retry|closed/);
     await follower.dispose();
   });
+
+  it('reports the leader worker storage-persistence grant to the host', async () => {
+    const locks = new FakeLockManager();
+    const bus = new FakeBus();
+    const seen: boolean[] = [];
+    const leader = new EngineClient({
+      locks,
+      createChannel: () => bus.channel(),
+      spawnWorker: () => {
+        const worker = new FakeEngineWorker();
+        setTimeout(() => worker.ready(true), 0);
+        return worker;
+      },
+      onStoragePersistence: (persisted) => seen.push(persisted),
+    });
+    await tick();
+    await tick();
+
+    expect(seen).toEqual([true]);
+    await leader.dispose();
+  });
 });

@@ -228,7 +228,7 @@ export class FakeEngineWorker implements EngineWorkerLike {
       listener({ data: message } as MessageEvent<WorkerMessage>);
   }
 
-  ready(): void {
-    this.emit({ type: 'ready' });
+  ready(storagePersisted = false): void {
+    this.emit({ type: 'ready', storagePersisted });
   }
 }

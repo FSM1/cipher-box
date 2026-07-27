@@ -28,7 +28,11 @@ function errorCode(error: unknown): string | undefined {
 }
 
 /** Wires `scope` to `host`, then signals readiness. */
-export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void {
+export function serveEngine(
+  scope: WorkerScopeLike,
+  host: EngineHostLike,
+  storagePersisted = false
+): void {
   const post = (message: WorkerMessage): void => scope.postMessage(message);
 
   const handle = async (request: WorkerRequest): Promise<void> => {
@@ -82,5 +86,5 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
     }
   })();
 
-  post({ type: 'ready' });
+  post({ type: 'ready', storagePersisted });
 }

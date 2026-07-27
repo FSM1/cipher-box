@@ -12,6 +12,7 @@
  * never import it into the UI realm.
  */
 
+import { requestStoragePersistence } from '../seams/index.js';
 import { makeBrowserSeams, type BrowserSeamsConfig } from './browserSeams.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm } from './engineWasm.js';
@@ -52,9 +53,12 @@ async function bootstrap(config: EngineWorkerBootstrap): Promise<void> {
   try {
     const wasm = (await import(/* @vite-ignore */ config.wasmModuleUrl)) as WasmGlue;
     await wasm.default({ module_or_path: config.wasmBinaryUrl });
+    // Ask before the seams can take their first enqueue: without the grant the
+    // browser may evict the op queue and staged bytes wholesale.
+    const storagePersisted = await requestStoragePersistence();
     const seams = makeBrowserSeams(config);
     const host = new EngineHost(wasm, seams, config.profile);
-    serveEngine(workerScope as unknown as WorkerScopeLike, host);
+    serveEngine(workerScope as unknown as WorkerScopeLike, host, storagePersisted);
   } catch (error) {
     workerScope.postMessage({
       type: 'fatal',

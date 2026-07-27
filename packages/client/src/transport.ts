@@ -56,15 +56,27 @@ export class LocalTransport extends CorrelatedTransport {
   // Settles `ready` on teardown so a request awaiting cold start before the
   // worker's `ready` rejects instead of hanging forever.
   private rejectReady!: (error: Error) => void;
+  private resolvePersisted!: (persisted: boolean) => void;
+
+  /**
+   * Whether the origin holds persistent-storage permission, as the worker
+   * reported it at startup. Resolves `false` if the worker never got that far,
+   * so a host awaiting it is never left hanging.
+   */
+  readonly storagePersisted: Promise<boolean>;
 
   constructor(private readonly worker: EngineWorkerLike) {
     super();
+    this.storagePersisted = new Promise<boolean>((resolve) => {
+      this.resolvePersisted = resolve;
+    });
     this.ready = new Promise<void>((resolveReady, rejectReady) => {
       this.rejectReady = rejectReady;
       this.worker.addEventListener('message', (event) => {
         const message = event.data;
         switch (message.type) {
           case 'ready':
+            this.resolvePersisted(message.storagePersisted ?? false);
             resolveReady();
             return;
           case 'response':
@@ -75,6 +87,7 @@ export class LocalTransport extends CorrelatedTransport {
             this.emit(message.event);
             return;
           case 'fatal':
+            this.resolvePersisted(false);
             rejectReady(new Error(message.error));
             this.fail(new Error(message.error));
             return;
@@ -82,6 +95,7 @@ export class LocalTransport extends CorrelatedTransport {
       });
       this.worker.addEventListener('error', (event) => {
         const error = new Error(event.message || 'engine worker error');
+        this.resolvePersisted(false);
         rejectReady(error);
         this.fail(error);
       });
@@ -121,6 +135,7 @@ export class LocalTransport extends CorrelatedTransport {
     // Reject `ready` first so a request parked on cold start unblocks with the
     // teardown error rather than hanging; `fail` then rejects in-flight requests.
     this.rejectReady(error);
+    this.resolvePersisted(false);
     this.fail(error);
     this.worker.terminate();
   }

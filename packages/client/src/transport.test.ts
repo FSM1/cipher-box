@@ -314,4 +314,20 @@ describe('LocalTransport', () => {
     await expect(pending).rejects.toThrow('closed');
     expect(worker.terminated).toBe(true);
   });
+
+  it('surfaces the storage-persistence grant the worker reports at startup', async () => {
+    const worker = new FakeWorker();
+    const transport = new LocalTransport(worker);
+    worker.emit({ type: 'ready', storagePersisted: true });
+
+    await expect(transport.storagePersisted).resolves.toBe(true);
+  });
+
+  it('reports storage as not persisted when the worker never reaches ready', async () => {
+    const worker = new FakeWorker();
+    const transport = new LocalTransport(worker);
+    transport.close();
+
+    await expect(transport.storagePersisted).resolves.toBe(false);
+  });
 });

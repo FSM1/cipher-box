@@ -118,8 +118,13 @@ export type WorkerRequest =
 
 /** A worker → UI message. */
 export type WorkerMessage =
-  /** The worker has instantiated the engine and is ready for requests. */
-  | { type: 'ready' }
+  /**
+   * The worker has instantiated the engine and is ready for requests.
+   * `storagePersisted` reports whether the origin holds persistent-storage
+   * permission, so the host can warn that queued work may be evicted; absent
+   * means the worker did not report a grant, which the host reads as denied.
+   */
+  | { type: 'ready'; storagePersisted?: boolean }
   /**
    * The correlated result of a request. A read request's ok response carries
    * its value: a `SnapshotDescriptor` for `snapshot`, the plaintext
