@@ -1,8 +1,7 @@
 import { EngineClient, spawnEngineWorker } from '@cipherbox/client';
 import { engineHostConfig } from './config';
-// `?url` hands the engine worker the artifact's built URL instead of inlining
-// it here: Vite emits both files as content-hashed assets, so the artifact is
-// fingerprinted and served immutable (blueprint/web-client.md "WASM packaging").
+// Content-hashed by Vite, so the artifact is served immutable
+// (blueprint/web-client.md "WASM packaging").
 import wasmModuleUrl from '../wasm/cipherbox_wasm.js?url';
 import wasmBinaryUrl from '../wasm/cipherbox_wasm_bg.wasm?url';
 

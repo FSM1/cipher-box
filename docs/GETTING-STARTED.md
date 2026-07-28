@@ -12,9 +12,17 @@ This guide takes you from a fresh checkout to a running local stack.
 | Node.js        | 20+        | Used by all JS/TS workspaces                   |
 | pnpm           | 10.33.0    | Declared in `packageManager` field             |
 | Docker         | Any recent | Runs PostgreSQL, IPFS, Redis, and mock routing |
-| Rust toolchain | stable     | Desktop app only (`apps/desktop`)              |
+| Rust toolchain | stable     | Desktop app, and the web app's engine WASM     |
 
 No `.nvmrc` is present; use your system Node version manager to select Node 20+.
+
+`apps/web` compiles `crates/wasm` into the engine worker's artifact on every `dev`/`build`, so it also
+needs the browser target and a `wasm-bindgen-cli` matching the `wasm-bindgen` version in `Cargo.lock`:
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-bindgen-cli --version "$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')" --locked
+```
 
 For the desktop app, also install the platform FUSE driver:
 

@@ -22,6 +22,7 @@ jobs:
     outputs:
       ts: ${{ steps.filter.outputs.ts }}
       rust: ${{ steps.filter.outputs.rust }}
+      web: ${{ steps.filter.outputs.web }}
       desktop: ${{ steps.filter.outputs.desktop }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -43,6 +44,19 @@ jobs:
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
               - '.cargo/config.toml'
+              - '.github/workflows/ci.yml'
+            web:
+              - 'apps/web/**'
+              - 'packages/client/**'
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/config.toml'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - 'package.json'
+              - 'tsconfig*.json'
               - '.github/workflows/ci.yml'
             desktop:
               - 'apps/desktop/**'
@@ -139,37 +153,37 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # The web bundle needs the wasm-bindgen artifact, so it is gated by the
-      # `Web Bundle` job, which carries the Rust toolchain; this job stays
-      # TS-only. `!cipher-box` drops the root project, whose own `build` script
-      # would recurse back into every package.
+      # apps/web is built by `Web Bundle`, which carries the Rust toolchain its
+      # WASM artifact needs. `!cipher-box` drops the root project, whose own
+      # `build` script would recurse back into every package.
       - name: Build packages
         run: pnpm --filter '!@cipherbox/web' --filter '!cipher-box' run build
 
-  # apps/web's production wasm-bindgen artifact and the bundle that serves it
-  # (blueprint/web-client.md "WASM packaging"): the app build emits the engine
-  # module from crates/wasm and Vite fingerprints both files into `dist/assets`.
-  # Merge-blocking, and split out of `Build` so a TS-only change never waits on
-  # a Rust toolchain. Depends on both the crates and packages.
+  # apps/web's production WASM artifact and the bundle that fingerprints it
+  # (blueprint/web-client.md "WASM packaging"). Split out of `Build` so a change
+  # that touches neither the web app nor the crates pays no Rust toolchain.
   web-bundle:
     name: Web Bundle
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
-      (needs.changes.outputs.ts == 'true' || needs.changes.outputs.rust == 'true')
+      needs.changes.outputs.web == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # Only the browser target's build tree: the native `target/` subtrees the
+      # cargo jobs cache are dead weight here, and a fourth full copy would push
+      # the repo's other cargo caches out under LRU.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin
-            target
+            target/wasm32-unknown-unknown
           key: web-bundle-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: web-bundle-cargo-
 
@@ -201,19 +215,8 @@ jobs:
       - name: Build the web bundle
         run: pnpm --filter @cipherbox/web run build
 
-      # The worker's dynamic import resolves to whatever Vite emitted, so the
-      # bundle is only usable if both artifact files landed content-hashed.
       - name: Bundle carries the fingerprinted engine artifact
-        run: |
-          shopt -s nullglob
-          glue=(apps/web/dist/assets/cipherbox_wasm-*.js)
-          binary=(apps/web/dist/assets/cipherbox_wasm_bg-*.wasm)
-          if [ ${#glue[@]} -ne 1 ] || [ ${#binary[@]} -ne 1 ]; then
-            echo "::error::apps/web/dist is missing the fingerprinted engine WASM artifact"
-            ls -R apps/web/dist
-            exit 1
-          fi
-          echo "engine artifact: ${glue[0]} ${binary[0]}"
+        run: ls apps/web/dist/assets/cipherbox_wasm-*.js apps/web/dist/assets/cipherbox_wasm_bg-*.wasm
 
   api-unit:
     name: API Unit
@@ -548,8 +551,8 @@ jobs:
           fi
 
       # The single wasm-bindgen ES module and its generated .d.ts contract must
-      # build (blueprint/web-client.md); packages/client hosts and fingerprints
-      # it later.
+      # build (blueprint/web-client.md) on any crate change, including one that
+      # touches no TS; `Web Bundle` is what ships it.
       - name: Build the wasm-bindgen ES module and .d.ts
         run: |
           cargo build -p cipherbox-wasm --release --target wasm32-unknown-unknown

@@ -3,13 +3,13 @@ import type { EngineHostConfig } from '@cipherbox/client';
 const DEFAULT_API_URL = 'http://localhost:3000';
 const DEFAULT_ROUTING_ENDPOINTS = 'https://delegated-ipfs.dev';
 
-/** Where the bundler placed the engine's WASM artifact; not environment-configurable. */
-export type WasmArtifactUrls = Pick<EngineHostConfig, 'wasmModuleUrl' | 'wasmBinaryUrl'>;
-
-/** Reads the app's build-time environment into the engine host's configuration. */
+/**
+ * Reads the app's build-time environment into the engine host's configuration.
+ * The artifact URLs come from the bundler, not the environment.
+ */
 export function engineHostConfig(
   env: Partial<ImportMetaEnv>,
-  artifact: WasmArtifactUrls
+  artifact: Pick<EngineHostConfig, 'wasmModuleUrl' | 'wasmBinaryUrl'>
 ): EngineHostConfig {
   const recordEndpoints = (env.VITE_ROUTING_ENDPOINTS ?? DEFAULT_ROUTING_ENDPOINTS)
     .split(',')

@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm build:wasm && tsc -b && vite",
-    "build": "pnpm build:wasm && tsc -b && vite build",
+    "build": "pnpm build:wasm && pnpm build:bundle",
     "build:wasm": "node scripts/build-wasm.mjs",
+    "build:bundle": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "test": "tsc -b && vitest run"

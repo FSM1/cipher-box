@@ -69,8 +69,7 @@ jobs:
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
-      # No cargo cache on the deploy path: the shipped artifact is built from a
-      # clean checkout, so no cache entry can reach a staging bundle.
+      # apps/web compiles crates/wasm into the engine artifact it bundles.
       - name: Add wasm target
         run: rustup target add wasm32-unknown-unknown
 
@@ -87,19 +86,18 @@ jobs:
         run: |
           WB_VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
           echo "wasm-bindgen ${WB_VERSION}"
-          if wasm-bindgen --version 2>/dev/null | grep -qw "${WB_VERSION}"; then
-            echo "wasm-bindgen-cli ${WB_VERSION} already present (cache hit); skipping install"
-          else
-            cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked --force
-          fi
+          cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # Builds the engine WASM artifact first (apps/web `build:wasm`), then the
-      # bundle that fingerprints it.
+      # Kept separate from the bundle step so the staging secrets below never
+      # enter the environment of a cargo build script.
+      - name: Build the engine WASM artifact
+        run: pnpm --filter @cipherbox/web build:wasm
+
       - name: Build web app with staging env vars
-        run: pnpm --filter @cipherbox/web build
+        run: pnpm --filter @cipherbox/web build:bundle
         env:
           VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_API_URL: ${{ vars.STAGING_API_URL }}

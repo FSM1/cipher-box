@@ -6,11 +6,7 @@ import type { EngineClient } from '@cipherbox/client';
 const EngineContext = createContext<EngineClient | null | undefined>(undefined);
 
 export interface EngineProviderProps {
-  /**
-   * Builds this tab's engine client. Read once, on mount. Injected rather than
-   * defaulted so the WASM artifact stays out of this module's import graph —
-   * only the composition root resolves it.
-   */
+  /** Builds this tab's engine client. Read once, on mount. */
   createClient: () => EngineClient;
   children: ReactNode;
 }
