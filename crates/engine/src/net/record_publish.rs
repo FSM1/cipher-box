@@ -49,9 +49,7 @@ pub enum PreflightError {
 impl core::fmt::Display for PreflightError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::BlockEnvelopeMismatch => {
-                f.write_str("head block is not the envelope beside it")
-            }
+            Self::BlockEnvelopeMismatch => f.write_str("head block is not the envelope beside it"),
             Self::BindingMismatch => f.write_str("authored envelope binding mismatch"),
             Self::Unseal(e) => write!(f, "authored envelope does not reopen: {}", e.check()),
         }

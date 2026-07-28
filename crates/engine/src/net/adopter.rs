@@ -201,29 +201,46 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<Option<OwnScopeMaterial>, SeamError> {
-        // Recovery is fail-open, never a trust verdict: an unopenable/absent blob
-        // yields `Ok(None)`, held keyless (#752 F3: a Current never hardens).
-        // Reuse the candidate the rejected `adopt` assembled for these same
-        // bytes; assembling again re-fetches the head block.
-        let cached = self
+        // Recovery is fail-open, never a trust verdict: anything unproved yields
+        // `Ok(None)`, held keyless (#752 F3: a Current never hardens).
+        //
+        // Only the candidate the rejected [`Adopter::adopt`] cached for these
+        // exact bytes is eligible. That candidate reached the floor stages, so
+        // the gate's stages 1-3 authenticated the grant section it carries;
+        // re-assembling here would run none of them.
+        let Some(candidate) = self
             .assembled
             .borrow_mut()
             .take()
-            .filter(|c| c.name == *name && c.record_bytes == record_bytes);
-        let candidate = match cached {
-            Some(candidate) => candidate,
-            None => match self.assemble_candidate(name, record_bytes).await {
-                Ok(candidate) => candidate,
-                Err(GateError::Seam(seam)) => return Err(seam),
-                Err(GateError::Rejected(_)) => return Ok(None),
-            },
+            .filter(|c| c.name == *name && c.record_bytes == record_bytes)
+        else {
+            return Ok(None);
         };
         let env = &candidate.envelope;
+        // Stages 4/5 did NOT run: `floor::check` returns `SequenceNotNewer`
+        // before it reads the epoch floor. Re-impose what they would have —
+        // scope binding and the read-epoch floor — or a forgery-window writer
+        // re-serving a pre-rotation section at the floor would hand back the
+        // revoked epoch's read seed.
+        let epoch_floor = floor::read_epoch_floor(self.floors, &self.root_scope_id)
+            .await?
+            .unwrap_or(0);
+        if env.scope != self.root_scope_id || env.epoch < epoch_floor {
+            return Ok(None);
+        }
         let Ok(read_scope_seed) =
             self.open_read_scope_seed(env, &candidate.grant_section.owner_blob)
         else {
             return Ok(None);
         };
+        // Unseal-confirm the seed, exactly as stage 6 does for an adopt: a seed
+        // that does not derive the key this record's own body opens under is not
+        // this scope's seed.
+        let node_seed = kdf::node_seed(&read_scope_seed, &env.id);
+        let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
+        if open_read_body(env, &read_key).is_err() {
+            return Ok(None);
+        }
         let write_scope_seed = match &candidate.grant_section.owner_write_blob {
             None => None,
             // Map a recovery seam to availability, never a trust verdict.
@@ -243,9 +260,7 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
 
 impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     /// Open the record's owner blob with the owner's own encryption secret and
-    /// take the scope read seed it wraps. The blob's structure signature is
-    /// authenticated by the gate's stage 3, which runs before the floor stages,
-    /// so an equal-floor `Current` has already proved it committed.
+    /// take the scope read seed it wraps.
     fn open_read_scope_seed(
         &self,
         env: &Envelope,

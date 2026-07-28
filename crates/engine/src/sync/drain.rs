@@ -364,16 +364,19 @@ where
             children: root.children.clone(),
             unknown: root.body_unknown.clone(),
         };
-        let head = author_scope_root_envelope(EnvelopeAuthoring {
-            node_id: scope.root.0,
-            scope_id: scope.root.0,
-            epoch: root.epoch,
-            read_key: &read_key,
-            nonce: &self.nonce()?,
-            body: &body,
-            carried_unknown: root.envelope_unknown.clone(),
-            carried_epoch_tag_unknown: root.epoch_tag_unknown.clone(),
-        })
+        let head = author_scope_root_envelope(
+            EnvelopeAuthoring {
+                node_id: scope.root.0,
+                scope_id: scope.root.0,
+                epoch: root.epoch,
+                read_key: &read_key,
+                nonce: &self.nonce()?,
+                body: &body,
+                carried_unknown: root.envelope_unknown.clone(),
+                carried_epoch_tag_unknown: root.epoch_tag_unknown.clone(),
+            },
+            scope.root_name,
+        )
         .map_err(|_| Halt)?;
         let record_bytes = self
             .publish_head(scope, scope.root_name, &scope.root.0, root.epoch, &head)
@@ -421,7 +424,14 @@ where
         };
         let preflighted =
             preflight(&binding, &self.node_read_key(scope, node_id), head).map_err(|_| Halt)?;
+        // The name and the seed the signer comes from have independent sources
+        // for the scope root — the vault pointer's `currentRoot` and the
+        // owner-write-blob. Publishing under a name this signer cannot sign for
+        // would burn a CAS sequence on a record nothing can verify.
         let signer = SessionIdentity::write_name_signer(scope.write_scope_seed, node_id);
+        if IpnsName::from_public_key(&signer.verifying_key()) != *name {
+            return Err(Halt);
+        }
         let PublishReceipt {
             outcome,
             record_bytes,

@@ -8,6 +8,9 @@
 //!
 //! - a child envelope carrying a grant section returns `Err`, off core's own
 //!   `has_grant_section` — the produce guard and the decode reject cannot drift;
+//! - a scope root missing its grant section, or carrying one whose commitment
+//!   names another `ipnsName`, returns `Err` off the same decoder the gate's
+//!   stages 2 and 5 run;
 //! - a kind transplant and a non-canonical child-ref `ipnsName` are
 //!   unrepresentable: [`new_child`] feeds one [`NodeKind`] and one typed
 //!   [`IpnsName`] to both the body and the parent's ref.
@@ -17,7 +20,8 @@ use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
-    ChildRef, Envelope, NodeKind, ReadBody, encode_envelope, has_grant_section, seal_read_body,
+    ChildRef, Envelope, NodeKind, ReadBody, decode_grant_section, encode_envelope,
+    grant_section_bytes, has_grant_section, seal_read_body,
 };
 
 use crate::content::DAG_ROOT_CODEC;
@@ -34,6 +38,12 @@ pub enum AuthorError {
     /// child adoption always rejects (`net/child.rs`). Refusing here keeps the
     /// produce side and the decode side on the same predicate.
     GrantSectionOnChild,
+    /// A scope root carried no decodable `grantSection` — the marker every root
+    /// adoption requires (`net/adopter.rs` step 5).
+    MissingGrantSection,
+    /// The carried grant-set commitment names a different `ipnsName` than the
+    /// record is published under, which the gate's stage 2 rejects.
+    CommitmentNameMismatch,
     /// Core refused to seal or encode the authored body (a body decode would
     /// refuse to reopen, e.g. duplicate child ids).
     Seal(CodecError),
@@ -43,6 +53,10 @@ impl core::fmt::Display for AuthorError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::GrantSectionOnChild => f.write_str("child envelope carries a grantSection"),
+            Self::MissingGrantSection => f.write_str("scope root carries no grantSection"),
+            Self::CommitmentNameMismatch => {
+                f.write_str("carried commitment names another ipnsName")
+            }
             Self::Seal(e) => write!(f, "seal failed: {}", e.check()),
         }
     }
@@ -96,13 +110,24 @@ pub fn author_child_envelope(
     encode(envelope)
 }
 
-/// Author a **scope root**'s envelope. The grant section is the root's marker
-/// and rides `carried_unknown` verbatim, so the seed-bearing structures and
-/// their signatures survive a metadata republish untouched.
+/// Author a **scope root**'s envelope for publication under `name`. The grant
+/// section is the root's marker and rides `carried_unknown` verbatim, so the
+/// seed-bearing structures and their signatures survive a metadata republish
+/// untouched — which also means a republish must not carry a section belonging
+/// to some other name, so the two checks the gate's stages 2 and 5 make on
+/// arrival run here first (release-active).
 pub fn author_scope_root_envelope(
     authoring: EnvelopeAuthoring<'_>,
+    name: &IpnsName,
 ) -> Result<AuthoredHead, AuthorError> {
-    encode(seal(&authoring)?)
+    let envelope = seal(&authoring)?;
+    let section = grant_section_bytes(&envelope)
+        .and_then(|bytes| decode_grant_section(bytes).ok())
+        .ok_or(AuthorError::MissingGrantSection)?;
+    if section.commitment.ipns_name != name.as_str().as_bytes() {
+        return Err(AuthorError::CommitmentNameMismatch);
+    }
+    encode(envelope)
 }
 
 fn seal(authoring: &EnvelopeAuthoring<'_>) -> Result<Envelope, AuthorError> {
@@ -185,7 +210,10 @@ mod tests {
     use super::*;
     use cipherbox_core::ipns::IpnsName;
     use cipherbox_core::kdf;
-    use cipherbox_core::seal::{decode_envelope, open_read_body};
+    use cipherbox_core::seal::{decode_envelope, encode_grant_section, open_read_body};
+    use cipherbox_core::suite::ecdsa::EcdsaSigner;
+
+    use crate::testkit::{OwnerRootFixture, OwnerRootSpec, owner_root_fixture};
 
     const READ_KEY: [u8; 32] = [9u8; 32];
     const NONCE: [u8; 24] = [5u8; 24];
@@ -220,6 +248,26 @@ mod tests {
         vec![("grantSection".to_owned(), Value::Bytes(b"section".to_vec()))]
     }
 
+    /// A real scope root's grant section and the name its commitment binds.
+    fn owner_root() -> OwnerRootFixture {
+        let owner_identity = EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid scalar");
+        owner_root_fixture(OwnerRootSpec {
+            owner_identity: &owner_identity,
+            owner_enc: &kdf::enc_subkey(&[0x33; 32]).public(),
+            scope_id: [2u8; 16],
+            root_id: [1u8; 16],
+            children: Vec::new(),
+            owner_write_blob_epoch: None,
+        })
+    }
+
+    fn carried_section(fixture: &OwnerRootFixture) -> Vec<(String, Value)> {
+        vec![(
+            "grantSection".to_owned(),
+            Value::Bytes(encode_grant_section(&fixture.grant_section).expect("encodes")),
+        )]
+    }
+
     #[test]
     fn a_child_envelope_carrying_a_grant_section_is_refused() {
         // Release-active: the guard returns `Err`, so this assertion holds
@@ -232,9 +280,36 @@ mod tests {
 
     #[test]
     fn a_scope_root_envelope_carries_its_grant_section_through() {
-        let head = author_scope_root_envelope(authoring(&folder(), grant_section_field())).unwrap();
+        let fixture = owner_root();
+        let head = author_scope_root_envelope(
+            authoring(&folder(), carried_section(&fixture)),
+            &fixture.name,
+        )
+        .unwrap();
         assert!(has_grant_section(&head.envelope));
         assert!(has_grant_section(&decode_envelope(&head.block).unwrap()));
+    }
+
+    #[test]
+    fn a_scope_root_envelope_republished_under_another_name_is_refused() {
+        // The commitment signs the name it belongs to, so a section carried onto
+        // a record published elsewhere is one the gate's stage 2 always rejects.
+        let fixture = owner_root();
+        assert_eq!(
+            author_scope_root_envelope(authoring(&folder(), carried_section(&fixture)), &name())
+                .unwrap_err(),
+            AuthorError::CommitmentNameMismatch,
+        );
+    }
+
+    #[test]
+    fn a_scope_root_envelope_without_a_grant_section_is_refused() {
+        // A root that lost its section is a root no reader can open: child
+        // adoption refuses the missing marker and the gate has no commitment.
+        assert_eq!(
+            author_scope_root_envelope(authoring(&folder(), Vec::new()), &name()).unwrap_err(),
+            AuthorError::MissingGrantSection,
+        );
     }
 
     #[test]
