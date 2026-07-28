@@ -46,6 +46,7 @@ pub mod staleness;
 pub mod tick;
 
 pub use boot::{ColdStartError, ColdStartOutcome, ColdStartParams, RootResolve, cold_start};
+pub use drain::DRAINED_OP_FLOOR_KEY;
 pub use model::{Link, NodeMeta, Snapshot, collation_key, suffix_name};
 pub use op::{Op, OpDecodeError, OpKind, StagedContent};
 pub use overlay::apply_overlay;

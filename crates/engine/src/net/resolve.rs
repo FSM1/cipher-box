@@ -44,19 +44,34 @@ pub trait Adopter {
     /// `Err(GateError::Seam)` is host I/O.
     async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<AdoptOutcome, GateError>;
 
-    /// Recover the OWNER's own write-scope seed for an equal-floor `Current` own
-    /// record so the liveness loop can hold+renew it (#752 F3). `Ok(None)` when
-    /// not our own / no owner-write-blob / the blob won't open under the durable
-    /// write floor — held keyless, never force-held. Fail-OPEN: returns a
-    /// [`SeamError`], never a `Rejected` verdict (a `Current` must never harden
-    /// into a trust error). The default suits every non-owner adopter stub.
-    async fn recover_own_write_seed(
+    /// Recover the OWNER's own scope material for an equal-floor `Current` own
+    /// record: the read seed the child pipeline and the drain seal under, and
+    /// the write seed the liveness loop renews with (#752 F3). `Ok(None)` when
+    /// the record is not our own or its owner blob will not open. Fail-OPEN:
+    /// returns a [`SeamError`], never a `Rejected` verdict (a `Current` must
+    /// never harden into a trust error). The default suits every non-owner
+    /// adopter stub.
+    async fn recover_own_scope_material(
         &self,
         _name: &IpnsName,
         _record_bytes: &[u8],
-    ) -> Result<Option<([u8; 16], Zeroizing<[u8; 32]>)>, SeamError> {
+    ) -> Result<Option<OwnScopeMaterial>, SeamError> {
         Ok(None)
     }
+}
+
+/// The owner's own-scope seeds, recovered from a record already at the durable
+/// sequence floor. Both come from grant-section structures the gate's stages
+/// 1-3 authenticated before the floor stages ran, so an equal-floor `Current`
+/// has proved them committed; neither is ever persisted.
+pub struct OwnScopeMaterial {
+    /// The scope-root node id the seeds belong to.
+    pub node_id: [u8; 16],
+    /// The scope read seed (the owner blob's override seed).
+    pub read_scope_seed: Zeroizing<[u8; 32]>,
+    /// The scope write seed, `None` when the root is held keyless (no
+    /// owner-write-blob, or it will not open under the durable write floor).
+    pub write_scope_seed: Option<Zeroizing<[u8; 32]>>,
 }
 
 /// A gate pass plus the transient write material a write-capable holder needs to
@@ -204,17 +219,28 @@ where
                 Err(GateError::Rejected(rejection)) => match &rejection.reason {
                     RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {
                         // Our own current root at exactly the floor: recover the
-                        // owner's write seed (fail-open) so the liveness loop can
-                        // hold+renew it before its EOL lapses (#752 F3). A non-owner
-                        // record or an unopenable owner-write-blob yields no hold.
-                        let hold = adopter.recover_own_write_seed(name, &bytes).await?;
+                        // owner's own scope seeds (fail-open) so the liveness loop
+                        // can hold+renew it before its EOL lapses (#752 F3) and the
+                        // write plane keeps the keys it seals under across a
+                        // session that adopts nothing. A non-owner record yields
+                        // neither.
+                        let material = adopter.recover_own_scope_material(name, &bytes).await?;
+                        let (hold, read_scope_seed) = match material {
+                            Some(material) => (
+                                material
+                                    .write_scope_seed
+                                    .map(|seed| (material.node_id, seed)),
+                                Some(material.read_scope_seed),
+                            ),
+                            None => (None, None),
+                        };
                         (
                             ResolveOutcome::Current {
                                 record_bytes: bytes.clone(),
                             },
                             hold,
                             Some(bytes),
-                            None,
+                            read_scope_seed,
                         )
                     }
                     _ => (ResolveOutcome::TrustViolation(rejection), None, None, None),
@@ -378,7 +404,9 @@ pub(crate) fn refresh_base_from_outcome(
 
 #[cfg(test)]
 mod tests {
-    use super::{HeldMaterial, ResolveOutcome, head_cid_from_value, resolve_and_hold};
+    use super::{
+        HeldMaterial, OwnScopeMaterial, ResolveOutcome, head_cid_from_value, resolve_and_hold,
+    };
 
     use core::cell::RefCell;
 
@@ -484,14 +512,16 @@ mod tests {
             }
         }
 
-        async fn recover_own_write_seed(
+        async fn recover_own_scope_material(
             &self,
             _name: &IpnsName,
             _record_bytes: &[u8],
-        ) -> Result<Option<([u8; 16], Zeroizing<[u8; 32]>)>, crate::seams::SeamError> {
-            Ok(self
-                .own_seed
-                .map(|(node_id, seed)| (node_id, Zeroizing::new(seed))))
+        ) -> Result<Option<OwnScopeMaterial>, crate::seams::SeamError> {
+            Ok(self.own_seed.map(|(node_id, seed)| OwnScopeMaterial {
+                node_id,
+                read_scope_seed: Zeroizing::new([0u8; 32]),
+                write_scope_seed: Some(Zeroizing::new(seed)),
+            }))
         }
     }
 
@@ -804,8 +834,7 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold")
-        .resolved;
+        .expect("resolve_and_hold");
 
         // The gate-surfaced write seed derived the renewal signer, keyed by the
         // gate's node id, and it signs for exactly the held name.
@@ -884,8 +913,7 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold")
-        .resolved;
+        .expect("resolve_and_hold");
 
         let expected = head_cid_from_value(VALUE).expect("fixture value has a head cid");
         assert!(!expected.is_empty());
@@ -935,8 +963,7 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold")
-        .resolved;
+        .expect("resolve_and_hold");
         let hr = held
             .borrow()
             .get(&node_id)

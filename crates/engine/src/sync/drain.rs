@@ -61,7 +61,7 @@ use crate::sync::record::RecordReader;
 /// namespace, whose contract it is — a durable monotonic-max `u64` under opaque
 /// key bytes — under a key the base36 `ipnsName` alphabet cannot spell, so it
 /// never collides with a real per-name floor.
-const DRAINED_OP_FLOOR_KEY: &[u8] = b"cipherbox/drained-op";
+pub const DRAINED_OP_FLOOR_KEY: &[u8] = b"cipherbox/drained-op";
 
 /// What one drain pass did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]

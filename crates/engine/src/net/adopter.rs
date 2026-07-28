@@ -23,16 +23,16 @@ use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, Envelope, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, SignedOwnerWriteBlob,
-    decode_envelope, decode_grant_section, grant_section_bytes, open_owner_blob,
-    open_owner_write_blob,
+    AadContext, Envelope, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, SignedOwnerBlob,
+    SignedOwnerWriteBlob, decode_envelope, decode_grant_section, grant_section_bytes,
+    open_owner_blob, open_owner_write_blob,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use super::publish::head_cid_from_value;
-use super::resolve::{AdoptOutcome, Adopter};
+use super::resolve::{AdoptOutcome, Adopter, OwnScopeMaterial};
 use crate::content::{ContentPlane, Gateway, ReadError, read_block};
 use crate::gate::{
     Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob,
@@ -60,7 +60,7 @@ pub struct RootAdopter<'a, H, F> {
     /// the gate rejects fail-closed.
     root_scope_id: [u8; 16],
     /// The candidate a rejected [`Adopter::adopt`] assembled, kept so the
-    /// equal-floor `Current` recovery ([`Adopter::recover_own_write_seed`])
+    /// equal-floor `Current` recovery ([`Adopter::recover_own_scope_material`])
     /// reuses it instead of re-fetching the same head block per resolve tick.
     assembled: RefCell<Option<Candidate>>,
     /// A head block the caller already holds ([`Self::hold_local_head`]).
@@ -145,26 +145,15 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         // seed derives this key, and unseals the read-body.
         let env = &candidate.envelope;
         let owner_blob = &candidate.grant_section.owner_blob;
-        let owner_blob_aad = AadContext {
-            v: env.v,
-            id: env.id,
-            scope: env.scope,
-            epoch: env.epoch,
-            struct_tag: STRUCT_TAG_OWNER_BLOB,
-        };
-        let payload = open_owner_blob(
-            self.owner_enc_secret,
-            &owner_blob.enc,
-            &owner_blob_aad,
-            &owner_blob.ciphertext,
-        )
-        .map_err(|e| reject(GateStage::Unseal, e))?;
+        let owner_blob_aad = owner_blob_aad(env);
+        let read_scope_seed = self
+            .open_read_scope_seed(env, owner_blob)
+            .map_err(|e| reject(GateStage::Unseal, e))?;
 
         // The derived read key is secret; this fn is its terminal owner, so it
         // zeroizes on drop (the gate borrows it and never zeroizes a caller buffer).
         // The recovered scope read seed rides the outcome on a gate pass — the
         // engine's per-scope seed cell feeds the child read pipeline from it.
-        let read_scope_seed = Zeroizing::new(*payload.override_seed());
         let node_seed = kdf::node_seed(&read_scope_seed, &env.id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
 
@@ -207,11 +196,11 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         })
     }
 
-    async fn recover_own_write_seed(
+    async fn recover_own_scope_material(
         &self,
         name: &IpnsName,
         record_bytes: &[u8],
-    ) -> Result<Option<([u8; 16], Zeroizing<[u8; 32]>)>, SeamError> {
+    ) -> Result<Option<OwnScopeMaterial>, SeamError> {
         // Recovery is fail-open, never a trust verdict: an unopenable/absent blob
         // yields `Ok(None)`, held keyless (#752 F3: a Current never hardens).
         // Reuse the candidate the rejected `adopt` assembled for these same
@@ -229,23 +218,48 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
                 Err(GateError::Rejected(_)) => return Ok(None),
             },
         };
-        let Some(owb) = &candidate.grant_section.owner_write_blob else {
+        let env = &candidate.envelope;
+        let Ok(read_scope_seed) =
+            self.open_read_scope_seed(env, &candidate.grant_section.owner_blob)
+        else {
             return Ok(None);
         };
-        // Map a recovery seam to availability, never a trust verdict.
-        let seed = match self
-            .recover_write_scope_seed(&candidate.envelope, owb)
-            .await
-        {
-            Ok(seed) => seed,
-            Err(GateError::Seam(seam)) => return Err(seam),
-            Err(GateError::Rejected(_)) => return Ok(None),
+        let write_scope_seed = match &candidate.grant_section.owner_write_blob {
+            None => None,
+            // Map a recovery seam to availability, never a trust verdict.
+            Some(owb) => match self.recover_write_scope_seed(env, owb).await {
+                Ok(seed) => seed,
+                Err(GateError::Seam(seam)) => return Err(seam),
+                Err(GateError::Rejected(_)) => return Ok(None),
+            },
         };
-        Ok(seed.map(|seed| (candidate.envelope.id, seed)))
+        Ok(Some(OwnScopeMaterial {
+            node_id: env.id,
+            read_scope_seed,
+            write_scope_seed,
+        }))
     }
 }
 
 impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
+    /// Open the record's owner blob with the owner's own encryption secret and
+    /// take the scope read seed it wraps. The blob's structure signature is
+    /// authenticated by the gate's stage 3, which runs before the floor stages,
+    /// so an equal-floor `Current` has already proved it committed.
+    fn open_read_scope_seed(
+        &self,
+        env: &Envelope,
+        owner_blob: &SignedOwnerBlob,
+    ) -> Result<Zeroizing<[u8; 32]>, CodecError> {
+        let payload = open_owner_blob(
+            self.owner_enc_secret,
+            &owner_blob.enc,
+            &owner_blob_aad(env),
+            &owner_blob.ciphertext,
+        )?;
+        Ok(Zeroizing::new(*payload.override_seed()))
+    }
+
     /// Recover the owner's write-scope seed (a KDF non-edge the owner cannot
     /// re-derive) from the record's owner-write-blob for cold-start write-plane
     /// self-renewal (blueprint/core.md "Grant section").
@@ -336,6 +350,17 @@ pub(crate) async fn assemble_head_envelope<H: Http>(
     Ok((verified.sequence, envelope))
 }
 
+/// The structured AAD an owner blob is sealed under.
+fn owner_blob_aad(env: &Envelope) -> AadContext {
+    AadContext {
+        v: env.v,
+        id: env.id,
+        scope: env.scope,
+        epoch: env.epoch,
+        struct_tag: STRUCT_TAG_OWNER_BLOB,
+    }
+}
+
 /// A fail-closed content-plane assembly failure: the head the signed record
 /// anchors is malformed or tampered, so the record's content anchor is
 /// untrustworthy. Assembly runs before the gate's six stages, so it surfaces as
@@ -377,7 +402,8 @@ mod tests {
     use crate::session::SessionIdentity;
     use crate::testkit::fakes::{InMemoryFloorStore, ScriptedHttp};
     use crate::testkit::{
-        OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec, block_on, owner_root_fixture,
+        OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec,
+        block_on, owner_root_fixture,
     };
 
     const TTL_NANOS: u64 = 2_000_000_000;
@@ -666,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn recover_own_write_seed_returns_the_seed_for_our_own_current_root() {
+    fn recovery_returns_both_scope_seeds_for_our_own_current_root() {
         let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
         let http = ScriptedHttp::default();
         http.enqueue_response(ok_response(fx.head_block.clone()));
@@ -675,10 +701,17 @@ mod tests {
         let gw = gateway();
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
 
-        let (node_id, seed) = block_on(adopter.recover_own_write_seed(&fx.name, &fx.record(1)))
+        let material = block_on(adopter.recover_own_scope_material(&fx.name, &fx.record(1)))
             .expect("recovery is fail-open, never an error")
-            .expect("the owner recovers its own write seed on the Current path");
-        assert_eq!(node_id, fx.root_id, "keyed by the envelope id");
+            .expect("the owner recovers its own scope seeds on the Current path");
+        assert_eq!(material.node_id, fx.root_id, "keyed by the envelope id");
+        assert_eq!(
+            *material.read_scope_seed, OWNER_ROOT_SCOPE_SEED,
+            "the read seed the write plane seals under survives a session that adopts nothing",
+        );
+        let seed = material
+            .write_scope_seed
+            .expect("the write seed is recovered");
         assert_eq!(*seed, OWNER_ROOT_WRITE_SCOPE_SEED);
         // The recovered seed reproduces the record's IPNS routing name.
         let signer = SessionIdentity::write_name_signer(&seed, &fx.root_id);
@@ -704,9 +737,11 @@ mod tests {
             Ok(_) => panic!("an equal-floor record must reject at the sequence stage"),
             Err(GateError::Seam(e)) => panic!("expected a rejection, got seam {e}"),
         }
-        let (_, seed) = block_on(adopter.recover_own_write_seed(&fx.name, &record))
+        let seed = block_on(adopter.recover_own_scope_material(&fx.name, &record))
             .expect("recovery is fail-open, never an error")
-            .expect("the owner recovers its write seed from the reused candidate");
+            .expect("the owner recovers its seeds from the reused candidate")
+            .write_scope_seed
+            .expect("the write seed is recovered");
         assert_eq!(*seed, OWNER_ROOT_WRITE_SCOPE_SEED);
         assert_eq!(
             http.requests().len(),
@@ -716,7 +751,7 @@ mod tests {
     }
 
     #[test]
-    fn recover_own_write_seed_is_none_when_the_blob_is_absent_stale_or_transplanted() {
+    fn no_write_seed_is_recovered_when_the_blob_is_absent_stale_or_transplanted() {
         // Missing owner-write-blob → held keyless, never a seed.
         let fx = Fixture::new();
         let http = ScriptedHttp::default();
@@ -726,10 +761,12 @@ mod tests {
         let gw = gateway();
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
         assert!(
-            block_on(adopter.recover_own_write_seed(&fx.name, &fx.record(1)))
+            block_on(adopter.recover_own_scope_material(&fx.name, &fx.record(1)))
                 .expect("fail-open")
+                .expect("the read seed still recovers")
+                .write_scope_seed
                 .is_none(),
-            "no owner-write-blob ⇒ no recovered seed"
+            "no owner-write-blob ⇒ held keyless"
         );
 
         // Stale blob one write epoch below the floor → won't open → None.
@@ -741,10 +778,12 @@ mod tests {
         let gw = gateway();
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
         assert!(
-            block_on(adopter.recover_own_write_seed(&fx.name, &fx.record(1)))
+            block_on(adopter.recover_own_scope_material(&fx.name, &fx.record(1)))
                 .expect("fail-open")
+                .expect("the read seed still recovers")
+                .write_scope_seed
                 .is_none(),
-            "a stale owner-write-blob below the floor recovers no seed"
+            "a stale owner-write-blob below the floor recovers no write seed"
         );
 
         // Transplanted: the floor names a different write epoch than the blob was
@@ -757,10 +796,12 @@ mod tests {
         let gw = gateway();
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
         assert!(
-            block_on(adopter.recover_own_write_seed(&fx.name, &fx.record(1)))
+            block_on(adopter.recover_own_scope_material(&fx.name, &fx.record(1)))
                 .expect("fail-open")
+                .expect("the read seed still recovers")
+                .write_scope_seed
                 .is_none(),
-            "a transplanted owner-write-blob recovers no seed"
+            "a transplanted owner-write-blob recovers no write seed"
         );
     }
 }
