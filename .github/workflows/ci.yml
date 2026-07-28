@@ -370,9 +370,15 @@ jobs:
           key: linux-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: linux-cargo-
 
-      # Engine unit tests plus every seam conformance kit executed against
-      # its in-memory fake (the test-kit feature activates via the crate's
-      # self dev-dependency).
+      - name: Engine KAT vectors fresh (committed generator is the only writer)
+        run: |
+          cargo run -p cipherbox-engine --example kat_gen
+          git diff --exit-code -- crates/engine/kat
+          test -z "$(git status --porcelain -- crates/engine/kat)"
+
+      # Engine unit tests, the content-DAG KAT suite, plus every seam
+      # conformance kit executed against its in-memory fake (the test-kit
+      # feature activates via the crate's self dev-dependency).
       - name: Engine tests and seam conformance kits
         run: cargo test -p cipherbox-engine
 

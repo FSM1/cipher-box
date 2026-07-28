@@ -489,6 +489,12 @@ pub enum EngineError {
         /// The verdict classification; never carries key material.
         message: String,
     },
+    /// The content's DAG root declared a format version this build cannot
+    /// read; see [`DagError::UnsupportedFormat`](crate::DagError).
+    UnsupportedContentFormat {
+        /// The version the root declared.
+        version: u64,
+    },
     /// The command's pipeline slice has not landed yet (scaffold state).
     Unimplemented {
         /// [`Command::name`] of the rejected command.
@@ -582,6 +588,10 @@ impl fmt::Display for EngineError {
                 write!(f, "content unavailable: {message}")
             }
             EngineError::TrustViolation { message } => write!(f, "trust violation: {message}"),
+            EngineError::UnsupportedContentFormat { version } => write!(
+                f,
+                "content format version {version} is not supported by this client"
+            ),
             EngineError::Unimplemented { command } => {
                 write!(f, "command not implemented yet: {command}")
             }
@@ -1542,6 +1552,9 @@ impl<T: SeamTypes> Engine<T> {
             .map_err(|e| match e {
                 OpenError::Trust(message) => EngineError::TrustViolation { message },
                 OpenError::Unavailable(message) => EngineError::ContentUnavailable { message },
+                OpenError::UnsupportedFormat { version } => {
+                    EngineError::UnsupportedContentFormat { version }
+                }
             })?;
         Ok((
             plaintext,
@@ -1943,6 +1956,10 @@ mod tests {
             "command not implemented yet: create"
         );
         assert_eq!(EngineError::NotStarted.to_string(), "engine not started");
+        assert_eq!(
+            EngineError::UnsupportedContentFormat { version: 2 }.to_string(),
+            "content format version 2 is not supported by this client"
+        );
     }
 
     // --- facade wiring: reads, command execution, event emission ---

@@ -1,0 +1,10 @@
+[
+  {
+    "name": "flat-dag-ceiling-max-links",
+    "chunkSize": 1048536,
+    "leafCount": 110375,
+    "size": 115732161000,
+    "rootBlockLen": 4194294,
+    "contentCid": "01711e20cce429fca648b0d71f89a985f66aa5cb4cb89652b99314f00444aca30652329a"
+  }
+]

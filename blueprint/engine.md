@@ -486,8 +486,11 @@ contract-test suite owned by the testing-strategy blueprint (#28 D6).
   content key, #26 D6), and assembles a DAG addressed by the version's
   `contentCid`, shaped so ranged block/CAR fetches map chunk-aligned.
   Retention default: keep all versions within quota, with an explicit
-  user-initiated prune op. Exact chunk size and retention knobs are open edges
-  below.
+  user-initiated prune op. The framing is frozen (#820) and pinned by the
+  engine KAT manifest: the 1 MiB budget belongs to the **block**, so a
+  1,048,536-byte plaintext chunk seals to a 1 MiB leaf; the DAG is a flat root
+  carrying an explicit format version, whose inlined link list caps a single
+  file at ~107.78 GiB.
 
 ## Facade
 
@@ -507,8 +510,6 @@ already happened below the facade — hosts render, they never decide.
   serving the tombstone before retire. #38 fixed the channel architecture but
   not the window; proposed as a sync-timing-profile constant, to settle with
   the testing-strategy blueprint's e2e work.
-- **Chunk size, DAG shape, retention defaults** — the judgment above needs
-  numbers; freeze alongside the KAT manifest and testing strategy.
 - **Sweep cadence** — the idle-cadence value joins the sync timing profile.
 - **Designed-for seams, deliberately unbuilt in v2.0**: push overlay (API
   WebSocket hints or desktop PubSub) behind `RefreshHintSource` (#33 D1);

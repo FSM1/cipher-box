@@ -14,7 +14,7 @@
 //! - [`provider`] — the pin-provider layer and BYO reachability probe.
 //! - [`read`] — verified reads (accelerator + public fallback), fail-closed.
 //! - [`retention`] — pre-flight quota and the explicit prune op.
-//! - [`profile`] — the open-edge chunk-size constant.
+//! - [`profile`] — the frozen chunk-size constant.
 
 pub mod chunk;
 pub mod dag;
@@ -25,7 +25,9 @@ pub mod read;
 pub mod retention;
 
 pub use chunk::{ContentKey, SealedChunk, frame_and_seal};
-pub use dag::{ContentDag, DAG_ROOT_CODEC, DagError, RootManifest, assemble, decode_root};
+pub use dag::{
+    ContentDag, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, RootManifest, assemble, decode_root,
+};
 pub use profile::ContentProfile;
 pub use provider::{
     ByoIpfsConfig, ByoKind, PinMode, ProviderError, test_connection, validate_endpoint,
@@ -108,6 +110,12 @@ pub enum OpenError {
     Trust(String),
     /// Availability — retryable, never a trust verdict.
     Unavailable(String),
+    /// The root declared a root-manifest format this build cannot read; see
+    /// [`DagError::UnsupportedFormat`].
+    UnsupportedFormat {
+        /// The version the root declared.
+        version: u64,
+    },
 }
 
 /// Map a content-block read failure onto the [`OpenError`] classification.
@@ -119,6 +127,24 @@ fn open_read_error(e: ReadError) -> OpenError {
         ReadError::Unavailable => OpenError::Unavailable("content block unavailable".to_owned()),
         ReadError::TooLarge { size, limit } => {
             OpenError::Unavailable(format!("content block exceeds the cap ({size} > {limit})"))
+        }
+    }
+}
+
+/// Map a DAG-root rejection onto the [`OpenError`] classification. Exhaustive
+/// for the same reason [`DagError::class`] is: a new variant must state its
+/// classification here rather than inherit a trust verdict from a wildcard.
+fn open_dag_error(e: DagError) -> OpenError {
+    match e {
+        DagError::UnsupportedFormat { version } => OpenError::UnsupportedFormat { version },
+        DagError::RootTooLarge { size, limit } => OpenError::Unavailable(format!(
+            "content DAG root exceeds the cap: {size} > {limit}"
+        )),
+        e @ (DagError::Cbor(_)
+        | DagError::ZeroChunkSize
+        | DagError::MalformedLeafCid
+        | DagError::LinkCountMismatch) => {
+            OpenError::Trust(format!("content DAG root rejected: [{}]", e.check()))
         }
     }
 }
@@ -142,8 +168,7 @@ pub async fn open_content<H: Http>(
     )
     .await
     .map_err(open_read_error)?;
-    let manifest = decode_root(&root_block)
-        .map_err(|e| OpenError::Trust(format!("content DAG root rejected: {e:?}")))?;
+    let manifest = decode_root(&root_block).map_err(open_dag_error)?;
     if manifest.size != version.size {
         return Err(OpenError::Trust(format!(
             "manifest size {} disagrees with version size {}",
@@ -181,6 +206,7 @@ mod tests {
     use super::*;
     use crate::testkit::SeededEntropy;
     use cipherbox_core::content::verify_cid;
+    use cipherbox_core::error::Malformed;
     use cipherbox_core::suite::aead::KEY_LEN;
 
     #[test]
@@ -217,6 +243,32 @@ mod tests {
         assert_eq!(
             recovered, plaintext,
             "verified reassembly equals the original"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_root_format_is_classified_apart_from_a_trust_verdict() {
+        assert_eq!(
+            open_dag_error(DagError::UnsupportedFormat { version: 2 }),
+            OpenError::UnsupportedFormat { version: 2 },
+            "an out-of-date client is not a forged record (#820)"
+        );
+        assert!(matches!(
+            open_dag_error(DagError::LinkCountMismatch),
+            OpenError::Trust(_)
+        ));
+        assert!(matches!(
+            open_dag_error(DagError::Cbor(
+                Malformed::MissingField { field: "v" }.into()
+            )),
+            OpenError::Trust(_)
+        ));
+        assert!(
+            matches!(
+                open_dag_error(DagError::RootTooLarge { size: 5, limit: 4 }),
+                OpenError::Unavailable(_)
+            ),
+            "an over-cap root matches read_block's own cap verdict"
         );
     }
 
