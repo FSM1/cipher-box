@@ -9,10 +9,22 @@ Scope: the current branch's diff against `origin/main` — one PR-sized slice of
 
 - **Decide, don't ask.** For every review/audit finding, pick exactly one of **three** dispositions and proceed. The default for anything that isn't clearly material is **discard**, not defer — the issue backlog is a signal for real upcoming work, so keep it small.
   - **Fix now** — the finding is a genuine bug, security/privacy issue, or correctness gap **AND** (it's in the slice's domain OR the fix is small and safe). Always fix real defects the slice itself introduced, regardless of size, or block on them if you can't.
-  - **File an issue** — defer via `env -u GITHUB_TOKEN gh issue create` **only if the item clears the materiality bar**: it's a real defect or a concrete, actionable piece of future work, that you are choosing not to do now because it's out of domain, risky, or large. Before filing, **search open issues and dedupe** — comment on a near-duplicate rather than opening a new one. Reference filed issues in the PR.
+  - **File an issue** — defer via `env -u GITHUB_TOKEN gh issue create` **only if the item clears the materiality bar**: it's a real defect or a concrete, actionable piece of future work, that you are choosing not to do now because it's out of domain, risky, or large. Before filing, **search open issues and dedupe** — comment on a near-duplicate rather than opening a new one. Reference filed issues in the PR. **A filed issue is not done until it is wired into tracking** — see below.
+  - **Wiring a filed issue (mandatory, not optional).** Prose like "Depends on #NNN. Part of #655" in the body is _not_ tracking — nothing reads it. Every issue you file must get **native GitHub dependency edges** the same turn:
+
+    ```bash
+    BLOCKER_ID=$(env -u GITHUB_TOKEN gh api repos/FSM1/cipher-box/issues/<blocker> --jq '.id')
+    env -u GITHUB_TOKEN gh api -X POST \
+      repos/FSM1/cipher-box/issues/<new>/dependencies/blocked_by -F issue_id="$BLOCKER_ID"
+    ```
+
+    Note the API takes the issue's **global `.id`**, not its number. The reverse (`blocking`) edge resolves automatically — re-query it to confirm. Then add a `- [ ] #NNN — <title>` line to the tracker checklist in **#655**, placed in build order, and label the issue `v2-build`.
+
+  - **Do not point a tracking edge at a closed issue.** The wayfinder issues (#813, #819–#832, #841, #844, #845, #852 …) are _design resolutions_ and are closed. Citing one as the parent or blocker looks like tracking but orphans the work, because nothing will ever reopen to surface it. Give the edge to an **open** slice that will consume the work, plus the #655 tracker line. Use `blocked_by` only for genuine hard blockers — a merely _related_ issue stays prose, since a false blocker stalls the issue forever.
   - **Discard** — do nothing and do not file. This is the right call for: style/naming/formatting nits, subjective preferences, speculative "could hypothetically" findings with no demonstrated impact, micro-optimizations, test-only suggestions of marginal value, and low-severity **pre-existing** noise unrelated to the slice. Briefly acknowledge dismissed classes in the PR (e.g. "N nits dismissed") rather than filing them.
   - **Materiality bar for an issue** (must meet at least one): user-visible or data-integrity impact; security/privacy/crypto relevance; a real crash/correctness risk; or a concrete follow-up the build will genuinely need. "A reviewer mentioned it" is not sufficient. When unsure whether an item clears the bar, **discard it**.
   - Only stop for: a real failing gate you cannot fix, a genuine ambiguity in intent, or the final merge decision.
+
 - **Verify outcomes faithfully.** Quote real test output. Never report a step done that wasn't.
 - Run independent checks in parallel. Keep yourself as orchestrator; hand large self-contained chunks to sub-agents (Rust builds, mechanical sweeps) and adversarially verify their results.
 - The blueprint corpus (`blueprint/*.md`, `CONTEXT.md`) is normative — a finding that contradicts it is judged against the blueprint, not reviewer preference.
@@ -66,7 +78,11 @@ Transitional note: while v2 suites are still landing, run whatever `ci.yml` curr
 coderabbit review --agent --base main --type committed
 ```
 
-Triage every finding with the three-way operating rule. Re-run until the in-scope set is clean. (The CLI under-reports vs the web review — for crypto/durability-heavy slices, request a full web review on the PR as well.)
+Use `--agent` (never `--plain`) — it returns structured findings. Triage every finding with the three-way operating rule. Re-run until the in-scope set is clean.
+
+If the CLI reports a rate-limit cooldown, wait for it **inline, in the foreground, in this same turn** (chain `sleep` calls; at most one retry). Never end the turn intending to resume — see step 7.
+
+The CLI under-reports relative to the web review, so a clean CLI run does not mean a clean PR review. **Do not manually request a web review** (`@coderabbitai review`) to compensate: the web review fires automatically on PR-ready and the ~1/hour org-wide quota is shared, so a manual request burns the slot another PR is waiting for. Just mark ready and let the automatic one land.
 
 ### 6. Ship
 
@@ -77,7 +93,23 @@ Triage every finding with the three-way operating rule. Re-run until the in-scop
 
 ### 7. Resolve PR reviews
 
-When CodeRabbit's PR-level review lands (poll `gh pr checks <N>` in the background until the `CodeRabbit` check is no longer pending — don't block):
+CodeRabbit's web review is **automatic on PR-ready** and rate-limited to roughly **one per hour org-wide**, so a queued PR can wait 30–60 minutes. Wait for it **inline, in the foreground, inside a single turn** — chain `sleep` calls (Bash caps at 600000 ms per call), polling between them:
+
+```bash
+env -u GITHUB_TOKEN gh api repos/FSM1/cipher-box/pulls/<N>/reviews \
+  --jq '.[] | {user: .user.login, state: .state, submitted: .submitted_at}'
+```
+
+**Never end your turn intending to come back to this.** Nothing wakes you: the turn ends, the review is never processed, and the PR sits looking finished when it was never reviewed. Backgrounding the wait or scheduling a detached sleep fails the same way. If the budget (~45 min) expires with no review, say so plainly with the poll output rather than implying one happened.
+
+**But only wait for something that is actually coming.** Wait inline for a review that has been _triggered and is pending_. If the `CodeRabbit` check reads **`Review rate limited`**, that is a **terminal outcome to report, not a delay to absorb** — stop immediately and say so. Two cautions, both of which have burned real time here:
+
+- **The check status goes stale.** `Review rate limited` persists from the last attempt and does _not_ refresh when the window expires. Never infer the current quota from it. Compute the real reset from the last **submitted** review (`.submitted_at` on `/pulls/<N>/reviews`) plus one hour, or read `Next review available in: N minutes` from CodeRabbit's own rate-limit comment — and mind that comment's own timestamp, since it too goes stale.
+- **Toggling ready inside a limited window buys nothing** — it consumes the transition without producing a review. Confirm the slot is genuinely open _before_ `gh pr ready`.
+
+**This applies equally to the re-review of your own fix commits.** After you push fixes, CodeRabbit re-reviews only if quota allows. A re-review is **polish, not a gate**: once the original findings are addressed, the threads are resolved, and CI is green, the PR is complete. Report and stop. Do not wait out another hour, and never re-request a review to force one.
+
+A CodeRabbit **walkthrough is not a review pass** — confirm an actually-submitted review ("Actionable comments posted: N") before concluding it reviewed. Then:
 
 - CodeRabbit bundles findings in the **review body** AND as inline **review threads**. Fetch threads via the GraphQL `reviewThreads` query (id, isResolved, path, line, first comment body). Query **all** threads, no author filter — Greptile reviews too, sometimes late; CodeRabbit's author is `coderabbitai`, not `coderabbitai[bot]`. Expect re-reviews of your own fix commits — triage those too.
 - For each finding apply the three-way operating rule (fix → reference the commit; material defer → reference the issue; nit → resolve the thread with a brief "acknowledged, not actionable" reply, nothing filed).
@@ -85,4 +117,4 @@ When CodeRabbit's PR-level review lands (poll `gh pr checks <N>` in the backgrou
 
 ### 8. Confirm green & report
 
-Poll `env -u GITHUB_TOKEN gh pr checks <N>` until all checks settle. Report: final commit SHA, CI status (all green / which failed), threads resolved (`N/N`), a triage tally (fixed / issues filed / discarded), and the list of issues filed. Keep the filed count low — if it's climbing, re-check that each cleared the materiality bar. Leave the merge decision to the user.
+Poll `env -u GITHUB_TOKEN gh pr checks <N>` until all checks settle. Report: final commit SHA, CI status (all green / which failed), threads resolved (`N/N`), a triage tally (fixed / issues filed / discarded), and for each issue filed its number **and the dependency edges you gave it** (verified in both directions, plus its tracker line). Keep the filed count low — if it's climbing, re-check that each cleared the materiality bar. Leave the merge decision to the user.
