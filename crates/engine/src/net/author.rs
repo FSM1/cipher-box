@@ -90,7 +90,9 @@ pub struct EnvelopeAuthoring<'a> {
 
 /// Author a **child** record's envelope: a non-scope-root node, which must
 /// carry no grant section (guard 1, release-active).
-pub fn author_child_envelope(authoring: EnvelopeAuthoring<'_>) -> Result<AuthoredHead, AuthorError> {
+pub fn author_child_envelope(
+    authoring: EnvelopeAuthoring<'_>,
+) -> Result<AuthoredHead, AuthorError> {
     let envelope = seal(&authoring)?;
     if has_grant_section(&envelope) {
         return Err(AuthorError::GrantSectionOnChild);
@@ -234,8 +236,7 @@ mod tests {
 
     #[test]
     fn a_scope_root_envelope_carries_its_grant_section_through() {
-        let head =
-            author_scope_root_envelope(authoring(&folder(), grant_section_field())).unwrap();
+        let head = author_scope_root_envelope(authoring(&folder(), grant_section_field())).unwrap();
         assert!(has_grant_section(&head.envelope));
         assert!(has_grant_section(&decode_envelope(&head.block).unwrap()));
     }

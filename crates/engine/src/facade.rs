@@ -46,6 +46,7 @@ use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore,
 use crate::session::SessionIdentity;
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
+use crate::sync::drain::{Drain, DrainReport, DrainScope};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
 use crate::sync::op::Op;
 use crate::sync::overlay::apply_overlay;
@@ -719,6 +720,24 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
     }
 }
 
+/// Fold one drain pass's report into the host-visible surface: retain and emit
+/// every dead letter, and emit one [`Event::SnapshotUpdated`] if the pass moved
+/// anything off the queue (the overlay the host renders just shrank). Both sends
+/// are best-effort over the in-process channel — a dropped receiver is fine.
+fn surface_drain_report(
+    events: &mpsc::UnboundedSender<Event>,
+    dead_letters: &RefCell<BTreeMap<OpId, Option<NodeId>>>,
+    report: &DrainReport,
+) {
+    for (op_id, target, _reason) in &report.dead_letters {
+        dead_letters.borrow_mut().insert(*op_id, Some(*target));
+        let _ = events.unbounded_send(Event::DeadLetter { op_id: *op_id });
+    }
+    if !report.is_empty() {
+        let _ = events.unbounded_send(Event::SnapshotUpdated);
+    }
+}
+
 /// Count nodes reachable from the root via the link graph, cycle-guarded (a
 /// malformed link cycle terminates rather than looping).
 fn count_nodes(snapshot: &Snapshot) -> u64 {
@@ -892,6 +911,7 @@ impl<T: SeamTypes> Engine<T> {
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
         T::SnapshotCache: Clone + 'static,
+        T::StagingStore: Clone + 'static,
     {
         if self.started {
             return Err(EngineError::AlreadyStarted);
@@ -972,6 +992,11 @@ impl<T: SeamTypes> Engine<T> {
                 .borrow_mut()
                 .insert(root_scope_id, seed);
         }
+        // The same adopt recovered the scope write seed: the drain derives every
+        // new node's `ipnsName` and its narrow per-name signer from it.
+        if let Some((scope_id, seed)) = outcome.write_scope_seed.take() {
+            self.scope_write_seeds.borrow_mut().insert(scope_id, seed);
+        }
 
         // The gate-passing base becomes the state law's left operand (reads render
         // this ⊕ the pending-op overlay). The resolved root name — the vault
@@ -987,7 +1012,7 @@ impl<T: SeamTypes> Engine<T> {
         self.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
 
         self.spawn_liveness_loop(api.clone());
-        self.spawn_resolve_tick_loop(root_name);
+        self.spawn_resolve_tick_loop(root_name, api.clone());
         self.api = Some(api);
         self.started = true;
         Ok(())
@@ -1323,7 +1348,11 @@ impl<T: SeamTypes> Engine<T> {
     /// law), so an op rebases against the state the host saw. Content sealing,
     /// grants, rotation, and auth land with their own slices and stay
     /// [`EngineError::Unimplemented`].
-    pub async fn command(&mut self, command: Command) -> Result<(), EngineError> {
+    ///
+    /// Returns the durable queue id of the staged op, so a host can correlate a
+    /// later [`Event::DeadLetter`] or [`Event::OpProgress`] back to the call
+    /// that made it; `None` for a command that queues nothing.
+    pub async fn command(&mut self, command: Command) -> Result<Option<OpId>, EngineError> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
@@ -1386,7 +1415,7 @@ impl<T: SeamTypes> Engine<T> {
                 api.siwe_login(&message, &hex_lower(&signature))
                     .await
                     .map_err(EngineError::from_api)?;
-                Ok(())
+                Ok(None)
             }
             other => Err(EngineError::Unimplemented {
                 command: other.name(),
@@ -1718,8 +1747,9 @@ impl<T: SeamTypes> Engine<T> {
         Ok(NodeId(id))
     }
 
-    /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success.
-    async fn stage_and_notify(&mut self, op: &Op) -> Result<(), EngineError> {
+    /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success,
+    /// returning the durable queue id the drain will report the op under.
+    async fn stage_and_notify(&mut self, op: &Op) -> Result<Option<OpId>, EngineError> {
         let seal = self.record_seal()?;
         // Metadata ops queue unbounded, so any rejection here means a content
         // op reached this path — fail closed rather than report a storage
@@ -1734,11 +1764,11 @@ impl<T: SeamTypes> Engine<T> {
         .await
         .map_err(EngineError::from_seam)?
         {
-            StageOutcome::Queued { .. } => {
+            StageOutcome::Queued { op_id } => {
                 // Best-effort push-invalidation trigger; a dropped receiver
                 // (host torn down) is fine.
                 let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-                Ok(())
+                Ok(Some(op_id))
             }
             StageOutcome::RejectedOverBudget { .. }
             | StageOutcome::RejectedStorageUnmeasured { .. } => Err(EngineError::Seam {

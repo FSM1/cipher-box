@@ -41,14 +41,9 @@ pub mod resolve;
 pub mod retire;
 pub mod revival;
 
-pub use adopter::{LocalHead, RootAdopter};
 pub(crate) use adopter::assemble_head_envelope;
-pub use author::{AuthorError, AuthoredHead, EnvelopeAuthoring, NewChild};
+pub use adopter::{LocalHead, RootAdopter};
 pub use child::ChildAdopter;
-pub use record_publish::{
-    HeadBinding, PreflightError, PreflightedHead, RecordPublishError, RecordPublishOutcome,
-    RecordPublishRequest, preflight, publish_record,
-};
 pub(crate) use liveness::eol_renew_pass;
 pub use liveness::{
     EolRenewResult, HeldRecord, HeldRecords, LivenessControl, RE_PUT_INTERVAL, RePutResult,
@@ -58,8 +53,7 @@ pub use pointer_fetch::RecordPointerFetch;
 pub use publish::{PublishError, PublishOutcome, PublishReceipt, PublishRequest, publish};
 pub use resolve::{AdoptOutcome, Adopter, ResolveOutcome, Resolved, resolve};
 pub(crate) use resolve::{
-    GatedResolve, HeldMaterial, HeldResolve, refresh_base_from_outcome, resolve_and_hold,
-    resolve_gated,
+    GatedResolve, HeldMaterial, refresh_base_from_outcome, resolve_and_hold, resolve_gated,
 };
 pub use retire::{retire, root_retire_ready};
 pub use revival::{ReviveError, ReviveRequest, revive};

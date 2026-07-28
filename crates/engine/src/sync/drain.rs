@@ -17,6 +17,7 @@
 //! the pass with the op still queued, so FIFO order is never broken.
 
 use core::cell::RefCell;
+use std::collections::BTreeSet;
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
@@ -38,13 +39,14 @@ use crate::net::record_publish::{
     publish_record,
 };
 use crate::net::{
-    Adopter, AdoptOutcome, ChildAdopter, HeldRecord, HeldRecords, LocalHead, RootAdopter,
+    AdoptOutcome, Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, RootAdopter,
     assemble_head_envelope,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
 use crate::seams::{
-    CredentialStore, FloorStore, Http, OpId, RecordTransport, Scheduler, SnapshotCache, StagingStore,
+    CredentialStore, FloorStore, Http, OpId, RecordTransport, Scheduler, SnapshotCache,
+    StagingStore,
 };
 use crate::session::SessionIdentity;
 use crate::sync::model::Snapshot;
@@ -54,14 +56,11 @@ use crate::sync::project::project_root;
 use crate::sync::rebase::{DeadLetterReason, decode_queue, replay};
 use crate::sync::record::RecordReader;
 
-/// The durable drained-op high-water mark's floor key: every op id at or below
-/// the stored value has left this device's queue (published, dropped, or
-/// dead-lettered).
-///
-/// It rides the sequence-floor namespace because it is exactly that namespace's
-/// contract — a durable monotonic-max `u64` under engine-chosen opaque key
-/// bytes. The `/` makes it unrepresentable as an `ipnsName` (base36 alphanumeric
-/// only), so it can never collide with a real per-name floor.
+/// The durable drained-op high-water mark: every op id at or below the stored
+/// value has left this device's queue (#860). It rides the sequence-floor
+/// namespace, whose contract it is — a durable monotonic-max `u64` under opaque
+/// key bytes — under a key the base36 `ipnsName` alphabet cannot spell, so it
+/// never collides with a real per-name floor.
 const DRAINED_OP_FLOOR_KEY: &[u8] = b"cipherbox/drained-op";
 
 /// What one drain pass did.
@@ -79,6 +78,16 @@ pub(crate) struct DrainReport {
     /// Why the pass stopped early, if it did. FIFO is strict: the op stays
     /// queued and the next pass retries it.
     pub(crate) halted: Option<DrainHalt>,
+}
+
+impl DrainReport {
+    /// Whether the pass left the durable queue exactly as it found it.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.published.is_empty()
+            && self.dropped.is_empty()
+            && self.dead_letters.is_empty()
+            && self.restore_residue.is_empty()
+    }
 }
 
 /// Why a drain pass stopped before the queue was empty.
@@ -159,9 +168,18 @@ where
     /// applied op it can, stopping at the first it cannot.
     pub(crate) async fn run(&self, scope: &DrainScope<'_>) -> DrainReport {
         let mut report = DrainReport::default();
-        match self.pass(scope, &mut report).await {
-            Ok(()) => {}
-            Err(halt) => report.halted = Some(halt),
+        let queued = match self.queued_ops(scope, &mut report).await {
+            Ok(queued) => queued,
+            Err(halt) => {
+                report.halted = Some(halt);
+                return report;
+            }
+        };
+        if let Err(halt) = self.pass(scope, &queued, &mut report).await {
+            report.halted = Some(halt);
+        }
+        if let Err(halt) = self.mark_drained(&queued, &report).await {
+            report.halted.get_or_insert(halt);
         }
         report
     }
@@ -169,9 +187,9 @@ where
     async fn pass(
         &self,
         scope: &DrainScope<'_>,
+        queued: &[(OpId, Op)],
         report: &mut DrainReport,
     ) -> Result<(), DrainHalt> {
-        let queued = self.queued_ops(scope, report).await?;
         if queued.is_empty() {
             return Ok(());
         }
@@ -181,7 +199,7 @@ where
             let base = self.base.borrow();
             let ops: Vec<Op> = queued.iter().map(|(_, op)| op.clone()).collect();
             let local = apply_overlay(&base, &ops);
-            replay(&base, &local, &queued)
+            replay(&base, &local, queued)
         };
 
         for (op_id, reason) in &rebased.dead_letters {
@@ -485,12 +503,36 @@ where
         );
     }
 
-    /// Remove a resolved op from the durable queue and raise the completion
-    /// mark past it, so a restored queue cannot replay it (#860).
+    /// Remove a resolved op from the durable queue.
     async fn retire_op(&self, op_id: OpId) -> Result<(), DrainHalt> {
-        self.staging.remove_op(op_id).await.map_err(seam)?;
+        self.staging.remove_op(op_id).await.map_err(seam)
+    }
+
+    /// Raise the completion mark over this pass's **contiguous** drained prefix.
+    /// The mark is a high-water line, so it may only pass ops that have all
+    /// left the queue: advancing it over a halted op would make a restored data
+    /// dir discard that op as residue instead of publishing it (#860).
+    async fn mark_drained(
+        &self,
+        queued: &[(OpId, Op)],
+        report: &DrainReport,
+    ) -> Result<(), DrainHalt> {
+        let retired: BTreeSet<OpId> = report
+            .published
+            .iter()
+            .chain(&report.dropped)
+            .copied()
+            .chain(report.dead_letters.iter().map(|(op_id, ..)| *op_id))
+            .collect();
+        let Some(mark) = queued
+            .iter()
+            .map_while(|(op_id, _)| retired.contains(op_id).then_some(op_id.0))
+            .last()
+        else {
+            return Ok(());
+        };
         self.floors
-            .raise_sequence_floor(DRAINED_OP_FLOOR_KEY, op_id.0)
+            .raise_sequence_floor(DRAINED_OP_FLOOR_KEY, mark)
             .await
             .map_err(seam)?;
         Ok(())

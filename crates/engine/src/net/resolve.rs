@@ -521,7 +521,7 @@ mod tests {
             write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
             content_cids: vec!["bafycontent".into()],
         };
-        let (resolved, _) = block_on(resolve_and_hold(
+        let resolved = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::new(Verdict::Accept),
@@ -529,7 +529,8 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold");
+        .expect("resolve_and_hold")
+        .resolved;
 
         assert!(matches!(resolved.outcome, ResolveOutcome::Adopted(_)));
         let map = held.borrow();
@@ -562,7 +563,7 @@ mod tests {
 
         // A fail-closed trust violation is never held.
         let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
-        let (out, _) = block_on(resolve_and_hold(
+        let out = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::new(Verdict::TrustViolation),
@@ -570,7 +571,8 @@ mod tests {
             &held,
             &material,
         ))
-        .unwrap();
+        .unwrap()
+        .resolved;
         assert!(matches!(out.outcome, ResolveOutcome::TrustViolation(_)));
         assert!(held.borrow().is_empty(), "a trust violation is never held");
     }
@@ -597,7 +599,7 @@ mod tests {
             write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
             content_cids: Vec::new(),
         };
-        let (resolved, _) = block_on(resolve_and_hold(
+        let resolved = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::new(Verdict::EqualSequence),
@@ -605,7 +607,8 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold");
+        .expect("resolve_and_hold")
+        .resolved;
 
         // Our own current record at the floor is `Current`, carrying the verified
         // bytes verbatim (no re-fetch), and is held for the keyless re-PUT.
@@ -660,7 +663,7 @@ mod tests {
             write_scope_seed: None,
             content_cids: Vec::new(),
         };
-        let (resolved, _) = block_on(resolve_and_hold(
+        let resolved = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::own_current(write_scope_seed, node_id),
@@ -668,7 +671,8 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold");
+        .expect("resolve_and_hold")
+        .resolved;
         assert!(matches!(resolved.outcome, ResolveOutcome::Current { .. }));
 
         let hr = held
@@ -741,7 +745,7 @@ mod tests {
             write_scope_seed: None,
             content_cids: Vec::new(),
         };
-        let (resolved, _) = block_on(resolve_and_hold(
+        let resolved = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::new(Verdict::EqualSequence),
@@ -749,7 +753,8 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold");
+        .expect("resolve_and_hold")
+        .resolved;
         assert!(matches!(resolved.outcome, ResolveOutcome::Current { .. }));
         assert!(
             held.borrow().is_empty(),
@@ -799,7 +804,8 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold");
+        .expect("resolve_and_hold")
+        .resolved;
 
         // The gate-surfaced write seed derived the renewal signer, keyed by the
         // gate's node id, and it signs for exactly the held name.
@@ -878,7 +884,8 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold");
+        .expect("resolve_and_hold")
+        .resolved;
 
         let expected = head_cid_from_value(VALUE).expect("fixture value has a head cid");
         assert!(!expected.is_empty());
@@ -928,7 +935,8 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold");
+        .expect("resolve_and_hold")
+        .resolved;
         let hr = held
             .borrow()
             .get(&node_id)
