@@ -10,5 +10,3 @@ declare global {
 
 globalThis.process = processShim;
 globalThis.Buffer = BufferShim;
-
-export {};

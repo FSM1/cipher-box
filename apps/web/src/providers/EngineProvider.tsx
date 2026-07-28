@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { EngineClient } from '@cipherbox/client';
 import { createEngineClient } from '../engine/createEngineClient';
 
@@ -7,10 +7,7 @@ import { createEngineClient } from '../engine/createEngineClient';
 const EngineContext = createContext<EngineClient | null | undefined>(undefined);
 
 export interface EngineProviderProps {
-  /**
-   * Builds this tab's engine client. Must be referentially stable — a new
-   * function identity tears the client down and rebuilds it.
-   */
+  /** Builds this tab's engine client. Read once, on mount. */
   createClient?: () => EngineClient;
   children: ReactNode;
 }
@@ -26,17 +23,17 @@ export function EngineProvider({
   children,
 }: EngineProviderProps) {
   const [client, setClient] = useState<EngineClient | null>(null);
+  const factory = useRef(createClient);
 
   useEffect(() => {
-    const instance = createClient();
+    const instance = factory.current();
     setClient(instance);
     return () => {
-      setClient(null);
       instance.dispose().catch((error: unknown) => {
         console.error('[engine] dispose failed', error instanceof Error ? error.message : error);
       });
     };
-  }, [createClient]);
+  }, []);
 
   return <EngineContext.Provider value={client}>{children}</EngineContext.Provider>;
 }

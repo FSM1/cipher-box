@@ -3,9 +3,10 @@
   "compilerOptions": {
     // Referenced by apps/web, which builds this project to get its declarations.
     "composite": true,
-    // Inside the output so wiping `dist` also invalidates the incremental
-    // state; a stale sibling would make the next build a silent no-op.
-    "tsBuildInfoFile": "./dist/.tsbuildinfo"
+    // Keep the incremental state inside the output it describes.
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
+    // The worker body is debugged in the browser from apps/web's build.
+    "sourceMap": true
   },
   "exclude": ["src/**/*.test.ts", "src/testkit.ts"]
 }

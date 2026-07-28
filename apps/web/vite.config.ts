@@ -1,11 +1,11 @@
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   plugins: [react()],
-  // The engine worker dynamically imports the wasm-bindgen ES module, which a
-  // classic worker cannot do (blueprint/web-client.md "WASM packaging").
+  // `@cipherbox/client`'s engine worker dynamically imports the wasm-bindgen ES
+  // module, which a classic worker cannot do (blueprint/web-client.md).
   worker: { format: 'es' },
   resolve: {
     alias: {
@@ -16,9 +16,12 @@ export default defineConfig({
   },
   define: { global: 'globalThis' },
   server: {
-    port: 5173,
     // The Web3Auth login popup posts its result back to the opener.
     headers: { 'Cross-Origin-Opener-Policy': 'same-origin-allow-popups' },
-    proxy: { '/api': { target: 'http://localhost:3000', changeOrigin: true } },
+  },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    include: ['src/**/*.test.{ts,tsx}'],
   },
 });

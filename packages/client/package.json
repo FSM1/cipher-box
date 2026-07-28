@@ -9,10 +9,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    },
-    "./worker": {
-      "types": "./dist/worker/engineWorker.d.ts",
-      "import": "./dist/worker/engineWorker.js"
     }
   },
   "scripts": {

@@ -4,31 +4,32 @@ import { StrictMode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { EngineProvider, useEngine } from './EngineProvider';
 
-/** The provider only builds, exposes and disposes the client — this is all it touches. */
-function fakeClient(disposed: string[], id: string): EngineClient {
-  return {
-    dispose: () => {
-      disposed.push(id);
-      return Promise.resolve();
-    },
-  } as unknown as EngineClient;
+/** Counts the clients a provider builds and disposes; that is all it touches. */
+function clientLedger() {
+  const built: EngineClient[] = [];
+  const disposed: EngineClient[] = [];
+  const createClient = () => {
+    const client = {
+      dispose: () => {
+        disposed.push(client);
+        return Promise.resolve();
+      },
+    } as unknown as EngineClient;
+    built.push(client);
+    return client;
+  };
+  return { built, disposed, createClient };
 }
 
-function Probe({ seen }: { seen: (EngineClient | null)[] }) {
+function Probe({ seen }: { seen?: (EngineClient | null)[] }) {
   const client = useEngine();
-  seen.push(client);
+  seen?.push(client);
   return <span data-testid="probe">{client ? 'ready' : 'pending'}</span>;
 }
 
 describe('EngineProvider', () => {
   it('builds exactly one engine client and hands it to consumers', () => {
-    const built: EngineClient[] = [];
-    const disposed: string[] = [];
-    const createClient = () => {
-      const client = fakeClient(disposed, `client-${String(built.length)}`);
-      built.push(client);
-      return client;
-    };
+    const { built, createClient } = clientLedger();
     const seen: (EngineClient | null)[] = [];
 
     render(
@@ -43,8 +44,7 @@ describe('EngineProvider', () => {
   });
 
   it('disposes the client when the provider unmounts', () => {
-    const disposed: string[] = [];
-    const createClient = () => fakeClient(disposed, 'only');
+    const { built, disposed, createClient } = clientLedger();
 
     const { unmount } = render(
       <EngineProvider createClient={createClient}>
@@ -54,18 +54,11 @@ describe('EngineProvider', () => {
     expect(disposed).toEqual([]);
 
     unmount();
-    expect(disposed).toEqual(['only']);
+    expect(disposed).toEqual(built);
   });
 
   it('leaves exactly one live client after a StrictMode double-mount', () => {
-    const built: EngineClient[] = [];
-    const disposed: string[] = [];
-    const createClient = () => {
-      const id = `client-${String(built.length)}`;
-      const client = fakeClient(disposed, id);
-      built.push(client);
-      return client;
-    };
+    const { built, disposed, createClient } = clientLedger();
 
     render(
       <StrictMode>
@@ -79,10 +72,9 @@ describe('EngineProvider', () => {
   });
 
   it('rejects a consumer mounted outside the provider', () => {
-    const seen: (EngineClient | null)[] = [];
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
-      expect(() => render(<Probe seen={seen} />)).toThrow(/EngineProvider/);
+      expect(() => render(<Probe />)).toThrow(/EngineProvider/);
     } finally {
       consoleError.mockRestore();
     }
