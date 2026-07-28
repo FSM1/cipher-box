@@ -8,5 +8,8 @@
     "declaration": false,
     "declarationMap": false
   },
-  "include": ["src"]
+  // Building the reference is what puts `@cipherbox/client`'s declarations on
+  // disk, so a typecheck can never read a stale or missing dist.
+  "references": [{ "path": "../../packages/client/tsconfig.build.json" }],
+  "include": ["src", "vite.config.ts", "vitest.config.ts"]
 }

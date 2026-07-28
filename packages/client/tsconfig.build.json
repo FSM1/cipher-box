@@ -1,4 +1,11 @@
 {
   "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // Referenced by apps/web, which builds this project to get its declarations.
+    "composite": true,
+    // Inside the output so wiping `dist` also invalidates the incremental
+    // state; a stale sibling would make the next build a silent no-op.
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
+  },
   "exclude": ["src/**/*.test.ts", "src/testkit.ts"]
 }
