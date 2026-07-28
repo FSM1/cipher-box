@@ -9,13 +9,13 @@
 //! facade.
 
 use cipherbox_engine::seams::SeamTypes;
-use cipherbox_engine::{Command, Engine, EngineView, NodeAttrs, NodeId, NodeKind};
+use cipherbox_engine::{Command, Engine, EngineView, NodeAttrs, NodeId, NodeKind, StatFs};
 
 use crate::adapter::{CacheTtls, HostAdapter, Invalidation};
 use crate::error::VfsError;
 use crate::handle::{Access, HandleId, HandleTable, OpenFile};
-use crate::inode::InodeTable;
-use crate::name::{MAX_NAME_BYTES, is_platform_junk, validate_name};
+use crate::inode::{InodeTable, ROOT_INO};
+use crate::name::{is_emittable, is_platform_junk, validate_name};
 
 /// A node as the kernel sees it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,8 +26,10 @@ pub struct Attributes {
     pub node: NodeId,
     /// File or folder.
     pub kind: NodeKind,
-    /// Plaintext size in bytes; zero until the content plane projects one.
-    pub size: u64,
+    /// Plaintext size in bytes, `None` until the content plane projects one.
+    /// Never collapsed to zero: a kernel that believes `st_size == 0` stops
+    /// reading at byte zero, and `cp` writes an empty copy of a real file.
+    pub size: Option<u64>,
     /// Modification time in Unix millis, once projected.
     pub mtime_millis: Option<u64>,
 }
@@ -43,16 +45,6 @@ pub struct DirEntry {
     pub kind: NodeKind,
 }
 
-/// Filesystem-level counters for statfs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FsStats {
-    /// Nodes reachable from the mount root.
-    pub nodes: u64,
-    /// The longest admissible name, in bytes — the same limit create
-    /// enforces, so the advertised value is never a fiction.
-    pub name_max: u32,
-}
-
 /// The operation core for one mount session: the engine it projects, the host
 /// adapter it pushes invalidation to, and the session's inode and handle maps.
 pub struct OperationCore<T: SeamTypes, A: HostAdapter> {
@@ -60,29 +52,29 @@ pub struct OperationCore<T: SeamTypes, A: HostAdapter> {
     adapter: A,
     inodes: InodeTable,
     handles: HandleTable,
-    ttls: CacheTtls,
 }
 
 impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// Mount `engine` behind `adapter`. The engine must already be started.
     pub fn new(engine: Engine<T>, adapter: A) -> Self {
-        let ttls = CacheTtls::for_host(&adapter.capabilities(), engine.profile());
         Self {
             engine,
             adapter,
             inodes: InodeTable::new(),
             handles: HandleTable::new(),
-            ttls,
         }
     }
 
     /// The kernel cache lifetimes this mount's adapter earned.
     pub fn cache_ttls(&self) -> CacheTtls {
-        self.ttls
+        CacheTtls::for_host(&self.adapter.capabilities(), self.engine.profile())
     }
 
     /// Resolve a name under a directory.
     pub async fn lookup(&mut self, parent: u64, name: &str) -> Result<Attributes, VfsError> {
+        if !is_emittable(name) {
+            return Err(VfsError::NotFound);
+        }
         let view = self.render().await?;
         let parent_node = self.directory(&view, parent)?;
         let meta = view.lookup(parent_node, name).ok_or(VfsError::NotFound)?;
@@ -98,14 +90,16 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     }
 
     /// List a directory's children in the engine's deterministic order,
-    /// hiding platform junk that arrived from another client. `.` and `..`
-    /// are the adapter's to synthesize, along with any offset cookies.
+    /// hiding platform junk and names no kernel could carry — both classes
+    /// arrive from other clients, which validate nothing. `.` and `..` are the
+    /// adapter's to synthesize, along with any offset cookies.
     pub async fn readdir(&mut self, ino: u64) -> Result<Vec<DirEntry>, VfsError> {
         let view = self.render().await?;
         let node = self.directory(&view, ino)?;
-        let mut entries = Vec::new();
-        for child in view.children(node) {
-            if is_platform_junk(&child.name) {
+        let children = view.children(node);
+        let mut entries = Vec::with_capacity(children.len());
+        for child in children {
+            if is_platform_junk(&child.name) || !is_emittable(&child.name) {
                 continue;
             }
             entries.push(DirEntry {
@@ -158,27 +152,22 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let parent_node = self.directory(&view, parent)?;
         let new_parent_node = self.directory(&view, new_parent)?;
         let source = view.lookup(parent_node, name).ok_or(VfsError::NotFound)?;
+        if contains(&view, source.id, new_parent_node) {
+            return Err(VfsError::Invalid);
+        }
         // A case- or normalization-only respell folds onto the source itself
         // under the engine's strict comparator; it is a rename, not a replace.
         let replaced = view
             .lookup(new_parent_node, new_name)
             .filter(|dest| dest.id != source.id);
         if let Some(dest) = &replaced {
-            match (source.kind, dest.kind) {
-                (NodeKind::File, NodeKind::Folder) => return Err(VfsError::IsADirectory),
-                (NodeKind::Folder, NodeKind::File) => return Err(VfsError::NotADirectory),
-                (NodeKind::Folder, NodeKind::Folder) if !view.children(dest.id).is_empty() => {
-                    return Err(VfsError::NotEmpty);
-                }
-                _ => {}
-            }
+            removable(&view, dest, source.kind)?;
         }
 
-        // The facade has no combined move-and-rename op, so the projection
-        // spells the request as the minimal ordered intent-op sequence:
-        // vacate the destination, relink, then respell.
+        // The facade has no combined move-and-rename op, so a rename that
+        // replaces has a window where the destination is already gone (#884).
         if let Some(dest) = replaced {
-            self.command(Command::Delete { node: dest.id }).await?;
+            self.delete(&view, dest.id).await?;
         }
         if new_parent_node != parent_node {
             self.command(Command::Relink {
@@ -196,14 +185,8 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         }
 
         let ino = self.inodes.ino_for(source.id);
-        self.adapter.invalidate(Invalidation::Entry {
-            parent,
-            name: name.to_owned(),
-        });
-        self.adapter.invalidate(Invalidation::Entry {
-            parent: new_parent,
-            name: new_name.to_owned(),
-        });
+        self.entry_changed(parent, name);
+        self.entry_changed(new_parent, new_name);
         self.adapter.invalidate(Invalidation::Attributes { ino });
         Ok(())
     }
@@ -230,28 +213,33 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         Ok(())
     }
 
-    /// Filesystem counters.
-    pub async fn statfs(&mut self) -> Result<FsStats, VfsError> {
-        let view = self.render().await?;
-        Ok(FsStats {
-            nodes: view.statfs().nodes,
-            name_max: MAX_NAME_BYTES as u32,
-        })
+    /// Filesystem counters. The longest admissible name is
+    /// [`MAX_NAME_BYTES`](crate::MAX_NAME_BYTES), the same limit create
+    /// enforces.
+    pub async fn statfs(&mut self) -> Result<StatFs, VfsError> {
+        Ok(self.render().await?.statfs())
     }
 
     /// One internally-consistent read of the facade's rendered state, with the
     /// mount root bound to its inode.
     async fn render(&mut self) -> Result<EngineView, VfsError> {
-        let view = self.engine.view().await.map_err(VfsError::from_engine)?;
-        self.inodes.bind_root(view.root());
+        let view = self.engine.view().await?;
+        if self.inodes.bind_root(view.root()) {
+            self.adapter
+                .invalidate(Invalidation::Attributes { ino: ROOT_INO });
+        }
         Ok(view)
     }
 
     async fn command(&mut self, command: Command) -> Result<(), VfsError> {
-        self.engine
-            .command(command)
-            .await
-            .map_err(VfsError::from_engine)
+        Ok(self.engine.command(command).await?)
+    }
+
+    fn entry_changed(&self, parent: u64, name: &str) {
+        self.adapter.invalidate(Invalidation::Entry {
+            parent,
+            name: name.to_owned(),
+        });
     }
 
     fn node_of(&self, ino: u64) -> Result<NodeId, VfsError> {
@@ -261,11 +249,11 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// Resolve an inode that must be a directory.
     fn directory(&self, view: &EngineView, ino: u64) -> Result<NodeId, VfsError> {
         let node = self.node_of(ino)?;
-        match view.attrs(node) {
-            None => Err(VfsError::NotFound),
-            Some(meta) if meta.kind != NodeKind::Folder => Err(VfsError::NotADirectory),
-            Some(_) => Ok(node),
+        let meta = view.attrs(node).ok_or(VfsError::NotFound)?;
+        if meta.kind != NodeKind::Folder {
+            return Err(VfsError::NotADirectory);
         }
+        Ok(node)
     }
 
     fn attributes(&mut self, meta: &NodeAttrs) -> Attributes {
@@ -273,7 +261,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             ino: self.inodes.ino_for(meta.id),
             node: meta.id,
             kind: meta.kind,
-            size: meta.size.unwrap_or(0),
+            size: meta.size,
             mtime_millis: meta.mtime,
         }
     }
@@ -305,10 +293,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
                 message: "a staged create is missing from the rendered view".to_owned(),
             })?;
         let attrs = self.attributes(&meta);
-        self.adapter.invalidate(Invalidation::Entry {
-            parent,
-            name: name.to_owned(),
-        });
+        self.entry_changed(parent, name);
         Ok(attrs)
     }
 
@@ -320,24 +305,56 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     ) -> Result<(), VfsError> {
         let view = self.render().await?;
         let parent_node = self.directory(&view, parent)?;
-        // No junk filtering here: junk hidden from listings must still be
-        // removable through the mount, or a name another client committed is
-        // stranded forever.
         let meta = view.lookup(parent_node, name).ok_or(VfsError::NotFound)?;
-        if meta.kind != expected {
-            return Err(match expected {
-                NodeKind::File => VfsError::IsADirectory,
-                NodeKind::Folder => VfsError::NotADirectory,
-            });
-        }
-        if expected == NodeKind::Folder && !view.children(meta.id).is_empty() {
-            return Err(VfsError::NotEmpty);
-        }
-        self.command(Command::Delete { node: meta.id }).await?;
-        self.adapter.invalidate(Invalidation::Entry {
-            parent,
-            name: name.to_owned(),
-        });
+        removable(&view, &meta, expected)?;
+        self.delete(&view, meta.id).await?;
+        self.entry_changed(parent, name);
         Ok(())
     }
+
+    /// Delete a node that has already passed [`removable`], sweeping whatever
+    /// children it still has — only junk can survive that check, and junk the
+    /// mount hides is junk the user could never clear by hand.
+    async fn delete(&mut self, view: &EngineView, victim: NodeId) -> Result<(), VfsError> {
+        for child in view.children(victim) {
+            self.command(Command::Delete { node: child.id }).await?;
+        }
+        self.command(Command::Delete { node: victim }).await
+    }
+}
+
+/// Whether `candidate` is `node` or lives somewhere beneath it. Relinking a
+/// folder into its own subtree would detach that subtree from the root for
+/// good; POSIX rename answers `EINVAL` and so does the projection.
+fn contains(view: &EngineView, node: NodeId, candidate: NodeId) -> bool {
+    let mut frontier = vec![node];
+    while let Some(next) = frontier.pop() {
+        if next == candidate {
+            return true;
+        }
+        frontier.extend(view.children(next).into_iter().map(|child| child.id));
+    }
+    false
+}
+
+/// The POSIX preconditions for making a node vanish: it must be the kind the
+/// caller expects, and a folder must be empty.
+fn removable(view: &EngineView, victim: &NodeAttrs, expected: NodeKind) -> Result<(), VfsError> {
+    if victim.kind != expected {
+        return Err(match expected {
+            NodeKind::File => VfsError::IsADirectory,
+            NodeKind::Folder => VfsError::NotADirectory,
+        });
+    }
+    // Junk does not count: it is hidden from listings, so a folder holding
+    // nothing else reads as empty through the mount and must behave that way.
+    if expected == NodeKind::Folder
+        && view
+            .children(victim.id)
+            .iter()
+            .any(|child| !is_platform_junk(&child.name))
+    {
+        return Err(VfsError::NotEmpty);
+    }
+    Ok(())
 }

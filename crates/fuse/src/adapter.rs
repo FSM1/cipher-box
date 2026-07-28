@@ -3,9 +3,7 @@
 //!
 //! Inbound, an adapter decodes its own wire protocol and calls the operation
 //! core with platform-normalized names; outbound, the core hands it
-//! invalidations to push at the kernel. Everything platform-shaped —
-//! errno/NTSTATUS mapping, case-insensitive presentation, readdir cookie
-//! quirks — lives on this side of the trait, and nothing else does.
+//! invalidations to push at the kernel.
 
 use core::time::Duration;
 
@@ -55,11 +53,8 @@ pub struct CacheTtls {
 }
 
 impl CacheTtls {
-    /// Cache lifetimes for a mount with these capabilities, read off the sync
-    /// timing profile rather than hardcoded: a push-capable mount may hold a
-    /// cache entry until the staleness threshold, since a real change arrives
-    /// as an invalidation. Without push, nothing revalidates on its own, so
-    /// the ceiling is one poll cycle.
+    /// Without push, nothing revalidates on its own, so the ceiling is one
+    /// poll cycle.
     pub fn for_host(capabilities: &HostCapabilities, profile: &SyncTimingProfile) -> Self {
         let ttl = if capabilities.push_invalidation {
             profile.stale_after
@@ -124,7 +119,7 @@ mod tests {
     }
 
     #[test]
-    fn no_profile_yields_a_zero_ttl() {
+    fn every_configuration_yields_a_nonzero_ttl() {
         for profile in [SyncTimingProfile::PRODUCTION, SyncTimingProfile::CI] {
             for push_invalidation in [true, false] {
                 let ttls = CacheTtls::for_host(&HostCapabilities { push_invalidation }, &profile);

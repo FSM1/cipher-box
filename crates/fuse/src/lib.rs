@@ -9,23 +9,20 @@
 //! them. Everything platform-shaped lives behind [`HostAdapter`] and nothing
 //! else does. The projection holds no key material — the inode and handle maps
 //! carry identity only.
-//!
-//! Content byte paths and the journal ack land with the read/write slice; the
-//! concrete adapters with the adapter slice.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
-pub mod adapter;
-pub mod error;
-pub mod handle;
-pub mod inode;
-pub mod name;
-pub mod ops;
+mod adapter;
+mod error;
+mod handle;
+mod inode;
+mod name;
+mod ops;
 
 pub use adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation};
 pub use error::{OverBudgetCause, VfsError};
 pub use handle::{Access, HandleId, HandleTable, OpenFile};
 pub use inode::{InodeTable, ROOT_INO};
-pub use name::{MAX_NAME_BYTES, NameError, is_platform_junk, validate_name};
-pub use ops::{Attributes, DirEntry, FsStats, OperationCore};
+pub use name::{MAX_NAME_BYTES, NameError, is_emittable, is_platform_junk, validate_name};
+pub use ops::{Attributes, DirEntry, OperationCore};

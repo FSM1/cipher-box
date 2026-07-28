@@ -1,9 +1,6 @@
 //! Open-file handles for one mount session. Key-free like the inode map: a
 //! handle records which node it addresses and how it was opened, never
 //! anything derived from a key.
-//!
-//! The byte paths behind a handle — ranged chunk reads and the sealed spill
-//! file a write lands in — are `crates/fuse`'s next slice.
 
 use std::collections::HashMap;
 
@@ -71,16 +68,6 @@ impl HandleTable {
     pub fn close(&mut self, id: HandleId) -> Option<OpenFile> {
         self.open.remove(&id)
     }
-
-    /// How many handles are open.
-    pub fn len(&self) -> usize {
-        self.open.len()
-    }
-
-    /// Whether no handle is open.
-    pub fn is_empty(&self) -> bool {
-        self.open.is_empty()
-    }
 }
 
 #[cfg(test)]
@@ -111,7 +98,6 @@ mod tests {
         assert!(table.close(id).is_some());
         assert_eq!(table.get(id), None);
         assert!(table.close(id).is_none(), "a second close is not an open");
-        assert!(table.is_empty());
     }
 
     #[test]
@@ -129,8 +115,8 @@ mod tests {
         let reader = table.open(node(1), Access::Read);
         let writer = table.open(node(1), Access::Write);
         assert_ne!(reader, writer);
-        assert_eq!(table.len(), 2);
         table.close(reader);
+        assert_eq!(table.get(reader), None);
         assert_eq!(table.get(writer).map(|h| h.access), Some(Access::Write));
     }
 

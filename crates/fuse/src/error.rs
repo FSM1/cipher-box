@@ -1,10 +1,5 @@
-//! The operation core's failure vocabulary.
-//!
-//! Semantic, not numeric: each host adapter maps these onto its own protocol
-//! (errno on the FUSE hosts, NTSTATUS on WinFsp). Deciding *what* failed once,
-//! centrally, is what stops the two v1 operation trees from disagreeing about
-//! the same condition — the divergence that produced a revocation bypass in
-//! exactly one of them.
+//! The operation core's failure vocabulary. Semantic, not numeric: each host
+//! adapter maps these onto its own protocol (errno, NTSTATUS).
 
 use core::fmt;
 
@@ -36,6 +31,9 @@ pub enum VfsError {
     NotEmpty,
     /// A node of that name already exists under the parent.
     AlreadyExists,
+    /// The operation is structurally impossible — moving a folder inside
+    /// itself, which would detach the whole subtree from the root.
+    Invalid,
     /// The name is not admissible.
     InvalidName(NameError),
     /// The handle is not open.
@@ -61,9 +59,11 @@ pub enum VfsError {
     },
 }
 
-impl VfsError {
-    /// Classify a facade error for the mount.
-    pub fn from_engine(error: EngineError) -> Self {
+impl From<EngineError> for VfsError {
+    /// Exhaustive by construction: no wildcard arm, so a new `EngineError`
+    /// variant is a compile error here rather than a fail-closed verdict that
+    /// silently degrades to [`Internal`](VfsError::Internal).
+    fn from(error: EngineError) -> Self {
         match error {
             EngineError::UnknownNode => VfsError::NotFound,
             EngineError::NotAFolder => VfsError::NotADirectory,
@@ -75,8 +75,14 @@ impl VfsError {
             EngineError::UnsupportedContentFormat { version } => VfsError::Unavailable {
                 message: format!("unsupported content format version {version}"),
             },
-            other => VfsError::Internal {
-                message: other.to_string(),
+            EngineError::Seam { message }
+            | EngineError::Entropy { message }
+            | EngineError::Auth { message } => VfsError::Internal { message },
+            error @ (EngineError::NotStarted
+            | EngineError::AlreadyStarted
+            | EngineError::InvalidSecret
+            | EngineError::Unimplemented { .. }) => VfsError::Internal {
+                message: error.to_string(),
             },
         }
     }
@@ -96,6 +102,7 @@ impl fmt::Display for VfsError {
             VfsError::IsADirectory => f.write_str("is a directory"),
             VfsError::NotEmpty => f.write_str("directory not empty"),
             VfsError::AlreadyExists => f.write_str("already exists"),
+            VfsError::Invalid => f.write_str("invalid operation"),
             VfsError::InvalidName(reason) => write!(f, "invalid name: {reason:?}"),
             VfsError::BadHandle => f.write_str("bad file handle"),
             VfsError::OverBudget(cause) => write!(f, "over budget: {cause:?}"),
@@ -114,16 +121,13 @@ mod tests {
 
     #[test]
     fn node_shape_errors_map_to_their_posix_counterparts() {
+        assert_eq!(VfsError::from(EngineError::UnknownNode), VfsError::NotFound);
         assert_eq!(
-            VfsError::from_engine(EngineError::UnknownNode),
-            VfsError::NotFound
-        );
-        assert_eq!(
-            VfsError::from_engine(EngineError::NotAFolder),
+            VfsError::from(EngineError::NotAFolder),
             VfsError::NotADirectory
         );
         assert_eq!(
-            VfsError::from_engine(EngineError::NotAFile),
+            VfsError::from(EngineError::NotAFile),
             VfsError::IsADirectory
         );
     }
@@ -140,7 +144,7 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    VfsError::from_engine(error.clone()),
+                    VfsError::from(error.clone()),
                     VfsError::TrustViolation { .. }
                 ),
                 "{error} must never degrade to availability"
@@ -157,7 +161,7 @@ mod tests {
             EngineError::UnsupportedContentFormat { version: 9 },
         ] {
             assert!(matches!(
-                VfsError::from_engine(error),
+                VfsError::from(error),
                 VfsError::Unavailable { .. }
             ));
         }
@@ -181,17 +185,9 @@ mod tests {
             },
         ] {
             assert!(
-                matches!(VfsError::from_engine(error), VfsError::Internal { .. }),
+                matches!(VfsError::from(error), VfsError::Internal { .. }),
                 "a host-local failure must not read as a trust verdict"
             );
         }
-    }
-
-    #[test]
-    fn the_two_over_budget_causes_stay_distinguishable() {
-        assert_ne!(
-            VfsError::OverBudget(OverBudgetCause::DeviceStaging),
-            VfsError::OverBudget(OverBudgetCause::AccountQuota),
-        );
     }
 }

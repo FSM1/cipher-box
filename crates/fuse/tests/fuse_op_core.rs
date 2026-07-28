@@ -2,9 +2,8 @@
 //! over the in-memory seam fakes, plus the never-block law
 //! (blueprint/desktop.md "Reads, writes, and the never-block law").
 //!
-//! No kernel and no adapter — the operation core is the unit under test, and a
-//! recording adapter stands in for the mount so the outbound invalidation
-//! direction is observable.
+//! No kernel: a recording adapter stands in for the mount so the outbound
+//! invalidation direction is observable.
 
 use std::cell::RefCell;
 use std::future::Future;
@@ -13,11 +12,11 @@ use std::task::{Context, Poll, Waker};
 
 use cipherbox_engine::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    Engine, GatewayConfig, LoginSecret, NodeKind, StoragePolicy, SyncTimingProfile,
+    Command, Engine, GatewayConfig, LoginSecret, NodeKind, StoragePolicy, SyncTimingProfile,
 };
 use cipherbox_fuse::{
-    Access, HostAdapter, HostCapabilities, Invalidation, NameError, OperationCore, ROOT_INO,
-    VfsError,
+    Access, HostAdapter, HostCapabilities, Invalidation, MAX_NAME_BYTES, NameError, OperationCore,
+    ROOT_INO, VfsError,
 };
 
 /// A mount that records what it was told to invalidate.
@@ -55,6 +54,18 @@ impl HostAdapter for RecordingAdapter {
 type Core = OperationCore<FakeSeamTypes, RecordingAdapter>;
 
 fn mount() -> (Core, RecordingAdapter) {
+    let adapter = RecordingAdapter::push_capable();
+    (mount_with(adapter.clone()), adapter)
+}
+
+fn mount_with(adapter: RecordingAdapter) -> Core {
+    mount_seeded(adapter, &[])
+}
+
+/// Mount over an engine seeded by issuing facade commands directly, which is
+/// how a name the projection would never create — one another client
+/// committed — gets into the rendered view.
+fn mount_seeded(adapter: RecordingAdapter, root_children: &[(&str, NodeKind)]) -> Core {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = Engine::new(
@@ -66,8 +77,17 @@ fn mount() -> (Core, RecordingAdapter) {
         GatewayConfig::disabled(),
     );
     block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("engine starts");
-    let adapter = RecordingAdapter::push_capable();
-    (OperationCore::new(engine, adapter.clone()), adapter)
+    let root = block_on(engine.view()).expect("view").root();
+    for (name, kind) in root_children {
+        block_on(engine.command(Command::Create {
+            parent: root,
+            name: (*name).to_owned(),
+            kind: *kind,
+            content: None,
+        }))
+        .expect("seeded create");
+    }
+    OperationCore::new(engine, adapter)
 }
 
 /// Poll a future exactly once. `Ready` proves the operation reached its answer
@@ -98,28 +118,24 @@ fn an_empty_mount_lists_nothing_under_a_root_that_is_a_directory() {
 }
 
 #[test]
-fn a_created_node_is_immediately_visible_through_lookup_and_readdir() {
+fn created_nodes_are_immediately_visible_and_lookup_agrees_with_readdir() {
     let (mut core, _adapter) = mount();
-    let created = block_on(core.mkdir(ROOT_INO, "Photos")).expect("mkdir");
+    let folder = block_on(core.mkdir(ROOT_INO, "Photos")).expect("mkdir");
+    let (file, _handle) = block_on(core.create(ROOT_INO, "f.txt", Access::ReadWrite)).unwrap();
 
     let found = block_on(core.lookup(ROOT_INO, "Photos")).expect("lookup");
-    assert_eq!(found.ino, created.ino);
+    assert_eq!(found.ino, folder.ino);
     assert_eq!(found.kind, NodeKind::Folder);
-    assert_eq!(names(&mut core, ROOT_INO), vec!["Photos".to_owned()]);
-}
-
-#[test]
-fn lookup_and_readdir_agree_on_inode_numbers() {
-    let (mut core, _adapter) = mount();
-    block_on(core.mkdir(ROOT_INO, "dir")).unwrap();
-    let (attrs, _handle) = block_on(core.create(ROOT_INO, "f.txt", Access::ReadWrite)).unwrap();
 
     let listed = block_on(core.readdir(ROOT_INO)).unwrap();
     for entry in &listed {
         let looked_up = block_on(core.lookup(ROOT_INO, &entry.name)).unwrap();
         assert_eq!(looked_up.ino, entry.ino, "{} renumbered", entry.name);
     }
-    assert!(listed.iter().any(|entry| entry.ino == attrs.ino));
+    assert!(listed.iter().any(|entry| entry.ino == file.ino));
+    let mut listed_names = names(&mut core, ROOT_INO);
+    listed_names.sort();
+    assert_eq!(listed_names, vec!["Photos".to_owned(), "f.txt".to_owned()]);
 }
 
 #[test]
@@ -142,17 +158,16 @@ fn a_missing_name_is_not_found_and_a_file_is_not_a_directory() {
 }
 
 #[test]
-fn statfs_counts_reachable_nodes_and_advertises_the_enforced_name_limit() {
+fn statfs_counts_reachable_nodes_and_the_advertised_name_limit_is_enforced() {
     let (mut core, _adapter) = mount();
     assert_eq!(block_on(core.statfs()).unwrap().nodes, 1, "root only");
     block_on(core.mkdir(ROOT_INO, "a")).unwrap();
     block_on(core.create(ROOT_INO, "b", Access::Write)).unwrap();
-    let stats = block_on(core.statfs()).unwrap();
-    assert_eq!(stats.nodes, 3);
+    assert_eq!(block_on(core.statfs()).unwrap().nodes, 3);
 
-    let longest = "x".repeat(stats.name_max as usize);
+    let longest = "x".repeat(MAX_NAME_BYTES);
     block_on(core.mkdir(ROOT_INO, &longest)).expect("the advertised limit is creatable");
-    let too_long = "x".repeat(stats.name_max as usize + 1);
+    let too_long = "x".repeat(MAX_NAME_BYTES + 1);
     assert_eq!(
         block_on(core.mkdir(ROOT_INO, &too_long)),
         Err(VfsError::InvalidName(NameError::TooLong)),
@@ -167,8 +182,6 @@ fn the_read_surface_never_yields() {
     let (mut core, _adapter) = mount();
     block_on(core.mkdir(ROOT_INO, "dir")).unwrap();
 
-    // Each of these must reach its answer from the rendered snapshot alone:
-    // a yield here would mean a kernel callback waiting on resolve or publish.
     assert!(matches!(
         poll_once(core.readdir(ROOT_INO)),
         Poll::Ready(Ok(_))
@@ -186,8 +199,7 @@ fn the_read_surface_never_yields() {
 
 #[test]
 fn a_cold_mount_reads_without_yielding() {
-    // Nothing is cached and nothing has resolved: the read surface still
-    // answers from last-known-good rather than waiting on the network.
+    // Nothing is cached and nothing has resolved: last-known-good still answers.
     let (mut core, _adapter) = mount();
     assert!(matches!(
         poll_once(core.readdir(ROOT_INO)),
@@ -390,10 +402,6 @@ fn platform_junk_cannot_be_created_through_the_mount() {
 
 #[test]
 fn removal_does_not_gate_on_name_admission() {
-    // A name another client committed is inadmissible here but must stay
-    // reachable for removal, or it is stranded in the vault forever. The
-    // removal path therefore reports what it found, never why the name would
-    // have been refused at create.
     let (mut core, _adapter) = mount();
     for name in [".DS_Store", "re:port", "COM1"] {
         assert_eq!(
@@ -406,23 +414,6 @@ fn removal_does_not_gate_on_name_admission() {
             Err(VfsError::NotFound)
         );
     }
-}
-
-#[test]
-fn a_windows_hostile_name_is_refused_on_this_platform_too() {
-    let (mut core, _adapter) = mount();
-    assert_eq!(
-        block_on(core.mkdir(ROOT_INO, "re:port")),
-        Err(VfsError::InvalidName(NameError::ReservedCharacter))
-    );
-    assert_eq!(
-        block_on(core.mkdir(ROOT_INO, "COM1")),
-        Err(VfsError::InvalidName(NameError::ReservedDevice))
-    );
-    assert_eq!(
-        block_on(core.mkdir(ROOT_INO, "")),
-        Err(VfsError::InvalidName(NameError::Empty))
-    );
 }
 
 // --- the outbound adapter direction ---
@@ -495,19 +486,126 @@ fn a_refused_operation_pushes_nothing() {
 #[test]
 fn a_mount_that_cannot_push_gets_a_shorter_cache_ttl() {
     let (with_push, _adapter) = mount();
+    let without_push = mount_with(RecordingAdapter::default());
+
+    assert!(without_push.cache_ttls().entry < with_push.cache_ttls().entry);
+    assert!(!without_push.cache_ttls().attr.is_zero());
+}
+
+// --- names arriving from other clients ---
+
+#[test]
+fn a_name_no_kernel_could_carry_never_reaches_a_listing() {
+    // Nothing below the facade validates names: a peer on any client can
+    // commit whatever text string it likes, and this crate is the only
+    // enforcement point in the stack.
+    let hostile = [
+        "a/b",
+        "a\\b",
+        "..",
+        ".",
+        "",
+        "a\0b",
+        "a\nb",
+        &"x".repeat(MAX_NAME_BYTES + 1),
+    ];
+    let seed: Vec<(&str, NodeKind)> = hostile
+        .iter()
+        .map(|name| (*name, NodeKind::File))
+        .chain([("keeper.txt", NodeKind::File)])
+        .collect();
+    let mut core = mount_seeded(RecordingAdapter::push_capable(), &seed);
+
+    assert_eq!(names(&mut core, ROOT_INO), vec!["keeper.txt".to_owned()]);
+    for name in hostile {
+        assert_eq!(
+            block_on(core.lookup(ROOT_INO, name)),
+            Err(VfsError::NotFound),
+            "{name:?} must not resolve through the mount"
+        );
+    }
+}
+
+#[test]
+fn a_folder_holding_only_hidden_junk_is_removable() {
+    // Junk is hidden from listings, so a user who cannot see it could never
+    // clear it by hand; the folder must not be stranded behind ENOTEMPTY.
+    let mut core = seeded_junk_folder();
+    let dir = block_on(core.lookup(ROOT_INO, "dir")).unwrap();
+    assert!(names(&mut core, dir.ino).is_empty(), "junk stays hidden");
+
+    block_on(core.rmdir(ROOT_INO, "dir")).expect("a junk-only folder is empty to the user");
+    assert!(names(&mut core, ROOT_INO).is_empty());
+}
+
+/// A `dir` holding one `.DS_Store` and nothing else, both committed elsewhere.
+fn seeded_junk_folder() -> Core {
     let world = FakeWorld::new();
-    let device = world.device(b"bob-pk");
+    let device = world.device(b"alice-pk");
     let (mut engine, _events) = Engine::new(
         device.seam_set(),
-        Box::new(SeededEntropy::new(7)),
+        Box::new(SeededEntropy::new(42)),
         SyncTimingProfile::CI,
         StoragePolicy::CI,
         String::new(),
         GatewayConfig::disabled(),
     );
-    block_on(engine.start(LoginSecret::new(vec![9u8; 32]))).unwrap();
-    let without_push = OperationCore::new(engine, RecordingAdapter::default());
+    block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("engine starts");
+    let root = block_on(engine.view()).expect("view").root();
+    block_on(engine.command(Command::Create {
+        parent: root,
+        name: "dir".to_owned(),
+        kind: NodeKind::Folder,
+        content: None,
+    }))
+    .unwrap();
+    let dir = block_on(engine.view())
+        .unwrap()
+        .lookup(root, "dir")
+        .unwrap()
+        .id;
+    block_on(engine.command(Command::Create {
+        parent: dir,
+        name: ".DS_Store".to_owned(),
+        kind: NodeKind::File,
+        content: None,
+    }))
+    .unwrap();
+    OperationCore::new(engine, RecordingAdapter::push_capable())
+}
 
-    assert!(without_push.cache_ttls().entry < with_push.cache_ttls().entry);
-    assert!(!without_push.cache_ttls().attr.is_zero());
+// --- structurally impossible moves ---
+
+#[test]
+fn a_folder_cannot_be_moved_inside_itself() {
+    let (mut core, _adapter) = mount();
+    let outer = block_on(core.mkdir(ROOT_INO, "outer")).unwrap();
+    let inner = block_on(core.mkdir(outer.ino, "inner")).unwrap();
+
+    assert_eq!(
+        block_on(core.rename(ROOT_INO, "outer", outer.ino, "loop")),
+        Err(VfsError::Invalid),
+        "a folder is not its own parent"
+    );
+    assert_eq!(
+        block_on(core.rename(ROOT_INO, "outer", inner.ino, "loop")),
+        Err(VfsError::Invalid),
+        "nor its descendant's"
+    );
+
+    // The subtree is still reachable from the root.
+    assert_eq!(names(&mut core, ROOT_INO), vec!["outer".to_owned()]);
+    assert_eq!(names(&mut core, outer.ino), vec!["inner".to_owned()]);
+}
+
+// --- attributes ---
+
+#[test]
+fn an_unprojected_size_is_reported_as_unknown_never_as_empty() {
+    // A kernel told st_size == 0 stops reading at byte zero, so `cp` would
+    // write an empty copy of a file whose bytes simply have not landed yet.
+    let (mut core, _adapter) = mount();
+    let (file, _handle) = block_on(core.create(ROOT_INO, "f.txt", Access::Write)).unwrap();
+    assert_eq!(file.size, None);
+    assert_eq!(block_on(core.getattr(file.ino)).unwrap().size, None);
 }

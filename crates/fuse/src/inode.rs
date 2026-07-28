@@ -37,18 +37,39 @@ impl InodeTable {
         }
     }
 
-    /// Bind the rendered root to [`ROOT_INO`]. Idempotent, and re-points the
-    /// root inode if cold start replaces the anchored root the session opened
-    /// on.
-    pub fn bind_root(&mut self, root: NodeId) {
+    /// Bind the rendered root to [`ROOT_INO`], reporting whether it *moved* —
+    /// a cold start can replace the anchored root the session opened on, and
+    /// then [`ROOT_INO`] addresses a different node than the kernel has
+    /// cached, so the caller must push an invalidation. The first bind of a
+    /// session moves nothing.
+    pub fn bind_root(&mut self, root: NodeId) -> bool {
         if self.root == Some(root) {
-            return;
+            return false;
         }
-        if let Some(previous) = self.root.replace(root) {
+        let previous = self.root.replace(root);
+        if let Some(previous) = previous {
             self.by_node.remove(&previous);
         }
+        // The incoming root may already hold an ordinary number from an
+        // earlier listing; drop it, or the node answers to two inodes.
+        if let Some(stale) = self.by_node.insert(root, ROOT_INO) {
+            self.by_ino.remove(&stale);
+        }
         self.by_ino.insert(ROOT_INO, root);
-        self.by_node.insert(root, ROOT_INO);
+        previous.is_some()
+    }
+
+    /// Drop a binding the kernel has forgotten. Safe because numbers are never
+    /// reused: a later [`ino_for`](Self::ino_for) mints a fresh one rather
+    /// than resurrecting this. The root is never forgotten — the mount would
+    /// lose its anchor.
+    pub fn forget(&mut self, ino: u64) {
+        if ino == ROOT_INO {
+            return;
+        }
+        if let Some(node) = self.by_ino.remove(&ino) {
+            self.by_node.remove(&node);
+        }
     }
 
     /// The node bound to `ino`, if the session has seen it.
@@ -114,14 +135,44 @@ mod tests {
     #[test]
     fn cold_start_repointing_the_root_moves_the_root_inode() {
         let mut table = InodeTable::new();
-        table.bind_root(node(0));
+        assert!(!table.bind_root(node(0)), "the first bind moves nothing");
         let child = table.ino_for(node(9));
+        let promoted = table.ino_for(node(3));
 
-        table.bind_root(node(3));
+        assert!(table.bind_root(node(3)), "a re-anchor must be reported");
+        assert!(
+            !table.bind_root(node(3)),
+            "rebinding the same root does not"
+        );
 
         assert_eq!(table.node(ROOT_INO), Some(node(3)));
         assert_eq!(table.ino_for(node(3)), ROOT_INO);
+        assert_eq!(
+            table.node(promoted),
+            None,
+            "the promoted node must not answer to two inodes"
+        );
         assert_eq!(table.ino_for(node(9)), child, "other bindings survive");
+    }
+
+    #[test]
+    fn a_forgotten_inode_is_dropped_and_never_resurrected() {
+        let mut table = InodeTable::new();
+        table.bind_root(node(0));
+        let ino = table.ino_for(node(7));
+
+        table.forget(ino);
+
+        assert_eq!(table.node(ino), None);
+        assert_ne!(table.ino_for(node(7)), ino, "numbers are never reused");
+    }
+
+    #[test]
+    fn the_root_is_never_forgotten() {
+        let mut table = InodeTable::new();
+        table.bind_root(node(0));
+        table.forget(ROOT_INO);
+        assert_eq!(table.node(ROOT_INO), Some(node(0)));
     }
 
     #[test]
