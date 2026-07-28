@@ -1,14 +1,13 @@
-//! The content profile — the open-edge chunk-framing constant
-//! (blueprint/engine.md "Content plane"; "Open edges": "Chunk size, DAG shape,
-//! retention defaults ... freeze alongside the KAT manifest").
+//! The content profile — the frozen chunk-framing constant
+//! (blueprint/engine.md "Content plane"; frozen by #820 and pinned by the
+//! engine KAT).
 //!
 //! Chunk size is engine-owned per core.md's hand-off and, like the sync timing
 //! profile, is injected rather than hardcoded at a call site: framing reads the
-//! size from the profile handed in, so a future measured value lands as one
-//! profile-constant change.
+//! size from the profile handed in.
 
-/// The content-plane framing profile (#630). Fixed-size chunking is the whole
-/// of the shape today; DAG fan-out/balancing stays flat (an open edge below).
+/// The content-plane framing profile (#630). Fixed-size chunking over a flat
+/// DAG is the whole of the shape, frozen by #820.
 ///
 /// There is deliberately **no `Default`** (mirrors [`crate::profile`]): every
 /// construction site names its profile, and the chunk size is always a real,
@@ -27,14 +26,15 @@ pub struct ContentProfile {
 }
 
 impl ContentProfile {
-    /// Shipped framing: 1 MiB chunks.
+    /// Shipped framing, frozen by #820: the **sealed leaf** is exactly 1 MiB.
     ///
-    /// A placeholder pending the measurement process in blueprint/testing.md
-    /// ("The profile is where measured constants land"); it lands as a
-    /// profile-constant change with its measurement linked, and the DAG fan-out
-    /// open edge is settled alongside it.
+    /// The 1 MiB budget belongs to the block, not the plaintext, because the
+    /// ecosystem imposes its limits on blocks — so the plaintext chunk is
+    /// 1 MiB less core's seal overhead (`nonce || ciphertext||tag`). Frozen in
+    /// every published root and pinned by the engine KAT: changing it changes
+    /// the wire format.
     pub const PRODUCTION: Self = Self {
-        chunk_size: 1 << 20,
+        chunk_size: 1_048_536,
     };
 
     /// CI framing: 16-byte chunks so multi-chunk framing and DAG assembly are
@@ -65,10 +65,18 @@ impl ContentProfile {
 #[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
+    use cipherbox_core::content::seal_chunk;
+    use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN};
 
     #[test]
-    fn production_chunk_size_is_one_mib() {
-        assert_eq!(ContentProfile::PRODUCTION.chunk_size(), 1 << 20);
+    fn a_production_chunk_seals_to_exactly_a_one_mib_block() {
+        let plaintext = vec![0u8; ContentProfile::PRODUCTION.chunk_size()];
+        let sealed = seal_chunk(&[0u8; KEY_LEN], &[0u8; NONCE_LEN], &plaintext);
+        assert_eq!(
+            sealed.len(),
+            1 << 20,
+            "the 1 MiB budget belongs to the block, not the plaintext"
+        );
     }
 
     #[test]

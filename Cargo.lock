@@ -671,6 +671,7 @@ dependencies = [
  "cipherbox-engine",
  "futures-channel",
  "futures-core",
+ "hex",
  "serde",
  "serde_json",
  "zeroize",

@@ -1,0 +1,49 @@
+[
+  {
+    "name": "production-multi-chunk-short-tail",
+    "chunkSize": 1048536,
+    "size": 2109417,
+    "leafCids": [
+      "01551e205c504f0368d8d99a1e7b812ba59acd1132860fc2f9f3890f2de4713eafb9314e",
+      "01551e206f0a8416f6224eb25b00b48bad1063bff80da07d6a7a9192a4376547e277ffbb",
+      "01551e2071dc56dcfb78ea7d05a032bd6a047f482a05596af444ffe78e7866328e2e46ea"
+    ],
+    "rootBlock": "a46176016473697a651a00202fe9656c696e6b7383582401551e205c504f0368d8d99a1e7b812ba59acd1132860fc2f9f3890f2de4713eafb9314e582401551e206f0a8416f6224eb25b00b48bad1063bff80da07d6a7a9192a4376547e277ffbb582401551e2071dc56dcfb78ea7d05a032bd6a047f482a05596af444ffe78e7866328e2e46ea696368756e6b53697a651a000fffd8",
+    "contentCid": "01711e20852c04916feef6195416178cca11a120155ed5ee42d51704937c86edf8564416",
+    "contentCidStr": "bafyr4ieffqcjc37o6ymvifqxrtfbdijacvpnl3sc2ulqje34q3w7qvsecy"
+  },
+  {
+    "name": "production-single-chunk",
+    "chunkSize": 1048536,
+    "size": 1000,
+    "leafCids": [
+      "01551e2098cd779778b3bd3fd25d93ca827f7ed7e56b29057b109b62827204fc554e1e71"
+    ],
+    "rootBlock": "a46176016473697a651903e8656c696e6b7381582401551e2098cd779778b3bd3fd25d93ca827f7ed7e56b29057b109b62827204fc554e1e71696368756e6b53697a651a000fffd8",
+    "contentCid": "01711e2028f16a5229aa3c362f6da14cf9805eb65b8de9f87bdc0be22cfc7cdcffab64db",
+    "contentCidStr": "bafyr4ibi6fvfeknkhq3c63nbjt4yaxvwlog6t6d33qf6elh4ptop7k3e3m"
+  },
+  {
+    "name": "production-empty-version",
+    "chunkSize": 1048536,
+    "size": 0,
+    "leafCids": [
+      "01551e2070a9b329da6fff17b72434302be94343ec3e1f72ae74b0661b3ed8a80d5b874a"
+    ],
+    "rootBlock": "a46176016473697a6500656c696e6b7381582401551e2070a9b329da6fff17b72434302be94343ec3e1f72ae74b0661b3ed8a80d5b874a696368756e6b53697a651a000fffd8",
+    "contentCid": "01711e207de04d2ca61eef8c8e5b8771b13c0da936df26cff10332b37aa7bfe09bb402b2",
+    "contentCidStr": "bafyr4id54bgszjq656gi4w4hogytydnjg3psnt7ramzlg6vhx7qjxnacwi"
+  },
+  {
+    "name": "production-exact-multiple",
+    "chunkSize": 1048536,
+    "size": 2097072,
+    "leafCids": [
+      "01551e205c504f0368d8d99a1e7b812ba59acd1132860fc2f9f3890f2de4713eafb9314e",
+      "01551e206f0a8416f6224eb25b00b48bad1063bff80da07d6a7a9192a4376547e277ffbb"
+    ],
+    "rootBlock": "a46176016473697a651a001fffb0656c696e6b7382582401551e205c504f0368d8d99a1e7b812ba59acd1132860fc2f9f3890f2de4713eafb9314e582401551e206f0a8416f6224eb25b00b48bad1063bff80da07d6a7a9192a4376547e277ffbb696368756e6b53697a651a000fffd8",
+    "contentCid": "01711e20482e9f19f29ce1d948ad5af0b11fcb363246d3e95d5588842c1016c3f4bfd44c",
+    "contentCidStr": "bafyr4icif2prt4u44hmurlk26cyr7szwgjdnh2k5kweiilaqc3b7jp6ujq"
+  }
+]

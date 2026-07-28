@@ -270,6 +270,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::NotAFile => "notAFile",
         EngineError::ContentUnavailable { .. } => "contentUnavailable",
         EngineError::TrustViolation { .. } => "trustViolation",
+        EngineError::UnsupportedContentFormat { .. } => "unsupportedContentFormat",
         EngineError::Unimplemented { .. } => "unimplemented",
         EngineError::Seam { .. } => "seam",
         EngineError::Entropy { .. } => "entropy",

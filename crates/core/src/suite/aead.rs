@@ -98,10 +98,11 @@ mod tests {
 
     #[test]
     fn content_chunk_size_is_far_below_the_plaintext_ceiling() {
-        // The engine frames content into 1 MiB chunks (crates/engine content
-        // profile); that is orders of magnitude below the AEAD ceiling, so the
-        // infallible `encrypt` contract holds for every framed chunk.
-        let engine_chunk_size: u64 = 1 << 20;
+        // The engine frames content so the *sealed* leaf is 1 MiB (crates/engine
+        // content profile), so the plaintext it hands `encrypt` is that budget
+        // less this suite's own framing overhead. Derived rather than restated:
+        // core cannot depend on the engine to name the constant.
+        let engine_chunk_size: u64 = (1 << 20) - NONCE_LEN as u64 - TAG_LEN as u64;
         let ceiling = MAX_PLAINTEXT_LEN;
         assert!(engine_chunk_size.saturating_mul(1000) < ceiling);
         // Sanity-pin the ceiling itself: 64 * (2^32 - 1) bytes.

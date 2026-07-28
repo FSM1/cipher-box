@@ -1,0 +1,34 @@
+{
+  "manifestVersion": 1,
+  "profile": "cipherbox/v2 engine content-dag",
+  "content": {
+    "rootFormatVersion": 1,
+    "rootCidCodec": 113,
+    "productionChunkSize": 1048536,
+    "dagRootAccept": {
+      "file": "vectors/content/dag_root_accept.json",
+      "count": 4
+    },
+    "dagRootReject": {
+      "file": "vectors/content/dag_root_reject.json",
+      "count": 4,
+      "checks": [
+        "dag-unsupported-format",
+        "dag-zero-chunk-size",
+        "dag-malformed-leaf-cid",
+        "dag-link-count-mismatch"
+      ]
+    },
+    "dagCapacityAccept": {
+      "file": "vectors/content/dag_capacity_accept.json",
+      "count": 1
+    },
+    "dagCapacityReject": {
+      "file": "vectors/content/dag_capacity_reject.json",
+      "count": 1,
+      "checks": [
+        "dag-root-too-large"
+      ]
+    }
+  }
+}

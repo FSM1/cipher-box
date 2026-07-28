@@ -3,17 +3,17 @@
 //! version's `contentCid`, shaped so ranged block/CAR fetches map
 //! chunk-aligned").
 //!
-//! The DAG *shape* is engine-owned (an open edge); the *encoding* and the
-//! content-address are core's — the root node is serialized with core's
-//! deterministic CBOR ([`cipherbox_core::codec`], a strict DAG-CBOR subset) and
-//! addressed by [`cipherbox_core::content::compute_cid`] under the engine-chosen
-//! `dag-cbor` codec, so there is one codec and one KAT set (AGENTS.md rules 4-5).
+//! The DAG *shape* is engine-owned; the *encoding* and the content-address are
+//! core's — the root node is serialized with core's deterministic CBOR
+//! ([`cipherbox_core::codec`], a strict DAG-CBOR subset) and addressed by
+//! [`cipherbox_core::content::compute_cid`] under the engine-chosen `dag-cbor`
+//! codec, so there is one codec and one KAT set (AGENTS.md rules 4-5).
 //!
-//! Shape today is a single flat root over the ordered leaf CIDs plus the fixed
-//! chunk size and the plaintext length. Flat keeps the byte→leaf map trivial
-//! (offset / chunkSize), which is exactly the chunk-alignment a ranged fetch
-//! needs; a fan-out/balancing profile is the open edge deferred with the chunk
-//! size (blueprint/engine.md "Open edges").
+//! The shape is frozen (#820, blueprint/engine.md "Content plane"): a single
+//! flat root over the ordered leaf CIDs plus the fixed chunk size, the
+//! plaintext length, and [`ROOT_FORMAT_VERSION`]. Flat keeps the byte→leaf map
+//! a single division, which is the chunk-alignment a ranged fetch needs, and
+//! costs the ceiling documented on [`DagError::RootTooLarge`].
 
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::content::{
@@ -30,27 +30,41 @@ use super::profile::ContentProfile;
 /// codec as a parameter. Single-byte, inside core's frozen content-plane set.
 pub const DAG_ROOT_CODEC: u8 = 0x71;
 
+/// The root-manifest format version this crate writes and the only one it
+/// reads. A discriminator, not a compatibility arm: a root carrying any other
+/// version is refused as [`DagError::UnsupportedFormat`], so a client meeting a
+/// future shape reports "upgrade" instead of a rule-6 trust violation (#820).
+pub const ROOT_FORMAT_VERSION: u64 = 1;
+
 /// CIDv1 version byte, and the digest-length byte (BLAKE3-256 = 32) — the two
 /// fixed CIDv1 framing bytes core does not expose as public constants; used to
 /// validate that a decoded leaf link is a well-formed content CID.
 const CID_VERSION: u8 = 0x01;
 const CID_DIGEST_LEN: u8 = 32;
 
-/// Why decoding a root block failed, fail-closed.
+/// Why assembling or decoding a root block failed, fail-closed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DagError {
     /// The root block was not valid deterministic CBOR, or not the root map
     /// shape (a non-canonical encoding, a missing field, a wrong-typed field) —
     /// a core [`CodecError`] surfaced verbatim.
     Cbor(CodecError),
-    /// The root decoded but violated a manifest invariant: a zero chunk size, a
-    /// leaf link that is not a well-formed content CID, or a link count
-    /// inconsistent with the byte size. An internally inconsistent manifest is
-    /// never trusted, even when its own `contentCid` verifies.
-    InvalidManifest {
-        /// Which invariant failed.
-        reason: &'static str,
+    /// The root declared a format version other than [`ROOT_FORMAT_VERSION`].
+    /// Deliberately distinct from the invariant rejects below: the content is
+    /// not suspect, this build simply cannot read the shape.
+    UnsupportedFormat {
+        /// The version the root declared.
+        version: u64,
     },
+    /// The root declared a zero chunk size, which no framing can produce and
+    /// which would make the byte→leaf map a division by zero.
+    ZeroChunkSize,
+    /// A leaf link was not a well-formed `raw` content CID.
+    MalformedLeafCid,
+    /// The link count disagreed with `ceil(size / chunkSize)`. An internally
+    /// inconsistent manifest is never trusted, even when its own `contentCid`
+    /// verifies.
+    LinkCountMismatch,
     /// The assembled root manifest exceeded [`MAX_RESOLVED_RECORD_BYTES`]: the
     /// flat root inlines every leaf CID, so a file past the flat-DAG ceiling
     /// (~108 GiB) produces a root [`read_block`](super::read::read_block) would
@@ -62,6 +76,42 @@ pub enum DagError {
         /// The enforced ceiling ([`MAX_RESOLVED_RECORD_BYTES`]).
         limit: usize,
     },
+}
+
+impl DagError {
+    /// Every engine-owned DAG check, in declaration order — the surface
+    /// `crates/engine/tests/kat_content.rs` pins. The `dag-` prefix keeps an
+    /// engine check from ever colliding with a core one.
+    pub const CHECKS: &'static [&'static str] = &[
+        "dag-unsupported-format",
+        "dag-zero-chunk-size",
+        "dag-malformed-leaf-cid",
+        "dag-link-count-mismatch",
+        "dag-root-too-large",
+    ];
+
+    /// The stable name of the check that fired.
+    pub fn check(&self) -> &'static str {
+        match self {
+            Self::Cbor(error) => error.check(),
+            Self::UnsupportedFormat { .. } => "dag-unsupported-format",
+            Self::ZeroChunkSize => "dag-zero-chunk-size",
+            Self::MalformedLeafCid => "dag-malformed-leaf-cid",
+            Self::LinkCountMismatch => "dag-link-count-mismatch",
+            Self::RootTooLarge { .. } => "dag-root-too-large",
+        }
+    }
+
+    /// The class label used in reject vectors. Exhaustive so a new variant must
+    /// state its class rather than inherit `"trust"`.
+    pub fn class(&self) -> &'static str {
+        match self {
+            Self::Cbor(error) => error.class(),
+            Self::UnsupportedFormat { .. } => "unsupported",
+            Self::RootTooLarge { .. } => "over-cap",
+            Self::ZeroChunkSize | Self::MalformedLeafCid | Self::LinkCountMismatch => "trust",
+        }
+    }
 }
 
 impl From<CodecError> for DagError {
@@ -76,6 +126,7 @@ impl From<Malformed> for DagError {
     }
 }
 
+const VERSION_KEY: &str = "v";
 const CHUNK_SIZE_KEY: &str = "chunkSize";
 const SIZE_KEY: &str = "size";
 const LINKS_KEY: &str = "links";
@@ -98,26 +149,27 @@ pub struct ContentDag {
 /// size bound). Deterministic: identical leaves + length + profile give a
 /// byte-identical root block and CID.
 ///
-/// Fails closed when the leaf count does not match [`decode_root`]'s
-/// `ceil(size / chunkSize)`. Enforced in every build (not a release-compiled-out
-/// `debug_assert`): a mis-wired caller must never emit a root this crate's own
-/// [`decode_root`] would reject as `link count inconsistent with size`, which
-/// would leave the published version permanently unreadable.
+/// Every caller-supplied invariant [`decode_root`] rejects on is enforced here
+/// too, in every build (not a release-compiled-out `debug_assert`): a mis-wired
+/// caller must never emit a root this crate's own decoder rejects, which would
+/// leave the published version permanently unreadable (AGENTS.md rule 8).
 pub fn assemble(
     leaves: &[SealedChunk],
     plaintext_len: u64,
     profile: &ContentProfile,
 ) -> Result<ContentDag, DagError> {
+    if !leaves.iter().all(|leaf| is_raw_leaf_cid(&leaf.cid)) {
+        return Err(DagError::MalformedLeafCid);
+    }
     if leaves.len() as u64 != expected_leaf_count(plaintext_len, profile.chunk_size() as u64) {
-        return Err(DagError::InvalidManifest {
-            reason: "link count inconsistent with size",
-        });
+        return Err(DagError::LinkCountMismatch);
     }
     let links = leaves
         .iter()
         .map(|leaf| Value::Bytes(leaf.cid.clone()))
         .collect();
     let mut root = Map::new();
+    root.insert(VERSION_KEY, Value::Unsigned(ROOT_FORMAT_VERSION));
     root.insert(CHUNK_SIZE_KEY, Value::Unsigned(profile.chunk_size() as u64));
     root.insert(SIZE_KEY, Value::Unsigned(plaintext_len));
     root.insert(LINKS_KEY, Value::Array(links));
@@ -150,15 +202,21 @@ pub struct RootManifest {
 }
 
 /// Decode a root block (already verified against its `contentCid` by the
-/// caller) into its manifest, fail-closed. Beyond the core-CBOR checks (a
-/// non-canonical encoding, a missing or wrong-typed field), the manifest
-/// invariants are enforced here so a `contentCid`-valid-but-inconsistent root is
-/// rejected, not silently trusted: the chunk size must be nonzero, every leaf
-/// link must be a well-formed `raw` content CID, and the link count must match
-/// `ceil(size / chunkSize)` (an empty version is exactly one empty leaf).
+/// caller) into its manifest, fail-closed — a `contentCid`-valid-but-internally
+/// inconsistent root is rejected, not silently trusted. The format version is
+/// read first, so a future shape is refused as
+/// [`DagError::UnsupportedFormat`] rather than by whichever invariant it
+/// happens to trip.
 pub fn decode_root(root_block: &[u8]) -> Result<RootManifest, DagError> {
     let root = decode(root_block)?;
     let map = root.as_map()?;
+    let version = map
+        .get(VERSION_KEY)
+        .ok_or(Malformed::MissingField { field: "v" })?
+        .as_unsigned()?;
+    if version != ROOT_FORMAT_VERSION {
+        return Err(DagError::UnsupportedFormat { version });
+    }
     let chunk_size = map
         .get(CHUNK_SIZE_KEY)
         .ok_or(Malformed::MissingField { field: "chunkSize" })?
@@ -176,19 +234,13 @@ pub fn decode_root(root_block: &[u8]) -> Result<RootManifest, DagError> {
         .collect::<Result<Vec<_>, Malformed>>()?;
 
     if chunk_size == 0 {
-        return Err(DagError::InvalidManifest {
-            reason: "zero chunk size",
-        });
+        return Err(DagError::ZeroChunkSize);
     }
     if !leaf_cids.iter().all(|cid| is_raw_leaf_cid(cid)) {
-        return Err(DagError::InvalidManifest {
-            reason: "malformed leaf cid",
-        });
+        return Err(DagError::MalformedLeafCid);
     }
     if leaf_cids.len() as u64 != expected_leaf_count(size, chunk_size) {
-        return Err(DagError::InvalidManifest {
-            reason: "link count inconsistent with size",
-        });
+        return Err(DagError::LinkCountMismatch);
     }
 
     Ok(RootManifest {
@@ -243,8 +295,9 @@ mod tests {
 
     /// Hand-build a root block with arbitrary fields, bypassing `assemble`, to
     /// drive the fail-closed manifest checks.
-    fn root_bytes(chunk_size: u64, size: u64, links: &[Vec<u8>]) -> Vec<u8> {
+    fn root_bytes(version: u64, chunk_size: u64, size: u64, links: &[Vec<u8>]) -> Vec<u8> {
         let mut root = Map::new();
+        root.insert(VERSION_KEY, Value::Unsigned(version));
         root.insert(CHUNK_SIZE_KEY, Value::Unsigned(chunk_size));
         root.insert(SIZE_KEY, Value::Unsigned(size));
         root.insert(
@@ -254,10 +307,10 @@ mod tests {
         encode(&Value::Map(root)).unwrap()
     }
 
-    fn invalid_manifest_reason(block: &[u8]) -> &'static str {
+    fn reject_check(block: &[u8]) -> &'static str {
         match decode_root(block) {
-            Err(DagError::InvalidManifest { reason }) => reason,
-            other => panic!("expected an InvalidManifest error, got {other:?}"),
+            Err(error) => error.check(),
+            Ok(manifest) => panic!("expected a fail-closed reject, got {manifest:?}"),
         }
     }
 
@@ -314,25 +367,74 @@ mod tests {
     #[test]
     fn decode_root_rejects_a_zero_chunk_size() {
         assert_eq!(
-            invalid_manifest_reason(&root_bytes(0, 0, &[])),
-            "zero chunk size"
+            reject_check(&root_bytes(ROOT_FORMAT_VERSION, 0, 0, &[])),
+            "dag-zero-chunk-size"
         );
     }
 
     #[test]
     fn decode_root_rejects_a_malformed_leaf_cid() {
         // chunkSize 16, size 16 => one leaf expected; the one link is not a CID.
-        let block = root_bytes(16, 16, &[b"not-a-content-cid".to_vec()]);
-        assert_eq!(invalid_manifest_reason(&block), "malformed leaf cid");
+        let block = root_bytes(
+            ROOT_FORMAT_VERSION,
+            16,
+            16,
+            &[b"not-a-content-cid".to_vec()],
+        );
+        assert_eq!(reject_check(&block), "dag-malformed-leaf-cid");
     }
 
     #[test]
     fn decode_root_rejects_a_link_count_size_mismatch() {
         // size 40 at chunkSize 16 expects 3 leaves; only one (valid) link given.
-        let block = root_bytes(16, 40, &[compute_cid(CONTENT_CID_CODEC, b"x")]);
+        let block = root_bytes(
+            ROOT_FORMAT_VERSION,
+            16,
+            40,
+            &[compute_cid(CONTENT_CID_CODEC, b"x")],
+        );
+        assert_eq!(reject_check(&block), "dag-link-count-mismatch");
+    }
+
+    #[test]
+    fn assemble_stamps_the_frozen_format_version() {
+        let (leaves, profile) = framed(b"abc", 13);
+        let dag = assemble(&leaves, 3, &profile).unwrap();
+        let root = decode(&dag.root_block).unwrap();
         assert_eq!(
-            invalid_manifest_reason(&block),
-            "link count inconsistent with size"
+            root.as_map().unwrap().get(VERSION_KEY).unwrap(),
+            &Value::Unsigned(ROOT_FORMAT_VERSION),
+            "every published root carries the format discriminator"
+        );
+    }
+
+    #[test]
+    fn decode_root_refuses_an_unrecognized_format_version() {
+        // A future fan-out root: the version check fires first, so the client
+        // learns it is out of date instead of reporting a trust violation.
+        let block = root_bytes(
+            ROOT_FORMAT_VERSION + 1,
+            16,
+            16,
+            &[b"not-a-content-cid".to_vec()],
+        );
+        assert_eq!(
+            decode_root(&block),
+            Err(DagError::UnsupportedFormat {
+                version: ROOT_FORMAT_VERSION + 1
+            })
+        );
+    }
+
+    #[test]
+    fn decode_root_rejects_a_root_with_no_format_version() {
+        let mut root = Map::new();
+        root.insert(CHUNK_SIZE_KEY, Value::Unsigned(16));
+        root.insert(SIZE_KEY, Value::Unsigned(0));
+        root.insert(LINKS_KEY, Value::Array(Vec::new()));
+        assert_eq!(
+            reject_check(&encode(&Value::Map(root)).unwrap()),
+            "missing-field"
         );
     }
 
@@ -346,14 +448,12 @@ mod tests {
         assert_eq!(manifest.leaf_cids.len(), 1);
     }
 
-    /// `count` dummy leaves with 36-byte (`CONTENT_CID_LEN`) CIDs and empty
-    /// sealed bytes, framed to match a `chunk_size`-16 profile — enough to size
-    /// the root manifest without materializing any file bytes. `assemble` only
-    /// reads `leaf.cid`, so the sealed payload can stay empty.
+    /// `count` distinct well-formed leaf CIDs. `assemble` reads only `leaf.cid`,
+    /// so the root can be sized without materializing any file bytes.
     fn dummy_leaves(count: usize) -> Vec<SealedChunk> {
         (0..count)
-            .map(|_| SealedChunk {
-                cid: vec![0u8; CONTENT_CID_LEN],
+            .map(|i| SealedChunk {
+                cid: compute_cid(CONTENT_CID_CODEC, &(i as u64).to_be_bytes()),
                 sealed: Vec::new(),
             })
             .collect()
@@ -401,9 +501,36 @@ mod tests {
         assert_eq!(leaves.len(), 1);
         assert_eq!(
             assemble(&leaves, 40, &profile),
-            Err(DagError::InvalidManifest {
-                reason: "link count inconsistent with size",
-            })
+            Err(DagError::LinkCountMismatch)
         );
+    }
+
+    #[test]
+    fn assemble_rejects_a_malformed_leaf_cid_in_every_build() {
+        // The encode-side half of `decode_root`'s leaf-CID reject (rule 8).
+        let profile = ContentProfile::CI;
+        let leaves = vec![SealedChunk {
+            cid: b"not-a-content-cid".to_vec(),
+            sealed: Vec::new(),
+        }];
+        assert_eq!(
+            assemble(&leaves, profile.chunk_size() as u64, &profile),
+            Err(DagError::MalformedLeafCid)
+        );
+    }
+
+    #[test]
+    fn the_check_surface_matches_the_engine_owned_variants_in_order() {
+        let named: Vec<&str> = [
+            DagError::UnsupportedFormat { version: 2 },
+            DagError::ZeroChunkSize,
+            DagError::MalformedLeafCid,
+            DagError::LinkCountMismatch,
+            DagError::RootTooLarge { size: 1, limit: 0 },
+        ]
+        .iter()
+        .map(DagError::check)
+        .collect();
+        assert_eq!(named, DagError::CHECKS);
     }
 }

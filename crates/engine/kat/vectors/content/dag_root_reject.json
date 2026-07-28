@@ -1,0 +1,26 @@
+[
+  {
+    "name": "unsupported-format-version",
+    "rootBlock": "a46176026473697a651a002fff88656c696e6b7381516e6f742d612d636f6e74656e742d636964696368756e6b53697a651a000fffd8",
+    "check": "dag-unsupported-format",
+    "class": "unsupported"
+  },
+  {
+    "name": "zero-chunk-size",
+    "rootBlock": "a46176016473697a6500656c696e6b7380696368756e6b53697a6500",
+    "check": "dag-zero-chunk-size",
+    "class": "trust"
+  },
+  {
+    "name": "malformed-leaf-cid",
+    "rootBlock": "a46176016473697a651a000fffd8656c696e6b7381516e6f742d612d636f6e74656e742d636964696368756e6b53697a651a000fffd8",
+    "check": "dag-malformed-leaf-cid",
+    "class": "trust"
+  },
+  {
+    "name": "link-count-inconsistent-with-size",
+    "rootBlock": "a46176016473697a651a002fff88656c696e6b7381582401551e206ba14306b6dda722da8e997d39e50857390d97e51a473c223ac338b60bdacde3696368756e6b53697a651a000fffd8",
+    "check": "dag-link-count-mismatch",
+    "class": "trust"
+  }
+]
