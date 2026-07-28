@@ -251,6 +251,7 @@ async fn production_ignores_the_test_profile_auth_limit_override() {
     };
     let http = ReqwestHttp::new();
     let mut statuses = Vec::new();
+    let mut advertised = None;
     for _ in 0..=PRODUCTION_AUTH_LIMIT {
         let response = http
             .send(HttpRequest {
@@ -261,6 +262,13 @@ async fn production_ignores_the_test_profile_auth_limit_override() {
             })
             .await
             .expect("challenge request");
+        if advertised.is_none() {
+            advertised = response
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("x-ratelimit-limit"))
+                .map(|(_, value)| value.clone());
+        }
         statuses.push(response.status);
         if response.status == 429 {
             break;
@@ -272,6 +280,16 @@ async fn production_ignores_the_test_profile_auth_limit_override() {
         "production throttled none of {} auth requests, so it honored THROTTLE_AUTH_LIMIT: {statuses:?}",
         PRODUCTION_AUTH_LIMIT + 1
     );
+    // Pins the exact boundary, which the 429 alone does not: a production limit
+    // accidentally cut to 1 would still throttle. The throttler emits the header
+    // only on a request it admits, so an already-drained bucket yields none.
+    if let Some(limit) = advertised {
+        assert_eq!(
+            limit,
+            PRODUCTION_AUTH_LIMIT.to_string(),
+            "production advertised a per-IP auth limit other than the catalog's {PRODUCTION_AUTH_LIMIT}"
+        );
+    }
 }
 
 #[tokio::test]
