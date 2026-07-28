@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::facade::{NodeId, NodeKind, PendingClass};
 use crate::seams::UnixMillis;
+use crate::sync::model::NodeMeta;
 
 /// One intent op: the target node, the base sequence it was formed against,
 /// when it was authored, and the mutation.
@@ -228,6 +229,18 @@ impl Op {
         self.staged_content().map(|c| &c.root_cid[..])
     }
 
+    /// Stamp this op's authored facts onto the node it targets — `mtime`
+    /// **overwriting** the projected time, and a content op's plaintext size.
+    /// The one function the pending-op overlay and the drain's publish plan
+    /// share, so a rendered node and the record that will publish it agree
+    /// (blueprint/engine.md "State law").
+    pub fn stamp_authored(&self, meta: &mut NodeMeta) {
+        meta.mtime = Some(self.authored_at.0);
+        if let Some(content) = self.staged_content() {
+            meta.size = Some(content.plaintext_size);
+        }
+    }
+
     /// Encode the intent body — the plaintext a durable record seals
     /// ([`crate::sync::record`]).
     pub fn encode_body(&self) -> Vec<u8> {
@@ -238,25 +251,21 @@ impl Op {
 
     /// Decode an intent body opened from a durable record.
     pub fn decode_body(bytes: &[u8]) -> Result<Self, OpDecodeError> {
-        serde_json::from_slice(bytes).map_err(|e| OpDecodeError(e.to_string()))
+        serde_json::from_slice(bytes).map_err(|_| OpDecodeError)
     }
 }
 
-/// A durable op-queue record failed to decode — a corrupt or forward-version
-/// journal entry. The engine dead-letters it rather than crash the replay.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct OpDecodeError(String);
-
-impl OpDecodeError {
-    /// The diagnostic message (no key material — ops carry no plaintext).
-    pub fn message(&self) -> &str {
-        &self.0
-    }
-}
+/// An intent body did not satisfy this build's op grammar.
+///
+/// Carries no detail by construction: the body is sealed *because* it holds
+/// user plaintext — `Create { name }` and `Rename { new_name }` are filenames —
+/// and a serde message echoes the offending value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpDecodeError;
 
 impl core::fmt::Display for OpDecodeError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "op decode failed: {}", self.0)
+        f.write_str("op body did not match this build's grammar")
     }
 }
 
@@ -373,6 +382,28 @@ mod tests {
         );
         assert!(PendingClass::Content > PendingClass::Metadata);
         assert!(PendingClass::Metadata > PendingClass::None);
+    }
+
+    #[test]
+    fn a_content_op_stamps_its_authored_time_and_plaintext_size() {
+        let mut node = NodeMeta::new(id(1), "f.txt", NodeKind::File);
+        Op::update_content(id(1), staged(b"root", 9), 1, at(5)).stamp_authored(&mut node);
+        assert_eq!(node.mtime, Some(5));
+        assert_eq!(node.size, Some(9));
+    }
+
+    #[test]
+    fn a_metadata_op_stamps_time_over_a_projection_and_leaves_size_alone() {
+        let mut node = NodeMeta::new(id(1), "f.txt", NodeKind::File);
+        node.mtime = Some(999);
+        node.size = Some(42);
+        Op::rename(id(1), "g.txt", 1, at(1)).stamp_authored(&mut node);
+        assert_eq!(
+            node.mtime,
+            Some(1),
+            "the op authors the node's next record, so the projected time is stale"
+        );
+        assert_eq!(node.size, Some(42), "a metadata op carries no size");
     }
 
     #[test]

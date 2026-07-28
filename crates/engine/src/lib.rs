@@ -87,11 +87,11 @@ pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};
 pub use sync::{
     AppliedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow,
     HeadReconciliation, Link, NodeMeta, Op, OpKind, OpRecordError, OpResolution, PointerError,
-    PointerFetch, QueueScan, RecordClass, RecordReader, RecordSeal, Repair, ReplayReport,
-    RetainedReason, SessionRole, Snapshot, StageOutcome, StagedContent, TickCause, TickControl,
-    VaultPointerAdoption, apply_overlay, apply_repairs, classify, decode_queue, encode_op_record,
-    focus_set, observed_repair, rebase_one, reconcile_head, record_content_root_cid, replay,
-    resolve_vault_pointer, stage_op, stamp_authored,
+    PointerFetch, RecordClass, RecordReader, RecordSeal, Repair, ReplayReport, SessionRole,
+    Snapshot, StageOutcome, StagedContent, TickCause, TickControl, VaultPointerAdoption,
+    apply_overlay, apply_repairs, classify, decode_queue, encode_op_record, focus_set,
+    observed_repair, rebase_one, reconcile_head, record_content_root_cid, replay,
+    resolve_vault_pointer, stage_op,
 };
 
 /// Placeholder identity item; kept for the sibling crate stubs' dependency

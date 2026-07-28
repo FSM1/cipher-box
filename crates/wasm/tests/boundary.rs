@@ -207,6 +207,7 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
             name: String::new(),
         }],
         dead_letters: vec![OpId(9)],
+        retained_records: 0,
         staleness: facade::Staleness::Fresh,
     })
     .into();

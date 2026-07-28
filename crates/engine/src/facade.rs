@@ -178,11 +178,10 @@ pub struct SnapshotView {
     pub ancestors: Vec<Breadcrumb>,
     /// Every retained dead-lettered op id.
     pub dead_letters: Vec<OpId>,
-    /// Durable queue entries this session holds but cannot read — another
-    /// identity's, or written by a newer build. They occupy staged bytes
-    /// against the same device budget, so a host reports "this device holds
-    /// work from another account or a newer version" instead of leaving an
-    /// over-budget rejection unexplained on a vault that looks empty
+    /// How many durable queue entries this session holds but cannot read
+    /// (CONTEXT.md "Retained record"). Deliberately unattributed — it says the
+    /// device is not empty, never whose work it holds — and it exists so an
+    /// over-budget rejection on an apparently empty vault has an explanation
     /// (#832 §6 residual).
     pub retained_records: usize,
     /// The staleness rung at read time.
@@ -1040,11 +1039,7 @@ impl<T: SeamTypes> Engine<T> {
 
         // Surface every undecodable queue entry as `Event::DeadLetter` and drop
         // its op record from the durable queue so a corrupt entry is not
-        // re-decoded and re-emitted on every boot (#768). Retained records —
-        // another account's, or a newer build's format — are not in this list
-        // and never reach removal (CONTEXT.md "Retained record"). Staged upload
-        // bytes live in a separate plane keyed by content root CIDs and are not
-        // touched here.
+        // re-decoded and re-emitted on every boot (#768).
         //
         // `DeadLetter` delivery is best-effort over a non-durable in-process
         // channel, so hosts MUST dedup by `op_id`. Gate the durable removal on a

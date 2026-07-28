@@ -3454,6 +3454,7 @@ fn op_record_reject_vectors_fire_the_named_check() {
         "content-cid-mismatch",
         "missing-field",
         "unsupported-record-version",
+        "unknown-record-field",
     ] {
         assert!(
             listed.contains(required),

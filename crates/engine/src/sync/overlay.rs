@@ -9,7 +9,6 @@
 //! suffixes, or dead-letters — it renders intent. The op queue is the only
 //! local divergence from the remote snapshot.
 
-use crate::sync::authored::stamp_authored;
 use crate::sync::model::{NodeMeta, Snapshot};
 use crate::sync::op::{Op, OpKind};
 
@@ -25,9 +24,8 @@ pub fn apply_overlay(base: &Snapshot, ops: &[Op]) -> Snapshot {
 
 /// Apply one op to the working view optimistically (intent, not rebase).
 ///
-/// Every op but a delete authors its target's next record, so each stamps the
-/// authored facts through [`stamp_authored`] — the same function the drain's
-/// publish plan uses.
+/// Every op but a delete authors its target's next record, so each stamps
+/// [`Op::stamp_authored`].
 fn apply_one(view: &mut Snapshot, op: &Op) {
     match &op.kind {
         OpKind::Create {
@@ -41,7 +39,7 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
             if content.is_some() {
                 meta.content_version = Some(1);
             }
-            stamp_authored(&mut meta, op);
+            op.stamp_authored(&mut meta);
             view.upsert_node(meta);
             view.link_next(*parent, op.target);
         }
@@ -51,7 +49,7 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
         OpKind::Rename { new_name } => {
             if let Some(node) = view.node_mut(op.target) {
                 node.name = new_name.clone();
-                stamp_authored(node, op);
+                op.stamp_authored(node);
             }
         }
         OpKind::Relink { new_parent, .. } => {
@@ -60,13 +58,13 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
             }
             view.link_next(*new_parent, op.target);
             if let Some(node) = view.node_mut(op.target) {
-                stamp_authored(node, op);
+                op.stamp_authored(node);
             }
         }
         OpKind::UpdateContent { .. } => {
             if let Some(node) = view.node_mut(op.target) {
                 node.content_version = node.content_version.map(|count| count + 1);
-                stamp_authored(node, op);
+                op.stamp_authored(node);
             }
         }
     }

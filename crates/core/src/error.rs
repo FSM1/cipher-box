@@ -333,11 +333,19 @@ pub enum Malformed {
     /// slot, not a non-canonical encoding of a real CID — the strict decode keeps
     /// the recovered head anchor fail-closed before a fetch trusts it.
     ContentCidStrMalformed,
+    /// A durable op record at this build's version carried a key outside its
+    /// frozen five. *Malformed*: the five keys are exhaustive at a given `v`
+    /// (a bump is the extension mechanism), and anything else is unauthenticated
+    /// — extra keys sit outside the AAD, so a local writer could hang arbitrary
+    /// bytes off an otherwise integrity-protected record.
+    UnknownRecordField { key: String },
     /// A durable op record declared a format version this build does not
     /// implement. *Malformed*, not trust: a forward-version record is intact
-    /// input this decoder cannot interpret, carrying no evidence of tampering
-    /// (a rewritten `v` is bound into the AAD and fails the tag instead). The
-    /// distinction is load-bearing — the engine **retains** such a record
+    /// input this decoder cannot interpret, carrying no evidence of tampering.
+    /// A rewritten `v` is indistinguishable from a genuine one and lands here
+    /// too — deliberately, since the gate runs before the AEAD; the AAD's
+    /// version binding closes downgrade *between* supported versions instead.
+    /// The distinction is load-bearing — the engine **retains** such a record
     /// rather than dead-lettering and deleting a queue it cannot yet read.
     UnsupportedRecordVersion { version: u64 },
     /// An IPNS record's protobuf could not be parsed, or it was missing a field
@@ -374,6 +382,7 @@ impl Malformed {
         "invalid-field-length",
         "ipns-name-malformed",
         "content-cid-str-malformed",
+        "unknown-record-field",
         "unsupported-record-version",
         "ipns-record-malformed",
     ];
@@ -402,6 +411,7 @@ impl Malformed {
             Self::InvalidFieldLength { .. } => "invalid-field-length",
             Self::IpnsNameMalformed => "ipns-name-malformed",
             Self::ContentCidStrMalformed => "content-cid-str-malformed",
+            Self::UnknownRecordField { .. } => "unknown-record-field",
             Self::UnsupportedRecordVersion { .. } => "unsupported-record-version",
             Self::IpnsRecordMalformed => "ipns-record-malformed",
         }
@@ -434,6 +444,7 @@ impl fmt::Display for Malformed {
                 expected,
                 found,
             } => write!(f, " (field {field}: expected {expected}, found {found})"),
+            Self::UnknownRecordField { key } => write!(f, " (key {:?})", DisplayKey(key)),
             Self::UnsupportedRecordVersion { version } => write!(f, " (version {version})"),
             Self::InvalidIdentityKey
             | Self::InvalidEncSubkey

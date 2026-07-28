@@ -5667,10 +5667,31 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
     let missing_owner_tag = reframe_op_record(&record, |m| {
         m.remove("ownerTag");
     });
-    // A record from a build ahead of this one: its header still reads keylessly
-    // (that is what lets the engine retain it), but it never reaches the AEAD.
+    // Records from a build ahead of this one. Each still reads keylessly — that
+    // is what lets the engine retain rather than delete them — and each fires
+    // the version gate before any width or framing check this build owns.
     let forward_version = reframe_op_record(&record, |m| {
         m.insert("v", Value::Unsigned(OP_RECORD_V + 1));
+    });
+    let forward_version_wide_enc = reframe_op_record(&record, |m| {
+        m.insert("v", Value::Unsigned(OP_RECORD_V + 1));
+        m.insert("enc", Value::Bytes(vec![0x5a; 48]));
+        m.insert("ownerTag", Value::Bytes(vec![0x5b; 48]));
+    });
+    let forward_version_other_cid_framing = reframe_op_record(&record, |m| {
+        m.insert("v", Value::Unsigned(OP_RECORD_V + 1));
+        m.insert("contentRootCid", Value::Bytes(b"a later framing".to_vec()));
+    });
+    // The encoder cannot emit a tag naming a key that does not open the record;
+    // hand-framed, `open_op_record` must still refuse it.
+    let lying_owner_tag = reframe_op_record(&record, |m| {
+        let other = X25519Secret::from_scalar([0x33; 32]).public().to_bytes();
+        m.insert("ownerTag", Value::Bytes(other.to_vec()));
+    });
+    // A sixth key at this version: outside the AAD, so it opens cleanly unless
+    // the five keys are enforced as exhaustive.
+    let unknown_field = reframe_op_record(&record, |m| {
+        m.insert("stash", Value::Bytes(b"unauthenticated".to_vec()));
     });
     // A stranger's enc subkey: the owner tag stays readable, the body does not.
     let stranger_scalar: [u8; 32] = std::array::from_fn(|i| (0x21 + i) as u8);
@@ -5682,6 +5703,7 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
             &tampered_ciphertext,
             "hpke-open-failed",
             "trust",
+            false,
         ),
         op_record_reject_vector(
             "tampered-owner-tag",
@@ -5689,6 +5711,7 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
             &tampered_owner_tag,
             "hpke-open-failed",
             "trust",
+            false,
         ),
         op_record_reject_vector(
             "swapped-content-root-cid",
@@ -5696,6 +5719,7 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
             &swapped_content_root_cid,
             "hpke-open-failed",
             "trust",
+            false,
         ),
         op_record_reject_vector(
             "malformed-content-root-cid",
@@ -5703,6 +5727,7 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
             &malformed_content_root_cid,
             "content-cid-mismatch",
             "trust",
+            false,
         ),
         op_record_reject_vector(
             "foreign-recipient",
@@ -5710,6 +5735,7 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
             &record,
             "hpke-open-failed",
             "trust",
+            false,
         ),
         op_record_reject_vector(
             "missing-owner-tag",
@@ -5717,6 +5743,7 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
             &missing_owner_tag,
             "missing-field",
             "malformed",
+            true,
         ),
         op_record_reject_vector(
             "forward-version",
@@ -5724,21 +5751,54 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
             &forward_version,
             "unsupported-record-version",
             "malformed",
+            false,
+        ),
+        op_record_reject_vector(
+            "forward-version-wide-kem-widths",
+            scalar,
+            &forward_version_wide_enc,
+            "unsupported-record-version",
+            "malformed",
+            false,
+        ),
+        op_record_reject_vector(
+            "forward-version-other-cid-framing",
+            scalar,
+            &forward_version_other_cid_framing,
+            "unsupported-record-version",
+            "malformed",
+            false,
+        ),
+        op_record_reject_vector(
+            "lying-owner-tag",
+            scalar,
+            &lying_owner_tag,
+            "hpke-open-failed",
+            "trust",
+            false,
+        ),
+        op_record_reject_vector(
+            "unknown-header-field",
+            scalar,
+            &unknown_field,
+            "unknown-record-field",
+            "malformed",
+            false,
         ),
     ]
 }
 
-/// Build + self-check one op-record reject vector. Exactly two checks may need
-/// a key: an HPKE failure, and a version this build refuses to open but must
-/// still read (retention depends on that header staying reachable). Every other
-/// check fires on the keyless header read — the `keyless` flag records which,
-/// rather than leaving it inferred.
+/// Build + self-check one op-record reject vector. `keyless` is asserted, not
+/// inferred: only the frozen *framing* checks fire on the keyless header read,
+/// because every value-level grammar this build owns runs behind the version
+/// gate so a forward-version record stays readable (and therefore retainable).
 fn op_record_reject_vector(
     name: &str,
     opener_scalar: [u8; 32],
     record: &[u8],
     check: &str,
     class: &str,
+    keyless_expected: bool,
 ) -> OpRecordRejectVector {
     let opener = X25519Secret::from_scalar(opener_scalar);
     let err = match open_op_record(&opener, record) {
@@ -5760,8 +5820,7 @@ fn op_record_reject_vector(
         Ok(_) => false,
     };
     assert_eq!(
-        keyless,
-        !matches!(check, "hpke-open-failed" | "unsupported-record-version"),
+        keyless, keyless_expected,
         "op-record reject {name}: keyless flag"
     );
 

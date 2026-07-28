@@ -53,19 +53,14 @@ impl StoragePlatform {
     };
 }
 
-/// Whether the host could measure storage headroom at all.
-///
-/// Both states yield budgets the engine enforces the same way; they differ only
-/// in what a caller may say about a rejection. Keeping them apart is what stops
-/// an environment with no `navigator.storage.estimate()` from being reported as
-/// a full disk.
+/// Where a [`StoragePolicy`]'s budgets came from. Both states admit the same
+/// uploads; they differ only in what a caller may say about a rejection
+/// (CONTEXT.md "Storage policy").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Headroom {
     /// The host reported a byte figure and the budgets are its split.
     Measured,
-    /// The host could not measure headroom. The budgets are zero — inventing
-    /// one would be the floor-up #829 rules out — but "unmeasurable" is not
-    /// "measured full", and a caller reports it as such.
+    /// The host could not measure headroom.
     Unmeasured,
 }
 
@@ -100,8 +95,9 @@ impl StoragePolicy {
         }
     }
 
-    /// The policy for a host that cannot measure headroom: zero budgets, and
-    /// [`Headroom::Unmeasured`] so a rejection says so.
+    /// The policy for a host that cannot measure headroom: zero budgets —
+    /// inventing one is the floor-up #829 rules out — and
+    /// [`Headroom::Unmeasured`] so a rejection says "unknown", not "full".
     pub const UNMEASURED: Self = Self {
         staging_budget_bytes: 0,
         read_cache_ceiling_bytes: 0,
@@ -123,8 +119,6 @@ fn percent_of(bytes: u64, percent: u32) -> u64 {
 }
 
 #[cfg(test)]
-// The CI-constant guard deliberately asserts on constants: it is the rail that
-// keeps a future edit from drifting past what a test can exhaust.
 #[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
@@ -193,6 +187,17 @@ mod tests {
         let policy = StoragePolicy::measured(StoragePlatform::DESKTOP, u64::MAX);
         assert_eq!(policy.staging_budget_bytes, 16 * GIB);
         assert_eq!(policy.read_cache_ceiling_bytes, 2 * GIB);
+    }
+
+    #[test]
+    fn every_shipped_platform_splits_within_its_headroom() {
+        for platform in [StoragePlatform::WEB, StoragePlatform::DESKTOP] {
+            assert!(platform.staging_percent <= 100 && platform.cache_percent <= 100);
+            // The two claims come off one headroom figure, so together they must
+            // not promise more storage than was measured.
+            let policy = StoragePolicy::measured(platform, 1 << 40);
+            assert!(policy.staging_budget_bytes + policy.read_cache_ceiling_bytes <= 1 << 40);
+        }
     }
 
     #[test]

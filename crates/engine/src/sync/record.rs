@@ -1,15 +1,10 @@
 //! The durable op record — `v || ownerTag || contentRootCid? || sealed(op)`
 //! (CONTEXT.md "Op record", "Owner tag", "Retained record").
 //!
-//! The staging store is namespaced per origin, not per account, so two accounts
-//! on one browser profile share one op queue. The record's clear header is what
-//! keeps them apart, and it is read **strictly before** any open: an unreadable
-//! record is dead-lettered and removed from the queue, so deciding ownership —
-//! or format support — from a failed open would let a second account's first
-//! login, or a single format bump, destroy an unpublished queue.
-//!
 //! Sealing and framing live in [`cipherbox_core::seal::op_record`]; this module
-//! is the engine-side edge that binds an [`Op`] to it.
+//! is the engine-side edge that binds an [`Op`] to it, and it owns the one
+//! decision core cannot make: which failures mean "not mine to act on" and
+//! which mean "delete this".
 
 use cipherbox_core::seal::op_record::{
     OP_RECORD_V, decode_op_record_header, open_op_record, seal_op_record,
@@ -17,7 +12,7 @@ use cipherbox_core::seal::op_record::{
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::sync::op::{Op, OpDecodeError};
+use crate::sync::op::Op;
 
 /// One record's sealing inputs.
 ///
@@ -48,7 +43,7 @@ pub fn encode_op_record(seal: RecordSeal, op: &Op) -> Result<Vec<u8>, OpRecordEr
         op.content_root_cid(),
         &body,
     )
-    .map_err(|e| OpRecordError::Malformed(e.check()));
+    .map_err(|e| OpRecordError(e.check()));
     body.zeroize();
     record
 }
@@ -61,7 +56,7 @@ pub fn encode_op_record(seal: RecordSeal, op: &Op) -> Result<Vec<u8>, OpRecordEr
 pub fn record_content_root_cid(record: &[u8]) -> Result<Option<Vec<u8>>, OpRecordError> {
     decode_op_record_header(record)
         .map(|h| h.content_root_cid)
-        .map_err(|e| OpRecordError::Malformed(e.check()))
+        .map_err(|e| OpRecordError(e.check()))
 }
 
 /// The owner's op-record custody: the clear tag every reader compares against,
@@ -81,14 +76,13 @@ impl<'a> RecordReader<'a> {
         }
     }
 
-    /// Classify one durable record: version first, tag second, open third,
-    /// nothing between. Both discriminators precede the open because the
-    /// [`Undecodable`](RecordClass::Undecodable) verdict *deletes*, and neither
-    /// a stranger's record nor a format this build predates is an error.
+    /// Classify one durable record. Every discriminator that can say "not for
+    /// me" runs before the [`Undecodable`](RecordClass::Undecodable) verdict,
+    /// because that verdict *deletes*.
     pub fn classify(&self, record: &[u8]) -> RecordClass {
         let header = match decode_op_record_header(record) {
             Ok(header) => header,
-            Err(e) => return RecordClass::Undecodable(OpRecordError::Malformed(e.check())),
+            Err(e) => return RecordClass::Undecodable(OpRecordError(e.check())),
         };
         if header.version != OP_RECORD_V {
             return RecordClass::Retained(RetainedReason::UnsupportedVersion);
@@ -97,11 +91,20 @@ impl<'a> RecordReader<'a> {
             return RecordClass::Retained(RetainedReason::ForeignOwner);
         }
         match open_op_record(self.enc_secret, record) {
-            Ok((_, body)) => match Op::decode_body(&body) {
+            // The AEAD tag has verified, so this plaintext is what a holder of
+            // our own enc-subkey wrote — a grammar it does not satisfy is a
+            // newer build's intent, never corruption.
+            Ok((header, body)) => match Op::decode_body(&body) {
+                // `encode_op_record` derives the clear root from the body's, so
+                // a disagreement is a hand-framed record: GC would pin one root
+                // while the drain published another (AGENTS.md rule 8).
+                Ok(op) if op.content_root_cid() != header.content_root_cid.as_deref() => {
+                    RecordClass::Undecodable(OpRecordError("content-cid-mismatch"))
+                }
                 Ok(op) => RecordClass::Mine(op),
-                Err(e) => RecordClass::Undecodable(OpRecordError::Body(e)),
+                Err(_) => RecordClass::Retained(RetainedReason::UnsupportedBody),
             },
-            Err(e) => RecordClass::Undecodable(OpRecordError::Malformed(e.check())),
+            Err(e) => RecordClass::Undecodable(OpRecordError(e.check())),
         }
     }
 }
@@ -120,38 +123,29 @@ pub enum RecordClass {
     Undecodable(OpRecordError),
 }
 
-/// Why a record is held rather than replayed. Both reasons are terminal for
-/// *this* session; neither is an error, and the two are indistinguishable from
-/// a corrupted header field of the same name, which is why the verdict is
-/// retention in both cases.
+/// Why a record is held rather than replayed (CONTEXT.md "Retained record").
+/// Every reason is terminal for *this* session and none is an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RetainedReason {
-    /// Another identity's record. Deleting it would destroy that account's
-    /// unpublished offline work; dead-lettering it would hand this account a
-    /// permanent notice about an op it cannot see.
+    /// Another identity's record.
     ForeignOwner,
-    /// Written at a format version this build does not implement — a queue
-    /// authored by a newer build on the same device. Held for that build to
-    /// drain rather than destroyed by the older one.
+    /// A header version this build does not implement.
     UnsupportedVersion,
+    /// The header version matched and the seal opened, but the intent body is
+    /// a grammar this build does not implement — a newer build wrote it
+    /// without bumping the header version.
+    UnsupportedBody,
 }
 
-/// A durable record could not be produced or read back.
+/// A durable record could not be produced or read back: the record framing,
+/// its header, or its seal failed core's check of that name (a stable check id,
+/// never key material).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum OpRecordError {
-    /// The record framing, its header, or its seal failed core's check of that
-    /// name (a stable check id, never key material).
-    Malformed(&'static str),
-    /// The record opened, but its sealed intent body did not decode.
-    Body(OpDecodeError),
-}
+pub struct OpRecordError(pub &'static str);
 
 impl core::fmt::Display for OpRecordError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Malformed(check) => write!(f, "op record rejected: {check}"),
-            Self::Body(e) => write!(f, "{e}"),
-        }
+        write!(f, "op record rejected: {}", self.0)
     }
 }
 
@@ -305,7 +299,7 @@ mod tests {
         // Returned, never asserted: the guard must fire in a release build too.
         assert_eq!(
             encode_op_record(seal_for(&me, 6), &op),
-            Err(OpRecordError::Malformed("content-cid-mismatch"))
+            Err(OpRecordError("content-cid-mismatch"))
         );
     }
 }

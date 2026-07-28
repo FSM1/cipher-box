@@ -192,7 +192,7 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
       kind: 'file',
       pending: 'metadata',
       sizeNull: true,
-      mtimeNull: true,
+      mtimeNull: false,
     });
 
     // The nested snapshot's breadcrumb trail ends at the root.
