@@ -21,6 +21,6 @@ pub mod seal;
 
 pub use cid::{
     CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid, decode_content_cid_str,
-    encode_content_cid_str, verify_cid,
+    encode_content_cid_str, is_wellformed_content_cid, verify_cid,
 };
 pub use seal::{open_chunk, seal_chunk};

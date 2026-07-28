@@ -5,8 +5,11 @@ use core::pin::Pin;
 use core::time::Duration;
 
 /// Milliseconds since the Unix epoch, as reported by the host wall clock
-/// (or the virtual clock in tests).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// (or the virtual clock in tests). Journaled verbatim on an intent op's
+/// `authored_at`, hence serializable.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct UnixMillis(pub u64);
 
 impl UnixMillis {

@@ -42,6 +42,16 @@ const workerScope = globalThis as unknown as {
   removeEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
 };
 
+/**
+ * Measured origin headroom for the storage policy: quota minus usage from the
+ * Storage Standard estimate. Unavailable or unreported reads as zero, which the
+ * engine turns into a zero staging budget rather than a promised ceiling.
+ */
+async function storageHeadroomBytes(): Promise<number> {
+  const estimate = await navigator.storage?.estimate?.().catch(() => undefined);
+  return Math.max(0, (estimate?.quota ?? 0) - (estimate?.usage ?? 0));
+}
+
 function onBootstrap(event: MessageEvent<EngineWorkerBootstrap>): void {
   if (event.data?.type !== 'bootstrap') return;
   workerScope.removeEventListener('message', onBootstrap as (event: MessageEvent) => void);
@@ -53,7 +63,7 @@ async function bootstrap(config: EngineWorkerBootstrap): Promise<void> {
     const wasm = (await import(/* @vite-ignore */ config.wasmModuleUrl)) as WasmGlue;
     await wasm.default({ module_or_path: config.wasmBinaryUrl });
     const seams = makeBrowserSeams(config);
-    const host = new EngineHost(wasm, seams, config.profile);
+    const host = new EngineHost(wasm, seams, config.profile, await storageHeadroomBytes());
     serveEngine(workerScope as unknown as WorkerScopeLike, host);
   } catch (error) {
     workerScope.postMessage({

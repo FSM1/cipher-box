@@ -162,12 +162,19 @@ The `structTag` byte-space is the domain-separation registry, frozen in the KAT
 manifest: `read-body` (`0x01`), `write-body` (`0x02`), `grant-blob` (`0x03`),
 `owner-blob` (`0x04`), `ascent-link` (`0x05`), `history-link` (`0x06`),
 `pointer-payload` (`0x07`), `mailbox-payload` (`0x08`), `owner-write-blob`
-(`0x09`). Every new tag extends the manifest and its vectors before merge; the
+(`0x09`), `op-record` (`0x0a`). Every new tag extends the manifest and its
+vectors before merge; the
 `owner-write-blob` KAT set is `owner_write_blob_accept` (seal/open round-trip
 under a fixed enc + ephemeral) and `owner_write_blob_reject` (decode: wrong-length
 seed, missing `writeEpoch`; HPKE fail-closed: tampered ciphertext/tag,
 truncation, and struct-tag / scope / writeEpoch AAD transplants), with the tag's
-structure-signature accept/reject riding the shared `structure_sig` families.
+structure-signature accept/reject riding the shared `structure_sig` families. The
+`op-record` KAT set is `op_record_accept` (a metadata record with no content root
+and a content record with one, each reproducing its exact bytes from a fixed
+enc + ephemeral, then reading its header keylessly and opening) and
+`op_record_reject` (tampered ciphertext, tampered `ownerTag`, a swapped
+`contentRootCid`, a malformed `contentRootCid`, a foreign recipient, and a
+missing `ownerTag`).
 
 ## KDF edge catalog
 

@@ -257,9 +257,13 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::seams::UnixMillis;
     use std::cell::RefCell;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
+
+    /// Journal time for ops whose narrative does not turn on it.
+    const AT: UnixMillis = UnixMillis(0);
 
     use cipherbox_core::ipns::{IpnsName, IpnsRecord};
     use cipherbox_core::kdf;
@@ -413,6 +417,7 @@ mod tests {
             "pending.txt",
             NodeKind::File,
             1,
+            AT,
             None,
         )]
     }

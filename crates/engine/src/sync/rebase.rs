@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use crate::seams::OpId;
 use crate::sync::model::{NodeMeta, Snapshot, collation_key, suffix_name};
 use crate::sync::op::{Op, OpKind};
+use crate::sync::record::{RecordClass, RecordReader};
 
 /// The highest auto-suffix a loser probes before dead-lettering — a folder
 /// jammed with this many colliding siblings is pathological, not a routine
@@ -117,15 +118,23 @@ pub type DecodedOps = Vec<(OpId, Op)>;
 /// Op-queue entries that failed to decode, tagged for dead-lettering.
 pub type UndecodableOps = Vec<(OpId, DeadLetterReason)>;
 
-/// Decode a raw durable op queue, dead-lettering any entry that fails to
-/// decode rather than aborting the whole replay.
-pub fn decode_queue(raw: &[(OpId, Vec<u8>)]) -> (DecodedOps, UndecodableOps) {
+/// Decode a raw durable op queue for one identity, dead-lettering any entry
+/// that fails to decode rather than aborting the whole replay.
+///
+/// Another account's records appear in neither list: they are invisible to this
+/// identity, so nothing replays, surfaces, or removes them
+/// ([`RecordClass::Foreign`]).
+pub fn decode_queue(
+    reader: &RecordReader<'_>,
+    raw: &[(OpId, Vec<u8>)],
+) -> (DecodedOps, UndecodableOps) {
     let mut ops = Vec::new();
     let mut dead = Vec::new();
     for (op_id, bytes) in raw {
-        match Op::decode(bytes) {
-            Ok(op) => ops.push((*op_id, op)),
-            Err(_) => dead.push((*op_id, DeadLetterReason::Undecodable)),
+        match reader.classify(bytes) {
+            RecordClass::Mine(op) => ops.push((*op_id, op)),
+            RecordClass::Foreign => {}
+            RecordClass::Undecodable(_) => dead.push((*op_id, DeadLetterReason::Undecodable)),
         }
     }
     (ops, dead)
@@ -502,6 +511,12 @@ pub fn reconcile_head(
 mod tests {
     use super::*;
     use crate::facade::{NodeId, NodeKind};
+    use crate::sync::record::{RecordSeal, encode_op_record};
+    use cipherbox_core::suite::x25519::X25519Secret;
+    use zeroize::Zeroizing;
+
+    /// Journal time for ops whose narrative does not turn on it.
+    const AT: crate::seams::UnixMillis = crate::seams::UnixMillis(0);
 
     fn id(b: u8) -> NodeId {
         NodeId([b; 16])
@@ -524,7 +539,7 @@ mod tests {
 
         // The delete snapshotted the target at sequence 3.
         let local = base.clone();
-        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, 3));
+        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3));
         assert_eq!(res, OpResolution::Dropped(DropReason::TargetAdvanced));
         assert!(base.contains(id(1)), "edit wins — the node survives");
     }
@@ -536,7 +551,7 @@ mod tests {
         base.node_mut(id(1)).unwrap().record_sequence = 3;
 
         let local = base.clone();
-        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, 3));
+        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3));
         assert!(matches!(res, OpResolution::Applied { .. }));
         assert!(!base.contains(id(1)));
     }
@@ -551,7 +566,7 @@ mod tests {
         let res = rebase_one(
             &mut working,
             &local,
-            &Op::update_content(id(1), b"k".to_vec(), 1),
+            &Op::update_content(id(1), b"k".to_vec(), 1, AT),
         );
         assert!(matches!(res, OpResolution::Applied { .. }));
         assert!(working.contains(id(1)), "the edit resurrected the node");
@@ -572,7 +587,7 @@ mod tests {
         let res = rebase_one(
             &mut working,
             &local,
-            &Op::update_content(id(1), b"k".to_vec(), 1),
+            &Op::update_content(id(1), b"k".to_vec(), 1, AT),
         );
         assert_eq!(
             res,
@@ -634,7 +649,7 @@ mod tests {
         let res = rebase_one(
             &mut gate_passing.clone(),
             &local,
-            &Op::update_content(id(1), b"k".to_vec(), 1),
+            &Op::update_content(id(1), b"k".to_vec(), 1, AT),
         );
         assert_eq!(
             res,
@@ -652,7 +667,7 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::create(id(2), id(0), "a.txt", NodeKind::File, 1, None),
+            &Op::create(id(2), id(0), "a.txt", NodeKind::File, 1, AT, None),
         );
         assert_eq!(
             res,
@@ -675,7 +690,7 @@ mod tests {
         base.node_mut(id(1)).unwrap().name = "other.txt".into();
 
         let local = base.clone();
-        let res = rebase_one(&mut base, &local, &Op::rename(id(1), "final.txt", 1));
+        let res = rebase_one(&mut base, &local, &Op::rename(id(1), "final.txt", 1, AT));
         assert!(matches!(
             res,
             OpResolution::Applied {
@@ -700,7 +715,7 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::relink(id(2), id(0), id(1), 1, false, false),
+            &Op::relink(id(2), id(0), id(1), 1, AT, false, false),
         );
         assert!(matches!(res, OpResolution::Applied { .. }));
         assert_eq!(base.parent_of(id(2)), Some(id(1)), "dest-linked");
@@ -722,7 +737,7 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::relink(id(3), id(0), id(1), 1, false, false),
+            &Op::relink(id(3), id(0), id(1), 1, AT, false, false),
         );
         assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
         assert_eq!(
@@ -744,7 +759,7 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::relink(id(7), id(5), id(6), 1, true, true),
+            &Op::relink(id(7), id(5), id(6), 1, AT, true, true),
         );
         assert_eq!(
             res,
@@ -787,6 +802,7 @@ mod tests {
                 "x.txt",
                 NodeKind::File,
                 1,
+                AT,
                 Some(b"bytes".to_vec()),
             ),
         );
@@ -801,15 +817,15 @@ mod tests {
         let ops = vec![
             (
                 OpId(1),
-                Op::create(id(2), id(1), "a.txt", NodeKind::File, 1, None),
+                Op::create(id(2), id(1), "a.txt", NodeKind::File, 1, AT, None),
             ),
             (
                 OpId(2),
-                Op::create(id(3), id(1), "a.txt", NodeKind::File, 1, None),
+                Op::create(id(3), id(1), "a.txt", NodeKind::File, 1, AT, None),
             ), // collides → suffix
             (
                 OpId(3),
-                Op::create(id(4), id(99), "orphan", NodeKind::File, 1, None),
+                Op::create(id(4), id(99), "orphan", NodeKind::File, 1, AT, None),
             ), // dead-letter
         ];
         let report = replay(&gate_passing, &gate_passing, &ops);
@@ -825,11 +841,40 @@ mod tests {
 
     #[test]
     fn decode_queue_dead_letters_corrupt_entries() {
-        let good = Op::rename(id(1), "n", 1).encode();
+        let me = X25519Secret::from_scalar([1; 32]);
+        let good = encode_op_record(
+            RecordSeal {
+                owner_enc_pub: me.public(),
+                ephemeral_scalar: Zeroizing::new([2; 32]),
+            },
+            &Op::rename(id(1), "n", 1, AT),
+        )
+        .unwrap();
         let raw = vec![(OpId(1), good), (OpId(2), b"garbage".to_vec())];
-        let (ops, dead) = decode_queue(&raw);
+        let (ops, dead) = decode_queue(&RecordReader::new(&me), &raw);
         assert_eq!(ops.len(), 1);
         assert_eq!(dead, vec![(OpId(2), DeadLetterReason::Undecodable)]);
+    }
+
+    #[test]
+    fn decode_queue_leaves_another_accounts_records_invisible() {
+        let me = X25519Secret::from_scalar([1; 32]);
+        let stranger = X25519Secret::from_scalar([2; 32]);
+        let theirs = encode_op_record(
+            RecordSeal {
+                owner_enc_pub: stranger.public(),
+                ephemeral_scalar: Zeroizing::new([3; 32]),
+            },
+            &Op::rename(id(1), "theirs", 1, AT),
+        )
+        .unwrap();
+
+        let (ops, dead) = decode_queue(&RecordReader::new(&me), &[(OpId(1), theirs)]);
+        assert!(ops.is_empty(), "never replayed");
+        assert!(
+            dead.is_empty(),
+            "never dead-lettered — the caller removes what it dead-letters"
+        );
     }
 
     #[test]

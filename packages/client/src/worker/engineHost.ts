@@ -27,9 +27,18 @@ export class EngineHost implements EngineHostLike {
   constructor(
     private readonly wasm: EngineWasm,
     seams: unknown,
-    profile?: string
+    profile?: string,
+    storageHeadroomBytes?: number
   ) {
-    this.handle = new wasm.EngineHandle(seams, profile);
+    this.handle = new wasm.EngineHandle(
+      seams,
+      profile,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      storageHeadroomBytes
+    );
   }
 
   async start(secret: ArrayBuffer): Promise<void> {

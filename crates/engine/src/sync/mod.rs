@@ -15,7 +15,8 @@
 //!
 //! - [`model`] — the working tree (the state law's left operand) and the one
 //!   strict name comparator.
-//! - [`op`] — the intent-op model and its durable-queue codec.
+//! - [`op`] — the intent-op grammar.
+//! - [`record`] — the sealed, owner-tagged durable queue record.
 //! - [`overlay`] — the state law: snapshot ⊕ pending ops → rendered view.
 //! - [`rebase`] — FIFO replay, the five race rules, dead-lettering, and
 //!   dual-link observed repair.
@@ -38,6 +39,7 @@ pub mod overlay;
 pub mod pointer;
 pub(crate) mod project;
 pub mod rebase;
+pub mod record;
 pub mod staging;
 pub mod staleness;
 pub mod tick;
@@ -54,6 +56,9 @@ pub use pointer::{
 pub use rebase::{
     AppliedOp, DeadLetterReason, DropReason, HeadReconciliation, OpResolution, Repair,
     ReplayReport, apply_repairs, decode_queue, observed_repair, rebase_one, reconcile_head, replay,
+};
+pub use record::{
+    OpRecordError, RecordClass, RecordReader, RecordSeal, encode_op_record, record_content_root_cid,
 };
 pub use staging::{StageOutcome, orphan_staging_keys, stage_op};
 pub use staleness::{Connectivity, classify, withheld_escalation};

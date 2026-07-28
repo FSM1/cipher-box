@@ -27,16 +27,16 @@ use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, NodeKind, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
-    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
-    STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructureSigInput, build_aad,
-    decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_section,
-    decode_grant_set_commitment, decode_history_link_payload, decode_override_seed_payload,
-    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
-    encode_envelope, encode_grant_section, encode_grant_set_commitment,
-    encode_override_seed_payload, encode_read_body, encode_write_body, open_ascent_link,
-    open_grant_blob, open_owner_blob, open_owner_write_blob, open_read_body,
-    structure_sig_preimage, verify_grant_set, verify_structure,
+    self, AAD_DOMAIN, AadContext, NodeKind, OP_RECORD_V, STRUCT_TAG_ASCENT_LINK,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS,
+    StructureSigInput, build_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload,
+    decode_grant_section, decode_grant_set_commitment, decode_history_link_payload,
+    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
+    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
+    encode_grant_set_commitment, encode_override_seed_payload, encode_read_body, encode_write_body,
+    open_ascent_link, open_grant_blob, open_op_record, open_owner_blob, open_owner_write_blob,
+    open_read_body, seal_op_record, structure_sig_preimage, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
@@ -240,6 +240,14 @@ const FIXTURES: &[(&str, &str)] = &[
         "vectors/content/cid_str_reject.json",
         include_str!("../kat/vectors/content/cid_str_reject.json"),
     ),
+    (
+        "vectors/op_record/op_record_accept.json",
+        include_str!("../kat/vectors/op_record/op_record_accept.json"),
+    ),
+    (
+        "vectors/op_record/op_record_reject.json",
+        include_str!("../kat/vectors/op_record/op_record_reject.json"),
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -261,6 +269,39 @@ struct Manifest {
     payload: PayloadManifest,
     grant: GrantManifest,
     content: ContentManifest,
+    op_record: OpRecordManifest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OpRecordManifest {
+    struct_tag: u8,
+    v: u64,
+    accept: FileCount,
+    reject: RejectSection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OpRecordAcceptVector {
+    name: String,
+    owner_secret: String,
+    owner_public: String,
+    ephemeral_scalar: String,
+    content_root_cid: Option<String>,
+    body: String,
+    record: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct OpRecordRejectVector {
+    name: String,
+    owner_secret: String,
+    record: String,
+    keyless: bool,
+    check: String,
+    class: String,
 }
 
 #[derive(Deserialize)]
@@ -1023,6 +1064,14 @@ fn owner_blob_reject_vectors(m: &Manifest) -> Vec<BlobRejectVector> {
     serde_json::from_str(fixture(&m.grant.owner_blob_reject.file)).expect("owner_blob_reject shape")
 }
 
+fn op_record_accept_vectors(m: &Manifest) -> Vec<OpRecordAcceptVector> {
+    serde_json::from_str(fixture(&m.op_record.accept.file)).expect("op_record_accept shape")
+}
+
+fn op_record_reject_vectors(m: &Manifest) -> Vec<OpRecordRejectVector> {
+    serde_json::from_str(fixture(&m.op_record.reject.file)).expect("op_record_reject shape")
+}
+
 fn owner_write_blob_accept_vectors(m: &Manifest) -> Vec<HpkeStructureVector> {
     serde_json::from_str(fixture(&m.grant.owner_write_blob_accept.file))
         .expect("owner_write_blob_accept shape")
@@ -1173,6 +1222,8 @@ fn fixture_table_matches_manifest_files() {
         m.content.cid_reject.file.as_str(),
         m.content.cid_str_accept.file.as_str(),
         m.content.cid_str_reject.file.as_str(),
+        m.op_record.accept.file.as_str(),
+        m.op_record.reject.file.as_str(),
     ];
     let referenced_set: BTreeSet<&str> = referenced.iter().copied().collect();
     assert_eq!(
@@ -1365,6 +1416,7 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
             .into_iter()
             .map(|v| v.check),
     );
+    covered.extend(op_record_reject_vectors(&m).into_iter().map(|v| v.check));
 
     let surface: BTreeSet<String> = TrustViolation::CHECKS
         .iter()
@@ -1567,6 +1619,7 @@ const ALL_STRUCT_TAGS: &[(&str, u8)] = &[
     ("pointer-payload", 7),
     ("mailbox-payload", 8),
     ("owner-write-blob", 9),
+    ("op-record", 10),
 ];
 
 #[test]
@@ -1574,7 +1627,7 @@ fn structure_tag_registry_is_complete_and_frozen() {
     let m = manifest();
 
     // The crate STRUCT_TABLE, the canonical anchor, and the manifest all agree
-    // name-for-byte, and the byte-space is exactly the eight frozen tags.
+    // name-for-byte, and the byte-space is exactly the frozen tag set.
     assert_eq!(
         STRUCT_TAGS.len(),
         ALL_STRUCT_TAGS.len(),
@@ -3291,6 +3344,161 @@ fn owner_write_blob_reject_vectors_fire_the_named_check() {
                 .any(|c| c == required),
             "owner-write-blob reject must cover the {required} check"
         );
+    }
+}
+
+#[test]
+fn op_record_accept_vectors_seal_reproduce_open_and_decode() {
+    let m = manifest();
+    assert_eq!(m.op_record.struct_tag, STRUCT_TAG_OP_RECORD);
+    assert_eq!(m.op_record.v, OP_RECORD_V);
+
+    let vectors = op_record_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.op_record.accept.count,
+        "op-record accept count drift"
+    );
+    assert!(
+        vectors.len() >= 2,
+        "op-record accept must cover a metadata and a content record"
+    );
+    assert!(
+        vectors.iter().any(|v| v.content_root_cid.is_none())
+            && vectors.iter().any(|v| v.content_root_cid.is_some()),
+        "op-record accept must cover both an absent and a present content root"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate op-record accept {}",
+            v.name
+        );
+        let owner = X25519Secret::from_scalar(unhex32(&v.name, &v.owner_secret));
+        let owner_public = unhex32(&v.name, &v.owner_public);
+        assert_eq!(
+            owner.public().to_bytes(),
+            owner_public,
+            "op-record accept {}: owner keypair",
+            v.name
+        );
+        let eph = unhex32(&v.name, &v.ephemeral_scalar);
+        let cid: Option<Vec<u8>> = v.content_root_cid.as_ref().map(|c| unhex(&v.name, c));
+        let body = unhex(&v.name, &v.body);
+
+        let sealed = seal_op_record(&owner.public(), &eph, cid.as_deref(), &body)
+            .unwrap_or_else(|e| panic!("op-record accept {}: seal ({e})", v.name));
+        assert_eq!(
+            hex::encode(&sealed),
+            v.record,
+            "op-record accept {}: record drift",
+            v.name
+        );
+
+        let record = unhex(&v.name, &v.record);
+        let header = decode_op_record_header(&record)
+            .unwrap_or_else(|e| panic!("op-record accept {}: header decode ({e})", v.name));
+        assert_eq!(
+            header.owner_tag, owner_public,
+            "op-record accept {}: owner tag",
+            v.name
+        );
+        assert_eq!(
+            header.content_root_cid, cid,
+            "op-record accept {}: content root cid",
+            v.name
+        );
+
+        let (opened, plaintext) = open_op_record(&owner, &record)
+            .unwrap_or_else(|e| panic!("op-record accept {}: open ({e})", v.name));
+        assert_eq!(opened, header, "op-record accept {}: opened header", v.name);
+        assert_eq!(
+            &plaintext[..],
+            &body[..],
+            "op-record accept {}: body",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn op_record_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = op_record_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.op_record.reject.count,
+        "op-record reject count drift"
+    );
+    let listed: BTreeSet<&str> = m
+        .op_record
+        .reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs op-record reject.json"
+    );
+    for required in ["hpke-open-failed", "content-cid-mismatch", "missing-field"] {
+        assert!(
+            listed.contains(required),
+            "op-record reject must cover the {required} check"
+        );
+    }
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate op-record reject {}",
+            v.name
+        );
+        let owner = X25519Secret::from_scalar(unhex32(&v.name, &v.owner_secret));
+        let record = unhex(&v.name, &v.record);
+        let err = match open_op_record(&owner, &record) {
+            Err(e) => e,
+            Ok(_) => panic!("op-record reject {}: open accepted it", v.name),
+        };
+        assert_eq!(
+            err.check(),
+            v.check,
+            "op-record reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "op-record reject {}: class ({err})",
+            v.name
+        );
+
+        // The keyless header read is what orphan GC performs: it must fire the
+        // same check, or accept, exactly as the vector records.
+        match decode_op_record_header(&record) {
+            Err(e) => {
+                assert!(
+                    v.keyless,
+                    "op-record reject {}: unexpected keyless reject",
+                    v.name
+                );
+                assert_eq!(
+                    e.check(),
+                    v.check,
+                    "op-record reject {}: keyless check ({e})",
+                    v.name
+                );
+            }
+            Ok(_) => assert!(
+                !v.keyless,
+                "op-record reject {}: keyless read must have refused it",
+                v.name
+            ),
+        }
     }
 }
 
