@@ -226,6 +226,12 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
     );
 
     // Dead-letter op ids are u64s and must cross as bigints.
+    assert_eq!(
+        get(&view, "retainedRecords").as_f64(),
+        Some(0.0),
+        "retainedRecords must cross under that JS name"
+    );
+
     let dead_letters = get(&view, "deadLetters");
     assert!(dead_letters.is_instance_of::<js_sys::BigUint64Array>());
     assert_eq!(

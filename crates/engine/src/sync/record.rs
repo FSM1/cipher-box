@@ -256,6 +256,41 @@ mod tests {
         ));
     }
 
+    /// Seal an arbitrary body to `secret`, bypassing [`encode_op_record`] —
+    /// the only way to build the records a conforming encoder never emits.
+    fn seal_body(secret: &X25519Secret, scalar: u8, cid: Option<&[u8]>, body: &[u8]) -> Vec<u8> {
+        cipherbox_core::seal::op_record::seal_op_record(&secret.public(), &[scalar; 32], cid, body)
+            .unwrap()
+    }
+
+    #[test]
+    fn an_authenticated_body_in_an_unknown_grammar_is_retained_not_deleted() {
+        let me = owner(11);
+        // The AEAD tag verifies, so only a holder of our own enc-subkey wrote
+        // this — a newer build's intent, never corruption. Deleting it would
+        // destroy that build's queue.
+        let record = seal_body(&me, 12, None, b"{\"someFutureOp\":true}");
+        assert_eq!(
+            RecordReader::new(&me).classify(&record),
+            RecordClass::Retained(RetainedReason::UnsupportedBody)
+        );
+    }
+
+    #[test]
+    fn a_header_root_disagreeing_with_the_body_is_undecodable() {
+        let me = owner(13);
+        let cid = compute_cid(CONTENT_CID_CODEC, b"header root");
+        // A conforming encoder derives the clear root from the body's, so this
+        // is hand-framed: the header claims a staged root the intent does not.
+        // GC would pin one root while the drain published another.
+        let body = rename_op().encode_body();
+        let record = seal_body(&me, 14, Some(&cid), &body);
+        assert_eq!(
+            RecordReader::new(&me).classify(&record),
+            RecordClass::Undecodable(OpRecordError("content-cid-mismatch"))
+        );
+    }
+
     #[test]
     fn garbage_bytes_are_undecodable_not_foreign() {
         let me = owner(7);

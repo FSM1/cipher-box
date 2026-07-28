@@ -17,6 +17,7 @@ import { EngineHost } from './engineHost.js';
 import type { EngineWasm } from './engineWasm.js';
 import { serveEngine, type WorkerScopeLike } from './serve.js';
 import type { WorkerMessage } from './protocol.js';
+import { measureStorageHeadroomBytes } from './storageHeadroom.js';
 
 /** The one-shot handshake the leader sends after spawning the worker. */
 export interface EngineWorkerBootstrap extends BrowserSeamsConfig {
@@ -42,21 +43,6 @@ const workerScope = globalThis as unknown as {
   removeEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
 };
 
-/**
- * Measured origin headroom for the storage policy: quota minus usage from the
- * Storage Standard estimate.
- *
- * `undefined` when the environment does not report one — a missing
- * `navigator.storage.estimate()`, a rejected call, or an estimate with no
- * quota. The engine keeps that apart from a measured zero: both admit no
- * upload, but only one of them means the origin is full.
- */
-async function storageHeadroomBytes(): Promise<number | undefined> {
-  const estimate = await navigator.storage?.estimate?.().catch(() => undefined);
-  if (estimate?.quota === undefined) return undefined;
-  return Math.max(0, estimate.quota - (estimate.usage ?? 0));
-}
-
 function onBootstrap(event: MessageEvent<EngineWorkerBootstrap>): void {
   if (event.data?.type !== 'bootstrap') return;
   workerScope.removeEventListener('message', onBootstrap as (event: MessageEvent) => void);
@@ -68,7 +54,7 @@ async function bootstrap(config: EngineWorkerBootstrap): Promise<void> {
     const wasm = (await import(/* @vite-ignore */ config.wasmModuleUrl)) as WasmGlue;
     await wasm.default({ module_or_path: config.wasmBinaryUrl });
     const seams = makeBrowserSeams(config);
-    const host = new EngineHost(wasm, seams, config.profile, await storageHeadroomBytes());
+    const host = new EngineHost(wasm, seams, config.profile, await measureStorageHeadroomBytes());
     serveEngine(workerScope as unknown as WorkerScopeLike, host);
   } catch (error) {
     workerScope.postMessage({

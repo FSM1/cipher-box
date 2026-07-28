@@ -80,8 +80,9 @@ pub enum DeadLetterReason {
     /// A folder is pathologically saturated with colliding names.
     SuffixExhausted,
     /// The durable op record failed to decode: corrupt or truncated. A record
-    /// this build merely cannot *interpret* — another identity's, or a newer
-    /// format — is retained instead ([`RecordClass::Retained`]).
+    /// this build merely cannot *interpret* — another identity's, a newer
+    /// header format, or a newer intent grammar — is retained instead
+    /// ([`RecordClass::Retained`]).
     Undecodable,
 }
 
@@ -134,8 +135,11 @@ pub struct QueueScan {
     pub retained: usize,
 }
 
-/// Scan a raw durable op queue for one identity, dead-lettering any entry that
-/// fails to decode rather than aborting the whole replay.
+/// Scan a raw durable op queue for one identity.
+///
+/// Only an [`Undecodable`](RecordClass::Undecodable) entry is dead-lettered —
+/// and it is the caller that removes it. A
+/// [`Retained`](RecordClass::Retained) entry is left untouched in the store.
 pub fn decode_queue(reader: &RecordReader<'_>, raw: &[(OpId, Vec<u8>)]) -> QueueScan {
     let mut scan = QueueScan::default();
     for (op_id, bytes) in raw {
@@ -900,6 +904,53 @@ mod tests {
             scan.retained, 1,
             "held records are counted, so the host can say the device is not empty"
         );
+    }
+
+    #[test]
+    fn decode_queue_retains_records_this_build_cannot_interpret() {
+        let me = X25519Secret::from_scalar([1; 32]);
+        let mine = encode_op_record(
+            RecordSeal {
+                owner_enc_pub: me.public(),
+                ephemeral_scalar: Zeroizing::new([2; 32]),
+            },
+            &Op::rename(id(1), "n", 1, AT),
+        )
+        .unwrap();
+
+        // A newer header format, and a newer intent grammar under a seal that
+        // opens. Neither may reach the dead-letter path, which removes.
+        let newer_header = {
+            let value = cipherbox_core::codec::decode(&mine).unwrap();
+            let mut map = value.as_map().unwrap().clone();
+            map.insert(
+                "v",
+                cipherbox_core::codec::Value::Unsigned(
+                    cipherbox_core::seal::op_record::OP_RECORD_V + 1,
+                ),
+            );
+            cipherbox_core::codec::encode(&cipherbox_core::codec::Value::Map(map)).unwrap()
+        };
+        let newer_grammar = cipherbox_core::seal::op_record::seal_op_record(
+            &me.public(),
+            &[4; 32],
+            None,
+            b"{\"someFutureOp\":true}",
+        )
+        .unwrap();
+
+        for (label, record) in [
+            ("newer header", newer_header),
+            ("newer grammar", newer_grammar),
+        ] {
+            let scan = decode_queue(&RecordReader::new(&me), &[(OpId(1), record)]);
+            assert!(scan.mine.is_empty(), "{label} must not replay");
+            assert!(
+                scan.undecodable.is_empty(),
+                "{label} must not be dead-lettered — that path removes it"
+            );
+            assert_eq!(scan.retained, 1, "{label} must be held");
+        }
     }
 
     #[test]
