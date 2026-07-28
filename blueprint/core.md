@@ -173,8 +173,13 @@ structure-signature accept/reject riding the shared `structure_sig` families. Th
 and a content record with one, each reproducing its exact bytes from a fixed
 enc + ephemeral, then reading its header keylessly and opening) and
 `op_record_reject` (tampered ciphertext, tampered `ownerTag`, a swapped
-`contentRootCid`, a malformed `contentRootCid`, a foreign recipient, and a
-missing `ownerTag`).
+`contentRootCid`, a malformed `contentRootCid`, a foreign recipient, a missing
+`ownerTag`, and a forward `v`). The clear header — `v`, `ownerTag`,
+`contentRootCid`, `enc`, `ciphertext` — is **frozen across format versions**: a
+later `v` may change the sealed body, the suite, or the AAD layout, but never
+these five keys, so any build can read any record's header. That is what lets a
+reader hold a record it cannot open instead of mistaking it for corruption; the
+version is bound into the AAD too, so rewriting the clear copy fails the tag.
 
 ## KDF edge catalog
 

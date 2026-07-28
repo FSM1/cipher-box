@@ -3401,6 +3401,11 @@ fn op_record_accept_vectors_seal_reproduce_open_and_decode() {
         let header = decode_op_record_header(&record)
             .unwrap_or_else(|e| panic!("op-record accept {}: header decode ({e})", v.name));
         assert_eq!(
+            header.version, OP_RECORD_V,
+            "op-record accept {}: clear version",
+            v.name
+        );
+        assert_eq!(
             header.owner_tag, owner_public,
             "op-record accept {}: owner tag",
             v.name
@@ -3444,7 +3449,12 @@ fn op_record_reject_vectors_fire_the_named_check() {
         listed, in_vectors,
         "manifest checks vs op-record reject.json"
     );
-    for required in ["hpke-open-failed", "content-cid-mismatch", "missing-field"] {
+    for required in [
+        "hpke-open-failed",
+        "content-cid-mismatch",
+        "missing-field",
+        "unsupported-record-version",
+    ] {
         assert!(
             listed.contains(required),
             "op-record reject must cover the {required} check"

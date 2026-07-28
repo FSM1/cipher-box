@@ -9,6 +9,7 @@
 //! suffixes, or dead-letters — it renders intent. The op queue is the only
 //! local divergence from the remote snapshot.
 
+use crate::sync::authored::stamp_authored;
 use crate::sync::model::{NodeMeta, Snapshot};
 use crate::sync::op::{Op, OpKind};
 
@@ -23,19 +24,24 @@ pub fn apply_overlay(base: &Snapshot, ops: &[Op]) -> Snapshot {
 }
 
 /// Apply one op to the working view optimistically (intent, not rebase).
+///
+/// Every op but a delete authors its target's next record, so each stamps the
+/// authored facts through [`stamp_authored`] — the same function the drain's
+/// publish plan uses.
 fn apply_one(view: &mut Snapshot, op: &Op) {
     match &op.kind {
         OpKind::Create {
             parent,
             name,
             kind,
-            content_root_cid,
+            content,
         } => {
             let mut meta = NodeMeta::new(op.target, name.clone(), *kind);
             // A create carrying content authors exactly one version.
-            if content_root_cid.is_some() {
+            if content.is_some() {
                 meta.content_version = Some(1);
             }
+            stamp_authored(&mut meta, op);
             view.upsert_node(meta);
             view.link_next(*parent, op.target);
         }
@@ -45,6 +51,7 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
         OpKind::Rename { new_name } => {
             if let Some(node) = view.node_mut(op.target) {
                 node.name = new_name.clone();
+                stamp_authored(node, op);
             }
         }
         OpKind::Relink { new_parent, .. } => {
@@ -52,10 +59,14 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
                 view.unlink(old_parent, op.target);
             }
             view.link_next(*new_parent, op.target);
+            if let Some(node) = view.node_mut(op.target) {
+                stamp_authored(node, op);
+            }
         }
         OpKind::UpdateContent { .. } => {
             if let Some(node) = view.node_mut(op.target) {
                 node.content_version = node.content_version.map(|count| count + 1);
+                stamp_authored(node, op);
             }
         }
     }
@@ -65,6 +76,7 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
 mod tests {
     use super::*;
     use crate::facade::{NodeId, NodeKind};
+    use crate::sync::op::StagedContent;
 
     /// Journal time for ops whose narrative does not turn on it.
     const AT: crate::seams::UnixMillis = crate::seams::UnixMillis(0);
@@ -75,6 +87,13 @@ mod tests {
 
     fn base() -> Snapshot {
         Snapshot::new(id(0))
+    }
+
+    fn staged() -> StagedContent {
+        StagedContent {
+            root_cid: b"k".to_vec(),
+            plaintext_size: 7,
+        }
     }
 
     #[test]
@@ -145,7 +164,7 @@ mod tests {
         meta.content_version = Some(4);
         base.upsert_node(meta);
         base.link(id(0), id(1), 1);
-        let view = apply_overlay(&base, &[Op::update_content(id(1), b"k".to_vec(), 1, AT)]);
+        let view = apply_overlay(&base, &[Op::update_content(id(1), staged(), 1, AT)]);
         assert_eq!(
             view.node(id(1)).unwrap().content_version,
             Some(5),
@@ -163,7 +182,18 @@ mod tests {
         let mut base = base();
         base.upsert_node(NodeMeta::new(id(1), "f.txt", NodeKind::File));
         base.link(id(0), id(1), 1);
-        let view = apply_overlay(&base, &[Op::update_content(id(1), b"k".to_vec(), 1, AT)]);
+        let view = apply_overlay(
+            &base,
+            &[Op::update_content(
+                id(1),
+                StagedContent {
+                    root_cid: b"k".to_vec(),
+                    plaintext_size: 7,
+                },
+                1,
+                AT,
+            )],
+        );
         assert_eq!(
             view.node(id(1)).unwrap().content_version,
             None,
@@ -174,15 +204,7 @@ mod tests {
     #[test]
     fn overlay_renders_the_one_version_a_content_bearing_create_authors() {
         let base = base();
-        let with_content = Op::create(
-            id(1),
-            id(0),
-            "a.txt",
-            NodeKind::File,
-            1,
-            AT,
-            Some(b"k".to_vec()),
-        );
+        let with_content = Op::create(id(1), id(0), "a.txt", NodeKind::File, 1, AT, Some(staged()));
         let bare = Op::create(id(2), id(0), "dir", NodeKind::Folder, 1, AT, None);
 
         let view = apply_overlay(&base, &[with_content, bare]);

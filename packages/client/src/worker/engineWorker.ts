@@ -44,12 +44,17 @@ const workerScope = globalThis as unknown as {
 
 /**
  * Measured origin headroom for the storage policy: quota minus usage from the
- * Storage Standard estimate. Unavailable or unreported reads as zero, which the
- * engine turns into a zero staging budget rather than a promised ceiling.
+ * Storage Standard estimate.
+ *
+ * `undefined` when the environment does not report one — a missing
+ * `navigator.storage.estimate()`, a rejected call, or an estimate with no
+ * quota. The engine keeps that apart from a measured zero: both admit no
+ * upload, but only one of them means the origin is full.
  */
-async function storageHeadroomBytes(): Promise<number> {
+async function storageHeadroomBytes(): Promise<number | undefined> {
   const estimate = await navigator.storage?.estimate?.().catch(() => undefined);
-  return Math.max(0, (estimate?.quota ?? 0) - (estimate?.usage ?? 0));
+  if (estimate?.quota === undefined) return undefined;
+  return Math.max(0, estimate.quota - (estimate.usage ?? 0));
 }
 
 function onBootstrap(event: MessageEvent<EngineWorkerBootstrap>): void {

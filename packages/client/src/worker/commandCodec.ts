@@ -210,6 +210,7 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
     })),
     ancestors: view.ancestors.map((ancestor) => ({ id: ancestor.id, name: ancestor.name })),
     deadLetters: [...view.deadLetters],
+    retainedRecords: view.retainedRecords,
     staleness: staleness(wasm, view.staleness),
   };
 }

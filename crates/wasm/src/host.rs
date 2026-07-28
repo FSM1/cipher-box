@@ -141,15 +141,18 @@ impl EngineHandle {
 
         // The host measures origin headroom (`navigator.storage.estimate()`
         // quota minus usage) and hands it in; the split itself is computed here
-        // so one headroom figure yields one budget on every platform. No
-        // measurement means no staging budget — an honest fail-closed zero
-        // rather than a ceiling the origin cannot honour.
+        // so one headroom figure yields one budget on every platform. An absent
+        // or nonsensical figure is `UNMEASURED`, not a measured zero: both admit
+        // no upload (there is no floor-up), but only one of them means the
+        // origin is full, and the rejection says which.
         let storage_policy = match profile {
             SyncTimingProfile::CI => StoragePolicy::CI,
-            _ => StoragePolicy::measured(
-                StoragePlatform::WEB,
-                storage_headroom_bytes.map_or(0, |b| b.max(0.0) as u64),
-            ),
+            _ => match storage_headroom_bytes {
+                Some(bytes) if bytes.is_finite() && bytes >= 0.0 => {
+                    StoragePolicy::measured(StoragePlatform::WEB, bytes as u64)
+                }
+                _ => StoragePolicy::UNMEASURED,
+            },
         };
 
         // Dormant until the config slice (E4) supplies real endpoints: with no

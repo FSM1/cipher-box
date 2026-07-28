@@ -53,6 +53,22 @@ impl StoragePlatform {
     };
 }
 
+/// Whether the host could measure storage headroom at all.
+///
+/// Both states yield budgets the engine enforces the same way; they differ only
+/// in what a caller may say about a rejection. Keeping them apart is what stops
+/// an environment with no `navigator.storage.estimate()` from being reported as
+/// a full disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Headroom {
+    /// The host reported a byte figure and the budgets are its split.
+    Measured,
+    /// The host could not measure headroom. The budgets are zero — inventing
+    /// one would be the floor-up #829 rules out — but "unmeasurable" is not
+    /// "measured full", and a caller reports it as such.
+    Unmeasured,
+}
+
 /// The measured storage split, injected whole at construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StoragePolicy {
@@ -62,6 +78,8 @@ pub struct StoragePolicy {
     /// The sealed-block read cache's ceiling, reserved off headroom before the
     /// staging fraction and enforced by the cache itself.
     pub read_cache_ceiling_bytes: u64,
+    /// Where the budgets above came from.
+    pub headroom: Headroom,
 }
 
 impl StoragePolicy {
@@ -78,14 +96,24 @@ impl StoragePolicy {
             staging_budget_bytes: percent_of(stageable, platform.staging_percent)
                 .min(platform.staging_cap_bytes),
             read_cache_ceiling_bytes,
+            headroom: Headroom::Measured,
         }
     }
+
+    /// The policy for a host that cannot measure headroom: zero budgets, and
+    /// [`Headroom::Unmeasured`] so a rejection says so.
+    pub const UNMEASURED: Self = Self {
+        staging_budget_bytes: 0,
+        read_cache_ceiling_bytes: 0,
+        headroom: Headroom::Unmeasured,
+    };
 
     /// CI policy: a staging budget small enough that budget exhaustion is
     /// reachable in a test (blueprint/testing.md "The DX hook").
     pub const CI: Self = Self {
         staging_budget_bytes: 256 * 1024,
         read_cache_ceiling_bytes: 256 * 1024,
+        headroom: Headroom::Measured,
     };
 }
 
@@ -138,10 +166,26 @@ mod tests {
     }
 
     #[test]
-    fn no_measured_headroom_yields_no_budget() {
+    fn a_measured_zero_headroom_yields_no_budget_and_stays_measured() {
         let policy = StoragePolicy::measured(StoragePlatform::WEB, 0);
         assert_eq!(policy.staging_budget_bytes, 0);
         assert_eq!(policy.read_cache_ceiling_bytes, 0);
+        assert_eq!(policy.headroom, Headroom::Measured);
+    }
+
+    #[test]
+    fn an_unmeasurable_host_is_distinguishable_from_a_full_one() {
+        // Same budgets — no floor-up invents one — but the two are not the
+        // same state, and only one of them means "the disk is full".
+        assert_eq!(
+            StoragePolicy::UNMEASURED.staging_budget_bytes,
+            StoragePolicy::measured(StoragePlatform::WEB, 0).staging_budget_bytes
+        );
+        assert_eq!(StoragePolicy::UNMEASURED.headroom, Headroom::Unmeasured);
+        assert_ne!(
+            StoragePolicy::UNMEASURED,
+            StoragePolicy::measured(StoragePlatform::WEB, 0)
+        );
     }
 
     #[test]

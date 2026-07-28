@@ -79,7 +79,9 @@ pub enum DeadLetterReason {
     DestinationGone,
     /// A folder is pathologically saturated with colliding names.
     SuffixExhausted,
-    /// The durable op record failed to decode (corrupt or forward-version).
+    /// The durable op record failed to decode: corrupt or truncated. A record
+    /// this build merely cannot *interpret* — another identity's, or a newer
+    /// format — is retained instead ([`RecordClass::Retained`]).
     Undecodable,
 }
 
@@ -118,26 +120,34 @@ pub type DecodedOps = Vec<(OpId, Op)>;
 /// Op-queue entries that failed to decode, tagged for dead-lettering.
 pub type UndecodableOps = Vec<(OpId, DeadLetterReason)>;
 
-/// Decode a raw durable op queue for one identity, dead-lettering any entry
-/// that fails to decode rather than aborting the whole replay.
-///
-/// Another account's records appear in neither list: they are invisible to this
-/// identity, so nothing replays, surfaces, or removes them
-/// ([`RecordClass::Foreign`]).
-pub fn decode_queue(
-    reader: &RecordReader<'_>,
-    raw: &[(OpId, Vec<u8>)],
-) -> (DecodedOps, UndecodableOps) {
-    let mut ops = Vec::new();
-    let mut dead = Vec::new();
+/// One pass over the raw durable op queue for one identity.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct QueueScan {
+    /// This identity's ops, FIFO — the only entries that replay or render.
+    pub mine: DecodedOps,
+    /// Entries that failed to decode, tagged for dead-lettering and removal.
+    pub undecodable: UndecodableOps,
+    /// How many entries were held rather than read
+    /// ([`RecordClass::Retained`]). They never replay, render, or get removed,
+    /// and their staged bytes stay pinned — so this count is the only signal
+    /// that the store holds work this session cannot account for.
+    pub retained: usize,
+}
+
+/// Scan a raw durable op queue for one identity, dead-lettering any entry that
+/// fails to decode rather than aborting the whole replay.
+pub fn decode_queue(reader: &RecordReader<'_>, raw: &[(OpId, Vec<u8>)]) -> QueueScan {
+    let mut scan = QueueScan::default();
     for (op_id, bytes) in raw {
         match reader.classify(bytes) {
-            RecordClass::Mine(op) => ops.push((*op_id, op)),
-            RecordClass::Foreign => {}
-            RecordClass::Undecodable(_) => dead.push((*op_id, DeadLetterReason::Undecodable)),
+            RecordClass::Mine(op) => scan.mine.push((*op_id, op)),
+            RecordClass::Retained(_) => scan.retained += 1,
+            RecordClass::Undecodable(_) => scan
+                .undecodable
+                .push((*op_id, DeadLetterReason::Undecodable)),
         }
     }
-    (ops, dead)
+    scan
 }
 
 /// Replay `ops` FIFO onto the gate-passing base. `local` (the pre-rebase
@@ -518,6 +528,13 @@ mod tests {
     /// Journal time for ops whose narrative does not turn on it.
     const AT: crate::seams::UnixMillis = crate::seams::UnixMillis(0);
 
+    fn staged_k() -> crate::sync::op::StagedContent {
+        crate::sync::op::StagedContent {
+            root_cid: b"k".to_vec(),
+            plaintext_size: 1,
+        }
+    }
+
     fn id(b: u8) -> NodeId {
         NodeId([b; 16])
     }
@@ -566,7 +583,7 @@ mod tests {
         let res = rebase_one(
             &mut working,
             &local,
-            &Op::update_content(id(1), b"k".to_vec(), 1, AT),
+            &Op::update_content(id(1), staged_k(), 1, AT),
         );
         assert!(matches!(res, OpResolution::Applied { .. }));
         assert!(working.contains(id(1)), "the edit resurrected the node");
@@ -587,7 +604,7 @@ mod tests {
         let res = rebase_one(
             &mut working,
             &local,
-            &Op::update_content(id(1), b"k".to_vec(), 1, AT),
+            &Op::update_content(id(1), staged_k(), 1, AT),
         );
         assert_eq!(
             res,
@@ -649,7 +666,7 @@ mod tests {
         let res = rebase_one(
             &mut gate_passing.clone(),
             &local,
-            &Op::update_content(id(1), b"k".to_vec(), 1, AT),
+            &Op::update_content(id(1), staged_k(), 1, AT),
         );
         assert_eq!(
             res,
@@ -803,7 +820,7 @@ mod tests {
                 NodeKind::File,
                 1,
                 AT,
-                Some(b"bytes".to_vec()),
+                Some(staged_k()),
             ),
         );
         assert_eq!(res, OpResolution::DeadLetter(DeadLetterReason::TargetGone));
@@ -851,9 +868,13 @@ mod tests {
         )
         .unwrap();
         let raw = vec![(OpId(1), good), (OpId(2), b"garbage".to_vec())];
-        let (ops, dead) = decode_queue(&RecordReader::new(&me), &raw);
-        assert_eq!(ops.len(), 1);
-        assert_eq!(dead, vec![(OpId(2), DeadLetterReason::Undecodable)]);
+        let scan = decode_queue(&RecordReader::new(&me), &raw);
+        assert_eq!(scan.mine.len(), 1);
+        assert_eq!(
+            scan.undecodable,
+            vec![(OpId(2), DeadLetterReason::Undecodable)]
+        );
+        assert_eq!(scan.retained, 0);
     }
 
     #[test]
@@ -869,11 +890,15 @@ mod tests {
         )
         .unwrap();
 
-        let (ops, dead) = decode_queue(&RecordReader::new(&me), &[(OpId(1), theirs)]);
-        assert!(ops.is_empty(), "never replayed");
+        let scan = decode_queue(&RecordReader::new(&me), &[(OpId(1), theirs)]);
+        assert!(scan.mine.is_empty(), "never replayed");
         assert!(
-            dead.is_empty(),
+            scan.undecodable.is_empty(),
             "never dead-lettered — the caller removes what it dead-letters"
+        );
+        assert_eq!(
+            scan.retained, 1,
+            "held records are counted, so the host can say the device is not empty"
         );
     }
 

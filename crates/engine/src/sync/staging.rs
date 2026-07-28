@@ -11,7 +11,7 @@
 use cipherbox_core::content::verify_cid;
 
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
-use crate::storage_policy::StoragePolicy;
+use crate::storage_policy::{Headroom, StoragePolicy};
 use crate::sync::op::Op;
 use crate::sync::record::{RecordSeal, encode_op_record, record_content_root_cid};
 
@@ -32,6 +32,13 @@ pub enum StageOutcome {
         incoming: u64,
         /// The policy budget.
         budget: u64,
+    },
+    /// The host could not measure storage headroom, so no upload can be
+    /// admitted. Distinct from [`Self::RejectedOverBudget`] at zero: nothing is
+    /// known about this device's storage, rather than known to be full.
+    RejectedStorageUnmeasured {
+        /// The upload's own byte length.
+        incoming: u64,
     },
 }
 
@@ -57,8 +64,11 @@ pub async fn stage_op<S: StagingStore>(
     let record = encode_op_record(seal, op).map_err(|e| SeamError::new(e.to_string()))?;
     match (op.content_root_cid(), upload) {
         (Some(cid), Some(bytes)) => {
-            let staged = store.staged_bytes_total().await?;
             let incoming = bytes.len() as u64;
+            if policy.headroom == Headroom::Unmeasured {
+                return Ok(StageOutcome::RejectedStorageUnmeasured { incoming });
+            }
+            let staged = store.staged_bytes_total().await?;
             // Saturating: an overflowing sum is unreachable under any real
             // budget, and must still read as "over budget", never wrap to a
             // spuriously-small total.
@@ -128,6 +138,7 @@ mod tests {
     use super::*;
     use crate::facade::{NodeId, NodeKind};
     use crate::seams::UnixMillis;
+    use crate::sync::op::StagedContent;
     use crate::testkit::block_on;
     use crate::testkit::fakes::InMemoryStagingStore;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
@@ -170,7 +181,10 @@ mod tests {
             NodeKind::File,
             1,
             UnixMillis(1),
-            Some(cid(upload)),
+            Some(StagedContent {
+                root_cid: cid(upload),
+                plaintext_size: upload.len() as u64,
+            }),
         )
     }
 
@@ -208,6 +222,44 @@ mod tests {
                 0,
                 "no bytes staged"
             );
+        });
+    }
+
+    #[test]
+    fn an_unmeasurable_host_rejects_uploads_distinguishably_from_a_full_one() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let op = content_op(1, b"bytes");
+            let out = stage_op(
+                &store,
+                &StoragePolicy::UNMEASURED,
+                seal(1),
+                &op,
+                Some(b"bytes"),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                out,
+                StageOutcome::RejectedStorageUnmeasured { incoming: 5 },
+                "an unmeasurable device must not be reported as a full one"
+            );
+            assert!(store.queued_ops().await.unwrap().is_empty());
+            assert_eq!(store.staged_bytes_total().await.unwrap(), 0);
+        });
+    }
+
+    #[test]
+    fn metadata_ops_still_queue_on_an_unmeasurable_host() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            // The op queue is the durable divergence and is never capped —
+            // unmeasurable storage bounds uploads, not intent.
+            let op = Op::rename(id(1), "n", 1, UnixMillis(1));
+            let out = stage_op(&store, &StoragePolicy::UNMEASURED, seal(1), &op, None)
+                .await
+                .unwrap();
+            assert!(matches!(out, StageOutcome::Queued { .. }));
         });
     }
 
@@ -352,6 +404,40 @@ mod tests {
                 orphan_staging_keys(&store).await.unwrap(),
                 vec![b"orphan".to_vec()],
                 "a foreign root is referenced, not collectible"
+            );
+        });
+    }
+
+    #[test]
+    fn a_forward_version_records_staged_root_is_never_collected() {
+        use cipherbox_core::codec::{Value, decode, encode};
+
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            // A record written by a newer build on this device. Its clear
+            // header is still readable — the framing is frozen across versions
+            // — so GC pins its root instead of reclaiming it under the owner.
+            let record = encode_op_record(seal(4), &content_op(1, b"their bytes")).unwrap();
+            let value = decode(&record).unwrap();
+            let mut map = value.as_map().unwrap().clone();
+            map.insert(
+                "v",
+                Value::Unsigned(cipherbox_core::seal::op_record::OP_RECORD_V + 1),
+            );
+            store
+                .enqueue_op(&encode(&Value::Map(map)).unwrap())
+                .await
+                .unwrap();
+            store
+                .put_staged_bytes(&cid(b"their bytes"), b"their bytes")
+                .await
+                .unwrap();
+            store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
+
+            assert_eq!(
+                orphan_staging_keys(&store).await.unwrap(),
+                vec![b"orphan".to_vec()],
+                "a retained record's root is referenced, not collectible"
             );
         });
     }

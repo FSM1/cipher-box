@@ -1,17 +1,19 @@
-//! The durable op record — `ownerTag || contentRootCid? || sealed(op)`
-//! (CONTEXT.md "Op record", "Owner tag").
+//! The durable op record — `v || ownerTag || contentRootCid? || sealed(op)`
+//! (CONTEXT.md "Op record", "Owner tag", "Retained record").
 //!
 //! The staging store is namespaced per origin, not per account, so two accounts
-//! on one browser profile share one op queue. The record's clear owner tag is
-//! what keeps them apart, and it is read **strictly before** any open: an
-//! unreadable record is dead-lettered and removed from the queue, so deciding
-//! ownership from a failed open would let a second account's first login
-//! destroy the first account's whole queue.
+//! on one browser profile share one op queue. The record's clear header is what
+//! keeps them apart, and it is read **strictly before** any open: an unreadable
+//! record is dead-lettered and removed from the queue, so deciding ownership —
+//! or format support — from a failed open would let a second account's first
+//! login, or a single format bump, destroy an unpublished queue.
 //!
 //! Sealing and framing live in [`cipherbox_core::seal::op_record`]; this module
 //! is the engine-side edge that binds an [`Op`] to it.
 
-use cipherbox_core::seal::op_record::{decode_op_record_header, open_op_record, seal_op_record};
+use cipherbox_core::seal::op_record::{
+    OP_RECORD_V, decode_op_record_header, open_op_record, seal_op_record,
+};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -79,14 +81,20 @@ impl<'a> RecordReader<'a> {
         }
     }
 
-    /// Classify one durable record: tag first, open second, nothing between.
+    /// Classify one durable record: version first, tag second, open third,
+    /// nothing between. Both discriminators precede the open because the
+    /// [`Undecodable`](RecordClass::Undecodable) verdict *deletes*, and neither
+    /// a stranger's record nor a format this build predates is an error.
     pub fn classify(&self, record: &[u8]) -> RecordClass {
         let header = match decode_op_record_header(record) {
             Ok(header) => header,
             Err(e) => return RecordClass::Undecodable(OpRecordError::Malformed(e.check())),
         };
+        if header.version != OP_RECORD_V {
+            return RecordClass::Retained(RetainedReason::UnsupportedVersion);
+        }
         if header.owner_tag != self.owner_tag {
-            return RecordClass::Foreign;
+            return RecordClass::Retained(RetainedReason::ForeignOwner);
         }
         match open_op_record(self.enc_secret, record) {
             Ok((_, body)) => match Op::decode_body(&body) {
@@ -103,13 +111,29 @@ impl<'a> RecordReader<'a> {
 pub enum RecordClass {
     /// The reader's own, and its intent opened.
     Mine(Op),
-    /// Another identity's. Invisible: never replayed, never surfaced, never
-    /// removed — deleting it would destroy that account's unpublished offline
-    /// work, and dead-lettering it would hand this account a permanent notice
-    /// about an op it cannot see.
-    Foreign,
-    /// Unreadable — corrupt, truncated, or a forward-version entry.
+    /// Held, not acted on: never replayed, never surfaced as this account's,
+    /// never removed, and its staged root still counts as referenced so orphan
+    /// GC leaves its bytes alone.
+    Retained(RetainedReason),
+    /// Unreadable — corrupt or truncated. Dead-lettered and dropped from the
+    /// durable queue, so it is not re-emitted every boot.
     Undecodable(OpRecordError),
+}
+
+/// Why a record is held rather than replayed. Both reasons are terminal for
+/// *this* session; neither is an error, and the two are indistinguishable from
+/// a corrupted header field of the same name, which is why the verdict is
+/// retention in both cases.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetainedReason {
+    /// Another identity's record. Deleting it would destroy that account's
+    /// unpublished offline work; dead-lettering it would hand this account a
+    /// permanent notice about an op it cannot see.
+    ForeignOwner,
+    /// Written at a format version this build does not implement — a queue
+    /// authored by a newer build on the same device. Held for that build to
+    /// drain rather than destroyed by the older one.
+    UnsupportedVersion,
 }
 
 /// A durable record could not be produced or read back.
@@ -138,6 +162,7 @@ mod tests {
     use super::*;
     use crate::facade::NodeId;
     use crate::seams::UnixMillis;
+    use cipherbox_core::codec;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
 
     fn owner(b: u8) -> X25519Secret {
@@ -151,8 +176,25 @@ mod tests {
         }
     }
 
+    fn staged(root_cid: Vec<u8>, plaintext_size: u64) -> crate::sync::op::StagedContent {
+        crate::sync::op::StagedContent {
+            root_cid,
+            plaintext_size,
+        }
+    }
+
     fn rename_op() -> Op {
         Op::rename(NodeId([1; 16]), "b.txt", 3, UnixMillis(1_700))
+    }
+
+    /// Re-frame a sealed record at another declared version — what a build
+    /// ahead of this one writes. Its body no longer opens here, which is the
+    /// point: only the clear header may be read.
+    fn at_version(record: &[u8], version: u64) -> Vec<u8> {
+        let value = codec::decode(record).unwrap();
+        let mut map = value.as_map().unwrap().clone();
+        map.insert("v", codec::Value::Unsigned(version));
+        codec::encode(&codec::Value::Map(map)).unwrap()
     }
 
     #[test]
@@ -166,14 +208,44 @@ mod tests {
     }
 
     #[test]
-    fn a_foreign_record_classifies_foreign_rather_than_undecodable() {
+    fn a_foreign_record_is_retained_rather_than_undecodable() {
         let me = owner(1);
         let stranger = owner(2);
         let record = encode_op_record(seal_for(&me, 9), &rename_op()).unwrap();
         assert_eq!(
             RecordReader::new(&stranger).classify(&record),
-            RecordClass::Foreign,
+            RecordClass::Retained(RetainedReason::ForeignOwner),
             "a foreign record must never reach the dead-letter path"
+        );
+    }
+
+    #[test]
+    fn a_forward_version_record_is_retained_even_for_its_own_owner() {
+        let me = owner(1);
+        let record = at_version(
+            &encode_op_record(seal_for(&me, 9), &rename_op()).unwrap(),
+            OP_RECORD_V + 1,
+        );
+        assert_eq!(
+            RecordReader::new(&me).classify(&record),
+            RecordClass::Retained(RetainedReason::UnsupportedVersion),
+            "a format bump must not dead-letter and delete the owner's own queue"
+        );
+    }
+
+    #[test]
+    fn a_forward_version_record_still_yields_its_staged_root() {
+        let me = owner(3);
+        let cid = compute_cid(CONTENT_CID_CODEC, b"sealed root");
+        let op = Op::update_content(NodeId([4; 16]), staged(cid.clone(), 11), 1, UnixMillis(5));
+        let record = at_version(
+            &encode_op_record(seal_for(&me, 8), &op).unwrap(),
+            OP_RECORD_V + 1,
+        );
+        assert_eq!(
+            record_content_root_cid(&record),
+            Ok(Some(cid)),
+            "retention is only durable if GC can still see the root it pins"
         );
     }
 
@@ -203,7 +275,7 @@ mod tests {
     fn a_content_record_exposes_its_root_cid_keylessly() {
         let me = owner(3);
         let cid = compute_cid(CONTENT_CID_CODEC, b"sealed root");
-        let op = Op::update_content(NodeId([4; 16]), cid.clone(), 1, UnixMillis(5));
+        let op = Op::update_content(NodeId([4; 16]), staged(cid.clone(), 11), 1, UnixMillis(5));
         let record = encode_op_record(seal_for(&me, 8), &op).unwrap();
 
         assert_eq!(record_content_root_cid(&record), Ok(Some(cid)));
@@ -224,7 +296,12 @@ mod tests {
     #[test]
     fn an_op_referencing_a_malformed_root_is_refused_at_encode() {
         let me = owner(6);
-        let op = Op::update_content(NodeId([1; 16]), b"not a cid".to_vec(), 1, UnixMillis(1));
+        let op = Op::update_content(
+            NodeId([1; 16]),
+            staged(b"not a cid".to_vec(), 9),
+            1,
+            UnixMillis(1),
+        );
         // Returned, never asserted: the guard must fire in a release build too.
         assert_eq!(
             encode_op_record(seal_for(&me, 6), &op),

@@ -63,6 +63,13 @@ export interface SnapshotDescriptor {
   children: SnapshotChildDescriptor[];
   ancestors: BreadcrumbDescriptor[];
   deadLetters: bigint[];
+  /**
+   * Durable queue entries this session holds but cannot read — another
+   * identity's, or written by a newer build. They occupy staged bytes against
+   * the same device budget, so a host reports them rather than leaving an
+   * over-budget rejection unexplained on a vault that looks empty.
+   */
+  retainedRecords: number;
   staleness: Staleness;
 }
 

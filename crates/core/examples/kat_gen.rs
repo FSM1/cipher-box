@@ -5667,6 +5667,11 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
     let missing_owner_tag = reframe_op_record(&record, |m| {
         m.remove("ownerTag");
     });
+    // A record from a build ahead of this one: its header still reads keylessly
+    // (that is what lets the engine retain it), but it never reaches the AEAD.
+    let forward_version = reframe_op_record(&record, |m| {
+        m.insert("v", Value::Unsigned(OP_RECORD_V + 1));
+    });
     // A stranger's enc subkey: the owner tag stays readable, the body does not.
     let stranger_scalar: [u8; 32] = std::array::from_fn(|i| (0x21 + i) as u8);
 
@@ -5713,12 +5718,21 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
             "missing-field",
             "malformed",
         ),
+        op_record_reject_vector(
+            "forward-version",
+            scalar,
+            &forward_version,
+            "unsupported-record-version",
+            "malformed",
+        ),
     ]
 }
 
-/// Build + self-check one op-record reject vector. Only an HPKE failure may
-/// need a key, so every other check must already fire on the keyless header
-/// read — the `keyless` flag records which, rather than leaving it inferred.
+/// Build + self-check one op-record reject vector. Exactly two checks may need
+/// a key: an HPKE failure, and a version this build refuses to open but must
+/// still read (retention depends on that header staying reachable). Every other
+/// check fires on the keyless header read — the `keyless` flag records which,
+/// rather than leaving it inferred.
 fn op_record_reject_vector(
     name: &str,
     opener_scalar: [u8; 32],
@@ -5747,7 +5761,7 @@ fn op_record_reject_vector(
     };
     assert_eq!(
         keyless,
-        check != "hpke-open-failed",
+        !matches!(check, "hpke-open-failed" | "unsupported-record-version"),
         "op-record reject {name}: keyless flag"
     );
 

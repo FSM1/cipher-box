@@ -445,11 +445,12 @@
     },
     "reject": {
       "file": "vectors/op_record/op_record_reject.json",
-      "count": 6,
+      "count": 7,
       "checks": [
         "hpke-open-failed",
         "content-cid-mismatch",
-        "missing-field"
+        "missing-field",
+        "unsupported-record-version"
       ]
     }
   }

@@ -16,6 +16,8 @@
 //! - [`model`] — the working tree (the state law's left operand) and the one
 //!   strict name comparator.
 //! - [`op`] — the intent-op grammar.
+//! - [`authored`] — the authored facts an op stamps on the node it targets,
+//!   shared by the overlay and the drain's publish plan.
 //! - [`record`] — the sealed, owner-tagged durable queue record.
 //! - [`overlay`] — the state law: snapshot ⊕ pending ops → rendered view.
 //! - [`rebase`] — FIFO replay, the five race rules, dead-lettering, and
@@ -32,6 +34,7 @@
 //! trigger event ([`rebase::ReplayReport::scope_exit_triggers`]); the rotation
 //! primitives themselves land with the rotation slice.
 
+pub mod authored;
 pub mod boot;
 pub mod model;
 pub mod op;
@@ -44,9 +47,10 @@ pub mod staging;
 pub mod staleness;
 pub mod tick;
 
+pub use authored::stamp_authored;
 pub use boot::{ColdStartError, ColdStartOutcome, ColdStartParams, RootResolve, cold_start};
 pub use model::{Link, NodeMeta, Snapshot, collation_key, suffix_name};
-pub use op::{Op, OpDecodeError, OpKind};
+pub use op::{Op, OpDecodeError, OpKind, StagedContent};
 pub use overlay::apply_overlay;
 pub use pointer::{
     ConsultReason, PointerError, PointerFetch, SessionRole, VaultPointerAdoption, open_repoint,
@@ -54,11 +58,12 @@ pub use pointer::{
     vault_pointer_name,
 };
 pub use rebase::{
-    AppliedOp, DeadLetterReason, DropReason, HeadReconciliation, OpResolution, Repair,
+    AppliedOp, DeadLetterReason, DropReason, HeadReconciliation, OpResolution, QueueScan, Repair,
     ReplayReport, apply_repairs, decode_queue, observed_repair, rebase_one, reconcile_head, replay,
 };
 pub use record::{
-    OpRecordError, RecordClass, RecordReader, RecordSeal, encode_op_record, record_content_root_cid,
+    OpRecordError, RecordClass, RecordReader, RecordSeal, RetainedReason, encode_op_record,
+    record_content_root_cid,
 };
 pub use staging::{StageOutcome, orphan_staging_keys, stage_op};
 pub use staleness::{Connectivity, classify, withheld_escalation};

@@ -56,6 +56,7 @@ export interface WasmSnapshotView {
   readonly children: WasmSnapshotChild[];
   readonly ancestors: WasmBreadcrumb[];
   readonly deadLetters: BigUint64Array;
+  readonly retainedRecords: number;
   readonly staleness: number;
 }
 

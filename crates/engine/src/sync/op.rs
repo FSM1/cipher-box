@@ -8,8 +8,9 @@
 //! [`crate::sync::rebase`] owns its replay.
 //!
 //! Content bytes never live in an op: `create`/`updateContent` reference their
-//! staged upload by its DAG root CID, and the sealed blocks sit in the staging
-//! store behind the storage policy's budget ([`crate::sync::staging`]).
+//! staged upload by its DAG root CID and carry its plaintext length
+//! ([`StagedContent`]), while the sealed blocks sit in the staging store behind
+//! the storage policy's budget ([`crate::sync::staging`]).
 
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +38,21 @@ pub struct Op {
     pub kind: OpKind,
 }
 
+/// The staged content one op authors: the DAG root it references and the
+/// plaintext length that root reassembles to.
+///
+/// One value because the two must not drift: the root names sealed blocks whose
+/// byte count is not the plaintext's, so the size a node renders and the size
+/// the published version carries both come from here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StagedContent {
+    /// DAG root CID of the staged content — simultaneously the root block's
+    /// staging key and the published version's `contentCid`.
+    pub root_cid: Vec<u8>,
+    /// Plaintext byte length of the content this root reassembles to.
+    pub plaintext_size: u64,
+}
+
 /// The five intent-op mutations (#33 D6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpKind {
@@ -48,9 +64,9 @@ pub enum OpKind {
         name: String,
         /// File or folder.
         kind: NodeKind,
-        /// DAG root CID of the initial file content, if any (folders and empty
-        /// files carry none).
-        content_root_cid: Option<Vec<u8>>,
+        /// The initial file content, if any (folders and empty files carry
+        /// none).
+        content: Option<StagedContent>,
     },
     /// Delete a node. `target_sequence` snapshots the target's own record
     /// sequence for the conditional-delete rebase rule.
@@ -84,8 +100,8 @@ pub enum OpKind {
     },
     /// Write a new file version (fresh per-version content key).
     UpdateContent {
-        /// DAG root CID of the new content bytes.
-        content_root_cid: Vec<u8>,
+        /// The new version's staged content.
+        content: StagedContent,
     },
 }
 
@@ -98,7 +114,7 @@ impl Op {
         kind: NodeKind,
         base_sequence: u64,
         authored_at: UnixMillis,
-        content_root_cid: Option<Vec<u8>>,
+        content: Option<StagedContent>,
     ) -> Self {
         Self {
             target: new_node,
@@ -108,7 +124,7 @@ impl Op {
                 parent,
                 name: name.into(),
                 kind,
-                content_root_cid,
+                content,
             },
         }
     }
@@ -171,7 +187,7 @@ impl Op {
     /// An `updateContent` op.
     pub fn update_content(
         target: NodeId,
-        content_root_cid: Vec<u8>,
+        content: StagedContent,
         base_sequence: u64,
         authored_at: UnixMillis,
     ) -> Self {
@@ -179,7 +195,19 @@ impl Op {
             target,
             base_sequence,
             authored_at,
-            kind: OpKind::UpdateContent { content_root_cid },
+            kind: OpKind::UpdateContent { content },
+        }
+    }
+
+    /// The staged content this op authors, if any.
+    pub fn staged_content(&self) -> Option<&StagedContent> {
+        match &self.kind {
+            OpKind::Create {
+                content: Some(content),
+                ..
+            }
+            | OpKind::UpdateContent { content } => Some(content),
+            _ => None,
         }
     }
 
@@ -197,16 +225,7 @@ impl Op {
     /// and the `contentCid` the published version carries — which is what lets
     /// the drain compare rather than recompute.
     pub fn content_root_cid(&self) -> Option<&[u8]> {
-        match &self.kind {
-            OpKind::Create {
-                content_root_cid: Some(cid),
-                ..
-            }
-            | OpKind::UpdateContent {
-                content_root_cid: cid,
-            } => Some(cid),
-            _ => None,
-        }
+        self.staged_content().map(|c| &c.root_cid[..])
     }
 
     /// Encode the intent body — the plaintext a durable record seals
@@ -255,6 +274,13 @@ mod tests {
         UnixMillis(ms)
     }
 
+    fn staged(root: &[u8], plaintext_size: u64) -> StagedContent {
+        StagedContent {
+            root_cid: root.to_vec(),
+            plaintext_size,
+        }
+    }
+
     #[test]
     fn every_op_round_trips_through_the_body_encoding() {
         let ops = vec![
@@ -265,12 +291,12 @@ mod tests {
                 NodeKind::File,
                 3,
                 at(1_000),
-                Some(b"stage".to_vec()),
+                Some(staged(b"stage", 11)),
             ),
             Op::delete(id(2), 4, at(1_001), 7),
             Op::rename(id(3), "b.txt", 5, at(1_002)),
             Op::relink(id(4), id(0), id(9), 6, at(1_003), true, true),
-            Op::update_content(id(5), b"stage2".to_vec(), 8, at(1_004)),
+            Op::update_content(id(5), staged(b"stage2", 12), 8, at(1_004)),
         ];
         for op in ops {
             assert_eq!(Op::decode_body(&op.encode_body()).unwrap(), op);
@@ -297,13 +323,13 @@ mod tests {
                 NodeKind::File,
                 1,
                 at(1),
-                Some(b"k".to_vec())
+                Some(staged(b"k", 1))
             )
             .content_root_cid(),
             Some(&b"k"[..])
         );
         assert_eq!(
-            Op::update_content(id(1), b"k".to_vec(), 1, at(1)).content_root_cid(),
+            Op::update_content(id(1), staged(b"k", 1), 1, at(1)).content_root_cid(),
             Some(&b"k"[..])
         );
         assert_eq!(Op::rename(id(1), "b", 1, at(1)).content_root_cid(), None);
@@ -323,7 +349,7 @@ mod tests {
                 NodeKind::File,
                 1,
                 at(1),
-                Some(b"k".to_vec()),
+                Some(staged(b"k", 1)),
             )
             .pending_class(),
             Op::create(id(1), id(0), "a", NodeKind::File, 1, at(1), None).pending_class(),
@@ -331,7 +357,7 @@ mod tests {
             Op::delete(id(2), 1, at(1), 1).pending_class(),
             Op::rename(id(3), "b", 1, at(1)).pending_class(),
             Op::relink(id(4), id(0), id(9), 1, at(1), false, false).pending_class(),
-            Op::update_content(id(5), b"k".to_vec(), 1, at(1)).pending_class(),
+            Op::update_content(id(5), staged(b"k", 1), 1, at(1)).pending_class(),
         ];
         assert_eq!(
             classes,

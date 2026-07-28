@@ -349,6 +349,14 @@ impl SnapshotView {
         self.inner.dead_letters.iter().map(|op| op.0).collect()
     }
 
+    /// Durable queue entries this session holds but cannot read — another
+    /// identity's, or written by a newer build. A host reports these instead of
+    /// leaving an over-budget rejection unexplained on a vault that looks empty.
+    #[wasm_bindgen(getter, js_name = retainedRecords)]
+    pub fn retained_records(&self) -> usize {
+        self.inner.retained_records
+    }
+
     /// The staleness rung at read time.
     #[wasm_bindgen(getter)]
     pub fn staleness(&self) -> Staleness {
@@ -813,12 +821,14 @@ mod tests {
                 name: String::new(),
             }],
             dead_letters: vec![OpId(9), OpId(11)],
+            retained_records: 3,
             staleness: facade::Staleness::Reconciling,
         });
 
         assert_eq!(view.root(), vec![1u8; 16]);
         assert_eq!(view.folder(), vec![2u8; 16]);
         assert_eq!(view.dead_letters(), vec![9, 11]);
+        assert_eq!(view.retained_records(), 3);
         assert_eq!(view.staleness(), Staleness::Reconciling);
 
         let children = view.children();

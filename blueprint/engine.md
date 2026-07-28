@@ -188,7 +188,10 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
 
 - **State law**: rendered state = last-known-good remote snapshot ⊕
   pending-op overlay, single owner; the op queue is the only local divergence
-  (#33 D6).
+  (#33 D6). Every op but a delete authors its target's next record, so the
+  overlay stamps `mtime = authored_at` — overwriting the projected time, not
+  filling it — and a content op also stamps its version's plaintext size,
+  through the one function the drain's publish plan shares.
 - **Focus-window tick**, 30 s with jitter: refresh the vault pointer, the open
   folder, and its full ancestor chain to root; the scope-pointer resolves for
   open shared scopes (#38 D4) and the mailbox poll (#34 D5) ride the same
@@ -206,7 +209,9 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   construction — never a live host query inside a staging read-modify-write.
   The cache ceiling comes off headroom before the staging fraction; there is no
   floor-up, so a small headroom yields a small budget and an honest
-  over-budget rejection.
+  over-budget rejection. A host that cannot measure headroom at all is a
+  distinct state, not a measured zero: uploads are refused as _unmeasurable_
+  rather than reported as a full device.
 - **Staleness ladder** (#33 D4): fresh → reconciling (quiet indicator) →
   stale (badge + "last synced X ago" after ~3 missed cycles) → offline banner.
   Availability staleness keeps cached views usable indefinitely. Errors are
@@ -215,9 +220,12 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
 - **Ops**: every mutation is an intent op — `create`, `delete`, `rename`,
   `relink`, `updateContent` — carrying its base sequence and its authored
   time, journaled FIFO in the durable op queue (all mutations, both platforms)
-  as an owner-tagged record whose intent body seals HPKE-to-self. The queue is
-  per device, not per account: a record bearing another identity's tag is
-  invisible — never replayed, never surfaced, never removed. An intra-scope
+  as a versioned, owner-tagged record whose intent body seals HPKE-to-self. The
+  queue is per device, not per account, and is shared with whatever build wrote
+  it: a record bearing another identity's tag, or a format version this build
+  does not implement, is **retained** — never replayed, never surfaced, never
+  removed, and its staged bytes stay pinned. Only a record that fails to decode
+  at all is dead-lettered and dropped. An intra-scope
   `relink` is a pure relink; a cross-scope `relink` re-seals the moved subtree
   at the destination scope's epoch, and one that leaves a granted source scope
   is a scope-exit rotation trigger for the source (#26 D1/D7). Replay is FIFO

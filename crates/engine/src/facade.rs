@@ -51,7 +51,7 @@ use crate::sync::op::Op;
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
-use crate::sync::rebase::decode_queue;
+use crate::sync::rebase::{QueueScan, decode_queue};
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::staging::{StageOutcome, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
@@ -178,6 +178,13 @@ pub struct SnapshotView {
     pub ancestors: Vec<Breadcrumb>,
     /// Every retained dead-lettered op id.
     pub dead_letters: Vec<OpId>,
+    /// Durable queue entries this session holds but cannot read — another
+    /// identity's, or written by a newer build. They occupy staged bytes
+    /// against the same device budget, so a host reports "this device holds
+    /// work from another account or a newer version" instead of leaving an
+    /// over-budget rejection unexplained on a vault that looks empty
+    /// (#832 §6 residual).
+    pub retained_records: usize,
     /// The staleness rung at read time.
     pub staleness: Staleness,
 }
@@ -1028,21 +1035,22 @@ impl<T: SeamTypes> Engine<T> {
             .queued_ops()
             .await
             .map_err(ColdStartError::Seam)?;
-        let (decoded, undecodable) = decode_queue(&RecordReader::new(session.enc_subkey()), &raw);
-        let pending: Vec<_> = decoded.into_iter().map(|(_id, op)| op).collect();
+        let scan = decode_queue(&RecordReader::new(session.enc_subkey()), &raw);
+        let pending: Vec<_> = scan.mine.into_iter().map(|(_id, op)| op).collect();
 
         // Surface every undecodable queue entry as `Event::DeadLetter` and drop
-        // its op record from the durable queue so a corrupt/forward-version
-        // entry is not re-decoded and re-emitted on every boot (#768). Another
-        // account's records are not in this list — they never reach removal
-        // (CONTEXT.md "Owner tag"). Staged upload bytes live in a separate
-        // plane keyed by content root CIDs and are not touched here.
+        // its op record from the durable queue so a corrupt entry is not
+        // re-decoded and re-emitted on every boot (#768). Retained records —
+        // another account's, or a newer build's format — are not in this list
+        // and never reach removal (CONTEXT.md "Retained record"). Staged upload
+        // bytes live in a separate plane keyed by content root CIDs and are not
+        // touched here.
         //
         // `DeadLetter` delivery is best-effort over a non-durable in-process
         // channel, so hosts MUST dedup by `op_id`. Gate the durable removal on a
         // successful send: a receiver dropped mid-teardown must not silently
         // purge an unsurfaced entry — preserved, the next boot re-surfaces it.
-        for (op_id, _reason) in &undecodable {
+        for (op_id, _reason) in &scan.undecodable {
             // Retain the dead letter (target unknown for an undecodable entry)
             // so the read surface keeps reporting it.
             self.dead_letters.borrow_mut().insert(*op_id, None);
@@ -1353,7 +1361,8 @@ impl<T: SeamTypes> Engine<T> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
-        let ops = self.pending_ops().await?;
+        let scan = self.scan_queue().await?;
+        let ops: Vec<Op> = scan.mine.into_iter().map(|(_id, op)| op).collect();
         let rendered = {
             let base = self.snapshot.borrow();
             apply_overlay(&base, &ops)
@@ -1409,6 +1418,7 @@ impl<T: SeamTypes> Engine<T> {
             children,
             ancestors,
             dead_letters,
+            retained_records: scan.retained,
             staleness,
         })
     }
@@ -1608,10 +1618,10 @@ impl<T: SeamTypes> Engine<T> {
         Ok(apply_overlay(&base, &ops))
     }
 
-    /// The pending ops from the durable staging store, decoded FIFO. Undecodable
-    /// entries are dropped from the render here; the cold-start path dead-letters
-    /// and removes them from the durable queue.
-    async fn pending_ops(&self) -> Result<Vec<Op>, EngineError> {
+    /// Scan the durable staging store's queue for this session. Undecodable
+    /// entries are dropped from the render here; the cold-start path
+    /// dead-letters and removes them from the durable queue.
+    async fn scan_queue(&self) -> Result<QueueScan, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let raw = self
             .seams
@@ -1619,8 +1629,18 @@ impl<T: SeamTypes> Engine<T> {
             .queued_ops()
             .await
             .map_err(EngineError::from_seam)?;
-        let (decoded, _undecodable) = decode_queue(&RecordReader::new(session.enc_subkey()), &raw);
-        Ok(decoded.into_iter().map(|(_id, op)| op).collect())
+        Ok(decode_queue(&RecordReader::new(session.enc_subkey()), &raw))
+    }
+
+    /// This session's pending ops, FIFO.
+    async fn pending_ops(&self) -> Result<Vec<Op>, EngineError> {
+        Ok(self
+            .scan_queue()
+            .await?
+            .mine
+            .into_iter()
+            .map(|(_id, op)| op)
+            .collect())
     }
 
     /// The base sequence to anchor an op at: the target's own record sequence in
@@ -1646,7 +1666,9 @@ impl<T: SeamTypes> Engine<T> {
     /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success.
     async fn stage_and_notify(&mut self, op: &Op) -> Result<(), EngineError> {
         let seal = self.record_seal()?;
-        // metadata ops never budget-reject; a rejection means a content op reached this path — fail closed
+        // Metadata ops queue unbounded, so any rejection here means a content
+        // op reached this path — fail closed rather than report a storage
+        // verdict for a mutation that carries no bytes.
         match stage_op(
             &self.seams.staging_store,
             &self.storage_policy,
@@ -1663,8 +1685,9 @@ impl<T: SeamTypes> Engine<T> {
                 let _ = self.events.unbounded_send(Event::SnapshotUpdated);
                 Ok(())
             }
-            StageOutcome::RejectedOverBudget { .. } => Err(EngineError::Seam {
-                message: "metadata op unexpectedly rejected over budget".to_owned(),
+            StageOutcome::RejectedOverBudget { .. }
+            | StageOutcome::RejectedStorageUnmeasured { .. } => Err(EngineError::Seam {
+                message: "metadata op unexpectedly rejected by the storage policy".to_owned(),
             }),
         }
     }
@@ -2273,6 +2296,7 @@ mod tests {
             );
             assert!(view.children.iter().all(|c| !c.dead_letter));
             assert!(view.dead_letters.is_empty());
+            assert_eq!(view.retained_records, 0);
             assert!(view.ancestors.is_empty(), "the root has no ancestors");
         }
 
@@ -2309,13 +2333,56 @@ mod tests {
                 &engine.seams.staging_store,
                 &engine.storage_policy,
                 seal,
-                &Op::update_content(node, root_cid, 1, crate::seams::UnixMillis(1)),
+                &Op::update_content(
+                    node,
+                    crate::sync::op::StagedContent {
+                        root_cid,
+                        plaintext_size: 5,
+                    },
+                    1,
+                    crate::seams::UnixMillis(1),
+                ),
                 Some(b"bytes"),
             ))
             .unwrap();
 
             let view = block_on(engine.snapshot(root)).unwrap();
             assert_eq!(view.children[0].pending, PendingClass::Content);
+        }
+
+        #[test]
+        fn a_foreign_queue_entry_is_invisible_but_counted() {
+            let (engine, _events) = started();
+            let root = engine.root();
+            let stranger = cipherbox_core::suite::x25519::X25519Secret::from_scalar([9; 32]);
+            let theirs = crate::sync::record::encode_op_record(
+                RecordSeal {
+                    owner_enc_pub: stranger.public(),
+                    ephemeral_scalar: Zeroizing::new([3; 32]),
+                },
+                &Op::create(
+                    NodeId([7; 16]),
+                    root,
+                    "theirs.txt",
+                    NodeKind::File,
+                    1,
+                    crate::seams::UnixMillis(1),
+                    None,
+                ),
+            )
+            .unwrap();
+            block_on(engine.seams.staging_store.enqueue_op(&theirs)).unwrap();
+
+            let view = block_on(engine.snapshot(root)).unwrap();
+            assert!(
+                view.children.is_empty(),
+                "another account's op never renders"
+            );
+            assert!(view.dead_letters.is_empty(), "and never dead-letters");
+            assert_eq!(
+                view.retained_records, 1,
+                "but the count says the device is not empty"
+            );
         }
 
         #[test]

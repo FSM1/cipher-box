@@ -333,6 +333,13 @@ pub enum Malformed {
     /// slot, not a non-canonical encoding of a real CID — the strict decode keeps
     /// the recovered head anchor fail-closed before a fetch trusts it.
     ContentCidStrMalformed,
+    /// A durable op record declared a format version this build does not
+    /// implement. *Malformed*, not trust: a forward-version record is intact
+    /// input this decoder cannot interpret, carrying no evidence of tampering
+    /// (a rewritten `v` is bound into the AAD and fails the tag instead). The
+    /// distinction is load-bearing — the engine **retains** such a record
+    /// rather than dead-lettering and deleting a queue it cannot yet read.
+    UnsupportedRecordVersion { version: u64 },
     /// An IPNS record's protobuf could not be parsed, or it was missing a field
     /// the V2 verify chain requires (`value`, `signatureV2`, or `data`), or its
     /// `data` field was not the frozen det-CBOR shape. *Malformed*: structurally
@@ -367,6 +374,7 @@ impl Malformed {
         "invalid-field-length",
         "ipns-name-malformed",
         "content-cid-str-malformed",
+        "unsupported-record-version",
         "ipns-record-malformed",
     ];
 
@@ -394,6 +402,7 @@ impl Malformed {
             Self::InvalidFieldLength { .. } => "invalid-field-length",
             Self::IpnsNameMalformed => "ipns-name-malformed",
             Self::ContentCidStrMalformed => "content-cid-str-malformed",
+            Self::UnsupportedRecordVersion { .. } => "unsupported-record-version",
             Self::IpnsRecordMalformed => "ipns-record-malformed",
         }
     }
@@ -425,6 +434,7 @@ impl fmt::Display for Malformed {
                 expected,
                 found,
             } => write!(f, " (field {field}: expected {expected}, found {found})"),
+            Self::UnsupportedRecordVersion { version } => write!(f, " (version {version})"),
             Self::InvalidIdentityKey
             | Self::InvalidEncSubkey
             | Self::InvalidBindingSigEncoding

@@ -27,8 +27,9 @@ use cipherbox_engine::sync::model::NodeMeta;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
     self, Connectivity, DeadLetterReason, DropReason, Op, OpResolution, PointerFetch, RecordReader,
-    RecordSeal, SessionRole, Snapshot, StageOutcome, apply_repairs, classify, decode_queue,
-    observed_repair, rebase_one, replay, resolve_vault_pointer, stage_op, withheld_escalation,
+    RecordSeal, SessionRole, Snapshot, StageOutcome, StagedContent, apply_repairs, classify,
+    decode_queue, observed_repair, rebase_one, replay, resolve_vault_pointer, stage_op,
+    withheld_escalation,
 };
 use cipherbox_engine::testkit::fakes::{InMemoryFloorStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{SeededEntropy, block_on};
@@ -62,6 +63,15 @@ fn budget(bytes: u64) -> StoragePolicy {
 /// The content address a staged root block is keyed by.
 fn root_cid(marker: &[u8]) -> Vec<u8> {
     compute_cid(CONTENT_CID_CODEC, marker)
+}
+
+/// The staged content for an upload of `marker` — its root CID and its
+/// plaintext length.
+fn staged(marker: &[u8]) -> StagedContent {
+    StagedContent {
+        root_cid: root_cid(marker),
+        plaintext_size: marker.len() as u64,
+    }
 }
 
 fn id(b: u8) -> NodeId {
@@ -108,7 +118,7 @@ fn race_1_reverse_edit_resurrects_a_concurrently_deleted_node() {
     let res = rebase_one(
         &mut working,
         &local,
-        &Op::update_content(id(1), b"v2".to_vec(), 1, AT),
+        &Op::update_content(id(1), staged(b"v2"), 1, AT),
     );
     assert!(matches!(res, OpResolution::Applied { .. }));
     assert!(
@@ -255,11 +265,12 @@ fn offline_queue_replays_fifo_onto_gate_passing_state() {
 
         // Reconnect: decode the durable journal and replay onto fresh state.
         let raw = store.queued_ops().await.unwrap();
-        let (decoded, undecodable) = decode_queue(&RecordReader::new(&me), &raw);
-        assert!(undecodable.is_empty());
+        let scan = decode_queue(&RecordReader::new(&me), &raw);
+        assert!(scan.undecodable.is_empty());
+        assert_eq!(scan.retained, 0);
 
         let base = Snapshot::new(id(0));
-        let report = replay(&base, &base, &decoded);
+        let report = replay(&base, &base, &scan.mine);
 
         assert_eq!(report.applied.len(), 3, "every op replayed in FIFO order");
         assert_eq!(report.rebased.node(id(1)).unwrap().name, "notes-v2.txt");
@@ -277,7 +288,7 @@ fn offline_queue_replays_fifo_onto_gate_passing_state() {
 fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
     let store = InMemoryStagingStore::default();
     let me = owner();
-    let staged_root = root_cid(b"sealed-bytes");
+    let staged_root = staged(b"sealed-bytes");
 
     block_on(async {
         // Offline: create a file inside a granted folder (id 5), staging its bytes.
@@ -307,8 +318,8 @@ fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
         // gate-passing state entirely.
         let gate_passing = Snapshot::new(id(0)); // no id(5)
         let raw = store.queued_ops().await.unwrap();
-        let (decoded, _) = decode_queue(&RecordReader::new(&me), &raw);
-        let report = replay(&gate_passing, &gate_passing, &decoded);
+        let scan = decode_queue(&RecordReader::new(&me), &raw);
+        let report = replay(&gate_passing, &gate_passing, &scan.mine);
 
         // The op terminally dead-letters — nothing silently dropped.
         assert_eq!(report.applied.len(), 0);
@@ -318,7 +329,7 @@ fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
         // The staged bytes are preserved (the caller does NOT GC a dead-letter's
         // bytes — the user can still recover them).
         assert_eq!(
-            store.staged_bytes(&staged_root).await.unwrap(),
+            store.staged_bytes(&staged_root.root_cid).await.unwrap(),
             Some(b"sealed-bytes".to_vec()),
             "staged bytes survive the dead-letter"
         );
@@ -342,7 +353,7 @@ fn staging_budget_fails_fast_on_uploads_but_metadata_queues_unbounded() {
             NodeKind::File,
             1,
             AT,
-            Some(root_cid(b"nine byte")),
+            Some(staged(b"nine byte")),
         );
         assert!(matches!(
             stage_op(
