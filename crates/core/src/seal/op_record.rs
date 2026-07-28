@@ -66,6 +66,11 @@ pub struct OpRecordHeader {
 /// a present content root CID is the frozen content-plane framing.
 /// Release-active — a record the decoder refuses would strand its staged bytes
 /// with no way to reach them.
+///
+/// *Trust*, not [`Malformed`], unlike the other rejects in this module: an op
+/// record is **locally authored**, so unlike a decoded network CID there is no
+/// conforming writer that could have produced these bytes. It is the same
+/// verdict the content plane gives the same check name.
 fn check_content_root_cid(cid: Option<&[u8]>) -> Result<(), CodecError> {
     match cid {
         Some(cid) if !is_wellformed_content_cid(cid) => {

@@ -96,8 +96,14 @@ pub async fn stage_op<S: StagingStore>(
         (Some(_), None) => Err(SeamError::new(
             "stage_op: content op carries a content root CID but no upload bytes",
         )),
+        // Bytes with no root to key them by: the mirror of the arm above, and
+        // the same broken caller contract. Staging them would leave residue no
+        // op references; dropping them would silently lose a user's upload.
+        (None, Some(_)) => Err(SeamError::new(
+            "stage_op: upload bytes with no content root CID on the op",
+        )),
         // A metadata op: journal unbounded.
-        (None, _) => {
+        (None, None) => {
             let op_id = store.enqueue_op(&record).await?;
             Ok(StageOutcome::Queued { op_id })
         }
@@ -305,6 +311,18 @@ mod tests {
             .await
             .unwrap();
             assert!(matches!(out, StageOutcome::RejectedOverBudget { .. }));
+        });
+    }
+
+    #[test]
+    fn metadata_op_with_stray_bytes_fails_closed_and_queues_nothing() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let op = Op::rename(id(1), "n", 1, UnixMillis(1));
+            let result = stage_op(&store, &budget(1024), seal(1), &op, Some(b"bytes")).await;
+            assert!(result.is_err(), "bytes with no root to key them by");
+            assert!(store.queued_ops().await.unwrap().is_empty());
+            assert_eq!(store.staged_bytes_total().await.unwrap(), 0);
         });
     }
 
