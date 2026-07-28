@@ -14,7 +14,7 @@ import {
 import { NameInventory } from '../entities/name-inventory.entity';
 import { PinnedCid } from '../entities/pinned-cid.entity';
 import { PinStore } from '../pin-store';
-import { byteConfigBigInt, DEFAULT_QUOTA_BYTES, resolveLimitBytes, sumPinnedBytes } from '../quota';
+import { byteConfigBigInt, DEFAULT_QUOTA_BYTES, quotaSums, resolveLimitBytes } from '../quota';
 
 /**
  * Serialize every refcount/inventory mutation for each token by taking a
@@ -51,6 +51,7 @@ export interface RetireResult {
 
 export interface QuotaResult {
   usedBytes: number;
+  pinnedBytes: number;
   limitBytes: number;
   advisory: boolean;
 }
@@ -274,11 +275,12 @@ export class RegistryService {
   }
 
   /**
-   * The per-account quota (blueprint/api.md). `usedBytes` is the sum over the
-   * account's pin rows; `limitBytes` is the per-account override, else the env
-   * default. Hosted accounts are authoritative (`advisory: false`, the sum
-   * gates uploads); a BYO account's rows are advisory (`advisory: true`, quota
-   * always allows) — the bytes live on the user's own provider.
+   * The per-account quota (blueprint/api.md). `usedBytes` is the GATED sum the
+   * upload gate itself enforces, so a client pre-flight and a server refusal
+   * read one number by construction (#843); `pinnedBytes` is the all-rows sum,
+   * informational only. `limitBytes` is the per-account override, else the env
+   * default. A BYO account's rows are advisory (`advisory: true`, quota always
+   * allows) — the bytes live on the user's own provider.
    */
   async quota(accountId: string): Promise<QuotaResult> {
     const user = await this.userRepository.findOne({ where: { id: accountId } });
@@ -288,11 +290,12 @@ export class RegistryService {
 
     // Compute in BigInt (exact above 2^53) and narrow to the wire number at the
     // edge; the DTO is a JSON number, but the gate math never rounds (#677).
-    const used = await sumPinnedBytes(this.pinRepository, accountId);
+    const sums = await quotaSums(this.pinRepository, accountId);
     const limit = resolveLimitBytes(user.quotaLimitOverride, this.defaultLimitBytes);
 
     return {
-      usedBytes: Number(used),
+      usedBytes: Number(sums.hosted),
+      pinnedBytes: Number(sums.pinned),
       limitBytes: Number(limit),
       advisory: user.byo,
     };

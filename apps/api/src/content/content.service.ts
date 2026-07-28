@@ -30,6 +30,7 @@ import {
   resolveLimitBytes,
   sumHostedBytes,
 } from '../registry/quota';
+import { QUOTA_EXCEEDED, uploadTooLargeBody } from './upload-error-codes';
 
 /**
  * Max uploads admitted concurrently to the pin path (`CONTENT_PIN_CONCURRENCY`).
@@ -265,7 +266,9 @@ export class ContentService {
     const used = await sumHostedBytes(pinRepo, accountId);
     const limit = resolveLimitBytes(user.quotaLimitOverride, this.defaultLimitBytes);
     if (exceedsQuota(used, BigInt(size), limit)) {
-      throw new PayloadTooLargeException('Upload exceeds the account storage quota');
+      throw new PayloadTooLargeException(
+        uploadTooLargeBody(QUOTA_EXCEEDED, 'Upload exceeds the account storage quota')
+      );
     }
 
     if (existing) {

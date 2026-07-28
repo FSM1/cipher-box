@@ -205,7 +205,28 @@ describe('registry HTTP surface (real Postgres)', () => {
         .get('/account/quota')
         .set('Authorization', `Bearer ${acct.token}`)
         .expect(200);
-      expect(res.body).toEqual({ usedBytes: 512, limitBytes: 10 * GIB, advisory: false });
+      expect(res.body).toEqual({
+        usedBytes: 512,
+        pinnedBytes: 512,
+        limitBytes: 10 * GIB,
+        advisory: false,
+      });
+    });
+
+    it('reports usedBytes as the GATED sum when advisory rows are present, pinnedBytes as all rows', async () => {
+      const acct = await account();
+      const pins = db.dataSource.getRepository(PinnedCid);
+      await pins.save({ accountId: acct.id, cid: 'bafyHostedQ', size: '512', advisory: false });
+      await pins.save({ accountId: acct.id, cid: 'bafyAdvisoryQ', size: '9000', advisory: true });
+
+      const res = await request(http())
+        .get('/account/quota')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .expect(200);
+
+      // 512 is what the upload gate would enforce; the advisory 9000 is not.
+      expect(res.body.usedBytes).toBe(512);
+      expect(res.body.pinnedBytes).toBe(9512);
     });
 
     it('flips advisory once the account enables BYO', async () => {

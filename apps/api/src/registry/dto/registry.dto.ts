@@ -90,8 +90,17 @@ export class RetireResponseDto {
 }
 
 export class QuotaResponseDto {
-  @ApiProperty({ description: 'Bytes currently counted against the account (sum over pin rows)' })
+  @ApiProperty({
+    description:
+      'Bytes gated against the limit: the sum over AUTHORITATIVE (non-advisory) pin rows — the same sum the upload gate enforces, so a client pre-flight and the server refusal agree by construction',
+  })
   usedBytes!: number;
+
+  @ApiProperty({
+    description:
+      'Bytes across ALL pin rows, advisory ones included. Reported for BYO usage display only; never gated. Equals usedBytes for an account with no advisory bytes',
+  })
+  pinnedBytes!: number;
 
   @ApiProperty({ description: 'The account limit: per-account override, else the env default' })
   limitBytes!: number;
