@@ -212,18 +212,20 @@ impl EngineHandle {
     }
 
     /// Executes one engine command — the single write entry point. Consumes the
-    /// command value. Resolves on success; rejects with the engine error.
+    /// command value. Resolves with the staged op's durable queue id (the same
+    /// `u64` an `opProgress`/`deadLetter` event carries), or `undefined` for a
+    /// command that queues nothing; rejects with the engine error.
     pub fn command(&self, command: Command) -> Promise {
         let engine = self.engine.clone();
         let facade_command = command.into_facade();
         future_to_promise(async move {
-            engine
+            let op_id = engine
                 .write()
                 .await
                 .command(facade_command)
                 .await
                 .map_err(engine_error)?;
-            Ok(JsValue::UNDEFINED)
+            Ok(op_id.map_or(JsValue::UNDEFINED, |op| JsValue::from_f64(op.0 as f64)))
         })
     }
 
