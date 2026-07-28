@@ -10,7 +10,7 @@
 
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::seal::open_read_body;
+use cipherbox_core::seal::{decode_envelope, open_read_body};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::author::AuthoredHead;
@@ -19,8 +19,8 @@ use crate::api::{ApiClient, ApiError};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 
-/// The identity an authored envelope must claim, supplied independently of the
-/// envelope so the preflight compares rather than echoes.
+/// The identity an authored envelope must claim, as the caller believes it —
+/// carried alongside the envelope rather than read out of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HeadBinding {
     /// The node the record is for.
@@ -36,6 +36,9 @@ pub struct HeadBinding {
 /// rejection would have diagnostic value and no preventive value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PreflightError {
+    /// The head block is not the encoding of the envelope beside it, so the
+    /// bytes checked here are not the bytes that would ship.
+    BlockEnvelopeMismatch,
     /// The authored envelope does not claim the identity the caller expects.
     BindingMismatch,
     /// The authored envelope does not reopen under the key the gate will
@@ -46,6 +49,9 @@ pub enum PreflightError {
 impl core::fmt::Display for PreflightError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::BlockEnvelopeMismatch => {
+                f.write_str("head block is not the envelope beside it")
+            }
             Self::BindingMismatch => f.write_str("authored envelope binding mismatch"),
             Self::Unseal(e) => write!(f, "authored envelope does not reopen: {}", e.check()),
         }
@@ -64,22 +70,28 @@ pub struct PreflightedHead {
 }
 
 impl PreflightedHead {
-    /// The head block's content CID, as a record `Value` spells it.
+    /// The head block's content CID, as the record `Value` spells it.
     pub fn cid(&self) -> &str {
         &self.cid
     }
 }
 
-/// Envelope-level dry run: check the authored envelope claims the expected
-/// `(id, scope, epoch)` and reopens under the read key the adoption gate will
-/// re-derive. No network, no record, no floor advance — the full six-stage gate
-/// still runs post-publish on the returned bytes.
+/// Envelope-level dry run: check the head block really is the envelope beside
+/// it, that the envelope claims the expected `(id, scope, epoch)`, and that it
+/// reopens under the read key the adoption gate will re-derive. No network, no
+/// record, no floor advance — the full six-stage gate still runs post-publish
+/// on the returned bytes.
 pub fn preflight(
     binding: &HeadBinding,
     read_key: &[u8; 32],
     head: &AuthoredHead,
 ) -> Result<PreflightedHead, PreflightError> {
     let envelope = &head.envelope;
+    // The block ships; the envelope is what the rest of this dry run inspects.
+    // A head that pairs one with the other's bytes would publish unchecked.
+    if decode_envelope(&head.block).ok().as_ref() != Some(envelope) {
+        return Err(PreflightError::BlockEnvelopeMismatch);
+    }
     if envelope.id != binding.node_id
         || envelope.scope != binding.scope_id
         || envelope.epoch != binding.epoch
@@ -180,6 +192,8 @@ where
 mod tests {
     use super::*;
     use crate::net::author::{EnvelopeAuthoring, author_child_envelope};
+    use crate::seams::{HttpResponse, RecordTransport};
+    use crate::testkit::{FakeWorld, block_on};
     use cipherbox_core::seal::ReadBody;
 
     const READ_KEY: [u8; 32] = [8u8; 32];
@@ -213,12 +227,58 @@ mod tests {
         .unwrap()
     }
 
+    /// A pin store that answers with an address other than the block's own is
+    /// not holding the bytes we authored, so signing a record at our CID would
+    /// point at a block nothing pinned.
     #[test]
-    fn a_dry_run_head_carries_its_own_block_address() {
+    fn a_pin_store_that_reports_another_address_publishes_nothing() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
         let binding = binding();
         let authored = head(&binding);
-        let flighted = preflight(&binding, &READ_KEY, &authored).unwrap();
-        assert_eq!(flighted.cid(), authored.cid);
+        let preflighted = preflight(&binding, &READ_KEY, &authored).expect("dry run");
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        device.http.enqueue_response(HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: br#"{"cid":"bafkreisomeotherblock","size":1}"#.to_vec(),
+        });
+        let signer = Ed25519Signer::from_seed([9u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+
+        let outcome = block_on(publish_record(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &RecordPublishRequest {
+                name: &name,
+                signer: &signer,
+                head: &preflighted,
+                content_cids: Vec::new(),
+                min_current_sequence: None,
+            },
+        ));
+
+        assert_eq!(
+            outcome.unwrap_err(),
+            RecordPublishError::HeadCidMismatch {
+                expected: authored.cid,
+                returned: "bafkreisomeotherblock".to_owned(),
+            }
+        );
+        assert!(
+            device
+                .record_store
+                .record_at(&device.record_store.endpoints()[0], name.as_str())
+                .is_none(),
+            "nothing reached the record plane"
+        );
     }
 
     #[test]

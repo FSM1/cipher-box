@@ -31,13 +31,11 @@ use crate::content::Gateway;
 use crate::entropy::Entropy;
 use crate::facade::{NodeId, NodeKind};
 use crate::net::author::{
-    AuthorError, AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
-    author_scope_root_envelope, new_child,
+    AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope, author_scope_root_envelope,
+    new_child,
 };
 use crate::net::publish::{PublishOutcome, PublishReceipt};
-use crate::net::record_publish::{
-    HeadBinding, PreflightError, RecordPublishRequest, preflight, publish_record,
-};
+use crate::net::record_publish::{HeadBinding, RecordPublishRequest, preflight, publish_record};
 use crate::net::{
     AdoptOutcome, Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, RootAdopter,
     assemble_head_envelope,
@@ -75,9 +73,6 @@ pub(crate) struct DrainReport {
     /// Ops removed as restore residue: already drained on this device, so the
     /// queue that holds them is older than the completion record (#860).
     pub(crate) restore_residue: Vec<OpId>,
-    /// Why the pass stopped early, if it did. FIFO is strict: the op stays
-    /// queued and the next pass retries it.
-    pub(crate) halted: Option<DrainHalt>,
 }
 
 impl DrainReport {
@@ -90,20 +85,11 @@ impl DrainReport {
     }
 }
 
-/// Why a drain pass stopped before the queue was empty.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DrainHalt {
-    /// The op kind has no publisher in this slice.
-    Unsupported,
-    /// Authoring refused to produce the record.
-    Author(AuthorError),
-    /// The pre-publish dry run refused the authored envelope.
-    Preflight(PreflightError),
-    /// The publish itself failed, or landed unconfirmed/lost the CAS race.
-    Publish(String),
-    /// A durable seam or a gate rejection stopped the pass.
-    Seam(String),
-}
+/// A drain pass stopped before the queue was empty. Strict FIFO: the op that
+/// stopped it stays queued and the next tick retries it, so the durable queue
+/// is the record of the failure. Classifying it — dead-letter thresholds,
+/// attempt budgets — is the failure-policy slice's.
+struct Halt;
 
 /// The owner-scope material one drain pass publishes under. Every field is
 /// borrowed from the live session; the drain zeroizes none of it.
@@ -168,19 +154,11 @@ where
     /// applied op it can, stopping at the first it cannot.
     pub(crate) async fn run(&self, scope: &DrainScope<'_>) -> DrainReport {
         let mut report = DrainReport::default();
-        let queued = match self.queued_ops(scope, &mut report).await {
-            Ok(queued) => queued,
-            Err(halt) => {
-                report.halted = Some(halt);
-                return report;
-            }
+        let Ok(queued) = self.queued_ops(scope, &mut report).await else {
+            return report;
         };
-        if let Err(halt) = self.pass(scope, &queued, &mut report).await {
-            report.halted = Some(halt);
-        }
-        if let Err(halt) = self.mark_drained(&queued, &report).await {
-            report.halted.get_or_insert(halt);
-        }
+        let _ = self.pass(scope, &queued, &mut report).await;
+        let _ = self.mark_drained(&queued, &report).await;
         report
     }
 
@@ -189,7 +167,7 @@ where
         scope: &DrainScope<'_>,
         queued: &[(OpId, Op)],
         report: &mut DrainReport,
-    ) -> Result<(), DrainHalt> {
+    ) -> Result<(), Halt> {
         if queued.is_empty() {
             return Ok(());
         }
@@ -232,7 +210,7 @@ where
         &self,
         scope: &DrainScope<'_>,
         report: &mut DrainReport,
-    ) -> Result<Vec<(OpId, Op)>, DrainHalt> {
+    ) -> Result<Vec<(OpId, Op)>, Halt> {
         let raw = self.staging.queued_ops().await.map_err(seam)?;
         let scan = decode_queue(&RecordReader::new(scope.enc_secret), &raw);
         let drained = self
@@ -255,13 +233,13 @@ where
 
     /// The scope root as currently published: its envelope's carried fields and
     /// its unsealed folder body.
-    async fn load_root(&self, scope: &DrainScope<'_>) -> Result<RootState, DrainHalt> {
+    async fn load_root(&self, scope: &DrainScope<'_>) -> Result<RootState, Halt> {
         let record_bytes = self
             .snapshot_cache
             .get(scope.root_name.as_str().as_bytes())
             .await
             .map_err(seam)?
-            .ok_or_else(|| DrainHalt::Seam("no gate-passing root record to publish onto".into()))?;
+            .ok_or(Halt)?;
         let (_sequence, envelope) = assemble_head_envelope(
             self.gateway,
             self.http,
@@ -270,19 +248,15 @@ where
             None,
         )
         .await
-        .map_err(|e| DrainHalt::Seam(format!("root head assembly failed: {e}")))?;
+        .map_err(|_| Halt)?;
         // Encode/decode fail-closed symmetry: this build authors exactly
         // `ENVELOPE_V`, so republishing a newer client's root would silently
         // downgrade `v` — the exact rollback the read-body AAD defends against.
         if envelope.v != ENVELOPE_V {
-            return Err(DrainHalt::Seam(format!(
-                "root envelope v{} is not authorable by this build",
-                envelope.v
-            )));
+            return Err(Halt);
         }
         let read_key = self.node_read_key(scope, &scope.root.0);
-        let body = open_read_body(&envelope, &read_key)
-            .map_err(|e| DrainHalt::Seam(format!("root read body: {}", e.check())))?;
+        let body = open_read_body(&envelope, &read_key).map_err(|_| Halt)?;
         let ReadBody::Folder {
             created_at,
             children,
@@ -290,7 +264,7 @@ where
             ..
         } = body
         else {
-            return Err(DrainHalt::Seam("scope root is not a folder".into()));
+            return Err(Halt);
         };
         Ok(RootState {
             envelope_unknown: envelope.unknown,
@@ -310,7 +284,7 @@ where
         root: &mut RootState,
         applied: &crate::sync::rebase::AppliedOp,
         rebased: &Snapshot,
-    ) -> Result<(), DrainHalt> {
+    ) -> Result<(), Halt> {
         let OpKind::Create {
             parent,
             kind,
@@ -318,18 +292,15 @@ where
             ..
         } = &applied.op.kind
         else {
-            return Err(DrainHalt::Unsupported);
+            return Err(Halt);
         };
         // A deeper parent's own record is not authorable yet: the base snapshot
         // projects the root's direct children only, so there is no gate-passing
         // sub-folder body to re-author onto.
         if *parent != scope.root {
-            return Err(DrainHalt::Unsupported);
+            return Err(Halt);
         }
-        let name = applied
-            .effective_name
-            .clone()
-            .ok_or_else(|| DrainHalt::Seam("a create resolved to no name".into()))?;
+        let name = applied.effective_name.clone().ok_or(Halt)?;
 
         let child_id = applied.op.target;
         let child_name = derive_write_name(scope.write_scope_seed, &child_id.0);
@@ -352,7 +323,7 @@ where
             carried_unknown: Vec::new(),
             carried_epoch_tag_unknown: Vec::new(),
         })
-        .map_err(DrainHalt::Author)?;
+        .map_err(|_| Halt)?;
         let record_bytes = self
             .publish_head(scope, &child_name, &child_id.0, root.epoch, &head)
             .await?;
@@ -369,7 +340,7 @@ where
         adopter
             .adopt(&child_name, &record_bytes)
             .await
-            .map_err(|e| DrainHalt::Seam(format!("child self-adopt rejected: {e}")))?;
+            .map_err(|_| Halt)?;
         self.hold(scope, child_id.0, &child_name, &head, record_bytes);
 
         // Referent published: only now does the parent gain the ref to it.
@@ -385,7 +356,7 @@ where
         scope: &DrainScope<'_>,
         root: &mut RootState,
         modified_at: u64,
-    ) -> Result<(), DrainHalt> {
+    ) -> Result<(), Halt> {
         let read_key = self.node_read_key(scope, &scope.root.0);
         let body = ReadBody::Folder {
             created_at: root.created_at,
@@ -403,7 +374,7 @@ where
             carried_unknown: root.envelope_unknown.clone(),
             carried_epoch_tag_unknown: root.epoch_tag_unknown.clone(),
         })
-        .map_err(DrainHalt::Author)?;
+        .map_err(|_| Halt)?;
         let record_bytes = self
             .publish_head(scope, scope.root_name, &scope.root.0, root.epoch, &head)
             .await?;
@@ -420,7 +391,7 @@ where
         let AdoptOutcome { adopted, .. } = adopter
             .adopt(scope.root_name, &record_bytes)
             .await
-            .map_err(|e| DrainHalt::Seam(format!("root self-adopt rejected: {e}")))?;
+            .map_err(|_| Halt)?;
         // Cached implies gate-passing: these bytes just cleared all six stages.
         self.snapshot_cache
             .put(scope.root_name.as_str().as_bytes(), &record_bytes)
@@ -442,14 +413,14 @@ where
         node_id: &[u8; 16],
         epoch: u64,
         head: &AuthoredHead,
-    ) -> Result<Vec<u8>, DrainHalt> {
+    ) -> Result<Vec<u8>, Halt> {
         let binding = HeadBinding {
             node_id: *node_id,
             scope_id: scope.root.0,
             epoch,
         };
-        let preflighted = preflight(&binding, &self.node_read_key(scope, node_id), head)
-            .map_err(DrainHalt::Preflight)?;
+        let preflighted =
+            preflight(&binding, &self.node_read_key(scope, node_id), head).map_err(|_| Halt)?;
         let signer = SessionIdentity::write_name_signer(scope.write_scope_seed, node_id);
         let PublishReceipt {
             outcome,
@@ -469,18 +440,11 @@ where
             },
         )
         .await
-        .map_err(|e| DrainHalt::Publish(format!("{e:?}")))?;
+        .map_err(|_| Halt)?;
         match outcome {
             PublishOutcome::Published { .. } => Ok(record_bytes),
-            PublishOutcome::Unconfirmed { sequence } => Err(DrainHalt::Publish(format!(
-                "sequence {sequence} published but nothing resolved back"
-            ))),
-            PublishOutcome::LostRace {
-                published_sequence,
-                observed_sequence,
-            } => Err(DrainHalt::Publish(format!(
-                "lost CAS race: published {published_sequence}, observed {observed_sequence}"
-            ))),
+            PublishOutcome::Unconfirmed { .. } => Err(Halt),
+            PublishOutcome::LostRace { .. } => Err(Halt),
         }
     }
 
@@ -508,7 +472,7 @@ where
     }
 
     /// Remove a resolved op from the durable queue.
-    async fn retire_op(&self, op_id: OpId) -> Result<(), DrainHalt> {
+    async fn retire_op(&self, op_id: OpId) -> Result<(), Halt> {
         self.staging.remove_op(op_id).await.map_err(seam)
     }
 
@@ -516,11 +480,7 @@ where
     /// The mark is a high-water line, so it may only pass ops that have all
     /// left the queue: advancing it over a halted op would make a restored data
     /// dir discard that op as residue instead of publishing it (#860).
-    async fn mark_drained(
-        &self,
-        queued: &[(OpId, Op)],
-        report: &DrainReport,
-    ) -> Result<(), DrainHalt> {
+    async fn mark_drained(&self, queued: &[(OpId, Op)], report: &DrainReport) -> Result<(), Halt> {
         let retired: BTreeSet<OpId> = report
             .published
             .iter()
@@ -551,12 +511,12 @@ where
 
     /// A fresh injected seal nonce. Fails closed: a reused nonce under one key
     /// is a confidentiality break, never a degraded mode.
-    fn nonce(&self) -> Result<[u8; 24], DrainHalt> {
+    fn nonce(&self) -> Result<[u8; 24], Halt> {
         let mut nonce = [0u8; 24];
         self.entropy
             .borrow_mut()
             .fill(&mut nonce)
-            .map_err(|e| DrainHalt::Seam(e.message().to_owned()))?;
+            .map_err(|_| Halt)?;
         Ok(nonce)
     }
 }
@@ -576,6 +536,6 @@ fn local_head(head: &AuthoredHead) -> LocalHead {
     }
 }
 
-fn seam(err: crate::seams::SeamError) -> DrainHalt {
-    DrainHalt::Seam(err.message().to_owned())
+fn seam(_: crate::seams::SeamError) -> Halt {
+    Halt
 }
