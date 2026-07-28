@@ -1,0 +1,46 @@
+<task-notification>
+<task-id>ab187985c6e61da00</task-id>
+<tool-use-id>toolu_01JuX46xQAgM1MG7dT79X7PS</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/8267f28c-a642-4499-8ed8-0ab37af2bee1/tasks/ab187985c6e61da00.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify review 861" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Verified the diff, read the full `crates/core/src/kdf/mod.rs`, checked the KAT/generator/property surfaces for hardcoded edge lists, and empirically tested the prettier question.
+
+## Verdict: the slice is tight. No worth-doing-now findings.
+
+### Convention conformance — clean
+The new edge is appended (never inserted) in all seven places that carry catalog order, and each follows the surrounding fourteen exactly:
+- `crates/core/src/kdf/mod.rs:48` context const, `:133-137` `EdgeSpec`, `:230-232` private `_bytes`, `:326-331` public fn, `:469-472` probe row
+- `crates/core/tests/kat_manifest.rs:1973` `ALL_EDGE_NAMES` (the anti-vacuity anchor — correctly updated)
+- `crates/core/kat/manifest.json`, `crates/core/kat/vectors/kdf/edges.json`, `blueprint/core.md:196`
+
+`input_layout` (`ed25519_from_seed(derive_key(ctx, loginSecret[var]))`) accurately describes the code and mirrors `ipns-keypair`'s phrasing. `crates/core/examples/kat_gen.rs` and `crates/core/tests/kdf_props.rs` are fully generic over `EDGES`/`edge_probe_outputs` — no per-edge list was missed.
+
+### `settings_ipns_keypair_bytes` wrapper — justified, do not inline
+Six existing edges have the identical one-line `derive_key` wrapper shape (`read_key_bytes`, `write_key_bytes`, `ipns_keypair_bytes`, `ascent_keypair_bytes`, `enc_subkey_bytes`, `owner_pointer_seed_bytes`, `crates/core/src/kdf/mod.rs:150-182`). The `_bytes` layer is load-bearing, not indirection: `edge_probe_outputs` consumes the raw bytes while the public fn wraps them into the purpose type. Inlining would break that symmetry for one edge only. **Discard.**
+
+### Duplication — correctly left explicit
+The per-edge repetition across `EDGES` / `_bytes` / public fn / probe is the frozen catalog's point (every row is independently readable and diffable, and `kat_manifest.rs` cross-checks all four against a hand-written name list). No helper/macro should absorb it. **Discard.**
+
+### `blueprint/core.md` table re-pad — required, not noise
+Empirically confirmed: appending the row with the original column widths fails `prettier --check`, and `prettier --write` produces byte-identical output to what is committed (verified against the committed lines 170-200). Column 1 must widen regardless — `settings-ipns-keypair` is 21 chars vs. the old 19-char width. **Discard.**
+
+### Comment discipline — no violations
+No absence-justifying prose, no workaround apologia, no happy-path narration. The one substantive new comment (`crates/core/src/kdf/mod.rs:326-328`) states genuine non-obvious rationale (why the login secret and not a write seed) at its home, and I confirmed that rationale appears nowhere in `blueprint/` or `CONTEXT.md`, so a cross-reference is not available.
+
+## Recommendations (both optional)
+
+**1. Marginal — drop the redundant clause in the new doc comment.** `crates/core/src/kdf/mod.rs:326-328` says "from the login secret" and then "Login-secret-derived" in the next sentence. Tighten to one sentence:
+```rust
+/// `settings-ipns-keypair`: the vault settings record's Ed25519 keypair
+/// (→ `ipnsName`), derived from the login secret so the name resolves at cold
+/// start without CipherBox infrastructure.
+```
+Also brings it closer to the one-line doc shape of the other fourteen public fns.
+
+**2. Marginal, reviewer's call — retire the spelled-out edge count from prose.** Five of the diff's lines exist only to bump "fourteen" → "fifteen": `crates/core/src/kdf/mod.rs:3`, `:60`, `:397`, `crates/core/tests/kat_manifest.rs:1950`, `crates/core/tests/kdf_props.rs:3`. The count is already enforced mechanically (`EDGES.len()` vs. `ALL_EDGE_NAMES.len()` vs. `manifest.count`, `kat_manifest.rs:1979-1985`), so the prose number is unenforceable duplication that will churn on every future edge. Rewording to "these edges" / "the catalog's edges" / "the outputs must be pairwise distinct" removes the recurring churn. Counter-argument for leaving it: an explicit number in a *frozen* catalog is a deliberate human tripwire, and the lines are already in the diff either way — so the saving is only for future slices.
+
+**Note (not a finding):** `settings_ipns_keypair` currently has zero consumers outside `crates/core/src/kdf/mod.rs` — every other edge has 6-47 references in `crates/engine`. Expected for a catalog-first slice, but it is dead public API until the settings-record slice wires it; worth confirming that follow-up exists.</result>
+<usage><subagent_tokens>65125</subagent_tokens><tool_uses>13</tool_uses><duration_ms>125392</duration_ms></usage>
+</task-notification>

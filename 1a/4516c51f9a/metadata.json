@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "1a4516c51f9a",
+  "strategy": "manual-commit",
+  "branch": "chore/ship-triage-issue-wiring",
+  "checkpoints_count": 16,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/1a/4516c51f9a/0/metadata.json",
+      "transcript": "/1a/4516c51f9a/0/full.jsonl",
+      "compact_transcript": "/1a/4516c51f9a/0/transcript.jsonl",
+      "content_hash": "/1a/4516c51f9a/0/content_hash.txt",
+      "prompt": "/1a/4516c51f9a/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 226,
+    "cache_creation_tokens": 208799,
+    "cache_read_tokens": 17307696,
+    "output_tokens": 105685,
+    "api_call_count": 113
+  }
+}
