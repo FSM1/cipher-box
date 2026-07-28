@@ -4,7 +4,8 @@
 //! Coverage mirrors api.md surface for surface, over the auth/token surface
 //! that exists server-side today (#624): challenge-signature login and account
 //! identity, refresh rotation with reuse detection, test-login environment
-//! gating + deterministic keypair + cross-consistency with identity login,
+//! gating + deterministic keypair + cross-consistency with identity login, the
+//! production block on the test-profile auth-limit override,
 //! SIWE secondary surface, logout revocation, the pin/name registry and quota,
 //! the mailbox lifecycle, and a raw endpoint round-trip.
 //!
@@ -42,6 +43,21 @@ async fn client_seeded_with(base: &str, refresh_token: &[u8]) -> Client {
     ApiClient::new(ReqwestHttp::new(), store, base)
 }
 
+/// Unwrap an auth-surface call, naming the per-IP throttle explicitly on a 429.
+/// One bucket is shared by every login-shaped route, so exhausting it fails
+/// whichever test happens to log in next — which reads as an unrelated auth
+/// failure unless the diagnostic says otherwise (#837).
+fn expect_auth<T>(what: &str, result: Result<T, ApiError>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(ApiError::Status { status: 429, .. }) => panic!(
+            "{what}: the API rate-limited the suite (429) on the per-IP auth bucket. Raise \
+             THROTTLE_AUTH_LIMIT on the API under test."
+        ),
+        Err(error) => panic!("{what}: {error}"),
+    }
+}
+
 /// A fresh account: a new client logged in with a random identity key, which
 /// implicitly creates the account (challenge-signature first login). Every
 /// contract run mints a brand-new account, so fixed name/CID strings below are
@@ -49,10 +65,10 @@ async fn client_seeded_with(base: &str, refresh_token: &[u8]) -> Client {
 /// CI database.
 async fn fresh_account(base: &str) -> Client {
     let client = new_client(base);
-    client
-        .login_identity(&random_identity_signer())
-        .await
-        .expect("identity login creates the account");
+    expect_auth(
+        "identity login creates the account",
+        client.login_identity(&random_identity_signer()).await,
+    );
     client
 }
 
@@ -95,16 +111,16 @@ async fn challenge_signature_login_creates_and_reuses_the_account() {
     let signer = random_identity_signer();
 
     let first = new_client(&base);
-    let outcome = first.login_identity(&signer).await.expect("identity login");
+    let outcome = expect_auth("identity login", first.login_identity(&signer).await);
     assert!(outcome.is_new_user, "a fresh random key creates an account");
     assert!(first.is_authenticated());
 
     // The same identity key is the same account on a second, independent client.
     let second = new_client(&base);
-    let outcome = second
-        .login_identity(&signer)
-        .await
-        .expect("second identity login");
+    let outcome = expect_auth(
+        "second identity login",
+        second.login_identity(&signer).await,
+    );
     assert!(!outcome.is_new_user, "same identity key is one account");
 }
 
@@ -112,10 +128,10 @@ async fn challenge_signature_login_creates_and_reuses_the_account() {
 async fn refresh_rotates_and_reuse_kills_the_family() {
     let base = require_stack!("refresh_rotates_and_reuse_kills_the_family");
     let (client, store) = client_with_store(&base);
-    client
-        .login_identity(&random_identity_signer())
-        .await
-        .expect("login");
+    expect_auth(
+        "login",
+        client.login_identity(&random_identity_signer()).await,
+    );
 
     let original = store
         .load_refresh_token()
@@ -163,10 +179,7 @@ async fn test_login_gates_the_secret_and_derives_a_stable_keypair() {
 
     // The right secret returns a deterministic keypair.
     let client = new_client(&base);
-    let first = client
-        .test_login(handle, &secret)
-        .await
-        .expect("test login");
+    let first = expect_auth("test login", client.test_login(handle, &secret).await);
     assert_eq!(
         first.public_key.len(),
         66,
@@ -174,10 +187,10 @@ async fn test_login_gates_the_secret_and_derives_a_stable_keypair() {
     );
     assert!(client.is_authenticated());
 
-    let again = new_client(&base)
-        .test_login(handle, &secret)
-        .await
-        .expect("second test login");
+    let again = expect_auth(
+        "second test login",
+        new_client(&base).test_login(handle, &secret).await,
+    );
     assert_eq!(first.public_key, again.public_key, "same handle, same key");
     assert_eq!(&*first.private_key, &*again.private_key);
     assert!(!again.is_new_user, "the account already existed");
@@ -186,10 +199,10 @@ async fn test_login_gates_the_secret_and_derives_a_stable_keypair() {
     // challenge-signature login with it lands on the same account.
     let scalar = hex_to_scalar(&first.private_key).expect("valid private key hex");
     let signer = IdentityChallengeSigner::from_scalar(&scalar).expect("valid scalar");
-    let identity = new_client(&base)
-        .login_identity(&signer)
-        .await
-        .expect("identity login with the test key");
+    let identity = expect_auth(
+        "identity login with the test key",
+        new_client(&base).login_identity(&signer).await,
+    );
     assert!(
         !identity.is_new_user,
         "the test-login keypair is the same account as challenge-signature login"
@@ -217,13 +230,57 @@ async fn test_login_is_hard_blocked_in_production() {
     );
 }
 
+/// The catalog's per-IP auth limit — what production gets whatever
+/// `THROTTLE_AUTH_LIMIT` says (`apps/api/src/ops/throttling.ts`).
+const PRODUCTION_AUTH_LIMIT: usize = 10;
+
+/// The test-profile auth-limit override is hard-blocked in production (#837):
+/// the CI job sets `THROTTLE_AUTH_LIMIT` far above the catalog limit for BOTH
+/// instances, so the production-mode one still throttling inside a catalog
+/// window is the live evidence that no configuration widens a real rate limit.
+/// Malformed bodies on purpose: the throttler runs ahead of validation, so the
+/// bucket fills without touching the auth path.
+#[tokio::test]
+async fn production_ignores_the_test_profile_auth_limit_override() {
+    let Some(prod) = prod_api_url() else {
+        eprintln!(
+            "SKIP production_ignores_the_test_profile_auth_limit_override: set \
+             CONTRACT_API_PROD_URL to a production-mode API instance"
+        );
+        return;
+    };
+    let http = ReqwestHttp::new();
+    let mut statuses = Vec::new();
+    for _ in 0..=PRODUCTION_AUTH_LIMIT {
+        let response = http
+            .send(HttpRequest {
+                method: HttpMethod::Post,
+                url: format!("{prod}/auth/challenge"),
+                headers: vec![("content-type".to_owned(), "application/json".to_owned())],
+                body: Some(b"{}".to_vec()),
+            })
+            .await
+            .expect("challenge request");
+        statuses.push(response.status);
+        if response.status == 429 {
+            break;
+        }
+    }
+
+    assert!(
+        statuses.contains(&429),
+        "production throttled none of {} auth requests, so it honored THROTTLE_AUTH_LIMIT: {statuses:?}",
+        PRODUCTION_AUTH_LIMIT + 1
+    );
+}
+
 #[tokio::test]
 async fn siwe_secondary_surface_is_reachable_and_gated() {
     let base = require_stack!("siwe_secondary_surface_is_reachable_and_gated");
     let client = new_client(&base);
 
     // The nonce endpoint issues a fresh nonce.
-    let nonce = client.siwe_challenge().await.expect("siwe nonce");
+    let nonce = expect_auth("siwe nonce", client.siwe_challenge().await);
     assert!(!nonce.nonce.is_empty(), "a nonce is issued");
 
     // A well-formed-but-unlinked SIWE login is refused (the wallet is not
@@ -249,10 +306,10 @@ async fn siwe_secondary_surface_is_reachable_and_gated() {
 async fn logout_revokes_the_refresh_token_server_side() {
     let base = require_stack!("logout_revokes_the_refresh_token_server_side");
     let (client, store) = client_with_store(&base);
-    client
-        .login_identity(&random_identity_signer())
-        .await
-        .expect("login");
+    expect_auth(
+        "login",
+        client.login_identity(&random_identity_signer()).await,
+    );
     let token = store
         .load_refresh_token()
         .await
@@ -396,11 +453,9 @@ async fn union_liveness_is_per_account_and_permissionless() {
 /// authoritative (`advisory: false`) with a positive limit and gate uploads; a
 /// BYO account's quota is advisory (`advisory: true`, quota always allows) and
 /// its bytes bypass the API entirely — so hosted ingress is REFUSED for a BYO
-/// account rather than pinned off an uncounted row. The upload path pins bytes
-/// to the real CI Kubo and is exercised here rather than in dedicated tests so
-/// the shared per-IP login throttle is not tripped by an extra account. The
-/// contract-suite job sets a tiny 1 KiB QUOTA_DEFAULT_BYTES, so a few hundred
-/// bytes straddle the over-quota limit deterministically.
+/// account rather than pinned off an uncounted row. The contract-suite job sets
+/// a tiny 1 KiB QUOTA_DEFAULT_BYTES, so a few hundred bytes straddle the
+/// over-quota limit deterministically.
 #[tokio::test]
 async fn quota_is_hosted_authoritative_and_byo_advisory() {
     let base = require_stack!("quota_is_hosted_authoritative_and_byo_advisory");
@@ -472,14 +527,14 @@ async fn quota_is_hosted_authoritative_and_byo_advisory() {
 // --- mailbox (blueprint/api.md, Mailbox; #827) ------------------------------
 
 /// An account addressable as a mailbox recipient: the client plus its identity
-/// publicKey. Minted through test-login rather than a fresh identity login so
-/// the mailbox tests add no traffic to the per-IP `/auth/login` bucket.
+/// publicKey. Minted through test-login, whose deterministic per-handle keypair
+/// gives each role a stable recipient address.
 async fn addressable_account(base: &str, handle: &str) -> (Client, String) {
     let client = new_client(base);
-    let outcome = client
-        .test_login(handle, &test_login_secret())
-        .await
-        .expect("test login");
+    let outcome = expect_auth(
+        "test login",
+        client.test_login(handle, &test_login_secret()).await,
+    );
     (client, outcome.public_key)
 }
 

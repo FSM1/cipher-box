@@ -17,7 +17,7 @@ import { Entropy, SystemEntropy } from '../common/entropy';
 import { fakeConfig } from '../testing/fakes';
 import { createHttpIntegrationApp, HttpIntegrationApp } from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
-import { THROTTLE_SURFACES } from './throttling';
+import { resolveAuthLimit } from './throttling';
 
 /**
  * The Ops HTTP surface on a booted app against a throwaway Postgres (#725): the
@@ -62,7 +62,7 @@ describe('ops HTTP surface (real Postgres)', () => {
 
   describe('global throttler with per-surface limits', () => {
     it('returns real 429s on the auth surface once its limit is exhausted', async () => {
-      const limit = THROTTLE_SURFACES.auth.default.limit;
+      const limit = resolveAuthLimit();
       // Invalid bodies on purpose: the guard runs before validation, so within
       // the limit we see 400s, and past it the guard's 429.
       for (let i = 0; i < limit; i += 1) {
@@ -79,7 +79,7 @@ describe('ops HTTP surface (real Postgres)', () => {
     });
 
     it('exempts health and metrics via SkipThrottle', async () => {
-      const beyondLimit = THROTTLE_SURFACES.auth.default.limit + 5;
+      const beyondLimit = resolveAuthLimit() + 5;
       for (let i = 0; i < beyondLimit; i += 1) {
         await request(http()).get('/health').expect(200);
       }
