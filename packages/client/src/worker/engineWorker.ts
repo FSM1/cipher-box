@@ -17,6 +17,7 @@ import { EngineHost } from './engineHost.js';
 import type { EngineWasm } from './engineWasm.js';
 import { serveEngine, type WorkerScopeLike } from './serve.js';
 import type { WorkerMessage } from './protocol.js';
+import { measureStorageHeadroomBytes } from './storageHeadroom.js';
 
 /** The one-shot handshake the leader sends after spawning the worker. */
 export interface EngineWorkerBootstrap extends BrowserSeamsConfig {
@@ -53,7 +54,7 @@ async function bootstrap(config: EngineWorkerBootstrap): Promise<void> {
     const wasm = (await import(/* @vite-ignore */ config.wasmModuleUrl)) as WasmGlue;
     await wasm.default({ module_or_path: config.wasmBinaryUrl });
     const seams = makeBrowserSeams(config);
-    const host = new EngineHost(wasm, seams, config.profile);
+    const host = new EngineHost(wasm, seams, config.profile, await measureStorageHeadroomBytes());
     serveEngine(workerScope as unknown as WorkerScopeLike, host);
   } catch (error) {
     workerScope.postMessage({

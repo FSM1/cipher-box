@@ -15,7 +15,8 @@
 //!
 //! - [`model`] — the working tree (the state law's left operand) and the one
 //!   strict name comparator.
-//! - [`op`] — the intent-op model and its durable-queue codec.
+//! - [`op`] — the intent-op grammar.
+//! - [`record`] — the sealed, owner-tagged durable queue record.
 //! - [`overlay`] — the state law: snapshot ⊕ pending ops → rendered view.
 //! - [`rebase`] — FIFO replay, the five race rules, dead-lettering, and
 //!   dual-link observed repair.
@@ -38,13 +39,14 @@ pub mod overlay;
 pub mod pointer;
 pub(crate) mod project;
 pub mod rebase;
+pub mod record;
 pub mod staging;
 pub mod staleness;
 pub mod tick;
 
 pub use boot::{ColdStartError, ColdStartOutcome, ColdStartParams, RootResolve, cold_start};
 pub use model::{Link, NodeMeta, Snapshot, collation_key, suffix_name};
-pub use op::{Op, OpDecodeError, OpKind};
+pub use op::{Op, OpDecodeError, OpKind, StagedContent};
 pub use overlay::apply_overlay;
 pub use pointer::{
     ConsultReason, PointerError, PointerFetch, SessionRole, VaultPointerAdoption, open_repoint,
@@ -52,8 +54,12 @@ pub use pointer::{
     vault_pointer_name,
 };
 pub use rebase::{
-    AppliedOp, DeadLetterReason, DropReason, HeadReconciliation, OpResolution, Repair,
+    AppliedOp, DeadLetterReason, DropReason, HeadReconciliation, OpResolution, QueueScan, Repair,
     ReplayReport, apply_repairs, decode_queue, observed_repair, rebase_one, reconcile_head, replay,
+};
+pub use record::{
+    OpRecordError, RecordClass, RecordReader, RecordSeal, RetainedReason, encode_op_record,
+    record_content_root_cid,
 };
 pub use staging::{StageOutcome, orphan_staging_keys, stage_op};
 pub use staleness::{Connectivity, classify, withheld_escalation};

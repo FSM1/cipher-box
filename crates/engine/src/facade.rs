@@ -44,13 +44,15 @@ use crate::net::{
 use crate::profile::SyncTimingProfile;
 use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore, UnixMillis};
 use crate::session::SessionIdentity;
+use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
 use crate::sync::op::Op;
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
-use crate::sync::rebase::decode_queue;
+use crate::sync::rebase::{QueueScan, decode_queue};
+use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::staging::{StageOutcome, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
 
@@ -176,6 +178,12 @@ pub struct SnapshotView {
     pub ancestors: Vec<Breadcrumb>,
     /// Every retained dead-lettered op id.
     pub dead_letters: Vec<OpId>,
+    /// How many durable queue entries this session holds but cannot read
+    /// (CONTEXT.md "Retained record"). Deliberately unattributed — it says the
+    /// device is not empty, never whose work it holds — and it exists so an
+    /// over-budget rejection on an apparently empty vault has an explanation
+    /// (#832 §6 residual).
+    pub retained_records: usize,
     /// The staleness rung at read time.
     pub staleness: Staleness,
 }
@@ -755,6 +763,9 @@ pub struct Engine<T: SeamTypes> {
     /// Seeds, nonces, jitter, and command-path node-id minting.
     entropy: Box<dyn Entropy>,
     profile: SyncTimingProfile,
+    /// The measured storage split this device runs under, injected whole at
+    /// construction so no staging read-modify-write queries the host mid-flight.
+    storage_policy: StoragePolicy,
     /// The API base URL the liveness loop's [`ApiClient`] registers renewals
     /// against. Empty until the auth/config slice supplies it; the register-first
     /// renewal is a no-op against an empty base until then.
@@ -815,6 +826,7 @@ impl<T: SeamTypes> Engine<T> {
         seams: SeamSet<T>,
         entropy: Box<dyn Entropy>,
         profile: SyncTimingProfile,
+        storage_policy: StoragePolicy,
         api_base_url: String,
         gateway: GatewayConfig,
     ) -> (Self, EventStream) {
@@ -824,6 +836,7 @@ impl<T: SeamTypes> Engine<T> {
                 seams,
                 entropy,
                 profile,
+                storage_policy,
                 api_base_url,
                 gateway: gateway.into_gateway(),
                 events,
@@ -1021,21 +1034,18 @@ impl<T: SeamTypes> Engine<T> {
             .queued_ops()
             .await
             .map_err(ColdStartError::Seam)?;
-        let (decoded, undecodable) = decode_queue(&raw);
-        let pending: Vec<_> = decoded.into_iter().map(|(_id, op)| op).collect();
+        let scan = decode_queue(&RecordReader::new(session.enc_subkey()), &raw);
+        let pending: Vec<_> = scan.mine.into_iter().map(|(_id, op)| op).collect();
 
         // Surface every undecodable queue entry as `Event::DeadLetter` and drop
-        // its op record from the durable queue so a corrupt/forward-version
-        // entry is not re-decoded and re-emitted on every boot (#768). Staged
-        // upload bytes live in a separate plane keyed by staging keys — never
-        // touched here, so they are retained per the dead-letter contract
-        // (blueprint/engine.md #33 D6).
+        // its op record from the durable queue so a corrupt entry is not
+        // re-decoded and re-emitted on every boot (#768).
         //
         // `DeadLetter` delivery is best-effort over a non-durable in-process
         // channel, so hosts MUST dedup by `op_id`. Gate the durable removal on a
         // successful send: a receiver dropped mid-teardown must not silently
         // purge an unsurfaced entry — preserved, the next boot re-surfaces it.
-        for (op_id, _reason) in &undecodable {
+        for (op_id, _reason) in &scan.undecodable {
             // Retain the dead letter (target unknown for an undecodable entry)
             // so the read surface keeps reporting it.
             self.dead_letters.borrow_mut().insert(*op_id, None);
@@ -1259,6 +1269,9 @@ impl<T: SeamTypes> Engine<T> {
             return Err(EngineError::NotStarted);
         }
         let command_name = command.name();
+        // One clock read per command, journaled on the op: a retried publish
+        // re-mints the same sequence, so authoring time must not be re-read.
+        let authored_at = self.seams.scheduler.now();
         match command {
             Command::Create {
                 parent,
@@ -1276,18 +1289,19 @@ impl<T: SeamTypes> Engine<T> {
                 }
                 let target = self.mint_node_id()?;
                 let base_sequence = self.base_sequence_for(parent).await?;
-                let op = Op::create(target, parent, name, kind, base_sequence, None);
+                let op = Op::create(target, parent, name, kind, base_sequence, authored_at, None);
                 self.stage_and_notify(&op).await
             }
             Command::Delete { node } => {
                 // Both anchors snapshot the target's own sequence for the
                 // conditional-delete rebase rule.
                 let seq = self.base_sequence_for(node).await?;
-                self.stage_and_notify(&Op::delete(node, seq, seq)).await
+                self.stage_and_notify(&Op::delete(node, seq, authored_at, seq))
+                    .await
             }
             Command::Rename { node, new_name } => {
                 let seq = self.base_sequence_for(node).await?;
-                self.stage_and_notify(&Op::rename(node, new_name, seq))
+                self.stage_and_notify(&Op::rename(node, new_name, seq, authored_at))
                     .await
             }
             Command::Relink { node, new_parent } => {
@@ -1297,7 +1311,15 @@ impl<T: SeamTypes> Engine<T> {
                     .unwrap_or(self.snapshot.borrow().root);
                 let base_sequence = rendered.record_sequence(node).unwrap_or(1);
                 // trailing bools: cross_scope=false, exits_granted_source=false — intra-scope pure relink
-                let op = Op::relink(node, from_parent, new_parent, base_sequence, false, false);
+                let op = Op::relink(
+                    node,
+                    from_parent,
+                    new_parent,
+                    base_sequence,
+                    authored_at,
+                    false,
+                    false,
+                );
                 self.stage_and_notify(&op).await
             }
             Command::SiweLogin { message, signature } => {
@@ -1334,7 +1356,8 @@ impl<T: SeamTypes> Engine<T> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
-        let ops = self.pending_ops().await?;
+        let scan = self.scan_queue().await?;
+        let ops: Vec<Op> = scan.mine.into_iter().map(|(_id, op)| op).collect();
         let rendered = {
             let base = self.snapshot.borrow();
             apply_overlay(&base, &ops)
@@ -1390,6 +1413,7 @@ impl<T: SeamTypes> Engine<T> {
             children,
             ancestors,
             dead_letters,
+            retained_records: scan.retained,
             staleness,
         })
     }
@@ -1589,18 +1613,29 @@ impl<T: SeamTypes> Engine<T> {
         Ok(apply_overlay(&base, &ops))
     }
 
-    /// The pending ops from the durable staging store, decoded FIFO. Undecodable
-    /// entries are dropped from the render here; the cold-start path dead-letters
-    /// and removes them from the durable queue.
-    async fn pending_ops(&self) -> Result<Vec<Op>, EngineError> {
+    /// Scan the durable staging store's queue for this session. Undecodable
+    /// entries are dropped from the render here; the cold-start path
+    /// dead-letters and removes them from the durable queue.
+    async fn scan_queue(&self) -> Result<QueueScan, EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let raw = self
             .seams
             .staging_store
             .queued_ops()
             .await
             .map_err(EngineError::from_seam)?;
-        let (decoded, _undecodable) = decode_queue(&raw);
-        Ok(decoded.into_iter().map(|(_id, op)| op).collect())
+        Ok(decode_queue(&RecordReader::new(session.enc_subkey()), &raw))
+    }
+
+    /// This session's pending ops, FIFO.
+    async fn pending_ops(&self) -> Result<Vec<Op>, EngineError> {
+        Ok(self
+            .scan_queue()
+            .await?
+            .mine
+            .into_iter()
+            .map(|(_id, op)| op)
+            .collect())
     }
 
     /// The base sequence to anchor an op at: the target's own record sequence in
@@ -1625,10 +1660,19 @@ impl<T: SeamTypes> Engine<T> {
 
     /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success.
     async fn stage_and_notify(&mut self, op: &Op) -> Result<(), EngineError> {
-        // metadata ops never budget-reject; a rejection means a content op reached this path — fail closed
-        match stage_op(&self.seams.staging_store, &self.profile, op, None)
-            .await
-            .map_err(EngineError::from_seam)?
+        let seal = self.record_seal()?;
+        // Metadata ops queue unbounded, so any rejection here means a content
+        // op reached this path — fail closed rather than report a storage
+        // verdict for a mutation that carries no bytes.
+        match stage_op(
+            &self.seams.staging_store,
+            &self.storage_policy,
+            seal,
+            op,
+            None,
+        )
+        .await
+        .map_err(EngineError::from_seam)?
         {
             StageOutcome::Queued { .. } => {
                 // Best-effort push-invalidation trigger; a dropped receiver
@@ -1636,15 +1680,43 @@ impl<T: SeamTypes> Engine<T> {
                 let _ = self.events.unbounded_send(Event::SnapshotUpdated);
                 Ok(())
             }
-            StageOutcome::RejectedOverBudget { .. } => Err(EngineError::Seam {
-                message: "metadata op unexpectedly rejected over budget".to_owned(),
+            StageOutcome::RejectedOverBudget { .. }
+            | StageOutcome::RejectedStorageUnmeasured { .. } => Err(EngineError::Seam {
+                message: "metadata op unexpectedly rejected by the storage policy".to_owned(),
             }),
         }
+    }
+
+    /// Sealing inputs for one durable op record: the session's enc-subkey
+    /// public half plus a fresh ephemeral scalar. Fails closed on entropy
+    /// failure — a reused HPKE ephemeral is a confidentiality break, never a
+    /// degraded mode.
+    fn record_seal(&mut self) -> Result<RecordSeal, EngineError> {
+        let owner_enc_pub = self
+            .session
+            .as_ref()
+            .ok_or(EngineError::NotStarted)?
+            .enc_subkey_public();
+        let mut ephemeral_scalar = Zeroizing::new([0u8; 32]);
+        self.entropy
+            .fill(ephemeral_scalar.as_mut())
+            .map_err(|e| EngineError::Entropy {
+                message: e.message().to_owned(),
+            })?;
+        Ok(RecordSeal {
+            owner_enc_pub,
+            ephemeral_scalar,
+        })
     }
 
     /// The sync timing profile this engine runs under.
     pub fn profile(&self) -> &SyncTimingProfile {
         &self.profile
+    }
+
+    /// The measured storage split this engine runs under.
+    pub fn storage_policy(&self) -> &StoragePolicy {
+        &self.storage_policy
     }
 }
 
@@ -1682,6 +1754,7 @@ mod tests {
             device.seam_set(),
             Box::new(SeededEntropy::new(42)),
             SyncTimingProfile::CI,
+            StoragePolicy::CI,
             base_url.to_owned(),
             GatewayConfig::disabled(),
         );
@@ -1694,6 +1767,7 @@ mod tests {
             device.seam_set(),
             Box::new(SeededEntropy::new(42)),
             SyncTimingProfile::CI,
+            StoragePolicy::CI,
             String::new(),
             GatewayConfig::disabled(),
         )
@@ -1709,6 +1783,7 @@ mod tests {
             device.seam_set(),
             Box::new(SeededEntropy::new(42)),
             SyncTimingProfile::CI,
+            StoragePolicy::CI,
             String::new(),
             GatewayConfig::disabled(),
         );
@@ -2216,6 +2291,7 @@ mod tests {
             );
             assert!(view.children.iter().all(|c| !c.dead_letter));
             assert!(view.dead_letters.is_empty());
+            assert_eq!(view.retained_records, 0);
             assert!(view.ancestors.is_empty(), "the root has no ancestors");
         }
 
@@ -2243,16 +2319,65 @@ mod tests {
             create(&mut engine, root, "notes.txt", NodeKind::File);
             let node = block_on(engine.snapshot(root)).unwrap().children[0].id;
 
+            let root_cid = cipherbox_core::content::compute_cid(
+                cipherbox_core::content::CONTENT_CID_CODEC,
+                b"bytes",
+            );
+            let seal = engine.record_seal().unwrap();
             block_on(stage_op(
                 &engine.seams.staging_store,
-                &engine.profile,
-                &Op::update_content(node, b"staged".to_vec(), 1),
+                &engine.storage_policy,
+                seal,
+                &Op::update_content(
+                    node,
+                    crate::sync::op::StagedContent {
+                        root_cid,
+                        plaintext_size: 5,
+                    },
+                    1,
+                    crate::seams::UnixMillis(1),
+                ),
                 Some(b"bytes"),
             ))
             .unwrap();
 
             let view = block_on(engine.snapshot(root)).unwrap();
             assert_eq!(view.children[0].pending, PendingClass::Content);
+        }
+
+        #[test]
+        fn a_foreign_queue_entry_is_invisible_but_counted() {
+            let (engine, _events) = started();
+            let root = engine.root();
+            let stranger = cipherbox_core::suite::x25519::X25519Secret::from_scalar([9; 32]);
+            let theirs = crate::sync::record::encode_op_record(
+                RecordSeal {
+                    owner_enc_pub: stranger.public(),
+                    ephemeral_scalar: Zeroizing::new([3; 32]),
+                },
+                &Op::create(
+                    NodeId([7; 16]),
+                    root,
+                    "theirs.txt",
+                    NodeKind::File,
+                    1,
+                    crate::seams::UnixMillis(1),
+                    None,
+                ),
+            )
+            .unwrap();
+            block_on(engine.seams.staging_store.enqueue_op(&theirs)).unwrap();
+
+            let view = block_on(engine.snapshot(root)).unwrap();
+            assert!(
+                view.children.is_empty(),
+                "another account's op never renders"
+            );
+            assert!(view.dead_letters.is_empty(), "and never dead-letters");
+            assert_eq!(
+                view.retained_records, 1,
+                "but the count says the device is not empty"
+            );
         }
 
         #[test]
@@ -2460,6 +2585,7 @@ mod tests {
                 device.seam_set(),
                 Box::new(SeededEntropy::new(42)),
                 SyncTimingProfile::CI,
+                StoragePolicy::CI,
                 String::new(),
                 GatewayConfig::disabled(),
             );
@@ -2627,6 +2753,7 @@ mod tests {
                 device.seam_set(),
                 Box::new(SeededEntropy::new(42)),
                 SyncTimingProfile::CI,
+                StoragePolicy::CI,
                 String::new(),
                 GatewayConfig::disabled(),
             );
@@ -2645,7 +2772,7 @@ mod tests {
         #[test]
         fn undecodable_queue_entry_surfaces_as_dead_letter_on_cold_start() {
             let (mut engine, mut events, pointers) = started_at(UnixMillis(123_456));
-            // A corrupt op record that `Op::decode` rejects.
+            // A corrupt op record whose header does not even read.
             let op_id = block_on(engine.seams.staging_store.enqueue_op(b"not-a-valid-op"))
                 .expect("enqueue");
             assert_eq!(op_id, OpId(1));
@@ -2664,6 +2791,42 @@ mod tests {
                     .unwrap()
                     .is_empty(),
                 "the dead-lettered op is removed from the durable queue"
+            );
+        }
+
+        #[test]
+        fn another_accounts_queued_record_is_invisible_and_survives_cold_start() {
+            let (mut engine, mut events, pointers) = started_at(UnixMillis(123_456));
+            // A well-formed record sealed by a different identity — the shape a
+            // second account meets on a shared browser profile.
+            let stranger = cipherbox_core::suite::x25519::X25519Secret::from_scalar([0xC7; 32]);
+            let theirs = crate::sync::record::encode_op_record(
+                RecordSeal {
+                    owner_enc_pub: stranger.public(),
+                    ephemeral_scalar: Zeroizing::new([0x5A; 32]),
+                },
+                &Op::rename(NodeId([9; 16]), "theirs.txt", 1, UnixMillis(1)),
+            )
+            .expect("seal");
+            block_on(engine.seams.staging_store.enqueue_op(&theirs)).expect("enqueue");
+
+            drive(&mut engine, &pointers);
+
+            assert_eq!(
+                block_on(events.next()),
+                Some(Event::SnapshotUpdated),
+                "no dead letter is raised for a record this account cannot see"
+            );
+            let view = block_on(engine.snapshot(engine.root())).unwrap();
+            assert!(view.dead_letters.is_empty(), "never surfaced");
+            assert!(
+                view.children.iter().all(|c| c.name != "theirs.txt"),
+                "never replayed into the render"
+            );
+            assert_eq!(
+                block_on(engine.seams.staging_store.queued_ops()).unwrap(),
+                vec![(OpId(1), theirs)],
+                "never removed — deleting it would destroy that account's offline work"
             );
         }
 
@@ -2925,6 +3088,7 @@ mod tests {
                 device.seam_set(),
                 Box::new(SeededEntropy::new(42)),
                 SyncTimingProfile::CI,
+                StoragePolicy::CI,
                 String::new(),
                 gateway_config(),
             )

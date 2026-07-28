@@ -6,7 +6,7 @@ use cipherbox_engine::seams::{Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     Command, Engine, EngineError, EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind,
-    Permission, PlaintextContent, SyncTimingProfile,
+    Permission, PlaintextContent, StoragePolicy, SyncTimingProfile,
 };
 
 fn new_engine(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
@@ -14,6 +14,7 @@ fn new_engine(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
         device.seam_set(),
         Box::new(SeededEntropy::new(42)),
         SyncTimingProfile::CI,
+        StoragePolicy::CI,
         String::new(),
         GatewayConfig::disabled(),
     )
@@ -221,6 +222,11 @@ fn the_engine_runs_under_the_injected_profile() {
     let (engine, _events) = new_engine(&device);
 
     assert_eq!(engine.profile(), &SyncTimingProfile::CI);
+    assert_eq!(
+        engine.storage_policy(),
+        &StoragePolicy::CI,
+        "the measured storage split is injected whole, not derived at use"
+    );
 }
 
 #[test]

@@ -37,38 +37,31 @@ pub struct SyncTimingProfile {
     /// Scope-pointer consult interval — polled, not fallback (#38 D4);
     /// bounds the read-only-survivor residual.
     pub pointer_consult_interval: Duration,
-    /// Offline staging budget in bytes: past it, new uploads fail fast;
-    /// metadata ops queue unbounded (#33 D6).
-    pub staging_budget_bytes: u64,
 }
 
 impl SyncTimingProfile {
     /// Shipped policy: TTL 1 minute, 30 s poll (#33 D3).
     ///
-    /// `escalation_window`, `pointer_consult_interval`, and
-    /// `staging_budget_bytes` are placeholders pending the measurement
-    /// process fixed in blueprint/testing.md ("The profile is where
-    /// measured constants land"); each lands as a profile-constant change
-    /// with its measurement linked.
+    /// `escalation_window` and `pointer_consult_interval` are placeholders
+    /// pending the measurement process fixed in blueprint/testing.md ("The
+    /// profile is where measured constants land"); each lands as a
+    /// profile-constant change with its measurement linked.
     pub const PRODUCTION: Self = Self {
         record_ttl: Duration::from_secs(60),
         poll_cadence: Duration::from_secs(30),
         stale_after: Duration::from_secs(90),
         escalation_window: Duration::from_secs(600),
         pointer_consult_interval: Duration::from_secs(30),
-        staging_budget_bytes: 1 << 30,
     };
 
-    /// CI policy: record TTL 1–5 s (small but nonzero), compressed
-    /// cadences, and a small staging budget so budget-exhaustion paths are
-    /// reachable (blueprint/testing.md "The DX hook").
+    /// CI policy: record TTL 1–5 s (small but nonzero) and compressed
+    /// cadences (blueprint/testing.md "The DX hook").
     pub const CI: Self = Self {
         record_ttl: Duration::from_secs(2),
         poll_cadence: Duration::from_secs(1),
         stale_after: Duration::from_secs(3),
         escalation_window: Duration::from_secs(5),
         pointer_consult_interval: Duration::from_secs(1),
-        staging_budget_bytes: 256 * 1024,
     };
 }
 
@@ -120,15 +113,6 @@ mod tests {
             assert!(!profile.stale_after.is_zero());
             assert!(!profile.escalation_window.is_zero());
             assert!(!profile.pointer_consult_interval.is_zero());
-            assert!(profile.staging_budget_bytes > 0);
         }
-    }
-
-    #[test]
-    fn ci_staging_budget_keeps_exhaustion_reachable() {
-        assert!(
-            SyncTimingProfile::CI.staging_budget_bytes <= 1024 * 1024,
-            "CI budget must be small enough to exhaust in a test"
-        );
     }
 }

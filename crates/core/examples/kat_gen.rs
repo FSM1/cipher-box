@@ -33,21 +33,22 @@ use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payloa
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, AscentLink, ChildRef, ChildScopeRef, GrantBlobPayload,
-    GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload, NodeKind,
+    GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload, NodeKind, OP_RECORD_V,
     OverrideSeedPayload, OwnerWriteBlobPayload, Permission, ReadBody, STRUCT_TAG_ASCENT_LINK,
     STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD,
-    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
+    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
     STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob,
     SignedSealed, StructureSigInput, Version, WriteBody, build_aad, decode_ascent_link,
     decode_envelope, decode_grant_blob_payload, decode_grant_set_commitment,
-    decode_history_link_payload, decode_override_seed_payload, decode_owner_write_blob_payload,
-    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope,
-    encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
-    encode_override_seed_payload, encode_owner_write_blob_payload, encode_read_body,
-    encode_write_body, open_ascent_link, open_grant_blob, open_history_link, open_owner_blob,
-    open_owner_write_blob, open_read_body, seal_ascent_link, seal_grant_blob, seal_history_link,
-    seal_owner_blob, seal_owner_write_blob, seal_read_body, sign_grant_set, sign_structure,
-    structure_sig_preimage, verify_grant_set, verify_structure,
+    decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
+    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
+    encode_envelope, encode_grant_blob_payload, encode_grant_set_commitment,
+    encode_history_link_payload, encode_override_seed_payload, encode_owner_write_blob_payload,
+    encode_read_body, encode_write_body, open_ascent_link, open_grant_blob, open_history_link,
+    open_op_record, open_owner_blob, open_owner_write_blob, open_read_body, seal_ascent_link,
+    seal_grant_blob, seal_history_link, seal_op_record, seal_owner_blob, seal_owner_write_blob,
+    seal_read_body, sign_grant_set, sign_structure, structure_sig_preimage, verify_grant_set,
+    verify_structure,
 };
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
@@ -213,6 +214,48 @@ struct Manifest {
     payload: PayloadSection,
     grant: GrantSection,
     content: ContentSection,
+    op_record: OpRecordSection,
+}
+
+// --- Op-record section: the durable local op-queue record, HPKE-to-self under
+// --- the owner's enc subkey with its clear header as the AAD.
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpRecordSection {
+    struct_tag: u8,
+    v: u64,
+    accept: FileCount,
+    reject: RejectSection,
+}
+
+/// An op-record accept vector: the fixed owner enc keypair and injected
+/// ephemeral, the clear header, and the whole record — a re-seal must reproduce
+/// `record` byte-for-byte.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpRecordAcceptVector {
+    name: String,
+    owner_secret: String,
+    owner_public: String,
+    ephemeral_scalar: String,
+    content_root_cid: Option<String>,
+    body: String,
+    record: String,
+}
+
+/// An op-record reject vector: a record that must fail closed when opened under
+/// `ownerSecret`. `keyless` marks the ones `decode_op_record_header` alone must
+/// already refuse — the header read orphan GC performs without a key.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpRecordRejectVector {
+    name: String,
+    owner_secret: String,
+    record: String,
+    keyless: bool,
+    check: String,
+    class: String,
 }
 
 // --- Content section: the content-seal primitive over caller-framed chunks and
@@ -759,6 +802,7 @@ fn main() {
     let payload_dir = vectors_dir.join("payload");
     let grant_dir = vectors_dir.join("grant");
     let content_dir = vectors_dir.join("content");
+    let op_record_dir = vectors_dir.join("op_record");
     for dir in [
         &codec_dir,
         &kdf_dir,
@@ -769,6 +813,7 @@ fn main() {
         &payload_dir,
         &grant_dir,
         &content_dir,
+        &op_record_dir,
     ] {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
     }
@@ -918,6 +963,18 @@ fn main() {
         &content_cid_str_reject,
     );
 
+    let op_record_accept = build_op_record_accept();
+    let op_record_reject = build_op_record_reject();
+
+    write_pretty(
+        &op_record_dir.join("op_record_accept.json"),
+        &op_record_accept,
+    );
+    write_pretty(
+        &op_record_dir.join("op_record_reject.json"),
+        &op_record_reject,
+    );
+
     let manifest = build_manifest(ManifestInputs {
         accept: &accept,
         reject: &reject,
@@ -949,6 +1006,8 @@ fn main() {
         content_cid_reject: &content_cid_reject,
         content_cid_str_accept: &content_cid_str_accept,
         content_cid_str_reject: &content_cid_str_reject,
+        op_record_accept: &op_record_accept,
+        op_record_reject: &op_record_reject,
     });
     write_pretty(&kat_dir.join("manifest.json"), &manifest);
 
@@ -959,8 +1018,8 @@ fn main() {
          {} name-accept, {} name-reject, {} record-accept, {} record-reject, {} record-reput, \
          {} pointer-accept, {} pointer-reject, {} mailbox-accept, {} mailbox-reject, \
          {} grant-family, {} content-seal, {} content-seal-reject, {} content-cid, \
-         {} content-cid-reject, {} content-cid-str-accept, {} content-cid-str-reject \
-         vectors + manifest.json",
+         {} content-cid-reject, {} content-cid-str-accept, {} content-cid-str-reject, \
+         {} op-record-accept, {} op-record-reject vectors + manifest.json",
         accept.len(),
         reject.len(),
         unknown.len(),
@@ -991,6 +1050,8 @@ fn main() {
         content_cid_reject.len(),
         content_cid_str_accept.len(),
         content_cid_str_reject.len(),
+        op_record_accept.len(),
+        op_record_reject.len(),
     );
 }
 
@@ -1747,6 +1808,8 @@ struct ManifestInputs<'a> {
     content_cid_reject: &'a [ContentCidRejectVector],
     content_cid_str_accept: &'a [ContentCidStrAcceptVector],
     content_cid_str_reject: &'a [TextRejectVector],
+    op_record_accept: &'a [OpRecordAcceptVector],
+    op_record_reject: &'a [OpRecordRejectVector],
 }
 
 fn build_manifest(m: ManifestInputs) -> Manifest {
@@ -1926,6 +1989,24 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
         },
         grant: build_grant_section(m.grant),
         content: build_content_section(&m),
+        op_record: OpRecordSection {
+            struct_tag: STRUCT_TAG_OP_RECORD,
+            v: OP_RECORD_V,
+            accept: FileCount {
+                file: "vectors/op_record/op_record_accept.json".to_string(),
+                count: m.op_record_accept.len(),
+            },
+            reject: RejectSection {
+                file: "vectors/op_record/op_record_reject.json".to_string(),
+                count: m.op_record_reject.len(),
+                checks: checks_surface_ordered(
+                    &m.op_record_reject
+                        .iter()
+                        .map(|v| v.check.as_str())
+                        .collect(),
+                ),
+            },
+        },
     }
 }
 
@@ -5462,4 +5543,293 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
         class: "trust".to_string(),
     });
     out
+}
+
+// ===========================================================================
+// Op record: the durable local op-queue record. Sealed HPKE-to-self under a
+// fixed owner enc subkey and a fixed injected ephemeral, so every record is
+// byte-reproducible; the clear header is the AAD, so a header swap fails at the
+// AEAD tag rather than merely mismatching.
+// ===========================================================================
+
+/// The frozen owner enc subkey the op-record vectors seal to, and its scalar.
+fn op_record_owner() -> ([u8; 32], X25519Secret) {
+    let scalar: [u8; 32] = std::array::from_fn(|i| (0x41 + i) as u8);
+    let secret = X25519Secret::from_scalar(scalar);
+    (scalar, secret)
+}
+
+fn op_record_content_root() -> Vec<u8> {
+    compute_cid(CONTENT_CID_CODEC, b"op-record staged root block")
+}
+
+fn build_op_record_accept() -> Vec<OpRecordAcceptVector> {
+    let (scalar, owner) = op_record_owner();
+    vec![
+        op_record_accept_vector(
+            "metadata-op",
+            scalar,
+            &owner,
+            std::array::from_fn(|i| (0x51 + i) as u8),
+            None,
+            b"metadata-op intent bytes",
+        ),
+        op_record_accept_vector(
+            "content-op",
+            scalar,
+            &owner,
+            std::array::from_fn(|i| (0x71 + i) as u8),
+            Some(&op_record_content_root()),
+            b"content-op intent bytes",
+        ),
+    ]
+}
+
+/// Build + self-check one op-record accept vector: the seal is deterministic,
+/// the header reads keylessly, and the open recovers the body.
+fn op_record_accept_vector(
+    name: &str,
+    owner_scalar: [u8; 32],
+    owner: &X25519Secret,
+    eph: [u8; 32],
+    content_root_cid: Option<&[u8]>,
+    body: &[u8],
+) -> OpRecordAcceptVector {
+    let record = seal_op_record(&owner.public(), &eph, content_root_cid, body)
+        .unwrap_or_else(|e| panic!("op-record {name}: seal ({e})"));
+    assert_eq!(
+        seal_op_record(&owner.public(), &eph, content_root_cid, body).unwrap(),
+        record,
+        "op-record {name}: not deterministic"
+    );
+
+    let header = decode_op_record_header(&record)
+        .unwrap_or_else(|e| panic!("op-record {name}: header decode ({e})"));
+    assert_eq!(
+        header.owner_tag,
+        owner.public().to_bytes(),
+        "op-record {name}: owner tag"
+    );
+    assert_eq!(
+        header.content_root_cid.as_deref(),
+        content_root_cid,
+        "op-record {name}: content root cid"
+    );
+
+    let (opened, plaintext) =
+        open_op_record(owner, &record).unwrap_or_else(|e| panic!("op-record {name}: open ({e})"));
+    assert_eq!(opened, header, "op-record {name}: opened header");
+    assert_eq!(&plaintext[..], body, "op-record {name}: body round-trip");
+
+    OpRecordAcceptVector {
+        name: name.to_string(),
+        owner_secret: hexstr(&owner_scalar),
+        owner_public: hexstr(&owner.public().to_bytes()),
+        ephemeral_scalar: hexstr(&eph),
+        content_root_cid: content_root_cid.map(hexstr),
+        body: hexstr(body),
+        record: hexstr(&record),
+    }
+}
+
+/// Re-frame a record through the live encoder — the only way to produce the
+/// header swaps and omissions the seal path itself refuses to emit.
+fn reframe_op_record(record: &[u8], edit: impl FnOnce(&mut Map)) -> Vec<u8> {
+    let value = decode(record).expect("op-record reframe: source decodes");
+    let mut map = value.as_map().expect("op-record reframe: map").clone();
+    edit(&mut map);
+    encode(&Value::Map(map)).expect("op-record reframe: re-encodes")
+}
+
+fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
+    let (scalar, owner) = op_record_owner();
+    let eph: [u8; 32] = std::array::from_fn(|i| (0x91 + i) as u8);
+    let cid = op_record_content_root();
+    let record = seal_op_record(&owner.public(), &eph, Some(&cid), b"reject-probe intent").unwrap();
+
+    let tampered_ciphertext = reframe_op_record(&record, |m| {
+        let mut ct = m.get("ciphertext").unwrap().as_bytes().unwrap().to_vec();
+        ct[0] ^= 0x01;
+        m.insert("ciphertext", Value::Bytes(ct));
+    });
+    let tampered_owner_tag = reframe_op_record(&record, |m| {
+        let mut tag = m.get("ownerTag").unwrap().as_bytes().unwrap().to_vec();
+        tag[0] ^= 0x01;
+        m.insert("ownerTag", Value::Bytes(tag));
+    });
+    let swapped_content_root_cid = reframe_op_record(&record, |m| {
+        let other = compute_cid(CONTENT_CID_CODEC, b"a different staged root block");
+        m.insert("contentRootCid", Value::Bytes(other));
+    });
+    let malformed_content_root_cid = reframe_op_record(&record, |m| {
+        m.insert("contentRootCid", Value::Bytes(b"not a cid".to_vec()));
+    });
+    let missing_owner_tag = reframe_op_record(&record, |m| {
+        m.remove("ownerTag");
+    });
+    // Records from a build ahead of this one. Each still reads keylessly — that
+    // is what lets the engine retain rather than delete them — and each fires
+    // the version gate before any width or framing check this build owns.
+    let forward_version = reframe_op_record(&record, |m| {
+        m.insert("v", Value::Unsigned(OP_RECORD_V + 1));
+    });
+    let forward_version_wide_enc = reframe_op_record(&record, |m| {
+        m.insert("v", Value::Unsigned(OP_RECORD_V + 1));
+        m.insert("enc", Value::Bytes(vec![0x5a; 48]));
+        m.insert("ownerTag", Value::Bytes(vec![0x5b; 48]));
+    });
+    let forward_version_other_cid_framing = reframe_op_record(&record, |m| {
+        m.insert("v", Value::Unsigned(OP_RECORD_V + 1));
+        m.insert("contentRootCid", Value::Bytes(b"a later framing".to_vec()));
+    });
+    // The encoder cannot emit a tag naming a key that does not open the record;
+    // hand-framed, `open_op_record` must still refuse it.
+    let lying_owner_tag = reframe_op_record(&record, |m| {
+        let other = X25519Secret::from_scalar([0x33; 32]).public().to_bytes();
+        m.insert("ownerTag", Value::Bytes(other.to_vec()));
+    });
+    // A sixth key at this version: outside the AAD, so it opens cleanly unless
+    // the five keys are enforced as exhaustive.
+    let unknown_field = reframe_op_record(&record, |m| {
+        m.insert("stash", Value::Bytes(b"unauthenticated".to_vec()));
+    });
+    // A stranger's enc subkey: the owner tag stays readable, the body does not.
+    let stranger_scalar: [u8; 32] = std::array::from_fn(|i| (0x21 + i) as u8);
+
+    vec![
+        op_record_reject_vector(
+            "tampered-ciphertext",
+            scalar,
+            &tampered_ciphertext,
+            "hpke-open-failed",
+            "trust",
+            false,
+        ),
+        op_record_reject_vector(
+            "tampered-owner-tag",
+            scalar,
+            &tampered_owner_tag,
+            "hpke-open-failed",
+            "trust",
+            false,
+        ),
+        op_record_reject_vector(
+            "swapped-content-root-cid",
+            scalar,
+            &swapped_content_root_cid,
+            "hpke-open-failed",
+            "trust",
+            false,
+        ),
+        op_record_reject_vector(
+            "malformed-content-root-cid",
+            scalar,
+            &malformed_content_root_cid,
+            "content-cid-mismatch",
+            "trust",
+            false,
+        ),
+        op_record_reject_vector(
+            "foreign-recipient",
+            stranger_scalar,
+            &record,
+            "hpke-open-failed",
+            "trust",
+            false,
+        ),
+        op_record_reject_vector(
+            "missing-owner-tag",
+            scalar,
+            &missing_owner_tag,
+            "missing-field",
+            "malformed",
+            true,
+        ),
+        op_record_reject_vector(
+            "forward-version",
+            scalar,
+            &forward_version,
+            "unsupported-record-version",
+            "malformed",
+            false,
+        ),
+        op_record_reject_vector(
+            "forward-version-wide-kem-widths",
+            scalar,
+            &forward_version_wide_enc,
+            "unsupported-record-version",
+            "malformed",
+            false,
+        ),
+        op_record_reject_vector(
+            "forward-version-other-cid-framing",
+            scalar,
+            &forward_version_other_cid_framing,
+            "unsupported-record-version",
+            "malformed",
+            false,
+        ),
+        op_record_reject_vector(
+            "lying-owner-tag",
+            scalar,
+            &lying_owner_tag,
+            "hpke-open-failed",
+            "trust",
+            false,
+        ),
+        op_record_reject_vector(
+            "unknown-header-field",
+            scalar,
+            &unknown_field,
+            "unknown-record-field",
+            "malformed",
+            false,
+        ),
+    ]
+}
+
+/// Build + self-check one op-record reject vector. `keyless` is asserted, not
+/// inferred: only the frozen *framing* checks fire on the keyless header read,
+/// because every value-level grammar this build owns runs behind the version
+/// gate so a forward-version record stays readable (and therefore retainable).
+fn op_record_reject_vector(
+    name: &str,
+    opener_scalar: [u8; 32],
+    record: &[u8],
+    check: &str,
+    class: &str,
+    keyless_expected: bool,
+) -> OpRecordRejectVector {
+    let opener = X25519Secret::from_scalar(opener_scalar);
+    let err = match open_op_record(&opener, record) {
+        Err(e) => e,
+        Ok(_) => panic!("op-record reject {name}: open accepted it"),
+    };
+    assert_eq!(err.check(), check, "op-record reject {name}: check ({err})");
+    assert_eq!(err.class(), class, "op-record reject {name}: class ({err})");
+
+    let keyless = match decode_op_record_header(record) {
+        Err(e) => {
+            assert_eq!(
+                e.check(),
+                check,
+                "op-record reject {name}: keyless check ({e})"
+            );
+            true
+        }
+        Ok(_) => false,
+    };
+    assert_eq!(
+        keyless, keyless_expected,
+        "op-record reject {name}: keyless flag"
+    );
+
+    OpRecordRejectVector {
+        name: name.to_string(),
+        owner_secret: hexstr(&opener_scalar),
+        record: hexstr(record),
+        keyless,
+        check: check.to_string(),
+        class: class.to_string(),
+    }
 }

@@ -19,7 +19,8 @@ use std::rc::Rc;
 use async_lock::{Mutex, RwLock};
 use cipherbox_engine::facade::{Engine, EngineError, EventStream, LoginSecret};
 use cipherbox_engine::{
-    Entropy, EntropyError, GatewayConfig, GatewaySource, SeamSet, SeamTypes, SyncTimingProfile,
+    Entropy, EntropyError, GatewayConfig, GatewaySource, SeamSet, SeamTypes, StoragePlatform,
+    StoragePolicy, SyncTimingProfile,
 };
 use js_sys::{Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
@@ -99,6 +100,7 @@ impl EngineHandle {
         accelerator_base_url: Option<String>,
         accelerator_bearer: Option<String>,
         public_gateways: Option<Vec<String>>,
+        storage_headroom_bytes: Option<f64>,
     ) -> Result<EngineHandle, JsError> {
         console_error_panic_hook::set_once();
 
@@ -137,6 +139,22 @@ impl EngineHandle {
             _ => SyncTimingProfile::PRODUCTION,
         };
 
+        // The host measures origin headroom (`navigator.storage.estimate()`
+        // quota minus usage) and hands it in; the split itself is computed here
+        // so one headroom figure yields one budget on every platform. An absent
+        // or nonsensical figure is `UNMEASURED`, not a measured zero: both admit
+        // no upload (there is no floor-up), but only one of them means the
+        // origin is full, and the rejection says which.
+        let storage_policy = match profile {
+            SyncTimingProfile::CI => StoragePolicy::CI,
+            _ => match storage_headroom_bytes {
+                Some(bytes) if bytes.is_finite() && bytes >= 0.0 => {
+                    StoragePolicy::measured(StoragePlatform::WEB, bytes as u64)
+                }
+                _ => StoragePolicy::UNMEASURED,
+            },
+        };
+
         // Dormant until the config slice (E4) supplies real endpoints: with no
         // accelerator base URL and no fallbacks the gateway is empty, and reads
         // fail closed as `Unavailable` (availability, never a trust violation).
@@ -165,6 +183,7 @@ impl EngineHandle {
             seam_set,
             Box::new(GetrandomEntropy),
             profile,
+            storage_policy,
             api_base_url.unwrap_or_default(),
             gateway,
         );

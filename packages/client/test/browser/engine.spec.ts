@@ -61,12 +61,14 @@ test.describe('engine worker host', () => {
     const docs = result.children.find((child) => child.name === 'docs');
     const file = result.children.find((child) => child.name === 'pending.txt');
     expect(docs).toMatchObject({ kind: 'folder', pending: 'metadata', deadLetter: false });
+    // A pending create authors the node's next record, so the overlay stamps
+    // its authored time; size stays absent until the content plane projects it.
     expect(file).toMatchObject({
       kind: 'file',
       pending: 'metadata',
       deadLetter: false,
       sizeNull: true,
-      mtimeNull: true,
+      mtimeNull: false,
     });
 
     // The nested folder's breadcrumb trail ends at the root.

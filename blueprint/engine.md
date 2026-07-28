@@ -78,7 +78,7 @@ by the decomposition (#28 D3) and the rotation design's mandatory-seam rule
 | **Mailbox**           | Post/poll/ack of sealed blobs to/from a recipient pubkey                                                  | API mailbox via the engine's own API client  | Same                          |
 | **RefreshHintSource** | Host-event stream that forces an immediate tick                                                           | Navigation, tab-visibility regain, reconnect | FUSE-op TTL checks, reconnect |
 | **Scheduler**         | Jittered timers, background task execution, wall clock                                                    | Worker timers                                | Tokio                         |
-| **StagingStore**      | Durable op queue + staged upload bytes (profile-scoped budget)                                            | IndexedDB + OPFS                             | Local journal                 |
+| **StagingStore**      | Durable op queue + staged upload bytes (storage-policy budget)                                            | IndexedDB + OPFS                             | Local journal                 |
 | **SnapshotCache**     | Durable last-known-good record/metadata cache backing cache-first reads                                   | IndexedDB                                    | Local store                   |
 | **CredentialStore**   | Refresh-token persistence                                                                                 | No-op (HTTP-only cookie rides the Http seam) | OS keychain                   |
 
@@ -188,7 +188,10 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
 
 - **State law**: rendered state = last-known-good remote snapshot ⊕
   pending-op overlay, single owner; the op queue is the only local divergence
-  (#33 D6).
+  (#33 D6). Every op but a delete authors its target's next record, so the
+  overlay stamps `mtime = authored_at` — overwriting the projected time, not
+  filling it — and a content op also stamps its version's plaintext size,
+  through the one function the drain's publish plan shares.
 - **Focus-window tick**, 30 s with jitter: refresh the vault pointer, the open
   folder, and its full ancestor chain to root; the scope-pointer resolves for
   open shared scopes (#38 D4) and the mailbox poll (#34 D5) ride the same
@@ -196,18 +199,33 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   refreshes on access past the staleness threshold — no background churn over
   the whole tree; cached shared scopes consult their scope pointer on access.
 - **Sync timing profile** (environment-scoped): record TTL, poll cadence,
-  staleness thresholds, offline staging budget, escalation window, and the
-  pointer-consult interval that bounds the read-only-survivor residual
-  (#38 residuals). The profile is the CI-DX hook — dev/CI values make
-  cross-client e2e flows testable at speed (#33 D3).
+  staleness thresholds, escalation window, and the pointer-consult interval
+  that bounds the read-only-survivor residual (#38 residuals). The profile is
+  the CI-DX hook — dev/CI values make cross-client e2e flows testable at speed
+  (#33 D3). It is a _named_ constant set, so measured per-device byte counts
+  live in the storage policy instead.
+- **Storage policy** (device-scoped): the staging budget and the read-cache
+  ceiling, split from a headroom figure the host measures once and injects at
+  construction — never a live host query inside a staging read-modify-write.
+  The cache ceiling comes off headroom before the staging fraction; there is no
+  floor-up, so a small headroom yields a small budget and an honest
+  over-budget rejection. A host that cannot measure headroom at all is a
+  distinct state, not a measured zero: uploads are refused as _unmeasurable_
+  rather than reported as a full device.
 - **Staleness ladder** (#33 D4): fresh → reconciling (quiet indicator) →
   stale (badge + "last synced X ago" after ~3 missed cycles) → offline banner.
   Availability staleness keeps cached views usable indefinitely. Errors are
   exactly two things: trust violations and an empty-cache cold start. Manual
   refresh resolves with nocache semantics everywhere.
 - **Ops**: every mutation is an intent op — `create`, `delete`, `rename`,
-  `relink`, `updateContent` — carrying its base sequence, journaled FIFO in
-  the durable op queue (all mutations, both platforms). An intra-scope
+  `relink`, `updateContent` — carrying its base sequence and its authored
+  time, journaled FIFO in the durable op queue (all mutations, both platforms)
+  as a versioned, owner-tagged record whose intent body seals HPKE-to-self. The
+  queue is per device, not per account, and is shared with whatever build wrote
+  it: a record bearing another identity's tag, or a format version this build
+  does not implement, is **retained** — never replayed, never surfaced, never
+  removed, and its staged bytes stay pinned. Only a record that fails to decode
+  at all is dead-lettered and dropped. An intra-scope
   `relink` is a pure relink; a cross-scope `relink` re-seals the moved subtree
   at the destination scope's epoch, and one that leaves a granted source scope
   is a scope-exit rotation trigger for the source (#26 D1/D7). Replay is FIFO

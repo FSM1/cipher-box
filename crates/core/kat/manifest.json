@@ -50,6 +50,7 @@
     "grant-blob": 3,
     "history-link": 6,
     "mailbox-payload": 8,
+    "op-record": 10,
     "owner-blob": 4,
     "owner-write-blob": 9,
     "pointer-payload": 7,
@@ -432,6 +433,25 @@
       "count": 9,
       "checks": [
         "content-cid-str-malformed"
+      ]
+    }
+  },
+  "opRecord": {
+    "structTag": 10,
+    "v": 2,
+    "accept": {
+      "file": "vectors/op_record/op_record_accept.json",
+      "count": 2
+    },
+    "reject": {
+      "file": "vectors/op_record/op_record_reject.json",
+      "count": 11,
+      "checks": [
+        "hpke-open-failed",
+        "content-cid-mismatch",
+        "missing-field",
+        "unknown-record-field",
+        "unsupported-record-version"
       ]
     }
   }

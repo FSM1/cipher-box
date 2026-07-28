@@ -56,6 +56,7 @@ export interface WasmSnapshotView {
   readonly children: WasmSnapshotChild[];
   readonly ancestors: WasmBreadcrumb[];
   readonly deadLetters: BigUint64Array;
+  readonly retainedRecords: number;
   readonly staleness: number;
 }
 
@@ -70,7 +71,15 @@ export interface WasmEngineHandle {
 
 /** The wasm-bindgen module namespace the worker binds against. */
 export interface EngineWasm {
-  EngineHandle: new (seams: unknown, profile?: string) => WasmEngineHandle;
+  EngineHandle: new (
+    seams: unknown,
+    profile?: string,
+    apiBaseUrl?: string,
+    acceleratorBaseUrl?: string,
+    acceleratorBearer?: string,
+    publicGateways?: string[],
+    storageHeadroomBytes?: number
+  ) => WasmEngineHandle;
   NodeId: { fromBytes(bytes: Uint8Array): WasmNodeId };
   Command: {
     create(parent: WasmNodeId, name: string, kind: number, content?: Uint8Array): WasmCommand;

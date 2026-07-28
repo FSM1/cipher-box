@@ -16,15 +16,16 @@ pub mod aad;
 pub mod body;
 pub mod envelope;
 pub mod grant;
+pub mod op_record;
 pub mod section;
 pub mod structure;
 pub mod write_body;
 
 pub use aad::{
     AAD_DOMAIN, AadContext, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
-    STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
-    STRUCT_TAG_POINTER_PAYLOAD, STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS,
-    StructTagSpec, build_aad,
+    STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_POINTER_PAYLOAD, STRUCT_TAG_READ_BODY,
+    STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructTagSpec, build_aad,
 };
 pub use body::{
     ChildRef, NodeKind, ReadBody, Version, decode_read_body, encode_read_body, name_cmp,
@@ -43,6 +44,9 @@ pub use grant::{
     open_grant_blob, open_history_link, open_owner_blob, open_owner_write_blob, seal_ascent_link,
     seal_grant_blob, seal_history_link, seal_owner_blob, seal_owner_write_blob, sign_grant_set,
     verify_grant_set,
+};
+pub use op_record::{
+    OP_RECORD_V, OpRecordHeader, decode_op_record_header, open_op_record, seal_op_record,
 };
 pub use section::{
     GrantSection, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob,

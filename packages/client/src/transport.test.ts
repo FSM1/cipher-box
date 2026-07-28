@@ -143,6 +143,7 @@ describe('LocalTransport', () => {
     const result: SnapshotDescriptor = {
       ...emptySnapshot(folder),
       deadLetters: [1n],
+      retainedRecords: 0,
       staleness: 'stale',
     };
     worker.emit({ type: 'response', id: message.id, ok: true, result });

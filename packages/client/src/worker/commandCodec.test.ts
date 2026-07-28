@@ -95,6 +95,7 @@ describe('readSnapshot', () => {
       ],
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],
       deadLetters: new BigUint64Array([9n, 9_007_199_254_740_993n]),
+      retainedRecords: 2,
       staleness: 1,
     };
 
@@ -135,6 +136,7 @@ describe('readSnapshot', () => {
       ],
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],
       deadLetters: [9n, 9_007_199_254_740_993n],
+      retainedRecords: 2,
       staleness: 'reconciling',
     });
   });
@@ -146,6 +148,7 @@ describe('readSnapshot', () => {
       children: [],
       ancestors: [],
       deadLetters: new BigUint64Array(0),
+      retainedRecords: 0,
       staleness: 0,
     };
     expect(() => readSnapshot(fakeWasm, { ...base, staleness: 42 })).toThrow(

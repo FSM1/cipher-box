@@ -17,19 +17,62 @@ use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
+use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
+use cipherbox_core::suite::x25519::X25519Secret;
+use cipherbox_engine::StoragePolicy;
 use cipherbox_engine::gate::floor;
 use cipherbox_engine::profile::SyncTimingProfile;
 use cipherbox_engine::seams::{SeamResult, StagingStore, UnixMillis};
 use cipherbox_engine::sync::model::NodeMeta;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
-    self, Connectivity, DeadLetterReason, DropReason, Op, OpResolution, PointerFetch, SessionRole,
-    Snapshot, StageOutcome, apply_repairs, classify, decode_queue, observed_repair, rebase_one,
-    replay, resolve_vault_pointer, stage_op, withheld_escalation,
+    self, Connectivity, DeadLetterReason, DropReason, Op, OpResolution, PointerFetch, RecordReader,
+    RecordSeal, SessionRole, Snapshot, StageOutcome, StagedContent, apply_repairs, classify,
+    decode_queue, observed_repair, rebase_one, replay, resolve_vault_pointer, stage_op,
+    withheld_escalation,
 };
 use cipherbox_engine::testkit::fakes::{InMemoryFloorStore, InMemoryStagingStore};
 use cipherbox_engine::testkit::{SeededEntropy, block_on};
 use cipherbox_engine::{NodeId, NodeKind, Staleness};
+use zeroize::Zeroizing;
+
+/// Journal time for ops whose narrative does not turn on it.
+const AT: UnixMillis = UnixMillis(0);
+
+/// The device owner whose enc subkey tags and seals every record here.
+fn owner() -> X25519Secret {
+    X25519Secret::from_scalar([9; 32])
+}
+
+/// Sealing inputs for one record; `nonce` keeps each ephemeral distinct.
+fn seal(who: &X25519Secret, nonce: u8) -> RecordSeal {
+    RecordSeal {
+        owner_enc_pub: who.public(),
+        ephemeral_scalar: Zeroizing::new([nonce; 32]),
+    }
+}
+
+/// A staging budget with everything else at CI defaults.
+fn budget(bytes: u64) -> StoragePolicy {
+    StoragePolicy {
+        staging_budget_bytes: bytes,
+        ..StoragePolicy::CI
+    }
+}
+
+/// The content address a staged root block is keyed by.
+fn root_cid(marker: &[u8]) -> Vec<u8> {
+    compute_cid(CONTENT_CID_CODEC, marker)
+}
+
+/// The staged content for an upload of `marker` — its root CID and its
+/// plaintext length.
+fn staged(marker: &[u8]) -> StagedContent {
+    StagedContent {
+        root_cid: root_cid(marker),
+        plaintext_size: marker.len() as u64,
+    }
+}
 
 fn id(b: u8) -> NodeId {
     NodeId([b; 16])
@@ -55,7 +98,7 @@ fn race_1_delete_vs_concurrent_edit_edit_wins() {
     base.node_mut(id(1)).unwrap().record_sequence = 6;
     let local = base.clone();
 
-    let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, 3));
+    let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3));
     assert_eq!(res, OpResolution::Dropped(DropReason::TargetAdvanced));
     assert!(
         base.contains(id(1)),
@@ -75,7 +118,7 @@ fn race_1_reverse_edit_resurrects_a_concurrently_deleted_node() {
     let res = rebase_one(
         &mut working,
         &local,
-        &Op::update_content(id(1), b"v2".to_vec(), 1),
+        &Op::update_content(id(1), staged(b"v2"), 1, AT),
     );
     assert!(matches!(res, OpResolution::Applied { .. }));
     assert!(
@@ -93,7 +136,7 @@ fn race_2_rename_vs_rename_serialized_by_parent_cas_higher_writer_wins() {
     base.node_mut(id(1)).unwrap().name = "other.txt".into();
     let local = base.clone();
 
-    let res = rebase_one(&mut base, &local, &Op::rename(id(1), "mine.txt", 1));
+    let res = rebase_one(&mut base, &local, &Op::rename(id(1), "mine.txt", 1, AT));
     assert!(matches!(
         res,
         OpResolution::Applied {
@@ -115,7 +158,7 @@ fn race_3_add_vs_add_name_collision_auto_suffixes_the_loser() {
     let res = rebase_one(
         &mut base,
         &local,
-        &Op::create(id(2), id(0), "a.txt", NodeKind::File, 1, None),
+        &Op::create(id(2), id(0), "a.txt", NodeKind::File, 1, AT, None),
     );
     assert_eq!(
         res,
@@ -138,7 +181,7 @@ fn race_4_move_dest_first_then_presence_conditional_source_remove() {
     let res = rebase_one(
         &mut base,
         &local,
-        &Op::relink(id(2), id(0), id(1), 1, false, false),
+        &Op::relink(id(2), id(0), id(1), 1, AT, false, false),
     );
     assert!(matches!(res, OpResolution::Applied { .. }));
     assert_eq!(base.parent_of(id(2)), Some(id(1)), "dest-linked");
@@ -163,7 +206,7 @@ fn race_4_move_race_loser_undoes_its_dest_add() {
     let res = rebase_one(
         &mut base,
         &local,
-        &Op::relink(id(3), id(0), id(1), 1, false, false),
+        &Op::relink(id(3), id(0), id(1), 1, AT, false, false),
     );
     assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
     assert_eq!(
@@ -202,29 +245,32 @@ fn race_5_dual_link_observed_repair_uses_the_link_counter() {
 #[test]
 fn offline_queue_replays_fifo_onto_gate_passing_state() {
     let store = InMemoryStagingStore::default();
-    let profile = SyncTimingProfile::CI;
+    let me = owner();
 
     block_on(async {
         // Offline: journal a create, a rename, and a colliding create.
         let ops = [
-            Op::create(id(1), id(0), "notes.txt", NodeKind::File, 1, None),
-            Op::rename(id(1), "notes-v2.txt", 1),
-            Op::create(id(2), id(0), "notes-v2.txt", NodeKind::File, 1, None), // will collide
+            Op::create(id(1), id(0), "notes.txt", NodeKind::File, 1, AT, None),
+            Op::rename(id(1), "notes-v2.txt", 1, AT),
+            Op::create(id(2), id(0), "notes-v2.txt", NodeKind::File, 1, AT, None), // will collide
         ];
-        for op in &ops {
+        for (n, op) in ops.iter().enumerate() {
             assert!(matches!(
-                stage_op(&store, &profile, op, None).await.unwrap(),
+                stage_op(&store, &budget(0), seal(&me, n as u8), op, None)
+                    .await
+                    .unwrap(),
                 StageOutcome::Queued { .. }
             ));
         }
 
         // Reconnect: decode the durable journal and replay onto fresh state.
         let raw = store.queued_ops().await.unwrap();
-        let (decoded, undecodable) = decode_queue(&raw);
-        assert!(undecodable.is_empty());
+        let scan = decode_queue(&RecordReader::new(&me), &raw);
+        assert!(scan.undecodable.is_empty());
+        assert_eq!(scan.retained, 0);
 
         let base = Snapshot::new(id(0));
-        let report = replay(&base, &base, &decoded);
+        let report = replay(&base, &base, &scan.mine);
 
         assert_eq!(report.applied.len(), 3, "every op replayed in FIFO order");
         assert_eq!(report.rebased.node(id(1)).unwrap().name, "notes-v2.txt");
@@ -241,10 +287,8 @@ fn offline_queue_replays_fifo_onto_gate_passing_state() {
 #[test]
 fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
     let store = InMemoryStagingStore::default();
-    let profile = SyncTimingProfile {
-        staging_budget_bytes: 1 << 20,
-        ..SyncTimingProfile::CI
-    };
+    let me = owner();
+    let staged_root = staged(b"sealed-bytes");
 
     block_on(async {
         // Offline: create a file inside a granted folder (id 5), staging its bytes.
@@ -254,12 +298,19 @@ fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
             "secret.txt",
             NodeKind::File,
             1,
-            Some(b"stage-key".to_vec()),
+            AT,
+            Some(staged_root.clone()),
         );
         assert!(matches!(
-            stage_op(&store, &profile, &op, Some(b"plaintext-bytes"))
-                .await
-                .unwrap(),
+            stage_op(
+                &store,
+                &budget(1 << 20),
+                seal(&me, 1),
+                &op,
+                Some(b"sealed-bytes")
+            )
+            .await
+            .unwrap(),
             StageOutcome::Queued { .. }
         ));
 
@@ -267,8 +318,8 @@ fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
         // gate-passing state entirely.
         let gate_passing = Snapshot::new(id(0)); // no id(5)
         let raw = store.queued_ops().await.unwrap();
-        let (decoded, _) = decode_queue(&raw);
-        let report = replay(&gate_passing, &gate_passing, &decoded);
+        let scan = decode_queue(&RecordReader::new(&me), &raw);
+        let report = replay(&gate_passing, &gate_passing, &scan.mine);
 
         // The op terminally dead-letters — nothing silently dropped.
         assert_eq!(report.applied.len(), 0);
@@ -278,8 +329,8 @@ fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
         // The staged bytes are preserved (the caller does NOT GC a dead-letter's
         // bytes — the user can still recover them).
         assert_eq!(
-            store.staged_bytes(b"stage-key").await.unwrap(),
-            Some(b"plaintext-bytes".to_vec()),
+            store.staged_bytes(&staged_root.root_cid).await.unwrap(),
+            Some(b"sealed-bytes".to_vec()),
             "staged bytes survive the dead-letter"
         );
     });
@@ -292,17 +343,28 @@ fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
 #[test]
 fn staging_budget_fails_fast_on_uploads_but_metadata_queues_unbounded() {
     let store = InMemoryStagingStore::default();
-    let profile = SyncTimingProfile {
-        staging_budget_bytes: 8,
-        ..SyncTimingProfile::CI
-    };
+    let me = owner();
     block_on(async {
         // A 9-byte upload past the 8-byte budget fails fast — nothing staged.
-        let upload = Op::create(id(1), id(0), "big", NodeKind::File, 1, Some(b"k".to_vec()));
+        let upload = Op::create(
+            id(1),
+            id(0),
+            "big",
+            NodeKind::File,
+            1,
+            AT,
+            Some(staged(b"nine byte")),
+        );
         assert!(matches!(
-            stage_op(&store, &profile, &upload, Some(b"nine byte"))
-                .await
-                .unwrap(),
+            stage_op(
+                &store,
+                &budget(8),
+                seal(&me, 1),
+                &upload,
+                Some(b"nine byte")
+            )
+            .await
+            .unwrap(),
             StageOutcome::RejectedOverBudget { .. }
         ));
         assert_eq!(store.staged_bytes_total().await.unwrap(), 0);
@@ -310,9 +372,15 @@ fn staging_budget_fails_fast_on_uploads_but_metadata_queues_unbounded() {
         // Metadata ops still queue past the exhausted budget.
         for i in 10..20 {
             assert!(matches!(
-                stage_op(&store, &profile, &Op::rename(id(i), "n", 1), None)
-                    .await
-                    .unwrap(),
+                stage_op(
+                    &store,
+                    &budget(8),
+                    seal(&me, i),
+                    &Op::rename(id(i), "n", 1, AT),
+                    None
+                )
+                .await
+                .unwrap(),
                 StageOutcome::Queued { .. }
             ));
         }
@@ -563,8 +631,8 @@ fn state_law_renders_the_snapshot_plus_the_pending_overlay() {
 
     // Two pending ops not yet confirmed by the network.
     let pending = [
-        Op::create(id(2), id(0), "pending.txt", NodeKind::File, 1, None),
-        Op::rename(id(1), "renamed.txt", 1),
+        Op::create(id(2), id(0), "pending.txt", NodeKind::File, 1, AT, None),
+        Op::rename(id(1), "renamed.txt", 1, AT),
     ];
     let view = sync::apply_overlay(&base, &pending);
 

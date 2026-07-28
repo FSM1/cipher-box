@@ -124,7 +124,7 @@ const BASE32_ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 /// `version=1`, a single-byte multicodec (`< 0x80`, engine-owned #630), the
 /// BLAKE3 multihash code, and the 32-byte digest length. The invariant both the
 /// encoder guards (release-active) and the decoder rejects on, kept symmetric.
-fn is_wellformed_content_cid(cid: &[u8]) -> bool {
+pub fn is_wellformed_content_cid(cid: &[u8]) -> bool {
     cid.len() == CONTENT_CID_LEN
         && cid[0] == CID_VERSION
         && cid[CID_CODEC_INDEX] < 0x80
