@@ -9,3 +9,8 @@ publish.workspace = true
 
 [dependencies]
 cipherbox-engine.workspace = true
+
+[dev-dependencies]
+# The vfs suite drives a real engine over the in-memory seam fakes and the
+# virtual clock — no kernel, no network, no wall clock.
+cipherbox-engine = { workspace = true, features = ["test-kit"] }
