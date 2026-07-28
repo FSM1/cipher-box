@@ -18,7 +18,7 @@
 
 use core::cell::RefCell;
 
-use cipherbox_core::content::decode_content_cid_str;
+use cipherbox_core::content::{decode_content_cid_str, verify_cid};
 use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
@@ -63,6 +63,8 @@ pub struct RootAdopter<'a, H, F> {
     /// equal-floor `Current` recovery ([`Adopter::recover_own_write_seed`])
     /// reuses it instead of re-fetching the same head block per resolve tick.
     assembled: RefCell<Option<Candidate>>,
+    /// A head block the caller already holds ([`Self::hold_local_head`]).
+    local_head: RefCell<Option<LocalHead>>,
 }
 
 impl<'a, H, F> RootAdopter<'a, H, F> {
@@ -84,7 +86,15 @@ impl<'a, H, F> RootAdopter<'a, H, F> {
             owner_identity,
             root_scope_id,
             assembled: RefCell::new(None),
+            local_head: RefCell::new(None),
         }
+    }
+
+    /// Supply a head block the caller already holds, so a self-adopt of our own
+    /// just-published record skips the fetch. The CID the signed record anchors
+    /// still decides: a block that does not match it is ignored.
+    pub fn hold_local_head(&self, head: LocalHead) {
+        *self.local_head.borrow_mut() = Some(head);
     }
 }
 
@@ -100,8 +110,10 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     ) -> Result<Candidate, GateError> {
         // Steps 1-4 are the shared head-envelope assembly; the sequence is
         // discarded — the gate re-verifies the record from scratch.
+        let local = self.local_head.borrow().clone();
         let (_sequence, envelope) =
-            assemble_head_envelope(self.gateway, self.http, name, record_bytes).await?;
+            assemble_head_envelope(self.gateway, self.http, name, record_bytes, local.as_ref())
+                .await?;
 
         // Step 5 — decode the grant section.
         let section_bytes = grant_section_bytes(&envelope).ok_or_else(|| {
@@ -279,15 +291,28 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     }
 }
 
+/// A head block the caller already holds — the write path's own just-uploaded
+/// block. Supplying it lets a self-adopt skip the fetch (never the gate): the
+/// block is still checked against the CID the signed record anchors, so a
+/// mismatched local head falls back to the network rather than being trusted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalHead {
+    /// The block's content CID, as the record `Value` spells it.
+    pub cid: String,
+    /// The head block bytes.
+    pub block: Vec<u8>,
+}
+
 /// The head-envelope assembly shared by both adopters: verify the record to
 /// read its signed `/ipfs/<cid>` head anchor (trust is the gate's — this only
-/// extracts the anchor), fetch the head block fail-closed on a CID mismatch,
-/// and decode the envelope. Returns the verified record sequence alongside it.
-pub(super) async fn assemble_head_envelope<H: Http>(
+/// extracts the anchor), take the head block fail-closed on a CID mismatch, and
+/// decode the envelope. Returns the verified record sequence alongside it.
+pub(crate) async fn assemble_head_envelope<H: Http>(
     gateway: &Gateway,
     http: &H,
     name: &IpnsName,
     record_bytes: &[u8],
+    local: Option<&LocalHead>,
 ) -> Result<(u64, Envelope), GateError> {
     let verified = IpnsRecord::unmarshal(record_bytes)
         .and_then(|record| record.verify(name))
@@ -297,9 +322,15 @@ pub(super) async fn assemble_head_envelope<H: Http>(
         .ok_or_else(|| assembly_reject(Malformed::ContentCidStrMalformed.into()))?;
     let expected_cid = decode_content_cid_str(&cid_str).map_err(assembly_reject)?;
 
-    let block = read_block(gateway, http, &cid_str, &expected_cid, ContentPlane::Root)
-        .await
-        .map_err(map_read_error)?;
+    let block = match local.filter(|held| held.cid == cid_str) {
+        Some(held) => {
+            verify_cid(&expected_cid, &held.block).map_err(assembly_reject)?;
+            held.block.clone()
+        }
+        None => read_block(gateway, http, &cid_str, &expected_cid, ContentPlane::Root)
+            .await
+            .map_err(map_read_error)?,
+    };
 
     let envelope = decode_envelope(&block).map_err(assembly_reject)?;
     Ok((verified.sequence, envelope))

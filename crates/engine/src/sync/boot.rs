@@ -128,6 +128,11 @@ pub struct ColdStartOutcome {
     /// blob; `None` when nothing adopted. The engine deposits it in its
     /// in-memory per-scope seed cell (never persisted).
     pub read_scope_seed: Option<Zeroizing<[u8; 32]>>,
+    /// The (node id, scope write seed) the same adopt recovered from the
+    /// owner-write-blob; `None` when nothing adopted or the root is held
+    /// keyless. The drain derives every new node's name and per-name signer
+    /// from it (never persisted).
+    pub write_scope_seed: Option<([u8; 16], Zeroizing<[u8; 32]>)>,
 }
 
 impl core::fmt::Debug for ColdStartOutcome {
@@ -141,6 +146,10 @@ impl core::fmt::Debug for ColdStartOutcome {
             .field(
                 "read_scope_seed",
                 &self.read_scope_seed.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "write_scope_seed",
+                &self.write_scope_seed.as_ref().map(|_| "<redacted>"),
             )
             .finish()
     }
@@ -194,6 +203,7 @@ where
             base,
             rendered,
             read_scope_seed: None,
+            write_scope_seed: None,
         });
     };
 
@@ -216,6 +226,7 @@ where
     let GatedResolve {
         resolved,
         read_scope_seed,
+        hold: write_scope_seed,
         ..
     } = resolve_gated(
         transport,
@@ -251,6 +262,7 @@ where
         base,
         rendered,
         read_scope_seed,
+        write_scope_seed,
     })
 }
 

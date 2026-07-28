@@ -254,13 +254,29 @@ pub(crate) struct HeldMaterial {
     pub content_cids: Vec<String>,
 }
 
+/// What [`resolve_and_hold`] produced: the public resolve result plus the
+/// transient scope material a gate-passing adopt recovered. Kept off the public
+/// [`Resolved`] so no seed ever rides the facade-visible surface.
+pub(crate) struct HeldResolve {
+    /// The public resolve result.
+    pub(crate) resolved: Resolved,
+    /// The scope read seed the child read pipeline derives per-node read keys
+    /// from.
+    pub(crate) read_scope_seed: Option<Zeroizing<[u8; 32]>>,
+    /// The (node id, scope write seed) the drain derives new names and per-name
+    /// signers from.
+    pub(crate) write_scope_seed: Option<AdoptHold>,
+}
+
 /// [`resolve`] a name, then hold it for liveness **iff** it passed the gate:
 /// on [`ResolveOutcome::Adopted`], insert (replacing any prior entry for the
 /// same node) a [`HeldRecord`] so the keyless re-PUT loop keeps it alive. Only a
 /// gate-passing record enters the set — a `TrustViolation`/`NoUpdate` never
 /// does (blueprint/engine.md "Liveness": never re-PUT a stale record).
-/// Additionally surfaces the recovered scope read seed (see
-/// [`AdoptOutcome::read_scope_seed`]) for the tick driver's deposit.
+/// Additionally surfaces the scope seeds a gate-passing adopt recovered (see
+/// [`AdoptOutcome::read_scope_seed`]) for the tick driver's deposit — the write
+/// seed among them, because the drain derives every new node's name and signer
+/// from it.
 pub(crate) async fn resolve_and_hold<T, S, A>(
     transport: &T,
     snapshot_cache: &S,
@@ -268,7 +284,7 @@ pub(crate) async fn resolve_and_hold<T, S, A>(
     name: &IpnsName,
     held: &RefCell<HeldRecords>,
     material: &HeldMaterial,
-) -> Result<(Resolved, Option<Zeroizing<[u8; 32]>>), SeamError>
+) -> Result<HeldResolve, SeamError>
 where
     T: RecordTransport,
     S: SnapshotCache,
@@ -280,6 +296,12 @@ where
         held_bytes,
         read_scope_seed,
     } = resolve_gated(transport, snapshot_cache, adopter, name).await?;
+    let write_scope_seed = adopt_hold.clone();
+    let done = |resolved| HeldResolve {
+        resolved,
+        read_scope_seed,
+        write_scope_seed,
+    };
     // A gate-passing adopt (`Adopted`) and our own current record (`Current`)
     // are both alive-worthy and ride their verified bytes back here; a
     // `TrustViolation`/`NoUpdate` holds nothing (blueprint/engine.md "Liveness").
@@ -294,7 +316,7 @@ where
             .ok()
             .and_then(|verified| head_cid_from_value(&verified.value))
         else {
-            return Ok((resolved, read_scope_seed));
+            return Ok(done(resolved));
         };
         // The renewal (node id, write seed) comes from the gate for a write
         // grantee, else from the caller for an own-scope record. No seed on
@@ -306,7 +328,7 @@ where
                 .as_ref()
                 .map(|seed| (material.node_id, seed.clone()))
         }) else {
-            return Ok((resolved, read_scope_seed));
+            return Ok(done(resolved));
         };
         // Derive the narrow per-name signer once from the transient seed and hold
         // only it — the seed drops at this scope's end. Fail-closed encode-side
@@ -315,7 +337,7 @@ where
         // the hold rather than store a mismatched signer.
         let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
         if IpnsName::from_public_key(&signer.verifying_key()) != *name {
-            return Ok((resolved, read_scope_seed));
+            return Ok(done(resolved));
         }
         // Content re-pin on renewal is a deferred slice; the record still
         // republishes validly under its head CID (only re-pinning is deferred).
@@ -330,7 +352,7 @@ where
             },
         );
     }
-    Ok((resolved, read_scope_seed))
+    Ok(done(resolved))
 }
 
 /// Fold a completed resolve's verdict into the shared base cell. A gate-passing

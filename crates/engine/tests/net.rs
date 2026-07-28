@@ -375,7 +375,7 @@ fn publish_registers_first_embeds_sequence_one_and_confirms() {
     ))
     .expect("publish");
 
-    assert_eq!(outcome, PublishOutcome::Published { sequence: 1 });
+    assert_eq!(outcome.outcome, PublishOutcome::Published { sequence: 1 });
     assert_all_endpoints_at(&world.record_store, &name, 1);
 
     // The register call went out (register-first ordering), to the registry.
@@ -418,7 +418,7 @@ fn publish_cas_embeds_the_exact_expected_sequence_floor_plus_one() {
     ))
     .expect("publish");
 
-    assert_eq!(outcome, PublishOutcome::Published { sequence: 4 });
+    assert_eq!(outcome.outcome, PublishOutcome::Published { sequence: 4 });
     assert_all_endpoints_at(&world.record_store, &name, 4);
 }
 
@@ -561,7 +561,7 @@ fn publish_succeeds_on_any_ack_and_the_background_retry_reaches_the_failed_endpo
     .expect("publish");
 
     assert_eq!(
-        outcome,
+        outcome.outcome,
         PublishOutcome::Published { sequence: 1 },
         "any ack is success"
     );
@@ -669,7 +669,7 @@ fn publish_confirm_detects_a_lost_cas_race() {
     .expect("publish");
 
     assert_eq!(
-        outcome,
+        outcome.outcome,
         PublishOutcome::LostRace {
             published_sequence: 2,
             observed_sequence: 3,

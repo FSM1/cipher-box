@@ -83,5 +83,6 @@ where
     };
     publish(transport, api, floors, scheduler, profile, &publish_request)
         .await
+        .map(|receipt| receipt.outcome)
         .map_err(ReviveError::Publish)
 }
