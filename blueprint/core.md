@@ -177,22 +177,23 @@ are fixed-length message input, **never** variable context. Context strings
 follow `cipherbox/v2/<edge>`; the exact string table and input layouts freeze
 in the KAT manifest.
 
-| Edge                | Inputs                                                   | Output                             |
-| ------------------- | -------------------------------------------------------- | ---------------------------------- |
-| node-seed           | scopeSeed, node id                                       | nodeSeed (flat within scope)       |
-| read-key            | nodeSeed                                                 | readKey                            |
-| structure-key       | nodeSeed or scope seed, structTag                        | per-structure sealing keys         |
-| write-seed          | writeScopeSeed, node id                                  | writeSeed (flat)                   |
-| write-key           | writeSeed                                                | writeKey                           |
-| ipns-keypair        | writeSeed                                                | Ed25519 keypair → ipnsName         |
-| ascent-keypair      | parent nodeSeed                                          | X25519 keypair for the ascent link |
-| enc-subkey          | login secret                                             | X25519 encryption subkey           |
-| blinded-tag         | ECDH(ownerEnc, recipientEnc) ‖ scopeRootIpnsName         | grant-blob tag                     |
-| pseudonym-sign      | ECDH(ownerEnc, writerEnc) ‖ scopeId (owner: root secret) | Ed25519 pseudonym keypair          |
-| owner-pointer-seed  | login secret                                             | ownerPointerSeed                   |
-| scope-pointer       | ownerPointerSeed, scope id                               | per-scope pointer Ed25519 keypair  |
-| pointer-read-key    | ownerPointerSeed, scope id                               | pointerReadKey                     |
-| vault-pointer-index | login secret, index i (0 default)                        | pointer Ed25519 keypair chain      |
+| Edge                  | Inputs                                                   | Output                                    |
+| --------------------- | -------------------------------------------------------- | ----------------------------------------- |
+| node-seed             | scopeSeed, node id                                       | nodeSeed (flat within scope)              |
+| read-key              | nodeSeed                                                 | readKey                                   |
+| structure-key         | nodeSeed or scope seed, structTag                        | per-structure sealing keys                |
+| write-seed            | writeScopeSeed, node id                                  | writeSeed (flat)                          |
+| write-key             | writeSeed                                                | writeKey                                  |
+| ipns-keypair          | writeSeed                                                | Ed25519 keypair → ipnsName                |
+| ascent-keypair        | parent nodeSeed                                          | X25519 keypair for the ascent link        |
+| enc-subkey            | login secret                                             | X25519 encryption subkey                  |
+| blinded-tag           | ECDH(ownerEnc, recipientEnc) ‖ scopeRootIpnsName         | grant-blob tag                            |
+| pseudonym-sign        | ECDH(ownerEnc, writerEnc) ‖ scopeId (owner: root secret) | Ed25519 pseudonym keypair                 |
+| owner-pointer-seed    | login secret                                             | ownerPointerSeed                          |
+| scope-pointer         | ownerPointerSeed, scope id                               | per-scope pointer Ed25519 keypair         |
+| pointer-read-key      | ownerPointerSeed, scope id                               | pointerReadKey                            |
+| vault-pointer-index   | login secret, index i (0 default)                        | pointer Ed25519 keypair chain             |
+| settings-ipns-keypair | login secret                                             | vault settings Ed25519 keypair → ipnsName |
 
 Non-edges, stated to stay non-edges: content keys (random per version), scope
 override seeds (random at rotation), scope seeds at grant cuts (random).
