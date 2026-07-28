@@ -34,16 +34,22 @@ export interface BreadcrumbDescriptor {
   name: string;
 }
 
-/** One direct child in a snapshot, as data. `size`/`mtime` are `null` until projected. */
+/** What the op queue holds for a node (mirrors the facade `PendingClass`). */
+export type PendingClass = 'none' | 'metadata' | 'content';
+
+/**
+ * One direct child in a snapshot, as data. `size`/`mtime`/`contentVersion` are
+ * `null` until projected.
+ */
 export interface SnapshotChildDescriptor {
   id: Uint8Array;
   name: string;
   kind: NodeKind;
   size: bigint | null;
   mtime: bigint | null;
-  pending: boolean;
+  pending: PendingClass;
   deadLetter: boolean;
-  contentVersion: bigint;
+  contentVersion: bigint | null;
 }
 
 /**

@@ -74,7 +74,7 @@ describe('readSnapshot', () => {
           kind: 0,
           size: 1024n,
           mtime: 1_700_000_000_000n,
-          pending: true,
+          pending: 2,
           deadLetter: false,
           contentVersion: 2n,
         },
@@ -82,9 +82,15 @@ describe('readSnapshot', () => {
           id: new Uint8Array(16).fill(4),
           name: 'docs',
           kind: 1,
-          pending: false,
+          pending: 0,
           deadLetter: true,
-          contentVersion: 0n,
+        },
+        {
+          id: new Uint8Array(16).fill(5),
+          name: 'renamed.txt',
+          kind: 0,
+          pending: 1,
+          deadLetter: false,
         },
       ],
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],
@@ -102,7 +108,7 @@ describe('readSnapshot', () => {
           kind: 'file',
           size: 1024n,
           mtime: 1_700_000_000_000n,
-          pending: true,
+          pending: 'content',
           deadLetter: false,
           contentVersion: 2n,
         },
@@ -112,9 +118,19 @@ describe('readSnapshot', () => {
           kind: 'folder',
           size: null,
           mtime: null,
-          pending: false,
+          pending: 'none',
           deadLetter: true,
-          contentVersion: 0n,
+          contentVersion: null,
+        },
+        {
+          id: new Uint8Array(16).fill(5),
+          name: 'renamed.txt',
+          kind: 'file',
+          size: null,
+          mtime: null,
+          pending: 'metadata',
+          deadLetter: false,
+          contentVersion: null,
         },
       ],
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],
@@ -123,7 +139,7 @@ describe('readSnapshot', () => {
     });
   });
 
-  it('fails closed on an unknown child kind or staleness value', () => {
+  it('fails closed on an unknown child kind, pending class or staleness value', () => {
     const base: WasmSnapshotView = {
       root: new Uint8Array(16),
       folder: new Uint8Array(16),
@@ -143,12 +159,25 @@ describe('readSnapshot', () => {
             id: new Uint8Array(16),
             name: 'x',
             kind: 42,
-            pending: false,
+            pending: 0,
             deadLetter: false,
-            contentVersion: 0n,
           },
         ],
       })
     ).toThrow('unknown WASM node kind value: 42');
+    expect(() =>
+      readSnapshot(fakeWasm, {
+        ...base,
+        children: [
+          {
+            id: new Uint8Array(16),
+            name: 'x',
+            kind: 0,
+            pending: 42,
+            deadLetter: false,
+          },
+        ],
+      })
+    ).toThrow('unknown WASM pending class value: 42');
   });
 });

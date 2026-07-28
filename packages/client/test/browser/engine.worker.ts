@@ -4,15 +4,9 @@
  * and serves the facade protocol. Mirrors the production `engineWorker` wiring,
  * but imports the built `pkg` glue statically instead of dynamically.
  */
-import init, {
-  Command,
-  EngineHandle,
-  NodeId,
-  NodeKind,
-  OpPhase,
-  Permission,
-  Staleness,
-} from './pkg/cipherbox_wasm.js';
+// Namespace import, not named bindings: the host needs every binding `EngineWasm`
+// declares, and a hand-listed set silently goes stale when one is added.
+import init, * as glue from './pkg/cipherbox_wasm.js';
 import wasmUrl from './pkg/cipherbox_wasm_bg.wasm?url';
 
 import { EngineHost } from '../../src/worker/engineHost.js';
@@ -24,15 +18,7 @@ const scope = self as unknown as WorkerScopeLike & { location: { origin: string 
 
 async function boot(): Promise<void> {
   await init({ module_or_path: wasmUrl });
-  const wasm = {
-    EngineHandle,
-    Command,
-    NodeId,
-    NodeKind,
-    OpPhase,
-    Permission,
-    Staleness,
-  } as unknown as EngineWasm;
+  const wasm = glue as unknown as EngineWasm;
   const { origin } = scope.location;
   const seams = makeBrowserSeams({
     recordEndpoints: [`${origin}/routing`],

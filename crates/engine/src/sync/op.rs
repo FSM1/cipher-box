@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::facade::{NodeId, NodeKind};
+use crate::facade::{NodeId, NodeKind, PendingClass};
 
 /// One intent op: the target node, the base sequence it was formed against,
 /// and the mutation.
@@ -160,6 +160,15 @@ impl Op {
         }
     }
 
+    /// The pending class this op puts its target in — a staged content write
+    /// outranks a metadata-only mutation.
+    pub fn pending_class(&self) -> PendingClass {
+        match self.staging_key() {
+            Some(_) => PendingClass::Content,
+            None => PendingClass::Metadata,
+        }
+    }
+
     /// The staging key this op references, if any (orphan-GC input).
     pub fn staging_key(&self) -> Option<&[u8]> {
         match &self.kind {
@@ -251,6 +260,33 @@ mod tests {
             Op::create(id(1), id(0), "d", NodeKind::Folder, 1, None).staging_key(),
             None
         );
+    }
+
+    #[test]
+    fn pending_class_is_content_for_exactly_the_content_bearing_kinds() {
+        let classes = [
+            Op::create(id(1), id(0), "a", NodeKind::File, 1, Some(b"k".to_vec())).pending_class(),
+            Op::create(id(1), id(0), "a", NodeKind::File, 1, None).pending_class(),
+            Op::create(id(1), id(0), "d", NodeKind::Folder, 1, None).pending_class(),
+            Op::delete(id(2), 1, 1).pending_class(),
+            Op::rename(id(3), "b", 1).pending_class(),
+            Op::relink(id(4), id(0), id(9), 1, false, false).pending_class(),
+            Op::update_content(id(5), b"k".to_vec(), 1).pending_class(),
+        ];
+        assert_eq!(
+            classes,
+            [
+                PendingClass::Content,
+                PendingClass::Metadata,
+                PendingClass::Metadata,
+                PendingClass::Metadata,
+                PendingClass::Metadata,
+                PendingClass::Metadata,
+                PendingClass::Content,
+            ]
+        );
+        assert!(PendingClass::Content > PendingClass::Metadata);
+        assert!(PendingClass::Metadata > PendingClass::None);
     }
 
     #[test]

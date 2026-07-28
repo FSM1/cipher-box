@@ -187,8 +187,13 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     expect(view.folderHex).toBe(rootHex);
     const docs = view.children!.find((child) => child.name === 'docs');
     const file = view.children!.find((child) => child.name === 'pending.txt');
-    expect(docs).toMatchObject({ kind: 'folder', pending: true });
-    expect(file).toMatchObject({ kind: 'file', pending: true, sizeNull: true, mtimeNull: true });
+    expect(docs).toMatchObject({ kind: 'folder', pending: 'metadata' });
+    expect(file).toMatchObject({
+      kind: 'file',
+      pending: 'metadata',
+      sizeNull: true,
+      mtimeNull: true,
+    });
 
     // The nested snapshot's breadcrumb trail ends at the root.
     const nested = await follower.snapshot(docs!.idHex);

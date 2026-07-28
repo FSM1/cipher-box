@@ -22,6 +22,7 @@ import type {
  */
 export const fakeWasmEnums = {
   NodeKind: { File: 0, Folder: 1 },
+  PendingClass: { None: 0, Metadata: 1, Content: 2 },
   Permission: { Read: 0, Write: 1 },
   Staleness: { Fresh: 0, Reconciling: 1, Stale: 2, Offline: 3 },
   OpPhase: { DownloadStarted: 0, DownloadCompleted: 1, DownloadFailed: 2 },

@@ -35,6 +35,7 @@ export type {
   EventDescriptor,
   Permission,
   NodeKind,
+  PendingClass,
   Staleness,
   OpProgressPhase,
   SnapshotDescriptor,

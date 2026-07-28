@@ -90,6 +90,21 @@ pub enum NodeKind {
     Folder,
 }
 
+/// What the op queue holds for a node, strongest class first: a queued content
+/// write outranks a queued metadata mutation. The variant order **is** the rank
+/// (a node with both queued reports `Content`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum PendingClass {
+    /// No queued op targets the node.
+    #[default]
+    None,
+    /// A queued op mutates only the node's metadata (create without content,
+    /// rename, relink, delete).
+    Metadata,
+    /// A queued op writes new content bytes for the node.
+    Content,
+}
+
 /// A node's host-facing attributes, projected from the rendered view for a
 /// FUSE getattr/readdir. Kind-uniform metadata only — content size and
 /// timestamps land with the content-plane slice.
@@ -101,8 +116,8 @@ pub struct NodeAttrs {
     pub name: String,
     /// File or folder.
     pub kind: NodeKind,
-    /// Current content version (bumped per `updateContent`).
-    pub content_version: u64,
+    /// Retained version count, `None` until projected.
+    pub content_version: Option<u64>,
 }
 
 /// Minimal filesystem-level counters for a FUSE statfs. Node count only:
@@ -137,12 +152,12 @@ pub struct SnapshotChild {
     pub size: Option<u64>,
     /// Modification time (Unix millis), once projected.
     pub mtime: Option<u64>,
-    /// Whether a queued pending op targets this node.
-    pub pending: bool,
+    /// What the op queue holds for this node.
+    pub pending: PendingClass,
     /// Whether a retained dead-lettered op maps to this node.
     pub dead_letter: bool,
-    /// Current content version (bumped per `updateContent`).
-    pub content_version: u64,
+    /// Retained version count, `None` until projected.
+    pub content_version: Option<u64>,
 }
 
 /// A key-free snapshot of one folder for a host UI paint: its children, its
@@ -1318,7 +1333,11 @@ impl<T: SeamTypes> Engine<T> {
         if meta.kind != NodeKind::Folder {
             return Err(EngineError::NotAFolder);
         }
-        let pending: BTreeSet<NodeId> = ops.iter().map(|op| op.target).collect();
+        let mut pending: BTreeMap<NodeId, PendingClass> = BTreeMap::new();
+        for op in &ops {
+            let slot = pending.entry(op.target).or_default();
+            *slot = (*slot).max(op.pending_class());
+        }
         let dead = self.dead_letters.borrow();
         let dead_nodes: BTreeSet<NodeId> = dead.values().flatten().copied().collect();
         let children = rendered
@@ -1330,7 +1349,7 @@ impl<T: SeamTypes> Engine<T> {
                 kind: child.kind,
                 size: child.size,
                 mtime: child.mtime,
-                pending: pending.contains(&child.id),
+                pending: pending.get(&child.id).copied().unwrap_or_default(),
                 dead_letter: dead_nodes.contains(&child.id),
                 content_version: child.content_version,
             })
@@ -1379,11 +1398,17 @@ impl<T: SeamTypes> Engine<T> {
         }
         self.emit_op_progress(node, OpPhase::DownloadStarted, None);
         match self.read_content_inner(node).await {
-            Ok((plaintext, size, modified_at)) => {
+            Ok((plaintext, size, modified_at, version_count)) => {
                 // The verified head version is gate-passing state, so it may
                 // legally touch the base node's projected size/mtime. Repaint
                 // only on a real change — a repeat read must not cascade.
-                if project_child_version(&mut self.snapshot.borrow_mut(), node, size, modified_at) {
+                if project_child_version(
+                    &mut self.snapshot.borrow_mut(),
+                    node,
+                    size,
+                    modified_at,
+                    version_count,
+                ) {
                     let _ = self.events.unbounded_send(Event::SnapshotUpdated);
                 }
                 self.emit_op_progress(node, OpPhase::DownloadCompleted, None);
@@ -1400,8 +1425,11 @@ impl<T: SeamTypes> Engine<T> {
     /// base-snapshot lookup → gated child resolve →
     /// [`open_content`] (version-DAG fetch, per-leaf unseal, length
     /// cross-checks). Returns the plaintext plus the head version's
-    /// `(size, modifiedAt)`.
-    async fn read_content_inner(&self, node: NodeId) -> Result<(Vec<u8>, u64, u64), EngineError> {
+    /// `(size, modifiedAt)` and the body's version count.
+    async fn read_content_inner(
+        &self,
+        node: NodeId,
+    ) -> Result<(Vec<u8>, u64, u64, u64), EngineError> {
         // The base snapshot alone answers the lookup (kind and ipnsName never
         // come from the overlay) — no full render for a single node. The borrow
         // never spans an await.
@@ -1515,7 +1543,12 @@ impl<T: SeamTypes> Engine<T> {
                 OpenError::Trust(message) => EngineError::TrustViolation { message },
                 OpenError::Unavailable(message) => EngineError::ContentUnavailable { message },
             })?;
-        Ok((plaintext, version.size, version.modified_at))
+        Ok((
+            plaintext,
+            version.size,
+            version.modified_at,
+            versions.len() as u64,
+        ))
     }
 
     /// Best-effort [`Event::OpProgress`] emission (a dropped receiver is fine).
@@ -2139,7 +2172,7 @@ mod tests {
             let view = block_on(engine.snapshot(root)).unwrap();
             assert_eq!(view.root, root);
             assert_eq!(view.folder, root);
-            let by: Vec<(NodeId, &str, NodeKind, bool, u64)> = view
+            let by: Vec<(NodeId, &str, NodeKind, PendingClass, Option<u64>)> = view
                 .children
                 .iter()
                 .map(|c| (c.id, c.name.as_str(), c.kind, c.pending, c.content_version))
@@ -2147,10 +2180,22 @@ mod tests {
             assert_eq!(
                 by,
                 vec![
-                    (NodeId([1; 16]), "a", NodeKind::Folder, false, 0),
-                    (NodeId([2; 16]), "b.txt", NodeKind::File, false, 0),
+                    (
+                        NodeId([1; 16]),
+                        "a",
+                        NodeKind::Folder,
+                        PendingClass::None,
+                        None
+                    ),
+                    (
+                        NodeId([2; 16]),
+                        "b.txt",
+                        NodeKind::File,
+                        PendingClass::None,
+                        None
+                    ),
                 ],
-                "base children render id-sorted, none pending"
+                "base children render id-sorted, none pending, no version count"
             );
             assert!(view.children.iter().all(|c| !c.dead_letter));
             assert!(view.dead_letters.is_empty());
@@ -2158,7 +2203,7 @@ mod tests {
         }
 
         #[test]
-        fn staged_create_appears_with_pending_true() {
+        fn staged_create_appears_pending_as_a_metadata_op() {
             let (mut engine, _events) = started();
             let root = engine.root();
             create(&mut engine, root, "notes.txt", NodeKind::File);
@@ -2166,11 +2211,31 @@ mod tests {
             let view = block_on(engine.snapshot(root)).unwrap();
             assert_eq!(view.children.len(), 1);
             assert_eq!(view.children[0].name, "notes.txt");
-            assert!(
+            assert_eq!(
                 view.children[0].pending,
-                "a queued op targeting the node flags it pending"
+                PendingClass::Metadata,
+                "a contentless create queues a metadata mutation"
             );
             assert!(!view.children[0].dead_letter);
+        }
+
+        #[test]
+        fn a_queued_content_write_outranks_a_queued_metadata_op() {
+            let (mut engine, _events) = started();
+            let root = engine.root();
+            create(&mut engine, root, "notes.txt", NodeKind::File);
+            let node = block_on(engine.snapshot(root)).unwrap().children[0].id;
+
+            block_on(stage_op(
+                &engine.seams.staging_store,
+                &engine.profile,
+                &Op::update_content(node, b"staged".to_vec(), 1),
+                Some(b"bytes"),
+            ))
+            .unwrap();
+
+            let view = block_on(engine.snapshot(root)).unwrap();
+            assert_eq!(view.children[0].pending, PendingClass::Content);
         }
 
         #[test]

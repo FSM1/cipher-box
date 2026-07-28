@@ -44,9 +44,9 @@ export interface WasmSnapshotChild {
   readonly kind: number;
   readonly size?: bigint;
   readonly mtime?: bigint;
-  readonly pending: boolean;
+  readonly pending: number;
   readonly deadLetter: boolean;
-  readonly contentVersion: bigint;
+  readonly contentVersion?: bigint;
 }
 
 /** wasm-bindgen `SnapshotView` — a key-free folder snapshot for a UI paint. */
@@ -95,6 +95,11 @@ export interface EngineWasm {
     logout(): WasmCommand;
   };
   NodeKind: { readonly File: number; readonly Folder: number };
+  PendingClass: {
+    readonly None: number;
+    readonly Metadata: number;
+    readonly Content: number;
+  };
   Permission: { readonly Read: number; readonly Write: number };
   OpPhase: {
     readonly DownloadStarted: number;

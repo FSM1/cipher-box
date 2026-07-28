@@ -12,6 +12,7 @@ import type {
   EventDescriptor,
   NodeKind,
   OpProgressPhase,
+  PendingClass,
   Permission,
   SnapshotDescriptor,
   Staleness,
@@ -130,6 +131,20 @@ function opPhase(wasm: EngineWasm, phase: number | undefined): OpProgressPhase {
   }
 }
 
+function pendingClass(wasm: EngineWasm, pending: number): PendingClass {
+  switch (pending) {
+    case wasm.PendingClass.None:
+      return 'none';
+    case wasm.PendingClass.Metadata:
+      return 'metadata';
+    case wasm.PendingClass.Content:
+      return 'content';
+    default:
+      // Fail closed: an unmapped value means a JS/WASM version mismatch.
+      throw new Error(`unknown WASM pending class value: ${pending}`);
+  }
+}
+
 function nodeKindFrom(wasm: EngineWasm, kind: number): NodeKind {
   switch (kind) {
     case wasm.NodeKind.File:
@@ -189,9 +204,9 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
       kind: nodeKindFrom(wasm, child.kind),
       size: child.size ?? null,
       mtime: child.mtime ?? null,
-      pending: child.pending,
+      pending: pendingClass(wasm, child.pending),
       deadLetter: child.deadLetter,
-      contentVersion: child.contentVersion,
+      contentVersion: child.contentVersion ?? null,
     })),
     ancestors: view.ancestors.map((ancestor) => ({ id: ancestor.id, name: ancestor.name })),
     deadLetters: [...view.deadLetters],

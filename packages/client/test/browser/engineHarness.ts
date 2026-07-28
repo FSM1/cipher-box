@@ -6,7 +6,7 @@
  */
 import { EngineFacade } from '../../src/facade.js';
 import { LocalTransport } from '../../src/transport.js';
-import type { EventDescriptor } from '../../src/worker/protocol.js';
+import type { EventDescriptor, PendingClass } from '../../src/worker/protocol.js';
 import { hex } from './hexUtil.js';
 
 export interface RealEngineResult {
@@ -28,7 +28,7 @@ export interface SnapshotSuiteResult {
   children: Array<{
     name: string;
     kind: string;
-    pending: boolean;
+    pending: PendingClass;
     deadLetter: boolean;
     sizeNull: boolean;
     mtimeNull: boolean;
