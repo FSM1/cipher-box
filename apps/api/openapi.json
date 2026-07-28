@@ -553,7 +553,7 @@
             "bearer": []
           }
         ],
-        "summary": "The caller per-account quota: usedBytes (sum over pin rows), limitBytes (override or env default), advisory (BYO)",
+        "summary": "The caller per-account quota: usedBytes is the gated sum the upload gate enforces, pinnedBytes the all-rows sum, limitBytes the override or env default, advisory the BYO flag",
         "tags": [
           "Account"
         ]
@@ -671,7 +671,14 @@
             "description": "Hosted ingress is unavailable for BYO accounts; pin to your own provider"
           },
           "413": {
-            "description": "Upload exceeds the account storage quota or size cap"
+            "description": "Two unrelated causes share this status; discriminate on the body `code`, never on `message`. `UPLOAD_TOO_LARGE`: the body exceeded the transport cap MAX_UPLOAD_BYTES — permanent, so retrying the same body always fails. `QUOTA_EXCEEDED`: the account storage quota gate refused it — transient, so the same body succeeds once space is freed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadTooLargeDto"
+                }
+              }
+            }
           },
           "429": {
             "description": "Upload rate limit exceeded"
@@ -1119,7 +1126,11 @@
         "properties": {
           "usedBytes": {
             "type": "number",
-            "description": "Bytes currently counted against the account (sum over pin rows)"
+            "description": "Bytes gated against the limit: the sum over AUTHORITATIVE (non-advisory) pin rows — the same sum the upload gate enforces, so a client pre-flight and the server refusal agree by construction"
+          },
+          "pinnedBytes": {
+            "type": "number",
+            "description": "Bytes across ALL pin rows, advisory ones included. Reported for BYO usage display only; never gated. Equals usedBytes for an account with no advisory bytes"
           },
           "limitBytes": {
             "type": "number",
@@ -1132,6 +1143,7 @@
         },
         "required": [
           "usedBytes",
+          "pinnedBytes",
           "limitBytes",
           "advisory"
         ]
@@ -1202,6 +1214,39 @@
         "required": [
           "cid",
           "size"
+        ]
+      },
+      "UploadTooLargeDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "UPLOAD_TOO_LARGE",
+              "QUOTA_EXCEEDED"
+            ],
+            "description": "The refusal cause"
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable diagnostic; never parse it"
+          },
+          "statusCode": {
+            "type": "number",
+            "description": "The HTTP status code",
+            "example": 413
+          },
+          "error": {
+            "type": "string",
+            "description": "The HTTP status reason phrase",
+            "example": "Payload Too Large"
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "statusCode",
+          "error"
         ]
       }
     }

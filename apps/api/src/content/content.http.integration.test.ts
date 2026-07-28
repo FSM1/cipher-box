@@ -17,6 +17,7 @@ import {
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { ContentController } from './content.controller';
 import { ContentService } from './content.service';
+import { QUOTA_EXCEEDED, UPLOAD_TOO_LARGE } from './upload-error-codes';
 
 /**
  * The hosted-upload HTTP surface re-homed onto a REAL Postgres (#725): the raw
@@ -159,13 +160,18 @@ describe('content HTTP (real Postgres)', () => {
       expect(pinStore.pinned).toEqual([]);
     });
 
-    it('maps an over-quota upload to 413', async () => {
+    it('maps an over-quota upload to 413 discriminated by code QUOTA_EXCEEDED', async () => {
       const acct = await account({ quotaLimitOverride: '100' });
       await db.dataSource
         .getRepository(PinnedCid)
         .save({ accountId: acct.id, cid: 'baExisting', size: '60', advisory: false });
       // 60 already used + 60 incoming > 100.
-      await post(acct.token).send(Buffer.alloc(60, 1)).expect(413);
+      const res = await post(acct.token).send(Buffer.alloc(60, 1)).expect(413);
+      expect(res.body).toMatchObject({
+        statusCode: 413,
+        error: 'Payload Too Large',
+        code: QUOTA_EXCEEDED,
+      });
       expect(pinStore.pinned).toEqual([]);
     });
 
@@ -227,7 +233,7 @@ describe('content HTTP (real Postgres)', () => {
       return jwt.signAsync({ sub: user.id, publicKey }, { expiresIn });
     }
 
-    it('answers an over-cap authenticated upload with a real 413 JSON body (no connection reset)', async () => {
+    it('answers an over-cap authenticated upload with a real 413 JSON body discriminated by code UPLOAD_TOO_LARGE', async () => {
       const token = await authToken();
       const res = await request(ctx.http)
         .post('/content/upload')
@@ -235,7 +241,11 @@ describe('content HTTP (real Postgres)', () => {
         .set('Content-Type', 'application/octet-stream')
         .send(Buffer.alloc(MAX + 8, 1))
         .expect(413);
-      expect(res.body).toMatchObject({ statusCode: 413, error: 'Payload Too Large' });
+      expect(res.body).toMatchObject({
+        statusCode: 413,
+        error: 'Payload Too Large',
+        code: UPLOAD_TOO_LARGE,
+      });
     });
 
     it('refuses an over-cap UNAUTHENTICATED upload with 401 before buffering (not 413)', async () => {

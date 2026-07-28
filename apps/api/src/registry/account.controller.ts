@@ -32,7 +32,7 @@ export class AccountController {
   @Throttle(THROTTLE_SURFACES.account)
   @ApiOperation({
     summary:
-      'The caller per-account quota: usedBytes (sum over pin rows), limitBytes (override or env default), advisory (BYO)',
+      'The caller per-account quota: usedBytes is the gated sum the upload gate enforces, pinnedBytes the all-rows sum, limitBytes the override or env default, advisory the BYO flag',
   })
   @ApiOkResponse({ type: QuotaResponseDto })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })

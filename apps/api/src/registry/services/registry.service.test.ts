@@ -61,21 +61,32 @@ class InAwareRepository<T extends { id: string }> extends FakeRepository<T> {
     return super.save(entities);
   }
 
-  /** Emulates the `COALESCE(SUM(size), 0)` aggregate `sumPinnedBytes` runs, keyed by accountId. */
+  /**
+   * Emulates the account-scoped `COALESCE(SUM(size), 0)` aggregates in
+   * `quota.ts`, serving every alias they select: `used`/`hosted` narrow to
+   * authoritative rows, `pinned` counts all of them.
+   */
   createQueryBuilder(_alias?: string): SumQueryBuilder {
     const allRows = this.rows;
     let accountId: string | undefined;
     const qb: SumQueryBuilder = {
       select: () => qb,
+      addSelect: () => qb,
       where: (_clause, params) => {
         accountId = params?.accountId as string | undefined;
         return qb;
       },
+      andWhere: () => qb,
       getRawOne: async () => {
-        const used = allRows
-          .filter((row) => (row as { accountId?: string }).accountId === accountId)
-          .reduce((total, row) => total + BigInt((row as { size?: string }).size ?? '0'), 0n);
-        return { used: used.toString() };
+        const sum = (rows: T[]): string =>
+          rows
+            .reduce((total, row) => total + BigInt((row as { size?: string }).size ?? '0'), 0n)
+            .toString();
+        const mine = allRows.filter(
+          (row) => (row as { accountId?: string }).accountId === accountId
+        );
+        const hosted = sum(mine.filter((row) => !(row as { advisory?: boolean }).advisory));
+        return { used: hosted, hosted, pinned: sum(mine) };
       },
     };
     return qb;
@@ -84,8 +95,10 @@ class InAwareRepository<T extends { id: string }> extends FakeRepository<T> {
 
 interface SumQueryBuilder {
   select: (selection: string, alias: string) => SumQueryBuilder;
+  addSelect: (selection: string, alias: string) => SumQueryBuilder;
   where: (clause: string, params?: Record<string, unknown>) => SumQueryBuilder;
-  getRawOne: () => Promise<{ used: string }>;
+  andWhere: (clause: string, params?: Record<string, unknown>) => SumQueryBuilder;
+  getRawOne: () => Promise<{ used: string; hosted: string; pinned: string }>;
 }
 
 /**
@@ -351,7 +364,27 @@ describe('RegistryService', () => {
       await seedPin(acct, 'bafy2', 250);
 
       const quota = await service.quota(acct);
-      expect(quota).toEqual({ usedBytes: 350, limitBytes: 2 * GIB, advisory: false });
+      expect(quota).toEqual({
+        usedBytes: 350,
+        pinnedBytes: 350,
+        limitBytes: 2 * GIB,
+        advisory: false,
+      });
+    });
+
+    it('reports usedBytes as the GATED sum, excluding advisory rows pinnedBytes still counts', async () => {
+      const acct = await account();
+      await seedPin(acct, 'bafyHosted', 100);
+      await pins.save({
+        accountId: acct,
+        cid: 'bafyAdvisory',
+        size: '900',
+        advisory: true,
+      } as never);
+
+      const quota = await service.quota(acct);
+      expect(quota.usedBytes).toBe(100);
+      expect(quota.pinnedBytes).toBe(1000);
     });
 
     it('counts only the account own rows, never another account bytes', async () => {

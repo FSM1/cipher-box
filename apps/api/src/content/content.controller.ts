@@ -12,7 +12,8 @@ import { Throttle } from '@nestjs/throttler';
 import { AuthenticatedRequest, JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { THROTTLE_SURFACES } from '../ops/throttling';
 import { ContentService } from './content.service';
-import { UploadResponseDto } from './dto/content.dto';
+import { UploadResponseDto, UploadTooLargeDto } from './dto/content.dto';
+import { QUOTA_EXCEEDED, UPLOAD_TOO_LARGE } from './upload-error-codes';
 
 /**
  * The hosted content ingress surface (blueprint/api.md, Content plane): an
@@ -42,7 +43,14 @@ export class ContentController {
     status: 409,
     description: 'Hosted ingress is unavailable for BYO accounts; pin to your own provider',
   })
-  @ApiResponse({ status: 413, description: 'Upload exceeds the account storage quota or size cap' })
+  @ApiResponse({
+    status: 413,
+    type: UploadTooLargeDto,
+    description:
+      'Two unrelated causes share this status; discriminate on the body `code`, never on `message`. ' +
+      `\`${UPLOAD_TOO_LARGE}\`: the body exceeded the transport cap MAX_UPLOAD_BYTES — permanent, so retrying the same body always fails. ` +
+      `\`${QUOTA_EXCEEDED}\`: the account storage quota gate refused it — transient, so the same body succeeds once space is freed.`,
+  })
   @ApiResponse({ status: 429, description: 'Upload rate limit exceeded' })
   @ApiResponse({ status: 503, description: 'Pin store contended or unavailable; retry shortly' })
   upload(@Req() request: AuthenticatedRequest): Promise<UploadResponseDto> {

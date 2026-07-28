@@ -2,6 +2,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser';
 import type { NextFunction, Request, Response } from 'express';
+import { UPLOAD_TOO_LARGE, uploadTooLargeBody } from './content/upload-error-codes';
 import { verifiedUnexpiredSubjectFromBearer } from './ops/account-throttler.guard';
 
 /** Absolute upload-size cap (coarse DoS guard); the quota gate is the fine one. */
@@ -49,11 +50,9 @@ function rawUploadBody(maxBytes: number) {
       total += chunk.length;
       if (total > maxBytes) {
         aborted = true;
-        res.status(413).json({
-          statusCode: 413,
-          message: `Upload exceeds ${maxBytes} bytes`,
-          error: 'Payload Too Large',
-        });
+        res
+          .status(413)
+          .json(uploadTooLargeBody(UPLOAD_TOO_LARGE, `Upload exceeds ${maxBytes} bytes`));
         return;
       }
       chunks.push(chunk);

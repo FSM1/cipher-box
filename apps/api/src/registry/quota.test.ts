@@ -4,54 +4,68 @@ import {
   byteConfigBigInt,
   DEFAULT_QUOTA_BYTES,
   exceedsQuota,
+  quotaSums,
   resolveLimitBytes,
   sumHostedBytes,
-  sumPinnedBytes,
 } from './quota';
 import type { PinnedCid } from './entities/pinned-cid.entity';
 
 /**
- * A minimal QueryBuilder double that records the `andWhere` clauses each sum
- * applies and returns a caller-set raw `used` string, so a test can prove which
- * rows a sum narrows to and that the driver's `numeric` string is read back as
- * an exact BigInt — without a live Postgres.
+ * A minimal QueryBuilder double that records the clauses each sum applies and
+ * returns a caller-set raw row, so a test can prove which rows a sum narrows to
+ * and that the driver's `numeric` string is read back as an exact BigInt —
+ * without a live Postgres.
  */
-function fakeRepo(used: string | undefined) {
+function fakeRepo(row: Record<string, string> | undefined) {
+  const select = vi.fn().mockReturnThis();
   const andWhere = vi.fn().mockReturnThis();
   const qb = {
-    select: vi.fn().mockReturnThis(),
+    select,
+    addSelect: vi.fn().mockReturnThis(),
     where: vi.fn().mockReturnThis(),
     andWhere,
-    getRawOne: vi.fn().mockResolvedValue(used === undefined ? undefined : { used }),
+    getRawOne: vi.fn().mockResolvedValue(row),
   };
   const repo = {
     createQueryBuilder: vi.fn().mockReturnValue(qb),
   } as unknown as Repository<PinnedCid>;
-  return { repo, qb, andWhere };
+  return { repo, select, andWhere };
 }
 
-describe('sumPinnedBytes / sumHostedBytes — aggregation scope and BigInt read-back', () => {
-  it('sumPinnedBytes sums ALL rows: no advisory predicate is applied', async () => {
-    const { repo, andWhere } = fakeRepo('42');
-    expect(await sumPinnedBytes(repo, 'acct-1')).toBe(42n);
-    expect(andWhere).not.toHaveBeenCalled();
+describe('quota sums — aggregation scope and BigInt read-back', () => {
+  it('sumHostedBytes narrows to authoritative rows via advisory = false', async () => {
+    const { repo, andWhere } = fakeRepo({ used: '42' });
+    expect(await sumHostedBytes(repo, 'acct-1')).toBe(42n);
+    expect(andWhere).toHaveBeenCalledWith('pin.advisory = false');
   });
 
-  it('sumHostedBytes narrows to authoritative rows via advisory = false', async () => {
-    const { repo, andWhere } = fakeRepo('42');
-    expect(await sumHostedBytes(repo, 'acct-1')).toBe(42n);
-    expect(andWhere).toHaveBeenCalledWith('pin.advisory = :advisory', { advisory: false });
+  it('quotaSums gates on the SAME predicate as sumHostedBytes, in ONE aggregate', async () => {
+    const { repo, select, andWhere } = fakeRepo({ hosted: '42', pinned: '99' });
+    expect(await quotaSums(repo, 'acct-1')).toEqual({ hosted: 42n, pinned: 99n });
+    // The gate predicate rides a FILTER rather than a second query, so the
+    // reported and enforced sums cannot drift apart (#843).
+    expect(select).toHaveBeenCalledWith(
+      'COALESCE(SUM(pin.size) FILTER (WHERE pin.advisory = false), 0)',
+      'hosted'
+    );
+    expect(andWhere).not.toHaveBeenCalled();
   });
 
   it('reads the driver numeric string back as an exact BigInt above 2^53', async () => {
     const huge = ((1n << 53n) + 5n).toString();
-    expect(await sumPinnedBytes(fakeRepo(huge).repo, 'acct-1')).toBe((1n << 53n) + 5n);
-    expect(await sumHostedBytes(fakeRepo(huge).repo, 'acct-1')).toBe((1n << 53n) + 5n);
+    expect(await sumHostedBytes(fakeRepo({ used: huge }).repo, 'acct-1')).toBe((1n << 53n) + 5n);
+    expect(await quotaSums(fakeRepo({ hosted: huge, pinned: huge }).repo, 'acct-1')).toEqual({
+      hosted: (1n << 53n) + 5n,
+      pinned: (1n << 53n) + 5n,
+    });
   });
 
   it('reads an empty account (no row / COALESCE 0) as 0n', async () => {
-    expect(await sumPinnedBytes(fakeRepo(undefined).repo, 'acct-1')).toBe(0n);
-    expect(await sumHostedBytes(fakeRepo('0').repo, 'acct-1')).toBe(0n);
+    expect(await sumHostedBytes(fakeRepo(undefined).repo, 'acct-1')).toBe(0n);
+    expect(await quotaSums(fakeRepo(undefined).repo, 'acct-1')).toEqual({
+      hosted: 0n,
+      pinned: 0n,
+    });
   });
 });
 
