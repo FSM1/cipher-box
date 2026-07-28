@@ -13,6 +13,7 @@ use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
+use cipherbox_core::seal::{ReadBody, decode_envelope, open_read_body};
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
 use cipherbox_engine::content::{DAG_ROOT_CODEC, GatewaySource};
@@ -25,8 +26,8 @@ use cipherbox_engine::sync::DRAINED_OP_MARK_KEY;
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
-    OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED, OwnerRootSpec, SeededEntropy, block_on,
-    owner_root_fixture,
+    OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
+    OwnerRootSpec, SeededEntropy, block_on, owner_root_fixture,
 };
 use cipherbox_engine::{
     Command, Engine, EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, StoragePolicy,
@@ -283,6 +284,60 @@ fn a_folder_create_publishes_and_resolves_back() {
             .unwrap()
             .is_empty(),
         "and left the durable queue"
+    );
+}
+
+/// The two KDF edges the write plane hangs off must not be crossed: a node's
+/// name comes from the WRITE scope seed and its body opens under a key derived
+/// from the READ scope seed. Swapping them would still publish, so only this
+/// pins them.
+#[test]
+fn a_published_child_sits_on_the_write_name_edge_and_the_read_key_edge() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    serve_http(&alice, &blocks, 16);
+    let (mut engine, _events) = engine_on(&alice, 42);
+    block_on(engine.start(secret())).unwrap();
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+        content: None,
+    }))
+    .unwrap();
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_each(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let child = block_on(engine.view()).unwrap().children(ROOT)[0].id;
+
+    // The name edge: `writeSeed(writeScopeSeed, id) -> ipnsKeypair`.
+    let expected_name = IpnsName::from_public_key(
+        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &child.0).as_bytes()).verifying_key(),
+    );
+    let record = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], expected_name.as_str())
+        .expect("the child publishes under the write-seed name");
+    let verified = IpnsRecord::unmarshal(&record)
+        .and_then(|r| r.verify(&expected_name))
+        .expect("and is signed by that name's own key");
+
+    // The read-key edge: `nodeSeed(readScopeSeed, id) -> readKey`.
+    let head_cid = core::str::from_utf8(&verified.value)
+        .unwrap()
+        .strip_prefix("/ipfs/")
+        .unwrap();
+    let envelope = decode_envelope(&blocks.get(head_cid).expect("the head block")).unwrap();
+    let read_key = kdf::read_key(kdf::node_seed(&READ_SCOPE_SEED, &child.0).as_bytes());
+    let body = open_read_body(&envelope, read_key.as_bytes())
+        .expect("the child body opens under the read-seed key");
+    assert!(
+        matches!(body, ReadBody::Folder { ref children, .. } if children.is_empty()),
+        "a fresh folder publishes an empty child list"
     );
 }
 

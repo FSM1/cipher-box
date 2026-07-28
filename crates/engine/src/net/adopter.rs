@@ -422,8 +422,8 @@ mod tests {
     use crate::session::SessionIdentity;
     use crate::testkit::fakes::{InMemoryFloorStore, ScriptedHttp};
     use crate::testkit::{
-        OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec,
-        block_on, owner_root_fixture,
+        OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture,
+        OwnerRootSpec, block_on, owner_root_fixture,
     };
 
     const TTL_NANOS: u64 = 2_000_000_000;
@@ -811,6 +811,29 @@ mod tests {
         // The recovered seed reproduces the record's IPNS routing name.
         let signer = SessionIdentity::write_name_signer(&seed, &fx.root_id);
         assert_eq!(IpnsName::from_public_key(&signer.verifying_key()), fx.name);
+    }
+
+    #[test]
+    fn equal_floor_recovery_refuses_a_record_below_the_read_epoch_floor() {
+        // Stages 4/5 never ran for a `Current`, so recovery re-imposes the
+        // read-epoch floor itself: a forgery-window writer re-serving a
+        // pre-rotation section at the floor must not hand back the revoked
+        // epoch's read seed.
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        block_on(floors.raise_epoch_floor(&fx.scope_id, OWNER_ROOT_EPOCH + 1)).unwrap();
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+
+        assert!(
+            block_on(recover_at_floor(&adopter, &floors, &fx))
+                .expect("fail-open")
+                .is_none(),
+            "a record below the read-epoch floor recovers no seed"
+        );
     }
 
     #[test]
