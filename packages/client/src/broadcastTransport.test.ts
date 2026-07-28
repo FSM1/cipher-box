@@ -163,7 +163,7 @@ describe('broadcast transport ↔ leader relay', () => {
           kind: 'file',
           size: 1024n,
           mtime: null,
-          pending: true,
+          pending: 'content',
           deadLetter: false,
           contentVersion: 9_007_199_254_740_993n,
         },

@@ -331,7 +331,7 @@ fn rebase_relink(
 fn rebase_update_content(working: &mut Snapshot, local: &Snapshot, op: &Op) -> OpResolution {
     if working.contains(op.target) {
         if let Some(node) = working.node_mut(op.target) {
-            node.content_version += 1;
+            node.content_version = node.content_version.map(|count| count + 1);
         }
         return OpResolution::applied(None);
     }
@@ -348,7 +348,7 @@ fn rebase_update_content(working: &mut Snapshot, local: &Snapshot, op: &Op) -> O
             };
             let mut resurrected = meta.clone();
             resurrected.name = effective.clone();
-            resurrected.content_version += 1;
+            resurrected.content_version = resurrected.content_version.map(|count| count + 1);
             working.upsert_node(resurrected);
             working.link_next(parent, op.target);
             OpResolution::Applied {

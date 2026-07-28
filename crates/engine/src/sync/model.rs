@@ -30,9 +30,11 @@ pub struct NodeMeta {
     /// The node's own IPNS record sequence — the conditional-delete snapshot
     /// (a delete op drops on rebase if this advanced past the op's snapshot).
     pub record_sequence: u64,
-    /// Bumped on every `updateContent` (a fresh per-version content key seals
-    /// each version, CONTEXT.md "Content key").
-    pub content_version: u64,
+    /// The node's retained version count, projected from the file read-body's
+    /// `versions` list and bumped on every queued `updateContent` (a fresh
+    /// per-version content key seals each version, CONTEXT.md "Content key").
+    /// `None` until projected — unprojected is not zero.
+    pub content_version: Option<u64>,
     /// Plaintext content size in bytes; `None` until the content plane
     /// projects it.
     pub size: Option<u64>,
@@ -45,15 +47,15 @@ pub struct NodeMeta {
 }
 
 impl NodeMeta {
-    /// A node at record sequence 1, content version 0, no projected
-    /// size/mtime/ipnsName.
+    /// A node at record sequence 1, with no projected content
+    /// version/size/mtime/ipnsName.
     pub fn new(id: NodeId, name: impl Into<String>, kind: NodeKind) -> Self {
         Self {
             id,
             name: name.into(),
             kind,
             record_sequence: 1,
-            content_version: 0,
+            content_version: None,
             size: None,
             mtime: None,
             ipns_name: None,

@@ -108,6 +108,29 @@ impl From<facade::NodeKind> for NodeKind {
     }
 }
 
+/// What the op queue holds for a node (a queued content write outranks a queued
+/// metadata mutation).
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PendingClass {
+    /// No queued op targets the node.
+    None,
+    /// A queued op mutates only the node's metadata.
+    Metadata,
+    /// A queued op writes new content bytes for the node.
+    Content,
+}
+
+impl From<facade::PendingClass> for PendingClass {
+    fn from(class: facade::PendingClass) -> Self {
+        match class {
+            facade::PendingClass::None => PendingClass::None,
+            facade::PendingClass::Metadata => PendingClass::Metadata,
+            facade::PendingClass::Content => PendingClass::Content,
+        }
+    }
+}
+
 /// Grant permission level.
 #[wasm_bindgen]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -250,10 +273,10 @@ impl SnapshotChild {
         self.inner.mtime
     }
 
-    /// Whether a queued pending op targets this node.
+    /// What the op queue holds for this node.
     #[wasm_bindgen(getter)]
-    pub fn pending(&self) -> bool {
-        self.inner.pending
+    pub fn pending(&self) -> PendingClass {
+        self.inner.pending.into()
     }
 
     /// Whether a retained dead-lettered op maps to this node.
@@ -262,9 +285,9 @@ impl SnapshotChild {
         self.inner.dead_letter
     }
 
-    /// Current content version (a `bigint`, bumped per `updateContent`).
+    /// Retained version count (a `bigint`), or `undefined` until projected.
     #[wasm_bindgen(getter, js_name = contentVersion)]
-    pub fn content_version(&self) -> u64 {
+    pub fn content_version(&self) -> Option<u64> {
         self.inner.content_version
     }
 }
@@ -770,9 +793,9 @@ mod tests {
                     kind: facade::NodeKind::File,
                     size: Some(1024),
                     mtime: Some(1_700_000_000_000),
-                    pending: true,
+                    pending: facade::PendingClass::Content,
                     dead_letter: false,
-                    content_version: 2,
+                    content_version: Some(2),
                 },
                 facade::SnapshotChild {
                     id: facade::NodeId([4u8; 16]),
@@ -780,9 +803,9 @@ mod tests {
                     kind: facade::NodeKind::Folder,
                     size: None,
                     mtime: None,
-                    pending: false,
+                    pending: facade::PendingClass::None,
                     dead_letter: true,
-                    content_version: 0,
+                    content_version: None,
                 },
             ],
             ancestors: vec![facade::Breadcrumb {
@@ -805,10 +828,12 @@ mod tests {
         assert_eq!(children[0].kind(), NodeKind::File);
         assert_eq!(children[0].size(), Some(1024));
         assert_eq!(children[0].mtime(), Some(1_700_000_000_000));
-        assert!(children[0].pending());
+        assert_eq!(children[0].pending(), PendingClass::Content);
         assert!(!children[0].dead_letter());
-        assert_eq!(children[0].content_version(), 2);
+        assert_eq!(children[0].content_version(), Some(2));
         assert_eq!(children[1].kind(), NodeKind::Folder);
+        assert_eq!(children[1].pending(), PendingClass::None);
+        assert!(children[1].content_version().is_none());
         assert!(children[1].size().is_none());
         assert!(children[1].mtime().is_none());
         assert!(children[1].dead_letter());

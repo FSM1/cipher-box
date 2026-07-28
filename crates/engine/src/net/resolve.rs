@@ -334,11 +334,11 @@ where
 }
 
 /// Fold a completed resolve's verdict into the shared base cell. A gate-passing
-/// `Adopted` re-projects (`project_root`) and replaces the base, returning true
-/// (the caller emits `SnapshotUpdated`); `Current`/`NoUpdate`/`TrustViolation`
-/// leave last-known-good intact and return false. Non-await by construction — the
-/// short `borrow_mut` never spans an `.await` (facade single-threaded executor
-/// rule).
+/// `Adopted` re-projects ([`project_root`], merging over the current base) and
+/// installs the result, returning true (the caller emits `SnapshotUpdated`);
+/// `Current`/`NoUpdate`/`TrustViolation` leave last-known-good intact and return
+/// false. Non-await by construction — the short borrows never span an `.await`
+/// (facade single-threaded executor rule).
 pub(crate) fn refresh_base_from_outcome(
     base: &RefCell<Snapshot>,
     root: NodeId,
@@ -346,7 +346,8 @@ pub(crate) fn refresh_base_from_outcome(
 ) -> bool {
     match outcome {
         ResolveOutcome::Adopted(adopted) => {
-            *base.borrow_mut() = project_root(root, adopted);
+            let projected = project_root(root, adopted, &base.borrow());
+            *base.borrow_mut() = projected;
             true
         }
         _ => false,
@@ -979,6 +980,7 @@ mod tests {
         use crate::gate::Adopted;
         use crate::sync::model::Snapshot;
         use crate::sync::overlay::apply_overlay;
+        use crate::sync::project::project_child_version;
 
         fn adopted_with_one_child(child_id: [u8; 16]) -> Adopted {
             Adopted {
@@ -1017,6 +1019,43 @@ mod tests {
             let children = rendered.children(root);
             assert_eq!(children.len(), 1, "the newer child is projected under root");
             assert_eq!(children[0].id, NodeId(child_id));
+        }
+
+        #[test]
+        fn a_root_advance_keeps_the_values_the_root_body_cannot_express() {
+            let root = NodeId([0u8; 16]);
+            let child_id = [7u8; 16];
+            let cell = RefCell::new(Snapshot::new(root));
+
+            assert!(refresh_base_from_outcome(
+                &cell,
+                root,
+                &ResolveOutcome::Adopted(adopted_with_one_child(child_id)),
+            ));
+            // A verified head-version read folds the child's plaintext facts in.
+            assert!(project_child_version(
+                &mut cell.borrow_mut(),
+                NodeId(child_id),
+                4_096,
+                1_700,
+                2,
+            ));
+
+            assert!(refresh_base_from_outcome(
+                &cell,
+                root,
+                &ResolveOutcome::Adopted(adopted_with_one_child(child_id)),
+            ));
+
+            let base = cell.borrow();
+            let child = base.node(NodeId(child_id)).expect("child still projected");
+            assert_eq!(child.size, Some(4_096), "size survives the re-projection");
+            assert_eq!(child.mtime, Some(1_700), "mtime survives the re-projection");
+            assert_eq!(
+                child.content_version,
+                Some(2),
+                "the version count survives the re-projection"
+            );
         }
 
         #[test]

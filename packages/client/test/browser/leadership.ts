@@ -8,6 +8,7 @@
  * kill-the-leader failover with no accepted-op loss.
  */
 import { EngineClient } from '../../src/engineClient.js';
+import type { PendingClass } from '../../src/worker/protocol.js';
 import { hex, unhex } from './hexUtil.js';
 
 const JOURNAL_DB = 'cb-leadership-journal';
@@ -36,7 +37,7 @@ export interface SnapshotResult {
     idHex: string;
     name: string;
     kind: string;
-    pending: boolean;
+    pending: PendingClass;
     sizeNull: boolean;
     mtimeNull: boolean;
   }>;

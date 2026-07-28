@@ -60,10 +60,10 @@ test.describe('engine worker host', () => {
     expect(result.children).toHaveLength(2);
     const docs = result.children.find((child) => child.name === 'docs');
     const file = result.children.find((child) => child.name === 'pending.txt');
-    expect(docs).toMatchObject({ kind: 'folder', pending: true, deadLetter: false });
+    expect(docs).toMatchObject({ kind: 'folder', pending: 'metadata', deadLetter: false });
     expect(file).toMatchObject({
       kind: 'file',
-      pending: true,
+      pending: 'metadata',
       deadLetter: false,
       sizeNull: true,
       mtimeNull: true,

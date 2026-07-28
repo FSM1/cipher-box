@@ -26,9 +26,17 @@ pub fn apply_overlay(base: &Snapshot, ops: &[Op]) -> Snapshot {
 fn apply_one(view: &mut Snapshot, op: &Op) {
     match &op.kind {
         OpKind::Create {
-            parent, name, kind, ..
+            parent,
+            name,
+            kind,
+            content_staging_key,
         } => {
-            view.upsert_node(NodeMeta::new(op.target, name.clone(), *kind));
+            let mut meta = NodeMeta::new(op.target, name.clone(), *kind);
+            // A create carrying content authors exactly one version.
+            if content_staging_key.is_some() {
+                meta.content_version = Some(1);
+            }
+            view.upsert_node(meta);
             view.link_next(*parent, op.target);
         }
         OpKind::Delete { .. } => {
@@ -47,7 +55,7 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
         }
         OpKind::UpdateContent { .. } => {
             if let Some(node) = view.node_mut(op.target) {
-                node.content_version += 1;
+                node.content_version = node.content_version.map(|count| count + 1);
             }
         }
     }
@@ -120,20 +128,54 @@ mod tests {
     }
 
     #[test]
-    fn overlay_update_content_bumps_the_content_version() {
+    fn overlay_update_content_bumps_a_projected_content_version() {
+        let mut base = base();
+        let mut meta = NodeMeta::new(id(1), "f.txt", NodeKind::File);
+        meta.content_version = Some(4);
+        base.upsert_node(meta);
+        base.link(id(0), id(1), 1);
+        let view = apply_overlay(&base, &[Op::update_content(id(1), b"k".to_vec(), 1)]);
+        assert_eq!(
+            view.node(id(1)).unwrap().content_version,
+            Some(5),
+            "new version rendered"
+        );
+        assert_eq!(
+            base.node(id(1)).unwrap().content_version,
+            Some(4),
+            "base untouched"
+        );
+    }
+
+    #[test]
+    fn overlay_update_content_leaves_an_unprojected_count_unknown() {
         let mut base = base();
         base.upsert_node(NodeMeta::new(id(1), "f.txt", NodeKind::File));
         base.link(id(0), id(1), 1);
         let view = apply_overlay(&base, &[Op::update_content(id(1), b"k".to_vec(), 1)]);
         assert_eq!(
             view.node(id(1)).unwrap().content_version,
+            None,
+            "one more than unknown is still unknown"
+        );
+    }
+
+    #[test]
+    fn overlay_renders_the_one_version_a_content_bearing_create_authors() {
+        let base = base();
+        let with_content = Op::create(
+            id(1),
+            id(0),
+            "a.txt",
+            NodeKind::File,
             1,
-            "new version rendered"
+            Some(b"k".to_vec()),
         );
-        assert_eq!(
-            base.node(id(1)).unwrap().content_version,
-            0,
-            "base untouched"
-        );
+        let bare = Op::create(id(2), id(0), "dir", NodeKind::Folder, 1, None);
+
+        let view = apply_overlay(&base, &[with_content, bare]);
+
+        assert_eq!(view.node(id(1)).unwrap().content_version, Some(1));
+        assert_eq!(view.node(id(2)).unwrap().content_version, None);
     }
 }

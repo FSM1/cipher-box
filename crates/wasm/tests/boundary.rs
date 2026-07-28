@@ -11,7 +11,7 @@
 use cipherbox_engine::facade;
 use cipherbox_engine::seams::OpId;
 use cipherbox_wasm::{
-    Command, Event, NodeId, NodeKind, OpPhase, Permission, SnapshotView, Staleness,
+    Command, Event, NodeId, NodeKind, OpPhase, PendingClass, Permission, SnapshotView, Staleness,
 };
 use js_sys::{Array, BigInt, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
@@ -187,9 +187,9 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
                 kind: facade::NodeKind::File,
                 size: Some(u64::MAX),
                 mtime: Some(1_700_000_000_000),
-                pending: true,
+                pending: facade::PendingClass::Content,
                 dead_letter: false,
-                content_version: 2,
+                content_version: Some(2),
             },
             facade::SnapshotChild {
                 id: facade::NodeId([4u8; 16]),
@@ -197,9 +197,9 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
                 kind: facade::NodeKind::Folder,
                 size: None,
                 mtime: None,
-                pending: false,
+                pending: facade::PendingClass::None,
                 dead_letter: true,
-                content_version: 0,
+                content_version: None,
             },
         ],
         ancestors: vec![facade::Breadcrumb {
@@ -256,11 +256,26 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
             .expect("bigint renders in base 10"),
     );
     assert_eq!(decimal, u64::MAX.to_string());
+    let version = get(&file, "contentVersion");
     assert_eq!(
-        get(&file, "contentVersion").js_typeof(),
-        JsValue::from_str("bigint")
+        version.js_typeof(),
+        JsValue::from_str("bigint"),
+        "the version count must cross as a JS bigint, never a number"
     );
-    assert_eq!(get(&file, "pending"), JsValue::TRUE);
+    assert_eq!(
+        String::from(
+            version
+                .unchecked_into::<BigInt>()
+                .to_string(10)
+                .expect("bigint renders in base 10")
+        ),
+        "2"
+    );
+    assert_eq!(
+        get(&file, "pending").as_f64(),
+        Some(PendingClass::Content as u32 as f64),
+        "the pending class crosses as its enum value"
+    );
     assert_eq!(get(&file, "deadLetter"), JsValue::FALSE);
 
     let folder_child = children.get(1);
@@ -269,6 +284,10 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
         "an unprojected size must cross as undefined"
     );
     assert!(get(&folder_child, "mtime").is_undefined());
+    assert!(
+        get(&folder_child, "contentVersion").is_undefined(),
+        "an unprojected version count must cross as undefined"
+    );
     assert_eq!(get(&folder_child, "deadLetter"), JsValue::TRUE);
 
     let ancestors = get(&view, "ancestors").unchecked_into::<Array>();
