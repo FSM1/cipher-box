@@ -15,7 +15,9 @@ export default [
       '**/.learnings/**',
       '**/src-tauri/target/**',
       'target/**',
-      // Generated wasm-bindgen glue + Playwright output for the browser suite.
+      // Generated wasm-bindgen glue: the web app's engine artifact, and the
+      // browser suite's conformance copy alongside its Playwright output.
+      'apps/web/src/wasm/**',
       '**/test/browser/pkg/**',
       '**/playwright-report/**',
       '**/test-results/**',

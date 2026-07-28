@@ -1,14 +1,17 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { EngineClient } from '@cipherbox/client';
-import { createEngineClient } from '../engine/createEngineClient';
 
 // `undefined` distinguishes "no provider above me" from "provider mounted,
 // client not built yet".
 const EngineContext = createContext<EngineClient | null | undefined>(undefined);
 
 export interface EngineProviderProps {
-  /** Builds this tab's engine client. Read once, on mount. */
-  createClient?: () => EngineClient;
+  /**
+   * Builds this tab's engine client. Read once, on mount. Injected rather than
+   * defaulted so the WASM artifact stays out of this module's import graph —
+   * only the composition root resolves it.
+   */
+  createClient: () => EngineClient;
   children: ReactNode;
 }
 
@@ -18,10 +21,7 @@ export interface EngineProviderProps {
  * never duplicated. Construction runs in an effect so a StrictMode double-mount
  * disposes the throwaway client rather than leaking a second lock contender.
  */
-export function EngineProvider({
-  createClient = createEngineClient,
-  children,
-}: EngineProviderProps) {
+export function EngineProvider({ createClient, children }: EngineProviderProps) {
   const [client, setClient] = useState<EngineClient | null>(null);
   const factory = useRef(createClient);
 

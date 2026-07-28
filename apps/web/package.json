@@ -4,8 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsc -b && vite",
-    "build": "tsc -b && vite build",
+    "dev": "pnpm build:wasm && tsc -b && vite",
+    "build": "pnpm build:wasm && tsc -b && vite build",
+    "build:wasm": "node scripts/build-wasm.mjs",
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "test": "tsc -b && vitest run"

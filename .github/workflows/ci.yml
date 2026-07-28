@@ -139,8 +139,81 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The web bundle needs the wasm-bindgen artifact, so it is gated by the
+      # `Web Bundle` job, which carries the Rust toolchain; this job stays
+      # TS-only. `!cipher-box` drops the root project, whose own `build` script
+      # would recurse back into every package.
       - name: Build packages
-        run: pnpm build
+        run: pnpm --filter '!@cipherbox/web' --filter '!cipher-box' run build
+
+  # apps/web's production wasm-bindgen artifact and the bundle that serves it
+  # (blueprint/web-client.md "WASM packaging"): the app build emits the engine
+  # module from crates/wasm and Vite fingerprints both files into `dist/assets`.
+  # Merge-blocking, and split out of `Build` so a TS-only change never waits on
+  # a Rust toolchain. Depends on both the crates and packages.
+  web-bundle:
+    name: Web Bundle
+    needs: [changes, lint]
+    if: |
+      !failure() && !cancelled() &&
+      (needs.changes.outputs.ts == 'true' || needs.changes.outputs.rust == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            target
+          key: web-bundle-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: web-bundle-cargo-
+
+      - name: Add wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+          cache: 'pnpm'
+
+      # wasm-bindgen-cli generates the engine glue and must match the locked
+      # wasm-bindgen version exactly (a schema mismatch fails the run).
+      - name: Install wasm-bindgen-cli (matching Cargo.lock)
+        run: |
+          WB_VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "wasm-bindgen ${WB_VERSION}"
+          if wasm-bindgen --version 2>/dev/null | grep -qw "${WB_VERSION}"; then
+            echo "wasm-bindgen-cli ${WB_VERSION} already present (cache hit); skipping install"
+          else
+            cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked --force
+          fi
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the web bundle
+        run: pnpm --filter @cipherbox/web run build
+
+      # The worker's dynamic import resolves to whatever Vite emitted, so the
+      # bundle is only usable if both artifact files landed content-hashed.
+      - name: Bundle carries the fingerprinted engine artifact
+        run: |
+          shopt -s nullglob
+          glue=(apps/web/dist/assets/cipherbox_wasm-*.js)
+          binary=(apps/web/dist/assets/cipherbox_wasm_bg-*.wasm)
+          if [ ${#glue[@]} -ne 1 ] || [ ${#binary[@]} -ne 1 ]; then
+            echo "::error::apps/web/dist is missing the fingerprinted engine WASM artifact"
+            ls -R apps/web/dist
+            exit 1
+          fi
+          echo "engine artifact: ${glue[0]} ${binary[0]}"
 
   api-unit:
     name: API Unit

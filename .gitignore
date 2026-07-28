@@ -30,6 +30,9 @@ yarn-error.log*
 # Test coverage
 coverage/
 
+# Generated wasm-bindgen glue for the web app's engine worker
+apps/web/src/wasm/
+
 # Playwright test results
 packages/client/test/browser/pkg/
 packages/client/playwright-report/

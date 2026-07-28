@@ -69,6 +69,11 @@ jobs:
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
+      # No cargo cache on the deploy path: the shipped artifact is built from a
+      # clean checkout, so no cache entry can reach a staging bundle.
+      - name: Add wasm target
+        run: rustup target add wasm32-unknown-unknown
+
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -76,17 +81,23 @@ jobs:
           node-version-file: 'package.json'
           cache: 'pnpm'
 
+      # wasm-bindgen-cli generates the engine glue and must match the locked
+      # wasm-bindgen version exactly (a schema mismatch fails the run).
+      - name: Install wasm-bindgen-cli (matching Cargo.lock)
+        run: |
+          WB_VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "wasm-bindgen ${WB_VERSION}"
+          if wasm-bindgen --version 2>/dev/null | grep -qw "${WB_VERSION}"; then
+            echo "wasm-bindgen-cli ${WB_VERSION} already present (cache hit); skipping install"
+          else
+            cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked --force
+          fi
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build shared packages
-        run: |
-          pnpm --filter @cipherbox/crypto build
-          pnpm --filter @cipherbox/core build
-          pnpm --filter @cipherbox/api-client build
-          pnpm --filter @cipherbox/sdk-core build
-          pnpm --filter @cipherbox/sdk build
-
+      # Builds the engine WASM artifact first (apps/web `build:wasm`), then the
+      # bundle that fingerprints it.
       - name: Build web app with staging env vars
         run: pnpm --filter @cipherbox/web build
         env:
