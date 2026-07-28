@@ -102,6 +102,13 @@ env -u GITHUB_TOKEN gh api repos/FSM1/cipher-box/pulls/<N>/reviews \
 
 **Never end your turn intending to come back to this.** Nothing wakes you: the turn ends, the review is never processed, and the PR sits looking finished when it was never reviewed. Backgrounding the wait or scheduling a detached sleep fails the same way. If the budget (~45 min) expires with no review, say so plainly with the poll output rather than implying one happened.
 
+**But only wait for something that is actually coming.** Wait inline for a review that has been _triggered and is pending_. If the `CodeRabbit` check reads **`Review rate limited`**, that is a **terminal outcome to report, not a delay to absorb** — stop immediately and say so. Two cautions, both of which have burned real time here:
+
+- **The check status goes stale.** `Review rate limited` persists from the last attempt and does _not_ refresh when the window expires. Never infer the current quota from it. Compute the real reset from the last **submitted** review (`.submitted_at` on `/pulls/<N>/reviews`) plus one hour, or read `Next review available in: N minutes` from CodeRabbit's own rate-limit comment — and mind that comment's own timestamp, since it too goes stale.
+- **Toggling ready inside a limited window buys nothing** — it consumes the transition without producing a review. Confirm the slot is genuinely open _before_ `gh pr ready`.
+
+**This applies equally to the re-review of your own fix commits.** After you push fixes, CodeRabbit re-reviews only if quota allows. A re-review is **polish, not a gate**: once the original findings are addressed, the threads are resolved, and CI is green, the PR is complete. Report and stop. Do not wait out another hour, and never re-request a review to force one.
+
 A CodeRabbit **walkthrough is not a review pass** — confirm an actually-submitted review ("Actionable comments posted: N") before concluding it reviewed. Then:
 
 - CodeRabbit bundles findings in the **review body** AND as inline **review threads**. Fetch threads via the GraphQL `reviewThreads` query (id, isResolved, path, line, first comment body). Query **all** threads, no author filter — Greptile reviews too, sometimes late; CodeRabbit's author is `coderabbitai`, not `coderabbitai[bot]`. Expect re-reviews of your own fix commits — triage those too.
