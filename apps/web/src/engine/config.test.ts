@@ -23,6 +23,12 @@ describe('engineHostConfig', () => {
     expect(config.wasmBinaryUrl).toBe('/assets/engine.wasm');
   });
 
+  it('rejects a routing endpoint set that parses to nothing', () => {
+    expect(() => engineHostConfig({ VITE_ROUTING_ENDPOINTS: ' , ' })).toThrow(
+      /VITE_ROUTING_ENDPOINTS/
+    );
+  });
+
   it('falls back to defaults for an unconfigured environment', () => {
     const config = engineHostConfig({});
     expect(config.apiBaseUrl).toBe('http://localhost:3000');
