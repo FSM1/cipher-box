@@ -58,7 +58,7 @@
   },
   "kdf": {
     "file": "vectors/kdf/edges.json",
-    "count": 14,
+    "count": 15,
     "edges": [
       {
         "name": "node-seed",
@@ -129,6 +129,11 @@
         "name": "vault-pointer-index",
         "context": "cipherbox/v2/vault-pointer-index",
         "inputLayout": "ed25519_from_seed(keyed_hash(derive_key(ctx, loginSecret[var]), index[8 BE]))"
+      },
+      {
+        "name": "settings-ipns-keypair",
+        "context": "cipherbox/v2/settings-ipns-keypair",
+        "inputLayout": "ed25519_from_seed(derive_key(ctx, loginSecret[var]))"
       }
     ]
   },

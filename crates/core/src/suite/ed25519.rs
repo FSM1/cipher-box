@@ -1,7 +1,6 @@
 //! Ed25519 signing (blueprint/core.md "Crypto suite": pseudonym + record
 //! signing). Deterministic by construction — no RNG — so seeds injected by the
-//! KDF catalog's `ipns-keypair`, `pseudonym-sign`, `scope-pointer`, and
-//! `vault-pointer-index` edges yield reproducible keypairs.
+//! [`crate::kdf`] catalog's Ed25519 edges yield reproducible keypairs.
 //!
 //! The structure-signature verify *policy* (fail-closed, whole-record) is the
 //! engine's gate; this module ships only the pure primitive.

@@ -1,6 +1,6 @@
 //! The frozen KDF edge catalog (blueprint/core.md "KDF edge catalog", #39 D8).
 //!
-//! Nothing in CipherBox derives a key outside these fourteen edges. Every edge
+//! Nothing in CipherBox derives a key outside these fifteen edges. Every edge
 //! is domain-separated by a fixed `cipherbox/v2/<edge>` context string fed to
 //! BLAKE3 `derive_key`; per-node/per-id material then takes the frozen shape
 //! `keyed_hash(derive_key(context, seed), id)` — ids, tags, and indices are
@@ -45,6 +45,7 @@ const CTX_OWNER_POINTER_SEED: &str = "cipherbox/v2/owner-pointer-seed";
 const CTX_SCOPE_POINTER: &str = "cipherbox/v2/scope-pointer";
 const CTX_POINTER_READ_KEY: &str = "cipherbox/v2/pointer-read-key";
 const CTX_VAULT_POINTER_INDEX: &str = "cipherbox/v2/vault-pointer-index";
+const CTX_SETTINGS_IPNS_KEYPAIR: &str = "cipherbox/v2/settings-ipns-keypair";
 
 /// One catalog edge's frozen, machine-checkable metadata: its stable name, its
 /// `cipherbox/v2/...` context string, and an input-layout descriptor. The KAT
@@ -56,7 +57,7 @@ pub struct EdgeSpec {
     pub input_layout: &'static str,
 }
 
-/// The fourteen edges, in catalog order. [`edge_probe_outputs`] returns one
+/// The fifteen edges, in catalog order. [`edge_probe_outputs`] returns one
 /// output per row in this same order.
 pub const EDGES: &[EdgeSpec] = &[
     EdgeSpec {
@@ -128,6 +129,11 @@ pub const EDGES: &[EdgeSpec] = &[
         name: "vault-pointer-index",
         context: CTX_VAULT_POINTER_INDEX,
         input_layout: "ed25519_from_seed(keyed_hash(derive_key(ctx, loginSecret[var]), index[8 BE]))",
+    },
+    EdgeSpec {
+        name: "settings-ipns-keypair",
+        context: CTX_SETTINGS_IPNS_KEYPAIR,
+        input_layout: "ed25519_from_seed(derive_key(ctx, loginSecret[var]))",
     },
 ];
 
@@ -219,6 +225,10 @@ fn vault_pointer_index_bytes(login_secret: &[u8], index: u64) -> SecretBytes {
         derive_key(CTX_VAULT_POINTER_INDEX, login_secret).as_bytes(),
         &index.to_be_bytes(),
     )
+}
+
+fn settings_ipns_keypair_bytes(login_secret: &[u8]) -> SecretBytes {
+    derive_key(CTX_SETTINGS_IPNS_KEYPAIR, login_secret)
 }
 
 // ---------------------------------------------------------------------------
@@ -313,6 +323,13 @@ pub fn vault_pointer_index(login_secret: &[u8], index: u64) -> Ed25519Signer {
     Ed25519Signer::from_seed(*vault_pointer_index_bytes(login_secret, index).as_bytes())
 }
 
+/// `settings-ipns-keypair`: the vault settings record's Ed25519 keypair
+/// (→ `ipnsName`), derived from the login secret so the name resolves at cold
+/// start without CipherBox infrastructure.
+pub fn settings_ipns_keypair(login_secret: &[u8]) -> Ed25519Signer {
+    Ed25519Signer::from_seed(*settings_ipns_keypair_bytes(login_secret).as_bytes())
+}
+
 // ---------------------------------------------------------------------------
 // Separation surface: the whole edge table under one set of probe inputs.
 // ---------------------------------------------------------------------------
@@ -377,7 +394,7 @@ impl core::fmt::Debug for EdgeProbeOutput {
 }
 
 /// Run every edge under one probe, in [`EDGES`] order. Backs the separation KAT
-/// (the fourteen outputs must be pairwise distinct) and its property test, and
+/// (the fifteen outputs must be pairwise distinct) and its property test, and
 /// is the frozen-vector surface the KAT generator writes.
 ///
 /// This is the **catalog-freezing / separation surface**, not the production
@@ -448,6 +465,10 @@ pub fn edge_probe_outputs(probe: &EdgeProbe) -> Vec<EdgeProbeOutput> {
         EdgeProbeOutput {
             name: "vault-pointer-index",
             output: b(vault_pointer_index_bytes(probe.seed, probe.index)),
+        },
+        EdgeProbeOutput {
+            name: "settings-ipns-keypair",
+            output: b(settings_ipns_keypair_bytes(probe.seed)),
         },
     ]
 }
@@ -521,6 +542,12 @@ mod tests {
             enc_subkey(&seed).public().to_bytes(),
             X25519Secret::from_scalar(by("enc-subkey"))
                 .public()
+                .to_bytes()
+        );
+        assert_eq!(
+            settings_ipns_keypair(&seed).verifying_key().to_bytes(),
+            Ed25519Signer::from_seed(by("settings-ipns-keypair"))
+                .verifying_key()
                 .to_bytes()
         );
     }

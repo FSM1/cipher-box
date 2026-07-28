@@ -1947,7 +1947,7 @@ fn envelope_reject_vectors_fire_the_named_check() {
 }
 
 // ---------------------------------------------------------------------------
-// KDF edge catalog: the fourteen frozen edges, their contexts + layouts, the
+// KDF edge catalog: the fifteen frozen edges, their contexts + layouts, the
 // per-edge output freeze, and the mechanical separation KAT.
 // ---------------------------------------------------------------------------
 
@@ -1970,6 +1970,7 @@ const ALL_EDGE_NAMES: &[&str] = &[
     "scope-pointer",
     "pointer-read-key",
     "vault-pointer-index",
+    "settings-ipns-keypair",
 ];
 
 #[test]

@@ -90,6 +90,12 @@
       "context": "cipherbox/v2/vault-pointer-index",
       "inputLayout": "ed25519_from_seed(keyed_hash(derive_key(ctx, loginSecret[var]), index[8 BE]))",
       "output": "edc7d34844be81ebaecaa1733024479de5708f855d72802a8a5461f95cb23340"
+    },
+    {
+      "name": "settings-ipns-keypair",
+      "context": "cipherbox/v2/settings-ipns-keypair",
+      "inputLayout": "ed25519_from_seed(derive_key(ctx, loginSecret[var]))",
+      "output": "2e696a4097ec1bb360623faa4373cd27cdd7f3ea223ffa867e611549d03de98d"
     }
   ]
 }
