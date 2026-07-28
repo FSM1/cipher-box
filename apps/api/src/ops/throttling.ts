@@ -1,3 +1,34 @@
+import { positiveIntConfig } from '../common/config-int';
+
+/**
+ * The auth surface's per-IP limit; mirrored by the contract suite's
+ * `PRODUCTION_AUTH_LIMIT` (crates/contract/tests/contract.rs).
+ */
+const AUTH_LIMIT = 10;
+
+/**
+ * The undeployed profiles, where the API only ever answers a test harness — the
+ * same pair `AuthController` treats as not needing secure cookies.
+ */
+const TEST_PROFILES = ['test', 'development'];
+
+/**
+ * The effective per-IP auth limit, resolved per request by the throttler guard.
+ *
+ * A whole test suite logs in from ONE IP, so this bucket silently caps how many
+ * tests can exist (#837); `THROTTLE_AUTH_LIMIT` raises it, but ONLY on an
+ * undeployed profile — an allowlist rather than a production denylist, so no
+ * internet-facing deployment can be configured out of a live rate limit. The
+ * env is read directly because the guard resolves this outside Nest's DI graph,
+ * as `account-throttler.guard.ts` already does for the JWT secret.
+ */
+export function resolveAuthLimit(): number {
+  if (!TEST_PROFILES.includes(process.env.NODE_ENV ?? '')) {
+    return AUTH_LIMIT;
+  }
+  return positiveIntConfig(process.env.THROTTLE_AUTH_LIMIT, AUTH_LIMIT);
+}
+
 /**
  * Per-surface rate limits (blueprint/api.md Ops: a working global throttler
  * with per-surface limits — v1's inert decorators are a named defect, so
@@ -8,7 +39,7 @@
  */
 export const THROTTLE_SURFACES = {
   /** Login-shaped endpoints: challenge issuance and credential presentation. */
-  auth: { default: { limit: 10, ttl: 60_000 } },
+  auth: { default: { limit: resolveAuthLimit, ttl: 60_000 } },
   /** Refresh rotation: chattier than login, still bounded. */
   refresh: { default: { limit: 30, ttl: 60_000 } },
   /**

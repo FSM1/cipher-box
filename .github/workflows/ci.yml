@@ -648,6 +648,11 @@ jobs:
       QUOTA_DEFAULT_BYTES: '1024'
       # The client-presented secret must equal the API's TEST_LOGIN_SECRET.
       TEST_LOGIN_SECRET: contract-suite-secret
+      # The whole suite logs in from one IP, so the per-IP auth bucket would
+      # otherwise cap how many tests can exist (#837). Only the test-mode
+      # instance honors it; the production-mode one on 3100 refuses it, which
+      # the suite asserts.
+      THROTTLE_AUTH_LIMIT: '200'
       CONTRACT_API_URL: http://localhost:3000
       CONTRACT_API_PROD_URL: http://localhost:3100
       CONTRACT_TEST_LOGIN_SECRET: contract-suite-secret
