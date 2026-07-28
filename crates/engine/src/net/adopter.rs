@@ -19,7 +19,7 @@
 use core::cell::RefCell;
 
 use cipherbox_core::content::{decode_content_cid_str, verify_cid};
-use cipherbox_core::error::{CodecError, Malformed};
+use cipherbox_core::error::{CodecError, Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -33,7 +33,7 @@ use zeroize::Zeroizing;
 
 use super::publish::head_cid_from_value;
 use super::resolve::{AdoptOutcome, Adopter, OwnScopeMaterial};
-use crate::content::{ContentPlane, Gateway, ReadError, read_block};
+use crate::content::{ContentPlane, Gateway, ReadError, is_plane_anchor, read_block};
 use crate::gate::{
     Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason, SeedBlob,
     adopt, floor,
@@ -338,6 +338,11 @@ pub(crate) async fn assemble_head_envelope<H: Http>(
 
     let block = match local.filter(|held| held.cid == cid_str) {
         Some(held) => {
+            // A locally-held block clears the same bar as a fetched one: the
+            // plane's anchor check, then the content address itself.
+            if !is_plane_anchor(&cid_str, &expected_cid, ContentPlane::Root) {
+                return Err(assembly_reject(TrustViolation::ContentCidMismatch.into()));
+            }
             verify_cid(&expected_cid, &held.block).map_err(assembly_reject)?;
             held.block.clone()
         }
@@ -531,6 +536,62 @@ mod tests {
         assert_eq!(candidate.grant_section, fx.grant_section);
         // The head block was fetched at its canonical content-CID address.
         assert!(http.requests()[0].url.contains(&fx.head_cid_str));
+    }
+
+    #[test]
+    fn a_held_local_head_serves_the_assembly_without_a_fetch() {
+        let fx = Fixture::new();
+        // No scripted response at all: a fetch here would fail the assembly.
+        let http = ScriptedHttp::default();
+        let floors = InMemoryFloorStore::default();
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+        adopter.hold_local_head(LocalHead {
+            cid: fx.head_cid_str.clone(),
+            block: fx.head_block.clone(),
+        });
+
+        let candidate = block_on(adopter.assemble_candidate(&fx.name, &fx.record(1)))
+            .expect("the held block stands in for the fetch");
+        assert_eq!(candidate.envelope, fx.envelope);
+        assert!(http.requests().is_empty(), "the write path skips the fetch");
+    }
+
+    #[test]
+    fn a_held_local_head_that_is_not_the_records_own_block_is_never_trusted() {
+        let fx = Fixture::new();
+        let http = ScriptedHttp::default();
+        let floors = InMemoryFloorStore::default();
+        let gw = gateway();
+
+        // Right address, wrong bytes: the content-address check refuses them
+        // exactly as it refuses a tampered fetched block.
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+        adopter.hold_local_head(LocalHead {
+            cid: fx.head_cid_str.clone(),
+            block: b"not the block this record anchors".to_vec(),
+        });
+        match block_on(adopter.assemble_candidate(&fx.name, &fx.record(1))) {
+            Err(GateError::Rejected(r)) => assert_eq!(r.check(), "content-cid-mismatch"),
+            Err(GateError::Seam(e)) => panic!("expected a rejection, got seam {e}"),
+            Ok(_) => panic!("a mis-addressed local head must fail closed"),
+        }
+
+        // A held block for some other record is simply not this record's head:
+        // the assembly falls back to the network for the one it does anchor.
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+        adopter.hold_local_head(LocalHead {
+            cid: "bafkreiotherblockaddress".to_owned(),
+            block: b"another record's head".to_vec(),
+        });
+        assert_eq!(
+            block_on(adopter.assemble_candidate(&fx.name, &fx.record(1)))
+                .expect("falls back to the fetch")
+                .envelope,
+            fx.envelope
+        );
     }
 
     #[test]

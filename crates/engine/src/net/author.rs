@@ -2,19 +2,15 @@
 //! body, seal it into an envelope, and mint the parent's ref to it
 //! (blueprint/engine.md "Resolve/publish pipeline: Publish").
 //!
-//! This is where #812's encode-side fail-closed guards live (security rule 8;
-//! #823 assigned them here rather than to core, so the produce-side guard and
-//! the decode-side reject are the same function and cannot drift):
+//! Home of the encode-side fail-closed guards #823 assigned to the engine
+//! rather than to core (security rule 8). None is a `debug_assert!`, so a
+//! release build refuses exactly the bytes a debug build does:
 //!
-//! | Guard                             | Form       | Mechanism                                     |
-//! | --------------------------------- | ---------- | --------------------------------------------- |
-//! | Grant section on a child envelope | checked    | [`author_child_envelope`] calls core's `has_grant_section` |
-//! | Kind transplant                   | structural | [`new_child`] feeds one [`NodeKind`] to both sides |
-//! | Child-ref `ipnsName` well-formed  | structural | authoring takes a typed [`IpnsName`]          |
-//!
-//! No guard is a `debug_assert!`: the checked one returns `Err`, the structural
-//! ones are unrepresentable, so every guard behaves identically under
-//! `--release`.
+//! - a child envelope carrying a grant section returns `Err`, off core's own
+//!   `has_grant_section` — the produce guard and the decode reject cannot drift;
+//! - a kind transplant and a non-canonical child-ref `ipnsName` are
+//!   unrepresentable: [`new_child`] feeds one [`NodeKind`] and one typed
+//!   [`IpnsName`] to both the body and the parent's ref.
 
 use cipherbox_core::codec::Value;
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};

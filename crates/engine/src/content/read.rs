@@ -149,6 +149,16 @@ pub enum ReadError {
     Unavailable,
 }
 
+/// Whether the pair names a canonical block address on `plane`: the CID is
+/// well-formed for that plane's codec and the string is its canonical spelling.
+/// The anchor check every block read makes before trusting any bytes for it —
+/// a locally-held block must clear the same bar as a fetched one.
+pub fn is_plane_anchor(cid_str: &str, expected_cid: &[u8], plane: ContentPlane) -> bool {
+    expected_cid.len() == CONTENT_CID_LEN
+        && expected_cid[CID_CODEC_INDEX] == plane.codec()
+        && is_canonical_content_cid_str(cid_str)
+}
+
 /// Fetch and verify one block addressed by `cid_str` against its binary
 /// `expected_cid`. `cid_str` is the gateway address (the canonical CIDv1
 /// base32 string as it appears in metadata/links); `expected_cid` is the binary
@@ -179,11 +189,8 @@ pub async fn read_block(
     expected_cid: &[u8],
     plane: ContentPlane,
 ) -> Result<Vec<u8>, ReadError> {
-    // Reject a non-anchor request before any fetch, fail-closed (codec
-    // out-of-set/wrong-plane, or a non-canonical address).
-    let codec_ok =
-        expected_cid.len() == CONTENT_CID_LEN && expected_cid[CID_CODEC_INDEX] == plane.codec();
-    if !codec_ok || !is_canonical_content_cid_str(cid_str) {
+    // Reject a non-anchor request before any fetch, fail-closed.
+    if !is_plane_anchor(cid_str, expected_cid, plane) {
         return Err(ReadError::TrustViolation(
             TrustViolation::ContentCidMismatch.into(),
         ));

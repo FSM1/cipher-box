@@ -286,6 +286,109 @@ fn a_folder_create_publishes_and_resolves_back() {
     );
 }
 
+/// A restart whose root is unchanged resolves `Current`, which adopts nothing.
+/// The write plane must still keep the seeds it seals and signs under, or the
+/// very bug this slice fixes — a `mkdir` that publishes nothing — returns on
+/// the second run.
+#[test]
+fn a_restart_that_adopts_nothing_still_drains() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    serve_http(&alice, &blocks, 40);
+    let (mut engine, _events) = engine_on(&alice, 42);
+    block_on(engine.start(secret())).unwrap();
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+        content: None,
+    }))
+    .unwrap();
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_each(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+    drop(engine);
+
+    // Same device, second run: the network root is exactly at this device's
+    // durable floor, so cold start reconciles without adopting.
+    let (mut engine, _events) = engine_on(&alice, 43);
+    block_on(engine.start(secret())).unwrap();
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "docs".into(),
+        kind: NodeKind::Folder,
+        content: None,
+    }))
+    .unwrap();
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_each(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let mut names: Vec<String> = block_on(engine.view())
+        .unwrap()
+        .children(ROOT)
+        .into_iter()
+        .map(|child| child.name)
+        .collect();
+    names.sort();
+    assert_eq!(names, ["docs", "photos"], "both runs published");
+
+    let published = world
+        .record_store
+        .record_at(&world.record_store.endpoints()[0], root_name.as_str())
+        .expect("the root record is published");
+    let sequence = IpnsRecord::unmarshal(&published)
+        .and_then(|record| record.verify(&root_name))
+        .expect("the published root verifies under its own name")
+        .sequence;
+    assert_eq!(sequence, 3, "the second run advanced the root again");
+}
+
+/// The drain covers `Create { content: None }`, which is both kinds: a file
+/// with no content yet is a metadata-only create exactly like a folder, and its
+/// record is a file body with an empty version list.
+#[test]
+fn an_empty_file_create_publishes_under_the_same_metadata_path() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    serve_http(&alice, &blocks, 16);
+    let (mut engine, _events) = engine_on(&alice, 42);
+    block_on(engine.start(secret())).unwrap();
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "notes.txt".into(),
+        kind: NodeKind::File,
+        content: None,
+    }))
+    .unwrap();
+
+    let mut tasks = world.scheduler.take_spawned_tasks();
+    poll_each(&mut tasks);
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.snapshot(ROOT)).unwrap();
+    assert_eq!(view.children.len(), 1);
+    assert_eq!(view.children[0].name, "notes.txt");
+    assert_eq!(
+        view.children[0].kind,
+        NodeKind::File,
+        "the kind the parent ref carries is the kind the child body was sealed as"
+    );
+    assert_eq!(view.children[0].pending, PendingClass::None);
+    assert!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .is_empty(),
+        "the queue drained rather than wedging on an unsupported kind"
+    );
+}
+
 #[test]
 fn a_second_device_of_the_same_account_resolves_the_write() {
     let world = FakeWorld::new();

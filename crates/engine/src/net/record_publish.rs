@@ -14,7 +14,7 @@ use cipherbox_core::seal::open_read_body;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::author::AuthoredHead;
-use super::publish::{PublishError, PublishOutcome, PublishRequest, publish};
+use super::publish::{PublishError, PublishReceipt, PublishRequest, publish};
 use crate::api::{ApiClient, ApiError};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
@@ -109,34 +109,6 @@ pub struct RecordPublishRequest<'a> {
     pub min_current_sequence: Option<u64>,
 }
 
-/// What a record publish produced. `Published` is the only outcome whose bytes
-/// a caller may self-adopt: adopting an `Unconfirmed` publish would advance the
-/// sequence floor and destroy the idempotent-in-sequence retry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RecordPublishOutcome {
-    /// The record landed and re-resolved as the freshest at the name.
-    Published {
-        /// The sequence embedded in the published record.
-        sequence: u64,
-        /// The signed record bytes, for the caller's self-adopt.
-        record_bytes: Vec<u8>,
-    },
-    /// The PUT was acked but nothing resolved back — availability, not trust.
-    Unconfirmed {
-        /// The sequence embedded in the published record.
-        sequence: u64,
-        /// The signed record bytes.
-        record_bytes: Vec<u8>,
-    },
-    /// A concurrent writer landed a strictly higher sequence first.
-    LostRace {
-        /// The sequence this publish embedded.
-        published_sequence: u64,
-        /// The higher sequence a concurrent writer landed first.
-        observed_sequence: u64,
-    },
-}
-
 /// A fail-closed record-publish failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecordPublishError {
@@ -156,7 +128,10 @@ pub enum RecordPublishError {
 }
 
 /// Publish one authored record: upload its head block, then run the
-/// register-first CAS publish and hand back the signed bytes.
+/// register-first CAS publish and hand back the signed bytes. Only
+/// [`PublishOutcome::Published`] bytes may be self-adopted — adopting an
+/// unconfirmed publish would advance the sequence floor and destroy the
+/// idempotent-in-sequence retry.
 pub async fn publish_record<T, H, C, F, Sch>(
     transport: &T,
     api: &ApiClient<H, C>,
@@ -164,7 +139,7 @@ pub async fn publish_record<T, H, C, F, Sch>(
     scheduler: &Sch,
     profile: &SyncTimingProfile,
     request: &RecordPublishRequest<'_>,
-) -> Result<RecordPublishOutcome, RecordPublishError>
+) -> Result<PublishReceipt, RecordPublishError>
 where
     T: RecordTransport + Clone + 'static,
     H: Http,
@@ -183,7 +158,7 @@ where
         });
     }
 
-    let receipt = publish(
+    publish(
         transport,
         api,
         floors,
@@ -198,25 +173,7 @@ where
         },
     )
     .await
-    .map_err(RecordPublishError::Publish)?;
-
-    Ok(match receipt.outcome {
-        PublishOutcome::Published { sequence } => RecordPublishOutcome::Published {
-            sequence,
-            record_bytes: receipt.record_bytes,
-        },
-        PublishOutcome::Unconfirmed { sequence } => RecordPublishOutcome::Unconfirmed {
-            sequence,
-            record_bytes: receipt.record_bytes,
-        },
-        PublishOutcome::LostRace {
-            published_sequence,
-            observed_sequence,
-        } => RecordPublishOutcome::LostRace {
-            published_sequence,
-            observed_sequence,
-        },
-    })
+    .map_err(RecordPublishError::Publish)
 }
 
 #[cfg(test)]

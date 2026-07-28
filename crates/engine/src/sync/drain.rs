@@ -34,9 +34,9 @@ use crate::net::author::{
     AuthorError, AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope,
     author_scope_root_envelope, new_child,
 };
+use crate::net::publish::{PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{
-    HeadBinding, PreflightError, RecordPublishOutcome, RecordPublishRequest, preflight,
-    publish_record,
+    HeadBinding, PreflightError, RecordPublishRequest, preflight, publish_record,
 };
 use crate::net::{
     AdoptOutcome, Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, RootAdopter,
@@ -313,15 +313,16 @@ where
     ) -> Result<(), DrainHalt> {
         let OpKind::Create {
             parent,
-            kind: NodeKind::Folder,
+            kind,
             content: None,
             ..
         } = &applied.op.kind
         else {
             return Err(DrainHalt::Unsupported);
         };
-        // Deeper folders need their own parent record authored, which is the
-        // next slice; this one publishes creates directly under the scope root.
+        // A deeper parent's own record is not authorable yet: the base snapshot
+        // projects the root's direct children only, so there is no gate-passing
+        // sub-folder body to re-author onto.
         if *parent != scope.root {
             return Err(DrainHalt::Unsupported);
         }
@@ -336,7 +337,7 @@ where
             child_id.0,
             name,
             &child_name,
-            CoreNodeKind::Folder,
+            core_kind(*kind),
             rebased.max_link_counter(child_id),
             applied.op.authored_at.0,
         );
@@ -450,7 +451,10 @@ where
         let preflighted = preflight(&binding, &self.node_read_key(scope, node_id), head)
             .map_err(DrainHalt::Preflight)?;
         let signer = SessionIdentity::write_name_signer(scope.write_scope_seed, node_id);
-        let outcome = publish_record(
+        let PublishReceipt {
+            outcome,
+            record_bytes,
+        } = publish_record(
             self.transport,
             self.api,
             self.floors,
@@ -467,11 +471,11 @@ where
         .await
         .map_err(|e| DrainHalt::Publish(format!("{e:?}")))?;
         match outcome {
-            RecordPublishOutcome::Published { record_bytes, .. } => Ok(record_bytes),
-            RecordPublishOutcome::Unconfirmed { sequence, .. } => Err(DrainHalt::Publish(format!(
+            PublishOutcome::Published { .. } => Ok(record_bytes),
+            PublishOutcome::Unconfirmed { sequence } => Err(DrainHalt::Publish(format!(
                 "sequence {sequence} published but nothing resolved back"
             ))),
-            RecordPublishOutcome::LostRace {
+            PublishOutcome::LostRace {
                 published_sequence,
                 observed_sequence,
             } => Err(DrainHalt::Publish(format!(
@@ -554,6 +558,14 @@ where
             .fill(&mut nonce)
             .map_err(|e| DrainHalt::Seam(e.message().to_owned()))?;
         Ok(nonce)
+    }
+}
+
+/// Map the facade node kind onto the structurally-identical wire kind.
+fn core_kind(kind: NodeKind) -> CoreNodeKind {
+    match kind {
+        NodeKind::Folder => CoreNodeKind::Folder,
+        NodeKind::File => CoreNodeKind::File,
     }
 }
 
