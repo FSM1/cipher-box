@@ -205,12 +205,23 @@ where
     // to pass for `Published`).
     let observed = fanout_get_verify(transport, request.name).await;
     let outcome = match observed {
+        // `fanout_get_verify` reports the freshest record across the endpoint
+        // set. Only our own bytes prove a readable endpoint holds *our* record:
+        // a different record at the same sequence is a fork — a retry that
+        // re-authored after an unconfirmed PUT — and adopting it would advance
+        // the floor past bytes the network may never serve.
+        Some((observed_sequence, bytes)) if observed_sequence == sequence => {
+            if bytes == record_bytes {
+                PublishOutcome::Published { sequence }
+            } else {
+                PublishOutcome::Unconfirmed { sequence }
+            }
+        }
         Some((observed_sequence, _)) if observed_sequence > sequence => PublishOutcome::LostRace {
             published_sequence: sequence,
             observed_sequence,
         },
-        Some(_) => PublishOutcome::Published { sequence },
-        None => PublishOutcome::Unconfirmed { sequence },
+        _ => PublishOutcome::Unconfirmed { sequence },
     };
     Ok(PublishReceipt {
         outcome,

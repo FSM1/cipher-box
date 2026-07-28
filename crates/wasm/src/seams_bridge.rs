@@ -206,6 +206,7 @@ impl SnapshotCache for SnapshotCacheAdapter {
 #[wasm_bindgen]
 extern "C" {
     /// JS `StagingStoreSeam` (packages/client).
+    #[derive(Clone)]
     pub type JsStagingStoreSeam;
 
     #[wasm_bindgen(method, catch, js_name = enqueueOp)]
@@ -236,6 +237,7 @@ extern "C" {
     async fn staged_bytes_total(this: &JsStagingStoreSeam) -> Result<JsValue, JsValue>;
 }
 
+#[derive(Clone)]
 pub(crate) struct StagingStoreAdapter {
     pub(crate) js: JsStagingStoreSeam,
 }

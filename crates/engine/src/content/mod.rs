@@ -18,7 +18,7 @@
 
 pub mod chunk;
 pub mod dag;
-mod limits;
+pub(crate) mod limits;
 pub mod profile;
 pub mod provider;
 pub mod read;

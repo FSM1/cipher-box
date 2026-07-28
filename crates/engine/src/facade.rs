@@ -42,6 +42,7 @@ use crate::net::{
     run_liveness_loop,
 };
 use crate::profile::SyncTimingProfile;
+use crate::rotation::derive_write_name;
 use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore, UnixMillis};
 use crate::session::SessionIdentity;
 use crate::storage_policy::StoragePolicy;
@@ -738,6 +739,23 @@ fn surface_drain_report(
     }
 }
 
+/// Deposit a recovered scope write seed, but only if it derives the very name
+/// the scope root publishes under. A write-capable grantee can commit an
+/// owner-write-blob wrapping a seed of its choosing; holding it would make the
+/// drain mint every new node's `ipnsName` and signer from a key that party also
+/// holds. A seed that cannot name our own root is not our scope's — held
+/// keyless, never a trust verdict.
+fn deposit_write_seed(
+    cell: &RefCell<ScopeWriteSeeds>,
+    scope_id: [u8; 16],
+    seed: Zeroizing<[u8; 32]>,
+    root_name: Option<&IpnsName>,
+) {
+    if root_name.is_some_and(|name| derive_write_name(&seed, &scope_id) == *name) {
+        cell.borrow_mut().insert(scope_id, seed);
+    }
+}
+
 /// Count nodes reachable from the root via the link graph, cycle-guarded (a
 /// malformed link cycle terminates rather than looping).
 fn count_nodes(snapshot: &Snapshot) -> u64 {
@@ -992,12 +1010,6 @@ impl<T: SeamTypes> Engine<T> {
                 .borrow_mut()
                 .insert(root_scope_id, seed);
         }
-        // The same adopt recovered the scope write seed: the drain derives every
-        // new node's `ipnsName` and its narrow per-name signer from it.
-        if let Some((scope_id, seed)) = outcome.write_scope_seed.take() {
-            self.scope_write_seeds.borrow_mut().insert(scope_id, seed);
-        }
-
         // The gate-passing base becomes the state law's left operand (reads render
         // this ⊕ the pending-op overlay). The resolved root name — the vault
         // pointer's `currentRoot` — drives the resolve-tick loop; `None` on an
@@ -1006,6 +1018,11 @@ impl<T: SeamTypes> Engine<T> {
             .vault_pointer
             .as_ref()
             .map(|vp| vp.repoint.current_root.clone());
+        // The same adopt recovered the scope write seed: the drain derives every
+        // new node's `ipnsName` and its narrow per-name signer from it.
+        if let Some((scope_id, seed)) = outcome.write_scope_seed.take() {
+            deposit_write_seed(&self.scope_write_seeds, scope_id, seed, root_name.as_ref());
+        }
         *self.snapshot.borrow_mut() = outcome.base;
         // A successful cold start is a successful reconcile: stamp it so the
         // ladder starts Fresh rather than Reconciling.
@@ -1265,7 +1282,7 @@ impl<T: SeamTypes> Engine<T> {
                         scope_read_seeds.borrow_mut().insert(root_id, seed);
                     }
                     if let Some((node_id, seed)) = held_resolve.write_scope_seed {
-                        scope_write_seeds.borrow_mut().insert(node_id, seed);
+                        deposit_write_seed(&scope_write_seeds, node_id, seed, Some(&root_name));
                     }
                     held_resolve.resolved
                 });
@@ -1298,7 +1315,7 @@ impl<T: SeamTypes> Engine<T> {
                     .run(&DrainScope {
                         root: NodeId(root_id),
                         root_name: &root_name,
-                        scope_read_seed: &read_seed,
+                        read_scope_seed: &read_seed,
                         write_scope_seed: &write_seed,
                         enc_secret: session.enc_subkey(),
                         owner_identity: &owner_identity,

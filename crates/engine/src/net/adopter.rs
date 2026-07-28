@@ -25,7 +25,7 @@ use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, Envelope, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, SignedOwnerBlob,
     SignedOwnerWriteBlob, decode_envelope, decode_grant_section, grant_section_bytes,
-    open_owner_blob, open_owner_write_blob,
+    open_owner_blob, open_owner_write_blob, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -767,6 +767,26 @@ mod tests {
         );
     }
 
+    /// Drive the real equal-floor `Current` sequence: the durable floor already
+    /// sits at the record's sequence, so `adopt` rejects at the sequence stage
+    /// and caches its candidate, and recovery runs off that.
+    async fn recover_at_floor(
+        adopter: &RootAdopter<'_, ScriptedHttp, InMemoryFloorStore>,
+        floors: &InMemoryFloorStore,
+        fx: &Fixture,
+    ) -> Result<Option<OwnScopeMaterial>, SeamError> {
+        floors
+            .raise_sequence_floor(fx.name.as_str().as_bytes(), 1)
+            .await
+            .expect("seed the floor");
+        let record = fx.record(1);
+        assert!(
+            adopter.adopt(&fx.name, &record).await.is_err(),
+            "an equal-floor record must reject at the sequence stage"
+        );
+        adopter.recover_own_scope_material(&fx.name, &record).await
+    }
+
     #[test]
     fn recovery_returns_both_scope_seeds_for_our_own_current_root() {
         let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
@@ -776,8 +796,7 @@ mod tests {
         seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
         let gw = gateway();
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
-
-        let material = block_on(adopter.recover_own_scope_material(&fx.name, &fx.record(1)))
+        let material = block_on(recover_at_floor(&adopter, &floors, &fx))
             .expect("recovery is fail-open, never an error")
             .expect("the owner recovers its own scope seeds on the Current path");
         assert_eq!(material.node_id, fx.root_id, "keyed by the envelope id");
@@ -837,7 +856,7 @@ mod tests {
         let gw = gateway();
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
         assert!(
-            block_on(adopter.recover_own_scope_material(&fx.name, &fx.record(1)))
+            block_on(recover_at_floor(&adopter, &floors, &fx))
                 .expect("fail-open")
                 .expect("the read seed still recovers")
                 .write_scope_seed
@@ -854,7 +873,7 @@ mod tests {
         let gw = gateway();
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
         assert!(
-            block_on(adopter.recover_own_scope_material(&fx.name, &fx.record(1)))
+            block_on(recover_at_floor(&adopter, &floors, &fx))
                 .expect("fail-open")
                 .expect("the read seed still recovers")
                 .write_scope_seed
@@ -872,7 +891,7 @@ mod tests {
         let gw = gateway();
         let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
         assert!(
-            block_on(adopter.recover_own_scope_material(&fx.name, &fx.record(1)))
+            block_on(recover_at_floor(&adopter, &floors, &fx))
                 .expect("fail-open")
                 .expect("the read seed still recovers")
                 .write_scope_seed

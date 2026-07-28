@@ -25,6 +25,7 @@ use cipherbox_core::seal::{
 };
 
 use crate::content::DAG_ROOT_CODEC;
+use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
 
 /// The envelope format+suite version this build authors (blueprint/core.md).
 pub const ENVELOPE_V: u64 = 1;
@@ -47,6 +48,16 @@ pub enum AuthorError {
     /// Core refused to seal or encode the authored body (a body decode would
     /// refuse to reopen, e.g. duplicate child ids).
     Seal(CodecError),
+    /// The encoded head block exceeds the ceiling every block read enforces
+    /// ([`MAX_RESOLVED_RECORD_BYTES`]). Publishing it would sign a pointer to a
+    /// block this build's own reader always refuses, leaving the node
+    /// permanently unopenable.
+    HeadTooLarge {
+        /// The encoded block's size.
+        size: usize,
+        /// The enforced ceiling.
+        limit: usize,
+    },
 }
 
 impl core::fmt::Display for AuthorError {
@@ -58,6 +69,9 @@ impl core::fmt::Display for AuthorError {
                 f.write_str("carried commitment names another ipnsName")
             }
             Self::Seal(e) => write!(f, "seal failed: {}", e.check()),
+            Self::HeadTooLarge { size, limit } => {
+                write!(f, "head block exceeds the content cap ({size} > {limit})")
+            }
         }
     }
 }
@@ -148,6 +162,12 @@ fn seal(authoring: &EnvelopeAuthoring<'_>) -> Result<Envelope, AuthorError> {
 
 fn encode(envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
     let block = encode_envelope(&envelope).map_err(AuthorError::Seal)?;
+    if block.len() > MAX_RESOLVED_RECORD_BYTES {
+        return Err(AuthorError::HeadTooLarge {
+            size: block.len(),
+            limit: MAX_RESOLVED_RECORD_BYTES,
+        });
+    }
     let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
     Ok(AuthoredHead {
         envelope,
@@ -323,6 +343,40 @@ mod tests {
             head.cid,
             encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head.block)),
             "the record value points at the block's own address"
+        );
+    }
+
+    #[test]
+    fn a_head_block_past_the_read_cap_is_never_published() {
+        // Release-active (security rule 8): every block read refuses an
+        // over-cap body, so authoring one would sign a pointer to a block this
+        // build's own reader always rejects — an unopenable node.
+        let children = (0..40_000u32)
+            .map(|i| ChildRef {
+                id: {
+                    let mut id = [0u8; 16];
+                    id[..4].copy_from_slice(&i.to_be_bytes());
+                    id
+                },
+                name: "x".repeat(96),
+                ipns_name: i.to_be_bytes().to_vec(),
+                kind: NodeKind::File,
+                link_counter: 1,
+                unknown: Vec::new(),
+            })
+            .collect();
+        let body = ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children,
+            unknown: Vec::new(),
+        };
+        assert!(
+            matches!(
+                author_child_envelope(authoring(&body, Vec::new())).unwrap_err(),
+                AuthorError::HeadTooLarge { limit, .. } if limit == MAX_RESOLVED_RECORD_BYTES
+            ),
+            "an over-cap head must fail closed on the produce side"
         );
     }
 

@@ -54,12 +54,17 @@ use crate::sync::project::project_root;
 use crate::sync::rebase::{DeadLetterReason, decode_queue, replay};
 use crate::sync::record::RecordReader;
 
-/// The durable drained-op high-water mark: every op id at or below the stored
-/// value has left this device's queue (#860). It rides the sequence-floor
-/// namespace, whose contract it is — a durable monotonic-max `u64` under opaque
-/// key bytes — under a key the base36 `ipnsName` alphabet cannot spell, so it
-/// never collides with a real per-name floor.
-pub const DRAINED_OP_FLOOR_KEY: &[u8] = b"cipherbox/drained-op";
+/// The staging key holding the drained-op high-water mark: every op id at or
+/// below the stored value has left this device's queue (#860).
+///
+/// It lives in the staging store rather than the floors so the mark and the op
+/// ids it names share one durability domain — a store that loses its queue
+/// loses the mark with it, instead of retaining a mark that would delete every
+/// id the restarted counter reissues. [`orphan_staging_keys`] treats it as
+/// referenced so orphan GC never collects it.
+///
+/// [`orphan_staging_keys`]: crate::sync::staging::orphan_staging_keys
+pub const DRAINED_OP_MARK_KEY: &[u8] = b"cipherbox/drained-op";
 
 /// What one drain pass did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -99,7 +104,7 @@ pub(crate) struct DrainScope<'a> {
     /// The root's write-plane IPNS name.
     pub(crate) root_name: &'a IpnsName,
     /// The scope read seed per-node read keys derive from.
-    pub(crate) scope_read_seed: &'a Zeroizing<[u8; 32]>,
+    pub(crate) read_scope_seed: &'a Zeroizing<[u8; 32]>,
     /// The scope write seed per-node IPNS names and signers derive from.
     pub(crate) write_scope_seed: &'a Zeroizing<[u8; 32]>,
     /// The owner's encryption secret (the root's own seed source, and the op
@@ -213,15 +218,13 @@ where
     ) -> Result<Vec<(OpId, Op)>, Halt> {
         let raw = self.staging.queued_ops().await.map_err(seam)?;
         let scan = decode_queue(&RecordReader::new(scope.enc_secret), &raw);
-        let drained = self
-            .floors
-            .sequence_floor(DRAINED_OP_FLOOR_KEY)
-            .await
-            .map_err(seam)?
-            .unwrap_or(0);
+        // `None` is "no op has ever drained here", not "id 0 drained": the seam
+        // contract promises only strictly-increasing ids, so a host that starts
+        // at 0 must not lose its first op.
+        let drained = self.drained_mark().await?;
         let mut live = Vec::with_capacity(scan.mine.len());
         for (op_id, op) in scan.mine {
-            if op_id.0 <= drained {
+            if drained.is_some_and(|mark| op_id.0 <= mark) {
                 self.staging.remove_op(op_id).await.map_err(seam)?;
                 report.restore_residue.push(op_id);
                 continue;
@@ -240,7 +243,7 @@ where
             .await
             .map_err(seam)?
             .ok_or(Halt)?;
-        let (_sequence, envelope) = assemble_head_envelope(
+        let (sequence, envelope) = assemble_head_envelope(
             self.gateway,
             self.http,
             scope.root_name,
@@ -249,6 +252,18 @@ where
         )
         .await
         .map_err(|_| Halt)?;
+        // The cache can be older than the floors — a restored data dir is
+        // exactly that (#860). Re-authoring over a below-floor root would erase
+        // every child added since, durably and at a sequence the gate accepts.
+        let floor = self
+            .floors
+            .sequence_floor(scope.root_name.as_str().as_bytes())
+            .await
+            .map_err(seam)?
+            .unwrap_or(0);
+        if sequence < floor {
+            return Err(Halt);
+        }
         // Encode/decode fail-closed symmetry: this build authors exactly
         // `ENVELOPE_V`, so republishing a newer client's root would silently
         // downgrade `v` — the exact rollback the read-body AAD defends against.
@@ -333,7 +348,7 @@ where
             self.http,
             self.floors,
             scope.root.0,
-            scope.scope_read_seed.clone(),
+            scope.read_scope_seed.clone(),
             child_id.0,
         );
         adopter.hold_local_head(local_head(&head));
@@ -341,12 +356,15 @@ where
             .adopt(&child_name, &record_bytes)
             .await
             .map_err(|_| Halt)?;
-        self.hold(scope, child_id.0, &child_name, &head, record_bytes);
 
         // Referent published: only now does the parent gain the ref to it.
         root.children.push(child.child_ref);
         self.publish_root(scope, root, applied.op.authored_at.0)
-            .await
+            .await?;
+        // Held only once the parent names it: a record nothing references is
+        // not one the liveness loop should keep alive.
+        self.hold(scope, child_id.0, &child_name, &head, record_bytes);
+        Ok(())
     }
 
     /// Re-author and publish the scope root over its current children, then
@@ -505,17 +523,32 @@ where
         else {
             return Ok(());
         };
-        self.floors
-            .raise_sequence_floor(DRAINED_OP_FLOOR_KEY, mark)
+        // Monotonic by construction: the engine is the single writer, and the
+        // mark only ever names ops that have already left the queue.
+        let raised = mark.max(self.drained_mark().await?.unwrap_or(0));
+        self.staging
+            .put_staged_bytes(DRAINED_OP_MARK_KEY, &raised.to_be_bytes())
+            .await
+            .map_err(seam)
+    }
+
+    /// The stored drained-op mark; `0` when nothing has drained on this device
+    /// (op ids start at 1) or the stored bytes are not a mark this build wrote.
+    async fn drained_mark(&self) -> Result<Option<u64>, Halt> {
+        let stored = self
+            .staging
+            .staged_bytes(DRAINED_OP_MARK_KEY)
             .await
             .map_err(seam)?;
-        Ok(())
+        Ok(stored
+            .and_then(|bytes| <[u8; 8]>::try_from(bytes.as_slice()).ok())
+            .map(u64::from_be_bytes))
     }
 
     /// The per-node read key (`node-seed` → `read-key`), owned by the caller of
     /// this fn — it is the terminal owner and zeroizes on drop.
     fn node_read_key(&self, scope: &DrainScope<'_>, node_id: &[u8; 16]) -> Zeroizing<[u8; 32]> {
-        let node_seed = kdf::node_seed(scope.scope_read_seed, node_id);
+        let node_seed = kdf::node_seed(scope.read_scope_seed, node_id);
         Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes())
     }
 

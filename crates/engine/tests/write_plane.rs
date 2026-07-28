@@ -18,10 +18,10 @@ use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_engine::content::{DAG_ROOT_CODEC, GatewaySource};
 use cipherbox_engine::facade::PendingClass;
 use cipherbox_engine::seams::{
-    BoxedTask, FloorStore, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
+    BoxedTask, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
     StagingStore,
 };
-use cipherbox_engine::sync::DRAINED_OP_FLOOR_KEY;
+use cipherbox_engine::sync::DRAINED_OP_MARK_KEY;
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
@@ -274,7 +274,7 @@ fn a_folder_create_publishes_and_resolves_back() {
     // The completion record marks the op as drained, so a restored copy of this
     // queue cannot replay it (#860).
     assert_eq!(
-        block_on(alice.floor_store.sequence_floor(DRAINED_OP_FLOOR_KEY)).unwrap(),
+        block_on(drained_mark(&alice)),
         op_id.map(|id| id.0),
         "the drained op raised the durable completion mark"
     );
@@ -445,11 +445,11 @@ fn an_op_the_completion_record_already_covers_never_republishes() {
     serve_http(&alice, &blocks, 16);
     // The restored dir's mark says op 1 already drained — the id the create
     // below reclaims from the stale queue.
-    block_on(
-        alice
-            .floor_store
-            .raise_sequence_floor(DRAINED_OP_FLOOR_KEY, 1),
-    )
+    block_on(StagingStore::put_staged_bytes(
+        &alice.staging_store,
+        DRAINED_OP_MARK_KEY,
+        &1u64.to_be_bytes(),
+    ))
     .unwrap();
 
     let (mut engine, _events) = engine_on(&alice, 42);
@@ -484,4 +484,13 @@ fn an_op_the_completion_record_already_covers_never_republishes() {
         block_on(engine.view()).unwrap().children(ROOT).is_empty(),
         "so the folder it would have created never appears"
     );
+}
+
+/// The device's durable drained-op completion mark. It lives beside the op
+/// queue it names, so a store that loses one loses the other.
+async fn drained_mark(device: &FakeDevice) -> Option<u64> {
+    StagingStore::staged_bytes(&device.staging_store, DRAINED_OP_MARK_KEY)
+        .await
+        .expect("the staging store answers")
+        .map(|bytes| u64::from_be_bytes(bytes.try_into().expect("an 8-byte mark")))
 }
