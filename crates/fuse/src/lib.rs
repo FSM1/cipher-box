@@ -1,20 +1,28 @@
-//! CipherBox fuse: filesystem projection core over the engine, backing the
-//! desktop mounts (FUSE-T SMB on macOS, libfuse3 on Linux, WinFsp on Windows).
+//! CipherBox fuse: the filesystem projection over the engine facade, and the
+//! host-adapter trait each mount technology implements — FUSE-T SMB on macOS,
+//! libfuse3 on Linux, WinFsp on Windows.
 //!
-//! Normative design: blueprint/desktop.md
+//! Normative design: blueprint/desktop.md.
+//!
+//! One operation core serves every platform: v1's duplicated per-host
+//! operation trees produced a revocation bypass that existed in exactly one of
+//! them. Everything platform-shaped lives behind [`HostAdapter`] and nothing
+//! else does. The projection holds no key material — the inode and handle maps
+//! carry identity only.
 
-/// Placeholder identity item; the real FS projection lands in later PRs.
-pub const CRATE: &str = "cipherbox-fuse";
+#![forbid(unsafe_code)]
+#![warn(missing_docs)]
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_name() {
-        assert_eq!(super::CRATE, "cipherbox-fuse");
-    }
+mod adapter;
+mod error;
+mod handle;
+mod inode;
+mod name;
+mod ops;
 
-    #[test]
-    fn depends_on_engine() {
-        assert_eq!(cipherbox_engine::CRATE, "cipherbox-engine");
-    }
-}
+pub use adapter::{CacheTtls, HostAdapter, HostCapabilities, Invalidation};
+pub use error::{OverBudgetCause, VfsError};
+pub use handle::{Access, HandleId, HandleTable, OpenFile};
+pub use inode::{InodeTable, ROOT_INO};
+pub use name::{MAX_NAME_BYTES, NameError, is_emittable, is_platform_junk, validate_name};
+pub use ops::{Attributes, DirEntry, OperationCore};

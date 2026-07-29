@@ -110,8 +110,7 @@ pub enum PendingClass {
 }
 
 /// A node's host-facing attributes, projected from the rendered view for a
-/// FUSE getattr/readdir. Kind-uniform metadata only — content size and
-/// timestamps land with the content-plane slice.
+/// FUSE getattr/readdir.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NodeAttrs {
     /// Stable node id.
@@ -120,6 +119,10 @@ pub struct NodeAttrs {
     pub name: String,
     /// File or folder.
     pub kind: NodeKind,
+    /// Plaintext content size in bytes, once the content plane projects it.
+    pub size: Option<u64>,
+    /// Modification time (Unix millis), once projected.
+    pub mtime: Option<u64>,
     /// Retained version count, `None` until projected.
     pub content_version: Option<u64>,
 }
@@ -684,6 +687,8 @@ fn node_attrs(meta: &NodeMeta) -> NodeAttrs {
         id: meta.id,
         name: meta.name.clone(),
         kind: meta.kind,
+        size: meta.size,
+        mtime: meta.mtime,
         content_version: meta.content_version,
     }
 }
