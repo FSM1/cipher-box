@@ -301,6 +301,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::TrustViolation { .. } => "trustViolation",
         EngineError::UnsupportedContentFormat { .. } => "unsupportedContentFormat",
         EngineError::Unimplemented { .. } => "unimplemented",
+        EngineError::OverBudget { .. } => "overBudget",
         EngineError::Seam { .. } => "seam",
         EngineError::Entropy { .. } => "entropy",
         EngineError::Auth { .. } => "auth",

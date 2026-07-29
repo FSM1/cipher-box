@@ -32,7 +32,8 @@ class FakeHost implements EngineHostLike {
   async command(descriptor: CommandDescriptor): Promise<void> {
     this.commandCount += 1;
     if (descriptor.kind === 'manualRefresh') {
-      for (let opId = 1n; opId <= 10n; opId += 1n) this.pushEvent({ kind: 'deadLetter', opId });
+      for (let opId = 1n; opId <= 10n; opId += 1n)
+        this.pushEvent({ kind: 'deadLetter', opId, reason: 'undecodable' });
       return;
     }
     // First call is slow, later calls fast → responses arrive out of order.

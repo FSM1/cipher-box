@@ -121,7 +121,7 @@ describe('LocalTransport', () => {
     const sent: EventDescriptor[] = [
       { kind: 'snapshotUpdated' },
       { kind: 'stalenessChanged', staleness: 'stale' },
-      { kind: 'deadLetter', opId: 7n },
+      { kind: 'deadLetter', opId: 7n, reason: 'attemptsExhausted' },
       { kind: 'snapshotUpdated' },
     ];
     for (const event of sent) worker.emit({ type: 'event', event });
@@ -142,7 +142,7 @@ describe('LocalTransport', () => {
     expect(message).toMatchObject({ type: 'snapshot', folder });
     const result: SnapshotDescriptor = {
       ...emptySnapshot(folder),
-      deadLetters: [1n],
+      deadLetters: [{ opId: 1n, reason: 'targetGone' }],
       retainedRecords: 0,
       staleness: 'stale',
     };

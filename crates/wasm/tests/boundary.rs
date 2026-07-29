@@ -11,7 +11,8 @@
 use cipherbox_engine::facade;
 use cipherbox_engine::seams::OpId;
 use cipherbox_wasm::{
-    Command, Event, NodeId, NodeKind, OpPhase, PendingClass, Permission, SnapshotView, Staleness,
+    Command, DeadLetterReason, Event, NodeId, NodeKind, OpPhase, PendingClass, Permission,
+    SnapshotView, Staleness,
 };
 use js_sys::{Array, BigInt, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
@@ -39,6 +40,7 @@ fn getrandom_wires_to_crypto_get_random_values() {
 fn op_id_u64_crosses_as_bigint() {
     let event: JsValue = Event::from_facade(facade::Event::DeadLetter {
         op_id: OpId(u64::MAX),
+        reason: facade::DeadLetterReason::Undecodable,
     })
     .into();
     let op_id = Reflect::get(&event, &JsValue::from_str("opId")).expect("opId getter is readable");
@@ -206,7 +208,15 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
             id: facade::NodeId([1u8; 16]),
             name: String::new(),
         }],
-        dead_letters: vec![OpId(9)],
+        dead_letters: vec![facade::DeadLetter {
+            op_id: OpId(9),
+            reason: facade::DeadLetterReason::SuffixExhausted,
+        }],
+        blocked: Some(facade::BlockedOp {
+            op_id: OpId(12),
+            node: facade::NodeId([6u8; 16]),
+            needed_bytes: u64::MAX,
+        }),
         retained_records: 0,
         staleness: facade::Staleness::Fresh,
     })
@@ -225,7 +235,6 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
         vec![2u8; 16]
     );
 
-    // Dead-letter op ids are u64s and must cross as bigints.
     assert_eq!(
         get(&view, "retainedRecords").as_f64(),
         Some(0.0),
@@ -233,12 +242,52 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
     );
 
     let dead_letters = get(&view, "deadLetters");
-    assert!(dead_letters.is_instance_of::<js_sys::BigUint64Array>());
+    assert!(dead_letters.is_instance_of::<Array>());
+    let dead_letters = dead_letters.unchecked_into::<Array>();
+    assert_eq!(dead_letters.length(), 1);
+    let dead = dead_letters.get(0);
+    let dead_op_id = get(&dead, "opId");
     assert_eq!(
-        dead_letters
-            .unchecked_into::<js_sys::BigUint64Array>()
+        dead_op_id.js_typeof(),
+        JsValue::from_str("bigint"),
+        "a dead letter's opId must cross as a JS bigint, never a number"
+    );
+    assert_eq!(
+        String::from(
+            dead_op_id
+                .unchecked_into::<BigInt>()
+                .to_string(10)
+                .expect("bigint renders in base 10")
+        ),
+        "9"
+    );
+    assert_eq!(
+        get(&dead, "reason").as_f64(),
+        Some(DeadLetterReason::SuffixExhausted as u32 as f64),
+        "the reason crosses as its mirror-enum ordinal"
+    );
+
+    let blocked = get(&view, "blocked");
+    let needed = get(&blocked, "neededBytes");
+    assert_eq!(
+        needed.js_typeof(),
+        JsValue::from_str("bigint"),
+        "neededBytes must cross as a JS bigint, never a number"
+    );
+    assert_eq!(
+        String::from(
+            needed
+                .unchecked_into::<BigInt>()
+                .to_string(10)
+                .expect("bigint renders in base 10")
+        ),
+        u64::MAX.to_string()
+    );
+    assert_eq!(
+        get(&blocked, "node")
+            .unchecked_into::<Uint8Array>()
             .to_vec(),
-        vec![9u64]
+        vec![6u8; 16]
     );
 
     let children = get(&view, "children");

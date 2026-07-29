@@ -13,12 +13,14 @@
 //! per-name sequence floor advances only as the gate's stage-6 consequence
 //! (#817; `gate/floor.rs` stays the only place floors move).
 //!
-//! Out of this slice: content bytes (#868), cross-scope re-seal and the
-//! scope-exit rotation trigger (#635), and failure classification (#867) — the
-//! first op this pass cannot publish stops it with the op still queued.
+//! What the pass does when a publish will not succeed is the failure valve
+//! ([`Halt`], #867).
+//!
+//! Out of this slice: content bytes (#868), and cross-scope re-seal with the
+//! scope-exit rotation trigger (#635).
 
 use core::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::codec::Value;
 use cipherbox_core::ipns::IpnsName;
@@ -28,8 +30,8 @@ use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
-use crate::api::ApiClient;
-use crate::content::Gateway;
+use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, UPLOAD_TOO_LARGE};
+use crate::content::{Gateway, pre_flight_quota_check};
 use crate::entropy::Entropy;
 use crate::facade::{NodeId, NodeKind};
 use crate::gate::floor;
@@ -39,7 +41,10 @@ use crate::net::author::{
     new_child,
 };
 use crate::net::publish::{PublishOutcome, PublishReceipt};
-use crate::net::record_publish::{HeadBinding, RecordPublishRequest, preflight, publish_record};
+use crate::net::record_publish::{
+    HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
+};
+use crate::net::retire::retire;
 use crate::net::{
     Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, ResolveOutcome, RootAdopter,
     assemble_head_envelope, fanout_get_verify, resolve,
@@ -94,11 +99,136 @@ impl DrainReport {
     }
 }
 
-/// A drain pass stopped before the queue was empty. Strict FIFO: the op that
-/// stopped it stays queued and the next tick retries it, so the durable queue
-/// is the record of the failure. Classifying it — dead-letter thresholds,
-/// attempt budgets — is the failure-policy slice's.
-struct Halt;
+/// Per-op drain attempt counts, decoded from [`OP_ATTEMPTS_KEY`].
+#[derive(Debug, Default)]
+struct Attempts {
+    counts: BTreeMap<OpId, u32>,
+    /// Whether this pass changed the counts — an unchanged record is not
+    /// rewritten, so an idle tick makes no staging write.
+    dirty: bool,
+}
+
+impl Attempts {
+    /// Decode the stored pairs. Bytes this build did not write decode as empty
+    /// — the same rule the drained-op mark applies, and the fail-safe
+    /// direction: an op is retried, never abandoned on unreadable bookkeeping.
+    fn decode(stored: Option<Vec<u8>>) -> Self {
+        let Some(bytes) = stored.filter(|bytes| {
+            bytes.first() == Some(&ATTEMPT_FORMAT_V1) && bytes.len() % ATTEMPT_ENTRY_LEN == 1
+        }) else {
+            return Self::default();
+        };
+        Self {
+            counts: bytes[1..]
+                .chunks_exact(ATTEMPT_ENTRY_LEN)
+                .map(|entry| {
+                    let (id, count) = entry.split_at(8);
+                    (
+                        OpId(u64::from_be_bytes(id.try_into().expect("8 bytes"))),
+                        u32::from_be_bytes(count.try_into().expect("4 bytes")),
+                    )
+                })
+                .collect(),
+            dirty: false,
+        }
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(1 + self.counts.len() * ATTEMPT_ENTRY_LEN);
+        bytes.push(ATTEMPT_FORMAT_V1);
+        for (op_id, count) in &self.counts {
+            bytes.extend_from_slice(&op_id.0.to_be_bytes());
+            bytes.extend_from_slice(&count.to_be_bytes());
+        }
+        bytes
+    }
+
+    /// Charge one attempt to `op_id` and return its new count.
+    fn charge(&mut self, op_id: OpId) -> u32 {
+        self.dirty = true;
+        let count = self.counts.entry(op_id).or_default();
+        *count = count.saturating_add(1);
+        *count
+    }
+
+    /// Drop every count whose op has left the queue, so the record cannot grow
+    /// without bound and a reissued id inherits nothing.
+    fn retain_live(&mut self, live: &BTreeSet<OpId>) {
+        let before = self.counts.len();
+        self.counts.retain(|op_id, _| live.contains(op_id));
+        self.dirty |= self.counts.len() != before;
+    }
+}
+
+/// What stopped a drain pass, and what the valve does about it (#867). Strict
+/// FIFO throughout: the op that stopped the pass keeps its place at the head of
+/// the durable queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Halt {
+    /// A reason the valve does not classify — a seam failure, an unreachable
+    /// record plane, a load this pass could not do. Charged nothing and retried
+    /// on the next tick, so an outage never abandons an op.
+    Unclassified,
+    /// The op's record reached the record plane and did not confirm. Charged
+    /// against the attempt budget, because a retry re-signs at the same
+    /// sequence and a jammed name would otherwise retry forever.
+    Attempt,
+    /// Classified-permanent: the same bytes are refused on every retry.
+    Permanent(DeadLetterReason),
+    /// Over the account quota. Not a failure of the op — it holds the head and
+    /// its staging reservation until a quota probe reports room (#841).
+    Blocked {
+        /// The byte count the refused upload asked for, and so the figure the
+        /// resume probe must find room for.
+        needed_bytes: u64,
+    },
+}
+
+/// How many non-confirming publish attempts one op gets before it dead-letters.
+///
+/// Bounds a pathology, not a network outage — only [`Halt::Attempt`] is charged.
+const ATTEMPT_BUDGET: u32 = 5;
+
+/// The staging key holding per-op drain attempt counts: a one-byte format tag
+/// followed by `(op_id, attempts)` pairs, big-endian and fixed-width, rewritten
+/// each pass over the live queue so a retired op's count leaves with it.
+///
+/// It lives in the staging store for the same reason [`DRAINED_OP_MARK_KEY`]
+/// does — the counts and the op ids they name share one durability domain — and
+/// [`orphan_staging_keys`] treats it as referenced. What the counts are *for* is
+/// [`Drain::abandon`].
+///
+/// [`orphan_staging_keys`]: crate::sync::staging::orphan_staging_keys
+pub const OP_ATTEMPTS_KEY: &[u8] = b"cipherbox/op-attempts";
+
+/// The attempt record's format tag. The staging store is shared with whatever
+/// build wrote it, so bytes that merely happen to be the right length must not
+/// parse as counts — a fabricated count would abandon an op early.
+const ATTEMPT_FORMAT_V1: u8 = 1;
+
+/// One `(op_id, attempts)` pair as [`OP_ATTEMPTS_KEY`] stores it.
+const ATTEMPT_ENTRY_LEN: usize = 12;
+
+/// One read of the durable queue: this identity's decoded ops, and every id the
+/// store holds — including other identities' and retained records', which the
+/// attempt record must not reclaim.
+struct Queue {
+    mine: Vec<(OpId, Op)>,
+    all_ids: BTreeSet<OpId>,
+}
+
+/// The queue head is held over rather than failed: the account quota refused
+/// it, and it keeps its place and its staging reservation until a probe on a
+/// later drain tick reports room (#841).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockedOp {
+    /// The held op.
+    pub op_id: OpId,
+    /// The node the op targets, so a host can point at it.
+    pub node: NodeId,
+    /// The byte count the resume probe must find room for.
+    pub needed_bytes: u64,
+}
 
 /// The owner-scope material one drain pass publishes under. Every field is
 /// borrowed from the live session; the drain zeroizes none of it.
@@ -136,6 +266,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     pub(crate) base: &'a RefCell<Snapshot>,
     /// The live held-record set the liveness loop keeps alive.
     pub(crate) held: &'a RefCell<HeldRecords>,
+    /// The over-quota hold, shared with the facade's read surface. It clears
+    /// only here, on a quota probe reporting room.
+    pub(crate) blocked: &'a RefCell<Option<BlockedOp>>,
 }
 
 /// One folder's current published state, carried across the ops of one pass so
@@ -196,7 +329,7 @@ impl Pass {
             .iter()
             .find(|(id, _)| *id == folder)
             .map(|(_, state)| state)
-            .ok_or(Halt)
+            .ok_or(Halt::Unclassified)
     }
 
     fn folder_mut(&mut self, folder: NodeId) -> Result<&mut FolderState, Halt> {
@@ -204,7 +337,7 @@ impl Pass {
             .iter_mut()
             .find(|(id, _)| *id == folder)
             .map(|(_, state)| state)
-            .ok_or(Halt)
+            .ok_or(Halt::Unclassified)
     }
 }
 
@@ -222,10 +355,19 @@ where
     /// applied op it can, stopping at the first it cannot.
     pub(crate) async fn run(&self, scope: &DrainScope<'_>) -> DrainReport {
         let mut report = DrainReport::default();
-        let Ok(queued) = self.queued_ops(scope, &mut report).await else {
+        let Ok(Queue { mine, all_ids }) = self.queued_ops(scope, &mut report).await else {
             return report;
         };
-        let _ = self.pass(scope, &queued, &mut report).await;
+        let queued = mine;
+        if queued.is_empty() {
+            self.clear_block();
+            return report;
+        }
+        let Ok(mut attempts) = self.load_attempts(&all_ids).await else {
+            return report;
+        };
+        let _ = self.pass(scope, &queued, &mut report, &mut attempts).await;
+        let _ = self.store_attempts(&attempts).await;
         let _ = self.mark_drained(&queued, &report).await;
         report
     }
@@ -235,8 +377,9 @@ where
         scope: &DrainScope<'_>,
         queued: &[(OpId, Op)],
         report: &mut DrainReport,
+        attempts: &mut Attempts,
     ) -> Result<(), Halt> {
-        if queued.is_empty() {
+        if !self.quota_admits_the_held_head(queued).await {
             return Ok(());
         }
 
@@ -249,26 +392,97 @@ where
         };
 
         for (op_id, reason) in &rebased.dead_letters {
-            let target = queued
-                .iter()
-                .find(|(id, _)| id == op_id)
-                .map(|(_, op)| op.target)
-                .unwrap_or(scope.root);
-            self.retire_op(*op_id).await?;
-            report.dead_letters.push((*op_id, target, *reason));
+            let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
+                continue;
+            };
+            self.abandon(scope, *op_id, op).await?;
+            report.dead_letters.push((*op_id, op.target, *reason));
         }
+        // A drop is not an abandonment: `AlreadySatisfied` on a create is the
+        // create having *landed*, so retiring its name would cut a live record
+        // its parent already references.
         for (op_id, _) in &rebased.dropped {
-            self.retire_op(*op_id).await?;
+            self.dequeue_op(*op_id).await?;
             report.dropped.push(*op_id);
         }
 
         for applied in &rebased.applied {
-            self.publish_applied(scope, &mut pass, applied, &rebased.rebased)
-                .await?;
-            self.retire_op(applied.op_id).await?;
+            if let Err(halt) = self
+                .publish_applied(scope, &mut pass, applied, &rebased.rebased)
+                .await
+            {
+                self.apply_valve(scope, applied.op_id, &applied.op, halt, attempts, report)
+                    .await;
+                return Err(halt);
+            }
+            self.dequeue_op(applied.op_id).await?;
             report.published.push(applied.op_id);
         }
         Ok(())
+    }
+
+    /// Apply the failure valve to whatever stopped the pass at one op.
+    async fn apply_valve(
+        &self,
+        scope: &DrainScope<'_>,
+        op_id: OpId,
+        op: &Op,
+        halt: Halt,
+        attempts: &mut Attempts,
+        report: &mut DrainReport,
+    ) {
+        match halt {
+            Halt::Unclassified => {}
+            Halt::Attempt => {
+                if attempts.charge(op_id) < ATTEMPT_BUDGET {
+                    return;
+                }
+                if self.dequeue_op(op_id).await.is_ok() {
+                    report.dead_letters.push((
+                        op_id,
+                        op.target,
+                        DeadLetterReason::AttemptsExhausted,
+                    ));
+                }
+            }
+            Halt::Permanent(reason) => {
+                if self.abandon(scope, op_id, op).await.is_ok() {
+                    report.dead_letters.push((op_id, op.target, reason));
+                }
+            }
+            Halt::Blocked { needed_bytes } => {
+                *self.blocked.borrow_mut() = Some(BlockedOp {
+                    op_id,
+                    node: op.target,
+                    needed_bytes,
+                });
+            }
+        }
+    }
+
+    /// Whether a held head may be tried again this tick. A `GET /account/quota`
+    /// probe reporting room is the hold's only exit (#841), so an unanswered
+    /// probe leaves it in place.
+    async fn quota_admits_the_held_head(&self, queued: &[(OpId, Op)]) -> bool {
+        let Some(blocked) = *self.blocked.borrow() else {
+            return true;
+        };
+        if !queued.iter().any(|(op_id, _)| *op_id == blocked.op_id) {
+            self.clear_block();
+            return true;
+        }
+        let Ok(quota) = self.api.quota().await else {
+            return false;
+        };
+        if pre_flight_quota_check(blocked.needed_bytes, &quota).is_err() {
+            return false;
+        }
+        self.clear_block();
+        true
+    }
+
+    fn clear_block(&self) {
+        *self.blocked.borrow_mut() = None;
     }
 
     /// This identity's queued ops, minus restore residue: an op at or below the
@@ -278,23 +492,24 @@ where
         &self,
         scope: &DrainScope<'_>,
         report: &mut DrainReport,
-    ) -> Result<Vec<(OpId, Op)>, Halt> {
+    ) -> Result<Queue, Halt> {
         let raw = self.staging.queued_ops().await.map_err(seam)?;
+        let all_ids = raw.iter().map(|(op_id, _)| *op_id).collect();
         let scan = decode_queue(&RecordReader::new(scope.enc_secret), &raw);
         // `None` is "no op has ever drained here", not "id 0 drained": the seam
         // contract promises only strictly-increasing ids, so a host that starts
         // at 0 must not lose its first op.
         let drained = self.drained_mark().await?;
-        let mut live = Vec::with_capacity(scan.mine.len());
+        let mut mine = Vec::with_capacity(scan.mine.len());
         for (op_id, op) in scan.mine {
             if drained.is_some_and(|mark| op_id.0 <= mark) {
-                self.staging.remove_op(op_id).await.map_err(seam)?;
+                self.dequeue_op(op_id).await?;
                 report.restore_residue.push(op_id);
                 continue;
             }
-            live.push((op_id, op));
+            mine.push((op_id, op));
         }
-        Ok(live)
+        Ok(Queue { mine, all_ids })
     }
 
     // -----------------------------------------------------------------------
@@ -322,7 +537,7 @@ where
             .get(scope.root_name.as_str().as_bytes())
             .await
             .map_err(seam)?
-            .ok_or(Halt)?;
+            .ok_or(Halt::Unclassified)?;
         let (sequence, envelope) = assemble_head_envelope(
             self.gateway,
             self.http,
@@ -331,7 +546,7 @@ where
             None,
         )
         .await
-        .map_err(|_| Halt)?;
+        .map_err(|_| Halt::Unclassified)?;
         // The cache can be older than the floors — a restored data dir is
         // exactly that (#860). The whole pass anchors here: this record's epoch
         // becomes the epoch every record it publishes is sealed at, so a
@@ -348,15 +563,15 @@ where
             floor::Strictness::AtFloor,
         )
         .await
-        .map_err(|_| Halt)?;
+        .map_err(|_| Halt::Unclassified)?;
         // Encode/decode fail-closed symmetry: this build authors exactly
         // `ENVELOPE_V`, so republishing a newer client's root would silently
         // downgrade `v` — the exact rollback the read-body AAD defends against.
         if envelope.v != ENVELOPE_V {
-            return Err(Halt);
+            return Err(Halt::Unclassified);
         }
         let read_key = self.node_read_key(scope, &scope.root.0);
-        let body = open_read_body(&envelope, &read_key).map_err(|_| Halt)?;
+        let body = open_read_body(&envelope, &read_key).map_err(|_| Halt::Unclassified)?;
         let ReadBody::Folder {
             created_at,
             modified_at,
@@ -364,7 +579,7 @@ where
             unknown,
         } = body
         else {
-            return Err(Halt);
+            return Err(Halt::Unclassified);
         };
         let epoch = envelope.epoch;
         Ok((
@@ -407,7 +622,7 @@ where
         // top of last-known-good while the record plane serves a rejected root
         // is exactly the fail-open this rule forbids.
         match resolved.outcome {
-            ResolveOutcome::TrustViolation(_) => Err(Halt),
+            ResolveOutcome::TrustViolation(_) => Err(Halt::Unclassified),
             _ => Ok(()),
         }
     }
@@ -441,20 +656,20 @@ where
                 .get(name.as_str().as_bytes())
                 .await
                 .map_err(seam)?
-                .ok_or(Halt)?,
+                .ok_or(Halt::Unclassified)?,
             ResolveOutcome::Current { record_bytes } => record_bytes,
-            ResolveOutcome::NoUpdate => resolved.last_known_good.ok_or(Halt)?,
-            ResolveOutcome::TrustViolation(_) => return Err(Halt),
+            ResolveOutcome::NoUpdate => resolved.last_known_good.ok_or(Halt::Unclassified)?,
+            ResolveOutcome::TrustViolation(_) => return Err(Halt::Unclassified),
         };
         let (adopted, envelope) = adopter
             .open_carried_at_floor(&name, &record_bytes)
             .await
-            .map_err(|_| Halt)?;
+            .map_err(|_| Halt::Unclassified)?;
         // The same two rollback guards the root load makes: this build authors
         // exactly `ENVELOPE_V`, and re-sealing a node at another epoch than the
         // scope's would cross the AAD epoch binding.
         if envelope.v != ENVELOPE_V || adopted.epoch != epoch {
-            return Err(Halt);
+            return Err(Halt::Unclassified);
         }
         Ok(LoadedNode {
             name,
@@ -487,7 +702,7 @@ where
         // A folder whose chain does not reach the scope root is not a folder
         // this scope's write plane may author.
         if chain.first() != Some(&scope.root) {
-            return Err(Halt);
+            return Err(Halt::Unclassified);
         }
         for node in chain {
             if pass.holds(node) {
@@ -516,7 +731,7 @@ where
             unknown,
         } = loaded.body
         else {
-            return Err(Halt);
+            return Err(Halt::Unclassified);
         };
         Ok(FolderState {
             name: loaded.name,
@@ -566,7 +781,7 @@ where
             }
             OpKind::UpdateContent { .. } => self.publish_update_content(scope, pass, applied).await,
             // Content bytes are #868's; cross-scope re-seal is #635's.
-            OpKind::Create { .. } | OpKind::Relink { .. } => Err(Halt),
+            OpKind::Create { .. } | OpKind::Relink { .. } => Err(Halt::Unclassified),
         }
     }
 
@@ -580,7 +795,7 @@ where
         parent: NodeId,
         kind: NodeKind,
     ) -> Result<(), Halt> {
-        let name = applied.effective_name.clone().ok_or(Halt)?;
+        let name = applied.effective_name.clone().ok_or(Halt::Unclassified)?;
         self.ensure_folder(scope, pass, parent).await?;
 
         let child_id = applied.op.target;
@@ -624,7 +839,7 @@ where
         pass: &mut Pass,
         applied: &AppliedOp,
     ) -> Result<(), Halt> {
-        let new_name = applied.effective_name.clone().ok_or(Halt)?;
+        let new_name = applied.effective_name.clone().ok_or(Halt::Unclassified)?;
         let target = applied.op.target;
         let parent = self.published_parent(target)?;
         self.ensure_folder(scope, pass, parent).await?;
@@ -634,7 +849,7 @@ where
                 .children
                 .iter_mut()
                 .find(|child| child.id == target.0)
-                .ok_or(Halt)?;
+                .ok_or(Halt::Unclassified)?;
             child.name = new_name;
         }
         self.publish_folder(scope, pass, parent, applied.op.authored_at.0)
@@ -684,7 +899,7 @@ where
         // against is a concurrent move this op lost (`sync/op.rs`), and removing
         // from it would clobber the winner.
         if source != from_parent {
-            return Err(Halt);
+            return Err(Halt::Unclassified);
         }
         if source == dest {
             return Ok(());
@@ -693,7 +908,7 @@ where
         // and no walk can find it again. Release-active, and refused again at
         // rebase so the op dead-letters instead of wedging the queue.
         if dest == target || self.base.borrow().ancestors(dest).contains(&target) {
-            return Err(Halt);
+            return Err(Halt::Unclassified);
         }
         let modified_at = applied.op.authored_at.0;
 
@@ -709,7 +924,7 @@ where
             .iter()
             .find(|child| child.id == target.0)
             .cloned()
-            .ok_or(Halt)?;
+            .ok_or(Halt::Unclassified)?;
         moved.link_counter = rebased
             .winning_link(target)
             .map_or(moved.link_counter.saturating_add(1), |link| {
@@ -736,7 +951,7 @@ where
         {
             self.compensate_dest_add(scope, pass, dest, source, target, cas_base, modified_at)
                 .await?;
-            return Err(Halt);
+            return Err(Halt::Unclassified);
         }
         Ok(())
     }
@@ -803,7 +1018,7 @@ where
         fanout_get_verify(self.transport, name)
             .await
             .map(|(sequence, _)| sequence)
-            .ok_or(Halt)
+            .ok_or(Halt::Unclassified)
     }
 
     /// Re-read a folder from the record plane, replacing this pass's copy.
@@ -846,7 +1061,7 @@ where
         // resurrect arm, which re-links under a resolved name — has no publish
         // plan here and must not report success.
         if applied.effective_name.is_some() {
-            return Err(Halt);
+            return Err(Halt::Unclassified);
         }
         // Same reachability rule every other plan gets from `ensure_folder`: a
         // node no parent links is not one this scope's write plane may author.
@@ -860,7 +1075,7 @@ where
             ..
         } = loaded.body
         else {
-            return Err(Halt);
+            return Err(Halt::Unclassified);
         };
         let body = ReadBody::File {
             created_at,
@@ -891,7 +1106,7 @@ where
     /// The parent a node is published under, from the base the pass repaints as
     /// it goes — so an op rebases onto exactly what the ops before it published.
     fn published_parent(&self, node: NodeId) -> Result<NodeId, Halt> {
-        self.base.borrow().parent_of(node).ok_or(Halt)
+        self.base.borrow().parent_of(node).ok_or(Halt::Unclassified)
     }
 
     // -----------------------------------------------------------------------
@@ -976,7 +1191,7 @@ where
         } else {
             author_child_envelope(authoring)
         }
-        .map_err(|_| Halt)?;
+        .map_err(|_| Halt::Unclassified)?;
 
         let record_bytes = self
             .publish_head(scope, name, &node.0, epoch, &head)
@@ -992,7 +1207,10 @@ where
                 scope.root.0,
             );
             adopter.hold_local_head(local);
-            adopter.adopt(name, &record_bytes).await.map_err(|_| Halt)?
+            adopter
+                .adopt(name, &record_bytes)
+                .await
+                .map_err(|_| Halt::Unclassified)?
         } else {
             let adopter = ChildAdopter::new(
                 self.gateway,
@@ -1003,7 +1221,10 @@ where
                 node.0,
             );
             adopter.hold_local_head(local);
-            adopter.adopt(name, &record_bytes).await.map_err(|_| Halt)?
+            adopter
+                .adopt(name, &record_bytes)
+                .await
+                .map_err(|_| Halt::Unclassified)?
         }
         .adopted
         .sequence;
@@ -1039,15 +1260,15 @@ where
             scope_id: scope.root.0,
             epoch,
         };
-        let preflighted =
-            preflight(&binding, &self.node_read_key(scope, node_id), head).map_err(|_| Halt)?;
+        let preflighted = preflight(&binding, &self.node_read_key(scope, node_id), head)
+            .map_err(|_| Halt::Unclassified)?;
         // The name and the seed the signer comes from have independent sources
         // for the scope root — the vault pointer's `currentRoot` and the
         // owner-write-blob. Publishing under a name this signer cannot sign for
         // would burn a CAS sequence on a record nothing can verify.
         let signer = SessionIdentity::write_name_signer(scope.write_scope_seed, node_id);
         if IpnsName::from_public_key(&signer.verifying_key()) != *name {
-            return Err(Halt);
+            return Err(Halt::Unclassified);
         }
         let PublishReceipt {
             outcome,
@@ -1067,11 +1288,14 @@ where
             },
         )
         .await
-        .map_err(|_| Halt)?;
+        .map_err(|error| classify_publish(error, head.block.len() as u64))?;
         match outcome {
             PublishOutcome::Published { .. } => Ok(record_bytes),
-            PublishOutcome::Unconfirmed { .. } => Err(Halt),
-            PublishOutcome::LostRace { .. } => Err(Halt),
+            // Both burned a CAS sequence at this name without a record we could
+            // adopt, so both are charged against the attempt budget.
+            PublishOutcome::Unconfirmed { .. } | PublishOutcome::LostRace { .. } => {
+                Err(Halt::Attempt)
+            }
         }
     }
 
@@ -1099,8 +1323,53 @@ where
     }
 
     /// Remove a resolved op from the durable queue.
-    async fn retire_op(&self, op_id: OpId) -> Result<(), Halt> {
+    async fn dequeue_op(&self, op_id: OpId) -> Result<(), Halt> {
         self.staging.remove_op(op_id).await.map_err(seam)
+    }
+
+    /// Abandon one op: retire what its publish registered, then drop it from
+    /// the queue (#819 as amended by #824).
+    ///
+    /// A name some published record already references is never retired — that
+    /// would leave a reference outliving its referent. The gate-passing base is
+    /// the evidence: a created node reaches it only once a parent record naming
+    /// it published.
+    ///
+    /// Staged bytes outlive the queue entry: a dead letter's content is the
+    /// user's unpublished work and the host's compensation channel (#33 D6).
+    async fn abandon(&self, scope: &DrainScope<'_>, op_id: OpId, op: &Op) -> Result<(), Halt> {
+        if !self.base.borrow().contains(op.target) {
+            retire(self.api, &registered_by(scope, op))
+                .await
+                .map_err(|_| Halt::Unclassified)?;
+        }
+        self.dequeue_op(op_id).await
+    }
+
+    /// The attempt record, pruned to the ops still queued. `live` is every id
+    /// the store holds, not just this identity's, so one account's pass cannot
+    /// reset a budget another account's ops are spending.
+    async fn load_attempts(&self, live: &BTreeSet<OpId>) -> Result<Attempts, Halt> {
+        let stored = self
+            .staging
+            .staged_bytes(OP_ATTEMPTS_KEY)
+            .await
+            .map_err(seam)?;
+        let mut attempts = Attempts::decode(stored);
+        if !attempts.counts.is_empty() {
+            attempts.retain_live(live);
+        }
+        Ok(attempts)
+    }
+
+    async fn store_attempts(&self, attempts: &Attempts) -> Result<(), Halt> {
+        if !attempts.dirty {
+            return Ok(());
+        }
+        self.staging
+            .put_staged_bytes(OP_ATTEMPTS_KEY, &attempts.encode())
+            .await
+            .map_err(seam)
     }
 
     /// Raise the completion mark over this pass's **contiguous** drained prefix.
@@ -1158,7 +1427,7 @@ where
         self.entropy
             .borrow_mut()
             .fill(&mut nonce)
-            .map_err(|_| Halt)?;
+            .map_err(|_| Halt::Unclassified)?;
         Ok(nonce)
     }
 }
@@ -1179,5 +1448,158 @@ fn local_head(head: &AuthoredHead) -> LocalHead {
 }
 
 fn seam(_: crate::seams::SeamError) -> Halt {
-    Halt
+    Halt::Unclassified
+}
+
+/// Classify a publish failure for the valve. Only the head-block upload carries
+/// a server verdict this pass can act on; everything else is availability.
+///
+/// `refused_bytes` is what the upload asked for, so a block entered here records
+/// the figure its resume probe must find room for.
+fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
+    let ApiError::Status {
+        status: 413, code, ..
+    } = (match error {
+        RecordPublishError::Upload(error) => error,
+        RecordPublishError::HeadCidMismatch { .. } | RecordPublishError::Publish(_) => {
+            return Halt::Unclassified;
+        }
+    })
+    else {
+        return Halt::Unclassified;
+    };
+    // 413 covers two unrelated causes, so each verdict rests on **positive
+    // evidence only**: the discriminators the API stamps (#848). A response
+    // carrying neither did not come from a gate that inspected these bytes — a
+    // proxy body cap answers 413 with no code at all — and neither holding the
+    // head nor abandoning the op is a conclusion it supports.
+    match code.as_deref() {
+        Some(QUOTA_EXCEEDED) => Halt::Blocked {
+            needed_bytes: refused_bytes,
+        },
+        Some(UPLOAD_TOO_LARGE) => Halt::Permanent(DeadLetterReason::PayloadRefused),
+        _ => Halt::Attempt,
+    }
+}
+
+/// The registry rows one op's publish registered, mirroring what the publish
+/// pipeline sends (`PublishRequest::registration`). An abandoned create's child
+/// name never becomes reachable, so it leaves the republish inventory with the
+/// op; content CIDs join this list when the content plane starts registering
+/// them (#868).
+fn registered_by(scope: &DrainScope<'_>, op: &Op) -> Vec<String> {
+    if !matches!(op.kind, OpKind::Create { .. }) {
+        return Vec::new();
+    }
+    vec![
+        derive_write_name(scope.write_scope_seed, &op.target.0)
+            .as_str()
+            .to_owned(),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn attempts(pairs: &[(u64, u32)]) -> Attempts {
+        let mut attempts = Attempts::default();
+        for (op_id, count) in pairs {
+            for _ in 0..*count {
+                attempts.charge(OpId(*op_id));
+            }
+        }
+        attempts
+    }
+
+    /// A budget only bounds a pathology if it survives the restart that a
+    /// half-published op is most likely to hit.
+    #[test]
+    fn the_attempt_record_survives_a_round_trip() {
+        let stored = attempts(&[(1, 2), (9, 1)]).encode();
+        assert_eq!(
+            Attempts::decode(Some(stored)).counts,
+            BTreeMap::from([(OpId(1), 2), (OpId(9), 1)])
+        );
+    }
+
+    /// The staging store is shared with whatever build and identity wrote it, so
+    /// bytes this build did not write must read as no attempts — a fabricated
+    /// count would spend another op's budget and abandon it early.
+    #[test]
+    fn bytes_this_build_did_not_write_read_as_no_attempts() {
+        let foreign_but_well_sized = {
+            let mut bytes = attempts(&[(1, 2)]).encode();
+            bytes[0] = ATTEMPT_FORMAT_V1.wrapping_add(1);
+            bytes
+        };
+        for stored in [
+            None,
+            Some(Vec::new()),
+            Some(vec![0xAB; 7]),
+            Some(vec![0xAB; ATTEMPT_ENTRY_LEN]),
+            Some(foreign_but_well_sized),
+        ] {
+            assert!(Attempts::decode(stored).counts.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_retired_ops_count_leaves_with_it() {
+        let mut attempts = attempts(&[(1, 3), (2, 1)]);
+        attempts.retain_live(&BTreeSet::from([OpId(2)]));
+        assert_eq!(attempts.counts, BTreeMap::from([(OpId(2), 1)]));
+    }
+
+    /// Positive evidence only: one status covers the account-quota gate and the
+    /// transport cap, so each verdict needs the API's own discriminator.
+    #[test]
+    fn each_413_verdict_rests_on_the_apis_own_code() {
+        let refusal = |code: Option<&str>| {
+            classify_publish(
+                RecordPublishError::Upload(ApiError::Status {
+                    status: 413,
+                    message: Some("too large".to_owned()),
+                    code: code.map(str::to_owned),
+                }),
+                4096,
+            )
+        };
+        assert_eq!(
+            refusal(Some(QUOTA_EXCEEDED)),
+            Halt::Blocked { needed_bytes: 4096 }
+        );
+        assert_eq!(
+            refusal(Some(UPLOAD_TOO_LARGE)),
+            Halt::Permanent(DeadLetterReason::PayloadRefused)
+        );
+        for code in [None, Some("SOMETHING_NEW")] {
+            assert_eq!(
+                refusal(code),
+                Halt::Attempt,
+                "a 413 the API did not stamp is a proxy, and supports neither verdict"
+            );
+        }
+    }
+
+    /// Every other publish failure is availability: retried indefinitely and
+    /// charged nothing, so an unreachable network never abandons an op.
+    #[test]
+    fn a_failure_carrying_no_server_verdict_is_availability() {
+        for error in [
+            RecordPublishError::Upload(ApiError::Status {
+                status: 503,
+                message: None,
+                code: None,
+            }),
+            RecordPublishError::Upload(ApiError::NotAuthenticated),
+            RecordPublishError::HeadCidMismatch {
+                expected: "a".to_owned(),
+                returned: "b".to_owned(),
+            },
+            RecordPublishError::Publish(crate::net::PublishError::AllEndpointsFailed),
+        ] {
+            assert_eq!(classify_publish(error, 4096), Halt::Unclassified);
+        }
+    }
 }

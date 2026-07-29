@@ -52,6 +52,9 @@ use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
 use crate::sync::rebase::{QueueScan, decode_queue};
+
+pub use crate::sync::drain::BlockedOp;
+pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::staging::{StageOutcome, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
@@ -165,6 +168,28 @@ pub struct SnapshotChild {
     pub content_version: Option<u64>,
 }
 
+/// Which budget refused a write. The two are different facts about the world —
+/// a full device is not a full account — and different errnos on desktop
+/// (`ENOSPC` vs `EDQUOT`, blueprint/desktop.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverBudgetCause {
+    /// This device's offline staging budget is exhausted.
+    DeviceStaging,
+    /// The account's hosted storage quota refused the bytes.
+    AccountQuota,
+}
+
+/// One retained dead-lettered op and why it will never publish. The reason is
+/// the whole surface: "the folder this was going into no longer exists" and
+/// "this queued change is corrupt" call for different user actions (#859).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeadLetter {
+    /// The dead-lettered op.
+    pub op_id: OpId,
+    /// Why it dead-lettered.
+    pub reason: DeadLetterReason,
+}
+
 /// A key-free snapshot of one folder for a host UI paint: its children, its
 /// breadcrumb trail, the retained dead letters, and the staleness rung — one
 /// internally-consistent read of the rendered view (state law).
@@ -179,8 +204,12 @@ pub struct SnapshotView {
     /// Ancestor trail from the folder's parent up to and including the root,
     /// nearest first.
     pub ancestors: Vec<Breadcrumb>,
-    /// Every retained dead-lettered op id.
-    pub dead_letters: Vec<OpId>,
+    /// Every retained dead-lettered op, with its reason.
+    pub dead_letters: Vec<DeadLetter>,
+    /// The over-quota hold, if the drain has one. Read here and never as an
+    /// event: this is a state that *clears*, and a lost "resumed" would strand
+    /// the UI on a blockage that is gone (#841).
+    pub blocked: Option<BlockedOp>,
     /// How many durable queue entries this session holds but cannot read
     /// (CONTEXT.md "Retained record"). Deliberately unattributed — it says the
     /// device is not empty, never whose work it holds — and it exists so an
@@ -423,11 +452,14 @@ pub enum Event {
         /// The pinned name, as opaque bytes.
         ipns_name: Vec<u8>,
     },
-    /// A queued op terminally failed rebase; staged bytes are preserved
-    /// (#33 D6).
+    /// A queued op terminally failed; staged bytes are preserved unless the
+    /// abandonment released them (#33 D6).
     DeadLetter {
         /// The dead-lettered op.
         op_id: OpId,
+        /// Why it dead-lettered — the four reasons need four different messages
+        /// (#859).
+        reason: DeadLetterReason,
     },
     /// Attributable abuse: owner-blob / ascent-link / unseal cross-check
     /// disagreement (#39 D6) — never a silent failure.
@@ -510,6 +542,14 @@ pub enum EngineError {
     Unimplemented {
         /// [`Command::name`] of the rejected command.
         command: &'static str,
+    },
+    /// A write was refused for want of room. The cause names which budget, so a
+    /// host can distinguish a full device from a full account — on desktop,
+    /// `ENOSPC` from `EDQUOT`. Produced by the content plane, the only caller
+    /// that stages upload bytes (#868).
+    OverBudget {
+        /// Which budget refused it.
+        cause: OverBudgetCause,
     },
     /// A host seam failed (durable op-queue I/O). Availability, never a trust
     /// decision — trust classification happens below the facade.
@@ -606,6 +646,12 @@ impl fmt::Display for EngineError {
             EngineError::Unimplemented { command } => {
                 write!(f, "command not implemented yet: {command}")
             }
+            EngineError::OverBudget {
+                cause: OverBudgetCause::DeviceStaging,
+            } => f.write_str("this device's staging budget is exhausted"),
+            EngineError::OverBudget {
+                cause: OverBudgetCause::AccountQuota,
+            } => f.write_str("the account's storage quota is exhausted"),
             EngineError::Seam { message } => write!(f, "seam error: {message}"),
             EngineError::Entropy { message } => write!(f, "entropy error: {message}"),
             EngineError::Auth { message } => write!(f, "auth error: {message}"),
@@ -628,6 +674,11 @@ impl EventStream {
     /// Waits for the next event; `None` once the engine is gone.
     pub async fn next(&mut self) -> Option<Event> {
         core::future::poll_fn(|cx| Pin::new(&mut self.receiver).poll_next(cx)).await
+    }
+
+    /// The next buffered event without waiting; `None` when none is ready.
+    pub fn try_next(&mut self) -> Option<Event> {
+        self.receiver.try_recv().ok()
     }
 }
 
@@ -730,12 +781,17 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
 /// are best-effort over the in-process channel — a dropped receiver is fine.
 fn surface_drain_report(
     events: &mpsc::UnboundedSender<Event>,
-    dead_letters: &RefCell<BTreeMap<OpId, Option<NodeId>>>,
+    dead_letters: &RefCell<RetainedDeadLetters>,
     report: &DrainReport,
 ) {
-    for (op_id, target, _reason) in &report.dead_letters {
-        dead_letters.borrow_mut().insert(*op_id, Some(*target));
-        let _ = events.unbounded_send(Event::DeadLetter { op_id: *op_id });
+    for (op_id, target, reason) in &report.dead_letters {
+        dead_letters
+            .borrow_mut()
+            .insert(*op_id, (Some(*target), *reason));
+        let _ = events.unbounded_send(Event::DeadLetter {
+            op_id: *op_id,
+            reason: *reason,
+        });
     }
     if !report.is_empty() {
         let _ = events.unbounded_send(Event::SnapshotUpdated);
@@ -792,6 +848,11 @@ type ScopeReadSeeds = BTreeMap<[u8; 16], Zeroizing<[u8; 32]>>;
 /// The engine's in-memory per-scope write-seed cell: scope id → the recovered
 /// scope write seed (zeroized on removal/drop).
 type ScopeWriteSeeds = BTreeMap<[u8; 16], Zeroizing<[u8; 32]>>;
+
+/// Retained dead letters: op id → its target node when known (`None` for an
+/// undecodable queue entry, which never decoded far enough to name one) and why
+/// it dead-lettered.
+type RetainedDeadLetters = BTreeMap<OpId, (Option<NodeId>, DeadLetterReason)>;
 
 /// The re-point pointer-payload wire version the owner's own vault seals under
 /// and the cold-start walk verifies against (`crates/core` pointer payload) — the
@@ -851,10 +912,13 @@ pub struct Engine<T: SeamTypes> {
     /// [`scope_read_seeds`](Self::scope_read_seeds); the drain derives each new
     /// node's `ipnsName` and its narrow per-name signer from them.
     scope_write_seeds: Rc<RefCell<ScopeWriteSeeds>>,
-    /// Retained dead-lettered ops, mapped to the target node when known
-    /// (`None` for an undecodable queue entry). Feeds [`SnapshotView`]'s
-    /// dead-letter surface (#33 D6: dead letters are retained, never silent).
-    dead_letters: Rc<RefCell<BTreeMap<OpId, Option<NodeId>>>>,
+    /// Retained dead-lettered ops. Feeds [`SnapshotView`]'s dead-letter surface
+    /// (#33 D6: dead letters are retained, never silent).
+    dead_letters: Rc<RefCell<RetainedDeadLetters>>,
+    /// The drain's over-quota hold, written by the drain tick and read by
+    /// [`snapshot`](Self::snapshot). In-memory: a restart re-derives it from the
+    /// next drain attempt's own 413 rather than trusting a stale verdict.
+    blocked: Rc<RefCell<Option<BlockedOp>>>,
     /// Session-alive latch: cleared on drop so the spawned liveness loop
     /// stops at its next wake instead of re-PUTting after the engine is gone.
     alive: Rc<Cell<bool>>,
@@ -900,6 +964,7 @@ impl<T: SeamTypes> Engine<T> {
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
+                blocked: Rc::new(RefCell::new(None)),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
                 api: None,
@@ -1093,13 +1158,18 @@ impl<T: SeamTypes> Engine<T> {
         // channel, so hosts MUST dedup by `op_id`. Gate the durable removal on a
         // successful send: a receiver dropped mid-teardown must not silently
         // purge an unsurfaced entry — preserved, the next boot re-surfaces it.
-        for (op_id, _reason) in &scan.undecodable {
+        for (op_id, reason) in &scan.undecodable {
             // Retain the dead letter (target unknown for an undecodable entry)
             // so the read surface keeps reporting it.
-            self.dead_letters.borrow_mut().insert(*op_id, None);
+            self.dead_letters
+                .borrow_mut()
+                .insert(*op_id, (None, *reason));
             if self
                 .events
-                .unbounded_send(Event::DeadLetter { op_id: *op_id })
+                .unbounded_send(Event::DeadLetter {
+                    op_id: *op_id,
+                    reason: *reason,
+                })
                 .is_ok()
             {
                 self.seams
@@ -1206,6 +1276,7 @@ impl<T: SeamTypes> Engine<T> {
         let entropy = self.entropy.clone();
         let scope_write_seeds = self.scope_write_seeds.clone();
         let dead_letters = self.dead_letters.clone();
+        let blocked = self.blocked.clone();
         let transport = self.seams.record_transport.clone();
         let snapshot_cache = self.seams.snapshot_cache.clone();
         let floors = self.seams.floor_store.clone();
@@ -1298,6 +1369,7 @@ impl<T: SeamTypes> Engine<T> {
                         entropy: &entropy,
                         base: &base,
                         held: &held,
+                        blocked: &blocked,
                     }
                     .run(&DrainScope {
                         root: NodeId(root_id),
@@ -1464,7 +1536,7 @@ impl<T: SeamTypes> Engine<T> {
             *slot = (*slot).max(op.pending_class());
         }
         let dead = self.dead_letters.borrow();
-        let dead_nodes: BTreeSet<NodeId> = dead.values().flatten().copied().collect();
+        let dead_nodes: BTreeSet<NodeId> = dead.values().filter_map(|(node, _)| *node).collect();
         let children = rendered
             .children(folder)
             .into_iter()
@@ -1490,7 +1562,13 @@ impl<T: SeamTypes> Engine<T> {
                     .unwrap_or_default(),
             })
             .collect();
-        let dead_letters = dead.keys().copied().collect();
+        let dead_letters = dead
+            .iter()
+            .map(|(op_id, (_, reason))| DeadLetter {
+                op_id: *op_id,
+                reason: *reason,
+            })
+            .collect();
         let status = self.sync_status.borrow();
         let staleness = classify(
             self.seams.scheduler.now(),
@@ -1505,6 +1583,7 @@ impl<T: SeamTypes> Engine<T> {
             children,
             ancestors,
             dead_letters,
+            blocked: *self.blocked.borrow(),
             retained_records: scan.retained,
             staleness,
         })
@@ -2142,7 +2221,7 @@ mod tests {
     /// Every event currently buffered on the stream, without blocking.
     fn drain(events: &mut EventStream) -> Vec<Event> {
         let mut out = Vec::new();
-        while let Ok(event) = events.receiver.try_recv() {
+        while let Some(event) = events.try_next() {
             out.push(event);
         }
         out
@@ -2876,7 +2955,10 @@ mod tests {
             // The dead-letter surfaces on the host stream ahead of the first paint.
             assert_eq!(
                 block_on(events.next()),
-                Some(Event::DeadLetter { op_id: OpId(1) })
+                Some(Event::DeadLetter {
+                    op_id: OpId(1),
+                    reason: DeadLetterReason::Undecodable
+                })
             );
             assert_eq!(block_on(events.next()), Some(Event::SnapshotUpdated));
             // The op record was dropped from the durable queue.
@@ -2934,7 +3016,10 @@ mod tests {
             let view = block_on(engine.snapshot(engine.root())).unwrap();
             assert_eq!(
                 view.dead_letters,
-                vec![OpId(1)],
+                vec![DeadLetter {
+                    op_id: OpId(1),
+                    reason: DeadLetterReason::Undecodable
+                }],
                 "the retained dead letter stays on the read surface after removal \
                  from the durable queue"
             );
@@ -2953,7 +3038,10 @@ mod tests {
             drive(&mut engine, &pointers);
             assert_eq!(
                 block_on(events.next()),
-                Some(Event::DeadLetter { op_id: OpId(1) })
+                Some(Event::DeadLetter {
+                    op_id: OpId(1),
+                    reason: DeadLetterReason::Undecodable
+                })
             );
             assert_eq!(block_on(events.next()), Some(Event::SnapshotUpdated));
 
@@ -3005,7 +3093,10 @@ mod tests {
             );
             assert_eq!(
                 block_on(events.next()),
-                Some(Event::DeadLetter { op_id: OpId(1) })
+                Some(Event::DeadLetter {
+                    op_id: OpId(1),
+                    reason: DeadLetterReason::Undecodable
+                })
             );
             assert_eq!(
                 block_on(engine.seams.staging_store.queued_ops())
@@ -3028,7 +3119,10 @@ mod tests {
             assert!(matches!(second, Err(ColdStartError::Seam(_))));
             assert_eq!(
                 block_on(events.next()),
-                Some(Event::DeadLetter { op_id: OpId(1) })
+                Some(Event::DeadLetter {
+                    op_id: OpId(1),
+                    reason: DeadLetterReason::Undecodable
+                })
             );
         }
     }

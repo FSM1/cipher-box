@@ -44,7 +44,8 @@ pub mod testkit;
 
 pub use api::{
     ApiClient, ApiError, ChallengeSigner, IdentityChallengeSigner, LoginOutcome, MailboxItem,
-    NameRegistration, Quota, SiweNonce, TestLoginOutcome, UploadResult,
+    NameRegistration, QUOTA_EXCEEDED, Quota, SiweNonce, TestLoginOutcome, UPLOAD_TOO_LARGE,
+    UploadResult,
 };
 pub use content::{
     ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
@@ -55,9 +56,9 @@ pub use content::{
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{
-    Breadcrumb, Command, Engine, EngineError, EngineView, Event, EventStream, LoginSecret,
-    NodeAttrs, NodeId, NodeKind, OpPhase, Permission, PlaintextContent, SnapshotChild,
-    SnapshotView, Staleness, StatFs,
+    Breadcrumb, Command, DeadLetter, Engine, EngineError, EngineView, Event, EventStream,
+    LoginSecret, NodeAttrs, NodeId, NodeKind, OpPhase, OverBudgetCause, Permission,
+    PlaintextContent, SnapshotChild, SnapshotView, Staleness, StatFs,
 };
 pub use gate::{
     Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,
@@ -85,7 +86,7 @@ pub use rotation::{
 pub use seams::{SeamError, SeamResult, SeamSet, SeamTypes};
 pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};
 pub use sync::{
-    AppliedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow,
+    AppliedOp, BlockedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow,
     HeadReconciliation, Link, NodeMeta, Op, OpKind, OpRecordError, OpResolution, PointerError,
     PointerFetch, RecordClass, RecordReader, RecordSeal, Repair, ReplayReport, SessionRole,
     Snapshot, StageOutcome, StagedContent, TickCause, TickControl, VaultPointerAdoption,

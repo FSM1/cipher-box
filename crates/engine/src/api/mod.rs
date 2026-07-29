@@ -13,7 +13,7 @@ mod signer;
 mod types;
 
 pub use client::ApiClient;
-pub use error::ApiError;
+pub use error::{ApiError, QUOTA_EXCEEDED, UPLOAD_TOO_LARGE};
 pub use signer::{ChallengeSigner, IdentityChallengeSigner};
 pub use types::{
     LoginOutcome, MailboxItem, NameRegistration, Quota, SiweNonce, TestLoginOutcome, UploadResult,

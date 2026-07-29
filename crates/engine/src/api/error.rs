@@ -4,6 +4,14 @@ use core::fmt;
 
 use crate::seams::SeamError;
 
+/// The 413 `code` for the account-quota gate. Transient: it clears when the
+/// account frees space (blueprint/api.md).
+pub const QUOTA_EXCEEDED: &str = "QUOTA_EXCEEDED";
+
+/// The 413 `code` for the transport cap, which shares the status. Permanent for
+/// the request: the same bytes are refused on every retry.
+pub const UPLOAD_TOO_LARGE: &str = "UPLOAD_TOO_LARGE";
+
 /// A failure of an API call.
 ///
 /// Diagnostic strings carried here are the API's own error messages, never key
@@ -27,12 +35,15 @@ pub enum ApiError {
     Forbidden,
     /// A non-2xx status the client does not special-case. `message` is the
     /// server's diagnostic string when the body parsed as a Nest error
-    /// envelope.
+    /// envelope; `code` is its stable machine discriminator, which is what a
+    /// caller may branch on — prose is diagnostic only.
     Status {
         /// The HTTP status code.
         status: u16,
         /// The server's `message` field, if the error body carried one.
         message: Option<String>,
+        /// The server's `code` field, if the error body carried one.
+        code: Option<String>,
     },
     /// A 2xx body did not match the expected shape. Carries a short reason,
     /// never the body bytes.
@@ -55,10 +66,12 @@ impl fmt::Display for ApiError {
             ApiError::Status {
                 status,
                 message: Some(message),
+                ..
             } => write!(f, "api returned status {status}: {message}"),
             ApiError::Status {
                 status,
                 message: None,
+                ..
             } => write!(f, "api returned status {status}"),
             ApiError::Decode(reason) => write!(f, "api response decode error: {reason}"),
         }

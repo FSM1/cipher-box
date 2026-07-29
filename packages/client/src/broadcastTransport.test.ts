@@ -75,7 +75,7 @@ describe('broadcast transport ↔ leader relay', () => {
     engine.emit({ kind: 'snapshotUpdated' });
     engine.emit({ kind: 'stalenessChanged', staleness: 'stale' });
     engine.emit({ kind: 'withheldUpdateEscalation', ipnsName: new Uint8Array([1, 2, 3]) });
-    engine.emit({ kind: 'deadLetter', opId: 9n });
+    engine.emit({ kind: 'deadLetter', opId: 9n, reason: 'undecodable' });
     engine.emit({ kind: 'attributableAbuse', description: 'abuse' });
     await tick();
 
@@ -121,7 +121,7 @@ describe('broadcast transport ↔ leader relay', () => {
 
     const sent: EventDescriptor[] = [
       { kind: 'snapshotUpdated' },
-      { kind: 'deadLetter', opId: 3n },
+      { kind: 'deadLetter', opId: 3n, reason: 'payloadRefused' },
       { kind: 'stalenessChanged', staleness: 'stale' },
     ];
     for (const event of sent) engine.emit(event);
@@ -169,7 +169,8 @@ describe('broadcast transport ↔ leader relay', () => {
         },
       ],
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],
-      deadLetters: [7n],
+      deadLetters: [{ opId: 7n, reason: 'suffixExhausted' }],
+      blocked: null,
       retainedRecords: 0,
       staleness: 'reconciling',
     };
