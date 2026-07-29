@@ -52,41 +52,52 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
                 op.stamp_authored(node);
             }
         }
-        OpKind::Relink { new_parent, .. } => {
-            if let Some(old_parent) = view.parent_of(op.target) {
-                view.unlink(old_parent, op.target);
-            }
-            view.link_next(*new_parent, op.target);
-            if let Some(node) = view.node_mut(op.target) {
-                op.stamp_authored(node);
-            }
-        }
+        OpKind::Relink { new_parent, .. } => relocate(view, op, *new_parent, None, None),
         OpKind::Move {
             new_parent,
             new_name,
             replacing,
             ..
-        } => {
-            if let Some(replaced) = replacing {
-                view.remove_node(replaced.node);
-            }
-            if view.parent_of(op.target) != Some(*new_parent) {
-                if let Some(old_parent) = view.parent_of(op.target) {
-                    view.unlink(old_parent, op.target);
-                }
-                view.link_next(*new_parent, op.target);
-            }
-            if let Some(node) = view.node_mut(op.target) {
-                node.name = new_name.clone();
-                op.stamp_authored(node);
-            }
-        }
+        } => relocate(
+            view,
+            op,
+            *new_parent,
+            Some(new_name.as_str()),
+            replacing.map(|replaced| replaced.node),
+        ),
         OpKind::UpdateContent { .. } => {
             if let Some(node) = view.node_mut(op.target) {
                 node.content_version = node.content_version.map(|count| count + 1);
                 op.stamp_authored(node);
             }
         }
+    }
+}
+
+/// Render a relink or a move: vacate the node the op replaces, re-link under
+/// the destination when the parent actually changes, and take the new name.
+fn relocate(
+    view: &mut Snapshot,
+    op: &Op,
+    new_parent: crate::facade::NodeId,
+    new_name: Option<&str>,
+    replacing: Option<crate::facade::NodeId>,
+) {
+    if let Some(replaced) = replacing {
+        view.remove_node(replaced);
+    }
+    let current = view.parent_of(op.target);
+    if current != Some(new_parent) {
+        if let Some(current) = current {
+            view.unlink(current, op.target);
+        }
+        view.link_next(new_parent, op.target);
+    }
+    if let Some(node) = view.node_mut(op.target) {
+        if let Some(new_name) = new_name {
+            node.name = new_name.to_owned();
+        }
+        op.stamp_authored(node);
     }
 }
 

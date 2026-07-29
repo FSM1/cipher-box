@@ -322,8 +322,7 @@ pub enum Command {
         new_parent: NodeId,
     },
     /// Relink and rename a node in one intent op, replacing whatever sits at
-    /// the destination name. One kernel rename is exactly one of these
-    /// (blueprint/desktop.md "Reads, writes, and the never-block law").
+    /// the destination name ([`OpKind::Move`](crate::OpKind::Move)).
     Move {
         /// Node being moved.
         node: NodeId,
@@ -1484,10 +1483,7 @@ impl<T: SeamTypes> Engine<T> {
             }
             Command::Relink { node, new_parent } => {
                 let rendered = self.render().await?;
-                let from_parent = rendered
-                    .parent_of(node)
-                    .unwrap_or(self.snapshot.borrow().root);
-                let base_sequence = rendered.record_sequence(node).unwrap_or(1);
+                let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
                 // trailing bools: cross_scope=false, exits_granted_source=false — intra-scope pure relink
                 let op = Op::relink(
                     node,
@@ -1507,12 +1503,12 @@ impl<T: SeamTypes> Engine<T> {
                 replacing,
             } => {
                 let rendered = self.render().await?;
-                let from_parent = rendered
-                    .parent_of(node)
-                    .unwrap_or(self.snapshot.borrow().root);
-                let base_sequence = rendered.record_sequence(node).unwrap_or(1);
+                let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
                 let replacing = replacing.map(|replaced| Replaced {
                     node: replaced,
+                    // The conditional-delete anchor: a concurrent edit that
+                    // advances the replaced node past this keeps it, and the
+                    // move auto-suffixes off the name it could not free.
                     sequence: rendered.record_sequence(replaced).unwrap_or(1),
                 });
                 let op = Op::move_node(
@@ -1847,6 +1843,15 @@ impl<T: SeamTypes> Engine<T> {
             .into_iter()
             .map(|(_id, op)| op)
             .collect())
+    }
+
+    /// What a relocation op anchors on: the parent the move was formed against
+    /// (the scope root for an unlinked node) and the target's base sequence.
+    fn relocation_anchors(&self, rendered: &Snapshot, node: NodeId) -> (NodeId, u64) {
+        let from_parent = rendered
+            .parent_of(node)
+            .unwrap_or(self.snapshot.borrow().root);
+        (from_parent, rendered.record_sequence(node).unwrap_or(1))
     }
 
     /// The base sequence to anchor an op at: the target's own record sequence in

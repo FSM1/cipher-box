@@ -372,26 +372,59 @@ fn a_durable_queue_outage_never_destroys_the_destination_a_rename_did_not_replac
 
         let outcome = block_on(core.rename(ROOT_INO, "new.txt", ROOT_INO, "target.txt"));
 
+        // The destination name resolves either way: to the moved node when the
+        // rename landed, to the node it would have replaced when it did not.
         let survivor = block_on(core.lookup(ROOT_INO, "target.txt"))
             .unwrap_or_else(|_| panic!("budget {budget}: the destination name vanished"))
             .node;
-        match outcome {
-            Ok(()) => {
-                assert_eq!(names(&mut core, ROOT_INO), vec!["target.txt".to_owned()]);
-                assert_eq!(survivor, source, "the replace completed");
-            }
-            Err(_) => {
-                let mut listed = names(&mut core, ROOT_INO);
-                listed.sort();
-                assert_eq!(
-                    listed,
-                    vec!["new.txt".to_owned(), "target.txt".to_owned()],
-                    "budget {budget}: a refused rename left something half-done"
-                );
-                assert_eq!(survivor, victim);
-            }
-        }
+        let landed = outcome.is_ok();
+        assert_eq!(survivor, if landed { source } else { victim });
+        assert_eq!(
+            names(&mut core, ROOT_INO).len(),
+            if landed { 1 } else { 2 },
+            "budget {budget}: a refused rename left something half-done"
+        );
     }
+}
+
+#[test]
+fn renaming_a_node_onto_itself_journals_nothing() {
+    // POSIX `rename(a, a)` succeeds and changes nothing, so it must not spend a
+    // journal entry — proven by refusing every durable write.
+    let (mut engine, root, staging) = started_engine_with_staging();
+    seed_child(&mut engine, root, "f.txt", NodeKind::File);
+    let mut core = OperationCore::new(engine, RecordingAdapter::push_capable());
+    staging.fail_enqueue_after(0);
+
+    block_on(core.rename(ROOT_INO, "f.txt", ROOT_INO, "f.txt")).expect("a no-op rename succeeds");
+    assert_eq!(names(&mut core, ROOT_INO), vec!["f.txt".to_owned()]);
+}
+
+#[test]
+fn replacing_a_junk_holding_folder_keeps_the_destination_entry_when_the_queue_fails() {
+    // The replaced folder's own unlink rides the move, but the hidden junk it
+    // holds still needs deletes of its own. A queue that dies between them may
+    // lose junk the user could never see — never the destination entry itself.
+    let (mut engine, root, staging) = started_engine_with_staging();
+    let source = seed_child(&mut engine, root, "dir", NodeKind::Folder);
+    let victim = seed_child(&mut engine, root, "target", NodeKind::Folder);
+    seed_child(&mut engine, victim, ".DS_Store", NodeKind::File);
+    let mut core = OperationCore::new(engine, RecordingAdapter::push_capable());
+    // The junk delete lands; the move that would unlink the folder does not.
+    staging.fail_enqueue_after(1);
+
+    block_on(core.rename(ROOT_INO, "dir", ROOT_INO, "target")).expect_err("the move is refused");
+
+    assert_eq!(
+        block_on(core.lookup(ROOT_INO, "target")).unwrap().node,
+        victim,
+        "the destination entry POSIX promises survives"
+    );
+    assert_eq!(
+        block_on(core.lookup(ROOT_INO, "dir")).unwrap().node,
+        source,
+        "and the source never moved"
+    );
 }
 
 #[test]

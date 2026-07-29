@@ -334,17 +334,8 @@ fn rebase_relink(
     new_parent: crate::facade::NodeId,
     exits_granted_source: bool,
 ) -> OpResolution {
-    if !working.contains(op.target) {
-        return OpResolution::DeadLetter(DeadLetterReason::TargetGone);
-    }
-    if !working.contains(new_parent) {
-        return OpResolution::DeadLetter(DeadLetterReason::DestinationGone);
-    }
-    // A move into the subtree it is moving detaches that subtree from the scope
-    // root with nothing left to walk it from, so no later op could reach it —
-    // unrepresentable rather than merely refused at publish.
-    if new_parent == op.target || working.ancestors(new_parent).contains(&op.target) {
-        return OpResolution::DeadLetter(DeadLetterReason::DestinationInsideTarget);
+    if let Some(dead_letter) = relocation_guards(working, op, new_parent) {
+        return dead_letter;
     }
 
     let scope_exit_trigger = exits_granted_source.then_some(from_parent);
@@ -370,14 +361,33 @@ fn rebase_relink(
     }
 }
 
+/// What a relocation cannot rebase onto at all, in one place for the relink and
+/// move rules: an absent target or destination, and a destination inside the
+/// moved subtree — which detaches that subtree from the scope root with nothing
+/// left to walk it from, so no later op could reach it (unrepresentable rather
+/// than merely refused at publish).
+fn relocation_guards(
+    working: &Snapshot,
+    op: &Op,
+    new_parent: crate::facade::NodeId,
+) -> Option<OpResolution> {
+    let reason = if !working.contains(op.target) {
+        DeadLetterReason::TargetGone
+    } else if !working.contains(new_parent) {
+        DeadLetterReason::DestinationGone
+    } else if new_parent == op.target || working.ancestors(new_parent).contains(&op.target) {
+        DeadLetterReason::DestinationInsideTarget
+    } else {
+        return None;
+    };
+    Some(OpResolution::DeadLetter(reason))
+}
+
 /// Combined move: the relink rule's races, then the rename rule's collision
-/// resolution, over a destination this op vacates first. Vacating first is what
-/// makes a replace land under the entered name instead of auto-suffixing off
-/// the node it is replacing.
-///
-/// The replaced node is dropped under the conditional-delete rule, so a
-/// concurrent edit to it still wins — the mover then auto-suffixes off the name
-/// it could not free, and no version is lost in either direction.
+/// resolution, over a destination this op vacates first — which is what makes a
+/// replace land under the entered name instead of auto-suffixing off the node
+/// it is replacing. The replaced node drops under the conditional-delete rule,
+/// so a concurrent edit to it still wins.
 fn rebase_move(
     working: &mut Snapshot,
     op: &Op,
@@ -386,14 +396,8 @@ fn rebase_move(
     new_name: &str,
     replacing: Option<Replaced>,
 ) -> OpResolution {
-    if !working.contains(op.target) {
-        return OpResolution::DeadLetter(DeadLetterReason::TargetGone);
-    }
-    if !working.contains(new_parent) {
-        return OpResolution::DeadLetter(DeadLetterReason::DestinationGone);
-    }
-    if new_parent == op.target || working.ancestors(new_parent).contains(&op.target) {
-        return OpResolution::DeadLetter(DeadLetterReason::DestinationInsideTarget);
+    if let Some(dead_letter) = relocation_guards(working, op, new_parent) {
+        return dead_letter;
     }
     let current_parent = working.parent_of(op.target);
     // A concurrent move relocated the child somewhere this op never anchored
@@ -405,7 +409,7 @@ fn rebase_move(
 
     // Already where it was going, under the name it was going to take, with
     // nothing left at the destination to vacate.
-    if !replacing.is_some_and(|replaced| working.contains(replaced.node))
+    if replacing.is_none_or(|replaced| !working.contains(replaced.node))
         && current_parent == Some(new_parent)
         && working.node(op.target).is_some_and(|n| n.name == new_name)
     {

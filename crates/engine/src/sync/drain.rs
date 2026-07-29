@@ -289,6 +289,31 @@ struct FolderState {
     sequence: u64,
 }
 
+/// Where one child ref is going, under what name, and what it displaces —
+/// rename, relink, and move all reduce to this.
+struct MovePlan {
+    /// The source parent the op anchored on.
+    from_parent: NodeId,
+    /// The destination parent; the source parent for a rename in place.
+    dest: NodeId,
+    /// `None` keeps the name the ref already carries.
+    new_name: Option<String>,
+    /// The node the rebase vacated at the destination name, if any.
+    vacated: Option<NodeId>,
+}
+
+/// A published dest-add, as its compensation must invert it.
+struct DestAdd {
+    dest: NodeId,
+    source: NodeId,
+    target: NodeId,
+    /// The ref the dest-add vacated in the same publish, if any.
+    replaced: Option<ChildRef>,
+    /// The dest sequence the add published at.
+    cas_base: u64,
+    modified_at: u64,
+}
+
 /// One node's record as loaded for re-authoring: the envelope fields a
 /// republish must carry forward byte-stable (#27 D10) plus the opened body.
 struct LoadedNode {
@@ -768,7 +793,20 @@ where
                 self.publish_create(scope, pass, applied, rebased, *parent, *kind)
                     .await
             }
-            OpKind::Rename { .. } => self.publish_rename(scope, pass, applied).await,
+            // The name lives only in the parent's child ref
+            // (`crates/core/src/seal/body.rs`), so a rename never leaves the
+            // folder it is already in.
+            OpKind::Rename { .. } => {
+                let parent = self.published_parent(applied.op.target)?;
+                let plan = MovePlan {
+                    from_parent: parent,
+                    dest: parent,
+                    new_name: Some(applied.effective_name.clone().ok_or(Halt::Unclassified)?),
+                    vacated: None,
+                };
+                self.publish_ref_move(scope, pass, applied, rebased, plan)
+                    .await
+            }
             OpKind::Delete { .. } => self.publish_delete(scope, pass, applied).await,
             OpKind::Relink {
                 from_parent,
@@ -776,7 +814,13 @@ where
                 cross_scope: false,
                 ..
             } => {
-                self.publish_relink(scope, pass, applied, rebased, *from_parent, *new_parent)
+                let plan = MovePlan {
+                    from_parent: *from_parent,
+                    dest: *new_parent,
+                    new_name: None,
+                    vacated: None,
+                };
+                self.publish_ref_move(scope, pass, applied, rebased, plan)
                     .await
             }
             OpKind::Move {
@@ -785,16 +829,19 @@ where
                 replacing,
                 ..
             } => {
-                self.publish_move(
-                    scope,
-                    pass,
-                    applied,
-                    rebased,
-                    *from_parent,
-                    *new_parent,
-                    replacing.map(|replaced| replaced.node),
-                )
-                .await
+                let plan = MovePlan {
+                    from_parent: *from_parent,
+                    dest: *new_parent,
+                    new_name: Some(applied.effective_name.clone().ok_or(Halt::Unclassified)?),
+                    // Only the node the rebase actually vacated loses its ref:
+                    // one that won the conditional delete keeps its entry, and
+                    // the move already resolved onto a name beside it.
+                    vacated: replacing
+                        .map(|replaced| replaced.node)
+                        .filter(|node| !rebased.contains(*node)),
+                };
+                self.publish_ref_move(scope, pass, applied, rebased, plan)
+                    .await
             }
             OpKind::UpdateContent { .. } => self.publish_update_content(scope, pass, applied).await,
             // Content bytes are #868's; cross-scope re-seal is #635's.
@@ -848,32 +895,6 @@ where
         Ok(())
     }
 
-    /// Rename: the name lives only in the parent's child ref
-    /// (`crates/core/src/seal/body.rs`), so one parent republish is the whole op.
-    async fn publish_rename(
-        &self,
-        scope: &DrainScope<'_>,
-        pass: &mut Pass,
-        applied: &AppliedOp,
-    ) -> Result<(), Halt> {
-        let new_name = applied.effective_name.clone().ok_or(Halt::Unclassified)?;
-        let target = applied.op.target;
-        let parent = self.published_parent(target)?;
-        self.ensure_folder(scope, pass, parent).await?;
-        {
-            let child = pass
-                .folder_mut(parent)?
-                .children
-                .iter_mut()
-                .find(|child| child.id == target.0)
-                .ok_or(Halt::Unclassified)?;
-            child.name = new_name;
-        }
-        self.publish_folder(scope, pass, parent, applied.op.authored_at.0)
-            .await?;
-        Ok(())
-    }
-
     /// Delete: drop the parent's ref. The name itself is retired only on
     /// abandonment (#819 as amended by #824), which is the failure-policy
     /// slice's (#867).
@@ -898,27 +919,34 @@ where
         Ok(())
     }
 
-    /// Relink: dest-add published before the source-remove, so no window leaves
-    /// the child absent from both parents. A source-remove that will not
-    /// publish compensates its own dest-add rather than leaving a dual link.
-    async fn publish_relink(
+    /// The one plan behind rename, relink, and move: relocate a child ref,
+    /// dest-add before source-remove, so no window leaves the child absent from
+    /// both parents. A source-remove that will not publish compensates its own
+    /// dest-add rather than leaving a dual link. Source and destination being
+    /// one folder collapses the whole plan into a single record.
+    async fn publish_ref_move(
         &self,
         scope: &DrainScope<'_>,
         pass: &mut Pass,
         applied: &AppliedOp,
         rebased: &Snapshot,
-        from_parent: NodeId,
-        dest: NodeId,
+        plan: MovePlan,
     ) -> Result<(), Halt> {
+        let MovePlan {
+            from_parent,
+            dest,
+            new_name,
+            vacated,
+        } = plan;
         let target = applied.op.target;
         let source = self.published_parent(target)?;
         // The op's own presence condition: a source the rebase did not resolve
         // against is a concurrent move this op lost (`sync/op.rs`), and removing
         // from it would clobber the winner.
-        if source != from_parent {
+        if source != from_parent && source != dest {
             return Err(Halt::Unclassified);
         }
-        if source == dest {
+        if source == dest && new_name.is_none() && vacated.is_none() {
             return Ok(());
         }
         // A cycle detaches the whole subtree from the scope root irrecoverably,
@@ -933,8 +961,7 @@ where
         self.ensure_folder(scope, pass, dest).await?;
 
         // The dest gains the source's own ref, so id/ipnsName/kind and any
-        // newer client's fields ride verbatim; only the link counter advances
-        // to the winner replay allocated (#33 D5).
+        // newer client's fields ride verbatim.
         let mut moved = pass
             .folder(source)?
             .children
@@ -942,122 +969,35 @@ where
             .find(|child| child.id == target.0)
             .cloned()
             .ok_or(Halt::Unclassified)?;
-        moved.link_counter = rebased
-            .winning_link(target)
-            .map_or(moved.link_counter.saturating_add(1), |link| {
-                link.link_counter
-            });
+        if let Some(new_name) = new_name {
+            moved.name = new_name;
+        }
+        if source != dest {
+            // Only a newly-established link advances the counter, to the winner
+            // replay allocated (#33 D5).
+            moved.link_counter = rebased
+                .winning_link(target)
+                .map_or(moved.link_counter.saturating_add(1), |link| {
+                    link.link_counter
+                });
+        }
 
+        let dest_children = &mut pass.folder_mut(dest)?.children;
+        let replaced = vacated
+            .and_then(|node| dest_children.iter().position(|child| child.id == node.0))
+            .map(|at| dest_children.remove(at));
         // The rebase resolves against a dest it has not loaded yet, so a dest
         // already naming the target is reachable; a second ref would sign a
         // listing `author_child_envelope` rejects, wedging every retry.
-        let dest_children = &mut pass.folder_mut(dest)?.children;
         match dest_children.iter_mut().find(|child| child.id == target.0) {
             Some(existing) => *existing = moved,
             None => dest_children.push(moved),
         }
         let cas_base = self.publish_folder(scope, pass, dest, modified_at).await?;
-
-        pass.folder_mut(source)?
-            .children
-            .retain(|child| child.id != target.0);
-        if self
-            .publish_folder(scope, pass, source, modified_at)
-            .await
-            .is_err()
-        {
-            self.compensate_dest_add(
-                scope,
-                pass,
-                dest,
-                source,
-                target,
-                None,
-                cas_base,
-                modified_at,
-            )
-            .await?;
-            return Err(Halt::Unclassified);
-        }
-        Ok(())
-    }
-
-    /// Move: one publish plan for the whole kernel rename. The destination
-    /// folder drops the replaced ref and gains the moved one in a **single**
-    /// record, so no observer ever sees the destination name unresolvable; a
-    /// cross-folder move then removes from the source under the same dest-first
-    /// ordering a relink uses.
-    #[expect(clippy::too_many_arguments, reason = "one move's full publish plan")]
-    async fn publish_move(
-        &self,
-        scope: &DrainScope<'_>,
-        pass: &mut Pass,
-        applied: &AppliedOp,
-        rebased: &Snapshot,
-        from_parent: NodeId,
-        dest: NodeId,
-        replacing: Option<NodeId>,
-    ) -> Result<(), Halt> {
-        let target = applied.op.target;
-        let new_name = applied.effective_name.clone().ok_or(Halt::Unclassified)?;
-        let source = self.published_parent(target)?;
-        // The op's own presence condition (`sync/op.rs`): a parent neither
-        // anchor names is a concurrent move this op lost.
-        if source != from_parent && source != dest {
-            return Err(Halt::Unclassified);
-        }
-        if dest == target || self.base.borrow().ancestors(dest).contains(&target) {
-            return Err(Halt::Unclassified);
-        }
-        let modified_at = applied.op.authored_at.0;
-
-        self.ensure_folder(scope, pass, source).await?;
-        self.ensure_folder(scope, pass, dest).await?;
-
-        // Only the node the rebase actually vacated loses its ref: one that won
-        // the conditional delete keeps its entry, and the move already resolved
-        // onto an auto-suffixed name beside it.
-        let vacated = replacing.filter(|replaced| !rebased.contains(*replaced));
-
-        let mut moved = pass
-            .folder(source)?
-            .children
-            .iter()
-            .find(|child| child.id == target.0)
-            .cloned()
-            .ok_or(Halt::Unclassified)?;
-        moved.name = new_name;
-        // The counter the replay allocated (#33 D5) — unchanged for a rename in
-        // place, advanced to the winner for a relink.
-        moved.link_counter = rebased.winning_link(target).ok_or(Halt::Unclassified)?.link_counter;
-
         if source == dest {
-            let children = &mut pass.folder_mut(dest)?.children;
-            if let Some(replaced) = vacated {
-                children.retain(|child| child.id != replaced.0);
-            }
-            let entry = children
-                .iter_mut()
-                .find(|child| child.id == target.0)
-                .ok_or(Halt::Unclassified)?;
-            *entry = moved;
-            self.publish_folder(scope, pass, dest, modified_at).await?;
             return Ok(());
         }
 
-        let dest_children = &mut pass.folder_mut(dest)?.children;
-        let replaced_ref = vacated
-            .and_then(|replaced| dest_children.iter().position(|c| c.id == replaced.0))
-            .map(|at| dest_children.remove(at));
-        // A dest already naming the target is reachable (the rebase resolves
-        // against a dest it has not loaded); a second ref would sign a listing
-        // `author_child_envelope` rejects, wedging every retry.
-        match dest_children.iter_mut().find(|child| child.id == target.0) {
-            Some(existing) => *existing = moved,
-            None => dest_children.push(moved),
-        }
-        let cas_base = self.publish_folder(scope, pass, dest, modified_at).await?;
-
         pass.folder_mut(source)?
             .children
             .retain(|child| child.id != target.0);
@@ -1069,12 +1009,14 @@ where
             self.compensate_dest_add(
                 scope,
                 pass,
-                dest,
-                source,
-                target,
-                replaced_ref,
-                cas_base,
-                modified_at,
+                DestAdd {
+                    dest,
+                    source,
+                    target,
+                    replaced,
+                    cas_base,
+                    modified_at,
+                },
             )
             .await?;
             return Err(Halt::Unclassified);
@@ -1092,21 +1034,23 @@ where
     /// removal re-derived onto the winner's record rather than replayed over it
     /// (#786).
     ///
-    /// `replaced` is the ref the dest-add vacated in the same publish, if any;
-    /// the undo restores it, because a dest that keeps neither the moved node
-    /// nor the one it replaced has lost an entry outright.
-    #[expect(clippy::too_many_arguments, reason = "one compensation's full state")]
+    /// The undo also restores the ref the dest-add vacated: a dest keeping
+    /// neither the moved node nor the one it replaced has lost an entry
+    /// outright.
     async fn compensate_dest_add(
         &self,
         scope: &DrainScope<'_>,
         pass: &mut Pass,
-        dest: NodeId,
-        source: NodeId,
-        target: NodeId,
-        replaced: Option<ChildRef>,
-        cas_base: u64,
-        modified_at: u64,
+        add: DestAdd,
     ) -> Result<(), Halt> {
+        let DestAdd {
+            dest,
+            source,
+            target,
+            replaced,
+            cas_base,
+            modified_at,
+        } = add;
         self.reload_folder(scope, pass, source).await?;
         if !pass
             .folder(source)?
