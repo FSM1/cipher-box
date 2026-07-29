@@ -321,8 +321,9 @@ pub enum Command {
         /// Destination parent.
         new_parent: NodeId,
     },
-    /// Relink and rename a node in one intent op, replacing whatever sits at
-    /// the destination name ([`OpKind::Move`](crate::OpKind::Move)).
+    /// Relink and rename a node in one intent op, conditionally replacing the
+    /// node at the destination name — a concurrent edit to it wins and the move
+    /// auto-suffixes instead ([`OpKind::Move`](crate::OpKind::Move)).
     Move {
         /// Node being moved.
         node: NodeId,
