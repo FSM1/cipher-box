@@ -3,14 +3,13 @@
 //!
 //! Normative design: blueprint/engine.md
 //!
-//! This slice freezes the architecture surface: the nine host seam traits
-//! and the whole-set constructor bundle ([`seams`]), injected entropy
-//! ([`entropy`]), the environment-scoped sync timing profile ([`profile`]),
-//! and the facade skeleton ([`facade`]) — one async command-and-event
-//! surface with start of secret. The [`api`] module lands the single
-//! hand-written API client and token lifecycle. The rest of the pipeline
-//! (gate, sync, rotation, grants, pointer, mailbox, net, content) lands in
-//! later slices behind this exact surface.
+//! The architecture surface: the nine host seam traits and their whole-set
+//! constructor bundle ([`seams`]), injected entropy ([`entropy`]), the
+//! environment-scoped sync timing profile ([`profile`]) and storage policy
+//! ([`storage_policy`]), the hand-written API client and token lifecycle
+//! ([`api`]), and the facade ([`facade`]) — one async command-and-event
+//! surface with start of secret. The pipeline modules ([`gate`], [`sync`],
+//! [`rotation`], [`grants`], [`mailbox`], [`net`], [`content`]) sit behind it.
 //!
 //! The `test-kit` feature adds [`testkit`]: in-memory fakes for every seam,
 //! a virtual-clock scheduler, seeded entropy, and the reusable per-seam

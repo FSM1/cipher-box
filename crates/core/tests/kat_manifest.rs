@@ -1713,7 +1713,6 @@ fn seal_vectors_are_frozen_and_round_trip() {
             "seal {}: sealed drift",
             v.name
         );
-        // The nonce is prefixed, and the recipient recovers the plaintext.
         assert_eq!(
             &sealed[..NONCE_LEN],
             &nonce,
@@ -1844,7 +1843,6 @@ fn read_body_accept_vectors_decode_and_round_trip() {
         assert_eq!(body.kind(), expected, "read-body accept {}: kind", v.name);
         kinds.insert(v.kind.clone());
     }
-    // Both kinds are exercised.
     assert!(
         kinds.contains("folder") && kinds.contains("file"),
         "both kinds covered"
@@ -2166,7 +2164,6 @@ fn hpke_seal_vectors_are_frozen_and_open() {
             v.name
         );
 
-        // And the recipient must recover the plaintext.
         let recipient = X25519Secret::from_scalar(unhex32(&v.name, &v.recipient_secret));
         let enc = unhex32(&v.name, &v.enc);
         let opened = hpke_open(
@@ -2253,7 +2250,6 @@ fn contact_accept_vectors_import_and_round_trip() {
         let bytes = unhex(&v.name, &v.hex);
         let code = import_contact_code(&bytes)
             .unwrap_or_else(|e| panic!("contact accept {}: must import: {e}", v.name));
-        // Re-encode is byte-stable, and the components match the vector.
         assert_eq!(
             hex::encode(code.encode()),
             v.hex,
@@ -2415,7 +2411,6 @@ fn ipns_name_accept_vectors_encode_and_parse() {
             v.name
         );
         let key = Ed25519Signer::from_seed(unhex32(&v.name, &v.signer_seed)).verifying_key();
-        // Encode: the frozen name is the key's one canonical name.
         assert_eq!(
             IpnsName::from_public_key(&key).as_str(),
             v.ipns_name,
@@ -2519,7 +2514,6 @@ fn ipns_record_accept_vectors_are_frozen_and_verify() {
             "record-accept {}: record bytes drift",
             v.name
         );
-        // Keyless re-PUT is byte-stable.
         let reparsed = IpnsRecord::unmarshal(&record)
             .unwrap_or_else(|e| panic!("record-accept {}: unmarshal: {e}", v.name));
         assert_eq!(
@@ -2528,7 +2522,6 @@ fn ipns_record_accept_vectors_are_frozen_and_verify() {
             "record-accept {}: re-PUT byte-stable",
             v.name
         );
-        // Verify under the name's key extracts the injected fields.
         let name = IpnsName::parse(&v.ipns_name).expect("record-accept name parses");
         let verified = reparsed
             .verify(&name)
@@ -2692,7 +2685,6 @@ fn pointer_accept_vectors_are_frozen_and_open() {
             "pointer-accept {}: sealed drift",
             v.name
         );
-        // And it opens back to the object under the owner's identity key.
         let opened = open_pointer_payload(
             &key,
             v.v,
@@ -2803,7 +2795,6 @@ fn mailbox_accept_vectors_are_frozen_and_open() {
             "mailbox-accept {}: block drift",
             v.name
         );
-        // The recipient opens and the sender identity verifies.
         let item = open_mailbox_payload(&recipient, v.v, &unhex(&v.name, &v.block))
             .unwrap_or_else(|e| panic!("mailbox-accept {}: open: {e}", v.name));
         assert_eq!(item.payload, payload, "mailbox-accept {}: payload", v.name);
@@ -4010,7 +4001,6 @@ fn content_seal_vectors_are_frozen_and_round_trip() {
             "content seal {}: sealed drift",
             v.name
         );
-        // The nonce is prefixed and the recipient recovers the plaintext.
         assert_eq!(
             &sealed[..NONCE_LEN],
             &nonce,
@@ -4111,7 +4101,6 @@ fn content_cid_vectors_are_frozen_and_verify() {
             "content cid {}: v1||codec||blake3||len prefix",
             v.name
         );
-        // Verify accepts the blob against its own CID.
         verify_cid(&cid, &sealed)
             .unwrap_or_else(|e| panic!("content cid {}: verify must accept: {e}", v.name));
     }
