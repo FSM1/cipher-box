@@ -58,6 +58,10 @@ pub const STRUCT_TAG_OWNER_WRITE_BLOB: u8 = 0x09;
 /// subkey ([`super::op_record`]). Local durable state rather than a published
 /// body, so it binds its own clear header instead of an [`AadContext`].
 pub const STRUCT_TAG_OP_RECORD: u8 = 0x0a;
+/// `settings-record` — the published vault settings record HPKE-sealed to the
+/// owner's enc subkey ([`super::settings_record`]). Like `op-record`, it binds
+/// its own clear header instead of an [`AadContext`].
+pub const STRUCT_TAG_SETTINGS_RECORD: u8 = 0x0b;
 
 /// One registry entry's frozen, machine-checkable metadata: the structure's
 /// stable name and its domain-separation byte. The KAT manifest freezes this
@@ -68,8 +72,8 @@ pub struct StructTagSpec {
     pub tag: u8,
 }
 
-/// The ten structure tags, in registry (byte) order. Every new tag extends this
-/// table and its manifest vectors before merge (blueprint/core.md).
+/// The eleven structure tags, in registry (byte) order. Every new tag extends
+/// this table and its manifest vectors before merge (blueprint/core.md).
 pub const STRUCT_TAGS: &[StructTagSpec] = &[
     StructTagSpec {
         name: "read-body",
@@ -110,6 +114,10 @@ pub const STRUCT_TAGS: &[StructTagSpec] = &[
     StructTagSpec {
         name: "op-record",
         tag: STRUCT_TAG_OP_RECORD,
+    },
+    StructTagSpec {
+        name: "settings-record",
+        tag: STRUCT_TAG_SETTINGS_RECORD,
     },
 ];
 
@@ -168,7 +176,11 @@ mod tests {
             // Registry order is byte order, and bytes are 1-based dense.
             assert_eq!(s.tag as usize, i + 1, "tag {} out of byte order", s.name);
         }
-        assert_eq!(STRUCT_TAGS.len(), 10, "the frozen byte-space is ten tags");
+        assert_eq!(
+            STRUCT_TAGS.len(),
+            11,
+            "the frozen byte-space is eleven tags"
+        );
     }
 
     #[test]

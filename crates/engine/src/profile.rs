@@ -37,6 +37,10 @@ pub struct SyncTimingProfile {
     /// Scope-pointer consult interval — polled, not fallback (#38 D4);
     /// bounds the read-only-survivor residual.
     pub pointer_consult_interval: Duration,
+    /// Ceiling on the vault settings load. A settings record that will not
+    /// resolve must never block cold start, so the load yields the documented
+    /// defaults once this elapses (v1's 10 s, carried forward).
+    pub settings_load_budget: Duration,
 }
 
 impl SyncTimingProfile {
@@ -52,6 +56,7 @@ impl SyncTimingProfile {
         stale_after: Duration::from_secs(90),
         escalation_window: Duration::from_secs(600),
         pointer_consult_interval: Duration::from_secs(30),
+        settings_load_budget: Duration::from_secs(10),
     };
 
     /// CI policy: record TTL 1–5 s (small but nonzero) and compressed
@@ -62,6 +67,7 @@ impl SyncTimingProfile {
         stale_after: Duration::from_secs(3),
         escalation_window: Duration::from_secs(5),
         pointer_consult_interval: Duration::from_secs(1),
+        settings_load_budget: Duration::from_secs(1),
     };
 }
 
@@ -113,6 +119,10 @@ mod tests {
             assert!(!profile.stale_after.is_zero());
             assert!(!profile.escalation_window.is_zero());
             assert!(!profile.pointer_consult_interval.is_zero());
+            assert!(
+                !profile.settings_load_budget.is_zero(),
+                "a zero budget would time out every settings load"
+            );
         }
     }
 }

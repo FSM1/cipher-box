@@ -134,7 +134,7 @@ impl Value {
     /// included, since a filename is user-private metadata in a ZK system.
     ///
     /// [`encode_read_body`]: crate::seal::encode_read_body
-    pub(crate) fn zeroize_bytes(&mut self) {
+    pub fn zeroize_bytes(&mut self) {
         match self {
             Self::Bytes(b) => b.zeroize(),
             Self::Text(s) => s.zeroize(),
@@ -226,7 +226,7 @@ impl Map {
 
     /// Zeroize every entry value's owned byte buffers in place (keys are text,
     /// never secret). See [`Value::zeroize_bytes`].
-    pub(crate) fn zeroize_bytes(&mut self) {
+    pub fn zeroize_bytes(&mut self) {
         for (_, v) in &mut self.entries {
             v.zeroize_bytes();
         }

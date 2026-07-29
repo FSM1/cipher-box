@@ -37,6 +37,7 @@ pub mod rotation;
 pub mod seams;
 pub mod secret_util;
 mod session;
+pub mod settings;
 pub mod storage_policy;
 pub mod sync;
 #[cfg(feature = "test-kit")]
@@ -84,6 +85,10 @@ pub use rotation::{
     ScopeRootPublisher, enumerate_eager_set, reseal_scope_root, revoke_read_grant, rotate_scope,
 };
 pub use seams::{SeamError, SeamResult, SeamSet, SeamTypes};
+pub use settings::{
+    DefaultsReason, RetentionPolicy, SettingsInvalid, SettingsLoad, SettingsPublishError,
+    VaultSettings, load_settings, publish_settings, settings_name,
+};
 pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};
 pub use sync::{
     AppliedOp, BlockedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow,

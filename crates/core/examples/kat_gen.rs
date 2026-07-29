@@ -35,9 +35,10 @@ use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, AscentLink, ChildRef, ChildScopeRef, GrantBlobPayload,
     GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload, NodeKind,
     OP_RECORD_HPKE_INFO, OP_RECORD_V, OpRecordHeader, OverrideSeedPayload, OwnerWriteBlobPayload,
-    Permission, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
-    STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS,
+    Permission, ReadBody, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD,
+    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
+    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, SettingsRecordHeader,
     SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, Version,
     WriteBody, build_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload,
     decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header,
@@ -46,9 +47,10 @@ use cipherbox_core::seal::{
     encode_grant_set_commitment, encode_history_link_payload, encode_override_seed_payload,
     encode_owner_write_blob_payload, encode_read_body, encode_write_body, op_record_aad,
     open_ascent_link, open_grant_blob, open_history_link, open_op_record, open_owner_blob,
-    open_owner_write_blob, open_read_body, seal_ascent_link, seal_grant_blob, seal_history_link,
-    seal_op_record, seal_owner_blob, seal_owner_write_blob, seal_read_body, sign_grant_set,
-    sign_structure, structure_sig_preimage, verify_grant_set, verify_structure,
+    open_owner_write_blob, open_read_body, open_settings_record, seal_ascent_link, seal_grant_blob,
+    seal_history_link, seal_op_record, seal_owner_blob, seal_owner_write_blob, seal_read_body,
+    seal_settings_record, settings_record_aad, sign_grant_set, sign_structure,
+    structure_sig_preimage, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
@@ -215,6 +217,49 @@ struct Manifest {
     grant: GrantSection,
     content: ContentSection,
     op_record: OpRecordSection,
+    settings_record: SettingsRecordSection,
+}
+
+// --- Settings-record section: the vault settings record, HPKE-auth-to-self
+// --- under the owner's enc subkey with its clear header as the AAD.
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsRecordSection {
+    struct_tag: u8,
+    v: u64,
+    /// RFC 9180 mode: auth, so a record's author is authenticated and not only
+    /// its recipient — the recipient half is public by construction here.
+    hpke_mode: u8,
+    hpke_info: String,
+    accept: FileCount,
+    reject: RejectSection,
+}
+
+/// A settings-record accept vector: the fixed owner enc keypair and injected
+/// ephemeral, and the whole record — a re-seal must reproduce `record`
+/// byte-for-byte.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsRecordAcceptVector {
+    name: String,
+    owner_secret: String,
+    owner_public: String,
+    ephemeral_scalar: String,
+    body: String,
+    record: String,
+}
+
+/// A settings-record reject vector: a record that must fail closed when opened
+/// under `ownerSecret`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SettingsRecordRejectVector {
+    name: String,
+    owner_secret: String,
+    record: String,
+    check: String,
+    class: String,
 }
 
 // --- Op-record section: the durable local op-queue record, HPKE-to-self under
@@ -807,6 +852,7 @@ fn main() {
     let grant_dir = vectors_dir.join("grant");
     let content_dir = vectors_dir.join("content");
     let op_record_dir = vectors_dir.join("op_record");
+    let settings_record_dir = vectors_dir.join("settings_record");
     for dir in [
         &codec_dir,
         &kdf_dir,
@@ -818,6 +864,7 @@ fn main() {
         &grant_dir,
         &content_dir,
         &op_record_dir,
+        &settings_record_dir,
     ] {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
     }
@@ -979,6 +1026,18 @@ fn main() {
         &op_record_reject,
     );
 
+    let settings_record_accept = build_settings_record_accept();
+    let settings_record_reject = build_settings_record_reject();
+
+    write_pretty(
+        &settings_record_dir.join("settings_record_accept.json"),
+        &settings_record_accept,
+    );
+    write_pretty(
+        &settings_record_dir.join("settings_record_reject.json"),
+        &settings_record_reject,
+    );
+
     let manifest = build_manifest(ManifestInputs {
         accept: &accept,
         reject: &reject,
@@ -1012,6 +1071,8 @@ fn main() {
         content_cid_str_reject: &content_cid_str_reject,
         op_record_accept: &op_record_accept,
         op_record_reject: &op_record_reject,
+        settings_record_accept: &settings_record_accept,
+        settings_record_reject: &settings_record_reject,
     });
     write_pretty(&kat_dir.join("manifest.json"), &manifest);
 
@@ -1023,7 +1084,8 @@ fn main() {
          {} pointer-accept, {} pointer-reject, {} mailbox-accept, {} mailbox-reject, \
          {} grant-family, {} content-seal, {} content-seal-reject, {} content-cid, \
          {} content-cid-reject, {} content-cid-str-accept, {} content-cid-str-reject, \
-         {} op-record-accept, {} op-record-reject vectors + manifest.json",
+         {} op-record-accept, {} op-record-reject, {} settings-record-accept, \
+         {} settings-record-reject vectors + manifest.json",
         accept.len(),
         reject.len(),
         unknown.len(),
@@ -1056,6 +1118,8 @@ fn main() {
         content_cid_str_reject.len(),
         op_record_accept.len(),
         op_record_reject.len(),
+        settings_record_accept.len(),
+        settings_record_reject.len(),
     );
 }
 
@@ -1814,6 +1878,8 @@ struct ManifestInputs<'a> {
     content_cid_str_reject: &'a [TextRejectVector],
     op_record_accept: &'a [OpRecordAcceptVector],
     op_record_reject: &'a [OpRecordRejectVector],
+    settings_record_accept: &'a [SettingsRecordAcceptVector],
+    settings_record_reject: &'a [SettingsRecordRejectVector],
 }
 
 fn build_manifest(m: ManifestInputs) -> Manifest {
@@ -2008,6 +2074,27 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
                 count: m.op_record_reject.len(),
                 checks: checks_surface_ordered(
                     &m.op_record_reject
+                        .iter()
+                        .map(|v| v.check.as_str())
+                        .collect(),
+                ),
+            },
+        },
+        settings_record: SettingsRecordSection {
+            struct_tag: STRUCT_TAG_SETTINGS_RECORD,
+            v: SETTINGS_RECORD_V,
+            hpke_mode: MODE_AUTH,
+            hpke_info: String::from_utf8(SETTINGS_RECORD_HPKE_INFO.to_vec())
+                .expect("the settings-record info string is ASCII"),
+            accept: FileCount {
+                file: "vectors/settings_record/settings_record_accept.json".to_string(),
+                count: m.settings_record_accept.len(),
+            },
+            reject: RejectSection {
+                file: "vectors/settings_record/settings_record_reject.json".to_string(),
+                count: m.settings_record_reject.len(),
+                checks: checks_surface_ordered(
+                    &m.settings_record_reject
                         .iter()
                         .map(|v| v.check.as_str())
                         .collect(),
@@ -5873,6 +5960,241 @@ fn op_record_reject_vector(
         owner_secret: hexstr(&opener_scalar),
         record: hexstr(record),
         keyless,
+        check: check.to_string(),
+        class: class.to_string(),
+    }
+}
+
+// ===========================================================================
+// Settings record: the vault settings record resolved at cold start. Sealed
+// HPKE auth-mode to the owner's own enc subkey under a fixed injected
+// ephemeral, so every record is byte-reproducible; the clear header is the
+// AAD, so a header swap fails at the AEAD tag rather than merely mismatching.
+// ===========================================================================
+
+/// The frozen owner enc subkey the settings-record vectors seal to, and its
+/// scalar.
+fn settings_record_owner() -> ([u8; 32], X25519Secret) {
+    let scalar: [u8; 32] = std::array::from_fn(|i| (0x61 + i) as u8);
+    let secret = X25519Secret::from_scalar(scalar);
+    (scalar, secret)
+}
+
+fn build_settings_record_accept() -> Vec<SettingsRecordAcceptVector> {
+    let (scalar, owner) = settings_record_owner();
+    vec![
+        settings_record_accept_vector(
+            "empty-body",
+            scalar,
+            &owner,
+            std::array::from_fn(|i| (0x81 + i) as u8),
+            b"",
+        ),
+        settings_record_accept_vector(
+            "config-body",
+            scalar,
+            &owner,
+            std::array::from_fn(|i| (0xa1 + i) as u8),
+            b"{\"api\":\"https://api.example\",\"gateway\":\"https://gw.example\"}",
+        ),
+    ]
+}
+
+/// Build + self-check one settings-record accept vector: the seal is
+/// deterministic and the open recovers the body.
+fn settings_record_accept_vector(
+    name: &str,
+    owner_scalar: [u8; 32],
+    owner: &X25519Secret,
+    eph: [u8; 32],
+    body: &[u8],
+) -> SettingsRecordAcceptVector {
+    let record = seal_settings_record(owner, &eph, body)
+        .unwrap_or_else(|e| panic!("settings-record {name}: seal ({e})"));
+    assert_eq!(
+        seal_settings_record(owner, &eph, body).unwrap(),
+        record,
+        "settings-record {name}: not deterministic"
+    );
+
+    let plaintext = open_settings_record(owner, &record)
+        .unwrap_or_else(|e| panic!("settings-record {name}: open ({e})"));
+    assert_eq!(
+        &plaintext[..],
+        body,
+        "settings-record {name}: body round-trip"
+    );
+
+    SettingsRecordAcceptVector {
+        name: name.to_string(),
+        owner_secret: hexstr(&owner_scalar),
+        owner_public: hexstr(&owner.public().to_bytes()),
+        ephemeral_scalar: hexstr(&eph),
+        body: hexstr(body),
+        record: hexstr(&record),
+    }
+}
+
+/// Re-frame a record through the live encoder — the only way to produce the
+/// header swaps and omissions the seal path itself refuses to emit.
+fn reframe_settings_record(record: &[u8], edit: impl FnOnce(&mut Map)) -> Vec<u8> {
+    let value = decode(record).expect("settings-record reframe: source decodes");
+    let mut map = value
+        .as_map()
+        .expect("settings-record reframe: map")
+        .clone();
+    edit(&mut map);
+    encode(&Value::Map(map)).expect("settings-record reframe: re-encodes")
+}
+
+fn build_settings_record_reject() -> Vec<SettingsRecordRejectVector> {
+    let (scalar, owner) = settings_record_owner();
+    let eph: [u8; 32] = std::array::from_fn(|i| (0xc1 + i) as u8);
+    let record = seal_settings_record(&owner, &eph, b"reject-probe config").unwrap();
+
+    let tampered_ciphertext = reframe_settings_record(&record, |m| {
+        let mut ct = m.get("ciphertext").unwrap().as_bytes().unwrap().to_vec();
+        ct[0] ^= 0x01;
+        m.insert("ciphertext", Value::Bytes(ct));
+    });
+    let tampered_owner_tag = reframe_settings_record(&record, |m| {
+        let mut tag = m.get("ownerTag").unwrap().as_bytes().unwrap().to_vec();
+        tag[0] ^= 0x01;
+        m.insert("ownerTag", Value::Bytes(tag));
+    });
+    // The encoder derives the tag from the recipient, so it cannot emit a tag
+    // naming a key that does not open the record; hand-framed, the open path
+    // must still refuse it.
+    let lying_owner_tag = reframe_settings_record(&record, |m| {
+        let other = X25519Secret::from_scalar([0x44; 32]).public().to_bytes();
+        m.insert("ownerTag", Value::Bytes(other.to_vec()));
+    });
+    let missing_owner_tag = reframe_settings_record(&record, |m| {
+        m.remove("ownerTag");
+    });
+    let forward_version = reframe_settings_record(&record, |m| {
+        m.insert("v", Value::Unsigned(SETTINGS_RECORD_V + 1));
+    });
+    // A fifth key at this version: outside the AAD, so it opens cleanly unless
+    // the four keys are enforced as exhaustive.
+    let unknown_field = reframe_settings_record(&record, |m| {
+        m.insert("stash", Value::Bytes(b"unauthenticated".to_vec()));
+    });
+    let base_mode_forgery = forged_base_mode_settings_record(&owner.public());
+    // A stranger's enc subkey: the owner tag stays readable, the body does not.
+    let stranger_scalar: [u8; 32] = std::array::from_fn(|i| (0x31 + i) as u8);
+
+    vec![
+        settings_record_reject_vector(
+            "tampered-ciphertext",
+            scalar,
+            &tampered_ciphertext,
+            "hpke-open-failed",
+            "trust",
+        ),
+        settings_record_reject_vector(
+            "tampered-owner-tag",
+            scalar,
+            &tampered_owner_tag,
+            "hpke-open-failed",
+            "trust",
+        ),
+        settings_record_reject_vector(
+            "lying-owner-tag",
+            scalar,
+            &lying_owner_tag,
+            "hpke-open-failed",
+            "trust",
+        ),
+        settings_record_reject_vector(
+            "foreign-recipient",
+            stranger_scalar,
+            &record,
+            "hpke-open-failed",
+            "trust",
+        ),
+        settings_record_reject_vector(
+            "missing-owner-tag",
+            scalar,
+            &missing_owner_tag,
+            "missing-field",
+            "malformed",
+        ),
+        settings_record_reject_vector(
+            "forward-version",
+            scalar,
+            &forward_version,
+            "unsupported-record-version",
+            "malformed",
+        ),
+        settings_record_reject_vector(
+            "unknown-header-field",
+            scalar,
+            &unknown_field,
+            "unknown-record-field",
+            "malformed",
+        ),
+        settings_record_reject_vector(
+            "base-mode-forgery",
+            scalar,
+            &base_mode_forgery,
+            "hpke-open-failed",
+            "trust",
+        ),
+    ]
+}
+
+/// A record a forger holding only the owner's public tag can build: correctly
+/// framed and correctly AAD-bound, sealed HPKE **base** mode.
+fn forged_base_mode_settings_record(owner_pub: &X25519Public) -> Vec<u8> {
+    let header = SettingsRecordHeader {
+        version: SETTINGS_RECORD_V,
+        owner_tag: owner_pub.to_bytes().to_vec(),
+    };
+    let eph: [u8; 32] = std::array::from_fn(|i| (0xd1 + i) as u8);
+    let sealed = hpke_seal(
+        owner_pub,
+        &eph,
+        SETTINGS_RECORD_HPKE_INFO,
+        &settings_record_aad(&header),
+        b"{\"api\":\"https://attacker.example\"}",
+    );
+    let mut m = Map::new();
+    m.insert("ciphertext", Value::Bytes(sealed.ciphertext));
+    m.insert("enc", Value::Bytes(sealed.enc.to_vec()));
+    m.insert("ownerTag", Value::Bytes(header.owner_tag.clone()));
+    m.insert("v", Value::Unsigned(header.version));
+    encode(&Value::Map(m)).expect("forged settings record encodes")
+}
+
+/// Build + self-check one settings-record reject vector.
+fn settings_record_reject_vector(
+    name: &str,
+    opener_scalar: [u8; 32],
+    record: &[u8],
+    check: &str,
+    class: &str,
+) -> SettingsRecordRejectVector {
+    let opener = X25519Secret::from_scalar(opener_scalar);
+    let err = match open_settings_record(&opener, record) {
+        Err(e) => e,
+        Ok(_) => panic!("settings-record reject {name}: open accepted it"),
+    };
+    assert_eq!(
+        err.check(),
+        check,
+        "settings-record reject {name}: check ({err})"
+    );
+    assert_eq!(
+        err.class(),
+        class,
+        "settings-record reject {name}: class ({err})"
+    );
+
+    SettingsRecordRejectVector {
+        name: name.to_string(),
+        owner_secret: hexstr(&opener_scalar),
+        record: hexstr(record),
         check: check.to_string(),
         class: class.to_string(),
     }

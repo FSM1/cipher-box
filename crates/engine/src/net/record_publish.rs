@@ -8,14 +8,17 @@
 //! envelope that has not been dry-run against the key the gate will re-derive
 //! cannot reach the network.
 
+use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::seal::{decode_envelope, open_read_body};
+use cipherbox_core::seal::{decode_envelope, open_read_body, open_settings_record};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
+use cipherbox_core::suite::x25519::X25519Secret;
 
 use super::author::AuthoredHead;
 use super::publish::{PublishError, PublishReceipt, PublishRequest, publish};
 use crate::api::{ApiClient, ApiError};
+use crate::content::DAG_ROOT_CODEC;
 use crate::profile::SyncTimingProfile;
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 
@@ -101,6 +104,18 @@ pub fn preflight(
         block: head.block.clone(),
         cid: head.cid.clone(),
     })
+}
+
+/// Settings-record dry run: the vault settings head is a self-sealed blob
+/// rather than an envelope, so the reopen is the whole check — the block must
+/// open under the same `enc-subkey` its reader will use.
+pub fn preflight_settings(
+    enc_secret: &X25519Secret,
+    block: Vec<u8>,
+) -> Result<PreflightedHead, PreflightError> {
+    open_settings_record(enc_secret, &block).map_err(PreflightError::Unseal)?;
+    let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
+    Ok(PreflightedHead { block, cid })
 }
 
 /// One record publish: the name and its narrow per-name signer, the

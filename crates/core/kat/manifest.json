@@ -55,6 +55,7 @@
     "owner-write-blob": 9,
     "pointer-payload": 7,
     "read-body": 1,
+    "settings-record": 11,
     "write-body": 2
   },
   "kdf": {
@@ -451,6 +452,26 @@
       "checks": [
         "hpke-open-failed",
         "content-cid-mismatch",
+        "missing-field",
+        "unknown-record-field",
+        "unsupported-record-version"
+      ]
+    }
+  },
+  "settingsRecord": {
+    "structTag": 11,
+    "v": 1,
+    "hpkeMode": 2,
+    "hpkeInfo": "cipherbox/v2/settings-record",
+    "accept": {
+      "file": "vectors/settings_record/settings_record_accept.json",
+      "count": 2
+    },
+    "reject": {
+      "file": "vectors/settings_record/settings_record_reject.json",
+      "count": 8,
+      "checks": [
+        "hpke-open-failed",
         "missing-field",
         "unknown-record-field",
         "unsupported-record-version"

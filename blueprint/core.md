@@ -162,8 +162,8 @@ The `structTag` byte-space is the domain-separation registry, frozen in the KAT
 manifest: `read-body` (`0x01`), `write-body` (`0x02`), `grant-blob` (`0x03`),
 `owner-blob` (`0x04`), `ascent-link` (`0x05`), `history-link` (`0x06`),
 `pointer-payload` (`0x07`), `mailbox-payload` (`0x08`), `owner-write-blob`
-(`0x09`), `op-record` (`0x0a`). Every new tag extends the manifest and its
-vectors before merge; the
+(`0x09`), `op-record` (`0x0a`), `settings-record` (`0x0b`). Every new tag
+extends the manifest and its vectors before merge; the
 `owner-write-blob` KAT set is `owner_write_blob_accept` (seal/open round-trip
 under a fixed enc + ephemeral) and `owner_write_blob_reject` (decode: wrong-length
 seed, missing `writeEpoch`; HPKE fail-closed: tampered ciphertext/tag,
@@ -187,6 +187,15 @@ later `v` may change the sealed body, the suite, or the AAD layout, but never
 these five keys, so any build can read any record's header. That is what lets a
 reader hold a record it cannot open instead of mistaking it for corruption; the
 version is bound into the AAD too, so rewriting the clear copy fails the tag.
+
+The `settings-record` KAT set is `settings_record_accept` (an empty and a
+config-shaped body, each reproducing its exact bytes from a fixed enc +
+ephemeral, then opening) and `settings_record_reject` (tampered ciphertext,
+tampered and lying `ownerTag`, a foreign recipient, a missing `ownerTag`, a
+forward `v`, an unknown clear-header field, and the same base-mode forgery). It
+seals HPKE **auth mode** to the owner's own enc subkey for the same reason the
+op record does, over a four-key clear header — `v`, `ownerTag`, `enc`,
+`ciphertext`.
 
 ## KDF edge catalog
 
