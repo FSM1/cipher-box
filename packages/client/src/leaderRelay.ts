@@ -16,6 +16,11 @@
 import type { BroadcastChannelLike, FollowerMessage, LeaderMessage } from './broadcast.js';
 import { EngineRequestError } from './correlatedTransport.js';
 import type { EngineTransport } from './transport.js';
+import type { WriteHandle } from './worker/protocol.js';
+import { WriteQueue } from './writeQueue.js';
+
+/** The correlated ack envelope addressing one follower request. */
+type Ack = { type: 'cb:response'; token: string; clientId: string; requestId: number };
 
 /** Projects a caught failure onto the wire's `error`/`code` fields. */
 function wireError(error: unknown): { error: string; code?: string } {
@@ -67,6 +72,11 @@ function hex(bytes: Uint8Array): string {
 
 export class LeaderRelay {
   private readonly focus = new FocusRegistry();
+  private readonly writes = new WriteQueue();
+  // Which client opened each open handle. Handle ids are one global namespace
+  // across tabs, so this binds every step to the tab that owns the upload — and
+  // lets a departing tab's handles be released.
+  private readonly writeOwners = new Map<WriteHandle, string>();
   private readonly unsubscribe: () => void;
   private closed = false;
   // An unguessable per-leadership capability. It stamps every leader→follower
@@ -101,6 +111,7 @@ export class LeaderRelay {
     // fresh token covers that path.
     this.post({ type: 'cb:leaderGone', token: this.token });
     this.closed = true;
+    this.releaseWrites(null);
     this.unsubscribe();
     this.channel.removeEventListener('message', this.onMessage);
   }
@@ -118,7 +129,7 @@ export class LeaderRelay {
         void this.serveRead(message as Extract<FollowerMessage, { type: 'cb:read' }>);
         return;
       case 'cb:write':
-        void this.serveWrite(message as Extract<FollowerMessage, { type: 'cb:write' }>);
+        this.serveWrite(message as Extract<FollowerMessage, { type: 'cb:write' }>);
         return;
       case 'cb:focus': {
         const { clientId, node } = message as Extract<FollowerMessage, { type: 'cb:focus' }>;
@@ -128,6 +139,7 @@ export class LeaderRelay {
       case 'cb:bye': {
         const { clientId } = message as Extract<FollowerMessage, { type: 'cb:bye' }>;
         if (this.focus.remove(clientId)) this.refreshHint();
+        this.releaseWrites(clientId);
         return;
       }
     }
@@ -168,36 +180,70 @@ export class LeaderRelay {
     }
   }
 
-  private async serveWrite(message: Extract<FollowerMessage, { type: 'cb:write' }>): Promise<void> {
+  private serveWrite(message: Extract<FollowerMessage, { type: 'cb:write' }>): void {
     const { clientId, requestId, write } = message;
-    const ack = { type: 'cb:response', token: this.token, clientId, requestId } as const;
+    const ack: Ack = { type: 'cb:response', token: this.token, clientId, requestId };
+
+    if (write.kind === 'beginWrite') {
+      void this.answerWrite(ack, async () => {
+        const handle = await this.transport.beginWrite(write.target, write.size);
+        this.writeOwners.set(handle, clientId);
+        return handle;
+      });
+      return;
+    }
+
+    const handle = write.handle;
+    if (this.writeOwners.get(handle) !== clientId) {
+      this.post({ ...ack, ok: false, error: 'unknown write handle', code: 'unknownWriteHandle' });
+      return;
+    }
+
+    // Enqueued synchronously, before any await: `WriteQueue` orders a handle's
+    // steps by call order.
+    void this.writes.run(handle, () =>
+      this.answerWrite(ack, async () => {
+        switch (write.kind) {
+          case 'pushChunk':
+            // Materialize the follower's shared `Blob` only here, then transfer
+            // the buffer into the worker.
+            return this.transport.pushChunk(handle, await write.chunk.arrayBuffer());
+          case 'commitWrite': {
+            const opId = await this.transport.commitWrite(handle);
+            // Dropped only once the commit resolves: a rejected one leaves the
+            // handle open for its owner to abort.
+            this.writeOwners.delete(handle);
+            return opId;
+          }
+          case 'abortWrite':
+            this.writeOwners.delete(handle);
+            return this.transport.abortWrite(handle);
+        }
+      })
+    );
+  }
+
+  /** Runs one write step and posts its correlated ack. */
+  private async answerWrite(ack: Ack, step: () => Promise<bigint | void>): Promise<void> {
     try {
-      switch (write.kind) {
-        case 'beginWrite': {
-          const result = await this.transport.beginWrite(write.target, write.size);
-          this.post({ ...ack, ok: true, result });
-          return;
-        }
-        case 'pushChunk': {
-          // Materialize the follower's shared `Blob` only here, then transfer the
-          // buffer into the worker.
-          await this.transport.pushChunk(write.handle, await write.chunk.arrayBuffer());
-          this.post({ ...ack, ok: true });
-          return;
-        }
-        case 'commitWrite': {
-          const result = await this.transport.commitWrite(write.handle);
-          this.post({ ...ack, ok: true, result });
-          return;
-        }
-        case 'abortWrite': {
-          await this.transport.abortWrite(write.handle);
-          this.post({ ...ack, ok: true });
-          return;
-        }
-      }
+      const result = await step();
+      this.post(typeof result === 'bigint' ? { ...ack, ok: true, result } : { ...ack, ok: true });
     } catch (error) {
       this.post({ ...ack, ok: false, ...wireError(error) });
+    }
+  }
+
+  /**
+   * Abandons handles this relay can no longer serve — `clientId`'s, or all of
+   * them on teardown. A stranded handle holds its byte reservation against the
+   * staging ledger for the rest of the session, so every later write on every
+   * tab is refused as over-budget.
+   */
+  private releaseWrites(clientId: string | null): void {
+    for (const [handle, owner] of this.writeOwners) {
+      if (clientId !== null && owner !== clientId) continue;
+      this.writeOwners.delete(handle);
+      void this.writes.run(handle, () => this.transport.abortWrite(handle)).catch(() => undefined);
     }
   }
 

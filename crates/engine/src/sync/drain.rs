@@ -189,6 +189,18 @@ enum Halt {
 /// root, or a leaf is gone, and no retry brings any of them back.
 const CONTENT_LOST: Halt = Halt::Permanent(DeadLetterReason::ContentUnrecoverable);
 
+/// The staging key holding the head content op's upload progress: its root CID
+/// followed by a big-endian `u32` leaf count.
+///
+/// Without it, a leaf missing before the first present one is indistinguishable
+/// from one a previous pass uploaded — so an evicted or deleted prefix would
+/// publish a version whose manifest names blocks nothing holds. It lives beside
+/// the queue's other bookkeeping for the same reason [`DRAINED_OP_MARK_KEY`]
+/// does, and [`orphan_staging_keys`] treats it as referenced.
+///
+/// [`orphan_staging_keys`]: crate::sync::staging::orphan_staging_keys
+pub const UPLOAD_MARK_KEY: &[u8] = b"cipherbox/upload-mark";
+
 /// How many non-confirming publish attempts one op gets before it dead-letters.
 ///
 /// Bounds a pathology, not a network outage — only [`Halt::Attempt`] is charged.
@@ -477,6 +489,7 @@ where
                     return;
                 }
                 if self.dequeue_op(op_id).await.is_ok() {
+                    self.release_staged_blocks(op).await;
                     report.dead_letters.push((
                         op_id,
                         op.target,
@@ -486,13 +499,7 @@ where
             }
             Halt::Permanent(reason) => {
                 if self.abandon(scope, op_id, op).await.is_ok() {
-                    // Staged bytes normally outlive a dead letter as the user's
-                    // recoverable work. Content whose key will not open is not
-                    // work — nothing can ever read it — so it is released here
-                    // instead of holding the budget forever (#818).
-                    if reason == DeadLetterReason::ContentUnrecoverable {
-                        self.release_staged_blocks(op).await;
-                    }
+                    self.release_staged_blocks(op).await;
                     report.dead_letters.push((op_id, op.target, reason));
                 }
             }
@@ -1284,34 +1291,39 @@ where
         if content.size() != staged.plaintext_size {
             return Err(CONTENT_LOST);
         }
-        // The key is a KDF non-edge: a blob that will not open leaves blocks no
-        // key ever opens, so the op dead-letters and releases them (#818).
+        // A blob this build cannot *interpret* — one a newer build wrote — is
+        // retained and retried, never destroyed: the same rule the op record
+        // itself follows. Only a genuine crypto failure is unrecoverable.
         let key = open_content_key(
             scope.enc_secret,
+            &scope.root.0,
             staged.epoch,
             &staged.root_cid,
             &staged.sealed_content_key,
         )
-        .map_err(|_| CONTENT_LOST)?;
+        .map_err(|error| match error.check() {
+            "unsupported-record-version" | "unknown-record-field" => Halt::Unclassified,
+            _ => CONTENT_LOST,
+        })?;
 
-        // File order, root last. Each leaf is removed on a confirmed
-        // `UploadResult`, so the blocks still staged are always a **suffix** of
-        // the list: a resumed pass re-sends only what has not landed, and an
-        // absent block after a present one is loss, not progress.
-        let mut landed = false;
-        for leaf_cid in content.leaf_cids() {
+        // File order, root last, each leaf removed on its confirmed
+        // `UploadResult` — so the blocks still staged are a **suffix**. An
+        // absence is only progress up to the durable mark this pass keeps: past
+        // it, a missing block is loss, and the version can never be assembled.
+        let uploaded = self.upload_mark(&staged.root_cid).await?;
+        for (index, leaf_cid) in content.leaf_cids().iter().enumerate() {
             match self.staged_block(leaf_cid).await? {
                 Some(block) => {
-                    landed = true;
                     self.upload_block(&block).await?;
                     self.staging
                         .remove_staged_bytes(leaf_cid)
                         .await
                         .map_err(seam)?;
+                    self.mark_uploaded(&staged.root_cid, index + 1).await?;
                 }
-                // A gap in the suffix: an earlier leaf is still here, so this
-                // one was never uploaded and its bytes are simply gone.
-                None if landed => return Err(CONTENT_LOST),
+                // Absent and not covered by the mark: these bytes were never
+                // uploaded and are simply gone.
+                None if index >= uploaded => return Err(CONTENT_LOST),
                 None => {}
             }
         }
@@ -1328,6 +1340,38 @@ where
             version: content.version(*key, applied.op.authored_at.0),
             content_cids,
         })
+    }
+
+    /// How many of this version's leaves a previous pass durably confirmed. A
+    /// mark naming another version has nothing to say about this one, so it
+    /// reads as zero and every absent leaf is loss.
+    async fn upload_mark(&self, root_cid: &[u8]) -> Result<usize, Halt> {
+        let Some(stored) = self
+            .staging
+            .staged_bytes(UPLOAD_MARK_KEY)
+            .await
+            .map_err(seam)?
+        else {
+            return Ok(0);
+        };
+        let Some((root, count)) = stored.split_at_checked(stored.len().saturating_sub(4)) else {
+            return Ok(0);
+        };
+        if root != root_cid {
+            return Ok(0);
+        }
+        Ok(<[u8; 4]>::try_from(count).map_or(0, |c| u32::from_be_bytes(c) as usize))
+    }
+
+    /// Record that `count` of this version's leaves have uploaded. Written after
+    /// the removal, so the mark never claims more than the store has released.
+    async fn mark_uploaded(&self, root_cid: &[u8], count: usize) -> Result<(), Halt> {
+        let mut mark = root_cid.to_vec();
+        mark.extend_from_slice(&(count as u32).to_be_bytes());
+        self.staging
+            .put_staged_bytes(UPLOAD_MARK_KEY, &mark)
+            .await
+            .map_err(seam)
     }
 
     /// The staged bytes at `key`, CID-verified fail-closed. The read path hard-
@@ -1353,10 +1397,17 @@ where
             .map_err(|error| classify_upload(error, block.len() as u64))
     }
 
-    /// Drop every staged block of an op's version. Called once its record has
-    /// published — the bytes are on the network — and on the one abandonment
-    /// whose bytes no key opens. Best-effort: a failed removal is orphan residue
-    /// a later GC pass collects, never a reason to fail a landed publish.
+    /// Drop every staged block of an op's version.
+    ///
+    /// Called once its record publishes — the bytes are on the network — and on
+    /// **every** abandonment. The blocks are not the user's recoverable work
+    /// past that point: the only copy of the version's content key rides the op
+    /// record, which the abandonment deletes, so what survives is ciphertext
+    /// nothing can ever open. Holding it would spend the staging budget forever
+    /// (#818; the dead-letter event is what surfaces the loss).
+    ///
+    /// Best-effort: a failed removal is orphan residue a later GC pass collects,
+    /// never a reason to fail a landed publish.
     async fn release_staged_blocks(&self, op: &Op) {
         let Some(staged) = op.staged_content() else {
             return;
@@ -1607,9 +1658,6 @@ where
     /// would leave a reference outliving its referent. The gate-passing base is
     /// the evidence: a created node reaches it only once a parent record naming
     /// it published.
-    ///
-    /// Staged bytes outlive the queue entry: a dead letter's content is the
-    /// user's unpublished work and the host's compensation channel (#33 D6).
     async fn abandon(&self, scope: &DrainScope<'_>, op_id: OpId, op: &Op) -> Result<(), Halt> {
         if !self.base.borrow().contains(op.target) {
             retire(self.api, &registered_by(scope, op))

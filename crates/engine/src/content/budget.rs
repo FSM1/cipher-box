@@ -6,95 +6,81 @@
 //! the same `staged_bytes_total` and both be admitted against room only one of
 //! them can have. The ledger closes that: a reservation is the version's **whole
 //! sealed total**, held from `beginWrite` to release, so concurrent handles
-//! contend for the budget rather than over-admit against it. `pushChunk`
-//! therefore enforces only the declared shape and never re-checks the budget.
-//!
-//! The reservation is exact, not an estimate: leaf count and per-leaf overhead
-//! are both determined by the declared size and the frozen framing, and the root
-//! block is sized by assembling one over placeholder links of the fixed CID
-//! width.
+//! contend for the budget rather than over-admit against it.
 
 use std::collections::BTreeMap;
 
-use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
-
 use super::chunk::SEALED_LEAF_OVERHEAD;
-use super::dag::{DagError, assemble, expected_leaf_count};
+use super::dag::{DagError, expected_leaf_count, root_block_len};
 use super::profile::ContentProfile;
 use crate::storage_policy::{Headroom, StoragePolicy};
 
 /// The exact staged byte total a version of `size` plaintext bytes occupies:
-/// every leaf's sealed length (`size + 40n`) plus the assembled root block's.
+/// every leaf's sealed length (`size + 40n`) plus the root block's.
 ///
-/// Fails closed with the same [`DagError`] the real assembly would raise, so a
-/// file past the flat-DAG ceiling is refused before a single byte is staged.
-pub fn sealed_total_bytes(size: u64, profile: &ContentProfile) -> Result<u64, DagError> {
+/// Fails closed on the flat-DAG ceiling, so a file whose root could never be
+/// read back is refused before a single byte is staged.
+pub(crate) fn sealed_total_bytes(size: u64, profile: &ContentProfile) -> Result<u64, DagError> {
     let leaves = expected_leaf_count(size, profile.chunk_size() as u64);
-    // Placeholder links: every content CID is the same fixed width, so a root
-    // over `leaves` of them encodes to exactly the length the real one will.
-    let placeholder = compute_cid(CONTENT_CID_CODEC, b"");
-    let links = vec![
-        placeholder;
-        usize::try_from(leaves).map_err(|_| DagError::RootTooLarge {
-            size: usize::MAX,
-            limit: super::limits::MAX_RESOLVED_RECORD_BYTES,
-        })?
-    ];
-    let root = assemble(&links, size, profile)?;
     Ok(size
         .saturating_add(leaves.saturating_mul(SEALED_LEAF_OVERHEAD))
-        .saturating_add(root.root_block.len() as u64))
+        .saturating_add(root_block_len(size, profile)?))
 }
 
 /// A handle's live staging reservation. Held by the ledger until the write
 /// commits, fails, or its bytes leave the store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ReservationId(pub u64);
+pub(crate) struct ReservationId(pub u64);
 
-/// The verdict on one admission request. The three refusals are separate
-/// because they call for different user actions: nothing helps on this device,
-/// wait for the queue to drain, or free disk space.
+/// How many write handles may be open at once.
+///
+/// The ledger bounds *staged* bytes, which a handle only spends as the client
+/// feeds it — so a caller that opens handles and never pushes reserves almost
+/// nothing while costing a live buffer and a map entry each. This is the bound
+/// on that: a host driving more than a few uploads at once is already past any
+/// useful concurrency, and a caller opening thousands is a bug or an attack.
+pub(crate) const MAX_OPEN_WRITES: usize = 64;
+
+/// Why an admission was refused. The variants are separate because they call for
+/// different user actions: nothing helps on this device, free disk space, wait
+/// for the queue to drain, close some uploads, or the host cannot say.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Admission {
-    /// Admitted; the reservation is held until it is released.
-    Reserved(ReservationId),
+pub(crate) enum Refusal {
+    /// Too many write handles are already open ([`MAX_OPEN_WRITES`]).
+    TooManyWrites,
     /// The version exceeds this platform's hard staging cap, so no amount of
     /// free space or drain progress admits it.
-    OverLimit {
-        /// The version's exact sealed total.
-        requested: u64,
-        /// The room the budget would have with nothing staged or reserved.
-        available: u64,
-    },
-    /// It would fit an empty store, but staged and reserved bytes leave too
-    /// little right now — the drain frees room as blocks upload.
-    Backlog {
-        /// The version's exact sealed total.
-        requested: u64,
-        /// `budget - (staged + reserved)`, the room a caller may quote.
-        available: u64,
-    },
+    OverLimit,
     /// The budget is below the platform cap because this device's measured
     /// headroom cut it there.
-    DeviceFull {
-        /// The version's exact sealed total.
-        requested: u64,
-        /// The whole budget this device's headroom allows.
-        available: u64,
-    },
+    DeviceFull,
+    /// It would fit an empty store, but staged and reserved bytes leave too
+    /// little right now — the drain frees room as blocks upload.
+    Backlog,
     /// The host could not measure storage headroom, so nothing is admissible —
     /// distinct from a measured zero, which is a device known to be full.
-    Unmeasured {
-        /// The version's exact sealed total.
-        requested: u64,
-    },
+    Unmeasured,
+}
+
+/// A refused admission: why, what it asked for, and the room a caller may quote
+/// — never the whole budget, which a caller cannot act on when other writes
+/// already hold most of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Refused {
+    /// Which ceiling refused it, and so which action helps.
+    pub(crate) refusal: Refusal,
+    /// The version's exact sealed total.
+    pub(crate) requested: u64,
+    /// The applicable room: `budget - (staged + reserved)` for a backlog, the
+    /// relevant ceiling otherwise.
+    pub(crate) available: u64,
 }
 
 /// The in-memory reservation ledger of live write handles. Session-scoped: a
 /// restart drops every reservation, and the staged bytes it held are either
 /// referenced by a queued op or collected as orphans.
 #[derive(Debug, Default)]
-pub struct StagingLedger {
+pub(crate) struct StagingLedger {
     live: BTreeMap<ReservationId, u64>,
     next: u64,
 }
@@ -103,46 +89,52 @@ impl StagingLedger {
     /// Reserve `requested` bytes against `policy`, given the store's current
     /// `staged` total. The reservation counts from here, so a second handle
     /// opened before the first stages anything still sees the room taken.
-    pub fn admit(&mut self, requested: u64, staged: u64, policy: &StoragePolicy) -> Admission {
+    pub(crate) fn admit(
+        &mut self,
+        requested: u64,
+        staged: u64,
+        policy: &StoragePolicy,
+    ) -> Result<ReservationId, Refused> {
+        let refuse = |refusal, available| {
+            Err(Refused {
+                refusal,
+                requested,
+                available,
+            })
+        };
         if policy.headroom == Headroom::Unmeasured {
-            return Admission::Unmeasured { requested };
+            return refuse(Refusal::Unmeasured, 0);
+        }
+        if self.live.len() >= MAX_OPEN_WRITES {
+            return refuse(Refusal::TooManyWrites, 0);
         }
         if requested > policy.staging_cap_bytes {
-            return Admission::OverLimit {
-                requested,
-                available: policy.staging_cap_bytes,
-            };
+            return refuse(Refusal::OverLimit, policy.staging_cap_bytes);
         }
         if requested > policy.staging_budget_bytes {
-            return Admission::DeviceFull {
-                requested,
-                available: policy.staging_budget_bytes,
-            };
+            return refuse(Refusal::DeviceFull, policy.staging_budget_bytes);
         }
         // Saturating: an overflowing sum is unreachable under any real budget,
         // and must still read as "no room", never wrap to a spurious surplus.
         let committed = staged.saturating_add(self.reserved());
         let available = policy.staging_budget_bytes.saturating_sub(committed);
         if requested > available {
-            return Admission::Backlog {
-                requested,
-                available,
-            };
+            return refuse(Refusal::Backlog, available);
         }
         self.next += 1;
         let id = ReservationId(self.next);
         self.live.insert(id, requested);
-        Admission::Reserved(id)
+        Ok(id)
     }
 
     /// Drop a reservation — the write committed, failed, or was abandoned. Its
     /// bytes are accounted by the store from here on.
-    pub fn release(&mut self, id: ReservationId) {
+    pub(crate) fn release(&mut self, id: ReservationId) {
         self.live.remove(&id);
     }
 
     /// Bytes reserved by live handles and not yet staged-and-accounted.
-    pub fn reserved(&self) -> u64 {
+    pub(crate) fn reserved(&self) -> u64 {
         self.live.values().copied().fold(0, u64::saturating_add)
     }
 }
@@ -172,7 +164,8 @@ mod tests {
         for size in [0usize, 1, 15, 16, 17, 32, 100] {
             let plaintext = vec![7u8; size];
             let mut entropy = SeededEntropy::new(1);
-            let mut writer = ContentWriter::new(ContentKey::from_bytes([3u8; KEY_LEN]), profile);
+            let mut writer =
+                ContentWriter::new(ContentKey::from_bytes([3u8; KEY_LEN]), profile, size as u64);
             let mut staged = 0u64;
             let mut rest = &plaintext[..];
             while !rest.is_empty() {
@@ -213,18 +206,20 @@ mod tests {
         let mut ledger = StagingLedger::default();
         let policy = budget(1000);
         // Nothing is staged yet, so a naive check would admit both.
-        let Admission::Reserved(first) = ledger.admit(600, 0, &policy) else {
-            panic!("the first handle fits");
-        };
-        assert!(
-            matches!(ledger.admit(600, 0, &policy), Admission::Backlog { available, .. } if available == 400),
+        let first = ledger
+            .admit(600, 0, &policy)
+            .expect("the first handle fits");
+        assert_eq!(
+            ledger.admit(600, 0, &policy),
+            Err(Refused {
+                refusal: Refusal::Backlog,
+                requested: 600,
+                available: 400
+            }),
             "the second handle contends with the first's reservation"
         );
         ledger.release(first);
-        assert!(matches!(
-            ledger.admit(600, 0, &policy),
-            Admission::Reserved(_)
-        ));
+        assert!(ledger.admit(600, 0, &policy).is_ok());
     }
 
     #[test]
@@ -233,10 +228,11 @@ mod tests {
         let policy = budget(1000);
         assert_eq!(
             ledger.admit(500, 700, &policy),
-            Admission::Backlog {
+            Err(Refused {
+                refusal: Refusal::Backlog,
                 requested: 500,
                 available: 300
-            },
+            }),
             "the figure a caller may act on is budget - staged"
         );
     }
@@ -250,41 +246,70 @@ mod tests {
             staging_cap_bytes: 1000,
             ..StoragePolicy::CI
         };
-        assert!(matches!(
-            ledger.admit(500, 0, &constrained),
-            Admission::DeviceFull { available: 100, .. }
-        ));
+        let mut refusal = |requested, staged| {
+            ledger
+                .admit(requested, staged, &constrained)
+                .expect_err("refused")
+                .refusal
+        };
+        assert_eq!(refusal(500, 0), Refusal::DeviceFull);
         // Past the platform cap: nothing on this device ever admits it.
-        assert!(matches!(
-            ledger.admit(5000, 0, &constrained),
-            Admission::OverLimit {
-                available: 1000,
-                ..
-            }
-        ));
+        assert_eq!(refusal(5000, 0), Refusal::OverLimit);
         // Room in principle, taken right now: the drain frees it.
-        assert!(matches!(
-            ledger.admit(60, 50, &constrained),
-            Admission::Backlog { available: 50, .. }
-        ));
+        assert_eq!(refusal(60, 50), Refusal::Backlog);
     }
 
     #[test]
     fn an_unmeasurable_host_is_never_reported_as_a_full_one() {
         let mut ledger = StagingLedger::default();
         assert_eq!(
-            ledger.admit(1, 0, &StoragePolicy::UNMEASURED),
-            Admission::Unmeasured { requested: 1 }
+            ledger
+                .admit(1, 0, &StoragePolicy::UNMEASURED)
+                .expect_err("refused")
+                .refusal,
+            Refusal::Unmeasured
         );
+    }
+
+    /// A handle costs a buffer and a map entry before it stages anything, so the
+    /// byte ledger alone does not bound them: opening thousands of near-empty
+    /// writes must be refused, not absorbed.
+    #[test]
+    fn open_handles_are_capped_independently_of_the_byte_budget() {
+        let mut ledger = StagingLedger::default();
+        let policy = budget(u64::MAX);
+        let mut ids = Vec::new();
+        for _ in 0..MAX_OPEN_WRITES {
+            ids.push(ledger.admit(1, 0, &policy).expect("under the cap"));
+        }
+        assert_eq!(
+            ledger.admit(1, 0, &policy).expect_err("at the cap").refusal,
+            Refusal::TooManyWrites
+        );
+        ledger.release(ids[0]);
+        assert!(
+            ledger.admit(1, 0, &policy).is_ok(),
+            "closing one makes room for the next"
+        );
+    }
+
+    /// A caller-declared size is a `u64` from JS: sizing it must fail closed on
+    /// the flat-DAG ceiling, never try to allocate its leaf set first.
+    #[test]
+    fn an_absurd_declared_size_is_refused_without_allocating() {
+        for profile in [ContentProfile::CI, ContentProfile::PRODUCTION] {
+            assert!(matches!(
+                sealed_total_bytes(u64::MAX, &profile),
+                Err(DagError::RootTooLarge { .. })
+            ));
+        }
     }
 
     #[test]
     fn a_released_reservation_stops_counting() {
         let mut ledger = StagingLedger::default();
         let policy = budget(1000);
-        let Admission::Reserved(id) = ledger.admit(400, 0, &policy) else {
-            panic!("admitted");
-        };
+        let id = ledger.admit(400, 0, &policy).expect("admitted");
         assert_eq!(ledger.reserved(), 400);
         ledger.release(id);
         assert_eq!(ledger.reserved(), 0);
@@ -296,9 +321,6 @@ mod tests {
         let policy = StoragePolicy::measured(StoragePlatform::WEB, 64 * (1 << 30));
         let total = sealed_total_bytes(10 * (1 << 20), &ContentProfile::PRODUCTION).unwrap();
         assert!(total > 10 * (1 << 20), "sealing adds overhead");
-        assert!(matches!(
-            StagingLedger::default().admit(total, 0, &policy),
-            Admission::Reserved(_)
-        ));
+        assert!(StagingLedger::default().admit(total, 0, &policy).is_ok());
     }
 }

@@ -49,14 +49,12 @@ pub use api::{
     UploadResult,
 };
 pub use content::{
-    Admission, ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile,
-    ContentVersion, ContentWriter, DAG_ROOT_CODEC, DagError, FinishedContent, Gateway,
-    GatewayConfig, GatewaySource, PinMode, ProviderError, PrunePlan, QuotaExceeded,
-    ROOT_FORMAT_VERSION, ReadError, RetentionPolicy, RootManifest, SEALED_LEAF_OVERHEAD, SealError,
-    SealedChunk, SealedContent, StagingLedger, assemble, decode_root, frame_and_seal,
-    leaf_range_for_byte_range, plan_prune, pre_flight_quota_check, read_block, seal_one_chunk,
-    sealed_total_bytes,
-    test_connection, validate_endpoint,
+    ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
+    ContentWriter, DAG_ROOT_CODEC, DagError, FinishedContent, Gateway, GatewayConfig,
+    GatewaySource, PinMode, ProviderError, PrunePlan, QuotaExceeded, ROOT_FORMAT_VERSION,
+    ReadError, RetentionPolicy, RootManifest, SealError, SealedChunk, SealedContent, assemble,
+    decode_root, frame_and_seal, leaf_range_for_byte_range, plan_prune, pre_flight_quota_check,
+    read_block, seal_one_chunk, test_connection, validate_endpoint,
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{

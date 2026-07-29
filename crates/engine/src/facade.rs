@@ -29,9 +29,9 @@ use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
-use crate::content::budget::ReservationId;
+use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
-    Admission, ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError,
+    ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, Refused,
     SealError, StagingLedger, open_content, sealed_total_bytes,
 };
 use crate::entropy::Entropy;
@@ -200,6 +200,8 @@ pub enum OverBudgetCause {
     /// The write fits the budget, but bytes already staged and reserved by other
     /// writes leave too little right now — the drain frees room as it uploads.
     StagingBacklog,
+    /// Too many uploads are already open; one must finish or be cancelled first.
+    TooManyWrites,
     /// The host could not measure storage headroom, so nothing can be admitted.
     /// Distinct from a measured zero, which is a device known to be full.
     StorageUnmeasured,
@@ -601,6 +603,14 @@ pub enum EngineError {
     /// A write-handle call named a handle this engine does not hold — never
     /// minted, or already committed, failed, or aborted.
     UnknownWriteHandle,
+    /// The file is past the flat-DAG ceiling: its root would inline more leaf
+    /// links than a readable block can hold, so no device could ever serve it
+    /// back. A format limit, not a budget verdict
+    /// ([`DagError::RootTooLarge`](crate::DagError)).
+    ContentTooLarge {
+        /// The assembly check that fired; never key material.
+        check: &'static str,
+    },
     /// A host seam failed (durable op-queue I/O). Availability, never a trust
     /// decision — trust classification happens below the facade.
     Seam {
@@ -643,6 +653,13 @@ impl EngineError {
     fn from_api(err: ApiError) -> Self {
         EngineError::Auth {
             message: err.to_string(),
+        }
+    }
+
+    /// Entropy acquisition failed — fail closed, never a predictable substitute.
+    fn from_entropy(err: crate::entropy::EntropyError) -> Self {
+        EngineError::Entropy {
+            message: err.message().to_owned(),
         }
     }
 
@@ -713,6 +730,9 @@ impl fmt::Display for EngineError {
                     f,
                     "this write needs {requested} bytes but only {available} are free until queued uploads finish"
                 ),
+                OverBudgetCause::TooManyWrites => f.write_str(
+                    "too many uploads are already in progress; finish or cancel one first",
+                ),
                 OverBudgetCause::StorageUnmeasured => write!(
                     f,
                     "this device's available storage could not be measured, so the {requested}-byte write cannot be admitted"
@@ -727,6 +747,10 @@ impl fmt::Display for EngineError {
                 "the file changed while it was being read: {declared} bytes were declared and {observed} arrived"
             ),
             EngineError::UnknownWriteHandle => f.write_str("unknown write handle"),
+            EngineError::ContentTooLarge { check } => write!(
+                f,
+                "this file is too large to store as a single version: [{check}]"
+            ),
             EngineError::Seam { message } => write!(f, "seam error: {message}"),
             EngineError::Entropy { message } => write!(f, "entropy error: {message}"),
             EngineError::Auth { message } => write!(f, "auth error: {message}"),
@@ -929,44 +953,36 @@ type ScopeWriteSeeds = BTreeMap<[u8; 16], Zeroizing<[u8; 32]>>;
 /// it dead-lettered.
 type RetainedDeadLetters = BTreeMap<OpId, (Option<NodeId>, DeadLetterReason)>;
 
-/// Map a staging-admission refusal onto the facade error, preserving which of
-/// the three device-side actions it calls for and the room a caller may quote.
-fn over_budget(refusal: Admission) -> EngineError {
-    let (cause, requested, available) = match refusal {
-        Admission::OverLimit {
+impl From<Refused> for EngineError {
+    fn from(
+        Refused {
+            refusal,
             requested,
             available,
-        } => (OverBudgetCause::StagingLimit, requested, available),
-        Admission::DeviceFull {
+        }: Refused,
+    ) -> Self {
+        EngineError::OverBudget {
+            cause: match refusal {
+                Refusal::OverLimit => OverBudgetCause::StagingLimit,
+                Refusal::DeviceFull => OverBudgetCause::DeviceFull,
+                Refusal::Backlog => OverBudgetCause::StagingBacklog,
+                Refusal::TooManyWrites => OverBudgetCause::TooManyWrites,
+                Refusal::Unmeasured => OverBudgetCause::StorageUnmeasured,
+            },
             requested,
             available,
-        } => (OverBudgetCause::DeviceFull, requested, available),
-        Admission::Backlog {
-            requested,
-            available,
-        } => (OverBudgetCause::StagingBacklog, requested, available),
-        Admission::Unmeasured { requested } => (OverBudgetCause::StorageUnmeasured, requested, 0),
-        // `admit` returns this only on success, which the caller consumed.
-        Admission::Reserved(_) => (OverBudgetCause::StagingBacklog, 0, 0),
-    };
-    EngineError::OverBudget {
-        cause,
-        requested,
-        available,
+        }
     }
 }
 
-/// Map a content-sealing failure onto the facade error. Entropy is a fail-closed
-/// availability failure; a DAG refusal means the framed version could never be
-/// read back, which is the same "this device can never stage it" verdict
-/// `beginWrite` gives the flat-DAG ceiling.
+/// Map a content-sealing failure onto the facade error: entropy is fail-closed
+/// availability, and an assembly refusal is a version this build's own reader
+/// would reject.
 fn seal_error(error: SealError) -> EngineError {
     match error {
-        SealError::Entropy(error) => EngineError::Entropy {
-            message: error.message().to_owned(),
-        },
-        SealError::Dag(error) => EngineError::Seam {
-            message: format!("content assembly rejected: [{}]", error.check()),
+        SealError::Entropy(error) => EngineError::from_entropy(error),
+        SealError::Dag(error) => EngineError::ContentTooLarge {
+            check: error.check(),
         },
     }
 }
@@ -1680,13 +1696,9 @@ impl<T: SeamTypes> Engine<T> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
-        // A version whose root would not assemble is one this device can never
-        // stage, whatever its budget — the flat-DAG ceiling, not a shortage.
-        let requested = sealed_total_bytes(size, &self.content_profile).map_err(|_| {
-            EngineError::OverBudget {
-                cause: OverBudgetCause::StagingLimit,
-                requested: size,
-                available: self.storage_policy.staging_cap_bytes,
+        let requested = sealed_total_bytes(size, &self.content_profile).map_err(|error| {
+            EngineError::ContentTooLarge {
+                check: error.check(),
             }
         })?;
         let staged = self
@@ -1695,21 +1707,29 @@ impl<T: SeamTypes> Engine<T> {
             .staged_bytes_total()
             .await
             .map_err(EngineError::from_seam)?;
-        let node = match &target {
-            WriteTarget::NewFile { .. } => self.mint_node_id()?,
-            WriteTarget::Version { node } => *node,
-        };
-        let key = ContentKey::generate(&mut *self.entropy.borrow_mut()).map_err(|e| {
-            EngineError::Entropy {
-                message: e.message().to_owned(),
-            }
-        })?;
-
+        // Admitted before anything is spent, so a refused write burns no node id
+        // and no entropy; a failure past this point hands the reservation back.
         let mut writes = self.writes.borrow_mut();
-        let reservation = match writes.ledger.admit(requested, staged, &self.storage_policy) {
-            Admission::Reserved(id) => id,
-            refusal => return Err(over_budget(refusal)),
+        let reservation = writes
+            .ledger
+            .admit(requested, staged, &self.storage_policy)?;
+        let opened = (|| {
+            let node = match &target {
+                WriteTarget::NewFile { .. } => self.mint_node_id()?,
+                WriteTarget::Version { node } => *node,
+            };
+            let key = ContentKey::generate(&mut *self.entropy.borrow_mut())
+                .map_err(EngineError::from_entropy)?;
+            Ok((node, ContentWriter::new(key, self.content_profile, size)))
+        })();
+        let (node, writer) = match opened {
+            Ok(opened) => opened,
+            Err(error) => {
+                writes.ledger.release(reservation);
+                return Err(error);
+            }
         };
+
         writes.next += 1;
         let handle = WriteHandle(writes.next);
         writes.open.insert(
@@ -1719,7 +1739,7 @@ impl<T: SeamTypes> Engine<T> {
                 target,
                 declared_size: size,
                 reservation,
-                writer: ContentWriter::new(key, self.content_profile),
+                writer,
             },
         );
         Ok(handle)
@@ -1799,8 +1819,8 @@ impl<T: SeamTypes> Engine<T> {
         // Taken out of the ledger up front: from here the handle is spent
         // whatever happens, and its reservation must not outlive it.
         let write = self.take_write(handle)?;
-        let staged = write.writer.staged_leaf_cids().to_vec();
-        match self.commit_write_inner(write).await {
+        let mut staged = write.writer.staged_leaf_cids().to_vec();
+        match self.commit_write_inner(write, &mut staged).await {
             Ok(op_id) => {
                 let _ = self.events.unbounded_send(Event::SnapshotUpdated);
                 Ok(op_id)
@@ -1840,7 +1860,13 @@ impl<T: SeamTypes> Engine<T> {
         }
     }
 
-    async fn commit_write_inner(&self, write: LiveWrite) -> Result<OpId, EngineError> {
+    /// `staged` accumulates every block this commit puts into the store, so a
+    /// failure after the tail or the root landed still releases them.
+    async fn commit_write_inner(
+        &self,
+        write: LiveWrite,
+        staged: &mut Vec<Vec<u8>>,
+    ) -> Result<OpId, EngineError> {
         let LiveWrite {
             node,
             target,
@@ -1860,6 +1886,7 @@ impl<T: SeamTypes> Engine<T> {
             .map_err(seal_error)?;
 
         if let Some(tail) = &finished.tail {
+            staged.push(tail.cid.clone());
             self.seams
                 .staging_store
                 .put_staged_bytes(&tail.cid, &tail.sealed)
@@ -1867,35 +1894,27 @@ impl<T: SeamTypes> Engine<T> {
                 .map_err(EngineError::from_seam)?;
         }
         let root_cid = finished.content.content_cid().to_vec();
+        staged.push(root_cid.clone());
         self.seams
             .staging_store
             .put_staged_bytes(&root_cid, &finished.root_block)
             .await
             .map_err(EngineError::from_seam)?;
 
-        // The scope epoch this device knows the vault to be at. It rides the key
-        // blob's AAD as a value, never as a key input: the blob seals under the
-        // login-secret-derived enc subkey, so a rotation between commit and
-        // drain leaves it openable — content bytes are never re-encrypted by any
-        // rotation path (blueprint/engine.md "sweep").
+        // The `{scope, epoch}` the key blob's AAD binds — see `seal_content_key`
+        // for why they are values and not key inputs.
         let scope = self.snapshot.borrow().root;
         let epoch = floor::read_epoch_floor(&self.seams.floor_store, &scope.0)
             .await
             .map_err(EngineError::from_seam)?
             .unwrap_or(0);
-        let mut ephemeral = Zeroizing::new([0u8; 32]);
-        self.entropy
-            .borrow_mut()
-            .fill(ephemeral.as_mut())
-            .map_err(|e| EngineError::Entropy {
-                message: e.message().to_owned(),
-            })?;
+        // Its own ephemeral, independent of the op record's: two seals to one
+        // recipient key must never share one.
+        let key_seal = self.record_seal()?;
         let sealed_content_key = seal_content_key(
-            self.session
-                .as_ref()
-                .ok_or(EngineError::NotStarted)?
-                .enc_subkey(),
-            &ephemeral,
+            key_seal.owner_enc_secret,
+            &key_seal.ephemeral_scalar,
+            &scope.0,
             epoch,
             &root_cid,
             finished.key.as_bytes(),
@@ -2878,7 +2897,7 @@ mod tests {
                 parent: root,
                 name: "huge.bin".into(),
             },
-            u64::from(u32::MAX),
+            StoragePolicy::CI.staging_cap_bytes + 1,
         ))
         .unwrap_err();
         assert!(
@@ -2890,6 +2909,27 @@ mod tests {
                 }
             ),
             "got {refused:?}"
+        );
+    }
+
+    /// The flat-DAG ceiling is a format limit, not a budget verdict: no device
+    /// can serve such a version back, so freeing space would not help and the
+    /// refusal must not quote a byte figure as though it would.
+    #[test]
+    fn a_file_past_the_flat_dag_ceiling_is_refused_as_a_format_limit() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        assert_eq!(
+            block_on(engine.begin_write(
+                WriteTarget::NewFile {
+                    parent: root,
+                    name: "colossal.bin".into(),
+                },
+                u64::MAX,
+            )),
+            Err(EngineError::ContentTooLarge {
+                check: "dag-root-too-large"
+            })
         );
     }
 

@@ -247,6 +247,49 @@ describe('serveEngine write requests', () => {
     // Per-request, never fatal: the transport still serves the next call.
     await expect(transport.abortWrite(handle)).resolves.toBeUndefined();
   });
+
+  it('applies pipelined chunks for one handle in arrival order', async () => {
+    const { scope, worker } = loopback();
+    const host = new ReadHost();
+    const applied: number[] = [];
+    // Later chunks settle faster: unserialized they would overtake earlier ones,
+    // scrambling the plaintext while every integrity check still passes.
+    host.pushChunk = async (_handle, chunk) => {
+      const seq = new Uint8Array(chunk)[0];
+      await new Promise((resolve) => setTimeout(resolve, (4 - seq) * 5));
+      applied.push(seq);
+    };
+    serveEngine(scope, host);
+    const transport = new LocalTransport(worker);
+
+    const handle = await transport.beginWrite({ node: new Uint8Array(16) }, 3);
+    // Fired without awaiting, exactly as a UI pipelining an upload would.
+    await Promise.all(
+      [1, 2, 3].map((seq) => transport.pushChunk(handle, Uint8Array.of(seq).buffer))
+    );
+
+    expect(applied).toEqual([1, 2, 3]);
+  });
+
+  it('keeps distinct handles concurrent', async () => {
+    const { scope, worker } = loopback();
+    const host = new ReadHost();
+    let releaseFirst!: () => void;
+    host.pushChunk = (handle) =>
+      handle === 11n ? new Promise<void>((resolve) => (releaseFirst = resolve)) : Promise.resolve();
+    serveEngine(scope, host);
+    const transport = new LocalTransport(worker);
+
+    const parked = transport.pushChunk(11n, new ArrayBuffer(1));
+    let parkedSettled = false;
+    void parked.then(() => (parkedSettled = true));
+
+    await expect(transport.pushChunk(12n, new ArrayBuffer(1))).resolves.toBeUndefined();
+    expect(parkedSettled).toBe(false);
+
+    releaseFirst();
+    await parked;
+  });
 });
 
 describe('serveEngine event pump over the real EngineHost', () => {

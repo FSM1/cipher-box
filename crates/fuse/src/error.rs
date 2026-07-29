@@ -25,7 +25,8 @@ pub enum VfsError {
     /// A node of that name already exists under the parent.
     AlreadyExists,
     /// The operation is structurally impossible — moving a folder inside
-    /// itself, which would detach the whole subtree from the root.
+    /// itself, which would detach the whole subtree from the root, or writing a
+    /// file past the size one version can represent.
     Invalid,
     /// The name is not admissible.
     InvalidName(NameError),
@@ -69,6 +70,9 @@ impl From<EngineError> for VfsError {
             EngineError::UnsupportedContentFormat { version } => VfsError::Unavailable {
                 message: format!("unsupported content format version {version}"),
             },
+            // Past the flat-DAG ceiling: no amount of free space stores a file
+            // this large as one version, so it is not a budget verdict.
+            EngineError::ContentTooLarge { .. } => VfsError::Invalid,
             EngineError::Seam { message }
             | EngineError::Entropy { message }
             | EngineError::Auth { message } => VfsError::Internal { message },

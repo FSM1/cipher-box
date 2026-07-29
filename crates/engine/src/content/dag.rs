@@ -263,6 +263,59 @@ pub fn decode_root(root_block: &[u8]) -> Result<RootManifest, DagError> {
 /// share, so the two sides cannot diverge. `chunk_size` is nonzero at both call
 /// sites (a profile invariant on produce; the zero-chunk check runs first on
 /// decode).
+/// The encoded length of the root block [`assemble`] would produce for a
+/// version of `plaintext_len` bytes, without building one — what the staging
+/// admission ledger sizes a reservation from.
+///
+/// Arithmetic over the same canonical CBOR [`assemble`] emits, and held to it by
+/// `root_block_len_matches_the_assembled_root`. Fails closed on the same
+/// [`DagError::RootTooLarge`] ceiling, so a file past the flat-DAG limit is
+/// refused before a byte is staged.
+pub(crate) fn root_block_len(
+    plaintext_len: u64,
+    profile: &ContentProfile,
+) -> Result<u64, DagError> {
+    let leaves = expected_leaf_count(plaintext_len, profile.chunk_size() as u64);
+    // Saturating: a caller-declared size is an arbitrary `u64`, and an absurd
+    // one must reach the ceiling check below rather than wrap past it.
+    let len = (1u64 // the 4-entry map header
+        + text_key_len(VERSION_KEY) + uint_len(ROOT_FORMAT_VERSION)
+        + text_key_len(CHUNK_SIZE_KEY) + uint_len(profile.chunk_size() as u64)
+        + text_key_len(SIZE_KEY) + uint_len(plaintext_len)
+        + text_key_len(LINKS_KEY) + head_len(leaves))
+    .saturating_add(
+        leaves.saturating_mul(head_len(CONTENT_CID_LEN as u64) + CONTENT_CID_LEN as u64),
+    );
+    if len > MAX_RESOLVED_RECORD_BYTES as u64 {
+        return Err(DagError::RootTooLarge {
+            size: usize::try_from(len).unwrap_or(usize::MAX),
+            limit: MAX_RESOLVED_RECORD_BYTES,
+        });
+    }
+    Ok(len)
+}
+
+/// The bytes CBOR spends on an item head carrying `value` — the argument that
+/// prefixes a uint, a byte string's length, or an array's element count.
+fn head_len(value: u64) -> u64 {
+    match value {
+        0..=23 => 1,
+        24..=0xFF => 2,
+        0x100..=0xFFFF => 3,
+        0x1_0000..=0xFFFF_FFFF => 5,
+        _ => 9,
+    }
+}
+
+fn uint_len(value: u64) -> u64 {
+    head_len(value)
+}
+
+/// A map key's encoded length: the text head plus its bytes.
+fn text_key_len(key: &str) -> u64 {
+    head_len(key.len() as u64) + key.len() as u64
+}
+
 pub(crate) fn expected_leaf_count(plaintext_len: u64, chunk_size: u64) -> u64 {
     if plaintext_len == 0 {
         1
@@ -514,6 +567,45 @@ mod tests {
             assemble(&leaves, profile.chunk_size() as u64, &profile),
             Err(DagError::MalformedLeafCid)
         );
+    }
+
+    /// The arithmetic sizing and the real encoder must never drift: the staging
+    /// reservation is exact only if this holds at every leaf count where a CBOR
+    /// head width changes.
+    #[test]
+    fn root_block_len_matches_the_assembled_root() {
+        for profile in [ContentProfile::CI, ContentProfile::PRODUCTION] {
+            let chunk = profile.chunk_size() as u64;
+            for leaves in [0u64, 1, 23, 24, 255, 256, 300] {
+                let size = leaves * chunk;
+                let assembled = assemble(&dummy_leaves(leaves.max(1) as usize), size, &profile)
+                    .expect("assembles")
+                    .root_block
+                    .len() as u64;
+                assert_eq!(
+                    root_block_len(size, &profile).unwrap(),
+                    assembled,
+                    "{leaves} leaves at chunk {chunk}"
+                );
+            }
+            // A short tail exercises a `size` that is not a chunk multiple.
+            let size = 2 * chunk + 1;
+            let assembled = assemble(&dummy_leaves(3), size, &profile)
+                .expect("assembles")
+                .root_block
+                .len() as u64;
+            assert_eq!(root_block_len(size, &profile).unwrap(), assembled);
+        }
+    }
+
+    #[test]
+    fn root_block_len_refuses_a_file_past_the_flat_dag_ceiling() {
+        let profile = ContentProfile::PRODUCTION;
+        let size = 120_000u64 * profile.chunk_size() as u64;
+        assert!(matches!(
+            root_block_len(size, &profile),
+            Err(DagError::RootTooLarge { .. })
+        ));
     }
 
     #[test]

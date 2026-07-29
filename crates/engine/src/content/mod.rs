@@ -19,8 +19,8 @@ pub mod read;
 pub mod retention;
 pub mod write;
 
-pub use budget::{Admission, StagingLedger, sealed_total_bytes};
-pub use chunk::{ContentKey, SEALED_LEAF_OVERHEAD, SealedChunk, frame_and_seal, seal_one_chunk};
+pub(crate) use budget::{Refused, StagingLedger, sealed_total_bytes};
+pub use chunk::{ContentKey, SealedChunk, frame_and_seal, seal_one_chunk};
 pub use dag::{
     ContentDag, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, RootManifest, assemble, decode_root,
     root_block_cid,
@@ -248,8 +248,11 @@ mod tests {
     /// root block and the version identity it addresses.
     fn sealed(plaintext: &[u8], seed: u64) -> (Vec<u8>, SealedContent) {
         let mut entropy = SeededEntropy::new(seed);
-        let mut writer =
-            ContentWriter::new(ContentKey::from_bytes([9u8; KEY_LEN]), ContentProfile::CI);
+        let mut writer = ContentWriter::new(
+            ContentKey::from_bytes([9u8; KEY_LEN]),
+            ContentProfile::CI,
+            plaintext.len() as u64,
+        );
         let mut rest = plaintext;
         while !rest.is_empty() {
             let (remaining, _) = writer.push(rest, &mut entropy).unwrap();

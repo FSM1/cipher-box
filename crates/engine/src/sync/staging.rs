@@ -14,7 +14,7 @@ use cipherbox_core::content::verify_cid;
 
 use crate::content::decode_root;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
-use crate::sync::drain::{DRAINED_OP_MARK_KEY, OP_ATTEMPTS_KEY};
+use crate::sync::drain::{DRAINED_OP_MARK_KEY, OP_ATTEMPTS_KEY, UPLOAD_MARK_KEY};
 use crate::sync::op::Op;
 use crate::sync::record::{RecordSeal, encode_op_record, record_content_root_cid};
 
@@ -47,25 +47,31 @@ pub async fn stage_op<S: StagingStore>(
     store.enqueue_op(&record).await
 }
 
-/// Staging keys held by the store that no queued record references — orphan
-/// residue from a superseded or abandoned upload, safe to GC (#33 D6 staged-
-/// bytes hygiene).
+/// Staging keys held by the store that nothing references — orphan residue from
+/// a superseded or abandoned upload, safe to GC (#33 D6 staged-bytes hygiene).
 ///
-/// Keyless: a queued record's content root rides its clear header, and a version
-/// stages one block per key, so a root is **expanded** into the leaf keys its
-/// own manifest lists. A foreign account's or a forward-version record's whole
-/// block set is therefore counted as referenced rather than collected.
+/// Two things reference a block. A **queued record**'s content root rides its
+/// clear header, and since a version stages one block per key, a root is
+/// expanded into the leaf keys its own manifest lists — so a foreign account's
+/// or a forward-version record's whole block set is retained. An **open write
+/// handle**'s leaves are staged before any op is journaled, so they are
+/// unreferenced by construction and must be passed in as `live`; collecting them
+/// mid-write would publish a version whose manifest names blocks nothing holds.
 ///
-/// Fail-closed in both directions a root can be unusable: an unreadable queue
-/// entry, and a referenced root the store cannot produce or this build cannot
-/// decode, both class **nothing** an orphan — deleting a live upload's leaves is
-/// unrecoverable, while leaving residue is a later pass's problem.
-pub async fn orphan_staging_keys<S: StagingStore>(store: &S) -> SeamResult<Vec<Vec<u8>>> {
+/// Fail-closed: an unreadable queue entry, or a referenced root the store cannot
+/// produce or this build cannot decode, classes **nothing** an orphan.
+pub async fn orphan_staging_keys<S: StagingStore>(
+    store: &S,
+    live: &[Vec<u8>],
+) -> SeamResult<Vec<Vec<u8>>> {
     let queued = store.queued_ops().await?;
-    // The drain's completion mark and attempt record are queue bookkeeping
-    // under staging keys, not upload residue.
-    let mut referenced =
-        std::collections::HashSet::from([DRAINED_OP_MARK_KEY.to_vec(), OP_ATTEMPTS_KEY.to_vec()]);
+    // The drain's own queue bookkeeping is not upload residue.
+    let mut referenced = std::collections::HashSet::from([
+        DRAINED_OP_MARK_KEY.to_vec(),
+        OP_ATTEMPTS_KEY.to_vec(),
+        UPLOAD_MARK_KEY.to_vec(),
+    ]);
+    referenced.extend(live.iter().cloned());
     for (_, record) in &queued {
         let Ok(root) = record_content_root_cid(record) else {
             // An unreadable record may still reference staged bytes, and its
@@ -123,8 +129,11 @@ mod tests {
     /// order, the root block, and the op's staged-content reference.
     fn framed(plaintext: &[u8]) -> (Vec<SealedChunk>, Vec<u8>, StagedContent) {
         let mut entropy = SeededEntropy::new(1);
-        let mut writer =
-            ContentWriter::new(ContentKey::from_bytes([9u8; KEY_LEN]), ContentProfile::CI);
+        let mut writer = ContentWriter::new(
+            ContentKey::from_bytes([9u8; KEY_LEN]),
+            ContentProfile::CI,
+            plaintext.len() as u64,
+        );
         let mut blocks = Vec::new();
         let mut rest = plaintext;
         while !rest.is_empty() {
@@ -257,7 +266,7 @@ mod tests {
                 .unwrap();
 
             assert!(
-                orphan_staging_keys(&store).await.unwrap().is_empty(),
+                orphan_staging_keys(&store, &[]).await.unwrap().is_empty(),
                 "an unreadable entry forbids classing anything an orphan"
             );
         });
@@ -278,7 +287,7 @@ mod tests {
                 .await
                 .unwrap();
 
-            assert!(orphan_staging_keys(&store).await.unwrap().is_empty());
+            assert!(orphan_staging_keys(&store, &[]).await.unwrap().is_empty());
         });
     }
 
@@ -298,9 +307,33 @@ mod tests {
             store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
 
             assert_eq!(
-                orphan_staging_keys(&store).await.unwrap(),
+                orphan_staging_keys(&store, &[]).await.unwrap(),
                 vec![b"orphan".to_vec()],
                 "every leaf the root lists is referenced"
+            );
+        });
+    }
+
+    /// A write handle's leaves are staged before any op is journaled, so nothing
+    /// in the queue references them — collecting them mid-write would publish a
+    /// version whose manifest names blocks nothing holds.
+    #[test]
+    fn an_open_write_handles_blocks_are_never_collected() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
+            let live: Vec<Vec<u8>> = blocks.iter().map(|block| block.cid.clone()).collect();
+
+            assert_eq!(
+                orphan_staging_keys(&store, &live).await.unwrap(),
+                vec![staged.root_cid.clone(), b"orphan".to_vec()],
+                "the handle's leaves are held; its uncommitted root is not yet referenced"
+            );
+            assert!(
+                orphan_staging_keys(&store, &[]).await.unwrap().len() > live.len(),
+                "without the live set every one of them would be collected"
             );
         });
     }
@@ -324,7 +357,7 @@ mod tests {
             store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
 
             assert_eq!(
-                orphan_staging_keys(&store).await.unwrap(),
+                orphan_staging_keys(&store, &[]).await.unwrap(),
                 vec![b"orphan".to_vec()],
                 "a foreign root and its leaves are referenced, not collectible"
             );
@@ -356,7 +389,7 @@ mod tests {
             store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
 
             assert_eq!(
-                orphan_staging_keys(&store).await.unwrap(),
+                orphan_staging_keys(&store, &[]).await.unwrap(),
                 vec![b"orphan".to_vec()],
                 "a retained record's blocks are referenced, not collectible"
             );
@@ -388,7 +421,7 @@ mod tests {
                 .unwrap();
             store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
 
-            assert!(orphan_staging_keys(&store).await.unwrap().is_empty());
+            assert!(orphan_staging_keys(&store, &[]).await.unwrap().is_empty());
         });
     }
 }

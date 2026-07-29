@@ -280,6 +280,9 @@ impl EngineHandle {
     #[wasm_bindgen(js_name = pushChunk)]
     pub fn push_chunk(&self, handle: u64, chunk: Vec<u8>) -> Promise {
         let engine = self.engine.clone();
+        // The copy wasm-bindgen makes out of the JS view is plaintext; wipe it
+        // rather than leave it in the freed heap.
+        let chunk = Zeroizing::new(chunk);
         future_to_promise(async move {
             engine
                 .write()
@@ -392,6 +395,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::OverBudget { .. } => "overBudget",
         EngineError::ContentSizeMismatch { .. } => "contentSizeMismatch",
         EngineError::UnknownWriteHandle => "unknownWriteHandle",
+        EngineError::ContentTooLarge { .. } => "contentTooLarge",
         EngineError::Seam { .. } => "seam",
         EngineError::Entropy { .. } => "entropy",
         EngineError::Auth { .. } => "auth",

@@ -30,7 +30,9 @@ use cipherbox_engine::seams::{
     StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
-use cipherbox_engine::sync::{DRAINED_OP_MARK_KEY, StagedContent, record_content_root_cid};
+use cipherbox_engine::sync::{
+    DRAINED_OP_MARK_KEY, StagedContent, UPLOAD_MARK_KEY, record_content_root_cid,
+};
 use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
@@ -736,8 +738,8 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
     // blocks once its record has published, leaving only the queue bookkeeping.
     assert_eq!(
         block_on(alice.staging_store.staged_keys()).unwrap(),
-        vec![DRAINED_OP_MARK_KEY.to_vec()],
-        "no staged block survives a published version"
+        vec![DRAINED_OP_MARK_KEY.to_vec(), UPLOAD_MARK_KEY.to_vec()],
+        "no staged block survives a published version, only queue bookkeeping"
     );
     assert!(
         block_on(alice.staging_store.queued_ops())
@@ -896,7 +898,11 @@ fn a_truncated_file_fails_the_commit_and_publishes_nothing() {
 /// sealed block in file order, the root block, and its content address.
 fn frame_version(plaintext: &[u8]) -> (Vec<SealedChunk>, Vec<u8>, Vec<u8>) {
     let mut entropy = SeededEntropy::new(99);
-    let mut writer = ContentWriter::new(ContentKey::from_bytes([0x3C; 32]), ContentProfile::CI);
+    let mut writer = ContentWriter::new(
+        ContentKey::from_bytes([0x3C; 32]),
+        ContentProfile::CI,
+        plaintext.len() as u64,
+    );
     let mut leaves = Vec::new();
     let mut rest = plaintext;
     while !rest.is_empty() {
@@ -992,6 +998,65 @@ fn a_version_whose_content_key_will_not_open_dead_letters_and_releases_its_block
         published(&world.record_store, file).0,
         file_sequence,
         "nothing published"
+    );
+}
+
+/// A leaf missing from *before* anything uploaded is indistinguishable from one
+/// a previous pass already sent — unless progress is recorded. Without the
+/// durable mark, an evicted prefix would publish a version whose manifest names
+/// blocks nothing holds; with it, the absence is loss and fails closed.
+#[test]
+fn an_evicted_prefix_of_the_block_set_is_loss_not_progress() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &plaintext,
+    )
+    .unwrap();
+
+    // Storage pressure evicts the *first* leaf before the drain ever runs, so
+    // nothing has uploaded and no mark exists.
+    block_on(async {
+        let queued = alice.staging_store.queued_ops().await.unwrap();
+        let root_cid = record_content_root_cid(&queued[0].1).unwrap().unwrap();
+        let root_block = alice
+            .staging_store
+            .staged_bytes(&root_cid)
+            .await
+            .unwrap()
+            .unwrap();
+        let leaves = decode_root(&root_block).unwrap().leaf_cids;
+        alice
+            .staging_store
+            .remove_staged_bytes(&leaves[0])
+            .await
+            .unwrap();
+    });
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::DeadLetter {
+                reason: DeadLetterReason::ContentUnrecoverable,
+                ..
+            }
+        )),
+        "an unsent prefix is loss, never assumed progress"
+    );
+    assert!(
+        block_on(engine.view()).unwrap().children(ROOT).is_empty(),
+        "no version publishes over a block nothing holds"
     );
 }
 

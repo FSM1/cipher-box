@@ -4,12 +4,23 @@
  *
  * Requests are handled concurrently and answered by `id`, so responses may
  * return out of order without confusion — the single engine writer serializes
- * itself below the facade, and the correlation is purely by request id. Events
- * ride one ordered pump, so the UI sees them in emission order with no drops.
+ * itself below the facade, and the correlation is purely by request id. Steps
+ * driving one open write handle are the exception: they run in arrival order
+ * (`WriteQueue`). Events ride one ordered pump, so the UI sees them in emission
+ * order with no drops.
  */
 
+import { WriteQueue } from '../writeQueue.js';
 import type { EngineHostLike } from './engineHost.js';
 import type { WorkerMessage, WorkerRequest } from './protocol.js';
+
+/** A request driving an already-open write handle, ordered per handle. */
+type WriteStep = Extract<WorkerRequest, { type: 'pushChunk' | 'commitWrite' | 'abortWrite' }>;
+
+function isWriteStep(request: WorkerRequest): request is WriteStep {
+  const type = request?.type;
+  return type === 'pushChunk' || type === 'commitWrite' || type === 'abortWrite';
+}
 
 /** The subset of a worker global scope (or `MessagePort`) the server needs. */
 export interface WorkerScopeLike {
@@ -30,6 +41,7 @@ function errorCode(error: unknown): string | undefined {
 /** Wires `scope` to `host`, then signals readiness. */
 export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void {
   const post = (message: WorkerMessage): void => scope.postMessage(message);
+  const writes = new WriteQueue();
 
   const handle = async (request: WorkerRequest): Promise<void> => {
     try {
@@ -83,7 +95,11 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
   };
 
   scope.addEventListener('message', (event) => {
-    void handle(event.data);
+    const request = event.data;
+    // Enqueued synchronously, before any await: `WriteQueue` orders a handle's
+    // steps by call order. Everything else stays concurrent.
+    if (isWriteStep(request)) void writes.run(request.handle, () => handle(request));
+    else void handle(request);
   });
 
   void (async () => {

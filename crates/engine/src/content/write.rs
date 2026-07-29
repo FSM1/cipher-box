@@ -24,6 +24,11 @@ pub struct ContentWriter {
     /// Plaintext awaiting a full chunk — never longer than one chunk, and
     /// zeroized on drop (it is user content at rest in memory).
     pending: Zeroizing<Vec<u8>>,
+    /// The one length [`Self::pending`] may reach. Enforced here rather than
+    /// taken on trust from the caller: a `Zeroizing<Vec<u8>>` wipes only its
+    /// current allocation, so a reallocation would leave plaintext behind in a
+    /// freed one.
+    max_pending: usize,
     leaf_cids: Vec<Vec<u8>>,
     observed: u64,
 }
@@ -47,12 +52,20 @@ pub struct FinishedContent {
 }
 
 impl ContentWriter {
-    /// Start framing a version under a freshly minted content key.
-    pub fn new(key: ContentKey, profile: ContentProfile) -> Self {
+    /// Start framing a version of `declared_size` bytes under a freshly minted
+    /// content key.
+    ///
+    /// The buffer is sized to what this version can actually put in it, so a
+    /// small file costs its own length rather than a whole chunk — and it is
+    /// allocated once, so `extend_from_slice` never reallocates and never
+    /// orphans an un-zeroized plaintext copy in the allocator.
+    pub fn new(key: ContentKey, profile: ContentProfile, declared_size: u64) -> Self {
+        let max_pending = declared_size.min(profile.chunk_size() as u64) as usize;
         Self {
             key,
             profile,
-            pending: Zeroizing::new(Vec::with_capacity(profile.chunk_size())),
+            pending: Zeroizing::new(Vec::with_capacity(max_pending)),
+            max_pending,
             leaf_cids: Vec::new(),
             observed: 0,
         }
@@ -67,8 +80,7 @@ impl ContentWriter {
         bytes: &'a [u8],
         entropy: &mut impl Entropy,
     ) -> Result<(&'a [u8], Option<SealedChunk>), EntropyError> {
-        let room = self.profile.chunk_size() - self.pending.len();
-        let take = room.min(bytes.len());
+        let take = (self.max_pending - self.pending.len()).min(bytes.len());
         self.pending.extend_from_slice(&bytes[..take]);
         self.observed += take as u64;
         let leaf = if self.pending.len() == self.profile.chunk_size() {
@@ -133,7 +145,7 @@ mod tests {
     fn stream(plaintext: &[u8], stride: usize, seed: u64) -> (Vec<SealedChunk>, FinishedContent) {
         let mut entropy = SeededEntropy::new(seed);
         let key = ContentKey::from_bytes([7u8; KEY_LEN]);
-        let mut writer = ContentWriter::new(key, ContentProfile::CI);
+        let mut writer = ContentWriter::new(key, ContentProfile::CI, plaintext.len() as u64);
         let mut leaves = Vec::new();
         for piece in plaintext.chunks(stride.max(1)) {
             let mut rest = piece;
@@ -226,11 +238,43 @@ mod tests {
         );
     }
 
+    /// A `Zeroizing<Vec<u8>>` wipes only the allocation it currently holds, so a
+    /// reallocation would strand plaintext in a freed one. The buffer must
+    /// therefore never grow, whatever a caller pushes.
+    #[test]
+    fn the_pending_buffer_is_never_reallocated() {
+        let mut entropy = SeededEntropy::new(17);
+        let mut writer = ContentWriter::new(
+            ContentKey::from_bytes([1u8; KEY_LEN]),
+            ContentProfile::CI,
+            4,
+        );
+        let capacity = writer.pending.capacity();
+        // Far past both the declared size and the chunk size.
+        let mut rest: &[u8] = &[0u8; 512];
+        loop {
+            let (remaining, _) = writer.push(rest, &mut entropy).unwrap();
+            if remaining.len() == rest.len() {
+                break;
+            }
+            rest = remaining;
+        }
+        assert_eq!(writer.pending.capacity(), capacity, "the buffer never grew");
+        assert_eq!(
+            writer.observed_size(),
+            4,
+            "nothing past the declared size is absorbed"
+        );
+    }
+
     #[test]
     fn the_observed_size_is_the_sum_of_the_pushes() {
         let mut entropy = SeededEntropy::new(13);
-        let mut writer =
-            ContentWriter::new(ContentKey::from_bytes([1u8; KEY_LEN]), ContentProfile::CI);
+        let mut writer = ContentWriter::new(
+            ContentKey::from_bytes([1u8; KEY_LEN]),
+            ContentProfile::CI,
+            37,
+        );
         assert_eq!(writer.observed_size(), 0);
         let mut rest: &[u8] = &[0u8; 37];
         while !rest.is_empty() {
