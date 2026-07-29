@@ -165,10 +165,13 @@ is not the contract gate.
 - **`apps/api` unit.** Nest specs where server logic actually lives (quota
   arithmetic, refcounting, retention caps, auth services) — the v1 jest
   setup ports. The contract suite, not spec mocks, is the correctness gate.
-- **`apps/web` and `apps/desktop` shells.** No unit suites, by design — v1's
-  accidental posture made policy (and made safe: the logic genuinely lives
-  below the facade now). Playwright and the mounted e2e cover rendering and
-  chrome.
+- **`apps/web` and `apps/desktop` shells.** Vault correctness is not tested
+  here — it lives below the facade. What the web shell does own is the seam
+  the facade does not: the `useSyncExternalStore` snapshot adapter, the
+  login-secret handoff and its transfer/zeroization boundary, and UI-owned
+  chrome state. Those get a thin unit suite, merge-blocking under the
+  workspace `Test` gate; rendering and flows stay Playwright's and the
+  mounted e2e's.
 
 ### E2E — flows over real stacks
 
@@ -197,11 +200,11 @@ is not the contract gate.
 Path-filtered like v1 (the dorny pattern and reusable-workflow structure
 port), reorganized into three tiers:
 
-| Tier                         | Trigger        | Contents                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ---------------------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **PR gate** — merge-blocking | every PR       | lint + typecheck; cargo workspace tests (core KATs + property layer, engine simulation, fuse op core); the WASM KAT run; the `packages/client` browser suite; the contract suite on the CI stack; Windows cargo check + adapter tests; DB migration drift check (ports as-is if the API keeps TypeORM); an e2e **smoke slice** — a bounded-minutes budget of web login-and-CRUD plus one timing-profile cross-client scenario |
-| **Main gate**                | push to main   | the full web-e2e suite, the desktop mounted matrix (macOS/Linux/Windows), the full cross-client matrix. Failure is treated revert-first, not fix-forward — this tier exists to bound the blast radius of what the smoke slice missed, never to be the first line                                                                                                                                                              |
-| **Dispatch / scheduled**     | manual or cron | the load harness (v1's k6 scenarios in `tests/load/` port); long-horizon liveness — lease renewal at seq+1 and the republisher walk against a compressed-EOL profile; staging release gates (mechanics → [#48](https://github.com/FSM1/cipher-box-next/issues/48))                                                                                                                                                            |
+| Tier                         | Trigger        | Contents                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **PR gate** — merge-blocking | every PR       | lint + typecheck; cargo workspace tests (core KATs + property layer, engine simulation, fuse op core); the WASM KAT run; the `packages/client` browser suite; the TS workspace unit suites incl. the `apps/web` host suite (`Test`); the contract suite on the CI stack; Windows cargo check + adapter tests; DB migration drift check (ports as-is if the API keeps TypeORM); an e2e **smoke slice** — a bounded-minutes budget of web login-and-CRUD plus one timing-profile cross-client scenario |
+| **Main gate**                | push to main   | the full web-e2e suite, the desktop mounted matrix (macOS/Linux/Windows), the full cross-client matrix. Failure is treated revert-first, not fix-forward — this tier exists to bound the blast radius of what the smoke slice missed, never to be the first line                                                                                                                                                                                                                                     |
+| **Dispatch / scheduled**     | manual or cron | the load harness (v1's k6 scenarios in `tests/load/` port); long-horizon liveness — lease renewal at seq+1 and the republisher walk against a compressed-EOL profile; staging release gates (mechanics → [#48](https://github.com/FSM1/cipher-box-next/issues/48))                                                                                                                                                                                                                                   |
 
 The CI stack: Postgres, Kubo, the API under test, and a local `/routing/v1`
 record store — v1's `mock-ipns-routing` tool **promoted, not deleted**: a
