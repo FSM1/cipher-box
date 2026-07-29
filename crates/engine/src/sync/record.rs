@@ -9,7 +9,7 @@
 use cipherbox_core::seal::op_record::{
     OP_RECORD_V, decode_op_record_header, open_op_record, seal_op_record,
 };
-use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
+use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::sync::op::Op;
@@ -18,13 +18,12 @@ use crate::sync::op::Op;
 ///
 /// `ephemeral_scalar` must be **fresh for every record**: HPKE ephemeral reuse
 /// under one recipient key is a confidentiality break. Consumed by value and
-/// deliberately not `Clone`, so one scalar seals one record. It is also secret
-/// material in its own right — the recipient public half rides the record's
-/// clear header, so the scalar alone reopens the body.
-pub struct RecordSeal {
-    /// The owner's `enc-subkey` public half — the sealing recipient, and the
-    /// owner tag the record is stamped with.
-    pub owner_enc_pub: X25519Public,
+/// deliberately not `Clone`, so one scalar seals one record.
+pub struct RecordSeal<'a> {
+    /// The owner's `enc-subkey` — recipient, HPKE static sender, and the source
+    /// of the owner tag the record is stamped with. The secret, not the public
+    /// half: authoring a record is what the seal authenticates.
+    pub owner_enc_secret: &'a X25519Secret,
     /// Fresh entropy from the engine's injected [`Entropy`](crate::Entropy).
     pub ephemeral_scalar: Zeroizing<[u8; 32]>,
 }
@@ -34,11 +33,11 @@ pub struct RecordSeal {
 /// Fails closed when the op references a staged root that is not a well-formed
 /// content CID: the header is what a keyless GC pass expands, so a record the
 /// decoder refuses would strand its staged bytes unreachable.
-pub fn encode_op_record(seal: RecordSeal, op: &Op) -> Result<Vec<u8>, OpRecordError> {
+pub fn encode_op_record(seal: RecordSeal<'_>, op: &Op) -> Result<Vec<u8>, OpRecordError> {
     // The encoded intent is the plaintext this call is terminal owner of.
     let mut body = op.encode_body();
     let record = seal_op_record(
-        &seal.owner_enc_pub,
+        seal.owner_enc_secret,
         &seal.ephemeral_scalar,
         op.content_root_cid(),
         &body,
@@ -118,8 +117,9 @@ pub enum RecordClass {
     /// never removed, and its staged root still counts as referenced so orphan
     /// GC leaves its bytes alone.
     Retained(RetainedReason),
-    /// Unreadable — corrupt or truncated. Dead-lettered and dropped from the
-    /// durable queue, so it is not re-emitted every boot.
+    /// Unreadable — corrupt, truncated, or forged under this reader's own tag
+    /// by a co-tenant of the store. Dead-lettered and dropped from the durable
+    /// queue, so it is not re-emitted every boot.
     Undecodable(OpRecordError),
 }
 
@@ -163,9 +163,9 @@ mod tests {
         X25519Secret::from_scalar([b; 32])
     }
 
-    fn seal_for(secret: &X25519Secret, scalar: u8) -> RecordSeal {
+    fn seal_for(secret: &X25519Secret, scalar: u8) -> RecordSeal<'_> {
         RecordSeal {
-            owner_enc_pub: secret.public(),
+            owner_enc_secret: secret,
             ephemeral_scalar: Zeroizing::new([scalar; 32]),
         }
     }
@@ -259,8 +259,7 @@ mod tests {
     /// Seal an arbitrary body to `secret`, bypassing [`encode_op_record`] —
     /// the only way to build the records a conforming encoder never emits.
     fn seal_body(secret: &X25519Secret, scalar: u8, cid: Option<&[u8]>, body: &[u8]) -> Vec<u8> {
-        cipherbox_core::seal::op_record::seal_op_record(&secret.public(), &[scalar; 32], cid, body)
-            .unwrap()
+        cipherbox_core::seal::op_record::seal_op_record(secret, &[scalar; 32], cid, body).unwrap()
     }
 
     #[test]
@@ -288,6 +287,41 @@ mod tests {
         assert_eq!(
             RecordReader::new(&me).classify(&record),
             RecordClass::Undecodable(OpRecordError("content-cid-mismatch"))
+        );
+    }
+
+    #[test]
+    fn a_record_forged_from_our_public_owner_tag_is_never_replayed() {
+        // #879: the tag is our enc-subkey public half, in the clear on every
+        // record in a store the op queue shares per origin, not per account. A
+        // co-tenant can seal to it in HPKE base mode; only the auth-mode open
+        // stops the intent riding our write keys. It must not classify as
+        // `Mine`, and — unlike an unknown grammar — must not be retained either:
+        // nothing authored it that this device owes custody to.
+        let me = owner(31);
+        let header = cipherbox_core::seal::op_record::OpRecordHeader {
+            version: OP_RECORD_V,
+            owner_tag: me.public().to_bytes().to_vec(),
+            content_root_cid: None,
+        };
+        let forged = cipherbox_core::suite::hpke::hpke_seal(
+            &me.public(),
+            &[32; 32],
+            cipherbox_core::seal::op_record::OP_RECORD_HPKE_INFO,
+            &cipherbox_core::seal::op_record::op_record_aad(&header),
+            &Op::delete(NodeId([9; 16]), 1, UnixMillis(1), 1).encode_body(),
+        );
+        let mut map = codec::Map::new();
+        map.insert("ciphertext", codec::Value::Bytes(forged.ciphertext));
+        map.insert("contentRootCid", codec::Value::Null);
+        map.insert("enc", codec::Value::Bytes(forged.enc.to_vec()));
+        map.insert("ownerTag", codec::Value::Bytes(header.owner_tag.clone()));
+        map.insert("v", codec::Value::Unsigned(OP_RECORD_V));
+        let record = codec::encode(&codec::Value::Map(map)).unwrap();
+
+        assert_eq!(
+            RecordReader::new(&me).classify(&record),
+            RecordClass::Undecodable(OpRecordError("hpke-open-failed"))
         );
     }
 

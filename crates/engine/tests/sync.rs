@@ -45,9 +45,9 @@ fn owner() -> X25519Secret {
 }
 
 /// Sealing inputs for one record; `nonce` keeps each ephemeral distinct.
-fn seal(who: &X25519Secret, nonce: u8) -> RecordSeal {
+fn seal(who: &X25519Secret, nonce: u8) -> RecordSeal<'_> {
     RecordSeal {
-        owner_enc_pub: who.public(),
+        owner_enc_secret: who,
         ephemeral_scalar: Zeroizing::new([nonce; 32]),
     }
 }

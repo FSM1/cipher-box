@@ -76,7 +76,7 @@ Functional decomposition, not final file layout:
 | -------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | Symmetric sealing          | XChaCha20-Poly1305 (24-byte nonce)                      | All sealed bodies and structures, content bytes                                 |
 | Key derivation             | BLAKE3 `derive_key` / `keyed_hash`                      | The whole edge catalog                                                          |
-| Sealing to a person        | RFC 9180 HPKE (X25519-HKDF-SHA256 + XChaCha20-Poly1305) | Grant blobs, owner blob, ascent links, mailbox payloads                         |
+| Sealing to a person        | RFC 9180 HPKE (X25519-HKDF-SHA256 + XChaCha20-Poly1305) | Base mode: grant blobs, owner blob, ascent links, mailbox payloads; auth mode: the op record |
 | Pairwise secrets           | X25519 ECDH                                             | Blinded tags, pseudonym derivation                                              |
 | Identity signing           | secp256k1 ECDSA (RFC 6979) over det-CBOR                | Grant-set commitment, subkey binding, re-point object, mailbox sender signature |
 | Pseudonym + record signing | Ed25519                                                 | Structure signatures; IPNS records                                              |
@@ -174,7 +174,14 @@ and a content record with one, each reproducing its exact bytes from a fixed
 enc + ephemeral, then reading its header keylessly and opening) and
 `op_record_reject` (tampered ciphertext, tampered `ownerTag`, a swapped
 `contentRootCid`, a malformed `contentRootCid`, a foreign recipient, a missing
-`ownerTag`, and a forward `v`). The clear header — `v`, `ownerTag`,
+`ownerTag`, a forward `v`, and a **base-mode forgery** — a correctly framed,
+correctly AAD-bound record sealed to the owner's own clear tag by a writer who
+lacks the enc secret). That last vector is the sender-authentication gate: the
+op record seals HPKE **auth mode** (RFC 9180 §5.1.1) with the owner's enc subkey
+as both static sender and recipient, because the recipient half is public by
+construction and stamped in the clear beside the records, so base mode would let
+any writer sharing the per-origin queue enqueue an op that publishes under the
+owner's write keys. The clear header — `v`, `ownerTag`,
 `contentRootCid`, `enc`, `ciphertext` — is **frozen across format versions**: a
 later `v` may change the sealed body, the suite, or the AAD layout, but never
 these five keys, so any build can read any record's header. That is what lets a

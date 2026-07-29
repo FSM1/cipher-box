@@ -220,12 +220,16 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
 - **Ops**: every mutation is an intent op — `create`, `delete`, `rename`,
   `relink`, `updateContent` — carrying its base sequence and its authored
   time, journaled FIFO in the durable op queue (all mutations, both platforms)
-  as a versioned, owner-tagged record whose intent body seals HPKE-to-self. The
-  queue is per device, not per account, and is shared with whatever build wrote
-  it: a record bearing another identity's tag, or a format version this build
-  does not implement, is **retained** — never replayed, never surfaced, never
-  removed, and its staged bytes stay pinned. Only a record that fails to decode
-  at all is dead-lettered and dropped. An intra-scope
+  as a versioned, owner-tagged record whose intent body seals HPKE-to-self in
+  **auth mode**, so authoring one requires the owner's enc secret rather than
+  the public tag stamped beside it. That authenticates a record's *author*, not
+  its freshness or its position: a store co-tenant can still copy, delete, or
+  reorder whole records, which queue-integrity work covers separately. The queue
+  is per device, not per account, and is shared with whatever build wrote it: a
+  record bearing another identity's tag, or a format version this build does not
+  implement, is **retained** — never replayed, never surfaced, never removed,
+  and its staged bytes stay pinned. Only a record that fails to decode at all is
+  dead-lettered and dropped. An intra-scope
   `relink` is a pure relink; a cross-scope `relink` re-seals the moved subtree
   at the destination scope's epoch, and one that leaves a granted source scope
   is a scope-exit rotation trigger for the source (#26 D1/D7). Replay is FIFO

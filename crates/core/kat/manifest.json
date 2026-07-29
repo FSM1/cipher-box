@@ -438,14 +438,16 @@
   },
   "opRecord": {
     "structTag": 10,
-    "v": 2,
+    "v": 3,
+    "hpkeMode": 2,
+    "hpkeInfo": "cipherbox/v2/op-record",
     "accept": {
       "file": "vectors/op_record/op_record_accept.json",
       "count": 2
     },
     "reject": {
       "file": "vectors/op_record/op_record_reject.json",
-      "count": 11,
+      "count": 12,
       "checks": [
         "hpke-open-failed",
         "content-cid-mismatch",

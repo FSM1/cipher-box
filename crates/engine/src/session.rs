@@ -47,8 +47,9 @@ pub(crate) struct SessionIdentity {
     /// The login secret, retained for the runtime vault-pointer index probe.
     /// Engine memory only: never persisted, never logged, zeroized on drop.
     login_secret: Zeroizing<Vec<u8>>,
-    /// The user's X25519 encryption subkey (`enc-subkey` edge). Seals only;
-    /// the identity key signs. Zeroizes on drop.
+    /// The user's X25519 encryption subkey (`enc-subkey` edge). Seals, and —
+    /// as the op record's HPKE static sender — authenticates authorship of a
+    /// queued op; the identity key signs. Zeroizes on drop.
     enc_subkey: X25519Secret,
     /// The owner pointer seed (`owner-pointer-seed` edge). Per-scope pointer
     /// signers and pointer read keys derive from it lazily. Zeroizes on drop.
