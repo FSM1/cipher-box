@@ -1355,7 +1355,7 @@ fn stage(device: &FakeDevice, op: &Op, upload: Option<&[u8]>) {
         &device.staging_store,
         &StoragePolicy::CI,
         RecordSeal {
-            owner_enc_pub: kdf::enc_subkey(&SECRET).public(),
+            owner_enc_secret: &kdf::enc_subkey(&SECRET),
             ephemeral_scalar: Zeroizing::new([0x5A; 32]),
         },
         op,
