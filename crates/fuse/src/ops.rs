@@ -8,6 +8,8 @@
 //! machinery, no freshness policy — those decisions all happened below the
 //! facade.
 
+use std::collections::BTreeSet;
+
 use cipherbox_engine::seams::SeamTypes;
 use cipherbox_engine::{Command, Engine, EngineView, NodeAttrs, NodeId, NodeKind, StatFs};
 
@@ -231,8 +233,11 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         Ok(view)
     }
 
+    /// Stage an intent op. The staged `OpId` is the journal-ack handle, which
+    /// the write plane claims in #648; the projection needs only the outcome.
     async fn command(&mut self, command: Command) -> Result<(), VfsError> {
-        Ok(self.engine.command(command).await?)
+        self.engine.command(command).await?;
+        Ok(())
     }
 
     fn entry_changed(&self, parent: u64, name: &str) {
@@ -312,14 +317,17 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         Ok(())
     }
 
-    /// Delete a node that has already passed [`removable`], sweeping whatever
-    /// children it still has — only junk can survive that check, and junk the
-    /// mount hides is junk the user could never clear by hand.
+    /// Delete a node that has already passed [`removable`], sweeping the whole
+    /// subtree it still holds — only junk can survive that check, and junk the
+    /// mount hides is junk the user could never clear by hand. A junk folder
+    /// can hold real descendants, and `Command::Delete` unlinks exactly one
+    /// node, so the sweep has to reach them or they outlive the mount point
+    /// they hung from.
     async fn delete(&mut self, view: &EngineView, victim: NodeId) -> Result<(), VfsError> {
-        for child in view.children(victim) {
-            self.command(Command::Delete { node: child.id }).await?;
+        for node in subtree(view, victim) {
+            self.command(Command::Delete { node }).await?;
         }
-        self.command(Command::Delete { node: victim }).await
+        Ok(())
     }
 }
 
@@ -327,14 +335,28 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
 /// folder into its own subtree would detach that subtree from the root for
 /// good; POSIX rename answers `EINVAL` and so does the projection.
 fn contains(view: &EngineView, node: NodeId, candidate: NodeId) -> bool {
-    let mut frontier = vec![node];
+    subtree(view, node).contains(&candidate)
+}
+
+/// `root` and everything beneath it, deepest first — the order deletes must
+/// run in, since each one unlinks a single node. Visit-tracked like the
+/// engine snapshot's own `ancestors` walk: a malformed cycle has to terminate
+/// rather than hang the mount.
+fn subtree(view: &EngineView, root: NodeId) -> Vec<NodeId> {
+    let mut order = Vec::new();
+    let mut seen = BTreeSet::from([root]);
+    let mut frontier = vec![root];
     while let Some(next) = frontier.pop() {
-        if next == candidate {
-            return true;
+        order.push(next);
+        for child in view.children(next) {
+            if seen.insert(child.id) {
+                frontier.push(child.id);
+            }
         }
-        frontier.extend(view.children(next).into_iter().map(|child| child.id));
     }
-    false
+    // Preorder puts every node before its descendants; reversed, after them.
+    order.reverse();
+    order
 }
 
 /// The POSIX preconditions for making a node vanish: it must be the kind the

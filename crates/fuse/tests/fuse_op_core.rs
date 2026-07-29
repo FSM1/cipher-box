@@ -12,7 +12,7 @@ use std::task::{Context, Poll, Waker};
 
 use cipherbox_engine::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    Command, Engine, GatewayConfig, LoginSecret, NodeKind, StoragePolicy, SyncTimingProfile,
+    Command, Engine, GatewayConfig, LoginSecret, NodeId, NodeKind, StoragePolicy, SyncTimingProfile,
 };
 use cipherbox_fuse::{
     Access, HostAdapter, HostCapabilities, Invalidation, MAX_NAME_BYTES, NameError, OperationCore,
@@ -62,10 +62,8 @@ fn mount_with(adapter: RecordingAdapter) -> Core {
     mount_seeded(adapter, &[])
 }
 
-/// Mount over an engine seeded by issuing facade commands directly, which is
-/// how a name the projection would never create — one another client
-/// committed — gets into the rendered view.
-fn mount_seeded(adapter: RecordingAdapter, root_children: &[(&str, NodeKind)]) -> Core {
+/// A started engine over fresh in-memory seams, with its rendered root id.
+fn started_engine() -> (Engine<FakeSeamTypes>, NodeId) {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
     let (mut engine, _events) = Engine::new(
@@ -78,14 +76,37 @@ fn mount_seeded(adapter: RecordingAdapter, root_children: &[(&str, NodeKind)]) -
     );
     block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("engine starts");
     let root = block_on(engine.view()).expect("view").root();
+    (engine, root)
+}
+
+/// Seed a child by issuing a facade command directly, which is how a name the
+/// projection would never create — one another client committed — gets into
+/// the rendered view.
+fn seed_child(
+    engine: &mut Engine<FakeSeamTypes>,
+    parent: NodeId,
+    name: &str,
+    kind: NodeKind,
+) -> NodeId {
+    block_on(engine.command(Command::Create {
+        parent,
+        name: name.to_owned(),
+        kind,
+        content: None,
+    }))
+    .expect("seeded create");
+    block_on(engine.view())
+        .expect("view")
+        .lookup(parent, name)
+        .expect("seeded child is rendered")
+        .id
+}
+
+/// Mount over an engine seeded with the given root children.
+fn mount_seeded(adapter: RecordingAdapter, root_children: &[(&str, NodeKind)]) -> Core {
+    let (mut engine, root) = started_engine();
     for (name, kind) in root_children {
-        block_on(engine.command(Command::Create {
-            parent: root,
-            name: (*name).to_owned(),
-            kind: *kind,
-            content: None,
-        }))
-        .expect("seeded create");
+        seed_child(&mut engine, root, name, *kind);
     }
     OperationCore::new(engine, adapter)
 }
@@ -538,39 +559,40 @@ fn a_folder_holding_only_hidden_junk_is_removable() {
     assert!(names(&mut core, ROOT_INO).is_empty());
 }
 
+#[test]
+fn removing_a_junk_only_folder_sweeps_what_the_junk_itself_holds() {
+    // A junk *folder* can hold real descendants the user can never see, let
+    // alone clear. One delete per direct child would leave them behind with
+    // no reachable parent.
+    let mut core = seeded_nested_junk_folder();
+    let dir = block_on(core.lookup(ROOT_INO, "dir")).unwrap();
+    let junk = block_on(core.lookup(dir.ino, ".Trash-1000")).unwrap();
+    let buried = block_on(core.lookup(junk.ino, "buried.txt")).unwrap();
+
+    block_on(core.rmdir(ROOT_INO, "dir")).expect("a junk-only folder is empty to the user");
+
+    assert_eq!(block_on(core.getattr(junk.ino)), Err(VfsError::NotFound));
+    assert_eq!(
+        block_on(core.getattr(buried.ino)),
+        Err(VfsError::NotFound),
+        "nothing survives the swept subtree"
+    );
+}
+
 /// A `dir` holding one `.DS_Store` and nothing else, both committed elsewhere.
 fn seeded_junk_folder() -> Core {
-    let world = FakeWorld::new();
-    let device = world.device(b"alice-pk");
-    let (mut engine, _events) = Engine::new(
-        device.seam_set(),
-        Box::new(SeededEntropy::new(42)),
-        SyncTimingProfile::CI,
-        StoragePolicy::CI,
-        String::new(),
-        GatewayConfig::disabled(),
-    );
-    block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("engine starts");
-    let root = block_on(engine.view()).expect("view").root();
-    block_on(engine.command(Command::Create {
-        parent: root,
-        name: "dir".to_owned(),
-        kind: NodeKind::Folder,
-        content: None,
-    }))
-    .unwrap();
-    let dir = block_on(engine.view())
-        .unwrap()
-        .lookup(root, "dir")
-        .unwrap()
-        .id;
-    block_on(engine.command(Command::Create {
-        parent: dir,
-        name: ".DS_Store".to_owned(),
-        kind: NodeKind::File,
-        content: None,
-    }))
-    .unwrap();
+    let (mut engine, root) = started_engine();
+    let dir = seed_child(&mut engine, root, "dir", NodeKind::Folder);
+    seed_child(&mut engine, dir, ".DS_Store", NodeKind::File);
+    OperationCore::new(engine, RecordingAdapter::push_capable())
+}
+
+/// A `dir` holding one junk-prefixed folder, which itself holds a real file.
+fn seeded_nested_junk_folder() -> Core {
+    let (mut engine, root) = started_engine();
+    let dir = seed_child(&mut engine, root, "dir", NodeKind::Folder);
+    let junk = seed_child(&mut engine, dir, ".Trash-1000", NodeKind::Folder);
+    seed_child(&mut engine, junk, "buried.txt", NodeKind::File);
     OperationCore::new(engine, RecordingAdapter::push_capable())
 }
 
