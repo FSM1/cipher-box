@@ -33,8 +33,9 @@ pub(crate) fn project_root(snapshot: &mut Snapshot, root: NodeId, adopted: &Adop
 ///
 /// Only a gate-passing body reaches here — the gate already enforced child
 /// id/ipnsName uniqueness at unseal — so child uniqueness is trusted and not
-/// re-validated. `link_counter` is carried verbatim (it feeds the dual-link
-/// tiebreak in [`Snapshot::winning_link`]).
+/// re-validated. `link_counter` merges monotonically per link ([`Snapshot::link`]
+/// keeps the higher of the two) and feeds the dual-link tiebreak in
+/// [`Snapshot::winning_link`].
 ///
 /// `size`, `mtime`, the content-version count and the child's own record
 /// sequence have no `ChildRef` to come from (`crates/core/src/seal/body.rs`: no

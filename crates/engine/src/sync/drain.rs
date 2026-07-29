@@ -716,7 +716,14 @@ where
                 link.link_counter
             });
 
-        pass.folder_mut(dest)?.children.push(moved);
+        // The rebase resolves against a dest it has not loaded yet, so a dest
+        // already naming the target is reachable; a second ref would sign a
+        // listing `author_child_envelope` rejects, wedging every retry.
+        let dest_children = &mut pass.folder_mut(dest)?.children;
+        match dest_children.iter_mut().find(|child| child.id == target.0) {
+            Some(existing) => *existing = moved,
+            None => dest_children.push(moved),
+        }
         let cas_base = self.publish_folder(scope, pass, dest, modified_at).await?;
 
         pass.folder_mut(source)?

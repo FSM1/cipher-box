@@ -859,7 +859,7 @@ fn an_update_content_republishes_the_files_own_record_and_not_its_parent() {
             file,
             StagedContent {
                 root_cid: compute_cid(CONTENT_CID_CODEC, STAGED_ROOT),
-                plaintext_size: 11,
+                plaintext_size: STAGED_ROOT.len() as u64,
             },
             file_sequence,
             UnixMillis(4_242),
@@ -1064,14 +1064,7 @@ fn a_concurrent_dest_writer_is_re_derived_onto_never_clobbered() {
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
     let (photos, moved) = seed_folder_and_file(&world, &mut engine, &mut tasks);
 
-    let winner = ChildRef {
-        id: [0xAA; 16],
-        name: "winner.txt".into(),
-        ipns_name: write_name(NodeId([0xAA; 16])).as_str().as_bytes().to_vec(),
-        kind: CoreNodeKind::File,
-        link_counter: 1,
-        unknown: Vec::new(),
-    };
+    let winner = file_ref([0xAA; 16], "winner.txt");
     let records = world.record_store.clone();
     let plane = blocks.clone();
     blocks.refuse_upload(Box::new(move |block| {
@@ -1147,6 +1140,59 @@ fn a_concurrent_writer_at_the_root_dest_is_re_derived_onto_never_clobbered() {
         published_names(&world.record_store, &blocks, ROOT),
         ["photos", "winner.txt"],
         "the winner's entry survived and our dest-add was undone"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, photos),
+        ["a.txt"],
+        "the source kept the child it could not release"
+    );
+}
+
+/// The rebase resolves a move against a destination it has not loaded, so the
+/// dest can already name the target — dual-link residue a failed compensation
+/// leaves behind. A second ref would sign a listing `author_child_envelope`
+/// always rejects, wedging the op on every retry.
+#[test]
+fn a_dest_that_already_names_the_target_gains_no_second_ref() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (photos, moved) = seed_folder_and_file(&world, &mut engine, &mut tasks);
+    concurrent_add(
+        &world.record_store,
+        &blocks,
+        photos,
+        file_ref(moved.0, "a.txt"),
+    );
+
+    block_on(engine.command(Command::Relink {
+        node: moved,
+        new_parent: photos,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_children(&world.record_store, &blocks, photos)
+            .iter()
+            .filter(|child| child.id == moved.0)
+            .count(),
+        1,
+        "the dest names the moved child exactly once"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["photos"],
+        "the source released the child"
+    );
+    assert!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .is_empty(),
+        "the op drained rather than wedging the queue"
     );
 }
 

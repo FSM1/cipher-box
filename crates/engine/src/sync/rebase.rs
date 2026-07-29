@@ -77,6 +77,9 @@ pub enum DeadLetterReason {
     TargetGone,
     /// A relink destination is absent from gate-passing state.
     DestinationGone,
+    /// A relink destination is the moved target itself or lies inside its
+    /// subtree — the move would detach that subtree from the scope root.
+    DestinationInsideTarget,
     /// A folder is pathologically saturated with colliding names.
     SuffixExhausted,
     /// The durable op record failed to decode: corrupt or truncated. A record
@@ -328,7 +331,7 @@ fn rebase_relink(
     // root with nothing left to walk it from, so no later op could reach it —
     // unrepresentable rather than merely refused at publish.
     if new_parent == op.target || working.ancestors(new_parent).contains(&op.target) {
-        return OpResolution::DeadLetter(DeadLetterReason::DestinationGone);
+        return OpResolution::DeadLetter(DeadLetterReason::DestinationInsideTarget);
     }
 
     let scope_exit_trigger = exits_granted_source.then_some(from_parent);
@@ -834,6 +837,27 @@ mod tests {
             ),
         );
         assert_eq!(res, OpResolution::DeadLetter(DeadLetterReason::TargetGone));
+    }
+
+    #[test]
+    fn a_relink_inside_the_moved_subtree_names_its_own_reason() {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "photos", NodeKind::Folder);
+        with_node(&mut base, id(1), id(2), "2026", NodeKind::Folder);
+        let local = base.clone();
+
+        for dest in [id(1), id(2)] {
+            let res = rebase_one(
+                &mut base.clone(),
+                &local,
+                &Op::relink(id(1), id(0), dest, 1, AT, false, false),
+            );
+            assert_eq!(
+                res,
+                OpResolution::DeadLetter(DeadLetterReason::DestinationInsideTarget),
+                "a present destination inside the target is not a missing one"
+            );
+        }
     }
 
     #[test]
