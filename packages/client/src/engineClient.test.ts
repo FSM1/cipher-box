@@ -151,6 +151,40 @@ describe('EngineClient leadership + transport swap', () => {
     await follower.dispose();
   });
 
+  it('zeroes the re-derived failover secret when the promoted worker never starts', async () => {
+    const { tab } = origin();
+    const secret = new Uint8Array([7, 7, 7, 7]).buffer;
+    const secretSource = { provideSecret: (): Promise<ArrayBuffer> => Promise.resolve(secret) };
+    const errors: Error[] = [];
+
+    const leader = tab();
+    const follower = tab({
+      secretSource,
+      // The promoted tab's fresh worker dies before it is ready, so `start`
+      // rejects without ever posting — the buffer stays attached and this frame
+      // remains its terminal owner.
+      spawnWorker: (): FakeEngineWorker => {
+        const worker = new FakeEngineWorker();
+        setTimeout(() => worker.emit({ type: 'fatal', error: 'engine construction failed' }), 0);
+        return worker;
+      },
+      onError: (error) => errors.push(error),
+    });
+    await tick();
+    await follower.facade.start(new Uint8Array([9]).buffer);
+
+    await leader.dispose();
+    await tick();
+    await tick();
+    await tick();
+
+    expect(errors.map((error) => error.message)).toContain('engine construction failed');
+    expect(secret.byteLength).toBe(4); // never transferred
+    expect([...new Uint8Array(secret)]).toEqual([0, 0, 0, 0]);
+
+    await follower.dispose();
+  });
+
   it('does not advertise leadership or start the worker until the cold-start secret resolves (P1-2)', async () => {
     const { tab, workers } = origin();
     let releaseSecret!: () => void;

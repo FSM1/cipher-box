@@ -1,15 +1,17 @@
-import type { EngineClient } from '@cipherbox/client';
-import { render, screen } from '@testing-library/react';
-import { StrictMode } from 'react';
+import type { EngineClient, SecretSource } from '@cipherbox/client';
+import { render, renderHook, screen } from '@testing-library/react';
+import { StrictMode, type ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { EngineProvider, useEngine } from './EngineProvider';
+import { EngineProvider, useEngine, useLoginSecretSource } from './EngineProvider';
 
 /** Counts the clients a provider builds and disposes; that is all it touches. */
 function clientLedger() {
   const built: EngineClient[] = [];
   const disposed: EngineClient[] = [];
+  const sources: SecretSource[] = [];
   const subscriptions = { open: 0 };
-  const createClient = () => {
+  const createClient = (secretSource: SecretSource) => {
+    sources.push(secretSource);
     const client = {
       facade: {
         subscribe: () => {
@@ -25,7 +27,7 @@ function clientLedger() {
     built.push(client);
     return client;
   };
-  return { built, disposed, subscriptions, createClient };
+  return { built, disposed, sources, subscriptions, createClient };
 }
 
 function Probe({ seen }: { seen?: (EngineClient | null)[] }) {
@@ -87,5 +89,23 @@ describe('EngineProvider', () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it('gives the client a secret source that stops re-exporting once unmounted', async () => {
+    const { sources, createClient } = clientLedger();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <EngineProvider createClient={createClient}>{children}</EngineProvider>
+    );
+
+    const { result, unmount } = renderHook(() => useLoginSecretSource(), { wrapper });
+    const source = result.current!;
+    expect(sources).toEqual([source]);
+
+    source.use({ _UNSAFE_exportTssKey: () => Promise.resolve('00'.repeat(32)) });
+    await expect(source.provideSecret()).resolves.toBeInstanceOf(ArrayBuffer);
+
+    // The re-export capability dies with the client that could have used it.
+    unmount();
+    await expect(source.provideSecret()).rejects.toThrow(/no login session/);
   });
 });

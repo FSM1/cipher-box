@@ -1,95 +1,26 @@
-import type {
-  EngineClient,
-  EventDescriptor,
-  SnapshotDescriptor,
-  Staleness,
-} from '@cipherbox/client';
+import { EngineRequestError } from '@cipherbox/client';
 import { describe, expect, it } from 'vitest';
-import { VAULT_ROOT_NODE_ID, createSnapshotStore, idleSnapshotStore } from './snapshotStore';
-
-function view(folder: Uint8Array, staleness: Staleness = 'fresh'): SnapshotDescriptor {
-  return {
-    root: VAULT_ROOT_NODE_ID,
-    folder,
-    children: [],
-    ancestors: [],
-    deadLetters: [],
-    retainedRecords: 0,
-    staleness,
-  };
-}
-
-/**
- * The engine as the store sees it: an event stream plus a `snapshot` the test
- * settles by hand, so pull ordering is observable rather than timing-dependent.
- */
-function fakeEngine() {
-  const listeners = new Set<(event: EventDescriptor) => void>();
-  const pulls: {
-    folder: Uint8Array;
-    resolve: (view: SnapshotDescriptor) => void;
-    reject: (error: Error) => void;
-  }[] = [];
-  const focus: (Uint8Array | null)[] = [];
-  const reported: (Uint8Array | null)[] = [];
-  let settleFocus: (() => void) | null = null;
-
-  const client = {
-    facade: {
-      subscribe(listener: (event: EventDescriptor) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      snapshot(folder: Uint8Array) {
-        return new Promise<SnapshotDescriptor>((resolve, reject) => {
-          pulls.push({ folder, resolve, reject });
-        });
-      },
-      setFocus(node: Uint8Array | null) {
-        focus.push(node);
-        return new Promise<void>((resolve) => {
-          settleFocus = resolve;
-        });
-      },
-    },
-    reportFocus(node: Uint8Array | null) {
-      reported.push(node);
-    },
-  } as unknown as EngineClient;
-
-  return {
-    client,
-    pulls,
-    focus,
-    reported,
-    emit: (event: EventDescriptor) => {
-      for (const listener of listeners) listener(event);
-    },
-    ackFocus: () => settleFocus?.(),
-    subscriberCount: () => listeners.size,
-  };
-}
-
-/** Lets every pending promise callback in the store run. */
-const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+import { createSnapshotStore, idleSnapshotStore } from './snapshotStore';
+import { ROOT_ID, fakeEngine, flush, view } from './testFakes';
 
 describe('snapshotStore', () => {
   it('caches the engine view and returns it synchronously', async () => {
     const engine = fakeEngine();
     const store = createSnapshotStore(engine.client);
-    const changes: number[] = [];
-    store.subscribe(() => changes.push(1));
+    let changes = 0;
+    store.subscribe(() => (changes += 1));
 
     expect(store.getSnapshot()).toEqual({ view: null, error: null });
 
     engine.emit({ kind: 'snapshotUpdated' });
-    const emitted = view(VAULT_ROOT_NODE_ID);
+    const emitted = view();
     engine.pulls[0].resolve(emitted);
     await flush();
 
     // Verbatim: the store holds the engine's descriptor, not a derived copy.
     expect(store.getSnapshot().view).toBe(emitted);
-    expect(changes).toHaveLength(1);
+    // One engine word, one notification — the view and its rung land together.
+    expect(changes).toBe(1);
     // The `useSyncExternalStore` contract: a repeat read is reference-stable.
     expect(store.getSnapshot()).toBe(store.getSnapshot());
   });
@@ -103,13 +34,13 @@ describe('snapshotStore', () => {
     store.subscribe(() => (second += 1));
 
     engine.emit({ kind: 'snapshotUpdated' });
-    engine.pulls[0].resolve(view(VAULT_ROOT_NODE_ID));
+    engine.pulls[0].resolve(view());
     await flush();
     expect([first, second]).toEqual([1, 1]);
 
     drop();
     engine.emit({ kind: 'snapshotUpdated' });
-    engine.pulls[1].resolve(view(VAULT_ROOT_NODE_ID, 'reconciling'));
+    engine.pulls[1].resolve(view(ROOT_ID, 'reconciling'));
     await flush();
     expect([first, second]).toEqual([1, 2]);
   });
@@ -119,7 +50,7 @@ describe('snapshotStore', () => {
     const store = createSnapshotStore(engine.client);
 
     engine.emit({ kind: 'snapshotUpdated' });
-    expect(engine.pulls[0].folder).toEqual(VAULT_ROOT_NODE_ID);
+    expect(engine.pulls[0].folder).toEqual(ROOT_ID);
     expect(store.getSnapshot().view).toBeNull();
   });
 
@@ -143,6 +74,45 @@ describe('snapshotStore', () => {
     expect(store.getSnapshot().view).toBe(focused);
   });
 
+  it('ignores a focus change to the folder already focused', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+
+    store.setFocus(new Uint8Array(16).fill(7));
+    engine.ackFocus();
+    await flush();
+    // A fresh array with identical bytes: the route re-rendered, nothing moved.
+    store.setFocus(new Uint8Array(16).fill(7));
+
+    expect(engine.focus).toHaveLength(1);
+    expect(engine.reported).toHaveLength(1);
+    expect(engine.pulls).toHaveLength(1);
+  });
+
+  it('coalesces an event burst into one re-pull', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+
+    // One `snapshotUpdated` per op stage, all while the first pull is in flight.
+    engine.emit({ kind: 'snapshotUpdated' });
+    engine.emit({ kind: 'snapshotUpdated' });
+    engine.emit({ kind: 'snapshotUpdated' });
+    engine.emit({ kind: 'snapshotUpdated' });
+    expect(engine.pulls).toHaveLength(1);
+
+    engine.pulls[0].resolve(view());
+    await flush();
+
+    // Exactly one re-pull, not one per event.
+    expect(engine.pulls).toHaveLength(2);
+    const final = view(ROOT_ID, 'fresh', 2);
+    engine.pulls[1].resolve(final);
+    await flush();
+
+    expect(engine.pulls).toHaveLength(2);
+    expect(store.getSnapshot().view).toBe(final);
+  });
+
   it('drops a superseded pull so an older folder never lands over a newer one', async () => {
     const engine = fakeEngine();
     const store = createSnapshotStore(engine.client);
@@ -152,35 +122,48 @@ describe('snapshotStore', () => {
     store.setFocus(older);
     engine.ackFocus();
     await flush();
+    expect(engine.pulls[0].folder).toBe(older);
 
+    // Navigate away while the first folder's pull is still outstanding.
     store.setFocus(newer);
     engine.ackFocus();
     await flush();
 
+    engine.pulls[0].resolve(view(older, 'fresh', 9));
+    await flush();
+    // The stale answer is discarded, and its settlement releases the coalesced
+    // re-pull — which targets the folder now focused.
+    expect(store.getSnapshot().view).toBeNull();
+    expect(engine.pulls[1].folder).toBe(newer);
+
     const newest = view(newer);
     engine.pulls[1].resolve(newest);
     await flush();
-    engine.pulls[0].resolve(view(older));
-    await flush();
-
     expect(store.getSnapshot().view).toBe(newest);
   });
 
-  it('keeps the last engine view when a pull fails', async () => {
+  it('keeps the last engine view when a pull fails, with the engine error code', async () => {
     const engine = fakeEngine();
     const store = createSnapshotStore(engine.client);
 
     engine.emit({ kind: 'snapshotUpdated' });
-    const good = view(VAULT_ROOT_NODE_ID);
+    const good = view();
     engine.pulls[0].resolve(good);
     await flush();
 
     engine.emit({ kind: 'snapshotUpdated' });
-    engine.pulls[1].reject(new Error('trust violation'));
+    engine.pulls[1].reject(
+      new EngineRequestError('root failed the adoption gate', 'trustViolation')
+    );
     await flush();
 
     expect(store.getSnapshot().view).toBe(good);
-    expect(store.getSnapshot().error).toBe('trust violation');
+    // Classified, not string-matched: the UI renders trust violations apart
+    // from staleness (blueprint/web-client.md "UI state law").
+    expect(store.getSnapshot().error).toEqual({
+      message: 'root failed the adoption gate',
+      code: 'trustViolation',
+    });
   });
 
   it('tracks the staleness ladder from the event stream', async () => {
@@ -192,7 +175,7 @@ describe('snapshotStore', () => {
     expect(store.getStaleness()).toBe('offline');
 
     engine.emit({ kind: 'snapshotUpdated' });
-    engine.pulls[0].resolve(view(VAULT_ROOT_NODE_ID, 'fresh'));
+    engine.pulls[0].resolve(view(ROOT_ID, 'fresh'));
     await flush();
     expect(store.getStaleness()).toBe('fresh');
   });
@@ -203,7 +186,7 @@ describe('snapshotStore', () => {
 
     engine.emit({ kind: 'snapshotUpdated' });
     engine.emit({ kind: 'stalenessChanged', staleness: 'offline' });
-    engine.pulls[0].resolve(view(VAULT_ROOT_NODE_ID, 'fresh'));
+    engine.pulls[0].resolve(view(ROOT_ID, 'fresh'));
     await flush();
 
     expect(store.getStaleness()).toBe('offline');

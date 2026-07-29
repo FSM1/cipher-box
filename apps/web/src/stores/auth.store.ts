@@ -1,9 +1,7 @@
 /**
- * UI-owned auth chrome: who is signed in and how. Vault state never lives here
- * (blueprint/web-client.md "UI state law" — that is the snapshot adapter's job),
- * and neither do tokens or key material: the engine owns the token lifecycle,
- * and the login secret goes straight to it. Memory only — `email` is PII and
- * this store is never persisted.
+ * UI-owned auth chrome: who is signed in and how. Vault state, tokens, and key
+ * material live below the facade (blueprint/web-client.md "UI state law").
+ * Memory only — `email` is PII and this store is never persisted.
  */
 
 import { useSyncExternalStore } from 'react';
@@ -24,6 +22,15 @@ let state: AuthState = SIGNED_OUT;
 const listeners = new Set<() => void>();
 
 function set(next: AuthState): void {
+  // `useSyncExternalStore` bails out on snapshot identity, so a repeat login
+  // with identical values must not mint a new object and re-render consumers.
+  if (
+    next.isAuthenticated === state.isAuthenticated &&
+    next.email === state.email &&
+    next.method === state.method
+  ) {
+    return;
+  }
   state = next;
   for (const listener of listeners) listener();
 }

@@ -1,9 +1,7 @@
 /**
  * The Web3Auth Core Kit → engine secret handoff (blueprint/web-client.md "Login
  * and identity"). Core Kit runs on the UI thread and exports the login secret;
- * this module hands it to the engine **once**, transferred, and holds nothing.
- * Every derivation — identity key, encryption subkey, pointer chain, vault
- * entry — happens in the engine, from those bytes.
+ * this module hands it to the engine once, transferred, and holds nothing.
  */
 
 import { fromHex, type EngineClient, type SecretSource } from '@cipherbox/client';
@@ -12,6 +10,9 @@ import { fromHex, type EngineClient, type SecretSource } from '@cipherbox/client
 export interface LoginSecretExporter {
   _UNSAFE_exportTssKey(): Promise<string>;
 }
+
+/** The secp256k1 scalar length `crates/engine/src/session.rs` requires. */
+const LOGIN_SECRET_LEN = 32;
 
 /**
  * Exports the login secret as a buffer the caller owns and must transfer or
@@ -29,8 +30,13 @@ export async function exportLoginSecret(exporter: LoginSecretExporter): Promise<
     // Never re-raise the decoder's message: its input is the secret.
     throw new Error('login secret export is not hex');
   }
-  if (decoded.length === 0) throw new Error('login secret export is empty');
+  if (decoded.length !== LOGIN_SECRET_LEN) {
+    decoded.fill(0);
+    throw new Error('login secret export is not a 32-byte scalar');
+  }
 
+  // Copy rather than hand over `decoded.buffer`: the transferred buffer must
+  // hold the secret and nothing else, whatever the decoder allocated.
   const secret = new ArrayBuffer(decoded.length);
   new Uint8Array(secret).set(decoded);
   decoded.fill(0);
@@ -38,9 +44,9 @@ export async function exportLoginSecret(exporter: LoginSecretExporter): Promise<
 }
 
 /**
- * Cold-starts the engine with the login secret. `start` transfers the buffer,
- * so the worker is its terminal owner from the `postMessage` onward; the
- * `finally` scrubs only the case where the transfer never happened.
+ * Cold-starts the engine with the login secret. `EngineClient.start` can reject
+ * before it delegates, so this frame stays the buffer's terminal owner until a
+ * transfer detaches it (security rule 7).
  */
 export async function handOffLoginSecret(
   client: EngineClient,
@@ -54,11 +60,7 @@ export async function handOffLoginSecret(
   }
 }
 
-/**
- * Re-exports the secret when this tab is promoted to leader mid-session. Keys
- * never persist in JS, so the failover path goes back to the live Core Kit
- * session for them.
- */
+/** The `SecretSource` a failover promotion re-exports through. */
 export class LoginSecretSource implements SecretSource {
   private exporter: LoginSecretExporter | null = null;
 

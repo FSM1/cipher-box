@@ -31,9 +31,9 @@ export { LeaderRelay } from './leaderRelay.js';
 export { BROADCAST_CHANNEL_NAME, newClientId } from './broadcast.js';
 export type { BroadcastChannelLike } from './broadcast.js';
 
-// The one hex codec in TypeScript: hosts that receive hex-encoded bytes from a
-// third-party SDK decode with this rather than growing a second one.
-export { fromHex, toHex } from './seams/bytes.js';
+// The one hex codec in TypeScript, for hosts that receive hex-encoded bytes
+// from a third-party SDK.
+export { fromHex } from './seams/bytes.js';
 
 // The wire descriptors the UI exchanges with the engine over the transport.
 export type {

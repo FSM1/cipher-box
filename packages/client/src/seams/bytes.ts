@@ -18,17 +18,34 @@ export function toHex(bytes: Uint8Array): string {
   return out;
 }
 
-/** Inverse of {@link toHex}; `''` maps to an empty byte string. */
+/**
+ * Inverse of {@link toHex}; `''` maps to an empty byte string.
+ *
+ * Decodes character-code by character-code — no regex and no `slice`. A
+ * successful `RegExp.test` parks its whole input in the realm-global Annex B
+ * statics (`RegExp.input`, `RegExp.lastMatch`), and hosts decode secret-bearing
+ * hex here (`apps/web` login handoff), which would publish the secret to every
+ * script sharing the realm.
+ */
 export function fromHex(hex: string): Uint8Array {
   if (hex.length % 2 !== 0) {
     throw new TypeError('fromHex: hex string must have an even length');
   }
-  if (!/^[0-9a-fA-F]*$/.test(hex)) {
-    throw new TypeError('fromHex: hex string contains a non-hex character');
-  }
   const out = new Uint8Array(hex.length / 2);
   for (let i = 0; i < out.length; i += 1) {
-    out[i] = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    const high = nibble(hex.charCodeAt(i * 2));
+    const low = nibble(hex.charCodeAt(i * 2 + 1));
+    if (high < 0 || low < 0) {
+      throw new TypeError('fromHex: hex string contains a non-hex character');
+    }
+    out[i] = (high << 4) | low;
   }
   return out;
+}
+
+function nibble(code: number): number {
+  if (code >= 0x30 && code <= 0x39) return code - 0x30; // 0-9
+  if (code >= 0x61 && code <= 0x66) return code - 0x57; // a-f
+  if (code >= 0x41 && code <= 0x46) return code - 0x37; // A-F
+  return -1;
 }

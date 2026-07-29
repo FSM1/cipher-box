@@ -209,7 +209,13 @@ export class EngineClient implements EngineTransport {
 
       if (wasActiveFollower) {
         const secret = await this.provideFailoverSecret();
-        await local.start(secret);
+        try {
+          await local.start(secret);
+        } finally {
+          // This frame owns the re-derived buffer until a transfer detaches it
+          // (`SecretSource`); a start that failed before the post did not.
+          if (secret.byteLength > 0) new Uint8Array(secret).fill(0);
+        }
       }
       // `dispose()` may have latched `closed` during the awaited startup.
       if ((this.role as EngineClientRole) === 'closed') {

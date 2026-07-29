@@ -18,35 +18,25 @@ function exporter(key: string | Error): LoginSecretExporter {
   };
 }
 
-/** A client whose `start` transfers, exactly as `LocalTransport.postMessage` does. */
-function transferringClient() {
+/** A client whose `start` behaviour the test scripts; records what it was handed. */
+function fakeClient(start: (secret: ArrayBuffer) => Promise<void>) {
   const received: ArrayBuffer[] = [];
   const client = {
     facade: {
       start(secret: ArrayBuffer) {
         received.push(secret);
-        // structuredClone with a transfer list detaches the sender's buffer,
-        // which is what `postMessage(msg, [secret])` does to it.
-        structuredClone(secret, { transfer: [secret] });
-        return Promise.resolve();
+        return start(secret);
       },
     },
   } as unknown as EngineClient;
   return { client, received };
 }
 
-function rejectingClient(error: Error) {
-  const seen: ArrayBuffer[] = [];
-  const client = {
-    facade: {
-      start(secret: ArrayBuffer) {
-        seen.push(secret);
-        return Promise.reject(error);
-      },
-    },
-  } as unknown as EngineClient;
-  return { client, seen };
-}
+/** `postMessage(msg, [secret])` detaches the sender's buffer; so does this. */
+const transferring = (secret: ArrayBuffer): Promise<void> => {
+  structuredClone(secret, { transfer: [secret] });
+  return Promise.resolve();
+};
 
 describe('exportLoginSecret', () => {
   it('decodes the Core Kit hex export, with or without the 0x prefix', async () => {
@@ -60,33 +50,63 @@ describe('exportLoginSecret', () => {
     await expect(exportLoginSecret(exporter('nothex'))).rejects.toThrow(
       /^login secret export is not hex$/
     );
-    await expect(exportLoginSecret(exporter(''))).rejects.toThrow(/^login secret export is empty$/);
+    await expect(exportLoginSecret(exporter(''))).rejects.toThrow(/32-byte scalar/);
+    // Short of a full secp256k1 scalar: rejected here, not after a transfer.
+    await expect(exportLoginSecret(exporter(SECRET_HEX.slice(2)))).rejects.toThrow(
+      /32-byte scalar/
+    );
   });
 });
 
 describe('handOffLoginSecret', () => {
-  it('leaves the sender buffer detached after the transfer', async () => {
-    const { client, received } = transferringClient();
+  it('hands the engine the exported secret', async () => {
+    const seen: number[] = [];
+    const { client } = fakeClient((secret) => {
+      seen.push(...new Uint8Array(secret));
+      return transferring(secret);
+    });
 
     await handOffLoginSecret(client, exporter(SECRET_HEX));
 
-    expect(received).toHaveLength(1);
+    expect(Uint8Array.from(seen)).toEqual(SECRET_BYTES);
+  });
+
+  it('tolerates the buffer the transport already detached', async () => {
+    const { client, received } = fakeClient(transferring);
+
+    await handOffLoginSecret(client, exporter(SECRET_HEX));
+
+    // Post-transfer the buffer is neutered, so the `finally` must not re-view it.
     expect(received[0].byteLength).toBe(0);
   });
 
   it('zeroes the buffer when the engine never took it', async () => {
-    const { client, seen } = rejectingClient(new Error('engine client closed'));
+    const { client, received } = fakeClient(() =>
+      Promise.reject(new Error('engine client closed'))
+    );
 
     await expect(handOffLoginSecret(client, exporter(SECRET_HEX))).rejects.toThrow(
       'engine client closed'
     );
 
-    expect(seen[0].byteLength).toBe(32);
-    expect(new Uint8Array(seen[0])).toEqual(new Uint8Array(32));
+    expect(received[0].byteLength).toBe(32);
+    expect(new Uint8Array(received[0])).toEqual(new Uint8Array(32));
+  });
+
+  it('zeroes the buffer when start throws synchronously', async () => {
+    const { client, received } = fakeClient(() => {
+      throw new Error('transport gone');
+    });
+
+    await expect(handOffLoginSecret(client, exporter(SECRET_HEX))).rejects.toThrow(
+      'transport gone'
+    );
+
+    expect(new Uint8Array(received[0])).toEqual(new Uint8Array(32));
   });
 
   it('never starts the engine when the export fails', async () => {
-    const { client, received } = transferringClient();
+    const { client, received } = fakeClient(transferring);
 
     await expect(
       handOffLoginSecret(client, exporter(new Error('core kit locked')))
@@ -113,19 +133,33 @@ describe('secret containment', () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it('writes no secret to storage and logs none', async () => {
-    const { client } = transferringClient();
+  it('writes no secret to storage and logs nothing at all', async () => {
+    const { client } = fakeClient(transferring);
+    const source = new LoginSecretSource();
+    source.use(exporter(SECRET_HEX));
 
     await handOffLoginSecret(client, exporter(SECRET_HEX));
-    await new LoginSecretSource().provideSecret().catch(() => undefined);
+    const reExported = await source.provideSecret();
 
+    expect(new Uint8Array(reExported)).toEqual(SECRET_BYTES);
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
-    expect(logged.join('\n')).not.toContain(SECRET_HEX);
+    // The whole path is silent, so no encoding of the secret can reach a log.
+    expect(logged).toEqual([]);
   });
 
-  it('keeps the secret out of a failure message', async () => {
-    const { client } = rejectingClient(new Error('boom'));
+  it('parks no copy of the secret in the realm-global RegExp statics', async () => {
+    const { client } = fakeClient(transferring);
+    /(sentinel)/.exec('sentinel');
+
+    await handOffLoginSecret(client, exporter(SECRET_HEX));
+
+    expect(RegExp.input).toBe('sentinel');
+    expect(RegExp.lastMatch).toBe('sentinel');
+  });
+
+  it('keeps the secret out of a failure message, in any encoding', async () => {
+    const { client } = fakeClient(() => Promise.reject(new Error('boom')));
 
     const failure = await handOffLoginSecret(client, exporter(SECRET_HEX)).catch(
       (error: unknown) => error
@@ -134,10 +168,13 @@ describe('secret containment', () => {
       (error: unknown) => error
     );
 
+    const decimal = [...SECRET_BYTES].join(',');
     for (const error of [failure, malformed]) {
       expect(error).toBeInstanceOf(Error);
-      expect(String(error)).not.toContain(SECRET_HEX);
-      expect((error as Error).stack ?? '').not.toContain(SECRET_HEX);
+      const text = `${String(error)}\n${(error as Error).stack ?? ''}`;
+      expect(text).not.toContain(SECRET_HEX);
+      expect(text).not.toContain(SECRET_HEX.toUpperCase());
+      expect(text).not.toContain(decimal);
     }
   });
 });

@@ -218,35 +218,6 @@ jobs:
       - name: Bundle carries the fingerprinted engine artifact
         run: ls apps/web/dist/assets/cipherbox_wasm-*.js apps/web/dist/assets/cipherbox_wasm_bg-*.wasm
 
-  # The web host's unit suite (blueprint/testing.md law 1): the engine adapter,
-  # the login-secret handoff, and the UI-owned auth store — the thin layer that
-  # sits above the facade and below Playwright. Named so the gate survives any
-  # change to the workspace-wide `Test` job's filter.
-  web-unit:
-    name: Web Unit
-    needs: [changes, lint]
-    if: |
-      !failure() && !cancelled() &&
-      needs.changes.outputs.web == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: 'package.json'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run the web host unit suite
-        run: pnpm --filter @cipherbox/client --filter @cipherbox/web run test
-
   api-unit:
     name: API Unit
     needs: [changes, lint]
