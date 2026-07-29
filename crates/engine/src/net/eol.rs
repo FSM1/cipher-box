@@ -8,10 +8,8 @@
 //! injected [`Scheduler`](crate::seams::Scheduler) clock here and compares a
 //! resolved record's EOL against the same clock to drive the two liveness
 //! decisions: **renewal** (below the threshold, republish at seq+1) and
-//! **expiry** (a >EOL lapse, revive from the recovery endpoint).
-//!
-//! Determinism: this module reads no wall clock — every function takes the
-//! instant as a [`UnixMillis`] argument sourced from the scheduler seam.
+//! **expiry** (a >EOL lapse, revive from the recovery endpoint). Determinism
+//! law: every function here takes the instant as a [`UnixMillis`] argument.
 
 use core::time::Duration;
 

@@ -1,7 +1,5 @@
-//! Fixed-size chunk framing over core's content-seal (blueprint/engine.md
-//! "Content plane": "the engine frames content into fixed-size chunks, seals
-//! each with core's content-seal primitive ... fresh random per-version content
-//! key").
+//! Fixed-size chunk framing over core's content-seal, under a fresh random
+//! per-version content key (blueprint/engine.md "Content plane").
 //!
 //! Framing is the engine's job; the seal and the leaf content-address are
 //! core's ([`cipherbox_core::content`], #691). This module owns only the

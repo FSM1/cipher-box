@@ -95,8 +95,6 @@ pub async fn fanout_get_verify<T: RecordTransport>(
     let key = name.as_str();
     let mut best: Option<(u64, Vec<u8>)> = None;
     for endpoint in transport.endpoints() {
-        // A per-endpoint transport error is availability staleness, not a trust
-        // decision: skip it and keep the freshest copy the other endpoints hold.
         let Ok(Some(bytes)) = transport.get_record(&endpoint, key).await else {
             continue;
         };

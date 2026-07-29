@@ -112,8 +112,7 @@ pub async fn keyless_re_put<T: RecordTransport>(
 ) -> Vec<RePutResult> {
     let mut results = Vec::with_capacity(held.len());
     for record in held {
-        // Byte-stable keyless re-PUT (blueprint/core.md): a record that does not
-        // round-trip marshal is not a record we can keep alive — skip it.
+        // Byte-stable keyless marshal (blueprint/core.md).
         let bytes = match IpnsRecord::unmarshal(&record.record_bytes) {
             Ok(parsed) => parsed.marshal(),
             Err(_) => {
@@ -146,9 +145,8 @@ pub enum LivenessControl {
 /// Drive a liveness pass on a fixed cadence off the injected [`Scheduler`]
 /// clock: sleep `interval`, run `pass`, repeat until it returns
 /// [`LivenessControl::Stop`]. This is the ~hourly loop the facade spawns at
-/// [`RE_PUT_INTERVAL`] over [`keyless_re_put`] (and, once cold-start derives the
-/// per-name signers, the sub-EOL [`eol_republish`] renewal composes into the
-/// same `pass`). Determinism law: the only time source is `scheduler.sleep`.
+/// [`RE_PUT_INTERVAL`] over [`keyless_re_put`]. Determinism law: the only time
+/// source is `scheduler.sleep`.
 pub async fn run_liveness_loop<Sch, F, Fut>(scheduler: &Sch, interval: Duration, mut pass: F)
 where
     Sch: Scheduler,
@@ -183,7 +181,6 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    // Inspect the name's current record EOL against the injected clock.
     let Some((_sequence, bytes)) = fanout_get_verify(transport, request.name).await else {
         return Ok(None);
     };

@@ -1,9 +1,6 @@
-//! The pin-provider layer (blueprint/engine.md "Content plane": "hosted
-//! (default), external (own Kubo/PSA/Pinata endpoint), or dual — the engine
-//! decides where bytes go; every mode's publish flow still traverses
-//! registration. `ByoIpfsConfig` stays sealed in vault settings; provider
-//! connection testing is engine-side over the Http seam (the TEE tester is
-//! gone)").
+//! The pin-provider layer — hosted / external / dual placement and the
+//! engine-side BYO connection test over the `Http` seam (blueprint/engine.md
+//! "Content plane").
 //!
 //! This module owns the placement decision surface and the BYO config type plus
 //! its engine-side reachability probe. Registration and the publish pipeline
@@ -93,11 +90,9 @@ pub enum ProviderError {
 /// over the Http seam. Issues the provider's standard health/auth probe and
 /// treats any 2xx as success.
 ///
-/// The endpoint is member-controlled by design (it is the member's own
-/// provider), but it is still validated to an absolute `http(s)` URL before it
-/// reaches the seam — a `file:`, relative, or hostless target is
-/// [`ProviderError::InvalidEndpoint`], never sent. A transport failure is
-/// [`ProviderError::Unreachable`]; a non-2xx is [`ProviderError::Rejected`].
+/// The member-controlled endpoint passes [`validate_endpoint`] before it reaches
+/// the seam. A transport failure is [`ProviderError::Unreachable`]; a non-2xx is
+/// [`ProviderError::Rejected`].
 pub async fn test_connection(
     config: &ByoIpfsConfig,
     http: &impl Http,

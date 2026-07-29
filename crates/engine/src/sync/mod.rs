@@ -11,22 +11,6 @@
 //! the five per-op race rules — and a terminally unrebasable op dead-letters
 //! with its staged bytes preserved rather than being silently dropped.
 //!
-//! Submodules:
-//!
-//! - [`model`] — the working tree (the state law's left operand) and the one
-//!   strict name comparator.
-//! - [`op`] — the intent-op grammar.
-//! - [`record`] — the sealed, owner-tagged durable queue record.
-//! - [`overlay`] — the state law: snapshot ⊕ pending ops → rendered view.
-//! - [`rebase`] — FIFO replay, the five race rules, dead-lettering, and
-//!   dual-link observed repair.
-//! - [`staging`] — the budgeted offline staging policy over `StagingStore`.
-//! - [`staleness`] — the staleness ladder and the withheld-update escalation.
-//! - [`pointer`] — the scope/vault pointer planes, the re-point object, the
-//!   consult discipline, and the cold-start floor cold-seed.
-//! - [`tick`] — the jittered focus-window tick, immediate hint ticks, and
-//!   on-access refresh.
-//!
 //! Out of this slice, by design (CONTEXT.md #632): scope-exit rotation
 //! *triggering* — a cross-scope relink out of a granted scope **queues** the
 //! trigger event ([`rebase::ReplayReport::scope_exit_triggers`]); the rotation

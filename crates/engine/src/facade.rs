@@ -9,13 +9,11 @@
 //! facade — hosts render, they never decide.
 //!
 //! The surface shape (constructor over the whole seam set, `start(secret)`,
-//! the [`Command`] enum, the [`Event`] stream) is frozen. This slice wires the
-//! facade onto the sync core: the metadata intent ops (create/delete/rename/
-//! relink) stage through the durable op queue, reads render the gate-passing
-//! base snapshot ⊕ pending-op overlay (blueprint/engine.md "Sync core: State
-//! law"), and every successful stage emits [`Event::SnapshotUpdated`]. The
-//! non-metadata commands (grants, rotation, auth, content seal) stay
-//! [`EngineError::Unimplemented`] until their slices land.
+//! the [`Command`] enum, the [`Event`] stream) is frozen. Metadata intent ops
+//! stage through the durable op queue, reads render the gate-passing base
+//! snapshot ⊕ pending-op overlay (blueprint/engine.md "Sync core: State law"),
+//! and every successful stage emits [`Event::SnapshotUpdated`]. A command whose
+//! slice has not landed returns [`EngineError::Unimplemented`].
 
 use core::cell::{Cell, RefCell};
 use core::fmt;
@@ -837,8 +835,7 @@ pub struct Engine<T: SeamTypes> {
     /// The session's live held-record set, keyed by node id: the resolve path
     /// ([`resolve_and_hold`](crate::net::resolve_and_hold)) inserts each
     /// gate-passing record here, and the cold-start liveness loop keyless
-    /// re-PUTs the map's values on the hourly cadence. Empty until the resolve
-    /// tick driver (next slice) wires it in.
+    /// re-PUTs the map's values on the hourly cadence.
     held_records: Rc<RefCell<HeldRecords>>,
     /// Staleness bookkeeping shared with the resolve-tick loop: it stamps
     /// successes and reports rung changes; [`snapshot`](Self::snapshot)
@@ -917,10 +914,8 @@ impl<T: SeamTypes> Engine<T> {
     /// Derives the cold-start [`SessionIdentity`] from the secret — the
     /// owner-plane identity that needs no network (enc subkey, owner pointer
     /// seed, vault-pointer signer chain), plus the per-scope/per-name signer
-    /// factories the pipeline layers scope material onto. The remaining
-    /// cold-start steps (vault-pointer resolve, floor cold-seed, root
-    /// adoption, first snapshot event) land with the resolve/gate slices,
-    /// which read their key material from the session assembled here.
+    /// factories the pipeline layers scope material onto — then runs the
+    /// cold-start data path off it ([`cold_start_data_path`](Self::cold_start_data_path)).
     ///
     /// The lifecycle contract holds: exactly one successful `start` per
     /// instance, and the secret is zeroized on consumption — derivation is the
@@ -1044,8 +1039,6 @@ impl<T: SeamTypes> Engine<T> {
     /// `pub(crate)`: the in-crate pipeline (resolve, publish, rotation, the
     /// liveness loop) reads its signers here; hosts wrap the facade and never
     /// hold key material.
-    // Read by the pipeline slices that consume the session (resolve #745/#746);
-    // the liveness loop (#750) shares the `Rc` directly.
     #[allow(dead_code)]
     pub(crate) fn session(&self) -> Option<&SessionIdentity> {
         self.session.as_deref()
@@ -1060,18 +1053,12 @@ impl<T: SeamTypes> Engine<T> {
     /// an [`Event::DeadLetter`] and dropped from the durable queue before the
     /// chain runs, so a corrupt entry is not re-emitted on the next boot.
     ///
-    /// Reads every seam from the engine, the login secret from
-    /// [`session`](Self::session), and the pending ops from the durable staging
-    /// store; emits no clock/RNG-derived value, so the whole chain is
-    /// deterministic off the injected seams. The record-plane fetchers enter as
-    /// the two seam traits the resolver slices (#745/#746) implement:
-    /// [`PointerFetch`] for the pointer block and [`Adopter`] for the root record.
+    /// Emits no clock/RNG-derived value, so the whole chain is deterministic off
+    /// the injected seams; the record plane enters through the [`PointerFetch`]
+    /// and [`Adopter`] seam traits.
     ///
     /// `owner_identity` is the auth-provided contact-code-anchored identity that
     /// signs the re-point object — the vault-pointer walk's fail-closed anchor.
-    // Takes `&self`: `start` runs the production `RootAdopter`/`RecordPointerFetch`
-    // through it while they borrow the engine's own gateway/seams — a `&mut self`
-    // receiver would alias those shared borrows.
     pub(crate) async fn cold_start_data_path<Pf, Ad>(
         &self,
         pointer_fetch: &Pf,
@@ -1168,8 +1155,6 @@ impl<T: SeamTypes> Engine<T> {
         let held = self.held_records.clone();
         let alive = self.alive.clone();
         let events = self.events.clone();
-        // The shared client from `start` (see the `api` field): the renewal pass
-        // only fires once the resolve-tick driver populates the held set.
         self.seams.scheduler.spawn(Box::pin(async move {
             run_liveness_loop(&scheduler, RE_PUT_INTERVAL, || async {
                 if !alive.get() {
@@ -1178,8 +1163,7 @@ impl<T: SeamTypes> Engine<T> {
                 let records: Vec<HeldRecord> = held.borrow().values().cloned().collect();
                 keyless_re_put(&transport, &records).await;
                 // Surface every renewal that did not land (LostRace/PublishError)
-                // as an Event — never a silent failure (blueprint/engine.md). The
-                // held set is empty until the resolve-tick driver populates it.
+                // as an Event — never a silent failure (blueprint/engine.md).
                 let renewals =
                     eol_renew_pass(&transport, &api, &floors, &scheduler, &profile, &records).await;
                 emit_renewal_failures(&events, &renewals);
@@ -1246,8 +1230,6 @@ impl<T: SeamTypes> Engine<T> {
                 if !alive.get() {
                     return LivenessControl::Stop;
                 }
-                // Rebuild the owner-root adopter from the Rc'd session + task-owned
-                // seams each pass (the adopter borrows; the task owns the clones).
                 let adopter = RootAdopter::new(
                     &gateway,
                     &http,
