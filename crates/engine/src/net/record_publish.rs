@@ -279,6 +279,21 @@ mod tests {
         );
     }
 
+    /// The block is what ships and the envelope is what the rest of the dry run
+    /// inspects, so a head pairing one with the other's bytes would publish a
+    /// block nothing checked.
+    #[test]
+    fn a_head_whose_block_is_not_its_envelope_never_gets_a_witness() {
+        let binding = binding();
+        let mut authored = head(&binding);
+        authored.block.push(0);
+
+        assert_eq!(
+            preflight(&binding, &READ_KEY, &authored).unwrap_err(),
+            PreflightError::BlockEnvelopeMismatch,
+        );
+    }
+
     #[test]
     fn an_envelope_claiming_another_identity_never_gets_a_witness() {
         let authored = head(&binding());

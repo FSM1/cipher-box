@@ -380,6 +380,21 @@ mod tests {
         });
     }
 
+    /// Collecting the drain's completion mark would let a restored queue replay
+    /// ops that already published (#860), so it is never orphan residue.
+    #[test]
+    fn the_drained_op_mark_is_never_classed_an_orphan() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            store
+                .put_staged_bytes(DRAINED_OP_MARK_KEY, &7u64.to_be_bytes())
+                .await
+                .unwrap();
+
+            assert!(orphan_staging_keys(&store).await.unwrap().is_empty());
+        });
+    }
+
     #[test]
     fn orphan_keys_are_the_unreferenced_staged_bytes() {
         let store = InMemoryStagingStore::default();

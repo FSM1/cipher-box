@@ -704,7 +704,7 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
                 )
             }
             Ok(Some(PublishOutcome::Unconfirmed { sequence })) => {
-                format!("published sequence {sequence} but no record resolved back")
+                format!("published sequence {sequence} but it did not resolve back")
             }
             Err(PublishError::Register(_)) => "register-first publish failed".to_owned(),
             Err(PublishError::AllEndpointsFailed) => "all record endpoints failed".to_owned(),

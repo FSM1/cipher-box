@@ -532,8 +532,8 @@ where
             .map_err(seam)
     }
 
-    /// The stored drained-op mark; `0` when nothing has drained on this device
-    /// (op ids start at 1) or the stored bytes are not a mark this build wrote.
+    /// The stored drained-op mark; `None` when nothing has drained on this
+    /// device or the stored bytes are not a mark this build wrote.
     async fn drained_mark(&self) -> Result<Option<u64>, Halt> {
         let stored = self
             .staging

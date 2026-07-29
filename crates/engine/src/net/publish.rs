@@ -79,9 +79,11 @@ pub enum PublishOutcome {
         /// The sequence embedded in the published record.
         sequence: u64,
     },
-    /// The PUT was acknowledged but confirm-by-re-resolve observed **no**
-    /// resolvable record at the name. Availability, never a trust verdict: the
-    /// record may simply not have propagated to a readable endpoint yet.
+    /// The PUT was acknowledged but confirm-by-re-resolve did not read **our**
+    /// bytes back at our sequence: nothing resolvable, a stale lower sequence,
+    /// or different bytes at the same sequence (a fork from a retry that
+    /// re-authored after an earlier unconfirmed PUT). Availability, never a
+    /// trust verdict.
     /// Retrying is idempotent-in-sequence — the caller must not adopt these
     /// bytes, so the sequence floor stays put and a re-publish re-mints the
     /// same sequence.
