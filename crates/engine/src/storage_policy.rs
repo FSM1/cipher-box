@@ -73,6 +73,11 @@ pub struct StoragePolicy {
     /// The sealed-block read cache's ceiling, reserved off headroom before the
     /// staging fraction and enforced by the cache itself.
     pub read_cache_ceiling_bytes: u64,
+    /// The platform's hard staging cap this split was computed under. Carried so
+    /// a refused write can say *which* limit it hit — the platform ceiling this
+    /// device will never exceed, or a budget this device's measured headroom cut
+    /// below it. The two call for different user actions (#829).
+    pub staging_cap_bytes: u64,
     /// Where the budgets above came from.
     pub headroom: Headroom,
 }
@@ -91,6 +96,7 @@ impl StoragePolicy {
             staging_budget_bytes: percent_of(stageable, platform.staging_percent)
                 .min(platform.staging_cap_bytes),
             read_cache_ceiling_bytes,
+            staging_cap_bytes: platform.staging_cap_bytes,
             headroom: Headroom::Measured,
         }
     }
@@ -101,6 +107,7 @@ impl StoragePolicy {
     pub const UNMEASURED: Self = Self {
         staging_budget_bytes: 0,
         read_cache_ceiling_bytes: 0,
+        staging_cap_bytes: 0,
         headroom: Headroom::Unmeasured,
     };
 
@@ -109,6 +116,7 @@ impl StoragePolicy {
     pub const CI: Self = Self {
         staging_budget_bytes: 256 * 1024,
         read_cache_ceiling_bytes: 256 * 1024,
+        staging_cap_bytes: 256 * 1024,
         headroom: Headroom::Measured,
     };
 }

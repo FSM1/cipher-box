@@ -1684,6 +1684,7 @@ const ALL_STRUCT_TAGS: &[(&str, u8)] = &[
     ("owner-write-blob", 9),
     ("op-record", 10),
     ("settings-record", 11),
+    ("content-key", 12),
 ];
 
 #[test]

@@ -22,16 +22,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::seal::ReadBody;
+use cipherbox_core::seal::{ReadBody, seal_content_key};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
-use crate::content::{Gateway, GatewayConfig, OpenError, open_content};
+use crate::content::budget::ReservationId;
+use crate::content::{
+    Admission, ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError,
+    SealError, StagingLedger, open_content, sealed_total_bytes,
+};
 use crate::entropy::Entropy;
-use crate::gate::GateError;
+use crate::gate::{GateError, floor};
 use crate::hex::hex_lower;
 use crate::net::{
     Adopter, ChildAdopter, EolRenewResult, HeldMaterial, HeldRecord, HeldRecords, LivenessControl,
@@ -47,7 +51,7 @@ use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::drain::{Drain, DrainReport, DrainScope};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
-use crate::sync::op::{Op, Replaced};
+use crate::sync::op::{NewNode, Op, Replaced, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
@@ -56,7 +60,7 @@ use crate::sync::rebase::{QueueScan, decode_queue};
 pub use crate::sync::drain::BlockedOp;
 pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
-use crate::sync::staging::{StageOutcome, stage_op};
+use crate::sync::staging::stage_op;
 use crate::sync::staleness::{Connectivity, classify};
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
@@ -71,18 +75,31 @@ use crate::sync::staleness::{Connectivity, classify};
 )]
 pub struct NodeId(pub [u8; 16]);
 
-/// Plaintext file content crossing the facade.
+/// A live write handle, minted by [`Engine::begin_write`].
 ///
-/// A newtype rather than bare `Vec<u8>` so `Debug` is structurally
-/// redacted: plaintext user bytes must never reach a log site (security
-/// rule 2), including through a derived `{:?}` on a containing [`Command`].
-#[derive(Clone, PartialEq, Eq)]
-pub struct PlaintextContent(pub Vec<u8>);
+/// Content never crosses the facade as one buffer: the client slices the file
+/// and feeds chunks through [`Engine::push_chunk`], the engine seals and stages
+/// each, and the op is journaled once at [`Engine::commit_write`] — so peak heap
+/// is one chunk however large the file (blueprint/engine.md "Content plane";
+/// #815).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct WriteHandle(pub u64);
 
-impl fmt::Debug for PlaintextContent {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "PlaintextContent(<{} bytes>)", self.0.len())
-    }
+/// What a write handle is writing to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteTarget {
+    /// A new file under `parent`, created by the same commit.
+    NewFile {
+        /// Parent folder.
+        parent: NodeId,
+        /// Name as entered (uniqueness uses the strict comparator).
+        name: String,
+    },
+    /// A new version of a file that already exists.
+    Version {
+        /// Target file node.
+        node: NodeId,
+    },
 }
 
 /// What a created node is. Kind is sealed inside the read-body on the wire;
@@ -168,13 +185,24 @@ pub struct SnapshotChild {
     pub content_version: Option<u64>,
 }
 
-/// Which budget refused a write. The two are different facts about the world —
-/// a full device is not a full account — and different errnos on desktop
-/// (`ENOSPC` vs `EDQUOT`, blueprint/desktop.md).
+/// Which budget refused a write, and what a user can do about it. A full device
+/// is not a full account (different errnos on desktop — `ENOSPC` vs `EDQUOT`,
+/// blueprint/desktop.md), and the three device-side refusals call for three
+/// different actions: nothing helps here, free some space, or wait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverBudgetCause {
-    /// This device's offline staging budget is exhausted.
-    DeviceStaging,
+    /// The write is larger than the most this platform will ever stage, so no
+    /// amount of free space or drain progress admits it.
+    StagingLimit,
+    /// This device's measured storage headroom cut the staging budget below the
+    /// platform cap, and the write does not fit what is left.
+    DeviceFull,
+    /// The write fits the budget, but bytes already staged and reserved by other
+    /// writes leave too little right now — the drain frees room as it uploads.
+    StagingBacklog,
+    /// The host could not measure storage headroom, so nothing can be admitted.
+    /// Distinct from a measured zero, which is a device known to be full.
+    StorageUnmeasured,
     /// The account's hosted storage quota refused the bytes.
     AccountQuota,
 }
@@ -289,7 +317,8 @@ impl fmt::Debug for LoginSecret {
 #[derive(Clone, PartialEq, Eq)]
 pub enum Command {
     // --- intent ops (#33 D6: every mutation rides the durable op queue) ---
-    /// Create a node under a parent.
+    /// Create an empty node under a parent. A file created **with** content is
+    /// a write handle, not a command ([`Engine::begin_write`]).
     Create {
         /// Parent folder.
         parent: NodeId,
@@ -297,8 +326,6 @@ pub enum Command {
         name: String,
         /// File or folder.
         kind: NodeKind,
-        /// Initial content for file creates.
-        content: Option<PlaintextContent>,
     },
     /// Delete a node (conditional delete semantics on rebase).
     Delete {
@@ -334,14 +361,6 @@ pub enum Command {
         /// The node the destination name currently holds, if any.
         replacing: Option<NodeId>,
     },
-    /// Write new content to a file node (fresh per-version content key).
-    UpdateContent {
-        /// Target file node.
-        node: NodeId,
-        /// New content bytes.
-        content: PlaintextContent,
-    },
-
     // --- focus and refresh ---
     /// Set the open folder driving the focus window; `None` when no folder
     /// is open.
@@ -426,7 +445,6 @@ impl Command {
             Command::Rename { .. } => "rename",
             Command::Relink { .. } => "relink",
             Command::Move { .. } => "move",
-            Command::UpdateContent { .. } => "updateContent",
             Command::SetFocus { .. } => "setFocus",
             Command::ManualRefresh => "manualRefresh",
             Command::ImportContact { .. } => "importContact",
@@ -557,14 +575,32 @@ pub enum EngineError {
         /// [`Command::name`] of the rejected command.
         command: &'static str,
     },
-    /// A write was refused for want of room. The cause names which budget, so a
-    /// host can distinguish a full device from a full account — on desktop,
-    /// `ENOSPC` from `EDQUOT`. Produced by the content plane, the only caller
-    /// that stages upload bytes (#868).
+    /// A write was refused for want of room. The cause names which budget and
+    /// which user action, and `available` is the room left — never the whole
+    /// budget, which a caller cannot act on when other writes already hold most
+    /// of it (#829).
     OverBudget {
-        /// Which budget refused it.
+        /// Which budget refused it, and what a user can do about it.
         cause: OverBudgetCause,
+        /// The version's exact sealed byte total.
+        requested: u64,
+        /// The room a caller may quote: `budget - (staged + reserved)` for a
+        /// backlog, and the applicable ceiling for the other causes.
+        available: u64,
     },
+    /// The bytes fed to a write handle did not add up to the size declared at
+    /// [`begin_write`](Engine::begin_write). The reachable cause is a backing
+    /// file truncated mid-upload; committing it would publish a short version as
+    /// a success (#830).
+    ContentSizeMismatch {
+        /// The size declared at `beginWrite`.
+        declared: u64,
+        /// The total the pushes actually carried.
+        observed: u64,
+    },
+    /// A write-handle call named a handle this engine does not hold — never
+    /// minted, or already committed, failed, or aborted.
+    UnknownWriteHandle,
     /// A host seam failed (durable op-queue I/O). Availability, never a trust
     /// decision — trust classification happens below the facade.
     Seam {
@@ -661,11 +697,39 @@ impl fmt::Display for EngineError {
                 write!(f, "command not implemented yet: {command}")
             }
             EngineError::OverBudget {
-                cause: OverBudgetCause::DeviceStaging,
-            } => f.write_str("this device's staging budget is exhausted"),
-            EngineError::OverBudget {
-                cause: OverBudgetCause::AccountQuota,
-            } => f.write_str("the account's storage quota is exhausted"),
+                cause,
+                requested,
+                available,
+            } => match cause {
+                OverBudgetCause::StagingLimit => write!(
+                    f,
+                    "this write is {requested} bytes, past the {available}-byte maximum this device can stage"
+                ),
+                OverBudgetCause::DeviceFull => write!(
+                    f,
+                    "this write needs {requested} bytes but this device's free space allows only {available}"
+                ),
+                OverBudgetCause::StagingBacklog => write!(
+                    f,
+                    "this write needs {requested} bytes but only {available} are free until queued uploads finish"
+                ),
+                OverBudgetCause::StorageUnmeasured => write!(
+                    f,
+                    "this device's available storage could not be measured, so the {requested}-byte write cannot be admitted"
+                ),
+                OverBudgetCause::AccountQuota => write!(
+                    f,
+                    "this write needs {requested} bytes but the account's storage quota leaves {available}"
+                ),
+            },
+            EngineError::ContentSizeMismatch {
+                declared,
+                observed,
+            } => write!(
+                f,
+                "the file changed while it was being read: {declared} bytes were declared and {observed} arrived"
+            ),
+            EngineError::UnknownWriteHandle => f.write_str("unknown write handle"),
             EngineError::Seam { message } => write!(f, "seam error: {message}"),
             EngineError::Entropy { message } => write!(f, "entropy error: {message}"),
             EngineError::Auth { message } => write!(f, "auth error: {message}"),
@@ -868,6 +932,71 @@ type ScopeWriteSeeds = BTreeMap<[u8; 16], Zeroizing<[u8; 32]>>;
 /// it dead-lettered.
 type RetainedDeadLetters = BTreeMap<OpId, (Option<NodeId>, DeadLetterReason)>;
 
+/// Map a staging-admission refusal onto the facade error, preserving which of
+/// the three device-side actions it calls for and the room a caller may quote.
+fn over_budget(refusal: Admission) -> EngineError {
+    let (cause, requested, available) = match refusal {
+        Admission::OverLimit {
+            requested,
+            available,
+        } => (OverBudgetCause::StagingLimit, requested, available),
+        Admission::DeviceFull {
+            requested,
+            available,
+        } => (OverBudgetCause::DeviceFull, requested, available),
+        Admission::Backlog {
+            requested,
+            available,
+        } => (OverBudgetCause::StagingBacklog, requested, available),
+        Admission::Unmeasured { requested } => (OverBudgetCause::StorageUnmeasured, requested, 0),
+        // `admit` returns this only on success, which the caller consumed.
+        Admission::Reserved(_) => (OverBudgetCause::StagingBacklog, 0, 0),
+    };
+    EngineError::OverBudget {
+        cause,
+        requested,
+        available,
+    }
+}
+
+/// Map a content-sealing failure onto the facade error. Entropy is a fail-closed
+/// availability failure; a DAG refusal means the framed version could never be
+/// read back, which is the same "this device can never stage it" verdict
+/// `beginWrite` gives the flat-DAG ceiling.
+fn seal_error(error: SealError) -> EngineError {
+    match error {
+        SealError::Entropy(error) => EngineError::Entropy {
+            message: error.message().to_owned(),
+        },
+        SealError::Dag(error) => EngineError::Seam {
+            message: format!("content assembly rejected: [{}]", error.check()),
+        },
+    }
+}
+
+/// One write handle in flight between `beginWrite` and its commit.
+struct LiveWrite {
+    /// The node the commit's op targets — minted here for a new file.
+    node: NodeId,
+    /// What the commit journals.
+    target: WriteTarget,
+    /// The size declared at `beginWrite`, which the reservation was sized from
+    /// and the commit cross-checks the pushes against.
+    declared_size: u64,
+    /// The staging reservation held for this handle's whole life.
+    reservation: ReservationId,
+    /// The streaming framer, holding the version's content key.
+    writer: ContentWriter,
+}
+
+/// The engine's live write handles and the budget they hold.
+#[derive(Default)]
+struct LiveWrites {
+    ledger: StagingLedger,
+    open: BTreeMap<WriteHandle, LiveWrite>,
+    next: u64,
+}
+
 /// The re-point pointer-payload wire version the owner's own vault seals under
 /// and the cold-start walk verifies against (`crates/core` pointer payload) — the
 /// sole v2 version (CONTEXT.md "Vault pointer").
@@ -889,6 +1018,12 @@ pub struct Engine<T: SeamTypes> {
     /// The measured storage split this device runs under, injected whole at
     /// construction so no staging read-modify-write queries the host mid-flight.
     storage_policy: StoragePolicy,
+    /// The frozen content-framing profile every write handle frames under.
+    content_profile: ContentProfile,
+    /// Live write handles and the staging bytes each has reserved. In memory
+    /// only: a restart drops every reservation, and the blocks a dropped handle
+    /// staged are unreferenced and collectible as orphans.
+    writes: RefCell<LiveWrites>,
     /// The API base URL the liveness loop's [`ApiClient`] registers renewals
     /// against. Empty until the auth/config slice supplies it; the register-first
     /// renewal is a no-op against an empty base until then.
@@ -956,6 +1091,7 @@ impl<T: SeamTypes> Engine<T> {
         seams: SeamSet<T>,
         entropy: Box<dyn Entropy>,
         profile: SyncTimingProfile,
+        content_profile: ContentProfile,
         storage_policy: StoragePolicy,
         api_base_url: String,
         gateway: GatewayConfig,
@@ -967,6 +1103,8 @@ impl<T: SeamTypes> Engine<T> {
                 entropy: Rc::new(RefCell::new(entropy)),
                 profile,
                 storage_policy,
+                content_profile,
+                writes: RefCell::new(LiveWrites::default()),
                 api_base_url,
                 gateway: gateway.into_gateway(),
                 events,
@@ -1446,28 +1584,18 @@ impl<T: SeamTypes> Engine<T> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
-        let command_name = command.name();
         // One clock read per command, journaled on the op: a retried publish
         // re-mints the same sequence, so authoring time must not be re-read.
         let authored_at = self.seams.scheduler.now();
         match command {
-            Command::Create {
-                parent,
-                name,
-                kind,
-                content,
-            } => {
-                // A content-bearing create needs the content plane (sealing +
-                // staged bytes), a later slice; only metadata creates (folders
-                // and empty files) stage here.
-                if content.is_some() {
-                    return Err(EngineError::Unimplemented {
-                        command: command_name,
-                    });
-                }
+            Command::Create { parent, name, kind } => {
                 let target = self.mint_node_id()?;
                 let base_sequence = self.base_sequence_for(parent).await?;
-                let op = Op::create(target, parent, name, kind, base_sequence, authored_at, None);
+                let node = match kind {
+                    NodeKind::Folder => NewNode::Folder,
+                    NodeKind::File => NewNode::File { content: None },
+                };
+                let op = Op::create(target, parent, name, node, base_sequence, authored_at);
                 self.stage_and_notify(&op).await
             }
             Command::Delete { node } => {
@@ -1534,6 +1662,280 @@ impl<T: SeamTypes> Engine<T> {
                 command: other.name(),
             }),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Write handles: the content path across the facade (#815).
+    // -----------------------------------------------------------------------
+
+    /// Open a write handle for `size` plaintext bytes, reserving the exact
+    /// sealed total it will occupy against this device's staging budget.
+    ///
+    /// The reservation is held for the handle's whole life, so two handles
+    /// opened before either stages a byte contend for the budget rather than
+    /// both being admitted against room only one can have. It is released when
+    /// the write commits, fails, or is aborted.
+    pub async fn begin_write(
+        &mut self,
+        target: WriteTarget,
+        size: u64,
+    ) -> Result<WriteHandle, EngineError> {
+        if !self.started {
+            return Err(EngineError::NotStarted);
+        }
+        // A version whose root would not assemble is one this device can never
+        // stage, whatever its budget — the flat-DAG ceiling, not a shortage.
+        let requested =
+            sealed_total_bytes(size, &self.content_profile).map_err(|_| EngineError::OverBudget {
+                cause: OverBudgetCause::StagingLimit,
+                requested: size,
+                available: self.storage_policy.staging_cap_bytes,
+            })?;
+        let staged = self
+            .seams
+            .staging_store
+            .staged_bytes_total()
+            .await
+            .map_err(EngineError::from_seam)?;
+        let node = match &target {
+            WriteTarget::NewFile { .. } => self.mint_node_id()?,
+            WriteTarget::Version { node } => *node,
+        };
+        let key = ContentKey::generate(&mut *self.entropy.borrow_mut()).map_err(|e| {
+            EngineError::Entropy {
+                message: e.message().to_owned(),
+            }
+        })?;
+
+        let mut writes = self.writes.borrow_mut();
+        let reservation = match writes.ledger.admit(requested, staged, &self.storage_policy) {
+            Admission::Reserved(id) => id,
+            refusal => return Err(over_budget(refusal)),
+        };
+        writes.next += 1;
+        let handle = WriteHandle(writes.next);
+        writes.open.insert(
+            handle,
+            LiveWrite {
+                node,
+                target,
+                declared_size: size,
+                reservation,
+                writer: ContentWriter::new(key, self.content_profile),
+            },
+        );
+        Ok(handle)
+    }
+
+    /// Feed the next slice of the file. Seals and stages every whole chunk it
+    /// completes; the budget is not re-checked, since `beginWrite` reserved the
+    /// whole version. Pushing past the declared size fails closed and drops the
+    /// handle — the declaration is what the reservation was sized from.
+    pub async fn push_chunk(
+        &mut self,
+        handle: WriteHandle,
+        bytes: &[u8],
+    ) -> Result<(), EngineError> {
+        if !self.started {
+            return Err(EngineError::NotStarted);
+        }
+        match self.push_chunk_inner(handle, bytes).await {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.abort_write(handle).await;
+                Err(error)
+            }
+        }
+    }
+
+    async fn push_chunk_inner(&self, handle: WriteHandle, bytes: &[u8]) -> Result<(), EngineError> {
+        let mut rest = bytes;
+        loop {
+            let leaf = {
+                let mut writes = self.writes.borrow_mut();
+                let write = writes
+                    .open
+                    .get_mut(&handle)
+                    .ok_or(EngineError::UnknownWriteHandle)?;
+                if write.writer.observed_size() + rest.len() as u64 > write.declared_size {
+                    return Err(EngineError::ContentSizeMismatch {
+                        declared: write.declared_size,
+                        observed: write.writer.observed_size() + rest.len() as u64,
+                    });
+                }
+                let (remaining, leaf) = write
+                    .writer
+                    .push(rest, &mut *self.entropy.borrow_mut())
+                    .map_err(|e| EngineError::Entropy {
+                        message: e.message().to_owned(),
+                    })?;
+                // The borrow must not span the staging await; carry the offset
+                // out rather than the slice.
+                let consumed = rest.len() - remaining.len();
+                rest = &rest[consumed..];
+                leaf
+            };
+            if let Some(leaf) = leaf {
+                self.seams
+                    .staging_store
+                    .put_staged_bytes(&leaf.cid, &leaf.sealed)
+                    .await
+                    .map_err(EngineError::from_seam)?;
+            }
+            if rest.is_empty() {
+                return Ok(());
+            }
+        }
+    }
+
+    /// Close the handle: seal the tail, assemble and stage the root, seal the
+    /// per-version content key, and journal one op.
+    ///
+    /// Fails closed when the pushes did not add up to the declared size — the
+    /// reachable cause is a backing file truncated mid-read, and committing it
+    /// would publish a short version as a success (#830).
+    pub async fn commit_write(&mut self, handle: WriteHandle) -> Result<OpId, EngineError> {
+        if !self.started {
+            return Err(EngineError::NotStarted);
+        }
+        // Taken out of the ledger up front: from here the handle is spent
+        // whatever happens, and its reservation must not outlive it.
+        let write = self.take_write(handle)?;
+        let staged = write.writer.staged_leaf_cids().to_vec();
+        match self.commit_write_inner(write).await {
+            Ok(op_id) => {
+                let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+                Ok(op_id)
+            }
+            Err(error) => {
+                self.release_blocks(&staged).await;
+                Err(error)
+            }
+        }
+    }
+
+    /// Abandon a write handle: release its reservation and the blocks it staged.
+    /// Idempotent — an unknown handle is already gone.
+    pub async fn abort_write(&mut self, handle: WriteHandle) {
+        let Ok(write) = self.take_write(handle) else {
+            return;
+        };
+        self.release_blocks(write.writer.staged_leaf_cids()).await;
+    }
+
+    /// Remove a handle from the ledger, releasing its budget reservation.
+    fn take_write(&self, handle: WriteHandle) -> Result<LiveWrite, EngineError> {
+        let mut writes = self.writes.borrow_mut();
+        let write = writes
+            .open
+            .remove(&handle)
+            .ok_or(EngineError::UnknownWriteHandle)?;
+        writes.ledger.release(write.reservation);
+        Ok(write)
+    }
+
+    /// Drop staged blocks no op will ever reference. Best-effort: a failed
+    /// removal is orphan residue a later GC pass collects.
+    async fn release_blocks(&self, keys: &[Vec<u8>]) {
+        for key in keys {
+            let _ = self.seams.staging_store.remove_staged_bytes(key).await;
+        }
+    }
+
+    async fn commit_write_inner(&self, write: LiveWrite) -> Result<OpId, EngineError> {
+        let LiveWrite {
+            node,
+            target,
+            declared_size,
+            writer,
+            ..
+        } = write;
+        let observed = writer.observed_size();
+        if observed != declared_size {
+            return Err(EngineError::ContentSizeMismatch {
+                declared: declared_size,
+                observed,
+            });
+        }
+        let finished = writer
+            .finish(&mut *self.entropy.borrow_mut())
+            .map_err(seal_error)?;
+
+        if let Some(tail) = &finished.tail {
+            self.seams
+                .staging_store
+                .put_staged_bytes(&tail.cid, &tail.sealed)
+                .await
+                .map_err(EngineError::from_seam)?;
+        }
+        let root_cid = finished.content.content_cid().to_vec();
+        self.seams
+            .staging_store
+            .put_staged_bytes(&root_cid, &finished.root_block)
+            .await
+            .map_err(EngineError::from_seam)?;
+
+        // The scope epoch this device knows the vault to be at. It rides the key
+        // blob's AAD as a value, never as a key input: the blob seals under the
+        // login-secret-derived enc subkey, so a rotation between commit and
+        // drain leaves it openable — content bytes are never re-encrypted by any
+        // rotation path (blueprint/engine.md "sweep").
+        let scope = self.snapshot.borrow().root;
+        let epoch = floor::read_epoch_floor(&self.seams.floor_store, &scope.0)
+            .await
+            .map_err(EngineError::from_seam)?
+            .unwrap_or(0);
+        let mut ephemeral = Zeroizing::new([0u8; 32]);
+        self.entropy
+            .borrow_mut()
+            .fill(ephemeral.as_mut())
+            .map_err(|e| EngineError::Entropy {
+                message: e.message().to_owned(),
+            })?;
+        let sealed_content_key = seal_content_key(
+            self.session
+                .as_ref()
+                .ok_or(EngineError::NotStarted)?
+                .enc_subkey(),
+            &ephemeral,
+            epoch,
+            &root_cid,
+            finished.key.as_bytes(),
+        )
+        .map_err(|e| EngineError::Seam {
+            message: format!("content key seal failed: {}", e.check()),
+        })?;
+
+        let content = StagedContent {
+            root_cid,
+            plaintext_size: declared_size,
+            sealed_content_key,
+            epoch,
+        };
+        let authored_at = self.seams.scheduler.now();
+        let op = match target {
+            WriteTarget::NewFile { parent, name } => {
+                let base_sequence = self.base_sequence_for(parent).await?;
+                Op::create(
+                    node,
+                    parent,
+                    name,
+                    NewNode::File {
+                        content: Some(content),
+                    },
+                    base_sequence,
+                    authored_at,
+                )
+            }
+            WriteTarget::Version { node } => {
+                let base_sequence = self.base_sequence_for(node).await?;
+                Op::update_content(node, content, base_sequence, authored_at)
+            }
+        };
+        let seal = self.record_seal()?;
+        stage_op(&self.seams.staging_store, seal, &op)
+            .await
+            .map_err(EngineError::from_seam)
     }
 
     /// A rendered read of the current state — the gate-passing base snapshot ⊕
@@ -1880,30 +2282,13 @@ impl<T: SeamTypes> Engine<T> {
     /// returning the durable queue id the drain will report the op under.
     async fn stage_and_notify(&mut self, op: &Op) -> Result<Option<OpId>, EngineError> {
         let seal = self.record_seal()?;
-        // Metadata ops queue unbounded, so any rejection here means a content
-        // op reached this path — fail closed rather than report a storage
-        // verdict for a mutation that carries no bytes.
-        match stage_op(
-            &self.seams.staging_store,
-            &self.storage_policy,
-            seal,
-            op,
-            None,
-        )
-        .await
-        .map_err(EngineError::from_seam)?
-        {
-            StageOutcome::Queued { op_id } => {
-                // Best-effort push-invalidation trigger; a dropped receiver
-                // (host torn down) is fine.
-                let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-                Ok(Some(op_id))
-            }
-            StageOutcome::RejectedOverBudget { .. }
-            | StageOutcome::RejectedStorageUnmeasured { .. } => Err(EngineError::Seam {
-                message: "metadata op unexpectedly rejected by the storage policy".to_owned(),
-            }),
-        }
+        let op_id = stage_op(&self.seams.staging_store, seal, op)
+            .await
+            .map_err(EngineError::from_seam)?;
+        // Best-effort push-invalidation trigger; a dropped receiver (host torn
+        // down) is fine.
+        let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+        Ok(Some(op_id))
     }
 
     /// Sealing inputs for one durable op record: the session's enc-subkey plus
@@ -3641,7 +4026,8 @@ mod tests {
                     &ContentProfile::CI,
                 )
                 .unwrap();
-                let dag = assemble(&leaves, plaintext.len() as u64, &ContentProfile::CI).unwrap();
+                let cids: Vec<Vec<u8>> = leaves.iter().map(|leaf| leaf.cid.clone()).collect();
+                let dag = assemble(&cids, plaintext.len() as u64, &ContentProfile::CI).unwrap();
                 (leaves, dag)
             }
 

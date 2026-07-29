@@ -47,6 +47,7 @@
   },
   "structureTags": {
     "ascent-link": 5,
+    "content-key": 11,
     "grant-blob": 3,
     "history-link": 6,
     "mailbox-payload": 8,

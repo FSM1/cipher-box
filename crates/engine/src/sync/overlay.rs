@@ -28,15 +28,10 @@ pub fn apply_overlay(base: &Snapshot, ops: &[Op]) -> Snapshot {
 /// [`Op::stamp_authored`].
 fn apply_one(view: &mut Snapshot, op: &Op) {
     match &op.kind {
-        OpKind::Create {
-            parent,
-            name,
-            kind,
-            content,
-        } => {
-            let mut meta = NodeMeta::new(op.target, name.clone(), *kind);
+        OpKind::Create { parent, name, node } => {
+            let mut meta = NodeMeta::new(op.target, name.clone(), node.kind());
             // A create carrying content authors exactly one version.
-            if content.is_some() {
+            if op.staged_content().is_some() {
                 meta.content_version = Some(1);
             }
             op.stamp_authored(&mut meta);

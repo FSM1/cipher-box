@@ -19,7 +19,7 @@ use cipherbox_core::codec::Value;
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
-    ChildRef, Envelope, NodeKind, ReadBody, decode_grant_section, encode_envelope,
+    ChildRef, Envelope, NodeKind, ReadBody, Version, decode_grant_section, encode_envelope,
     grant_section_bytes, has_grant_section, seal_read_body,
 };
 
@@ -175,8 +175,30 @@ fn encode(envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
     })
 }
 
+/// What a newly created node is, carrying exactly the body content its kind can
+/// hold. The one value [`new_child`] derives both the sealed body variant and
+/// the parent ref's `kind` from.
+pub enum NewNodeBody {
+    /// A folder, always created empty.
+    Folder,
+    /// A file, with the versions its first record publishes (newest first).
+    File {
+        /// The file's version list; empty for a file created with no content.
+        versions: Vec<Version>,
+    },
+}
+
+impl NewNodeBody {
+    fn kind(&self) -> NodeKind {
+        match self {
+            Self::Folder => NodeKind::Folder,
+            Self::File { .. } => NodeKind::File,
+        }
+    }
+}
+
 /// A newly created node: its own read body and the ref its parent links it by.
-/// Both are built from one [`NodeKind`] and one typed [`IpnsName`], so a kind
+/// Both are built from one [`NewNodeBody`] and one typed [`IpnsName`], so a kind
 /// transplant and a non-canonical `ipnsName` are unrepresentable rather than
 /// rejected (guards 2 and 4).
 pub struct NewChild {
@@ -186,28 +208,29 @@ pub struct NewChild {
     pub child_ref: ChildRef,
 }
 
-/// Build a newly created empty node and its parent ref. `authored_at` is the
-/// op's journaled time (never a clock read here), and `link_counter` comes from
-/// the rebased snapshot's link allocation.
+/// Build a newly created node and its parent ref. `authored_at` is the op's
+/// journaled time (never a clock read here), and `link_counter` comes from the
+/// rebased snapshot's link allocation.
 pub fn new_child(
     node_id: [u8; 16],
     name: String,
     ipns_name: &IpnsName,
-    kind: NodeKind,
+    node: NewNodeBody,
     link_counter: u64,
     authored_at: u64,
 ) -> NewChild {
-    let body = match kind {
-        NodeKind::Folder => ReadBody::Folder {
+    let kind = node.kind();
+    let body = match node {
+        NewNodeBody::Folder => ReadBody::Folder {
             created_at: authored_at,
             modified_at: authored_at,
             children: Vec::new(),
             unknown: Vec::new(),
         },
-        NodeKind::File => ReadBody::File {
+        NewNodeBody::File { versions } => ReadBody::File {
             created_at: authored_at,
             modified_at: authored_at,
-            versions: Vec::new(),
+            versions,
             unknown: Vec::new(),
         },
     };
@@ -412,19 +435,51 @@ mod tests {
         }
     }
 
+    /// The encode side of `read_content`'s kind-transplant reject (rule 8;
+    /// #812 guard 2). Structural in every build: the body variant and the
+    /// parent ref's kind are two reads of one value, including for a file that
+    /// carries a version.
     #[test]
     fn a_new_child_agrees_with_its_parent_ref_on_kind_for_every_kind() {
-        for kind in [NodeKind::Folder, NodeKind::File] {
-            let child = new_child([4u8; 16], "n".into(), &name(), kind, 1, 77);
+        let versioned = NewNodeBody::File {
+            versions: vec![Version::new(vec![1, 2, 3], [4u8; 32], 9, 77)],
+        };
+        for (node, expected) in [
+            (NewNodeBody::Folder, NodeKind::Folder),
+            (NewNodeBody::File {
+                versions: Vec::new(),
+            }, NodeKind::File),
+            (versioned, NodeKind::File),
+        ] {
+            let child = new_child([4u8; 16], "n".into(), &name(), node, 1, 77);
             assert_eq!(child.child_ref.kind, child.body.kind());
-            assert_eq!(child.child_ref.kind, kind);
+            assert_eq!(child.child_ref.kind, expected);
         }
+    }
+
+    #[test]
+    fn a_new_file_child_carries_the_versions_it_was_built_from() {
+        let version = Version::new(vec![1, 2, 3], [4u8; 32], 9, 77);
+        let child = new_child(
+            [4u8; 16],
+            "n".into(),
+            &name(),
+            NewNodeBody::File {
+                versions: vec![version.clone()],
+            },
+            1,
+            77,
+        );
+        let ReadBody::File { versions, .. } = child.body else {
+            panic!("file");
+        };
+        assert_eq!(versions, vec![version]);
     }
 
     #[test]
     fn a_new_child_ref_carries_the_canonical_ipns_name_the_read_path_parses() {
         let ipns = name();
-        let child = new_child([4u8; 16], "n".into(), &ipns, NodeKind::Folder, 1, 77);
+        let child = new_child([4u8; 16], "n".into(), &ipns, NewNodeBody::Folder, 1, 77);
         // The read path's exact chain (`facade.rs` child-ref resolution).
         let parsed =
             IpnsName::parse(core::str::from_utf8(&child.child_ref.ipns_name).unwrap()).unwrap();
@@ -433,7 +488,7 @@ mod tests {
 
     #[test]
     fn a_new_child_stamps_the_journaled_time_not_a_clock() {
-        let child = new_child([4u8; 16], "n".into(), &name(), NodeKind::Folder, 1, 4_242);
+        let child = new_child([4u8; 16], "n".into(), &name(), NewNodeBody::Folder, 1, 4_242);
         let ReadBody::Folder {
             created_at,
             modified_at,

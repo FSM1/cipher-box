@@ -52,3 +52,12 @@ pub trait Entropy {
     /// Fills `dest` entirely with entropy bytes, or fails closed.
     fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError>;
 }
+
+/// The engine holds its source boxed so one instance is shared with every
+/// spawned loop; this lets that box satisfy the generic bound the content
+/// plane's pure framing takes.
+impl<E: Entropy + ?Sized> Entropy for Box<E> {
+    fn fill(&mut self, dest: &mut [u8]) -> Result<(), EntropyError> {
+        (**self).fill(dest)
+    }
+}

@@ -23,22 +23,23 @@ use core::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::codec::Value;
+use cipherbox_core::content::{encode_content_cid_str, verify_cid};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
-use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind, ReadBody, open_read_body};
+use cipherbox_core::seal::{ChildRef, ReadBody, Version, open_content_key, open_read_body};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, UPLOAD_TOO_LARGE};
-use crate::content::{Gateway, pre_flight_quota_check};
+use crate::content::{Gateway, SealedContent, pre_flight_quota_check};
 use crate::entropy::Entropy;
-use crate::facade::{NodeId, NodeKind};
+use crate::facade::NodeId;
 use crate::gate::floor;
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
-    AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope, author_scope_root_envelope,
-    new_child,
+    AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
+    author_scope_root_envelope, new_child,
 };
 use crate::net::publish::{PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{
@@ -57,7 +58,7 @@ use crate::seams::{
 };
 use crate::session::SessionIdentity;
 use crate::sync::model::{Snapshot, collation_key};
-use crate::sync::op::{Op, OpKind};
+use crate::sync::op::{NewNode, Op, OpKind, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::project::project_folder;
 use crate::sync::rebase::{AppliedOp, DeadLetterReason, decode_queue, replay};
@@ -183,6 +184,10 @@ enum Halt {
         needed_bytes: u64,
     },
 }
+
+/// The one verdict every unrecoverable-content path returns: the version's key,
+/// root, or a leaf is gone, and no retry brings any of them back.
+const CONTENT_LOST: Halt = Halt::Permanent(DeadLetterReason::ContentUnrecoverable);
 
 /// How many non-confirming publish attempts one op gets before it dead-letters.
 ///
@@ -322,6 +327,15 @@ struct LoadedNode {
     envelope_unknown: Vec<(String, Value)>,
     epoch_tag_unknown: Vec<(String, Value)>,
     body: ReadBody,
+}
+
+/// One version's blocks, uploaded and pinned.
+struct UploadedVersion {
+    /// The version the node's record carries.
+    version: Version,
+    /// Every content CID the registration names: the root first, then the
+    /// leaves in file order.
+    content_cids: Vec<String>,
 }
 
 /// One record as this pass published it.
@@ -472,6 +486,13 @@ where
             }
             Halt::Permanent(reason) => {
                 if self.abandon(scope, op_id, op).await.is_ok() {
+                    // Staged bytes normally outlive a dead letter as the user's
+                    // recoverable work. Content whose key will not open is not
+                    // work — nothing can ever read it — so it is released here
+                    // instead of holding the budget forever (#818).
+                    if reason == DeadLetterReason::ContentUnrecoverable {
+                        self.release_staged_blocks(op).await;
+                    }
                     report.dead_letters.push((op_id, op.target, reason));
                 }
             }
@@ -784,13 +805,8 @@ where
         rebased: &Snapshot,
     ) -> Result<(), Halt> {
         match &applied.op.kind {
-            OpKind::Create {
-                parent,
-                kind,
-                content: None,
-                ..
-            } => {
-                self.publish_create(scope, pass, applied, rebased, *parent, *kind)
+            OpKind::Create { parent, node, .. } => {
+                self.publish_create(scope, pass, applied, rebased, *parent, node)
                     .await
             }
             // The name lives only in the parent's child ref
@@ -843,13 +859,17 @@ where
                 self.publish_ref_move(scope, pass, applied, rebased, plan)
                     .await
             }
-            OpKind::UpdateContent { .. } => self.publish_update_content(scope, pass, applied).await,
-            // Content bytes are #868's; cross-scope re-seal is #635's.
-            OpKind::Create { .. } | OpKind::Relink { .. } => Err(Halt::Unclassified),
+            OpKind::UpdateContent { content } => {
+                self.publish_update_content(scope, pass, applied, content)
+                    .await
+            }
+            // Cross-scope re-seal is #635's.
+            OpKind::Relink { .. } => Err(Halt::Unclassified),
         }
     }
 
-    /// Create: the new node's own record, then the parent that names it.
+    /// Create: the new node's content blocks, then its own record, then the
+    /// parent that names it — referent before reference at every step.
     async fn publish_create(
         &self,
         scope: &DrainScope<'_>,
@@ -857,10 +877,31 @@ where
         applied: &AppliedOp,
         rebased: &Snapshot,
         parent: NodeId,
-        kind: NodeKind,
+        node: &NewNode,
     ) -> Result<(), Halt> {
         let name = applied.effective_name.clone().ok_or(Halt::Unclassified)?;
         self.ensure_folder(scope, pass, parent).await?;
+
+        let (body, content_cids) = match node {
+            NewNode::Folder => (NewNodeBody::Folder, Vec::new()),
+            NewNode::File { content: None } => (
+                NewNodeBody::File {
+                    versions: Vec::new(),
+                },
+                Vec::new(),
+            ),
+            NewNode::File {
+                content: Some(staged),
+            } => {
+                let uploaded = self.upload_version(scope, applied, staged).await?;
+                (
+                    NewNodeBody::File {
+                        versions: vec![uploaded.version],
+                    },
+                    uploaded.content_cids,
+                )
+            }
+        };
 
         let child_id = applied.op.target;
         let child_name = derive_write_name(scope.write_scope_seed, &child_id.0);
@@ -868,7 +909,7 @@ where
             child_id.0,
             name,
             &child_name,
-            core_kind(kind),
+            body,
             rebased.max_link_counter(child_id),
             applied.op.authored_at.0,
         );
@@ -880,6 +921,7 @@ where
                 &child_name,
                 false,
                 &child.body,
+                content_cids,
                 Vec::new(),
                 Vec::new(),
             )
@@ -889,6 +931,7 @@ where
         pass.folder_mut(parent)?.children.push(child.child_ref);
         self.publish_folder(scope, pass, parent, applied.op.authored_at.0)
             .await?;
+        self.release_staged_blocks(&applied.op).await;
         // Held only once the parent names it: a record nothing references is
         // not one the liveness loop should keep alive.
         self.hold(child_id.0, published.held);
@@ -1140,15 +1183,16 @@ where
         Ok(())
     }
 
-    /// `updateContent`'s metadata half: a file's own record carries its
-    /// `modifiedAt` and version list, and its parent holds no size/mtime mirror
-    /// to republish (`crates/core/src/seal/body.rs`). The version this op
-    /// stages is the content slice's (#868).
+    /// `updateContent`: upload the new version's blocks, then republish the
+    /// file's own record with the version at the head. Its parent holds no
+    /// size/mtime mirror to republish (`crates/core/src/seal/body.rs`), so this
+    /// plan authors exactly one record.
     async fn publish_update_content(
         &self,
         scope: &DrainScope<'_>,
         pass: &mut Pass,
         applied: &AppliedOp,
+        staged: &StagedContent,
     ) -> Result<(), Halt> {
         let target = applied.op.target;
         let modified_at = applied.op.authored_at.0;
@@ -1166,13 +1210,27 @@ where
         let loaded = self.load_child_node(scope, pass.epoch, target).await?;
         let ReadBody::File {
             created_at,
-            versions,
+            mut versions,
             unknown,
             ..
         } = loaded.body
         else {
             return Err(Halt::Unclassified);
         };
+        let uploaded = self.upload_version(scope, applied, staged).await?;
+        // Newest first, head is current (`crates/core/src/seal/body.rs`).
+        versions.insert(0, uploaded.version);
+        // Every retained version's root stays registered under this name, so a
+        // republish never drops the pin that keeps an older version readable.
+        let content_cids = uploaded
+            .content_cids
+            .into_iter()
+            .chain(
+                versions[1..]
+                    .iter()
+                    .map(|version| encode_content_cid_str(&version.content_cid)),
+            )
+            .collect();
         let body = ReadBody::File {
             created_at,
             modified_at,
@@ -1187,16 +1245,134 @@ where
                 &loaded.name,
                 false,
                 &body,
+                content_cids,
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
             )
             .await?;
+        self.release_staged_blocks(&applied.op).await;
         if let Some(node) = self.base.borrow_mut().node_mut(target) {
             node.record_sequence = published.sequence;
             node.mtime = Some(modified_at);
+            node.size = Some(staged.plaintext_size);
         }
         self.hold(target.0, published.held);
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // The content plane: staged blocks out, a published version back.
+    // -----------------------------------------------------------------------
+
+    /// One version's blocks, uploaded and pinned: the `Version` its record
+    /// carries and every content CID the registration must name.
+    async fn upload_version(
+        &self,
+        scope: &DrainScope<'_>,
+        applied: &AppliedOp,
+        staged: &StagedContent,
+    ) -> Result<UploadedVersion, Halt> {
+        let root_block = self
+            .staged_block(&staged.root_cid)
+            .await?
+            .ok_or(CONTENT_LOST)?;
+        let content = SealedContent::from_root_block(&root_block).map_err(|_| CONTENT_LOST)?;
+        // The observed `pushChunk` total against the manifest the reader will
+        // check the version's size against. The reachable mismatch is a backing
+        // file truncated mid-upload, which would otherwise publish short bytes
+        // as a success (#830).
+        if content.size() != staged.plaintext_size {
+            return Err(CONTENT_LOST);
+        }
+        // The key is a KDF non-edge: a blob that will not open leaves blocks no
+        // key ever opens, so the op dead-letters and releases them (#818).
+        let key = open_content_key(
+            scope.enc_secret,
+            staged.epoch,
+            &staged.root_cid,
+            &staged.sealed_content_key,
+        )
+        .map_err(|_| CONTENT_LOST)?;
+
+        // File order, root last. Each leaf is removed on a confirmed
+        // `UploadResult`, so the blocks still staged are always a **suffix** of
+        // the list: a resumed pass re-sends only what has not landed, and an
+        // absent block after a present one is loss, not progress.
+        let mut landed = false;
+        for leaf_cid in content.leaf_cids() {
+            match self.staged_block(leaf_cid).await? {
+                Some(block) => {
+                    landed = true;
+                    self.upload_block(leaf_cid, &block).await?;
+                    self.staging
+                        .remove_staged_bytes(leaf_cid)
+                        .await
+                        .map_err(seam)?;
+                }
+                // A gap in the suffix: an earlier leaf is still here, so this
+                // one was never uploaded and its bytes are simply gone.
+                None if landed => return Err(CONTENT_LOST),
+                None => {}
+            }
+        }
+        // The root goes up last and stays staged until the publish confirms: it
+        // is the manifest every retry re-derives the plan from, so releasing it
+        // before the record lands would strand a fully-uploaded version.
+        self.upload_block(&staged.root_cid, &root_block).await?;
+
+        let content_cids = core::iter::once(&staged.root_cid)
+            .chain(content.leaf_cids())
+            .map(|cid| encode_content_cid_str(cid))
+            .collect();
+        Ok(UploadedVersion {
+            version: content.version(*key, applied.op.authored_at.0),
+            content_cids,
+        })
+    }
+
+    /// The staged bytes at `key`, CID-verified fail-closed. The read path hard-
+    /// rejects a block whose bytes do not address to its CID, so an unverified
+    /// upload would turn host bit-rot into a permanently unreadable published
+    /// version.
+    async fn staged_block(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Halt> {
+        let Some(block) = self.staging.staged_bytes(key).await.map_err(seam)? else {
+            return Ok(None);
+        };
+        verify_cid(key, &block).map_err(|_| CONTENT_LOST)?;
+        Ok(Some(block))
+    }
+
+    /// Upload one block to the pin provider, asserting the CID it comes back
+    /// under. A provider answering with a different address has not pinned the
+    /// bytes this version links.
+    async fn upload_block(&self, cid: &[u8], block: &[u8]) -> Result<(), Halt> {
+        let uploaded = self
+            .api
+            .upload(block)
+            .await
+            .map_err(|error| classify_upload(error, block.len() as u64))?;
+        if uploaded.cid != encode_content_cid_str(cid) {
+            return Err(Halt::Attempt);
+        }
+        Ok(())
+    }
+
+    /// Drop every staged block of an op's version. Called once its record has
+    /// published — the bytes are on the network — and on the one abandonment
+    /// whose bytes no key opens. Best-effort: a failed removal is orphan residue
+    /// a later GC pass collects, never a reason to fail a landed publish.
+    async fn release_staged_blocks(&self, op: &Op) {
+        let Some(staged) = op.staged_content() else {
+            return;
+        };
+        if let Ok(Some(root_block)) = self.staging.staged_bytes(&staged.root_cid).await
+            && let Ok(content) = SealedContent::from_root_block(&root_block)
+        {
+            for leaf_cid in content.leaf_cids() {
+                let _ = self.staging.remove_staged_bytes(leaf_cid).await;
+            }
+        }
+        let _ = self.staging.remove_staged_bytes(&staged.root_cid).await;
     }
 
     /// The parent a node is published under, from the base the pass repaints as
@@ -1241,6 +1417,7 @@ where
                 &name,
                 is_scope_root,
                 &body,
+                Vec::new(),
                 envelope_unknown,
                 epoch_tag_unknown,
             )
@@ -1267,6 +1444,7 @@ where
         name: &IpnsName,
         is_scope_root: bool,
         body: &ReadBody,
+        content_cids: Vec<String>,
         carried_unknown: Vec<(String, Value)>,
         carried_epoch_tag_unknown: Vec<(String, Value)>,
     ) -> Result<Published, Halt> {
@@ -1290,7 +1468,7 @@ where
         .map_err(|_| Halt::Unclassified)?;
 
         let record_bytes = self
-            .publish_head(scope, name, &node.0, epoch, &head)
+            .publish_head(scope, name, &node.0, epoch, &head, content_cids.clone())
             .await?;
         let local = local_head(&head);
         let sequence = if is_scope_root {
@@ -1337,7 +1515,9 @@ where
                 record_bytes,
                 signer: SessionIdentity::write_name_signer(scope.write_scope_seed, &node.0),
                 head_cid: head.cid,
-                content_cids: Vec::new(),
+                // The same list the publish registered, so a sub-EOL renewal
+                // re-pins exactly the content this record points at (#797).
+                content_cids,
             },
         })
     }
@@ -1350,6 +1530,7 @@ where
         node_id: &[u8; 16],
         epoch: u64,
         head: &AuthoredHead,
+        content_cids: Vec<String>,
     ) -> Result<Vec<u8>, Halt> {
         let binding = HeadBinding {
             node_id: *node_id,
@@ -1379,7 +1560,7 @@ where
                 name,
                 signer: &signer,
                 head: &preflighted,
-                content_cids: Vec::new(),
+                content_cids,
                 min_current_sequence: None,
             },
         )
@@ -1528,14 +1709,6 @@ where
     }
 }
 
-/// Map the facade node kind onto the structurally-identical wire kind.
-fn core_kind(kind: NodeKind) -> CoreNodeKind {
-    match kind {
-        NodeKind::Folder => CoreNodeKind::Folder,
-        NodeKind::File => CoreNodeKind::File,
-    }
-}
-
 fn local_head(head: &AuthoredHead) -> LocalHead {
     LocalHead {
         cid: head.cid.clone(),
@@ -1553,14 +1726,21 @@ fn seam(_: crate::seams::SeamError) -> Halt {
 /// `refused_bytes` is what the upload asked for, so a block entered here records
 /// the figure its resume probe must find room for.
 fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
+    match error {
+        RecordPublishError::Upload(error) => classify_upload(error, refused_bytes),
+        RecordPublishError::HeadCidMismatch { .. } | RecordPublishError::Publish(_) => {
+            Halt::Unclassified
+        }
+    }
+}
+
+/// Classify a content-upload failure for the valve. The same server verdicts a
+/// head-block upload can carry, since content blocks and head blocks go through
+/// one endpoint.
+fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
     let ApiError::Status {
         status: 413, code, ..
-    } = (match error {
-        RecordPublishError::Upload(error) => error,
-        RecordPublishError::HeadCidMismatch { .. } | RecordPublishError::Publish(_) => {
-            return Halt::Unclassified;
-        }
-    })
+    } = error
     else {
         return Halt::Unclassified;
     };
@@ -1581,17 +1761,25 @@ fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
 /// The registry rows one op's publish registered, mirroring what the publish
 /// pipeline sends (`PublishRequest::registration`). An abandoned create's child
 /// name never becomes reachable, so it leaves the republish inventory with the
-/// op; content CIDs join this list when the content plane starts registering
-/// them (#868).
+/// op — and so does the version root it pinned, which no reachable record links.
+///
+/// Only the root: the leaves are not separately enumerable without the manifest,
+/// and retiring the root is what drops the reference count the accelerator's
+/// own GC walks.
 fn registered_by(scope: &DrainScope<'_>, op: &Op) -> Vec<String> {
     if !matches!(op.kind, OpKind::Create { .. }) {
         return Vec::new();
     }
-    vec![
+    core::iter::once(
         derive_write_name(scope.write_scope_seed, &op.target.0)
             .as_str()
             .to_owned(),
-    ]
+    )
+    .chain(
+        op.content_root_cid()
+            .map(|cid| encode_content_cid_str(cid)),
+    )
+    .collect()
 }
 
 #[cfg(test)]

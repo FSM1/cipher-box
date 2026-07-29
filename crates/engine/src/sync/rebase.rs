@@ -94,6 +94,12 @@ pub enum DeadLetterReason {
     /// plane and never confirmed, so the publish may have landed: this reason
     /// is the one abandonment that must **not** retire (#819 as amended).
     AttemptsExhausted,
+    /// The op's staged content can never publish: its per-version key will not
+    /// open, its root block is gone or unreadable, or a leaf is missing from the
+    /// middle of the block set. The content key is a KDF non-edge, so none of
+    /// these is recoverable — the abandonment **releases** the version's staged
+    /// blocks rather than preserving bytes no key opens (#818).
+    ContentUnrecoverable,
 }
 
 /// One applied op, resolved for republish.
@@ -225,9 +231,9 @@ impl OpResolution {
 /// resolution and, on `Applied`, mutates `working` to reflect it.
 pub fn rebase_one(working: &mut Snapshot, local: &Snapshot, op: &Op) -> OpResolution {
     match &op.kind {
-        OpKind::Create {
-            parent, name, kind, ..
-        } => rebase_create(working, op, *parent, name, *kind),
+        OpKind::Create { parent, name, node } => {
+            rebase_create(working, op, *parent, name, node.kind())
+        }
         OpKind::Delete { target_sequence } => rebase_delete(working, op, *target_sequence),
         OpKind::Rename { new_name } => rebase_rename(working, op, new_name),
         OpKind::Relink {
