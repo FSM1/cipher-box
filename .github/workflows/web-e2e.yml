@@ -1,6 +1,8 @@
 # DORMANT during the v2 build: tests/web-e2e was demolished with the v1
 # layout; the v2 web suite lands per blueprint/testing.md and this reusable
-# workflow gets rewired to it then.
+# workflow gets rewired to it then. The rewire must add the wasm toolchain
+# `ci.yml`'s `Web Bundle` job carries — `@cipherbox/web build` compiles
+# crates/wasm.
 name: Web E2E Tests
 
 on:

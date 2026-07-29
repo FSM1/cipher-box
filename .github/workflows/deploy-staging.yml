@@ -69,6 +69,10 @@ jobs:
         with:
           ref: ${{ inputs.staging_tag || github.ref_name }}
 
+      # apps/web compiles crates/wasm into the engine artifact it bundles.
+      - name: Add wasm target
+        run: rustup target add wasm32-unknown-unknown
+
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -76,19 +80,24 @@ jobs:
           node-version-file: 'package.json'
           cache: 'pnpm'
 
+      # wasm-bindgen-cli generates the engine glue and must match the locked
+      # wasm-bindgen version exactly (a schema mismatch fails the run).
+      - name: Install wasm-bindgen-cli (matching Cargo.lock)
+        run: |
+          WB_VERSION=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "wasm-bindgen ${WB_VERSION}"
+          cargo install wasm-bindgen-cli --version "${WB_VERSION}" --locked
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build shared packages
-        run: |
-          pnpm --filter @cipherbox/crypto build
-          pnpm --filter @cipherbox/core build
-          pnpm --filter @cipherbox/api-client build
-          pnpm --filter @cipherbox/sdk-core build
-          pnpm --filter @cipherbox/sdk build
+      # Kept separate from the bundle step so the staging secrets below never
+      # enter the environment of a cargo build script.
+      - name: Build the engine WASM artifact
+        run: pnpm --filter @cipherbox/web build:wasm
 
       - name: Build web app with staging env vars
-        run: pnpm --filter @cipherbox/web build
+        run: pnpm --filter @cipherbox/web build:bundle
         env:
           VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_API_URL: ${{ vars.STAGING_API_URL }}
