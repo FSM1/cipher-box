@@ -1,7 +1,7 @@
-//! The write plane, joined end to end (#865): a `Command::Create` for a folder
-//! is staged, drained, authored, published, self-adopted, and resolved back —
-//! first by the device that wrote it, then by a second device of the same
-//! account that only ever saw the network.
+//! The write plane, joined end to end: every metadata op kind is staged,
+//! drained, authored, published, self-adopted, and resolved back — first by the
+//! device that wrote it, then by a second device of the same account that only
+//! ever saw the network (#865, #866).
 //!
 //! Later write-plane slices extend this file rather than starting their own.
 
@@ -13,25 +13,30 @@ use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
-use cipherbox_core::seal::{ReadBody, decode_envelope, open_read_body};
+use cipherbox_core::seal::{
+    ChildRef, NodeKind as CoreNodeKind, ReadBody, decode_envelope, open_read_body,
+};
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
+use zeroize::Zeroizing;
 
 use cipherbox_engine::content::{DAG_ROOT_CODEC, GatewaySource};
 use cipherbox_engine::facade::PendingClass;
+use cipherbox_engine::net::author::{EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::seams::{
     BoxedTask, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
-    StagingStore,
+    StagingStore, UnixMillis,
 };
-use cipherbox_engine::sync::DRAINED_OP_MARK_KEY;
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
+use cipherbox_engine::sync::{DRAINED_OP_MARK_KEY, StagedContent};
+use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
     OwnerRootSpec, SeededEntropy, block_on, owner_root_fixture,
 };
 use cipherbox_engine::{
-    Command, Engine, EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, StoragePolicy,
-    SyncTimingProfile,
+    Command, Engine, EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, Op, RecordSeal,
+    StoragePolicy, SyncTimingProfile, stage_op,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
