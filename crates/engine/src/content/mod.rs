@@ -25,7 +25,6 @@ pub use dag::{
     ContentDag, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, RootManifest, assemble, decode_root,
     root_block_cid,
 };
-pub use write::{ContentWriter, FinishedContent};
 pub use profile::ContentProfile;
 pub use provider::{
     ByoIpfsConfig, ByoKind, PinMode, ProviderError, test_connection, validate_endpoint,
@@ -37,6 +36,7 @@ pub use read::{
 pub use retention::{
     ContentVersion, PrunePlan, QuotaExceeded, RetentionPolicy, plan_prune, pre_flight_quota_check,
 };
+pub use write::{ContentWriter, FinishedContent};
 
 use cipherbox_core::content::{compute_cid, encode_content_cid_str, open_chunk};
 use cipherbox_core::seal::Version;

@@ -20,8 +20,8 @@ use async_lock::{Mutex, RwLock};
 use cipherbox_engine::facade::{Engine, EngineError, EventStream, LoginSecret};
 use cipherbox_engine::seams::OpId;
 use cipherbox_engine::{
-    Entropy, EntropyError, GatewayConfig, GatewaySource, SeamSet, SeamTypes, StoragePlatform,
-    StoragePolicy, SyncTimingProfile,
+    ContentProfile, Entropy, EntropyError, GatewayConfig, GatewaySource, SeamSet, SeamTypes,
+    StoragePlatform, StoragePolicy, SyncTimingProfile, WriteHandle, WriteTarget,
 };
 use js_sys::{Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
@@ -184,6 +184,9 @@ impl EngineHandle {
             seam_set,
             Box::new(GetrandomEntropy),
             profile,
+            // The framing is frozen and pins the wire format, so the browser
+            // always writes the shipped profile — never the CI one.
+            ContentProfile::PRODUCTION,
             storage_policy,
             api_base_url.unwrap_or_default(),
             gateway,
@@ -227,6 +230,91 @@ impl EngineHandle {
                 .await
                 .map_err(engine_error)?;
             Ok(op_id_value(op_id))
+        })
+    }
+
+    /// Opens a write handle for a file of `size` plaintext bytes, reserving the
+    /// exact sealed total it will occupy. `node` names an existing file for a
+    /// new version; `parent` + `name` create one. Resolves with the handle id;
+    /// rejects with the engine error (an over-budget refusal names which budget
+    /// and how much room is left).
+    #[wasm_bindgen(js_name = beginWrite)]
+    pub fn begin_write(
+        &self,
+        parent: Option<NodeId>,
+        name: Option<String>,
+        node: Option<NodeId>,
+        size: f64,
+    ) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            let target = match (parent, name, node) {
+                (Some(parent), Some(name), None) => WriteTarget::NewFile {
+                    parent: parent.facade(),
+                    name,
+                },
+                (None, None, Some(node)) => WriteTarget::Version {
+                    node: node.facade(),
+                },
+                _ => {
+                    return Err(JsError::new(
+                        "beginWrite takes either (parent, name) or (node), never both",
+                    )
+                    .into());
+                }
+            };
+            let handle = engine
+                .write()
+                .await
+                .begin_write(target, size as u64)
+                .await
+                .map_err(engine_error)?;
+            Ok(JsValue::from(handle.0))
+        })
+    }
+
+    /// Feeds the next slice of the file to an open write handle. Seals and
+    /// stages every whole chunk it completes; peak heap stays one chunk however
+    /// large the file. Rejects — and spends the handle — if the pushes exceed
+    /// the declared size.
+    #[wasm_bindgen(js_name = pushChunk)]
+    pub fn push_chunk(&self, handle: u64, chunk: Vec<u8>) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            engine
+                .write()
+                .await
+                .push_chunk(WriteHandle(handle), &chunk)
+                .await
+                .map_err(engine_error)?;
+            Ok(JsValue::UNDEFINED)
+        })
+    }
+
+    /// Closes a write handle and journals its op. Resolves with the durable
+    /// queue id; rejects if the pushes did not add up to the declared size.
+    #[wasm_bindgen(js_name = commitWrite)]
+    pub fn commit_write(&self, handle: u64) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            let op_id = engine
+                .write()
+                .await
+                .commit_write(WriteHandle(handle))
+                .await
+                .map_err(engine_error)?;
+            Ok(JsValue::from(op_id.0))
+        })
+    }
+
+    /// Abandons a write handle, releasing its reservation and staged blocks.
+    /// Always resolves — an unknown handle is already gone.
+    #[wasm_bindgen(js_name = abortWrite)]
+    pub fn abort_write(&self, handle: u64) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            engine.write().await.abort_write(WriteHandle(handle)).await;
+            Ok(JsValue::UNDEFINED)
         })
     }
 
@@ -302,6 +390,8 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::UnsupportedContentFormat { .. } => "unsupportedContentFormat",
         EngineError::Unimplemented { .. } => "unimplemented",
         EngineError::OverBudget { .. } => "overBudget",
+        EngineError::ContentSizeMismatch { .. } => "contentSizeMismatch",
+        EngineError::UnknownWriteHandle => "unknownWriteHandle",
         EngineError::Seam { .. } => "seam",
         EngineError::Entropy { .. } => "entropy",
         EngineError::Auth { .. } => "auth",

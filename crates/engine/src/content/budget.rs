@@ -33,10 +33,13 @@ pub fn sealed_total_bytes(size: u64, profile: &ContentProfile) -> Result<u64, Da
     // Placeholder links: every content CID is the same fixed width, so a root
     // over `leaves` of them encodes to exactly the length the real one will.
     let placeholder = compute_cid(CONTENT_CID_CODEC, b"");
-    let links = vec![placeholder; usize::try_from(leaves).map_err(|_| DagError::RootTooLarge {
-        size: usize::MAX,
-        limit: super::limits::MAX_RESOLVED_RECORD_BYTES,
-    })?];
+    let links = vec![
+        placeholder;
+        usize::try_from(leaves).map_err(|_| DagError::RootTooLarge {
+            size: usize::MAX,
+            limit: super::limits::MAX_RESOLVED_RECORD_BYTES,
+        })?
+    ];
     let root = assemble(&links, size, profile)?;
     Ok(size
         .saturating_add(leaves.saturating_mul(SEALED_LEAF_OVERHEAD))
@@ -169,8 +172,7 @@ mod tests {
         for size in [0usize, 1, 15, 16, 17, 32, 100] {
             let plaintext = vec![7u8; size];
             let mut entropy = SeededEntropy::new(1);
-            let mut writer =
-                ContentWriter::new(ContentKey::from_bytes([3u8; KEY_LEN]), profile);
+            let mut writer = ContentWriter::new(ContentKey::from_bytes([3u8; KEY_LEN]), profile);
             let mut staged = 0u64;
             let mut rest = &plaintext[..];
             while !rest.is_empty() {
@@ -255,7 +257,10 @@ mod tests {
         // Past the platform cap: nothing on this device ever admits it.
         assert!(matches!(
             ledger.admit(5000, 0, &constrained),
-            Admission::OverLimit { available: 1000, .. }
+            Admission::OverLimit {
+                available: 1000,
+                ..
+            }
         ));
         // Room in principle, taken right now: the drain frees it.
         assert!(matches!(

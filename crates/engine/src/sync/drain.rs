@@ -1303,7 +1303,7 @@ where
             match self.staged_block(leaf_cid).await? {
                 Some(block) => {
                     landed = true;
-                    self.upload_block(leaf_cid, &block).await?;
+                    self.upload_block(&block).await?;
                     self.staging
                         .remove_staged_bytes(leaf_cid)
                         .await
@@ -1318,7 +1318,7 @@ where
         // The root goes up last and stays staged until the publish confirms: it
         // is the manifest every retry re-derives the plan from, so releasing it
         // before the record lands would strand a fully-uploaded version.
-        self.upload_block(&staged.root_cid, &root_block).await?;
+        self.upload_block(&root_block).await?;
 
         let content_cids = core::iter::once(&staged.root_cid)
             .chain(content.leaf_cids())
@@ -1342,19 +1342,15 @@ where
         Ok(Some(block))
     }
 
-    /// Upload one block to the pin provider, asserting the CID it comes back
-    /// under. A provider answering with a different address has not pinned the
-    /// bytes this version links.
-    async fn upload_block(&self, cid: &[u8], block: &[u8]) -> Result<(), Halt> {
-        let uploaded = self
-            .api
+    /// Upload one block to the pin provider. A block is only ever removed from
+    /// staging on a confirmed [`UploadResult`](crate::UploadResult), which is
+    /// what makes the still-staged set a suffix.
+    async fn upload_block(&self, block: &[u8]) -> Result<(), Halt> {
+        self.api
             .upload(block)
             .await
-            .map_err(|error| classify_upload(error, block.len() as u64))?;
-        if uploaded.cid != encode_content_cid_str(cid) {
-            return Err(Halt::Attempt);
-        }
-        Ok(())
+            .map(drop)
+            .map_err(|error| classify_upload(error, block.len() as u64))
     }
 
     /// Drop every staged block of an op's version. Called once its record has
@@ -1775,10 +1771,7 @@ fn registered_by(scope: &DrainScope<'_>, op: &Op) -> Vec<String> {
             .as_str()
             .to_owned(),
     )
-    .chain(
-        op.content_root_cid()
-            .map(|cid| encode_content_cid_str(cid)),
-    )
+    .chain(op.content_root_cid().map(encode_content_cid_str))
     .collect()
 }
 

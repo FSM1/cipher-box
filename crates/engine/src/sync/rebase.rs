@@ -25,6 +25,8 @@ use std::collections::HashSet;
 
 use crate::seams::OpId;
 use crate::sync::model::{NodeMeta, Snapshot, collation_key, suffix_name};
+#[cfg(test)]
+use crate::sync::op::NewNode;
 use crate::sync::op::{Op, OpKind, Replaced};
 use crate::sync::record::{RecordClass, RecordReader};
 
@@ -659,6 +661,8 @@ mod tests {
         crate::sync::op::StagedContent {
             root_cid: b"k".to_vec(),
             plaintext_size: 1,
+            sealed_content_key: b"sealed-key-blob".to_vec(),
+            epoch: 1,
         }
     }
 
@@ -811,7 +815,14 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::create(id(2), id(0), "a.txt", NodeKind::File, 1, AT, None),
+            &Op::create(
+                id(2),
+                id(0),
+                "a.txt",
+                NewNode::File { content: None },
+                1,
+                AT,
+            ),
         );
         assert_eq!(
             res,
@@ -1174,10 +1185,11 @@ mod tests {
                 id(9),
                 id(8),
                 "x.txt",
-                NodeKind::File,
+                NewNode::File {
+                    content: Some(staged_k()),
+                },
                 1,
                 AT,
-                Some(staged_k()),
             ),
         );
         assert_eq!(res, OpResolution::DeadLetter(DeadLetterReason::TargetGone));
@@ -1212,15 +1224,36 @@ mod tests {
         let ops = vec![
             (
                 OpId(1),
-                Op::create(id(2), id(1), "a.txt", NodeKind::File, 1, AT, None),
+                Op::create(
+                    id(2),
+                    id(1),
+                    "a.txt",
+                    NewNode::File { content: None },
+                    1,
+                    AT,
+                ),
             ),
             (
                 OpId(2),
-                Op::create(id(3), id(1), "a.txt", NodeKind::File, 1, AT, None),
+                Op::create(
+                    id(3),
+                    id(1),
+                    "a.txt",
+                    NewNode::File { content: None },
+                    1,
+                    AT,
+                ),
             ), // collides → suffix
             (
                 OpId(3),
-                Op::create(id(4), id(99), "orphan", NodeKind::File, 1, AT, None),
+                Op::create(
+                    id(4),
+                    id(99),
+                    "orphan",
+                    NewNode::File { content: None },
+                    1,
+                    AT,
+                ),
             ), // dead-letter
         ];
         let report = replay(&gate_passing, &gate_passing, &ops);

@@ -64,7 +64,7 @@ impl From<EngineError> for VfsError {
             EngineError::TrustViolation { message } | EngineError::ColdStart { message } => {
                 VfsError::TrustViolation { message }
             }
-            EngineError::OverBudget { cause } => VfsError::OverBudget(cause),
+            EngineError::OverBudget { cause, .. } => VfsError::OverBudget(cause),
             EngineError::ContentUnavailable { message } => VfsError::Unavailable { message },
             EngineError::UnsupportedContentFormat { version } => VfsError::Unavailable {
                 message: format!("unsupported content format version {version}"),
@@ -72,9 +72,13 @@ impl From<EngineError> for VfsError {
             EngineError::Seam { message }
             | EngineError::Entropy { message }
             | EngineError::Auth { message } => VfsError::Internal { message },
+            // A write handle that lost track of its own file is a broken caller
+            // contract on the mount's side, never a user-visible storage verdict.
             error @ (EngineError::NotStarted
             | EngineError::AlreadyStarted
             | EngineError::InvalidSecret
+            | EngineError::ContentSizeMismatch { .. }
+            | EngineError::UnknownWriteHandle
             | EngineError::Unimplemented { .. }) => VfsError::Internal {
                 message: error.to_string(),
             },
@@ -166,11 +170,18 @@ mod tests {
     #[test]
     fn each_budget_keeps_its_own_cause() {
         for cause in [
-            OverBudgetCause::DeviceStaging,
+            OverBudgetCause::StagingLimit,
+            OverBudgetCause::DeviceFull,
+            OverBudgetCause::StagingBacklog,
+            OverBudgetCause::StorageUnmeasured,
             OverBudgetCause::AccountQuota,
         ] {
             assert_eq!(
-                VfsError::from(EngineError::OverBudget { cause }),
+                VfsError::from(EngineError::OverBudget {
+                    cause,
+                    requested: 900,
+                    available: 100,
+                }),
                 VfsError::OverBudget(cause)
             );
         }

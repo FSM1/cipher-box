@@ -446,9 +446,12 @@ mod tests {
         };
         for (node, expected) in [
             (NewNodeBody::Folder, NodeKind::Folder),
-            (NewNodeBody::File {
-                versions: Vec::new(),
-            }, NodeKind::File),
+            (
+                NewNodeBody::File {
+                    versions: Vec::new(),
+                },
+                NodeKind::File,
+            ),
             (versioned, NodeKind::File),
         ] {
             let child = new_child([4u8; 16], "n".into(), &name(), node, 1, 77);
@@ -488,7 +491,14 @@ mod tests {
 
     #[test]
     fn a_new_child_stamps_the_journaled_time_not_a_clock() {
-        let child = new_child([4u8; 16], "n".into(), &name(), NewNodeBody::Folder, 1, 4_242);
+        let child = new_child(
+            [4u8; 16],
+            "n".into(),
+            &name(),
+            NewNodeBody::Folder,
+            1,
+            4_242,
+        );
         let ReadBody::Folder {
             created_at,
             modified_at,

@@ -13,7 +13,8 @@ use std::task::{Context, Poll, Waker};
 use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
 use cipherbox_engine::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    Command, Engine, GatewayConfig, LoginSecret, NodeId, NodeKind, StoragePolicy, SyncTimingProfile,
+    Command, ContentProfile, Engine, GatewayConfig, LoginSecret, NodeId, NodeKind, StoragePolicy,
+    SyncTimingProfile,
 };
 use cipherbox_fuse::{
     Access, HostAdapter, HostCapabilities, Invalidation, MAX_NAME_BYTES, NameError, OperationCore,
@@ -79,6 +80,7 @@ fn started_engine_with_staging() -> (Engine<FakeSeamTypes>, NodeId, InMemoryStag
         device.seam_set(),
         Box::new(SeededEntropy::new(42)),
         SyncTimingProfile::CI,
+        ContentProfile::CI,
         StoragePolicy::CI,
         String::new(),
         GatewayConfig::disabled(),
@@ -101,7 +103,6 @@ fn seed_child(
         parent,
         name: name.to_owned(),
         kind,
-        content: None,
     }))
     .expect("seeded create");
     block_on(engine.view())

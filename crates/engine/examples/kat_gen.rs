@@ -23,8 +23,8 @@ use cipherbox_core::codec::{Map, Value, encode};
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str, verify_cid};
 use cipherbox_core::suite::aead::KEY_LEN;
 use cipherbox_engine::content::{
-    ContentKey, ContentProfile, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, SealedChunk,
-    assemble, decode_root, frame_and_seal,
+    ContentKey, ContentProfile, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, assemble,
+    decode_root, frame_and_seal,
 };
 use cipherbox_engine::entropy::{Entropy, EntropyError};
 use serde::Serialize;
@@ -238,7 +238,12 @@ fn build_dag_root_accept() -> Vec<DagRootAcceptVector> {
         let key = ContentKey::from_bytes([0x5au8; KEY_LEN]);
         let leaves = frame_and_seal(&plaintext(size), &key, &mut PinnedEntropy(0x10), &profile)
             .expect("pinned entropy never fails");
-        let dag = assemble(&leaves, size as u64, &profile).expect("production framing assembles");
+        let leaf_cids = leaves
+            .iter()
+            .map(|leaf| leaf.cid.clone())
+            .collect::<Vec<_>>();
+        let dag =
+            assemble(&leaf_cids, size as u64, &profile).expect("production framing assembles");
 
         verify_cid(&dag.content_cid, &dag.root_block).expect("root addresses its own bytes");
         let manifest = decode_root(&dag.root_block).expect("own root decodes");
@@ -331,19 +336,16 @@ fn build_dag_root_reject() -> Vec<DagRootRejectVector> {
 /// `count` synthetic leaf links: the `raw` content CID of the big-endian link
 /// index. The KAT suite rebuilds them by the same rule; a divergence surfaces as
 /// a mismatch against the frozen root CID.
-fn capacity_leaves(count: u64) -> Vec<SealedChunk> {
+fn capacity_leaves(count: u64) -> Vec<Vec<u8>> {
     (0..count)
-        .map(|i| SealedChunk {
-            cid: compute_cid(CONTENT_CID_CODEC, &i.to_be_bytes()),
-            sealed: Vec::new(),
-        })
+        .map(|i| compute_cid(CONTENT_CID_CODEC, &i.to_be_bytes()))
         .collect()
 }
 
 /// The largest link count that still assembles at the production chunk size —
 /// the flat-DAG ceiling #820 committed to knowingly. Every probe subslices one
 /// leaf vector, so the search costs the bound rather than the sum of its probes.
-fn max_leaf_count(leaves: &[SealedChunk]) -> u64 {
+fn max_leaf_count(leaves: &[Vec<u8>]) -> u64 {
     let profile = ContentProfile::PRODUCTION;
     let chunk = profile.chunk_size() as u64;
     // Only the cap may move the boundary; any other verdict is a generator bug.
@@ -362,7 +364,7 @@ fn max_leaf_count(leaves: &[SealedChunk]) -> u64 {
     lo
 }
 
-fn build_dag_capacity_accept(pool: &[SealedChunk]) -> DagCapacityAcceptVector {
+fn build_dag_capacity_accept(pool: &[Vec<u8>]) -> DagCapacityAcceptVector {
     let profile = ContentProfile::PRODUCTION;
     let chunk = profile.chunk_size() as u64;
     let leaf_count = max_leaf_count(pool);
@@ -382,7 +384,7 @@ fn build_dag_capacity_accept(pool: &[SealedChunk]) -> DagCapacityAcceptVector {
     }
 }
 
-fn build_dag_capacity_reject(pool: &[SealedChunk], leaf_count: u64) -> DagCapacityRejectVector {
+fn build_dag_capacity_reject(pool: &[Vec<u8>], leaf_count: u64) -> DagCapacityRejectVector {
     let profile = ContentProfile::PRODUCTION;
     let chunk = profile.chunk_size() as u64;
     let size = leaf_count * chunk;

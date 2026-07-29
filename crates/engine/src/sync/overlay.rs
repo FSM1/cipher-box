@@ -102,7 +102,7 @@ fn relocate(
 mod tests {
     use super::*;
     use crate::facade::{NodeId, NodeKind};
-    use crate::sync::op::{Replaced, StagedContent};
+    use crate::sync::op::{NewNode, Replaced, StagedContent};
 
     /// Journal time for ops whose narrative does not turn on it.
     const AT: crate::seams::UnixMillis = crate::seams::UnixMillis(0);
@@ -119,6 +119,8 @@ mod tests {
         StagedContent {
             root_cid: b"k".to_vec(),
             plaintext_size: 7,
+            sealed_content_key: b"sealed-key-blob".to_vec(),
+            epoch: 1,
         }
     }
 
@@ -129,10 +131,9 @@ mod tests {
             id(1),
             id(0),
             "a.txt",
-            NodeKind::File,
+            NewNode::File { content: None },
             1,
             AT,
-            None,
         )];
         let view = apply_overlay(&base, &ops);
 
@@ -266,18 +267,7 @@ mod tests {
         let mut base = base();
         base.upsert_node(NodeMeta::new(id(1), "f.txt", NodeKind::File));
         base.link(id(0), id(1), 1);
-        let view = apply_overlay(
-            &base,
-            &[Op::update_content(
-                id(1),
-                StagedContent {
-                    root_cid: b"k".to_vec(),
-                    plaintext_size: 7,
-                },
-                1,
-                AT,
-            )],
-        );
+        let view = apply_overlay(&base, &[Op::update_content(id(1), staged(), 1, AT)]);
         assert_eq!(
             view.node(id(1)).unwrap().content_version,
             None,
@@ -288,8 +278,17 @@ mod tests {
     #[test]
     fn overlay_renders_the_one_version_a_content_bearing_create_authors() {
         let base = base();
-        let with_content = Op::create(id(1), id(0), "a.txt", NodeKind::File, 1, AT, Some(staged()));
-        let bare = Op::create(id(2), id(0), "dir", NodeKind::Folder, 1, AT, None);
+        let with_content = Op::create(
+            id(1),
+            id(0),
+            "a.txt",
+            NewNode::File {
+                content: Some(staged()),
+            },
+            1,
+            AT,
+        );
+        let bare = Op::create(id(2), id(0), "dir", NewNode::Folder, 1, AT);
 
         let view = apply_overlay(&base, &[with_content, bare]);
 

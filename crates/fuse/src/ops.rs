@@ -282,7 +282,6 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             parent: parent_node,
             name: name.to_owned(),
             kind,
-            content: None,
         })
         .await?;
 

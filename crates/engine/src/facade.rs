@@ -722,10 +722,7 @@ impl fmt::Display for EngineError {
                     "this write needs {requested} bytes but the account's storage quota leaves {available}"
                 ),
             },
-            EngineError::ContentSizeMismatch {
-                declared,
-                observed,
-            } => write!(
+            EngineError::ContentSizeMismatch { declared, observed } => write!(
                 f,
                 "the file changed while it was being read: {declared} bytes were declared and {observed} arrived"
             ),
@@ -1685,12 +1682,13 @@ impl<T: SeamTypes> Engine<T> {
         }
         // A version whose root would not assemble is one this device can never
         // stage, whatever its budget — the flat-DAG ceiling, not a shortage.
-        let requested =
-            sealed_total_bytes(size, &self.content_profile).map_err(|_| EngineError::OverBudget {
+        let requested = sealed_total_bytes(size, &self.content_profile).map_err(|_| {
+            EngineError::OverBudget {
                 cause: OverBudgetCause::StagingLimit,
                 requested: size,
                 available: self.storage_policy.staging_cap_bytes,
-            })?;
+            }
+        })?;
         let staged = self
             .seams
             .staging_store
@@ -2358,6 +2356,7 @@ mod tests {
             device.seam_set(),
             Box::new(SeededEntropy::new(42)),
             SyncTimingProfile::CI,
+            ContentProfile::CI,
             StoragePolicy::CI,
             base_url.to_owned(),
             GatewayConfig::disabled(),
@@ -2371,6 +2370,7 @@ mod tests {
             device.seam_set(),
             Box::new(SeededEntropy::new(42)),
             SyncTimingProfile::CI,
+            ContentProfile::CI,
             StoragePolicy::CI,
             String::new(),
             GatewayConfig::disabled(),
@@ -2387,6 +2387,7 @@ mod tests {
             device.seam_set(),
             Box::new(SeededEntropy::new(42)),
             SyncTimingProfile::CI,
+            ContentProfile::CI,
             StoragePolicy::CI,
             String::new(),
             GatewayConfig::disabled(),
@@ -2616,16 +2617,9 @@ mod tests {
             parent: NodeId([0; 16]),
             name: "vacation-plans.txt".into(),
             kind: NodeKind::File,
-            content: Some(PlaintextContent(b"top-secret-plaintext".to_vec())),
         };
         let debug = format!("{command:?}");
         assert_eq!(debug, "Command(create)", "payloads must never leak");
-    }
-
-    #[test]
-    fn plaintext_content_debug_is_redacted() {
-        let content = PlaintextContent(b"top-secret-plaintext".to_vec());
-        assert_eq!(format!("{content:?}"), "PlaintextContent(<20 bytes>)");
     }
 
     #[test]
@@ -2638,6 +2632,35 @@ mod tests {
         assert_eq!(
             EngineError::UnsupportedContentFormat { version: 2 }.to_string(),
             "content format version 2 is not supported by this client"
+        );
+    }
+
+    /// The three device-side refusals are three different user actions, and each
+    /// quotes the room left rather than the whole budget (#829).
+    #[test]
+    fn over_budget_messages_name_the_action_and_quote_the_room_left() {
+        let message = |cause| {
+            EngineError::OverBudget {
+                cause,
+                requested: 900,
+                available: 100,
+            }
+            .to_string()
+        };
+        let limit = message(OverBudgetCause::StagingLimit);
+        let full = message(OverBudgetCause::DeviceFull);
+        let backlog = message(OverBudgetCause::StagingBacklog);
+        for text in [&limit, &full, &backlog] {
+            assert!(text.contains("100"), "the refusal quotes the room left");
+            assert!(!text.contains("256"), "never the whole budget");
+        }
+        assert_ne!(limit, full);
+        assert_ne!(full, backlog);
+        assert_ne!(limit, backlog);
+        assert_ne!(
+            message(OverBudgetCause::StorageUnmeasured),
+            message(OverBudgetCause::AccountQuota),
+            "an unmeasurable device is not a full account"
         );
     }
 
@@ -2663,9 +2686,25 @@ mod tests {
             parent,
             name: name.into(),
             kind,
-            content: None,
         }))
         .unwrap();
+    }
+
+    /// Feed `plaintext` through a write handle and commit it, the way a host
+    /// slices a file.
+    fn write_file(
+        engine: &mut Engine<FakeSeamTypes>,
+        target: WriteTarget,
+        plaintext: &[u8],
+    ) -> Result<OpId, EngineError> {
+        let handle = block_on(engine.begin_write(target, plaintext.len() as u64))?;
+        for piece in plaintext
+            .chunks(7)
+            .chain(plaintext.is_empty().then_some(&[][..]))
+        {
+            block_on(engine.push_chunk(handle, piece))?;
+        }
+        block_on(engine.commit_write(handle))
     }
 
     #[test]
@@ -2710,18 +2749,148 @@ mod tests {
     }
 
     #[test]
-    fn content_bearing_create_is_unimplemented_pending_the_content_plane() {
+    fn a_committed_write_renders_its_declared_size_before_it_publishes() {
+        let (mut engine, mut events) = started();
+        let root = engine.root();
+        let plaintext = b"forty bytes of content ------------------";
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: root,
+                name: "notes.txt".into(),
+            },
+            plaintext,
+        )
+        .expect("the write commits");
+
+        let children = block_on(engine.view()).unwrap().children(root);
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].kind, NodeKind::File);
+        assert_eq!(
+            children[0].size,
+            Some(plaintext.len() as u64),
+            "the overlay renders the committed size (#830)"
+        );
+        assert!(drain(&mut events).contains(&Event::SnapshotUpdated));
+    }
+
+    /// The acceptance case: a backing file that shrinks mid-read must fail the
+    /// commit, never publish a short version as a success (#830).
+    #[test]
+    fn a_write_whose_bytes_fall_short_of_the_declaration_fails_the_commit() {
         let (mut engine, _events) = started();
         let root = engine.root();
-        let out = block_on(engine.command(Command::Create {
+        let handle = block_on(engine.begin_write(
+            WriteTarget::NewFile {
+                parent: root,
+                name: "truncated.txt".into(),
+            },
+            64,
+        ))
+        .unwrap();
+        block_on(engine.push_chunk(handle, b"only twenty bytes...")).unwrap();
+
+        assert_eq!(
+            block_on(engine.commit_write(handle)),
+            Err(EngineError::ContentSizeMismatch {
+                declared: 64,
+                observed: 20
+            })
+        );
+        assert!(
+            block_on(engine.view()).unwrap().children(root).is_empty(),
+            "nothing is journaled, so nothing renders"
+        );
+        assert_eq!(
+            block_on(engine.seams.staging_store.staged_bytes_total()).unwrap(),
+            0,
+            "the failed write releases the blocks it staged"
+        );
+    }
+
+    /// A file that grows past its declaration is the same class of hazard, and
+    /// is refused at the push rather than absorbed silently.
+    #[test]
+    fn a_push_past_the_declared_size_fails_closed_and_drops_the_handle() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        let handle = block_on(engine.begin_write(
+            WriteTarget::NewFile {
+                parent: root,
+                name: "grew.txt".into(),
+            },
+            8,
+        ))
+        .unwrap();
+        assert!(matches!(
+            block_on(engine.push_chunk(handle, b"nine bytes")),
+            Err(EngineError::ContentSizeMismatch { declared: 8, .. })
+        ));
+        assert_eq!(
+            block_on(engine.commit_write(handle)),
+            Err(EngineError::UnknownWriteHandle),
+            "the handle is spent"
+        );
+    }
+
+    /// The ledger's whole point: two handles opened before either stages a byte
+    /// must contend for the budget, not both be admitted against it.
+    #[test]
+    fn concurrent_write_handles_cannot_over_admit_the_staging_budget() {
+        let (mut engine, _events) = started();
+        // Room for one 200-byte version's sealed total, not two.
+        engine.storage_policy = StoragePolicy {
+            staging_budget_bytes: 2000,
+            staging_cap_bytes: 2000,
+            ..StoragePolicy::CI
+        };
+        let root = engine.root();
+        let target = |name: &str| WriteTarget::NewFile {
             parent: root,
-            name: "f".into(),
-            kind: NodeKind::File,
-            content: Some(PlaintextContent(b"x".to_vec())),
-        }));
-        assert_eq!(out, Err(EngineError::Unimplemented { command: "create" }));
-        // Nothing staged: the read surface stays empty.
-        assert!(block_on(engine.view()).unwrap().children(root).is_empty());
+            name: name.into(),
+        };
+        let first = block_on(engine.begin_write(target("a"), 200)).expect("the first fits");
+        let refused = block_on(engine.begin_write(target("b"), 200)).unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                EngineError::OverBudget {
+                    cause: OverBudgetCause::StagingBacklog,
+                    ..
+                }
+            ),
+            "got {refused:?}"
+        );
+
+        block_on(engine.abort_write(first));
+        assert!(
+            block_on(engine.begin_write(target("b"), 200)).is_ok(),
+            "releasing the first reservation frees the room"
+        );
+    }
+
+    #[test]
+    fn a_write_past_the_platform_cap_is_refused_before_a_byte_is_pushed() {
+        let (mut engine, _events) = started();
+        let root = engine.root();
+        let refused = block_on(engine.begin_write(
+            WriteTarget::NewFile {
+                parent: root,
+                name: "huge.bin".into(),
+            },
+            u64::from(u32::MAX),
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(
+                refused,
+                EngineError::OverBudget {
+                    cause: OverBudgetCause::StagingLimit,
+                    ..
+                }
+            ),
+            "got {refused:?}"
+        );
     }
 
     #[test]
@@ -2923,27 +3092,7 @@ mod tests {
             create(&mut engine, root, "notes.txt", NodeKind::File);
             let node = block_on(engine.snapshot(root)).unwrap().children[0].id;
 
-            let root_cid = cipherbox_core::content::compute_cid(
-                cipherbox_core::content::CONTENT_CID_CODEC,
-                b"bytes",
-            );
-            let seal = engine.record_seal().unwrap();
-            block_on(stage_op(
-                &engine.seams.staging_store,
-                &engine.storage_policy,
-                seal,
-                &Op::update_content(
-                    node,
-                    crate::sync::op::StagedContent {
-                        root_cid,
-                        plaintext_size: 5,
-                    },
-                    1,
-                    crate::seams::UnixMillis(1),
-                ),
-                Some(b"bytes"),
-            ))
-            .unwrap();
+            write_file(&mut engine, WriteTarget::Version { node }, b"bytes").unwrap();
 
             let view = block_on(engine.snapshot(root)).unwrap();
             assert_eq!(view.children[0].pending, PendingClass::Content);
@@ -2963,10 +3112,9 @@ mod tests {
                     NodeId([7; 16]),
                     root,
                     "theirs.txt",
-                    NodeKind::File,
+                    NewNode::File { content: None },
                     1,
                     crate::seams::UnixMillis(1),
-                    None,
                 ),
             )
             .unwrap();
@@ -3189,6 +3337,7 @@ mod tests {
                 device.seam_set(),
                 Box::new(SeededEntropy::new(42)),
                 SyncTimingProfile::CI,
+                ContentProfile::CI,
                 StoragePolicy::CI,
                 String::new(),
                 GatewayConfig::disabled(),
@@ -3357,6 +3506,7 @@ mod tests {
                 device.seam_set(),
                 Box::new(SeededEntropy::new(42)),
                 SyncTimingProfile::CI,
+                ContentProfile::CI,
                 StoragePolicy::CI,
                 String::new(),
                 GatewayConfig::disabled(),
@@ -3707,6 +3857,7 @@ mod tests {
                 device.seam_set(),
                 Box::new(SeededEntropy::new(42)),
                 SyncTimingProfile::CI,
+                ContentProfile::CI,
                 StoragePolicy::CI,
                 String::new(),
                 gateway_config(),
@@ -4307,7 +4458,6 @@ mod tests {
                     parent: ROOT,
                     name: "pending.txt".into(),
                     kind: NodeKind::File,
-                    content: None,
                 }))
                 .unwrap();
                 let pending = block_on(engine.view())

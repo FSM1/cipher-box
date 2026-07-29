@@ -189,6 +189,8 @@ pub enum DeadLetterReason {
     PayloadRefused,
     /// The op's drain attempt budget ran out.
     AttemptsExhausted,
+    /// The op's staged content can never publish, and its blocks were released.
+    ContentUnrecoverable,
 }
 
 impl From<facade::DeadLetterReason> for DeadLetterReason {
@@ -203,6 +205,9 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
             facade::DeadLetterReason::Undecodable => DeadLetterReason::Undecodable,
             facade::DeadLetterReason::PayloadRefused => DeadLetterReason::PayloadRefused,
             facade::DeadLetterReason::AttemptsExhausted => DeadLetterReason::AttemptsExhausted,
+            facade::DeadLetterReason::ContentUnrecoverable => {
+                DeadLetterReason::ContentUnrecoverable
+            }
         }
     }
 }
@@ -478,18 +483,13 @@ pub struct Command {
 
 #[wasm_bindgen]
 impl Command {
-    /// Create a node under a parent (`content` only for file creates).
-    pub fn create(
-        parent: &NodeId,
-        name: String,
-        kind: NodeKind,
-        content: Option<Vec<u8>>,
-    ) -> Command {
+    /// Create an empty node under a parent. A file created **with** content is
+    /// a write handle, not a command (`beginWrite` on the engine handle).
+    pub fn create(parent: &NodeId, name: String, kind: NodeKind) -> Command {
         Self::wrap(facade::Command::Create {
             parent: parent.facade(),
             name,
             kind: kind.into(),
-            content: content.map(facade::PlaintextContent),
         })
     }
 
@@ -513,15 +513,6 @@ impl Command {
         Self::wrap(facade::Command::Relink {
             node: node.facade(),
             new_parent: new_parent.facade(),
-        })
-    }
-
-    /// Write new content to a file node.
-    #[wasm_bindgen(js_name = updateContent)]
-    pub fn update_content(node: &NodeId, content: Vec<u8>) -> Command {
-        Self::wrap(facade::Command::UpdateContent {
-            node: node.facade(),
-            content: facade::PlaintextContent(content),
         })
     }
 
@@ -797,13 +788,9 @@ mod tests {
         let node = NodeId::from_bytes(&[0u8; 16]).unwrap();
         assert_eq!(Command::manual_refresh().name(), "manualRefresh");
         assert_eq!(Command::logout().name(), "logout");
-        assert_eq!(
-            Command::update_content(&node, b"bytes".to_vec()).name(),
-            "updateContent"
-        );
         assert_eq!(Command::set_focus(None).name(), "setFocus");
         assert_eq!(
-            Command::create(&node, "f".into(), NodeKind::Folder, None).name(),
+            Command::create(&node, "f".into(), NodeKind::Folder).name(),
             "create"
         );
     }

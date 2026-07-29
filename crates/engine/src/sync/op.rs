@@ -369,6 +369,8 @@ mod tests {
         StagedContent {
             root_cid: root.to_vec(),
             plaintext_size,
+            sealed_content_key: b"sealed-key-blob".to_vec(),
+            epoch: 3,
         }
     }
 
@@ -379,10 +381,11 @@ mod tests {
                 id(1),
                 id(0),
                 "a.txt",
-                NodeKind::File,
+                NewNode::File {
+                    content: Some(staged(b"stage", 11)),
+                },
                 3,
                 at(1_000),
-                Some(staged(b"stage", 11)),
             ),
             Op::delete(id(2), 4, at(1_001), 7),
             Op::rename(id(3), "b.txt", 5, at(1_002)),
@@ -424,10 +427,11 @@ mod tests {
                 id(1),
                 id(0),
                 "a",
-                NodeKind::File,
+                NewNode::File {
+                    content: Some(staged(b"k", 1)),
+                },
                 1,
                 at(1),
-                Some(staged(b"k", 1))
             )
             .content_root_cid(),
             Some(&b"k"[..])
@@ -438,7 +442,7 @@ mod tests {
         );
         assert_eq!(Op::rename(id(1), "b", 1, at(1)).content_root_cid(), None);
         assert_eq!(
-            Op::create(id(1), id(0), "d", NodeKind::Folder, 1, at(1), None).content_root_cid(),
+            Op::create(id(1), id(0), "d", NewNode::Folder, 1, at(1)).content_root_cid(),
             None
         );
     }
@@ -450,14 +454,16 @@ mod tests {
                 id(1),
                 id(0),
                 "a",
-                NodeKind::File,
+                NewNode::File {
+                    content: Some(staged(b"k", 1)),
+                },
                 1,
                 at(1),
-                Some(staged(b"k", 1)),
             )
             .pending_class(),
-            Op::create(id(1), id(0), "a", NodeKind::File, 1, at(1), None).pending_class(),
-            Op::create(id(1), id(0), "d", NodeKind::Folder, 1, at(1), None).pending_class(),
+            Op::create(id(1), id(0), "a", NewNode::File { content: None }, 1, at(1))
+                .pending_class(),
+            Op::create(id(1), id(0), "d", NewNode::Folder, 1, at(1)).pending_class(),
             Op::delete(id(2), 1, at(1), 1).pending_class(),
             Op::rename(id(3), "b", 1, at(1)).pending_class(),
             Op::relink(id(4), id(0), id(9), 1, at(1), false, false).pending_class(),

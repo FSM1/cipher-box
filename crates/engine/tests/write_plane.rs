@@ -20,7 +20,9 @@ use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use zeroize::Zeroizing;
 
-use cipherbox_engine::content::{DAG_ROOT_CODEC, GatewaySource};
+use cipherbox_engine::content::{
+    ContentKey, ContentWriter, DAG_ROOT_CODEC, GatewaySource, SealedChunk, decode_root,
+};
 use cipherbox_engine::facade::PendingClass;
 use cipherbox_engine::net::author::{EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::seams::{
@@ -28,7 +30,7 @@ use cipherbox_engine::seams::{
     StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
-use cipherbox_engine::sync::{DRAINED_OP_MARK_KEY, StagedContent};
+use cipherbox_engine::sync::{DRAINED_OP_MARK_KEY, StagedContent, record_content_root_cid};
 use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
@@ -36,8 +38,9 @@ use cipherbox_engine::testkit::{
     OwnerRootSpec, SeededEntropy, block_on, owner_root_fixture,
 };
 use cipherbox_engine::{
-    Command, DeadLetter, DeadLetterReason, Engine, Event, EventStream, GatewayConfig, LoginSecret,
-    NodeId, NodeKind, Op, RecordSeal, StoragePolicy, SyncTimingProfile, stage_op,
+    Command, ContentProfile, DeadLetter, DeadLetterReason, Engine, EngineError, Event, EventStream,
+    GatewayConfig, LoginSecret, NodeId, NodeKind, Op, RecordSeal, StoragePolicy, SyncTimingProfile,
+    WriteTarget, stage_op,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -99,10 +102,16 @@ struct Blocks {
 }
 
 impl Blocks {
+    /// Index a block by its own content address. The content plane addresses
+    /// roots under `dag-cbor` and leaves under `raw`, and the ingress carries no
+    /// codec, so a block is served under either address a reader may ask for.
     fn put(&self, block: Vec<u8>) -> String {
-        let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
-        self.store.lock().expect("lock").insert(cid.clone(), block);
-        cid
+        let root_cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
+        let leaf_cid = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, &block));
+        let mut store = self.store.lock().expect("lock");
+        store.insert(leaf_cid, block.clone());
+        store.insert(root_cid.clone(), block);
+        root_cid
     }
 
     fn get(&self, cid: &str) -> Option<Vec<u8>> {
@@ -259,6 +268,7 @@ fn engine_on(device: &FakeDevice, entropy_seed: u64) -> (Engine<FakeSeamTypes>, 
         device.seam_set(),
         Box::new(SeededEntropy::new(entropy_seed)),
         SyncTimingProfile::CI,
+        ContentProfile::CI,
         StoragePolicy::CI,
         // The API base URL is empty, so `start` skips login: this suite exercises
         // the record plane, not the auth handshake.
@@ -381,6 +391,32 @@ fn uploaded_node_ids(device: &FakeDevice) -> Vec<[u8; 16]> {
         .collect()
 }
 
+/// The `contentCids` the device's last registration for `name` carried — what a
+/// sub-EOL renewal will re-pin (#797).
+fn registered_content_cids(device: &FakeDevice, name: &IpnsName) -> Vec<String> {
+    device
+        .http
+        .requests()
+        .iter()
+        .filter(|request| request.url.ends_with("/registry/register"))
+        .filter_map(|request| {
+            serde_json::from_slice::<serde_json::Value>(request.body.as_deref()?).ok()
+        })
+        .filter_map(|body| body.as_array()?.first().cloned())
+        .filter(|entry| entry["ipnsName"] == name.as_str())
+        .filter_map(|entry| {
+            Some(
+                entry["contentCids"]
+                    .as_array()?
+                    .iter()
+                    .filter_map(|cid| cid.as_str().map(str::to_owned))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .next_back()
+        .unwrap_or_default()
+}
+
 /// The node a head block about to be uploaded was sealed for.
 fn head_of(block: &[u8]) -> Option<[u8; 16]> {
     decode_envelope(block).ok().map(|envelope| envelope.id)
@@ -418,7 +454,6 @@ fn a_folder_create_publishes_and_resolves_back() {
         parent: ROOT,
         name: "photos".into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .expect("a metadata create stages");
     assert!(
@@ -486,7 +521,6 @@ fn a_published_child_sits_on_the_write_name_edge_and_the_read_key_edge() {
         parent: ROOT,
         name: "photos".into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .unwrap();
     let mut tasks = world.scheduler.take_spawned_tasks();
@@ -540,7 +574,6 @@ fn a_restart_that_adopts_nothing_still_drains() {
         parent: ROOT,
         name: "photos".into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .unwrap();
     let mut tasks = world.scheduler.take_spawned_tasks();
@@ -556,7 +589,6 @@ fn a_restart_that_adopts_nothing_still_drains() {
         parent: ROOT,
         name: "docs".into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .unwrap();
     let mut tasks = world.scheduler.take_spawned_tasks();
@@ -583,9 +615,9 @@ fn a_restart_that_adopts_nothing_still_drains() {
     assert_eq!(sequence, 3, "the second run advanced the root again");
 }
 
-/// The drain covers `Create { content: None }`, which is both kinds: a file
-/// with no content yet is a metadata-only create exactly like a folder, and its
-/// record is a file body with an empty version list.
+/// The drain covers `Create` for both kinds: a file with no content yet is a
+/// metadata-only create exactly like a folder, and its record is a file body
+/// with an empty version list.
 #[test]
 fn an_empty_file_create_publishes_under_the_same_metadata_path() {
     let world = FakeWorld::new();
@@ -600,7 +632,6 @@ fn an_empty_file_create_publishes_under_the_same_metadata_path() {
         parent: ROOT,
         name: "notes.txt".into(),
         kind: NodeKind::File,
-        content: None,
     }))
     .unwrap();
 
@@ -639,7 +670,6 @@ fn a_second_device_of_the_same_account_resolves_the_write() {
         parent: ROOT,
         name: "photos".into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .unwrap();
     let mut tasks = world.scheduler.take_spawned_tasks();
@@ -660,6 +690,366 @@ fn a_second_device_of_the_same_account_resolves_the_write() {
     assert_eq!(
         children[0].id,
         block_on(engine_a.view()).unwrap().children(ROOT)[0].id
+    );
+}
+
+/// Feed `plaintext` through a write handle in small slices, the way a host
+/// slices a `File`, and commit it.
+fn write_file(
+    engine: &mut Engine<FakeSeamTypes>,
+    target: WriteTarget,
+    plaintext: &[u8],
+) -> Result<OpId, EngineError> {
+    let handle = block_on(engine.begin_write(target, plaintext.len() as u64))?;
+    for slice in plaintext.chunks(7) {
+        block_on(engine.push_chunk(handle, slice))?;
+    }
+    block_on(engine.commit_write(handle))
+}
+
+/// The slice's headline: content bytes sliced by the client, sealed and staged
+/// per block by the engine, uploaded and published by the drain, and downloaded
+/// and verified byte-for-byte by a second device that only ever saw the network.
+#[test]
+fn a_file_create_round_trips_its_bytes_to_a_second_device() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    // Multi-leaf at the CI framing, so the DAG, the per-block staging, and the
+    // upload ordering are all exercised rather than degenerate.
+    let plaintext: Vec<u8> = (0..200u8).collect();
+
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine_a,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &plaintext,
+    )
+    .expect("the write commits");
+    tick(&world, &engine_a, &mut tasks);
+
+    // Every staged block left with its upload: the drain releases the version's
+    // blocks once its record has published, leaving only the queue bookkeeping.
+    assert_eq!(
+        block_on(alice.staging_store.staged_keys()).unwrap(),
+        vec![DRAINED_OP_MARK_KEY.to_vec()],
+        "no staged block survives a published version"
+    );
+    assert!(
+        block_on(alice.staging_store.queued_ops())
+            .unwrap()
+            .is_empty(),
+        "the op left the queue"
+    );
+
+    let bob = world.device(b"alice-second-device");
+    serve_http(&bob, &blocks, 400);
+    let (mut engine_b, _events_b) = engine_on(&bob, 7);
+    block_on(engine_b.start(secret()))
+        .expect("the second device cold-starts off the published record plane");
+
+    let children = block_on(engine_b.view()).unwrap().children(ROOT);
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].name, "photo.bin");
+    assert_eq!(children[0].kind, NodeKind::File);
+
+    assert_eq!(
+        block_on(engine_b.read_content(children[0].id)).expect("the verified read serves it"),
+        plaintext,
+        "the bytes device A sealed are the bytes device B verifies"
+    );
+    assert_eq!(
+        block_on(engine_b.view())
+            .unwrap()
+            .attrs(children[0].id)
+            .unwrap()
+            .size,
+        Some(plaintext.len() as u64),
+        "the published version carries its own manifest's size"
+    );
+}
+
+/// A new version of an existing file takes the head of its version list and is
+/// what a second device downloads.
+#[test]
+fn an_update_content_write_round_trips_the_new_version_to_a_second_device() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine_a,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "notes.txt".into(),
+        },
+        b"first version bytes",
+    )
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks);
+    let node = child_id(&engine_a, ROOT, "notes.txt");
+
+    write_file(
+        &mut engine_a,
+        WriteTarget::Version { node },
+        b"second version bytes, longer than the first",
+    )
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks);
+
+    let bob = world.device(b"alice-second-device");
+    serve_http(&bob, &blocks, 400);
+    let (mut engine_b, _events_b) = engine_on(&bob, 7);
+    block_on(engine_b.start(secret())).unwrap();
+    assert_eq!(
+        block_on(engine_b.read_content(node)).expect("the head version reads"),
+        b"second version bytes, longer than the first",
+        "the newest version is the head"
+    );
+}
+
+/// The publish registers every block the version links, and the held record
+/// keeps that list so a sub-EOL renewal re-pins the same content (#797).
+#[test]
+fn a_published_version_registers_its_whole_block_set() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let plaintext: Vec<u8> = (0..200u8).collect();
+
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine_a,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &plaintext,
+    )
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks);
+
+    let node = child_id(&engine_a, ROOT, "photo.bin");
+    let registered = registered_content_cids(&alice, &write_name(node));
+    // 200 bytes at the CI framing frames to 13 leaves plus the root.
+    assert_eq!(
+        registered.len(),
+        14,
+        "every block the version links rides the registration"
+    );
+    assert!(
+        registered.iter().all(|cid| blocks.get(cid).is_some()),
+        "every registered CID names a block the provider holds"
+    );
+}
+
+/// The `pushChunk` total is cross-checked against the `beginWrite` declaration:
+/// a backing file truncated mid-read fails the commit rather than publishing a
+/// short version as a success (#830).
+#[test]
+fn a_truncated_file_fails_the_commit_and_publishes_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let handle = block_on(engine_a.begin_write(
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "truncated.bin".into(),
+        },
+        200,
+    ))
+    .unwrap();
+    // The file shrinks: the host feeds 100 of the 200 bytes it promised.
+    block_on(engine_a.push_chunk(handle, &(0..100u8).collect::<Vec<_>>())).unwrap();
+
+    assert_eq!(
+        block_on(engine_a.commit_write(handle)),
+        Err(EngineError::ContentSizeMismatch {
+            declared: 200,
+            observed: 100
+        })
+    );
+    tick(&world, &engine_a, &mut tasks);
+
+    assert!(
+        block_on(engine_a.view()).unwrap().children(ROOT).is_empty(),
+        "nothing was journaled, so nothing publishes"
+    );
+    assert_eq!(
+        block_on(alice.staging_store.staged_bytes_total()).unwrap(),
+        0,
+        "the failed write releases every block it staged"
+    );
+}
+
+/// Frame `plaintext` the way a write handle does, without the facade: every
+/// sealed block in file order, the root block, and its content address.
+fn frame_version(plaintext: &[u8]) -> (Vec<SealedChunk>, Vec<u8>, Vec<u8>) {
+    let mut entropy = SeededEntropy::new(99);
+    let mut writer = ContentWriter::new(ContentKey::from_bytes([0x3C; 32]), ContentProfile::CI);
+    let mut leaves = Vec::new();
+    let mut rest = plaintext;
+    while !rest.is_empty() {
+        let (remaining, leaf) = writer.push(rest, &mut entropy).unwrap();
+        if let Some(leaf) = leaf {
+            leaves.push(leaf);
+        }
+        rest = remaining;
+    }
+    let finished = writer.finish(&mut entropy).unwrap();
+    if let Some(tail) = finished.tail {
+        leaves.push(tail);
+    }
+    let root_cid = finished.content.content_cid().to_vec();
+    (leaves, finished.root_block, root_cid)
+}
+
+/// Put a framed version's blocks into a device's staging store.
+fn stage_blocks(device: &FakeDevice, leaves: &[SealedChunk], root_block: &[u8], root_cid: &[u8]) {
+    block_on(async {
+        for leaf in leaves {
+            device
+                .staging_store
+                .put_staged_bytes(&leaf.cid, &leaf.sealed)
+                .await
+                .unwrap();
+        }
+        device
+            .staging_store
+            .put_staged_bytes(root_cid, root_block)
+            .await
+            .unwrap();
+    });
+}
+
+/// A version whose key blob will not open can never be read again, whatever its
+/// bytes say. The op dead-letters — and unlike every other abandonment, its
+/// blocks are **released** rather than preserved, since bytes no key opens are
+/// not the user's recoverable work (#818).
+#[test]
+fn a_version_whose_content_key_will_not_open_dead_letters_and_releases_its_blocks() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "notes.txt".into(),
+        kind: NodeKind::File,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let file = child_id(&engine, ROOT, "notes.txt");
+    let (file_sequence, _) = published(&world.record_store, file);
+
+    let (leaves, root_block, root_cid) = frame_version(&(0..40u8).collect::<Vec<_>>());
+    stage_blocks(&alice, &leaves, &root_block, &root_cid);
+    stage(
+        &alice,
+        &Op::update_content(
+            file,
+            StagedContent {
+                root_cid: root_cid.clone(),
+                plaintext_size: 40,
+                sealed_content_key: b"not a key blob".to_vec(),
+                epoch: EPOCH,
+            },
+            file_sequence,
+            UnixMillis(4_242),
+        ),
+        Some(&root_block),
+    );
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::DeadLetter {
+                reason: DeadLetterReason::ContentUnrecoverable,
+                ..
+            }
+        )),
+        "the host learns the version is unrecoverable"
+    );
+    assert_eq!(
+        block_on(alice.staging_store.staged_keys()).unwrap(),
+        vec![DRAINED_OP_MARK_KEY.to_vec()],
+        "blocks no key opens are released, never held against the budget"
+    );
+    assert_eq!(
+        published(&world.record_store, file).0,
+        file_sequence,
+        "nothing published"
+    );
+}
+
+/// The drain removes each block on its confirmed upload, so the blocks still
+/// staged are always a suffix of the list. A block missing from the middle is
+/// loss, not progress: the version can never be assembled, so it fails closed
+/// rather than publishing a root whose links do not resolve.
+#[test]
+fn a_hole_in_the_staged_block_suffix_is_loss_and_fails_closed() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &plaintext,
+    )
+    .unwrap();
+
+    // The host loses one block from the middle of the set before the drain runs.
+    block_on(async {
+        let queued = alice.staging_store.queued_ops().await.unwrap();
+        let root_cid = record_content_root_cid(&queued[0].1).unwrap().unwrap();
+        let root_block = alice
+            .staging_store
+            .staged_bytes(&root_cid)
+            .await
+            .unwrap()
+            .unwrap();
+        let leaves = decode_root(&root_block).unwrap().leaf_cids;
+        alice
+            .staging_store
+            .remove_staged_bytes(&leaves[leaves.len() / 2])
+            .await
+            .unwrap();
+    });
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::DeadLetter {
+                reason: DeadLetterReason::ContentUnrecoverable,
+                ..
+            }
+        )),
+        "a hole is loss, never progress"
+    );
+    assert!(
+        block_on(engine.view()).unwrap().children(ROOT).is_empty(),
+        "no short version publishes"
     );
 }
 
@@ -694,7 +1084,6 @@ fn an_op_the_completion_record_already_covers_never_republishes() {
         parent: ROOT,
         name: "photos".into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .unwrap();
     assert_eq!(op_id, Some(OpId(1)), "the create reclaims the covered id");
@@ -750,7 +1139,6 @@ fn a_rename_republishes_only_the_parent_and_a_second_device_resolves_it() {
         parent: ROOT,
         name: "photos".into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .unwrap();
     tick(&world, &engine, &mut tasks);
@@ -802,7 +1190,6 @@ fn a_delete_drops_the_parent_ref_and_a_second_device_resolves_it() {
             parent: ROOT,
             name: name.into(),
             kind: NodeKind::File,
-            content: None,
         }))
         .unwrap();
     }
@@ -898,7 +1285,6 @@ fn a_replacing_rename_lands_the_vacated_and_moved_refs_in_one_record() {
             parent: ROOT,
             name: name.into(),
             kind: NodeKind::File,
-            content: None,
         }))
         .unwrap();
     }
@@ -957,7 +1343,6 @@ fn a_cross_folder_move_that_replaces_publishes_the_dest_before_the_source() {
         parent: photos,
         name: "a.txt".into(),
         kind: NodeKind::File,
-        content: None,
     }))
     .unwrap();
     tick(&world, &engine, &mut tasks);
@@ -988,10 +1373,9 @@ fn a_cross_folder_move_that_replaces_publishes_the_dest_before_the_source() {
     );
 }
 
-/// `updateContent`'s metadata half: a file's own record carries its
-/// `modifiedAt`, and its parent holds no size/mtime mirror to republish. The
-/// facade cannot form this op until the content slice (#868), so it is staged
-/// straight into the durable queue the drain reads.
+/// `updateContent` authors the file's own record and nothing else: its parent
+/// holds no size/mtime mirror to republish. The record takes the new version at
+/// the head of its list and stamps the op's journaled authoring time.
 #[test]
 fn an_update_content_republishes_the_files_own_record_and_not_its_parent() {
     let world = FakeWorld::new();
@@ -1004,7 +1388,6 @@ fn an_update_content_republishes_the_files_own_record_and_not_its_parent() {
         parent: ROOT,
         name: "notes.txt".into(),
         kind: NodeKind::File,
-        content: None,
     }))
     .unwrap();
     tick(&world, &engine, &mut tasks);
@@ -1012,20 +1395,13 @@ fn an_update_content_republishes_the_files_own_record_and_not_its_parent() {
     let (file_sequence, _) = published(&world.record_store, file);
     let (root_sequence, _) = published(&world.record_store, ROOT);
 
-    const STAGED_ROOT: &[u8] = b"a staged version root";
-    stage(
-        &alice,
-        &Op::update_content(
-            file,
-            StagedContent {
-                root_cid: compute_cid(CONTENT_CID_CODEC, STAGED_ROOT),
-                plaintext_size: STAGED_ROOT.len() as u64,
-            },
-            file_sequence,
-            UnixMillis(4_242),
-        ),
-        Some(STAGED_ROOT),
-    );
+    let authored_at = cipherbox_engine::seams::Scheduler::now(&world.scheduler).0;
+    write_file(
+        &mut engine,
+        WriteTarget::Version { node: file },
+        b"v2 bytes",
+    )
+    .unwrap();
     tick(&world, &engine, &mut tasks);
 
     let (sequence, head_cid) = published(&world.record_store, file);
@@ -1049,20 +1425,18 @@ fn an_update_content_republishes_the_files_own_record_and_not_its_parent() {
         panic!("expected a file body");
     };
     assert_eq!(
-        modified_at, 4_242,
+        modified_at, authored_at,
         "the journaled authoring time, never a clock read at publish"
     );
-    assert!(
-        versions.is_empty(),
-        "the version this op stages is the content slice's"
-    );
+    assert_eq!(versions.len(), 1, "the write authored exactly one version");
+    assert_eq!(versions[0].size, b"v2 bytes".len() as u64);
 
     let bob = world.device(b"alice-second-device");
     let (engine_b, _events_b, _tasks_b) = boot(&world, &blocks, &bob, 7);
     assert_eq!(
         block_on(engine_b.view()).unwrap().children(ROOT).len(),
         1,
-        "device B resolves a root the metadata write left alone"
+        "device B resolves a root the child write left alone"
     );
 }
 
@@ -1085,7 +1459,6 @@ fn a_rename_of_a_still_queued_create_publishes_child_before_parent() {
         parent: ROOT,
         name: "photos".into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .unwrap();
     assert!(op.is_some());
@@ -1136,7 +1509,6 @@ fn a_create_below_the_scope_root_publishes_and_projects() {
         parent: ROOT,
         name: "photos".into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .unwrap();
     tick(&world, &engine, &mut tasks);
@@ -1146,7 +1518,6 @@ fn a_create_below_the_scope_root_publishes_and_projects() {
         parent: photos,
         name: "2026".into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .unwrap();
     tick(&world, &engine, &mut tasks);
@@ -1228,7 +1599,6 @@ fn a_compensated_move_restores_the_ref_its_dest_add_replaced() {
         parent: photos,
         name: "a.txt".into(),
         kind: NodeKind::File,
-        content: None,
     }))
     .unwrap();
     tick(&world, &engine, &mut tasks);
@@ -1283,7 +1653,6 @@ fn a_compensated_move_does_not_resurrect_a_replaced_ref_over_a_concurrent_winner
         parent: photos,
         name: "a.txt".into(),
         kind: NodeKind::File,
-        content: None,
     }))
     .unwrap();
     tick(&world, &engine, &mut tasks);
@@ -1482,7 +1851,6 @@ fn a_relink_into_its_own_descendant_or_itself_is_refused() {
             parent: ROOT,
             name: "photos".into(),
             kind: NodeKind::Folder,
-            content: None,
         }))
         .unwrap();
         tick(&world, &engine, &mut tasks);
@@ -1491,7 +1859,6 @@ fn a_relink_into_its_own_descendant_or_itself_is_refused() {
             parent: photos,
             name: "2026".into(),
             kind: NodeKind::Folder,
-            content: None,
         }))
         .unwrap();
         tick(&world, &engine, &mut tasks);
@@ -1538,7 +1905,6 @@ fn a_remote_root_advance_leaves_a_queued_deep_op_publishable() {
         parent: ROOT,
         name: "photos".into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .unwrap();
     tick(&world, &engine, &mut tasks);
@@ -1547,7 +1913,6 @@ fn a_remote_root_advance_leaves_a_queued_deep_op_publishable() {
         parent: photos,
         name: "2026".into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .unwrap();
     tick(&world, &engine, &mut tasks);
@@ -1902,14 +2267,12 @@ fn seed_folder_and_file(
         parent: ROOT,
         name: "photos".into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .unwrap();
     block_on(engine.command(Command::Create {
         parent: ROOT,
         name: "a.txt".into(),
         kind: NodeKind::File,
-        content: None,
     }))
     .unwrap();
     tick(world, engine, tasks);
@@ -1925,7 +2288,6 @@ fn create(engine: &mut Engine<FakeSeamTypes>, name: &str) -> OpId {
         parent: ROOT,
         name: name.into(),
         kind: NodeKind::Folder,
-        content: None,
     }))
     .expect("a metadata create stages")
     .expect("a create queues an op")
@@ -1985,19 +2347,28 @@ fn jam_name(records: &InMemoryRecordStore, node: NodeId) {
 }
 
 /// Stage an op straight into the durable queue, for a mutation the facade
-/// cannot form yet.
+/// cannot form yet. A content op's `upload` is the root block `stage_op`
+/// requires the store to already hold under the op's root CID.
 fn stage(device: &FakeDevice, op: &Op, upload: Option<&[u8]>) {
-    block_on(stage_op(
-        &device.staging_store,
-        &StoragePolicy::CI,
-        RecordSeal {
-            owner_enc_secret: &kdf::enc_subkey(&SECRET),
-            ephemeral_scalar: Zeroizing::new([0x5A; 32]),
-        },
-        op,
-        upload,
-    ))
-    .expect("the op queues");
+    block_on(async {
+        if let (Some(cid), Some(bytes)) = (op.content_root_cid(), upload) {
+            device
+                .staging_store
+                .put_staged_bytes(cid, bytes)
+                .await
+                .expect("the root block stages");
+        }
+        stage_op(
+            &device.staging_store,
+            RecordSeal {
+                owner_enc_secret: &kdf::enc_subkey(&SECRET),
+                ephemeral_scalar: Zeroizing::new([0x5A; 32]),
+            },
+            op,
+        )
+        .await
+        .expect("the op queues");
+    });
 }
 
 /// Another writer publishes the **scope root**'s next record, adding `extra` on

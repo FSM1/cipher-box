@@ -203,7 +203,9 @@ mod tests {
         let root = cid(b"root block");
         let sealed = seal_content_key(&owner, &[7; 32], 2, &root, &KEY).unwrap();
         assert_eq!(
-            open_content_key(&owner, 3, &root, &sealed).unwrap_err().check(),
+            open_content_key(&owner, 3, &root, &sealed)
+                .unwrap_err()
+                .check(),
             "hpke-open-failed",
             "the epoch is AAD-bound, so it cannot be re-dated"
         );
