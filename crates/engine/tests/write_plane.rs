@@ -1266,6 +1266,61 @@ fn a_compensated_move_restores_the_ref_its_dest_add_replaced() {
     );
 }
 
+/// The compensation's restore is an inverse of **our own** edit, so it may only
+/// run while our bytes are still the destination head. A winner that built on
+/// the listing our dest-add published must not have the vacated ref re-asserted
+/// over it (#786's rule, extended to the replace).
+#[test]
+fn a_compensated_move_does_not_resurrect_a_replaced_ref_over_a_concurrent_winner() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (photos, moved) = seed_folder_and_file(&world, &mut engine, &mut tasks);
+    block_on(engine.command(Command::Create {
+        parent: photos,
+        name: "a.txt".into(),
+        kind: NodeKind::File,
+        content: None,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let replaced = child_id(&engine, photos, "a.txt");
+
+    let winner = file_ref([0xAA; 16], "winner.txt");
+    let records = world.record_store.clone();
+    let plane = blocks.clone();
+    blocks.refuse_upload(Box::new(move |block| {
+        if head_of(block) != Some(ROOT.0) {
+            return None;
+        }
+        // The instant our source-remove fails, another writer advances the dest.
+        concurrent_add(&records, &plane, photos, winner.clone());
+        Some(unreachable_upload())
+    }));
+    block_on(engine.command(Command::Move {
+        node: moved,
+        new_parent: photos,
+        new_name: "a.txt".into(),
+        replacing: Some(replaced),
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, photos),
+        ["winner.txt"],
+        "our dest-add was undone without re-asserting the ref we vacated"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["a.txt", "photos"],
+        "the source kept the child it could not release"
+    );
+}
+
 /// The adversarial interleave at the compensation seam: a concurrent writer
 /// lands a strictly-newer dest record between the dest-add and its undo. The
 /// versioned compare-and-remove refuses to replay a stale copy over the winner

@@ -414,7 +414,10 @@ fn rebase_move(
     // because a name lives in the parent's child ref and renaming a node never
     // advances the node's own record sequence.
     let vacating = replacing.filter(|replaced| {
-        working.parent_of(replaced.node) == Some(new_parent)
+        // A node never replaces itself: the facade is a public surface, and
+        // vacating the target would erase the very node this op moves.
+        replaced.node != op.target
+            && working.parent_of(replaced.node) == Some(new_parent)
             && working
                 .node(replaced.node)
                 .is_some_and(|node| collation_key(&node.name) == collation_key(new_name))
@@ -1023,6 +1026,35 @@ mod tests {
             Some(id(0)),
             "the relocated bystander is untouched where it now lives"
         );
+    }
+
+    #[test]
+    fn a_move_that_names_its_own_target_as_the_replaced_node_keeps_it() {
+        // `Command::Move` is a public facade surface; vacating the target would
+        // erase the very node the op moves, and every later op on it would then
+        // dead-letter as `TargetGone`.
+        let mut base = replace_tree(1);
+        let local = base.clone();
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(
+                id(2),
+                id(0),
+                id(0),
+                "renamed.txt",
+                Some(Replaced {
+                    node: id(2),
+                    sequence: 1,
+                }),
+                1,
+                AT,
+            ),
+        );
+        assert!(matches!(res, OpResolution::Applied { .. }));
+        assert!(base.contains(id(2)), "the target survives its own replace");
+        assert_eq!(base.node(id(2)).unwrap().name, "renamed.txt");
+        assert_eq!(base.parent_of(id(2)), Some(id(0)));
     }
 
     #[test]

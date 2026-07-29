@@ -1074,25 +1074,31 @@ where
         // a cache hit would answer with the bytes we just published and make the
         // compare vacuous.
         let observed = self.observed_sequence(&pass.folder(dest)?.name).await?;
-        let replaced = replaced.as_ref();
-        let undo = |children: &[ChildRef]| -> Vec<ChildRef> {
-            let mut next: Vec<ChildRef> = children
+        let drop_target = |children: &[ChildRef]| -> Vec<ChildRef> {
+            children
                 .iter()
                 .filter(|child| child.id != target.0)
                 .cloned()
-                .collect();
-            if let Some(replaced) = replaced
-                && !next.iter().any(|child| child.id == replaced.id)
-            {
-                next.push(replaced.clone());
-            }
-            next
+                .collect()
         };
-        let children = match undo_dest_add_versioned(&staged, undo, cas_base, observed) {
-            UndoDestAdd::Removed(children) => children,
+        let children = match undo_dest_add_versioned(&staged, drop_target, cas_base, observed) {
+            // Our own bytes are still the head, so the undo is an exact inverse
+            // of our own edit: the vacated ref goes back too.
+            UndoDestAdd::Removed(mut children) => {
+                if let Some(replaced) = replaced
+                    && !children.iter().any(|child| child.id == replaced.id)
+                {
+                    children.push(replaced);
+                }
+                children
+            }
+            // A winner owns the dest and built on the listing our dest-add
+            // published. Subtract our add and stop there — re-asserting a ref
+            // whose absence the winner has already built on would resurrect it
+            // against an intent that may be permanently retired.
             UndoDestAdd::Conflict => {
                 self.reload_folder(scope, pass, dest).await?;
-                undo(&pass.folder(dest)?.children)
+                drop_target(&pass.folder(dest)?.children)
             }
         };
         pass.folder_mut(dest)?.children = children;

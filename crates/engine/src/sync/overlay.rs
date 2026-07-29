@@ -83,7 +83,9 @@ fn relocate(
     new_name: Option<&str>,
     replacing: Option<crate::facade::NodeId>,
 ) {
-    if let Some(replaced) = replacing {
+    // A node never replaces itself — vacating the target would erase the very
+    // node this op moves (`crate::sync::rebase` refuses it the same way).
+    if let Some(replaced) = replacing.filter(|node| *node != op.target) {
         view.remove_node(replaced);
     }
     let current = view.parent_of(op.target);
@@ -205,6 +207,33 @@ mod tests {
         assert_eq!(view.parent_of(id(2)), Some(id(1)));
         assert_eq!(view.node(id(2)).unwrap().name, "target.txt");
         assert!(view.children(id(0)).iter().all(|c| c.id != id(2)));
+    }
+
+    #[test]
+    fn overlay_move_keeps_a_target_named_as_its_own_replaced_node() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "f.txt", NodeKind::File));
+        base.link(id(0), id(1), 1);
+
+        let replacing = Some(Replaced {
+            node: id(1),
+            sequence: 1,
+        });
+        let view = apply_overlay(
+            &base,
+            &[Op::move_node(
+                id(1),
+                id(0),
+                id(0),
+                "g.txt",
+                replacing,
+                1,
+                AT,
+            )],
+        );
+
+        assert!(view.contains(id(1)), "the target survives its own replace");
+        assert_eq!(view.node(id(1)).unwrap().name, "g.txt");
     }
 
     #[test]
