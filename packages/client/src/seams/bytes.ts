@@ -36,6 +36,9 @@ export function fromHex(hex: string): Uint8Array {
     const high = nibble(hex.charCodeAt(i * 2));
     const low = nibble(hex.charCodeAt(i * 2 + 1));
     if (high < 0 || low < 0) {
+      // Hosts decode secret-bearing hex here, so the bytes already decoded must
+      // not survive the throw (blueprint/core.md: scrub on error paths too).
+      out.fill(0, 0, i);
       throw new TypeError('fromHex: hex string contains a non-hex character');
     }
     out[i] = (high << 4) | low;

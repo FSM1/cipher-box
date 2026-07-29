@@ -10,13 +10,17 @@ import { useSyncExternalStore } from 'react';
 export type LoginMethod = 'google' | 'email' | 'wallet';
 
 export interface AuthState {
-  isAuthenticated: boolean;
+  readonly isAuthenticated: boolean;
   /** Absent for wallet logins, which carry no email. */
-  email: string | null;
-  method: LoginMethod | null;
+  readonly email: string | null;
+  readonly method: LoginMethod | null;
 }
 
-const SIGNED_OUT: AuthState = { isAuthenticated: false, email: null, method: null };
+const SIGNED_OUT: AuthState = Object.freeze({
+  isAuthenticated: false,
+  email: null,
+  method: null,
+});
 
 let state: AuthState = SIGNED_OUT;
 const listeners = new Set<() => void>();
@@ -31,7 +35,9 @@ function set(next: AuthState): void {
   ) {
     return;
   }
-  state = next;
+  // Frozen: a consumer that mutated a published snapshot would change what the
+  // UI renders without notifying anyone, and React bails out on identity.
+  state = Object.freeze(next);
   for (const listener of listeners) listener();
 }
 
@@ -42,7 +48,9 @@ export const authStore = {
   },
   getState: (): AuthState => state,
   signedIn(method: LoginMethod, email: string | null = null): void {
-    set({ isAuthenticated: true, email, method });
+    // Drop an email a wallet login had no business carrying rather than hold
+    // PII the state contract declares absent.
+    set({ isAuthenticated: true, email: method === 'wallet' ? null : email, method });
   },
   signedOut(): void {
     set(SIGNED_OUT);

@@ -27,6 +27,17 @@ describe('auth.store', () => {
     expect(authStore.getState().isAuthenticated).toBe(true);
   });
 
+  it('drops an email handed to a wallet login', () => {
+    authStore.signedIn('wallet', 'user@example.com');
+    expect(authStore.getState().email).toBeNull();
+  });
+
+  it('publishes frozen snapshots', () => {
+    expect(Object.isFrozen(authStore.getState())).toBe(true);
+    authStore.signedIn('google', 'user@example.com');
+    expect(Object.isFrozen(authStore.getState())).toBe(true);
+  });
+
   it('clears the session on sign-out', () => {
     authStore.signedIn('email', 'user@example.com');
     authStore.signedOut();
@@ -43,6 +54,12 @@ describe('auth.store', () => {
 
     authStore.signedIn('google', 'user@example.com');
     expect(changes).toBe(1);
+
+    // A repeat login of identical values must not re-render consumers.
+    const snapshot = authStore.getState();
+    authStore.signedIn('google', 'user@example.com');
+    expect(changes).toBe(1);
+    expect(authStore.getState()).toBe(snapshot);
 
     drop();
     authStore.signedOut();

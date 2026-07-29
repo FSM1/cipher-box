@@ -50,6 +50,7 @@ export function fakeEngine() {
   const focus: (Uint8Array | null)[] = [];
   const reported: (Uint8Array | null)[] = [];
   let settleFocus: (() => void) | null = null;
+  let failFocus: ((error: Error) => void) | null = null;
 
   const client = {
     facade: {
@@ -64,8 +65,9 @@ export function fakeEngine() {
       },
       setFocus(node: Uint8Array | null) {
         focus.push(node);
-        return new Promise<void>((resolve) => {
+        return new Promise<void>((resolve, reject) => {
           settleFocus = resolve;
+          failFocus = reject;
         });
       },
     },
@@ -84,6 +86,7 @@ export function fakeEngine() {
       for (const listener of listeners) listener(event);
     },
     ackFocus: () => settleFocus?.(),
+    rejectFocus: (error: Error) => failFocus?.(error),
     subscriberCount: () => listeners.size,
   };
 }
