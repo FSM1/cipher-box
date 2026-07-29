@@ -9,6 +9,7 @@ import type {
   SnapshotDescriptor,
   WorkerMessage,
   WorkerRequest,
+  WriteTarget,
 } from './protocol.js';
 import { serveEngine, type WorkerScopeLike } from './serve.js';
 
@@ -60,6 +61,10 @@ const SNAPSHOT: SnapshotDescriptor = {
 class ReadHost implements EngineHostLike {
   readonly snapshots: Uint8Array[] = [];
   readonly downloads: Uint8Array[] = [];
+  readonly beginWrites: Array<{ target: WriteTarget; size: number }> = [];
+  readonly chunks: Array<{ handle: bigint; bytes: number[] }> = [];
+  readonly commits: bigint[] = [];
+  readonly aborts: bigint[] = [];
   respondSnapshot: () => Promise<SnapshotDescriptor> = () => Promise.resolve(SNAPSHOT);
   respondDownload: () => Promise<ArrayBuffer> = () =>
     Promise.resolve(new Uint8Array([9, 8, 7]).buffer);
@@ -69,6 +74,26 @@ class ReadHost implements EngineHostLike {
   }
 
   command(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  beginWrite(target: WriteTarget, size: number): Promise<bigint> {
+    this.beginWrites.push({ target, size });
+    return Promise.resolve(11n);
+  }
+
+  pushChunk(handle: bigint, chunk: ArrayBuffer): Promise<void> {
+    this.chunks.push({ handle, bytes: [...new Uint8Array(chunk)] });
+    return Promise.resolve();
+  }
+
+  commitWrite(handle: bigint): Promise<bigint> {
+    this.commits.push(handle);
+    return Promise.resolve(2048n);
+  }
+
+  abortWrite(handle: bigint): Promise<void> {
+    this.aborts.push(handle);
     return Promise.resolve();
   }
 
@@ -178,6 +203,52 @@ describe('serveEngine read requests', () => {
   });
 });
 
+describe('serveEngine write requests', () => {
+  it('routes every write step to the host and correlates its response', async () => {
+    const { scope, worker } = loopback();
+    const host = new ReadHost();
+    serveEngine(scope, host);
+    const transport = new LocalTransport(worker);
+
+    const parent = new Uint8Array(16).fill(1);
+    const handle = await transport.beginWrite({ parent, name: 'a.txt' }, 5);
+    expect(handle).toBe(11n);
+    expect(host.beginWrites).toEqual([{ target: { parent, name: 'a.txt' }, size: 5 }]);
+
+    const chunk = new Uint8Array([1, 2, 3, 4, 5]).buffer;
+    await expect(transport.pushChunk(handle, chunk)).resolves.toBeUndefined();
+    expect(host.chunks).toEqual([{ handle: 11n, bytes: [1, 2, 3, 4, 5] }]);
+
+    await expect(transport.commitWrite(handle)).resolves.toBe(2048n);
+    expect(host.commits).toEqual([11n]);
+
+    await expect(transport.abortWrite(11n)).resolves.toBeUndefined();
+    expect(host.aborts).toEqual([11n]);
+  });
+
+  it('answers a version write and maps a rejected commit to its stable code', async () => {
+    const { scope, worker } = loopback();
+    const host = new ReadHost();
+    host.commitWrite = () =>
+      Promise.reject(
+        Object.assign(new Error('pushed 3 of 5 bytes'), { code: 'contentSizeMismatch' })
+      );
+    serveEngine(scope, host);
+    const transport = new LocalTransport(worker);
+
+    const node = new Uint8Array(16).fill(9);
+    const handle = await transport.beginWrite({ node }, 5);
+    expect(host.beginWrites).toEqual([{ target: { node }, size: 5 }]);
+
+    await expect(transport.commitWrite(handle)).rejects.toMatchObject({
+      code: 'contentSizeMismatch',
+      message: 'pushed 3 of 5 bytes',
+    });
+    // Per-request, never fatal: the transport still serves the next call.
+    await expect(transport.abortWrite(handle)).resolves.toBeUndefined();
+  });
+});
+
 describe('serveEngine event pump over the real EngineHost', () => {
   it('streams renewalFailed and opProgress without turning the pump fatal', async () => {
     // The regression this guards: a renewalFailed engine event used to be an
@@ -197,6 +268,10 @@ describe('serveEngine event pump over the real EngineHost', () => {
     const handle: WasmEngineHandle = {
       start: () => Promise.resolve(undefined),
       command: () => Promise.resolve(undefined),
+      beginWrite: () => Promise.resolve(1n),
+      pushChunk: () => Promise.resolve(undefined),
+      commitWrite: () => Promise.resolve(1n),
+      abortWrite: () => Promise.resolve(undefined),
       snapshot: () => Promise.reject(new Error('unused')),
       download: () => Promise.reject(new Error('unused')),
       nextEvent: () =>

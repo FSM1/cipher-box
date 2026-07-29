@@ -40,6 +40,22 @@ class FakeHost implements EngineHostLike {
     await sleep(this.commandCount === 1 ? 40 : 5);
   }
 
+  beginWrite(): Promise<bigint> {
+    return Promise.reject(new Error('fake host serves no writes'));
+  }
+
+  pushChunk(): Promise<void> {
+    return Promise.reject(new Error('fake host serves no writes'));
+  }
+
+  commitWrite(): Promise<bigint> {
+    return Promise.reject(new Error('fake host serves no writes'));
+  }
+
+  abortWrite(): Promise<void> {
+    return Promise.resolve();
+  }
+
   snapshot(): Promise<SnapshotDescriptor> {
     return Promise.reject(new Error('fake host serves no snapshots'));
   }

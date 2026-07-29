@@ -120,7 +120,7 @@ window.runSnapshotSuite = async (): Promise<SnapshotSuiteResult> => {
     // Metadata-only creates: pending overlay entries with no content plane.
     const root = new Uint8Array(16);
     await facade.create(root, 'docs', 'folder');
-    await facade.create(root, 'pending.txt', 'file', null);
+    await facade.create(root, 'pending.txt', 'file');
 
     const view = await facade.snapshot(root);
     const docs = view.children.find((child) => child.name === 'docs');

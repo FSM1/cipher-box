@@ -13,7 +13,8 @@
  *
  * `u64`s cross as `bigint`; binary payloads cross as `Uint8Array`, with file
  * content transferred as an `ArrayBuffer` so no bytes are copied through the
- * boundary (blueprint/web-client.md "Boundary hygiene").
+ * boundary (blueprint/web-client.md "Boundary hygiene"). Content never rides a
+ * command: it streams chunk by chunk through a write handle.
  */
 
 /** Grant permission level (mirrors the facade `Permission`). */
@@ -45,7 +46,8 @@ export type DeadLetterReason =
   | 'suffixExhausted'
   | 'undecodable'
   | 'payloadRefused'
-  | 'attemptsExhausted';
+  | 'attemptsExhausted'
+  | 'contentUnrecoverable';
 
 /** A terminal dead-lettered op and its reason, as data. */
 export interface DeadLetterDescriptor {
@@ -103,17 +105,10 @@ export interface SnapshotDescriptor {
  * builder name (`crates/wasm` `Command`), so the worker maps it mechanically.
  */
 export type CommandDescriptor =
-  | {
-      kind: 'create';
-      parent: Uint8Array;
-      name: string;
-      nodeKind: NodeKind;
-      content: ArrayBuffer | null;
-    }
+  | { kind: 'create'; parent: Uint8Array; name: string; nodeKind: NodeKind }
   | { kind: 'delete'; node: Uint8Array }
   | { kind: 'rename'; node: Uint8Array; newName: string }
   | { kind: 'relink'; node: Uint8Array; newParent: Uint8Array }
-  | { kind: 'updateContent'; node: Uint8Array; content: ArrayBuffer }
   | { kind: 'setFocus'; node: Uint8Array | null }
   | { kind: 'manualRefresh' }
   | { kind: 'importContact'; contactCode: Uint8Array }
@@ -130,6 +125,15 @@ export type CommandDescriptor =
   | { kind: 'rotateNow'; node: Uint8Array }
   | { kind: 'siweLogin'; message: string; signature: Uint8Array }
   | { kind: 'logout' };
+
+/**
+ * Where a streaming write lands: a new file named `name` under `parent`, or a
+ * new version of the existing file `node`. Never both (the engine rejects it).
+ */
+export type WriteTarget = { parent: Uint8Array; name: string } | { node: Uint8Array };
+
+/** An open write handle's id — the engine's `u64`, opaque to this layer. */
+export type WriteHandle = bigint;
 
 /** One event the engine emitted, as data (mirrors the facade `Event`). */
 export type EventDescriptor =
@@ -151,6 +155,10 @@ export type EventDescriptor =
 export type WorkerRequest =
   | { type: 'start'; id: number; secret: ArrayBuffer }
   | { type: 'command'; id: number; command: CommandDescriptor }
+  | { type: 'beginWrite'; id: number; target: WriteTarget; size: number }
+  | { type: 'pushChunk'; id: number; handle: WriteHandle; chunk: ArrayBuffer }
+  | { type: 'commitWrite'; id: number; handle: WriteHandle }
+  | { type: 'abortWrite'; id: number; handle: WriteHandle }
   | { type: 'snapshot'; id: number; folder: Uint8Array }
   | { type: 'download'; id: number; node: Uint8Array };
 
@@ -159,11 +167,12 @@ export type WorkerMessage =
   /** The worker has instantiated the engine and is ready for requests. */
   | { type: 'ready' }
   /**
-   * The correlated result of a request. A read request's ok response carries
-   * its value: a `SnapshotDescriptor` for `snapshot`, the plaintext
-   * `ArrayBuffer` (transferred, not copied) for `download`.
+   * The correlated result of a request. A value-bearing ok response carries it:
+   * a `SnapshotDescriptor` for `snapshot`, the plaintext `ArrayBuffer`
+   * (transferred, not copied) for `download`, the write handle for `beginWrite`,
+   * the durable op id for `commitWrite`.
    */
-  | { type: 'response'; id: number; ok: true; result?: SnapshotDescriptor | ArrayBuffer }
+  | { type: 'response'; id: number; ok: true; result?: SnapshotDescriptor | ArrayBuffer | bigint }
   /**
    * A failed request. `error` is the human-readable diagnostic; `code` is the
    * engine's stable machine-readable error code (the wasm host's camelCase

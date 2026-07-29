@@ -11,7 +11,13 @@
  */
 
 import type { EngineEventListener, EngineTransport } from './transport.js';
-import type { CommandDescriptor, EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
+import type {
+  CommandDescriptor,
+  EventDescriptor,
+  SnapshotDescriptor,
+  WriteHandle,
+  WriteTarget,
+} from './worker/protocol.js';
 
 interface Pending {
   resolve: (result: unknown) => void;
@@ -59,6 +65,10 @@ export abstract class CorrelatedTransport implements EngineTransport {
 
   abstract start(secret: ArrayBuffer): Promise<void>;
   abstract command(command: CommandDescriptor, transfer: Transferable[]): Promise<void>;
+  abstract beginWrite(target: WriteTarget, size: number): Promise<WriteHandle>;
+  abstract pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void>;
+  abstract commitWrite(handle: WriteHandle): Promise<bigint>;
+  abstract abortWrite(handle: WriteHandle): Promise<void>;
   abstract snapshot(folder: Uint8Array): Promise<SnapshotDescriptor>;
   abstract download(node: Uint8Array): Promise<ArrayBuffer>;
   abstract close(): void;

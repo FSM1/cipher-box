@@ -40,6 +40,22 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
         case 'command':
           await host.command(request.command);
           break;
+        case 'pushChunk':
+          await host.pushChunk(request.handle, request.chunk);
+          break;
+        case 'abortWrite':
+          await host.abortWrite(request.handle);
+          break;
+        case 'beginWrite': {
+          const result = await host.beginWrite(request.target, request.size);
+          post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
+        case 'commitWrite': {
+          const result = await host.commitWrite(request.handle);
+          post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
         case 'snapshot': {
           const result = await host.snapshot(request.folder);
           post({ type: 'response', id: request.id, ok: true, result });

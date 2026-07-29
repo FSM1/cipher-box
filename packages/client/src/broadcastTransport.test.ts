@@ -99,18 +99,41 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(leaderPosts.length).toBeGreaterThanOrEqual(6);
   });
 
-  it('shares upload content as a Blob and rebuilds identical bytes on the leader', async () => {
+  it('shares an upload chunk as a Blob and rebuilds identical bytes on the leader', async () => {
     const { engine, follower } = wire();
-    const bytes = new Uint8Array([9, 8, 7, 6]);
-    await follower.command(
-      { kind: 'updateContent', node: new Uint8Array(16), content: bytes.buffer },
-      [bytes.buffer]
-    );
+    const bytes = Uint8Array.from({ length: 512 }, (_, i) => (i * 13 + 7) & 0xff);
 
-    const command = engine.commands[0];
-    expect(command.kind).toBe('updateContent');
-    if (command.kind !== 'updateContent') throw new Error('unreachable');
-    expect([...new Uint8Array(command.content)]).toEqual([9, 8, 7, 6]);
+    const node = new Uint8Array(16).fill(3);
+    const handle = await follower.beginWrite({ node }, bytes.byteLength);
+    expect(handle).toBe(engine.writeHandle);
+    expect(engine.beginWrites).toEqual([{ target: { node }, size: 512 }]);
+
+    await follower.pushChunk(handle, bytes.buffer.slice(0));
+    expect(engine.chunks).toHaveLength(1);
+    expect([...new Uint8Array(engine.chunks[0].chunk)]).toEqual([...bytes]);
+    expect(engine.chunks[0].handle).toBe(handle);
+
+    await expect(follower.commitWrite(handle)).resolves.toBe(engine.commitOpId);
+    expect(engine.commits).toEqual([handle]);
+  });
+
+  it('propagates a write rejection to the follower with the stable code', async () => {
+    const { engine, follower } = wire();
+    engine.commitWrite = () =>
+      Promise.reject(new EngineRequestError('pushed 3 of 5 bytes', 'contentSizeMismatch'));
+    engine.pushChunk = () =>
+      Promise.reject(new EngineRequestError('no such handle', 'unknownWriteHandle'));
+
+    await expect(follower.pushChunk(1n, new ArrayBuffer(1))).rejects.toMatchObject({
+      code: 'unknownWriteHandle',
+    });
+    await expect(follower.commitWrite(1n)).rejects.toMatchObject({
+      code: 'contentSizeMismatch',
+      message: 'pushed 3 of 5 bytes',
+    });
+    // The abort path stays usable after a failed commit.
+    await expect(follower.abortWrite(1n)).resolves.toBeUndefined();
+    expect(engine.aborts).toEqual([1n]);
   });
 
   it('fans engine events out to the follower in emission order', async () => {

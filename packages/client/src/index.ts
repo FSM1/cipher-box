@@ -50,4 +50,6 @@ export type {
   SnapshotDescriptor,
   SnapshotChildDescriptor,
   BreadcrumbDescriptor,
+  WriteTarget,
+  WriteHandle,
 } from './worker/protocol.js';

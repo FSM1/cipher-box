@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { fakeWasmEnums } from '../testkit.js';
-import { readEvent, readSnapshot } from './commandCodec.js';
+import { buildCommand, readEvent, readSnapshot } from './commandCodec.js';
 import type { EngineWasm, WasmEvent, WasmSnapshotView } from './engineWasm.js';
 
 /**
@@ -9,6 +9,34 @@ import type { EngineWasm, WasmEvent, WasmSnapshotView } from './engineWasm.js';
  * value tables the codec's read paths consult.
  */
 const fakeWasm = fakeWasmEnums as unknown as EngineWasm;
+
+describe('buildCommand', () => {
+  it('builds a create from parent, name and kind alone — no content argument', () => {
+    const calls: unknown[][] = [];
+    const wasm = {
+      ...fakeWasmEnums,
+      NodeId: { fromBytes: (bytes: Uint8Array) => ({ bytes }) },
+      Command: {
+        create: (...args: unknown[]) => {
+          calls.push(args);
+          return {};
+        },
+      },
+    } as unknown as EngineWasm;
+
+    buildCommand(wasm, {
+      kind: 'create',
+      parent: new Uint8Array(16).fill(1),
+      name: 'a.txt',
+      nodeKind: 'file',
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toHaveLength(3);
+    expect(calls[0][1]).toBe('a.txt');
+    expect(calls[0][2]).toBe(fakeWasmEnums.NodeKind.File);
+  });
+});
 
 describe('readEvent', () => {
   it('maps renewalFailed instead of throwing (the transport-bricking bug)', () => {
@@ -59,6 +87,15 @@ describe('readEvent', () => {
       kind: 'deadLetter',
       opId: 7n,
       reason: 'destinationInsideTarget',
+    });
+  });
+
+  it('maps the unrecoverable-content dead letter reason', () => {
+    const event: WasmEvent = { kind: 'deadLetter', opId: 4n, deadLetterReason: 7 };
+    expect(readEvent(fakeWasm, event)).toEqual({
+      kind: 'deadLetter',
+      opId: 4n,
+      reason: 'contentUnrecoverable',
     });
   });
 

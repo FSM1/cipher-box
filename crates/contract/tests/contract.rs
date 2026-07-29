@@ -542,6 +542,80 @@ async fn quota_is_hosted_authoritative_and_byo_advisory() {
     );
 }
 
+/// The content write plane's residual API surface, composed the way the drain
+/// composes it (#868): a version's blocks upload one at a time, root last, then
+/// one registration names the file's `ipnsName` and every block CID under it,
+/// and an abandoned version retires the same set.
+///
+/// This is the write path's first live coverage. It exercises the API contract
+/// the drain depends on — per-block ingress, batch registration carrying a whole
+/// block set, quota accounting over the sum, and retirement of both a name and
+/// its content — against a real API, Postgres, and Kubo.
+#[tokio::test]
+async fn a_content_version_uploads_registers_and_retires_as_one_block_set() {
+    let base = require_stack!("a_content_version_uploads_registers_and_retires_as_one_block_set");
+    let client = fresh_account(&base).await;
+
+    // Three leaves and a root, the shape a multi-chunk version stages. The
+    // contract-suite quota is 1 KiB, so the whole version stays well under it.
+    let leaves: Vec<Vec<u8>> = (0..3u8).map(|i| vec![i; 96]).collect();
+    let root = vec![0xAAu8; 64];
+    let total_bytes = (leaves.len() * 96 + root.len()) as u64;
+
+    // File order, root last — the order that keeps the still-staged set a
+    // suffix, so a resumed drain re-sends only what has not landed.
+    let mut content_cids = Vec::new();
+    for block in leaves.iter().chain(core::iter::once(&root)) {
+        let uploaded = client
+            .upload(block)
+            .await
+            .unwrap_or_else(|e| panic!("a version block uploads: {e:?}"));
+        assert_eq!(
+            uploaded.size,
+            block.len() as u64,
+            "the ingress reports the byte count it counted"
+        );
+        content_cids.push(uploaded.cid);
+    }
+    assert_eq!(
+        client.quota().await.expect("quota after upload").used_bytes,
+        total_bytes,
+        "every block of the version counts against the account"
+    );
+
+    // Register-first: one batch names the file's write-plane name, its head
+    // block, and the whole content block set.
+    let name = "k51contractContentVersion".to_owned();
+    let registration = vec![NameRegistration {
+        ipns_name: name.clone(),
+        head_cid: Some("bafyContractVersionHead".into()),
+        content_cids: content_cids.clone(),
+    }];
+    client
+        .register(&registration)
+        .await
+        .expect("a version's whole block set registers in one batch");
+    // A republish re-registers the same set (the sub-EOL renewal shape, #797).
+    client
+        .register(&registration)
+        .await
+        .expect("re-registering the same set is idempotent");
+
+    // Abandonment retires the name and the content it pinned together.
+    let mut targets = vec![name];
+    targets.extend(content_cids);
+    client.retire(&targets).await.expect("retire the version");
+    assert_eq!(
+        client.quota().await.expect("quota after retire").used_bytes,
+        0,
+        "retiring the block set releases every counted byte"
+    );
+    client
+        .retire(&targets)
+        .await
+        .expect("a replayed retire is a no-op");
+}
+
 // --- mailbox (blueprint/api.md, Mailbox; #827) ------------------------------
 
 /// An account addressable as a mailbox recipient: the client plus its identity

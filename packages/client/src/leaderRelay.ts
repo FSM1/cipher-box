@@ -13,12 +13,7 @@
  * ride the outbound wire, exactly the facade's event surface.
  */
 
-import {
-  lowerContent,
-  type BroadcastChannelLike,
-  type FollowerMessage,
-  type LeaderMessage,
-} from './broadcast.js';
+import type { BroadcastChannelLike, FollowerMessage, LeaderMessage } from './broadcast.js';
 import { EngineRequestError } from './correlatedTransport.js';
 import type { EngineTransport } from './transport.js';
 
@@ -122,6 +117,9 @@ export class LeaderRelay {
       case 'cb:read':
         void this.serveRead(message as Extract<FollowerMessage, { type: 'cb:read' }>);
         return;
+      case 'cb:write':
+        void this.serveWrite(message as Extract<FollowerMessage, { type: 'cb:write' }>);
+        return;
       case 'cb:focus': {
         const { clientId, node } = message as Extract<FollowerMessage, { type: 'cb:focus' }>;
         if (this.focus.set(clientId, node)) this.refreshHint();
@@ -136,10 +134,9 @@ export class LeaderRelay {
   }
 
   private async forward(message: Extract<FollowerMessage, { type: 'cb:command' }>): Promise<void> {
-    const { clientId, requestId, wire } = message;
+    const { clientId, requestId, command } = message;
     try {
-      const { command, transfer } = await lowerContent(wire);
-      await this.transport.command(command, transfer);
+      await this.transport.command(command, []);
       this.post({ type: 'cb:response', token: this.token, clientId, requestId, ok: true });
     } catch (error) {
       this.post({
@@ -165,6 +162,39 @@ export class LeaderRelay {
         // shares the immutable backing store instead of copying the bytes.
         const bytes = await this.transport.download(read.node);
         this.post({ ...ack, ok: true, result: new Blob([bytes]) });
+      }
+    } catch (error) {
+      this.post({ ...ack, ok: false, ...wireError(error) });
+    }
+  }
+
+  private async serveWrite(message: Extract<FollowerMessage, { type: 'cb:write' }>): Promise<void> {
+    const { clientId, requestId, write } = message;
+    const ack = { type: 'cb:response', token: this.token, clientId, requestId } as const;
+    try {
+      switch (write.kind) {
+        case 'beginWrite': {
+          const result = await this.transport.beginWrite(write.target, write.size);
+          this.post({ ...ack, ok: true, result });
+          return;
+        }
+        case 'pushChunk': {
+          // Materialize the follower's shared `Blob` only here, then transfer the
+          // buffer into the worker.
+          await this.transport.pushChunk(write.handle, await write.chunk.arrayBuffer());
+          this.post({ ...ack, ok: true });
+          return;
+        }
+        case 'commitWrite': {
+          const result = await this.transport.commitWrite(write.handle);
+          this.post({ ...ack, ok: true, result });
+          return;
+        }
+        case 'abortWrite': {
+          await this.transport.abortWrite(write.handle);
+          this.post({ ...ack, ok: true });
+          return;
+        }
       }
     } catch (error) {
       this.post({ ...ack, ok: false, ...wireError(error) });

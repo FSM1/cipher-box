@@ -79,6 +79,16 @@ export interface WasmSnapshotView {
 export interface WasmEngineHandle {
   start(secret: Uint8Array): Promise<unknown>;
   command(command: WasmCommand): Promise<unknown>;
+  /** Either `(parent, name)` or `(node)` — never both, never neither. */
+  beginWrite(
+    parent: WasmNodeId | undefined,
+    name: string | undefined,
+    node: WasmNodeId | undefined,
+    size: number
+  ): Promise<bigint>;
+  pushChunk(handle: bigint, chunk: Uint8Array): Promise<unknown>;
+  commitWrite(handle: bigint): Promise<bigint>;
+  abortWrite(handle: bigint): Promise<unknown>;
   snapshot(folder: WasmNodeId): Promise<WasmSnapshotView>;
   download(node: WasmNodeId): Promise<Uint8Array>;
   nextEvent(): Promise<WasmEvent | undefined>;
@@ -97,11 +107,10 @@ export interface EngineWasm {
   ) => WasmEngineHandle;
   NodeId: { fromBytes(bytes: Uint8Array): WasmNodeId };
   Command: {
-    create(parent: WasmNodeId, name: string, kind: number, content?: Uint8Array): WasmCommand;
+    create(parent: WasmNodeId, name: string, kind: number): WasmCommand;
     delete(node: WasmNodeId): WasmCommand;
     rename(node: WasmNodeId, newName: string): WasmCommand;
     relink(node: WasmNodeId, newParent: WasmNodeId): WasmCommand;
-    updateContent(node: WasmNodeId, content: Uint8Array): WasmCommand;
     setFocus(node?: WasmNodeId): WasmCommand;
     manualRefresh(): WasmCommand;
     importContact(contactCode: Uint8Array): WasmCommand;
@@ -144,5 +153,6 @@ export interface EngineWasm {
     readonly Undecodable: number;
     readonly PayloadRefused: number;
     readonly AttemptsExhausted: number;
+    readonly ContentUnrecoverable: number;
   };
 }

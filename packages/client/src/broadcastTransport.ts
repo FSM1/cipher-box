@@ -16,13 +16,18 @@
  */
 
 import {
-  hoistContent,
   type BroadcastChannelLike,
   type LeaderMessage,
   type WireRead,
+  type WireWrite,
 } from './broadcast.js';
 import { CorrelatedTransport } from './correlatedTransport.js';
-import type { CommandDescriptor, SnapshotDescriptor } from './worker/protocol.js';
+import type {
+  CommandDescriptor,
+  SnapshotDescriptor,
+  WriteHandle,
+  WriteTarget,
+} from './worker/protocol.js';
 
 export class BroadcastTransport extends CorrelatedTransport {
   private closed = false;
@@ -63,13 +68,26 @@ export class BroadcastTransport extends CorrelatedTransport {
 
   command(command: CommandDescriptor, _transfer: Transferable[]): Promise<void> {
     return this.dispatch(this.leaderReady, (requestId) =>
-      this.channel.postMessage({
-        type: 'cb:command',
-        clientId: this.clientId,
-        requestId,
-        wire: hoistContent(command),
-      })
+      this.channel.postMessage({ type: 'cb:command', clientId: this.clientId, requestId, command })
     );
+  }
+
+  beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
+    return this.write<WriteHandle>({ kind: 'beginWrite', target, size });
+  }
+
+  pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
+    // A `Blob` handle, not the buffer: structured clone shares its backing store
+    // while an `ArrayBuffer` would be copied into every receiver.
+    return this.write<void>({ kind: 'pushChunk', handle, chunk: new Blob([chunk]) });
+  }
+
+  commitWrite(handle: WriteHandle): Promise<bigint> {
+    return this.write<bigint>({ kind: 'commitWrite', handle });
+  }
+
+  abortWrite(handle: WriteHandle): Promise<void> {
+    return this.write<void>({ kind: 'abortWrite', handle });
   }
 
   snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
@@ -86,6 +104,12 @@ export class BroadcastTransport extends CorrelatedTransport {
   private read<T>(read: WireRead): Promise<T> {
     return this.request<T>(this.leaderReady, (requestId) =>
       this.channel.postMessage({ type: 'cb:read', clientId: this.clientId, requestId, read })
+    );
+  }
+
+  private write<T>(write: WireWrite): Promise<T> {
+    return this.request<T>(this.leaderReady, (requestId) =>
+      this.channel.postMessage({ type: 'cb:write', clientId: this.clientId, requestId, write })
     );
   }
 

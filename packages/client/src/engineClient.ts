@@ -25,7 +25,12 @@ import { LeaderElection, type LockManagerLike } from './leadership.js';
 import { requestStoragePersistence } from './storagePersistence.js';
 import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './transport.js';
 import { LocalTransport } from './transport.js';
-import type { CommandDescriptor, SnapshotDescriptor } from './worker/protocol.js';
+import type {
+  CommandDescriptor,
+  SnapshotDescriptor,
+  WriteHandle,
+  WriteTarget,
+} from './worker/protocol.js';
 
 /**
  * Re-derives the login secret when this tab is promoted to leader mid-session
@@ -125,6 +130,22 @@ export class EngineClient implements EngineTransport {
 
   command(command: CommandDescriptor, transfer: Transferable[]): Promise<void> {
     return this.current.command(command, transfer);
+  }
+
+  beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
+    return this.current.beginWrite(target, size);
+  }
+
+  pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
+    return this.current.pushChunk(handle, chunk);
+  }
+
+  commitWrite(handle: WriteHandle): Promise<bigint> {
+    return this.current.commitWrite(handle);
+  }
+
+  abortWrite(handle: WriteHandle): Promise<void> {
+    return this.current.abortWrite(handle);
   }
 
   snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
