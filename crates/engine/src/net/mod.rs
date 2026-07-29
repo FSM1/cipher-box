@@ -44,6 +44,7 @@ pub mod revival;
 pub(crate) use adopter::assemble_head_envelope;
 pub use adopter::{LocalHead, RootAdopter};
 pub use child::ChildAdopter;
+pub(crate) use fanout::fanout_get_verify;
 pub(crate) use liveness::eol_renew_pass;
 pub use liveness::{
     EolRenewResult, HeldRecord, HeldRecords, LivenessControl, RE_PUT_INTERVAL, RePutResult,

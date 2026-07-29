@@ -1,56 +1,84 @@
-//! Projection of a gate-passing adopted root read-body into a facade
-//! [`Snapshot`] — direct children only, no recursion, no network, no seams
-//! (blueprint/engine.md "Sync core"; the deeper content-plane assembly is a
-//! later slice).
+//! Projection of a gate-passing adopted read-body into a facade [`Snapshot`] —
+//! one folder's direct children at a time, no recursion, no network, no seams
+//! (blueprint/engine.md "Sync core").
+//!
+//! [`project_folder`] is the single merge model. A snapshot is only ever
+//! *merged into*, never rebuilt: the write plane authors below the scope root,
+//! and a re-projection of the root that installed a fresh snapshot would delete
+//! the deeper tree the drain just published — and with it every queued op that
+//! rebases onto a node below depth 1.
 
-use cipherbox_core::seal::{NodeKind as CoreNodeKind, ReadBody};
+use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind, ReadBody};
 
 use crate::facade::{NodeId, NodeKind};
 use crate::gate::Adopted;
 use crate::sync::model::{NodeMeta, Snapshot};
 
-/// Project a gate-passing adopted root read-body into a [`Snapshot`] holding
-/// the root and its **direct** children, merged over `previous`. Pure: the
-/// child read-bodies (and thus the deeper tree) are not fetched here.
-///
-/// Only a gate-passing [`Adopted`] reaches this fn — the gate already enforced
-/// child id/ipnsName uniqueness at unseal — so child uniqueness is trusted and
-/// not re-validated. `link_counter` is carried verbatim (feeds the dual-link
-/// tiebreak in [`Snapshot::winning_link`]).
-///
-/// `size`, `mtime` and the content-version count have no `ChildRef` to come
-/// from (`crates/core/src/seal/body.rs`: no size/mtime mirrors), so they carry
-/// forward from `previous`; every other field is rebuilt from the adopted body.
-pub(crate) fn project_root(root: NodeId, adopted: &Adopted, previous: &Snapshot) -> Snapshot {
-    let mut snapshot = Snapshot::new(root);
-    if let Some(node) = snapshot.node_mut(root) {
-        node.record_sequence = adopted.sequence;
-    }
-
+/// Merge a gate-passing adopted **scope root** body into `snapshot`. A body that
+/// is not a folder leaves the snapshot untouched.
+pub(crate) fn project_root(snapshot: &mut Snapshot, root: NodeId, adopted: &Adopted) {
     if let ReadBody::Folder {
         modified_at,
         children,
         ..
     } = &adopted.read_body
     {
-        if let Some(node) = snapshot.node_mut(root) {
-            node.mtime = Some(*modified_at);
-        }
-        for child in children {
-            let id = NodeId(child.id);
-            let mut meta = NodeMeta::new(id, child.name.clone(), map_kind(child.kind));
-            meta.ipns_name = Some(child.ipns_name.clone());
-            if let Some(prior) = previous.node(id) {
-                meta.size = prior.size;
-                meta.mtime = prior.mtime;
-                meta.content_version = prior.content_version;
-            }
-            snapshot.upsert_node(meta);
-            snapshot.link(root, id, child.link_counter);
+        project_folder(snapshot, root, children, adopted.sequence, *modified_at);
+    }
+}
+
+/// Merge one folder's gate-passing children into `snapshot` **in place**.
+/// Children the folder no longer names are unlinked, and dropped entirely once
+/// no parent links them.
+///
+/// Only a gate-passing body reaches here — the gate already enforced child
+/// id/ipnsName uniqueness at unseal — so child uniqueness is trusted and not
+/// re-validated. `link_counter` merges monotonically per link ([`Snapshot::link`]
+/// keeps the higher of the two) and feeds the dual-link tiebreak in
+/// [`Snapshot::winning_link`].
+///
+/// `size`, `mtime`, the content-version count and the child's own record
+/// sequence have no `ChildRef` to come from (`crates/core/src/seal/body.rs`: no
+/// size/mtime mirrors), so they survive from whatever the snapshot already held;
+/// every other field is rebuilt from the body.
+pub(crate) fn project_folder(
+    snapshot: &mut Snapshot,
+    folder: NodeId,
+    children: &[ChildRef],
+    sequence: u64,
+    modified_at: u64,
+) {
+    if let Some(node) = snapshot.node_mut(folder) {
+        node.record_sequence = sequence;
+        node.mtime = Some(modified_at);
+    }
+
+    let departed: Vec<NodeId> = snapshot
+        .children(folder)
+        .into_iter()
+        .map(|node| node.id)
+        .filter(|id| !children.iter().any(|child| child.id == id.0))
+        .collect();
+    for id in departed {
+        snapshot.unlink(folder, id);
+        if snapshot.links_to(id).is_empty() {
+            snapshot.remove_node(id);
         }
     }
 
-    snapshot
+    for child in children {
+        let id = NodeId(child.id);
+        let mut meta = NodeMeta::new(id, child.name.clone(), map_kind(child.kind));
+        meta.ipns_name = Some(child.ipns_name.clone());
+        if let Some(prior) = snapshot.node(id) {
+            meta.size = prior.size;
+            meta.mtime = prior.mtime;
+            meta.content_version = prior.content_version;
+            meta.record_sequence = prior.record_sequence;
+        }
+        snapshot.upsert_node(meta);
+        snapshot.link(folder, id, child.link_counter);
+    }
 }
 
 /// Fold a verified file read-body's plaintext `(size, mtime)` and version count
@@ -105,7 +133,9 @@ mod tests {
 
     /// Project with nothing to merge over — the cold-start shape.
     fn project_fresh(root: NodeId, adopted: &Adopted) -> Snapshot {
-        project_root(root, adopted, &Snapshot::new(root))
+        let mut snapshot = Snapshot::new(root);
+        project_root(&mut snapshot, root, adopted);
+        snapshot
     }
 
     fn adopted_folder(children: Vec<ChildRef>, sequence: u64) -> Adopted {
@@ -225,7 +255,8 @@ mod tests {
 
         // The same child renamed, re-linked and re-kinded by the newer body.
         let next = adopted_folder(vec![child(1, "renamed.txt", CoreNodeKind::Folder, 9)], 2);
-        let snap = project_root(root, &next, &previous);
+        let mut snap = previous;
+        project_root(&mut snap, root, &next);
 
         let meta = snap.node(node_id(1)).unwrap();
         assert_eq!(meta.size, Some(2_048), "size has no ChildRef to come from");
@@ -255,13 +286,14 @@ mod tests {
         ));
 
         // The child left the root body; it takes its projected values with it.
-        let snap = project_root(root, &adopted_folder(vec![], 2), &previous);
+        let mut snap = previous;
+        project_root(&mut snap, root, &adopted_folder(vec![], 2));
 
         assert!(!snap.contains(node_id(1)));
 
         // And a re-appearance is a fresh projection, not a resurrection.
         let back = adopted_folder(vec![child(1, "a.txt", CoreNodeKind::File, 1)], 3);
-        let snap = project_root(root, &back, &snap);
+        project_root(&mut snap, root, &back);
         let meta = snap.node(node_id(1)).unwrap();
         assert_eq!(meta.size, None);
         assert_eq!(meta.mtime, None);

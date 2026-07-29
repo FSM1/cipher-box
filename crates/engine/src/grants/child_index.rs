@@ -69,7 +69,9 @@ pub fn insert_child(index: &[ChildScopeRef], child: ChildScopeRef) -> Vec<ChildS
     canonicalize(&next)
 }
 
-/// Presence-conditional remove by `scope_id`. Idempotent: removing an absent
+/// Presence-conditional remove by `scope_id` — also this index's race-loser
+/// dest-add compensation, which a distributed publish boundary must run through
+/// the fail-closed [`undo_dest_add_versioned`]. Idempotent: removing an absent
 /// `scope_id` is a no-op, never an error.
 pub fn remove_child(index: &[ChildScopeRef], scope_id: &[u8; 16]) -> Vec<ChildScopeRef> {
     let next: Vec<ChildScopeRef> = index
@@ -104,23 +106,17 @@ pub fn repair_observed(index: &[ChildScopeRef], child: ChildScopeRef) -> Vec<Chi
     insert_child(index, child)
 }
 
-/// Unversioned local dest-add compensation; a distributed publish boundary must
-/// use the fail-closed [`undo_dest_add_versioned`] instead.
-pub(crate) fn undo_dest_add(dest: &[ChildScopeRef], scope_id: &[u8; 16]) -> Vec<ChildScopeRef> {
-    remove_child(dest, scope_id)
-}
-
-/// The read-version a dest-add was derived against: the dest parent scope root's
-/// published record sequence — the same monotonic seq-CAS key the net publish
-/// path mints against (`net::publish`, blueprint/engine.md "CAS sequencing").
+/// The read-version a dest-add was derived against: the dest parent's published
+/// record sequence — the same monotonic seq-CAS key the net publish path mints
+/// against (`net::publish`, blueprint/engine.md "CAS sequencing").
 pub type DestIndexVersion = u64;
 
-/// Outcome of a versioned dest-add compensation.
+/// Outcome of a versioned dest-add compensation over an index of `T`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum UndoDestAdd {
+pub enum UndoDestAdd<T> {
     /// The dest index was still at the CAS base the add read: the dest-add was
     /// removed cleanly. Carries the recomputed index to publish.
-    Removed(Vec<ChildScopeRef>),
+    Removed(Vec<T>),
     /// A concurrent authoritative writer advanced the dest index past the CAS
     /// base: a blind remove would clobber the winner. Fail-closed.
     Conflict,
@@ -132,16 +128,20 @@ pub enum UndoDestAdd {
 /// [`UndoDestAdd::Conflict`] rather than blind-removing, so a concurrent
 /// authoritative write always wins and the caller re-reads + re-derives instead
 /// of clobbering it (#743, deferred from #741; blueprint/engine.md).
-pub fn undo_dest_add_versioned(
-    dest: &[ChildScopeRef],
-    scope_id: &[u8; 16],
+///
+/// The version rule is index-agnostic — it governs the direct-child-scope index
+/// here and a folder's own child list in the drain's relink envelope (#786) —
+/// so `remove` stays the caller's, carrying that index's own removal semantics.
+pub fn undo_dest_add_versioned<T>(
+    dest: &[T],
+    remove: impl FnOnce(&[T]) -> Vec<T>,
     cas_base: DestIndexVersion,
     observed: DestIndexVersion,
-) -> UndoDestAdd {
+) -> UndoDestAdd<T> {
     if observed != cas_base {
         return UndoDestAdd::Conflict;
     }
-    UndoDestAdd::Removed(undo_dest_add(dest, scope_id))
+    UndoDestAdd::Removed(remove(dest))
 }
 
 #[cfg(test)]
@@ -308,32 +308,39 @@ mod tests {
     }
 
     #[test]
-    fn undo_dest_add_reverses_insert() {
-        let moving = child(0x44, "x");
-        let dest = vec![child(0x10, "d1")];
-        let added = insert_child(&dest, moving.clone());
-        let undone = undo_dest_add(&added, &[0x44; 16]);
-        assert_eq!(undone, canonicalize(&dest));
-    }
-
-    #[test]
     fn versioned_compensation_removes_only_when_the_version_is_unchanged() {
         // The loser added itself to the dest index it read at CAS base seq 7.
         let moving = child(0x44, "x");
         let base = vec![child(0x10, "d1")];
         let added = insert_child(&base, moving.clone());
         let cas_base: DestIndexVersion = 7;
+        let undo = |dest: &[ChildScopeRef]| remove_child(dest, &[0x44; 16]);
 
         // Dest index still at seq 7: the compensation removes its own add.
-        let unchanged = undo_dest_add_versioned(&added, &[0x44; 16], cas_base, 7);
+        let unchanged = undo_dest_add_versioned(&added, undo, cas_base, 7);
         assert_eq!(unchanged, UndoDestAdd::Removed(canonicalize(&base)));
 
         // A concurrent authoritative writer bumped the dest to seq 8: fail closed,
         // never remove — the winner's newer state stands untouched.
-        let raced = undo_dest_add_versioned(&added, &[0x44; 16], cas_base, 8);
+        let raced = undo_dest_add_versioned(&added, undo, cas_base, 8);
         assert_eq!(raced, UndoDestAdd::Conflict);
         // A stale/lower observed version is a divergence too — also fail-closed.
-        let stale = undo_dest_add_versioned(&added, &[0x44; 16], cas_base, 6);
+        let stale = undo_dest_add_versioned(&added, undo, cas_base, 6);
         assert_eq!(stale, UndoDestAdd::Conflict);
+    }
+
+    #[test]
+    fn versioned_compensation_carries_any_indexs_own_removal() {
+        // The rule is the version compare; the removal belongs to the index.
+        let dest = vec![7u8, 8, 9];
+        let drop_eight = |d: &[u8]| d.iter().copied().filter(|e| *e != 8).collect();
+        assert_eq!(
+            undo_dest_add_versioned(&dest, drop_eight, 3, 3),
+            UndoDestAdd::Removed(vec![7, 9])
+        );
+        assert_eq!(
+            undo_dest_add_versioned(&dest, drop_eight, 3, 4),
+            UndoDestAdd::Conflict
+        );
     }
 }
