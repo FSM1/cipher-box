@@ -47,7 +47,7 @@ use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::drain::{Drain, DrainReport, DrainScope};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
-use crate::sync::op::Op;
+use crate::sync::op::{Op, Replaced};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
@@ -321,6 +321,19 @@ pub enum Command {
         /// Destination parent.
         new_parent: NodeId,
     },
+    /// Relink and rename a node in one intent op, conditionally replacing the
+    /// node at the destination name — a concurrent edit to it wins and the move
+    /// auto-suffixes instead ([`OpKind::Move`](crate::OpKind::Move)).
+    Move {
+        /// Node being moved.
+        node: NodeId,
+        /// Destination parent (the current parent for a pure rename).
+        new_parent: NodeId,
+        /// Name at the destination, as entered.
+        new_name: String,
+        /// The node the destination name currently holds, if any.
+        replacing: Option<NodeId>,
+    },
     /// Write new content to a file node (fresh per-version content key).
     UpdateContent {
         /// Target file node.
@@ -412,6 +425,7 @@ impl Command {
             Command::Delete { .. } => "delete",
             Command::Rename { .. } => "rename",
             Command::Relink { .. } => "relink",
+            Command::Move { .. } => "move",
             Command::UpdateContent { .. } => "updateContent",
             Command::SetFocus { .. } => "setFocus",
             Command::ManualRefresh => "manualRefresh",
@@ -1470,10 +1484,7 @@ impl<T: SeamTypes> Engine<T> {
             }
             Command::Relink { node, new_parent } => {
                 let rendered = self.render().await?;
-                let from_parent = rendered
-                    .parent_of(node)
-                    .unwrap_or(self.snapshot.borrow().root);
-                let base_sequence = rendered.record_sequence(node).unwrap_or(1);
+                let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
                 // trailing bools: cross_scope=false, exits_granted_source=false — intra-scope pure relink
                 let op = Op::relink(
                     node,
@@ -1483,6 +1494,32 @@ impl<T: SeamTypes> Engine<T> {
                     authored_at,
                     false,
                     false,
+                );
+                self.stage_and_notify(&op).await
+            }
+            Command::Move {
+                node,
+                new_parent,
+                new_name,
+                replacing,
+            } => {
+                let rendered = self.render().await?;
+                let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
+                let replacing = replacing.map(|replaced| Replaced {
+                    node: replaced,
+                    // The conditional-delete anchor: a concurrent edit that
+                    // advances the replaced node past this keeps it, and the
+                    // move auto-suffixes off the name it could not free.
+                    sequence: rendered.record_sequence(replaced).unwrap_or(1),
+                });
+                let op = Op::move_node(
+                    node,
+                    from_parent,
+                    new_parent,
+                    new_name,
+                    replacing,
+                    base_sequence,
+                    authored_at,
                 );
                 self.stage_and_notify(&op).await
             }
@@ -1807,6 +1844,15 @@ impl<T: SeamTypes> Engine<T> {
             .into_iter()
             .map(|(_id, op)| op)
             .collect())
+    }
+
+    /// What a relocation op anchors on: the parent the move was formed against
+    /// (the scope root for an unlinked node) and the target's base sequence.
+    fn relocation_anchors(&self, rendered: &Snapshot, node: NodeId) -> (NodeId, u64) {
+        let from_parent = rendered
+            .parent_of(node)
+            .unwrap_or(self.snapshot.borrow().root);
+        (from_parent, rendered.record_sequence(node).unwrap_or(1))
     }
 
     /// The base sequence to anchor an op at: the target's own record sequence in

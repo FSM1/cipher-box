@@ -218,11 +218,11 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   exactly two things: trust violations and an empty-cache cold start. Manual
   refresh resolves with nocache semantics everywhere.
 - **Ops**: every mutation is an intent op — `create`, `delete`, `rename`,
-  `relink`, `updateContent` — carrying its base sequence and its authored
+  `relink`, `move`, `updateContent` — carrying its base sequence and its authored
   time, journaled FIFO in the durable op queue (all mutations, both platforms)
   as a versioned, owner-tagged record whose intent body seals HPKE-to-self in
   **auth mode**, so authoring one requires the owner's enc secret rather than
-  the public tag stamped beside it. That authenticates a record's *author*, not
+  the public tag stamped beside it. That authenticates a record's _author_, not
   its freshness or its position: a store co-tenant can still copy, delete, or
   reorder whole records, which queue-integrity work covers separately. The queue
   is per device, not per account, and is shared with whatever build wrote it: a
@@ -232,7 +232,10 @@ poll timer, desktop from FUSE-op TTL checks — the core is identical.
   dead-lettered and dropped. An intra-scope
   `relink` is a pure relink; a cross-scope `relink` re-seals the moved subtree
   at the destination scope's epoch, and one that leaves a granted source scope
-  is a scope-exit rotation trigger for the source (#26 D1/D7). Replay is FIFO
+  is a scope-exit rotation trigger for the source (#26 D1/D7). A `move` is a
+  relink and a rename in one entry, optionally vacating the node already at the
+  destination name — one POSIX rename is exactly one `move`, so the whole
+  operation is journaled or none of it is. Replay is FIFO
   in performed order through the standard rebase, and rebases only onto
   gate-passing state (#33 D5–D7).
 - **Withheld-update escalation**: shared scopes only — a name pinned past a

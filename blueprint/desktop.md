@@ -176,7 +176,9 @@ there is no `block_on` freeze of the whole mount behind one slow call.
   plaintext `cb-write-*` exposure class is gone (judgment; the zero-overwrite
   cleanup papers over what this closes structurally).
 - **release** (and create/mkdir/rename/unlink/rmdir) — becomes exactly one
-  facade intent op (`updateContent`, `create`, `rename`, `relink`, `delete`).
+  facade intent op (`updateContent`, `create`, `move`, `delete`). A kernel
+  rename is one `move`, which carries the relink, the rename, and the
+  destination it replaces, so a replace is never observable half-done.
   The kernel is acked when the op is **journaled durably in the StagingStore**
   — the v1 INV-1 no-false-ack discipline, now uniform across every mutation
   instead of two. Everything after the ack (seal, upload, publish, CAS rebase)

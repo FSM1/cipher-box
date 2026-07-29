@@ -11,6 +11,7 @@ struct Inner {
     staged: BTreeMap<Vec<u8>, Vec<u8>>,
     fail_queued_ops: bool,
     fail_remove_op: bool,
+    enqueue_budget: Option<u64>,
 }
 
 impl Default for Inner {
@@ -21,6 +22,7 @@ impl Default for Inner {
             staged: BTreeMap::new(),
             fail_queued_ops: false,
             fail_remove_op: false,
+            enqueue_budget: None,
         }
     }
 }
@@ -45,11 +47,23 @@ impl InMemoryStagingStore {
     pub fn fail_remove_op(&self) {
         self.inner.lock().expect("lock").fail_remove_op = true;
     }
+
+    /// Lets the next `budget` enqueues through and fails every one after, so a
+    /// test can drop a durable-queue outage in the middle of a multi-op
+    /// sequence and see what the earlier entries already committed.
+    pub fn fail_enqueue_after(&self, budget: u64) {
+        self.inner.lock().expect("lock").enqueue_budget = Some(budget);
+    }
 }
 
 impl StagingStore for InMemoryStagingStore {
     async fn enqueue_op(&self, op: &[u8]) -> SeamResult<OpId> {
         let mut inner = self.inner.lock().expect("lock");
+        match inner.enqueue_budget {
+            Some(0) => return Err(SeamError::new("enqueue_op unavailable")),
+            Some(budget) => inner.enqueue_budget = Some(budget - 1),
+            None => {}
+        }
         let op_id = OpId(inner.next_op_id);
         inner.next_op_id += 1;
         inner.ops.push((op_id, op.to_vec()));

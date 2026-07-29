@@ -164,27 +164,22 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             .filter(|dest| dest.id != source.id);
         if let Some(dest) = &replaced {
             removable(&view, dest, source.kind)?;
+            // The replaced node's own unlink rides the move op; only the hidden
+            // junk it may still hold needs deletes of its own.
+            self.delete_descendants(&view, dest.id).await?;
         }
-
-        // The facade has no combined move-and-rename op, so a rename that
-        // replaces has a window where the destination is already gone (#884).
-        if let Some(dest) = replaced {
-            self.delete(&view, dest.id).await?;
+        // POSIX renaming a node onto itself changes nothing, so it journals
+        // nothing.
+        if replaced.is_none() && new_parent_node == parent_node && source.name == new_name {
+            return Ok(());
         }
-        if new_parent_node != parent_node {
-            self.command(Command::Relink {
-                node: source.id,
-                new_parent: new_parent_node,
-            })
-            .await?;
-        }
-        if source.name != new_name {
-            self.command(Command::Rename {
-                node: source.id,
-                new_name: new_name.to_owned(),
-            })
-            .await?;
-        }
+        self.command(Command::Move {
+            node: source.id,
+            new_parent: new_parent_node,
+            new_name: new_name.to_owned(),
+            replacing: replaced.map(|dest| dest.id),
+        })
+        .await?;
 
         let ino = self.inodes.ino_for(source.id);
         self.entry_changed(parent, name);
@@ -324,7 +319,21 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     /// node, so the sweep has to reach them or they outlive the mount point
     /// they hung from.
     async fn delete(&mut self, view: &EngineView, victim: NodeId) -> Result<(), VfsError> {
-        for node in subtree(view, victim) {
+        self.delete_descendants(view, victim).await?;
+        self.command(Command::Delete { node: victim }).await
+    }
+
+    /// The [`delete`](Self::delete) sweep without the node itself, for a caller
+    /// that unlinks the root of the subtree by other means.
+    async fn delete_descendants(
+        &mut self,
+        view: &EngineView,
+        root: NodeId,
+    ) -> Result<(), VfsError> {
+        let mut order = subtree(view, root);
+        // `subtree` is deepest-first, so the root is the last entry.
+        order.pop();
+        for node in order {
             self.command(Command::Delete { node }).await?;
         }
         Ok(())

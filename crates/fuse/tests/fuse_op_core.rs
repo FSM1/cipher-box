@@ -10,6 +10,7 @@ use std::future::Future;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
+use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
 use cipherbox_engine::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     Command, Engine, GatewayConfig, LoginSecret, NodeId, NodeKind, StoragePolicy, SyncTimingProfile,
@@ -64,8 +65,16 @@ fn mount_with(adapter: RecordingAdapter) -> Core {
 
 /// A started engine over fresh in-memory seams, with its rendered root id.
 fn started_engine() -> (Engine<FakeSeamTypes>, NodeId) {
+    let (engine, root, _staging) = started_engine_with_staging();
+    (engine, root)
+}
+
+/// A started engine plus a handle on its durable op queue, for tests that
+/// inject a staging outage.
+fn started_engine_with_staging() -> (Engine<FakeSeamTypes>, NodeId, InMemoryStagingStore) {
     let world = FakeWorld::new();
     let device = world.device(b"alice-pk");
+    let staging = device.staging_store.clone();
     let (mut engine, _events) = Engine::new(
         device.seam_set(),
         Box::new(SeededEntropy::new(42)),
@@ -76,7 +85,7 @@ fn started_engine() -> (Engine<FakeSeamTypes>, NodeId) {
     );
     block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("engine starts");
     let root = block_on(engine.view()).expect("view").root();
-    (engine, root)
+    (engine, root, staging)
 }
 
 /// Seed a child by issuing a facade command directly, which is how a name the
@@ -345,6 +354,76 @@ fn rename_over_an_existing_file_replaces_it() {
         block_on(core.lookup(ROOT_INO, "target.txt")).unwrap().ino,
         source.ino,
         "the surviving entry is the source node, not the replaced one"
+    );
+}
+
+#[test]
+fn a_durable_queue_outage_never_destroys_the_destination_a_rename_did_not_replace() {
+    // POSIX: an observer always sees either the old destination or the new one.
+    // A rename that replaces is one journal entry, so a queue that accepts only
+    // one more write either takes the whole rename or none of it — never the
+    // destination's removal while the source stays put (#884).
+    for budget in [0, 1] {
+        let (mut engine, root, staging) = started_engine_with_staging();
+        let source = seed_child(&mut engine, root, "new.txt", NodeKind::File);
+        let victim = seed_child(&mut engine, root, "target.txt", NodeKind::File);
+        let mut core = OperationCore::new(engine, RecordingAdapter::push_capable());
+        staging.fail_enqueue_after(budget);
+
+        let outcome = block_on(core.rename(ROOT_INO, "new.txt", ROOT_INO, "target.txt"));
+
+        // The destination name resolves either way: to the moved node when the
+        // rename landed, to the node it would have replaced when it did not.
+        let survivor = block_on(core.lookup(ROOT_INO, "target.txt"))
+            .unwrap_or_else(|_| panic!("budget {budget}: the destination name vanished"))
+            .node;
+        let landed = outcome.is_ok();
+        assert_eq!(survivor, if landed { source } else { victim });
+        assert_eq!(
+            names(&mut core, ROOT_INO).len(),
+            if landed { 1 } else { 2 },
+            "budget {budget}: a refused rename left something half-done"
+        );
+    }
+}
+
+#[test]
+fn renaming_a_node_onto_itself_journals_nothing() {
+    // POSIX `rename(a, a)` succeeds and changes nothing, so it must not spend a
+    // journal entry — proven by refusing every durable write.
+    let (mut engine, root, staging) = started_engine_with_staging();
+    seed_child(&mut engine, root, "f.txt", NodeKind::File);
+    let mut core = OperationCore::new(engine, RecordingAdapter::push_capable());
+    staging.fail_enqueue_after(0);
+
+    block_on(core.rename(ROOT_INO, "f.txt", ROOT_INO, "f.txt")).expect("a no-op rename succeeds");
+    assert_eq!(names(&mut core, ROOT_INO), vec!["f.txt".to_owned()]);
+}
+
+#[test]
+fn replacing_a_junk_holding_folder_keeps_the_destination_entry_when_the_queue_fails() {
+    // The replaced folder's own unlink rides the move, but the hidden junk it
+    // holds still needs deletes of its own. A queue that dies between them may
+    // lose junk the user could never see — never the destination entry itself.
+    let (mut engine, root, staging) = started_engine_with_staging();
+    let source = seed_child(&mut engine, root, "dir", NodeKind::Folder);
+    let victim = seed_child(&mut engine, root, "target", NodeKind::Folder);
+    seed_child(&mut engine, victim, ".DS_Store", NodeKind::File);
+    let mut core = OperationCore::new(engine, RecordingAdapter::push_capable());
+    // The junk delete lands; the move that would unlink the folder does not.
+    staging.fail_enqueue_after(1);
+
+    block_on(core.rename(ROOT_INO, "dir", ROOT_INO, "target")).expect_err("the move is refused");
+
+    assert_eq!(
+        block_on(core.lookup(ROOT_INO, "target")).unwrap().node,
+        victim,
+        "the destination entry POSIX promises survives"
+    );
+    assert_eq!(
+        block_on(core.lookup(ROOT_INO, "dir")).unwrap().node,
+        source,
+        "and the source never moved"
     );
 }
 
