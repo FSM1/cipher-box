@@ -24,10 +24,8 @@
 //! # Deterministic convergence
 //!
 //! Entries are ordered and deduped by `scope_id` byte `Ord` so replayed /
-//! multi-writer runs converge to identical bytes. A `scope_id` names exactly one
-//! child, so **first-seen** dedup is the deliberate replace-wins operation policy
-//! (ops prepend the authoritative entry), not a content tie-break — see
-//! [`canonicalize`].
+//! multi-writer runs converge to identical bytes; the first-seen dedup rule and
+//! why it is a replace-wins operation policy live on [`canonicalize`].
 
 use cipherbox_core::seal::ChildScopeRef;
 

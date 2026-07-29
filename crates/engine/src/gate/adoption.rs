@@ -287,12 +287,10 @@ impl PendingAdoption {
     /// then yield the [`Adopted`] result. Call only after the accepted state is
     /// durably persisted.
     ///
-    /// The stage-4/5 floor reads and this advance are not a CAS pair and do not
-    /// need to be: the engine is the single writer (blueprint/engine.md
-    /// "Facade" — one live instance), so no concurrent adopt races this device's
-    /// floors between the read and the advance. Cross-writer contention is
-    /// resolved on the publish/RecordTransport plane (CAS), never on the local
-    /// floor read. `advance_on_unseal` itself orders its two raises fail-safe.
+    /// The stage-4/5 floor reads and this advance are deliberately not a CAS
+    /// pair: the engine is the single writer (blueprint/engine.md "Facade"), and
+    /// cross-writer contention is resolved on the publish plane, never on the
+    /// local floor read.
     pub async fn commit<F: FloorStore>(self, floors: &F) -> Result<Adopted, GateError> {
         floor::advance_on_unseal(
             floors,
@@ -449,13 +447,8 @@ pub async fn adopt_deferred<F: FloorStore>(
         ));
     }
 
-    // Stage 3 — grant-section authentication. Enumerate every seed-bearing
-    // structure **from this record's grant section** and recompute each
-    // `H(ciphertext)` over the actual sealed bytes with `scope`/`epoch` taken
-    // from the authenticated envelope (#687): a signature proves the committed
-    // writer signed *these* bytes at *this* rotation, so a swapped ciphertext or
-    // a cross-epoch replay recomputes a preimage the signature never covered.
-    // Any failure rejects the whole record (#39 D3).
+    // Stage 3 — grant-section authentication under `authenticate_structure`'s
+    // recompute contract (#687). Any failure rejects the whole record (#39 D3).
     let committed = committed_write_pseudonyms(&section.commitment);
     let scope = candidate.envelope.scope;
     let epoch = candidate.envelope.epoch;

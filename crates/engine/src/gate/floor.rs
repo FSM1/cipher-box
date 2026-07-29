@@ -35,11 +35,8 @@ use crate::seams::{FloorRaise, FloorStore, SeamError, SeamResult};
 /// rolled-back re-point object, a fail-closed trust violation and never mere
 /// staleness (the floor law: revocation boundaries cannot be rolled back).
 ///
-/// The comparison is sound at the vault/root anchor: the root scope's read
-/// epoch is authored only by the owner (no grantee rotation advances the
-/// envelope read epoch past `minReadEpoch` there), so `min_read_epoch` and the
-/// durable read-epoch floor share the owner's authorship, and `write_epoch` is
-/// owner-vouched and never unseal-advanced.
+/// Where the read-epoch comparison is sound — and where it must not run — is
+/// [`AnchorRole`]'s contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FloorRegression {
     /// The re-point's `minReadEpoch` is strictly below the durable read-epoch
@@ -111,9 +108,7 @@ impl std::error::Error for ColdSeedError {}
 /// false-positive into a self-inflicted fail-closed **DoS** (a bricked boot) —
 /// never a security hole, since no rollback is accepted and the write-epoch
 /// check stays unconditionally sound. `Shared` therefore never runs the
-/// read-epoch check; only `Root` does (#763). Making the role explicit means no
-/// caller can express "read-epoch check on a shared scope": the check lives
-/// behind the `Root` arm alone.
+/// read-epoch check; only `Root` does (#763).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnchorRole {
     /// The vault/root anchor: read-epoch check runs (alongside write-epoch).
@@ -307,10 +302,9 @@ pub async fn cold_seed<F: FloorStore>(floors: &F, repoint: &RepointObject) -> Se
 /// The read-epoch check runs under [`AnchorRole::Root`] only; the write-epoch
 /// check is unconditional — see [`AnchorRole`] for why.
 ///
-/// The single-writer engine reads the floors and advances them with no
-/// concurrent adopt in between (blueprint/engine.md "Facade" — one live
-/// instance), so the check-then-advance is not a CAS pair; the monotonic-max
-/// store is the backstop either way.
+/// Check-then-advance is deliberately not a CAS pair: the engine is the single
+/// writer (blueprint/engine.md "Facade"), and the monotonic-max store backstops
+/// it either way.
 pub async fn cold_seed_checked<F: FloorStore>(
     floors: &F,
     repoint: &RepointObject,

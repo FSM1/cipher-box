@@ -13,36 +13,30 @@
 //! fresh write scope seed moves every node to a fresh name under a fresh signing
 //! key. The read plane is untouched — override seeds, read keys, and `minReadEpoch`
 //! carry verbatim, and no rotation path re-encrypts content bytes (#26 D6).
-//! Write-grantees derive the new names locally; read-only survivors follow the
-//! owner-signed re-point object.
 //!
 //! # Ordering is the safety property (#34 D4)
 //!
-//! Republish descendants first at their new names, the root last, then flip the
-//! stable scope pointer. A new name is **registered before** its predecessor is
-//! retired (register-first, never orphan a live name — the API's pin/name-registry
-//! quota discipline); interior old names batch-retire only **after** the root
-//! re-point, and the old root name lingers past the migration window. Old names
-//! stay live until the flip and the pointer flips last, so at every instant a
-//! resolver reaches every node by at least one live name.
+//! A new name is **registered before** its predecessor is retired, old names stay
+//! live until the pointer flips, and the pointer flips last — so at every instant
+//! a resolver reaches every node by at least one live name. Interior old names
+//! batch-retire only **after** the root re-point; the old root name lingers past
+//! the migration window.
 //!
 //! # Three-channel re-point (#38 D3)
 //!
-//! The owner-identity-signed re-point object `{scopeId, currentRootName,
-//! writeEpoch, minReadEpoch, prevRootName}` publishes to the scope pointer record
+//! The owner-identity-signed re-point object publishes to the scope pointer record
 //! (canonical), the mailbox, and the old root name's tombstone (feeding the
 //! depth-guarded `movedTo` chase). `writeEpoch` advances here; `minReadEpoch` is
-//! carried unchanged, so each plane's clock is authored by its owning authority
+//! carried unchanged, so each plane's clock stays authored by its owning authority
 //! (#38 D1).
 //!
 //! # Crash recovery from published records only (#26 D8)
 //!
 //! No cross-crash state: a resumed wave re-derives each node's deterministic new
 //! name and skips already-republished nodes via
-//! [`WriteWavePublisher::is_republished`]; register/republish/retire/re-point are
-//! idempotent, so it converges to the same terminal state. The fresh write scope
-//! seed is recovered from the published root (the write-plane history link) — the
-//! deferred #745/#746 resolver wiring, faked here and threaded via
+//! [`WriteWavePublisher::is_republished`]; every effect is idempotent, so it
+//! converges to the same terminal state. The fresh write scope seed is recovered
+//! from the published root — deferred #745/#746 wiring, faked here via
 //! [`RotateScopeWritePlan::resume_write_scope_seed`]. Accepted limitation: a crash
 //! after the pointer flip but before interior retirement orphans the prior run's
 //! interior old names — the fail-safe direction (leaking a registration beats
@@ -51,15 +45,12 @@
 //! # Owner-only, fail-closed, deterministic
 //!
 //! The caller must present the owner identity signer that authored the current
-//! grant-set commitment, verified up front ([`WriteRotateError::NotOwner`]), and
-//! that commitment must name this scope's current root
-//! ([`WriteRotateError::CommitmentScopeMismatch`]). A
-//! non-advancing `writeEpoch` or an identity re-point is rejected release-active
-//! ([`build_repoint_object`]), never a `debug_assert!` — the encode-side mirror of
-//! the floor law's monotonic write-epoch reject (AGENTS.md rule 8). Entropy enters
-//! only through the [`Entropy`] seam (fresh seed + re-point nonce); the impure edges
-//! are the injected [`WriteSubtreeResolver`] and [`WriteWavePublisher`] (network
-//! wiring is #745/#746, faked in this slice).
+//! grant-set commitment, and that commitment must name this scope's current root
+//! ([`WriteRotateError::NotOwner`], [`WriteRotateError::CommitmentScopeMismatch`]).
+//! [`build_repoint_object`]'s two encode-side invariants are release-active, never
+//! a `debug_assert!` (AGENTS.md rule 8). Entropy enters only through the
+//! [`Entropy`] seam; the impure edges are the injected [`WriteSubtreeResolver`] and
+//! [`WriteWavePublisher`] (network wiring is #745/#746, faked in this slice).
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -381,12 +372,11 @@ pub fn derive_write_name(write_scope_seed: &[u8; SECRET_LEN], node_id: &[u8; 16]
     IpnsName::from_public_key(&kdf::ipns_keypair(write_seed.as_bytes()).verifying_key())
 }
 
-/// Assemble the re-point object, enforcing the two encode-side invariants
-/// release-active (never a `debug_assert!`): `new_write_epoch` MUST advance past
-/// `prev_write_epoch` (the floor law's monotonic write-epoch reject, mirrored on
-/// the encode side), and `new_root` MUST differ from `prev_root` (an identity
-/// re-point is not progress). Read plane is untouched, so `min_read_epoch` is
-/// carried verbatim.
+/// Assemble the re-point object, enforcing release-active (never a
+/// `debug_assert!`, AGENTS.md rule 8) that `new_write_epoch` advances past
+/// `prev_write_epoch` ([`WriteRotateError::WriteEpochNotAdvancing`]) and that
+/// `new_root` differs from `prev_root` ([`WriteRotateError::IdentityRepoint`]).
+/// The read plane is untouched, so `min_read_epoch` is carried verbatim.
 pub fn build_repoint_object(
     scope_id: [u8; 16],
     new_root: IpnsName,
@@ -431,10 +421,9 @@ where
 {
     let scope_id = plan.scope_id;
 
-    // 1) Owner-only, fail-closed BEFORE anything is minted or published: the
-    //    presented identity signer MUST be the one that authored the current
-    //    commitment. The current commitment is owner-authentic (it passed the gate
-    //    to resolve), so binding the signer to it anchors the rotation to the owner
+    // 1) Owner-only, fail-closed BEFORE anything is minted or published. The
+    //    current commitment is owner-authentic (it passed the gate to resolve), so
+    //    binding the presented signer to it anchors the rotation to the owner
     //    identity — the same gate the read-revoke trigger enforces.
     let current_sig =
         EcdsaSignature::from_compact(plan.commitment_sig).ok_or(WriteRotateError::NotOwner)?;
@@ -508,8 +497,7 @@ where
     .await?;
 
     // 7) Three-channel re-point: seal the owner-signed re-point object and publish
-    //    it to the scope pointer (canonical), the mailbox, and the old-root
-    //    tombstone (accelerators). Built through the release-active encode guards.
+    //    it in `REPOINT_CHANNELS` order.
     let repoint = build_repoint_object(
         scope_id,
         new_root_name.clone(),
@@ -540,8 +528,7 @@ where
     }
 
     // 8) Batch-retire the interior old names — only now, after the re-point flipped
-    //    the pointer. Register-first already enrolled every successor, so no name is
-    //    ever orphaned. The old root name is absent (it lingers).
+    //    the pointer. The old root name is absent (it lingers).
     if !interior_old_names.is_empty() {
         publisher
             .retire(&interior_old_names)
