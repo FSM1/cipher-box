@@ -9,11 +9,9 @@
 //! record touches the snapshot; a gate failure is a fail-closed trust violation
 //! that pins last-known-good and never renders the rejected record.
 //!
-//! The gate itself is a composition over content-plane and reader state that
-//! lands with the content/pointer/grants and key-lifecycle slices, so this slice
-//! reaches it through the [`Adopter`] seam. The pipeline's contract is fixed
-//! now: **every** fetched record is routed through [`Adopter::adopt`] — there is
-//! no ungated path to the snapshot.
+//! The gate itself is a composition over content-plane and reader state, reached
+//! through the [`Adopter`] seam. **Every** fetched record is routed through
+//! [`Adopter::adopt`] — there is no ungated path to the snapshot.
 
 use core::cell::RefCell;
 
@@ -32,9 +30,8 @@ use crate::sync::project::project_root;
 
 /// Runs the adoption gate over a fetched record. The concrete implementation
 /// assembles the content-plane candidate and the reader's private context and
-/// calls [`crate::gate::adopt`]; it lands with the content/pointer/grants and
-/// key-lifecycle slices. The resolve pipeline requires only this: every record
-/// it fetches is adopted through here before it can touch the snapshot
+/// calls [`crate::gate::adopt`]. The resolve pipeline requires only this: every
+/// record it fetches is adopted through here before it can touch the snapshot
 /// (blueprint/engine.md: "only gate-passing records touch the snapshot").
 pub trait Adopter {
     /// Assemble and gate the record fetched under `name`. `Ok` carries the

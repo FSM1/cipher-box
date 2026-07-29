@@ -5,22 +5,17 @@
 //! owner blob, the ascent link, the history links, and the write-body — carries
 //! a **detached** Ed25519 signature by the rotator's writer pseudonym over the
 //! det-CBOR preimage `{scopeId, epoch, structTag, recipientTag?, H(ciphertext)}`.
-//! Binding the ciphertext hash and the full context makes a signature
-//! non-transferable:
+//! Binding the whole context makes a signature non-transferable: `structTag`
+//! closes transplanting it onto a different structure kind, `recipientTag`
+//! (grant blobs only) closes replaying one recipient's grant-blob signature
+//! under another recipient's tag, `H(ciphertext)` binds the exact sealed bytes,
+//! and `scopeId + epoch` bind the structure to its scope and rotation.
 //!
-//! - the **structTag** closes transplanting a signature onto a different
-//!   structure kind;
-//! - the **recipientTag** (present only for grant blobs) closes replaying one
-//!   recipient's grant-blob signature under another recipient's tag;
-//! - **H(ciphertext)** binds the exact sealed bytes, so a swapped ciphertext
-//!   fails; and
-//! - **scopeId + epoch** bind the structure to its scope and rotation.
-//!
-//! The preimage is a det-CBOR map (never decoded — only signed and verified —
-//! so, like the AAD, it carries no unknown-field tolerance). Verification is
-//! per-structure and pure; the whole-record fail-closed policy over these
-//! verdicts (a missing or invalid signature is a whole-record trust violation)
-//! is the engine's adoption gate, which composes [`verify_structure`].
+//! The preimage is a det-CBOR map, never decoded — only signed and verified — so
+//! it carries no unknown-field tolerance. Verification is per-structure and
+//! pure; the whole-record fail-closed policy over these verdicts (a missing or
+//! invalid signature is a whole-record trust violation) is the engine's adoption
+//! gate, which composes [`verify_structure`].
 
 use crate::codec::{Map, Value, encode_fixed_depth};
 use crate::error::{CodecError, TrustViolation};
@@ -90,10 +85,9 @@ pub fn sign_structure(signer: &Ed25519Signer, input: &StructureSigInput) -> Ed25
 
 /// Verify a detached structure signature against the writer pseudonym public
 /// key. Fails closed with [`TrustViolation::StructureSignatureInvalid`] on a
-/// forged signature, a signature transplanted to a different `structTag`, a
-/// grant-blob signature replayed under a different `recipientTag`, or a swapped
-/// ciphertext (all recompute a different preimage). A pure per-structure check
-/// the adoption gate composes.
+/// forgery or any transplant — everything the preimage binds (see the module
+/// docs) recomputes differently. A pure per-structure check the adoption gate
+/// composes.
 pub fn verify_structure(
     verifier: &Ed25519Verifier,
     input: &StructureSigInput,

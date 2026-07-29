@@ -202,22 +202,18 @@ pub fn reseal_scope_root<E: Entropy>(
     committed: &CommittedSet<'_>,
     carried_history_links: &[SignedSealed],
 ) -> Result<GrantSection, ResealError> {
-    // Fail-closed BEFORE any seal: the rotator's pseudonym signer MUST be the
-    // owner-committed pseudonym key, else every detach-signature is minted under a
-    // key the commitment does not name — an unopenable root the gate always
-    // rejects (encode-side mirror of the gate's signer check). The pseudonym pubkey
-    // is public, so a plain byte compare is correct.
+    // Fail-closed BEFORE any seal (see `ResealError::SignerNotCommitted`). The
+    // pseudonym pubkey is public, so a plain byte compare is correct.
     if identity.pseudonym_signer.verifying_key().to_bytes()
         != committed.commitment.owner_pseudonym_pk
     {
         return Err(ResealError::SignerNotCommitted);
     }
 
-    // Fail-closed BEFORE any seal: the re-wrap set must equal the owner-signed
-    // committed set. This is the revocation-completeness guarantee and the
-    // encode-side mirror of the gate's `enforce_committed_ledger` resolve check.
-    // Reseal trusts each entry's `recipient_enc_pk` verbatim from the committed
-    // ledger; the tag<->enc_pk binding is enforced at resolve time (#745).
+    // Fail-closed BEFORE any seal (see `ResealError::LedgerDivergesFromCommitment`
+    // and the module's revocation-completeness rule). Reseal trusts each entry's
+    // `recipient_enc_pk` verbatim from the committed ledger; the tag<->enc_pk
+    // binding is enforced at resolve time (#745).
     enforce_committed_ledger(committed.commitment, committed.grant_ledger)
         .map_err(|_| ResealError::LedgerDivergesFromCommitment)?;
 
@@ -502,7 +498,7 @@ mod tests {
     }
 
     // `owner_enc_pub` needs a `&X25519Public`; hold it in a local so the borrow
-    // outlives the call. A tiny builder keeps every test terse.
+    // outlives the call.
     fn identity<'a>(
         fx: &'a Fixture,
         owner_pub: &'a X25519Public,

@@ -5,10 +5,9 @@
 //! fixes: converge the subtree, mint the grantee scope at read epoch 1, publish
 //! grantee-first, re-key the reparented descendants under the fresh derivation,
 //! then post the sealed share pointer. Convergence is the load-bearing
-//! correctness rule — a grant over a
-//! subtree that cannot be proven epoch-converged is refused **fail-closed**, so a
-//! new grantee can never regress through an ancestor scope's history (CONTEXT.md
-//! "Epoch-converged"). Each step carries its rationale inline.
+//! correctness rule — a grant over a subtree that cannot be proven
+//! epoch-converged is refused **fail-closed**, so a new grantee can never regress
+//! through an ancestor scope's history (CONTEXT.md "Epoch-converged").
 //!
 //! # Simulation boundary
 //!
@@ -150,14 +149,10 @@ pub struct CreateGrantOutcome {
 /// A read-grant creation failure.
 ///
 /// Failures **through the grantee scope-root publish (step 5)** are truly
-/// fail-closed — nothing is minted or shared: `Converge`,
-/// `SubtreeNotConverged`, `UnusableRecipientKey`, `CommitmentEncode`,
-/// `Entropy`, `Mint`, and `Publish` (register-first: a failed grantee publish
-/// pushes nothing to the network). Failures **after** that publish are NOT
-/// atomic: the grantee root — and, for `Mailbox`, the reparented parent — is
-/// already committed to the network, so a stale orphan can outlive the error.
-/// Orphan reconciliation belongs to the deferred resume machinery (#745/#746);
-/// each post-publish variant documents what it leaves behind.
+/// fail-closed — nothing is minted or shared. Failures **after** that publish
+/// are NOT atomic: the grantee root is already committed to the network, so a
+/// stale orphan can outlive the error. Each post-publish variant below documents
+/// what it leaves behind; orphan reconciliation is deferred to #745/#746.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateGrantError {
     /// The pre-grant convergence sweep aborted (enumeration/floor/publish/reseal).
@@ -257,11 +252,8 @@ impl std::error::Error for CreateGrantError {}
 /// Converge → mint (epoch 1) → publish (grantee first) → re-key the reparented
 /// descendants under the fresh grantee derivation → parent index update → post
 /// the mailbox share pointer. Fail-closed **through the grantee publish** (step
-/// 5): any earlier error mints and shares nothing. Past
-/// that point the sequence is not atomic — see [`CreateGrantError`] for what
-/// each post-publish variant leaves committed (orphan cleanup is deferred to
-/// #745/#746). See the module docs for the full sequence and the deferred
-/// write-grant / invite slices.
+/// 5); past that point the sequence is not atomic — see [`CreateGrantError`] for
+/// what each post-publish variant leaves committed.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_read_grant<E, F, R, P, M>(
     entropy: &mut E,

@@ -457,16 +457,13 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     let grant = open_grant_blob(my_enc_secret, &blob.enc, &grant_aad, &blob.ciphertext)
         .map_err(AcceptError::GrantBlobOpen)?;
     let node_seed = kdf::node_seed(grant.read_scope_seed(), &candidate.envelope.id);
-    // The derived read key is secret; this fn is its terminal owner, so wipe it
-    // on drop (the gate borrows it and never zeroizes a caller-owned buffer).
+    // The derived read key is secret and this fn is its terminal owner.
     let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
 
-    // The adoption gate: commitment verified against the contact-anchored owner,
-    // grant-section authenticated, seeds cross-checked, read-body unsealed.
     let reader = ReaderContext {
         owner_identity: &owner_identity,
         scope_id: candidate.envelope.scope,
-        read_key: &read_key, // Zeroizing<[u8; 32]> derefs to the borrowed array
+        read_key: &read_key,
         parent_node_seed: None,
         seed_blob: Some(SeedBlob::Grantee {
             enc_secret: my_enc_secret,
@@ -475,10 +472,8 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
             aad: grant_aad,
         }),
     };
-    // Gate the record but DEFER the floor-law advance: the durable sequence
-    // floor must not move ahead of the bookmark it accepts. If the persist below
-    // fails the floor stays put, so redelivery re-adopts cleanly instead of being
-    // stranded below an already-advanced floor (a permanently-lost share).
+    // Gate the record but DEFER the floor-law advance so the durable sequence
+    // floor never moves ahead of the bookmark it accepts (see `PendingAdoption`).
     // The share-accept flow does not hold the scope for liveness here, so the
     // write-grantee seed the gate surfaces is dropped (the `_`).
     let pending = match adopt_deferred(floors, &reader, candidate).await {
@@ -513,8 +508,6 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
         }
     };
 
-    // Reconcile the self-healing bookmark: append if new, heal in place if the
-    // committed permission or pointer read key drifted, no-op if byte-identical.
     let reconciled = received.reconcile(ReceivedShare {
         scope_root_name: pointer.scope_root_name.clone(),
         sharer_identity_pk: pointer.sharer_identity_pk,
@@ -524,9 +517,8 @@ pub async fn accept_share<F: FloorStore, M: Mailbox, S: ReceivedShareStore>(
     });
     let newly_added = matches!(reconciled, Reconciled::Added);
 
-    // Persist durably BEFORE the floor advance and the ack. A failure rolls the
-    // in-memory bookmark back and returns un-acked, so the item redelivers rather
-    // than being lost. A true no-op re-accept needs no durable write.
+    // Persist durably BEFORE the floor advance and the ack; a failure rolls the
+    // in-memory bookmark back and returns un-acked, so the item redelivers.
     if reconciled.is_durable_change() {
         if let Err(e) = store.persist(received).await {
             received.revert(&pointer.scope_root_name, reconciled);

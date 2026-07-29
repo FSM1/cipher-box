@@ -2,13 +2,12 @@
 //! read-grantee) exchange a share over one fake mailbox hub and one fake record
 //! store on virtual time, plus the adversarial reject rows the design demands.
 //!
-//! Every record and grant blob is hand-fed (this slice lands no resolve/publish
-//! wiring): the IPNS record plane rides the shared fake record store; the scope
-//! root's metadata (grant blob, commitment, structures, envelope) is built
-//! directly with `crates/core`'s crypto, exactly as the owner would publish it.
-//! The engine layer under test composes only core's verify/unseal/open — so the
-//! reject rows assert core's named checks or the engine's own fail-closed
-//! classifications, never a reinvented crypto code.
+//! Every record and grant blob is hand-fed: the IPNS record plane rides the
+//! shared fake record store and the scope root's metadata is built directly with
+//! `crates/core`'s crypto, exactly as the owner would publish it. The engine
+//! layer under test composes only core's verify/unseal/open, so the reject rows
+//! assert core's named checks or the engine's own fail-closed classifications,
+//! never a reinvented crypto code.
 
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
@@ -376,7 +375,6 @@ fn two_instance_share_accept_end_to_end() {
     ))
     .expect("post");
 
-    // Owner records the sent share in its denormalized index.
     let mut sent = SentIndex::new();
     let recipient_identity = EcdsaSigner::from_scalar(&[0xAA; 32]).unwrap();
     sent.record(SentShare {
@@ -391,7 +389,6 @@ fn two_instance_share_accept_end_to_end() {
         .record_store
         .seed_record(&endpoint, fx.name.as_str(), fx.record_bytes(1));
 
-    // Recipient imports the owner's contact (fail-closed verify) and polls.
     let contact = import_contact(&fx.owner_contact).expect("valid contact imports");
     let items = block_on(poll_verified(
         &recipient_device.mailbox,
@@ -441,7 +438,6 @@ fn two_instance_share_accept_end_to_end() {
         "pointer read key mismatch"
     );
 
-    // The item was acked only after the durable append: the inbox is now empty.
     assert!(
         block_on(poll_verified(
             &recipient_device.mailbox,
@@ -878,7 +874,6 @@ fn a_failed_ack_after_commit_recovers_via_idempotent_reack() {
         block_on(recipient.floor_store.sequence_floor(name_bytes)).unwrap(),
         Some(1)
     );
-    // ...but the item stays pending because the ack failed.
     assert_eq!(
         inbox_len(&fx, &recipient),
         1,
@@ -1491,11 +1486,9 @@ fn mailbox_lifecycle_through_the_api_client() {
         "recipient: {post_body}"
     );
 
-    // poll: a GET on the mailbox collection.
     assert_eq!(requests[1].url, "http://api.test/mailbox/messages");
     assert_eq!(requests[1].method, HttpMethod::Get);
 
-    // ack: a DELETE on the item.
     assert_eq!(requests[2].url, "http://api.test/mailbox/messages/m1");
     assert_eq!(requests[2].method, HttpMethod::Delete);
 }

@@ -1,8 +1,7 @@
 //! secp256k1 ECDSA over det-CBOR (blueprint/core.md "Crypto suite": identity
 //! signing — subkey binding, grant-set commitment, re-point object, mailbox
-//! sender signature). Nonces are RFC 6979 deterministic (the `rfc6979` crate,
-//! no RNG), and messages are hashed with SHA-256 before signing, so a fixed key
-//! and message always produce the same signature.
+//! sender signature). Nonces are RFC 6979 deterministic (no RNG) and messages
+//! are hashed with SHA-256 before signing.
 //!
 //! Signatures are the canonical 64-byte compact `r || s` form (low-S is what
 //! the deterministic signer emits); the `sec1` compressed public key is 33
@@ -66,15 +65,12 @@ impl fmt::Debug for EcdsaSigner {
 }
 
 impl EcdsaVerifier {
-    /// Parse a **compressed** SEC1 public key. `None` when the bytes are not
-    /// exactly the frozen 33-byte compressed width, or are not a valid point on
-    /// secp256k1. The explicit length guard runs *before* `from_sec1_bytes`
-    /// (which also accepts 65-byte uncompressed/hybrid forms): a compressed key
-    /// re-emitted uncompressed is byte-distinct yet decodes to the same point,
-    /// so admitting it would break the frozen 33-byte-width canonical doctrine —
-    /// a `PartialEq`-equal contact code with different bytes, and (in the mailbox
-    /// path, where `sig_preimage` hashes the raw sender key) a distinct signed
-    /// preimage that still verifies.
+    /// Parse a **compressed** SEC1 public key. `None` unless the bytes are the
+    /// frozen 33-byte compressed width *and* a valid secp256k1 point. The length
+    /// guard runs *before* `from_sec1_bytes`, which also accepts the 65-byte
+    /// uncompressed/hybrid forms: the same point re-encoded uncompressed is
+    /// byte-distinct, breaking the single-valued byte doctrine the contact code
+    /// and the mailbox `sig_preimage` (which hashes the raw sender key) rest on.
     pub fn from_sec1(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != IDENTITY_PUBLIC_LEN {
             return None;
@@ -105,14 +101,12 @@ impl fmt::Debug for EcdsaVerifier {
 
 impl EcdsaSignature {
     /// Parse a compact signature. `None` when it is not exactly 64 bytes, when
-    /// `r`/`s` are out of range, or when `s` is **high** (non-canonical) — the
-    /// `invalid-binding-sig-encoding` gate. Rejecting high-S at the encoding
-    /// layer makes the byte form canonical and non-malleable: `s` and `n - s`
-    /// are two encodings of the same signature, so pinning low-S here keeps any
-    /// invariant keyed on the signature bytes single-valued (grant-set
-    /// commitment, one contact-code encoding). (k256's verifier also rejects
-    /// high-S, so this is defence in depth on the parse side.) The deterministic
-    /// signer already emits low-S, so this only rejects tampered inputs.
+    /// `r`/`s` are out of range, or when `s` is **high** — the
+    /// `invalid-binding-sig-encoding` gate. `s` and `n - s` encode the same
+    /// signature, so pinning low-S here keeps any invariant keyed on the
+    /// signature bytes single-valued (grant-set commitment, one contact-code
+    /// encoding). Defence in depth: k256's verifier also rejects high-S, and the
+    /// deterministic signer only ever emits low-S.
     pub fn from_compact(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != SIGNATURE_LEN {
             return None;

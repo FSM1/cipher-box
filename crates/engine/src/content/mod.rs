@@ -8,13 +8,6 @@
 //! and the content-address codec are core's ([`cipherbox_core::content`], #691);
 //! this plane composes them and owns the framing/DAG shape and the placement,
 //! quota, and retention judgment (#630).
-//!
-//! - [`chunk`] — fixed-size framing + per-version key + core seal + leaf CID.
-//! - [`dag`] — the version root addressed by its `contentCid`, chunk-aligned.
-//! - [`provider`] — the pin-provider layer and BYO reachability probe.
-//! - [`read`] — verified reads (accelerator + public fallback), fail-closed.
-//! - [`retention`] — pre-flight quota and the explicit prune op.
-//! - [`profile`] — the frozen chunk-size constant.
 
 pub mod chunk;
 pub mod dag;

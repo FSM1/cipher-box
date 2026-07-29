@@ -2,23 +2,16 @@
 //! (blueprint/core.md "Envelope and structures", "Structure-tag registry").
 //!
 //! The AAD is the authenticated-but-not-encrypted context every sealed body is
-//! bound to: `(v, id, scope, epoch, structTag)` under the fresh `cipherbox/v2`
-//! domain separator (#27 D3/D4 — a structured AAD replacing v1's 45-byte
-//! role-byte layout). It is a det-CBOR array so the layout is unambiguous and
-//! byte-frozen by the KAT; it is never decoded (only fed to the AEAD), so it
-//! carries no unknown-field tolerance.
+//! bound to: `(v, id, scope, epoch, structTag)` under the `cipherbox/v2` domain
+//! separator (#27 D3/D4). It is a det-CBOR array, byte-frozen by the KAT, and is
+//! never decoded — only fed to the AEAD — so it carries no unknown-field
+//! tolerance.
 //!
-//! What the AAD binds, and why each element is load-bearing:
-//!
-//! - **`v`** — the single small-int format+suite version. Binding it into the
-//!   AAD is the downgrade defence: a rolled-back `v` recomputes a different AAD
-//!   and fails the tag (blueprint/core.md "Wire format").
-//! - **`id` + `scope` + `epoch`** — the node identity and its epoch-tag
-//!   membership. A body re-hung under a different node, scope, or epoch fails
-//!   the tag; this is the transplant closure the AAD provides.
-//! - **`structTag`** — the domain-separation byte from the registry below, so a
-//!   read-body ciphertext can never be reinterpreted as a write-body, grant
-//!   blob, pointer payload, etc.
+//! What each bound element buys: **`v`** is the downgrade defence (a rolled-back
+//! `v` recomputes a different AAD and fails the tag); **`id` + `scope` + `epoch`**
+//! close transplant of a body across nodes, scopes, and epochs; **`structTag`**
+//! stops a read-body ciphertext being reinterpreted as a write-body, grant blob,
+//! or pointer payload.
 //!
 //! **`ipnsName` is deliberately excluded** (#39 D7): the name wave republishes
 //! epoch-lagged bodies under fresh names, so binding the name would break the
@@ -41,22 +34,21 @@ pub const AAD_DOMAIN: &str = "cipherbox/v2/aad";
 // has no v2 analog and is not carried).
 // ---------------------------------------------------------------------------
 
-/// `read-body` — the sealed node body (folder children / file versions). The
-/// only tag this slice exercises with vectors; the rest are reserved skeleton.
+/// `read-body` — the sealed node body (folder children / file versions).
 pub const STRUCT_TAG_READ_BODY: u8 = 0x01;
-/// `write-body` — the scope-root write-plane payload (later slice).
+/// `write-body` — the scope-root write-plane payload.
 pub const STRUCT_TAG_WRITE_BODY: u8 = 0x02;
-/// `grant-blob` — a scope seed sealed to one recipient (later slice).
+/// `grant-blob` — a scope seed sealed to one recipient.
 pub const STRUCT_TAG_GRANT_BLOB: u8 = 0x03;
-/// `owner-blob` — the override seed wrapped to the owner (later slice).
+/// `owner-blob` — the override seed wrapped to the owner.
 pub const STRUCT_TAG_OWNER_BLOB: u8 = 0x04;
-/// `ascent-link` — the override seed sealed to the parent keypair (later slice).
+/// `ascent-link` — the override seed sealed to the parent keypair.
 pub const STRUCT_TAG_ASCENT_LINK: u8 = 0x05;
-/// `history-link` — the previous epoch's seed under the current one (later slice).
+/// `history-link` — the previous epoch's seed under the current one.
 pub const STRUCT_TAG_HISTORY_LINK: u8 = 0x06;
-/// `pointer-payload` — the re-point object at a scope/vault pointer (later slice).
+/// `pointer-payload` — the re-point object at a scope/vault pointer.
 pub const STRUCT_TAG_POINTER_PAYLOAD: u8 = 0x07;
-/// `mailbox-payload` — the HPKE-sealed mailbox item (later slice).
+/// `mailbox-payload` — the HPKE-sealed mailbox item.
 pub const STRUCT_TAG_MAILBOX_PAYLOAD: u8 = 0x08;
 /// `owner-write-blob` — the write-scope seed HPKE-sealed to the owner's enc
 /// subkey, the write-plane mirror of the owner blob (owner cold-start write-seed
@@ -76,9 +68,8 @@ pub struct StructTagSpec {
     pub tag: u8,
 }
 
-/// The ten structure tags, in registry (byte) order. Every new tag extends
-/// this table and its manifest vectors before merge (blueprint/core.md); this
-/// slice populates and exercises only `read-body`.
+/// The ten structure tags, in registry (byte) order. Every new tag extends this
+/// table and its manifest vectors before merge (blueprint/core.md).
 pub const STRUCT_TAGS: &[StructTagSpec] = &[
     StructTagSpec {
         name: "read-body",

@@ -11,25 +11,13 @@
 //! recomputes each `H(ciphertext)` before verifying the signatures — so the
 //! record itself is the completeness authority, never a side list.
 //!
-//! Layout (det-CBOR map, one strictness policy, unknown fields preserved):
-//!
-//! - `commitment` — the encoded [`GrantSetCommitment`] (the exact owner-signed
-//!   preimage) and `commitmentSig` — its 64-byte compact ECDSA signature.
-//! - `grantBlobs` — `[{tag, enc, ciphertext, sig}]`, keyed and structure-signed
-//!   per recipient blinded tag; the tags are unique fail-closed (#39 D7).
-//! - `ownerBlob` — `{enc, ciphertext, sig}`.
-//! - `ascentLink` — `{ascentPublic, enc, ciphertext, sig}`, present only when
-//!   the scope has a parent (interior vault root omits it).
-//! - `historyLinks` — `[{sealed, sig}]`, the per-epoch key-regression links
-//!   (empty at epoch 1).
-//! - `writeBody` — `{sealed, sig}`, the scope root's sealed write-body.
-//!
+//! The frame is a det-CBOR map under one strictness policy, unknown fields
+//! preserved; its members are enumerated and documented on [`GrantSection`].
 //! Each `sig` is the 64-byte Ed25519 structure signature over the
 //! `{scopeId, epoch, structTag, recipientTag?, H(ciphertext)}` preimage
-//! ([`super::structure`]); the byte string a signature binds is:
-//!
-//! - the HPKE `ciphertext` (not `enc`) for grant blob / owner blob / ascent link;
-//! - the whole symmetric sealed blob `nonce||ct||tag` for history link / write-body.
+//! ([`super::structure`]); the byte string it binds is the HPKE `ciphertext`
+//! (**not** `enc`) for grant blob / owner blob / ascent link, and the whole
+//! symmetric sealed blob `nonce||ct||tag` for history link / write-body.
 //!
 //! Signatures are carried as raw fixed-width bytes and never parsed or verified
 //! here — that is the gate's crypto step. This codec only frames and enforces

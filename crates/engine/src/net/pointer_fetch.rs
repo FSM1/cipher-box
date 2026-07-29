@@ -35,10 +35,9 @@ impl<T: RecordTransport> PointerFetch for RecordPointerFetch<'_, T> {
         let Some((_sequence, record_bytes)) = fanout_get_verify(self.transport, name).await else {
             return Ok(None);
         };
-        // Fan-out returns the marshaled record (already Ed25519-from-name
-        // verified); re-extract the authenticated value — the inlined re-point
-        // block. The same bytes just verified, so a failure here is an internal
-        // inconsistency, surfaced as a seam error, never a trust reclassification.
+        // Re-extract the authenticated value from bytes fan-out already verified,
+        // so a failure here is an internal inconsistency (a seam error), never a
+        // trust reclassification.
         let value = IpnsRecord::unmarshal(&record_bytes)
             .and_then(|record| record.verify(name))
             .map_err(|e| SeamError::new(format!("verified record re-extract failed: {e}")))?

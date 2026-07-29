@@ -6,12 +6,10 @@
 //! "the simulation harness").
 //!
 //! Records are real (core-signed via `IpnsRecord::create_v2`), so the fan-out
-//! verify step runs core's actual chain; the adoption gate — whose full
-//! candidate/reader assembly lands with the content/pointer/key slices — is
-//! reached through a scripted [`Adopter`] so this slice can prove the pipeline
-//! contract (every resolve is gated; only gate-passing records touch the
-//! snapshot) without re-deriving the whole crypto fixture the adoption-gate
-//! suite already owns.
+//! verify step runs core's actual chain. The adoption gate is reached through a
+//! scripted [`Adopter`]: this suite proves the pipeline contract (every resolve
+//! is gated; only gate-passing records touch the snapshot) without re-deriving
+//! the crypto fixture the adoption-gate suite already owns.
 
 use core::cell::RefCell;
 use core::time::Duration;

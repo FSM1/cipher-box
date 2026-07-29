@@ -11,12 +11,10 @@
 //! **existing** override seed, `prev = None`, minting no new seed, epoch, or
 //! history link. Content bytes are never re-encrypted (#26 D6).
 //!
-//! It deliberately does **not** mint fresh descendant seeds — that fresh-seed
-//! eager-set republish, the part that defeats a revokee's cached descendant
-//! seeds, is the [`cascade`](super::cascade)'s job (blueprint/engine.md
-//! "rotateScope", L243-252). The sweep completes only epoch-lag convergence and
-//! the direct-child-scope index self-heal, so re-sealing a descendant with its
-//! existing seed does not on its own complete a read revoke.
+//! It deliberately mints **no** fresh descendant seeds, so it does not on its own
+//! complete a read revoke: that fresh-seed republish is the
+//! [`cascade`](super::cascade)'s job. The sweep completes only epoch-lag
+//! convergence and the direct-child-scope index self-heal.
 //!
 //! # Completeness is fail-closed
 //!
@@ -127,25 +125,17 @@ pub trait SweepResolver {
     /// Resolve `scope`'s current re-seal material, or a fail-closed
     /// [`ResolveFailure`] if its record cannot be authoritatively obtained.
     ///
-    /// One resolve returns the whole [`SweepTarget`] — the enumeration/lag
-    /// fields (`ipns_name`, `current_read_epoch`, `direct_child_scope_index`)
-    /// and the heavy re-seal material (seeds, signer, committed set). The real
-    /// resolver (#745/#746) fetches and gates a scope root's record once, so
-    /// unsealing the owner blob to hand back its seeds is incremental; splitting
-    /// this into a light enumeration edge plus a heavy re-seal edge fetched only
-    /// for lagging nodes is a designed-for optimization for that slice, not a
-    /// correctness requirement here.
+    /// One resolve returns the whole [`SweepTarget`] — enumeration/lag fields
+    /// *and* the heavy re-seal material. Splitting it into a light enumeration
+    /// edge plus a heavy re-seal edge fetched only for lagging nodes is a
+    /// designed-for optimization for #745/#746, not a correctness requirement.
     ///
     /// # Binding contract (obligation on the real resolver, #745/#746)
     ///
-    /// The same edge discipline [`ChildIndexResolver`] carries applies. The
-    /// resolver MUST gate `scope`'s record under the enumerated `scope.scope_id`
-    /// and `scope.ipns_name` — the adoption gate binds `ipns_name -> record` via
-    /// the Ed25519 key derived from the name, and the gated record's
-    /// `commitment.ipns_name` MUST equal `scope.ipns_name`. It returns **no**
-    /// self-identifying `scope_id` or `ipns_name`: the sweep re-seals and
-    /// CAS-publishes under the enumerated [`ChildScopeRef`] alone (see
-    /// [`SweepTarget`]).
+    /// The same edge discipline [`ChildIndexResolver`] carries applies: gate
+    /// `scope`'s record under the enumerated `scope.scope_id`/`scope.ipns_name`,
+    /// with `commitment.ipns_name` equal to `scope.ipns_name`, and return **no**
+    /// self-identifying ids (see [`SweepTarget`]).
     async fn resolve(&self, scope: &ChildScopeRef) -> Result<SweepTarget, ResolveFailure>;
 }
 
@@ -344,10 +334,7 @@ where
         // deduplicated form; flag the node when the stored index needed repair
         // (#38 D6 "repaired and flagged"). The heal rides the re-seal, so it
         // reaches only nodes being re-sealed this pass — a converged node's index
-        // heals on its next ordinary write ("ordinary writes advance it for
-        // free"). Detecting a child *missing from a different parent's* index is
-        // the resolver/tree wiring's job (#745/#746);
-        // this slice heals each re-sealed node's own index.
+        // heals on its next ordinary write ("ordinary writes advance it for free").
         let canonical_index = canonicalize(&target.direct_child_scope_index);
         // Flagged only after the canonical index durably publishes below — a
         // repair that loses the CAS never landed, so it must not be reported
@@ -449,9 +436,8 @@ where
 /// Scheduling is engineering judgment (blueprint/engine.md L275-278): the cadence
 /// and attempt cap are the host's, injected here; time enters only through the
 /// scheduler seam so the harness runs multi-tick timelines in virtual time.
-// Each seam is a distinct injected dependency (the determinism law keeps entropy,
-// time, and the two network edges separate); bundling them into an ad-hoc struct
-// purely to shrink the arg count would be abstraction for its own sake.
+// The determinism law keeps entropy, time, and the two network edges as separate
+// injected seams.
 #[allow(clippy::too_many_arguments)]
 pub async fn run_sweep<E, F, S, R, P>(
     entropy: &mut E,

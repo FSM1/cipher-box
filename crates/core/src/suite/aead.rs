@@ -1,10 +1,10 @@
 //! XChaCha20-Poly1305 AEAD primitive (blueprint/core.md "Crypto suite":
 //! symmetric sealing, 24-byte nonce).
 //!
-//! This is the raw AEAD only — the CipherBox seal/unseal layer (structured AAD
-//! construction, the `cipherbox/v2` domain separator, envelope framing) is a
-//! later slice and is deliberately *not* here. HPKE ([`super::hpke`]) composes
-//! this primitive under a per-message derived key and nonce.
+//! The raw AEAD only; the CipherBox seal/unseal layer (structured AAD, the
+//! `cipherbox/v2` domain separator, envelope framing) is [`crate::seal`]. HPKE
+//! ([`super::hpke`]) composes this primitive under a per-message derived key
+//! and nonce.
 
 use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
@@ -21,13 +21,11 @@ pub const TAG_LEN: usize = 16;
 ///
 /// # Security — plaintext length (caller invariant)
 ///
-/// [`encrypt`] treats sealing as **infallible** and would panic on a single
-/// message strictly longer than this. Core exports the raw AEAD over
-/// caller-framed chunks (the engine frames content well below this, at 1 MiB),
-/// so the framing seam owns the ceiling — the same caller-invariant class as the
-/// per-call ephemeral-scalar uniqueness [`hpke_seal`](super::hpke::hpke_seal)
-/// documents. A `u64` keeps the constant representable on the 32-bit WASM leg,
-/// where the value exceeds `usize::MAX`.
+/// [`encrypt`] treats sealing as **infallible** and would panic past this
+/// ceiling, so the caller's framing seam owns it (the engine frames content at
+/// 1 MiB) — the same caller-invariant class as the per-call ephemeral-scalar
+/// uniqueness [`hpke_seal`](super::hpke::hpke_seal) documents. `u64`, not
+/// `usize`: the value exceeds `usize::MAX` on the 32-bit WASM leg.
 pub const MAX_PLAINTEXT_LEN: u64 = 64 * ((1u64 << 32) - 1);
 
 /// Seal `plaintext` under `key`/`nonce` with additional authenticated data

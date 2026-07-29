@@ -26,18 +26,13 @@ pub enum Connectivity {
     Offline,
 }
 
-/// Classify the staleness rung. The ladder, top to bottom:
-///
-/// - `Offline` — connectivity is down.
-/// - `Reconciling` — a background reconcile is in flight (quiet indicator).
-/// - `Stale` — online and idle, but the last success is older than the
-///   profile threshold (`stale_after` ≈ 3 missed poll cycles).
-/// - `Fresh` — online and within the freshness window.
+/// Classify the [`Staleness`] rung, in precedence order: `Offline`, then
+/// `Reconciling`, then `Stale`/`Fresh` split on the profile's `stale_after`
+/// (≈ 3 missed poll cycles).
 ///
 /// A cold cache (`last_success` is `None`) with no reconcile in flight while
-/// online is reported as `Reconciling`: the first tick is implied, and the
-/// empty-cache cold-start *error* is the caller's separate concern, not a
-/// staleness rung.
+/// online reports `Reconciling`: the empty-cache cold-start *error* is the
+/// caller's separate concern, not a staleness rung.
 pub fn classify(
     now: UnixMillis,
     last_success: Option<UnixMillis>,

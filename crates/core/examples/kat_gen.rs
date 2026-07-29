@@ -2899,13 +2899,10 @@ fn build_read_body_reject() -> Vec<RejectVector> {
 }
 
 fn build_envelope_accept() -> Vec<EnvelopeAcceptVector> {
-    // Every seal below reuses the one fixed (key, nonce) from `seal_probe()`.
-    // That is deliberate and required here: KAT vectors must be byte-reproducible,
-    // so the generator injects a pinned nonce rather than sampling one. It is NOT
-    // a sanctioned production pattern — production sources a unique nonce per seal
-    // from the entropy seam (see `seal()`'s doc: XChaCha20-Poly1305 nonce reuse
-    // under one key breaks confidentiality and integrity). These fixtures protect
-    // no real data; they only pin the wire format and the accept verdict.
+    // Every seal below reuses the one fixed (key, nonce) from `seal_probe()`:
+    // KAT vectors must be byte-reproducible, so the generator injects a pinned
+    // nonce. NOT a production pattern — production sources a unique nonce per
+    // seal from the entropy seam (see `seal()`'s doc for why).
     let p = seal_probe();
     let bodies: Vec<(&str, ReadBody)> = vec![("folder", sample_folder()), ("file", sample_file())];
 

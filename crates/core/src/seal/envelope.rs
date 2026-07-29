@@ -74,10 +74,9 @@ pub fn decode_envelope(bytes: &[u8]) -> Result<Envelope, CodecError> {
 
 /// The `grantSection` bytes carried in the envelope's preserved unknown
 /// top-level fields (#27 D10 — `grantSection` rides `unknown`, never a typed
-/// field, so an envelope stays kind-uniform and byte-stable on rewrite). A
-/// non-crypto accessor: it hands the raw section bytes to the caller (see
-/// [`super::decode_grant_section`]) so the engine never matches raw `Value`s.
-/// `None` when the field is absent or not a byte string.
+/// field, so an envelope stays kind-uniform and byte-stable on rewrite). Raw
+/// bytes for [`super::decode_grant_section`], so the engine never matches raw
+/// `Value`s; `None` when the field is absent or not a byte string.
 pub fn grant_section_bytes(env: &Envelope) -> Option<&[u8]> {
     env.unknown
         .iter()
@@ -115,10 +114,8 @@ pub fn encode_envelope(env: &Envelope) -> Result<Vec<u8>, CodecError> {
 /// caller-injected entropy the KATs pin.
 ///
 /// The body is [`ReadBody::validate`]d first, so this never persists a folder
-/// with duplicate child ids/ipnsNames that decode would refuse to reopen —
-/// returning a [`TrustViolation`](crate::error::TrustViolation) if it would.
-/// The encoded plaintext (which carries inline content keys) is zeroized here —
-/// this function is its terminal owner.
+/// decode would refuse to reopen. The encoded plaintext carries inline content
+/// keys and is zeroized here — this function is its terminal owner.
 pub fn seal_read_body(
     key: &[u8; KEY_LEN],
     nonce: &[u8; NONCE_LEN],
@@ -150,12 +147,11 @@ pub fn seal_read_body(
     })
 }
 
-/// Open and decode an envelope's read-body under the read key. Rebuilds the
-/// `read-body` AAD from the envelope's own plaintext fields, so any transplant
-/// (a body re-hung under a different `v`/id/scope/epoch) or a `v` downgrade
-/// fails the tag as [`crate::error::TrustViolation::SealOpenFailed`]. The
-/// recovered plaintext buffer is zeroized here; the returned [`ReadBody`]'s
-/// content keys are the caller's to own.
+/// Open and decode an envelope's read-body under the read key. The AAD is
+/// rebuilt from the envelope's own plaintext fields, so any transplant or `v`
+/// downgrade fails the tag as [`crate::error::TrustViolation::SealOpenFailed`].
+/// The recovered plaintext is zeroized here; the returned [`ReadBody`]'s content
+/// keys are the caller's to own.
 pub fn open_read_body(env: &Envelope, key: &[u8; KEY_LEN]) -> Result<ReadBody, CodecError> {
     let ctx = AadContext {
         v: env.v,

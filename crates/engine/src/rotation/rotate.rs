@@ -30,10 +30,8 @@
 //!   best-effort and idempotent, so losing it to a crash costs only a delayed
 //!   lazy wave the next ordinary write or scheduled sweep advances.
 //!
-//! The eager-set descendant scope roots (#744's enumeration) are re-sealed
-//! through this same [`reseal_scope_root`] helper by the cascade once the
-//! resolver/tree wiring lands (#745/#746); this primitive lands the root cut and
-//! its crash-safe effect ordering.
+//! This primitive is the root cut alone; the descendant re-key runs through the
+//! same [`reseal_scope_root`] helper in [`cascade`](super::cascade).
 
 use zeroize::Zeroizing;
 

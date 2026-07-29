@@ -10,8 +10,8 @@
 //! The profile is a strict subset of DAG-CBOR, so every encoding this module
 //! emits is a valid DAG-CBOR block. (With text-only map keys, RFC 8949's
 //! bytewise key order and DAG-CBOR's length-first order coincide — pinned by
-//! test.) Envelope, body, and structure schema codecs build on this module in
-//! later slices; nothing outside it touches raw CBOR.
+//! test.) Every schema codec builds on this module; nothing outside it touches
+//! raw CBOR.
 
 mod decode;
 mod encode;

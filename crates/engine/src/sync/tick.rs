@@ -80,10 +80,9 @@ pub fn resolve_mode(cause: TickCause) -> ResolveMode {
     }
 }
 
-/// The focus set a tick refreshes, deterministically ordered: the vault pointer
-/// first (cold-boot anchor), then open shared-scope pointers (polled
-/// discipline), the mailbox poll, then the open folder and its ancestor chain
-/// to root. Everything else is out of the window (on-access refresh only).
+/// The focus set a tick refreshes, in deterministic order: vault pointer, open
+/// shared-scope pointers, mailbox poll, open folder, ancestors to root.
+/// Everything else is out of the window (on-access refresh only).
 pub fn focus_set(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<FocusTarget> {
     let mut targets = vec![FocusTarget::VaultPointer];
     for scope in &focus.open_shared_scopes {
@@ -119,10 +118,8 @@ pub fn jittered_cadence(cadence: Duration, entropy: &mut dyn Entropy) -> Duratio
         return cadence;
     }
     let mut bytes = [0u8; 8];
-    // Entropy is fail-closed elsewhere; jitter is best-effort scheduling, so a
-    // (practically impossible) fill error degrades to the un-jittered cadence
-    // rather than propagating — losing jitter costs only herd spread, never
-    // correctness.
+    // Jitter is best-effort scheduling: a fill error degrades to the un-jittered
+    // cadence rather than propagating — it costs herd spread, never correctness.
     if entropy.fill(&mut bytes).is_err() {
         return cadence;
     }

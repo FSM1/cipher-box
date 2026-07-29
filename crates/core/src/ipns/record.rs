@@ -1,28 +1,25 @@
 //! IPNS V2 records: create/sign, byte-stable marshal/unmarshal, and the pure
 //! verify chain (blueprint/core.md "IPNS records").
 //!
-//! A record is the spec-compliant IPFS `IpnsEntry` protobuf: the `signatureV2`
-//! (field 8) signs the DAG-CBOR `data` (field 9), and the deprecated top-level
-//! fields (value/validityType/validity/sequence/ttl) are emitted for ecosystem
-//! compatibility. `Value = /ipfs/<CID>` of the DAG-CBOR envelope; the first
-//! publish embeds sequence 1 and a CAS publish embeds the exact expected
-//! sequence (both are the caller's injected `sequence` — core embeds it
-//! faithfully, the strict floor gate is the engine's). Validity is a 90-day
-//! client-signed EOL and the TTL is always explicit, injected from the sync
-//! timing profile — core reads no clock and defaults neither (#33 D3).
+//! A record is the spec-compliant IPFS `IpnsEntry` protobuf: `signatureV2`
+//! (field 8) signs the DAG-CBOR `data` (field 9) whose `Value = /ipfs/<CID>` of
+//! the DAG-CBOR envelope, and the deprecated top-level fields are emitted for
+//! ecosystem compatibility. `sequence` (1 on first publish, the exact expected
+//! next on CAS), the 90-day client-signed EOL, and the always-explicit TTL are
+//! all caller-injected — core reads no clock and defaults neither (#33 D3); the
+//! strict floor gate is the engine's.
 //!
 //! **Marshal/unmarshal is keyless and byte-stable** (blueprint/core.md
 //! "Keyless re-PUT"): [`IpnsRecord::unmarshal`] preserves every field's exact
 //! wire segment in order, so [`IpnsRecord::marshal`] reproduces a foreign signed
-//! record byte-for-byte with no key material — the republisher and every
-//! accelerator depend on it, including fields this codec does not model
-//! (`signatureV1`, `pubKey`, any future field).
+//! record byte-for-byte with no key material — including fields this codec does
+//! not model (`signatureV1`, `pubKey`, any future field), which the republisher
+//! and every accelerator depend on.
 //!
 //! **Verify is pure** (blueprint/core.md "Verify"): the Ed25519 key comes from
 //! the [`IpnsName`] itself (never a side channel), `signatureV2` verifies over
-//! `"ipns-signature:" || data`, the signed `data.Value` must equal the
-//! top-level `value`, and the EOL + sequence are extracted for the gate's
-//! comparators.
+//! `"ipns-signature:" || data`, and the signed `data.Value` must equal the
+//! top-level `value`.
 
 use zeroize::Zeroize;
 
@@ -107,12 +104,9 @@ pub struct IpnsRecord {
 }
 
 impl IpnsRecord {
-    /// Build and sign a spec-compliant V2 record. `signer` is the injected
-    /// Ed25519 node key; `value` is the `/ipfs/<CID>` path; `sequence` is the
-    /// caller-chosen sequence (1 on first publish, the expected next on CAS);
-    /// `ttl_nanos` is the explicit injected TTL; `validity_eol` is the injected
-    /// RFC3339 EOL string. The top-level compat fields are emitted to match the
-    /// signed `data`.
+    /// Build and sign a spec-compliant V2 record from the injected signer,
+    /// `/ipfs/<CID>` value, sequence, TTL, and RFC3339 EOL. The top-level
+    /// compat fields are emitted to match the signed `data`.
     pub fn create_v2(
         signer: &Ed25519Signer,
         value: &[u8],
@@ -162,21 +156,17 @@ impl IpnsRecord {
     }
 
     /// The full pure verify chain against `name` — whose Ed25519 key is the sole
-    /// trust anchor (never a side channel). Fail-closed and two-class:
-    ///
-    /// - a structurally incomplete record (missing/duplicated `value`,
-    ///   `signatureV2`, or `data`, or an ill-shaped `data`) is
-    ///   [`Malformed::IpnsRecordMalformed`];
-    /// - a `signatureV2` that does not verify is
-    ///   [`TrustViolation::IpnsSignatureInvalid`];
-    /// - a signed `data.Value` disagreeing with the top-level `value` is
-    ///   [`TrustViolation::IpnsValueMismatch`].
+    /// trust anchor (never a side channel). Fail-closed and two-class: a
+    /// structurally incomplete record is [`Malformed::IpnsRecordMalformed`], a
+    /// `signatureV2` that does not verify is
+    /// [`TrustViolation::IpnsSignatureInvalid`], and a signed `data.Value`
+    /// disagreeing with the top-level `value` is
+    /// [`TrustViolation::IpnsValueMismatch`].
     pub fn verify(&self, name: &IpnsName) -> Result<VerifiedRecord, CodecError> {
         let top_value = self.unique_len_field(FIELD_VALUE)?;
         let signature_bytes = self.unique_len_field(FIELD_SIGNATURE_V2)?;
         let data = self.unique_len_field(FIELD_DATA)?;
 
-        // signatureV2 over "ipns-signature:" || data, under the name's key.
         let sig_array: [u8; SIGNATURE_LEN] = signature_bytes
             .try_into()
             .map_err(|_| Malformed::IpnsRecordMalformed)?;
@@ -319,7 +309,6 @@ fn parse_fields(bytes: &[u8]) -> Option<Vec<ProtoField>> {
         let wire_type = tag & 0x07;
         let value = match wire_type {
             WIRE_VARINT => {
-                // Validate + advance past the varint; its value is not retained.
                 read_varint(bytes, &mut pos)?;
                 FieldValue::Varint
             }
@@ -384,10 +373,9 @@ fn varint_field(number: u64, v: u64) -> ProtoField {
 
 impl Drop for IpnsRecord {
     fn drop(&mut self) {
-        // Records carry no secret key material (signatures/values are public),
-        // but wiping the buffers on drop keeps published bytes from lingering.
-        // `raw` and the decoded `Bytes` view are separate allocations, so wipe
-        // both to honor the contract fully.
+        // Records hold no secret material, but `raw` and the decoded `Bytes`
+        // view are separate allocations — wipe both so published bytes do not
+        // linger.
         for f in &mut self.fields {
             f.raw.zeroize();
             if let FieldValue::Bytes(b) = &mut f.value {

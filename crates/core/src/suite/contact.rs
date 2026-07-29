@@ -4,10 +4,8 @@
 //! Every user's identity key only signs and their X25519 encryption subkey only
 //! seals. The **subkey binding** is an ECDSA signature over the det-CBOR
 //! `{encSubkey, identityPk}` preimage; the **contact code** is the det-CBOR
-//! `{bindingSig, encSubkey, identityPk}` triple (~130 bytes, QR/URL-encodable).
-//! [`import_contact_code`] verifies the binding **mandatorily and fail-closed**:
-//! a code whose binding does not verify is rejected as a trust violation, never
-//! imported and never treated as stale.
+//! `{bindingSig, encSubkey, identityPk}` triple (~130 bytes, QR/URL-encodable),
+//! which [`import_contact_code`] verifies mandatorily and fail-closed.
 
 use crate::codec::{Map, Value, decode, encode_fixed_depth};
 use crate::error::{CodecError, Malformed, TrustViolation};

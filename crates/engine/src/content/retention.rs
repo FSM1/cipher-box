@@ -1,7 +1,4 @@
-//! Quota pre-flight and version retention (blueprint/engine.md "Content plane":
-//! "Retention default: keep all versions within quota, with an explicit
-//! user-initiated prune op"; "a pre-flight quota-query check to fail fast before
-//! bytes move is judgment").
+//! Quota pre-flight and version retention (blueprint/engine.md "Content plane").
 //!
 //! Retention is keep-all by default — nothing here evicts a version
 //! automatically; the network is authoritative on quota (enforced at the API

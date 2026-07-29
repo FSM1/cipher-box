@@ -10,12 +10,10 @@
 //!
 //! The wasm-bindgen-generated `.d.ts` is the single boundary contract that
 //! `packages/client` re-exports — there is no hand-maintained TS mirror of
-//! engine structures. Boundary hygiene is structural: `u64`s (op ids, sizes,
-//! IPNS sequence numbers) cross as `bigint`, binary payloads as `Uint8Array`,
-//! and no secret key material crosses at all — the command surface exposes
-//! only intent (a grant carries the recipient's *public* identity key, never
-//! a secret), and the event and read surfaces only key-free view state and
-//! decrypted user content (snapshot views, downloaded plaintext bytes).
+//! engine structures. Boundary hygiene is structural: `u64`s cross as `bigint`,
+//! binary payloads as `Uint8Array`, and no secret key material crosses at all —
+//! the command surface exposes only intent, the event and read surfaces only
+//! key-free view state and decrypted user content.
 
 // wasm-bindgen's macro-generated glue is unsafe by nature and exempt; this
 // forbids only unsafe we would hand-write (there is none).
@@ -25,20 +23,14 @@
 use cipherbox_engine::facade;
 use wasm_bindgen::prelude::*;
 
-// Shared JS-seam → engine-seam adapters (browser wasm target only): both the
-// production engine host and the test-only conformance bridge build on them.
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 mod seams_bridge;
 
-// The production engine host: constructs the one engine instance over the
-// browser seams and exposes `start`/`command`/`snapshot`/`download`/`nextEvent`
-// to the worker.
 #[cfg(all(target_family = "wasm", target_os = "unknown"))]
 mod host;
 
-// Test-only browser seam conformance bridge. Compiled only for the browser
-// suite's WASM build (`--features conformance` on the wasm target); the
-// production artifact never pulls the engine test kit or these bindings.
+// Test-only: the production artifact never pulls the engine test kit or these
+// bindings.
 #[cfg(all(feature = "conformance", target_family = "wasm", target_os = "unknown"))]
 mod conformance;
 
@@ -683,9 +675,8 @@ mod tests {
     use super::*;
     use cipherbox_engine::seams::OpId;
 
-    // The wrong-length rejection path builds a `JsError`, which only runs on
-    // wasm; it is asserted in `tests/boundary.rs`. Here we cover the accepted
-    // path and the byte round-trip.
+    // The wrong-length rejection builds a `JsError` (wasm-only) — see
+    // `tests/boundary.rs`.
     #[test]
     fn node_id_accepts_16_bytes_and_round_trips() {
         assert!(NodeId::from_bytes(&[0u8; 16]).is_ok());

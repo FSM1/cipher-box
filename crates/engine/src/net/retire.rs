@@ -25,12 +25,11 @@ where
 }
 
 /// Whether the old scope-root name may be retired yet. **Stubbed to `false`**:
-/// the migration-window constant that bounds how long the old root lingers
-/// serving the tombstone is an open edge (blueprint/engine.md "Open edges:
-/// Migration-window closure" — #38 fixed the channel architecture but not the
-/// window, proposed as a sync-timing-profile constant to settle with the
-/// testing-strategy blueprint). Until it lands the root never auto-retires, so
-/// a revokee or a lagging reader can always chase the tombstone to the new root.
+/// the migration window that bounds how long the old root lingers serving the
+/// tombstone is an open edge (blueprint/engine.md "Open edges: Migration-window
+/// closure"; #38 fixed the channel architecture but not the window). Until it
+/// lands the root never auto-retires, so a revokee or a lagging reader can
+/// always chase the tombstone to the new root.
 pub fn root_retire_ready() -> bool {
     false
 }

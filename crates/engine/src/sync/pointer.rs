@@ -2,24 +2,19 @@
 //! consult discipline (blueprint/engine.md "Pointer planes"; CONTEXT.md
 //! "Scope pointer", "Vault pointer", "Re-point object"; #38, #39 D5).
 //!
-//! Three planes (#38 D1): the owner plane (stable pointer names, owner-only
-//! keys), the write plane (rotating derived names), the read plane (seeds).
-//! The engine publishes to the owner plane **only in owner sessions**. Every
-//! re-point object is owner-identity-signed and sealed under the scope's stable
-//! `pointerReadKey`; core owns the codec, sign, and verify
+//! The engine publishes the owner plane (#38 D1) **only in owner sessions**.
+//! Every re-point object is owner-identity-signed and sealed under the scope's
+//! stable `pointerReadKey`; core owns that codec, sign, and verify
 //! ([`seal_pointer_payload`]/[`open_pointer_payload`]) — this module owns name
-//! derivation, the vault-pointer index walk, the owner-plane write gate, and
-//! the consult discipline. The floor cold-seed itself is the floor law's
+//! derivation, the index walk, the write gate, and the consult discipline. The
+//! floor cold-seed is the floor law's
 //! ([`floor::cold_seed_checked`](crate::gate::floor::cold_seed_checked)) — cold
 //! start feeds it the re-point this walk authenticated.
 //!
 //! **Consult discipline: polled, not fallback** (#38 D4). A revokee's forged
-//! old-epoch record passes every *other* gate stage (valid old-key signature,
-//! fresh sequence, floor-level epoch, old-seed unseal), so staleness never
-//! fires and a fallback-only pointer would never be consulted. The pointer
-//! resolve therefore *joins the focus-window tick* for open shared scopes,
-//! runs on access for cached ones, and is the first act on cold start — it is
-//! never gated behind a staleness signal.
+//! old-epoch record passes every *other* gate stage, so staleness never fires
+//! and a fallback-only pointer would never be consulted; the resolve therefore
+//! joins the focus-window tick rather than sitting behind a staleness signal.
 
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
@@ -122,8 +117,6 @@ pub struct VaultPointerAdoption {
 /// walk fail-closed at that index: it is never adopted and the walk never
 /// reaches beyond it, so a forged record cannot truncate the chain *below* an
 /// already-adopted valid index.
-///
-/// `login_secret` is a read-only borrow; sole consumer; zeroized at the session owner.
 pub async fn resolve_vault_pointer<F: PointerFetch>(
     fetch: &F,
     login_secret: &[u8],
@@ -152,8 +145,7 @@ pub async fn resolve_vault_pointer<F: PointerFetch>(
                     best = Some(VaultPointerAdoption { index, repoint });
                     index += 1;
                 }
-                // Fail-closed: an invalid payload is never adopted and stops the
-                // walk (a forged record cannot extend or masquerade the chain).
+                // Fail-closed: an invalid payload is never adopted and stops the walk.
                 Err(e) => return Err(e),
             },
         }
@@ -208,11 +200,9 @@ pub fn open_repoint(
     .map_err(PointerError::Open)
 }
 
-/// Whether to consult the scope pointer now — the polled discipline, decided
-/// independently of any staleness signal. Consult on cold start, on the focus
-/// tick for an open shared scope, and on access to a cached shared scope past
-/// staleness. Never a staleness fallback (a forged old-epoch record that passes
-/// staleness must not suppress the consult, #38 D4).
+/// Whether to consult the scope pointer now — the polled discipline (#38 D4),
+/// decided independently of any staleness signal. The reasons are enumerated on
+/// [`ConsultReason`].
 pub fn should_consult(
     is_cold_start: bool,
     is_open_shared_scope: bool,

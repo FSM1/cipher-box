@@ -71,10 +71,9 @@ pub struct HpkeCiphertext {
 ///
 /// `ephemeral_scalar` **must be fresh, uniformly-random 32 bytes on every
 /// call.** Reusing it across two different plaintexts for the same
-/// `recipient_pub`/`info` re-derives the identical AEAD key **and** base nonce:
-/// XChaCha20-Poly1305 under a repeated (key, nonce) is a catastrophic break
-/// (keystream reuse leaks the plaintext XOR, and the one-time Poly1305 key
-/// enables forgeries). Core cannot sample entropy or enforce this (determinism
+/// `recipient_pub`/`info` re-derives the identical AEAD key **and** base nonce,
+/// and XChaCha20-Poly1305 under a repeated (key, nonce) is a catastrophic
+/// break. Core cannot sample entropy or enforce this (determinism
 /// doctrine), so the engine seam that calls `hpke_seal` owns the invariant: the
 /// ephemeral is in the same *random-per-use* class as content keys, **not** a
 /// KDF-catalog edge. KATs reuse a fixed scalar only because they seal one fixed
@@ -230,8 +229,7 @@ fn labeled_extract(salt: &[u8], suite_id: &[u8], label: &[u8], ikm: &[u8]) -> [u
     labeled_ikm.extend_from_slice(ikm);
     let (prk, _) = Hkdf::<Sha256>::extract(Some(salt), &labeled_ikm);
     // The scratch buffer copies `ikm` verbatim — in the KEM path that is the DH
-    // shared secret. Wipe it before it drops; the derived PRK is kept in the
-    // caller's `Zeroizing` binding when it is secret.
+    // shared secret — so wipe it before it drops.
     labeled_ikm.zeroize();
     prk.into()
 }
@@ -281,9 +279,8 @@ pub(crate) fn dhkem_encap(
 ) -> (SecretBytes, [u8; ENC_LEN]) {
     let sk_e = X25519Secret::from_scalar(*ephemeral_scalar);
     let enc = sk_e.public().to_bytes();
-    // Sound only because every `X25519Public` is built through the low-order-
-    // rejecting `from_bytes`, guaranteeing a contributory exchange; a future
-    // constructor that bypasses `from_bytes` would require re-auditing this.
+    // Sound only while every `X25519Public` is built through the low-order-
+    // rejecting `from_bytes`; a constructor that bypasses it needs a re-audit.
     let dh = sk_e
         .diffie_hellman(pk_r)
         .expect("recipient key is validated non-low-order, so ECDH is contributory");
@@ -372,15 +369,12 @@ pub(crate) fn dhkem_auth_decap(
 }
 
 /// The key schedule outputs (seq 0). `key`/`base_nonce` seal; the
-/// exporter secret is derived so the A.1 conformance test can pin it, though
-/// the export interface itself is a later slice.
+/// exporter secret is derived only so the RFC 9180 A.1 conformance test can
+/// pin it.
 pub(crate) struct KeySchedule {
-    // Key material: zeroized on drop so the derived AEAD key never lingers on
-    // the heap. The base nonce is not secret and stays a plain Vec.
     pub key: Zeroizing<Vec<u8>>,
+    // Not secret — the AEAD authenticates it, so no zeroizing owner.
     pub base_nonce: Vec<u8>,
-    // Derived so the RFC 9180 A.1 conformance test can pin it; the HPKE export
-    // interface that consumes it in production is a later slice.
     #[cfg_attr(not(test), allow(dead_code))]
     pub exporter_secret: Zeroizing<Vec<u8>>,
 }

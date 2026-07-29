@@ -39,30 +39,19 @@ pub trait FloorStore {
     /// returning the resulting stored floor for each entry in order.
     ///
     /// A single floor advance raises several distinctly-keyed floors at once
-    /// (read-epoch, write-epoch, per-name sequence). Two backing shapes close
-    /// the partial-advance hazard (#685), differently:
-    ///
-    /// - **Transactional (all-or-nothing)** — a backing with a cross-key
-    ///   transaction (the in-memory fake's single lock guard) leaves *no* entry
-    ///   durably changed on a seam error, so a partial advance is never
-    ///   observable at all.
-    /// - **Roll-forward (write-ahead journal)** — the desktop file store fsyncs
-    ///   the batch to an intent record before any per-key write and replays it on
-    ///   reopen, so an interrupted advance *completes forward* on the next open
-    ///   rather than lingering as a partial. It heals forward; it never rewinds.
+    /// (read-epoch, write-epoch, per-name sequence). An implementation closes the
+    /// partial-advance hazard (#685) one of two ways: **transactionally** (a
+    /// cross-key transaction leaves no entry durably changed on error) or by
+    /// **roll-forward** (the desktop store fsyncs a batch intent record before any
+    /// per-key write and replays it on reopen — it heals forward, never rewinds).
     ///
     /// The default fallback applies the raises one key at a time in the given
-    /// order — not atomic, but the caller passes the trust-critical (revocation)
-    /// floor first, so an interrupted fallback fails toward *more* restriction and
-    /// re-converges idempotently on retry, exactly the #682 mitigation this method
-    /// subsumes. Callers MUST order entries revocation-before-liveness for that
-    /// guarantee to hold.
-    ///
-    /// The web IndexedDB seam intentionally rides this fallback (its JS boundary
-    /// exposes only the per-key methods, no batch), which stays #682-safe.
-    /// Web-atomic commit is designed-for but deferred: #685 is a durability /
-    /// liveness concern, not a trust hole, and the ordered fallback already fails
-    /// closed on the revocation floor.
+    /// order — not atomic. **Callers MUST order entries revocation-before-
+    /// liveness**: an interrupted fallback then fails toward *more* restriction
+    /// and re-converges idempotently on retry (the #682 mitigation this method
+    /// subsumes). The web IndexedDB seam rides this fallback — its JS boundary
+    /// exposes only the per-key methods — and web-atomic commit is deferred as a
+    /// durability/liveness concern, not a trust hole.
     async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<Vec<u64>> {
         let mut resulting = Vec::with_capacity(raises.len());
         for raise in raises {

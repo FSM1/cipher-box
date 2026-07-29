@@ -28,8 +28,7 @@
 //! derivation, so the walk runs **top-down**, threading each parent's
 //! freshly-minted seed so the child's ascent link re-seals under the parent's
 //! **new** seed — else the link still opens under the stale seed, leaving a
-//! revoked ancestor a path in. [`CascadeTarget`] carries **no** `parent_node_seed`:
-//! it is always threaded, never taken from the descendant's own stale record.
+//! revoked ancestor a path in.
 //!
 //! # Fail-closed completeness
 //!
@@ -80,19 +79,14 @@ use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
 /// published record — everything [`reseal_scope_root`] needs **except** the
 /// parent node seed and any self-identifying `scope_id`/`ipns_name`.
 ///
-/// Those omissions are deliberate and load-bearing. The cascade re-seals each
-/// descendant's ascent link under its **parent's freshly-minted** derivation
-/// (`node_seed(parent_fresh_seed, child_scope_id)`), threaded top-down — never
-/// under the descendant's own stale published parent seed; carrying a
-/// `parent_node_seed` here would invite re-sealing under the wrong (stale)
-/// derivation (contrast [`SweepTarget`](super::sweep::SweepTarget), which *does*
-/// carry it because the sweep reuses the published derivation). A resolved
-/// record carries no self-identifying `scope_id` or `ipns_name` either: the
-/// re-seal identity, CAS-publish destination, parent-seed derivation, and
-/// floor-raise all run under the **enumerated** [`ChildScopeRef`]
-/// (`child.scope_id` / `child.ipns_name`) alone — there is no second copy for a
-/// network hint to diverge from, so the #756 divergence class is
-/// unrepresentable.
+/// Both omissions are load-bearing. No `parent_node_seed`: the ascent link
+/// re-seals under the parent's **freshly-minted** derivation, threaded top-down,
+/// never the descendant's own stale published one (contrast
+/// [`SweepTarget`](super::sweep::SweepTarget), which *does* carry it because the
+/// sweep reuses the published derivation). No self-identifying `scope_id` /
+/// `ipns_name`: re-seal, publish, parent-seed derivation, and floor-raise all run
+/// under the **enumerated** [`ChildScopeRef`] alone, so there is no second copy
+/// for a network hint to diverge from (#756).
 ///
 /// Owns its secrets so the cascade is their terminal owner: the seed fields are
 /// [`Zeroizing`] and the pseudonym signer zeroizes on drop. Seeds are handed to
@@ -147,14 +141,10 @@ pub trait CascadeResealResolver {
     /// # Binding contract (obligation on the real resolver, #745/#746)
     ///
     /// The resolver MUST gate `scope`'s record under the enumerated
-    /// `scope.scope_id` and `scope.ipns_name` — the adoption gate binds
-    /// `ipns_name -> record` via the Ed25519 key derived from the name, and the
-    /// gated record's `commitment.ipns_name` MUST equal `scope.ipns_name`. It
-    /// returns **no** self-identifying `scope_id` or `ipns_name`: the engine
-    /// re-seals, derives the parent node seed, CAS-publishes, and floor-raises
-    /// under the enumerated [`ChildScopeRef`] alone (see [`CascadeTarget`], which
-    /// carries neither, making the #756 divergence unrepresentable). In this
-    /// slice the resolver is faked.
+    /// `scope.scope_id` and `scope.ipns_name`, and the gated record's
+    /// `commitment.ipns_name` MUST equal `scope.ipns_name`. It returns **no**
+    /// self-identifying `scope_id` or `ipns_name` — see [`CascadeTarget`] for why
+    /// (#756).
     async fn resolve(&self, scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure>;
 }
 
@@ -460,14 +450,11 @@ where
         rekeyed: vec![root_rekeyed],
     };
 
-    // 2) Top-down threaded walk over the descendant tree. Each frontier entry
-    //    carries its parent's freshly-minted override seed so the child's ascent
-    //    link re-seals under the parent's NEW derivation. Mirrors
-    //    `enumerate_eager_set`: canonicalized frontiers, a `scope_id`-keyed visited
-    //    set that terminates diamonds and cycles, and a `scope_id -> ipns_name`
-    //    label map that aborts a same-`scope_id`/different-`ipns_name` conflict
-    //    (C2, #746) rather than picking a coin-flip first-seen name. The re-key
-    //    needs these ordered edges, which the flat `EagerSet` does not carry.
+    // 2) Top-down threaded walk over the descendant tree, each frontier entry
+    //    carrying its parent's freshly-minted seed (module docs). Re-implements
+    //    `enumerate_eager_set`'s canonicalized-frontier walk — including its C2
+    //    label-conflict abort (#746) — because the re-key needs the parent edges
+    //    the flat `EagerSet` does not carry.
     let mut visited: BTreeSet<[u8; 16]> = BTreeSet::new();
     visited.insert(root_scope_id);
 
@@ -530,10 +517,8 @@ where
             let plan = RotateScopePlan {
                 identity: ScopeRootIdentity {
                     v: target.v,
-                    // The enumerated ChildScopeRef is the sole identity authority:
-                    // re-seal, publish, and floor-raise all run under
-                    // `child.scope_id`/`child.ipns_name`, never a resolver-returned
-                    // copy (#756; see CascadeTarget).
+                    // The enumerated ChildScopeRef is the sole identity authority
+                    // (#756; see CascadeTarget).
                     scope_id: child.scope_id,
                     ipns_name: &child.ipns_name,
                     owner_enc_pub: &target.owner_enc_pub,

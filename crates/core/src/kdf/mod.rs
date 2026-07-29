@@ -2,22 +2,20 @@
 //!
 //! Nothing in CipherBox derives a key outside these fifteen edges. Every edge
 //! is domain-separated by a fixed `cipherbox/v2/<edge>` context string fed to
-//! BLAKE3 `derive_key`; per-node/per-id material then takes the frozen shape
+//! BLAKE3 `derive_key`; per-node/per-id material takes the frozen shape
 //! `keyed_hash(derive_key(context, seed), id)` — ids, tags, and indices are
-//! **fixed-length message input**, never variable context (a variable context
-//! would admit cross-edge collisions). Composite-material edges hash a
-//! fixed-prefix concatenation as the `derive_key` ikm instead.
+//! **fixed-length message input**, never variable context, which would admit
+//! cross-edge collisions. Composite-material edges hash a fixed-prefix
+//! concatenation as the `derive_key` ikm instead.
 //!
-//! The catalog is `pure` and deterministic: seeds and login secrets enter as
-//! parameters, and outputs are the zeroizing owning types from [`crate::suite`].
-//! The context-string table, input layouts, and per-edge outputs are frozen in
-//! the KAT manifest, and [`edge_probe_outputs`] backs both the mechanical
-//! separation KAT (no two edges share an output for equal inputs) and its
-//! property test.
+//! Pure and deterministic: seeds and login secrets enter as parameters, and
+//! outputs are the zeroizing owning types from [`crate::suite`]. The KAT
+//! manifest freezes the context strings, input layouts, and per-edge outputs;
+//! [`edge_probe_outputs`] backs the mechanical separation KAT.
 //!
-//! Non-edges, stated to stay non-edges (blueprint/core.md): content keys
-//! (random per version), scope override seeds (random at rotation), and scope
-//! seeds at grant cuts (random) — none derive through here.
+//! Non-edges, stated to stay non-edges (blueprint/core.md): content keys,
+//! scope override seeds, and scope seeds at grant cuts — all random, none
+//! derived here.
 
 use zeroize::Zeroize;
 
@@ -138,9 +136,9 @@ pub const EDGES: &[EdgeSpec] = &[
 ];
 
 // ---------------------------------------------------------------------------
-// Core derivations. Each returns the 32-byte material its edge is built on,
-// in the zeroizing owning type; the public edge functions below wrap it into
-// the purpose type, and the probe reads its bytes.
+// Core derivations: each edge's raw 32-byte material, in the zeroizing owning
+// type. The public edge functions below wrap it into the purpose type; the
+// probe reads its bytes.
 // ---------------------------------------------------------------------------
 
 fn node_seed_bytes(scope_seed: &[u8; SECRET_LEN], node_id: &[u8; 16]) -> SecretBytes {
@@ -280,13 +278,10 @@ pub fn enc_subkey(login_secret: &[u8]) -> X25519Secret {
 /// `blinded-tag`: the public grant-blob tag from an ECDH secret and the scope
 /// root's `ipnsName`.
 ///
-/// `ecdh_shared` is expected to be a **contributory** X25519 result. A
-/// low-order peer public key forces an all-zero shared secret and thus a tag
-/// that depends only on the `ipnsName` — degenerate, not a secrecy break (the
-/// tag is public), but callers computing the ECDH get the contributory check for
-/// free from the [`x25519`](crate::suite::x25519) seam: `diffie_hellman` returns
-/// `None` on a non-contributory result, and `X25519Public::from_bytes` rejects
-/// low-order peer keys up front.
+/// `ecdh_shared` must be a **contributory** X25519 result: an all-zero shared
+/// secret yields a tag depending only on the `ipnsName` — degenerate, not a
+/// secrecy break (the tag is public). Callers get that check for free from
+/// [`X25519Secret::diffie_hellman`](crate::suite::x25519::X25519Secret::diffie_hellman).
 pub fn blinded_tag(
     ecdh_shared: &[u8; SECRET_LEN],
     scope_root_ipns_name: &[u8],
@@ -334,16 +329,12 @@ pub fn settings_ipns_keypair(login_secret: &[u8]) -> Ed25519Signer {
 // Separation surface: the whole edge table under one set of probe inputs.
 // ---------------------------------------------------------------------------
 
-/// Fixed inputs driving every edge through [`edge_probe_outputs`]. The same
-/// probe fills each edge's seed-shaped and id-shaped slots, so a difference in
-/// any two outputs is attributable to the context string alone — exactly what
-/// the mechanical separation KAT asserts.
+/// Fixed inputs driving every edge through [`edge_probe_outputs`]. One probe
+/// fills every seed-shaped and id-shaped slot, so any two outputs differing is
+/// attributable to the context string alone — what the separation KAT asserts.
 ///
-/// `seed` is caller key material, so `Debug` is redacted.
-///
-/// `#[doc(hidden)]`: `pub` only so the KAT integration tests and the `kat_gen`
-/// example (separate crates) can drive the separation surface. Not part of the
-/// supported API — production derives keys through the typed edge functions.
+/// `#[doc(hidden)]`: `pub` only for the cross-crate KAT tests and the `kat_gen`
+/// example, not supported API. `seed` is key material, so `Debug` is redacted.
 #[doc(hidden)]
 #[derive(Clone, Copy)]
 pub struct EdgeProbe<'a> {
@@ -394,18 +385,14 @@ impl core::fmt::Debug for EdgeProbeOutput {
 }
 
 /// Run every edge under one probe, in [`EDGES`] order. Backs the separation KAT
-/// (the fifteen outputs must be pairwise distinct) and its property test, and
-/// is the frozen-vector surface the KAT generator writes.
+/// (the fifteen outputs must be pairwise distinct), its property test, and the
+/// frozen vectors the KAT generator writes.
 ///
-/// This is the **catalog-freezing / separation surface**, not the production
-/// derivation path: it returns each edge's raw derived bytes in the clear
-/// (redacted `Debug` notwithstanding). Production code derives keys through the
-/// typed edge functions above ([`node_seed`], [`read_key`], …), which return
-/// zeroizing owning types. Do not feed production seeds through this function.
-///
-/// `#[doc(hidden)]`: `pub` exists only for the cross-crate KAT tests and the
-/// `kat_gen` example; it is not part of the crate's supported surface and the
-/// engine must never call it.
+/// The **catalog-freezing / separation surface**, not the production derivation
+/// path: it returns each edge's raw derived bytes in the clear. Never feed
+/// production seeds through it — derive through the typed edge functions above
+/// ([`node_seed`], [`read_key`], …), which return zeroizing owning types.
+/// `#[doc(hidden)]`: see [`EdgeProbe`].
 #[doc(hidden)]
 pub fn edge_probe_outputs(probe: &EdgeProbe) -> Vec<EdgeProbeOutput> {
     let b = |s: SecretBytes| *s.as_bytes();

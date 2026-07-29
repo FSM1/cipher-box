@@ -41,10 +41,8 @@ impl ContentProfile {
     /// reachable from tiny fixtures (blueprint/testing.md "The DX hook").
     pub const CI: Self = Self { chunk_size: 16 };
 
-    /// A custom profile with the given chunk size, or `None` for a zero size.
-    /// The nonzero invariant is enforced here so framing never divides or
-    /// `chunks()` by zero — a zero chunk size is rejected at construction, not
-    /// discovered as a panic during a seal.
+    /// A custom profile with the given chunk size, or `None` for a zero size —
+    /// the construction site that enforces the nonzero invariant.
     pub const fn new(chunk_size: usize) -> Option<Self> {
         if chunk_size == 0 {
             None

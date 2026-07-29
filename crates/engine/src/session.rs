@@ -7,9 +7,8 @@
 //! (blueprint/engine.md "Pointer planes"; CONTEXT.md "Vault pointer", "Scope
 //! pointer", "Encryption subkey"). Per-scope read/write material and the
 //! per-name write-plane signers layer on top through the factory methods here,
-//! fed the scope seeds the resolve/gate path unseals later — this module owns
-//! the derivation edges, the resolve slices (#745/#746) and the liveness
-//! composition (#750/#751) own the inputs.
+//! fed the scope seeds the resolve/gate path unseals — this module owns the
+//! derivation edges, its callers own the inputs.
 //!
 //! Every derivation composes `crates/core`'s frozen KDF edge catalog
 //! ([`cipherbox_core::kdf`]); nothing here derives a key of its own. The whole
@@ -39,9 +38,7 @@ use crate::facade::{EngineError, LoginSecret};
 /// signer/seal factories that return secret-bearing material are `pub(crate)`,
 /// reachable only by the in-crate pipeline (resolve, publish, rotation, the
 /// liveness loop) — hosts wrap the facade and never hold signers.
-// The factory surface is the hook the deferred slices consume (resolve
-// #745/#746, liveness composition #750/#751, rotation); `derive` is live at
-// cold start now, the readers of each factory land with those slices.
+// Not every derivation factory has a live caller yet.
 #[allow(dead_code)]
 pub(crate) struct SessionIdentity {
     /// The login secret, retained for the runtime vault-pointer index probe.
@@ -98,8 +95,7 @@ impl SessionIdentity {
     }
 
     /// The owner identity verifier — the owner-trust anchor a resolved record
-    /// is gated against (later slices pass this to `cold_start_data_path`).
-    /// Public material.
+    /// is gated against. Public material.
     pub fn owner_identity(&self) -> EcdsaVerifier {
         self.identity.verifying_key()
     }

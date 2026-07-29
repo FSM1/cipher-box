@@ -12,14 +12,12 @@
 //! `{payload, senderIdentityPk, senderSig}`: the opaque application `payload`,
 //! the sender's 33-byte compressed secp256k1 identity key, and the 64-byte
 //! ECDSA signature over `[domain, v, recipientEncPk, senderIdentityPk, payload]`
-//! (domain-, version-, recipient-, and key-bound so a signature can never be
-//! lifted onto a different sender, recipient, or protocol version — a recipient
-//! cannot relay-lift an opened item's `{payload, senderSig}` onto a second
-//! recipient). That plaintext is HPKE-sealed with the
-//! `mailbox-payload` AAD as the RFC 9180 `info`, and the published block is
-//! det-CBOR `{enc, ct}`. The recipient supplies the protocol version `v`
-//! out-of-band, so a version downgrade recomputes a different key schedule and
-//! fails the AEAD tag ([`TrustViolation::HpkeOpenFailed`]).
+//! — domain-, version-, recipient-, and key-bound, so a signature can never be
+//! lifted onto a different sender, recipient, or protocol version. That
+//! plaintext is HPKE-sealed with the `mailbox-payload` AAD as the RFC 9180
+//! `info`, and the published block is det-CBOR `{enc, ct}`. The recipient
+//! supplies `v` out-of-band, so a version downgrade recomputes a different key
+//! schedule and fails the AEAD tag ([`TrustViolation::HpkeOpenFailed`]).
 
 use zeroize::Zeroize;
 
@@ -218,8 +216,7 @@ mod tests {
 
     #[test]
     fn forged_sender_signature_fails_identity_check() {
-        // Seal a well-formed item whose senderSig is garbage: HPKE opens (anyone
-        // can seal), but the sender signature does not verify.
+        // HPKE opens (anyone can seal), but the sender signature does not verify.
         let eph = [0x51; 32];
         let sender_pk = sender().verifying_key().to_sec1();
         let mut inner = Map::new();
@@ -245,9 +242,8 @@ mod tests {
 
     #[test]
     fn relay_to_other_recipient_fails_identity_check() {
-        // R1 opens an item sealed to it, then re-seals the untouched inner
-        // plaintext — sender signature included — to a second recipient R2.
-        // Recipient binding makes R2's signature check fail (#712).
+        // R1 re-seals its untouched inner plaintext — sender signature included —
+        // to R2; recipient binding makes R2's signature check fail (#712).
         let r1 = recipient();
         let r2 = X25519Secret::from_scalar([0x42; 32]);
         let block = seal_mailbox_payload(&r1.public(), &[0x54; 32], 2, &sender(), b"relayed");
@@ -274,9 +270,8 @@ mod tests {
 
     #[test]
     fn per_recipient_binding_both_verify() {
-        // The binding is per-recipient, not pinned to one key: a sender seals
-        // separately to R1 and R2 and both verify, while a cross-open fails
-        // HPKE rather than silently verifying (#712).
+        // The binding is per-recipient, not pinned to one key: separate seals to
+        // R1 and R2 both verify, and a cross-open fails HPKE (#712).
         let s = sender();
         let r1 = recipient();
         let r2 = X25519Secret::from_scalar([0x42; 32]);
@@ -293,9 +288,7 @@ mod tests {
     #[test]
     fn same_recipient_reseal_still_verifies() {
         // The reject is specifically cross-recipient (#712), not "any re-seal
-        // breaks": R1 re-seals its own item to itself under a fresh ephemeral
-        // and it still verifies — the recipient tag, not the reseal act, is
-        // what the signature binds.
+        // breaks": the signature binds the recipient, not the reseal act.
         let r1 = recipient();
         let block = seal_mailbox_payload(&r1.public(), &[0x54; 32], 2, &sender(), b"relayed");
 

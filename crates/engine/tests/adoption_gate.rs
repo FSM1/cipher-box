@@ -3,12 +3,10 @@
 //! six-stage matrix and the floor-law scenarios hard-asserted 1:1 against the
 //! design tables in blueprint/engine.md ("Adoption gate and floors").
 //!
-//! Every record is hand-fed (this slice lands no resolve/publish wiring): the
-//! IPNS record plane rides the shared fake record store; the metadata (grant
-//! commitment, seed-bearing structures, envelope) is constructed directly with
-//! `crates/core`'s crypto. The gate composes only core's verify/unseal
-//! functions — so the reject rows assert core's exact named `TrustViolation`
-//! error, never an engine reinvention.
+//! Every record is hand-fed: the IPNS record plane rides the shared fake record
+//! store and the metadata is built directly with `crates/core`'s crypto. The
+//! gate composes only core's verify/unseal functions, so the reject rows assert
+//! core's exact named `TrustViolation` error, never an engine reinvention.
 
 use std::collections::BTreeSet;
 
@@ -322,11 +320,10 @@ impl Fixture {
         }
     }
 
-    /// A well-formed published ascent link sealed under `parent_node_seed`
-    /// (uncorrupted public half) with a valid owner-pseudonym structure signature.
-    /// The stage-3 verdict now hinges on whether the *reader's* `parent_node_seed`
-    /// re-derives this keypair — a mismatched reader seed is a natural
-    /// `ascent-link-mismatch`, no hand-corruption needed.
+    /// A well-formed published ascent link sealed under `parent_node_seed` with a
+    /// valid owner-pseudonym structure signature. The stage-3 verdict hinges on
+    /// whether the *reader's* `parent_node_seed` re-derives this keypair, so a
+    /// mismatched reader seed is a natural `ascent-link-mismatch`.
     fn ascent_link_under(&self, parent_node_seed: &[u8; 32]) -> SignedAscentLink {
         self.ascent_link_under_aad(parent_node_seed, self.ascent_aad())
     }
@@ -615,8 +612,7 @@ fn run_matrix_case(name: &str) -> Result<Adopted, GateError> {
         parent_node_seed: reader_parent_seed,
         seed_blob: Some(fx.owner_seed_blob(tamper_seed_blob)),
     };
-    // Drop the transient write-grantee seed the gate now surfaces; the matrix
-    // asserts only the adoption verdict.
+    // The matrix asserts only the adoption verdict.
     block_on(adopt(&floors, &reader, &candidate)).map(|(adopted, _)| adopted)
 }
 
@@ -690,14 +686,12 @@ fn matrix_table_and_reject_surface_mirror_one_to_one() {
 
 #[test]
 fn foreign_scope_label_rejected_at_stage_six_binding() {
-    // Test A (resolver binding, #745/#756): the record is a fully valid scope root
-    // sealed for its own scope, and the reader's read_key opens it (the scope UUID
-    // is not in the read-key KDF). Only the reader's `scope_id` — the trusted
-    // parent-index label — is foreign. Adopting under it would dedup/rotate the
-    // WRONG scope key, a silent revocation hole. Stage 6 binds `envelope.scope` to
-    // `reader.scope_id` and rejects fail-closed. With the returned `scope_id`
-    // dropped from the rotation targets, a divergent label can no longer even reach
-    // a re-key: this gate check is the sole surviving edge, and it fails closed.
+    // Resolver binding (#745/#756): the record is a fully valid scope root sealed
+    // for its own scope and the reader's read_key opens it (the scope UUID is not
+    // in the read-key KDF) — only the reader's `scope_id`, the trusted parent-index
+    // label, is foreign. Adopting under it would dedup/rotate the WRONG scope key,
+    // a silent revocation hole, so stage 6 binds `envelope.scope` to
+    // `reader.scope_id` and fails closed.
     let fx = Fixture::new();
     let floors = InMemoryFloorStore::default();
     let candidate = fx.candidate(1);
@@ -1091,10 +1085,7 @@ fn simulation_n_engines_one_record_store_adversarial() {
 #[test]
 fn non_empty_history_link_authenticates_and_rejects_tamper_and_replay() {
     // Every other fixture leaves history_links empty, so the STRUCT_TAG_HISTORY_LINK
-    // recompute-and-verify loop is exercised here over a populated list (#687): a
-    // valid link authenticates, a tampered sealed body is rejected, and a link
-    // validly signed for a different epoch (cross-epoch replay) recomputes a
-    // preimage the authenticated envelope epoch never covered.
+    // recompute-and-verify loop is exercised here over a populated list (#687).
     let fx = Fixture::new();
     let sealed = b"prior-write-epoch-history-link".to_vec();
     let sign_link = |epoch: u64, bytes: &[u8]| -> [u8; 64] {
@@ -1125,8 +1116,7 @@ fn non_empty_history_link_authenticates_and_rejects_tamper_and_replay() {
     ))
     .expect("valid non-empty history link adopts");
 
-    // Tamper: mutate the sealed bytes but keep the old signature — the recomputed
-    // preimage no longer matches, rejecting the whole record.
+    // Tamper: mutate the sealed bytes but keep the old signature.
     let mut tampered = fx.candidate(1);
     let mut bad = sealed.clone();
     bad[0] ^= 0xFF;
@@ -1306,10 +1296,8 @@ fn cross_epoch_structure_replay_rejected_at_grant_section() {
         &folder,
     )
     .expect("epoch-2 folder seals");
-    // The grant section's structures are all signed at epoch 1; presenting them
-    // in an epoch-2 envelope makes the gate recompute each preimage at epoch 2,
-    // so the epoch-1 signatures no longer verify — the cross-epoch replay is
-    // rejected without any caller-asserted epoch to trust (#687).
+    // The gate recomputes each preimage at the envelope's epoch, so there is no
+    // caller-asserted epoch to trust (#687).
     let mut candidate = fx.candidate(1);
     candidate.envelope = envelope_e2;
     let err = block_on(adopt(&floors, &fx.reader(), &candidate)).unwrap_err();
@@ -1329,7 +1317,6 @@ fn swapped_structure_ciphertext_rejected_at_grant_section() {
     let fx = Fixture::new();
     let floors = InMemoryFloorStore::default();
     let mut candidate = fx.candidate(1);
-    // Flip a byte of the owner-blob ciphertext, leaving the (valid) signature.
     candidate.grant_section.owner_blob.ciphertext[0] ^= 0xFF;
     let err = block_on(adopt(&floors, &fx.reader(), &candidate)).unwrap_err();
     let rej = err.rejection().unwrap();

@@ -1,20 +1,9 @@
-//! The content-plane cryptographic edge (blueprint/core.md "Open edges":
-//! "core ships the content-seal primitive over caller-framed chunks").
+//! The content-plane cryptographic edge (blueprint/core.md "Open edges").
 //!
 //! Two core-owned pieces, and nothing more — chunk framing, DAG assembly shape,
-//! and version-retention policy stay engine-owned (#630):
-//!
-//! - **content-seal** ([`seal::seal_chunk`]/[`seal::open_chunk`]):
-//!   XChaCha20-Poly1305 over caller-framed chunk bytes under a caller-supplied
-//!   per-version content key, reusing the frozen suite AEAD
-//!   ([`crate::suite::aead`]). The content key is caller-owned — the seal never
-//!   zeroizes it.
-//! - **content-DAG CID** ([`cid::compute_cid`]/[`cid::verify_cid`]): the
-//!   deterministic CIDv1 content address over the sealed bytes and a fail-closed
-//!   verify. One implementation, one KAT set, byte-identical native + wasm32. The
-//!   string codec ([`cid::encode_content_cid_str`]/[`cid::decode_content_cid_str`])
-//!   renders that CID as its base32-lowercase multibase `b…` form and strictly
-//!   recovers the binary anchor from a scope's `/ipfs/<head_cid>` record value.
+//! and version-retention policy stay engine-owned (#630): the content-seal over
+//! caller-framed chunks ([`seal`]), and the content-DAG CID with its fail-closed
+//! verify and base32 string codec ([`cid`]).
 
 pub mod cid;
 pub mod seal;

@@ -11,14 +11,9 @@
 //! | Manual       | none                 | per-scope, same primitive                  |
 //!
 //! On an owner read-revocation the rotation is the fresh-seed **eager cascade**
-//! ([`cascade_rotate_scope`](super::cascade::cascade_rotate_scope)): the rotated
-//! root **and every transitively-reachable descendant scope root** are re-keyed
-//! with a fresh override seed (blueprint/engine.md "rotateScope", L243-252).
-//! **That cascade — not the sweep — completes a read revoke**: a revokee who
-//! cached a descendant's override seed can open it at any epoch, so only a fresh
-//! seed per descendant locks them out; a floor-raise + sweep ([`super::sweep`])
-//! would merely walk the cached seed forward. The cascade is proven in simulation
-//! against faked seams; the production per-descendant resolver wiring is #745/#746.
+//! ([`cascade_rotate_scope`](super::cascade::cascade_rotate_scope)) — that
+//! cascade, not the sweep, is what completes a read revoke (rationale on
+//! [`super::cascade`]).
 //!
 //! Scope-exit and manual rotations re-seal the **unchanged** committed set: a
 //! grantee re-wraps blobs verbatim and can neither extend nor shrink the tag set
@@ -132,12 +127,9 @@ pub fn revoke_read_grant(
     revoked_tag: &[u8; 32],
     owner_signer: &EcdsaSigner,
 ) -> Result<RevokedCommittedSet, RevokeError> {
-    // Fail-closed BEFORE the cut: `owner_signer` MUST be the identity that signed
-    // the current commitment, else the re-signed cut mints a commitment the
-    // adoption gate rejects (an unreadable root). Encode-side mirror of the gate's
-    // owner-identity verify (fail-closed symmetry). The current commitment is
-    // owner-authentic (it passed the gate to resolve), so binding the new signer
-    // to it transitively anchors the cut to the owner identity.
+    // Fail-closed BEFORE the cut (see `RevokeError::UnauthorizedSigner`). The
+    // current commitment is owner-authentic — it passed the gate to resolve — so
+    // binding the new signer to it transitively anchors the cut to the owner.
     let current_sig =
         EcdsaSignature::from_compact(commitment_sig).ok_or(RevokeError::UnauthorizedSigner)?;
     verify_grant_set(&owner_signer.verifying_key(), commitment, &current_sig)

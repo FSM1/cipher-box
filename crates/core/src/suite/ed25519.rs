@@ -1,9 +1,7 @@
 //! Ed25519 signing (blueprint/core.md "Crypto suite": pseudonym + record
 //! signing). Deterministic by construction — no RNG — so seeds injected by the
-//! [`crate::kdf`] catalog's Ed25519 edges yield reproducible keypairs.
-//!
-//! The structure-signature verify *policy* (fail-closed, whole-record) is the
-//! engine's gate; this module ships only the pure primitive.
+//! [`crate::kdf`] catalog's Ed25519 edges yield reproducible keypairs. The pure
+//! primitive only — the verify *policy* is the engine's gate.
 
 use core::fmt;
 
@@ -66,15 +64,13 @@ impl Ed25519Verifier {
         self.0.to_bytes()
     }
 
-    /// Verify a detached signature over `message`. Returns `true` on a valid
-    /// signature; the fail-closed trust policy over this boolean lives in the
-    /// engine.
+    /// Verify a detached signature over `message`. The fail-closed trust policy
+    /// over this boolean lives in the engine.
     ///
-    /// Uses dalek's **strict** verification: it rejects the S-malleability
-    /// (`S` and `S + L` both satisfy cofactored verification) and small-order
-    /// `A`/`R`, so each (key, message) has a single accepting signature. That
-    /// non-malleability is required where signed structures/records may be
-    /// compared or committed in a zero-knowledge store.
+    /// Uses dalek's **strict** verification: it rejects S-malleability (`S` and
+    /// `S + L` both satisfy cofactored verification) and small-order `A`/`R`, so
+    /// each (key, message) has a single accepting signature — required where
+    /// signed structures may be compared or committed in a zero-knowledge store.
     pub fn verify(&self, message: &[u8], signature: &Ed25519Signature) -> bool {
         let sig = ed25519_dalek::Signature::from_bytes(&signature.0);
         self.0.verify_strict(message, &sig).is_ok()

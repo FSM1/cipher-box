@@ -13,8 +13,7 @@
 //! live): a chunk's authenticity anchor is its `contentCid` — a BLAKE3 digest
 //! over these sealed bytes ([`super::cid`]) that the metadata read-body carries
 //! and the metadata envelope binds into its own AAD — so the content plane
-//! inherits that binding transitively. This primitive seals caller bytes and
-//! nothing more.
+//! inherits that binding transitively.
 
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
@@ -25,9 +24,7 @@ use crate::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
 /// `nonce` **must be unique for every seal performed under a given `key`** —
 /// XChaCha20-Poly1305 nonce reuse under one key is a confidentiality and
 /// integrity break (the content key is random per version; the caller sources a
-/// fresh nonce per chunk from its injected entropy seam). `key` and `plaintext`
-/// are caller-owned; this callee borrows them and never zeroizes a caller-owned
-/// buffer.
+/// fresh nonce per chunk from its injected entropy seam).
 pub fn seal_chunk(key: &[u8; KEY_LEN], nonce: &[u8; NONCE_LEN], plaintext: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(NONCE_LEN + plaintext.len() + TAG_LEN);
     out.extend_from_slice(nonce);
@@ -123,9 +120,8 @@ mod tests {
 
     #[test]
     fn caller_key_is_not_zeroized() {
-        // The content key is caller-owned: sealing borrows it and must leave it
-        // intact (the "zeroize at the terminal owner only" rule — a broken
-        // callee-zero once failed 48/89 E2E).
+        // "Zeroize at the terminal owner only" (AGENTS.md rule 7): a callee-zero
+        // of the caller's content key once failed 48/89 E2E.
         let key = [0xcd; KEY_LEN];
         let _ = seal_chunk(&key, &[1u8; NONCE_LEN], b"x");
         assert_eq!(key, [0xcd; KEY_LEN], "seal must not zero the caller's key");
