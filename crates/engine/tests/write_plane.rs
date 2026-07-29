@@ -5,6 +5,8 @@
 //!
 //! Later write-plane slices extend this file rather than starting their own.
 
+use core::future::Future;
+use core::pin::pin;
 use core::task::{Context, Poll, Waker};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -35,8 +37,8 @@ use cipherbox_engine::testkit::{
     OwnerRootSpec, SeededEntropy, block_on, owner_root_fixture,
 };
 use cipherbox_engine::{
-    Command, Engine, EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, Op, RecordSeal,
-    StoragePolicy, SyncTimingProfile, stage_op,
+    Command, DeadLetter, DeadLetterReason, Engine, Event, EventStream, GatewayConfig, LoginSecret,
+    NodeId, NodeKind, Op, OverBudgetCause, RecordSeal, StoragePolicy, SyncTimingProfile, stage_op,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -58,14 +60,33 @@ fn owner_identity() -> EcdsaSigner {
 // ---------------------------------------------------------------------------
 
 /// A test hook on the upload path: given a head block about to be stored,
-/// answer whether the upload is refused. Lets a test fail exactly one record's
-/// publish — and interleave a concurrent writer at that instant.
-type UploadHook = Box<dyn FnMut(&[u8]) -> bool + Send>;
+/// answer with the reply to send instead of storing it, or `None` to let the
+/// upload through. Lets a test fail exactly one record's publish — and
+/// interleave a concurrent writer at that instant.
+type UploadHook = Box<dyn FnMut(&[u8]) -> Option<SeamResult<HttpResponse>> + Send>;
+
+/// The pin store is unreachable: a transport failure carrying no server verdict.
+fn unreachable_upload() -> Option<SeamResult<HttpResponse>> {
+    Some(Err(SeamError::new("upload refused")))
+}
+
+/// A server 413, optionally carrying the `code` discriminator that tells the
+/// account-quota gate apart from the transport cap (#848).
+fn upload_413(code: Option<&str>) -> Option<SeamResult<HttpResponse>> {
+    let code = code.map_or(String::new(), |code| format!(",\"code\":\"{code}\""));
+    Some(Ok(HttpResponse {
+        status: 413,
+        headers: Vec::new(),
+        body: format!("{{\"statusCode\":413,\"message\":\"too large\"{code}}}").into_bytes(),
+    }))
+}
 
 #[derive(Clone, Default)]
 struct Blocks {
     store: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
     on_upload: Arc<Mutex<Option<UploadHook>>>,
+    /// What `GET /account/quota` reports, as `(usedBytes, limitBytes)`.
+    quota: Arc<Mutex<Option<(u64, u64)>>>,
 }
 
 impl Blocks {
@@ -84,6 +105,16 @@ impl Blocks {
         *self.on_upload.lock().expect("lock") = Some(hook);
     }
 
+    /// Let every upload through again.
+    fn accept_uploads(&self) {
+        *self.on_upload.lock().expect("lock") = None;
+    }
+
+    /// Script what the quota endpoint reports.
+    fn set_quota(&self, used_bytes: u64, limit_bytes: u64) {
+        *self.quota.lock().expect("lock") = Some((used_bytes, limit_bytes));
+    }
+
     /// Answer one engine HTTP call: a content upload lands its bytes here and
     /// echoes their address, a registry call acks, and a gateway GET serves the
     /// block back. Enqueued as many times as the pass needs, so no test depends
@@ -100,13 +131,24 @@ impl Blocks {
         if url.ends_with("/content/upload") {
             let block = request.body.clone().unwrap_or_default();
             if let Some(hook) = self.on_upload.lock().expect("lock").as_mut()
-                && hook(&block)
+                && let Some(reply) = hook(&block)
             {
-                return Err(SeamError::new("upload refused"));
+                return reply;
             }
             let size = block.len();
             let cid = self.put(block);
             return ok(format!("{{\"cid\":\"{cid}\",\"size\":{size}}}").into_bytes());
+        }
+        if url.ends_with("/account/quota") {
+            let (used, limit) = self
+                .quota
+                .lock()
+                .expect("lock")
+                .expect("the test scripted a quota before the drain probed it");
+            return ok(format!(
+                "{{\"usedBytes\":{used},\"limitBytes\":{limit},\"advisory\":false}}"
+            )
+            .into_bytes());
         }
         if url.contains("/registry/") {
             return ok(Vec::new());
@@ -1024,7 +1066,9 @@ fn a_source_remove_that_cannot_publish_undoes_its_own_dest_add() {
     let (photos, moved) = seed_folder_and_file(&world, &mut engine, &mut tasks);
 
     // The root's own head upload is refused, so the source-remove cannot land.
-    blocks.refuse_upload(Box::new(|block| head_of(block) == Some(ROOT.0)));
+    blocks.refuse_upload(Box::new(|block| {
+        (head_of(block) == Some(ROOT.0)).then(unreachable_upload)?
+    }));
     block_on(engine.command(Command::Relink {
         node: moved,
         new_parent: photos,
@@ -1069,11 +1113,11 @@ fn a_concurrent_dest_writer_is_re_derived_onto_never_clobbered() {
     let plane = blocks.clone();
     blocks.refuse_upload(Box::new(move |block| {
         if head_of(block) != Some(ROOT.0) {
-            return false;
+            return None;
         }
         // The instant our source-remove fails, another writer advances the dest.
         concurrent_add(&records, &plane, photos, winner.clone());
-        true
+        unreachable_upload()
     }));
     block_on(engine.command(Command::Relink {
         node: moved,
@@ -1124,10 +1168,10 @@ fn a_concurrent_writer_at_the_root_dest_is_re_derived_onto_never_clobbered() {
     let plane = blocks.clone();
     blocks.refuse_upload(Box::new(move |block| {
         if head_of(block) != Some(photos.0) {
-            return false;
+            return None;
         }
         concurrent_root_add(&records, &plane, winner.clone());
-        true
+        unreachable_upload()
     }));
     block_on(engine.command(Command::Relink {
         node: moved,
@@ -1354,6 +1398,193 @@ fn every_record_one_pass_seals_carries_a_distinct_nonce() {
 }
 
 // ---------------------------------------------------------------------------
+// The failure valve: dead-letter classification, the over-quota block, and the
+// abandonment retire (#867).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_over_quota_413_holds_the_head_and_a_quota_probe_with_room_resumes_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    blocks.refuse_upload(Box::new(|_| upload_413(Some("QUOTA_EXCEEDED"))));
+    blocks.set_quota(1_000, 1_000);
+    let held = create(&mut engine, "photos");
+    let photos = child_id(&engine, ROOT, "photos");
+    // A second mutation behind it: the hold is at the head of a queue that has
+    // more in it, not at the end of one.
+    create(&mut engine, "notes");
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    let blocked = view.blocked.expect("the over-quota head is held");
+    assert_eq!(blocked.op_id, held);
+    assert_eq!(blocked.node, photos);
+    assert_eq!(blocked.cause, OverBudgetCause::AccountQuota);
+    assert!(
+        blocked.needed_bytes > 0,
+        "the hold records what the refused upload asked for"
+    );
+    assert!(
+        view.dead_letters.is_empty(),
+        "a full account is not a failed op"
+    );
+    assert!(
+        published_names(&world.record_store, &blocks, ROOT).is_empty(),
+        "nothing behind the held head published either"
+    );
+    assert_eq!(
+        block_on(alice.staging_store.queued_ops()).unwrap().len(),
+        2,
+        "both ops keep their place and their staging reservation"
+    );
+
+    // Still full on the next tick: the hold stands, and the payload is never
+    // re-offered — the probe is the only thing that can clear it.
+    let before = uploads(&alice);
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        uploads(&alice),
+        before,
+        "a held head re-probes the quota, never the upload"
+    );
+    assert!(block_on(engine.snapshot(ROOT)).unwrap().blocked.is_some());
+
+    // Room appears.
+    blocks.accept_uploads();
+    blocks.set_quota(1_000, 1_000_000);
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert!(view.blocked.is_none(), "the probe cleared the hold");
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["notes".to_owned(), "photos".to_owned()],
+        "the whole queue drained once the head was free"
+    );
+}
+
+#[test]
+fn a_413_with_no_code_is_permanent_and_its_reason_reaches_the_host() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    blocks.refuse_upload(Box::new(|_| upload_413(None)));
+    let op_id = create(&mut engine, "photos");
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert!(
+        view.blocked.is_none(),
+        "an unclassified 413 is not positive evidence of a full account"
+    );
+    assert_eq!(
+        view.dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::PayloadRefused
+        }],
+        "the reason is on the read surface, not just the event"
+    );
+    assert!(
+        events_so_far(&mut events).contains(&Event::DeadLetter {
+            op_id,
+            reason: DeadLetterReason::PayloadRefused
+        }),
+        "the dead letter reaches the host with its reason"
+    );
+    assert!(
+        block_on(alice.staging_store.queued_ops())
+            .unwrap()
+            .is_empty(),
+        "a permanently refused op does not wedge the queue"
+    );
+}
+
+#[test]
+fn a_publish_that_never_confirms_dead_letters_once_its_attempt_budget_runs_out() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let op_id = create(&mut engine, "photos");
+    jam_name(&world.record_store, child_id(&engine, ROOT, "photos"));
+
+    // The budget is spent one non-confirming publish per pass: finite, but more
+    // than one — a single lost race is a retry, not an abandonment.
+    let dead_letters =
+        |engine: &Engine<FakeSeamTypes>| block_on(engine.snapshot(ROOT)).unwrap().dead_letters;
+    let mut passes = 0;
+    while dead_letters(&engine).is_empty() {
+        tick(&world, &engine, &mut tasks);
+        passes += 1;
+        assert!(passes < 50, "the attempt budget must be finite");
+    }
+    assert!(
+        passes > 1,
+        "one non-confirming publish is a retry, not an abandonment"
+    );
+    assert_eq!(
+        dead_letters(&engine),
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::AttemptsExhausted
+        }]
+    );
+    // The record may well be live at the name we signed it under, so this is
+    // the one abandonment that must not retire.
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "an unconfirmed publish is never retired out from under itself"
+    );
+}
+
+#[test]
+fn an_abandoned_create_retires_the_child_name_it_registered_exactly_once() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    create(&mut engine, "photos");
+    let photos = child_id(&engine, ROOT, "photos");
+    // One attempt that registers the child name and then fails to confirm.
+    jam_name(&world.record_store, photos);
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "a queued op that will be retried retires nothing"
+    );
+
+    // The same op is now permanently refused, so its registered name must leave
+    // the inventory with it.
+    world
+        .record_store
+        .heal_put_endpoint(&world.record_store.endpoints()[1]);
+    blocks.refuse_upload(Box::new(|_| upload_413(None)));
+    tick(&world, &engine, &mut tasks);
+
+    let retired = retire_targets(&alice);
+    assert_eq!(retired, vec![write_name(photos).as_str().to_owned()]);
+
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        retire_targets(&alice),
+        retired,
+        "the abandonment ran once; later passes retire nothing again"
+    );
+}
+
+// ---------------------------------------------------------------------------
 
 /// A file child ref under this account's write-name edge.
 fn file_ref(id: [u8; 16], name: &str) -> ChildRef {
@@ -1392,6 +1623,69 @@ fn seed_folder_and_file(
         child_id(engine, ROOT, "photos"),
         child_id(engine, ROOT, "a.txt"),
     )
+}
+
+/// Stage a folder create under the root and hand back its durable queue id.
+fn create(engine: &mut Engine<FakeSeamTypes>, name: &str) -> OpId {
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: name.into(),
+        kind: NodeKind::Folder,
+        content: None,
+    }))
+    .expect("a metadata create stages")
+    .expect("a create queues an op")
+}
+
+/// Every event the engine has emitted and not yet been read, without blocking
+/// on an empty stream.
+fn events_so_far(events: &mut EventStream) -> Vec<Event> {
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut out = Vec::new();
+    while let Poll::Ready(Some(event)) = pin!(events.next()).poll(&mut cx) {
+        out.push(event);
+    }
+    out
+}
+
+/// How many content uploads this device has sent.
+fn uploads(device: &FakeDevice) -> usize {
+    device
+        .http
+        .requests()
+        .iter()
+        .filter(|request| request.url.ends_with("/content/upload"))
+        .count()
+}
+
+/// Every target this device has asked the registry to retire, in order.
+fn retire_targets(device: &FakeDevice) -> Vec<String> {
+    device
+        .http
+        .requests()
+        .iter()
+        .filter(|request| request.url.ends_with("/registry/retire"))
+        .filter_map(|request| serde_json::from_slice::<Vec<String>>(request.body.as_deref()?).ok())
+        .flatten()
+        .collect()
+}
+
+/// Another writer parks a strictly higher sequence at `node`'s own name on one
+/// endpoint, which then stops accepting our PUTs — so every publish there loses
+/// the CAS race on the confirm re-resolve, indefinitely.
+fn jam_name(records: &InMemoryRecordStore, node: NodeId) {
+    let endpoint = records.endpoints()[1].clone();
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes());
+    let record = IpnsRecord::create_v2(
+        &signer,
+        b"/ipfs/bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        1_000,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    records.seed_record(&endpoint, write_name(node).as_str(), record);
+    records.fail_put_endpoint(&endpoint);
 }
 
 /// Stage an op straight into the durable queue, for a mutation the facade

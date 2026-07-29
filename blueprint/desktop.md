@@ -182,9 +182,11 @@ there is no `block_on` freeze of the whole mount behind one slow call.
   instead of two. Everything after the ack (seal, upload, publish, CAS rebase)
   is the engine's background pipeline.
 - **statfs** — quota from the engine's quota state (advisory for BYO).
-  **ENOSPC becomes honest**: it returns when the offline staging budget is
-  exhausted (#33 D6 fail-fast) or a hosted-quota preflight refuses the write —
-  v1 never returned it at all.
+  **Over-budget becomes honest**: the engine says which budget refused the write
+  (`OverBudgetCause`), so the offline staging budget running out (#33 D6
+  fail-fast) is `ENOSPC` and a hosted-quota refusal is `EDQUOT` — v1 returned
+  neither, and collapsing both into "disk full" tells the user to free space on
+  the wrong machine.
 - **Deletes** ride the engine's delete op; recycle-bin semantics (#5) are
   vault-level engine behavior. The bin is not projected into the mount in
   v2.0; restore/purge live in the web UI and the tray's "Open CipherBox".

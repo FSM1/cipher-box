@@ -8,10 +8,13 @@
  */
 
 import type {
+  BlockedOpDescriptor,
   CommandDescriptor,
+  DeadLetterReason,
   EventDescriptor,
   NodeKind,
   OpProgressPhase,
+  OverBudgetCause,
   PendingClass,
   Permission,
   SnapshotDescriptor,
@@ -19,6 +22,7 @@ import type {
 } from './protocol.js';
 import type {
   EngineWasm,
+  WasmBlockedOp,
   WasmCommand,
   WasmEvent,
   WasmNodeId,
@@ -145,6 +149,54 @@ function pendingClass(wasm: EngineWasm, pending: number): PendingClass {
   }
 }
 
+function deadLetterReason(wasm: EngineWasm, reason: number | undefined): DeadLetterReason {
+  switch (reason) {
+    case wasm.DeadLetterReason.TargetGone:
+      return 'targetGone';
+    case wasm.DeadLetterReason.DestinationGone:
+      return 'destinationGone';
+    case wasm.DeadLetterReason.DestinationInsideTarget:
+      return 'destinationInsideTarget';
+    case wasm.DeadLetterReason.SuffixExhausted:
+      return 'suffixExhausted';
+    case wasm.DeadLetterReason.Undecodable:
+      return 'undecodable';
+    case wasm.DeadLetterReason.PayloadRefused:
+      return 'payloadRefused';
+    case wasm.DeadLetterReason.AttemptsExhausted:
+      return 'attemptsExhausted';
+    default:
+      // Fail closed: an unmapped (or absent) value means a JS/WASM version
+      // mismatch, not a dead letter safe to report without its reason.
+      throw new Error(`unknown WASM dead letter reason value: ${reason}`);
+  }
+}
+
+function overBudgetCause(wasm: EngineWasm, cause: number): OverBudgetCause {
+  switch (cause) {
+    case wasm.OverBudgetCause.DeviceStaging:
+      return 'deviceStaging';
+    case wasm.OverBudgetCause.AccountQuota:
+      return 'accountQuota';
+    default:
+      // Fail closed: an unmapped value means a JS/WASM version mismatch.
+      throw new Error(`unknown WASM over budget cause value: ${cause}`);
+  }
+}
+
+function blockedHold(
+  wasm: EngineWasm,
+  blocked: WasmBlockedOp | undefined
+): BlockedOpDescriptor | null {
+  if (blocked === undefined) return null;
+  return {
+    opId: blocked.opId,
+    node: blocked.node,
+    cause: overBudgetCause(wasm, blocked.cause),
+    neededBytes: blocked.neededBytes,
+  };
+}
+
 function nodeKindFrom(wasm: EngineWasm, kind: number): NodeKind {
   switch (kind) {
     case wasm.NodeKind.File:
@@ -169,7 +221,11 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
     case 'withheldUpdateEscalation':
       return { kind: 'withheldUpdateEscalation', ipnsName: event.ipnsName ?? new Uint8Array() };
     case 'deadLetter':
-      return { kind: 'deadLetter', opId: event.opId ?? 0n };
+      return {
+        kind: 'deadLetter',
+        opId: event.opId ?? 0n,
+        reason: deadLetterReason(wasm, event.deadLetterReason),
+      };
     case 'attributableAbuse':
       return { kind: 'attributableAbuse', description: event.description ?? '' };
     case 'renewalFailed':
@@ -209,7 +265,11 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
       contentVersion: child.contentVersion ?? null,
     })),
     ancestors: view.ancestors.map((ancestor) => ({ id: ancestor.id, name: ancestor.name })),
-    deadLetters: [...view.deadLetters],
+    deadLetters: view.deadLetters.map((dead) => ({
+      opId: dead.opId,
+      reason: deadLetterReason(wasm, dead.reason),
+    })),
+    blocked: blockedHold(wasm, view.blocked),
     retainedRecords: view.retainedRecords,
     staleness: staleness(wasm, view.staleness),
   };

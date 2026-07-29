@@ -169,6 +169,63 @@ impl From<facade::Staleness> for Staleness {
     }
 }
 
+/// Why a queued op dead-lettered. Each reason calls for a different message
+/// and a different user action, so the classification crosses with the op
+/// rather than being reduced to a flag (#859).
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeadLetterReason {
+    /// The op's target or parent is gone from gate-passing state.
+    TargetGone,
+    /// A relink destination is gone from gate-passing state.
+    DestinationGone,
+    /// A relink destination lies inside the moved subtree.
+    DestinationInsideTarget,
+    /// The folder is saturated with colliding names.
+    SuffixExhausted,
+    /// The durable op record is corrupt.
+    Undecodable,
+    /// The network permanently refused the op's own bytes.
+    PayloadRefused,
+    /// The op's drain attempt budget ran out.
+    AttemptsExhausted,
+}
+
+impl From<facade::DeadLetterReason> for DeadLetterReason {
+    fn from(reason: facade::DeadLetterReason) -> Self {
+        match reason {
+            facade::DeadLetterReason::TargetGone => DeadLetterReason::TargetGone,
+            facade::DeadLetterReason::DestinationGone => DeadLetterReason::DestinationGone,
+            facade::DeadLetterReason::DestinationInsideTarget => {
+                DeadLetterReason::DestinationInsideTarget
+            }
+            facade::DeadLetterReason::SuffixExhausted => DeadLetterReason::SuffixExhausted,
+            facade::DeadLetterReason::Undecodable => DeadLetterReason::Undecodable,
+            facade::DeadLetterReason::PayloadRefused => DeadLetterReason::PayloadRefused,
+            facade::DeadLetterReason::AttemptsExhausted => DeadLetterReason::AttemptsExhausted,
+        }
+    }
+}
+
+/// Which budget refused a write: a full device is not a full account.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverBudgetCause {
+    /// This device's offline staging budget is exhausted.
+    DeviceStaging,
+    /// The account's hosted storage quota refused the bytes.
+    AccountQuota,
+}
+
+impl From<facade::OverBudgetCause> for OverBudgetCause {
+    fn from(cause: facade::OverBudgetCause) -> Self {
+        match cause {
+            facade::OverBudgetCause::DeviceStaging => OverBudgetCause::DeviceStaging,
+            facade::OverBudgetCause::AccountQuota => OverBudgetCause::AccountQuota,
+        }
+    }
+}
+
 /// The phase an `opProgress` event reports.
 #[wasm_bindgen]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,6 +348,61 @@ impl SnapshotChild {
     }
 }
 
+/// One retained dead-lettered op and why it dead-lettered.
+#[wasm_bindgen]
+pub struct DeadLetter {
+    inner: facade::DeadLetter,
+}
+
+#[wasm_bindgen]
+impl DeadLetter {
+    /// The dead-lettered op id (a `u64`, crossing as a `bigint`).
+    #[wasm_bindgen(getter, js_name = opId)]
+    pub fn op_id(&self) -> u64 {
+        self.inner.op_id.0
+    }
+
+    /// Why it dead-lettered.
+    #[wasm_bindgen(getter)]
+    pub fn reason(&self) -> DeadLetterReason {
+        self.inner.reason.into()
+    }
+}
+
+/// The queue head held over the account quota, keeping its place and its
+/// staging reservation until a quota probe reports room.
+#[wasm_bindgen]
+pub struct BlockedOp {
+    inner: facade::BlockedOp,
+}
+
+#[wasm_bindgen]
+impl BlockedOp {
+    /// The held op id (a `u64`, crossing as a `bigint`).
+    #[wasm_bindgen(getter, js_name = opId)]
+    pub fn op_id(&self) -> u64 {
+        self.inner.op_id.0
+    }
+
+    /// The 16 raw bytes of the node the held op targets.
+    #[wasm_bindgen(getter)]
+    pub fn node(&self) -> Vec<u8> {
+        self.inner.node.0.to_vec()
+    }
+
+    /// Which budget refused it.
+    #[wasm_bindgen(getter)]
+    pub fn cause(&self) -> OverBudgetCause {
+        self.inner.cause.into()
+    }
+
+    /// The byte count the resume probe must find room for.
+    #[wasm_bindgen(getter, js_name = neededBytes)]
+    pub fn needed_bytes(&self) -> u64 {
+        self.inner.needed_bytes
+    }
+}
+
 /// A key-free snapshot of one folder for a host UI paint: children, breadcrumb
 /// trail, retained dead letters, and the staleness rung.
 #[wasm_bindgen]
@@ -335,10 +447,21 @@ impl SnapshotView {
             .collect()
     }
 
-    /// Every retained dead-lettered op id (`u64`s, crossing as `bigint`s).
+    /// Every retained dead-lettered op, with the reason it will never publish.
     #[wasm_bindgen(getter, js_name = deadLetters)]
-    pub fn dead_letters(&self) -> Vec<u64> {
-        self.inner.dead_letters.iter().map(|op| op.0).collect()
+    pub fn dead_letters(&self) -> Vec<DeadLetter> {
+        self.inner
+            .dead_letters
+            .iter()
+            .map(|dead| DeadLetter { inner: *dead })
+            .collect()
+    }
+
+    /// The drain's over-quota hold, or `undefined`. Read here rather than as an
+    /// event: a lost "resumed" would strand the host on a blockage that is gone.
+    #[wasm_bindgen(getter)]
+    pub fn blocked(&self) -> Option<BlockedOp> {
+        self.inner.blocked.map(|inner| BlockedOp { inner })
     }
 
     /// Durable queue entries this session holds but cannot read — another
@@ -587,8 +710,17 @@ impl Event {
     #[wasm_bindgen(getter, js_name = opId)]
     pub fn op_id(&self) -> Option<u64> {
         match self.inner {
-            facade::Event::DeadLetter { op_id } => Some(op_id.0),
+            facade::Event::DeadLetter { op_id, .. } => Some(op_id.0),
             facade::Event::OpProgress { op_id, .. } => op_id.map(|op| op.0),
+            _ => None,
+        }
+    }
+
+    /// `deadLetter`: why the op will never publish; otherwise `undefined`.
+    #[wasm_bindgen(getter, js_name = deadLetterReason)]
+    pub fn dead_letter_reason(&self) -> Option<DeadLetterReason> {
+        match self.inner {
+            facade::Event::DeadLetter { reason, .. } => Some(reason.into()),
             _ => None,
         }
     }
@@ -725,9 +857,20 @@ mod tests {
         assert_eq!(snapshot.kind(), "snapshotUpdated");
         assert!(snapshot.op_id().is_none());
 
-        let dead = Event::from_facade(facade::Event::DeadLetter { op_id: OpId(42) });
+        let dead = Event::from_facade(facade::Event::DeadLetter {
+            op_id: OpId(42),
+            reason: facade::DeadLetterReason::TargetGone,
+        });
         assert_eq!(dead.kind(), "deadLetter");
         assert_eq!(dead.op_id(), Some(42));
+        assert_eq!(
+            dead.dead_letter_reason(),
+            Some(DeadLetterReason::TargetGone)
+        );
+        assert!(
+            snapshot.dead_letter_reason().is_none(),
+            "the reason is undefined off-variant"
+        );
 
         let stale = Event::from_facade(facade::Event::StalenessChanged {
             level: facade::Staleness::Offline,
@@ -811,14 +954,44 @@ mod tests {
                 id: facade::NodeId([1u8; 16]),
                 name: String::new(),
             }],
-            dead_letters: vec![OpId(9), OpId(11)],
+            dead_letters: vec![
+                facade::DeadLetter {
+                    op_id: OpId(9),
+                    reason: facade::DeadLetterReason::Undecodable,
+                },
+                facade::DeadLetter {
+                    op_id: OpId(11),
+                    reason: facade::DeadLetterReason::AttemptsExhausted,
+                },
+            ],
+            blocked: Some(facade::BlockedOp {
+                op_id: OpId(12),
+                node: facade::NodeId([5u8; 16]),
+                cause: facade::OverBudgetCause::AccountQuota,
+                needed_bytes: 4096,
+            }),
             retained_records: 3,
             staleness: facade::Staleness::Reconciling,
         });
 
         assert_eq!(view.root(), vec![1u8; 16]);
         assert_eq!(view.folder(), vec![2u8; 16]);
-        assert_eq!(view.dead_letters(), vec![9, 11]);
+        let dead_letters = view.dead_letters();
+        assert_eq!(
+            dead_letters
+                .iter()
+                .map(|dead| (dead.op_id(), dead.reason()))
+                .collect::<Vec<_>>(),
+            vec![
+                (9, DeadLetterReason::Undecodable),
+                (11, DeadLetterReason::AttemptsExhausted),
+            ]
+        );
+        let blocked = view.blocked().expect("the view carries the hold");
+        assert_eq!(blocked.op_id(), 12);
+        assert_eq!(blocked.node(), vec![5u8; 16]);
+        assert_eq!(blocked.cause(), OverBudgetCause::AccountQuota);
+        assert_eq!(blocked.needed_bytes(), 4096);
         assert_eq!(view.retained_records(), 3);
         assert_eq!(view.staleness(), Staleness::Reconciling);
 

@@ -53,7 +53,7 @@ function loopback(): {
 const SNAPSHOT: SnapshotDescriptor = {
   ...emptySnapshot(new Uint8Array(16).fill(2)),
   root: new Uint8Array(16).fill(1),
-  deadLetters: [3n],
+  deadLetters: [{ opId: 3n, reason: 'destinationGone' }],
   retainedRecords: 0,
 };
 

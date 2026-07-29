@@ -29,6 +29,7 @@ export interface WasmEvent {
   readonly error?: string;
   readonly routingKey?: string;
   readonly detail?: string;
+  readonly deadLetterReason?: number;
 }
 
 /** wasm-bindgen `Breadcrumb` — one ancestor step in a snapshot view. */
@@ -49,13 +50,28 @@ export interface WasmSnapshotChild {
   readonly contentVersion?: bigint;
 }
 
+/** wasm-bindgen `DeadLetter` — one retained dead-lettered op and its reason. */
+export interface WasmDeadLetter {
+  readonly opId: bigint;
+  readonly reason: number;
+}
+
+/** wasm-bindgen `BlockedOp` — the drain's over-budget hold. */
+export interface WasmBlockedOp {
+  readonly opId: bigint;
+  readonly node: Uint8Array;
+  readonly cause: number;
+  readonly neededBytes: bigint;
+}
+
 /** wasm-bindgen `SnapshotView` — a key-free folder snapshot for a UI paint. */
 export interface WasmSnapshotView {
   readonly root: Uint8Array;
   readonly folder: Uint8Array;
   readonly children: WasmSnapshotChild[];
   readonly ancestors: WasmBreadcrumb[];
-  readonly deadLetters: BigUint64Array;
+  readonly deadLetters: readonly WasmDeadLetter[];
+  readonly blocked?: WasmBlockedOp;
   readonly retainedRecords: number;
   readonly staleness: number;
 }
@@ -120,5 +136,18 @@ export interface EngineWasm {
     readonly Reconciling: number;
     readonly Stale: number;
     readonly Offline: number;
+  };
+  DeadLetterReason: {
+    readonly TargetGone: number;
+    readonly DestinationGone: number;
+    readonly DestinationInsideTarget: number;
+    readonly SuffixExhausted: number;
+    readonly Undecodable: number;
+    readonly PayloadRefused: number;
+    readonly AttemptsExhausted: number;
+  };
+  OverBudgetCause: {
+    readonly DeviceStaging: number;
+    readonly AccountQuota: number;
   };
 }

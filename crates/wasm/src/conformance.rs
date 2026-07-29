@@ -112,5 +112,8 @@ pub async fn run_record_transport_conformance(
 /// boundary round-trips a value beyond `Number.MAX_SAFE_INTEGER` intact.
 #[wasm_bindgen(js_name = deadLetterEvent)]
 pub fn dead_letter_event(op_id: u64) -> crate::Event {
-    crate::Event::from_facade(facade::Event::DeadLetter { op_id: OpId(op_id) })
+    crate::Event::from_facade(facade::Event::DeadLetter {
+        op_id: OpId(op_id),
+        reason: facade::DeadLetterReason::Undecodable,
+    })
 }

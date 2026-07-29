@@ -37,6 +37,33 @@ export interface BreadcrumbDescriptor {
 /** What the op queue holds for a node (mirrors the facade `PendingClass`). */
 export type PendingClass = 'none' | 'metadata' | 'content';
 
+/** Why a queued op will never publish (mirrors the facade `DeadLetterReason`). */
+export type DeadLetterReason =
+  | 'targetGone'
+  | 'destinationGone'
+  | 'destinationInsideTarget'
+  | 'suffixExhausted'
+  | 'undecodable'
+  | 'payloadRefused'
+  | 'attemptsExhausted';
+
+/** Which budget refused a write (mirrors the facade `OverBudgetCause`). */
+export type OverBudgetCause = 'deviceStaging' | 'accountQuota';
+
+/** One retained dead-lettered op, as data. */
+export interface DeadLetterDescriptor {
+  opId: bigint;
+  reason: DeadLetterReason;
+}
+
+/** The drain's over-budget hold, as data (mirrors the facade `BlockedOp`). */
+export interface BlockedOpDescriptor {
+  opId: bigint;
+  node: Uint8Array;
+  cause: OverBudgetCause;
+  neededBytes: bigint;
+}
+
 /**
  * One direct child in a snapshot, as data. `size`/`mtime`/`contentVersion` are
  * `null` until projected.
@@ -62,7 +89,9 @@ export interface SnapshotDescriptor {
   folder: Uint8Array;
   children: SnapshotChildDescriptor[];
   ancestors: BreadcrumbDescriptor[];
-  deadLetters: bigint[];
+  deadLetters: DeadLetterDescriptor[];
+  /** The drain's over-budget hold, or `null` when nothing is held. */
+  blocked: BlockedOpDescriptor | null;
   /**
    * Durable queue entries this session holds but cannot read — another
    * identity's, or written by a newer build. They occupy staged bytes against
@@ -111,7 +140,7 @@ export type EventDescriptor =
   | { kind: 'snapshotUpdated' }
   | { kind: 'stalenessChanged'; staleness: Staleness }
   | { kind: 'withheldUpdateEscalation'; ipnsName: Uint8Array }
-  | { kind: 'deadLetter'; opId: bigint }
+  | { kind: 'deadLetter'; opId: bigint; reason: DeadLetterReason }
   | { kind: 'attributableAbuse'; description: string }
   | { kind: 'renewalFailed'; routingKey: string; detail: string }
   | {

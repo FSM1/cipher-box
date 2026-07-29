@@ -26,6 +26,16 @@ export const fakeWasmEnums = {
   Permission: { Read: 0, Write: 1 },
   Staleness: { Fresh: 0, Reconciling: 1, Stale: 2, Offline: 3 },
   OpPhase: { DownloadStarted: 0, DownloadCompleted: 1, DownloadFailed: 2 },
+  DeadLetterReason: {
+    TargetGone: 0,
+    DestinationGone: 1,
+    DestinationInsideTarget: 2,
+    SuffixExhausted: 3,
+    Undecodable: 4,
+    PayloadRefused: 5,
+    AttemptsExhausted: 6,
+  },
+  OverBudgetCause: { DeviceStaging: 0, AccountQuota: 1 },
 } as const;
 
 /** A minimal empty snapshot descriptor for transport-plumbing assertions. */
@@ -36,6 +46,7 @@ export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): Snapshot
     children: [],
     ancestors: [],
     deadLetters: [],
+    blocked: null,
     retainedRecords: 0,
     staleness: 'fresh',
   };

@@ -88,12 +88,16 @@ pub(crate) struct TestLoginResponse {
     pub private_key: String,
 }
 
-/// A NestJS error envelope: `{ statusCode, message, error }`. `message` is a
-/// string or an array of strings (validation failures); both are accepted.
+/// A NestJS error envelope: `{ statusCode, message, error, code? }`. `message`
+/// is a string or an array of strings (validation failures); both are accepted.
+/// `code` is the stable machine discriminator the API stamps where one status
+/// covers unrelated causes (blueprint/api.md; the two upload 413s).
 #[derive(Deserialize)]
 pub(crate) struct ErrorBody {
     #[serde(default)]
     pub message: serde_json::Value,
+    #[serde(default)]
+    pub code: Option<String>,
 }
 
 impl ErrorBody {

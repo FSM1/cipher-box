@@ -4,19 +4,12 @@
 use core::fmt;
 
 use cipherbox_engine::EngineError;
+/// Which budget a write exceeded, in the engine's own vocabulary. Which errno
+/// each maps to is the adapter's call: `ENOSPC` for a full device, `EDQUOT` for
+/// a full account.
+pub use cipherbox_engine::OverBudgetCause;
 
 use crate::name::NameError;
-
-/// Which budget a write exceeded. The two are different facts about the world
-/// and different errnos to the user: a full device is not a full account.
-/// Which errno each maps to is the adapter's call (#867).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OverBudgetCause {
-    /// This device's offline staging budget is exhausted.
-    DeviceStaging,
-    /// The account's hosted storage quota refused the write.
-    AccountQuota,
-}
 
 /// Why a vfs operation failed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +64,7 @@ impl From<EngineError> for VfsError {
             EngineError::TrustViolation { message } | EngineError::ColdStart { message } => {
                 VfsError::TrustViolation { message }
             }
+            EngineError::OverBudget { cause } => VfsError::OverBudget(cause),
             EngineError::ContentUnavailable { message } => VfsError::Unavailable { message },
             EngineError::UnsupportedContentFormat { version } => VfsError::Unavailable {
                 message: format!("unsupported content format version {version}"),
@@ -164,6 +158,21 @@ mod tests {
                 VfsError::from(error),
                 VfsError::Unavailable { .. }
             ));
+        }
+    }
+
+    /// A full device and a full account are different errnos to the user, so
+    /// the cause has to survive the crossing (#867).
+    #[test]
+    fn each_budget_keeps_its_own_cause() {
+        for cause in [
+            OverBudgetCause::DeviceStaging,
+            OverBudgetCause::AccountQuota,
+        ] {
+            assert_eq!(
+                VfsError::from(EngineError::OverBudget { cause }),
+                VfsError::OverBudget(cause)
+            );
         }
     }
 

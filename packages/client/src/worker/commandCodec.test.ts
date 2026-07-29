@@ -53,6 +53,24 @@ describe('readEvent', () => {
     });
   });
 
+  it('carries a dead letter reason through to the descriptor', () => {
+    const event: WasmEvent = { kind: 'deadLetter', opId: 7n, deadLetterReason: 2 };
+    expect(readEvent(fakeWasm, event)).toEqual({
+      kind: 'deadLetter',
+      opId: 7n,
+      reason: 'destinationInsideTarget',
+    });
+  });
+
+  it('fails closed on an unknown or absent dead letter reason', () => {
+    expect(() =>
+      readEvent(fakeWasm, { kind: 'deadLetter', opId: 7n, deadLetterReason: 42 })
+    ).toThrow('unknown WASM dead letter reason value: 42');
+    expect(() => readEvent(fakeWasm, { kind: 'deadLetter', opId: 7n })).toThrow(
+      'unknown WASM dead letter reason value: undefined'
+    );
+  });
+
   it('fails closed on an unknown opProgress phase', () => {
     const event: WasmEvent = { kind: 'opProgress', node: new Uint8Array(16), phase: 99 };
     expect(() => readEvent(fakeWasm, event)).toThrow('unknown WASM op phase value: 99');
@@ -61,6 +79,19 @@ describe('readEvent', () => {
     );
   });
 });
+
+/** An empty view: nothing pending, nothing dead-lettered, nothing held. */
+function baseView(): WasmSnapshotView {
+  return {
+    root: new Uint8Array(16),
+    folder: new Uint8Array(16),
+    children: [],
+    ancestors: [],
+    deadLetters: [],
+    retainedRecords: 0,
+    staleness: 0,
+  };
+}
 
 describe('readSnapshot', () => {
   it('maps every field, including bigint dead letters and null size/mtime', () => {
@@ -94,7 +125,16 @@ describe('readSnapshot', () => {
         },
       ],
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],
-      deadLetters: new BigUint64Array([9n, 9_007_199_254_740_993n]),
+      deadLetters: [
+        { opId: 9n, reason: 4 },
+        { opId: 9_007_199_254_740_993n, reason: 6 },
+      ],
+      blocked: {
+        opId: 12n,
+        node: new Uint8Array(16).fill(6),
+        cause: 1,
+        neededBytes: 9_007_199_254_740_993n,
+      },
       retainedRecords: 2,
       staleness: 1,
     };
@@ -135,22 +175,39 @@ describe('readSnapshot', () => {
         },
       ],
       ancestors: [{ id: new Uint8Array(16).fill(1), name: '' }],
-      deadLetters: [9n, 9_007_199_254_740_993n],
+      deadLetters: [
+        { opId: 9n, reason: 'undecodable' },
+        { opId: 9_007_199_254_740_993n, reason: 'attemptsExhausted' },
+      ],
+      blocked: {
+        opId: 12n,
+        node: new Uint8Array(16).fill(6),
+        cause: 'accountQuota',
+        neededBytes: 9_007_199_254_740_993n,
+      },
       retainedRecords: 2,
       staleness: 'reconciling',
     });
   });
 
+  it('maps an absent over-budget hold to null', () => {
+    expect(readSnapshot(fakeWasm, baseView()).blocked).toBeNull();
+  });
+
+  it('fails closed on an unknown dead letter reason or over-budget cause', () => {
+    expect(() =>
+      readSnapshot(fakeWasm, { ...baseView(), deadLetters: [{ opId: 1n, reason: 42 }] })
+    ).toThrow('unknown WASM dead letter reason value: 42');
+    expect(() =>
+      readSnapshot(fakeWasm, {
+        ...baseView(),
+        blocked: { opId: 1n, node: new Uint8Array(16), cause: 42, neededBytes: 1n },
+      })
+    ).toThrow('unknown WASM over budget cause value: 42');
+  });
+
   it('fails closed on an unknown child kind, pending class or staleness value', () => {
-    const base: WasmSnapshotView = {
-      root: new Uint8Array(16),
-      folder: new Uint8Array(16),
-      children: [],
-      ancestors: [],
-      deadLetters: new BigUint64Array(0),
-      retainedRecords: 0,
-      staleness: 0,
-    };
+    const base = baseView();
     expect(() => readSnapshot(fakeWasm, { ...base, staleness: 42 })).toThrow(
       'unknown WASM staleness value: 42'
     );

@@ -575,10 +575,12 @@ fn error_from_response(response: &HttpResponse) -> ApiError {
         401 => ApiError::Unauthorized,
         403 => ApiError::Forbidden,
         status => {
-            let message = serde_json::from_slice::<ErrorBody>(&response.body)
-                .ok()
-                .and_then(|body| body.message_string());
-            ApiError::Status { status, message }
+            let body = serde_json::from_slice::<ErrorBody>(&response.body).ok();
+            ApiError::Status {
+                status,
+                message: body.as_ref().and_then(ErrorBody::message_string),
+                code: body.and_then(|body| body.code),
+            }
         }
     }
 }
@@ -919,7 +921,27 @@ mod tests {
             block_on(client.siwe_challenge()).unwrap_err(),
             ApiError::Status {
                 status: 500,
-                message: Some("internal boom".into())
+                message: Some("internal boom".into()),
+                code: None,
+            }
+        );
+    }
+
+    /// One status covers unrelated causes on the upload endpoint, so the
+    /// machine discriminator has to survive the client — prose does not.
+    #[test]
+    fn status_error_carries_the_server_code_when_the_body_has_one() {
+        let (http, _creds, client) = fakes();
+        http.enqueue_response(json_response(
+            413,
+            json!({ "statusCode": 413, "message": "over quota", "code": "QUOTA_EXCEEDED" }),
+        ));
+        assert_eq!(
+            block_on(client.siwe_challenge()).unwrap_err(),
+            ApiError::Status {
+                status: 413,
+                message: Some("over quota".into()),
+                code: Some("QUOTA_EXCEEDED".into()),
             }
         );
     }
