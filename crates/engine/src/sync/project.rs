@@ -1,9 +1,12 @@
-//! Projection of a gate-passing adopted root read-body into a facade
-//! [`Snapshot`] — direct children only, no recursion, no network, no seams
-//! (blueprint/engine.md "Sync core"; the deeper content-plane assembly is a
-//! later slice).
+//! Projection of a gate-passing adopted read-body into a facade [`Snapshot`] —
+//! one folder's direct children at a time, no recursion, no network, no seams
+//! (blueprint/engine.md "Sync core").
+//!
+//! [`project_root`] rebuilds the snapshot from the scope root; [`project_folder`]
+//! merges any one folder's children into an existing snapshot, so a write plane
+//! that authors below the root keeps the tree it published.
 
-use cipherbox_core::seal::{NodeKind as CoreNodeKind, ReadBody};
+use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind, ReadBody};
 
 use crate::facade::{NodeId, NodeKind};
 use crate::gate::Adopted;
@@ -51,6 +54,55 @@ pub(crate) fn project_root(root: NodeId, adopted: &Adopted, previous: &Snapshot)
     }
 
     snapshot
+}
+
+/// Merge one folder's gate-passing children into `snapshot` **in place**: the
+/// deeper counterpart to [`project_root`], which can only rebuild from the scope
+/// root. Children the folder no longer names are unlinked, and dropped entirely
+/// once no parent links them.
+///
+/// Same trust posture and same carry-forward rule as [`project_root`]: only a
+/// gate-passing body reaches here, and `size`/`mtime`/the version count have no
+/// `ChildRef` to come from, so they survive from whatever the snapshot already
+/// held for that node.
+pub(crate) fn project_folder(
+    snapshot: &mut Snapshot,
+    folder: NodeId,
+    children: &[ChildRef],
+    sequence: u64,
+    modified_at: u64,
+) {
+    if let Some(node) = snapshot.node_mut(folder) {
+        node.record_sequence = sequence;
+        node.mtime = Some(modified_at);
+    }
+
+    let departed: Vec<NodeId> = snapshot
+        .children(folder)
+        .into_iter()
+        .map(|node| node.id)
+        .filter(|id| !children.iter().any(|child| child.id == id.0))
+        .collect();
+    for id in departed {
+        snapshot.unlink(folder, id);
+        if snapshot.links_to(id).is_empty() {
+            snapshot.remove_node(id);
+        }
+    }
+
+    for child in children {
+        let id = NodeId(child.id);
+        let mut meta = NodeMeta::new(id, child.name.clone(), map_kind(child.kind));
+        meta.ipns_name = Some(child.ipns_name.clone());
+        if let Some(prior) = snapshot.node(id) {
+            meta.size = prior.size;
+            meta.mtime = prior.mtime;
+            meta.content_version = prior.content_version;
+            meta.record_sequence = prior.record_sequence;
+        }
+        snapshot.upsert_node(meta);
+        snapshot.link(folder, id, child.link_counter);
+    }
 }
 
 /// Fold a verified file read-body's plaintext `(size, mtime)` and version count

@@ -146,6 +146,18 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<Adopted, GateError> {
+        self.open_carried_at_floor(name, record_bytes)
+            .await
+            .map(|(adopted, _)| adopted)
+    }
+
+    /// [`open_at_floor`](Self::open_at_floor) keeping the decoded envelope, so a
+    /// re-author can carry its unknown fields forward byte-stable (#27 D10).
+    pub(crate) async fn open_carried_at_floor(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> Result<(Adopted, Envelope), GateError> {
         // Reuse the envelope the floor-rejected adopt assembled for these same
         // bytes; assembling again re-fetches the head block.
         let cached = self
@@ -167,11 +179,14 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         )
         .await?;
         let read_body = self.unseal(&envelope)?;
-        Ok(Adopted {
-            read_body,
-            sequence,
-            epoch: envelope.epoch,
-        })
+        Ok((
+            Adopted {
+                read_body,
+                sequence,
+                epoch: envelope.epoch,
+            },
+            envelope,
+        ))
     }
 }
 
