@@ -32,7 +32,7 @@ pub mod tick;
 pub use boot::{ColdStartError, ColdStartOutcome, ColdStartParams, RootResolve, cold_start};
 pub use drain::{BlockedOp, DRAINED_OP_MARK_KEY, OP_ATTEMPTS_KEY};
 pub use model::{Link, NodeMeta, Snapshot, collation_key, suffix_name};
-pub use op::{Op, OpDecodeError, OpKind, StagedContent};
+pub use op::{Op, OpDecodeError, OpKind, Replaced, StagedContent};
 pub use overlay::apply_overlay;
 pub use pointer::{
     ConsultReason, PointerError, PointerFetch, SessionRole, VaultPointerAdoption, open_repoint,

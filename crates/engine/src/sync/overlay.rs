@@ -61,6 +61,26 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
                 op.stamp_authored(node);
             }
         }
+        OpKind::Move {
+            new_parent,
+            new_name,
+            replacing,
+            ..
+        } => {
+            if let Some(replaced) = replacing {
+                view.remove_node(replaced.node);
+            }
+            if view.parent_of(op.target) != Some(*new_parent) {
+                if let Some(old_parent) = view.parent_of(op.target) {
+                    view.unlink(old_parent, op.target);
+                }
+                view.link_next(*new_parent, op.target);
+            }
+            if let Some(node) = view.node_mut(op.target) {
+                node.name = new_name.clone();
+                op.stamp_authored(node);
+            }
+        }
         OpKind::UpdateContent { .. } => {
             if let Some(node) = view.node_mut(op.target) {
                 node.content_version = node.content_version.map(|count| count + 1);
@@ -74,7 +94,7 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
 mod tests {
     use super::*;
     use crate::facade::{NodeId, NodeKind};
-    use crate::sync::op::StagedContent;
+    use crate::sync::op::{Replaced, StagedContent};
 
     /// Journal time for ops whose narrative does not turn on it.
     const AT: crate::seams::UnixMillis = crate::seams::UnixMillis(0);
@@ -143,6 +163,37 @@ mod tests {
         let view = apply_overlay(&base, &ops);
         assert_eq!(view.parent_of(id(2)), Some(id(1)));
         assert_eq!(view.children(id(0)).len(), 1, "moved out of root");
+    }
+
+    #[test]
+    fn overlay_move_relinks_renames_and_replaces_in_one_step() {
+        let mut base = base();
+        base.upsert_node(NodeMeta::new(id(1), "dir", NodeKind::Folder));
+        base.upsert_node(NodeMeta::new(id(2), "f.txt", NodeKind::File));
+        base.upsert_node(NodeMeta::new(id(3), "target.txt", NodeKind::File));
+        base.link(id(0), id(1), 1);
+        base.link(id(0), id(2), 1);
+        base.link(id(1), id(3), 1);
+
+        let replacing = Some(Replaced {
+            node: id(3),
+            sequence: 1,
+        });
+        let ops = vec![Op::move_node(
+            id(2),
+            id(0),
+            id(1),
+            "target.txt",
+            replacing,
+            1,
+            AT,
+        )];
+        let view = apply_overlay(&base, &ops);
+
+        assert!(!view.contains(id(3)));
+        assert_eq!(view.parent_of(id(2)), Some(id(1)));
+        assert_eq!(view.node(id(2)).unwrap().name, "target.txt");
+        assert!(view.children(id(0)).iter().all(|c| c.id != id(2)));
     }
 
     #[test]

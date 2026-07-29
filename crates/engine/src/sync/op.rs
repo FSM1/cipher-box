@@ -54,7 +54,17 @@ pub struct StagedContent {
     pub plaintext_size: u64,
 }
 
-/// The five intent-op mutations (#33 D6).
+/// The destination node a [`OpKind::Move`] replaces, with the sequence
+/// snapshot the conditional-delete rule compares against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Replaced {
+    /// The node being replaced at the destination.
+    pub node: NodeId,
+    /// Its record sequence at the time the move was formed.
+    pub sequence: u64,
+}
+
+/// The six intent-op mutations (#33 D6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpKind {
     /// Create a node under a parent.
@@ -98,6 +108,21 @@ pub enum OpKind {
         /// Whether the move leaves a granted source scope (a scope-exit
         /// rotation trigger for the source).
         exits_granted_source: bool,
+    },
+    /// Relink **and** rename a node in one entry, optionally replacing the node
+    /// already at the destination name. One kernel rename is one of these, so
+    /// the whole POSIX-atomic operation is journaled or none of it is
+    /// (blueprint/desktop.md "Reads, writes, and the never-block law").
+    Move {
+        /// The source parent the move was formed against — the presence
+        /// condition for the source-remove and the move-race detector.
+        from_parent: NodeId,
+        /// The destination parent (the source parent for a pure rename).
+        new_parent: NodeId,
+        /// The name at the destination, as entered.
+        new_name: String,
+        /// The destination node this move vacates, if any.
+        replacing: Option<Replaced>,
     },
     /// Write a new file version (fresh per-version content key).
     UpdateContent {
@@ -181,6 +206,29 @@ impl Op {
                 new_parent,
                 cross_scope,
                 exits_granted_source,
+            },
+        }
+    }
+
+    /// A combined `move` op.
+    pub fn move_node(
+        target: NodeId,
+        from_parent: NodeId,
+        new_parent: NodeId,
+        new_name: impl Into<String>,
+        replacing: Option<Replaced>,
+        base_sequence: u64,
+        authored_at: UnixMillis,
+    ) -> Self {
+        Self {
+            target,
+            base_sequence,
+            authored_at,
+            kind: OpKind::Move {
+                from_parent,
+                new_parent,
+                new_name: new_name.into(),
+                replacing,
             },
         }
     }
@@ -306,6 +354,19 @@ mod tests {
             Op::rename(id(3), "b.txt", 5, at(1_002)),
             Op::relink(id(4), id(0), id(9), 6, at(1_003), true, true),
             Op::update_content(id(5), staged(b"stage2", 12), 8, at(1_004)),
+            Op::move_node(
+                id(6),
+                id(0),
+                id(9),
+                "c.txt",
+                Some(Replaced {
+                    node: id(7),
+                    sequence: 4,
+                }),
+                9,
+                at(1_005),
+            ),
+            Op::move_node(id(6), id(0), id(9), "c.txt", None, 9, at(1_005)),
         ];
         for op in ops {
             assert_eq!(Op::decode_body(&op.encode_body()).unwrap(), op);
@@ -366,12 +427,14 @@ mod tests {
             Op::delete(id(2), 1, at(1), 1).pending_class(),
             Op::rename(id(3), "b", 1, at(1)).pending_class(),
             Op::relink(id(4), id(0), id(9), 1, at(1), false, false).pending_class(),
+            Op::move_node(id(4), id(0), id(9), "b", None, 1, at(1)).pending_class(),
             Op::update_content(id(5), staged(b"k", 1), 1, at(1)).pending_class(),
         ];
         assert_eq!(
             classes,
             [
                 PendingClass::Content,
+                PendingClass::Metadata,
                 PendingClass::Metadata,
                 PendingClass::Metadata,
                 PendingClass::Metadata,

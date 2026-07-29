@@ -47,7 +47,7 @@ use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::drain::{Drain, DrainReport, DrainScope};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
-use crate::sync::op::Op;
+use crate::sync::op::{Op, Replaced};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
@@ -321,6 +321,19 @@ pub enum Command {
         /// Destination parent.
         new_parent: NodeId,
     },
+    /// Relink and rename a node in one intent op, replacing whatever sits at
+    /// the destination name. One kernel rename is exactly one of these
+    /// (blueprint/desktop.md "Reads, writes, and the never-block law").
+    Move {
+        /// Node being moved.
+        node: NodeId,
+        /// Destination parent (the current parent for a pure rename).
+        new_parent: NodeId,
+        /// Name at the destination, as entered.
+        new_name: String,
+        /// The node the destination name currently holds, if any.
+        replacing: Option<NodeId>,
+    },
     /// Write new content to a file node (fresh per-version content key).
     UpdateContent {
         /// Target file node.
@@ -412,6 +425,7 @@ impl Command {
             Command::Delete { .. } => "delete",
             Command::Rename { .. } => "rename",
             Command::Relink { .. } => "relink",
+            Command::Move { .. } => "move",
             Command::UpdateContent { .. } => "updateContent",
             Command::SetFocus { .. } => "setFocus",
             Command::ManualRefresh => "manualRefresh",
@@ -1483,6 +1497,32 @@ impl<T: SeamTypes> Engine<T> {
                     authored_at,
                     false,
                     false,
+                );
+                self.stage_and_notify(&op).await
+            }
+            Command::Move {
+                node,
+                new_parent,
+                new_name,
+                replacing,
+            } => {
+                let rendered = self.render().await?;
+                let from_parent = rendered
+                    .parent_of(node)
+                    .unwrap_or(self.snapshot.borrow().root);
+                let base_sequence = rendered.record_sequence(node).unwrap_or(1);
+                let replacing = replacing.map(|replaced| Replaced {
+                    node: replaced,
+                    sequence: rendered.record_sequence(replaced).unwrap_or(1),
+                });
+                let op = Op::move_node(
+                    node,
+                    from_parent,
+                    new_parent,
+                    new_name,
+                    replacing,
+                    base_sequence,
+                    authored_at,
                 );
                 self.stage_and_notify(&op).await
             }

@@ -779,6 +779,23 @@ where
                 self.publish_relink(scope, pass, applied, rebased, *from_parent, *new_parent)
                     .await
             }
+            OpKind::Move {
+                from_parent,
+                new_parent,
+                replacing,
+                ..
+            } => {
+                self.publish_move(
+                    scope,
+                    pass,
+                    applied,
+                    rebased,
+                    *from_parent,
+                    *new_parent,
+                    replacing.map(|replaced| replaced.node),
+                )
+                .await
+            }
             OpKind::UpdateContent { .. } => self.publish_update_content(scope, pass, applied).await,
             // Content bytes are #868's; cross-scope re-seal is #635's.
             OpKind::Create { .. } | OpKind::Relink { .. } => Err(Halt::Unclassified),
@@ -949,8 +966,117 @@ where
             .await
             .is_err()
         {
-            self.compensate_dest_add(scope, pass, dest, source, target, cas_base, modified_at)
-                .await?;
+            self.compensate_dest_add(
+                scope,
+                pass,
+                dest,
+                source,
+                target,
+                None,
+                cas_base,
+                modified_at,
+            )
+            .await?;
+            return Err(Halt::Unclassified);
+        }
+        Ok(())
+    }
+
+    /// Move: one publish plan for the whole kernel rename. The destination
+    /// folder drops the replaced ref and gains the moved one in a **single**
+    /// record, so no observer ever sees the destination name unresolvable; a
+    /// cross-folder move then removes from the source under the same dest-first
+    /// ordering a relink uses.
+    #[expect(clippy::too_many_arguments, reason = "one move's full publish plan")]
+    async fn publish_move(
+        &self,
+        scope: &DrainScope<'_>,
+        pass: &mut Pass,
+        applied: &AppliedOp,
+        rebased: &Snapshot,
+        from_parent: NodeId,
+        dest: NodeId,
+        replacing: Option<NodeId>,
+    ) -> Result<(), Halt> {
+        let target = applied.op.target;
+        let new_name = applied.effective_name.clone().ok_or(Halt::Unclassified)?;
+        let source = self.published_parent(target)?;
+        // The op's own presence condition (`sync/op.rs`): a parent neither
+        // anchor names is a concurrent move this op lost.
+        if source != from_parent && source != dest {
+            return Err(Halt::Unclassified);
+        }
+        if dest == target || self.base.borrow().ancestors(dest).contains(&target) {
+            return Err(Halt::Unclassified);
+        }
+        let modified_at = applied.op.authored_at.0;
+
+        self.ensure_folder(scope, pass, source).await?;
+        self.ensure_folder(scope, pass, dest).await?;
+
+        // Only the node the rebase actually vacated loses its ref: one that won
+        // the conditional delete keeps its entry, and the move already resolved
+        // onto an auto-suffixed name beside it.
+        let vacated = replacing.filter(|replaced| !rebased.contains(*replaced));
+
+        let mut moved = pass
+            .folder(source)?
+            .children
+            .iter()
+            .find(|child| child.id == target.0)
+            .cloned()
+            .ok_or(Halt::Unclassified)?;
+        moved.name = new_name;
+        // The counter the replay allocated (#33 D5) — unchanged for a rename in
+        // place, advanced to the winner for a relink.
+        moved.link_counter = rebased.winning_link(target).ok_or(Halt::Unclassified)?.link_counter;
+
+        if source == dest {
+            let children = &mut pass.folder_mut(dest)?.children;
+            if let Some(replaced) = vacated {
+                children.retain(|child| child.id != replaced.0);
+            }
+            let entry = children
+                .iter_mut()
+                .find(|child| child.id == target.0)
+                .ok_or(Halt::Unclassified)?;
+            *entry = moved;
+            self.publish_folder(scope, pass, dest, modified_at).await?;
+            return Ok(());
+        }
+
+        let dest_children = &mut pass.folder_mut(dest)?.children;
+        let replaced_ref = vacated
+            .and_then(|replaced| dest_children.iter().position(|c| c.id == replaced.0))
+            .map(|at| dest_children.remove(at));
+        // A dest already naming the target is reachable (the rebase resolves
+        // against a dest it has not loaded); a second ref would sign a listing
+        // `author_child_envelope` rejects, wedging every retry.
+        match dest_children.iter_mut().find(|child| child.id == target.0) {
+            Some(existing) => *existing = moved,
+            None => dest_children.push(moved),
+        }
+        let cas_base = self.publish_folder(scope, pass, dest, modified_at).await?;
+
+        pass.folder_mut(source)?
+            .children
+            .retain(|child| child.id != target.0);
+        if self
+            .publish_folder(scope, pass, source, modified_at)
+            .await
+            .is_err()
+        {
+            self.compensate_dest_add(
+                scope,
+                pass,
+                dest,
+                source,
+                target,
+                replaced_ref,
+                cas_base,
+                modified_at,
+            )
+            .await?;
             return Err(Halt::Unclassified);
         }
         Ok(())
@@ -965,6 +1091,10 @@ where
     /// sequence our dest-add published; a dest that moved is re-read and the
     /// removal re-derived onto the winner's record rather than replayed over it
     /// (#786).
+    ///
+    /// `replaced` is the ref the dest-add vacated in the same publish, if any;
+    /// the undo restores it, because a dest that keeps neither the moved node
+    /// nor the one it replaced has lost an entry outright.
     #[expect(clippy::too_many_arguments, reason = "one compensation's full state")]
     async fn compensate_dest_add(
         &self,
@@ -973,6 +1103,7 @@ where
         dest: NodeId,
         source: NodeId,
         target: NodeId,
+        replaced: Option<ChildRef>,
         cas_base: u64,
         modified_at: u64,
     ) -> Result<(), Halt> {
@@ -991,18 +1122,25 @@ where
         // a cache hit would answer with the bytes we just published and make the
         // compare vacuous.
         let observed = self.observed_sequence(&pass.folder(dest)?.name).await?;
-        let drop_target = |children: &[ChildRef]| -> Vec<ChildRef> {
-            children
+        let replaced = replaced.as_ref();
+        let undo = |children: &[ChildRef]| -> Vec<ChildRef> {
+            let mut next: Vec<ChildRef> = children
                 .iter()
                 .filter(|child| child.id != target.0)
                 .cloned()
-                .collect()
+                .collect();
+            if let Some(replaced) = replaced
+                && !next.iter().any(|child| child.id == replaced.id)
+            {
+                next.push(replaced.clone());
+            }
+            next
         };
-        let children = match undo_dest_add_versioned(&staged, drop_target, cas_base, observed) {
+        let children = match undo_dest_add_versioned(&staged, undo, cas_base, observed) {
             UndoDestAdd::Removed(children) => children,
             UndoDestAdd::Conflict => {
                 self.reload_folder(scope, pass, dest).await?;
-                drop_target(&pass.folder(dest)?.children)
+                undo(&pass.folder(dest)?.children)
             }
         };
         pass.folder_mut(dest)?.children = children;

@@ -166,25 +166,23 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             removable(&view, dest, source.kind)?;
         }
 
-        // The facade has no combined move-and-rename op, so a rename that
-        // replaces has a window where the destination is already gone (#884).
-        if let Some(dest) = replaced {
-            self.delete(&view, dest.id).await?;
+        // The replaced node's own unlink rides the move op. Only descendants
+        // the mount hides need their own deletes, and a listing the user cannot
+        // see is not one POSIX promises to keep.
+        if let Some(dest) = &replaced {
+            for node in subtree(&view, dest.id) {
+                if node != dest.id {
+                    self.command(Command::Delete { node }).await?;
+                }
+            }
         }
-        if new_parent_node != parent_node {
-            self.command(Command::Relink {
-                node: source.id,
-                new_parent: new_parent_node,
-            })
-            .await?;
-        }
-        if source.name != new_name {
-            self.command(Command::Rename {
-                node: source.id,
-                new_name: new_name.to_owned(),
-            })
-            .await?;
-        }
+        self.command(Command::Move {
+            node: source.id,
+            new_parent: new_parent_node,
+            new_name: new_name.to_owned(),
+            replacing: replaced.map(|dest| dest.id),
+        })
+        .await?;
 
         let ino = self.inodes.ino_for(source.id);
         self.entry_changed(parent, name);

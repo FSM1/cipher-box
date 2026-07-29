@@ -882,6 +882,112 @@ fn a_relink_publishes_the_dest_before_the_source_and_a_second_device_resolves_it
     assert_eq!(names, ["photos"], "device B resolves the source-remove");
 }
 
+/// A replacing rename in place: the vacated ref and the moved one land in a
+/// **single** destination record, so no observer sees the destination name
+/// unresolvable (#884).
+#[test]
+fn a_replacing_rename_lands_the_vacated_and_moved_refs_in_one_record() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    for name in ["new.txt", "target.txt"] {
+        block_on(engine.command(Command::Create {
+            parent: ROOT,
+            name: name.into(),
+            kind: NodeKind::File,
+            content: None,
+        }))
+        .unwrap();
+    }
+    tick(&world, &engine, &mut tasks);
+    let source = child_id(&engine, ROOT, "new.txt");
+    let replaced = child_id(&engine, ROOT, "target.txt");
+    let (root_sequence, _) = published(&world.record_store, ROOT);
+
+    block_on(engine.command(Command::Move {
+        node: source,
+        new_parent: ROOT,
+        new_name: "target.txt".into(),
+        replacing: Some(replaced),
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let children = published_children(&world.record_store, &blocks, ROOT);
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].name, "target.txt");
+    assert_eq!(
+        children[0].id, source.0,
+        "the surviving entry is the moved node, not the one it replaced"
+    );
+    assert_eq!(
+        published(&world.record_store, ROOT).0,
+        root_sequence + 1,
+        "one record carries the whole replace"
+    );
+    assert!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .is_empty(),
+        "the move drained"
+    );
+
+    let bob = world.device(b"alice-second-device");
+    let (engine_b, _events_b, _tasks_b) = boot(&world, &blocks, &bob, 7);
+    let seen = block_on(engine_b.view()).unwrap().children(ROOT);
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].id, source, "device B resolves the replace");
+}
+
+/// A move across folders keeps the relink's dest-first ordering while the
+/// destination's replace rides the same record as the dest-add.
+#[test]
+fn a_cross_folder_move_that_replaces_publishes_the_dest_before_the_source() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (photos, moved) = seed_folder_and_file(&world, &mut engine, &mut tasks);
+    block_on(engine.command(Command::Create {
+        parent: photos,
+        name: "a.txt".into(),
+        kind: NodeKind::File,
+        content: None,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let replaced = child_id(&engine, photos, "a.txt");
+    let before = uploaded_node_ids(&alice).len();
+
+    block_on(engine.command(Command::Move {
+        node: moved,
+        new_parent: photos,
+        new_name: "a.txt".into(),
+        replacing: Some(replaced),
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let children = published_children(&world.record_store, &blocks, photos);
+    assert_eq!(children.len(), 1);
+    assert_eq!(children[0].name, "a.txt");
+    assert_eq!(children[0].id, moved.0);
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["photos"]
+    );
+    assert_eq!(
+        uploaded_node_ids(&alice)[before..],
+        [photos.0, ROOT.0],
+        "dest-add published before the source-remove"
+    );
+}
+
 /// `updateContent`'s metadata half: a file's own record carries its
 /// `modifiedAt`, and its parent holds no size/mtime mirror to republish. The
 /// facade cannot form this op until the content slice (#868), so it is staged
@@ -1091,6 +1197,60 @@ fn a_source_remove_that_cannot_publish_undoes_its_own_dest_add() {
     assert!(
         published_children(&world.record_store, &blocks, photos).is_empty(),
         "the dest-add was compensated, not left as a dual link"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["a.txt", "photos"],
+        "the source kept the child it could not release"
+    );
+    assert_eq!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .len(),
+        1,
+        "the halted op stays queued for the next tick"
+    );
+}
+
+/// The compensation must restore what the dest-add vacated too: a destination
+/// left holding neither the moved node nor the one it replaced has lost an
+/// entry outright (#884).
+#[test]
+fn a_compensated_move_restores_the_ref_its_dest_add_replaced() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (photos, moved) = seed_folder_and_file(&world, &mut engine, &mut tasks);
+    block_on(engine.command(Command::Create {
+        parent: photos,
+        name: "a.txt".into(),
+        kind: NodeKind::File,
+        content: None,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let replaced = child_id(&engine, photos, "a.txt");
+
+    blocks.refuse_upload(Box::new(|block| {
+        (head_of(block) == Some(ROOT.0)).then(unreachable_upload)
+    }));
+    block_on(engine.command(Command::Move {
+        node: moved,
+        new_parent: photos,
+        new_name: "a.txt".into(),
+        replacing: Some(replaced),
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let children = published_children(&world.record_store, &blocks, photos);
+    assert_eq!(children.len(), 1);
+    assert_eq!(
+        children[0].id, replaced.0,
+        "the node the move never replaced is back where it was"
     );
     assert_eq!(
         published_names(&world.record_store, &blocks, ROOT),

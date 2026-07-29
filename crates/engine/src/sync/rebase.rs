@@ -25,7 +25,7 @@ use std::collections::HashSet;
 
 use crate::seams::OpId;
 use crate::sync::model::{NodeMeta, Snapshot, collation_key, suffix_name};
-use crate::sync::op::{Op, OpKind};
+use crate::sync::op::{Op, OpKind, Replaced};
 use crate::sync::record::{RecordClass, RecordReader};
 
 /// The highest auto-suffix a loser probes before dead-lettering — a folder
@@ -242,6 +242,12 @@ pub fn rebase_one(working: &mut Snapshot, local: &Snapshot, op: &Op) -> OpResolu
             *new_parent,
             *exits_granted_source,
         ),
+        OpKind::Move {
+            from_parent,
+            new_parent,
+            new_name,
+            replacing,
+        } => rebase_move(working, op, *from_parent, *new_parent, new_name, *replacing),
         OpKind::UpdateContent { .. } => rebase_update_content(working, local, op),
     }
 }
@@ -262,7 +268,7 @@ fn rebase_create(
         return OpResolution::DeadLetter(DeadLetterReason::TargetGone);
     }
 
-    let (effective, suffixed) = match resolve_name(working, parent, name, op.target) {
+    let (effective, suffixed) = match resolve_name(working, parent, name, &[op.target]) {
         Some(resolved) => resolved,
         None => return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted),
     };
@@ -301,7 +307,7 @@ fn rebase_rename(working: &mut Snapshot, op: &Op, new_name: &str) -> OpResolutio
     }
     let parent = working.parent_of(op.target);
     let (effective, suffixed) = match parent {
-        Some(parent) => match resolve_name(working, parent, new_name, op.target) {
+        Some(parent) => match resolve_name(working, parent, new_name, &[op.target]) {
             Some(resolved) => resolved,
             None => return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted),
         },
@@ -364,6 +370,82 @@ fn rebase_relink(
     }
 }
 
+/// Combined move: the relink rule's races, then the rename rule's collision
+/// resolution, over a destination this op vacates first. Vacating first is what
+/// makes a replace land under the entered name instead of auto-suffixing off
+/// the node it is replacing.
+///
+/// The replaced node is dropped under the conditional-delete rule, so a
+/// concurrent edit to it still wins — the mover then auto-suffixes off the name
+/// it could not free, and no version is lost in either direction.
+fn rebase_move(
+    working: &mut Snapshot,
+    op: &Op,
+    from_parent: crate::facade::NodeId,
+    new_parent: crate::facade::NodeId,
+    new_name: &str,
+    replacing: Option<Replaced>,
+) -> OpResolution {
+    if !working.contains(op.target) {
+        return OpResolution::DeadLetter(DeadLetterReason::TargetGone);
+    }
+    if !working.contains(new_parent) {
+        return OpResolution::DeadLetter(DeadLetterReason::DestinationGone);
+    }
+    if new_parent == op.target || working.ancestors(new_parent).contains(&op.target) {
+        return OpResolution::DeadLetter(DeadLetterReason::DestinationInsideTarget);
+    }
+    let current_parent = working.parent_of(op.target);
+    // A concurrent move relocated the child somewhere this op never anchored
+    // against: we are the race loser, and removing it from there would clobber
+    // the winner.
+    if current_parent.is_some_and(|current| current != from_parent && current != new_parent) {
+        return OpResolution::Dropped(DropReason::MoveRaceLost);
+    }
+
+    // Already where it was going, under the name it was going to take, with
+    // nothing left at the destination to vacate.
+    if !replacing.is_some_and(|replaced| working.contains(replaced.node))
+        && current_parent == Some(new_parent)
+        && working.node(op.target).is_some_and(|n| n.name == new_name)
+    {
+        return OpResolution::Dropped(DropReason::AlreadySatisfied);
+    }
+
+    let vacating = replacing.filter(|replaced| {
+        working
+            .record_sequence(replaced.node)
+            .is_some_and(|current| current <= replaced.sequence)
+    });
+
+    // Resolved before any mutation: an exhausted probe dead-letters, and a
+    // dead-lettered op must leave the working base as it found it.
+    let mut exclude = vec![op.target];
+    exclude.extend(vacating.map(|replaced| replaced.node));
+    let (effective, suffixed) = match resolve_name(working, new_parent, new_name, &exclude) {
+        Some(resolved) => resolved,
+        None => return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted),
+    };
+
+    if let Some(replaced) = vacating {
+        working.remove_node(replaced.node);
+    }
+    if current_parent != Some(new_parent) {
+        if let Some(current) = current_parent {
+            working.unlink(current, op.target);
+        }
+        working.link_next(new_parent, op.target);
+    }
+    if let Some(node) = working.node_mut(op.target) {
+        node.name = effective.clone();
+    }
+    OpResolution::Applied {
+        effective_name: Some(effective),
+        suffixed,
+        scope_exit_trigger: None,
+    }
+}
+
 /// Edit: applies onto a present target; onto a concurrently-deleted target the
 /// edit **resurrects** it from the local overlay view (edit wins in both
 /// directions). A target absent from both is a dead-letter.
@@ -381,10 +463,11 @@ fn rebase_update_content(working: &mut Snapshot, local: &Snapshot, op: &Op) -> O
             // Re-link under the freed name only if it is still free: a concurrent
             // sibling may have taken it, so route through the one collision
             // resolver every other insert uses.
-            let (effective, suffixed) = match resolve_name(working, parent, &meta.name, op.target) {
-                Some(resolved) => resolved,
-                None => return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted),
-            };
+            let (effective, suffixed) =
+                match resolve_name(working, parent, &meta.name, &[op.target]) {
+                    Some(resolved) => resolved,
+                    None => return OpResolution::DeadLetter(DeadLetterReason::SuffixExhausted),
+                };
             let mut resurrected = meta.clone();
             resurrected.name = effective.clone();
             resurrected.content_version = resurrected.content_version.map(|count| count + 1);
@@ -407,14 +490,14 @@ fn resolve_name(
     snap: &Snapshot,
     parent: crate::facade::NodeId,
     name: &str,
-    exclude: crate::facade::NodeId,
+    exclude: &[crate::facade::NodeId],
 ) -> Option<(String, bool)> {
     // Fold the sibling collation keys once instead of rescanning the children on
     // every probe — identical to `name_taken`, which folds the same set.
     let taken: HashSet<String> = snap
         .children(parent)
         .into_iter()
-        .filter(|child| child.id != exclude)
+        .filter(|child| !exclude.contains(&child.id))
         .map(|child| collation_key(&child.name))
         .collect();
     if !taken.contains(&collation_key(name)) {
@@ -807,6 +890,154 @@ mod tests {
             },
             "the trigger is queued; no rotation happens in this slice"
         );
+    }
+
+    /// The `(base, local)` pair for a move over `dir`/`f` plus an occupied
+    /// destination name, with the replaced node at `sequence`.
+    fn replace_tree(replaced_sequence: u64) -> Snapshot {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "dir", NodeKind::Folder);
+        with_node(&mut base, id(0), id(2), "f.txt", NodeKind::File);
+        with_node(&mut base, id(1), id(3), "target.txt", NodeKind::File);
+        base.node_mut(id(3)).unwrap().record_sequence = replaced_sequence;
+        base
+    }
+
+    fn replacing(sequence: u64) -> Option<Replaced> {
+        Some(Replaced {
+            node: id(3),
+            sequence,
+        })
+    }
+
+    #[test]
+    fn a_move_that_replaces_lands_under_the_entered_name() {
+        let mut base = replace_tree(1);
+        let local = base.clone();
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(id(2), id(0), id(1), "target.txt", replacing(1), 1, AT),
+        );
+        assert_eq!(
+            res,
+            OpResolution::Applied {
+                effective_name: Some("target.txt".to_owned()),
+                suffixed: false,
+                scope_exit_trigger: None,
+            },
+            "vacating the destination first is what keeps the entered name"
+        );
+        assert!(!base.contains(id(3)), "the replaced node is gone");
+        assert_eq!(base.parent_of(id(2)), Some(id(1)));
+        assert_eq!(base.node(id(2)).unwrap().name, "target.txt");
+        assert!(base.children(id(0)).iter().all(|c| c.id != id(2)));
+    }
+
+    #[test]
+    fn a_move_auto_suffixes_when_a_concurrent_edit_saves_the_node_it_would_replace() {
+        // Conditional delete in both directions: the edit keeps the destination
+        // and the mover lands beside it rather than over it.
+        let mut base = replace_tree(9);
+        let local = base.clone();
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(id(2), id(0), id(1), "target.txt", replacing(1), 1, AT),
+        );
+        assert_eq!(
+            res,
+            OpResolution::Applied {
+                effective_name: Some("target (2).txt".to_owned()),
+                suffixed: true,
+                scope_exit_trigger: None,
+            }
+        );
+        assert!(base.contains(id(3)), "the edited node survives");
+        assert_eq!(base.node(id(2)).unwrap().name, "target (2).txt");
+    }
+
+    #[test]
+    fn a_move_renames_in_place_without_disturbing_the_link() {
+        let mut base = replace_tree(1);
+        let counter_before = base.winning_link(id(2)).unwrap().link_counter;
+        let local = base.clone();
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(id(2), id(0), id(0), "g.txt", None, 1, AT),
+        );
+        assert!(matches!(
+            res,
+            OpResolution::Applied {
+                suffixed: false,
+                ..
+            }
+        ));
+        assert_eq!(base.node(id(2)).unwrap().name, "g.txt");
+        assert_eq!(base.parent_of(id(2)), Some(id(0)));
+        assert_eq!(
+            base.winning_link(id(2)).unwrap().link_counter,
+            counter_before,
+            "a rename in place is not a relink"
+        );
+    }
+
+    #[test]
+    fn a_move_whose_child_a_concurrent_move_took_loses_the_race_untouched() {
+        let mut base = replace_tree(1);
+        with_node(&mut base, id(0), id(4), "elsewhere", NodeKind::Folder);
+        base.unlink(id(0), id(2));
+        base.link(id(4), id(2), 2);
+        let local = base.clone();
+
+        let before = base.clone();
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(id(2), id(0), id(1), "target.txt", replacing(1), 1, AT),
+        );
+        assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
+        assert_eq!(
+            base, before,
+            "a dropped move must not have vacated the destination"
+        );
+    }
+
+    #[test]
+    fn a_move_dead_letters_rather_than_vacating_a_destination_it_cannot_reach() {
+        let base = replace_tree(1);
+        let cases = [
+            (id(9), id(2), DeadLetterReason::DestinationGone),
+            (id(1), id(9), DeadLetterReason::TargetGone),
+        ];
+        for (dest, target, reason) in cases {
+            let mut working = base.clone();
+            let res = rebase_one(
+                &mut working,
+                &base,
+                &Op::move_node(target, id(0), dest, "target.txt", replacing(1), 1, AT),
+            );
+            assert_eq!(res, OpResolution::DeadLetter(reason));
+            assert_eq!(working, base, "a dead letter changes nothing");
+        }
+    }
+
+    #[test]
+    fn a_move_already_landed_drops_as_satisfied() {
+        let mut base = replace_tree(1);
+        base.remove_node(id(3));
+        base.unlink(id(0), id(2));
+        base.link(id(1), id(2), 2);
+        base.node_mut(id(2)).unwrap().name = "target.txt".into();
+        let local = base.clone();
+
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(id(2), id(0), id(1), "target.txt", replacing(1), 1, AT),
+        );
+        assert_eq!(res, OpResolution::Dropped(DropReason::AlreadySatisfied));
     }
 
     #[test]
