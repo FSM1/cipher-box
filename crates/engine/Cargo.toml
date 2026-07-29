@@ -33,3 +33,6 @@ hex = "0.4"
 # hand-feed the adoption-gate simulation harness (core is already a normal
 # dependency; this line makes it addressable from `tests/`).
 cipherbox-core.workspace = true
+# Same reason: `RecordSeal` takes a zeroizing ephemeral scalar, so a test that
+# stages an op directly needs the type addressable from `tests/`.
+zeroize.workspace = true

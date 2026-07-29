@@ -382,24 +382,33 @@ mod tests {
 
     #[test]
     fn a_body_the_decoder_would_refuse_is_never_sealed() {
-        let dup = ChildRef {
-            id: [7u8; 16],
+        // Release-active (security rule 8): core's `assert_children_unique`
+        // returns `Err` on both halves of the uniqueness invariant, so a folder
+        // rewrite — a create's parent add, a relink's dest-add — can never sign
+        // a listing its own decoder always rejects.
+        let child = |id: u8, ipns_name: &[u8]| ChildRef {
+            id: [id; 16],
             name: "a".into(),
-            ipns_name: b"n".to_vec(),
+            ipns_name: ipns_name.to_vec(),
             kind: NodeKind::File,
             link_counter: 1,
             unknown: Vec::new(),
         };
-        let body = ReadBody::Folder {
+        let folder = |children| ReadBody::Folder {
             created_at: 0,
             modified_at: 0,
-            children: vec![dup.clone(), dup],
+            children,
             unknown: Vec::new(),
         };
-        assert!(matches!(
-            author_child_envelope(authoring(&body, Vec::new())).unwrap_err(),
-            AuthorError::Seal(_)
-        ));
+        for children in [
+            vec![child(7, b"n"), child(7, b"other")],
+            vec![child(7, b"n"), child(8, b"n")],
+        ] {
+            assert!(matches!(
+                author_child_envelope(authoring(&folder(children), Vec::new())).unwrap_err(),
+                AuthorError::Seal(_)
+            ));
+        }
     }
 
     #[test]
