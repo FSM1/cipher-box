@@ -42,10 +42,12 @@ use crate::net::{
     run_liveness_loop,
 };
 use crate::profile::SyncTimingProfile;
+use crate::rotation::derive_write_name;
 use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore, UnixMillis};
 use crate::session::SessionIdentity;
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
+use crate::sync::drain::{Drain, DrainReport, DrainScope};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
 use crate::sync::op::Op;
 use crate::sync::overlay::apply_overlay;
@@ -701,6 +703,9 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
                     "lost CAS race: published {published_sequence}, observed {observed_sequence}"
                 )
             }
+            Ok(Some(PublishOutcome::Unconfirmed { sequence })) => {
+                format!("published sequence {sequence} but it did not resolve back")
+            }
             Err(PublishError::Register(_)) => "register-first publish failed".to_owned(),
             Err(PublishError::AllEndpointsFailed) => "all record endpoints failed".to_owned(),
             Err(PublishError::FloorRead(_)) => "sequence floor read failed".to_owned(),
@@ -713,6 +718,41 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
             routing_key: result.routing_key.clone(),
             detail,
         });
+    }
+}
+
+/// Fold one drain pass's report into the host-visible surface: retain and emit
+/// every dead letter, and emit one [`Event::SnapshotUpdated`] if the pass moved
+/// anything off the queue (the overlay the host renders just shrank). Both sends
+/// are best-effort over the in-process channel — a dropped receiver is fine.
+fn surface_drain_report(
+    events: &mpsc::UnboundedSender<Event>,
+    dead_letters: &RefCell<BTreeMap<OpId, Option<NodeId>>>,
+    report: &DrainReport,
+) {
+    for (op_id, target, _reason) in &report.dead_letters {
+        dead_letters.borrow_mut().insert(*op_id, Some(*target));
+        let _ = events.unbounded_send(Event::DeadLetter { op_id: *op_id });
+    }
+    if !report.is_empty() {
+        let _ = events.unbounded_send(Event::SnapshotUpdated);
+    }
+}
+
+/// Deposit a recovered scope write seed, but only if it derives the very name
+/// the scope root publishes under. A write-capable grantee can commit an
+/// owner-write-blob wrapping a seed of its choosing; holding it would make the
+/// drain mint every new node's `ipnsName` and signer from a key that party also
+/// holds. A seed that cannot name our own root is not our scope's — held
+/// keyless, never a trust verdict.
+fn deposit_write_seed(
+    cell: &RefCell<ScopeWriteSeeds>,
+    scope_id: [u8; 16],
+    seed: Zeroizing<[u8; 32]>,
+    root_name: Option<&IpnsName>,
+) {
+    if root_name.is_some_and(|name| derive_write_name(&seed, &scope_id) == *name) {
+        cell.borrow_mut().insert(scope_id, seed);
     }
 }
 
@@ -746,6 +786,10 @@ struct SyncStatus {
 /// scope read seed (zeroized on removal/drop).
 type ScopeReadSeeds = BTreeMap<[u8; 16], Zeroizing<[u8; 32]>>;
 
+/// The engine's in-memory per-scope write-seed cell: scope id → the recovered
+/// scope write seed (zeroized on removal/drop).
+type ScopeWriteSeeds = BTreeMap<[u8; 16], Zeroizing<[u8; 32]>>;
+
 /// The re-point pointer-payload wire version the owner's own vault seals under
 /// and the cold-start walk verifies against (`crates/core` pointer payload) — the
 /// sole v2 version (CONTEXT.md "Vault pointer").
@@ -760,8 +804,9 @@ const POINTER_PAYLOAD_VERSION: u64 = 1;
 /// compiles to worker-hosted WASM on web.
 pub struct Engine<T: SeamTypes> {
     seams: SeamSet<T>,
-    /// Seeds, nonces, jitter, and command-path node-id minting.
-    entropy: Box<dyn Entropy>,
+    /// Seeds, nonces, jitter, and command-path node-id minting. Shared with the
+    /// spawned drain, which needs a fresh seal nonce per authored record.
+    entropy: Rc<RefCell<Box<dyn Entropy>>>,
     profile: SyncTimingProfile,
     /// The measured storage split this device runs under, injected whole at
     /// construction so no staging read-modify-write queries the host mid-flight.
@@ -799,6 +844,11 @@ pub struct Engine<T: SeamTypes> {
     /// never crossing the facade (security rules 1/3); the child read pipeline
     /// derives per-node read keys from them (`node-seed` → `read-key`).
     scope_read_seeds: Rc<RefCell<ScopeReadSeeds>>,
+    /// Per-scope write seeds recovered by gate-passing adopts (the
+    /// owner-write-blob seed), keyed by scope id. In-memory only, exactly like
+    /// [`scope_read_seeds`](Self::scope_read_seeds); the drain derives each new
+    /// node's `ipnsName` and its narrow per-name signer from them.
+    scope_write_seeds: Rc<RefCell<ScopeWriteSeeds>>,
     /// Retained dead-lettered ops, mapped to the target node when known
     /// (`None` for an undecodable queue entry). Feeds [`SnapshotView`]'s
     /// dead-letter surface (#33 D6: dead letters are retained, never silent).
@@ -834,7 +884,7 @@ impl<T: SeamTypes> Engine<T> {
         (
             Self {
                 seams,
-                entropy,
+                entropy: Rc::new(RefCell::new(entropy)),
                 profile,
                 storage_policy,
                 api_base_url,
@@ -846,6 +896,7 @@ impl<T: SeamTypes> Engine<T> {
                 held_records: Rc::new(RefCell::new(HeldRecords::new())),
                 sync_status: Rc::new(RefCell::new(SyncStatus::default())),
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
+                scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
@@ -878,6 +929,7 @@ impl<T: SeamTypes> Engine<T> {
         T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
         T::SnapshotCache: Clone + 'static,
+        T::StagingStore: Clone + 'static,
     {
         if self.started {
             return Err(EngineError::AlreadyStarted);
@@ -958,7 +1010,6 @@ impl<T: SeamTypes> Engine<T> {
                 .borrow_mut()
                 .insert(root_scope_id, seed);
         }
-
         // The gate-passing base becomes the state law's left operand (reads render
         // this ⊕ the pending-op overlay). The resolved root name — the vault
         // pointer's `currentRoot` — drives the resolve-tick loop; `None` on an
@@ -967,13 +1018,18 @@ impl<T: SeamTypes> Engine<T> {
             .vault_pointer
             .as_ref()
             .map(|vp| vp.repoint.current_root.clone());
+        // The same adopt recovered the scope write seed: the drain derives every
+        // new node's `ipnsName` and its narrow per-name signer from it.
+        if let Some((scope_id, seed)) = outcome.write_scope_seed.take() {
+            deposit_write_seed(&self.scope_write_seeds, scope_id, seed, root_name.as_ref());
+        }
         *self.snapshot.borrow_mut() = outcome.base;
         // A successful cold start is a successful reconcile: stamp it so the
         // ladder starts Fresh rather than Reconciling.
         self.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
 
         self.spawn_liveness_loop(api.clone());
-        self.spawn_resolve_tick_loop(root_name);
+        self.spawn_resolve_tick_loop(root_name, api.clone());
         self.api = Some(api);
         self.started = true;
         Ok(())
@@ -1140,18 +1196,27 @@ impl<T: SeamTypes> Engine<T> {
     /// `root_name` is the vault pointer's resolved `currentRoot`; `None` (an empty
     /// chain) spawns nothing — there is no root to poll until a later start
     /// rediscovers one.
-    fn spawn_resolve_tick_loop(&self, root_name: Option<IpnsName>)
-    where
+    fn spawn_resolve_tick_loop(
+        &self,
+        root_name: Option<IpnsName>,
+        api: Rc<ApiClient<T::Http, T::CredentialStore>>,
+    ) where
         T::Scheduler: Clone + 'static,
         T::RecordTransport: Clone + 'static,
         T::Http: Clone + 'static,
+        T::CredentialStore: Clone + 'static,
         T::FloorStore: Clone + 'static,
         T::SnapshotCache: Clone + 'static,
+        T::StagingStore: Clone + 'static,
     {
         let (Some(root_name), Some(session)) = (root_name, self.session.clone()) else {
             return;
         };
         let scheduler = self.seams.scheduler.clone();
+        let staging = self.seams.staging_store.clone();
+        let entropy = self.entropy.clone();
+        let scope_write_seeds = self.scope_write_seeds.clone();
+        let dead_letters = self.dead_letters.clone();
         let transport = self.seams.record_transport.clone();
         let snapshot_cache = self.seams.snapshot_cache.clone();
         let floors = self.seams.floor_store.clone();
@@ -1209,18 +1274,54 @@ impl<T: SeamTypes> Engine<T> {
                     &material,
                 )
                 .await
-                .map(|(resolved, read_scope_seed)| {
-                    // A gate-passing adopt re-surfaces the scope read seed:
-                    // refresh the in-memory per-scope cell.
-                    if let Some(seed) = read_scope_seed {
+                .map(|held_resolve| {
+                    // A gate-passing adopt re-surfaces the scope seeds: refresh
+                    // the in-memory per-scope cells the child read pipeline and
+                    // the drain derive from.
+                    if let Some(seed) = held_resolve.read_scope_seed {
                         scope_read_seeds.borrow_mut().insert(root_id, seed);
                     }
-                    resolved
+                    if let Some((node_id, seed)) = held_resolve.write_scope_seed {
+                        deposit_write_seed(&scope_write_seeds, node_id, seed, Some(&root_name));
+                    }
+                    held_resolve.resolved
                 });
                 if let Ok(resolved) = &resolved {
                     if refresh_base_from_outcome(&base, NodeId(root_id), &resolved.outcome) {
                         let _ = events.unbounded_send(Event::SnapshotUpdated);
                     }
+                }
+                // The drain rides the same tick: it publishes onto exactly the
+                // gate-passing state this pass just reconciled. Both scope seeds
+                // are required — without them there is no name to publish under
+                // and no key to seal with, so the queue simply waits.
+                let read_seed = scope_read_seeds.borrow().get(&root_id).cloned();
+                let write_seed = scope_write_seeds.borrow().get(&root_id).cloned();
+                if let (Some(read_seed), Some(write_seed)) = (read_seed, write_seed) {
+                    let report = Drain {
+                        transport: &transport,
+                        api: &api,
+                        floors: &floors,
+                        snapshot_cache: &snapshot_cache,
+                        staging: &staging,
+                        scheduler: &scheduler,
+                        http: &http,
+                        gateway: &gateway,
+                        profile: &profile,
+                        entropy: &entropy,
+                        base: &base,
+                        held: &held,
+                    }
+                    .run(&DrainScope {
+                        root: NodeId(root_id),
+                        root_name: &root_name,
+                        read_scope_seed: &read_seed,
+                        write_scope_seed: &write_seed,
+                        enc_secret: session.enc_subkey(),
+                        owner_identity: &owner_identity,
+                    })
+                    .await;
+                    surface_drain_report(&events, &dead_letters, &report);
                 }
                 // `Adopted`/`Current` are the reconciled outcomes: both prove the
                 // record plane answered with gate-passing state, so both stamp
@@ -1264,7 +1365,11 @@ impl<T: SeamTypes> Engine<T> {
     /// law), so an op rebases against the state the host saw. Content sealing,
     /// grants, rotation, and auth land with their own slices and stay
     /// [`EngineError::Unimplemented`].
-    pub async fn command(&mut self, command: Command) -> Result<(), EngineError> {
+    ///
+    /// Returns the durable queue id of the staged op, so a host can correlate a
+    /// later [`Event::DeadLetter`] or [`Event::OpProgress`] back to the call
+    /// that made it; `None` for a command that queues nothing.
+    pub async fn command(&mut self, command: Command) -> Result<Option<OpId>, EngineError> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
@@ -1327,7 +1432,7 @@ impl<T: SeamTypes> Engine<T> {
                 api.siwe_login(&message, &hex_lower(&signature))
                     .await
                     .map_err(EngineError::from_api)?;
-                Ok(())
+                Ok(None)
             }
             other => Err(EngineError::Unimplemented {
                 command: other.name(),
@@ -1648,9 +1753,10 @@ impl<T: SeamTypes> Engine<T> {
     /// Mint a fresh random 16-byte node id from the injected entropy seam
     /// (id16, non-secret; blueprint/core.md). Fails closed on entropy failure —
     /// never a predictable id.
-    fn mint_node_id(&mut self) -> Result<NodeId, EngineError> {
+    fn mint_node_id(&self) -> Result<NodeId, EngineError> {
         let mut id = [0u8; 16];
         self.entropy
+            .borrow_mut()
             .fill(&mut id)
             .map_err(|e| EngineError::Entropy {
                 message: e.message().to_owned(),
@@ -1658,8 +1764,9 @@ impl<T: SeamTypes> Engine<T> {
         Ok(NodeId(id))
     }
 
-    /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success.
-    async fn stage_and_notify(&mut self, op: &Op) -> Result<(), EngineError> {
+    /// Stage a metadata op and emit [`Event::SnapshotUpdated`] on success,
+    /// returning the durable queue id the drain will report the op under.
+    async fn stage_and_notify(&mut self, op: &Op) -> Result<Option<OpId>, EngineError> {
         let seal = self.record_seal()?;
         // Metadata ops queue unbounded, so any rejection here means a content
         // op reached this path — fail closed rather than report a storage
@@ -1674,11 +1781,11 @@ impl<T: SeamTypes> Engine<T> {
         .await
         .map_err(EngineError::from_seam)?
         {
-            StageOutcome::Queued { .. } => {
+            StageOutcome::Queued { op_id } => {
                 // Best-effort push-invalidation trigger; a dropped receiver
                 // (host torn down) is fine.
                 let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-                Ok(())
+                Ok(Some(op_id))
             }
             StageOutcome::RejectedOverBudget { .. }
             | StageOutcome::RejectedStorageUnmeasured { .. } => Err(EngineError::Seam {
@@ -1691,7 +1798,7 @@ impl<T: SeamTypes> Engine<T> {
     /// public half plus a fresh ephemeral scalar. Fails closed on entropy
     /// failure — a reused HPKE ephemeral is a confidentiality break, never a
     /// degraded mode.
-    fn record_seal(&mut self) -> Result<RecordSeal, EngineError> {
+    fn record_seal(&self) -> Result<RecordSeal, EngineError> {
         let owner_enc_pub = self
             .session
             .as_ref()
@@ -1699,6 +1806,7 @@ impl<T: SeamTypes> Engine<T> {
             .enc_subkey_public();
         let mut ephemeral_scalar = Zeroizing::new([0u8; 32]);
         self.entropy
+            .borrow_mut()
             .fill(ephemeral_scalar.as_mut())
             .map_err(|e| EngineError::Entropy {
                 message: e.message().to_owned(),

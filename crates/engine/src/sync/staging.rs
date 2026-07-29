@@ -12,6 +12,7 @@ use cipherbox_core::content::verify_cid;
 
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
 use crate::storage_policy::{Headroom, StoragePolicy};
+use crate::sync::drain::DRAINED_OP_MARK_KEY;
 use crate::sync::op::Op;
 use crate::sync::record::{RecordSeal, encode_op_record, record_content_root_cid};
 
@@ -118,7 +119,9 @@ pub async fn stage_op<S: StagingStore>(
 /// account's staged bytes are counted as referenced rather than collected.
 pub async fn orphan_staging_keys<S: StagingStore>(store: &S) -> SeamResult<Vec<Vec<u8>>> {
     let queued = store.queued_ops().await?;
-    let mut referenced = std::collections::HashSet::new();
+    // The drain's completion mark is queue bookkeeping under a staging key, not
+    // upload residue.
+    let mut referenced = std::collections::HashSet::from([DRAINED_OP_MARK_KEY.to_vec()]);
     for (_, record) in &queued {
         match record_content_root_cid(record) {
             Ok(Some(cid)) => {
@@ -374,6 +377,21 @@ mod tests {
                 orphans.is_empty(),
                 "an unreadable entry forbids classing anything an orphan"
             );
+        });
+    }
+
+    /// Collecting the drain's completion mark would let a restored queue replay
+    /// ops that already published (#860), so it is never orphan residue.
+    #[test]
+    fn the_drained_op_mark_is_never_classed_an_orphan() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            store
+                .put_staged_bytes(DRAINED_OP_MARK_KEY, &7u64.to_be_bytes())
+                .await
+                .unwrap();
+
+            assert!(orphan_staging_keys(&store).await.unwrap().is_empty());
         });
     }
 

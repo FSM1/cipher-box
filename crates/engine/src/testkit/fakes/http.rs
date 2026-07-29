@@ -5,9 +5,18 @@ use std::sync::{Arc, Mutex};
 
 use crate::seams::{Http, HttpRequest, HttpResponse, SeamError, SeamResult};
 
+/// A reply computed from the request it answers.
+type DerivedReply = Box<dyn FnOnce(&HttpRequest) -> SeamResult<HttpResponse> + Send>;
+
+/// A queued reply: either fixed bytes or a reply derived from the request.
+enum Reply {
+    Fixed(SeamResult<HttpResponse>),
+    Derived(DerivedReply),
+}
+
 #[derive(Default)]
 struct Inner {
-    responses: VecDeque<SeamResult<HttpResponse>>,
+    responses: VecDeque<Reply>,
     requests: Vec<HttpRequest>,
 }
 
@@ -23,20 +32,26 @@ pub struct ScriptedHttp {
 impl ScriptedHttp {
     /// Queues a successful response.
     pub fn enqueue_response(&self, response: HttpResponse) {
-        self.inner
-            .lock()
-            .expect("lock")
-            .responses
-            .push_back(Ok(response));
+        self.enqueue(Reply::Fixed(Ok(response)));
     }
 
     /// Queues a transport-level failure.
     pub fn enqueue_error(&self, error: SeamError) {
-        self.inner
-            .lock()
-            .expect("lock")
-            .responses
-            .push_back(Err(error));
+        self.enqueue(Reply::Fixed(Err(error)));
+    }
+
+    /// Queues a reply computed from the request — for an endpoint whose answer
+    /// is a function of what was sent (a content upload echoing the CID of the
+    /// bytes it received, say).
+    pub fn enqueue_derived(
+        &self,
+        reply: impl FnOnce(&HttpRequest) -> SeamResult<HttpResponse> + Send + 'static,
+    ) {
+        self.enqueue(Reply::Derived(Box::new(reply)));
+    }
+
+    fn enqueue(&self, reply: Reply) {
+        self.inner.lock().expect("lock").responses.push_back(reply);
     }
 
     /// Every request sent so far, in order.
@@ -48,11 +63,14 @@ impl ScriptedHttp {
 impl Http for ScriptedHttp {
     async fn send(&self, request: HttpRequest) -> SeamResult<HttpResponse> {
         let mut inner = self.inner.lock().expect("lock");
+        let reply = inner.responses.pop_front();
         inner.requests.push(request);
-        inner
-            .responses
-            .pop_front()
-            .unwrap_or_else(|| Err(SeamError::new("ScriptedHttp: no scripted response left")))
+        let request = inner.requests.last().expect("just pushed");
+        match reply {
+            Some(Reply::Fixed(response)) => response,
+            Some(Reply::Derived(reply)) => reply(request),
+            None => Err(SeamError::new("ScriptedHttp: no scripted response left")),
+        }
     }
 }
 

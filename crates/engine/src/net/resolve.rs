@@ -44,19 +44,34 @@ pub trait Adopter {
     /// `Err(GateError::Seam)` is host I/O.
     async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<AdoptOutcome, GateError>;
 
-    /// Recover the OWNER's own write-scope seed for an equal-floor `Current` own
-    /// record so the liveness loop can hold+renew it (#752 F3). `Ok(None)` when
-    /// not our own / no owner-write-blob / the blob won't open under the durable
-    /// write floor — held keyless, never force-held. Fail-OPEN: returns a
-    /// [`SeamError`], never a `Rejected` verdict (a `Current` must never harden
-    /// into a trust error). The default suits every non-owner adopter stub.
-    async fn recover_own_write_seed(
+    /// Recover the OWNER's own scope material for an equal-floor `Current` own
+    /// record: the read seed the child pipeline and the drain seal under, and
+    /// the write seed the liveness loop renews with (#752 F3). `Ok(None)` when
+    /// the record is not our own or its owner blob will not open. Fail-OPEN:
+    /// returns a [`SeamError`], never a `Rejected` verdict (a `Current` must
+    /// never harden into a trust error). The default suits every non-owner
+    /// adopter stub.
+    async fn recover_own_scope_material(
         &self,
         _name: &IpnsName,
         _record_bytes: &[u8],
-    ) -> Result<Option<([u8; 16], Zeroizing<[u8; 32]>)>, SeamError> {
+    ) -> Result<Option<OwnScopeMaterial>, SeamError> {
         Ok(None)
     }
+}
+
+/// The owner's own-scope seeds, recovered from a record already at the durable
+/// sequence floor. Both come from grant-section structures the gate's stages
+/// 1-3 authenticated before the floor stages ran, so an equal-floor `Current`
+/// has proved them committed; neither is ever persisted.
+pub struct OwnScopeMaterial {
+    /// The scope-root node id the seeds belong to.
+    pub node_id: [u8; 16],
+    /// The scope read seed (the owner blob's override seed).
+    pub read_scope_seed: Zeroizing<[u8; 32]>,
+    /// The scope write seed, `None` when the root is held keyless (no
+    /// owner-write-blob, or it will not open under the durable write floor).
+    pub write_scope_seed: Option<Zeroizing<[u8; 32]>>,
 }
 
 /// A gate pass plus the transient write material a write-capable holder needs to
@@ -204,17 +219,28 @@ where
                 Err(GateError::Rejected(rejection)) => match &rejection.reason {
                     RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {
                         // Our own current root at exactly the floor: recover the
-                        // owner's write seed (fail-open) so the liveness loop can
-                        // hold+renew it before its EOL lapses (#752 F3). A non-owner
-                        // record or an unopenable owner-write-blob yields no hold.
-                        let hold = adopter.recover_own_write_seed(name, &bytes).await?;
+                        // owner's own scope seeds (fail-open) so the liveness loop
+                        // can hold+renew it before its EOL lapses (#752 F3) and the
+                        // write plane keeps the keys it seals under across a
+                        // session that adopts nothing. A non-owner record yields
+                        // neither.
+                        let material = adopter.recover_own_scope_material(name, &bytes).await?;
+                        let (hold, read_scope_seed) = match material {
+                            Some(material) => (
+                                material
+                                    .write_scope_seed
+                                    .map(|seed| (material.node_id, seed)),
+                                Some(material.read_scope_seed),
+                            ),
+                            None => (None, None),
+                        };
                         (
                             ResolveOutcome::Current {
                                 record_bytes: bytes.clone(),
                             },
                             hold,
                             Some(bytes),
-                            None,
+                            read_scope_seed,
                         )
                     }
                     _ => (ResolveOutcome::TrustViolation(rejection), None, None, None),
@@ -254,13 +280,29 @@ pub(crate) struct HeldMaterial {
     pub content_cids: Vec<String>,
 }
 
+/// What [`resolve_and_hold`] produced: the public resolve result plus the
+/// transient scope material a gate-passing adopt recovered. Kept off the public
+/// [`Resolved`] so no seed ever rides the facade-visible surface.
+pub(crate) struct HeldResolve {
+    /// The public resolve result.
+    pub(crate) resolved: Resolved,
+    /// The scope read seed the child read pipeline derives per-node read keys
+    /// from.
+    pub(crate) read_scope_seed: Option<Zeroizing<[u8; 32]>>,
+    /// The (node id, scope write seed) the drain derives new names and per-name
+    /// signers from.
+    pub(crate) write_scope_seed: Option<AdoptHold>,
+}
+
 /// [`resolve`] a name, then hold it for liveness **iff** it passed the gate:
 /// on [`ResolveOutcome::Adopted`], insert (replacing any prior entry for the
 /// same node) a [`HeldRecord`] so the keyless re-PUT loop keeps it alive. Only a
 /// gate-passing record enters the set — a `TrustViolation`/`NoUpdate` never
 /// does (blueprint/engine.md "Liveness": never re-PUT a stale record).
-/// Additionally surfaces the recovered scope read seed (see
-/// [`AdoptOutcome::read_scope_seed`]) for the tick driver's deposit.
+/// Additionally surfaces the scope seeds a gate-passing adopt recovered (see
+/// [`AdoptOutcome::read_scope_seed`]) for the tick driver's deposit — the write
+/// seed among them, because the drain derives every new node's name and signer
+/// from it.
 pub(crate) async fn resolve_and_hold<T, S, A>(
     transport: &T,
     snapshot_cache: &S,
@@ -268,7 +310,7 @@ pub(crate) async fn resolve_and_hold<T, S, A>(
     name: &IpnsName,
     held: &RefCell<HeldRecords>,
     material: &HeldMaterial,
-) -> Result<(Resolved, Option<Zeroizing<[u8; 32]>>), SeamError>
+) -> Result<HeldResolve, SeamError>
 where
     T: RecordTransport,
     S: SnapshotCache,
@@ -280,6 +322,12 @@ where
         held_bytes,
         read_scope_seed,
     } = resolve_gated(transport, snapshot_cache, adopter, name).await?;
+    let write_scope_seed = adopt_hold.clone();
+    let done = |resolved| HeldResolve {
+        resolved,
+        read_scope_seed,
+        write_scope_seed,
+    };
     // A gate-passing adopt (`Adopted`) and our own current record (`Current`)
     // are both alive-worthy and ride their verified bytes back here; a
     // `TrustViolation`/`NoUpdate` holds nothing (blueprint/engine.md "Liveness").
@@ -294,7 +342,7 @@ where
             .ok()
             .and_then(|verified| head_cid_from_value(&verified.value))
         else {
-            return Ok((resolved, read_scope_seed));
+            return Ok(done(resolved));
         };
         // The renewal (node id, write seed) comes from the gate for a write
         // grantee, else from the caller for an own-scope record. No seed on
@@ -306,7 +354,7 @@ where
                 .as_ref()
                 .map(|seed| (material.node_id, seed.clone()))
         }) else {
-            return Ok((resolved, read_scope_seed));
+            return Ok(done(resolved));
         };
         // Derive the narrow per-name signer once from the transient seed and hold
         // only it — the seed drops at this scope's end. Fail-closed encode-side
@@ -315,7 +363,7 @@ where
         // the hold rather than store a mismatched signer.
         let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
         if IpnsName::from_public_key(&signer.verifying_key()) != *name {
-            return Ok((resolved, read_scope_seed));
+            return Ok(done(resolved));
         }
         // Content re-pin on renewal is a deferred slice; the record still
         // republishes validly under its head CID (only re-pinning is deferred).
@@ -330,7 +378,7 @@ where
             },
         );
     }
-    Ok((resolved, read_scope_seed))
+    Ok(done(resolved))
 }
 
 /// Fold a completed resolve's verdict into the shared base cell. A gate-passing
@@ -356,7 +404,9 @@ pub(crate) fn refresh_base_from_outcome(
 
 #[cfg(test)]
 mod tests {
-    use super::{HeldMaterial, ResolveOutcome, head_cid_from_value, resolve_and_hold};
+    use super::{
+        HeldMaterial, OwnScopeMaterial, ResolveOutcome, head_cid_from_value, resolve_and_hold,
+    };
 
     use core::cell::RefCell;
 
@@ -462,14 +512,16 @@ mod tests {
             }
         }
 
-        async fn recover_own_write_seed(
+        async fn recover_own_scope_material(
             &self,
             _name: &IpnsName,
             _record_bytes: &[u8],
-        ) -> Result<Option<([u8; 16], Zeroizing<[u8; 32]>)>, crate::seams::SeamError> {
-            Ok(self
-                .own_seed
-                .map(|(node_id, seed)| (node_id, Zeroizing::new(seed))))
+        ) -> Result<Option<OwnScopeMaterial>, crate::seams::SeamError> {
+            Ok(self.own_seed.map(|(node_id, seed)| OwnScopeMaterial {
+                node_id,
+                read_scope_seed: Zeroizing::new([0u8; 32]),
+                write_scope_seed: Some(Zeroizing::new(seed)),
+            }))
         }
     }
 
@@ -499,7 +551,7 @@ mod tests {
             write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
             content_cids: vec!["bafycontent".into()],
         };
-        let (resolved, _) = block_on(resolve_and_hold(
+        let resolved = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::new(Verdict::Accept),
@@ -507,7 +559,8 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold");
+        .expect("resolve_and_hold")
+        .resolved;
 
         assert!(matches!(resolved.outcome, ResolveOutcome::Adopted(_)));
         let map = held.borrow();
@@ -540,7 +593,7 @@ mod tests {
 
         // A fail-closed trust violation is never held.
         let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
-        let (out, _) = block_on(resolve_and_hold(
+        let out = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::new(Verdict::TrustViolation),
@@ -548,7 +601,8 @@ mod tests {
             &held,
             &material,
         ))
-        .unwrap();
+        .unwrap()
+        .resolved;
         assert!(matches!(out.outcome, ResolveOutcome::TrustViolation(_)));
         assert!(held.borrow().is_empty(), "a trust violation is never held");
     }
@@ -575,7 +629,7 @@ mod tests {
             write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
             content_cids: Vec::new(),
         };
-        let (resolved, _) = block_on(resolve_and_hold(
+        let resolved = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::new(Verdict::EqualSequence),
@@ -583,7 +637,8 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold");
+        .expect("resolve_and_hold")
+        .resolved;
 
         // Our own current record at the floor is `Current`, carrying the verified
         // bytes verbatim (no re-fetch), and is held for the keyless re-PUT.
@@ -638,7 +693,7 @@ mod tests {
             write_scope_seed: None,
             content_cids: Vec::new(),
         };
-        let (resolved, _) = block_on(resolve_and_hold(
+        let resolved = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::own_current(write_scope_seed, node_id),
@@ -646,7 +701,8 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold");
+        .expect("resolve_and_hold")
+        .resolved;
         assert!(matches!(resolved.outcome, ResolveOutcome::Current { .. }));
 
         let hr = held
@@ -719,7 +775,7 @@ mod tests {
             write_scope_seed: None,
             content_cids: Vec::new(),
         };
-        let (resolved, _) = block_on(resolve_and_hold(
+        let resolved = block_on(resolve_and_hold(
             &device.record_store,
             &device.snapshot_cache,
             &StubAdopter::new(Verdict::EqualSequence),
@@ -727,7 +783,8 @@ mod tests {
             &held,
             &material,
         ))
-        .expect("resolve_and_hold");
+        .expect("resolve_and_hold")
+        .resolved;
         assert!(matches!(resolved.outcome, ResolveOutcome::Current { .. }));
         assert!(
             held.borrow().is_empty(),

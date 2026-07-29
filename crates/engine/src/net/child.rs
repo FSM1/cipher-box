@@ -20,7 +20,7 @@ use cipherbox_core::kdf;
 use cipherbox_core::seal::{Envelope, ReadBody, has_grant_section, open_read_body};
 use zeroize::Zeroizing;
 
-use super::adopter::{assemble_head_envelope, reject};
+use super::adopter::{LocalHead, assemble_head_envelope, reject};
 use super::resolve::{AdoptOutcome, Adopter};
 use crate::content::Gateway;
 use crate::gate::{Adopted, GateError, GateStage, floor};
@@ -49,6 +49,8 @@ pub struct ChildAdopter<'a, H, F> {
     /// re-fetching the same head block (mirrors
     /// [`RootAdopter`](super::RootAdopter)).
     assembled: RefCell<Option<AssembledChild>>,
+    /// A head block the caller already holds ([`Self::hold_local_head`]).
+    local_head: RefCell<Option<LocalHead>>,
 }
 
 /// One assembled child head, keyed by the record it came from.
@@ -78,7 +80,15 @@ impl<'a, H, F> ChildAdopter<'a, H, F> {
             scope_read_seed,
             expected_node,
             assembled: RefCell::new(None),
+            local_head: RefCell::new(None),
         }
+    }
+
+    /// Supply a head block the caller already holds, so a self-adopt of our own
+    /// just-published record skips the fetch. The CID the signed record anchors
+    /// still decides: a block that does not match it is ignored.
+    pub fn hold_local_head(&self, head: LocalHead) {
+        *self.local_head.borrow_mut() = Some(head);
     }
 }
 
@@ -91,8 +101,10 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<(u64, Envelope), GateError> {
+        let local = self.local_head.borrow().clone();
         let (sequence, envelope) =
-            assemble_head_envelope(self.gateway, self.http, name, record_bytes).await?;
+            assemble_head_envelope(self.gateway, self.http, name, record_bytes, local.as_ref())
+                .await?;
         // A grant section marks a scope root; granted-subscope reads are a
         // later slice — fail closed, no partial support.
         if has_grant_section(&envelope) {

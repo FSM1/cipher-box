@@ -18,7 +18,7 @@
 
 pub mod chunk;
 pub mod dag;
-mod limits;
+pub(crate) mod limits;
 pub mod profile;
 pub mod provider;
 pub mod read;
@@ -33,8 +33,8 @@ pub use provider::{
     ByoIpfsConfig, ByoKind, PinMode, ProviderError, test_connection, validate_endpoint,
 };
 pub use read::{
-    ContentPlane, Gateway, GatewayConfig, GatewaySource, ReadError, leaf_range_for_byte_range,
-    read_block,
+    ContentPlane, Gateway, GatewayConfig, GatewaySource, ReadError, is_plane_anchor,
+    leaf_range_for_byte_range, read_block,
 };
 pub use retention::{ContentVersion, PrunePlan, QuotaExceeded, plan_prune, pre_flight_quota_check};
 

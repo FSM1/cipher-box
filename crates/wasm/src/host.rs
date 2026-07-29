@@ -18,6 +18,7 @@ use std::rc::Rc;
 
 use async_lock::{Mutex, RwLock};
 use cipherbox_engine::facade::{Engine, EngineError, EventStream, LoginSecret};
+use cipherbox_engine::seams::OpId;
 use cipherbox_engine::{
     Entropy, EntropyError, GatewayConfig, GatewaySource, SeamSet, SeamTypes, StoragePlatform,
     StoragePolicy, SyncTimingProfile,
@@ -212,18 +213,20 @@ impl EngineHandle {
     }
 
     /// Executes one engine command — the single write entry point. Consumes the
-    /// command value. Resolves on success; rejects with the engine error.
+    /// command value. Resolves with the staged op's durable queue id (the same
+    /// `u64` an `opProgress`/`deadLetter` event carries), or `undefined` for a
+    /// command that queues nothing; rejects with the engine error.
     pub fn command(&self, command: Command) -> Promise {
         let engine = self.engine.clone();
         let facade_command = command.into_facade();
         future_to_promise(async move {
-            engine
+            let op_id = engine
                 .write()
                 .await
                 .command(facade_command)
                 .await
                 .map_err(engine_error)?;
-            Ok(JsValue::UNDEFINED)
+            Ok(op_id_value(op_id))
         })
     }
 
@@ -275,6 +278,13 @@ impl EngineHandle {
     }
 }
 
+/// A staged op id as the boundary spells it. Op ids run the whole `u64` range,
+/// so they cross as `bigint` — the same marshalling the `opId` getter on
+/// `opProgress`/`deadLetter` uses, or a client could not correlate the two.
+fn op_id_value(op_id: Option<OpId>) -> JsValue {
+    op_id.map_or(JsValue::UNDEFINED, |op| JsValue::from(op.0))
+}
+
 /// Renders an engine error as a rejection value: a `js_sys::Error` whose
 /// message is the diagnostic `Display` string (no key material — redacted by
 /// construction) and whose `code` property is the stable camelCase variant
@@ -300,4 +310,37 @@ fn engine_error(error: EngineError) -> JsValue {
     // Setting a plain property on a fresh `Error` cannot fail.
     let _ = Reflect::set(&js, &JsValue::from_str("code"), &JsValue::from_str(code));
     js.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use js_sys::BigInt;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    /// `command()` resolves with the id an `opProgress`/`deadLetter` event
+    /// later carries, so both must cross as the same JS type — an f64 `number`
+    /// would neither compare equal to the event's `bigint` nor survive an id
+    /// past 2^53.
+    #[wasm_bindgen_test]
+    fn a_staged_op_id_crosses_as_a_bigint() {
+        let value = op_id_value(Some(OpId(u64::MAX)));
+
+        assert_eq!(value.js_typeof(), JsValue::from_str("bigint"));
+        assert_eq!(
+            String::from(
+                value
+                    .unchecked_into::<BigInt>()
+                    .to_string(10)
+                    .expect("bigint renders in base 10")
+            ),
+            u64::MAX.to_string(),
+        );
+    }
+
+    /// A command that queues nothing resolves `undefined`, never `0n`.
+    #[wasm_bindgen_test]
+    fn a_command_that_queues_nothing_crosses_as_undefined() {
+        assert!(op_id_value(None).is_undefined());
+    }
 }

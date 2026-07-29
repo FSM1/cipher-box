@@ -200,7 +200,7 @@ where
     // Republish the same content at seq+1 (floor + 1) with a fresh EOL.
     publish(transport, api, floors, scheduler, profile, request)
         .await
-        .map(Some)
+        .map(|receipt| Some(receipt.outcome))
 }
 
 /// One held record's sub-EOL renewal outcome.

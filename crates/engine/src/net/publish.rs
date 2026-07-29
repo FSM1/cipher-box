@@ -79,6 +79,18 @@ pub enum PublishOutcome {
         /// The sequence embedded in the published record.
         sequence: u64,
     },
+    /// The PUT was acknowledged but confirm-by-re-resolve did not read **our**
+    /// bytes back at our sequence: nothing resolvable, a stale lower sequence,
+    /// or different bytes at the same sequence (a fork from a retry that
+    /// re-authored after an earlier unconfirmed PUT). Availability, never a
+    /// trust verdict.
+    /// Retrying is idempotent-in-sequence — the caller must not adopt these
+    /// bytes, so the sequence floor stays put and a re-publish re-mints the
+    /// same sequence.
+    Unconfirmed {
+        /// The sequence embedded in the published record.
+        sequence: u64,
+    },
     /// A concurrent writer's record at a strictly higher sequence was observed
     /// on the confirm re-resolve: a lost CAS race. The caller re-resolves and
     /// rebases (rebase is a later slice; this slice only reports the race).
@@ -88,6 +100,17 @@ pub enum PublishOutcome {
         /// The higher sequence a concurrent writer landed first.
         observed_sequence: u64,
     },
+}
+
+/// A completed publish: the outcome plus the signed record bytes that were PUT,
+/// so a caller can feed its own record back through the adoption gate without a
+/// re-fetch (the write path's self-adopt).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublishReceipt {
+    /// The confirm-by-re-resolve verdict.
+    pub outcome: PublishOutcome,
+    /// The signed record bytes this publish PUT.
+    pub record_bytes: Vec<u8>,
 }
 
 /// A fail-closed publish failure.
@@ -119,7 +142,7 @@ pub async fn publish<T, H, C, F, Sch>(
     scheduler: &Sch,
     profile: &SyncTimingProfile,
     request: &PublishRequest<'_>,
-) -> Result<PublishOutcome, PublishError>
+) -> Result<PublishReceipt, PublishError>
 where
     T: RecordTransport + Clone + 'static,
     H: Http,
@@ -179,16 +202,33 @@ where
     }
 
     // Confirm by re-resolve: a strictly higher record means a concurrent writer
-    // won the CAS race; anything else confirms our record landed.
+    // won the CAS race; observing nothing at all confirms nothing, so it must
+    // not report success (that arm is how an acked-but-unresolvable publish used
+    // to pass for `Published`).
     let observed = fanout_get_verify(transport, request.name).await;
     let outcome = match observed {
+        // `fanout_get_verify` reports the freshest record across the endpoint
+        // set. Only our own bytes prove a readable endpoint holds *our* record:
+        // a different record at the same sequence is a fork — a retry that
+        // re-authored after an unconfirmed PUT — and adopting it would advance
+        // the floor past bytes the network may never serve.
+        Some((observed_sequence, bytes)) if observed_sequence == sequence => {
+            if bytes == record_bytes {
+                PublishOutcome::Published { sequence }
+            } else {
+                PublishOutcome::Unconfirmed { sequence }
+            }
+        }
         Some((observed_sequence, _)) if observed_sequence > sequence => PublishOutcome::LostRace {
             published_sequence: sequence,
             observed_sequence,
         },
-        _ => PublishOutcome::Published { sequence },
+        _ => PublishOutcome::Unconfirmed { sequence },
     };
-    Ok(outcome)
+    Ok(PublishReceipt {
+        outcome,
+        record_bytes,
+    })
 }
 
 /// Spawn the background re-PUT for endpoints that missed the first ack: sleep a

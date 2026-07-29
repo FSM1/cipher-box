@@ -33,6 +33,7 @@
 //! primitives themselves land with the rotation slice.
 
 pub mod boot;
+pub(crate) mod drain;
 pub mod model;
 pub mod op;
 pub mod overlay;
@@ -45,6 +46,7 @@ pub mod staleness;
 pub mod tick;
 
 pub use boot::{ColdStartError, ColdStartOutcome, ColdStartParams, RootResolve, cold_start};
+pub use drain::DRAINED_OP_MARK_KEY;
 pub use model::{Link, NodeMeta, Snapshot, collation_key, suffix_name};
 pub use op::{Op, OpDecodeError, OpKind, StagedContent};
 pub use overlay::apply_overlay;

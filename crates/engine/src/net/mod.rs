@@ -32,14 +32,17 @@ mod child;
 mod fanout;
 mod pointer_fetch;
 
+pub mod author;
 pub mod eol;
 pub mod liveness;
 pub mod publish;
+pub mod record_publish;
 pub mod resolve;
 pub mod retire;
 pub mod revival;
 
-pub use adopter::RootAdopter;
+pub(crate) use adopter::assemble_head_envelope;
+pub use adopter::{LocalHead, RootAdopter};
 pub use child::ChildAdopter;
 pub(crate) use liveness::eol_renew_pass;
 pub use liveness::{
@@ -47,8 +50,8 @@ pub use liveness::{
     eol_republish, keyless_re_put, run_liveness_loop,
 };
 pub use pointer_fetch::RecordPointerFetch;
-pub use publish::{PublishError, PublishOutcome, PublishRequest, publish};
-pub use resolve::{AdoptOutcome, Adopter, ResolveOutcome, Resolved, resolve};
+pub use publish::{PublishError, PublishOutcome, PublishReceipt, PublishRequest, publish};
+pub use resolve::{AdoptOutcome, Adopter, OwnScopeMaterial, ResolveOutcome, Resolved, resolve};
 pub(crate) use resolve::{
     GatedResolve, HeldMaterial, refresh_base_from_outcome, resolve_and_hold, resolve_gated,
 };
