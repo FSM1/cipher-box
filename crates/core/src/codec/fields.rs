@@ -217,19 +217,34 @@ mod tests {
 
     /// AGENTS.md rule 8: the merged encoder's `depth-exceeded` reject is
     /// release-active, and now fires from the sizing pass — before a byte is
-    /// allocated for the output.
+    /// allocated for the output. The deep value sits behind two preserved
+    /// unknowns, so its reported offset only matches the equivalent full-map
+    /// encode's if the sizing pass counted in emit order.
     #[test]
     fn merged_encode_rejects_past_max_depth() {
+        fn depth_offset(err: &CodecError) -> usize {
+            match err {
+                CodecError::Malformed(Malformed::DepthExceeded { offset }) => *offset,
+                other => panic!("expected depth-exceeded, got {}", other.check()),
+            }
+        }
+
         let original = encode(&Value::Map(sample_map())).unwrap();
         let (mut known, unknown) =
-            decode_map_partial(&original, known_key_set(&["v", "id"])).unwrap();
+            decode_map_partial(&original, known_key_set(&["v", "zz-later"])).unwrap();
         let mut deep = Value::Null;
         for _ in 0..crate::codec::MAX_DEPTH {
             deep = Value::Array(vec![deep]);
         }
-        known.insert("v", deep);
-        let err = encode_map_partial(&known, &unknown).unwrap_err();
-        assert_eq!(err.check(), "depth-exceeded");
+        known.insert("zz-later", deep.clone());
+        let mut full = sample_map();
+        full.insert("zz-later", deep);
+
+        assert_eq!(
+            depth_offset(&encode_map_partial(&known, &unknown).unwrap_err()),
+            depth_offset(&encode(&Value::Map(full)).unwrap_err()),
+            "merged reject offset diverged from the full-map encode"
+        );
     }
 
     #[test]
