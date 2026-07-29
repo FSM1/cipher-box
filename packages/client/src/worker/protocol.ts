@@ -47,9 +47,6 @@ export type DeadLetterReason =
   | 'payloadRefused'
   | 'attemptsExhausted';
 
-/** Which budget refused a write (mirrors the facade `OverBudgetCause`). */
-export type OverBudgetCause = 'deviceStaging' | 'accountQuota';
-
 /** One retained dead-lettered op, as data. */
 export interface DeadLetterDescriptor {
   opId: bigint;
@@ -60,7 +57,6 @@ export interface DeadLetterDescriptor {
 export interface BlockedOpDescriptor {
   opId: bigint;
   node: Uint8Array;
-  cause: OverBudgetCause;
   neededBytes: bigint;
 }
 

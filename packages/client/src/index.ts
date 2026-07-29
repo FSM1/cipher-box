@@ -41,7 +41,6 @@ export type {
   Staleness,
   OpProgressPhase,
   DeadLetterReason,
-  OverBudgetCause,
   DeadLetterDescriptor,
   BlockedOpDescriptor,
   SnapshotDescriptor,

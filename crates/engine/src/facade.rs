@@ -53,8 +53,6 @@ use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
 use crate::sync::rebase::{QueueScan, decode_queue};
 
-// Both ride the facade's own read and event surfaces, so they are part of its
-// contract as much as of the sync core's.
 pub use crate::sync::drain::BlockedOp;
 pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
@@ -546,8 +544,9 @@ pub enum EngineError {
         command: &'static str,
     },
     /// A write was refused for want of room. The cause names which budget, so a
-    /// host can say "your device is full" or "your account is full" rather than
-    /// collapsing both into one message.
+    /// host can distinguish a full device from a full account — on desktop,
+    /// `ENOSPC` from `EDQUOT`. Produced by the content plane, the only caller
+    /// that stages upload bytes (#868).
     OverBudget {
         /// Which budget refused it.
         cause: OverBudgetCause,
@@ -675,6 +674,11 @@ impl EventStream {
     /// Waits for the next event; `None` once the engine is gone.
     pub async fn next(&mut self) -> Option<Event> {
         core::future::poll_fn(|cx| Pin::new(&mut self.receiver).poll_next(cx)).await
+    }
+
+    /// The next buffered event without waiting; `None` when none is ready.
+    pub fn try_next(&mut self) -> Option<Event> {
+        self.receiver.try_recv().ok()
     }
 }
 
@@ -1830,6 +1834,9 @@ impl<T: SeamTypes> Engine<T> {
     /// returning the durable queue id the drain will report the op under.
     async fn stage_and_notify(&mut self, op: &Op) -> Result<Option<OpId>, EngineError> {
         let seal = self.record_seal()?;
+        // Metadata ops queue unbounded, so any rejection here means a content
+        // op reached this path — fail closed rather than report a storage
+        // verdict for a mutation that carries no bytes.
         match stage_op(
             &self.seams.staging_store,
             &self.storage_policy,
@@ -1846,13 +1853,9 @@ impl<T: SeamTypes> Engine<T> {
                 let _ = self.events.unbounded_send(Event::SnapshotUpdated);
                 Ok(Some(op_id))
             }
-            StageOutcome::RejectedOverBudget { .. } => Err(EngineError::OverBudget {
-                cause: OverBudgetCause::DeviceStaging,
-            }),
-            // Not a full device: nothing is known about this one's storage, so
-            // it is refused rather than reported over budget (#829).
-            StageOutcome::RejectedStorageUnmeasured { .. } => Err(EngineError::Seam {
-                message: "device storage headroom is unmeasurable".to_owned(),
+            StageOutcome::RejectedOverBudget { .. }
+            | StageOutcome::RejectedStorageUnmeasured { .. } => Err(EngineError::Seam {
+                message: "metadata op unexpectedly rejected by the storage policy".to_owned(),
             }),
         }
     }
@@ -2218,7 +2221,7 @@ mod tests {
     /// Every event currently buffered on the stream, without blocking.
     fn drain(events: &mut EventStream) -> Vec<Event> {
         let mut out = Vec::new();
-        while let Ok(event) = events.receiver.try_recv() {
+        while let Some(event) = events.try_next() {
             out.push(event);
         }
         out

@@ -5,8 +5,6 @@
 //!
 //! Later write-plane slices extend this file rather than starting their own.
 
-use core::future::Future;
-use core::pin::pin;
 use core::task::{Context, Poll, Waker};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -19,6 +17,7 @@ use cipherbox_core::seal::{
     ChildRef, NodeKind as CoreNodeKind, ReadBody, decode_envelope, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 use zeroize::Zeroizing;
 
 use cipherbox_engine::content::{DAG_ROOT_CODEC, GatewaySource};
@@ -38,7 +37,7 @@ use cipherbox_engine::testkit::{
 };
 use cipherbox_engine::{
     Command, DeadLetter, DeadLetterReason, Engine, Event, EventStream, GatewayConfig, LoginSecret,
-    NodeId, NodeKind, Op, OverBudgetCause, RecordSeal, StoragePolicy, SyncTimingProfile, stage_op,
+    NodeId, NodeKind, Op, RecordSeal, StoragePolicy, SyncTimingProfile, stage_op,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -66,19 +65,29 @@ fn owner_identity() -> EcdsaSigner {
 type UploadHook = Box<dyn FnMut(&[u8]) -> Option<SeamResult<HttpResponse>> + Send>;
 
 /// The pin store is unreachable: a transport failure carrying no server verdict.
-fn unreachable_upload() -> Option<SeamResult<HttpResponse>> {
-    Some(Err(SeamError::new("upload refused")))
+fn unreachable_upload() -> SeamResult<HttpResponse> {
+    Err(SeamError::new("upload refused"))
 }
 
 /// A server 413, optionally carrying the `code` discriminator that tells the
 /// account-quota gate apart from the transport cap (#848).
-fn upload_413(code: Option<&str>) -> Option<SeamResult<HttpResponse>> {
+fn upload_413(code: Option<&str>) -> SeamResult<HttpResponse> {
     let code = code.map_or(String::new(), |code| format!(",\"code\":\"{code}\""));
-    Some(Ok(HttpResponse {
+    Ok(HttpResponse {
         status: 413,
         headers: Vec::new(),
         body: format!("{{\"statusCode\":413,\"message\":\"too large\"{code}}}").into_bytes(),
-    }))
+    })
+}
+
+/// A 413 from an intermediary that never reached the API: an HTML body, so no
+/// error envelope parses out of it at all.
+fn proxy_413() -> SeamResult<HttpResponse> {
+    Ok(HttpResponse {
+        status: 413,
+        headers: Vec::new(),
+        body: b"<html><body>413 Request Entity Too Large</body></html>".to_vec(),
+    })
 }
 
 #[derive(Clone, Default)]
@@ -303,9 +312,12 @@ fn boot(
 
 /// A node's write-plane IPNS name (`writeSeed(writeScopeSeed, id)` → keypair).
 fn write_name(node: NodeId) -> IpnsName {
-    IpnsName::from_public_key(
-        &kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes()).verifying_key(),
-    )
+    IpnsName::from_public_key(&write_signer(node).verifying_key())
+}
+
+/// A node's write-plane signer, from the same edge the name comes off.
+fn write_signer(node: NodeId) -> Ed25519Signer {
+    kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes())
 }
 
 /// A node's per-node read key (`nodeSeed(readScopeSeed, id)` → `readKey`).
@@ -1067,7 +1079,7 @@ fn a_source_remove_that_cannot_publish_undoes_its_own_dest_add() {
 
     // The root's own head upload is refused, so the source-remove cannot land.
     blocks.refuse_upload(Box::new(|block| {
-        (head_of(block) == Some(ROOT.0)).then(unreachable_upload)?
+        (head_of(block) == Some(ROOT.0)).then(unreachable_upload)
     }));
     block_on(engine.command(Command::Relink {
         node: moved,
@@ -1117,7 +1129,7 @@ fn a_concurrent_dest_writer_is_re_derived_onto_never_clobbered() {
         }
         // The instant our source-remove fails, another writer advances the dest.
         concurrent_add(&records, &plane, photos, winner.clone());
-        unreachable_upload()
+        Some(unreachable_upload())
     }));
     block_on(engine.command(Command::Relink {
         node: moved,
@@ -1171,7 +1183,7 @@ fn a_concurrent_writer_at_the_root_dest_is_re_derived_onto_never_clobbered() {
             return None;
         }
         concurrent_root_add(&records, &plane, winner.clone());
-        unreachable_upload()
+        Some(unreachable_upload())
     }));
     block_on(engine.command(Command::Relink {
         node: moved,
@@ -1410,7 +1422,7 @@ fn an_over_quota_413_holds_the_head_and_a_quota_probe_with_room_resumes_it() {
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
 
-    blocks.refuse_upload(Box::new(|_| upload_413(Some("QUOTA_EXCEEDED"))));
+    blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("QUOTA_EXCEEDED")))));
     blocks.set_quota(1_000, 1_000);
     let held = create(&mut engine, "photos");
     let photos = child_id(&engine, ROOT, "photos");
@@ -1423,7 +1435,6 @@ fn an_over_quota_413_holds_the_head_and_a_quota_probe_with_room_resumes_it() {
     let blocked = view.blocked.expect("the over-quota head is held");
     assert_eq!(blocked.op_id, held);
     assert_eq!(blocked.node, photos);
-    assert_eq!(blocked.cause, OverBudgetCause::AccountQuota);
     assert!(
         blocked.needed_bytes > 0,
         "the hold records what the refused upload asked for"
@@ -1468,21 +1479,21 @@ fn an_over_quota_413_holds_the_head_and_a_quota_probe_with_room_resumes_it() {
 }
 
 #[test]
-fn a_413_with_no_code_is_permanent_and_its_reason_reaches_the_host() {
+fn an_over_cap_413_is_permanent_and_its_reason_reaches_the_host() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
     let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
 
-    blocks.refuse_upload(Box::new(|_| upload_413(None)));
+    blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("UPLOAD_TOO_LARGE")))));
     let op_id = create(&mut engine, "photos");
     tick(&world, &engine, &mut tasks);
 
     let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
     assert!(
         view.blocked.is_none(),
-        "an unclassified 413 is not positive evidence of a full account"
+        "the transport cap is not the account-quota gate"
     );
     assert_eq!(
         view.dead_letters,
@@ -1505,6 +1516,40 @@ fn a_413_with_no_code_is_permanent_and_its_reason_reaches_the_host() {
             .is_empty(),
         "a permanently refused op does not wedge the queue"
     );
+}
+
+/// A 413 the API did not stamp did not come from a gate that inspected these
+/// bytes — a proxy body cap answers exactly that — so it is evidence for
+/// neither verdict and must not abandon the op on one response.
+#[test]
+fn a_413_the_api_did_not_stamp_neither_blocks_nor_abandons_the_op() {
+    for refusal in [upload_413(None), proxy_413()] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let alice = world.device(b"alice");
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+        blocks.refuse_upload(Box::new(move |_| Some(refusal.clone())));
+        create(&mut engine, "photos");
+        tick(&world, &engine, &mut tasks);
+
+        let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+        assert!(
+            view.blocked.is_none(),
+            "no positive quota evidence, no hold"
+        );
+        assert!(
+            view.dead_letters.is_empty(),
+            "one unattributable response must not destroy queued work"
+        );
+        assert_eq!(
+            block_on(alice.staging_store.queued_ops()).unwrap().len(),
+            1,
+            "the op keeps its place and is retried"
+        );
+        assert!(retire_targets(&alice).is_empty());
+    }
 }
 
 #[test]
@@ -1539,8 +1584,6 @@ fn a_publish_that_never_confirms_dead_letters_once_its_attempt_budget_runs_out()
             reason: DeadLetterReason::AttemptsExhausted
         }]
     );
-    // The record may well be live at the name we signed it under, so this is
-    // the one abandonment that must not retire.
     assert!(
         retire_targets(&alice).is_empty(),
         "an unconfirmed publish is never retired out from under itself"
@@ -1555,26 +1598,17 @@ fn an_abandoned_create_retires_the_child_name_it_registered_exactly_once() {
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
 
+    blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("UPLOAD_TOO_LARGE")))));
     create(&mut engine, "photos");
     let photos = child_id(&engine, ROOT, "photos");
-    // One attempt that registers the child name and then fails to confirm.
-    jam_name(&world.record_store, photos);
-    tick(&world, &engine, &mut tasks);
-    assert!(
-        retire_targets(&alice).is_empty(),
-        "a queued op that will be retried retires nothing"
-    );
-
-    // The same op is now permanently refused, so its registered name must leave
-    // the inventory with it.
-    world
-        .record_store
-        .heal_put_endpoint(&world.record_store.endpoints()[1]);
-    blocks.refuse_upload(Box::new(|_| upload_413(None)));
     tick(&world, &engine, &mut tasks);
 
     let retired = retire_targets(&alice);
-    assert_eq!(retired, vec![write_name(photos).as_str().to_owned()]);
+    assert_eq!(
+        retired,
+        vec![write_name(photos).as_str().to_owned()],
+        "an abandoned create's child name leaves the republish inventory with it"
+    );
 
     tick(&world, &engine, &mut tasks);
     assert_eq!(
@@ -1584,18 +1618,63 @@ fn an_abandoned_create_retires_the_child_name_it_registered_exactly_once() {
     );
 }
 
+#[test]
+fn a_create_the_rebase_drops_as_already_satisfied_is_never_retired() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    create(&mut engine, "photos");
+    let photos = child_id(&engine, ROOT, "photos");
+    // One charged attempt, so by the retire record's reckoning this op has
+    // reached the network.
+    jam_name(&world.record_store, photos);
+    tick(&world, &engine, &mut tasks);
+
+    // The create then turns out to have landed: the root the network serves
+    // names the child, so the rebase drops the op as already satisfied.
+    world
+        .record_store
+        .heal_put_endpoint(&world.record_store.endpoints()[1]);
+    concurrent_root_add(
+        &world.record_store,
+        &blocks,
+        child_ref(photos.0, "photos", CoreNodeKind::Folder),
+    );
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        block_on(engine.view())
+            .unwrap()
+            .children(ROOT)
+            .iter()
+            .any(|child| child.id == photos),
+        "the create landed and the root names it"
+    );
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "retiring a landed create's name would cut a record its parent references"
+    );
+}
+
 // ---------------------------------------------------------------------------
 
-/// A file child ref under this account's write-name edge.
-fn file_ref(id: [u8; 16], name: &str) -> ChildRef {
+/// A child ref under this account's write-name edge.
+fn child_ref(id: [u8; 16], name: &str, kind: CoreNodeKind) -> ChildRef {
     ChildRef {
         id,
         name: name.into(),
         ipns_name: write_name(NodeId(id)).as_str().as_bytes().to_vec(),
-        kind: CoreNodeKind::File,
+        kind,
         link_counter: 1,
         unknown: Vec::new(),
     }
+}
+
+fn file_ref(id: [u8; 16], name: &str) -> ChildRef {
+    child_ref(id, name, CoreNodeKind::File)
 }
 
 /// A root holding an empty `photos` folder and a file `a.txt`, both published.
@@ -1637,12 +1716,10 @@ fn create(engine: &mut Engine<FakeSeamTypes>, name: &str) -> OpId {
     .expect("a create queues an op")
 }
 
-/// Every event the engine has emitted and not yet been read, without blocking
-/// on an empty stream.
+/// Every event the engine has emitted and not yet been read.
 fn events_so_far(events: &mut EventStream) -> Vec<Event> {
-    let mut cx = Context::from_waker(Waker::noop());
     let mut out = Vec::new();
-    while let Poll::Ready(Some(event)) = pin!(events.next()).poll(&mut cx) {
+    while let Some(event) = events.try_next() {
         out.push(event);
     }
     out
@@ -1675,9 +1752,8 @@ fn retire_targets(device: &FakeDevice) -> Vec<String> {
 /// the CAS race on the confirm re-resolve, indefinitely.
 fn jam_name(records: &InMemoryRecordStore, node: NodeId) {
     let endpoint = records.endpoints()[1].clone();
-    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &node.0).as_bytes());
     let record = IpnsRecord::create_v2(
-        &signer,
+        &write_signer(node),
         b"/ipfs/bafkreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         1_000,
         TTL_NANOS,
@@ -1720,9 +1796,8 @@ fn concurrent_root_add(records: &InMemoryRecordStore, blocks: &Blocks, extra: Ch
         owner_write_blob_epoch: Some(EPOCH),
     });
     blocks.put(fixture.head_block.clone());
-    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
     let record = IpnsRecord::create_v2(
-        &signer,
+        &write_signer(ROOT),
         format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
         sequence + 1,
         TTL_NANOS,
@@ -1771,9 +1846,8 @@ fn concurrent_add(records: &InMemoryRecordStore, blocks: &Blocks, folder: NodeId
     .expect("the concurrent writer authors a valid record");
     blocks.put(head.block.clone());
 
-    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &folder.0).as_bytes());
     let record = IpnsRecord::create_v2(
-        &signer,
+        &write_signer(folder),
         format!("/ipfs/{}", head.cid).as_bytes(),
         sequence + 1,
         TTL_NANOS,

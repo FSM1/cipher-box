@@ -44,7 +44,8 @@ pub mod testkit;
 
 pub use api::{
     ApiClient, ApiError, ChallengeSigner, IdentityChallengeSigner, LoginOutcome, MailboxItem,
-    NameRegistration, QUOTA_EXCEEDED, Quota, SiweNonce, TestLoginOutcome, UploadResult,
+    NameRegistration, QUOTA_EXCEEDED, Quota, SiweNonce, TestLoginOutcome, UPLOAD_TOO_LARGE,
+    UploadResult,
 };
 pub use content::{
     ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,

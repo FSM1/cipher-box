@@ -14,7 +14,6 @@ import type {
   EventDescriptor,
   NodeKind,
   OpProgressPhase,
-  OverBudgetCause,
   PendingClass,
   Permission,
   SnapshotDescriptor,
@@ -172,27 +171,11 @@ function deadLetterReason(wasm: EngineWasm, reason: number | undefined): DeadLet
   }
 }
 
-function overBudgetCause(wasm: EngineWasm, cause: number): OverBudgetCause {
-  switch (cause) {
-    case wasm.OverBudgetCause.DeviceStaging:
-      return 'deviceStaging';
-    case wasm.OverBudgetCause.AccountQuota:
-      return 'accountQuota';
-    default:
-      // Fail closed: an unmapped value means a JS/WASM version mismatch.
-      throw new Error(`unknown WASM over budget cause value: ${cause}`);
-  }
-}
-
-function blockedHold(
-  wasm: EngineWasm,
-  blocked: WasmBlockedOp | undefined
-): BlockedOpDescriptor | null {
+function blockedHold(blocked: WasmBlockedOp | undefined): BlockedOpDescriptor | null {
   if (blocked === undefined) return null;
   return {
     opId: blocked.opId,
     node: blocked.node,
-    cause: overBudgetCause(wasm, blocked.cause),
     neededBytes: blocked.neededBytes,
   };
 }
@@ -269,7 +252,7 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
       opId: dead.opId,
       reason: deadLetterReason(wasm, dead.reason),
     })),
-    blocked: blockedHold(wasm, view.blocked),
+    blocked: blockedHold(view.blocked),
     retainedRecords: view.retainedRecords,
     staleness: staleness(wasm, view.staleness),
   };

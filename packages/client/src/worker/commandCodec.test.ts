@@ -132,7 +132,6 @@ describe('readSnapshot', () => {
       blocked: {
         opId: 12n,
         node: new Uint8Array(16).fill(6),
-        cause: 1,
         neededBytes: 9_007_199_254_740_993n,
       },
       retainedRecords: 2,
@@ -182,7 +181,6 @@ describe('readSnapshot', () => {
       blocked: {
         opId: 12n,
         node: new Uint8Array(16).fill(6),
-        cause: 'accountQuota',
         neededBytes: 9_007_199_254_740_993n,
       },
       retainedRecords: 2,
@@ -194,16 +192,10 @@ describe('readSnapshot', () => {
     expect(readSnapshot(fakeWasm, baseView()).blocked).toBeNull();
   });
 
-  it('fails closed on an unknown dead letter reason or over-budget cause', () => {
+  it('fails closed on an unknown dead letter reason', () => {
     expect(() =>
       readSnapshot(fakeWasm, { ...baseView(), deadLetters: [{ opId: 1n, reason: 42 }] })
     ).toThrow('unknown WASM dead letter reason value: 42');
-    expect(() =>
-      readSnapshot(fakeWasm, {
-        ...baseView(),
-        blocked: { opId: 1n, node: new Uint8Array(16), cause: 42, neededBytes: 1n },
-      })
-    ).toThrow('unknown WASM over budget cause value: 42');
   });
 
   it('fails closed on an unknown child kind, pending class or staleness value', () => {

@@ -4,9 +4,13 @@ use core::fmt;
 
 use crate::seams::SeamError;
 
-/// The 413 `code` for the account-quota gate, as opposed to the transport cap
-/// that shares the status (blueprint/api.md; the API stamps both).
+/// The 413 `code` for the account-quota gate. Transient: it clears when the
+/// account frees space (blueprint/api.md).
 pub const QUOTA_EXCEEDED: &str = "QUOTA_EXCEEDED";
+
+/// The 413 `code` for the transport cap, which shares the status. Permanent for
+/// the request: the same bytes are refused on every retry.
+pub const UPLOAD_TOO_LARGE: &str = "UPLOAD_TOO_LARGE";
 
 /// A failure of an API call.
 ///

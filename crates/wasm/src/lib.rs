@@ -207,25 +207,6 @@ impl From<facade::DeadLetterReason> for DeadLetterReason {
     }
 }
 
-/// Which budget refused a write: a full device is not a full account.
-#[wasm_bindgen]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OverBudgetCause {
-    /// This device's offline staging budget is exhausted.
-    DeviceStaging,
-    /// The account's hosted storage quota refused the bytes.
-    AccountQuota,
-}
-
-impl From<facade::OverBudgetCause> for OverBudgetCause {
-    fn from(cause: facade::OverBudgetCause) -> Self {
-        match cause {
-            facade::OverBudgetCause::DeviceStaging => OverBudgetCause::DeviceStaging,
-            facade::OverBudgetCause::AccountQuota => OverBudgetCause::AccountQuota,
-        }
-    }
-}
-
 /// The phase an `opProgress` event reports.
 #[wasm_bindgen]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -390,12 +371,6 @@ impl BlockedOp {
         self.inner.node.0.to_vec()
     }
 
-    /// Which budget refused it.
-    #[wasm_bindgen(getter)]
-    pub fn cause(&self) -> OverBudgetCause {
-        self.inner.cause.into()
-    }
-
     /// The byte count the resume probe must find room for.
     #[wasm_bindgen(getter, js_name = neededBytes)]
     pub fn needed_bytes(&self) -> u64 {
@@ -457,8 +432,7 @@ impl SnapshotView {
             .collect()
     }
 
-    /// The drain's over-quota hold, or `undefined`. Read here rather than as an
-    /// event: a lost "resumed" would strand the host on a blockage that is gone.
+    /// The drain's over-quota hold, or `undefined`.
     #[wasm_bindgen(getter)]
     pub fn blocked(&self) -> Option<BlockedOp> {
         self.inner.blocked.map(|inner| BlockedOp { inner })
@@ -967,7 +941,6 @@ mod tests {
             blocked: Some(facade::BlockedOp {
                 op_id: OpId(12),
                 node: facade::NodeId([5u8; 16]),
-                cause: facade::OverBudgetCause::AccountQuota,
                 needed_bytes: 4096,
             }),
             retained_records: 3,
@@ -990,7 +963,6 @@ mod tests {
         let blocked = view.blocked().expect("the view carries the hold");
         assert_eq!(blocked.op_id(), 12);
         assert_eq!(blocked.node(), vec![5u8; 16]);
-        assert_eq!(blocked.cause(), OverBudgetCause::AccountQuota);
         assert_eq!(blocked.needed_bytes(), 4096);
         assert_eq!(view.retained_records(), 3);
         assert_eq!(view.staleness(), Staleness::Reconciling);

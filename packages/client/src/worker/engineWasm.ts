@@ -60,7 +60,6 @@ export interface WasmDeadLetter {
 export interface WasmBlockedOp {
   readonly opId: bigint;
   readonly node: Uint8Array;
-  readonly cause: number;
   readonly neededBytes: bigint;
 }
 
@@ -145,9 +144,5 @@ export interface EngineWasm {
     readonly Undecodable: number;
     readonly PayloadRefused: number;
     readonly AttemptsExhausted: number;
-  };
-  OverBudgetCause: {
-    readonly DeviceStaging: number;
-    readonly AccountQuota: number;
   };
 }

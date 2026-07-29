@@ -11,8 +11,8 @@
 use cipherbox_engine::facade;
 use cipherbox_engine::seams::OpId;
 use cipherbox_wasm::{
-    Command, DeadLetterReason, Event, NodeId, NodeKind, OpPhase, OverBudgetCause, PendingClass,
-    Permission, SnapshotView, Staleness,
+    Command, DeadLetterReason, Event, NodeId, NodeKind, OpPhase, PendingClass, Permission,
+    SnapshotView, Staleness,
 };
 use js_sys::{Array, BigInt, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue};
@@ -215,7 +215,6 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
         blocked: Some(facade::BlockedOp {
             op_id: OpId(12),
             node: facade::NodeId([6u8; 16]),
-            cause: facade::OverBudgetCause::AccountQuota,
             needed_bytes: u64::MAX,
         }),
         retained_records: 0,
@@ -269,10 +268,6 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
     );
 
     let blocked = get(&view, "blocked");
-    assert_eq!(
-        get(&blocked, "cause").as_f64(),
-        Some(OverBudgetCause::AccountQuota as u32 as f64)
-    );
     let needed = get(&blocked, "neededBytes");
     assert_eq!(
         needed.js_typeof(),

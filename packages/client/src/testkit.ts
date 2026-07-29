@@ -35,7 +35,6 @@ export const fakeWasmEnums = {
     PayloadRefused: 5,
     AttemptsExhausted: 6,
   },
-  OverBudgetCause: { DeviceStaging: 0, AccountQuota: 1 },
 } as const;
 
 /** A minimal empty snapshot descriptor for transport-plumbing assertions. */
