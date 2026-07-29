@@ -273,11 +273,10 @@ fn read_key_of(node: NodeId) -> [u8; 32] {
 
 /// The `(sequence, headCid)` of the record currently published under `node`'s
 /// write-plane name, verified under that name.
-fn published(world: &FakeWorld, node: NodeId) -> (u64, String) {
+fn published(records: &InMemoryRecordStore, node: NodeId) -> (u64, String) {
     let name = write_name(node);
-    let bytes = world
-        .record_store
-        .record_at(&world.record_store.endpoints()[0], name.as_str())
+    let bytes = records
+        .record_at(&records.endpoints()[0], name.as_str())
         .expect("the node has a published record");
     let verified = IpnsRecord::unmarshal(&bytes)
         .and_then(|record| record.verify(&name))
@@ -291,8 +290,12 @@ fn published(world: &FakeWorld, node: NodeId) -> (u64, String) {
 }
 
 /// The child refs a node's published folder body seals.
-fn published_children(world: &FakeWorld, blocks: &Blocks, node: NodeId) -> Vec<ChildRef> {
-    let (_, head_cid) = published(world, node);
+fn published_children(
+    records: &InMemoryRecordStore,
+    blocks: &Blocks,
+    node: NodeId,
+) -> Vec<ChildRef> {
+    let (_, head_cid) = published(records, node);
     let envelope =
         decode_envelope(&blocks.get(&head_cid).expect("the head block")).expect("decodes");
     match open_read_body(&envelope, &read_key_of(node)).expect("opens under the read-seed key") {
@@ -302,8 +305,8 @@ fn published_children(world: &FakeWorld, blocks: &Blocks, node: NodeId) -> Vec<C
 }
 
 /// The names a node's published folder body lists, sorted.
-fn published_names(world: &FakeWorld, blocks: &Blocks, node: NodeId) -> Vec<String> {
-    let mut names: Vec<String> = published_children(world, blocks, node)
+fn published_names(records: &InMemoryRecordStore, blocks: &Blocks, node: NodeId) -> Vec<String> {
+    let mut names: Vec<String> = published_children(records, blocks, node)
         .into_iter()
         .map(|child| child.name)
         .collect();
@@ -698,7 +701,7 @@ fn a_rename_republishes_only_the_parent_and_a_second_device_resolves_it() {
     .unwrap();
     tick(&world, &engine, &mut tasks);
     let node = child_id(&engine, ROOT, "photos");
-    let (child_sequence, _) = published(&world, node);
+    let (child_sequence, _) = published(&world.record_store, node);
 
     block_on(engine.command(Command::Rename {
         node,
@@ -707,9 +710,12 @@ fn a_rename_republishes_only_the_parent_and_a_second_device_resolves_it() {
     .unwrap();
     tick(&world, &engine, &mut tasks);
 
-    assert_eq!(published_names(&world, &blocks, ROOT), ["pictures"]);
     assert_eq!(
-        published(&world, node).0,
+        published_names(&world.record_store, &blocks, ROOT),
+        ["pictures"]
+    );
+    assert_eq!(
+        published(&world.record_store, node).0,
         child_sequence,
         "the renamed node's own record never republished"
     );
@@ -752,7 +758,10 @@ fn a_delete_drops_the_parent_ref_and_a_second_device_resolves_it() {
     block_on(engine.command(Command::Delete { node: doomed })).unwrap();
     tick(&world, &engine, &mut tasks);
 
-    assert_eq!(published_names(&world, &blocks, ROOT), ["photos"]);
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["photos"]
+    );
     assert!(
         block_on(engine.view()).unwrap().attrs(doomed).is_none(),
         "the deleted node left the rendered view"
@@ -789,8 +798,14 @@ fn a_relink_publishes_the_dest_before_the_source_and_a_second_device_resolves_it
     .unwrap();
     tick(&world, &engine, &mut tasks);
 
-    assert_eq!(published_names(&world, &blocks, photos), ["a.txt"]);
-    assert_eq!(published_names(&world, &blocks, ROOT), ["photos"]);
+    assert_eq!(
+        published_names(&world.record_store, &blocks, photos),
+        ["a.txt"]
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["photos"]
+    );
     assert_eq!(
         uploaded_node_ids(&alice)[before..],
         [photos.0, ROOT.0],
@@ -834,8 +849,8 @@ fn an_update_content_republishes_the_files_own_record_and_not_its_parent() {
     .unwrap();
     tick(&world, &engine, &mut tasks);
     let file = child_id(&engine, ROOT, "notes.txt");
-    let (file_sequence, _) = published(&world, file);
-    let (root_sequence, _) = published(&world, ROOT);
+    let (file_sequence, _) = published(&world.record_store, file);
+    let (root_sequence, _) = published(&world.record_store, ROOT);
 
     const STAGED_ROOT: &[u8] = b"a staged version root";
     stage(
@@ -853,14 +868,14 @@ fn an_update_content_republishes_the_files_own_record_and_not_its_parent() {
     );
     tick(&world, &engine, &mut tasks);
 
-    let (sequence, head_cid) = published(&world, file);
+    let (sequence, head_cid) = published(&world.record_store, file);
     assert_eq!(
         sequence,
         file_sequence + 1,
         "the file's own record advanced"
     );
     assert_eq!(
-        published(&world, ROOT).0,
+        published(&world.record_store, ROOT).0,
         root_sequence,
         "a child write never republishes its parent"
     );
@@ -928,9 +943,12 @@ fn a_rename_of_a_still_queued_create_publishes_child_before_parent() {
         [node.0, ROOT.0, ROOT.0],
         "the child's record precedes every parent that names it"
     );
-    assert_eq!(published_names(&world, &blocks, ROOT), ["pictures"]);
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["pictures"]
+    );
     // The parent's ref resolves: no reference outlived its referent.
-    let child = &published_children(&world, &blocks, ROOT)[0];
+    let child = &published_children(&world.record_store, &blocks, ROOT)[0];
     assert_eq!(child.ipns_name, write_name(node).as_str().as_bytes());
     assert!(
         world
@@ -979,9 +997,12 @@ fn a_create_below_the_scope_root_publishes_and_projects() {
             .is_empty(),
         "a deeper create no longer halts the drain"
     );
-    assert_eq!(published_names(&world, &blocks, photos), ["2026"]);
     assert_eq!(
-        published_names(&world, &blocks, ROOT),
+        published_names(&world.record_store, &blocks, photos),
+        ["2026"]
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
         ["photos"],
         "a child write stops at the immediate parent"
     );
@@ -1012,11 +1033,11 @@ fn a_source_remove_that_cannot_publish_undoes_its_own_dest_add() {
     tick(&world, &engine, &mut tasks);
 
     assert!(
-        published_children(&world, &blocks, photos).is_empty(),
+        published_children(&world.record_store, &blocks, photos).is_empty(),
         "the dest-add was compensated, not left as a dual link"
     );
     assert_eq!(
-        published_names(&world, &blocks, ROOT),
+        published_names(&world.record_store, &blocks, ROOT),
         ["a.txt", "photos"],
         "the source kept the child it could not release"
     );
@@ -1069,18 +1090,236 @@ fn a_concurrent_dest_writer_is_re_derived_onto_never_clobbered() {
     tick(&world, &engine, &mut tasks);
 
     assert_eq!(
-        published_names(&world, &blocks, photos),
+        published_names(&world.record_store, &blocks, photos),
         ["winner.txt"],
         "the winner's entry survived and our dest-add was undone"
     );
     assert_eq!(
-        published_names(&world, &blocks, ROOT),
+        published_names(&world.record_store, &blocks, ROOT),
         ["a.txt", "photos"],
         "the source kept the child"
     );
 }
 
+/// #786's guarantee has to hold when the destination is the scope root — the
+/// commonest move there is. The root is otherwise read from this device's own
+/// cache, which could never show the concurrent writer the compare exists to
+/// yield to.
+#[test]
+fn a_concurrent_writer_at_the_root_dest_is_re_derived_onto_never_clobbered() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (photos, moved) = seed_folder_and_file(&world, &mut engine, &mut tasks);
+    // Park the file inside `photos` so the move back out has the root as dest.
+    block_on(engine.command(Command::Relink {
+        node: moved,
+        new_parent: photos,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        published_names(&world.record_store, &blocks, photos),
+        ["a.txt"]
+    );
+
+    let winner = file_ref([0xAA; 16], "winner.txt");
+    let records = world.record_store.clone();
+    let plane = blocks.clone();
+    blocks.refuse_upload(Box::new(move |block| {
+        if head_of(block) != Some(photos.0) {
+            return false;
+        }
+        concurrent_root_add(&records, &plane, winner.clone());
+        true
+    }));
+    block_on(engine.command(Command::Relink {
+        node: moved,
+        new_parent: ROOT,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["photos", "winner.txt"],
+        "the winner's entry survived and our dest-add was undone"
+    );
+}
+
+/// A move into the subtree it is moving would detach that subtree from the
+/// scope root with nothing left to walk it from.
+#[test]
+fn a_relink_into_its_own_descendant_or_itself_is_refused() {
+    for into_itself in [true, false] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+
+        let alice = world.device(b"alice");
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        block_on(engine.command(Command::Create {
+            parent: ROOT,
+            name: "photos".into(),
+            kind: NodeKind::Folder,
+            content: None,
+        }))
+        .unwrap();
+        tick(&world, &engine, &mut tasks);
+        let photos = child_id(&engine, ROOT, "photos");
+        block_on(engine.command(Command::Create {
+            parent: photos,
+            name: "2026".into(),
+            kind: NodeKind::Folder,
+            content: None,
+        }))
+        .unwrap();
+        tick(&world, &engine, &mut tasks);
+        let inner = child_id(&engine, photos, "2026");
+
+        block_on(engine.command(Command::Relink {
+            node: photos,
+            new_parent: if into_itself { photos } else { inner },
+        }))
+        .unwrap();
+        tick(&world, &engine, &mut tasks);
+
+        assert_eq!(
+            published_names(&world.record_store, &blocks, ROOT),
+            ["photos"],
+            "the subtree stays reachable from the scope root"
+        );
+        assert_eq!(
+            published_names(&world.record_store, &blocks, inner),
+            Vec::<String>::new(),
+            "no folder ever names its own ancestor"
+        );
+        assert!(
+            block_on(StagingStore::queued_ops(&alice.staging_store))
+                .unwrap()
+                .is_empty(),
+            "the op dead-letters rather than wedging the queue"
+        );
+    }
+}
+
+/// State below the scope root is the drain's own output. A remote root advance
+/// must merge into the base, never replace it — a rebuilt base would erase the
+/// deeper tree and dead-letter every queued op that rebases onto it.
+#[test]
+fn a_remote_root_advance_leaves_a_queued_deep_op_publishable() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+        content: None,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let photos = child_id(&engine, ROOT, "photos");
+    block_on(engine.command(Command::Create {
+        parent: photos,
+        name: "2026".into(),
+        kind: NodeKind::Folder,
+        content: None,
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let inner = child_id(&engine, photos, "2026");
+
+    // A depth-2 rename queued, then another device advances the root under us.
+    block_on(engine.command(Command::Rename {
+        node: inner,
+        new_name: "2027".into(),
+    }))
+    .unwrap();
+    concurrent_root_add(
+        &world.record_store,
+        &blocks,
+        file_ref([0xAA; 16], "winner.txt"),
+    );
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, photos),
+        ["2027"],
+        "the deep rename published rather than dead-lettering onto a truncated base"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["photos", "winner.txt"],
+        "and the remote writer's own entry survived"
+    );
+    assert!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// A pass now seals many records. Each must draw its own nonce: a reused nonce
+/// under one key is a confidentiality break, not a degraded mode.
+#[test]
+fn every_record_one_pass_seals_carries_a_distinct_nonce() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (photos, moved) = seed_folder_and_file(&world, &mut engine, &mut tasks);
+    block_on(engine.command(Command::Relink {
+        node: moved,
+        new_parent: photos,
+    }))
+    .unwrap();
+    block_on(engine.command(Command::Rename {
+        node: photos,
+        new_name: "pictures".into(),
+    }))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let nonces: Vec<Vec<u8>> = alice
+        .http
+        .requests()
+        .iter()
+        .filter(|request| request.url.ends_with("/content/upload"))
+        .filter_map(|request| decode_envelope(request.body.as_deref()?).ok())
+        // `readSealed` is `nonce(24) || ciphertext||tag`.
+        .map(|envelope| envelope.read_sealed[..24].to_vec())
+        .collect();
+    let distinct: std::collections::BTreeSet<Vec<u8>> = nonces.iter().cloned().collect();
+    assert!(nonces.len() > 3, "the pass sealed several records");
+    assert_eq!(
+        distinct.len(),
+        nonces.len(),
+        "every seal drew a fresh nonce"
+    );
+}
+
 // ---------------------------------------------------------------------------
+
+/// A file child ref under this account's write-name edge.
+fn file_ref(id: [u8; 16], name: &str) -> ChildRef {
+    ChildRef {
+        id,
+        name: name.into(),
+        ipns_name: write_name(NodeId(id)).as_str().as_bytes().to_vec(),
+        kind: CoreNodeKind::File,
+        link_counter: 1,
+        unknown: Vec::new(),
+    }
+}
 
 /// A root holding an empty `photos` folder and a file `a.txt`, both published.
 fn seed_folder_and_file(
@@ -1125,22 +1364,43 @@ fn stage(device: &FakeDevice, op: &Op, upload: Option<&[u8]>) {
     .expect("the op queues");
 }
 
+/// Another writer publishes the **scope root**'s next record, adding `extra` on
+/// top of whatever the root currently carries. The root carries a grant section,
+/// so it re-authors through the owner-root fixture rather than the child path.
+fn concurrent_root_add(records: &InMemoryRecordStore, blocks: &Blocks, extra: ChildRef) {
+    let (sequence, _) = published(records, ROOT);
+    let mut children = published_children(records, blocks, ROOT);
+    children.push(extra);
+    let fixture = owner_root_fixture(OwnerRootSpec {
+        owner_identity: &owner_identity(),
+        owner_enc: &kdf::enc_subkey(&SECRET).public(),
+        scope_id: SCOPE,
+        root_id: ROOT.0,
+        children,
+        owner_write_blob_epoch: Some(EPOCH),
+    });
+    blocks.put(fixture.head_block.clone());
+    let signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
+    let record = IpnsRecord::create_v2(
+        &signer,
+        format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
+        sequence + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in records.endpoints() {
+        records.seed_record(&endpoint, fixture.name.as_str(), record.clone());
+    }
+}
+
 /// Another writer publishes `folder`'s next record, adding `extra` on top of
 /// whatever the folder currently carries.
 fn concurrent_add(records: &InMemoryRecordStore, blocks: &Blocks, folder: NodeId, extra: ChildRef) {
     let name = write_name(folder);
-    let current = records
-        .record_at(&records.endpoints()[0], name.as_str())
-        .expect("the dest is published");
-    let verified = IpnsRecord::unmarshal(&current)
-        .and_then(|record| record.verify(&name))
-        .expect("verifies");
-    let head_cid = core::str::from_utf8(&verified.value)
-        .expect("utf8")
-        .strip_prefix("/ipfs/")
-        .expect("an /ipfs/ pointer");
+    let (sequence, head_cid) = published(records, folder);
     let envelope =
-        decode_envelope(&blocks.get(head_cid).expect("the head block")).expect("decodes");
+        decode_envelope(&blocks.get(&head_cid).expect("the head block")).expect("decodes");
     let read_key = read_key_of(folder);
     let ReadBody::Folder {
         created_at,
@@ -1175,7 +1435,7 @@ fn concurrent_add(records: &InMemoryRecordStore, blocks: &Blocks, folder: NodeId
     let record = IpnsRecord::create_v2(
         &signer,
         format!("/ipfs/{}", head.cid).as_bytes(),
-        verified.sequence + 1,
+        sequence + 1,
         TTL_NANOS,
         EOL,
     )

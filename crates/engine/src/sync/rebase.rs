@@ -324,6 +324,12 @@ fn rebase_relink(
     if !working.contains(new_parent) {
         return OpResolution::DeadLetter(DeadLetterReason::DestinationGone);
     }
+    // A move into the subtree it is moving detaches that subtree from the scope
+    // root with nothing left to walk it from, so no later op could reach it —
+    // unrepresentable rather than merely refused at publish.
+    if new_parent == op.target || working.ancestors(new_parent).contains(&op.target) {
+        return OpResolution::DeadLetter(DeadLetterReason::DestinationGone);
+    }
 
     let scope_exit_trigger = exits_granted_source.then_some(from_parent);
     match working.parent_of(op.target) {

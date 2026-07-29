@@ -394,8 +394,7 @@ pub(crate) fn refresh_base_from_outcome(
 ) -> bool {
     match outcome {
         ResolveOutcome::Adopted(adopted) => {
-            let projected = project_root(root, adopted, &base.borrow());
-            *base.borrow_mut() = projected;
+            project_root(&mut base.borrow_mut(), root, adopted);
             true
         }
         _ => false,

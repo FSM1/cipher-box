@@ -239,10 +239,11 @@ where
     // Project the gate-passing root read-body to its direct children (E7); an
     // availability-stale current record leaves the base at the anchored root.
     let (root_resolve, base) = match resolved.outcome {
-        ResolveOutcome::Adopted(adopted) => (
-            RootResolve::Adopted,
-            project_root(params.root, &adopted, &base),
-        ),
+        ResolveOutcome::Adopted(adopted) => {
+            let mut base = base;
+            project_root(&mut base, params.root, &adopted);
+            (RootResolve::Adopted, base)
+        }
         // Cold start paints, it does not hold: our own current record at the
         // floor is availability staleness here, same as nothing newer fetched.
         ResolveOutcome::NoUpdate | ResolveOutcome::Current { .. } => (RootResolve::NoUpdate, base),

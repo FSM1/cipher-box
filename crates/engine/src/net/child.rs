@@ -193,7 +193,17 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
 impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
     async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<AdoptOutcome, GateError> {
         let (sequence, envelope) = self.assemble_envelope(name, record_bytes).await?;
-        if let Err(err) = floor::check(
+        // Keep the assembled head whatever the floor says: both the equal-floor
+        // re-open and the write path's carried-field read go back through
+        // [`open_carried_at_floor`], which re-fetches the same head block
+        // otherwise.
+        *self.assembled.borrow_mut() = Some(AssembledChild {
+            name: name.clone(),
+            record_bytes: record_bytes.to_vec(),
+            sequence,
+            envelope: envelope.clone(),
+        });
+        floor::check(
             self.floors,
             name.as_str().as_bytes(),
             &self.scope_id,
@@ -201,18 +211,7 @@ impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {
             envelope.epoch,
             floor::Strictness::StrictlyNewer,
         )
-        .await
-        {
-            // Keep the assembled head for the equal-floor re-open path — it
-            // re-fetches the same head block otherwise.
-            *self.assembled.borrow_mut() = Some(AssembledChild {
-                name: name.clone(),
-                record_bytes: record_bytes.to_vec(),
-                sequence,
-                envelope,
-            });
-            return Err(err);
-        }
+        .await?;
         let read_body = self.unseal(&envelope)?;
         // Sequence floor only, after the AAD-confirmed unseal (the floor law).
         floor::advance_sequence_on_unseal(self.floors, name.as_str().as_bytes(), sequence)

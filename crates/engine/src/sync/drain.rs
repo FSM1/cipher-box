@@ -32,6 +32,7 @@ use crate::api::ApiClient;
 use crate::content::Gateway;
 use crate::entropy::Entropy;
 use crate::facade::{NodeId, NodeKind};
+use crate::gate::floor;
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
     AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, author_child_envelope, author_scope_root_envelope,
@@ -41,7 +42,7 @@ use crate::net::publish::{PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{HeadBinding, RecordPublishRequest, preflight, publish_record};
 use crate::net::{
     Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, ResolveOutcome, RootAdopter,
-    assemble_head_envelope, resolve,
+    assemble_head_envelope, fanout_get_verify, resolve,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
@@ -151,8 +152,7 @@ struct FolderState {
     modified_at: u64,
     children: Vec<ChildRef>,
     body_unknown: Vec<(String, Value)>,
-    /// The record sequence this folder is published at — the dest-add
-    /// compensation's CAS base.
+    /// The record sequence this folder was last loaded or published at.
     sequence: u64,
 }
 
@@ -205,13 +205,6 @@ impl Pass {
             .find(|(id, _)| *id == folder)
             .map(|(_, state)| state)
             .ok_or(Halt)
-    }
-
-    fn replace(&mut self, folder: NodeId, state: FolderState) {
-        match self.folders.iter_mut().find(|(id, _)| *id == folder) {
-            Some(slot) => slot.1 = state,
-            None => self.insert(folder, state),
-        }
     }
 }
 
@@ -340,17 +333,22 @@ where
         .await
         .map_err(|_| Halt)?;
         // The cache can be older than the floors — a restored data dir is
-        // exactly that (#860). Re-authoring over a below-floor root would erase
-        // every child added since, durably and at a sequence the gate accepts.
-        let floor = self
-            .floors
-            .sequence_floor(scope.root_name.as_str().as_bytes())
-            .await
-            .map_err(seam)?
-            .unwrap_or(0);
-        if sequence < floor {
-            return Err(Halt);
-        }
+        // exactly that (#860). The whole pass anchors here: this record's epoch
+        // becomes the epoch every record it publishes is sealed at, so a
+        // below-floor anchor would bind a stale epoch into the AAD while the
+        // live session seed derives the key — records nobody can open. One
+        // at-floor gate call covers both floors (encode-side of the gate's
+        // stage-5 reject; security rule 8).
+        floor::check(
+            self.floors,
+            scope.root_name.as_str().as_bytes(),
+            &scope.root.0,
+            sequence,
+            envelope.epoch,
+            floor::Strictness::AtFloor,
+        )
+        .await
+        .map_err(|_| Halt)?;
         // Encode/decode fail-closed symmetry: this build authors exactly
         // `ENVELOPE_V`, so republishing a newer client's root would silently
         // downgrade `v` — the exact rollback the read-body AAD defends against.
@@ -383,6 +381,35 @@ where
             },
             epoch,
         ))
+    }
+
+    /// Resolve the scope root through its own gate so the snapshot cache holds
+    /// whatever the network now carries. Only a gate-passing adopt writes the
+    /// cache, so a rejected or unreachable record leaves last-known-good.
+    async fn refresh_scope_root_cache(&self, scope: &DrainScope<'_>) -> Result<(), Halt> {
+        let adopter = RootAdopter::new(
+            self.gateway,
+            self.http,
+            self.floors,
+            scope.enc_secret,
+            scope.owner_identity,
+            scope.root.0,
+        );
+        let resolved = resolve(
+            self.transport,
+            self.snapshot_cache,
+            &adopter,
+            scope.root_name,
+        )
+        .await
+        .map_err(seam)?;
+        // A gate failure is a trust violation, never staleness: re-authoring on
+        // top of last-known-good while the record plane serves a rejected root
+        // is exactly the fail-open this rule forbids.
+        match resolved.outcome {
+            ResolveOutcome::TrustViolation(_) => Err(Halt),
+            _ => Ok(()),
+        }
     }
 
     /// Resolve one non-root node's own record through the child pipeline and
@@ -529,11 +556,12 @@ where
             OpKind::Rename { .. } => self.publish_rename(scope, pass, applied).await,
             OpKind::Delete { .. } => self.publish_delete(scope, pass, applied).await,
             OpKind::Relink {
+                from_parent,
                 new_parent,
                 cross_scope: false,
                 ..
             } => {
-                self.publish_relink(scope, pass, applied, rebased, *new_parent)
+                self.publish_relink(scope, pass, applied, rebased, *from_parent, *new_parent)
                     .await
             }
             OpKind::UpdateContent { .. } => self.publish_update_content(scope, pass, applied).await,
@@ -647,12 +675,25 @@ where
         pass: &mut Pass,
         applied: &AppliedOp,
         rebased: &Snapshot,
+        from_parent: NodeId,
         dest: NodeId,
     ) -> Result<(), Halt> {
         let target = applied.op.target;
         let source = self.published_parent(target)?;
+        // The op's own presence condition: a source the rebase did not resolve
+        // against is a concurrent move this op lost (`sync/op.rs`), and removing
+        // from it would clobber the winner.
+        if source != from_parent {
+            return Err(Halt);
+        }
         if source == dest {
             return Ok(());
+        }
+        // A cycle detaches the whole subtree from the scope root irrecoverably,
+        // and no walk can find it again. Release-active, and refused again at
+        // rebase so the op dead-letters instead of wedging the queue.
+        if dest == target || self.base.borrow().ancestors(dest).contains(&target) {
+            return Err(Halt);
         }
         let modified_at = applied.op.authored_at.0;
 
@@ -670,8 +711,10 @@ where
             .cloned()
             .ok_or(Halt)?;
         moved.link_counter = rebased
-            .max_link_counter(target)
-            .max(moved.link_counter.saturating_add(1));
+            .winning_link(target)
+            .map_or(moved.link_counter.saturating_add(1), |link| {
+                link.link_counter
+            });
 
         pass.folder_mut(dest)?.children.push(moved);
         let cas_base = self.publish_folder(scope, pass, dest, modified_at).await?;
@@ -684,30 +727,48 @@ where
             .await
             .is_err()
         {
-            self.compensate_dest_add(scope, pass, dest, target, cas_base, modified_at)
+            self.compensate_dest_add(scope, pass, dest, source, target, cas_base, modified_at)
                 .await?;
             return Err(Halt);
         }
         Ok(())
     }
 
-    /// Undo a published dest-add when the source-remove will not follow it.
-    /// Fail-closed on a concurrent writer: the versioned compare-and-remove
-    /// refuses to replay our stale copy over a dest that moved, and the
-    /// re-derive lands the removal on the winner's record instead (#786).
+    /// Undo a published dest-add when the source-remove did not follow it.
+    ///
+    /// Two fail-closed conditions, because undoing wrongly is the one error the
+    /// ordering law cannot absorb — it leaves the child referenced by neither
+    /// parent. The source must still name the child (the publish may have
+    /// landed and only its self-adopt failed), and the dest must still be at the
+    /// sequence our dest-add published; a dest that moved is re-read and the
+    /// removal re-derived onto the winner's record rather than replayed over it
+    /// (#786).
+    #[expect(clippy::too_many_arguments, reason = "one compensation's full state")]
     async fn compensate_dest_add(
         &self,
         scope: &DrainScope<'_>,
         pass: &mut Pass,
         dest: NodeId,
+        source: NodeId,
         target: NodeId,
         cas_base: u64,
         modified_at: u64,
     ) -> Result<(), Halt> {
+        self.reload_folder(scope, pass, source).await?;
+        if !pass
+            .folder(source)?
+            .children
+            .iter()
+            .any(|child| child.id == target.0)
+        {
+            return Ok(());
+        }
+
         let staged = pass.folder(dest)?.children.clone();
-        // Re-read at whatever sequence the dest now carries — the same read the
-        // compensating publish's seq-CAS will assert against.
-        let observed = self.reload_folder(scope, pass, dest).await?;
+        // The version read is the record plane's own, never this device's cache:
+        // a cache hit would answer with the bytes we just published and make the
+        // compare vacuous.
+        let observed = self.observed_sequence(&pass.folder(dest)?.name).await?;
         let drop_target = |children: &[ChildRef]| -> Vec<ChildRef> {
             children
                 .iter()
@@ -717,30 +778,48 @@ where
         };
         let children = match undo_dest_add_versioned(&staged, drop_target, cas_base, observed) {
             UndoDestAdd::Removed(children) => children,
-            UndoDestAdd::Conflict => drop_target(&pass.folder(dest)?.children),
+            UndoDestAdd::Conflict => {
+                self.reload_folder(scope, pass, dest).await?;
+                drop_target(&pass.folder(dest)?.children)
+            }
         };
         pass.folder_mut(dest)?.children = children;
         self.publish_folder(scope, pass, dest, modified_at).await?;
         Ok(())
     }
 
-    /// Re-read a folder from the network, replacing this pass's copy. Returns
-    /// the sequence it now carries.
+    /// The freshest sequence the record plane shows at `name` — the same
+    /// record-verify read the publish confirm asserts against. Nothing
+    /// resolvable fails closed: the compensation may not treat an unanswered
+    /// name as "unchanged".
+    async fn observed_sequence(&self, name: &IpnsName) -> Result<u64, Halt> {
+        fanout_get_verify(self.transport, name)
+            .await
+            .map(|(sequence, _)| sequence)
+            .ok_or(Halt)
+    }
+
+    /// Re-read a folder from the record plane, replacing this pass's copy.
+    ///
+    /// The scope root is otherwise read from the snapshot cache, which is this
+    /// device's own — a compensation that read it there could never see the
+    /// concurrent writer it exists to yield to — so the root is re-resolved
+    /// through its own gate first.
     async fn reload_folder(
         &self,
         scope: &DrainScope<'_>,
         pass: &mut Pass,
         folder: NodeId,
-    ) -> Result<u64, Halt> {
+    ) -> Result<(), Halt> {
         let state = if folder == scope.root {
+            self.refresh_scope_root_cache(scope).await?;
             self.load_scope_root(scope).await?.0
         } else {
             self.load_child_folder(scope, pass.epoch, folder).await?
         };
-        let sequence = state.sequence;
-        self.repaint_folder(folder, &state.children, sequence, state.modified_at);
-        pass.replace(folder, state);
-        Ok(sequence)
+        self.repaint_folder(folder, &state.children, state.sequence, state.modified_at);
+        *pass.folder_mut(folder)? = state;
+        Ok(())
     }
 
     /// `updateContent`'s metadata half: a file's own record carries its
@@ -755,6 +834,17 @@ where
     ) -> Result<(), Halt> {
         let target = applied.op.target;
         let modified_at = applied.op.authored_at.0;
+        // This plan authors the target's own record and nothing else, so a
+        // resolution that also needs a parent-side write — the rebase's
+        // resurrect arm, which re-links under a resolved name — has no publish
+        // plan here and must not report success.
+        if applied.effective_name.is_some() {
+            return Err(Halt);
+        }
+        // Same reachability rule every other plan gets from `ensure_folder`: a
+        // node no parent links is not one this scope's write plane may author.
+        self.ensure_folder(scope, pass, self.published_parent(target)?)
+            .await?;
         let loaded = self.load_child_node(scope, pass.epoch, target).await?;
         let ReadBody::File {
             created_at,
