@@ -165,10 +165,12 @@ is not the contract gate.
 - **`apps/api` unit.** Nest specs where server logic actually lives (quota
   arithmetic, refcounting, retention caps, auth services) — the v1 jest
   setup ports. The contract suite, not spec mocks, is the correctness gate.
-- **`apps/web` and `apps/desktop` shells.** No unit suites, by design — v1's
-  accidental posture made policy (and made safe: the logic genuinely lives
-  below the facade now). Playwright and the mounted e2e cover rendering and
-  chrome.
+- **`apps/web` and `apps/desktop` shells.** Vault correctness is not tested
+  here — it lives below the facade. What the web shell does own is the seam
+  the facade does not: the `useSyncExternalStore` snapshot adapter, the
+  login-secret handoff and its transfer/zeroization boundary, and UI-owned
+  chrome state. Those get a thin merge-blocking unit suite, `Web Unit`;
+  rendering and flows stay Playwright's and the mounted e2e's.
 
 ### E2E — flows over real stacks
 

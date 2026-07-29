@@ -8,8 +8,15 @@ import { EngineProvider, useEngine } from './EngineProvider';
 function clientLedger() {
   const built: EngineClient[] = [];
   const disposed: EngineClient[] = [];
+  const subscriptions = { open: 0 };
   const createClient = () => {
     const client = {
+      facade: {
+        subscribe: () => {
+          subscriptions.open += 1;
+          return () => (subscriptions.open -= 1);
+        },
+      },
       dispose: () => {
         disposed.push(client);
         return Promise.resolve();
@@ -18,7 +25,7 @@ function clientLedger() {
     built.push(client);
     return client;
   };
-  return { built, disposed, createClient };
+  return { built, disposed, subscriptions, createClient };
 }
 
 function Probe({ seen }: { seen?: (EngineClient | null)[] }) {
@@ -43,8 +50,8 @@ describe('EngineProvider', () => {
     expect(seen.at(-1)).toBe(built[0]);
   });
 
-  it('disposes the client when the provider unmounts', () => {
-    const { built, disposed, createClient } = clientLedger();
+  it('disposes the client and its snapshot store when the provider unmounts', () => {
+    const { built, disposed, subscriptions, createClient } = clientLedger();
 
     const { unmount } = render(
       <EngineProvider createClient={createClient}>
@@ -52,9 +59,11 @@ describe('EngineProvider', () => {
       </EngineProvider>
     );
     expect(disposed).toEqual([]);
+    expect(subscriptions.open).toBe(1);
 
     unmount();
     expect(disposed).toEqual(built);
+    expect(subscriptions.open).toBe(0);
   });
 
   it('leaves exactly one live client after a StrictMode double-mount', () => {
