@@ -47,7 +47,7 @@ export type DeadLetterReason =
   | 'payloadRefused'
   | 'attemptsExhausted';
 
-/** One retained dead-lettered op, as data. */
+/** A terminal dead-lettered op and its reason, as data. */
 export interface DeadLetterDescriptor {
   opId: bigint;
   reason: DeadLetterReason;

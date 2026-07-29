@@ -1742,8 +1742,13 @@ fn retire_targets(device: &FakeDevice) -> Vec<String> {
         .requests()
         .iter()
         .filter(|request| request.url.ends_with("/registry/retire"))
-        .filter_map(|request| serde_json::from_slice::<Vec<String>>(request.body.as_deref()?).ok())
-        .flatten()
+        .flat_map(|request| {
+            let body = request
+                .body
+                .as_deref()
+                .expect("a retire call carries a body");
+            serde_json::from_slice::<Vec<String>>(body).expect("a retire body is a name array")
+        })
         .collect()
 }
 

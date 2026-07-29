@@ -1554,7 +1554,7 @@ mod tests {
     /// Positive evidence only: one status covers the account-quota gate and the
     /// transport cap, so each verdict needs the API's own discriminator.
     #[test]
-    fn only_a_quota_coded_413_blocks_and_every_other_413_is_permanent() {
+    fn each_413_verdict_rests_on_the_apis_own_code() {
         let refusal = |code: Option<&str>| {
             classify_publish(
                 RecordPublishError::Upload(ApiError::Status {
