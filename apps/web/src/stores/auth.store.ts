@@ -6,7 +6,7 @@
 
 import { useSyncExternalStore } from 'react';
 
-/** How the session was established (the v1 auth-method labels). */
+/** How the session was established. */
 export type LoginMethod = 'google' | 'email' | 'wallet';
 
 export interface AuthState {
