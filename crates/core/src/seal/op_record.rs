@@ -6,6 +6,11 @@
 //! `enc-subkey` public half verbatim: it names exactly the key that opens the
 //! body, so "is this mine?" and "can I open this?" are one question.
 //!
+//! That tag is also why the seal is HPKE **auth mode** to self, the enc subkey
+//! being both static sender and recipient: the tag *is* the recipient key, in
+//! the clear, in a queue two identities share. Base mode would let either of
+//! them author an op the other publishes under their own write keys.
+//!
 //! Three fields stay in the clear. The version, because a build that cannot
 //! interpret a record must still be able to tell that apart from corruption —
 //! the engine retains a forward-version record instead of dead-lettering and
@@ -33,18 +38,19 @@ use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::seal::aad::{AAD_DOMAIN, STRUCT_TAG_OP_RECORD};
 use crate::seal::body::{bytes_fixed, req};
 use crate::suite::hpke::{self, ENC_LEN};
-use crate::suite::x25519::{X25519Public, X25519Secret};
+use crate::suite::x25519::X25519Secret;
 
 /// The op-record format version this build writes and can open. Carried in the
 /// clear header *and* bound into the AAD: the clear copy lets a reader classify
 /// a version it cannot open, the AAD binding makes rewriting that copy fail the
 /// tag.
-pub const OP_RECORD_V: u64 = 2;
+pub const OP_RECORD_V: u64 = 3;
 
 /// The HPKE `info` string — the key-schedule domain separator, distinct from
 /// the grant family's so an owner blob and an op record, both HPKE-to-self
-/// under the same enc subkey, are never mutually transplantable.
-const OP_RECORD_HPKE_INFO: &[u8] = b"cipherbox/v2/op-record";
+/// under the same enc subkey, are never mutually transplantable. Frozen in the
+/// KAT manifest.
+pub const OP_RECORD_HPKE_INFO: &[u8] = b"cipherbox/v2/op-record";
 
 /// The clear header of a durable op record. Readable at any version — see the
 /// module's frozen-framing note.
@@ -87,8 +93,9 @@ fn cid_value(cid: Option<&[u8]>) -> Value {
 /// The AAD of an op record: its own clear header under the `cipherbox/v2`
 /// domain separator and the `op-record` structure tag. A five-element array,
 /// structurally non-unifiable with the grant family's six-element
-/// [`AadContext`](super::AadContext).
-fn op_record_aad(header: &OpRecordHeader) -> Vec<u8> {
+/// [`AadContext`](super::AadContext). Public — the frozen layout, like
+/// [`build_aad`](super::build_aad), so the KAT generator pins it directly.
+pub fn op_record_aad(header: &OpRecordHeader) -> Vec<u8> {
     encode_fixed_depth(&Value::Array(vec![
         Value::Text(AAD_DOMAIN.to_string()),
         Value::Unsigned(header.version),
@@ -98,27 +105,30 @@ fn op_record_aad(header: &OpRecordHeader) -> Vec<u8> {
     ]))
 }
 
-/// Seal `body` into a durable op record addressed to the owner's own enc
-/// subkey. The owner tag is derived from `owner_enc_pub`, so a record can never
-/// carry a tag naming a key that does not open it.
+/// Seal `body` into a durable op record sealed to the owner's own enc subkey,
+/// with that same key as the HPKE static sender. The owner tag is derived from
+/// `owner_enc_secret`, so a record can never carry a tag naming a key that does
+/// not open it, and only the secret's holder can author one.
 ///
 /// `ephemeral_scalar` must be **fresh per record**: HPKE ephemeral reuse across
 /// two seals under one recipient key is a confidentiality break
 /// ([`hpke::hpke_seal`]).
 pub fn seal_op_record(
-    owner_enc_pub: &X25519Public,
+    owner_enc_secret: &X25519Secret,
     ephemeral_scalar: &[u8; 32],
     content_root_cid: Option<&[u8]>,
     body: &[u8],
 ) -> Result<Vec<u8>, CodecError> {
     check_content_root_cid(content_root_cid)?;
+    let owner_enc_pub = owner_enc_secret.public();
     let header = OpRecordHeader {
         version: OP_RECORD_V,
         owner_tag: owner_enc_pub.to_bytes().to_vec(),
         content_root_cid: content_root_cid.map(<[u8]>::to_vec),
     };
-    let sealed = hpke::hpke_seal(
-        owner_enc_pub,
+    let sealed = hpke::hpke_seal_auth(
+        owner_enc_secret,
+        &owner_enc_pub,
         ephemeral_scalar,
         OP_RECORD_HPKE_INFO,
         &op_record_aad(&header),
@@ -151,8 +161,9 @@ pub fn decode_op_record_header(record: &[u8]) -> Result<OpRecordHeader, CodecErr
 ///
 /// Fails closed with [`Malformed::UnsupportedRecordVersion`] on a version this
 /// build does not implement, and with [`TrustViolation::HpkeOpenFailed`] when
-/// the record is another identity's, tampered, or carries a rewritten header —
-/// the header is the AAD, so it is authenticated rather than merely present.
+/// the record is another identity's, tampered, forged by a writer who lacked the
+/// enc secret, or carries a rewritten header — the header is the AAD, so it is
+/// authenticated rather than merely present.
 ///
 /// The declared `ownerTag` is re-bound to the key that opens the record, so the
 /// encoder's "a record can never carry a tag naming a key that does not open
@@ -169,7 +180,8 @@ pub fn open_op_record(
         }
         .into());
     }
-    if header.owner_tag != owner_enc_secret.public().to_bytes() {
+    let owner_enc_pub = owner_enc_secret.public();
+    if header.owner_tag != owner_enc_pub.to_bytes() {
         return Err(TrustViolation::HpkeOpenFailed.into());
     }
     check_content_root_cid(header.content_root_cid.as_deref())?;
@@ -177,8 +189,10 @@ pub fn open_op_record(
         return Err(Malformed::UnknownRecordField { key }.into());
     }
     let enc = bytes_fixed::<ENC_LEN>(&Value::Bytes(enc), "enc")?;
-    let body = hpke::hpke_open(
+    // Sender = recipient: the caller's own key, not the declared tag.
+    let body = hpke::hpke_open_auth(
         owner_enc_secret,
+        &owner_enc_pub,
         &enc,
         OP_RECORD_HPKE_INFO,
         &op_record_aad(&header),
@@ -241,7 +255,7 @@ mod tests {
     #[test]
     fn a_metadata_record_round_trips_and_tags_its_owner() {
         let owner = secret(7);
-        let record = seal_op_record(&owner.public(), &[1; 32], None, b"intent bytes").unwrap();
+        let record = seal_op_record(&owner, &[1; 32], None, b"intent bytes").unwrap();
 
         let header = decode_op_record_header(&record).unwrap();
         assert_eq!(header.version, OP_RECORD_V);
@@ -256,7 +270,7 @@ mod tests {
     #[test]
     fn a_content_record_exposes_its_root_cid_without_a_key() {
         let owner = secret(9);
-        let record = seal_op_record(&owner.public(), &[2; 32], Some(&cid()), b"intent").unwrap();
+        let record = seal_op_record(&owner, &[2; 32], Some(&cid()), b"intent").unwrap();
         assert_eq!(
             decode_op_record_header(&record).unwrap().content_root_cid,
             Some(cid())
@@ -267,7 +281,7 @@ mod tests {
     fn a_foreign_record_never_opens() {
         let owner = secret(1);
         let stranger = secret(2);
-        let record = seal_op_record(&owner.public(), &[3; 32], None, b"mine").unwrap();
+        let record = seal_op_record(&owner, &[3; 32], None, b"mine").unwrap();
 
         // The tag is readable — that is how a foreign record is skipped rather
         // than dead-lettered — but the body is not.
@@ -284,7 +298,7 @@ mod tests {
     #[test]
     fn a_swapped_header_fails_closed() {
         let owner = secret(4);
-        let record = seal_op_record(&owner.public(), &[5; 32], Some(&cid()), b"intent").unwrap();
+        let record = seal_op_record(&owner, &[5; 32], Some(&cid()), b"intent").unwrap();
 
         // Re-frame the record with a different (well-formed) root CID: the
         // header is the AAD, so the ciphertext no longer authenticates.
@@ -303,7 +317,7 @@ mod tests {
     #[test]
     fn a_tampered_ciphertext_fails_closed() {
         let owner = secret(6);
-        let record = seal_op_record(&owner.public(), &[7; 32], None, b"intent").unwrap();
+        let record = seal_op_record(&owner, &[7; 32], None, b"intent").unwrap();
         let value = decode(&record).unwrap();
         let mut map = value.as_map().unwrap().clone();
         let mut ct = map.get("ciphertext").unwrap().as_bytes().unwrap().to_vec();
@@ -320,7 +334,7 @@ mod tests {
     #[test]
     fn a_forward_version_record_reads_its_header_but_never_opens() {
         let owner = secret(11);
-        let record = seal_op_record(&owner.public(), &[12; 32], Some(&cid()), b"intent").unwrap();
+        let record = seal_op_record(&owner, &[12; 32], Some(&cid()), b"intent").unwrap();
         let value = decode(&record).unwrap();
         let mut map = value.as_map().unwrap().clone();
         map.insert("v", Value::Unsigned(OP_RECORD_V + 1));
@@ -343,7 +357,7 @@ mod tests {
     #[test]
     fn a_missing_version_is_malformed() {
         let owner = secret(15);
-        let record = seal_op_record(&owner.public(), &[16; 32], None, b"intent").unwrap();
+        let record = seal_op_record(&owner, &[16; 32], None, b"intent").unwrap();
         let value = decode(&record).unwrap();
         let mut map = value.as_map().unwrap().clone();
         map.remove("v");
@@ -359,7 +373,7 @@ mod tests {
         let owner = secret(8);
         // Seal side: release-active `Err`, never a stripped assertion.
         assert_eq!(
-            seal_op_record(&owner.public(), &[9; 32], Some(b"not a cid"), b"intent")
+            seal_op_record(&owner, &[9; 32], Some(b"not a cid"), b"intent")
                 .unwrap_err()
                 .check(),
             "content-cid-mismatch"
@@ -388,7 +402,7 @@ mod tests {
         // Hand-framed, it must still fail closed here rather than rely on a
         // caller having compared the tag first.
         let owner = secret(20);
-        let record = seal_op_record(&owner.public(), &[21; 32], None, b"intent").unwrap();
+        let record = seal_op_record(&owner, &[21; 32], None, b"intent").unwrap();
         let value = decode(&record).unwrap();
         let mut map = value.as_map().unwrap().clone();
         map.insert(
@@ -430,9 +444,43 @@ mod tests {
     }
 
     #[test]
+    fn a_record_forged_from_the_public_owner_tag_never_opens() {
+        let owner = secret(30);
+        let forged = hpke::hpke_seal(
+            &owner.public(),
+            &[31; 32],
+            OP_RECORD_HPKE_INFO,
+            &op_record_aad(&OpRecordHeader {
+                version: OP_RECORD_V,
+                owner_tag: owner.public().to_bytes().to_vec(),
+                content_root_cid: None,
+            }),
+            b"delete everything",
+        );
+        let mut m = Map::new();
+        m.insert("ciphertext", Value::Bytes(forged.ciphertext));
+        m.insert("contentRootCid", Value::Null);
+        m.insert("enc", Value::Bytes(forged.enc.to_vec()));
+        m.insert("ownerTag", Value::Bytes(owner.public().to_bytes().to_vec()));
+        m.insert("v", Value::Unsigned(OP_RECORD_V));
+        let record = encode(&Value::Map(m)).unwrap();
+
+        // The tag still classifies it as the owner's, so the open is the only
+        // thing that refuses it — and it must refuse as a trust violation.
+        assert_eq!(
+            decode_op_record_header(&record).unwrap().owner_tag,
+            owner.public().to_bytes().to_vec()
+        );
+        assert_eq!(
+            open_op_record(&owner, &record).unwrap_err().check(),
+            "hpke-open-failed"
+        );
+    }
+
+    #[test]
     fn a_truncated_record_is_malformed_not_a_panic() {
         let owner = secret(3);
-        let record = seal_op_record(&owner.public(), &[4; 32], None, b"intent").unwrap();
+        let record = seal_op_record(&owner, &[4; 32], None, b"intent").unwrap();
         assert!(decode_op_record_header(&record[..record.len() / 2]).is_err());
         assert!(decode_op_record_header(b"").is_err());
     }

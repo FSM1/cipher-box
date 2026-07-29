@@ -865,7 +865,7 @@ mod tests {
         let me = X25519Secret::from_scalar([1; 32]);
         let good = encode_op_record(
             RecordSeal {
-                owner_enc_pub: me.public(),
+                owner_enc_secret: &me,
                 ephemeral_scalar: Zeroizing::new([2; 32]),
             },
             &Op::rename(id(1), "n", 1, AT),
@@ -887,7 +887,7 @@ mod tests {
         let stranger = X25519Secret::from_scalar([2; 32]);
         let theirs = encode_op_record(
             RecordSeal {
-                owner_enc_pub: stranger.public(),
+                owner_enc_secret: &stranger,
                 ephemeral_scalar: Zeroizing::new([3; 32]),
             },
             &Op::rename(id(1), "theirs", 1, AT),
@@ -911,7 +911,7 @@ mod tests {
         let me = X25519Secret::from_scalar([1; 32]);
         let mine = encode_op_record(
             RecordSeal {
-                owner_enc_pub: me.public(),
+                owner_enc_secret: &me,
                 ephemeral_scalar: Zeroizing::new([2; 32]),
             },
             &Op::rename(id(1), "n", 1, AT),
@@ -932,7 +932,7 @@ mod tests {
             cipherbox_core::codec::encode(&cipherbox_core::codec::Value::Map(map)).unwrap()
         };
         let newer_grammar = cipherbox_core::seal::op_record::seal_op_record(
-            &me.public(),
+            &me,
             &[4; 32],
             None,
             b"{\"someFutureOp\":true}",

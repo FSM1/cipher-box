@@ -33,30 +33,30 @@ use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payloa
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, AscentLink, ChildRef, ChildScopeRef, GrantBlobPayload,
-    GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload, NodeKind, OP_RECORD_V,
-    OverrideSeedPayload, OwnerWriteBlobPayload, Permission, ReadBody, STRUCT_TAG_ASCENT_LINK,
-    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD,
-    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
-    STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob,
-    SignedSealed, StructureSigInput, Version, WriteBody, build_aad, decode_ascent_link,
-    decode_envelope, decode_grant_blob_payload, decode_grant_set_commitment,
-    decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
-    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
-    encode_envelope, encode_grant_blob_payload, encode_grant_set_commitment,
-    encode_history_link_payload, encode_override_seed_payload, encode_owner_write_blob_payload,
-    encode_read_body, encode_write_body, open_ascent_link, open_grant_blob, open_history_link,
-    open_op_record, open_owner_blob, open_owner_write_blob, open_read_body, seal_ascent_link,
-    seal_grant_blob, seal_history_link, seal_op_record, seal_owner_blob, seal_owner_write_blob,
-    seal_read_body, sign_grant_set, sign_structure, structure_sig_preimage, verify_grant_set,
-    verify_structure,
+    GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload, NodeKind,
+    OP_RECORD_HPKE_INFO, OP_RECORD_V, OpRecordHeader, OverrideSeedPayload, OwnerWriteBlobPayload,
+    Permission, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
+    STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS,
+    SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, Version,
+    WriteBody, build_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload,
+    decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header,
+    decode_override_seed_payload, decode_owner_write_blob_payload, decode_read_body,
+    decode_write_body, encode_ascent_link, encode_envelope, encode_grant_blob_payload,
+    encode_grant_set_commitment, encode_history_link_payload, encode_override_seed_payload,
+    encode_owner_write_blob_payload, encode_read_body, encode_write_body, op_record_aad,
+    open_ascent_link, open_grant_blob, open_history_link, open_op_record, open_owner_blob,
+    open_owner_write_blob, open_read_body, seal_ascent_link, seal_grant_blob, seal_history_link,
+    seal_op_record, seal_owner_blob, seal_owner_write_blob, seal_read_body, sign_grant_set,
+    sign_structure, structure_sig_preimage, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer};
 use cipherbox_core::suite::hash::hash;
-use cipherbox_core::suite::hpke::{self, hpke_open, hpke_seal};
-use cipherbox_core::suite::x25519::X25519Secret;
+use cipherbox_core::suite::hpke::{self, MODE_AUTH, hpke_open, hpke_seal};
+use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use serde::Serialize;
 
 const PROFILE: &str = "cipherbox/v2 det-cbor";
@@ -225,6 +225,10 @@ struct Manifest {
 struct OpRecordSection {
     struct_tag: u8,
     v: u64,
+    /// RFC 9180 mode: auth, so a record's author is authenticated and not only
+    /// its recipient (#879).
+    hpke_mode: u8,
+    hpke_info: String,
     accept: FileCount,
     reject: RejectSection,
 }
@@ -1992,6 +1996,9 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
         op_record: OpRecordSection {
             struct_tag: STRUCT_TAG_OP_RECORD,
             v: OP_RECORD_V,
+            hpke_mode: MODE_AUTH,
+            hpke_info: String::from_utf8(OP_RECORD_HPKE_INFO.to_vec())
+                .expect("the op-record info string is ASCII"),
             accept: FileCount {
                 file: "vectors/op_record/op_record_accept.json".to_string(),
                 count: m.op_record_accept.len(),
@@ -5595,10 +5602,10 @@ fn op_record_accept_vector(
     content_root_cid: Option<&[u8]>,
     body: &[u8],
 ) -> OpRecordAcceptVector {
-    let record = seal_op_record(&owner.public(), &eph, content_root_cid, body)
+    let record = seal_op_record(owner, &eph, content_root_cid, body)
         .unwrap_or_else(|e| panic!("op-record {name}: seal ({e})"));
     assert_eq!(
-        seal_op_record(&owner.public(), &eph, content_root_cid, body).unwrap(),
+        seal_op_record(owner, &eph, content_root_cid, body).unwrap(),
         record,
         "op-record {name}: not deterministic"
     );
@@ -5645,7 +5652,7 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
     let (scalar, owner) = op_record_owner();
     let eph: [u8; 32] = std::array::from_fn(|i| (0x91 + i) as u8);
     let cid = op_record_content_root();
-    let record = seal_op_record(&owner.public(), &eph, Some(&cid), b"reject-probe intent").unwrap();
+    let record = seal_op_record(&owner, &eph, Some(&cid), b"reject-probe intent").unwrap();
 
     let tampered_ciphertext = reframe_op_record(&record, |m| {
         let mut ct = m.get("ciphertext").unwrap().as_bytes().unwrap().to_vec();
@@ -5693,6 +5700,7 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
     let unknown_field = reframe_op_record(&record, |m| {
         m.insert("stash", Value::Bytes(b"unauthenticated".to_vec()));
     });
+    let base_mode_forgery = forged_base_mode_op_record(&owner.public(), Some(&cid));
     // A stranger's enc subkey: the owner tag stays readable, the body does not.
     let stranger_scalar: [u8; 32] = std::array::from_fn(|i| (0x21 + i) as u8);
 
@@ -5785,7 +5793,46 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
             "malformed",
             false,
         ),
+        op_record_reject_vector(
+            "base-mode-forgery",
+            scalar,
+            &base_mode_forgery,
+            "hpke-open-failed",
+            "trust",
+            false,
+        ),
     ]
+}
+
+/// A record a forger holding only the owner's public tag can build: correctly
+/// framed and correctly AAD-bound, sealed HPKE **base** mode.
+fn forged_base_mode_op_record(
+    owner_pub: &X25519Public,
+    content_root_cid: Option<&[u8]>,
+) -> Vec<u8> {
+    let header = OpRecordHeader {
+        version: OP_RECORD_V,
+        owner_tag: owner_pub.to_bytes().to_vec(),
+        content_root_cid: content_root_cid.map(<[u8]>::to_vec),
+    };
+    let eph: [u8; 32] = std::array::from_fn(|i| (0xb1 + i) as u8);
+    let sealed = hpke_seal(
+        owner_pub,
+        &eph,
+        OP_RECORD_HPKE_INFO,
+        &op_record_aad(&header),
+        b"forged delete intent",
+    );
+    let mut m = Map::new();
+    m.insert("ciphertext", Value::Bytes(sealed.ciphertext));
+    m.insert(
+        "contentRootCid",
+        content_root_cid.map_or(Value::Null, |c| Value::Bytes(c.to_vec())),
+    );
+    m.insert("enc", Value::Bytes(sealed.enc.to_vec()));
+    m.insert("ownerTag", Value::Bytes(header.owner_tag.clone()));
+    m.insert("v", Value::Unsigned(header.version));
+    encode(&Value::Map(m)).expect("forged op record encodes")
 }
 
 /// Build + self-check one op-record reject vector. `keyless` is asserted, not

@@ -46,7 +46,8 @@ pub use grant::{
     verify_grant_set,
 };
 pub use op_record::{
-    OP_RECORD_V, OpRecordHeader, decode_op_record_header, open_op_record, seal_op_record,
+    OP_RECORD_HPKE_INFO, OP_RECORD_V, OpRecordHeader, decode_op_record_header, op_record_aad,
+    open_op_record, seal_op_record,
 };
 pub use section::{
     GrantSection, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob,

@@ -58,7 +58,7 @@ pub enum StageOutcome {
 pub async fn stage_op<S: StagingStore>(
     store: &S,
     policy: &StoragePolicy,
-    seal: RecordSeal,
+    seal: RecordSeal<'_>,
     op: &Op,
     upload: Option<&[u8]>,
 ) -> SeamResult<StageOutcome> {
@@ -152,19 +152,18 @@ mod tests {
     use crate::testkit::fakes::InMemoryStagingStore;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
     use cipherbox_core::suite::x25519::X25519Secret;
+    use std::sync::LazyLock;
     use zeroize::Zeroizing;
 
     fn id(b: u8) -> NodeId {
         NodeId([b; 16])
     }
 
-    fn owner() -> X25519Secret {
-        X25519Secret::from_scalar([42; 32])
-    }
+    static OWNER: LazyLock<X25519Secret> = LazyLock::new(|| X25519Secret::from_scalar([42; 32]));
 
-    fn seal(scalar: u8) -> RecordSeal {
+    fn seal(scalar: u8) -> RecordSeal<'static> {
         RecordSeal {
-            owner_enc_pub: owner().public(),
+            owner_enc_secret: &OWNER,
             ephemeral_scalar: Zeroizing::new([scalar; 32]),
         }
     }
@@ -423,7 +422,7 @@ mod tests {
         block_on(async {
             let foreign = encode_op_record(
                 RecordSeal {
-                    owner_enc_pub: stranger.public(),
+                    owner_enc_secret: &stranger,
                     ephemeral_scalar: Zeroizing::new([3; 32]),
                 },
                 &content_op(1, b"their bytes"),

@@ -1799,16 +1799,15 @@ impl<T: SeamTypes> Engine<T> {
         }
     }
 
-    /// Sealing inputs for one durable op record: the session's enc-subkey
-    /// public half plus a fresh ephemeral scalar. Fails closed on entropy
-    /// failure — a reused HPKE ephemeral is a confidentiality break, never a
-    /// degraded mode.
-    fn record_seal(&self) -> Result<RecordSeal, EngineError> {
-        let owner_enc_pub = self
+    /// Sealing inputs for one durable op record: the session's enc-subkey plus
+    /// a fresh ephemeral scalar. Fails closed on entropy failure — a reused
+    /// HPKE ephemeral is a confidentiality break, never a degraded mode.
+    fn record_seal(&self) -> Result<RecordSeal<'_>, EngineError> {
+        let owner_enc_secret = self
             .session
             .as_ref()
             .ok_or(EngineError::NotStarted)?
-            .enc_subkey_public();
+            .enc_subkey();
         let mut ephemeral_scalar = Zeroizing::new([0u8; 32]);
         self.entropy
             .borrow_mut()
@@ -1817,7 +1816,7 @@ impl<T: SeamTypes> Engine<T> {
                 message: e.message().to_owned(),
             })?;
         Ok(RecordSeal {
-            owner_enc_pub,
+            owner_enc_secret,
             ephemeral_scalar,
         })
     }
@@ -2465,7 +2464,7 @@ mod tests {
             let stranger = cipherbox_core::suite::x25519::X25519Secret::from_scalar([9; 32]);
             let theirs = crate::sync::record::encode_op_record(
                 RecordSeal {
-                    owner_enc_pub: stranger.public(),
+                    owner_enc_secret: &stranger,
                     ephemeral_scalar: Zeroizing::new([3; 32]),
                 },
                 &Op::create(
@@ -2915,7 +2914,7 @@ mod tests {
             let stranger = cipherbox_core::suite::x25519::X25519Secret::from_scalar([0xC7; 32]);
             let theirs = crate::sync::record::encode_op_record(
                 RecordSeal {
-                    owner_enc_pub: stranger.public(),
+                    owner_enc_secret: &stranger,
                     ephemeral_scalar: Zeroizing::new([0x5A; 32]),
                 },
                 &Op::rename(NodeId([9; 16]), "theirs.txt", 1, UnixMillis(1)),

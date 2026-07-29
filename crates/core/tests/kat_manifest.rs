@@ -27,23 +27,24 @@ use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, NodeKind, OP_RECORD_V, STRUCT_TAG_ASCENT_LINK,
-    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS,
-    StructureSigInput, build_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload,
-    decode_grant_section, decode_grant_set_commitment, decode_history_link_payload,
-    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
-    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
-    encode_grant_set_commitment, encode_override_seed_payload, encode_read_body, encode_write_body,
-    open_ascent_link, open_grant_blob, open_op_record, open_owner_blob, open_owner_write_blob,
-    open_read_body, seal_op_record, structure_sig_preimage, verify_grant_set, verify_structure,
+    self, AAD_DOMAIN, AadContext, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
+    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
+    STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructureSigInput, build_aad, decode_ascent_link,
+    decode_envelope, decode_grant_blob_payload, decode_grant_section, decode_grant_set_commitment,
+    decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
+    decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link,
+    encode_envelope, encode_grant_section, encode_grant_set_commitment,
+    encode_override_seed_payload, encode_read_body, encode_write_body, open_ascent_link,
+    open_grant_blob, open_op_record, open_owner_blob, open_owner_write_blob, open_read_body,
+    seal_op_record, structure_sig_preimage, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer, Ed25519Verifier};
 use cipherbox_core::suite::hash::hash;
-use cipherbox_core::suite::hpke::{hpke_open, hpke_seal};
+use cipherbox_core::suite::hpke::{MODE_AUTH, hpke_open, hpke_seal};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use serde::Deserialize;
 
@@ -277,6 +278,8 @@ struct Manifest {
 struct OpRecordManifest {
     struct_tag: u8,
     v: u64,
+    hpke_mode: u8,
+    hpke_info: String,
     accept: FileCount,
     reject: RejectSection,
 }
@@ -3352,6 +3355,8 @@ fn op_record_accept_vectors_seal_reproduce_open_and_decode() {
     let m = manifest();
     assert_eq!(m.op_record.struct_tag, STRUCT_TAG_OP_RECORD);
     assert_eq!(m.op_record.v, OP_RECORD_V);
+    assert_eq!(m.op_record.hpke_mode, MODE_AUTH);
+    assert_eq!(m.op_record.hpke_info.as_bytes(), OP_RECORD_HPKE_INFO);
 
     let vectors = op_record_accept_vectors(&m);
     assert_eq!(
@@ -3388,7 +3393,7 @@ fn op_record_accept_vectors_seal_reproduce_open_and_decode() {
         let cid: Option<Vec<u8>> = v.content_root_cid.as_ref().map(|c| unhex(&v.name, c));
         let body = unhex(&v.name, &v.body);
 
-        let sealed = seal_op_record(&owner.public(), &eph, cid.as_deref(), &body)
+        let sealed = seal_op_record(&owner, &eph, cid.as_deref(), &body)
             .unwrap_or_else(|e| panic!("op-record accept {}: seal ({e})", v.name));
         assert_eq!(
             hex::encode(&sealed),
@@ -3461,6 +3466,11 @@ fn op_record_reject_vectors_fire_the_named_check() {
             "op-record reject must cover the {required} check"
         );
     }
+
+    assert!(
+        vectors.iter().any(|v| v.name == "base-mode-forgery"),
+        "op-record reject must pin a base-mode forgery under the owner's own tag"
+    );
 
     let mut names = BTreeSet::new();
     for v in &vectors {
