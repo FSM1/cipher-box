@@ -6,11 +6,9 @@
 //! Pure and deterministic: the sealing key and the nonce are injected (KATs pin
 //! them); core samples no entropy and reads no clock.
 //!
-//! The wire framing of a sealed body is `nonce(24) || ciphertext||tag`: the
-//! XChaCha20-Poly1305 24-byte nonce is prefixed so [`unseal`] can recover it,
-//! and it is authenticated by the AEAD itself (a flipped nonce breaks the tag).
-//! The nonce is deliberately **not** in the AAD — only `(v, id, scope, epoch,
-//! structTag)` is ([`aad`]).
+//! The wire framing of a sealed body is `nonce(24) || ciphertext||tag`; the
+//! nonce is authenticated by the AEAD itself and deliberately **not** in the
+//! AAD, which binds only `(v, id, scope, epoch, structTag)` ([`aad`]).
 
 pub mod aad;
 pub mod body;
@@ -66,11 +64,9 @@ use crate::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};
 ///
 /// `nonce` **must be unique for every seal performed with a given `key`**:
 /// XChaCha20-Poly1305 nonce reuse under one key is a confidentiality and
-/// integrity break. It is caller-injected entropy (KATs pin it; production
-/// callers source it from their injected entropy seam), prefixed so [`unseal`]
-/// can recover it, and authenticated by the AEAD rather than by the AAD
-/// (#39 D7). The caller owns `plaintext` and is its terminal owner for
-/// zeroization (a callee never zeroizes a caller-owned buffer).
+/// integrity break. It is caller-injected entropy (the KATs pin it), prefixed
+/// so [`unseal`] can recover it, and authenticated by the AEAD rather than by
+/// the AAD (#39 D7).
 pub fn seal(
     key: &[u8; KEY_LEN],
     nonce: &[u8; NONCE_LEN],

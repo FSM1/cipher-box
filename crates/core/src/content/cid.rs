@@ -1,11 +1,8 @@
-//! The content-DAG CID codec (blueprint/core.md "Open edges"; AGENTS.md rules
-//! 4-5: content-address codecs live in core, one KAT set).
+//! The content-DAG CID codec (blueprint/core.md "Open edges").
 //!
-//! The deterministic CIDv1 content address of a content blob, computed beside
-//! the in-core name codec ([`crate::ipns::name`], which likewise hand-assembles
-//! a fixed CIDv1 byte prefix). The digest is the frozen suite hash BLAKE3-256
-//! ([`crate::suite::hash::hash`]) — no content hash lives outside the suite
-//! (AGENTS.md rule 4) — so the CID is byte-identical on native and wasm32.
+//! The deterministic CIDv1 content address of a content blob. The digest is the
+//! frozen suite hash BLAKE3-256 ([`crate::suite::hash::hash`]), so the CID is
+//! byte-identical on native and wasm32.
 //!
 //! CIDv1 layout — all four framing bytes are single-byte multicodec varints, so
 //! the CID is a fixed 4-byte prefix followed by the digest:
@@ -18,13 +15,12 @@
 //! | `0x20` | multihash digest length = 32                                |
 //! | …      | 32-byte BLAKE3 digest of `bytes`                            |
 //!
-//! Core addresses *leaf* sealed chunks as `raw` ([`CONTENT_CID_CODEC`]). The
-//! version's `contentCid` is a DAG **root** (engine.md:473-474) whose codec —
-//! `dag-pb`/`dag-cbor` — is engine-owned (#630, engine.md:497 open edge), so the
-//! codec is a parameter here, not a constant. Core must verify that root CID on
-//! every block/CAR response (engine.md:468); [`verify_cid`] therefore keys off
-//! the claimed CID's *own* codec byte, validating both a raw leaf and a DAG root
-//! while the version, multihash, and length framing stay fixed and fail-closed.
+//! Core addresses *leaf* sealed chunks as `raw` ([`CONTENT_CID_CODEC`]); a
+//! version's `contentCid` is a DAG **root** whose codec is engine-owned (#630,
+//! engine.md:497), so the codec is a parameter here, not a constant.
+//! [`verify_cid`] therefore keys off the claimed CID's *own* codec byte —
+//! validating a raw leaf and a DAG root alike (engine.md:468) — while the
+//! version, multihash, and length framing stay fixed and fail-closed.
 
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::suite::hash::hash;
@@ -61,12 +57,11 @@ pub const CONTENT_CID_LEN: usize = CID_PREFIX_LEN + DIGEST_LEN;
 /// byte-identical across native and wasm32; a public content address, so no key
 /// material flows through here.
 ///
-/// The content plane's frozen multicodec set is single-byte — `raw` (0x55) leaf,
-/// `dag-cbor` (0x71) root (core.md:56) — like the name codec's libp2p-key 0x72
-/// ([`crate::ipns::name`]). A `codec >= 0x80` is a multi-byte unsigned varint,
-/// outside the frozen set and unrepresentable in this fixed layout, so callers
-/// must pass a single-byte multicodec; the guard fails closed (panics in every
-/// build) rather than silently emitting a malformed one-byte-truncated CID.
+/// # Panics
+///
+/// If `codec >= 0x80`: a multi-byte unsigned varint is outside the frozen
+/// single-byte content-plane set — `raw` 0x55 leaf, `dag-cbor` 0x71 root
+/// (core.md:56) — and unrepresentable in this fixed layout.
 pub fn compute_cid(codec: u8, bytes: &[u8]) -> Vec<u8> {
     // `assert!` (not `debug_assert!`): a one-byte-truncated CID from a
     // multi-byte codec must fail closed in release too (core.md:56).
@@ -91,10 +86,9 @@ pub fn compute_cid(codec: u8, bytes: &[u8]) -> Vec<u8> {
 /// is over a public content address (no secret), so ordinary equality is used.
 pub fn verify_cid(claimed_cid: &[u8], bytes: &[u8]) -> Result<(), CodecError> {
     // Untrusted claimed CID: reject a multi-byte-varint codec byte (>= 0x80)
-    // before mirroring it into `compute_cid`. A 36-byte CID with a high codec byte
-    // passes the length check, so without this guard it would trip the internal
-    // `debug_assert!` (debug DoS) and — with asserts stripped — fail open by
-    // matching the recomputed malformed CID byte-for-byte. Fail-closed in both.
+    // before mirroring it into `compute_cid`. A full-length CID with a high codec
+    // byte would otherwise either trip that guard (panic-as-DoS) or, in a build
+    // with asserts stripped, fail open by matching the recomputed malformed CID.
     if claimed_cid.len() == CONTENT_CID_LEN
         && claimed_cid[CID_CODEC_INDEX] < 0x80
         && compute_cid(claimed_cid[CID_CODEC_INDEX], bytes) == claimed_cid
@@ -107,11 +101,10 @@ pub fn verify_cid(claimed_cid: &[u8], bytes: &[u8]) -> Result<(), CodecError> {
 
 // ---------------------------------------------------------------------------
 // Content-CID string codec (blueprint/core.md "Content-CID string codec"). A
-// scope's metadata IPNS record carries `/ipfs/<head_cid>` where `<head_cid>` is
-// the binary CIDv1 above rendered in base32-lowercase multibase (leading `b`),
-// the form IPFS emits. The Adopter must recover the binary anchor from that
-// string before `read_block` can trust-check the fetched head, so encode + strict
-// decode are core exports — mirroring the base36 name codec ([`crate::ipns::name`]).
+// scope's metadata IPNS record carries `/ipfs/<head_cid>`: the binary CIDv1
+// above in base32-lowercase multibase (leading `b`), the form IPFS emits. The
+// Adopter must recover the binary anchor from that string before a fetched head
+// can be trust-checked, so encode + strict decode are core exports.
 // ---------------------------------------------------------------------------
 
 /// The multibase prefix for lowercase base32 (RFC 4648 `base32`, no padding).
@@ -135,9 +128,11 @@ pub fn is_wellformed_content_cid(cid: &[u8]) -> bool {
 /// Encode a binary content CIDv1 as its canonical base32-lowercase multibase
 /// string (leading `b`). Every valid content CID has exactly one such string.
 ///
-/// `assert!` (release-active, like [`compute_cid`]): emitting a `b…` string over
-/// bytes the decoder rejects would publish an unresolvable scope head (AGENTS.md
-/// rule 8 encode/decode symmetry), so a malformed CID fails closed in every build.
+/// # Panics
+///
+/// If `cid` is not the frozen framing: emitting a `b…` string over bytes the
+/// decoder rejects would publish an unresolvable scope head (AGENTS.md rule 8
+/// encode/decode symmetry), so the guard is release-active.
 pub fn encode_content_cid_str(cid: &[u8]) -> String {
     assert!(
         is_wellformed_content_cid(cid),
@@ -250,8 +245,7 @@ mod tests {
 
     #[test]
     fn compute_cid_carries_the_caller_codec() {
-        // The DAG-root codec (dag-cbor 0x71) is engine-chosen (#630): only the
-        // codec byte moves; version/multihash/len/digest stay frozen.
+        // The DAG-root codec (dag-cbor 0x71) is engine-chosen (#630).
         let cid = compute_cid(0x71, b"dag root bytes");
         assert_eq!(cid[CID_CODEC_INDEX], 0x71, "codec byte is the parameter");
         assert_eq!(
@@ -289,8 +283,7 @@ mod tests {
 
     #[test]
     fn verify_accepts_a_dag_root_cid_off_its_own_codec() {
-        // A non-raw (dag-cbor) DAG-root CID must verify — core keys off the
-        // claimed CID's codec byte, not a hardcoded raw prefix (engine.md:468).
+        // Core keys off the claimed CID's codec byte, not a hardcoded raw prefix.
         let bytes = b"the assembled dag root node";
         let cid = compute_cid(0x71, bytes);
         assert_ne!(cid[CID_CODEC_INDEX], CONTENT_CID_CODEC, "non-raw codec");
@@ -317,23 +310,20 @@ mod tests {
         );
     }
 
-    // Native-only: the always-on assert holds in every build (debug and
-    // release), and `#[should_panic]` is unsafe on the panic=abort wasm legs.
+    // Native-only: the guard is release-active, but `#[should_panic]` is unsafe
+    // on the panic=abort wasm legs.
     #[cfg(not(target_family = "wasm"))]
     #[test]
     #[should_panic(expected = "single-byte")]
     fn compute_cid_guards_a_multibyte_codec_fail_closed() {
-        // A codec >= 0x80 (e.g. dag-json 0x0129) is a multi-byte unsigned varint,
-        // outside the frozen single-byte content-plane set (core.md:56): the guard
-        // must trip rather than silently emit a one-byte-truncated CID.
+        // A codec >= 0x80 must trip the guard, not emit a truncated CID.
         let _ = compute_cid(0x80, b"multi-byte codec is out of the frozen set");
     }
 
     #[test]
     fn verify_rejects_a_multibyte_prefixed_oversized_cid_fail_closed() {
         // A real multi-byte-codec CID (dag-json 0x0129 = varint [0xa9, 0x02]) is
-        // 37 bytes; the fixed `len == CONTENT_CID_LEN` check rejects it fail-closed
-        // even though the multihash and digest tail match.
+        // 37 bytes: the fixed-length check rejects it even with a matching digest.
         let bytes = b"content";
         let cid = compute_cid(CONTENT_CID_CODEC, bytes);
         let mut oversized = vec![CID_VERSION, 0xa9, 0x02];
@@ -351,12 +341,10 @@ mod tests {
 
     #[test]
     fn verify_rejects_a_high_codec_byte_exact_len_cid_fail_closed() {
-        // Release-mode fail-open guard: a full-length (CONTENT_CID_LEN) CID whose
-        // codec byte is >= 0x80 with an otherwise valid framing and a *matching*
-        // BLAKE3 digest. Without the codec guard, release builds (asserts stripped)
-        // would mirror the byte and accept this malformed CID byte-for-byte, and
-        // debug builds would panic on the internal assert. verify_cid must return
-        // Err — never panic — in both, so this test runs on every leg incl. wasm.
+        // A full-length CID with a high codec byte, valid framing, and a
+        // *matching* digest: without the codec guard this fails open (asserts
+        // stripped) or panics (asserts live). `verify_cid` must return Err in
+        // both, so this runs on every leg including wasm.
         let bytes = b"content";
         let mut cid = vec![CID_VERSION, 0x80, CONTENT_CID_MULTIHASH, DIGEST_LEN as u8];
         cid.extend_from_slice(&hash(bytes));
@@ -427,8 +415,7 @@ mod tests {
 
     #[test]
     fn decode_rejects_wrong_framing_even_when_base32_canonical() {
-        // A canonical base32 body over 36 bytes with a corrupted multihash code:
-        // valid base32, wrong CIDv1 framing → fail closed.
+        // Valid base32 body, corrupted multihash code → wrong framing, fail closed.
         let mut cid = compute_cid(CONTENT_CID_CODEC, b"anchor");
         cid[2] ^= 0xff;
         let mut s = String::from("b");
@@ -439,8 +426,8 @@ mod tests {
         );
     }
 
-    // Native-only: the always-on encode guard fires in every build; `#[should_panic]`
-    // is unsafe on the panic=abort wasm legs (mirrors compute_cid's guard test).
+    // Native-only, like `compute_cid`'s guard test: `#[should_panic]` is unsafe
+    // on the panic=abort wasm legs.
     #[cfg(not(target_family = "wasm"))]
     #[test]
     #[should_panic(expected = "frozen CIDv1 framing")]

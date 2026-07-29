@@ -12,17 +12,13 @@
 //!   owner's encryption subkey; the owner is an implicit, unrevokable grantee of
 //!   every scope.
 //! - **Ascent link** — the current override seed HPKE-sealed to an X25519
-//!   keypair derived from the **parent's** node seed. The public half rides
-//!   plaintext so any writer can re-seal; unsealing needs the parent seed, so
-//!   only ancestor-scope readers descend. An ancestor re-derives the expected
-//!   keypair and **rejects a mismatched public half** before opening (the
-//!   derive-and-verify check).
+//!   keypair derived from the **parent's** node seed, so only ancestor-scope
+//!   readers descend ([`open_ascent_link`] is the derive-and-verify check).
 //! - **History link** — the previous epoch's seed symmetrically sealed under
 //!   the current one (struct tag `history-link`); the key-regression ratchet.
 //! - **Grant-set commitment** — the owner-signed, **epoch-free**
-//!   `{ipnsName, ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`. A
-//!   recipient verifies their tag is committed before trusting a grant; being
-//!   epoch-free, a grantee-triggered rotation needs no fresh owner signature.
+//!   `{ipnsName, ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`
+//!   ([`GrantSetCommitment`]).
 //!
 //! All crypto is composed from [`crate::suite`]; the whole-record fail-closed
 //! adoption policy over these verdicts is the engine's gate, not this layer.
@@ -177,10 +173,8 @@ impl Eq for GrantBlobPayload {}
 
 /// Decode a grant-blob plaintext (strict det-CBOR, unknown fields preserved).
 ///
-/// The transient decoded tree carries verbatim copies of the read/write scope
-/// seeds and the pointer read key; those bytes land in zeroizing owners, but the
-/// tree itself is scrubbed on drop via [`ScrubOwned`] (terminal-owner rule,
-/// symmetric with [`encode_grant_blob_payload`]).
+/// The transient decoded tree carries verbatim seed copies, so it is scrubbed on
+/// drop via [`ScrubOwned`].
 pub fn decode_grant_blob_payload(bytes: &[u8]) -> Result<GrantBlobPayload, CodecError> {
     let value = ScrubOwned(decode(bytes)?);
     let map = value.value().as_map()?;
@@ -220,9 +214,8 @@ pub fn encode_grant_blob_payload(payload: &GrantBlobPayload) -> Result<Vec<u8>, 
         m.insert("writeScopeSeed", Value::Bytes(w.as_bytes().to_vec()));
     }
     merge_unknown(&mut m, &payload.unknown);
-    // The transient tree carries verbatim seed copies; scrub the whole tree
-    // through the drop guard so the wipe runs on return and on panic-unwind
-    // (terminal-owner rule). The returned buffer stays the seal path's to zero.
+    // The transient tree carries verbatim seed copies; the drop guard wipes it
+    // on both return and panic-unwind.
     let mut value = Value::Map(m);
     let guard = ScrubOnDrop(&mut value);
     encode(guard.0)
@@ -259,8 +252,6 @@ pub fn open_grant_blob(
     ctx: &AadContext,
     ciphertext: &[u8],
 ) -> Result<GrantBlobPayload, CodecError> {
-    // `hpke_open` returns `Zeroizing<Vec<u8>>`, so this seed-bearing plaintext is
-    // wiped on drop — no explicit zeroize needed at this terminal owner.
     let plaintext = hpke::hpke_open(
         recipient_secret,
         enc,
@@ -327,10 +318,8 @@ impl Eq for OverrideSeedPayload {}
 
 /// Decode an override-seed plaintext (strict det-CBOR, unknown fields preserved).
 ///
-/// The transient decoded tree carries a verbatim copy of the override seed; it
-/// lands in a zeroizing owner, but the tree itself is scrubbed on drop via
-/// [`ScrubOwned`] (terminal-owner rule, symmetric with
-/// [`encode_override_seed_payload`]).
+/// The transient decoded tree carries a verbatim copy of the override seed, so
+/// it is scrubbed on drop via [`ScrubOwned`].
 pub fn decode_override_seed_payload(bytes: &[u8]) -> Result<OverrideSeedPayload, CodecError> {
     let value = ScrubOwned(decode(bytes)?);
     let map = value.value().as_map()?;
@@ -354,8 +343,8 @@ pub fn encode_override_seed_payload(payload: &OverrideSeedPayload) -> Result<Vec
         Value::Bytes(payload.override_seed.as_bytes().to_vec()),
     );
     merge_unknown(&mut m, &payload.unknown);
-    // Whole-tree scrub via the drop guard (terminal-owner rule); the returned
-    // buffer stays the seal path's to zeroize.
+    // The transient tree carries a verbatim seed copy; the drop guard wipes it
+    // on both return and panic-unwind.
     let mut value = Value::Map(m);
     let guard = ScrubOnDrop(&mut value);
     encode(guard.0)
@@ -390,8 +379,6 @@ pub fn open_owner_blob(
     ctx: &AadContext,
     ciphertext: &[u8],
 ) -> Result<OverrideSeedPayload, CodecError> {
-    // `hpke_open` returns `Zeroizing<Vec<u8>>`, so this seed-bearing plaintext is
-    // wiped on drop — no explicit zeroize needed at this terminal owner.
     let plaintext = hpke::hpke_open(
         owner_enc_secret,
         enc,
@@ -465,10 +452,8 @@ impl Eq for OwnerWriteBlobPayload {}
 /// Decode an owner-write-blob plaintext (strict det-CBOR, unknown fields
 /// preserved).
 ///
-/// The transient decoded tree carries a verbatim copy of the write-scope seed; it
-/// lands in a zeroizing owner, but the tree itself is scrubbed on drop via
-/// [`ScrubOwned`] (terminal-owner rule, symmetric with
-/// [`encode_owner_write_blob_payload`]).
+/// The transient decoded tree carries a verbatim copy of the write-scope seed,
+/// so it is scrubbed on drop via [`ScrubOwned`].
 pub fn decode_owner_write_blob_payload(bytes: &[u8]) -> Result<OwnerWriteBlobPayload, CodecError> {
     let value = ScrubOwned(decode(bytes)?);
     let map = value.value().as_map()?;
@@ -495,8 +480,8 @@ pub fn encode_owner_write_blob_payload(
         Value::Bytes(payload.write_scope_seed.as_bytes().to_vec()),
     );
     merge_unknown(&mut m, &payload.unknown);
-    // Whole-tree scrub via the drop guard (terminal-owner rule); the returned
-    // buffer stays the seal path's to zeroize.
+    // The transient tree carries a verbatim seed copy; the drop guard wipes it
+    // on both return and panic-unwind.
     let mut value = Value::Map(m);
     let guard = ScrubOnDrop(&mut value);
     encode(guard.0)
@@ -533,8 +518,6 @@ pub fn open_owner_write_blob(
     ctx: &AadContext,
     ciphertext: &[u8],
 ) -> Result<OwnerWriteBlobPayload, CodecError> {
-    // `hpke_open` returns `Zeroizing<Vec<u8>>`, so this seed-bearing plaintext is
-    // wiped on drop — no explicit zeroize needed at this terminal owner.
     let plaintext = hpke::hpke_open(
         owner_enc_secret,
         enc,
@@ -636,8 +619,6 @@ pub fn open_ascent_link(
     if ascent_secret.public().to_bytes() != link.ascent_public {
         return Err(TrustViolation::AscentLinkMismatch.into());
     }
-    // `hpke_open` returns `Zeroizing<Vec<u8>>`, so this seed-bearing plaintext is
-    // wiped on drop — no explicit zeroize needed at this terminal owner.
     let plaintext = hpke::hpke_open(
         &ascent_secret,
         &link.enc,
@@ -707,9 +688,7 @@ impl Eq for HistoryLinkPayload {}
 /// Decode a history-link plaintext (strict det-CBOR, unknown fields preserved).
 ///
 /// The transient decoded tree carries a verbatim copy of the previous epoch's
-/// seed; it lands in a zeroizing owner, but the tree itself is scrubbed on drop
-/// via [`ScrubOwned`] (terminal-owner rule, symmetric with
-/// [`encode_history_link_payload`]).
+/// seed, so it is scrubbed on drop via [`ScrubOwned`].
 pub fn decode_history_link_payload(bytes: &[u8]) -> Result<HistoryLinkPayload, CodecError> {
     let value = ScrubOwned(decode(bytes)?);
     let map = value.value().as_map()?;
@@ -733,8 +712,8 @@ pub fn encode_history_link_payload(payload: &HistoryLinkPayload) -> Result<Vec<u
         Value::Bytes(payload.prev_seed.as_bytes().to_vec()),
     );
     merge_unknown(&mut m, &payload.unknown);
-    // Whole-tree scrub via the drop guard (terminal-owner rule); the returned
-    // buffer stays the seal path's to zeroize.
+    // The transient tree carries a verbatim seed copy; the drop guard wipes it
+    // on both return and panic-unwind.
     let mut value = Value::Map(m);
     let guard = ScrubOnDrop(&mut value);
     encode(guard.0)
@@ -764,9 +743,8 @@ pub fn open_history_link(
     ctx: &AadContext,
     sealed: &[u8],
 ) -> Result<HistoryLinkPayload, CodecError> {
-    // `unseal` returns a plain buffer carrying the previous epoch's seed; this
-    // function is its terminal owner, so wipe it after decode (mirroring
-    // `open_read_body`). The HPKE open paths get this for free via `Zeroizing`.
+    // `unseal` returns a plain buffer carrying the previous epoch's seed, so
+    // this terminal owner wipes it after decode.
     let mut plaintext = super::unseal(key, ctx, sealed)?;
     let result = decode_history_link_payload(&plaintext);
     plaintext.zeroize();
@@ -904,8 +882,7 @@ pub fn sign_grant_set(
 /// Verify a grant-set commitment's owner signature. Fails closed with
 /// [`TrustViolation::CommitmentInvalid`] when the owner identity key did not
 /// attest this tag/pseudonym set — the fail-closed check a recipient runs
-/// before trusting a grant. The fail-closed *policy* over this verdict is the
-/// engine's adoption gate.
+/// before trusting a grant.
 pub fn verify_grant_set(
     verifier: &EcdsaVerifier,
     c: &GrantSetCommitment,

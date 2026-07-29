@@ -57,12 +57,11 @@ impl fmt::Debug for X25519Secret {
 
 impl X25519Public {
     /// Adopt a 32-byte public key, **rejecting** the RFC 7748 small-order
-    /// u-coordinates. `None` for a low-order point (identity or an order-2/4/8
-    /// point); `Some` otherwise. Holding an `X25519Public` therefore means "not
-    /// low-order", so [`super::hpke::dhkem_encap`] (seal) needs no separate
-    /// check. The exhaustive security gate is the contributory check in
-    /// [`Self::diffie_hellman`]; this rejects the canonical attack encodings up
-    /// front so a chosen low-order key never reaches contact import or decap.
+    /// u-coordinates. Holding an `X25519Public` therefore means "not low-order",
+    /// so [`super::hpke::dhkem_encap`] (seal) needs no separate check. This
+    /// rejects the canonical chosen-key encodings up front, before contact
+    /// import or decap; the exhaustive gate is the contributory check in
+    /// [`Self::diffie_hellman`].
     pub fn from_bytes(bytes: [u8; SECRET_LEN]) -> Option<Self> {
         if is_small_order(&bytes) {
             return None;
@@ -190,9 +189,8 @@ mod tests {
             let mut high = enc;
             high[31] |= 0x80;
             assert_eq!(X25519Public::from_bytes(high), None, "high-bit variant");
-            // Backstop: ECDH against a constructed peer of this u-coordinate (via
-            // dalek's total `PublicKey`) is non-contributory. `from_bytes` guards
-            // the encoding, so drive the peer through the dalek type directly.
+            // Backstop: `from_bytes` guards the encoding, so drive the peer
+            // through dalek's total `PublicKey` to reach the ECDH check.
             let peer = crate::suite::x25519::testonly_public_from_bytes(enc);
             assert!(probe.diffie_hellman(&peer).is_none(), "non-contributory");
         }

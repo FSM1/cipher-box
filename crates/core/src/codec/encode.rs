@@ -22,11 +22,10 @@ pub(super) const SIMPLE_NULL: u8 = 22;
 ///
 /// Two-pass: [`encoded_len`] sizes the buffer up front so the single allocation
 /// is exact and the write never reallocates. A grow-from-empty `Vec` frees each
-/// intermediate backing store un-zeroized, stranding secret bytes (content keys,
-/// scope/override/history seeds) in freed heap; with one right-sized buffer only
-/// the terminal owner's plaintext ever holds them, and that owner zeroizes it.
-/// Sizing first is also what makes [`check_depth`] fail closed instead of
-/// overflowing the stack: the deeper pass runs before anything is allocated.
+/// intermediate backing store un-zeroized, stranding secret bytes in freed heap;
+/// one right-sized buffer keeps them to the terminal owner's plaintext, which
+/// that owner zeroizes. Sizing first is also what makes [`check_depth`] fail
+/// closed instead of overflowing the stack: it runs before anything is allocated.
 pub fn encode(value: &Value) -> Result<Vec<u8>, CodecError> {
     let mut out = Vec::with_capacity(encoded_len(value)?);
     write_value(&mut out, value, 0)?;
@@ -258,11 +257,9 @@ mod tests {
         assert_eq!(super::super::decode(&bytes).unwrap(), deepest);
     }
 
-    /// The security invariant: encoding secret-bearing bytes performs a single
-    /// allocation and never reallocates, so no intermediate backing store is
-    /// freed un-zeroized. Capturing the pointer and capacity after the reserve
-    /// and asserting both are unchanged after the write proves the buffer never
-    /// moved (a realloc would move it and/or grow capacity), independent of any
+    /// The security invariant: encoding secret-bearing bytes never reallocates,
+    /// so no intermediate backing store is freed un-zeroized. An unchanged
+    /// pointer *and* capacity across the write proves it, independent of any
     /// allocator over-allocation.
     #[test]
     fn secret_bearing_encode_never_reallocates() {

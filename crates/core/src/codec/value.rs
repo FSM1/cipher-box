@@ -119,25 +119,19 @@ impl Value {
     }
 
     /// Scrub every owned byte and text buffer in this value tree in place: each
-    /// [`Value::Bytes`] and each [`Value::Text`] has its contents wiped from
-    /// memory and is cleared to empty (`Vec`/`String` `zeroize` semantics),
-    /// while the tree's shape and every other value are left intact.
+    /// [`Value::Bytes`] and each [`Value::Text`] is wiped from memory and cleared
+    /// to empty (`Vec`/`String` `zeroize` semantics), while the tree's shape and
+    /// every other value are left intact.
     ///
-    /// A sealed-body encode/decode path builds a transient `Value` tree that
-    /// carries verbatim copies of secret material — inline **content-key** bytes
-    /// (one [`Value::Bytes`] per file version, [`encode_read_body`]) and scope
-    /// **seed** bytes (grant/owner/history payloads). That tree is built and
-    /// owned by the codec layer, so the codec is its terminal owner and wipes it
-    /// here before it drops, closing the window where a freed-but-uncleared copy
-    /// of key material would linger on the heap (blueprint/core.md "Crypto
-    /// suite": key material lives only in zeroizing owners). Non-secret buffers
-    /// (ids, cids, ipnsNames) are wiped too: they are all transient copies, so a
-    /// whole-tree wipe needs no per-field secret classification and stays correct
-    /// as later bodies add secret fields. [`Value::Text`] is wiped for the same
-    /// reason — a transient copy of a filename is user-private metadata in a ZK
-    /// system, so it never lingers uncleared either. This only ever touches the
-    /// codec's own transient copies — the caller's
-    /// [`SecretBytes`](crate::suite::secret::SecretBytes) inputs are untouched.
+    /// The codec builds and owns the transient `Value` tree of a sealed-body
+    /// encode/decode, which carries verbatim copies of secret material — inline
+    /// content-key bytes ([`encode_read_body`]) and scope seed bytes — so the
+    /// codec is that tree's terminal owner and wipes it before it drops
+    /// (blueprint/core.md "Crypto suite": key material lives only in zeroizing
+    /// owners). Non-secret buffers are wiped too — every buffer here is a
+    /// transient copy, so a whole-tree wipe needs no per-field secret
+    /// classification and stays correct as later bodies add secret fields; text
+    /// included, since a filename is user-private metadata in a ZK system.
     ///
     /// [`encode_read_body`]: crate::seal::encode_read_body
     pub(crate) fn zeroize_bytes(&mut self) {
@@ -231,8 +225,7 @@ impl Map {
     }
 
     /// Zeroize every entry value's owned byte buffers in place (keys are text,
-    /// never secret). See [`Value::zeroize_bytes`] for the terminal-owner
-    /// rationale — the caller owns this map and is its terminal owner.
+    /// never secret). See [`Value::zeroize_bytes`].
     pub(crate) fn zeroize_bytes(&mut self) {
         for (_, v) in &mut self.entries {
             v.zeroize_bytes();
@@ -360,9 +353,8 @@ mod tests {
 
     #[test]
     fn zeroize_bytes_wipes_every_nested_byte_buffer() {
-        // A tree shaped like the sealed-body encode tree: a map holding an
-        // array of maps, each with a secret-carrying `Bytes` value plus
-        // non-byte fields, and a top-level non-secret `Bytes`.
+        // Shaped like the sealed-body encode tree: nested maps carrying a
+        // secret `Bytes` alongside non-byte fields.
         let mut version = Map::new();
         version.insert("contentKey", Value::Bytes(vec![0xab; SECRET_LEN_TEST]));
         version.insert("size", Value::Unsigned(4096));
@@ -376,10 +368,8 @@ mod tests {
 
         tree.zeroize_bytes();
 
-        // `Vec`/`String` `zeroize` wipes the whole buffer (contents scrubbed
-        // from memory) and clears it to empty; the tree keeps its shape and
-        // every non-byte, non-text value is untouched. Text (filename metadata)
-        // is scrubbed alongside bytes.
+        // Buffers scrubbed and cleared to empty; the tree keeps its shape and
+        // every non-byte, non-text value is untouched.
         let root = tree.as_map().unwrap();
         assert_eq!(root.get("id"), Some(&Value::Bytes(Vec::new())));
         assert_eq!(root.get("kind"), Some(&Value::Text(String::new())));

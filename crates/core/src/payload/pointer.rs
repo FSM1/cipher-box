@@ -7,17 +7,14 @@
 //! 64-byte compact signature. That plaintext is sealed with the symmetric
 //! [`seal`](crate::seal) path under `pointerReadKey`, binding the
 //! `pointer-payload` AAD `(v, scope, scope, 0, tag)`. The published block is
-//! that sealed blob (`nonce || ciphertext||tag`); the consulting reader already
-//! knows the scope (it derived `pointerReadKey` from the owner pointer seed and
-//! the scope id), so the AAD context is reconstructible without any plaintext
-//! envelope.
+//! that sealed blob (`nonce || ciphertext||tag`); the reader already knows the
+//! scope, so the AAD context is reconstructible without a plaintext envelope.
 //!
 //! The AAD `epoch` is fixed to `0`: a pointer is the epoch-*advancing* anchor,
 //! not an epoch-tagged node body, and the reader cannot know the write epoch
 //! before unsealing — the authoritative `writeEpoch`/`minReadEpoch` are the
-//! sealed, owner-signed payload. `id` and `scope` both carry the scope id (the
-//! scope root's node UUID), so a pointer sealed for one scope can never open
-//! under another (the AAD tag closes the transplant).
+//! sealed, owner-signed payload. `id` and `scope` both carry the scope id, so a
+//! pointer sealed for one scope can never open under another.
 
 use zeroize::Zeroize;
 
@@ -161,13 +158,11 @@ fn decode_and_verify(
         }
         .into());
     }
-    // A parseable signature that fails to verify — and a non-canonical (e.g.
-    // high-S) encoding that can never verify — are both the one trust check.
     let sig =
         EcdsaSignature::from_compact(sig_bytes).ok_or(TrustViolation::IdentitySignatureInvalid)?;
 
-    // The object bytes the owner signed are the verbatim canonical re-encoding
-    // of the decoded (canonical) `object` value.
+    // The decoder admits canonical input only, so re-encoding the decoded
+    // `object` reproduces the exact bytes the owner signed.
     let mut object_bytes = encode(object_value)?;
     let verified = owner_identity.verify_detcbor(&object_bytes, &sig);
     object_bytes.zeroize();

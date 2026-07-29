@@ -2,10 +2,9 @@
 //!
 //! Two classes, disjoint types, no reused codes: [`TrustViolation`] for
 //! failures the engine treats fail-closed (canonicality, uniqueness, and the
-//! cryptographic checks the suite layer contributes — subkey-binding verify,
-//! HPKE open — with signature/commitment/AAD following in later slices) and
-//! [`Malformed`] for structurally invalid or unsupported input. Every
-//! rejection names the check that fired via [`TrustViolation::check`] /
+//! cryptographic checks — signature, commitment, AAD, subkey-binding verify,
+//! HPKE open) and [`Malformed`] for structurally invalid or unsupported input.
+//! Every rejection names the check that fired via [`TrustViolation::check`] /
 //! [`Malformed::check`]; the check names are part of the frozen contract and
 //! are pinned by the KAT reject vectors.
 //!
@@ -16,17 +15,16 @@
 use core::fmt;
 
 /// A fail-closed trust violation: the input is well-formed enough to prove a
-/// writer did not follow the deterministic profile (or, in later slices,
-/// failed a cryptographic check). Never mere staleness, never retried.
+/// writer did not follow the deterministic profile, or it failed a
+/// cryptographic check. Never mere staleness, never retried.
 ///
 /// The codec-layer boundary between the classes, frozen by the KAT reject
 /// vectors: a violation is *trust* when a canonical encoding of the same data
 /// exists and the writer emitted a different one (non-shortest forms,
-/// indefinite lengths, unsorted or duplicate keys) — the signature of a
-/// tampering or non-conforming re-encode. Shapes the profile has no
-/// representation for at all (tags, floats, extra simple values, non-text
-/// keys) are [`Malformed`]: foreign data, not a non-canonical form of valid
-/// data.
+/// indefinite lengths, unsorted or duplicate keys) — the signature of tampering
+/// or a non-conforming re-encode. Shapes the profile has no representation for
+/// at all (tags, floats, extra simple values, non-text keys) are [`Malformed`]:
+/// foreign data, not a non-canonical form of valid data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TrustViolation {
     /// An integer (major type 0/1) used a longer encoding than the shortest
@@ -43,41 +41,35 @@ pub enum TrustViolation {
     /// The same key encoded twice in one map.
     DuplicateMapKey { offset: usize, key: String },
     /// A subkey binding signature did not verify over the det-CBOR
-    /// `{encSubkey, identityPk}` preimage. This is *trust*, never mere
-    /// malformation: the contact code is structurally well-formed (both keys
-    /// decode, the signature is a valid ECDSA encoding), yet the identity did
-    /// not attest this encryption subkey — the exact forgery the mandatory
-    /// import-time verify exists to reject fail-closed.
+    /// `{encSubkey, identityPk}` preimage. *Trust*, not malformation: the code
+    /// is structurally well-formed, yet the identity did not attest this
+    /// encryption subkey — the forgery the mandatory import-time verify rejects.
     SubkeyBindingInvalid,
-    /// An HPKE ciphertext failed to open: the AEAD authentication tag did not
-    /// verify under the derived key and AAD. *Trust*, not availability —
-    /// unseal failure never silently degrades, and a tag mismatch is the
-    /// signature of tampering or an AAD/enc transplant, not a retryable fetch
-    /// error.
+    /// An HPKE ciphertext failed to open: the AEAD tag did not verify under the
+    /// derived key and AAD. *Trust*, not availability — a tag mismatch is the
+    /// signature of tampering or an AAD/enc transplant, never a retryable error.
     HpkeOpenFailed,
     /// A low-order X25519 peer/recipient key forced a non-contributory (all-zero)
-    /// DHKEM shared secret, or a contact code's `encSubkey` was such a low-order
-    /// point (RFC 9180 §7.1.4). *Trust*: the bytes are structurally a valid
-    /// 32-byte key, so this is not malformation — it is a **chosen-key** attack,
-    /// a degenerate point picked so the derived AEAD key depends only on public
-    /// material (the sealed seed becomes openable by anyone). Fires before any
-    /// open at HPKE decap and at contact import, distinct from a mere tag
-    /// mismatch ([`Self::HpkeOpenFailed`]).
+    /// DHKEM shared secret, or a contact code's `encSubkey` was such a point
+    /// (RFC 9180 §7.1.4). *Trust*, not malformation: the bytes are a valid
+    /// 32-byte key, so this is a **chosen-key** attack — a degenerate point
+    /// picked so the derived AEAD key depends only on public material (the
+    /// sealed seed becomes openable by anyone). Fires before any open, at HPKE
+    /// decap and at contact import, distinct from a tag mismatch
+    /// ([`Self::HpkeOpenFailed`]).
     HpkeNonContributory,
     /// A symmetric sealed body failed to open: the XChaCha20-Poly1305 tag did
     /// not verify under the read/structure key and the structured AAD
     /// `(v, id, scope, epoch, structTag)`. *Trust*, not availability — the
-    /// signature of tampering, an AAD transplant (a body re-hung under a
-    /// different id/scope/epoch/tag), or a version downgrade (`v` is bound into
-    /// the AAD, so a rolled-back `v` fails the tag). Unseal never silently
-    /// degrades to staleness.
+    /// signature of an AAD transplant (a body re-hung under a different
+    /// id/scope/epoch/tag) or a `v` downgrade, both bound into the AAD. Unseal
+    /// never silently degrades to staleness.
     SealOpenFailed,
     /// A sealed content blob did not content-address to its claimed `contentCid`
-    /// (blueprint/core.md "Open edges"; the content-DAG CID verify). *Trust*,
-    /// never staleness: the CID is a BLAKE3 digest over the sealed bytes, so a
-    /// mismatch is evidence the bytes were substituted or the claimed CID is
-    /// wrong — the fail-closed content-address check, distinct from an unopened
-    /// seal ([`Self::SealOpenFailed`]).
+    /// (blueprint/core.md "Open edges"). *Trust*, never staleness: the CID is a
+    /// BLAKE3 digest over the sealed bytes, so a mismatch is evidence the bytes
+    /// were substituted — distinct from an unopened seal
+    /// ([`Self::SealOpenFailed`]).
     ContentCidMismatch,
     /// Two child refs in one folder read-body carried the same `id`. Uniqueness
     /// is fail-closed at decode (#39 D7): duplicate ids anywhere are a trust
@@ -90,12 +82,10 @@ pub enum TrustViolation {
     /// leaves the name out for — rejected here instead of by the tag.
     DuplicateIpnsName,
     /// Two rows of a grant ledger or grant-set commitment carried the same
-    /// blinded `tag`. The exact analog of [`Self::DuplicateId`] (#39 D7): a
-    /// recipient's tag locates its grant blob and its committed
-    /// `(permission, pseudonymPk)`, so a duplicate is a confused-deputy over
-    /// read-vs-write authority (a second row injecting the victim's tag with a
-    /// different permission/enc key makes the lookup ambiguous). Fail-closed at
-    /// decode, never first-match.
+    /// blinded `tag`. The exact analog of [`Self::DuplicateId`] (#39 D7): a tag
+    /// locates its grant blob and its committed `(permission, pseudonymPk)`, so
+    /// a duplicate is a confused-deputy over read-vs-write authority. Fail-closed
+    /// at decode, never first-match.
     DuplicateGrantTag,
     /// An IPNS record's `signatureV2` did not verify over
     /// `"ipns-signature:" || data` under the Ed25519 key **extracted from the
@@ -341,12 +331,11 @@ pub enum Malformed {
     UnknownRecordField { key: String },
     /// A durable op record declared a format version this build does not
     /// implement. *Malformed*, not trust: a forward-version record is intact
-    /// input this decoder cannot interpret, carrying no evidence of tampering.
-    /// A rewritten `v` is indistinguishable from a genuine one and lands here
-    /// too — deliberately, since the gate runs before the AEAD; the AAD's
-    /// version binding closes downgrade *between* supported versions instead.
-    /// The distinction is load-bearing — the engine **retains** such a record
-    /// rather than dead-lettering and deleting a queue it cannot yet read.
+    /// input this decoder cannot interpret. A rewritten `v` lands here too —
+    /// deliberately, since the gate runs before the AEAD; the AAD's version
+    /// binding closes downgrade *between* supported versions instead. The
+    /// distinction is load-bearing: the engine **retains** such a record rather
+    /// than dead-lettering a queue it cannot yet read.
     UnsupportedRecordVersion { version: u64 },
     /// An IPNS record's protobuf could not be parsed, or it was missing a field
     /// the V2 verify chain requires (`value`, `signatureV2`, or `data`), or its

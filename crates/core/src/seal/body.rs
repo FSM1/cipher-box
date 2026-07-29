@@ -2,26 +2,18 @@
 //! (blueprint/core.md "Envelope and structures", CONTEXT.md "Envelope").
 //!
 //! `kind` lives *inside* this sealed structure (#27 D4), so an observer of the
-//! plaintext envelope cannot tell a file from a folder. The read-body is a
-//! tagged union — `folder { children[] }` or `file { versions[] }` — plus the
-//! injected `createdAt`/`modifiedAt` timestamps (core reads no clock; times
-//! enter as parameters).
+//! plaintext envelope cannot tell a file from a folder. The body is a tagged
+//! union — `folder { children[] }` or `file { versions[] }` — plus injected
+//! timestamps (core reads no clock).
 //!
-//! - **Child refs** are `{id, name, ipnsName, kind, linkCounter}` (#27 D7): an
-//!   immutable location-independent id, the display name, the child's opaque
-//!   `ipnsName`, the immutable `kind`, and the monotonic link counter that
-//!   picks the deterministic loser in dual-link repair (#33 D5). No key wraps,
-//!   no size/mtime mirrors — a child write never republishes its parent.
-//! - **File versions** are one inline newest-first list
-//!   `[{contentCid, contentKey, size, modifiedAt}]`; head is current. Content
-//!   keys are **random per version**, stored inline (never derived): rotation
-//!   re-wraps them for free via the metadata re-seal, so the key material is
-//!   held in a zeroizing owning type here.
+//! A child ref (#27 D7) carries no key wraps and no size/mtime mirrors, so a
+//! child write never republishes its parent. File-version content keys are
+//! **random per version** and stored inline rather than derived: rotation
+//! re-wraps them for free via the metadata re-seal.
 //!
-//! **Uniqueness is fail-closed at decode** (#39 D7): within one folder's child
-//! listing, duplicate `id`s and duplicate `ipnsName`s reject as trust
-//! violations. Duplicate-`ipnsName` closes the name-transplant hole the AAD
-//! leaves open by design ([`super::aad`]).
+//! **Uniqueness is fail-closed at decode** (#39 D7): duplicate child `id`s and
+//! duplicate `ipnsName`s reject as trust violations, the latter closing the
+//! name-transplant hole the AAD leaves open by design ([`super::aad`]).
 //!
 //! One strictness policy, everywhere (#27 D10): every map level decodes strict
 //! det-CBOR and preserves unknown fields byte-stable, so an old client
@@ -79,8 +71,7 @@ pub struct ChildRef {
     pub id: [u8; 16],
     /// The display name.
     pub name: String,
-    /// The child's opaque `ipnsName` bytes (the base36 name codec is a later
-    /// slice; treated as opaque here and ordered by [`name_cmp`]).
+    /// The child's opaque `ipnsName` bytes, ordered by [`name_cmp`].
     pub ipns_name: Vec<u8>,
     /// The child's immutable kind.
     pub kind: NodeKind,
@@ -128,14 +119,11 @@ impl ChildRef {
 // File version. Content keys are secret material → zeroizing owning type.
 // ---------------------------------------------------------------------------
 
-/// One file version: the content CID, its random inline content key, the
-/// plaintext size, and the injected modification time. Newest-first in the
-/// version list; head is current.
+/// One file version; newest-first in the version list, head is current.
 ///
-/// The `content_key` is random per-version symmetric key material, held in a
-/// zeroizing owning type ([`SecretBytes`]) with a redacted `Debug` — the
-/// blueprint's inline-random-content-key rule crossed with the never-log-keys
-/// rule. It is private; read it through [`Version::content_key`].
+/// The private `content_key` is random per-version symmetric key material, held
+/// in a zeroizing owner ([`SecretBytes`]) with a redacted `Debug` (never-log-keys
+/// rule); read it through [`Version::content_key`].
 #[derive(Clone)]
 pub struct Version {
     /// The content CID bytes.
@@ -263,10 +251,9 @@ impl ReadBody {
         }
     }
 
-    /// Check the decode-time invariants a *constructed* body must also satisfy
-    /// before it is sealed and persisted: a folder's children carry
-    /// pairwise-unique ids and pairwise-unique ipnsNames (#39 D7). The seal path
-    /// runs this so it never persists a body that decode would refuse to reopen.
+    /// The decode-time uniqueness invariants (#39 D7) re-checked on a
+    /// *constructed* body: the seal path runs this so it never persists a body
+    /// that decode would refuse to reopen.
     pub fn validate(&self) -> Result<(), CodecError> {
         match self {
             Self::Folder { children, .. } => assert_children_unique(children),
@@ -278,24 +265,18 @@ impl ReadBody {
 /// The strict name comparator: a platform-stable total order over opaque
 /// `ipnsName` bytes (blueprint/testing.md — the strict name comparator).
 ///
-/// The base36 name codec is a later slice, so names are raw bytes here.
 /// Bytewise-lexicographic order depends only on the bytes — no length prefix,
 /// no locale — so duplicate detection is deterministic and identical on native
-/// and WASM. Backs the duplicate-`ipnsName` uniqueness check and its
-/// total-order property test.
+/// and WASM. Backs the duplicate-`ipnsName` uniqueness check.
 pub fn name_cmp(a: &[u8], b: &[u8]) -> Ordering {
     a.cmp(b)
 }
 
 /// Decode a sealed read-body plaintext (strict det-CBOR, uniqueness enforced).
 ///
-/// The transient decoded `Value` tree carries a verbatim copy of every file
-/// version's inline **content key**. Those bytes are read into zeroizing
-/// [`SecretBytes`] owners, but the tree itself must be scrubbed before it drops
-/// (terminal-owner rule, symmetric with [`encode_read_body`]). An owning
-/// [`ScrubOwned`] guard wraps the tree and wipes it on drop — covering the Ok
-/// return, every `?` early return, and a panic-unwind — while `map` reads
-/// through the guard's immutable accessor.
+/// The transient decoded tree carries a verbatim copy of every inline **content
+/// key**, so it is scrubbed through the owning [`ScrubOwned`] guard
+/// (terminal-owner rule; symmetric with [`encode_read_body`]).
 pub fn decode_read_body(bytes: &[u8]) -> Result<ReadBody, CodecError> {
     let value = ScrubOwned(decode(bytes)?);
     let map = value.value().as_map()?;
@@ -336,15 +317,14 @@ pub fn decode_read_body(bytes: &[u8]) -> Result<ReadBody, CodecError> {
 
 /// Encode a read-body to its canonical det-CBOR plaintext.
 ///
-/// The returned buffer carries any inline **content-key** material verbatim, so
-/// its caller is the terminal owner and must zeroize it after use (the seal
-/// path, [`seal_read_body`](super::seal_read_body), does exactly this).
+/// The returned buffer carries inline **content-key** material verbatim, so its
+/// caller is the terminal owner and must zeroize it (the seal path,
+/// [`seal_read_body`](super::seal_read_body), does).
 ///
-/// Encoding does *not* re-check uniqueness: a caller-built folder with duplicate
-/// child ids/ipnsNames still encodes but its bytes reject on decode. Callers
-/// that *persist* a body must go through [`seal_read_body`](super::seal_read_body)
-/// (or call [`ReadBody::validate`] first), which refuses to seal a body that
-/// would not reopen; a `debug_assert` catches the divergence early in tests.
+/// Encoding does *not* re-check uniqueness — persisting callers go through
+/// [`seal_read_body`](super::seal_read_body) (or [`ReadBody::validate`]), which
+/// refuses to seal a body that would not reopen; the `debug_assert` only catches
+/// that divergence early in tests.
 pub fn encode_read_body(body: &ReadBody) -> Result<Vec<u8>, CodecError> {
     debug_assert!(
         body.validate().is_ok(),
@@ -395,10 +375,9 @@ pub fn encode_read_body(body: &ReadBody) -> Result<Vec<u8>, CodecError> {
 
 /// Scrubs a codec-owned transient `Value` tree on drop, so the secret copies it
 /// carries (inline content keys, scope seeds) are wiped on both normal return
-/// and panic-unwind out of `encode` (blueprint/core.md terminal-owner rule). It
-/// borrows the tree rather than owning it, leaving the wiped buffers observable
-/// to a caller/test after the guard falls. `pub(crate)` so the grant-section
-/// encoders share the one guard.
+/// and panic-unwind (blueprint/core.md terminal-owner rule). It borrows rather
+/// than owns the tree, leaving the wiped buffers observable to a caller/test
+/// after the guard falls.
 pub(crate) struct ScrubOnDrop<'a>(pub(crate) &'a mut Value);
 
 impl Drop for ScrubOnDrop<'_> {
@@ -408,11 +387,9 @@ impl Drop for ScrubOnDrop<'_> {
 }
 
 /// The owning sibling of [`ScrubOnDrop`], for the decode side: it takes the
-/// transient decoded `Value` tree by value and scrubs it on drop. The decoder
-/// reads its fields through [`Self::value`], an immutable borrow that coexists
-/// with the guard (a `&mut` guard cannot, since decode holds a live `&Map` into
-/// the same tree). Covers Ok, Err, and panic-unwind. `pub(crate)` so the
-/// grant-section decoders share the one guard.
+/// decoded tree by value and scrubs it on drop, covering Ok, Err, and unwind.
+/// Owning rather than borrowing because decode holds a live `&Map` into the
+/// tree, which a `&mut` guard cannot coexist with; read it via [`Self::value`].
 pub(crate) struct ScrubOwned(pub(crate) Value);
 
 impl ScrubOwned {
@@ -502,12 +479,10 @@ pub(super) fn collect_unknown(map: &Map, known: &[&str]) -> Vec<(String, Value)>
 }
 
 /// Merge preserved unknown fields into a typed map, **typed fields taking
-/// precedence**. Decode guarantees the unknown keys never overlap the typed
-/// ones (they were partitioned by [`collect_unknown`]), so the round-trip path
-/// never collides and stays byte-stable. The skip-on-collision guard hardens
-/// the *construction* path: a caller-built struct whose public `unknown` list
-/// happens to carry a schema key can never overwrite the typed value and forge
-/// bytes that disagree with it. `Map::insert` re-imposes canonical order.
+/// precedence**. Decode already partitions the two ([`collect_unknown`]), so the
+/// skip-on-collision guard is for the *construction* path: a caller-built
+/// `unknown` list carrying a schema key can never overwrite the typed value and
+/// forge bytes that disagree with it. `Map::insert` re-imposes canonical order.
 pub(super) fn merge_unknown(map: &mut Map, unknown: &[(String, Value)]) {
     for (k, v) in unknown {
         if !map.contains_key(k) {

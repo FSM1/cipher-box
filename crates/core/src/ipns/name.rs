@@ -7,11 +7,10 @@
 //! anchor the name itself: [`IpnsName::public_key`] extracts the Ed25519 key
 //! from the name, never from a side channel or a DB column (#39 D7).
 //!
-//! Encode and strict decode are the two core exports; everything downstream
-//! treats names as opaque. Decode is deliberately strict — it matches the one
-//! canonical Ed25519-identity layout byte-for-byte and re-derives the canonical
-//! text, rejecting anything that does not round-trip to the exact bytes we would
-//! emit (the cross-language `$`-before-`\n` lesson: keep the Rust side strict).
+//! Decode is deliberately strict: it matches the one canonical
+//! Ed25519-identity layout byte-for-byte and re-derives the canonical text,
+//! rejecting anything that does not round-trip to the exact bytes we would emit
+//! (the cross-language `$`-before-`\n` lesson: keep the Rust side strict).
 
 use crate::error::{CodecError, Malformed};
 use crate::suite::ed25519::{Ed25519Verifier, PUBLIC_LEN};
@@ -67,10 +66,9 @@ impl IpnsName {
     /// a wrong CID/multihash/protobuf layout, or a 32-byte digest that is not a
     /// valid compressed Edwards point.
     pub fn parse(text: &str) -> Result<Self, CodecError> {
-        // A canonical name is one multibase char plus the base36 of a
-        // fixed-size CID; reject anything longer up front, before the O(n^2)
-        // base36 division, so a giant string cannot burn work (the base36 upper
-        // bound never rejects a real name — it always exceeds their true width).
+        // Bound the input before the O(n^2) base36 division so a giant string
+        // cannot burn work. The base36 upper bound always exceeds a real name's
+        // true width, so it never rejects one.
         if text.len() > 1 + base36_len(CID_LEN) {
             return Err(malformed());
         }

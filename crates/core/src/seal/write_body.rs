@@ -3,18 +3,13 @@
 //!
 //! Present **only at scope roots**: interior nodes publish no write-body at all
 //! — their write material (write seed, `writeKey`, IPNS keypair) is derived flat
-//! within the write scope. The write-body is sealed under the root's `writeKey`
-//! (struct tag `write-body`) and carries three things:
+//! within the write scope. Sealed under the root's `writeKey` (struct tag
+//! `write-body`), it carries the authoritative grant ledger, the write-plane
+//! history link (opaque sealed bytes here; codec in [`super::grant`]), and the
+//! `directChildScopeIndex` for the F-4 rotation cascade (#38 D6).
 //!
-//! - the **grant ledger** — the authoritative `(recipientIdentityPk,
-//!   recipientEncPk, permission, tag)` record of a scope's grants. Writers
-//!   re-wrap grant blobs for the recorded set during re-seals but cannot change
-//!   the set; grant changes are owner-only.
-//! - the **write-plane history link** — the previous write epoch's seed sealed
-//!   under the current one (opaque sealed bytes here; the codec is
-//!   [`super::grant`]).
-//! - the **directChildScopeIndex** — the directly-descendant scope roots, for
-//!   the F-4 rotation cascade (#38 D6).
+//! Writers re-wrap grant blobs for the ledger's recorded set during re-seals but
+//! cannot change the set; grant changes are owner-only.
 //!
 //! One strictness policy, everywhere (#27 D10): every map level decodes strict
 //! det-CBOR and preserves unknown fields byte-stable, so an old client
@@ -33,10 +28,9 @@ use super::grant::Permission;
 // Grant-ledger entry.
 // ---------------------------------------------------------------------------
 
-/// One authoritative grant-ledger row: the recipient's identity and encryption
-/// public keys, their permission, and their blinded tag. The identity key is
-/// the 33-byte compressed secp256k1 SEC1 form; the encryption subkey is the
-/// 32-byte X25519 public key.
+/// One authoritative grant-ledger row. The identity key is the 33-byte
+/// compressed secp256k1 SEC1 form; the encryption subkey is a 32-byte X25519
+/// public key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantLedgerEntry {
     /// The recipient's compressed secp256k1 identity public key (SEC1).
@@ -113,9 +107,7 @@ impl GrantLedgerEntry {
 // Child-scope index entry.
 // ---------------------------------------------------------------------------
 
-/// One directly-descendant scope root, enumerated for the F-4 rotation cascade:
-/// its scope id (the scope-root node UUID) and its opaque `ipnsName` (needed to
-/// resolve it).
+/// One directly-descendant scope root, enumerated for the F-4 rotation cascade.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildScopeRef {
     /// The child scope root's node id (16-byte UUID) = its scope id.
@@ -162,9 +154,7 @@ impl ChildScopeRef {
 // The write-body.
 // ---------------------------------------------------------------------------
 
-/// The sealed write-plane payload of a scope root. `write_history_link` is the
-/// opaque sealed bytes of the write-plane history link (empty at write epoch 1,
-/// before any prior write epoch exists).
+/// The sealed write-plane payload of a scope root.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteBody {
     /// The authoritative grant ledger.
@@ -181,9 +171,8 @@ const WRITE_BODY_KNOWN: &[&str] = &["directChildScopeIndex", "grantLedger", "wri
 
 /// Decode a write-body plaintext (strict det-CBOR, unknown fields preserved).
 ///
-/// The write-body is a scope-root-only structure; this codec does not (and
-/// cannot) enforce that — whether a node is a scope root is the engine's
-/// decision.
+/// Scope-root-only by construction; this codec cannot enforce that — whether a
+/// node is a scope root is the engine's decision.
 pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
     let value = decode(bytes)?;
     let map = value.as_map()?;
@@ -210,13 +199,10 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
 /// Encode a write-body to its canonical det-CBOR plaintext (sealed under the
 /// root's `writeKey` with struct tag `write-body` by the caller / seal path).
 ///
-/// Fails closed on a duplicate-tag ledger with the same `duplicate-grant-tag`
-/// verdict `decode_write_body` raises. Unlike [`encode_read_body`] — whose core
-/// seal boundary [`seal_read_body`](super::seal_read_body) runs `ReadBody::validate`
-/// — the write body is sealed outside core, so this encode is its release-active
-/// guard: it never hands back bytes its own decoder rejects.
-///
-/// [`encode_read_body`]: super::encode_read_body
+/// The write body is sealed outside core, so this encode is its release-active
+/// fail-closed guard: a duplicate-tag ledger fails here with the same
+/// `duplicate-grant-tag` verdict [`decode_write_body`] raises, so it never hands
+/// back bytes its own decoder rejects.
 pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
     assert_grant_tags_unique(body.grant_ledger.iter().map(|e| e.tag))?;
     let mut m = Map::new();

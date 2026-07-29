@@ -3,21 +3,17 @@
 //!
 //! Two owner/sender-authenticated transports core owns end to end:
 //!
-//! - **Pointer payload** ([`pointer`]) — the re-point object
-//!   `{scopeId, currentRootName, writeEpoch, minReadEpoch, prevRootName}`,
-//!   owner-identity-signed (secp256k1 ECDSA) inside the record and then sealed
-//!   under the scope's stable `pointerReadKey` with the `pointer-payload`
-//!   structured AAD. The vault pointer carries the same object for the root
-//!   scope (#39 D5).
-//! - **Mailbox payload** ([`mailbox`]) — an HPKE-sealed item with the sender's
-//!   identity signature **inside the seal** (#39 D9); the recipient opens, then
-//!   verifies the sender signature against the contact-code-anchored key.
+//! - **Pointer payload** ([`pointer`]) — the owner-identity-signed re-point
+//!   object, sealed under the scope's stable `pointerReadKey` via the symmetric
+//!   [`seal`](crate::seal) path. The vault pointer carries the same object for
+//!   the root scope (#39 D5).
+//! - **Mailbox payload** ([`mailbox`]) — an [`hpke`](crate::suite::hpke)-sealed
+//!   item with the sender's identity signature **inside the seal** (#39 D9),
+//!   verified against the contact-code-anchored key after opening.
 //!
-//! Both reuse the vetted primitives the seal slice landed: the symmetric
-//! [`seal`](crate::seal) path (structured AAD + XChaCha20-Poly1305) for the
-//! pointer, and [`hpke`](crate::suite::hpke) for the mailbox. The structure-tag
-//! registry (`pointer-payload = 0x07`, `mailbox-payload = 0x08`) is the one #620
-//! froze — this slice consumes it, never redefines it.
+//! The structure-tag registry (`pointer-payload = 0x07`,
+//! `mailbox-payload = 0x08`) is the one #620 froze — consumed here, never
+//! redefined.
 
 pub mod mailbox;
 pub mod pointer;
