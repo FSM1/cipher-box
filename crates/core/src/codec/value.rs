@@ -200,6 +200,13 @@ impl Map {
             .map(|i| &self.entries[i].1)
     }
 
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
+        self.entries
+            .binary_search_by(|(k, _)| canonical_key_cmp(k, key))
+            .ok()
+            .map(|i| &mut self.entries[i].1)
+    }
+
     pub fn remove(&mut self, key: &str) -> Option<Value> {
         self.entries
             .binary_search_by(|(k, _)| canonical_key_cmp(k, key))
@@ -226,7 +233,7 @@ impl Map {
 
     /// Zeroize every entry value's owned byte buffers in place (keys are text,
     /// never secret). See [`Value::zeroize_bytes`].
-    pub fn zeroize_bytes(&mut self) {
+    pub(crate) fn zeroize_bytes(&mut self) {
         for (_, v) in &mut self.entries {
             v.zeroize_bytes();
         }

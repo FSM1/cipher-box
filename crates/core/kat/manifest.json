@@ -469,10 +469,12 @@
     },
     "reject": {
       "file": "vectors/settings_record/settings_record_reject.json",
-      "count": 8,
+      "count": 10,
       "checks": [
         "hpke-open-failed",
+        "hpke-non-contributory",
         "missing-field",
+        "invalid-field-length",
         "unknown-record-field",
         "unsupported-record-version"
       ]

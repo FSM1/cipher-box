@@ -57,7 +57,7 @@ use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer};
 use cipherbox_core::suite::hash::hash;
-use cipherbox_core::suite::hpke::{self, MODE_AUTH, hpke_open, hpke_seal};
+use cipherbox_core::suite::hpke::{self, ENC_LEN, MODE_AUTH, hpke_open, hpke_seal};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use serde::Serialize;
 
@@ -5723,13 +5723,14 @@ fn op_record_accept_vector(
     }
 }
 
-/// Re-frame a record through the live encoder — the only way to produce the
-/// header swaps and omissions the seal path itself refuses to emit.
-fn reframe_op_record(record: &[u8], edit: impl FnOnce(&mut Map)) -> Vec<u8> {
-    let value = decode(record).expect("op-record reframe: source decodes");
-    let mut map = value.as_map().expect("op-record reframe: map").clone();
+/// Re-frame a clear-headered record through the live encoder — the only way to
+/// produce the header swaps and omissions the seal paths themselves refuse to
+/// emit.
+fn reframe_record(record: &[u8], edit: impl FnOnce(&mut Map)) -> Vec<u8> {
+    let value = decode(record).expect("reframe: source decodes");
+    let mut map = value.as_map().expect("reframe: map").clone();
     edit(&mut map);
-    encode(&Value::Map(map)).expect("op-record reframe: re-encodes")
+    encode(&Value::Map(map)).expect("reframe: re-encodes")
 }
 
 fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
@@ -5738,50 +5739,50 @@ fn build_op_record_reject() -> Vec<OpRecordRejectVector> {
     let cid = op_record_content_root();
     let record = seal_op_record(&owner, &eph, Some(&cid), b"reject-probe intent").unwrap();
 
-    let tampered_ciphertext = reframe_op_record(&record, |m| {
+    let tampered_ciphertext = reframe_record(&record, |m| {
         let mut ct = m.get("ciphertext").unwrap().as_bytes().unwrap().to_vec();
         ct[0] ^= 0x01;
         m.insert("ciphertext", Value::Bytes(ct));
     });
-    let tampered_owner_tag = reframe_op_record(&record, |m| {
+    let tampered_owner_tag = reframe_record(&record, |m| {
         let mut tag = m.get("ownerTag").unwrap().as_bytes().unwrap().to_vec();
         tag[0] ^= 0x01;
         m.insert("ownerTag", Value::Bytes(tag));
     });
-    let swapped_content_root_cid = reframe_op_record(&record, |m| {
+    let swapped_content_root_cid = reframe_record(&record, |m| {
         let other = compute_cid(CONTENT_CID_CODEC, b"a different staged root block");
         m.insert("contentRootCid", Value::Bytes(other));
     });
-    let malformed_content_root_cid = reframe_op_record(&record, |m| {
+    let malformed_content_root_cid = reframe_record(&record, |m| {
         m.insert("contentRootCid", Value::Bytes(b"not a cid".to_vec()));
     });
-    let missing_owner_tag = reframe_op_record(&record, |m| {
+    let missing_owner_tag = reframe_record(&record, |m| {
         m.remove("ownerTag");
     });
     // Records from a build ahead of this one. Each still reads keylessly — that
     // is what lets the engine retain rather than delete them — and each fires
     // the version gate before any width or framing check this build owns.
-    let forward_version = reframe_op_record(&record, |m| {
+    let forward_version = reframe_record(&record, |m| {
         m.insert("v", Value::Unsigned(OP_RECORD_V + 1));
     });
-    let forward_version_wide_enc = reframe_op_record(&record, |m| {
+    let forward_version_wide_enc = reframe_record(&record, |m| {
         m.insert("v", Value::Unsigned(OP_RECORD_V + 1));
         m.insert("enc", Value::Bytes(vec![0x5a; 48]));
         m.insert("ownerTag", Value::Bytes(vec![0x5b; 48]));
     });
-    let forward_version_other_cid_framing = reframe_op_record(&record, |m| {
+    let forward_version_other_cid_framing = reframe_record(&record, |m| {
         m.insert("v", Value::Unsigned(OP_RECORD_V + 1));
         m.insert("contentRootCid", Value::Bytes(b"a later framing".to_vec()));
     });
     // The encoder cannot emit a tag naming a key that does not open the record;
     // hand-framed, `open_op_record` must still refuse it.
-    let lying_owner_tag = reframe_op_record(&record, |m| {
+    let lying_owner_tag = reframe_record(&record, |m| {
         let other = X25519Secret::from_scalar([0x33; 32]).public().to_bytes();
         m.insert("ownerTag", Value::Bytes(other.to_vec()));
     });
     // A sixth key at this version: outside the AAD, so it opens cleanly unless
     // the five keys are enforced as exhaustive.
-    let unknown_field = reframe_op_record(&record, |m| {
+    let unknown_field = reframe_record(&record, |m| {
         m.insert("stash", Value::Bytes(b"unauthenticated".to_vec()));
     });
     let base_mode_forgery = forged_base_mode_op_record(&owner.public(), Some(&cid));
@@ -5972,6 +5973,14 @@ fn op_record_reject_vector(
 // AAD, so a header swap fails at the AEAD tag rather than merely mismatching.
 // ===========================================================================
 
+/// An order-8 X25519 point: every Diffie-Hellman against it yields the all-zero
+/// shared secret RFC 7748 §6.1 requires implementations to reject.
+fn low_order_x25519_point() -> [u8; 32] {
+    let bytes = hex::decode("e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800")
+        .expect("low-order point is valid hex");
+    bytes.try_into().expect("low-order point is 32 bytes")
+}
+
 /// The frozen owner enc subkey the settings-record vectors seal to, and its
 /// scalar.
 fn settings_record_owner() -> ([u8; 32], X25519Secret) {
@@ -6035,53 +6044,52 @@ fn settings_record_accept_vector(
     }
 }
 
-/// Re-frame a record through the live encoder — the only way to produce the
-/// header swaps and omissions the seal path itself refuses to emit.
-fn reframe_settings_record(record: &[u8], edit: impl FnOnce(&mut Map)) -> Vec<u8> {
-    let value = decode(record).expect("settings-record reframe: source decodes");
-    let mut map = value
-        .as_map()
-        .expect("settings-record reframe: map")
-        .clone();
-    edit(&mut map);
-    encode(&Value::Map(map)).expect("settings-record reframe: re-encodes")
-}
-
 fn build_settings_record_reject() -> Vec<SettingsRecordRejectVector> {
     let (scalar, owner) = settings_record_owner();
     let eph: [u8; 32] = std::array::from_fn(|i| (0xc1 + i) as u8);
     let record = seal_settings_record(&owner, &eph, b"reject-probe config").unwrap();
 
-    let tampered_ciphertext = reframe_settings_record(&record, |m| {
+    let tampered_ciphertext = reframe_record(&record, |m| {
         let mut ct = m.get("ciphertext").unwrap().as_bytes().unwrap().to_vec();
         ct[0] ^= 0x01;
         m.insert("ciphertext", Value::Bytes(ct));
     });
-    let tampered_owner_tag = reframe_settings_record(&record, |m| {
-        let mut tag = m.get("ownerTag").unwrap().as_bytes().unwrap().to_vec();
-        tag[0] ^= 0x01;
-        m.insert("ownerTag", Value::Bytes(tag));
-    });
-    // The encoder derives the tag from the recipient, so it cannot emit a tag
-    // naming a key that does not open the record; hand-framed, the open path
-    // must still refuse it.
-    let lying_owner_tag = reframe_settings_record(&record, |m| {
-        let other = X25519Secret::from_scalar([0x44; 32]).public().to_bytes();
-        m.insert("ownerTag", Value::Bytes(other.to_vec()));
-    });
-    let missing_owner_tag = reframe_settings_record(&record, |m| {
-        m.remove("ownerTag");
-    });
-    let forward_version = reframe_settings_record(&record, |m| {
+    let forward_version = reframe_record(&record, |m| {
         m.insert("v", Value::Unsigned(SETTINGS_RECORD_V + 1));
     });
-    // A fifth key at this version: outside the AAD, so it opens cleanly unless
-    // the four keys are enforced as exhaustive.
-    let unknown_field = reframe_settings_record(&record, |m| {
+    // A fourth key at this version: outside the AAD, so it opens cleanly unless
+    // the three keys are enforced as exhaustive.
+    let unknown_field = reframe_record(&record, |m| {
         m.insert("stash", Value::Bytes(b"unauthenticated".to_vec()));
     });
+    let short_enc = reframe_record(&record, |m| {
+        let mut enc = m.get("enc").unwrap().as_bytes().unwrap().to_vec();
+        enc.truncate(ENC_LEN - 1);
+        m.insert("enc", Value::Bytes(enc));
+    });
+    // A low-order point drives the KEM to an all-zero shared secret.
+    let low_order_enc = reframe_record(&record, |m| {
+        m.insert("enc", Value::Bytes(low_order_x25519_point().to_vec()));
+    });
+    let missing_enc = reframe_record(&record, |m| {
+        m.remove("enc");
+    });
+    let missing_ciphertext = reframe_record(&record, |m| {
+        m.remove("ciphertext");
+    });
+    // The op record's KEM output re-framed as a settings record. Dropping its
+    // `contentRootCid` key leaves a structurally valid settings header, so
+    // nothing but the struct tag and info string can refuse it — the vector
+    // that proves the two families are non-transplantable.
+    let op = seal_op_record(&owner, &eph, None, b"intent").unwrap();
+    let cross_family_transplant = reframe_record(&op, |m| {
+        m.remove("contentRootCid");
+        m.remove("ownerTag");
+        m.insert("v", Value::Unsigned(SETTINGS_RECORD_V));
+    });
     let base_mode_forgery = forged_base_mode_settings_record(&owner.public());
-    // A stranger's enc subkey: the owner tag stays readable, the body does not.
+    // A stranger's enc subkey: it rebuilds a different owner tag, so it derives
+    // a different AAD rather than merely failing a comparison.
     let stranger_scalar: [u8; 32] = std::array::from_fn(|i| (0x31 + i) as u8);
 
     vec![
@@ -6093,20 +6101,6 @@ fn build_settings_record_reject() -> Vec<SettingsRecordRejectVector> {
             "trust",
         ),
         settings_record_reject_vector(
-            "tampered-owner-tag",
-            scalar,
-            &tampered_owner_tag,
-            "hpke-open-failed",
-            "trust",
-        ),
-        settings_record_reject_vector(
-            "lying-owner-tag",
-            scalar,
-            &lying_owner_tag,
-            "hpke-open-failed",
-            "trust",
-        ),
-        settings_record_reject_vector(
             "foreign-recipient",
             stranger_scalar,
             &record,
@@ -6114,9 +6108,37 @@ fn build_settings_record_reject() -> Vec<SettingsRecordRejectVector> {
             "trust",
         ),
         settings_record_reject_vector(
-            "missing-owner-tag",
+            "cross-family-transplant",
             scalar,
-            &missing_owner_tag,
+            &cross_family_transplant,
+            "hpke-open-failed",
+            "trust",
+        ),
+        settings_record_reject_vector(
+            "short-enc",
+            scalar,
+            &short_enc,
+            "invalid-field-length",
+            "malformed",
+        ),
+        settings_record_reject_vector(
+            "low-order-enc",
+            scalar,
+            &low_order_enc,
+            "hpke-non-contributory",
+            "trust",
+        ),
+        settings_record_reject_vector(
+            "missing-enc",
+            scalar,
+            &missing_enc,
+            "missing-field",
+            "malformed",
+        ),
+        settings_record_reject_vector(
+            "missing-ciphertext",
+            scalar,
+            &missing_ciphertext,
             "missing-field",
             "malformed",
         ),
@@ -6162,7 +6184,6 @@ fn forged_base_mode_settings_record(owner_pub: &X25519Public) -> Vec<u8> {
     let mut m = Map::new();
     m.insert("ciphertext", Value::Bytes(sealed.ciphertext));
     m.insert("enc", Value::Bytes(sealed.enc.to_vec()));
-    m.insert("ownerTag", Value::Bytes(header.owner_tag.clone()));
     m.insert("v", Value::Unsigned(header.version));
     encode(&Value::Map(m)).expect("forged settings record encodes")
 }

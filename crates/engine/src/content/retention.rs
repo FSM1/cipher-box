@@ -6,6 +6,8 @@
 //! bytes move. Reclaiming space is the explicit user op [`plan_prune`], which is
 //! pure: it selects retire targets, and the net plane runs the retire.
 
+use core::num::NonZeroU64;
+
 use crate::api::Quota;
 
 /// A pre-flight quota rejection: the hosted account cannot admit `needed_bytes`.
@@ -39,6 +41,21 @@ pub fn pre_flight_quota_check(needed_bytes: u64, quota: &Quota) -> Result<(), Qu
         });
     }
     Ok(())
+}
+
+/// How many versions of a file's content the vault retains — the member-set
+/// policy that rides the vault settings record and drives [`plan_prune`].
+///
+/// `KeepLatest` carries a [`NonZeroU64`]: keeping zero versions would plan the
+/// retire of the live version along with its history, so the state is
+/// unrepresentable rather than guarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RetentionPolicy {
+    /// Keep every version within quota (blueprint/engine.md "Content plane").
+    #[default]
+    KeepAll,
+    /// Keep the newest `n` versions; an explicit prune retires the rest.
+    KeepLatest(NonZeroU64),
 }
 
 /// One retained content version: its root `contentCid` (the retire target, as it

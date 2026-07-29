@@ -8,6 +8,7 @@
 //! the documented defaults inside a scheduler-measured budget.
 
 use core::future::poll_fn;
+use core::num::NonZeroU64;
 use core::task::Poll;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -27,7 +28,7 @@ use cipherbox_engine::seams::{
 use cipherbox_engine::testkit::fakes::VirtualScheduler;
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    DefaultsReason, Gateway, GatewayConfig, GatewaySource, RetentionPolicy, SettingsInvalid,
+    DefaultsReason, Gateway, GatewayConfig, GatewaySource, ProviderError, RetentionPolicy,
     SettingsLoad, SettingsPublishError, SyncTimingProfile, VaultSettings, load_settings,
     publish_settings, settings_name,
 };
@@ -112,7 +113,7 @@ fn configured() -> VaultSettings {
             kind: ByoKind::Kubo,
             access_token: Some(Zeroizing::new("s3cret".to_owned())),
         }),
-        retention: RetentionPolicy::KeepLatest(3),
+        retention: RetentionPolicy::KeepLatest(NonZeroU64::new(3).expect("nonzero")),
     }
 }
 
@@ -144,9 +145,13 @@ fn publish(
 }
 
 /// Put `body` on the block plane and publish a record anchoring it at the
-/// account's settings name and `sequence`, bypassing the publish path.
+/// account's settings name and `sequence`, bypassing the publish path. The
+/// ephemeral varies with the sequence: two bodies sealed under one key must
+/// never share one, in fixtures as in production.
 fn seed_settings(device: &FakeDevice, blocks: &Blocks, body: &[u8], sequence: u64) {
-    let block = seal_settings_record(&kdf::enc_subkey(&SECRET), &[8u8; 32], body).expect("seal");
+    let mut ephemeral = [8u8; 32];
+    ephemeral[0] = u8::try_from(sequence).expect("fixture sequences are small");
+    let block = seal_settings_record(&kdf::enc_subkey(&SECRET), &ephemeral, body).expect("seal");
     let cid = blocks.put(block);
     let record = IpnsRecord::create_v2(
         &kdf::settings_ipns_keypair(&SECRET),
@@ -187,14 +192,115 @@ fn settings_written_on_one_device_resolve_on_a_second_device_of_the_account() {
     let alice = world.device(b"alice-laptop");
     publish(&world, &alice, &blocks, &SECRET, &configured());
 
-    // Device B shares only the network and the clock: its own floors, cache and
-    // HTTP, and no state carried over from the write.
+    // Device B shares only the network and the clock.
     let bob = world.device(b"alice-phone");
     assert_eq!(
         load(&world, &bob, &blocks, &SECRET),
         SettingsLoad::Resolved(configured()),
         "the second device opens the record under its own enc-subkey"
     );
+}
+
+/// A publish that does not advance the writer's own floor mints the same
+/// sequence next time, so the second update collides and silently never lands —
+/// and this is the path a leaked BYO credential is rotated on.
+#[test]
+fn a_second_publish_from_the_same_device_supersedes_the_first() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice-laptop");
+    let name = settings_name(&SECRET);
+
+    publish(&world, &alice, &blocks, &SECRET, &configured());
+    assert_eq!(
+        block_on(alice.floor_store.sequence_floor(name.as_str().as_bytes())).expect("read"),
+        Some(1),
+        "a confirmed publish advances the writer's own floor",
+    );
+
+    let rotated = VaultSettings {
+        byo: Some(ByoIpfsConfig {
+            endpoint: "https://kubo.example".to_owned(),
+            kind: ByoKind::Kubo,
+            access_token: Some(Zeroizing::new("rotated".to_owned())),
+        }),
+        ..configured()
+    };
+    publish(&world, &alice, &blocks, &SECRET, &rotated);
+
+    let bob = world.device(b"alice-phone");
+    assert_eq!(
+        load(&world, &bob, &blocks, &SECRET),
+        SettingsLoad::Resolved(rotated),
+        "the second device sees the rotated credential, not the superseded one",
+    );
+}
+
+/// HPKE ephemeral reuse across two seals under one recipient key is a
+/// confidentiality break, so every publish must draw a fresh one.
+#[test]
+fn consecutive_publishes_never_reuse_the_hpke_ephemeral() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    // One entropy source across both calls: a hoisted or cached scalar shows up
+    // as two identical `enc` values.
+    let mut entropy = SeededEntropy::new(4);
+    let mut encs = Vec::new();
+    for settings in [VaultSettings::default(), configured()] {
+        serve_http(&device, &blocks, 4);
+        block_on(publish_settings(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &mut entropy,
+            &SECRET,
+            &settings,
+        ))
+        .expect("publish");
+        let block = published_block(&device, &blocks, &settings_name(&SECRET));
+        let decoded = cipherbox_core::codec::decode(&block).expect("decode");
+        encs.push(
+            decoded
+                .as_map()
+                .expect("map")
+                .get("enc")
+                .expect("enc")
+                .as_bytes()
+                .expect("bytes")
+                .to_vec(),
+        );
+    }
+    assert_ne!(encs[0], encs[1], "each publish draws a fresh ephemeral");
+}
+
+/// The head block the record currently published at `name` anchors.
+fn published_block(device: &FakeDevice, blocks: &Blocks, name: &IpnsName) -> Vec<u8> {
+    let record = device
+        .record_store
+        .record_at(&device.record_store.endpoints()[0], name.as_str())
+        .expect("published");
+    let value = IpnsRecord::unmarshal(&record)
+        .and_then(|r| r.verify(name))
+        .expect("verifiable")
+        .value;
+    let cid = core::str::from_utf8(&value)
+        .expect("utf8")
+        .trim_start_matches("/ipfs/");
+    blocks
+        .store
+        .lock()
+        .expect("lock")
+        .get(cid)
+        .cloned()
+        .expect("block on the plane")
 }
 
 #[test]
@@ -270,9 +376,13 @@ fn a_missing_settings_record_yields_defaults_not_an_error() {
     let device = world.device(b"cold");
     let load = load(&world, &device, &Blocks::default(), &SECRET);
 
-    assert_eq!(load, SettingsLoad::Defaults(DefaultsReason::NoRecord));
     assert_eq!(
-        load.settings(),
+        load,
+        SettingsLoad::Defaults(DefaultsReason::NoRecord),
+        "no record and no durable floor is a first run, not a suppression",
+    );
+    assert_eq!(
+        VaultSettings::default(),
         VaultSettings {
             pin_mode: PinMode::Hosted,
             byo: None,
@@ -356,8 +466,11 @@ fn a_rolled_back_record_yields_defaults_and_never_lowers_the_floor() {
 
     assert_eq!(
         load(&world, &device, &blocks, &SECRET),
-        SettingsLoad::Defaults(DefaultsReason::Unreadable),
-        "a sequence below the durable floor is a rollback, not settings",
+        SettingsLoad::Defaults(DefaultsReason::RolledBack {
+            floor: 9,
+            sequence: 3
+        }),
+        "a sequence below the durable floor is a replay, reported as one",
     );
     assert_eq!(
         block_on(device.floor_store.sequence_floor(key)).expect("read"),
@@ -398,7 +511,8 @@ fn an_unavailable_head_block_yields_defaults() {
             &SyncTimingProfile::CI,
             &SECRET,
         )),
-        SettingsLoad::Defaults(DefaultsReason::Unreadable),
+        SettingsLoad::Defaults(DefaultsReason::Suppressed),
+        "a verified record whose block will not come back is being withheld",
     );
 }
 
@@ -417,29 +531,16 @@ fn settings_the_reader_would_refuse_are_never_published() {
         "http://api.test",
     );
 
-    let refused = [
-        (
-            VaultSettings {
-                retention: RetentionPolicy::KeepLatest(0),
-                ..VaultSettings::default()
-            },
-            SettingsInvalid::RetainsNoVersions,
-        ),
-        (
-            VaultSettings {
-                byo: Some(ByoIpfsConfig {
-                    // A scheme the Http seam must never be pointed at.
-                    endpoint: "file:///etc/passwd".to_owned(),
-                    kind: ByoKind::Kubo,
-                    access_token: None,
-                }),
-                ..VaultSettings::default()
-            },
-            SettingsInvalid::Endpoint(cipherbox_engine::ProviderError::InvalidEndpoint),
-        ),
-    ];
-
-    for (settings, expected) in refused {
+    // A scheme the Http seam must never be pointed at.
+    for endpoint in ["file:///etc/passwd", "ftp://node.example"] {
+        let settings = VaultSettings {
+            byo: Some(ByoIpfsConfig {
+                endpoint: endpoint.to_owned(),
+                kind: ByoKind::Kubo,
+                access_token: None,
+            }),
+            ..VaultSettings::default()
+        };
         serve_http(&device, &blocks, 4);
         let outcome = block_on(publish_settings(
             &device.record_store,
@@ -453,7 +554,7 @@ fn settings_the_reader_would_refuse_are_never_published() {
         ));
         assert_eq!(
             outcome.unwrap_err(),
-            SettingsPublishError::Invalid(expected),
+            SettingsPublishError::Endpoint(ProviderError::InvalidEndpoint),
             "the guard returns Err in every build, never a stripped assertion",
         );
         assert!(

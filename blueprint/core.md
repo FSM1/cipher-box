@@ -190,12 +190,19 @@ version is bound into the AAD too, so rewriting the clear copy fails the tag.
 
 The `settings-record` KAT set is `settings_record_accept` (an empty and a
 config-shaped body, each reproducing its exact bytes from a fixed enc +
-ephemeral, then opening) and `settings_record_reject` (tampered ciphertext,
-tampered and lying `ownerTag`, a foreign recipient, a missing `ownerTag`, a
-forward `v`, an unknown clear-header field, and the same base-mode forgery). It
-seals HPKE **auth mode** to the owner's own enc subkey for the same reason the
-op record does, over a four-key clear header — `v`, `ownerTag`, `enc`,
-`ciphertext`.
+ephemeral, then opening) and `settings_record_reject` (tampered ciphertext, a
+foreign recipient, a **cross-family transplant** of the op record's KEM output
+into settings framing, a short and a low-order `enc`, a missing `enc` and a
+missing `ciphertext`, a forward `v`, an unknown clear-header field, and the same
+base-mode forgery). It seals HPKE **auth mode** to the owner's own enc subkey
+for the same reason the op record does, but over a three-key clear header — `v`,
+`enc`, `ciphertext`: the owner tag is bound into the AAD and **never
+serialized**, because this record is published and therefore server-visible,
+while the enc-subkey public half is otherwise disclosed only by out-of-band
+contact-code exchange. The opener rebuilds the tag from its own key, so a record
+another identity could open is unrepresentable rather than compared away, and
+the transplant vector is what proves tag `0x0b` plus the distinct HPKE info
+string — not the framing — keep the two families apart.
 
 ## KDF edge catalog
 

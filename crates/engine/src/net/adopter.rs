@@ -332,17 +332,18 @@ pub struct LocalHead {
     pub block: Vec<u8>,
 }
 
-/// The head-envelope assembly shared by both adopters: verify the record to
-/// read its signed `/ipfs/<cid>` head anchor (trust is the gate's — this only
-/// extracts the anchor), take the head block fail-closed on a CID mismatch, and
-/// decode the envelope. Returns the verified record sequence alongside it.
-pub(crate) async fn assemble_head_envelope<H: Http>(
+/// Take the head block a record anchors: verify the record to read its signed
+/// `/ipfs/<cid>` anchor (trust is the gate's — this only extracts the anchor),
+/// then take the block fail-closed on a CID mismatch. Returns the verified
+/// record sequence alongside it. Every record family reaches its head block
+/// through here, so the anchor rule has one home.
+pub(crate) async fn fetch_head_block<H: Http>(
     gateway: &Gateway,
     http: &H,
     name: &IpnsName,
     record_bytes: &[u8],
     local: Option<&LocalHead>,
-) -> Result<(u64, Envelope), GateError> {
+) -> Result<(u64, Vec<u8>), GateError> {
     let verified = IpnsRecord::unmarshal(record_bytes)
         .and_then(|record| record.verify(name))
         .map_err(assembly_reject)?;
@@ -365,9 +366,21 @@ pub(crate) async fn assemble_head_envelope<H: Http>(
             .await
             .map_err(map_read_error)?,
     };
+    Ok((verified.sequence, block))
+}
 
+/// The head-envelope assembly shared by both adopters: [`fetch_head_block`],
+/// then decode the envelope.
+pub(crate) async fn assemble_head_envelope<H: Http>(
+    gateway: &Gateway,
+    http: &H,
+    name: &IpnsName,
+    record_bytes: &[u8],
+    local: Option<&LocalHead>,
+) -> Result<(u64, Envelope), GateError> {
+    let (sequence, block) = fetch_head_block(gateway, http, name, record_bytes, local).await?;
     let envelope = decode_envelope(&block).map_err(assembly_reject)?;
-    Ok((verified.sequence, envelope))
+    Ok((sequence, envelope))
 }
 
 /// The structured AAD an owner blob is sealed under.

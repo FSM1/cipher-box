@@ -26,8 +26,8 @@ pub mod resolve;
 pub mod retire;
 pub mod revival;
 
-pub(crate) use adopter::assemble_head_envelope;
 pub use adopter::{LocalHead, RootAdopter};
+pub(crate) use adopter::{assemble_head_envelope, fetch_head_block};
 pub use child::ChildAdopter;
 pub(crate) use fanout::fanout_get_verify;
 pub(crate) use liveness::eol_renew_pass;

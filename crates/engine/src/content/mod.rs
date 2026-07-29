@@ -20,6 +20,7 @@ pub mod retention;
 pub use chunk::{ContentKey, SealedChunk, frame_and_seal};
 pub use dag::{
     ContentDag, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, RootManifest, assemble, decode_root,
+    root_block_cid,
 };
 pub use profile::ContentProfile;
 pub use provider::{
@@ -29,7 +30,9 @@ pub use read::{
     ContentPlane, Gateway, GatewayConfig, GatewaySource, ReadError, is_plane_anchor,
     leaf_range_for_byte_range, read_block,
 };
-pub use retention::{ContentVersion, PrunePlan, QuotaExceeded, plan_prune, pre_flight_quota_check};
+pub use retention::{
+    ContentVersion, PrunePlan, QuotaExceeded, RetentionPolicy, plan_prune, pre_flight_quota_check,
+};
 
 use cipherbox_core::content::{encode_content_cid_str, open_chunk};
 use cipherbox_core::seal::Version;

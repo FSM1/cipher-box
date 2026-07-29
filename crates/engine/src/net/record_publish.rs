@@ -4,11 +4,10 @@
 //! Custody-free by design — it holds no read-key material, seals nothing, and
 //! runs no gate; the name and its signer are injected, mirroring the layer
 //! below ([`publish`]). What custody would have bought is recovered
-//! structurally: [`PreflightedHead`]'s only constructor is [`preflight`], so an
-//! envelope that has not been dry-run against the key the gate will re-derive
-//! cannot reach the network.
+//! structurally: a [`PreflightedHead`] is reachable only through a per-family
+//! dry run, each of which reopens the block under the key its reader will
+//! re-derive, so a head no reader could open cannot reach the network.
 
-use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{decode_envelope, open_read_body, open_settings_record};
@@ -18,7 +17,8 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use super::author::AuthoredHead;
 use super::publish::{PublishError, PublishReceipt, PublishRequest, publish};
 use crate::api::{ApiClient, ApiError};
-use crate::content::DAG_ROOT_CODEC;
+use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
+use crate::content::root_block_cid;
 use crate::profile::SyncTimingProfile;
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 
@@ -44,9 +44,18 @@ pub enum PreflightError {
     BlockEnvelopeMismatch,
     /// The authored envelope does not claim the identity the caller expects.
     BindingMismatch,
-    /// The authored envelope does not reopen under the key the gate will
-    /// re-derive — an encoder bug caught before it reaches the network.
+    /// The head does not reopen under the key its reader will re-derive — an
+    /// encoder bug caught before it reaches the network.
     Unseal(CodecError),
+    /// The head block exceeds the ceiling every block read enforces
+    /// ([`MAX_RESOLVED_RECORD_BYTES`]). Publishing it would sign a pointer to a
+    /// block this build's own reader always refuses.
+    TooLarge {
+        /// The encoded block's size.
+        size: usize,
+        /// The enforced ceiling.
+        limit: usize,
+    },
 }
 
 impl core::fmt::Display for PreflightError {
@@ -54,16 +63,19 @@ impl core::fmt::Display for PreflightError {
         match self {
             Self::BlockEnvelopeMismatch => f.write_str("head block is not the envelope beside it"),
             Self::BindingMismatch => f.write_str("authored envelope binding mismatch"),
-            Self::Unseal(e) => write!(f, "authored envelope does not reopen: {}", e.check()),
+            Self::Unseal(e) => write!(f, "authored head does not reopen: {}", e.check()),
+            Self::TooLarge { size, limit } => {
+                write!(f, "head block exceeds the content cap ({size} > {limit})")
+            }
         }
     }
 }
 
 impl std::error::Error for PreflightError {}
 
-/// A head block that passed [`preflight`]. Private fields and no other
+/// A head block that passed a dry run. Private fields and no public
 /// constructor: this type *is* the guarantee that every published head was
-/// dry-run first.
+/// dry-run first, and that its CID is its own content address.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreflightedHead {
     block: Vec<u8>,
@@ -71,6 +83,19 @@ pub struct PreflightedHead {
 }
 
 impl PreflightedHead {
+    /// Address `block` and cap it. Private: reachable only past a family's
+    /// reopen proof.
+    fn new(block: Vec<u8>) -> Result<Self, PreflightError> {
+        if block.len() > MAX_RESOLVED_RECORD_BYTES {
+            return Err(PreflightError::TooLarge {
+                size: block.len(),
+                limit: MAX_RESOLVED_RECORD_BYTES,
+            });
+        }
+        let cid = root_block_cid(&block);
+        Ok(Self { block, cid })
+    }
+
     /// The head block's content CID, as the record `Value` spells it.
     pub fn cid(&self) -> &str {
         &self.cid
@@ -100,10 +125,7 @@ pub fn preflight(
         return Err(PreflightError::BindingMismatch);
     }
     open_read_body(envelope, read_key).map_err(PreflightError::Unseal)?;
-    Ok(PreflightedHead {
-        block: head.block.clone(),
-        cid: head.cid.clone(),
-    })
+    PreflightedHead::new(head.block.clone())
 }
 
 /// Settings-record dry run: the vault settings head is a self-sealed blob
@@ -114,8 +136,7 @@ pub fn preflight_settings(
     block: Vec<u8>,
 ) -> Result<PreflightedHead, PreflightError> {
     open_settings_record(enc_secret, &block).map_err(PreflightError::Unseal)?;
-    let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
-    Ok(PreflightedHead { block, cid })
+    PreflightedHead::new(block)
 }
 
 /// One record publish: the name and its narrow per-name signer, the

@@ -3625,6 +3625,24 @@ fn settings_record_accept_vectors_seal_reproduce_and_open() {
         );
 
         let record = unhex(&v.name, &v.record);
+        // The record is published to the zero-knowledge server, so the owner's
+        // enc-subkey public half must stay AAD-bound and unserialized.
+        let decoded = decode(&record)
+            .unwrap_or_else(|e| panic!("settings-record accept {}: decode ({e})", v.name));
+        let keys: Vec<&str> = decoded
+            .as_map()
+            .unwrap_or_else(|e| panic!("settings-record accept {}: map ({e})", v.name))
+            .entries()
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            ["v", "enc", "ciphertext"],
+            "settings-record accept {}: clear header must not carry the owner tag",
+            v.name
+        );
+
         let plaintext = open_settings_record(&owner, &record)
             .unwrap_or_else(|e| panic!("settings-record accept {}: open ({e})", v.name));
         assert_eq!(
@@ -3659,6 +3677,8 @@ fn settings_record_reject_vectors_fire_the_named_check() {
     );
     for required in [
         "hpke-open-failed",
+        "hpke-non-contributory",
+        "invalid-field-length",
         "missing-field",
         "unsupported-record-version",
         "unknown-record-field",
@@ -3672,6 +3692,13 @@ fn settings_record_reject_vectors_fire_the_named_check() {
     assert!(
         vectors.iter().any(|v| v.name == "base-mode-forgery"),
         "settings-record reject must pin a base-mode forgery under the owner's own tag"
+    );
+    // Key-schedule separation, not framing: the transplanted op-record KEM
+    // output is a structurally valid settings header, so only the struct tag
+    // and the distinct info string can refuse it.
+    assert!(
+        vectors.iter().any(|v| v.name == "cross-family-transplant"),
+        "settings-record reject must pin a cross-family transplant from the op record"
     );
 
     let mut names = BTreeSet::new();

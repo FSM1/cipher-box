@@ -1,15 +1,22 @@
-//! The vault settings record: `v || ownerTag || sealed(body)` (CONTEXT.md
-//! "Vault settings record").
+//! The vault settings record: `v || sealed(body)` (CONTEXT.md "Vault settings
+//! record").
 //!
 //! Published at an IPNS name derived from the login secret and sealed
-//! HPKE-to-self under the owner's `enc-subkey`, so it resolves at cold start
-//! with no CipherBox infrastructure and before any vault resolve.
+//! HPKE-to-self under the owner's `enc-subkey`, so the record fetch needs no
+//! CipherBox infrastructure and runs before any vault resolve.
 //!
-//! The seal is HPKE **auth mode**, the enc subkey being both static sender and
-//! recipient: the recipient half is public by construction and stamped in the
-//! clear beside the ciphertext, so base mode would let anyone who has seen the
-//! owner's tag frame a settings body that opens — and this body names the
-//! endpoints the engine will later talk to.
+//! The owner tag — the enc-subkey public half — is bound into the AAD but
+//! **never serialized**, unlike the op record's, which is a local queue's
+//! routing key. This record is published and its block is server-visible, and
+//! the enc-subkey public half is otherwise disclosed only by out-of-band
+//! contact-code exchange; emitting it would hand a zero-knowledge server a
+//! durable `account → enc subkey` binding. Nothing is lost: a wrong opener
+//! computes a different AAD and fails the tag.
+//!
+//! Auth mode, the enc subkey being both static sender and recipient, is
+//! defence in depth behind the name's Ed25519 signature — base mode would let
+//! anyone holding the owner's public enc half frame a body that opens, and
+//! this body names endpoints the engine will later talk to.
 //!
 //! The body is opaque here — core seals the engine's config bytes and never
 //! interprets them.
@@ -17,7 +24,7 @@
 use zeroize::Zeroizing;
 
 use crate::codec::{Map, Value, decode, encode, encode_fixed_depth};
-use crate::error::{CodecError, Malformed, TrustViolation};
+use crate::error::{CodecError, Malformed};
 use crate::seal::aad::{AAD_DOMAIN, STRUCT_TAG_SETTINGS_RECORD};
 use crate::seal::body::{bytes_fixed, req};
 use crate::suite::hpke::{self, ENC_LEN};
@@ -33,7 +40,8 @@ pub const SETTINGS_RECORD_V: u64 = 1;
 /// subkey are never mutually transplantable. Frozen in the KAT manifest.
 pub const SETTINGS_RECORD_HPKE_INFO: &[u8] = b"cipherbox/v2/settings-record";
 
-/// The clear header of a vault settings record.
+/// The AAD inputs of a vault settings record. Only [`Self::version`] rides the
+/// wire; [`Self::owner_tag`] is reconstructed from the opening key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsRecordHeader {
     /// The format version the record was written at, as declared.
@@ -85,7 +93,6 @@ pub fn seal_settings_record(
     let mut m = Map::new();
     m.insert("ciphertext", Value::Bytes(sealed.ciphertext));
     m.insert("enc", Value::Bytes(sealed.enc.to_vec()));
-    m.insert("ownerTag", Value::Bytes(header.owner_tag));
     m.insert("v", Value::Unsigned(header.version));
     encode(&Value::Map(m))
 }
@@ -94,31 +101,22 @@ pub fn seal_settings_record(
 /// body.
 ///
 /// The version gate runs before the AEAD: opening a future record under this
-/// build's body grammar would misread its intent. Fails closed with
-/// [`Malformed::UnsupportedRecordVersion`] on a version this build does not
-/// implement, and with [`TrustViolation::HpkeOpenFailed`] when the record is
-/// another identity's, tampered, forged by a writer who lacked the enc secret,
-/// or carries a rewritten header — the header is the AAD, so it is
-/// authenticated rather than merely present.
-///
-/// The declared `ownerTag` is re-bound to the key that opens the record, so the
-/// encoder's "a record can never carry a tag naming a key that does not open
-/// it" invariant is re-established here rather than assumed from caller
-/// ordering (AGENTS.md rule 8).
+/// build's body grammar would misread its intent. Every other refusal is
+/// [`TrustViolation::HpkeOpenFailed`](crate::error::TrustViolation), including
+/// a rewritten `v` — the version
+/// is the AAD. The owner tag is rebuilt from the opening key rather than read
+/// off the wire, so a record another identity's key would open is
+/// unrepresentable rather than compared away.
 pub fn open_settings_record(
     owner_enc_secret: &X25519Secret,
     record: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, CodecError> {
     let value = decode(record)?;
     let map = value.as_map()?;
-    let unknown_field = map
-        .entries()
-        .iter()
-        .find(|(key, _)| !HEADER_KEYS.contains(&key.as_str()))
-        .map(|(key, _)| key.clone());
+    let owner_enc_pub = owner_enc_secret.public();
     let header = SettingsRecordHeader {
         version: req(map, "v")?.as_unsigned()?,
-        owner_tag: req(map, "ownerTag")?.as_bytes()?.to_vec(),
+        owner_tag: owner_enc_pub.to_bytes().to_vec(),
     };
     if header.version != SETTINGS_RECORD_V {
         return Err(Malformed::UnsupportedRecordVersion {
@@ -126,12 +124,12 @@ pub fn open_settings_record(
         }
         .into());
     }
-    if let Some(key) = unknown_field {
-        return Err(Malformed::UnknownRecordField { key }.into());
-    }
-    let owner_enc_pub = owner_enc_secret.public();
-    if header.owner_tag != owner_enc_pub.to_bytes() {
-        return Err(TrustViolation::HpkeOpenFailed.into());
+    if let Some((key, _)) = map
+        .entries()
+        .iter()
+        .find(|(key, _)| !HEADER_KEYS.contains(&key.as_str()))
+    {
+        return Err(Malformed::UnknownRecordField { key: key.clone() }.into());
     }
     let enc = bytes_fixed::<ENC_LEN>(req(map, "enc")?, "enc")?;
     let ciphertext = req(map, "ciphertext")?.as_bytes()?;
@@ -146,8 +144,8 @@ pub fn open_settings_record(
     )?)
 }
 
-/// The four clear-header keys, exhaustive at [`SETTINGS_RECORD_V`].
-const HEADER_KEYS: [&str; 4] = ["ciphertext", "enc", "ownerTag", "v"];
+/// The three clear-header keys, exhaustive at [`SETTINGS_RECORD_V`].
+const HEADER_KEYS: [&str; 3] = ["ciphertext", "enc", "v"];
 
 #[cfg(test)]
 mod tests {
@@ -206,19 +204,31 @@ mod tests {
         );
     }
 
+    /// The published block must not carry the owner's enc-subkey public half:
+    /// it is server-visible, and the grant plane blinds that same identifier.
     #[test]
-    fn a_tag_naming_a_key_that_does_not_open_the_record_is_refused() {
-        // The encoder cannot emit this — it derives the tag from the recipient.
+    fn the_wire_record_names_no_key() {
         let owner = secret(20);
         let record = seal_settings_record(&owner, &[21; 32], b"config").unwrap();
-        let lying = reframe(
-            &record,
-            "ownerTag",
-            Value::Bytes(secret(22).public().to_bytes().to_vec()),
-        );
+        let decoded = decode(&record).unwrap();
+        let mut keys: Vec<&str> = decoded
+            .as_map()
+            .unwrap()
+            .entries()
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .collect();
+        keys.sort_unstable();
+        let mut expected = HEADER_KEYS;
+        expected.sort_unstable();
         assert_eq!(
-            open_settings_record(&owner, &lying).unwrap_err().check(),
-            "hpke-open-failed"
+            keys, expected,
+            "encode/decode key-set symmetry: a key the reader refuses is never emitted",
+        );
+        let tag = owner.public().to_bytes();
+        assert!(
+            !record.windows(tag.len()).any(|w| w == tag),
+            "the enc-subkey public half never appears on the wire",
         );
     }
 
@@ -257,12 +267,7 @@ mod tests {
             }),
             b"http://attacker.example",
         );
-        let mut m = Map::new();
-        m.insert("ciphertext", Value::Bytes(forged.ciphertext));
-        m.insert("enc", Value::Bytes(forged.enc.to_vec()));
-        m.insert("ownerTag", Value::Bytes(owner.public().to_bytes().to_vec()));
-        m.insert("v", Value::Unsigned(SETTINGS_RECORD_V));
-        let record = encode(&Value::Map(m)).unwrap();
+        let record = framed(forged.enc, forged.ciphertext);
 
         assert_eq!(
             open_settings_record(&owner, &record).unwrap_err().check(),
@@ -271,14 +276,25 @@ mod tests {
         );
     }
 
+    /// The claim the `settings-record` tag and its own HPKE `info` string
+    /// exist to make. Re-framed rather than handed over whole, so the
+    /// unknown-field check cannot fire and the key schedule is what refuses it.
     #[test]
-    fn an_op_record_body_is_not_openable_as_a_settings_record() {
+    fn a_reframed_op_record_ciphertext_fails_the_settings_key_schedule() {
         let owner = secret(40);
         let op =
             super::super::op_record::seal_op_record(&owner, &[41; 32], None, b"intent").unwrap();
-        // Same clear framing except the extra contentRootCid key; the info
-        // string and AAD arity keep the families apart regardless.
-        assert!(open_settings_record(&owner, &op).is_err());
+        let decoded = decode(&op).unwrap();
+        let map = decoded.as_map().unwrap();
+        let enc = map.get("enc").unwrap().as_bytes().unwrap().to_vec();
+        let ciphertext = map.get("ciphertext").unwrap().as_bytes().unwrap().to_vec();
+
+        assert_eq!(
+            open_settings_record(&owner, &framed(enc, ciphertext))
+                .unwrap_err()
+                .check(),
+            "hpke-open-failed",
+        );
     }
 
     #[test]
@@ -290,17 +306,39 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_owner_tag_is_malformed() {
-        let mut m = Map::new();
-        m.insert("ciphertext", Value::Bytes(vec![0; 16]));
-        m.insert("enc", Value::Bytes(vec![0; ENC_LEN]));
-        m.insert("v", Value::Unsigned(SETTINGS_RECORD_V));
-        let record = encode(&Value::Map(m)).unwrap();
+    fn a_short_enc_never_reaches_the_aead() {
+        let owner = secret(9);
+        let record = seal_settings_record(&owner, &[10; 32], b"config").unwrap();
+        let short = reframe(&record, "enc", Value::Bytes(vec![0; ENC_LEN - 1]));
         assert_eq!(
-            open_settings_record(&secret(5), &record)
-                .unwrap_err()
-                .check(),
-            "missing-field"
+            open_settings_record(&owner, &short).unwrap_err().check(),
+            "invalid-field-length",
         );
+    }
+
+    #[test]
+    fn a_missing_clear_field_is_malformed() {
+        for missing in HEADER_KEYS {
+            let owner = secret(5);
+            let record = seal_settings_record(&owner, &[6; 32], b"config").unwrap();
+            let decoded = decode(&record).unwrap();
+            let mut map = decoded.as_map().unwrap().clone();
+            map.remove(missing);
+            let framed = encode(&Value::Map(map)).unwrap();
+            assert_eq!(
+                open_settings_record(&owner, &framed).unwrap_err().check(),
+                "missing-field",
+                "{missing}",
+            );
+        }
+    }
+
+    /// A settings record at this version, framed from parts.
+    fn framed(enc: impl Into<Vec<u8>>, ciphertext: Vec<u8>) -> Vec<u8> {
+        let mut m = Map::new();
+        m.insert("ciphertext", Value::Bytes(ciphertext));
+        m.insert("enc", Value::Bytes(enc.into()));
+        m.insert("v", Value::Unsigned(SETTINGS_RECORD_V));
+        encode(&Value::Map(m)).unwrap()
     }
 }

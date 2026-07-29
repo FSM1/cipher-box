@@ -271,7 +271,7 @@ fn spawn_background_reput<T, Sch>(
 /// Extract the head CID from a record `Value` (`/ipfs/<cid>`). `None` when the
 /// value is not an `/ipfs/` path — a malformed record, handled fail-closed by
 /// the caller.
-pub(crate) fn head_cid_from_value(value: &[u8]) -> Option<String> {
+pub(super) fn head_cid_from_value(value: &[u8]) -> Option<String> {
     core::str::from_utf8(value)
         .ok()?
         .strip_prefix(IPFS_PREFIX)
