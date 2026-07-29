@@ -33,6 +33,7 @@ export function view(
     })),
     ancestors: [],
     deadLetters: [],
+    blocked: null,
     retainedRecords: 0,
     staleness,
   };

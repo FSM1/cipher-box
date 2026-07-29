@@ -214,7 +214,7 @@ describe('snapshotStore', () => {
     store.setFocus(new Uint8Array(16).fill(3));
     engine.ackFocus();
     await flush();
-    engine.emit({ kind: 'deadLetter', opId: 1n });
+    engine.emit({ kind: 'deadLetter', opId: 1n, reason: 'targetGone' });
     engine.emit({ kind: 'attributableAbuse', description: 'x' });
     await flush();
 
