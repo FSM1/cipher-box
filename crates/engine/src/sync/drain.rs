@@ -881,7 +881,9 @@ where
         }
         .map_err(|_| Halt)?;
 
-        let record_bytes = self.publish_head(scope, name, &node.0, epoch, &head).await?;
+        let record_bytes = self
+            .publish_head(scope, name, &node.0, epoch, &head)
+            .await?;
         let local = local_head(&head);
         let sequence = if is_scope_root {
             let adopter = RootAdopter::new(

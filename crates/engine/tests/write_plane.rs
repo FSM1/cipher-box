@@ -293,7 +293,8 @@ fn published(world: &FakeWorld, node: NodeId) -> (u64, String) {
 /// The child refs a node's published folder body seals.
 fn published_children(world: &FakeWorld, blocks: &Blocks, node: NodeId) -> Vec<ChildRef> {
     let (_, head_cid) = published(world, node);
-    let envelope = decode_envelope(&blocks.get(&head_cid).expect("the head block")).expect("decodes");
+    let envelope =
+        decode_envelope(&blocks.get(&head_cid).expect("the head block")).expect("decodes");
     match open_read_body(&envelope, &read_key_of(node)).expect("opens under the read-seed key") {
         ReadBody::Folder { children, .. } => children,
         ReadBody::File { .. } => panic!("expected a folder body"),
@@ -853,7 +854,11 @@ fn an_update_content_republishes_the_files_own_record_and_not_its_parent() {
     tick(&world, &engine, &mut tasks);
 
     let (sequence, head_cid) = published(&world, file);
-    assert_eq!(sequence, file_sequence + 1, "the file's own record advanced");
+    assert_eq!(
+        sequence,
+        file_sequence + 1,
+        "the file's own record advanced"
+    );
     assert_eq!(
         published(&world, ROOT).0,
         root_sequence,
@@ -930,7 +935,10 @@ fn a_rename_of_a_still_queued_create_publishes_child_before_parent() {
     assert!(
         world
             .record_store
-            .record_at(&world.record_store.endpoints()[0], write_name(node).as_str())
+            .record_at(
+                &world.record_store.endpoints()[0],
+                write_name(node).as_str()
+            )
             .is_some(),
         "the name the parent points at resolves"
     );
@@ -1095,7 +1103,10 @@ fn seed_folder_and_file(
     }))
     .unwrap();
     tick(world, engine, tasks);
-    (child_id(engine, ROOT, "photos"), child_id(engine, ROOT, "a.txt"))
+    (
+        child_id(engine, ROOT, "photos"),
+        child_id(engine, ROOT, "a.txt"),
+    )
 }
 
 /// Stage an op straight into the durable queue, for a mutation the facade
@@ -1116,12 +1127,7 @@ fn stage(device: &FakeDevice, op: &Op, upload: Option<&[u8]>) {
 
 /// Another writer publishes `folder`'s next record, adding `extra` on top of
 /// whatever the folder currently carries.
-fn concurrent_add(
-    records: &InMemoryRecordStore,
-    blocks: &Blocks,
-    folder: NodeId,
-    extra: ChildRef,
-) {
+fn concurrent_add(records: &InMemoryRecordStore, blocks: &Blocks, folder: NodeId, extra: ChildRef) {
     let name = write_name(folder);
     let current = records
         .record_at(&records.endpoints()[0], name.as_str())
@@ -1133,7 +1139,8 @@ fn concurrent_add(
         .expect("utf8")
         .strip_prefix("/ipfs/")
         .expect("an /ipfs/ pointer");
-    let envelope = decode_envelope(&blocks.get(head_cid).expect("the head block")).expect("decodes");
+    let envelope =
+        decode_envelope(&blocks.get(head_cid).expect("the head block")).expect("decodes");
     let read_key = read_key_of(folder);
     let ReadBody::Folder {
         created_at,
