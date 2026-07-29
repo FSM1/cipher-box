@@ -56,7 +56,7 @@ use crate::seams::{
     StagingStore,
 };
 use crate::session::SessionIdentity;
-use crate::sync::model::Snapshot;
+use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{Op, OpKind};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::project::project_folder;
@@ -983,8 +983,16 @@ where
         }
 
         let dest_children = &mut pass.folder_mut(dest)?.children;
+        // The one destructive step in the plan, so it re-checks against the
+        // record the gate just handed us: the ref this drops must still be the
+        // one holding the name the move is taking. A concurrent writer that
+        // renamed it away made it a bystander.
         let replaced = vacated
-            .and_then(|node| dest_children.iter().position(|child| child.id == node.0))
+            .and_then(|node| {
+                dest_children.iter().position(|child| {
+                    child.id == node.0 && collation_key(&child.name) == collation_key(&moved.name)
+                })
+            })
             .map(|at| dest_children.remove(at));
         // The rebase resolves against a dest it has not loaded yet, so a dest
         // already naming the target is reachable; a second ref would sign a

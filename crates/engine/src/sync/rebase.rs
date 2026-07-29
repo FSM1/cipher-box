@@ -407,20 +407,31 @@ fn rebase_move(
         return OpResolution::Dropped(DropReason::MoveRaceLost);
     }
 
+    // The destination node this move may free — and it may free it only while
+    // it is still the one holding the contested name. A node a concurrent
+    // writer renamed or moved away is a bystander: the name is free and the
+    // move simply takes it. Anchoring on the sequence alone would not see that,
+    // because a name lives in the parent's child ref and renaming a node never
+    // advances the node's own record sequence.
+    let vacating = replacing.filter(|replaced| {
+        working.parent_of(replaced.node) == Some(new_parent)
+            && working
+                .node(replaced.node)
+                .is_some_and(|node| collation_key(&node.name) == collation_key(new_name))
+            // Conditional delete: a concurrent edit that advanced it wins.
+            && working
+                .record_sequence(replaced.node)
+                .is_some_and(|current| current <= replaced.sequence)
+    });
+
     // Already where it was going, under the name it was going to take, with
     // nothing left at the destination to vacate.
-    if replacing.is_none_or(|replaced| !working.contains(replaced.node))
+    if vacating.is_none()
         && current_parent == Some(new_parent)
         && working.node(op.target).is_some_and(|n| n.name == new_name)
     {
         return OpResolution::Dropped(DropReason::AlreadySatisfied);
     }
-
-    let vacating = replacing.filter(|replaced| {
-        working
-            .record_sequence(replaced.node)
-            .is_some_and(|current| current <= replaced.sequence)
-    });
 
     // Resolved before any mutation: an exhausted probe dead-letters, and a
     // dead-lettered op must leave the working base as it found it.
@@ -959,6 +970,59 @@ mod tests {
         );
         assert!(base.contains(id(3)), "the edited node survives");
         assert_eq!(base.node(id(2)).unwrap().name, "target (2).txt");
+    }
+
+    #[test]
+    fn a_move_spares_a_node_a_concurrent_writer_renamed_out_of_its_way() {
+        // A name lives in the parent's child ref, so renaming a node never
+        // advances the node's own sequence — the conditional-delete anchor
+        // alone would see this as "unchanged" and destroy a bystander.
+        let mut base = replace_tree(1);
+        base.node_mut(id(3)).unwrap().name = "keep.txt".into();
+        let local = base.clone();
+
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(id(2), id(0), id(1), "target.txt", replacing(1), 1, AT),
+        );
+        assert_eq!(
+            res,
+            OpResolution::Applied {
+                effective_name: Some("target.txt".to_owned()),
+                suffixed: false,
+                scope_exit_trigger: None,
+            },
+            "the contested name is free, so the move just takes it"
+        );
+        assert!(base.contains(id(3)), "the renamed bystander survives");
+        assert_eq!(base.node(id(3)).unwrap().name, "keep.txt");
+    }
+
+    #[test]
+    fn a_move_spares_a_node_a_concurrent_writer_moved_out_of_its_way() {
+        let mut base = replace_tree(1);
+        base.unlink(id(1), id(3));
+        base.link(id(0), id(3), 2);
+        let local = base.clone();
+
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::move_node(id(2), id(0), id(1), "target.txt", replacing(1), 1, AT),
+        );
+        assert!(matches!(
+            res,
+            OpResolution::Applied {
+                suffixed: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            base.parent_of(id(3)),
+            Some(id(0)),
+            "the relocated bystander is untouched where it now lives"
+        );
     }
 
     #[test]
