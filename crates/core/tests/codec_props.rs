@@ -122,6 +122,9 @@ proptest! {
             prop_assert!(!flags[k], "unknown side holds a known key {:?}", k);
         }
         let reencoded = encode_map_partial(&known, &unknown).expect("no collisions by construction");
+        // The merged sizing pass is exact, so the write never reallocates —
+        // property (d) for the partial encoder.
+        prop_assert_eq!(reencoded.capacity(), reencoded.len());
         prop_assert_eq!(reencoded, bytes);
     }
 

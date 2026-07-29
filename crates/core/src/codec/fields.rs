@@ -9,9 +9,15 @@
 //! rewrite canonical.
 
 use super::decode::Decoder;
-use super::encode::{MAJOR_MAP, write_head, write_text, write_value};
+use super::encode::{
+    MAJOR_MAP, count_value, head_len, text_len, write_head, write_text, write_value,
+};
 use super::value::{Map, canonical_key_cmp};
 use crate::error::{CodecError, Malformed};
+
+/// The depth a top-level map's values sit at: the map itself is the enclosing
+/// item, so its entries are one level in.
+const MAP_ENTRY_DEPTH: usize = 1;
 
 /// Fields preserved through a decode the caller's schema did not recognize:
 /// key plus the exact canonical bytes of the value. Ordered canonically.
@@ -58,8 +64,7 @@ pub fn decode_map_partial(
     for _ in 0..head.arg {
         let key = d.read_map_key(prev.as_deref())?;
         let start = d.pos();
-        // Depth 1: the top-level map is the enclosing item.
-        let value = d.read_value(1)?;
+        let value = d.read_value(MAP_ENTRY_DEPTH)?;
         if is_known(&key) {
             known.push((key.clone(), value));
         } else {
@@ -79,9 +84,8 @@ pub fn decode_map_partial(
 /// emitted byte-stable. A key present on both sides is a caller bug and
 /// rejects fail-closed.
 pub fn encode_map_partial(known: &Map, unknown: &UnknownFields) -> Result<Vec<u8>, CodecError> {
-    let mut out = Vec::new();
-    let total = known.len() + unknown.len();
-    write_head(&mut out, MAJOR_MAP, total as u64);
+    let mut out = Vec::with_capacity(merged_len(known, unknown)?);
+    write_head(&mut out, MAJOR_MAP, (known.len() + unknown.len()) as u64);
 
     let mut k = known.entries().iter().peekable();
     let mut u = unknown.entries.iter().peekable();
@@ -101,8 +105,7 @@ pub fn encode_map_partial(known: &Map, unknown: &UnknownFields) -> Result<Vec<u8
         if take_known {
             let (key, value) = k.next().expect("peeked");
             write_text(&mut out, key);
-            // Depth 1: the emitted map is the enclosing item.
-            write_value(&mut out, value, 1)?;
+            write_value(&mut out, value, MAP_ENTRY_DEPTH)?;
         } else {
             let (key, raw) = u.next().expect("peeked");
             write_text(&mut out, key);
@@ -110,6 +113,20 @@ pub fn encode_map_partial(known: &Map, unknown: &UnknownFields) -> Result<Vec<u8
         }
     }
     Ok(out)
+}
+
+/// The exact byte length of the merged map, sizing [`encode_map_partial`]'s one
+/// allocation for the realloc-hygiene reason [`super::encode::encode`] documents.
+fn merged_len(known: &Map, unknown: &UnknownFields) -> Result<usize, CodecError> {
+    let mut len = head_len((known.len() + unknown.len()) as u64);
+    for (key, value) in known.entries() {
+        len += text_len(key);
+        count_value(&mut len, value, MAP_ENTRY_DEPTH)?;
+    }
+    for (key, raw) in &unknown.entries {
+        len += text_len(key) + raw.len();
+    }
+    Ok(len)
 }
 
 /// Convenience for schema codecs: `true` when `key` is in `known`.
@@ -132,6 +149,41 @@ mod tests {
         );
         m.insert("zz-later", Value::Text("kept".into()));
         m
+    }
+
+    /// A merged map big enough to force several growths from an empty `Vec`,
+    /// spanning both key-head size classes and a >23-entry map head.
+    fn wide_secret_shaped_map() -> Map {
+        let mut m = Map::new();
+        for i in 0..40u8 {
+            m.insert(format!("k{i:02}"), Value::Bytes(vec![0xAB; 32]));
+            m.insert(
+                format!("a-preserved-future-field-name-{i:02}"),
+                Value::Text("x".repeat(40)),
+            );
+        }
+        m
+    }
+
+    /// The security invariant, as `encode` pins it: the merged write runs
+    /// inside one exact reservation, so no intermediate backing store is freed
+    /// un-zeroized. `merged_len` being exact makes `capacity == len` the
+    /// witness — growing from empty leaves a doubled capacity behind.
+    #[test]
+    fn merged_write_never_reallocates() {
+        let original = encode(&Value::Map(wide_secret_shaped_map())).unwrap();
+        let (known, unknown) = decode_map_partial(&original, |key| key.starts_with('k')).unwrap();
+        assert_eq!(known.len(), 40);
+        assert_eq!(unknown.len(), 40);
+
+        let out = encode_map_partial(&known, &unknown).unwrap();
+        assert!(out.len() > 1024, "test payload must force multiple growths");
+        assert_eq!(out, original, "wire bytes unchanged");
+        assert_eq!(
+            out.capacity(),
+            out.len(),
+            "buffer was resized after its up-front reservation"
+        );
     }
 
     #[test]
