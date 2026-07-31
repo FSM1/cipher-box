@@ -172,6 +172,59 @@ pub fn decode_queue(reader: &RecordReader<'_>, raw: &[(OpId, Vec<u8>)]) -> Queue
     scan
 }
 
+/// A memo of one [`decode_queue`] pass. The decode is an HPKE open per record
+/// this identity owns, so without it every render pays for the whole backlog
+/// — a queue the design refuses to cap (#880).
+///
+/// The key is everything that can change the answer: the reading identity's
+/// owner tag, plus the durable queue's shape. [`OpId`]s are strictly increasing
+/// and never reused per store
+/// ([`StagingStore`](crate::seams::StagingStore)), so an unchanged high-water
+/// id *and* an unchanged length admit no set of enqueues and removals other
+/// than none — including through mutation paths the engine does not observe.
+/// The bytes at an id never change either, so a hit re-serves the
+/// classification of exactly the bytes the store still holds: every check the
+/// miss path runs, sender authentication included, stays binding.
+///
+/// One slot, so it holds at most one scan's worth of decoded intent — the same
+/// copy a render already materializes.
+// No `Debug`: the memo holds decoded op plaintext.
+#[derive(Default)]
+pub struct QueueScanCache {
+    key: Option<QueueKey>,
+    scan: QueueScan,
+}
+
+/// The queue state a memoized scan is the answer for.
+#[derive(PartialEq, Eq)]
+struct QueueKey {
+    owner_tag: [u8; 32],
+    high_water: Option<OpId>,
+    len: usize,
+}
+
+impl QueueScanCache {
+    /// The scan of `raw` for the identity `owner_tag` names, running `decode`
+    /// only when the memo does not already cover that exact queue.
+    pub fn scan(
+        &mut self,
+        owner_tag: [u8; 32],
+        raw: &[(OpId, Vec<u8>)],
+        decode: impl FnOnce(&[(OpId, Vec<u8>)]) -> QueueScan,
+    ) -> &QueueScan {
+        let key = QueueKey {
+            owner_tag,
+            high_water: raw.iter().map(|(op_id, _)| *op_id).max(),
+            len: raw.len(),
+        };
+        if self.key.as_ref() != Some(&key) {
+            self.scan = decode(raw);
+            self.key = Some(key);
+        }
+        &self.scan
+    }
+}
+
 /// Replay `ops` FIFO onto the gate-passing base. `local` (the pre-rebase
 /// overlay view) supplies node metadata for the edit-resurrects-a-delete case
 /// — the only rule that must re-materialize a node the gate-passing base no
@@ -1408,5 +1461,140 @@ mod tests {
             },
             "the other client sees itself as the loser and re-mints above"
         );
+    }
+
+    /// The memo every read renders through (#880). Each test counts the records
+    /// a decode pass opened, because that count *is* the per-render HPKE cost.
+    mod queue_scan_cache {
+        use super::*;
+        use crate::sync::record::RecordClass;
+        use std::cell::Cell;
+
+        fn owner(b: u8) -> X25519Secret {
+            X25519Secret::from_scalar([b; 32])
+        }
+
+        /// One durable queue entry sealed to `secret`.
+        fn entry(secret: &X25519Secret, op_id: u64) -> (OpId, Vec<u8>) {
+            let record = encode_op_record(
+                RecordSeal {
+                    owner_enc_secret: secret,
+                    ephemeral_scalar: Zeroizing::new([op_id as u8; 32]),
+                },
+                &Op::rename(id(op_id as u8), "n", 1, AT),
+            )
+            .unwrap();
+            (OpId(op_id), record)
+        }
+
+        /// Scan through the memo, tallying every record the decode pass read.
+        fn scan(
+            cache: &mut QueueScanCache,
+            secret: &X25519Secret,
+            raw: &[(OpId, Vec<u8>)],
+            opened: &Cell<usize>,
+        ) -> QueueScan {
+            let reader = RecordReader::new(secret);
+            cache
+                .scan(reader.owner_tag(), raw, |raw| {
+                    opened.set(opened.get() + raw.len());
+                    decode_queue(&reader, raw)
+                })
+                .clone()
+        }
+
+        #[test]
+        fn an_unchanged_queue_is_opened_once_however_often_it_is_read() {
+            let me = owner(1);
+            let queue = vec![entry(&me, 1), entry(&me, 2)];
+            let opened = Cell::new(0);
+            let mut cache = QueueScanCache::default();
+
+            let first = scan(&mut cache, &me, &queue, &opened);
+            for _ in 0..5 {
+                assert_eq!(scan(&mut cache, &me, &queue, &opened), first);
+            }
+            assert_eq!(first.mine.len(), 2);
+            assert_eq!(opened.get(), 2, "six reads, one open per record");
+        }
+
+        #[test]
+        fn an_enqueued_op_is_read_on_the_next_scan() {
+            let me = owner(2);
+            let mut queue = vec![entry(&me, 1)];
+            let opened = Cell::new(0);
+            let mut cache = QueueScanCache::default();
+            scan(&mut cache, &me, &queue, &opened);
+
+            queue.push(entry(&me, 2));
+            assert_eq!(
+                scan(&mut cache, &me, &queue, &opened).mine.len(),
+                2,
+                "the memo must not outlive an enqueue it did not perform"
+            );
+            assert_eq!(opened.get(), 3);
+        }
+
+        #[test]
+        fn a_removed_op_is_gone_from_the_next_scan() {
+            let me = owner(3);
+            let mut queue = vec![entry(&me, 1), entry(&me, 2)];
+            let opened = Cell::new(0);
+            let mut cache = QueueScanCache::default();
+            scan(&mut cache, &me, &queue, &opened);
+
+            queue.remove(0);
+            assert_eq!(
+                scan(&mut cache, &me, &queue, &opened).mine,
+                vec![(OpId(2), Op::rename(id(2), "n", 1, AT))],
+                "a drained op must never re-render off the memo"
+            );
+            assert_eq!(opened.get(), 3);
+        }
+
+        /// The one shape a length check alone would miss: the queue keeps its
+        /// size while its contents turn over. Ids are strictly increasing and
+        /// never reused, so the high-water id catches it.
+        #[test]
+        fn a_removal_paired_with_an_enqueue_is_read_on_the_next_scan() {
+            let me = owner(4);
+            let mut queue = vec![entry(&me, 1), entry(&me, 2)];
+            let opened = Cell::new(0);
+            let mut cache = QueueScanCache::default();
+            scan(&mut cache, &me, &queue, &opened);
+
+            queue.remove(0);
+            queue.push(entry(&me, 3));
+            assert_eq!(
+                scan(&mut cache, &me, &queue, &opened)
+                    .mine
+                    .iter()
+                    .map(|(op_id, _)| *op_id)
+                    .collect::<Vec<_>>(),
+                vec![OpId(2), OpId(3)]
+            );
+            assert_eq!(opened.get(), 4);
+        }
+
+        #[test]
+        fn another_identity_never_reads_the_first_ones_scan() {
+            let me = owner(5);
+            let stranger = owner(6);
+            let queue = vec![entry(&me, 1)];
+            let opened = Cell::new(0);
+            let mut cache = QueueScanCache::default();
+            assert_eq!(scan(&mut cache, &me, &queue, &opened).mine.len(), 1);
+
+            let theirs = scan(&mut cache, &stranger, &queue, &opened);
+            assert!(
+                theirs.mine.is_empty() && theirs.retained == 1,
+                "a memo hit must never hand one identity another's opened intent"
+            );
+            assert_eq!(opened.get(), 2, "the reading identity is part of the key");
+            assert!(matches!(
+                RecordReader::new(&stranger).classify(&queue[0].1),
+                RecordClass::Retained(_)
+            ));
+        }
     }
 }

@@ -40,8 +40,9 @@ pub use pointer::{
     vault_pointer_name,
 };
 pub use rebase::{
-    AppliedOp, DeadLetterReason, DropReason, HeadReconciliation, OpResolution, QueueScan, Repair,
-    ReplayReport, apply_repairs, decode_queue, observed_repair, rebase_one, reconcile_head, replay,
+    AppliedOp, DeadLetterReason, DropReason, HeadReconciliation, OpResolution, QueueScan,
+    QueueScanCache, Repair, ReplayReport, apply_repairs, decode_queue, observed_repair, rebase_one,
+    reconcile_head, replay,
 };
 pub use record::{
     OpRecordError, RecordClass, RecordReader, RecordSeal, RetainedReason, encode_op_record,
