@@ -53,6 +53,11 @@ decay) inverted into structure.
   retire `[ipnsName | cid]`. Ordinary writes send single-item batches; name waves
   and sweeps send bulk. v1's BYO-only `register-cid` folds into the same register
   call.
+- **Batch bounds**: both batches cap at **1000 items** (register additionally
+  caps `contentCids` at 1000 per entry), enforced fail-closed with `400` before
+  per-item validation and published as `maxItems` in the OpenAPI document. A bulk
+  caller — a name wave, or an abandoned version whose leaves all need retiring —
+  chunks to the cap; retire is idempotent, so a replayed chunk is a no-op.
 - **Register-first, fail-closed**: registration precedes the first publish of a
   name, and publish is blocked on it. A live-but-uninventoried name is
   structurally impossible; the worst failure is a registered-never-published

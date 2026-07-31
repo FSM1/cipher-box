@@ -488,20 +488,17 @@ where
                 if attempts.charge(op_id) < ATTEMPT_BUDGET {
                     return;
                 }
-                if self.dequeue_op(op_id).await.is_ok() {
-                    self.release_staged_blocks(op).await;
-                    report.dead_letters.push((
-                        op_id,
-                        op.target,
-                        DeadLetterReason::AttemptsExhausted,
-                    ));
-                }
+                self.dead_letter(
+                    scope,
+                    op_id,
+                    op,
+                    DeadLetterReason::AttemptsExhausted,
+                    report,
+                )
+                .await;
             }
             Halt::Permanent(reason) => {
-                if self.abandon(scope, op_id, op).await.is_ok() {
-                    self.release_staged_blocks(op).await;
-                    report.dead_letters.push((op_id, op.target, reason));
-                }
+                self.dead_letter(scope, op_id, op, reason, report).await;
             }
             Halt::Blocked { needed_bytes } => {
                 *self.blocked.borrow_mut() = Some(BlockedOp {
@@ -1664,10 +1661,58 @@ where
     /// it published.
     async fn abandon(&self, scope: &DrainScope<'_>, op_id: OpId, op: &Op) -> Result<(), Halt> {
         let target_published = self.base.borrow().contains(op.target);
-        retire(self.api, &registered_by(scope, op, target_published))
-            .await
-            .map_err(|_| Halt::Unclassified)?;
+        let content_cids = self.uploaded_content_cids(op).await;
+        retire(
+            self.api,
+            &registered_by(scope, op, target_published, content_cids),
+        )
+        .await
+        .map_err(|_| Halt::Unclassified)?;
         self.dequeue_op(op_id).await
+    }
+
+    /// Dead-letter one op: the single reconciliation point both terminal valve
+    /// arms go through, so what an abandonment retires is decided in one place.
+    /// A failed retire leaves the op queued for the next pass rather than
+    /// dropping it with rows still charged.
+    async fn dead_letter(
+        &self,
+        scope: &DrainScope<'_>,
+        op_id: OpId,
+        op: &Op,
+        reason: DeadLetterReason,
+        report: &mut DrainReport,
+    ) {
+        if self.abandon(scope, op_id, op).await.is_ok() {
+            self.release_staged_blocks(op).await;
+            report.dead_letters.push((op_id, op.target, reason));
+        }
+    }
+
+    /// Every content CID an abandoned op's uploads may have left charged: the
+    /// version root and every leaf its staged manifest names. Each `POST
+    /// /content/upload` creates its own accountable pin row (blueprint/api.md
+    /// "Pin/name registry"), so retiring the root alone would spend account
+    /// quota forever on blocks no record reaches (#916).
+    ///
+    /// Reads the manifest before [`Self::release_staged_blocks`] drops it —
+    /// after that the leaf CIDs are recoverable from nowhere.
+    async fn uploaded_content_cids(&self, op: &Op) -> Vec<String> {
+        let Some(root_cid) = op.content_root_cid() else {
+            return Vec::new();
+        };
+        let mut cids = vec![encode_content_cid_str(root_cid)];
+        if let Ok(Some(root_block)) = self.staging.staged_bytes(root_cid).await
+            && let Ok(content) = SealedContent::from_root_block(&root_block)
+        {
+            cids.extend(
+                content
+                    .leaf_cids()
+                    .iter()
+                    .map(|cid| encode_content_cid_str(cid)),
+            );
+        }
+        cids
     }
 
     /// The attempt record, pruned to the ops still queued. `live` is every id
@@ -1810,18 +1855,21 @@ fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
 /// whether the op's node survives in gate-passing state.
 ///
 /// The child name goes only with an abandoned create whose target never became
-/// reachable — a landed node still publishes under it. The version root goes
-/// with **any** content-bearing op: no record ever links a version whose op was
+/// reachable — a landed node still publishes under it. `content_cids` goes with
+/// **any** content-bearing op: no record ever links a version whose op was
 /// abandoned, whatever became of the node it was authored for.
-fn registered_by(scope: &DrainScope<'_>, op: &Op, target_published: bool) -> Vec<String> {
+fn registered_by(
+    scope: &DrainScope<'_>,
+    op: &Op,
+    target_published: bool,
+    content_cids: Vec<String>,
+) -> Vec<String> {
     let name = (!target_published && matches!(op.kind, OpKind::Create { .. })).then(|| {
         derive_write_name(scope.write_scope_seed, &op.target.0)
             .as_str()
             .to_owned()
     });
-    name.into_iter()
-        .chain(op.content_root_cid().map(encode_content_cid_str))
-        .collect()
+    name.into_iter().chain(content_cids).collect()
 }
 
 #[cfg(test)]

@@ -9,19 +9,28 @@
 use crate::api::{ApiClient, ApiError};
 use crate::seams::{CredentialStore, Http};
 
+/// The server's retire batch cap (blueprint/api.md "Pin/name registry"). A
+/// larger array is refused fail-closed, so a caller that cannot chunk cannot
+/// reconcile at all — an abandoned version at the flat-DAG ceiling names far
+/// more leaves than this.
+const RETIRE_BATCH_MAX: usize = 1000;
+
 /// Batch-retire registry rows for `targets` (`ipnsName`s or CIDs). Idempotent
-/// server-side (blueprint/api.md), so a replayed batch — a resumed name wave —
-/// is a no-op, never an error. This is the interior-name path: it retires the
-/// moment the caller says a name is dead.
+/// server-side (blueprint/api.md), so a replayed batch — a resumed name wave, or
+/// a chunk a failed pass already sent — is a no-op, never an error. This is the
+/// interior-name path: it retires the moment the caller says a name is dead.
+///
+/// Chunked to [`RETIRE_BATCH_MAX`]. A chunk that fails leaves the earlier ones
+/// retired and returns `Err`; the caller's retry replays the whole batch.
 pub async fn retire<H, C>(api: &ApiClient<H, C>, targets: &[String]) -> Result<(), ApiError>
 where
     H: Http,
     C: CredentialStore,
 {
-    if targets.is_empty() {
-        return Ok(());
+    for chunk in targets.chunks(RETIRE_BATCH_MAX) {
+        api.retire(chunk).await?;
     }
-    api.retire(targets).await
+    Ok(())
 }
 
 /// Whether the old scope-root name may be retired yet. **Stubbed to `false`**:
@@ -74,6 +83,42 @@ mod tests {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].method, HttpMethod::Post);
         assert!(requests[0].url.ends_with("/registry/retire"));
+    }
+
+    #[test]
+    fn an_oversize_batch_splits_into_chunks_the_server_accepts() {
+        let (http, client) = client();
+        let targets: Vec<String> = (0..RETIRE_BATCH_MAX + 1)
+            .map(|i| format!("cid{i}"))
+            .collect();
+        for _ in 0..2 {
+            http.enqueue_response(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: Vec::new(),
+            });
+        }
+        block_on(retire(&client, &targets)).expect("retire");
+
+        let requests = http.requests();
+        assert_eq!(requests.len(), 2, "the batch splits at the server's cap");
+        let sent: Vec<String> = requests
+            .iter()
+            .flat_map(|request| {
+                let body = request.body.as_deref().expect("a retire call has a body");
+                serde_json::from_slice::<Vec<String>>(body).expect("a retire body is a JSON array")
+            })
+            .collect();
+        assert_eq!(
+            sent, targets,
+            "every target still reaches the registry once"
+        );
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.url.ends_with("/registry/retire")),
+            "every chunk goes to the retire endpoint"
+        );
     }
 
     #[test]

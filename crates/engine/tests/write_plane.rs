@@ -2218,7 +2218,8 @@ fn a_publish_that_never_confirms_dead_letters_once_its_attempt_budget_runs_out()
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
 
     let op_id = create(&mut engine, "photos");
-    jam_name(&world.record_store, child_id(&engine, ROOT, "photos"));
+    let photos = child_id(&engine, ROOT, "photos");
+    jam_name(&world.record_store, photos);
 
     // The budget is spent one non-confirming publish per pass: finite, but more
     // than one — a single lost race is a retry, not an abandonment.
@@ -2241,9 +2242,10 @@ fn a_publish_that_never_confirms_dead_letters_once_its_attempt_budget_runs_out()
             reason: DeadLetterReason::AttemptsExhausted
         }]
     );
-    assert!(
-        retire_targets(&alice).is_empty(),
-        "an unconfirmed publish is never retired out from under itself"
+    assert_eq!(
+        retire_targets(&alice),
+        vec![write_name(photos).as_str().to_owned()],
+        "an exhausted budget abandons: the name it registered leaves the inventory with it"
     );
 }
 
@@ -2275,44 +2277,135 @@ fn an_abandoned_create_retires_the_child_name_it_registered_exactly_once() {
     );
 }
 
-/// An abandoned `updateContent` uploaded a version root no record will ever
-/// link — its file still publishes the versions it had — so the root leaves the
-/// republish inventory with the op while the file's own name stays live.
+/// An abandoned `updateContent` uploaded a version no record will ever link —
+/// its file still publishes the versions it had — so every block it uploaded
+/// leaves the republish inventory with the op while the file's own name stays
+/// live. Each upload creates its own charged pin row, so a leaf the root
+/// retirement misses spends account quota forever (#916).
 #[test]
-fn an_abandoned_version_retires_its_root_and_keeps_the_files_name() {
+fn an_abandoned_version_retires_every_block_it_uploaded_and_keeps_the_files_name() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
-    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
-
-    let target = WriteTarget::NewFile {
-        parent: ROOT,
-        name: "photo.bin".into(),
-    };
-    write_file(&mut engine, target, &(0..200u8).collect::<Vec<_>>()).unwrap();
-    tick(&world, &engine, &mut tasks);
+    let (mut engine, mut tasks) = seed_file(&world, &blocks, &alice);
     let file = child_id(&engine, ROOT, "photo.bin");
-    assert!(retire_targets(&alice).is_empty(), "the create landed");
 
     write_file(
         &mut engine,
         WriteTarget::Version { node: file },
-        &(0..120u8).collect::<Vec<_>>(),
+        &(0..200u8).collect::<Vec<_>>(),
     )
     .unwrap();
-    let version_root = block_on(async {
-        let queued = alice.staging_store.queued_ops().await.unwrap();
-        record_content_root_cid(&queued[0].1).unwrap().unwrap()
-    });
-    blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("UPLOAD_TOO_LARGE")))));
+    let version = staged_version_cids(&alice);
+    // Refused mid-set, so leaves land before the halt and the retire batch has
+    // to name blocks that are already charged.
+    let refused_upload = 8;
+    let mut sent = 0;
+    blocks.refuse_upload(Box::new(move |_| {
+        sent += 1;
+        (sent == refused_upload).then(|| upload_413(Some("UPLOAD_TOO_LARGE")))
+    }));
     tick(&world, &engine, &mut tasks);
 
+    assert!(
+        uploads(&alice) >= refused_upload,
+        "the halt came after leaves had already landed"
+    );
     assert_eq!(
         retire_targets(&alice),
-        vec![encode_content_cid_str(&version_root)],
-        "the version root leaves the inventory; the file's own name does not"
+        version,
+        "every uploaded block leaves the inventory; the file's own name does not"
     );
+}
+
+/// The attempts-exhausted arm is an abandonment too: an op whose publish burned
+/// its budget retires what its uploads charged, exactly as a permanent refusal
+/// does (#916).
+#[test]
+fn a_version_whose_attempt_budget_runs_out_retires_every_block_it_uploaded() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, mut tasks) = seed_file(&world, &blocks, &alice);
+    let file = child_id(&engine, ROOT, "photo.bin");
+
+    write_file(
+        &mut engine,
+        WriteTarget::Version { node: file },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let version = staged_version_cids(&alice);
+    // Leaves land, then an unattributable 413 stalls the set: charged rows with
+    // an op that will never publish.
+    let mut sent = 0;
+    blocks.refuse_upload(Box::new(move |_| {
+        sent += 1;
+        (sent >= 8).then(proxy_413)
+    }));
+
+    let dead_letters =
+        |engine: &Engine<FakeSeamTypes>| block_on(engine.snapshot(ROOT)).unwrap().dead_letters;
+    let mut passes = 0;
+    while dead_letters(&engine).is_empty() {
+        tick(&world, &engine, &mut tasks);
+        passes += 1;
+        assert!(passes < 50, "the attempt budget must be finite");
+    }
+    assert_eq!(
+        dead_letters(&engine)
+            .iter()
+            .map(|letter| letter.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::AttemptsExhausted]
+    );
+    assert_eq!(
+        retire_targets(&alice),
+        version,
+        "an exhausted budget retires the same block set a permanent refusal does"
+    );
+}
+
+/// Land one multi-leaf file so a later version has something to update.
+fn seed_file(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+) -> (Engine<FakeSeamTypes>, Vec<BoxedTask>) {
+    let (mut engine, _events, mut tasks) = boot(world, blocks, device, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    tick(world, &engine, &mut tasks);
+    assert!(retire_targets(device).is_empty(), "the create landed");
+    (engine, tasks)
+}
+
+/// The queued content op's whole block set as the registry names it: the version
+/// root first, then every leaf in file order.
+fn staged_version_cids(device: &FakeDevice) -> Vec<String> {
+    block_on(async {
+        let queued = device.staging_store.queued_ops().await.unwrap();
+        let root_cid = record_content_root_cid(&queued[0].1).unwrap().unwrap();
+        let root_block = device
+            .staging_store
+            .staged_bytes(&root_cid)
+            .await
+            .unwrap()
+            .unwrap();
+        core::iter::once(&root_cid)
+            .chain(&decode_root(&root_block).unwrap().leaf_cids)
+            .map(|cid| encode_content_cid_str(cid))
+            .collect()
+    })
 }
 
 #[test]
