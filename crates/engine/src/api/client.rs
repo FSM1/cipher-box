@@ -11,6 +11,7 @@ use core::cell::RefCell;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use cipherbox_core::content::decode_content_cid_str;
 use futures_channel::oneshot;
 use serde::Serialize;
 use zeroize::Zeroizing;
@@ -287,12 +288,16 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         decode(&response)
     }
 
-    /// Upload content bytes to the hosted pin store.
-    pub async fn upload(&self, content: &[u8]) -> Result<UploadResult, ApiError> {
+    /// Upload content bytes to the hosted pin store under `cid`, the caller's
+    /// own content address for them. The API pins under exactly that address
+    /// and refuses bytes that do not hash to it, so the block the network
+    /// serves is the block the engine authored (blueprint/api.md, Ingress).
+    pub async fn upload(&self, cid: &str, content: &[u8]) -> Result<UploadResult, ApiError> {
+        decode_content_cid_str(cid).map_err(|_| ApiError::MalformedContentCid)?;
         let response = self
             .request_authed(
                 HttpMethod::Post,
-                "/content/upload",
+                &format!("/content/upload?cid={cid}"),
                 Some(APPLICATION_OCTET_STREAM),
                 Some(content.to_vec()),
             )

@@ -15,6 +15,7 @@ publish.workspace = true
 # merge-blocking `contract-suite` CI job, which stands up that stack.
 
 [dependencies]
+cipherbox-core.workspace = true
 cipherbox-engine.workspace = true
 # featureless reqwest (no TLS backend, matching the tauri resolution): the API
 # is reached over plain http on localhost in CI, so no TLS/OpenSSL is linked.

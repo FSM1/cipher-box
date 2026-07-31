@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   Logger,
@@ -22,7 +23,7 @@ import {
 import { resolveDbPoolSize } from '../common/db-pool';
 import { Semaphore } from '../common/semaphore';
 import { PinnedCid } from '../registry/entities/pinned-cid.entity';
-import { PinStore } from '../registry/pin-store';
+import { PinCidMismatchError, PinStore } from '../registry/pin-store';
 import {
   byteConfigBigInt,
   DEFAULT_QUOTA_BYTES,
@@ -89,11 +90,14 @@ export interface UploadResult {
 
 /**
  * The hosted ingress upload path (blueprint/api.md, Content plane): pin opaque
- * bytes to CipherBox Kubo, quota-gated, registering the pin row in the same
- * traversal. The API is zero-knowledge — it pins bytes it never inspects. Only
- * hosted accounts may ingress here: a BYO account pins to its own provider and
- * its bytes bypass the API, so a BYO upload is refused (409) rather than pinned
- * to hosted Kubo off the quota's books.
+ * bytes to CipherBox Kubo under the address the caller declared for them,
+ * quota-gated, registering the pin row in the same traversal. The API is
+ * zero-knowledge — it pins bytes it never inspects and computes no content
+ * address of its own; the pin store's put re-derives the address and the
+ * declared CID is only honoured if Kubo agrees. Only hosted accounts may ingress
+ * here: a BYO account pins to its own provider and its bytes bypass the API, so
+ * a BYO upload is refused (409) rather than pinned to hosted Kubo off the
+ * quota's books.
  *
  * Concurrency (two shared resources under contention):
  *  - the per-account quota SUM — a check-then-act serialized by a per-account
@@ -150,7 +154,7 @@ export class ContentService {
     this.pinSlots = new Semaphore(pinConcurrency.ceiling);
   }
 
-  async upload(accountId: string, bytes: Buffer): Promise<UploadResult> {
+  async upload(accountId: string, cid: string, bytes: Buffer): Promise<UploadResult> {
     // Fail closed on a pool too small (< 2 connections) to host one upload: the
     // pin path needs its session-lock connection AND a second for the commit tx,
     // so admitting a request here would self-deadlock waiting for the second.
@@ -158,9 +162,6 @@ export class ContentService {
       throw new ServiceUnavailableException('Content pin path unavailable; DB pool too small');
     }
     const size = bytes.byteLength;
-    // Phase 1 — derive the CID with no durable side effect (only-hash), so the
-    // ledger below can key on it before any bytes are pinned.
-    const cid = await this.pinStore.hash(bytes);
 
     // Admit at most `pinSlots` uploads into the session-lock → pin → compensate
     // span at once. That span holds a pooled connection across the external pin,
@@ -180,28 +181,26 @@ export class ContentService {
     size: number,
     bytes: Buffer
   ): Promise<UploadResult> {
-    // Phase 2 — the source of truth: gate + register under the account and CID
+    // Phase 1 — the source of truth: gate + register under the account and CID
     // advisory locks, atomically.
     const outcome = await runLockGuardedTransaction(this.dataSource, (manager) =>
       this.registerPin(manager, accountId, cid, size)
     );
 
-    // Phase 3 — durable pin AFTER commit. Byte-pin + register are all-or-nothing:
-    // a pin failure (or a CID mismatch) compensates — retiring a row it inserted,
-    // or reverting a promoted row's size charge.
+    // Phase 2 — durable pin AFTER commit, under the declared CID. Byte-pin +
+    // register are all-or-nothing: a pin failure compensates — retiring a row it
+    // inserted, or reverting a promoted row's size charge. A declared CID that
+    // does not address the bytes is a permanent caller fault (400), not a
+    // retriable outage (503).
     if (outcome.created) {
-      let pinnedCid: string;
       try {
-        pinnedCid = await this.pinStore.pin(bytes);
-      } catch {
+        await this.pinStore.pin(cid, bytes);
+      } catch (error) {
         await this.compensate(accountId, cid, outcome.promoted);
+        if (error instanceof PinCidMismatchError) {
+          throw new BadRequestException('Declared CID does not address the uploaded bytes');
+        }
         throw new ServiceUnavailableException('Pin store unavailable; upload not durable');
-      }
-      if (pinnedCid !== cid) {
-        // Fail closed: the row keys on `cid`; a mismatch means Kubo pinned bytes
-        // under a different CID than the ledger references.
-        await this.compensate(accountId, cid, outcome.promoted);
-        throw new ServiceUnavailableException('Pin CID mismatch; upload rejected');
       }
     }
 

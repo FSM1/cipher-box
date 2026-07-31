@@ -194,7 +194,7 @@ where
     Sch: Scheduler + Clone + 'static,
 {
     let uploaded = api
-        .upload(&request.head.block)
+        .upload(&request.head.cid, &request.head.block)
         .await
         .map_err(RecordPublishError::Upload)?;
     if uploaded.cid != request.head.cid {

@@ -146,7 +146,10 @@ impl Blocks {
             })
         };
         let url = &request.url;
-        if url.ends_with("/content/upload") {
+        if let Some((path, query)) = url.split_once('?')
+            && path.ends_with("/content/upload")
+        {
+            let declared = query.strip_prefix("cid=").expect("upload declares its CID");
             let block = request.body.clone().unwrap_or_default();
             if let Some(hook) = self.on_upload.lock().expect("lock").as_mut()
                 && let Some(reply) = hook(&block)
@@ -154,7 +157,10 @@ impl Blocks {
                 return reply;
             }
             let size = block.len();
+            // Mirror the API's fail-closed bind (#906): the block is stored —
+            // and served back — only under the address the caller declared.
             let cid = self.put(block);
+            assert_eq!(declared, cid, "upload declared an address it does not hash to");
             return ok(format!("{{\"cid\":\"{cid}\",\"size\":{size}}}").into_bytes());
         }
         if url.ends_with("/account/quota") {
@@ -385,7 +391,7 @@ fn uploaded_node_ids(device: &FakeDevice) -> Vec<[u8; 16]> {
         .http
         .requests()
         .iter()
-        .filter(|request| request.url.ends_with("/content/upload"))
+        .filter(|request| request.url.contains("/content/upload?"))
         .filter_map(|request| decode_envelope(request.body.as_deref()?).ok())
         .map(|envelope| envelope.id)
         .collect()
@@ -2027,7 +2033,7 @@ fn every_record_one_pass_seals_carries_a_distinct_nonce() {
         .http
         .requests()
         .iter()
-        .filter(|request| request.url.ends_with("/content/upload"))
+        .filter(|request| request.url.contains("/content/upload?"))
         .filter_map(|request| decode_envelope(request.body.as_deref()?).ok())
         // `readSealed` is `nonce(24) || ciphertext||tag`.
         .map(|envelope| envelope.read_sealed[..24].to_vec())
@@ -2400,7 +2406,7 @@ fn uploads(device: &FakeDevice) -> usize {
         .http
         .requests()
         .iter()
-        .filter(|request| request.url.ends_with("/content/upload"))
+        .filter(|request| request.url.contains("/content/upload?"))
         .count()
 }
 
