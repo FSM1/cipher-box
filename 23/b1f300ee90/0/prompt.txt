@@ -1164,3 +1164,7 @@ Context: the existing config already carries 103 allow entries in `.claude/setti
 **Rules to add to `permissions.allow`: none qualify.** The permission setup is not costing you prompts right now; the one real friction source in this window is the `user-prompt-submit` hook timeout.</result>
 <usage><subagent_tokens>48598</subagent_tokens><tool_uses>10</tool_uses><duration_ms>120667</duration_ms></usage>
 </task-notification>
+
+---
+
+ok please commit the doctor updates to a chore branch and open a PR
