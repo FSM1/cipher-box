@@ -214,6 +214,26 @@ mod tests {
         });
     }
 
+    /// The leaf gate is the drain's, not this one's: staging is mutable between
+    /// the journal entry and the upload, so a leaf sweep here would pass and
+    /// still leave the drain re-reading every block. It re-verifies each leaf's
+    /// CID as it uploads and dead-letters an absence past the durable mark
+    /// (`crate::sync::drain`), which is the check that can actually hold.
+    #[test]
+    fn a_missing_leaf_still_enqueues_because_the_drain_owns_that_gate() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            store.remove_staged_bytes(&blocks[0].cid).await.unwrap();
+
+            stage_op(&store, seal(1), &content_op(1, staged.clone()))
+                .await
+                .expect("the root is what this gate binds");
+            assert_eq!(store.queued_ops().await.unwrap().len(), 1);
+        });
+    }
+
     #[test]
     fn a_root_block_that_does_not_address_to_the_ops_root_fails_closed() {
         let store = InMemoryStagingStore::default();
