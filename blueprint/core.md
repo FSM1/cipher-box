@@ -162,8 +162,8 @@ The `structTag` byte-space is the domain-separation registry, frozen in the KAT
 manifest: `read-body` (`0x01`), `write-body` (`0x02`), `grant-blob` (`0x03`),
 `owner-blob` (`0x04`), `ascent-link` (`0x05`), `history-link` (`0x06`),
 `pointer-payload` (`0x07`), `mailbox-payload` (`0x08`), `owner-write-blob`
-(`0x09`), `op-record` (`0x0a`), `settings-record` (`0x0b`). Every new tag
-extends the manifest and its vectors before merge; the
+(`0x09`), `op-record` (`0x0a`), `settings-record` (`0x0b`), `content-key`
+(`0x0c`). Every new tag extends the manifest and its vectors before merge; the
 `owner-write-blob` KAT set is `owner_write_blob_accept` (seal/open round-trip
 under a fixed enc + ephemeral) and `owner_write_blob_reject` (decode: wrong-length
 seed, missing `writeEpoch`; HPKE fail-closed: tampered ciphertext/tag,

@@ -27,7 +27,19 @@ use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructureSigInput, build_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_section, decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section, encode_grant_set_commitment, encode_override_seed_payload, encode_read_body, encode_write_body, open_ascent_link, open_content_key, open_grant_blob, open_op_record, open_owner_blob, open_owner_write_blob, open_read_body, open_settings_record, seal_content_key, seal_op_record, seal_settings_record, structure_sig_preimage, verify_grant_set, verify_structure,
+    self, AAD_DOMAIN, AadContext, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, NodeKind,
+    OP_RECORD_HPKE_INFO, OP_RECORD_V, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V,
+    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
+    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
+    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructureSigInput, build_aad,
+    decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_section,
+    decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header,
+    decode_override_seed_payload, decode_owner_write_blob_payload, decode_read_body,
+    decode_write_body, encode_ascent_link, encode_envelope, encode_grant_section,
+    encode_grant_set_commitment, encode_override_seed_payload, encode_read_body, encode_write_body,
+    open_ascent_link, open_content_key, open_grant_blob, open_op_record, open_owner_blob,
+    open_owner_write_blob, open_read_body, open_settings_record, seal_content_key, seal_op_record,
+    seal_settings_record, structure_sig_preimage, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
@@ -278,6 +290,7 @@ struct Manifest {
     content: ContentManifest,
     op_record: OpRecordManifest,
     settings_record: SettingsRecordManifest,
+    content_key: ContentKeyManifest,
 }
 
 #[derive(Deserialize)]
@@ -310,7 +323,6 @@ struct SettingsRecordRejectVector {
     record: String,
     check: String,
     class: String,
-    content_key: ContentKeyManifest,
 }
 
 #[derive(Deserialize)]

@@ -32,7 +32,27 @@ use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, AscentLink, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, ChildRef, ChildScopeRef, GrantBlobPayload, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V, OpRecordHeader, OverrideSeedPayload, OwnerWriteBlobPayload, Permission, ReadBody, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, SettingsRecordHeader, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, Version, WriteBody, build_aad, content_key_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload, decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload, decode_read_body, decode_write_body, encode_ascent_link, encode_envelope, encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload, encode_override_seed_payload, encode_owner_write_blob_payload, encode_read_body, encode_write_body, op_record_aad, open_ascent_link, open_content_key, open_grant_blob, open_history_link, open_op_record, open_owner_blob, open_owner_write_blob, open_read_body, open_settings_record, seal_ascent_link, seal_content_key, seal_grant_blob, seal_history_link, seal_op_record, seal_owner_blob, seal_owner_write_blob, seal_read_body, seal_settings_record, settings_record_aad, sign_grant_set, sign_structure, structure_sig_preimage, verify_grant_set, verify_structure,
+    self, AAD_DOMAIN, AadContext, AscentLink, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, ChildRef,
+    ChildScopeRef, GrantBlobPayload, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry,
+    HistoryLinkPayload, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V, OpRecordHeader,
+    OverrideSeedPayload, OwnerWriteBlobPayload, Permission, ReadBody, SETTINGS_RECORD_HPKE_INFO,
+    SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
+    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, SettingsRecordHeader,
+    SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, Version,
+    WriteBody, build_aad, content_key_aad, decode_ascent_link, decode_envelope,
+    decode_grant_blob_payload, decode_grant_set_commitment, decode_history_link_payload,
+    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
+    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope,
+    encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
+    encode_override_seed_payload, encode_owner_write_blob_payload, encode_read_body,
+    encode_write_body, op_record_aad, open_ascent_link, open_content_key, open_grant_blob,
+    open_history_link, open_op_record, open_owner_blob, open_owner_write_blob, open_read_body,
+    open_settings_record, seal_ascent_link, seal_content_key, seal_grant_blob, seal_history_link,
+    seal_op_record, seal_owner_blob, seal_owner_write_blob, seal_read_body, seal_settings_record,
+    settings_record_aad, sign_grant_set, sign_structure, structure_sig_preimage, verify_grant_set,
+    verify_structure,
 };
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
@@ -201,6 +221,7 @@ struct Manifest {
     content: ContentSection,
     op_record: OpRecordSection,
     settings_record: SettingsRecordSection,
+    content_key: ContentKeySection,
 }
 
 // --- Settings-record section: the vault settings record, HPKE-auth-to-self
@@ -243,7 +264,6 @@ struct SettingsRecordRejectVector {
     record: String,
     check: String,
     class: String,
-    content_key: ContentKeySection,
 }
 
 // --- Op-record section: the durable local op-queue record, HPKE-to-self under
