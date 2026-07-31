@@ -114,6 +114,9 @@ pub enum DefaultsReason {
     /// A record was found but yielded no usable settings: it will not open
     /// under the enc subkey, or its body is malformed or invalid.
     Unreadable,
+    /// The durable sequence floor could not be read, so no record could be
+    /// held to its rollback bar. Host I/O, not a verdict on any record.
+    FloorUnreadable,
 }
 
 /// What a load produced.
@@ -249,7 +252,7 @@ where
     // per-name sequence floor is its whole floor law. A floor the host cannot
     // read is never treated as no floor.
     let Ok(durable) = floor::sequence_floor(floors, key).await else {
-        return SettingsLoad::Defaults(DefaultsReason::Unreadable);
+        return SettingsLoad::Defaults(DefaultsReason::FloorUnreadable);
     };
     let Some((sequence, record_bytes)) = fanout_get_verify(transport, name).await else {
         // A durable floor is proof this account has published settings, so

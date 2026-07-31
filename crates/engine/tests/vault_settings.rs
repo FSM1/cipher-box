@@ -303,6 +303,72 @@ fn published_block(device: &FakeDevice, blocks: &Blocks, name: &IpnsName) -> Vec
         .expect("block on the plane")
 }
 
+/// A transport that acks every PUT and serves nothing back: the confirm
+/// re-resolve reads no record at all.
+#[derive(Clone)]
+struct AcksNothingBack;
+
+impl RecordTransport for AcksNothingBack {
+    fn endpoints(&self) -> Vec<EndpointId> {
+        vec![EndpointId::new("fake:write-only")]
+    }
+
+    async fn get_record(
+        &self,
+        _endpoint: &EndpointId,
+        _routing_key: &str,
+    ) -> SeamResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    async fn put_record(
+        &self,
+        _endpoint: &EndpointId,
+        _routing_key: &str,
+        _record: &[u8],
+    ) -> SeamResult<()> {
+        Ok(())
+    }
+}
+
+/// Retrying an unconfirmed publish is idempotent-in-sequence, so its floor must
+/// stay put: raising it past bytes the network may never serve makes the retry
+/// mint a fresh sequence instead of re-minting the same one.
+#[test]
+fn an_unconfirmed_publish_is_reported_and_never_advances_the_floor() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    serve_http(&device, &Blocks::default(), 4);
+
+    let outcome = block_on(publish_settings(
+        &AcksNothingBack,
+        &api,
+        &device.floor_store,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(3),
+        &SECRET,
+        &configured(),
+    ));
+
+    assert_eq!(outcome.unwrap_err(), SettingsPublishError::Unconfirmed);
+    assert_eq!(
+        block_on(
+            device
+                .floor_store
+                .sequence_floor(settings_name(&SECRET).as_str().as_bytes())
+        )
+        .expect("read"),
+        None,
+        "an unconfirmed publish leaves the floor where it found it",
+    );
+}
+
 #[test]
 fn the_settings_name_is_derived_from_the_login_secret_alone() {
     assert_eq!(
@@ -482,13 +548,13 @@ fn a_rolled_back_record_yields_defaults_and_never_lowers_the_floor() {
 #[test]
 fn an_unavailable_head_block_yields_defaults() {
     let world = FakeWorld::new();
-    let blocks = Blocks::default();
     let device = world.device(b"me");
     let name = settings_name(&SECRET);
-    // A record anchoring a CID no gateway serves.
+    // The CID is computed, never uploaded, so no block plane anywhere holds it.
+    let head = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, b"never uploaded"));
     let record = IpnsRecord::create_v2(
         &kdf::settings_ipns_keypair(&SECRET),
-        format!("/ipfs/{}", blocks.put(b"never uploaded".to_vec())).as_bytes(),
+        format!("/ipfs/{head}").as_bytes(),
         1,
         TTL_NANOS,
         EOL,
@@ -513,6 +579,61 @@ fn an_unavailable_head_block_yields_defaults() {
         )),
         SettingsLoad::Defaults(DefaultsReason::Suppressed),
         "a verified record whose block will not come back is being withheld",
+    );
+}
+
+/// A floor store whose reads fail.
+struct UnreadableFloors;
+
+impl FloorStore for UnreadableFloors {
+    async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
+        Err(SeamError::new("floor store unreadable"))
+    }
+
+    async fn raise_epoch_floor(&self, _scope_id: &[u8], _epoch: u64) -> SeamResult<u64> {
+        Err(SeamError::new("floor store unreadable"))
+    }
+
+    async fn sequence_floor(&self, _ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+        Err(SeamError::new("floor store unreadable"))
+    }
+
+    async fn raise_sequence_floor(&self, _ipns_name: &[u8], _sequence: u64) -> SeamResult<u64> {
+        Err(SeamError::new("floor store unreadable"))
+    }
+}
+
+#[test]
+fn a_floor_the_host_cannot_read_is_reported_apart_from_an_unusable_record() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body("https://kubo.example"),
+        1,
+    );
+
+    // The control: these bytes resolve behind a readable floor, so the verdict
+    // below is the host's storage and nothing about the record.
+    assert!(matches!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Resolved(_)
+    ));
+
+    assert_eq!(
+        block_on(load_settings(
+            &device.record_store,
+            &gateway(),
+            &device.http,
+            &UnreadableFloors,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &SECRET,
+        )),
+        SettingsLoad::Defaults(DefaultsReason::FloorUnreadable),
+        "a floor the host cannot read is never treated as no floor",
     );
 }
 
