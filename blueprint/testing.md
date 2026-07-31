@@ -130,7 +130,10 @@ refresh rotation, SIWE secondary; test-login environment gating asserted
 (production mode must refuse); **register-first fail-closed** — publishing
 an unregistered name is refused; batch register/retire idempotency; union
 liveness and refcounted physical unpin; quota (hosted authoritative, BYO
-`advisory: true`); hosted upload; the mailbox lifecycle (post/poll/ack,
+`advisory: true`); hosted upload — including that the pinned address **equals**
+the caller-computed one under both content-plane codecs, and that a declared
+address the bytes do not hash to is refused and compensated;
+the mailbox lifecycle (post/poll/ack,
 idempotency keys, pending-cap reject-new, unknown-recipient rejection);
 the recovery endpoint (auth + rate limit); account hard-delete cascade;
 the republisher module's inventory walk and resolve-failure alerting; and

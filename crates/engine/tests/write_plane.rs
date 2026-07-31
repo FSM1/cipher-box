@@ -114,6 +114,22 @@ impl Blocks {
         root_cid
     }
 
+    /// Store an uploaded block under the address its caller declared, refusing
+    /// one the bytes do not hash to under either content-plane codec — the
+    /// ingress's put-and-compare (#906).
+    fn put_declared(&self, declared: &str, block: Vec<u8>) {
+        let raw = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, &block));
+        let root = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
+        assert!(
+            declared == raw || declared == root,
+            "upload declared an address it does not hash to"
+        );
+        self.store
+            .lock()
+            .expect("lock")
+            .insert(declared.to_owned(), block);
+    }
+
     fn get(&self, cid: &str) -> Option<Vec<u8>> {
         self.store.lock().expect("lock").get(cid).cloned()
     }
@@ -147,6 +163,12 @@ impl Blocks {
         };
         let url = &request.url;
         if url.ends_with("/content/upload") {
+            let declared = request
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
+                .map(|(_, value)| value.clone())
+                .expect("upload declares its CID");
             let block = request.body.clone().unwrap_or_default();
             if let Some(hook) = self.on_upload.lock().expect("lock").as_mut()
                 && let Some(reply) = hook(&block)
@@ -154,8 +176,11 @@ impl Blocks {
                 return reply;
             }
             let size = block.len();
-            let cid = self.put(block);
-            return ok(format!("{{\"cid\":\"{cid}\",\"size\":{size}}}").into_bytes());
+            // Mirror the API's fail-closed bind (#906): the block is stored —
+            // and served back — only under the address the caller declared,
+            // and only once those bytes really address to it.
+            self.put_declared(&declared, block);
+            return ok(format!("{{\"cid\":\"{declared}\",\"size\":{size}}}").into_bytes());
         }
         if url.ends_with("/account/quota") {
             let (used, limit) = self

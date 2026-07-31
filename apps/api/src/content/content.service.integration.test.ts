@@ -10,7 +10,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { User } from '../auth/entities/user.entity';
 import { advisoryLockKey } from '../common/advisory-lock';
 import { PinnedCid } from '../registry/entities/pinned-cid.entity';
-import { PinStore } from '../registry/pin-store';
+import { PinCidMismatchError, PinStore } from '../registry/pin-store';
 import { RegistryService } from '../registry/services/registry.service';
 import { fakeConfig } from '../testing/fakes';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
@@ -35,7 +35,7 @@ function compressedPublicKey(): string {
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Deterministic CID from bytes so hash() and pin() always agree; records effects. */
+/** Deterministic CID from bytes; declared and actual agree unless a test deliberately mismatches. */
 class FakePinStore extends PinStore {
   readonly pinned: string[] = [];
   readonly unpinned: string[] = [];
@@ -47,20 +47,18 @@ class FakePinStore extends PinStore {
     return `ba${createHash('sha256').update(bytes).digest('hex')}`;
   }
 
-  override async hash(bytes: Uint8Array): Promise<string> {
-    return this.cidFor(bytes);
-  }
-
-  override async pin(bytes: Uint8Array): Promise<string> {
+  override async pin(cid: string, bytes: Uint8Array): Promise<void> {
     if (this.pinGate) {
       await this.pinGate.onReach();
     }
     if (this.failPin) {
       throw new Error('pin store unavailable');
     }
-    const cid = this.cidFor(bytes);
+    const actual = this.cidFor(bytes);
+    if (actual !== cid) {
+      throw new PinCidMismatchError(cid, actual);
+    }
     this.pinned.push(cid);
-    return cid;
   }
 
   async unpin(cid: string): Promise<boolean> {
@@ -263,11 +261,13 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       const accountId = await seedAccount({ quotaLimitOverride: '100' });
       const gate = makeGate();
       const pinStore = new FakePinStore();
+      const firstBytes = Buffer.alloc(60, 1);
+      const secondBytes = Buffer.alloc(60, 2);
 
       const first = buildService(
         gatedDataSource(db.dataSource, { beforeInsert: gate.onReach }),
         pinStore
-      ).upload(accountId, Buffer.alloc(60, 1));
+      ).upload(accountId, pinStore.cidFor(firstBytes), firstBytes);
 
       // first holds the account lock, passed the gate (used 0 + 60 <= 100), and
       // paused just before its insert.
@@ -275,7 +275,7 @@ describe('ContentService upload concurrency (real Postgres)', () => {
 
       let secondDone = false;
       const second = buildService(db.dataSource, pinStore)
-        .upload(accountId, Buffer.alloc(60, 2))
+        .upload(accountId, pinStore.cidFor(secondBytes), secondBytes)
         .then((r) => {
           secondDone = true;
           return r;
@@ -308,17 +308,20 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       // two per-account serializers); their CIDs differ, so the CID lock never
       // serializes them either — nothing does.
       const gateHooks = { skipLockKeys: [skipLockKey], stripUserLock: true };
+      const firstBytes = Buffer.alloc(60, 1);
+      const secondBytes = Buffer.alloc(60, 2);
       const first = buildService(
         gatedDataSource(db.dataSource, { ...gateHooks, beforeInsert: gate.onReach }),
         pinStore
-      ).upload(accountId, Buffer.alloc(60, 1));
+      ).upload(accountId, pinStore.cidFor(firstBytes), firstBytes);
 
       await gate.reached; // first read used=0, passed the gate, paused before insert
 
       // second runs fully with no account serializer: it also reads used=0 and inserts.
       await buildService(gatedDataSource(db.dataSource, gateHooks), pinStore).upload(
         accountId,
-        Buffer.alloc(60, 2)
+        pinStore.cidFor(secondBytes),
+        secondBytes
       );
 
       gate.release();
@@ -337,17 +340,18 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       const bytes = Buffer.alloc(40, 7);
       const gate = makeGate();
       const pinStore = new FakePinStore();
+      const cid = pinStore.cidFor(bytes);
 
       const first = buildService(
         gatedDataSource(db.dataSource, { beforeInsert: gate.onReach }),
         pinStore
-      ).upload(accountId, bytes);
+      ).upload(accountId, cid, bytes);
 
       await gate.reached;
 
       let secondDone = false;
       const second = buildService(db.dataSource, pinStore)
-        .upload(accountId, bytes)
+        .upload(accountId, cid, bytes)
         .then((r) => {
           secondDone = true;
           return r;
@@ -381,13 +385,13 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       const first = buildService(
         gatedDataSource(db.dataSource, { ...skipHooks, beforeInsert: gate.onReach }),
         pinStore
-      ).upload(accountId, bytes);
+      ).upload(accountId, cid, bytes);
 
       await gate.reached; // first found no existing row and paused before insert
 
       // second runs fully with no locks: it also sees no existing row and inserts.
       const secondResult = await buildService(gatedDataSource(db.dataSource, skipHooks), pinStore)
-        .upload(accountId, bytes)
+        .upload(accountId, cid, bytes)
         .catch((e: unknown) => e);
 
       // first now inserts the duplicate (account, cid) and hits the unique index.
@@ -419,8 +423,9 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       expect(Number(limit) + 1 <= Number(limit)).toBe(true);
 
       const pinStore = new FakePinStore();
+      const bytes = Buffer.alloc(1, 9);
       await expect(
-        buildService(db.dataSource, pinStore).upload(accountId, Buffer.alloc(1, 9))
+        buildService(db.dataSource, pinStore).upload(accountId, pinStore.cidFor(bytes), bytes)
       ).rejects.toBeInstanceOf(PayloadTooLargeException);
 
       // Nothing was pinned; the ledger is unchanged.
@@ -439,9 +444,11 @@ describe('ContentService upload concurrency (real Postgres)', () => {
         .save({ accountId, cid: 'baAdvisoryStale', size: '500', advisory: true });
 
       const pinStore = new FakePinStore();
+      const bytes = Buffer.alloc(60, 1);
       const result = await buildService(db.dataSource, pinStore).upload(
         accountId,
-        Buffer.alloc(60, 1)
+        pinStore.cidFor(bytes),
+        bytes
       );
 
       expect(result.size).toBe(60);
@@ -458,8 +465,9 @@ describe('ContentService upload concurrency (real Postgres)', () => {
         .save({ accountId, cid: 'baHosted', size: '60', advisory: false });
 
       const pinStore = new FakePinStore();
+      const bytes = Buffer.alloc(60, 2);
       await expect(
-        buildService(db.dataSource, pinStore).upload(accountId, Buffer.alloc(60, 2))
+        buildService(db.dataSource, pinStore).upload(accountId, pinStore.cidFor(bytes), bytes)
       ).rejects.toBeInstanceOf(PayloadTooLargeException);
       // Nothing pinned; the authoritative 60 + incoming 60 > 100 refused.
       expect(pinStore.pinned).toEqual([]);
@@ -474,9 +482,10 @@ describe('ContentService upload concurrency (real Postgres)', () => {
     it('rejects the upload with 409 and pins nothing, leaving no uncounted row', async () => {
       const accountId = await seedAccount({ byo: true, quotaLimitOverride: '100' });
       const pinStore = new FakePinStore();
+      const bytes = Buffer.alloc(4096, 1);
 
       await expect(
-        buildService(db.dataSource, pinStore).upload(accountId, Buffer.alloc(4096, 1))
+        buildService(db.dataSource, pinStore).upload(accountId, pinStore.cidFor(bytes), bytes)
       ).rejects.toBeInstanceOf(ConflictException);
 
       // The adversarial invariant: bytes were NOT pinned to hosted Kubo, and no
@@ -497,7 +506,7 @@ describe('ContentService upload concurrency (real Postgres)', () => {
         .save({ accountId, cid, size: '0', advisory: true });
 
       await expect(
-        buildService(db.dataSource, pinStore).upload(accountId, bytes)
+        buildService(db.dataSource, pinStore).upload(accountId, cid, bytes)
       ).rejects.toBeInstanceOf(ConflictException);
 
       // The registry row is untouched (never promoted/charged) and nothing pinned.
@@ -531,13 +540,14 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       const bytes = Buffer.alloc(40, 1);
       const gate = makeGate();
       const pinStore = new FakePinStore();
+      const cid = pinStore.cidFor(bytes);
 
       // The upload takes the row lock, reads byo=false, then parks — still
       // holding the lock, uncommitted.
       const uploaded = buildService(
         gatedDataSource(db.dataSource, { afterUserRead: gate.onReach }),
         pinStore
-      ).upload(accountId, bytes);
+      ).upload(accountId, cid, bytes);
       await gate.reached;
 
       let setByoDone = false;
@@ -570,13 +580,14 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       const bytes = Buffer.alloc(40, 2);
       const gate = makeGate();
       const pinStore = new FakePinStore();
+      const cid = pinStore.cidFor(bytes);
 
       // The user read drops the FOR UPDATE lock (the pre-fix path); nothing
       // serializes the upload against the toggle.
       const uploaded = buildService(
         gatedDataSource(db.dataSource, { stripUserLock: true, afterUserRead: gate.onReach }),
         pinStore
-      ).upload(accountId, bytes);
+      ).upload(accountId, cid, bytes);
       await gate.reached; // upload read byo=false with no lock, then paused
 
       // The toggle commits immediately, mid-upload.
@@ -603,7 +614,11 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       const bytes = Buffer.alloc(20, 5);
       const pinStore = new FakePinStore();
 
-      const result = await buildService(db.dataSource, pinStore).upload(accountId, bytes);
+      const result = await buildService(db.dataSource, pinStore).upload(
+        accountId,
+        pinStore.cidFor(bytes),
+        bytes
+      );
 
       expect(result.size).toBe(20);
       expect(pinStore.pinned).toEqual([result.cid]);
@@ -619,7 +634,7 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       pinStore.failPin = true;
 
       await expect(
-        buildService(db.dataSource, pinStore).upload(accountId, bytes)
+        buildService(db.dataSource, pinStore).upload(accountId, pinStore.cidFor(bytes), bytes)
       ).rejects.toBeInstanceOf(ServiceUnavailableException);
 
       // Byte-pin + register are all-or-nothing: the row it registered was
@@ -640,13 +655,23 @@ describe('ContentService upload concurrency (real Postgres)', () => {
 
       const failing = new FakePinStore();
       failing.failPin = true;
+      const failingBytes = Buffer.alloc(20, 1);
       await expect(
-        buildService(db.dataSource, failing).upload(accountId, Buffer.alloc(20, 1))
+        buildService(db.dataSource, failing).upload(
+          accountId,
+          failing.cidFor(failingBytes),
+          failingBytes
+        )
       ).rejects.toBeInstanceOf(ServiceUnavailableException);
       expect(await usedBytes(accountId)).toBe(0n);
 
       const ok = new FakePinStore();
-      const result = await buildService(db.dataSource, ok).upload(accountId, Buffer.alloc(20, 2));
+      const okBytes = Buffer.alloc(20, 2);
+      const result = await buildService(db.dataSource, ok).upload(
+        accountId,
+        ok.cidFor(okBytes),
+        okBytes
+      );
       expect(result.size).toBe(20);
       expect(await usedBytes(accountId)).toBe(20n);
     });
@@ -666,7 +691,7 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       // A: commits its row, then reaches the (failing) pin while still holding
       // the session durability lock.
       const a = buildService(db.dataSource, failing)
-        .upload(accountId, bytes)
+        .upload(accountId, cid, bytes)
         .catch((e: unknown) => e);
       await pinGate.reached;
 
@@ -674,7 +699,7 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       const okStore = new FakePinStore();
       let bResult: UploadResult | undefined;
       const b = buildService(db.dataSource, okStore)
-        .upload(accountId, bytes)
+        .upload(accountId, cid, bytes)
         .then((r) => (bResult = r));
 
       await delay(200);
@@ -708,7 +733,7 @@ describe('ContentService upload concurrency (real Postgres)', () => {
         gatedDataSource(db.dataSource, { skipLockKeys: skipDurability }),
         failing
       )
-        .upload(accountId, bytes)
+        .upload(accountId, cid, bytes)
         .catch((e: unknown) => e);
       await pinGate.reached; // A committed its row, paused in the failing pin
 
@@ -718,7 +743,7 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       const bResult = (await buildService(
         gatedDataSource(db.dataSource, { skipLockKeys: skipDurability }),
         okStore
-      ).upload(accountId, bytes)) as UploadResult;
+      ).upload(accountId, cid, bytes)) as UploadResult;
       expect(bResult).toMatchObject({ cid, size: 30 });
       expect(okStore.pinned).toEqual([]); // B pinned nothing — it trusted A's row
 
@@ -761,7 +786,7 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       expect(registered).toMatchObject({ size: '0', advisory: false });
       expect(pinStore.pinned).toEqual([]); // register pins nothing
 
-      const result = await buildService(db.dataSource, pinStore).upload(accountId, bytes);
+      const result = await buildService(db.dataSource, pinStore).upload(accountId, cid, bytes);
 
       // The bytes are now DURABLY pinned, the row carries the real size, and the
       // quota is charged — closing the skip-with-size-0 durability/quota hole.
@@ -777,14 +802,15 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       const accountId = await seedAccount({ quotaLimitOverride: '1000' });
       const bytes = Buffer.alloc(30, 9);
       const pinStore = new FakePinStore();
+      const cid = pinStore.cidFor(bytes);
 
-      const first = await buildService(db.dataSource, pinStore).upload(accountId, bytes);
+      const first = await buildService(db.dataSource, pinStore).upload(accountId, cid, bytes);
       expect(first.size).toBe(30);
       expect(pinStore.pinned).toEqual([first.cid]);
 
       // The second upload finds a COMPLETED hosted pin (size > 0): idempotent
       // no-op — no second pin, no second charge.
-      const second = await buildService(db.dataSource, pinStore).upload(accountId, bytes);
+      const second = await buildService(db.dataSource, pinStore).upload(accountId, cid, bytes);
       expect(second).toMatchObject({ cid: first.cid, size: 30 });
       expect(pinStore.pinned).toEqual([first.cid]); // not re-pinned
       expect(await pinsFor(accountId)).toHaveLength(1);
@@ -802,7 +828,7 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       ]);
 
       await expect(
-        buildService(db.dataSource, pinStore).upload(accountId, bytes)
+        buildService(db.dataSource, pinStore).upload(accountId, cid, bytes)
       ).rejects.toBeInstanceOf(PayloadTooLargeException);
 
       // Refused before any pin; the registry-only row is untouched (still size 0).
@@ -825,7 +851,7 @@ describe('ContentService upload concurrency (real Postgres)', () => {
       const failing = new FakePinStore();
       failing.failPin = true;
       await expect(
-        buildService(db.dataSource, failing).upload(accountId, bytes)
+        buildService(db.dataSource, failing).upload(accountId, cid, bytes)
       ).rejects.toBeInstanceOf(ServiceUnavailableException);
 
       // Compensation reverts the size charge but MUST keep the pre-existing

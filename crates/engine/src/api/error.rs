@@ -48,6 +48,11 @@ pub enum ApiError {
     /// A 2xx body did not match the expected shape. Carries a short reason,
     /// never the body bytes.
     Decode(String),
+    /// A caller-supplied content address was not core's canonical CIDv1 base32
+    /// string under a content-plane codec, so no request was sent. Refused
+    /// here because the address is what the ingress pins under — a
+    /// non-canonical one must never reach the wire.
+    MalformedContentCid,
 }
 
 impl From<SeamError> for ApiError {
@@ -74,6 +79,9 @@ impl fmt::Display for ApiError {
                 ..
             } => write!(f, "api returned status {status}"),
             ApiError::Decode(reason) => write!(f, "api response decode error: {reason}"),
+            ApiError::MalformedContentCid => {
+                f.write_str("api call carried a non-canonical content CID")
+            }
         }
     }
 }

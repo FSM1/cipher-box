@@ -615,6 +615,7 @@ dependencies = [
 name = "cipherbox-contract"
 version = "0.0.0"
 dependencies = [
+ "cipherbox-core",
  "cipherbox-engine",
  "getrandom 0.2.17",
  "reqwest 0.13.4",

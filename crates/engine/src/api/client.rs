@@ -11,6 +11,7 @@ use core::cell::RefCell;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use cipherbox_core::content::{CONTENT_CID_CODEC, decode_content_cid_str};
 use futures_channel::oneshot;
 use serde::Serialize;
 use zeroize::Zeroizing;
@@ -23,12 +24,19 @@ use super::types::{
     SiweChallengeResponse, SiweLoginRequest, SiweNonce, TestLoginOutcome, TestLoginRequest,
     TestLoginResponse, TokenResponse, UploadResult,
 };
+use crate::content::DAG_ROOT_CODEC;
 use crate::seams::{CredentialStore, Http, HttpMethod, HttpRequest, HttpResponse};
 
 const CONTENT_TYPE: &str = "Content-Type";
 const AUTHORIZATION: &str = "Authorization";
 const APPLICATION_JSON: &str = "application/json";
 const APPLICATION_OCTET_STREAM: &str = "application/octet-stream";
+/// Carries an upload's declared content address. A header, not a query
+/// parameter: content addresses correlate across accounts and edge proxies log
+/// URLs (blueprint/api.md, Accepted exposure).
+const CONTENT_CID: &str = "X-Content-Cid";
+/// Byte offset of the multicodec in the frozen CIDv1 framing.
+const CID_CODEC_INDEX: usize = 1;
 
 /// Mutable client state, single-owner behind a [`RefCell`]: the engine is the
 /// single writer (blueprint/engine.md Facade), so interior mutability with no
@@ -287,13 +295,25 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         decode(&response)
     }
 
-    /// Upload content bytes to the hosted pin store.
-    pub async fn upload(&self, content: &[u8]) -> Result<UploadResult, ApiError> {
+    /// Upload content bytes to the hosted pin store under `cid`, the caller's
+    /// own content address for them. The API pins under exactly that address
+    /// and refuses bytes that do not hash to it, so the block the network
+    /// serves is the block the engine authored (blueprint/api.md, Ingress).
+    ///
+    /// Refused fail-closed unless `cid` is a canonical content-plane address
+    /// under one of the two codecs the ingress accepts — matching the API's
+    /// own set, so a wider one breaks here rather than as a 400 in production.
+    pub async fn upload(&self, cid: &str, content: &[u8]) -> Result<UploadResult, ApiError> {
+        let decoded = decode_content_cid_str(cid).map_err(|_| ApiError::MalformedContentCid)?;
+        if !matches!(decoded[CID_CODEC_INDEX], CONTENT_CID_CODEC | DAG_ROOT_CODEC) {
+            return Err(ApiError::MalformedContentCid);
+        }
         let response = self
-            .request_authed(
+            .request_authed_with(
                 HttpMethod::Post,
                 "/content/upload",
                 Some(APPLICATION_OCTET_STREAM),
+                &[(CONTENT_CID, cid)],
                 Some(content.to_vec()),
             )
             .await?;
@@ -443,8 +463,21 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         content_type: Option<&str>,
         body: Option<Vec<u8>>,
     ) -> Result<HttpResponse, ApiError> {
+        self.request_authed_with(method, path, content_type, &[], body)
+            .await
+    }
+
+    /// [`Self::request_authed`], plus request-specific headers.
+    async fn request_authed_with(
+        &self,
+        method: HttpMethod,
+        path: &str,
+        content_type: Option<&str>,
+        extra_headers: &[(&str, &str)],
+        body: Option<Vec<u8>>,
+    ) -> Result<HttpResponse, ApiError> {
         let first = self
-            .send_with_token(method, path, content_type, body.clone())
+            .send_with_token(method, path, content_type, extra_headers, body.clone())
             .await?;
         if first.status != 401 {
             return Ok(first);
@@ -452,7 +485,8 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         // One refresh, then one retry; a second 401 is terminal (the caller
         // maps it via `ok_or_err`).
         self.refresh().await?;
-        self.send_with_token(method, path, content_type, body).await
+        self.send_with_token(method, path, content_type, extra_headers, body)
+            .await
     }
 
     /// Send a request, attaching the in-memory access token as a bearer when
@@ -464,11 +498,15 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         method: HttpMethod,
         path: &str,
         content_type: Option<&str>,
+        extra_headers: &[(&str, &str)],
         body: Option<Vec<u8>>,
     ) -> Result<HttpResponse, ApiError> {
         let mut headers = Vec::new();
         if let Some(content_type) = content_type {
             headers.push((CONTENT_TYPE.to_owned(), content_type.to_owned()));
+        }
+        for (name, value) in extra_headers {
+            headers.push(((*name).to_owned(), (*value).to_owned()));
         }
         // Scope the borrow so it never crosses the await below.
         if let Some(token) = self.state.borrow().access_token.as_ref() {
@@ -592,6 +630,8 @@ fn decode<T: serde::de::DeserializeOwned>(response: &HttpResponse) -> Result<T, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
+
     use crate::testkit::block_on;
     use crate::testkit::fakes::{InMemoryCredentialStore, ScriptedHttp};
     use serde_json::{Value, json};
@@ -1028,5 +1068,69 @@ mod tests {
         assert!(matches!(second.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
         assert_eq!(http.request_count(), 1, "one refresh served both callers");
         assert!(client.is_authenticated());
+    }
+
+    #[test]
+    fn upload_declares_the_block_address_on_the_wire() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let block = b"sealed-block".to_vec();
+        let cid = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, &block));
+        http.enqueue_response(json_response(
+            201,
+            json!({ "cid": cid, "size": block.len() }),
+        ));
+
+        let result = block_on(client.upload(&cid, &block)).expect("upload");
+
+        assert_eq!(result.cid, cid);
+        let request = http.requests().pop().expect("upload request");
+        assert_eq!(
+            request.url, "http://api.test/content/upload",
+            "the address rides a header, never the URL"
+        );
+        assert!(
+            request
+                .headers
+                .iter()
+                .any(|(name, value)| name == CONTENT_CID && *value == cid),
+            "the declared address is sent"
+        );
+        assert_eq!(request.body.as_deref(), Some(&block[..]));
+    }
+
+    #[test]
+    fn upload_refuses_a_non_canonical_content_cid_before_the_wire() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+
+        let error = block_on(client.upload("not-a-canonical-cid", b"bytes")).expect_err("refused");
+
+        assert!(matches!(error, ApiError::MalformedContentCid));
+        assert_eq!(
+            http.requests().len(),
+            sent_after_login,
+            "no request left the client"
+        );
+    }
+
+    #[test]
+    fn upload_refuses_a_codec_the_ingress_does_not_accept() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+
+        // Canonically framed, but `dag-pb` (0x70) is outside the frozen
+        // content-plane set the ingress routes.
+        let cid = encode_content_cid_str(&compute_cid(0x70, b"block"));
+        let error = block_on(client.upload(&cid, b"block")).expect_err("refused");
+
+        assert!(matches!(error, ApiError::MalformedContentCid));
+        assert_eq!(
+            http.requests().len(),
+            sent_after_login,
+            "no request left the client"
+        );
     }
 }

@@ -99,6 +99,29 @@ decay) inverted into structure.
 - **Ingress (hosted)**: authenticated upload endpoint, quota-gated, pins to
   CipherBox Kubo, registers pins in the same traversal. BYO/dual bytes bypass
   the API entirely.
+- **The caller declares the address.** `POST /content/upload` carries the
+  client's own content address for the body in an `X-Content-Cid` header — a
+  header, not a query parameter, because content addresses correlate across
+  accounts and edge proxies log request URLs; they stay out of the URL plane just
+  as the registry's `contentCids` stay inside JSON bodies. The API pins under
+  exactly that CID and computes none of its own. It writes the block under the
+  declared CID's multicodec (`raw` for sealed leaves, `dag-cbor` for DAG roots
+  and record heads) with a BLAKE3-256 multihash, and refuses — **400,
+  permanent** — when the store addresses the bytes differently or the declared
+  CID is not one of those two frozen shapes. Kubo's re-derivation is what binds
+  bytes to CID; the declared string is only a routing hint until it matches.
+  Without this the ingress addresses blocks by its own UnixFS chunking, every
+  published record points at a CID the accelerator does not hold, and the
+  engine's head-CID check fails closed forever.
+- **One request, one block.** The declared CID takes the per-CID advisory lock
+  and keys the pin row, so a refusal compensates the row exactly as a pin failure
+  does — and every path that will not pin the block **removes** it, since an
+  unpinned block is not reclaimed and a refused upload must not grow the
+  datastore off the quota's books. The transport cap is the block ceiling
+  (`block/put` refuses over 2 MiB), so an over-size body is a permanent 413 here
+  rather than a retryable pin-store failure. Blocks are pinned **direct**, not
+  recursive: every block is uploaded and registered individually, and a recursive
+  pin would make repo GC walk sealed bytes it cannot interpret.
 - **Egress**: the API process serves no bytes. CipherBox runs a Kubo-backed
   **trustless gateway** (block/CAR responses, client-side CID verification)
   gated by a CipherBox auth token — an accelerator for members. Any public

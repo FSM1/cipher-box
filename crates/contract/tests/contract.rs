@@ -14,12 +14,14 @@
 //! sets it (and boots the stack), so the assertions always run there.
 
 use cipherbox_contract::{
-    MemoryCredentialStore, ReqwestHttp, api_url, hex_to_scalar, prod_api_url,
+    MemoryCredentialStore, ReqwestHttp, api_url, gateway_url, hex_to_scalar, prod_api_url,
     random_identity_signer, test_login_secret,
 };
+use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 use cipherbox_engine::api::{
     ApiClient, ApiError, ChallengeSigner, IdentityChallengeSigner, NameRegistration,
 };
+use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
 use cipherbox_engine::seams::{CredentialStore, Http, HttpMethod, HttpRequest};
 
 type Client = ApiClient<ReqwestHttp, MemoryCredentialStore>;
@@ -467,6 +469,130 @@ async fn union_liveness_is_per_account_and_permissionless() {
         .expect("bob retires the last row");
 }
 
+/// The engine's own content address for a sealed leaf — the `raw` codec core
+/// fixes for content blocks.
+fn leaf_cid(bytes: &[u8]) -> String {
+    encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, bytes))
+}
+
+/// Fetch one block back from the stack's trustless gateway by CID — the read
+/// path's view of what the ingress actually pinned.
+async fn fetch_block(cid: &str) -> Vec<u8> {
+    let gateway = gateway_url().expect(
+        "CONTRACT_GATEWAY_URL must be set alongside CONTRACT_API_URL; the suite cannot prove a \
+         pinned block is retrievable without the stack's gateway",
+    );
+    let response = ReqwestHttp::new()
+        .send(HttpRequest {
+            method: HttpMethod::Get,
+            url: format!("{gateway}/ipfs/{cid}?format=raw"),
+            headers: vec![("Accept".to_owned(), "application/vnd.ipld.raw".to_owned())],
+            body: None,
+        })
+        .await
+        .expect("gateway request");
+    assert_eq!(
+        response.status, 200,
+        "the gateway serves the pinned block at {cid}"
+    );
+    response.body
+}
+
+/// Hosted ingress pins under the **caller-computed** content address (#906,
+/// blueprint/api.md Ingress). The engine addresses every block as CIDv1 base32
+/// over a BLAKE3-256 multihash — `raw` for sealed leaves, `dag-cbor` for DAG
+/// roots and record heads — and a published record's value is `/ipfs/<that
+/// CID>`. If the store pinned bytes under an address of its own choosing, every
+/// record would point at a block the accelerator does not hold.
+///
+/// The proof is the gateway round-trip, not the echoed CID: the API answers
+/// with the address it was handed, so only fetching `/ipfs/<declared>` back and
+/// byte-comparing shows the block really landed there.
+#[tokio::test]
+async fn upload_pins_under_the_caller_computed_content_address() {
+    let base = require_stack!("upload_pins_under_the_caller_computed_content_address");
+    let client = fresh_account(&base).await;
+
+    // A sealed content leaf: `raw` codec.
+    let leaf = vec![42u8; 96];
+    let declared_leaf = leaf_cid(&leaf);
+    let pinned = client
+        .upload(&declared_leaf, &leaf)
+        .await
+        .expect("a leaf uploads under its own address");
+    assert_eq!(
+        pinned.cid, declared_leaf,
+        "the API answers about our address"
+    );
+    assert_eq!(
+        fetch_block(&declared_leaf).await,
+        leaf,
+        "the gateway serves our exact bytes at the address we computed"
+    );
+
+    // A DAG root over that leaf: `dag-cbor` codec, real det-CBOR bytes — the
+    // same shape a record head block takes on the metadata publish path.
+    let dag = assemble(
+        &[compute_cid(CONTENT_CID_CODEC, &leaf)],
+        ContentProfile::CI.chunk_size() as u64,
+        &ContentProfile::CI,
+    )
+    .expect("assemble a one-leaf root");
+    assert_eq!(
+        dag.content_cid[1], DAG_ROOT_CODEC,
+        "the root carries the dag-cbor codec, so both content-plane codecs are exercised"
+    );
+    let declared_root = encode_content_cid_str(&dag.content_cid);
+    let pinned_root = client
+        .upload(&declared_root, &dag.root_block)
+        .await
+        .expect("a dag-cbor root uploads under its own address");
+    assert_eq!(pinned_root.cid, declared_root);
+    assert_eq!(
+        fetch_block(&declared_root).await,
+        dag.root_block,
+        "a dag-cbor root is served at the caller's address, not a re-chunked one"
+    );
+
+    // Fail closed on a declared address the bytes do not hash to: a permanent
+    // 400, and the refused upload leaves no quota charge behind.
+    let used_before = client
+        .quota()
+        .await
+        .expect("quota before the mismatch")
+        .used_bytes;
+    // A CID no row references yet, so the ledger's idempotent re-upload
+    // short-circuit cannot stand in for a real pin.
+    let unregistered = leaf_cid(&[7u8; 96]);
+    let mismatch = client
+        .upload(&unregistered, &[9u8; 96])
+        .await
+        .expect_err("bytes that do not address to the declared CID are refused");
+    assert!(
+        matches!(mismatch, ApiError::Status { status: 400, .. }),
+        "a CID/bytes mismatch is a permanent 400, got {mismatch:?}"
+    );
+    assert_eq!(
+        client
+            .quota()
+            .await
+            .expect("quota after the mismatch")
+            .used_bytes,
+        used_before,
+        "a refused upload is compensated, not charged"
+    );
+
+    // A malformed declaration never reaches the pin path.
+    let malformed = client
+        .upload("not-a-cid", &leaf)
+        .await
+        .expect_err("a non-canonical content CID is refused");
+    assert!(
+        matches!(malformed, ApiError::MalformedContentCid),
+        "the client refuses a non-canonical CID before the wire, got {malformed:?}"
+    );
+}
+
 /// Quota + hosted ingress (blueprint/api.md; #629, #701): hosted accounts are
 /// authoritative (`advisory: false`) with a positive limit and gate uploads; a
 /// BYO account's quota is advisory (`advisory: true`, quota always allows) and
@@ -491,11 +617,11 @@ async fn quota_is_hosted_authoritative_and_byo_advisory() {
     );
 
     // A sub-limit hosted upload is pinned to Kubo and counts against the quota.
+    let under = vec![7u8; 512];
     let pinned = client
-        .upload(&vec![7u8; 512])
+        .upload(&leaf_cid(&under), &under)
         .await
         .expect("hosted upload under quota is pinned");
-    assert!(!pinned.cid.is_empty(), "the pinned CID is returned");
     assert_eq!(pinned.size, 512, "size is the uploaded byte count");
     assert_eq!(
         client.quota().await.expect("quota after upload").used_bytes,
@@ -504,8 +630,9 @@ async fn quota_is_hosted_authoritative_and_byo_advisory() {
     );
 
     // An upload crossing the 1 KiB limit is refused for a hosted account.
+    let over = vec![9u8; 600];
     let error = client
-        .upload(&vec![9u8; 600])
+        .upload(&leaf_cid(&over), &over)
         .await
         .expect_err("an over-quota upload is refused for a hosted account");
     assert!(
@@ -524,8 +651,9 @@ async fn quota_is_hosted_authoritative_and_byo_advisory() {
         byo.limit_bytes, hosted.limit_bytes,
         "the limit is unchanged"
     );
+    let byo_bytes = vec![3u8; 4096];
     let refused = client
-        .upload(&vec![3u8; 4096])
+        .upload(&leaf_cid(&byo_bytes), &byo_bytes)
         .await
         .expect_err("a BYO account cannot ingress to hosted Kubo");
     assert!(
@@ -566,14 +694,19 @@ async fn a_content_version_uploads_registers_and_retires_as_one_block_set() {
     // suffix, so a resumed drain re-sends only what has not landed.
     let mut content_cids = Vec::new();
     for block in leaves.iter().chain(core::iter::once(&root)) {
+        let declared = leaf_cid(block);
         let uploaded = client
-            .upload(block)
+            .upload(&declared, block)
             .await
             .unwrap_or_else(|e| panic!("a version block uploads: {e:?}"));
         assert_eq!(
             uploaded.size,
             block.len() as u64,
             "the ingress reports the byte count it counted"
+        );
+        assert_eq!(
+            uploaded.cid, declared,
+            "every block of the version pins under the address the drain computed"
         );
         content_cids.push(uploaded.cid);
     }

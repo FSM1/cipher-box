@@ -638,7 +638,17 @@
     "/content/upload": {
       "post": {
         "operationId": "ContentController_upload",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "x-content-cid",
+            "required": true,
+            "in": "header",
+            "description": "The caller-computed content address of the body: a CIDv1 base32 BLAKE3-256 CID whose codec is `raw` (sealed content leaf) or `dag-cbor` (DAG root or record head). The pin store rejects the upload if the bytes do not address to it.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -662,7 +672,7 @@
             }
           },
           "400": {
-            "description": "Empty or non-binary upload body"
+            "description": "Empty or non-binary upload body, a malformed declared CID, or bytes that do not address to it"
           },
           "401": {
             "description": "Missing or invalid access token"
@@ -692,7 +702,7 @@
             "bearer": []
           }
         ],
-        "summary": "Upload content bytes to the hosted pin store; quota-gated for hosted accounts, refused for BYO",
+        "summary": "Upload content bytes to the hosted pin store under their caller-computed content address; quota-gated for hosted accounts, refused for BYO",
         "tags": [
           "Content"
         ]
@@ -1204,7 +1214,7 @@
         "properties": {
           "cid": {
             "type": "string",
-            "description": "The content CID Kubo pinned"
+            "description": "The declared content CID the bytes are pinned under"
           },
           "size": {
             "type": "number",
