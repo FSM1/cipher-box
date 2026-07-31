@@ -1,4 +1,5 @@
 import { useParams } from 'react-router-dom';
+import { LogoutButton } from '../components/auth/LogoutButton';
 
 /** Placeholder for the vault browser (#805). */
 export function FilesPage() {
@@ -9,6 +10,7 @@ export function FilesPage() {
     <main>
       <h1>Files</h1>
       <p data-testid="files-node">{nodeId ?? 'root'}</p>
+      <LogoutButton />
     </main>
   );
 }

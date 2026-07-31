@@ -2,12 +2,16 @@ import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import { App } from './App';
+import { fakeCoreKitSession, fakeEngineClient, pageWrapper } from './test/authFakes';
 
 function renderAt(path: string) {
+  const Providers = pageWrapper(fakeEngineClient().client, fakeCoreKitSession().session);
   return render(
-    <MemoryRouter initialEntries={[path]}>
-      <App />
-    </MemoryRouter>
+    <Providers>
+      <MemoryRouter initialEntries={[path]}>
+        <App />
+      </MemoryRouter>
+    </Providers>
   );
 }
 
