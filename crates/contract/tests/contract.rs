@@ -534,9 +534,9 @@ async fn upload_pins_under_the_caller_computed_content_address() {
         .used_bytes;
     // A CID no row references yet, so the ledger's idempotent re-upload
     // short-circuit cannot stand in for a real pin.
-    let unregistered = leaf_cid(&vec![7u8; 96]);
+    let unregistered = leaf_cid(&[7u8; 96]);
     let mismatch = client
-        .upload(&unregistered, &vec![9u8; 96])
+        .upload(&unregistered, &[9u8; 96])
         .await
         .expect_err("bytes that do not address to the declared CID are refused");
     assert!(

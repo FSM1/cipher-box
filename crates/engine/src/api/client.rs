@@ -597,6 +597,8 @@ fn decode<T: serde::de::DeserializeOwned>(response: &HttpResponse) -> Result<T, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
+
     use crate::testkit::block_on;
     use crate::testkit::fakes::{InMemoryCredentialStore, ScriptedHttp};
     use serde_json::{Value, json};
@@ -1033,5 +1035,45 @@ mod tests {
         assert!(matches!(second.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
         assert_eq!(http.request_count(), 1, "one refresh served both callers");
         assert!(client.is_authenticated());
+    }
+
+    #[test]
+    fn upload_declares_the_block_address_on_the_wire() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let block = b"sealed-block".to_vec();
+        let cid = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, &block));
+        http.enqueue_response(json_response(
+            201,
+            json!({ "cid": cid, "size": block.len() }),
+        ));
+
+        let result = block_on(client.upload(&cid, &block)).expect("upload");
+
+        assert_eq!(result.cid, cid);
+        let request = http.requests().pop().expect("upload request");
+        assert_eq!(
+            request.url,
+            format!("http://api.test/content/upload?cid={cid}")
+        );
+        assert_eq!(request.body.as_deref(), Some(&block[..]));
+    }
+
+    #[test]
+    fn upload_refuses_a_non_canonical_content_cid_before_the_wire() {
+        let (http, _creds, client) = fakes();
+        login(&http, &client);
+        let sent_after_login = http.requests().len();
+
+        // A query-splicing attempt is not core's canonical CID string, so it is
+        // refused before it can reach the URL.
+        let error = block_on(client.upload("bafkr4i&pin=false", b"bytes")).expect_err("refused");
+
+        assert!(matches!(error, ApiError::MalformedContentCid));
+        assert_eq!(
+            http.requests().len(),
+            sent_after_login,
+            "no request left the client"
+        );
     }
 }

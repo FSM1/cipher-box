@@ -160,7 +160,10 @@ impl Blocks {
             // Mirror the API's fail-closed bind (#906): the block is stored —
             // and served back — only under the address the caller declared.
             let cid = self.put(block);
-            assert_eq!(declared, cid, "upload declared an address it does not hash to");
+            assert_eq!(
+                declared, cid,
+                "upload declared an address it does not hash to"
+            );
             return ok(format!("{{\"cid\":\"{cid}\",\"size\":{size}}}").into_bytes());
         }
         if url.ends_with("/account/quota") {
