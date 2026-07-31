@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { engineHostConfig } from './config';
+import { engineHostConfig, environment } from './config';
 
 const artifact = {
   wasmModuleUrl: '/assets/cipherbox_wasm-deadbeef.js',
@@ -37,5 +37,19 @@ describe('engineHostConfig', () => {
     const config = engineHostConfig({}, artifact);
     expect(config.apiBaseUrl).toBe('http://localhost:3000');
     expect(config.recordEndpoints).toEqual(['https://delegated-ipfs.dev']);
+  });
+});
+
+describe('environment', () => {
+  it('names the deployment, defaulting an absent value to local', () => {
+    expect(environment({ VITE_ENVIRONMENT: 'staging' })).toBe('staging');
+    expect(environment({ VITE_ENVIRONMENT: '' })).toBe('local');
+    expect(environment({})).toBe('local');
+  });
+
+  it('rejects an unrecognized deployment rather than silently defaulting it', () => {
+    // A typo would otherwise pick the wrong Web3Auth network, deriving a
+    // different identity over an empty vault.
+    expect(() => environment({ VITE_ENVIRONMENT: 'producton' })).toThrow(/VITE_ENVIRONMENT/);
   });
 });

@@ -60,20 +60,20 @@ export interface CoreKitCalls {
 }
 
 export function fakeCoreKitSession(
-  options: { loggedIn?: boolean; login?: () => Promise<void> } = {}
+  options: { loggedIn?: boolean; email?: () => string | null } = {}
 ) {
   const calls: CoreKitCalls = { logins: [], exports: 0, logouts: 0 };
   let loggedIn = options.loggedIn ?? false;
   const session: CoreKitSession = {
     restore: () => Promise.resolve(),
     isLoggedIn: () => loggedIn,
-    async login(method, email) {
+    login(method, email) {
       calls.logins.push({ method, email });
-      await (options.login?.() ?? Promise.resolve());
       loggedIn = true;
+      return Promise.resolve();
     },
     method: () => 'google',
-    email: () => 'user@example.test',
+    email: options.email ?? (() => 'user@example.test'),
     logout() {
       calls.logouts += 1;
       loggedIn = false;

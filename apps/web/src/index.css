@@ -9,30 +9,24 @@
   --color-green-dim: #006644;
   --color-green-darker: #003322;
   --color-green-glow: #00d08466; /* 40% opacity for shadows */
-  --color-toolbar-bg: #001108; /* Dark green toolbar background */
-  --color-nav-active: #001a11; /* Active nav item background */
-
-  /* Semantic Colors - Error/Warning */
   --color-error: #ef4444;
-  --color-error-dim: #7f1d1d;
-  --color-warning: #f59e0b;
-  --color-warning-dim: #78350f;
+  --color-warning: #ff6b00;
+  --color-warning-dim: #994400;
+  --color-warning-bg: #3d1a00;
 
   /* Background & Text */
   --color-background: var(--color-black);
-  --color-border: var(--color-green-primary);
   --color-border-dim: var(--color-green-darker);
   --color-text-primary: var(--color-green-primary);
   --color-text-secondary: var(--color-green-dim);
-  --color-text-muted: #8b9a8f; /* Muted gray-green for labels */
   --color-text-dim: #4a5a4e; /* Dim gray-green for hints */
 
   /* Typography */
   --font-family-mono: 'JetBrains Mono', monospace;
+  --font-size-xxs: 9px; /* Footer */
   --font-size-xs: 10px; /* Status text */
-  --font-size-sm: 11px; /* Body, buttons, file list */
-  --font-size-md: 14px; /* App name */
-  --font-size-lg: 18px; /* Prompt symbol */
+  --font-size-sm: 11px; /* Body, buttons */
+  --font-size-md: 13px; /* Banner headline */
   --font-size-xl: 24px; /* Login logo */
 
   /* Font Weights */

@@ -1,13 +1,13 @@
 /**
- * Web3Auth Core Kit on the UI thread (blueprint/web-client.md "Login and
- * identity"): it owns its own popup/redirect flows, so it cannot live in the
- * engine worker. Its only output the vault cares about is the login secret,
- * which `engine/loginHandoff` transfers to the engine — every derivation from
- * it happens in Rust.
+ * Web3Auth Core Kit on the UI thread: it owns its own popup and redirect flows,
+ * so it cannot live in the engine worker (blueprint/web-client.md "Login and
+ * identity"). The one thing it produces that the vault cares about is the login
+ * secret, which `engine/loginHandoff` transfers to the engine.
  */
 
 import { COREKIT_STATUS, WEB3AUTH_NETWORK, Web3AuthMPCCoreKit } from '@web3auth/mpc-core-kit';
 import { tssLib } from '@toruslabs/tss-dkls-lib';
+import { environment } from '../engine/config';
 import type { LoginSecretExporter } from '../engine/loginHandoff';
 
 /** How a session was established; also the `authStore` login method. */
@@ -29,15 +29,6 @@ export interface CoreKitSession extends LoginSecretExporter {
   email(): string | null;
   logout(): Promise<void>;
 }
-
-const NETWORK = {
-  local: WEB3AUTH_NETWORK.DEVNET,
-  ci: WEB3AUTH_NETWORK.DEVNET,
-  staging: WEB3AUTH_NETWORK.DEVNET,
-  production: WEB3AUTH_NETWORK.MAINNET,
-} as const;
-
-type Environment = keyof typeof NETWORK;
 
 /** Adapts the Web3Auth SDK to the narrow session seam above. */
 class Web3AuthSession implements CoreKitSession {
@@ -99,9 +90,12 @@ export function createCoreKitSession(env: Partial<ImportMetaEnv>): CoreKitSessio
 
   const coreKit = new Web3AuthMPCCoreKit({
     web3AuthClientId: clientId,
-    web3AuthNetwork: NETWORK[(env.VITE_ENVIRONMENT ?? 'local') as Environment] ?? NETWORK.local,
-    // Session metadata only — the login secret is never written to storage
-    // (security rule 1); it leaves this realm as a transferred buffer.
+    web3AuthNetwork:
+      environment(env) === 'production' ? WEB3AUTH_NETWORK.MAINNET : WEB3AUTH_NETWORK.DEVNET,
+    // Core Kit persists its own device-factor share and session id here. The
+    // login secret is not among them — it only ever leaves this realm as the
+    // transferred buffer — but this store is a bearer path back to a logged-in
+    // Core Kit, so its scope is a decision, not a default: see #913.
     storage: window.localStorage,
     manualSync: true,
     tssLib,

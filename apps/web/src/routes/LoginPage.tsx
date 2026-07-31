@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
 import { EmailLoginForm } from '../components/auth/EmailLoginForm';
 import { GoogleLoginButton } from '../components/auth/GoogleLoginButton';
+import { LoginError } from '../components/auth/LoginError';
 import { WalletLoginButton } from '../components/auth/WalletLoginButton';
 import { MatrixBackground } from '../components/MatrixBackground';
 import { StagingBanner } from '../components/StagingBanner';
@@ -10,8 +11,7 @@ import { apiBaseUrl } from '../engine/config';
 
 /**
  * The vault's front door: the Core Kit methods plus SIWE
- * (blueprint/web-client.md "Composition"). Every method ends in the same place
- * — the engine holds the session; this page holds no key, token, or vault state.
+ * (blueprint/web-client.md "Composition").
  */
 export function LoginPage() {
   const {
@@ -32,13 +32,14 @@ export function LoginPage() {
     if (isAuthenticated && pathname === '/') navigate('/files');
   }, [isAuthenticated, navigate, pathname]);
 
-  const swallow = (login: Promise<void>) => void login.catch(() => undefined);
+  // `useAuth` already surfaces the failure as `error`.
+  const dispatch = (login: Promise<void>) => void login.catch(() => undefined);
 
   return (
     <>
       <StagingBanner />
       <div className="login-container">
-        <MatrixBackground opacity={0.3} frameInterval={50} />
+        <MatrixBackground />
         <div className="login-panel">
           <h1>CipherBox</h1>
           <p className="tagline">zero-knowledge encrypted storage</p>
@@ -48,23 +49,23 @@ export function LoginPage() {
 
           <div className="login-methods">
             <GoogleLoginButton
-              onLogin={() => swallow(loginWithGoogle())}
-              disabled={!isReady || isBusy}
+              onLogin={() => dispatch(loginWithGoogle())}
+              disabled={!isReady}
               busy={isBusy}
             />
 
             <div className="login-divider">
-              <span>{'// or'}</span>
+              <span>// or</span>
             </div>
 
             <EmailLoginForm
-              onLogin={(email) => swallow(loginWithEmail(email))}
-              disabled={!isReady || isBusy}
+              onLogin={(email) => dispatch(loginWithEmail(email))}
+              disabled={!isReady}
               busy={isBusy}
             />
 
             <div className="login-divider">
-              <span>{'// or'}</span>
+              <span>// or</span>
             </div>
 
             <WalletLoginButton
@@ -74,26 +75,18 @@ export function LoginPage() {
             />
           </div>
 
-          {error && (
-            <div className="login-error" role="alert" aria-live="polite">
-              {error}
-            </div>
-          )}
+          {error && <LoginError message={error} />}
         </div>
         <footer className="login-footer">
-          <div className="footer-left">
-            <span className="footer-copyright">(c) 2026 CipherBox</span>
-          </div>
-          <div className="footer-center">
-            <a
-              href="https://github.com/fsm1/cipher-box"
-              className="footer-link"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              [github]
-            </a>
-          </div>
+          <span className="footer-copyright">(c) 2026 CipherBox</span>
+          <a
+            href="https://github.com/fsm1/cipher-box"
+            className="footer-link"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            [github]
+          </a>
         </footer>
       </div>
     </>

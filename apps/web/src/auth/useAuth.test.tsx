@@ -96,6 +96,20 @@ describe('useAuth', () => {
     expect(result.current.auth.error).toBe('engine gone');
   });
 
+  it('replaces the closed engine client so the tab can log in again', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession();
+    const { result } = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    const firstSource = result.current.secrets!;
+
+    await act(() => result.current.auth.logout());
+
+    // A new secret source means a new client: `facade.logout` closed the old one.
+    await waitFor(() => expect(result.current.secrets).not.toBe(firstSource));
+    expect(result.current.auth.isReady).toBe(true);
+  });
+
   it('hands the secret over for a Core Kit session that survived the reload', async () => {
     const engine = fakeEngineClient();
     const coreKit = fakeCoreKitSession({ loggedIn: true });
@@ -121,13 +135,33 @@ describe('useAuth', () => {
     expect(authStore.getState().isAuthenticated).toBe(false);
     expect(result.current.auth.error).toBe('trust violation');
     await expect(secrets.provideSecret()).rejects.toThrow(/no login session/);
+    // A Core Kit session the engine refused is ended rather than left resident.
+    expect(coreKit.calls.logouts).toBe(1);
     // The refused buffer is scrubbed rather than left holding the scalar.
     expect(new Uint8Array(engine.calls.started[0])).toEqual(new Uint8Array(32));
   });
 
-  it('writes nothing key-shaped to browser storage', async () => {
-    localStorage.clear();
-    sessionStorage.clear();
+  it('disarms the secret source when reading the session metadata throws', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession({
+      email: () => {
+        throw new Error('userNotLoggedIn');
+      },
+    });
+    const { result } = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+    const secrets = result.current.secrets!;
+
+    await act(async () => {
+      await result.current.auth.loginWithGoogle().catch(() => undefined);
+    });
+
+    expect(authStore.getState().isAuthenticated).toBe(false);
+    expect(engine.calls.started).toEqual([]);
+    await expect(secrets.provideSecret()).rejects.toThrow(/no login session/);
+  });
+
+  it('keeps the login secret out of React state and the auth store', async () => {
     const engine = fakeEngineClient();
     const coreKit = fakeCoreKitSession();
     const { result } = mount(engine, coreKit);
@@ -135,8 +169,8 @@ describe('useAuth', () => {
 
     await act(() => result.current.auth.loginWithGoogle());
 
-    expect(localStorage.length).toBe(0);
-    expect(sessionStorage.length).toBe(0);
-    expect(JSON.stringify(authStore.getState())).not.toContain(SECRET_HEX);
+    const rendered = JSON.stringify({ auth: result.current.auth, store: authStore.getState() });
+    expect(rendered).not.toContain(SECRET_HEX);
+    expect(rendered).not.toContain([...SECRET_BYTES].join(','));
   });
 });

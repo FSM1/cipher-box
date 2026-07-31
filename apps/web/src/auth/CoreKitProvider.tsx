@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { errorMessage } from '../lib/errorMessage';
 import type { CoreKitSession } from './coreKit';
 
 export interface CoreKitContextValue {
@@ -6,22 +7,23 @@ export interface CoreKitContextValue {
   session: CoreKitSession | null;
   /** True while the mount-time session restore is still in flight. */
   isRestoring: boolean;
-  /** Why Core Kit is unusable — a missing build config, or a failed restore. */
+  /** Why Core Kit is unusable at all — a missing or rejected build config. */
   error: string | null;
 }
 
 const CoreKitContext = createContext<CoreKitContextValue | undefined>(undefined);
 
 export interface CoreKitProviderProps {
-  /** Builds this tab's Core Kit session. Read once, on mount. */
+  /** Builds this tab's Core Kit session. Called once per tab. */
   createSession: () => CoreKitSession;
   children: ReactNode;
 }
 
 /**
- * Owns the tab's one Core Kit session and its mount-time restore. Construction
- * runs in an effect so a StrictMode double-mount cannot leave two SDK instances
- * racing for the same storage.
+ * Owns the tab's one Core Kit session and its mount-time restore. The session
+ * and the restore promise are both latched in refs: the SDK holds a device
+ * factor in origin storage, so a StrictMode remount must reuse the instance
+ * rather than race a second one against the same store.
  */
 export function CoreKitProvider({ createSession, children }: CoreKitProviderProps) {
   const [value, setValue] = useState<CoreKitContextValue>({
@@ -30,24 +32,26 @@ export function CoreKitProvider({ createSession, children }: CoreKitProviderProp
     error: null,
   });
   const factory = useRef(createSession);
+  const session = useRef<CoreKitSession | null>(null);
+  const restore = useRef<Promise<void> | null>(null);
 
   useEffect(() => {
     let live = true;
-    let session: CoreKitSession;
     try {
-      session = factory.current();
+      session.current ??= factory.current();
+      restore.current ??= session.current.restore();
     } catch (error) {
-      setValue({ session: null, isRestoring: false, error: message(error) });
+      setValue({ session: null, isRestoring: false, error: errorMessage(error) });
       return;
     }
 
-    session
-      .restore()
-      .then(() => live && setValue({ session, isRestoring: false, error: null }))
-      // A failed restore still yields a usable session to log in with.
-      .catch(
-        (error: unknown) => live && setValue({ session, isRestoring: false, error: message(error) })
-      );
+    const settled = { session: session.current, isRestoring: false, error: null };
+    // A failed restore just means there is no session to resume; the methods
+    // below still work, and a real breakage surfaces when one is used.
+    restore.current.then(
+      () => live && setValue(settled),
+      () => live && setValue(settled)
+    );
 
     return () => {
       live = false;
@@ -55,10 +59,6 @@ export function CoreKitProvider({ createSession, children }: CoreKitProviderProp
   }, []);
 
   return <CoreKitContext.Provider value={value}>{children}</CoreKitContext.Provider>;
-}
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** This tab's Core Kit session and its restore state. */

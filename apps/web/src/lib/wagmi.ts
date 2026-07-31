@@ -11,4 +11,7 @@ export const wagmiConfig = createConfig({
   chains: [mainnet],
   connectors: [injected()],
   transports: { [mainnet.id]: http() },
+  // `null` disables wagmi's persist middleware, which otherwise writes the
+  // connected `accounts` — the wallet address — to localStorage.
+  storage: null,
 });

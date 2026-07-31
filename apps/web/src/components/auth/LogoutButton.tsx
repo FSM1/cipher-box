@@ -1,17 +1,16 @@
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/useAuth';
 
-/**
- * Immediate logout, no confirmation. The reload is the teardown: `facade.logout`
- * closes this tab's engine client for good, so the login page needs a fresh one.
- */
+/** Immediate logout, no confirmation. */
 export function LogoutButton() {
   const { logout, isBusy } = useAuth();
+  const navigate = useNavigate();
 
   const signOut = async () => {
     try {
       await logout();
     } finally {
-      window.location.assign('/');
+      navigate('/');
     }
   };
 

@@ -1,8 +1,11 @@
 import { useState } from 'react';
 import { useConnect, useDisconnect, useSignMessage } from 'wagmi';
+import { mainnet } from 'wagmi/chains';
 import { createSiweMessage } from 'viem/siwe';
 import { fromHex } from '@cipherbox/client';
 import { requestSiweNonce } from '../../auth/siweNonce';
+import { errorMessage } from '../../lib/errorMessage';
+import { LoginError } from './LoginError';
 
 interface WalletLoginButtonProps {
   /** Hands the signed EIP-4361 message to the facade. */
@@ -22,8 +25,8 @@ const PHASE_LABEL: Record<Phase, string> = {
 
 /**
  * SIWE, the secondary auth method (blueprint/web-client.md "Login and
- * identity"): wagmi collects the wallet signature here on the UI thread and the
- * facade forwards it. No key material and no token touches this component.
+ * identity"): wagmi collects the wallet signature here and the facade forwards
+ * it.
  */
 export function WalletLoginButton({ onLogin, apiBaseUrl, disabled }: WalletLoginButtonProps) {
   const { connectors, connectAsync } = useConnect();
@@ -33,6 +36,8 @@ export function WalletLoginButton({ onLogin, apiBaseUrl, disabled }: WalletLogin
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
+
+  const busy = phase !== 'idle';
 
   const signIn = async (connector: (typeof connectors)[number]) => {
     setError(null);
@@ -46,21 +51,23 @@ export function WalletLoginButton({ onLogin, apiBaseUrl, disabled }: WalletLogin
       setPhase('signing');
       const message = createSiweMessage({
         address: accounts[0],
-        chainId: 1,
+        chainId: mainnet.id,
         domain: window.location.host,
         nonce: await requestSiweNonce(apiBaseUrl),
         uri: window.location.origin,
         version: '1',
         statement: 'Sign in to CipherBox encrypted storage',
       });
-      const signature = await signMessageAsync({ message });
+      // Pin the account the message names: a mid-flow account switch would
+      // otherwise sign with one address over a message naming another.
+      const signature = await signMessageAsync({ account: accounts[0], message });
 
       setPhase('verifying');
       handedOff = true;
-      await onLogin(message, fromHex(signature.slice(2)));
+      await onLogin(message, fromHex(strip0x(signature)));
       setPicking(false);
     } catch (failure) {
-      if (!handedOff) setError(describe(failure));
+      if (!handedOff) setError(rejectionOf(failure));
     } finally {
       // CipherBox needs the wallet for one signature, never a standing session.
       disconnect();
@@ -68,15 +75,53 @@ export function WalletLoginButton({ onLogin, apiBaseUrl, disabled }: WalletLogin
     }
   };
 
-  const busy = phase !== 'idle';
+  // EIP-6963 can announce the same wallet twice; one row per name.
+  const unique = connectors.filter((c, i, all) => all.findIndex((x) => x.name === c.name) === i);
 
-  if (!picking) {
-    return (
-      <div className="wallet-login-wrapper">
+  return (
+    <div className="wallet-login-wrapper">
+      {picking ? (
+        <div className="wallet-connector-list" role="group" aria-label="Available wallets">
+          {busy ? (
+            <div className="wallet-login-status" aria-live="polite">
+              {PHASE_LABEL[phase]}
+            </div>
+          ) : unique.length === 0 ? (
+            <div className="wallet-no-providers">
+              no wallets detected. install MetaMask or another browser wallet.
+            </div>
+          ) : (
+            <>
+              <div className="wallet-connector-header">// select wallet</div>
+              {unique.map((connector) => (
+                <button
+                  key={connector.uid}
+                  type="button"
+                  className="wallet-connector-option"
+                  onClick={() => void signIn(connector)}
+                  disabled={busy}
+                  aria-label={`Connect with ${connector.name}`}
+                >
+                  [{connector.name}]
+                </button>
+              ))}
+            </>
+          )}
+          <button
+            type="button"
+            className="wallet-connector-cancel"
+            onClick={() => setPicking(false)}
+            disabled={phase === 'verifying'}
+            aria-label="Cancel wallet connection"
+          >
+            // cancel
+          </button>
+        </div>
+      ) : (
         <button
           type="button"
           data-testid="wallet-login-button"
-          className="wallet-login-btn"
+          className="terminal-btn"
           onClick={() => {
             setError(null);
             setPicking(true);
@@ -84,68 +129,18 @@ export function WalletLoginButton({ onLogin, apiBaseUrl, disabled }: WalletLogin
           disabled={disabled}
           aria-label="Sign in with wallet"
         >
-          [WALLET]
+          {PHASE_LABEL.idle}
         </button>
-        {error && <LoginError message={error} />}
-      </div>
-    );
-  }
-
-  // EIP-6963 can announce the same wallet twice; one row per name.
-  const unique = connectors.filter((c, i, all) => all.findIndex((x) => x.name === c.name) === i);
-
-  return (
-    <div className="wallet-login-wrapper">
-      <div className="wallet-connector-list" role="group" aria-label="Available wallets">
-        {busy ? (
-          <div className="wallet-login-status" aria-live="polite">
-            {PHASE_LABEL[phase]}
-          </div>
-        ) : unique.length === 0 ? (
-          <div className="wallet-no-providers">
-            no wallets detected. install MetaMask or another browser wallet.
-          </div>
-        ) : (
-          <>
-            <div className="wallet-connector-header">{'// select wallet'}</div>
-            {unique.map((connector) => (
-              <button
-                key={connector.uid}
-                type="button"
-                className="wallet-connector-option"
-                onClick={() => void signIn(connector)}
-                aria-label={`Connect with ${connector.name}`}
-              >
-                [{connector.name}]
-              </button>
-            ))}
-          </>
-        )}
-        <button
-          type="button"
-          className="wallet-connector-cancel"
-          onClick={() => setPicking(false)}
-          disabled={phase === 'verifying'}
-          aria-label="Cancel wallet connection"
-        >
-          {'// cancel'}
-        </button>
-      </div>
+      )}
       {error && <LoginError message={error} />}
     </div>
   );
 }
 
-function LoginError({ message }: { message: string }) {
-  return (
-    <div className="login-error" role="alert" aria-live="polite">
-      {message}
-    </div>
-  );
-}
+const strip0x = (hex: string) => (hex.startsWith('0x') ? hex.slice(2) : hex);
 
 /** Renders a wallet refusal as a refusal rather than as a raw provider dump. */
-function describe(failure: unknown): string {
-  const text = failure instanceof Error ? failure.message : String(failure);
+function rejectionOf(failure: unknown): string {
+  const text = errorMessage(failure);
   return /user rejected|ACTION_REJECTED/i.test(text) ? 'the wallet request was rejected' : text;
 }
