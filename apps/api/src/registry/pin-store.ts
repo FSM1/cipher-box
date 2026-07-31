@@ -61,9 +61,7 @@ interface KuboBlockPutResult {
  *
  * `pin` writes the block under the declared CID's own multicodec and BLAKE3-256
  * multihash, so Kubo addresses it exactly as the engine does, then pins it
- * **direct** (`recursive=false`). Direct is the correct shape for this plane:
- * every block is uploaded and registered individually, and a recursive pin would
- * make repo GC walk sealed bytes it cannot interpret.
+ * **direct** — see blueprint/api.md, Content plane, for why not recursive.
  */
 @Injectable()
 export class KuboPinStore extends PinStore {
@@ -81,13 +79,22 @@ export class KuboPinStore extends PinStore {
     if (!codec) {
       throw new PinCidMismatchError(cid, 'not a content-plane CID');
     }
-    // Written unpinned first: a block whose address disagrees is never pinned,
-    // so a wrong declaration leaves nothing but GC-reclaimable bytes behind.
+    // The block is written before its address can be checked, so every failure
+    // past this point removes it again: an unpinned block is not reclaimed
+    // (the daemon runs without --enable-gc), and leaving one behind would let a
+    // refused upload grow the datastore off the quota's books.
     const put = await this.blockPut(bytes, codec);
     if (put.Key !== cid) {
+      await this.blockRm(put.Key);
+      this.logger.warn(`upload declared ${cid} for bytes addressing ${put.Key}`);
       throw new PinCidMismatchError(cid, put.Key);
     }
-    await this.pinAdd(cid);
+    try {
+      await this.pinAdd(cid);
+    } catch (error) {
+      await this.blockRm(put.Key);
+      throw error;
+    }
   }
 
   async unpin(cid: string): Promise<boolean> {
@@ -123,16 +130,29 @@ export class KuboPinStore extends PinStore {
       form
     );
     // Kubo streams newline-delimited JSON; one block yields one final object.
+    // A trailing error object parses but carries no `Key`, and reading that as
+    // a disagreeing address would report a store fault as a permanent 400.
     const lines = body.trim().split('\n').filter(Boolean);
     const last = lines[lines.length - 1];
-    if (!last) {
-      throw new ServiceUnavailableException('Kubo block/put returned no result');
+    const parsed: unknown = last ? JSON.parse(last) : undefined;
+    if (typeof (parsed as KuboBlockPutResult | undefined)?.Key !== 'string') {
+      throw new ServiceUnavailableException('Kubo block/put returned no address');
     }
-    return JSON.parse(last) as KuboBlockPutResult;
+    return parsed as KuboBlockPutResult;
   }
 
   private async pinAdd(cid: string): Promise<void> {
     await this.rpc(`pin/add?arg=${encodeURIComponent(cid)}&recursive=false`);
+  }
+
+  /** Drop a block this upload wrote but will not pin. Best-effort: Kubo refuses
+   * to remove a pinned block, so this can never release another account's. */
+  private async blockRm(cid: string): Promise<void> {
+    try {
+      await this.rpc(`block/rm?arg=${encodeURIComponent(cid)}`);
+    } catch (error) {
+      this.logger.warn(`block/rm failed for ${cid}: ${String(error)}`);
+    }
   }
 
   private async rpc(path: string, body?: FormData): Promise<string> {

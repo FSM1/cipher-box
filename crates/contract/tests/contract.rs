@@ -14,7 +14,7 @@
 //! sets it (and boots the stack), so the assertions always run there.
 
 use cipherbox_contract::{
-    MemoryCredentialStore, ReqwestHttp, api_url, hex_to_scalar, prod_api_url,
+    MemoryCredentialStore, ReqwestHttp, api_url, gateway_url, hex_to_scalar, prod_api_url,
     random_identity_signer, test_login_secret,
 };
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
@@ -475,14 +475,39 @@ fn leaf_cid(bytes: &[u8]) -> String {
     encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, bytes))
 }
 
+/// Fetch one block back from the stack's trustless gateway by CID — the read
+/// path's view of what the ingress actually pinned.
+async fn fetch_block(cid: &str) -> Vec<u8> {
+    let gateway = gateway_url().expect(
+        "CONTRACT_GATEWAY_URL must be set alongside CONTRACT_API_URL; the suite cannot prove a \
+         pinned block is retrievable without the stack's gateway",
+    );
+    let response = ReqwestHttp::new()
+        .send(HttpRequest {
+            method: HttpMethod::Get,
+            url: format!("{gateway}/ipfs/{cid}?format=raw"),
+            headers: vec![("Accept".to_owned(), "application/vnd.ipld.raw".to_owned())],
+            body: None,
+        })
+        .await
+        .expect("gateway request");
+    assert_eq!(
+        response.status, 200,
+        "the gateway serves the pinned block at {cid}"
+    );
+    response.body
+}
+
 /// Hosted ingress pins under the **caller-computed** content address (#906,
 /// blueprint/api.md Ingress). The engine addresses every block as CIDv1 base32
 /// over a BLAKE3-256 multihash — `raw` for sealed leaves, `dag-cbor` for DAG
 /// roots and record heads — and a published record's value is `/ipfs/<that
 /// CID>`. If the store pinned bytes under an address of its own choosing, every
-/// record would point at a block the accelerator does not hold; only comparing
-/// the returned address to the declared one can catch that, which is exactly
-/// what no test could assert before the declared CID existed on the wire.
+/// record would point at a block the accelerator does not hold.
+///
+/// The proof is the gateway round-trip, not the echoed CID: the API answers
+/// with the address it was handed, so only fetching `/ipfs/<declared>` back and
+/// byte-comparing shows the block really landed there.
 #[tokio::test]
 async fn upload_pins_under_the_caller_computed_content_address() {
     let base = require_stack!("upload_pins_under_the_caller_computed_content_address");
@@ -497,7 +522,12 @@ async fn upload_pins_under_the_caller_computed_content_address() {
         .expect("a leaf uploads under its own address");
     assert_eq!(
         pinned.cid, declared_leaf,
-        "the pinned address is the address the caller computed"
+        "the API answers about our address"
+    );
+    assert_eq!(
+        fetch_block(&declared_leaf).await,
+        leaf,
+        "the gateway serves our exact bytes at the address we computed"
     );
 
     // A DAG root over that leaf: `dag-cbor` codec, real det-CBOR bytes — the
@@ -520,9 +550,11 @@ async fn upload_pins_under_the_caller_computed_content_address() {
         .upload(&declared_root, &dag.root_block)
         .await
         .expect("a dag-cbor root uploads under its own address");
+    assert_eq!(pinned_root.cid, declared_root);
     assert_eq!(
-        pinned_root.cid, declared_root,
-        "a dag-cbor root pins under the caller's address, not a re-chunked one"
+        fetch_block(&declared_root).await,
+        dag.root_block,
+        "a dag-cbor root is served at the caller's address, not a re-chunked one"
     );
 
     // Fail closed on a declared address the bytes do not hash to: a permanent

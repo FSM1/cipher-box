@@ -126,7 +126,7 @@ describe('content HTTP (real Postgres)', () => {
     function post(token: string, cid: string) {
       return request(ctx.http)
         .post('/content/upload')
-        .query({ cid })
+        .set('x-content-cid', cid)
         .set('Authorization', `Bearer ${token}`)
         .set('Content-Type', 'application/octet-stream');
     }
@@ -152,7 +152,7 @@ describe('content HTTP (real Postgres)', () => {
       const cid = pinStore.cidFor(bytes);
       const res = await request(ctx.http)
         .post('/content/upload')
-        .query({ cid })
+        .set('x-content-cid', cid)
         .set('Authorization', `Bearer ${acct.token}`)
         .set('Content-Type', 'Application/Octet-Stream')
         .send(bytes)
@@ -168,7 +168,7 @@ describe('content HTTP (real Postgres)', () => {
       expect(pinStore.pinned).toEqual([]);
     });
 
-    it('rejects a request with no cid query param (400), reaching neither pin store', async () => {
+    it('rejects a request with no declared CID (400), reaching neither pin store', async () => {
       const acct = await account();
       await request(ctx.http)
         .post('/content/upload')
@@ -183,7 +183,7 @@ describe('content HTTP (real Postgres)', () => {
       const acct = await account();
       await request(ctx.http)
         .post('/content/upload')
-        .query({ cid: 'not-a-cid' })
+        .set('x-content-cid', 'not-a-cid')
         .set('Authorization', `Bearer ${acct.token}`)
         .set('Content-Type', 'application/octet-stream')
         .send(Buffer.from([9]))
@@ -195,7 +195,7 @@ describe('content HTTP (real Postgres)', () => {
       const cid = pinStore.cidFor(Buffer.from([9]));
       await request(ctx.http)
         .post('/content/upload')
-        .query({ cid })
+        .set('x-content-cid', cid)
         .set('Content-Type', 'application/octet-stream')
         .send(Buffer.from([9]))
         .expect(401);
@@ -294,7 +294,7 @@ describe('content HTTP (real Postgres)', () => {
       const bytes = Buffer.alloc(MAX + 8, 1);
       const res = await request(ctx.http)
         .post('/content/upload')
-        .query({ cid: pinStore.cidFor(bytes) })
+        .set('x-content-cid', pinStore.cidFor(bytes))
         .set('Authorization', `Bearer ${token}`)
         .set('Content-Type', 'application/octet-stream')
         .send(bytes)
@@ -310,7 +310,7 @@ describe('content HTTP (real Postgres)', () => {
       const bytes = Buffer.alloc(MAX + 8, 1);
       await request(ctx.http)
         .post('/content/upload')
-        .query({ cid: pinStore.cidFor(bytes) })
+        .set('x-content-cid', pinStore.cidFor(bytes))
         .set('Content-Type', 'application/octet-stream')
         .send(bytes)
         .expect(401);
@@ -321,7 +321,7 @@ describe('content HTTP (real Postgres)', () => {
       const bytes = Buffer.alloc(MAX + 8, 1);
       await request(ctx.http)
         .post('/content/upload')
-        .query({ cid: pinStore.cidFor(bytes) })
+        .set('x-content-cid', pinStore.cidFor(bytes))
         .set('Authorization', `Bearer ${expired}`)
         .set('Content-Type', 'application/octet-stream')
         .send(bytes)
@@ -333,7 +333,7 @@ describe('content HTTP (real Postgres)', () => {
       const bytes = Buffer.from([1, 2, 3]);
       const res = await request(ctx.http)
         .post('/content/upload')
-        .query({ cid: pinStore.cidFor(bytes) })
+        .set('x-content-cid', pinStore.cidFor(bytes))
         .set('Authorization', `Bearer ${token}`)
         .set('Content-Type', 'application/octet-stream')
         .send(bytes)

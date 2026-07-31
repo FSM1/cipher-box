@@ -1,11 +1,11 @@
-import { BadRequestException, Controller, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { BadRequestException, Controller, Headers, Post, Req, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
   ApiConsumes,
   ApiCreatedResponse,
+  ApiHeader,
   ApiOperation,
-  ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
@@ -18,9 +18,17 @@ import { UploadResponseDto, UploadTooLargeDto } from './dto/content.dto';
 import { QUOTA_EXCEEDED, UPLOAD_TOO_LARGE } from './upload-error-codes';
 
 /**
+ * The header carrying the caller's own content address for the body. A header,
+ * not a query parameter: content addresses correlate across accounts, and edge
+ * proxies log request URLs — so they stay out of the URL plane, as they already
+ * do on the registry's JSON bodies (blueprint/api.md, Accepted exposure).
+ */
+const CONTENT_CID_HEADER = 'x-content-cid';
+
+/**
  * The hosted content ingress surface (blueprint/api.md, Content plane): an
  * authenticated, quota-gated upload that pins opaque bytes to CipherBox Kubo
- * under the `cid` the caller computed for them. The raw
+ * under the address the caller computed for them. The raw
  * `application/octet-stream` body is buffered by the global raw-body middleware
  * (app-setup); BYO/dual byte paths bypass the API entirely.
  */
@@ -39,8 +47,8 @@ export class ContentController {
   })
   @ApiConsumes('application/octet-stream')
   @ApiBody({ schema: { type: 'string', format: 'binary' } })
-  @ApiQuery({
-    name: 'cid',
+  @ApiHeader({
+    name: CONTENT_CID_HEADER,
     required: true,
     description:
       'The caller-computed content address of the body: a CIDv1 base32 BLAKE3-256 CID whose codec is `raw` (sealed content leaf) or `dag-cbor` (DAG root or record head). The pin store rejects the upload if the bytes do not address to it.',
@@ -49,7 +57,7 @@ export class ContentController {
   @ApiResponse({
     status: 400,
     description:
-      'Empty or non-binary upload body, a malformed `cid`, or bytes that do not address to the declared `cid`',
+      'Empty or non-binary upload body, a malformed declared CID, or bytes that do not address to it',
   })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
   @ApiResponse({
@@ -68,7 +76,7 @@ export class ContentController {
   @ApiResponse({ status: 503, description: 'Pin store contended or unavailable; retry shortly' })
   upload(
     @Req() request: AuthenticatedRequest,
-    @Query('cid') cid?: string
+    @Headers(CONTENT_CID_HEADER) cid?: string
   ): Promise<UploadResponseDto> {
     const body: unknown = request.body;
     if (!Buffer.isBuffer(body) || body.length === 0) {
@@ -76,7 +84,7 @@ export class ContentController {
     }
     // Reject a shape the pin store could not route before any lock or quota
     // work; the byte-level bind is the pin store's put-and-compare.
-    if (!cid || !contentCidCodec(cid)) {
+    if (typeof cid !== 'string' || !contentCidCodec(cid)) {
       throw new BadRequestException('Missing or malformed content CID');
     }
     return this.contentService.upload(request.user.userId, cid, body);

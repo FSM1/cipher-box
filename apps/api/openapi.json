@@ -18,9 +18,7 @@
           }
         },
         "summary": "Liveness check",
-        "tags": [
-          "Ops"
-        ]
+        "tags": ["Ops"]
       }
     },
     "/metrics": {
@@ -40,9 +38,7 @@
           }
         },
         "summary": "Prometheus metrics in text exposition format",
-        "tags": [
-          "Ops"
-        ]
+        "tags": ["Ops"]
       }
     },
     "/auth/challenge": {
@@ -72,9 +68,7 @@
           }
         },
         "summary": "Issue a single-use login challenge bound to an identity publicKey",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/login": {
@@ -104,9 +98,7 @@
           }
         },
         "summary": "Challenge-signature login against the secp256k1 identity key; creates the account implicitly at first login",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/siwe/challenge": {
@@ -126,9 +118,7 @@
           }
         },
         "summary": "Issue a single-use SIWE nonce",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/siwe/login": {
@@ -158,9 +148,7 @@
           }
         },
         "summary": "SIWE wallet login (secondary method; the wallet must already be linked)",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/siwe/link": {
@@ -195,9 +183,7 @@
           }
         ],
         "summary": "Link a SIWE wallet to the authenticated account",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/refresh": {
@@ -227,9 +213,7 @@
           }
         },
         "summary": "Rotate the refresh token (one-time-use; reuse revokes the whole family)",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/logout": {
@@ -254,9 +238,7 @@
           }
         ],
         "summary": "Revoke every refresh token for the account (hard delete)",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/auth/test-login": {
@@ -286,9 +268,7 @@
           }
         },
         "summary": "Staging-gated deterministic login for e2e (hard-blocked in production)",
-        "tags": [
-          "Auth"
-        ]
+        "tags": ["Auth"]
       }
     },
     "/mailbox/messages": {
@@ -344,9 +324,7 @@
           }
         ],
         "summary": "Post an HPKE-sealed blob to a recipient identity publicKey; unknown recipients are rejected (rate-limited existence oracle)",
-        "tags": [
-          "Mailbox"
-        ]
+        "tags": ["Mailbox"]
       },
       "get": {
         "operationId": "MailboxController_poll",
@@ -375,9 +353,7 @@
           }
         ],
         "summary": "Poll the authenticated mailbox; returns sealed blobs with no sender metadata in the clear",
-        "tags": [
-          "Mailbox"
-        ]
+        "tags": ["Mailbox"]
       }
     },
     "/mailbox/messages/{id}": {
@@ -417,9 +393,7 @@
           }
         ],
         "summary": "Ack a message: hard delete by id, scoped to the caller mailbox",
-        "tags": [
-          "Mailbox"
-        ]
+        "tags": ["Mailbox"]
       }
     },
     "/registry/register": {
@@ -470,9 +444,7 @@
           }
         ],
         "summary": "Batch register [{ipnsName, headCid?, contentCids[]}] under the caller account; register-first, idempotent upserts",
-        "tags": [
-          "Registry"
-        ]
+        "tags": ["Registry"]
       }
     },
     "/registry/retire": {
@@ -524,9 +496,7 @@
           }
         ],
         "summary": "Batch retire [ipnsName | cid] for the caller account; union liveness, refcounted physical unpin at global zero",
-        "tags": [
-          "Registry"
-        ]
+        "tags": ["Registry"]
       }
     },
     "/account/quota": {
@@ -554,9 +524,7 @@
           }
         ],
         "summary": "The caller per-account quota: usedBytes is the gated sum the upload gate enforces, pinnedBytes the all-rows sum, limitBytes the override or env default, advisory the BYO flag",
-        "tags": [
-          "Account"
-        ]
+        "tags": ["Account"]
       }
     },
     "/account/byo": {
@@ -597,9 +565,7 @@
           }
         ],
         "summary": "Toggle the caller BYO-IPFS flag; advisory pin rows follow it",
-        "tags": [
-          "Account"
-        ]
+        "tags": ["Account"]
       }
     },
     "/account": {
@@ -630,9 +596,7 @@
           }
         ],
         "summary": "Immediate hard-delete of the caller account: retire inventory/pin rows (refcounted unpin), purge mailbox, delete auth rows",
-        "tags": [
-          "Account"
-        ]
+        "tags": ["Account"]
       }
     },
     "/content/upload": {
@@ -640,9 +604,9 @@
         "operationId": "ContentController_upload",
         "parameters": [
           {
-            "name": "cid",
+            "name": "x-content-cid",
             "required": true,
-            "in": "query",
+            "in": "header",
             "description": "The caller-computed content address of the body: a CIDv1 base32 BLAKE3-256 CID whose codec is `raw` (sealed content leaf) or `dag-cbor` (DAG root or record head). The pin store rejects the upload if the bytes do not address to it.",
             "schema": {
               "type": "string"
@@ -672,7 +636,7 @@
             }
           },
           "400": {
-            "description": "Empty or non-binary upload body, a malformed `cid`, or bytes that do not address to the declared `cid`"
+            "description": "Empty or non-binary upload body, a malformed declared CID, or bytes that do not address to it"
           },
           "401": {
             "description": "Missing or invalid access token"
@@ -703,9 +667,7 @@
           }
         ],
         "summary": "Upload content bytes to the hosted pin store under their caller-computed content address; quota-gated for hosted accounts, refused for BYO",
-        "tags": [
-          "Content"
-        ]
+        "tags": ["Content"]
       }
     },
     "/recovery/{ipnsName}": {
@@ -750,9 +712,7 @@
           }
         ],
         "summary": "Fetch cached (possibly expired) record bytes for a name — the revival aid after a >EOL lapse. Non-canonical: verify against the network.",
-        "tags": [
-          "Recovery"
-        ]
+        "tags": ["Recovery"]
       }
     }
   },
@@ -810,9 +770,7 @@
             "example": "ok"
           }
         },
-        "required": [
-          "status"
-        ]
+        "required": ["status"]
       },
       "ChallengeRequestDto": {
         "type": "object",
@@ -823,9 +781,7 @@
             "example": "02a1633cafcc01ebfb6d78e39f687a1f0995c62fc95f51ead10a02ee0be551b5dc"
           }
         },
-        "required": [
-          "publicKey"
-        ]
+        "required": ["publicKey"]
       },
       "ChallengeResponseDto": {
         "type": "object",
@@ -839,10 +795,7 @@
             "description": "Challenge expiry, ISO 8601"
           }
         },
-        "required": [
-          "challenge",
-          "expiresAt"
-        ]
+        "required": ["challenge", "expiresAt"]
       },
       "LoginRequestDto": {
         "type": "object",
@@ -860,11 +813,7 @@
             "description": "Compact secp256k1 signature over sha256(challenge), 64 bytes hex"
           }
         },
-        "required": [
-          "publicKey",
-          "challenge",
-          "signature"
-        ]
+        "required": ["publicKey", "challenge", "signature"]
       },
       "TokenResponseDto": {
         "type": "object",
@@ -882,10 +831,7 @@
             "description": "True when this login created the account implicitly"
           }
         },
-        "required": [
-          "accessToken",
-          "refreshToken"
-        ]
+        "required": ["accessToken", "refreshToken"]
       },
       "SiweChallengeResponseDto": {
         "type": "object",
@@ -899,10 +845,7 @@
             "description": "Nonce expiry, ISO 8601"
           }
         },
-        "required": [
-          "nonce",
-          "expiresAt"
-        ]
+        "required": ["nonce", "expiresAt"]
       },
       "SiweLoginRequestDto": {
         "type": "object",
@@ -916,10 +859,7 @@
             "description": "EIP-191 signature over the message, 0x-prefixed hex"
           }
         },
-        "required": [
-          "message",
-          "signature"
-        ]
+        "required": ["message", "signature"]
       },
       "LogoutResponseDto": {
         "type": "object",
@@ -928,9 +868,7 @@
             "type": "boolean"
           }
         },
-        "required": [
-          "success"
-        ]
+        "required": ["success"]
       },
       "RefreshRequestDto": {
         "type": "object",
@@ -953,10 +891,7 @@
             "description": "Must match TEST_LOGIN_SECRET"
           }
         },
-        "required": [
-          "handle",
-          "secret"
-        ]
+        "required": ["handle", "secret"]
       },
       "TestLoginResponseDto": {
         "type": "object",
@@ -982,12 +917,7 @@
             "description": "Deterministic secp256k1 privateKey, hex (test hook only)"
           }
         },
-        "required": [
-          "accessToken",
-          "refreshToken",
-          "publicKey",
-          "privateKey"
-        ]
+        "required": ["accessToken", "refreshToken", "publicKey", "privateKey"]
       },
       "PostMessageDto": {
         "type": "object",
@@ -1006,11 +936,7 @@
             "description": "Sender-supplied idempotency key; a replay returns the original message id. MUST be a high-entropy per-message random value: it is blended into a one-way sender digest, and a low-entropy key would let a server-side observer brute-force the sender→recipient edge."
           }
         },
-        "required": [
-          "recipientPublicKey",
-          "blob",
-          "idempotencyKey"
-        ]
+        "required": ["recipientPublicKey", "blob", "idempotencyKey"]
       },
       "PostMessageResponseDto": {
         "type": "object",
@@ -1020,9 +946,7 @@
             "description": "Server-assigned message id"
           }
         },
-        "required": [
-          "id"
-        ]
+        "required": ["id"]
       },
       "MailboxMessageDto": {
         "type": "object",
@@ -1040,11 +964,7 @@
             "description": "HPKE-sealed opaque payload, base64 (owner-signed inside the seal)"
           }
         },
-        "required": [
-          "id",
-          "receivedAt",
-          "blob"
-        ]
+        "required": ["id", "receivedAt", "blob"]
       },
       "PollResponseDto": {
         "type": "object",
@@ -1057,9 +977,7 @@
             }
           }
         },
-        "required": [
-          "messages"
-        ]
+        "required": ["messages"]
       },
       "AckResponseDto": {
         "type": "object",
@@ -1068,9 +986,7 @@
             "type": "boolean"
           }
         },
-        "required": [
-          "success"
-        ]
+        "required": ["success"]
       },
       "RegisterEntryDto": {
         "type": "object",
@@ -1092,10 +1008,7 @@
             }
           }
         },
-        "required": [
-          "ipnsName",
-          "contentCids"
-        ]
+        "required": ["ipnsName", "contentCids"]
       },
       "RegisterResponseDto": {
         "type": "object",
@@ -1109,10 +1022,7 @@
             "description": "Distinct content CIDs pinned/counted in this batch"
           }
         },
-        "required": [
-          "names",
-          "cids"
-        ]
+        "required": ["names", "cids"]
       },
       "RetireResponseDto": {
         "type": "object",
@@ -1126,10 +1036,7 @@
             "description": "CIDs physically unpinned because global refcount reached zero"
           }
         },
-        "required": [
-          "retired",
-          "unpinned"
-        ]
+        "required": ["retired", "unpinned"]
       },
       "QuotaResponseDto": {
         "type": "object",
@@ -1151,12 +1058,7 @@
             "description": "True for BYO accounts, whose rows never gate uploads (quota always allows)"
           }
         },
-        "required": [
-          "usedBytes",
-          "pinnedBytes",
-          "limitBytes",
-          "advisory"
-        ]
+        "required": ["usedBytes", "pinnedBytes", "limitBytes", "advisory"]
       },
       "SetByoDto": {
         "type": "object",
@@ -1166,9 +1068,7 @@
             "description": "Enable BYO-IPFS: pin rows become advisory, never quota-enforced"
           }
         },
-        "required": [
-          "byo"
-        ]
+        "required": ["byo"]
       },
       "ByoResponseDto": {
         "type": "object",
@@ -1178,9 +1078,7 @@
             "description": "The account BYO flag after the update"
           }
         },
-        "required": [
-          "byo"
-        ]
+        "required": ["byo"]
       },
       "DeleteAccountResponseDto": {
         "type": "object",
@@ -1202,12 +1100,7 @@
             "description": "CIDs physically unpinned because global refcount reached zero"
           }
         },
-        "required": [
-          "namesRetired",
-          "pinsRetired",
-          "mailboxPurged",
-          "unpinned"
-        ]
+        "required": ["namesRetired", "pinsRetired", "mailboxPurged", "unpinned"]
       },
       "UploadResponseDto": {
         "type": "object",
@@ -1221,20 +1114,14 @@
             "description": "The pinned size in bytes"
           }
         },
-        "required": [
-          "cid",
-          "size"
-        ]
+        "required": ["cid", "size"]
       },
       "UploadTooLargeDto": {
         "type": "object",
         "properties": {
           "code": {
             "type": "string",
-            "enum": [
-              "UPLOAD_TOO_LARGE",
-              "QUOTA_EXCEEDED"
-            ],
+            "enum": ["UPLOAD_TOO_LARGE", "QUOTA_EXCEEDED"],
             "description": "The refusal cause"
           },
           "message": {
@@ -1252,12 +1139,7 @@
             "example": "Payload Too Large"
           }
         },
-        "required": [
-          "code",
-          "message",
-          "statusCode",
-          "error"
-        ]
+        "required": ["code", "message", "statusCode", "error"]
       }
     }
   }

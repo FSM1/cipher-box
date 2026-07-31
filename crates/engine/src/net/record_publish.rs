@@ -160,13 +160,15 @@ pub struct RecordPublishRequest<'a> {
 pub enum RecordPublishError {
     /// The head block upload failed; nothing was published.
     Upload(ApiError),
-    /// The pin store reported a CID other than the block's own address, so the
-    /// bytes it holds are not the bytes we authored. Publishing our CID anyway
-    /// would sign a pointer to a block nothing pinned — refused fail-closed.
+    /// The API did not echo the address we declared, so it is not answering
+    /// about the block we uploaded. Publishing our CID on that answer would
+    /// sign a pointer to a block nothing confirmed — refused fail-closed. The
+    /// bytes/CID binding itself is enforced at the ingress, which refuses bytes
+    /// that do not hash to the declared address (blueprint/api.md).
     HeadCidMismatch {
-        /// The head block's own content address.
+        /// The head block's own content address, as declared.
         expected: String,
-        /// What the pin store reported.
+        /// What the API echoed back.
         returned: String,
     },
     /// The publish pipeline failed.

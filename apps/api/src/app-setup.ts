@@ -5,8 +5,13 @@ import type { NextFunction, Request, Response } from 'express';
 import { UPLOAD_TOO_LARGE, uploadTooLargeBody } from './content/upload-error-codes';
 import { verifiedUnexpiredSubjectFromBearer } from './ops/account-throttler.guard';
 
-/** Absolute upload-size cap (coarse DoS guard); the quota gate is the fine one. */
-const DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
+/**
+ * Absolute upload-size cap (coarse DoS guard); the quota gate is the fine one.
+ * One request is one block, and Kubo's `block/put` refuses anything over 2 MiB —
+ * a larger body would buffer in full only to fail at the pin store as a
+ * retryable 503, so the transport cap refuses it here as a permanent 413.
+ */
+const DEFAULT_MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
 
 function maxUploadBytes(): number {
   const raw = process.env.MAX_UPLOAD_BYTES;

@@ -146,6 +146,14 @@ pub fn prod_api_url() -> Option<String> {
     non_empty("CONTRACT_API_PROD_URL")
 }
 
+/// The base URL of the stack's IPFS gateway, from `CONTRACT_GATEWAY_URL` — how
+/// a read path fetches a block the ingress pinned. Set by the CI job alongside
+/// [`api_url`]; a suite that has an API but no gateway is a misconfiguration,
+/// so the leg that needs it fails loudly rather than skipping.
+pub fn gateway_url() -> Option<String> {
+    non_empty("CONTRACT_GATEWAY_URL")
+}
+
 /// The shared test-login secret; must equal the API's `TEST_LOGIN_SECRET`.
 pub fn test_login_secret() -> String {
     std::env::var("CONTRACT_TEST_LOGIN_SECRET").unwrap_or_else(|_| "contract-suite-secret".into())

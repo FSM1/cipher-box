@@ -146,10 +146,13 @@ impl Blocks {
             })
         };
         let url = &request.url;
-        if let Some((path, query)) = url.split_once('?')
-            && path.ends_with("/content/upload")
-        {
-            let declared = query.strip_prefix("cid=").expect("upload declares its CID");
+        if url.ends_with("/content/upload") {
+            let declared = request
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
+                .map(|(_, value)| value.clone())
+                .expect("upload declares its CID");
             let block = request.body.clone().unwrap_or_default();
             if let Some(hook) = self.on_upload.lock().expect("lock").as_mut()
                 && let Some(reply) = hook(&block)
@@ -394,7 +397,7 @@ fn uploaded_node_ids(device: &FakeDevice) -> Vec<[u8; 16]> {
         .http
         .requests()
         .iter()
-        .filter(|request| request.url.contains("/content/upload?"))
+        .filter(|request| request.url.ends_with("/content/upload"))
         .filter_map(|request| decode_envelope(request.body.as_deref()?).ok())
         .map(|envelope| envelope.id)
         .collect()
@@ -2036,7 +2039,7 @@ fn every_record_one_pass_seals_carries_a_distinct_nonce() {
         .http
         .requests()
         .iter()
-        .filter(|request| request.url.contains("/content/upload?"))
+        .filter(|request| request.url.ends_with("/content/upload"))
         .filter_map(|request| decode_envelope(request.body.as_deref()?).ok())
         // `readSealed` is `nonce(24) || ciphertext||tag`.
         .map(|envelope| envelope.read_sealed[..24].to_vec())
@@ -2409,7 +2412,7 @@ fn uploads(device: &FakeDevice) -> usize {
         .http
         .requests()
         .iter()
-        .filter(|request| request.url.contains("/content/upload?"))
+        .filter(|request| request.url.ends_with("/content/upload"))
         .count()
 }
 

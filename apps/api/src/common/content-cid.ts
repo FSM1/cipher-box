@@ -1,20 +1,13 @@
 /**
- * The declared content address a hosted upload carries (blueprint/api.md,
- * Content plane — Ingress). The engine computes every content address in
- * `crates/core`; the API only routes on it, so this reads the multicodec out of
- * the frozen CIDv1 framing without decoding or recomputing anything.
- *
- * The two frozen content-plane shapes (blueprint/core.md): CIDv1 + BLAKE3-256,
- * `raw` for sealed content leaves, `dag-cbor` for DAG roots and record heads.
- * Both share the fixed 4-byte framing `01 <codec> 1e 20`, whose base32 spans the
- * first seven characters — so the prefix identifies the codec exactly.
- *
- * This is a routing hint, never a trust decision: the pin store hands the codec
- * to Kubo, Kubo re-derives the address from the bytes, and the equality check
- * against the declared string is what actually binds bytes to CID.
+ * Reads the Kubo `cid-codec` off a declared content address (blueprint/api.md,
+ * Content plane — Ingress). The multicodec of the fixed CIDv1 framing
+ * `01 <codec> 1e 20` lands wholly inside the first six base32 characters, so the
+ * prefix names it exactly — no decoding, and no content address computed in
+ * TypeScript. Drift from core's framing fails the contract suite's upload leg,
+ * which pins a core-computed leaf and DAG root through this lookup.
  */
 
-/** Kubo `cid-codec` names for the frozen content-plane multicodecs. */
+/** The frozen content-plane multicodecs (blueprint/core.md), by CID prefix. */
 const CODEC_BY_PREFIX = {
   bafkr4i: 'raw',
   bafyr4i: 'dag-cbor',

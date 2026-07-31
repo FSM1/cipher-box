@@ -93,11 +93,9 @@ export interface UploadResult {
  * bytes to CipherBox Kubo under the address the caller declared for them,
  * quota-gated, registering the pin row in the same traversal. The API is
  * zero-knowledge — it pins bytes it never inspects and computes no content
- * address of its own; the pin store's put re-derives the address and the
- * declared CID is only honoured if Kubo agrees. Only hosted accounts may ingress
- * here: a BYO account pins to its own provider and its bytes bypass the API, so
- * a BYO upload is refused (409) rather than pinned to hosted Kubo off the
- * quota's books.
+ * address of its own. Only hosted accounts may ingress here: a BYO account pins
+ * to its own provider and its bytes bypass the API, so a BYO upload is refused
+ * (409) rather than pinned to hosted Kubo off the quota's books.
  *
  * Concurrency (two shared resources under contention):
  *  - the per-account quota SUM — a check-then-act serialized by a per-account
@@ -309,7 +307,9 @@ export class ContentService {
         await this.pinStore.unpin(cid);
       }
     } catch (error) {
-      this.logger.warn(`compensation for ${cid} failed: ${String(error)}`);
+      // Alertable: a stranded charged row makes every later upload of these
+      // bytes short-circuit as already-pinned, for a pin that never landed.
+      this.logger.error(`compensation for ${cid} failed: ${String(error)}`);
     }
   }
 }
