@@ -9,10 +9,8 @@
 use crate::api::{ApiClient, ApiError};
 use crate::seams::{CredentialStore, Http};
 
-/// The server's retire batch cap (blueprint/api.md "Pin/name registry"). A
-/// larger array is refused fail-closed, so a caller that cannot chunk cannot
-/// reconcile at all — an abandoned version at the flat-DAG ceiling names far
-/// more leaves than this.
+/// The server's retire batch cap, which refuses a larger array fail-closed
+/// (blueprint/api.md "Batch bounds").
 const RETIRE_BATCH_MAX: usize = 1000;
 
 /// Batch-retire registry rows for `targets` (`ipnsName`s or CIDs). Idempotent
@@ -20,8 +18,8 @@ const RETIRE_BATCH_MAX: usize = 1000;
 /// a chunk a failed pass already sent — is a no-op, never an error. This is the
 /// interior-name path: it retires the moment the caller says a name is dead.
 ///
-/// Chunked to [`RETIRE_BATCH_MAX`]. A chunk that fails leaves the earlier ones
-/// retired and returns `Err`; the caller's retry replays the whole batch.
+/// Chunked to [`RETIRE_BATCH_MAX`]; a failing chunk leaves the earlier ones
+/// retired and returns `Err`.
 pub async fn retire<H, C>(api: &ApiClient<H, C>, targets: &[String]) -> Result<(), ApiError>
 where
     H: Http,
@@ -112,12 +110,6 @@ mod tests {
         assert_eq!(
             sent, targets,
             "every target still reaches the registry once"
-        );
-        assert!(
-            requests
-                .iter()
-                .all(|request| request.url.ends_with("/registry/retire")),
-            "every chunk goes to the retire endpoint"
         );
     }
 

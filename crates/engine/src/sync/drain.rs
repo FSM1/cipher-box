@@ -174,6 +174,11 @@ enum Halt {
     /// against the attempt budget, because a retry re-signs at the same
     /// sequence and a jammed name would otherwise retry forever.
     Attempt,
+    /// An upload refusal this pass cannot attribute. Charged like
+    /// [`Halt::Attempt`], but raised strictly **before** the record PUT — so
+    /// exhausting the budget may retire what the op uploaded, which an acked
+    /// PUT's may not.
+    UploadAttempt,
     /// Classified-permanent: the same bytes are refused on every retry.
     Permanent(DeadLetterReason),
     /// Over the account quota. Not a failure of the op — it holds the head and
@@ -203,7 +208,8 @@ pub const UPLOAD_MARK_KEY: &[u8] = b"cipherbox/upload-mark";
 
 /// How many non-confirming publish attempts one op gets before it dead-letters.
 ///
-/// Bounds a pathology, not a network outage — only [`Halt::Attempt`] is charged.
+/// Bounds a pathology, not a network outage — only [`Halt::Attempt`] and
+/// [`Halt::UploadAttempt`] are charged.
 const ATTEMPT_BUDGET: u32 = 5;
 
 /// The staging key holding per-op drain attempt counts: a one-byte format tag
@@ -484,18 +490,20 @@ where
     ) {
         match halt {
             Halt::Unclassified => {}
-            Halt::Attempt => {
+            Halt::Attempt | Halt::UploadAttempt => {
                 if attempts.charge(op_id) < ATTEMPT_BUDGET {
                     return;
                 }
-                self.dead_letter(
-                    scope,
-                    op_id,
-                    op,
-                    DeadLetterReason::AttemptsExhausted,
-                    report,
-                )
-                .await;
+                let reason = DeadLetterReason::AttemptsExhausted;
+                if halt == Halt::UploadAttempt {
+                    self.dead_letter(scope, op_id, op, reason, report).await;
+                } else if self.dequeue_op(op_id).await.is_ok() {
+                    // An acked PUT may be resolvable at the name, so nothing is
+                    // retired: unpinning content a live record still names is
+                    // loss, where leaving the rows charged is only a leak.
+                    self.release_staged_blocks(op).await;
+                    report.dead_letters.push((op_id, op.target, reason));
+                }
             }
             Halt::Permanent(reason) => {
                 self.dead_letter(scope, op_id, op, reason, report).await;
@@ -1329,10 +1337,7 @@ where
         // before the record lands would strand a fully-uploaded version.
         self.upload_block(&staged.root_cid, &root_block).await?;
 
-        let content_cids = core::iter::once(&staged.root_cid)
-            .chain(content.leaf_cids())
-            .map(|cid| encode_content_cid_str(cid))
-            .collect();
+        let content_cids = registry_cids(&staged.root_cid, content.leaf_cids());
         Ok(UploadedVersion {
             version: content.version(*key, applied.op.authored_at.0),
             content_cids,
@@ -1383,6 +1388,14 @@ where
         Ok(Some(block))
     }
 
+    /// The version manifest a staged root block carries. `None` when the block
+    /// is gone or unreadable: both callers are reconciliation paths that must
+    /// still make progress on a store that has lost bytes.
+    async fn staged_manifest(&self, root_cid: &[u8]) -> Option<SealedContent> {
+        let block = self.staged_block(root_cid).await.ok()??;
+        SealedContent::from_root_block(&block).ok()
+    }
+
     /// Upload one block to the pin provider under `cid`, its staging key and
     /// own content address, so the ingress pins it where the published record
     /// points (#906). A block is only ever removed from staging on a confirmed
@@ -1413,9 +1426,7 @@ where
         let Some(staged) = op.staged_content() else {
             return;
         };
-        if let Ok(Some(root_block)) = self.staging.staged_bytes(&staged.root_cid).await
-            && let Ok(content) = SealedContent::from_root_block(&root_block)
-        {
+        if let Some(content) = self.staged_manifest(&staged.root_cid).await {
             for leaf_cid in content.leaf_cids() {
                 let _ = self.staging.remove_staged_bytes(leaf_cid).await;
             }
@@ -1654,27 +1665,15 @@ where
 
     /// Abandon one op: retire what its publish registered, then drop it from
     /// the queue (#819 as amended by #824).
-    ///
-    /// A name some published record already references is never retired — that
-    /// would leave a reference outliving its referent. The gate-passing base is
-    /// the evidence: a created node reaches it only once a parent record naming
-    /// it published.
     async fn abandon(&self, scope: &DrainScope<'_>, op_id: OpId, op: &Op) -> Result<(), Halt> {
-        let target_published = self.base.borrow().contains(op.target);
-        let content_cids = self.uploaded_content_cids(op).await;
-        retire(
-            self.api,
-            &registered_by(scope, op, target_published, content_cids),
-        )
-        .await
-        .map_err(|_| Halt::Unclassified)?;
+        retire(self.api, &self.registered_by(scope, op).await)
+            .await
+            .map_err(|_| Halt::Unclassified)?;
         self.dequeue_op(op_id).await
     }
 
-    /// Dead-letter one op: the single reconciliation point both terminal valve
-    /// arms go through, so what an abandonment retires is decided in one place.
-    /// A failed retire leaves the op queued for the next pass rather than
-    /// dropping it with rows still charged.
+    /// Dead-letter one op. A failed retire leaves it queued for the next pass
+    /// rather than dropping it with its registry rows still charged.
     async fn dead_letter(
         &self,
         scope: &DrainScope<'_>,
@@ -1689,30 +1688,37 @@ where
         }
     }
 
-    /// Every content CID an abandoned op's uploads may have left charged: the
-    /// version root and every leaf its staged manifest names. Each `POST
-    /// /content/upload` creates its own accountable pin row (blueprint/api.md
-    /// "Pin/name registry"), so retiring the root alone would spend account
-    /// quota forever on blocks no record reaches (#916).
+    /// The registry rows one op's publish registered, mirroring what the publish
+    /// pipeline sends (`PublishRequest::registration`).
     ///
-    /// Reads the manifest before [`Self::release_staged_blocks`] drops it —
-    /// after that the leaf CIDs are recoverable from nowhere.
-    async fn uploaded_content_cids(&self, op: &Op) -> Vec<String> {
-        let Some(root_cid) = op.content_root_cid() else {
-            return Vec::new();
+    /// The child name goes only with an abandoned create whose target never
+    /// became reachable: a name some published record already references would
+    /// leave a reference outliving its referent, and the gate-passing base is
+    /// the evidence — a created node reaches it only once a parent record naming
+    /// it published. The content CIDs go with **any** content-bearing op that
+    /// reaches here: an abandonment only retires when no PUT for the op was
+    /// acked, so no record can link the version.
+    ///
+    /// Reads the manifest before [`Self::release_staged_blocks`] drops it: after
+    /// that the leaf CIDs are recoverable from nowhere (#916).
+    async fn registered_by(&self, scope: &DrainScope<'_>, op: &Op) -> Vec<String> {
+        let target_published = self.base.borrow().contains(op.target);
+        let name = (!target_published && matches!(op.kind, OpKind::Create { .. })).then(|| {
+            derive_write_name(scope.write_scope_seed, &op.target.0)
+                .as_str()
+                .to_owned()
+        });
+        let content = match op.content_root_cid() {
+            Some(root_cid) => {
+                let manifest = self.staged_manifest(root_cid).await;
+                registry_cids(
+                    root_cid,
+                    manifest.as_ref().map_or(&[], SealedContent::leaf_cids),
+                )
+            }
+            None => Vec::new(),
         };
-        let mut cids = vec![encode_content_cid_str(root_cid)];
-        if let Ok(Some(root_block)) = self.staging.staged_bytes(root_cid).await
-            && let Ok(content) = SealedContent::from_root_block(&root_block)
-        {
-            cids.extend(
-                content
-                    .leaf_cids()
-                    .iter()
-                    .map(|cid| encode_content_cid_str(cid)),
-            );
-        }
-        cids
+        name.into_iter().chain(content).collect()
     }
 
     /// The attempt record, pruned to the ops still queued. `live` is every id
@@ -1846,30 +1852,20 @@ fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
             needed_bytes: refused_bytes,
         },
         Some(UPLOAD_TOO_LARGE) => Halt::Permanent(DeadLetterReason::PayloadRefused),
-        _ => Halt::Attempt,
+        _ => Halt::UploadAttempt,
     }
 }
 
-/// The registry rows one op's publish registered, mirroring what the publish
-/// pipeline sends (`PublishRequest::registration`). `target_published` is
-/// whether the op's node survives in gate-passing state.
-///
-/// The child name goes only with an abandoned create whose target never became
-/// reachable — a landed node still publishes under it. `content_cids` goes with
-/// **any** content-bearing op: no record ever links a version whose op was
-/// abandoned, whatever became of the node it was authored for.
-fn registered_by(
-    scope: &DrainScope<'_>,
-    op: &Op,
-    target_published: bool,
-    content_cids: Vec<String>,
-) -> Vec<String> {
-    let name = (!target_published && matches!(op.kind, OpKind::Create { .. })).then(|| {
-        derive_write_name(scope.write_scope_seed, &op.target.0)
-            .as_str()
-            .to_owned()
-    });
-    name.into_iter().chain(content_cids).collect()
+/// One version as the registry names it: the root first, then every leaf in
+/// file order. Registration and retirement both go through here, so a retire
+/// batch names exactly what a register batch claimed — and every block is its
+/// own accountable pin row (blueprint/api.md "Pin/name registry"), so leaving
+/// a leaf out of a retirement spends account quota forever.
+fn registry_cids(root_cid: &[u8], leaf_cids: &[Vec<u8>]) -> Vec<String> {
+    core::iter::once(root_cid)
+        .chain(leaf_cids.iter().map(Vec::as_slice))
+        .map(encode_content_cid_str)
+        .collect()
 }
 
 #[cfg(test)]
@@ -1950,7 +1946,7 @@ mod tests {
         for code in [None, Some("SOMETHING_NEW")] {
             assert_eq!(
                 refusal(code),
-                Halt::Attempt,
+                Halt::UploadAttempt,
                 "a 413 the API did not stamp is a proxy, and supports neither verdict"
             );
         }

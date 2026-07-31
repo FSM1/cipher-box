@@ -760,44 +760,34 @@ async fn an_abandoned_versions_whole_block_set_retires_back_to_the_pre_upload_fi
         "an_abandoned_versions_whole_block_set_retires_back_to_the_pre_upload_figure"
     );
     let client = fresh_account(&base).await;
-    let before = client
-        .quota()
-        .await
-        .expect("quota before upload")
-        .used_bytes;
 
     // Refused mid-set, the way a 413 halts a drain: the leaves before the halt
     // landed, the ones after never did, and the root never went up at all.
     let landed: Vec<Vec<u8>> = (0..3u8).map(|i| vec![0xB0 | i; 96]).collect();
-    let mut uploaded_cids = Vec::new();
+    let mut targets = vec!["bafyContractAbandonedRoot".to_owned()];
     for block in &landed {
-        uploaded_cids.push(
+        targets.push(
             client
-                .upload(block)
+                .upload(&leaf_cid(block), block)
                 .await
                 .unwrap_or_else(|e| panic!("a version block uploads: {e:?}"))
                 .cid,
         );
     }
+    targets.push("bafyContractAbandonedLeafNeverSent".to_owned());
     assert_eq!(
         client.quota().await.expect("quota after upload").used_bytes,
-        before + (landed.len() * 96) as u64,
-        "each uploaded block charges the account on its own"
+        (landed.len() * 96) as u64,
+        "an upload with no registration behind it still charges the account"
     );
 
-    // What the abandonment retires: the root and every leaf the manifest names,
-    // landed or not. The never-uploaded ones are retired idempotently.
-    let mut targets = vec!["bafyContractAbandonedRoot".to_owned()];
-    targets.extend(uploaded_cids);
-    targets.push("bafyContractAbandonedLeafNeverSent".to_owned());
     client
         .retire(&targets)
         .await
         .expect("an abandoned version retires its whole block set");
-
     assert_eq!(
         client.quota().await.expect("quota after retire").used_bytes,
-        before,
+        0,
         "abandonment returns the account to its pre-upload figure"
     );
 }

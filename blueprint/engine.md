@@ -135,7 +135,14 @@ bytes (#28 D2).
 - **Retirement**: retire = remove my registry rows; timing is engine policy
   (#34 D4). Interior old names batch-retire at name-wave completion; the old
   scope-root name lingers serving the tombstone until the migration window
-  closes (open edge below).
+  closes (open edge below). An abandoned op retires the **whole** set its
+  publish charged — the name it registered and every block it uploaded, root
+  and leaves — because each upload is its own accountable pin row (api.md);
+  batches chunk to the registry's batch cap, and retirement is idempotent, so a
+  target that never landed costs nothing. An op whose record PUT was
+  **acknowledged** retires nothing: the record may be resolvable at its name, and
+  unpinning content a live record still references is loss, where leaving the
+  rows charged is only a leak.
 
 ## Adoption gate and floors
 
