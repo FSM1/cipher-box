@@ -70,7 +70,7 @@ impl Default for VaultSettings {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsPublishError {
     /// The BYO config is not one the Http seam may be pointed at.
-    Endpoint(ProviderError),
+    Byo(ProviderError),
     /// Core refused to encode or seal the body.
     Codec(CodecError),
     /// The host could not supply the per-record HPKE ephemeral scalar.
@@ -156,7 +156,7 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    validate(settings).map_err(SettingsPublishError::Endpoint)?;
+    validate(settings).map_err(SettingsPublishError::Byo)?;
     let body = encode_settings_body(settings).map_err(SettingsPublishError::Codec)?;
     let mut ephemeral = Zeroizing::new([0u8; 32]);
     entropy
@@ -330,7 +330,7 @@ enum BodyError {
     /// network input naming a host the engine will later talk to, so it clears
     /// the same bar as a member-typed config (AGENTS.md rule 8: the encode
     /// path refuses the same value, release-active).
-    Endpoint(ProviderError),
+    Byo(ProviderError),
 }
 
 impl From<CodecError> for BodyError {
@@ -401,7 +401,7 @@ fn decode_settings_body(bytes: &[u8]) -> Result<VaultSettings, BodyError> {
     // every exit, including the early returns a malformed body takes.
     tree.zeroize_bytes();
     let settings = decoded?;
-    validate(&settings).map_err(BodyError::Endpoint)?;
+    validate(&settings).map_err(BodyError::Byo)?;
     Ok(settings)
 }
 
@@ -623,7 +623,7 @@ mod tests {
             assert_eq!(
                 decode_settings_body(&encode_settings_body(&settings).expect("encode"))
                     .unwrap_err(),
-                BodyError::Endpoint(refused),
+                BodyError::Byo(refused),
                 "{endpoint}: the reader must refuse what the writer refuses",
             );
         }

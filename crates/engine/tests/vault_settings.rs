@@ -682,7 +682,7 @@ fn settings_the_reader_would_refuse_are_never_published() {
         ));
         assert_eq!(
             outcome.unwrap_err(),
-            SettingsPublishError::Endpoint(verdict),
+            SettingsPublishError::Byo(verdict),
             "the guard returns Err in every build, never a stripped assertion",
         );
         assert!(

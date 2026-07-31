@@ -9,7 +9,7 @@
 //! plaintext it seals.
 
 use core::fmt;
-use core::net::{Ipv4Addr, Ipv6Addr};
+use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use zeroize::Zeroizing;
 
@@ -17,10 +17,14 @@ use crate::seams::{Http, HttpMethod, HttpRequest};
 
 const AUTHORIZATION: &str = "Authorization";
 
-/// The cloud metadata service, which no IPFS provider serves: the IPv4
-/// link-local address and the IPv6 address AWS answers on.
-const METADATA_V4: Ipv4Addr = Ipv4Addr::new(169, 254, 169, 254);
-const METADATA_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254);
+/// The cloud metadata service, which no IPFS provider serves: the link-local
+/// address in the two IPv6 spellings `to_canonical` does not fold, and the IPv6
+/// address AWS answers on.
+const METADATA: [IpAddr; 3] = [
+    IpAddr::V4(Ipv4Addr::new(169, 254, 169, 254)),
+    IpAddr::V6(Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0xa9fe, 0xa9fe)),
+    IpAddr::V6(Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254)),
+];
 
 /// Where a version's bytes are pinned (#34 D1). Every mode still registers with
 /// the API for union-liveness accounting; only the byte destination differs.
@@ -79,13 +83,16 @@ impl fmt::Debug for ByoIpfsConfig {
 /// say which rule refused the config instead of showing a bare failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderError {
-    /// The endpoint is not an absolute `http(s)` URL with a host-and-port
-    /// authority — a member-supplied string must not reach the Http seam as a
-    /// `file:`/relative/hostless target (SSRF and scheme-exfiltration surface).
+    /// The endpoint is not an absolute `http(s)` URL whose authority is
+    /// host-and-port bytes. It is spliced into a request URL, so a `file:`,
+    /// relative or hostless target, or one carrying whitespace, a control
+    /// character or URL syntax (`@`, `?`, `#`, `\`), could reshape the request
+    /// or inject a header — and which one happens would depend on the host
+    /// `Http` implementation. That decision does not belong to the seam.
     InvalidEndpoint,
-    /// Plaintext `http://` to a host that is not a literal loopback address:
-    /// the probe carries the member's bearer, so the credential would cross the
-    /// network in the clear.
+    /// Plaintext `http://` to a host that is not loopback: the probe carries
+    /// the member's bearer, so the credential would cross the network in the
+    /// clear.
     InsecureTransport,
     /// The endpoint names the cloud metadata service.
     BlockedAddress,
@@ -134,9 +141,11 @@ pub async fn test_connection(
 pub fn validate_byo_config(config: &ByoIpfsConfig) -> Result<(), ProviderError> {
     validate_endpoint(&config.endpoint)?;
     match &config.access_token {
-        // The token is spliced into a header value verbatim, so it may carry
-        // only the bytes one admits — a control character would inject a header.
-        Some(token) if !token.bytes().all(is_header_value_byte) => {
+        // The token is spliced into a header value verbatim, so a control
+        // character in it would inject a header. A present-but-empty one is an
+        // `Authorization: Bearer ` no provider accepts; `None` is how a
+        // credential-less provider is spelled.
+        Some(token) if token.is_empty() || !token.bytes().all(is_bearer_byte) => {
             Err(ProviderError::InvalidCredential)
         }
         _ => Ok(()),
@@ -144,27 +153,18 @@ pub fn validate_byo_config(config: &ByoIpfsConfig) -> Result<(), ProviderError> 
 }
 
 /// Require an absolute `http(s)` URL whose authority is a host and optional
-/// port, then hold the host to the transport and address policy. A lightweight
-/// scheme+authority check (the engine has no URL parser): it rejects other
-/// schemes (`file:`, `ftp:`, …), scheme-less or relative strings, and a hostless
-/// `http:///path`, closing the scheme-exfiltration / SSRF surface a raw member
-/// string would open.
-///
-/// The endpoint is spliced into a request URL, so the authority is restricted to
-/// the bytes a host and port may contain: whitespace, a control character, or
-/// URL syntax (`@`, `?`, `#`, `\`) could reshape the request target or inject a
-/// header, and which one happens would depend on the host `Http` implementation.
-/// That decision does not belong to the seam.
+/// port, then hold the host to the transport and address policy
+/// (blueprint/engine.md "Content plane"). A lightweight scheme+authority check —
+/// the engine has no URL parser — enforcing the byte rule
+/// [`ProviderError::InvalidEndpoint`] states.
 fn validate_endpoint(endpoint: &str) -> Result<(), ProviderError> {
     let lower = endpoint.to_ascii_lowercase();
-    let (tls, authority) = match lower.strip_prefix("https://") {
-        Some(rest) => (true, rest),
-        None => (
-            false,
-            lower
-                .strip_prefix("http://")
-                .ok_or(ProviderError::InvalidEndpoint)?,
-        ),
+    let (tls, authority) = if let Some(rest) = lower.strip_prefix("https://") {
+        (true, rest)
+    } else if let Some(rest) = lower.strip_prefix("http://") {
+        (false, rest)
+    } else {
+        return Err(ProviderError::InvalidEndpoint);
     };
     // A host must follow the scheme (not empty, not straight into a path).
     let host_port = authority.split('/').next().unwrap_or_default();
@@ -175,62 +175,78 @@ fn validate_endpoint(endpoint: &str) -> Result<(), ProviderError> {
     if authority.bytes().any(|b| !is_path_byte(b)) {
         return Err(ProviderError::InvalidEndpoint);
     }
-    let host = host_of(host_port)?;
-    if is_metadata_literal(host) {
+    let (host, ip) = host_of(host_port)?;
+    if ip.is_some_and(|ip| METADATA.contains(&ip)) {
         return Err(ProviderError::BlockedAddress);
     }
-    if !tls && !is_loopback_literal(host) {
+    if !tls && !is_loopback(host, ip) {
         return Err(ProviderError::InsecureTransport);
     }
     Ok(())
 }
 
-/// The host of a `host`, `host:port`, `[v6]` or `[v6]:port` authority. Fail
-/// closed: an authority that does not split cleanly is refused, never guessed,
-/// because everything downstream keys off the host it yields.
-fn host_of(authority: &str) -> Result<&str, ProviderError> {
+/// The host of a `host`, `host:port`, `[v6]` or `[v6]:port` authority, with the
+/// address it denotes when it is a literal — IPv4-mapped forms folded, so one
+/// address gets one verdict. Fail closed: an authority that does not split
+/// cleanly is refused, never guessed, because the policy keys off the host.
+fn host_of(authority: &str) -> Result<(&str, Option<IpAddr>), ProviderError> {
     let bad = || ProviderError::InvalidEndpoint;
-    let (host, port) = match authority.strip_prefix('[') {
-        Some(rest) => {
-            let (host, tail) = rest.split_once(']').ok_or_else(bad)?;
-            // A bracketed authority holds an IPv6 literal and nothing else.
-            host.parse::<Ipv6Addr>().map_err(|_| bad())?;
-            match tail {
-                "" => (host, None),
-                _ => (host, Some(tail.strip_prefix(':').ok_or_else(bad)?)),
-            }
+    let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
+        let (host, tail) = rest.split_once(']').ok_or_else(bad)?;
+        // A bracketed authority holds an IPv6 literal and nothing else.
+        if !host.parse::<IpAddr>().is_ok_and(|ip| ip.is_ipv6()) {
+            return Err(bad());
         }
-        None => {
-            let (host, port) = match authority.split_once(':') {
-                Some((host, port)) => (host, Some(port)),
-                None => (authority, None),
-            };
-            if host.is_empty() || host.contains(['[', ']']) {
-                return Err(bad());
-            }
-            (host, port)
+        match tail {
+            "" => (host, None),
+            _ => (host, Some(tail.strip_prefix(':').ok_or_else(bad)?)),
         }
+    } else if let Some((host, port)) = authority.split_once(':') {
+        (host, Some(port))
+    } else {
+        (authority, None)
     };
+    if host.is_empty() || host.contains(['[', ']']) {
+        return Err(bad());
+    }
     if port.is_some_and(|p| p.parse::<u16>().is_err()) {
         return Err(bad());
     }
-    Ok(host)
+    let ip = host.parse::<IpAddr>().ok().map(|ip| ip.to_canonical());
+    if ip.is_none() && !is_dns_name(host) {
+        return Err(bad());
+    }
+    Ok((host, ip))
 }
 
-/// Loopback decided from the literal alone. The engine has no resolver and does
-/// not acquire one for this: a name's address is the host's to resolve at
-/// request time, so a resolved verdict here would be a TOCTOU hole.
-fn is_loopback_literal(host: &str) -> bool {
-    host == "localhost"
-        || host.parse::<Ipv4Addr>().is_ok_and(|ip| ip.is_loopback())
-        || host.parse::<Ipv6Addr>().is_ok_and(|ip| ip.is_loopback())
+/// A host the engine and the seam's URL parser will read the same way. Core's
+/// address parser is strict, but a WHATWG one reads `0xa9fea9fe` and
+/// `0251.0376.0251.0376` as addresses — so a name whose last label could be
+/// read as a number is refused rather than classified as a name here and an
+/// address there.
+fn is_dns_name(host: &str) -> bool {
+    let shaped = |label: &str| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+    };
+    let last = host.rsplit('.').next().unwrap_or_default();
+    host.len() <= 253
+        && host.split('.').all(shaped)
+        && !last.starts_with("0x")
+        && !last.bytes().all(|b| b.is_ascii_digit())
 }
 
-fn is_metadata_literal(host: &str) -> bool {
-    host.parse::<Ipv4Addr>().is_ok_and(|ip| ip == METADATA_V4)
-        || host
-            .parse::<Ipv6Addr>()
-            .is_ok_and(|ip| ip == METADATA_V6 || ip.to_ipv4() == Some(METADATA_V4))
+/// Loopback decided without a resolver: a literal loopback address, or the name
+/// RFC 6761 reserves for one. Every other name is treated as off-host, because
+/// its address is the host's to resolve at request time and a resolved verdict
+/// here would be a TOCTOU hole.
+fn is_loopback(host: &str, ip: Option<IpAddr>) -> bool {
+    host == "localhost" || ip.is_some_and(|ip| ip.is_loopback())
 }
 
 /// The bytes a host-and-port may contain: letters, digits, `-`, `.`, `:`, plus
@@ -246,9 +262,10 @@ fn is_path_byte(b: u8) -> bool {
     is_authority_byte(b) || matches!(b, b'/' | b'_' | b'~' | b'%' | b'+' | b'=' | b'&' | b',')
 }
 
-/// The bytes an HTTP field value admits: visible ASCII plus space and tab.
-fn is_header_value_byte(b: u8) -> bool {
-    matches!(b, 0x20 | 0x09 | 0x21..=0x7e)
+/// The bytes a bearer credential admits: visible ASCII, the header-value set
+/// minus the whitespace no token carries.
+fn is_bearer_byte(b: u8) -> bool {
+    matches!(b, 0x21..=0x7e)
 }
 
 /// The per-kind reachability probe. The endpoints are each provider's standard
@@ -376,35 +393,37 @@ mod tests {
             ("http://", InvalidEndpoint),          // no host
             ("https:///pins", InvalidEndpoint),    // hostless
             ("", InvalidEndpoint),
-            // A record-sourced endpoint is spliced into a request URL, so the
-            // authority may carry only host-and-port bytes: no control
-            // characters, no whitespace, and no syntax that redirects the
-            // target or injects a header.
             ("http://host\r\nX-Evil: 1", InvalidEndpoint),
             ("http://host with space", InvalidEndpoint),
             ("http://user@evil.test", InvalidEndpoint),
             ("http://host/path?query", InvalidEndpoint),
             ("http://host/path#frag", InvalidEndpoint),
             ("http://host\\evil.test", InvalidEndpoint),
-            // An authority that does not split into host and port is refused
-            // rather than guessed at, because the policy below keys off the host.
             ("http://[::1", InvalidEndpoint),
             ("http://[kubo.example]", InvalidEndpoint),
             ("http://[::1]x", InvalidEndpoint),
             ("http://::1:5001", InvalidEndpoint),
             ("https://kubo.example:no", InvalidEndpoint),
             ("https://kubo.example:99999", InvalidEndpoint),
-            // Plaintext carries the bearer in the clear: only a literal
-            // loopback host may use it, and a name is never one.
+            // A host the seam's URL parser would read as an address while this
+            // gate reads it as a name is refused, not classified twice.
+            ("https://2852039166", InvalidEndpoint),
+            ("https://0251.0376.0251.0376", InvalidEndpoint),
+            ("https://0xa9fea9fe", InvalidEndpoint),
+            ("https://169.254.169.254.", InvalidEndpoint),
+            ("https://-kubo.example", InvalidEndpoint),
+            ("https://kubo..example", InvalidEndpoint),
             ("http://kubo.example", InsecureTransport),
             ("http://127.0.0.1.evil.test", InsecureTransport),
             ("http://localhost.evil.test", InsecureTransport),
             ("http://192.168.1.9:5001", InsecureTransport),
-            // The cloud metadata service, under either scheme and in the IPv6
-            // spellings of the same address.
+            // The metadata address is refused under either scheme, in each
+            // address spelling of it (the numeric-host spellings above are
+            // refused a step earlier, as unreadable rather than as metadata).
             ("http://169.254.169.254", BlockedAddress),
             ("https://169.254.169.254/pins", BlockedAddress),
             ("https://[::ffff:169.254.169.254]", BlockedAddress),
+            ("https://[::169.254.169.254]", BlockedAddress),
             ("https://[fd00:ec2::254]", BlockedAddress),
         ] {
             let cfg = ByoIpfsConfig {
@@ -424,49 +443,36 @@ mod tests {
         );
     }
 
+    /// Plaintext to a loopback literal is the local-node case, and a private
+    /// range over TLS is the LAN case: self-hosting is the feature.
     #[test]
     fn a_local_http_kubo_endpoint_is_allowed() {
-        for host in [
-            "127.0.0.1:5001",
-            "127.1.2.3:5001",
-            "localhost:5001",
-            "[::1]",
+        for endpoint in [
+            "http://127.0.0.1:5001",
+            "http://127.1.2.3:5001",
+            "http://localhost:5001",
+            "http://[::1]",
+            "http://[::ffff:127.0.0.1]",
+            "https://192.168.1.9:5001",
         ] {
             let http = ScriptedHttp::default();
             http.enqueue_response(ok());
             let cfg = ByoIpfsConfig {
-                endpoint: format!("http://{host}"),
+                endpoint: endpoint.to_owned(),
                 kind: ByoKind::Kubo,
                 access_token: None,
             };
             block_on(test_connection(&cfg, &http)).unwrap();
-            assert_eq!(http.requests()[0].url, format!("http://{host}/api/v0/id"));
+            assert_eq!(http.requests()[0].url, format!("{endpoint}/api/v0/id"));
         }
-    }
-
-    #[test]
-    fn a_private_range_endpoint_over_tls_is_allowed() {
-        let http = ScriptedHttp::default();
-        http.enqueue_response(ok());
-        let cfg = ByoIpfsConfig {
-            endpoint: "https://192.168.1.9:5001".into(),
-            kind: ByoKind::Kubo,
-            access_token: None,
-        };
-        block_on(test_connection(&cfg, &http)).unwrap();
     }
 
     #[test]
     fn an_access_token_that_could_inject_a_header_is_refused() {
         let http = ScriptedHttp::default();
-        for bad in ["tok\r\nX-Evil: 1", "tok\n", "tok\u{7f}"] {
-            let cfg = ByoIpfsConfig {
-                endpoint: "https://ipfs.member.test".into(),
-                kind: ByoKind::Psa,
-                access_token: Some(Zeroizing::new(bad.to_owned())),
-            };
+        for bad in ["tok\r\nX-Evil: 1", "tok\n", "tok\u{7f}", "tok tok", ""] {
             assert_eq!(
-                block_on(test_connection(&cfg, &http)).unwrap_err(),
+                block_on(test_connection(&config(ByoKind::Psa, Some(bad)), &http)).unwrap_err(),
                 ProviderError::InvalidCredential,
                 "{bad:?} must be rejected"
             );

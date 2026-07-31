@@ -512,18 +512,23 @@ contract-test suite owned by the testing-strategy blueprint (#28 D6).
   identically to a member-typed config and to one resolved back off the
   network, and release-active on the encode side so nothing is published that
   the reader would refuse. The rules: an absolute `http(s)` URL whose
-  authority is host-and-port bytes only; `https` unless the host is a
-  **literal** loopback address (`127.0.0.0/8`, `::1`, `localhost`), because
-  the probe carries the member's bearer and plaintext to anything else puts it
-  on the wire; the cloud-metadata address (`169.254.169.254`, its IPv6
-  spellings, and `fd00:ec2::254`) refused outright, since no IPFS provider
-  serves it; and an access token restricted to the bytes a header value may
-  carry. Private and link-local ranges otherwise stay **allowed** — self-hosting
-  on a LAN is the feature. The engine has no resolver and does not acquire one
-  for this: a name's address is the host's to resolve at request time, so
-  loopback is decided from the literal alone and the metadata refusal is a
-  legibility rule, not an SSRF containment boundary. Each refusal is its own
-  `ProviderError` verdict so the host can say which rule bit.
+  authority is host-and-port bytes only; `https` unless the host is a loopback
+  address (`127.0.0.0/8`, `::1`) or the name RFC 6761 reserves for one
+  (`localhost`), because the probe carries the member's bearer and plaintext
+  to anything else puts it on the wire; the cloud-metadata address
+  (`169.254.169.254` and its IPv6 spellings, `fd00:ec2::254`) refused
+  outright, since no IPFS provider serves it; and an access token restricted
+  to visible ASCII. A host that this gate would read as a name while the
+  transport's URL parser would read it as an address (`0xa9fea9fe`,
+  `2852039166`) is refused rather than classified twice. Private and
+  link-local ranges otherwise stay **allowed** — self-hosting on a LAN is the
+  feature. The engine has no resolver and does not acquire one for this: every
+  other name's address is the host's to resolve at request time, so the
+  verdict comes from the literal and the metadata refusal is a legibility
+  rule, not an SSRF containment boundary. Each refusal is its own
+  `ProviderError` verdict so the host can say which rule bit. The transport
+  decision binds the whole exchange, so the `Http` seam must not follow a
+  redirect that downgrades `https` to `http`.
 - **Reads**: the token-authed trustless gateway is a member accelerator; any
   public trustless gateway is the no-auth fallback. The engine verifies CIDs
   client-side via core on every block/CAR response; media uses ranged fetches
