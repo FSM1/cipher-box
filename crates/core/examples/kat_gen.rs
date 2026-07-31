@@ -32,25 +32,27 @@ use cipherbox_core::kdf::{self, EDGES, EdgeProbe};
 use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
-    self, AAD_DOMAIN, AadContext, AscentLink, ChildRef, ChildScopeRef, GrantBlobPayload,
-    GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload, NodeKind,
-    OP_RECORD_HPKE_INFO, OP_RECORD_V, OpRecordHeader, OverrideSeedPayload, OwnerWriteBlobPayload,
-    Permission, ReadBody, SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK,
-    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD,
-    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
+    self, AAD_DOMAIN, AadContext, AscentLink, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, ChildRef,
+    ChildScopeRef, GrantBlobPayload, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry,
+    HistoryLinkPayload, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V, OpRecordHeader,
+    OverrideSeedPayload, OwnerWriteBlobPayload, Permission, ReadBody, SETTINGS_RECORD_HPKE_INFO,
+    SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
     STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, SettingsRecordHeader,
     SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, Version,
-    WriteBody, build_aad, decode_ascent_link, decode_envelope, decode_grant_blob_payload,
-    decode_grant_set_commitment, decode_history_link_payload, decode_op_record_header,
-    decode_override_seed_payload, decode_owner_write_blob_payload, decode_read_body,
-    decode_write_body, encode_ascent_link, encode_envelope, encode_grant_blob_payload,
-    encode_grant_set_commitment, encode_history_link_payload, encode_override_seed_payload,
-    encode_owner_write_blob_payload, encode_read_body, encode_write_body, op_record_aad,
-    open_ascent_link, open_grant_blob, open_history_link, open_op_record, open_owner_blob,
-    open_owner_write_blob, open_read_body, open_settings_record, seal_ascent_link, seal_grant_blob,
-    seal_history_link, seal_op_record, seal_owner_blob, seal_owner_write_blob, seal_read_body,
-    seal_settings_record, settings_record_aad, sign_grant_set, sign_structure,
-    structure_sig_preimage, verify_grant_set, verify_structure,
+    WriteBody, build_aad, content_key_aad, decode_ascent_link, decode_envelope,
+    decode_grant_blob_payload, decode_grant_set_commitment, decode_history_link_payload,
+    decode_op_record_header, decode_override_seed_payload, decode_owner_write_blob_payload,
+    decode_read_body, decode_write_body, encode_ascent_link, encode_envelope,
+    encode_grant_blob_payload, encode_grant_set_commitment, encode_history_link_payload,
+    encode_override_seed_payload, encode_owner_write_blob_payload, encode_read_body,
+    encode_write_body, op_record_aad, open_ascent_link, open_content_key, open_grant_blob,
+    open_history_link, open_op_record, open_owner_blob, open_owner_write_blob, open_read_body,
+    open_settings_record, seal_ascent_link, seal_content_key, seal_grant_blob, seal_history_link,
+    seal_op_record, seal_owner_blob, seal_owner_write_blob, seal_read_body, seal_settings_record,
+    settings_record_aad, sign_grant_set, sign_structure, structure_sig_preimage, verify_grant_set,
+    verify_structure,
 };
 use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 use cipherbox_core::suite::contact::{ContactCode, import_contact_code};
@@ -58,6 +60,7 @@ use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer};
 use cipherbox_core::suite::hash::hash;
 use cipherbox_core::suite::hpke::{self, ENC_LEN, MODE_AUTH, hpke_open, hpke_seal};
+use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use serde::Serialize;
 
@@ -218,6 +221,7 @@ struct Manifest {
     content: ContentSection,
     op_record: OpRecordSection,
     settings_record: SettingsRecordSection,
+    content_key: ContentKeySection,
 }
 
 // --- Settings-record section: the vault settings record, HPKE-auth-to-self
@@ -303,6 +307,55 @@ struct OpRecordRejectVector {
     owner_secret: String,
     record: String,
     keyless: bool,
+    check: String,
+    class: String,
+}
+
+// --- Content-key section: the per-version staged content key, HPKE-to-self
+// --- under the owner's enc subkey with `{scope, epoch}` as AAD values and the
+// --- version's `contentCid` sealed inside the payload.
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentKeySection {
+    struct_tag: u8,
+    v: u64,
+    /// RFC 9180 mode: auth, so only the enc subkey's holder can author a blob.
+    hpke_mode: u8,
+    hpke_info: String,
+    accept: FileCount,
+    reject: RejectSection,
+}
+
+/// A content-key accept vector: the fixed owner enc keypair and injected
+/// ephemeral, the `{scope, epoch, contentCid}` the blob is authored at, and the
+/// whole blob — a re-seal must reproduce `blob` byte-for-byte.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentKeyAcceptVector {
+    name: String,
+    owner_secret: String,
+    owner_public: String,
+    ephemeral_scalar: String,
+    scope: String,
+    epoch: u64,
+    content_cid: String,
+    key: String,
+    blob: String,
+}
+
+/// A content-key reject vector: a blob that must fail closed when opened under
+/// `ownerSecret` at `{scope, epoch, contentCid}`. The transplant vectors carry a
+/// sound blob and vary exactly those coordinates.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentKeyRejectVector {
+    name: String,
+    owner_secret: String,
+    scope: String,
+    epoch: u64,
+    content_cid: String,
+    blob: String,
     check: String,
     class: String,
 }
@@ -853,6 +906,7 @@ fn main() {
     let content_dir = vectors_dir.join("content");
     let op_record_dir = vectors_dir.join("op_record");
     let settings_record_dir = vectors_dir.join("settings_record");
+    let content_key_dir = vectors_dir.join("content_key");
     for dir in [
         &codec_dir,
         &kdf_dir,
@@ -865,6 +919,7 @@ fn main() {
         &content_dir,
         &op_record_dir,
         &settings_record_dir,
+        &content_key_dir,
     ] {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
     }
@@ -1038,6 +1093,18 @@ fn main() {
         &settings_record_reject,
     );
 
+    let content_key_accept = build_content_key_accept();
+    let content_key_reject = build_content_key_reject();
+
+    write_pretty(
+        &content_key_dir.join("content_key_accept.json"),
+        &content_key_accept,
+    );
+    write_pretty(
+        &content_key_dir.join("content_key_reject.json"),
+        &content_key_reject,
+    );
+
     let manifest = build_manifest(ManifestInputs {
         accept: &accept,
         reject: &reject,
@@ -1073,6 +1140,8 @@ fn main() {
         op_record_reject: &op_record_reject,
         settings_record_accept: &settings_record_accept,
         settings_record_reject: &settings_record_reject,
+        content_key_accept: &content_key_accept,
+        content_key_reject: &content_key_reject,
     });
     write_pretty(&kat_dir.join("manifest.json"), &manifest);
 
@@ -1085,7 +1154,8 @@ fn main() {
          {} grant-family, {} content-seal, {} content-seal-reject, {} content-cid, \
          {} content-cid-reject, {} content-cid-str-accept, {} content-cid-str-reject, \
          {} op-record-accept, {} op-record-reject, {} settings-record-accept, \
-         {} settings-record-reject vectors + manifest.json",
+         {} settings-record-reject, {} content-key-accept, \
+         {} content-key-reject vectors + manifest.json",
         accept.len(),
         reject.len(),
         unknown.len(),
@@ -1120,6 +1190,8 @@ fn main() {
         op_record_reject.len(),
         settings_record_accept.len(),
         settings_record_reject.len(),
+        content_key_accept.len(),
+        content_key_reject.len(),
     );
 }
 
@@ -1880,6 +1952,8 @@ struct ManifestInputs<'a> {
     op_record_reject: &'a [OpRecordRejectVector],
     settings_record_accept: &'a [SettingsRecordAcceptVector],
     settings_record_reject: &'a [SettingsRecordRejectVector],
+    content_key_accept: &'a [ContentKeyAcceptVector],
+    content_key_reject: &'a [ContentKeyRejectVector],
 }
 
 fn build_manifest(m: ManifestInputs) -> Manifest {
@@ -2095,6 +2169,27 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
                 count: m.settings_record_reject.len(),
                 checks: checks_surface_ordered(
                     &m.settings_record_reject
+                        .iter()
+                        .map(|v| v.check.as_str())
+                        .collect(),
+                ),
+            },
+        },
+        content_key: ContentKeySection {
+            struct_tag: STRUCT_TAG_CONTENT_KEY,
+            v: CONTENT_KEY_V,
+            hpke_mode: MODE_AUTH,
+            hpke_info: String::from_utf8(CONTENT_KEY_HPKE_INFO.to_vec())
+                .expect("the content-key info string is ASCII"),
+            accept: FileCount {
+                file: "vectors/content_key/content_key_accept.json".to_string(),
+                count: m.content_key_accept.len(),
+            },
+            reject: RejectSection {
+                file: "vectors/content_key/content_key_reject.json".to_string(),
+                count: m.content_key_reject.len(),
+                checks: checks_surface_ordered(
+                    &m.content_key_reject
                         .iter()
                         .map(|v| v.check.as_str())
                         .collect(),
@@ -6216,6 +6311,359 @@ fn settings_record_reject_vector(
         name: name.to_string(),
         owner_secret: hexstr(&opener_scalar),
         record: hexstr(record),
+        check: check.to_string(),
+        class: class.to_string(),
+    }
+}
+
+// ===========================================================================
+// Content key: the per-version staged content key. Sealed HPKE-to-self under a
+// fixed owner enc subkey and a fixed injected ephemeral, so every blob is
+// byte-reproducible; `{scope, epoch}` ride the AAD and the version's
+// `contentCid` rides the sealed payload, so each transplant fails either at the
+// AEAD tag or at the CID re-check.
+// ===========================================================================
+
+/// The frozen owner enc subkey the content-key vectors seal to, and its scalar.
+fn content_key_owner() -> ([u8; 32], X25519Secret) {
+    let scalar: [u8; 32] = std::array::from_fn(|i| (0x61 + i) as u8);
+    let secret = X25519Secret::from_scalar(scalar);
+    (scalar, secret)
+}
+
+/// The frozen scope and content key every content-key vector is authored under.
+const CONTENT_KEY_SCOPE: [u8; 16] = [0xc1; 16];
+const CONTENT_KEY_KEY: [u8; SECRET_LEN] = [0x5a; SECRET_LEN];
+
+fn content_key_content_cid() -> Vec<u8> {
+    compute_cid(CONTENT_CID_CODEC, b"content-key staged version root")
+}
+
+fn build_content_key_accept() -> Vec<ContentKeyAcceptVector> {
+    let (scalar, owner) = content_key_owner();
+    let cid = content_key_content_cid();
+    vec![
+        content_key_accept_vector(
+            "genesis-epoch",
+            scalar,
+            &owner,
+            std::array::from_fn(|i| (0x81 + i) as u8),
+            0,
+            &cid,
+        ),
+        // The widest uint the epoch field can carry, so the AAD's own encoding
+        // is pinned at both ends of the range.
+        content_key_accept_vector(
+            "max-epoch",
+            scalar,
+            &owner,
+            std::array::from_fn(|i| (0xa1 + i) as u8),
+            u64::MAX,
+            &cid,
+        ),
+    ]
+}
+
+/// Build + self-check one content-key accept vector: the seal is deterministic
+/// and the open recovers the key verbatim.
+fn content_key_accept_vector(
+    name: &str,
+    owner_scalar: [u8; 32],
+    owner: &X25519Secret,
+    eph: [u8; 32],
+    epoch: u64,
+    content_cid: &[u8],
+) -> ContentKeyAcceptVector {
+    let blob = seal_content_key(
+        owner,
+        &eph,
+        &CONTENT_KEY_SCOPE,
+        epoch,
+        content_cid,
+        &CONTENT_KEY_KEY,
+    )
+    .unwrap_or_else(|e| panic!("content-key {name}: seal ({e})"));
+    assert_eq!(
+        seal_content_key(
+            owner,
+            &eph,
+            &CONTENT_KEY_SCOPE,
+            epoch,
+            content_cid,
+            &CONTENT_KEY_KEY
+        )
+        .unwrap(),
+        blob,
+        "content-key {name}: not deterministic"
+    );
+
+    let opened = open_content_key(owner, &CONTENT_KEY_SCOPE, epoch, content_cid, &blob)
+        .unwrap_or_else(|e| panic!("content-key {name}: open ({e})"));
+    assert_eq!(
+        *opened, CONTENT_KEY_KEY,
+        "content-key {name}: key round-trip"
+    );
+
+    ContentKeyAcceptVector {
+        name: name.to_string(),
+        owner_secret: hexstr(&owner_scalar),
+        owner_public: hexstr(&owner.public().to_bytes()),
+        ephemeral_scalar: hexstr(&eph),
+        scope: hexstr(&CONTENT_KEY_SCOPE),
+        epoch,
+        content_cid: hexstr(content_cid),
+        key: hexstr(&CONTENT_KEY_KEY),
+        blob: hexstr(&blob),
+    }
+}
+
+/// Re-frame a blob through the live encoder — the only way to produce the frame
+/// swaps and omissions the seal path itself refuses to emit.
+fn reframe_content_key(blob: &[u8], edit: impl FnOnce(&mut Map)) -> Vec<u8> {
+    let value = decode(blob).expect("content-key reframe: source decodes");
+    let mut map = value.as_map().expect("content-key reframe: map").clone();
+    edit(&mut map);
+    encode(&Value::Map(map)).expect("content-key reframe: re-encodes")
+}
+
+/// The `{scope, epoch, contentCid}` a reject vector opens at. The transplant
+/// vectors reuse one sound blob and vary exactly these.
+struct ContentKeyOpenAt {
+    scope: [u8; 16],
+    epoch: u64,
+    content_cid: Vec<u8>,
+}
+
+fn build_content_key_reject() -> Vec<ContentKeyRejectVector> {
+    let (scalar, owner) = content_key_owner();
+    let eph: [u8; 32] = std::array::from_fn(|i| (0xc1 + i) as u8);
+    let cid = content_key_content_cid();
+    const EPOCH: u64 = 9;
+    let blob = seal_content_key(
+        &owner,
+        &eph,
+        &CONTENT_KEY_SCOPE,
+        EPOCH,
+        &cid,
+        &CONTENT_KEY_KEY,
+    )
+    .unwrap();
+    let at = |scope: [u8; 16], epoch: u64, content_cid: &[u8]| ContentKeyOpenAt {
+        scope,
+        epoch,
+        content_cid: content_cid.to_vec(),
+    };
+    let authored = || at(CONTENT_KEY_SCOPE, EPOCH, &cid);
+
+    let tampered_ciphertext = reframe_content_key(&blob, |m| {
+        let mut ct = m.get("ciphertext").unwrap().as_bytes().unwrap().to_vec();
+        ct[0] ^= 0x01;
+        m.insert("ciphertext", Value::Bytes(ct));
+    });
+    let tampered_enc = reframe_content_key(&blob, |m| {
+        let mut enc = m.get("enc").unwrap().as_bytes().unwrap().to_vec();
+        enc[0] ^= 0x01;
+        m.insert("enc", Value::Bytes(enc));
+    });
+    let forward_version = reframe_content_key(&blob, |m| {
+        m.insert("v", Value::Unsigned(CONTENT_KEY_V + 1));
+    });
+    // The version gate runs ahead of the exhaustive-key scan, so a blob a newer
+    // build wrote is classified as unimplemented rather than as grammar failure
+    // — the caller retains it on the former and destroys it on the latter.
+    let forward_version_unknown_field = reframe_content_key(&blob, |m| {
+        m.insert("v", Value::Unsigned(CONTENT_KEY_V + 1));
+        m.insert("stash", Value::Bytes(b"a later framing".to_vec()));
+    });
+    // A fourth key at this version: outside the AAD, so it opens cleanly unless
+    // the three keys are enforced as exhaustive.
+    let unknown_field = reframe_content_key(&blob, |m| {
+        m.insert("stash", Value::Bytes(b"unauthenticated".to_vec()));
+    });
+    let missing_enc = reframe_content_key(&blob, |m| {
+        m.remove("enc");
+    });
+    let wide_enc = reframe_content_key(&blob, |m| {
+        m.insert("enc", Value::Bytes(vec![0x5a; 48]));
+    });
+    // A low-order point drives the KEM to an all-zero shared secret.
+    let low_order_enc = reframe_content_key(&blob, |m| {
+        m.insert("enc", Value::Bytes(low_order_x25519_point().to_vec()));
+    });
+    let truncated = blob[..blob.len() / 2].to_vec();
+    let base_mode_forgery = forged_base_mode_content_key(&owner, EPOCH, &cid);
+    let stranger_scalar: [u8; 32] = std::array::from_fn(|i| (0x21 + i) as u8);
+    let other_cid = compute_cid(CONTENT_CID_CODEC, b"a different staged version root");
+
+    vec![
+        content_key_reject_vector(
+            "tampered-ciphertext",
+            scalar,
+            &authored(),
+            &tampered_ciphertext,
+            "hpke-open-failed",
+            "trust",
+        ),
+        content_key_reject_vector(
+            "tampered-enc",
+            scalar,
+            &authored(),
+            &tampered_enc,
+            "hpke-open-failed",
+            "trust",
+        ),
+        content_key_reject_vector(
+            "truncated-blob",
+            scalar,
+            &authored(),
+            &truncated,
+            "truncated",
+            "malformed",
+        ),
+        content_key_reject_vector(
+            "foreign-recipient",
+            stranger_scalar,
+            &authored(),
+            &blob,
+            "hpke-open-failed",
+            "trust",
+        ),
+        content_key_reject_vector(
+            "base-mode-forgery",
+            scalar,
+            &authored(),
+            &base_mode_forgery,
+            "hpke-open-failed",
+            "trust",
+        ),
+        content_key_reject_vector(
+            "epoch-transplant",
+            scalar,
+            &at(CONTENT_KEY_SCOPE, EPOCH + 1, &cid),
+            &blob,
+            "hpke-open-failed",
+            "trust",
+        ),
+        content_key_reject_vector(
+            "scope-transplant",
+            scalar,
+            &at([0xd2; 16], EPOCH, &cid),
+            &blob,
+            "hpke-open-failed",
+            "trust",
+        ),
+        content_key_reject_vector(
+            "swapped-content-cid",
+            scalar,
+            &at(CONTENT_KEY_SCOPE, EPOCH, &other_cid),
+            &blob,
+            "content-cid-mismatch",
+            "trust",
+        ),
+        content_key_reject_vector(
+            "forward-version",
+            scalar,
+            &authored(),
+            &forward_version,
+            "unsupported-record-version",
+            "malformed",
+        ),
+        content_key_reject_vector(
+            "forward-version-unknown-frame-field",
+            scalar,
+            &authored(),
+            &forward_version_unknown_field,
+            "unsupported-record-version",
+            "malformed",
+        ),
+        content_key_reject_vector(
+            "unknown-frame-field",
+            scalar,
+            &authored(),
+            &unknown_field,
+            "unknown-record-field",
+            "malformed",
+        ),
+        content_key_reject_vector(
+            "missing-enc",
+            scalar,
+            &authored(),
+            &missing_enc,
+            "missing-field",
+            "malformed",
+        ),
+        content_key_reject_vector(
+            "wide-enc",
+            scalar,
+            &authored(),
+            &wide_enc,
+            "invalid-field-length",
+            "malformed",
+        ),
+        content_key_reject_vector(
+            "low-order-enc",
+            scalar,
+            &authored(),
+            &low_order_enc,
+            "hpke-non-contributory",
+            "trust",
+        ),
+    ]
+}
+
+/// A blob a forger holding only the owner's public enc subkey can build:
+/// correctly framed and correctly AAD-bound, sealed HPKE **base** mode.
+fn forged_base_mode_content_key(owner: &X25519Secret, epoch: u64, content_cid: &[u8]) -> Vec<u8> {
+    let mut payload = Map::new();
+    payload.insert("contentCid", Value::Bytes(content_cid.to_vec()));
+    payload.insert("key", Value::Bytes(CONTENT_KEY_KEY.to_vec()));
+    let eph: [u8; 32] = std::array::from_fn(|i| (0x01 + i) as u8);
+    let sealed = hpke_seal(
+        &owner.public(),
+        &eph,
+        CONTENT_KEY_HPKE_INFO,
+        &content_key_aad(&CONTENT_KEY_SCOPE, epoch),
+        &encode(&Value::Map(payload)).expect("forged content-key payload encodes"),
+    );
+    let mut m = Map::new();
+    m.insert("ciphertext", Value::Bytes(sealed.ciphertext));
+    m.insert("enc", Value::Bytes(sealed.enc.to_vec()));
+    m.insert("v", Value::Unsigned(CONTENT_KEY_V));
+    encode(&Value::Map(m)).expect("forged content-key blob encodes")
+}
+
+/// Build + self-check one content-key reject vector.
+fn content_key_reject_vector(
+    name: &str,
+    opener_scalar: [u8; 32],
+    at: &ContentKeyOpenAt,
+    blob: &[u8],
+    check: &str,
+    class: &str,
+) -> ContentKeyRejectVector {
+    let opener = X25519Secret::from_scalar(opener_scalar);
+    let err = match open_content_key(&opener, &at.scope, at.epoch, &at.content_cid, blob) {
+        Err(e) => e,
+        Ok(_) => panic!("content-key reject {name}: open accepted it"),
+    };
+    assert_eq!(
+        err.check(),
+        check,
+        "content-key reject {name}: check ({err})"
+    );
+    assert_eq!(
+        err.class(),
+        class,
+        "content-key reject {name}: class ({err})"
+    );
+
+    ContentKeyRejectVector {
+        name: name.to_string(),
+        owner_secret: hexstr(&opener_scalar),
+        scope: hexstr(&at.scope),
+        epoch: at.epoch,
+        content_cid: hexstr(&at.content_cid),
+        blob: hexstr(blob),
         check: check.to_string(),
         class: class.to_string(),
     }

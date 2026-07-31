@@ -16,6 +16,8 @@ import type {
   SnapshotDescriptor,
   WorkerMessage,
   WorkerRequest,
+  WriteHandle,
+  WriteTarget,
 } from './worker/protocol.js';
 
 /** A one-way engine → UI event subscriber. */
@@ -26,6 +28,14 @@ export interface EngineTransport {
   start(secret: ArrayBuffer): Promise<void>;
   /** Sends one command; `transfer` lists any owned buffers to move, not copy. */
   command(command: CommandDescriptor, transfer: Transferable[]): Promise<void>;
+  /** Opens a write handle for `size` plaintext bytes of streamed content. */
+  beginWrite(target: WriteTarget, size: number): Promise<WriteHandle>;
+  /** Feeds the next slice to an open handle (the buffer is moved, not copied). */
+  pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void>;
+  /** Closes the handle and journals its op; resolves with the durable op id. */
+  commitWrite(handle: WriteHandle): Promise<bigint>;
+  /** Abandons the handle, releasing its reservation and staged blocks. */
+  abortWrite(handle: WriteHandle): Promise<void>;
   /** Reads a key-free snapshot of `folder` for a UI paint. */
   snapshot(folder: Uint8Array): Promise<SnapshotDescriptor>;
   /** Downloads one file node's plaintext through the verified read pipeline. */
@@ -99,6 +109,30 @@ export class LocalTransport extends CorrelatedTransport {
   command(command: CommandDescriptor, transfer: Transferable[]): Promise<void> {
     return this.dispatch(this.ready, (id) =>
       this.worker.postMessage({ type: 'command', id, command }, transfer)
+    );
+  }
+
+  beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
+    return this.request<WriteHandle>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'beginWrite', id, target, size }, [])
+    );
+  }
+
+  pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
+    return this.dispatch(this.ready, (id) =>
+      this.worker.postMessage({ type: 'pushChunk', id, handle, chunk }, [chunk])
+    );
+  }
+
+  commitWrite(handle: WriteHandle): Promise<bigint> {
+    return this.request<bigint>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'commitWrite', id, handle }, [])
+    );
+  }
+
+  abortWrite(handle: WriteHandle): Promise<void> {
+    return this.dispatch(this.ready, (id) =>
+      this.worker.postMessage({ type: 'abortWrite', id, handle }, [])
     );
   }
 

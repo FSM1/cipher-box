@@ -13,14 +13,14 @@
  * ride the outbound wire, exactly the facade's event surface.
  */
 
-import {
-  lowerContent,
-  type BroadcastChannelLike,
-  type FollowerMessage,
-  type LeaderMessage,
-} from './broadcast.js';
+import type { BroadcastChannelLike, FollowerMessage, LeaderMessage } from './broadcast.js';
 import { EngineRequestError } from './correlatedTransport.js';
 import type { EngineTransport } from './transport.js';
+import type { WriteHandle } from './worker/protocol.js';
+import { WriteQueue } from './writeQueue.js';
+
+/** The correlated ack envelope addressing one follower request. */
+type Ack = { type: 'cb:response'; token: string; clientId: string; requestId: number };
 
 /** Projects a caught failure onto the wire's `error`/`code` fields. */
 function wireError(error: unknown): { error: string; code?: string } {
@@ -72,6 +72,11 @@ function hex(bytes: Uint8Array): string {
 
 export class LeaderRelay {
   private readonly focus = new FocusRegistry();
+  private readonly writes = new WriteQueue();
+  // Which client opened each open handle. Handle ids are one global namespace
+  // across tabs, so this binds every step to the tab that owns the upload — and
+  // lets a departing tab's handles be released.
+  private readonly writeOwners = new Map<WriteHandle, string>();
   private readonly unsubscribe: () => void;
   private closed = false;
   // An unguessable per-leadership capability. It stamps every leader→follower
@@ -106,6 +111,7 @@ export class LeaderRelay {
     // fresh token covers that path.
     this.post({ type: 'cb:leaderGone', token: this.token });
     this.closed = true;
+    this.releaseWrites(null);
     this.unsubscribe();
     this.channel.removeEventListener('message', this.onMessage);
   }
@@ -122,6 +128,9 @@ export class LeaderRelay {
       case 'cb:read':
         void this.serveRead(message as Extract<FollowerMessage, { type: 'cb:read' }>);
         return;
+      case 'cb:write':
+        this.serveWrite(message as Extract<FollowerMessage, { type: 'cb:write' }>);
+        return;
       case 'cb:focus': {
         const { clientId, node } = message as Extract<FollowerMessage, { type: 'cb:focus' }>;
         if (this.focus.set(clientId, node)) this.refreshHint();
@@ -130,16 +139,16 @@ export class LeaderRelay {
       case 'cb:bye': {
         const { clientId } = message as Extract<FollowerMessage, { type: 'cb:bye' }>;
         if (this.focus.remove(clientId)) this.refreshHint();
+        this.releaseWrites(clientId);
         return;
       }
     }
   }
 
   private async forward(message: Extract<FollowerMessage, { type: 'cb:command' }>): Promise<void> {
-    const { clientId, requestId, wire } = message;
+    const { clientId, requestId, command } = message;
     try {
-      const { command, transfer } = await lowerContent(wire);
-      await this.transport.command(command, transfer);
+      await this.transport.command(command, []);
       this.post({ type: 'cb:response', token: this.token, clientId, requestId, ok: true });
     } catch (error) {
       this.post({
@@ -168,6 +177,76 @@ export class LeaderRelay {
       }
     } catch (error) {
       this.post({ ...ack, ok: false, ...wireError(error) });
+    }
+  }
+
+  private serveWrite(message: Extract<FollowerMessage, { type: 'cb:write' }>): void {
+    const { clientId, requestId, write } = message;
+    const ack: Ack = { type: 'cb:response', token: this.token, clientId, requestId };
+
+    if (write.kind === 'beginWrite') {
+      void this.answerWrite(ack, async () => {
+        const handle = await this.transport.beginWrite(write.target, write.size);
+        this.writeOwners.set(handle, clientId);
+        return handle;
+      });
+      return;
+    }
+
+    const handle = write.handle;
+    if (this.writeOwners.get(handle) !== clientId) {
+      this.post({ ...ack, ok: false, error: 'unknown write handle', code: 'unknownWriteHandle' });
+      return;
+    }
+
+    // Enqueued synchronously, before any await: `WriteQueue` orders a handle's
+    // steps by call order.
+    void this.writes.run(handle, () =>
+      this.answerWrite(ack, async () => {
+        switch (write.kind) {
+          case 'pushChunk':
+            // Materialize the follower's shared `Blob` only here, then transfer
+            // the buffer into the worker.
+            return this.transport.pushChunk(handle, await write.chunk.arrayBuffer());
+          case 'commitWrite': {
+            const opId = await this.transport.commitWrite(handle);
+            // Dropped only once the commit resolves: a rejected one leaves the
+            // handle open for its owner to abort.
+            this.writeOwners.delete(handle);
+            return opId;
+          }
+          case 'abortWrite':
+            await this.transport.abortWrite(handle);
+            // Dropped only once the abort resolves: a rejected one leaves the
+            // handle owned so it can still be retried or released.
+            this.writeOwners.delete(handle);
+            return;
+        }
+      })
+    );
+  }
+
+  /** Runs one write step and posts its correlated ack. */
+  private async answerWrite(ack: Ack, step: () => Promise<bigint | void>): Promise<void> {
+    try {
+      const result = await step();
+      this.post(typeof result === 'bigint' ? { ...ack, ok: true, result } : { ...ack, ok: true });
+    } catch (error) {
+      this.post({ ...ack, ok: false, ...wireError(error) });
+    }
+  }
+
+  /**
+   * Abandons handles this relay can no longer serve — `clientId`'s, or all of
+   * them on teardown. A stranded handle holds its byte reservation against the
+   * staging ledger for the rest of the session, so every later write on every
+   * tab is refused as over-budget.
+   */
+  private releaseWrites(clientId: string | null): void {
+    for (const [handle, owner] of this.writeOwners) {
+      if (clientId !== null && owner !== clientId) continue;
+      this.writeOwners.delete(handle);
+      void this.writes.run(handle, () => this.transport.abortWrite(handle)).catch(() => undefined);
     }
   }
 

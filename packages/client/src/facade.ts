@@ -16,6 +16,8 @@ import type {
   NodeKind,
   Permission,
   SnapshotDescriptor,
+  WriteHandle,
+  WriteTarget,
 } from './worker/protocol.js';
 
 export class EngineFacade {
@@ -64,20 +66,34 @@ export class EngineFacade {
     return this.transport.download(node);
   }
 
-  create(
-    parent: Uint8Array,
-    name: string,
-    kind: NodeKind,
-    content: ArrayBuffer | null = null
-  ): Promise<void> {
-    return this.command(
-      { kind: 'create', parent, name, nodeKind: kind, content },
-      content === null ? [] : [content]
-    );
+  /** Creates an empty node. File content is written through a write handle. */
+  create(parent: Uint8Array, name: string, kind: NodeKind): Promise<void> {
+    return this.command({ kind: 'create', parent, name, nodeKind: kind });
   }
 
-  updateContent(node: Uint8Array, content: ArrayBuffer): Promise<void> {
-    return this.command({ kind: 'updateContent', node, content }, [content]);
+  /**
+   * Opens a streaming write of exactly `size` plaintext bytes: `{ parent, name }`
+   * creates a new file, `{ node }` writes a new version of an existing one. Feed
+   * the bytes with `pushChunk`, then `commitWrite` (or `abortWrite` to release
+   * the reservation); peak memory stays one chunk however large the file.
+   */
+  beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
+    return this.transport.beginWrite(target, size);
+  }
+
+  /** Feeds the next slice to an open handle; the buffer is transferred, not copied. */
+  pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
+    return this.transport.pushChunk(handle, chunk);
+  }
+
+  /** Closes the handle and journals its op; resolves with the durable op id. */
+  commitWrite(handle: WriteHandle): Promise<bigint> {
+    return this.transport.commitWrite(handle);
+  }
+
+  /** Abandons the handle, releasing its reservation and staged blocks. */
+  abortWrite(handle: WriteHandle): Promise<void> {
+    return this.transport.abortWrite(handle);
   }
 
   delete(node: Uint8Array): Promise<void> {

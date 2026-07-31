@@ -174,6 +174,8 @@ mod tests {
         crate::sync::op::StagedContent {
             root_cid,
             plaintext_size,
+            sealed_content_key: b"sealed-key-blob".to_vec(),
+            epoch: 1,
         }
     }
 

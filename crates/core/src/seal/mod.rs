@@ -12,6 +12,7 @@
 
 pub mod aad;
 pub mod body;
+pub mod content_key;
 pub mod envelope;
 pub mod grant;
 pub mod op_record;
@@ -21,13 +22,17 @@ pub mod structure;
 pub mod write_body;
 
 pub use aad::{
-    AAD_DOMAIN, AadContext, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
-    STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_POINTER_PAYLOAD, STRUCT_TAG_READ_BODY,
-    STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructTagSpec, build_aad,
+    AAD_DOMAIN, AadContext, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_POINTER_PAYLOAD,
+    STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS,
+    StructTagSpec, build_aad,
 };
 pub use body::{
     ChildRef, NodeKind, ReadBody, Version, decode_read_body, encode_read_body, name_cmp,
+};
+pub use content_key::{
+    CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, content_key_aad, open_content_key, seal_content_key,
 };
 pub use envelope::{
     Envelope, decode_envelope, encode_envelope, grant_section_bytes, has_grant_section,

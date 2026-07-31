@@ -144,9 +144,14 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
 
     expect(await leader.journalCount()).toBe(2);
 
-    // No plaintext at rest: the durable journal records only {kind, at} — never
-    // the upload content or any byte-array field the write command carried.
+    // No plaintext at rest: each upload streams its bytes through a write handle
+    // and the durable journal records only {kind, at} for the committed op —
+    // never the pushed content or any byte-array field.
     const records = await leader.journalRecords();
+    expect(records.map((record) => (record as { kind: string }).kind)).toEqual([
+      'commitWrite',
+      'commitWrite',
+    ]);
     for (const record of records) {
       const row = record as Record<string, unknown>;
       expect(Object.keys(row).sort()).toEqual(['at', 'kind']);

@@ -9,6 +9,7 @@
 //! this plane composes them and owns the framing/DAG shape and the placement,
 //! quota, and retention judgment (#630).
 
+pub(crate) mod budget;
 pub mod chunk;
 pub mod dag;
 pub(crate) mod limits;
@@ -16,8 +17,10 @@ pub mod profile;
 pub mod provider;
 pub mod read;
 pub mod retention;
+pub mod write;
 
-pub use chunk::{ContentKey, SealedChunk, frame_and_seal};
+pub(crate) use budget::{Refused, StagingLedger, sealed_total_bytes};
+pub use chunk::{ContentKey, SealedChunk, frame_and_seal, seal_one_chunk};
 pub use dag::{
     ContentDag, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, RootManifest, assemble, decode_root,
     root_block_cid,
@@ -33,24 +36,80 @@ pub use read::{
 pub use retention::{
     ContentVersion, PrunePlan, QuotaExceeded, RetentionPolicy, plan_prune, pre_flight_quota_check,
 };
+pub use write::{ContentWriter, FinishedContent};
 
-use cipherbox_core::content::{encode_content_cid_str, open_chunk};
+use cipherbox_core::content::{compute_cid, encode_content_cid_str, open_chunk};
 use cipherbox_core::seal::Version;
+use cipherbox_core::suite::secret::SECRET_LEN;
 
-use crate::entropy::{Entropy, EntropyError};
+use crate::entropy::EntropyError;
 use crate::seams::Http;
 
-/// A fully sealed content version, ready to pin and register: the version's
-/// `contentCid`, the DAG root block it addresses, and every sealed leaf block.
+/// The published identity of one sealed content version: the `contentCid` its
+/// metadata pins, the plaintext length that address reassembles to, and the leaf
+/// addresses under it.
+///
+/// The three always come from one decoded root manifest, so the published
+/// [`Version`] cannot disagree with the manifest [`open_content`] checks it
+/// against — the encode side of that reject is unrepresentable rather than
+/// merely guarded (AGENTS.md rule 8; #812 guard 3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SealedContent {
+    content_cid: Vec<u8>,
+    size: u64,
+    leaf_cids: Vec<Vec<u8>>,
+}
+
+impl SealedContent {
+    /// The identity of a version this process just assembled. `pub(crate)` so
+    /// the only public constructor is [`Self::from_root_block`], which derives
+    /// every field from bytes this crate's own decoder accepted.
+    pub(crate) fn new(content_cid: Vec<u8>, size: u64, leaf_cids: Vec<Vec<u8>>) -> Self {
+        Self {
+            content_cid,
+            size,
+            leaf_cids,
+        }
+    }
+
+    /// Recover a version's identity from its staged DAG root block, fail-closed.
+    /// The drain reads its blocks back this way, so the `Version` it publishes
+    /// is built from the manifest a reader will verify against, never from a
+    /// separately-carried size.
+    pub fn from_root_block(root_block: &[u8]) -> Result<Self, DagError> {
+        let manifest = decode_root(root_block)?;
+        Ok(Self {
+            content_cid: compute_cid(DAG_ROOT_CODEC, root_block),
+            size: manifest.size,
+            leaf_cids: manifest.leaf_cids,
+        })
+    }
+
     /// The version's `contentCid` — the DAG root's content address, pinned by
     /// the version metadata and the authenticity anchor for a verified read.
-    pub content_cid: Vec<u8>,
-    /// The DAG root block bytes (`dag-cbor`) that `content_cid` addresses.
-    pub root_block: Vec<u8>,
-    /// The sealed leaf blocks in file order, each carrying its own `raw` CID.
-    pub leaves: Vec<SealedChunk>,
+    pub fn content_cid(&self) -> &[u8] {
+        &self.content_cid
+    }
+
+    /// The plaintext byte length this version reassembles to.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// The leaf content addresses, in file order.
+    pub fn leaf_cids(&self) -> &[Vec<u8>] {
+        &self.leaf_cids
+    }
+
+    /// The published [`Version`] for this content under `content_key`.
+    pub fn version(&self, content_key: [u8; SECRET_LEN], modified_at: u64) -> Version {
+        Version::new(
+            self.content_cid.clone(),
+            content_key,
+            self.size,
+            modified_at,
+        )
+    }
 }
 
 /// Why sealing a content version failed, fail-closed: entropy acquisition, or a
@@ -74,26 +133,6 @@ impl From<DagError> for SealError {
     fn from(error: DagError) -> Self {
         Self::Dag(error)
     }
-}
-
-/// Frame, seal, and assemble `plaintext` into a content version under `key`
-/// (blueprint/engine.md "Content plane"). Composes [`frame_and_seal`] and
-/// [`assemble`]; deterministic under a fixed key and seeded entropy. Fails
-/// closed if entropy acquisition fails or the assembled leaf count would not
-/// round-trip through [`decode_root`].
-pub fn seal_content(
-    plaintext: &[u8],
-    key: &ContentKey,
-    entropy: &mut impl Entropy,
-    profile: &ContentProfile,
-) -> Result<SealedContent, SealError> {
-    let leaves = frame_and_seal(plaintext, key, entropy, profile)?;
-    let dag = assemble(&leaves, plaintext.len() as u64, profile)?;
-    Ok(SealedContent {
-        content_cid: dag.content_cid,
-        root_block: dag.root_block,
-        leaves,
-    })
 }
 
 /// Why a verified content read failed — the read dual of [`SealError`]. The
@@ -146,7 +185,7 @@ fn open_dag_error(e: DagError) -> OpenError {
 }
 
 /// Fetch, verify, and reassemble one content version's plaintext — the read
-/// dual of [`seal_content`]: DAG root fetch (CID-verified fail-closed) →
+/// dual of [`ContentWriter`]: DAG root fetch (CID-verified fail-closed) →
 /// manifest-vs-version size cross-check → per-leaf CID-verified fetch + unseal
 /// under the version content key → reassembled-length cross-check.
 pub async fn open_content<H: Http>(
@@ -205,41 +244,52 @@ mod tests {
     use cipherbox_core::error::Malformed;
     use cipherbox_core::suite::aead::KEY_LEN;
 
-    #[test]
-    fn seal_content_round_trips_through_the_dag() {
-        let plaintext: Vec<u8> = (0..100u8).collect();
-        let key = ContentKey::from_bytes([9u8; KEY_LEN]);
-        let sealed = seal_content(
-            &plaintext,
-            &key,
-            &mut SeededEntropy::new(1),
-            &ContentProfile::CI,
-        )
-        .unwrap();
-
-        // The root verifies, and its manifest lists the leaves in order.
-        assert!(verify_cid(&sealed.content_cid, &sealed.root_block).is_ok());
-        let manifest = decode_root(&sealed.root_block).unwrap();
-        assert_eq!(manifest.size, plaintext.len() as u64);
-        assert_eq!(
-            manifest.leaf_cids,
-            sealed
-                .leaves
-                .iter()
-                .map(|l| l.cid.clone())
-                .collect::<Vec<_>>()
+    /// Frame `plaintext` through the streaming writer, returning the assembled
+    /// root block and the version identity it addresses.
+    fn sealed(plaintext: &[u8], seed: u64) -> (Vec<u8>, SealedContent) {
+        let mut entropy = SeededEntropy::new(seed);
+        let mut writer = ContentWriter::new(
+            ContentKey::from_bytes([9u8; KEY_LEN]),
+            ContentProfile::CI,
+            plaintext.len() as u64,
         );
-
-        // Every leaf verifies against its listed CID and opens to reassemble.
-        let mut recovered = Vec::new();
-        for (leaf, cid) in sealed.leaves.iter().zip(&manifest.leaf_cids) {
-            assert!(verify_cid(cid, &leaf.sealed).is_ok());
-            recovered.extend(open_chunk(key.as_bytes(), &leaf.sealed).unwrap());
+        let mut rest = plaintext;
+        while !rest.is_empty() {
+            let (remaining, _) = writer.push(rest, &mut entropy).unwrap();
+            rest = remaining;
         }
+        let finished = writer.finish(&mut entropy).unwrap();
+        (finished.root_block, finished.content)
+    }
+
+    #[test]
+    fn a_version_identity_recovered_from_its_root_block_matches_the_assembled_one() {
+        let plaintext: Vec<u8> = (0..100u8).collect();
+        let (root_block, content) = sealed(&plaintext, 1);
+        assert!(verify_cid(content.content_cid(), &root_block).is_ok());
         assert_eq!(
-            recovered, plaintext,
-            "verified reassembly equals the original"
+            SealedContent::from_root_block(&root_block).unwrap(),
+            content,
+            "the drain's keyless recovery equals what the writer assembled"
         );
+        assert_eq!(content.size(), plaintext.len() as u64);
+    }
+
+    /// The encode side of [`open_content`]'s manifest-vs-version size reject:
+    /// both figures come from one value, so they cannot be made to disagree
+    /// (AGENTS.md rule 8; #812 guard 3). Fires in a release build.
+    #[test]
+    fn a_published_version_carries_its_own_manifests_size() {
+        let (root_block, content) = sealed(&(0..40u8).collect::<Vec<_>>(), 3);
+        let version = content.version([4u8; KEY_LEN], 99);
+        assert_eq!(version.size, decode_root(&root_block).unwrap().size);
+        assert_eq!(version.content_cid, content.content_cid());
+        assert_eq!(version.modified_at, 99);
+    }
+
+    #[test]
+    fn a_root_block_this_build_cannot_decode_yields_no_version() {
+        assert!(SealedContent::from_root_block(b"not a root block").is_err());
     }
 
     #[test]
@@ -269,20 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn seal_content_is_deterministic() {
-        let key = ContentKey::from_bytes([2u8; KEY_LEN]);
-        let a = seal_content(
-            b"determinism",
-            &key,
-            &mut SeededEntropy::new(7),
-            &ContentProfile::CI,
-        );
-        let b = seal_content(
-            b"determinism",
-            &key,
-            &mut SeededEntropy::new(7),
-            &ContentProfile::CI,
-        );
-        assert_eq!(a.unwrap(), b.unwrap());
+    fn framing_is_deterministic() {
+        assert_eq!(sealed(b"determinism", 7).0, sealed(b"determinism", 7).0);
     }
 }

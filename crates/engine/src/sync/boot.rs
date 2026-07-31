@@ -285,7 +285,7 @@ mod tests {
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
 
-    use crate::facade::{NodeId, NodeKind};
+    use crate::facade::NodeId;
     use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
     use crate::seams::{EndpointId, FloorStore, SeamResult, SnapshotCache};
     use crate::sync::op::Op;
@@ -423,15 +423,16 @@ mod tests {
         InMemoryRecordStore::new(vec![EndpointId::new("e1"), EndpointId::new("e2")])
     }
 
+    use crate::sync::op::NewNode;
+
     fn pending_create() -> Vec<Op> {
         vec![Op::create(
             NodeId([1u8; 16]),
             root_id(),
             "pending.txt",
-            NodeKind::File,
+            NewNode::File { content: None },
             1,
             AT,
-            None,
         )]
     }
 

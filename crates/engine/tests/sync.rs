@@ -4,7 +4,7 @@
 //!
 //! No network, no docker, no wall clock: the whole sync core runs in memory on
 //! the test kit's fakes and virtual clock. The five-race table, offline queue
-//! replay, dead-letter on revoked-while-offline, the staging-budget fail-fast,
+//! replay, dead-letter on revoked-while-offline, the unbounded metadata journal,
 //! the staleness ladder and escalation, the keyless-re-PUT adversary, and the
 //! cold-start-adopts-nothing sequence each get a narrative here, driven only
 //! through the engine's public sync surface.
@@ -19,15 +19,14 @@ use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
 use cipherbox_core::suite::x25519::X25519Secret;
-use cipherbox_engine::StoragePolicy;
 use cipherbox_engine::gate::floor;
 use cipherbox_engine::profile::SyncTimingProfile;
 use cipherbox_engine::seams::{SeamResult, StagingStore, UnixMillis};
 use cipherbox_engine::sync::model::NodeMeta;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
-    self, Connectivity, DeadLetterReason, DropReason, Op, OpResolution, PointerFetch, RecordReader,
-    RecordSeal, SessionRole, Snapshot, StageOutcome, StagedContent, apply_repairs, classify,
+    self, Connectivity, DeadLetterReason, DropReason, NewNode, Op, OpResolution, PointerFetch,
+    RecordReader, RecordSeal, SessionRole, Snapshot, StagedContent, apply_repairs, classify,
     decode_queue, observed_repair, rebase_one, replay, resolve_vault_pointer, stage_op,
     withheld_escalation,
 };
@@ -52,14 +51,6 @@ fn seal(who: &X25519Secret, nonce: u8) -> RecordSeal<'_> {
     }
 }
 
-/// A staging budget with everything else at CI defaults.
-fn budget(bytes: u64) -> StoragePolicy {
-    StoragePolicy {
-        staging_budget_bytes: bytes,
-        ..StoragePolicy::CI
-    }
-}
-
 /// The content address a staged root block is keyed by.
 fn root_cid(marker: &[u8]) -> Vec<u8> {
     compute_cid(CONTENT_CID_CODEC, marker)
@@ -71,6 +62,8 @@ fn staged(marker: &[u8]) -> StagedContent {
     StagedContent {
         root_cid: root_cid(marker),
         plaintext_size: marker.len() as u64,
+        sealed_content_key: Vec::new(),
+        epoch: 1,
     }
 }
 
@@ -158,7 +151,14 @@ fn race_3_add_vs_add_name_collision_auto_suffixes_the_loser() {
     let res = rebase_one(
         &mut base,
         &local,
-        &Op::create(id(2), id(0), "a.txt", NodeKind::File, 1, AT, None),
+        &Op::create(
+            id(2),
+            id(0),
+            "a.txt",
+            NewNode::File { content: None },
+            1,
+            AT,
+        ),
     );
     assert_eq!(
         res,
@@ -250,17 +250,27 @@ fn offline_queue_replays_fifo_onto_gate_passing_state() {
     block_on(async {
         // Offline: journal a create, a rename, and a colliding create.
         let ops = [
-            Op::create(id(1), id(0), "notes.txt", NodeKind::File, 1, AT, None),
+            Op::create(
+                id(1),
+                id(0),
+                "notes.txt",
+                NewNode::File { content: None },
+                1,
+                AT,
+            ),
             Op::rename(id(1), "notes-v2.txt", 1, AT),
-            Op::create(id(2), id(0), "notes-v2.txt", NodeKind::File, 1, AT, None), // will collide
+            // will collide
+            Op::create(
+                id(2),
+                id(0),
+                "notes-v2.txt",
+                NewNode::File { content: None },
+                1,
+                AT,
+            ),
         ];
         for (n, op) in ops.iter().enumerate() {
-            assert!(matches!(
-                stage_op(&store, &budget(0), seal(&me, n as u8), op, None)
-                    .await
-                    .unwrap(),
-                StageOutcome::Queued { .. }
-            ));
+            stage_op(&store, seal(&me, n as u8), op).await.unwrap();
         }
 
         // Reconnect: decode the durable journal and replay onto fresh state.
@@ -296,23 +306,17 @@ fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
             id(6),
             id(5),
             "secret.txt",
-            NodeKind::File,
+            NewNode::File {
+                content: Some(staged_root.clone()),
+            },
             1,
             AT,
-            Some(staged_root.clone()),
         );
-        assert!(matches!(
-            stage_op(
-                &store,
-                &budget(1 << 20),
-                seal(&me, 1),
-                &op,
-                Some(b"sealed-bytes")
-            )
+        store
+            .put_staged_bytes(&staged_root.root_cid, b"sealed-bytes")
             .await
-            .unwrap(),
-            StageOutcome::Queued { .. }
-        ));
+            .unwrap();
+        stage_op(&store, seal(&me, 1), &op).await.unwrap();
 
         // While offline the grant is revoked: the granted folder is gone from
         // gate-passing state entirely.
@@ -326,8 +330,8 @@ fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
         assert_eq!(report.dead_letters.len(), 1);
         assert_eq!(report.dead_letters[0].1, DeadLetterReason::TargetGone);
 
-        // The staged bytes are preserved (the caller does NOT GC a dead-letter's
-        // bytes — the user can still recover them).
+        // A terminally unrebasable op keeps its staged bytes (blueprint/engine.md,
+        // #33 D6) — only the failure valve's abandonments release them (#818).
         assert_eq!(
             store.staged_bytes(&staged_root.root_cid).await.unwrap(),
             Some(b"sealed-bytes".to_vec()),
@@ -337,52 +341,19 @@ fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
 }
 
 // ---------------------------------------------------------------------------
-// Staging-budget fail-fast — uploads bounded, metadata unbounded.
+// Metadata ops queue unbounded — the staged-byte bound is admitted at
+// `beginWrite`, never on the op journal.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn staging_budget_fails_fast_on_uploads_but_metadata_queues_unbounded() {
+fn metadata_ops_queue_unbounded() {
     let store = InMemoryStagingStore::default();
     let me = owner();
     block_on(async {
-        // A 9-byte upload past the 8-byte budget fails fast — nothing staged.
-        let upload = Op::create(
-            id(1),
-            id(0),
-            "big",
-            NodeKind::File,
-            1,
-            AT,
-            Some(staged(b"nine byte")),
-        );
-        assert!(matches!(
-            stage_op(
-                &store,
-                &budget(8),
-                seal(&me, 1),
-                &upload,
-                Some(b"nine byte")
-            )
-            .await
-            .unwrap(),
-            StageOutcome::RejectedOverBudget { .. }
-        ));
-        assert_eq!(store.staged_bytes_total().await.unwrap(), 0);
-
-        // Metadata ops still queue past the exhausted budget.
         for i in 10..20 {
-            assert!(matches!(
-                stage_op(
-                    &store,
-                    &budget(8),
-                    seal(&me, i),
-                    &Op::rename(id(i), "n", 1, AT),
-                    None
-                )
+            stage_op(&store, seal(&me, i), &Op::rename(id(i), "n", 1, AT))
                 .await
-                .unwrap(),
-                StageOutcome::Queued { .. }
-            ));
+                .unwrap();
         }
         assert_eq!(
             store.queued_ops().await.unwrap().len(),
@@ -631,7 +602,14 @@ fn state_law_renders_the_snapshot_plus_the_pending_overlay() {
 
     // Two pending ops not yet confirmed by the network.
     let pending = [
-        Op::create(id(2), id(0), "pending.txt", NodeKind::File, 1, AT, None),
+        Op::create(
+            id(2),
+            id(0),
+            "pending.txt",
+            NewNode::File { content: None },
+            1,
+            AT,
+        ),
         Op::rename(id(1), "renamed.txt", 1, AT),
     ];
     let view = sync::apply_overlay(&base, &pending);

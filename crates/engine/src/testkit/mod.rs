@@ -15,12 +15,14 @@
 //! tests. One contract, every platform.
 
 pub mod conformance;
+mod content;
 mod entropy;
 mod executor;
 pub mod fakes;
 mod owner_root;
 mod world;
 
+pub use content::frame_version;
 pub use entropy::SeededEntropy;
 pub use executor::block_on;
 pub use owner_root::{

@@ -62,6 +62,11 @@ pub const STRUCT_TAG_OP_RECORD: u8 = 0x0a;
 /// owner's enc subkey ([`super::settings_record`]). Like `op-record`, it binds
 /// its own clear header instead of an [`AadContext`].
 pub const STRUCT_TAG_SETTINGS_RECORD: u8 = 0x0b;
+/// `content-key` — the per-version content key HPKE-sealed to the owner's enc
+/// subkey while its version waits in the op queue ([`super::content_key`]).
+/// Local durable state like `op-record`, and bound to its own epoch rather than
+/// an [`AadContext`].
+pub const STRUCT_TAG_CONTENT_KEY: u8 = 0x0c;
 
 /// One registry entry's frozen, machine-checkable metadata: the structure's
 /// stable name and its domain-separation byte. The KAT manifest freezes this
@@ -72,7 +77,7 @@ pub struct StructTagSpec {
     pub tag: u8,
 }
 
-/// The eleven structure tags, in registry (byte) order. Every new tag extends
+/// The twelve structure tags, in registry (byte) order. Every new tag extends
 /// this table and its manifest vectors before merge (blueprint/core.md).
 pub const STRUCT_TAGS: &[StructTagSpec] = &[
     StructTagSpec {
@@ -118,6 +123,10 @@ pub const STRUCT_TAGS: &[StructTagSpec] = &[
     StructTagSpec {
         name: "settings-record",
         tag: STRUCT_TAG_SETTINGS_RECORD,
+    },
+    StructTagSpec {
+        name: "content-key",
+        tag: STRUCT_TAG_CONTENT_KEY,
     },
 ];
 
@@ -178,8 +187,8 @@ mod tests {
         }
         assert_eq!(
             STRUCT_TAGS.len(),
-            11,
-            "the frozen byte-space is eleven tags"
+            12,
+            "the frozen byte-space is twelve tags"
         );
     }
 

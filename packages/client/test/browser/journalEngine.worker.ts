@@ -15,6 +15,7 @@ import type {
   CommandDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
+  WriteTarget,
 } from '../../src/worker/protocol.js';
 
 const DB_NAME = 'cb-leadership-journal';
@@ -31,12 +32,12 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-async function journal(command: CommandDescriptor): Promise<void> {
+async function journal(kind: string): Promise<void> {
   const db = await openDb();
   try {
     await new Promise<void>((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).add({ kind: command.kind, at: Date.now() });
+      tx.objectStore(STORE).add({ kind, at: Date.now() });
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error ?? new Error('journal write failed'));
     });
@@ -46,6 +47,12 @@ async function journal(command: CommandDescriptor): Promise<void> {
 }
 
 class JournalHost implements EngineHostLike {
+  private nextHandle = 1n;
+  // Op ids are a separate id space from write handles; keep them disjoint so a
+  // client that conflates the two cannot pass against this fake.
+  private nextOpId = 1000n;
+  private readonly open = new Map<bigint, { size: number; received: number }>();
+
   start(): Promise<void> {
     return Promise.resolve();
   }
@@ -54,8 +61,36 @@ class JournalHost implements EngineHostLike {
     // Durable journal BEFORE the ack: the resolved promise is the UI-visible
     // ack, and it only settles once the op is on disk.
     if (command.kind !== 'manualRefresh' && command.kind !== 'setFocus') {
-      await journal(command);
+      await journal(command.kind);
     }
+  }
+
+  beginWrite(_target: WriteTarget, size: number): Promise<bigint> {
+    const handle = this.nextHandle++;
+    this.open.set(handle, { size, received: 0 });
+    return Promise.resolve(handle);
+  }
+
+  /** Staged content is never journaled — only the op that commits it is. */
+  pushChunk(handle: bigint, chunk: ArrayBuffer): Promise<void> {
+    const write = this.open.get(handle);
+    if (!write) return Promise.reject(new Error('unknown write handle'));
+    write.received += chunk.byteLength;
+    return Promise.resolve();
+  }
+
+  async commitWrite(handle: bigint): Promise<bigint> {
+    const write = this.open.get(handle);
+    if (!write) throw new Error('unknown write handle');
+    if (write.received !== write.size) throw new Error('content size mismatch');
+    this.open.delete(handle);
+    await journal('commitWrite');
+    return this.nextOpId++;
+  }
+
+  abortWrite(handle: bigint): Promise<void> {
+    this.open.delete(handle);
+    return Promise.resolve();
   }
 
   snapshot(): Promise<SnapshotDescriptor> {

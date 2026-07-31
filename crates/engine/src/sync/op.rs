@@ -39,19 +39,29 @@ pub struct Op {
     pub kind: OpKind,
 }
 
-/// The staged content one op authors: the DAG root it references and the
-/// plaintext length that root reassembles to.
+/// The staged content one op authors: the DAG root it references, the plaintext
+/// length that root reassembles to, and the sealed key that opens it.
 ///
-/// One value because the two must not drift: the root names sealed blocks whose
-/// byte count is not the plaintext's, so the size a node renders and the size
-/// the published version carries both come from here.
+/// One value because the parts must not drift: the root names sealed blocks
+/// whose byte count is not the plaintext's, and the key is a KDF non-edge that
+/// nothing can re-derive if it is separated from the version it opens.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StagedContent {
     /// DAG root CID of the staged content — simultaneously the root block's
     /// staging key and the published version's `contentCid`.
     pub root_cid: Vec<u8>,
-    /// Plaintext byte length of the content this root reassembles to.
+    /// Plaintext byte length of the content this root reassembles to, as the
+    /// commit observed it. The overlay renders it; the drain cross-checks it
+    /// against the staged root's own manifest before publishing (#830).
     pub plaintext_size: u64,
+    /// The per-version content key, HPKE-to-self sealed under the owner's enc
+    /// subkey ([`cipherbox_core::seal::seal_content_key`]). The subkey comes
+    /// from the login secret, so it is epoch-independent and available on
+    /// exactly the sessions that can run a drain.
+    pub sealed_content_key: Vec<u8>,
+    /// The scope epoch bound into the key blob's AAD. Carried because the blob
+    /// is opened at drain time, when the live scope epoch may have moved on.
+    pub epoch: u64,
 }
 
 /// The destination node a [`OpKind::Move`] replaces, with the sequence
@@ -64,6 +74,32 @@ pub struct Replaced {
     pub sequence: u64,
 }
 
+/// What a `create` op brings into being. One value feeds the node's kind and
+/// its initial content, so a folder carrying file content is unrepresentable
+/// rather than refused at publish — the op-queue end of the same structural
+/// guard [`new_child`](crate::net::author::new_child) makes on the wire
+/// (AGENTS.md rule 8; #812 guard 2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NewNode {
+    /// A folder, always created empty.
+    Folder,
+    /// A file, with its first version's staged content when it has one.
+    File {
+        /// The initial content; `None` for an empty file.
+        content: Option<StagedContent>,
+    },
+}
+
+impl NewNode {
+    /// The kind this node is created as.
+    pub fn kind(&self) -> NodeKind {
+        match self {
+            Self::Folder => NodeKind::Folder,
+            Self::File { .. } => NodeKind::File,
+        }
+    }
+}
+
 /// The six intent-op mutations (#33 D6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpKind {
@@ -73,11 +109,9 @@ pub enum OpKind {
         parent: NodeId,
         /// The name as entered.
         name: String,
-        /// File or folder.
-        kind: NodeKind,
-        /// The initial file content, if any (folders and empty files carry
-        /// none).
-        content: Option<StagedContent>,
+        /// What is being created, carrying exactly the content its kind can
+        /// hold.
+        node: NewNode,
     },
     /// Delete a node. `target_sequence` snapshots the target's own record
     /// sequence for the conditional-delete rebase rule.
@@ -137,10 +171,9 @@ impl Op {
         new_node: NodeId,
         parent: NodeId,
         name: impl Into<String>,
-        kind: NodeKind,
+        node: NewNode,
         base_sequence: u64,
         authored_at: UnixMillis,
-        content: Option<StagedContent>,
     ) -> Self {
         Self {
             target: new_node,
@@ -149,8 +182,7 @@ impl Op {
             kind: OpKind::Create {
                 parent,
                 name: name.into(),
-                kind,
-                content,
+                node,
             },
         }
     }
@@ -252,7 +284,9 @@ impl Op {
     pub fn staged_content(&self) -> Option<&StagedContent> {
         match &self.kind {
             OpKind::Create {
-                content: Some(content),
+                node: NewNode::File {
+                    content: Some(content),
+                },
                 ..
             }
             | OpKind::UpdateContent { content } => Some(content),
@@ -335,6 +369,8 @@ mod tests {
         StagedContent {
             root_cid: root.to_vec(),
             plaintext_size,
+            sealed_content_key: b"sealed-key-blob".to_vec(),
+            epoch: 3,
         }
     }
 
@@ -345,10 +381,11 @@ mod tests {
                 id(1),
                 id(0),
                 "a.txt",
-                NodeKind::File,
+                NewNode::File {
+                    content: Some(staged(b"stage", 11)),
+                },
                 3,
                 at(1_000),
-                Some(staged(b"stage", 11)),
             ),
             Op::delete(id(2), 4, at(1_001), 7),
             Op::rename(id(3), "b.txt", 5, at(1_002)),
@@ -390,10 +427,11 @@ mod tests {
                 id(1),
                 id(0),
                 "a",
-                NodeKind::File,
+                NewNode::File {
+                    content: Some(staged(b"k", 1)),
+                },
                 1,
                 at(1),
-                Some(staged(b"k", 1))
             )
             .content_root_cid(),
             Some(&b"k"[..])
@@ -404,7 +442,7 @@ mod tests {
         );
         assert_eq!(Op::rename(id(1), "b", 1, at(1)).content_root_cid(), None);
         assert_eq!(
-            Op::create(id(1), id(0), "d", NodeKind::Folder, 1, at(1), None).content_root_cid(),
+            Op::create(id(1), id(0), "d", NewNode::Folder, 1, at(1)).content_root_cid(),
             None
         );
     }
@@ -416,14 +454,16 @@ mod tests {
                 id(1),
                 id(0),
                 "a",
-                NodeKind::File,
+                NewNode::File {
+                    content: Some(staged(b"k", 1)),
+                },
                 1,
                 at(1),
-                Some(staged(b"k", 1)),
             )
             .pending_class(),
-            Op::create(id(1), id(0), "a", NodeKind::File, 1, at(1), None).pending_class(),
-            Op::create(id(1), id(0), "d", NodeKind::Folder, 1, at(1), None).pending_class(),
+            Op::create(id(1), id(0), "a", NewNode::File { content: None }, 1, at(1))
+                .pending_class(),
+            Op::create(id(1), id(0), "d", NewNode::Folder, 1, at(1)).pending_class(),
             Op::delete(id(2), 1, at(1), 1).pending_class(),
             Op::rename(id(3), "b", 1, at(1)).pending_class(),
             Op::relink(id(4), id(0), id(9), 1, at(1), false, false).pending_class(),

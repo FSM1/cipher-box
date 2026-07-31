@@ -30,9 +30,9 @@ pub mod staleness;
 pub mod tick;
 
 pub use boot::{ColdStartError, ColdStartOutcome, ColdStartParams, RootResolve, cold_start};
-pub use drain::{BlockedOp, DRAINED_OP_MARK_KEY, OP_ATTEMPTS_KEY};
+pub use drain::{BlockedOp, DRAINED_OP_MARK_KEY, OP_ATTEMPTS_KEY, UPLOAD_MARK_KEY};
 pub use model::{Link, NodeMeta, Snapshot, collation_key, suffix_name};
-pub use op::{Op, OpDecodeError, OpKind, Replaced, StagedContent};
+pub use op::{NewNode, Op, OpDecodeError, OpKind, Replaced, StagedContent};
 pub use overlay::apply_overlay;
 pub use pointer::{
     ConsultReason, PointerError, PointerFetch, SessionRole, VaultPointerAdoption, open_repoint,
@@ -47,7 +47,7 @@ pub use record::{
     OpRecordError, RecordClass, RecordReader, RecordSeal, RetainedReason, encode_op_record,
     record_content_root_cid,
 };
-pub use staging::{StageOutcome, orphan_staging_keys, stage_op};
+pub use staging::{orphan_staging_keys, stage_op};
 pub use staleness::{Connectivity, classify, withheld_escalation};
 pub use tick::{
     FocusTarget, FocusWindow, ResolveMode, TickCause, TickControl, focus_set, jittered_cadence,

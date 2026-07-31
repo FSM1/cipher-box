@@ -99,18 +99,42 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(leaderPosts.length).toBeGreaterThanOrEqual(6);
   });
 
-  it('shares upload content as a Blob and rebuilds identical bytes on the leader', async () => {
+  it('shares an upload chunk as a Blob and rebuilds identical bytes on the leader', async () => {
     const { engine, follower } = wire();
-    const bytes = new Uint8Array([9, 8, 7, 6]);
-    await follower.command(
-      { kind: 'updateContent', node: new Uint8Array(16), content: bytes.buffer },
-      [bytes.buffer]
-    );
+    const bytes = Uint8Array.from({ length: 512 }, (_, i) => (i * 13 + 7) & 0xff);
 
-    const command = engine.commands[0];
-    expect(command.kind).toBe('updateContent');
-    if (command.kind !== 'updateContent') throw new Error('unreachable');
-    expect([...new Uint8Array(command.content)]).toEqual([9, 8, 7, 6]);
+    const node = new Uint8Array(16).fill(3);
+    const handle = await follower.beginWrite({ node }, bytes.byteLength);
+    expect(handle).toBe(engine.writeHandle);
+    expect(engine.beginWrites).toEqual([{ target: { node }, size: 512 }]);
+
+    await follower.pushChunk(handle, bytes.buffer.slice(0));
+    expect(engine.chunks).toHaveLength(1);
+    expect([...new Uint8Array(engine.chunks[0].chunk)]).toEqual([...bytes]);
+    expect(engine.chunks[0].handle).toBe(handle);
+
+    await expect(follower.commitWrite(handle)).resolves.toBe(engine.commitOpId);
+    expect(engine.commits).toEqual([handle]);
+  });
+
+  it('propagates a write rejection to the follower with the stable code', async () => {
+    const { engine, follower } = wire();
+    engine.commitWrite = () =>
+      Promise.reject(new EngineRequestError('pushed 3 of 5 bytes', 'contentSizeMismatch'));
+    engine.pushChunk = () =>
+      Promise.reject(new EngineRequestError('no such handle', 'unknownWriteHandle'));
+
+    const handle = await follower.beginWrite({ node: new Uint8Array(16) }, 5);
+    await expect(follower.pushChunk(handle, new ArrayBuffer(1))).rejects.toMatchObject({
+      code: 'unknownWriteHandle',
+    });
+    await expect(follower.commitWrite(handle)).rejects.toMatchObject({
+      code: 'contentSizeMismatch',
+      message: 'pushed 3 of 5 bytes',
+    });
+    // The abort path stays usable after a failed commit.
+    await expect(follower.abortWrite(handle)).resolves.toBeUndefined();
+    expect(engine.aborts).toEqual([handle]);
   });
 
   it('fans engine events out to the follower in emission order', async () => {
@@ -341,5 +365,106 @@ describe('broadcast transport ↔ leader relay', () => {
 
     expect(settled).toBe(false);
     expect(events).toEqual([]);
+  });
+});
+
+describe('leader relay write handles', () => {
+  function bench(): { bus: FakeBus; engine: FakeEngineTransport; relay: LeaderRelay } {
+    const bus = new FakeBus();
+    const engine = new FakeEngineTransport();
+    const relay = new LeaderRelay(bus.channel(), engine);
+    return { bus, engine, relay };
+  }
+
+  const chunk = (seq: number): ArrayBuffer => Uint8Array.of(seq).buffer;
+  const node = (fill: number): Uint8Array => new Uint8Array(16).fill(fill);
+
+  it('applies pipelined chunks for one handle in send order', async () => {
+    const { bus, engine } = bench();
+    const follower = new BroadcastTransport(bus.channel(), 'f1');
+    const applied: number[] = [];
+    // Later chunks settle faster: unserialized they would overtake earlier ones,
+    // scrambling the plaintext while every integrity check still passes.
+    engine.pushChunk = async (_handle, bytes) => {
+      const seq = new Uint8Array(bytes)[0];
+      await new Promise((resolve) => setTimeout(resolve, (4 - seq) * 5));
+      applied.push(seq);
+    };
+
+    const handle = await follower.beginWrite({ node: node(3) }, 3);
+    // Fired without awaiting, exactly as a UI pipelining an upload would.
+    await Promise.all([1, 2, 3].map((seq) => follower.pushChunk(handle, chunk(seq))));
+
+    expect(applied).toEqual([1, 2, 3]);
+  });
+
+  it('keeps distinct handles concurrent', async () => {
+    const { bus, engine } = bench();
+    const follower = new BroadcastTransport(bus.channel(), 'f1');
+    let releaseFirst!: () => void;
+    engine.pushChunk = (handle) =>
+      handle === 1n ? new Promise<void>((resolve) => (releaseFirst = resolve)) : Promise.resolve();
+
+    engine.writeHandle = 1n;
+    const first = await follower.beginWrite({ node: node(1) }, 1);
+    engine.writeHandle = 2n;
+    const second = await follower.beginWrite({ node: node(2) }, 1);
+
+    const parked = follower.pushChunk(first, chunk(1));
+    let parkedSettled = false;
+    void parked.then(() => (parkedSettled = true));
+
+    await expect(follower.pushChunk(second, chunk(2))).resolves.toBeUndefined();
+    expect(parkedSettled).toBe(false);
+
+    releaseFirst();
+    await parked;
+  });
+
+  it('rejects a write step against a handle the sender does not own', async () => {
+    const { bus, engine } = bench();
+    const owner = new BroadcastTransport(bus.channel(), 'owner');
+    const other = new BroadcastTransport(bus.channel(), 'other');
+    const handle = await owner.beginWrite({ node: node(4) }, 4);
+
+    await expect(other.pushChunk(handle, chunk(9))).rejects.toMatchObject({
+      code: 'unknownWriteHandle',
+    });
+    await expect(other.abortWrite(handle)).rejects.toMatchObject({ code: 'unknownWriteHandle' });
+    await expect(other.commitWrite(handle)).rejects.toMatchObject({ code: 'unknownWriteHandle' });
+
+    // Nothing reached the engine, and the owner still drives its own handle.
+    expect(engine.chunks).toEqual([]);
+    expect(engine.aborts).toEqual([]);
+    expect(engine.commits).toEqual([]);
+    await expect(owner.pushChunk(handle, chunk(1))).resolves.toBeUndefined();
+  });
+
+  it('aborts a departing client handles and leaves the other client alone', async () => {
+    const { bus, engine } = bench();
+    const leaving = new BroadcastTransport(bus.channel(), 'leaving');
+    const staying = new BroadcastTransport(bus.channel(), 'staying');
+    engine.writeHandle = 1n;
+    const orphan = await leaving.beginWrite({ node: node(1) }, 4);
+    engine.writeHandle = 2n;
+    const kept = await staying.beginWrite({ node: node(2) }, 4);
+
+    leaving.close(); // posts `cb:bye`
+    await tick();
+
+    expect(engine.aborts).toEqual([orphan]);
+    await expect(staying.pushChunk(kept, chunk(1))).resolves.toBeUndefined();
+    expect(engine.chunks.map((entry) => entry.handle)).toEqual([kept]);
+  });
+
+  it('releases every open handle when the leader steps down', async () => {
+    const { bus, engine, relay } = bench();
+    const follower = new BroadcastTransport(bus.channel(), 'f1');
+    const handle = await follower.beginWrite({ node: node(5) }, 4);
+
+    relay.close();
+    await tick();
+
+    expect(engine.aborts).toEqual([handle]);
   });
 });

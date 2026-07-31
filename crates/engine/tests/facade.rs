@@ -5,8 +5,8 @@ use cipherbox_engine::net::RE_PUT_INTERVAL;
 use cipherbox_engine::seams::{Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    Command, Engine, EngineError, EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind,
-    Permission, PlaintextContent, StoragePolicy, SyncTimingProfile,
+    Command, ContentProfile, Engine, EngineError, EventStream, GatewayConfig, LoginSecret, NodeId,
+    Permission, StoragePolicy, SyncTimingProfile,
 };
 
 fn new_engine(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
@@ -14,6 +14,7 @@ fn new_engine(device: &FakeDevice) -> (Engine<FakeSeamTypes>, EventStream) {
         device.seam_set(),
         Box::new(SeededEntropy::new(42)),
         SyncTimingProfile::CI,
+        ContentProfile::CI,
         StoragePolicy::CI,
         String::new(),
         GatewayConfig::disabled(),
@@ -25,30 +26,11 @@ fn secret() -> LoginSecret {
 }
 
 /// Commands whose pipeline slice has not landed: the still-unimplemented
-/// surface. The metadata intent ops (delete/rename/relink and metadata-only
-/// create) are wired and covered by the inline facade tests; a *content*-
-/// bearing create and `updateContent` still need the content plane, so they
-/// remain unimplemented here.
+/// surface. The metadata intent ops (delete/rename/relink and create) are wired
+/// and covered by the inline facade tests.
 fn unimplemented_commands() -> Vec<(Command, &'static str)> {
     let node = NodeId([1; 16]);
-    let parent = NodeId([2; 16]);
     vec![
-        (
-            Command::Create {
-                parent,
-                name: "notes.txt".into(),
-                kind: NodeKind::File,
-                content: Some(PlaintextContent(b"hello".to_vec())),
-            },
-            "create",
-        ),
-        (
-            Command::UpdateContent {
-                node,
-                content: PlaintextContent(b"v2".to_vec()),
-            },
-            "updateContent",
-        ),
         (Command::SetFocus { node: Some(node) }, "setFocus"),
         (Command::ManualRefresh, "manualRefresh"),
         (

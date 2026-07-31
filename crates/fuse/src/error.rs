@@ -25,7 +25,8 @@ pub enum VfsError {
     /// A node of that name already exists under the parent.
     AlreadyExists,
     /// The operation is structurally impossible — moving a folder inside
-    /// itself, which would detach the whole subtree from the root.
+    /// itself, which would detach the whole subtree from the root, or writing a
+    /// file past the size one version can represent.
     Invalid,
     /// The name is not admissible.
     InvalidName(NameError),
@@ -64,17 +65,25 @@ impl From<EngineError> for VfsError {
             EngineError::TrustViolation { message } | EngineError::ColdStart { message } => {
                 VfsError::TrustViolation { message }
             }
-            EngineError::OverBudget { cause } => VfsError::OverBudget(cause),
+            EngineError::OverBudget { cause, .. } => VfsError::OverBudget(cause),
             EngineError::ContentUnavailable { message } => VfsError::Unavailable { message },
             EngineError::UnsupportedContentFormat { version } => VfsError::Unavailable {
                 message: format!("unsupported content format version {version}"),
             },
+            // Past the flat-DAG ceiling: no amount of free space stores a file
+            // this large as one version, so it is not a budget verdict.
+            EngineError::ContentTooLarge { .. } => VfsError::Invalid,
             EngineError::Seam { message }
             | EngineError::Entropy { message }
             | EngineError::Auth { message } => VfsError::Internal { message },
+            // A write handle that lost track of its own file is a broken caller
+            // contract on the mount's side, never a user-visible storage verdict.
             error @ (EngineError::NotStarted
             | EngineError::AlreadyStarted
             | EngineError::InvalidSecret
+            | EngineError::ContentSizeMismatch { .. }
+            | EngineError::UnknownWriteHandle
+            | EngineError::ContentKeySealFailed { .. }
             | EngineError::Unimplemented { .. }) => VfsError::Internal {
                 message: error.to_string(),
             },
@@ -166,11 +175,19 @@ mod tests {
     #[test]
     fn each_budget_keeps_its_own_cause() {
         for cause in [
-            OverBudgetCause::DeviceStaging,
+            OverBudgetCause::StagingLimit,
+            OverBudgetCause::DeviceFull,
+            OverBudgetCause::StagingBacklog,
+            OverBudgetCause::StorageUnmeasured,
             OverBudgetCause::AccountQuota,
+            OverBudgetCause::TooManyWrites,
         ] {
             assert_eq!(
-                VfsError::from(EngineError::OverBudget { cause }),
+                VfsError::from(EngineError::OverBudget {
+                    cause,
+                    requested: 900,
+                    available: 100,
+                }),
                 VfsError::OverBudget(cause)
             );
         }

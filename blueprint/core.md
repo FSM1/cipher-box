@@ -162,8 +162,8 @@ The `structTag` byte-space is the domain-separation registry, frozen in the KAT
 manifest: `read-body` (`0x01`), `write-body` (`0x02`), `grant-blob` (`0x03`),
 `owner-blob` (`0x04`), `ascent-link` (`0x05`), `history-link` (`0x06`),
 `pointer-payload` (`0x07`), `mailbox-payload` (`0x08`), `owner-write-blob`
-(`0x09`), `op-record` (`0x0a`), `settings-record` (`0x0b`). Every new tag
-extends the manifest and its vectors before merge; the
+(`0x09`), `op-record` (`0x0a`), `settings-record` (`0x0b`), `content-key`
+(`0x0c`). Every new tag extends the manifest and its vectors before merge; the
 `owner-write-blob` KAT set is `owner_write_blob_accept` (seal/open round-trip
 under a fixed enc + ephemeral) and `owner_write_blob_reject` (decode: wrong-length
 seed, missing `writeEpoch`; HPKE fail-closed: tampered ciphertext/tag,
@@ -203,6 +203,20 @@ contact-code exchange. The opener rebuilds the tag from its own key, so a record
 another identity could open is unrepresentable rather than compared away, and
 the transplant vector is what proves tag `0x0b` plus the distinct HPKE info
 string — not the framing — keep the two families apart.
+
+The `content-key` KAT set is `content_key_accept` (a genesis-epoch and a
+max-epoch blob, each reproducing its exact bytes from a fixed enc + ephemeral,
+then opening back to the version's content key) and `content_key_reject`
+(tampered ciphertext, tampered `enc`, a truncated blob, a foreign recipient, the
+same base-mode forgery, `scope` and `epoch` transplants, a **swapped
+`contentCid`** — the binding that stops a key being moved onto another version's
+blocks — a forward `v` with and without an unknown clear-header field, an
+unknown clear-header field alone, a missing `enc`, and a wide and a low-order
+`enc`). It seals HPKE **auth mode** to the owner's own enc subkey over the same
+three-key clear header as the settings record, with `{scope, epoch}` bound in
+the AAD and the `contentCid` bound inside the seal. Both directions refuse a
+malformed `contentCid` release-actively (AGENTS.md rule 8): a blob whose CID the
+open path would refuse is a version whose key is gone.
 
 ## KDF edge catalog
 

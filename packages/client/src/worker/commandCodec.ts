@@ -46,10 +46,7 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       return wasm.Command.create(
         nodeId(wasm, descriptor.parent),
         descriptor.name,
-        nodeKind(wasm, descriptor.nodeKind),
-        // The builder copies into WASM memory synchronously; a view over the
-        // transferred content buffer is safe (no await between here and the copy).
-        descriptor.content === null ? undefined : new Uint8Array(descriptor.content)
+        nodeKind(wasm, descriptor.nodeKind)
       );
     case 'delete':
       return wasm.Command.delete(nodeId(wasm, descriptor.node));
@@ -57,11 +54,6 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       return wasm.Command.rename(nodeId(wasm, descriptor.node), descriptor.newName);
     case 'relink':
       return wasm.Command.relink(nodeId(wasm, descriptor.node), nodeId(wasm, descriptor.newParent));
-    case 'updateContent':
-      return wasm.Command.updateContent(
-        nodeId(wasm, descriptor.node),
-        new Uint8Array(descriptor.content)
-      );
     case 'setFocus':
       return wasm.Command.setFocus(
         descriptor.node === null ? undefined : nodeId(wasm, descriptor.node)
@@ -164,6 +156,8 @@ function deadLetterReason(wasm: EngineWasm, reason: number | undefined): DeadLet
       return 'payloadRefused';
     case wasm.DeadLetterReason.AttemptsExhausted:
       return 'attemptsExhausted';
+    case wasm.DeadLetterReason.ContentUnrecoverable:
+      return 'contentUnrecoverable';
     default:
       // Fail closed: an unmapped (or absent) value means a JS/WASM version
       // mismatch, not a dead letter safe to report without its reason.

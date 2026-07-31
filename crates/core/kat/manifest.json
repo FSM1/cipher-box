@@ -47,6 +47,7 @@
   },
   "structureTags": {
     "ascent-link": 5,
+    "content-key": 12,
     "grant-blob": 3,
     "history-link": 6,
     "mailbox-payload": 8,
@@ -473,6 +474,30 @@
       "checks": [
         "hpke-open-failed",
         "hpke-non-contributory",
+        "missing-field",
+        "invalid-field-length",
+        "unknown-record-field",
+        "unsupported-record-version"
+      ]
+    }
+  },
+  "contentKey": {
+    "structTag": 12,
+    "v": 1,
+    "hpkeMode": 2,
+    "hpkeInfo": "cipherbox/v2/content-key",
+    "accept": {
+      "file": "vectors/content_key/content_key_accept.json",
+      "count": 2
+    },
+    "reject": {
+      "file": "vectors/content_key/content_key_reject.json",
+      "count": 14,
+      "checks": [
+        "hpke-open-failed",
+        "hpke-non-contributory",
+        "content-cid-mismatch",
+        "truncated",
         "missing-field",
         "invalid-field-length",
         "unknown-record-field",

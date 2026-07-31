@@ -50,17 +50,17 @@ pub use api::{
 };
 pub use content::{
     ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
-    DAG_ROOT_CODEC, DagError, Gateway, GatewayConfig, GatewaySource, PinMode, ProviderError,
-    PrunePlan, QuotaExceeded, ROOT_FORMAT_VERSION, ReadError, RetentionPolicy, RootManifest,
-    SealError, SealedChunk, SealedContent, assemble, decode_root, frame_and_seal,
-    leaf_range_for_byte_range, plan_prune, pre_flight_quota_check, read_block, seal_content,
-    test_connection, validate_endpoint,
+    ContentWriter, DAG_ROOT_CODEC, DagError, FinishedContent, Gateway, GatewayConfig,
+    GatewaySource, PinMode, ProviderError, PrunePlan, QuotaExceeded, ROOT_FORMAT_VERSION,
+    ReadError, RetentionPolicy, RootManifest, SealError, SealedChunk, SealedContent, assemble,
+    decode_root, frame_and_seal, leaf_range_for_byte_range, plan_prune, pre_flight_quota_check,
+    read_block, seal_one_chunk, test_connection, validate_endpoint,
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{
     Breadcrumb, Command, DeadLetter, Engine, EngineError, EngineView, Event, EventStream,
-    LoginSecret, NodeAttrs, NodeId, NodeKind, OpPhase, OverBudgetCause, Permission,
-    PlaintextContent, SnapshotChild, SnapshotView, Staleness, StatFs,
+    LoginSecret, NodeAttrs, NodeId, NodeKind, OpPhase, OverBudgetCause, Permission, SnapshotChild,
+    SnapshotView, Staleness, StatFs, WriteHandle, WriteTarget,
 };
 pub use gate::{
     Adopted, Candidate, GateError, GateRejection, GateStage, ReaderContext, RejectionReason,
@@ -93,9 +93,9 @@ pub use settings::{
 pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};
 pub use sync::{
     AppliedOp, BlockedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow,
-    HeadReconciliation, Link, NodeMeta, Op, OpKind, OpRecordError, OpResolution, PointerError,
-    PointerFetch, RecordClass, RecordReader, RecordSeal, Repair, Replaced, ReplayReport,
-    SessionRole, Snapshot, StageOutcome, StagedContent, TickCause, TickControl,
+    HeadReconciliation, Link, NewNode, NodeMeta, Op, OpKind, OpRecordError, OpResolution,
+    PointerError, PointerFetch, RecordClass, RecordReader, RecordSeal, Repair, Replaced,
+    ReplayReport, SessionRole, Snapshot, StagedContent, TickCause, TickControl,
     VaultPointerAdoption, apply_overlay, apply_repairs, classify, decode_queue, encode_op_record,
     focus_set, observed_repair, rebase_one, reconcile_head, record_content_root_cid, replay,
     resolve_vault_pointer, stage_op,

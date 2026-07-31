@@ -7,11 +7,17 @@
 //! entropy — no crypto of its own (AGENTS.md rule 4).
 
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, seal_chunk};
-use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN};
+use cipherbox_core::suite::aead::{KEY_LEN, NONCE_LEN, TAG_LEN};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use super::profile::ContentProfile;
 use crate::entropy::{Entropy, EntropyError};
+
+/// The sealed byte overhead one leaf adds to its plaintext chunk:
+/// `nonce(24) || ciphertext || tag(16)`, with ciphertext length equal to
+/// plaintext length. The staging admission ledger sizes a version from this, so
+/// the reservation is the exact sealed total rather than an estimate (#828).
+pub const SEALED_LEAF_OVERHEAD: u64 = (NONCE_LEN + TAG_LEN) as u64;
 
 /// A fresh random per-version content key (blueprint/engine.md, #26 D6). The
 /// terminal owner of the key bytes: zeroized on drop, borrowed (never copied)
@@ -84,15 +90,26 @@ pub fn frame_and_seal(
     } else {
         plaintext.chunks(profile.chunk_size()).collect()
     };
-    let mut leaves = Vec::with_capacity(framed.len());
-    for chunk in framed {
-        let mut nonce = [0u8; NONCE_LEN];
-        entropy.fill(&mut nonce)?;
-        let sealed = seal_chunk(key.as_bytes(), &nonce, chunk);
-        let cid = compute_cid(CONTENT_CID_CODEC, &sealed);
-        leaves.push(SealedChunk { cid, sealed });
-    }
-    Ok(leaves)
+    framed
+        .into_iter()
+        .map(|chunk| seal_one_chunk(key, chunk, entropy))
+        .collect()
+}
+
+/// Seal one already-framed chunk under `key`, drawing its nonce from injected
+/// `entropy`. The single seal step both the batch framer and the streaming
+/// writer ([`super::write::ContentWriter`]) go through, so the two cannot
+/// produce different bytes for the same chunk.
+pub fn seal_one_chunk(
+    key: &ContentKey,
+    chunk: &[u8],
+    entropy: &mut impl Entropy,
+) -> Result<SealedChunk, EntropyError> {
+    let mut nonce = [0u8; NONCE_LEN];
+    entropy.fill(&mut nonce)?;
+    let sealed = seal_chunk(key.as_bytes(), &nonce, chunk);
+    let cid = compute_cid(CONTENT_CID_CODEC, &sealed);
+    Ok(SealedChunk { cid, sealed })
 }
 
 #[cfg(test)]
@@ -121,6 +138,23 @@ mod tests {
             recovered.extend(open_chunk(key.as_bytes(), &leaf.sealed).unwrap());
         }
         assert_eq!(recovered, plaintext, "chunks reassemble to the original");
+    }
+
+    /// The staging reservation is exact only while this constant is the real
+    /// per-leaf overhead, so pin it against a sealed leaf rather than against a
+    /// second copy of the wire layout's arithmetic.
+    #[test]
+    fn the_leaf_overhead_constant_matches_a_real_sealed_leaf() {
+        let key = ContentKey::from_bytes([2u8; KEY_LEN]);
+        for len in [0usize, 1, 13, 16] {
+            let leaf =
+                seal_one_chunk(&key, &vec![0xABu8; len], &mut SeededEntropy::new(4)).unwrap();
+            assert_eq!(
+                leaf.sealed.len() as u64,
+                len as u64 + SEALED_LEAF_OVERHEAD,
+                "{len}-byte chunk: the reservation must match the sealed layout"
+            );
+        }
     }
 
     #[test]

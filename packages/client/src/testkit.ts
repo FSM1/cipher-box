@@ -14,6 +14,8 @@ import type {
   EventDescriptor,
   SnapshotDescriptor,
   WorkerMessage,
+  WriteHandle,
+  WriteTarget,
 } from './worker/protocol.js';
 
 /**
@@ -34,6 +36,7 @@ export const fakeWasmEnums = {
     Undecodable: 4,
     PayloadRefused: 5,
     AttemptsExhausted: 6,
+    ContentUnrecoverable: 7,
   },
 } as const;
 
@@ -170,8 +173,15 @@ export class FakeEngineTransport implements EngineTransport {
   readonly commands: CommandDescriptor[] = [];
   readonly snapshots: Uint8Array[] = [];
   readonly downloads: Uint8Array[] = [];
+  readonly beginWrites: Array<{ target: WriteTarget; size: number }> = [];
+  readonly chunks: Array<{ handle: WriteHandle; chunk: ArrayBuffer }> = [];
+  readonly commits: WriteHandle[] = [];
+  readonly aborts: WriteHandle[] = [];
   started: ArrayBuffer[] = [];
   closed = false;
+  /** What `beginWrite` hands back and what `commitWrite` resolves with. */
+  writeHandle: WriteHandle = 1n;
+  commitOpId = 42n;
   respond: (command: CommandDescriptor) => Promise<void> = () => Promise.resolve();
   respondSnapshot: (folder: Uint8Array) => Promise<SnapshotDescriptor> = (folder) =>
     Promise.resolve(emptySnapshot(folder));
@@ -187,6 +197,26 @@ export class FakeEngineTransport implements EngineTransport {
   command(command: CommandDescriptor): Promise<void> {
     this.commands.push(command);
     return this.respond(command);
+  }
+
+  beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
+    this.beginWrites.push({ target, size });
+    return Promise.resolve(this.writeHandle);
+  }
+
+  pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
+    this.chunks.push({ handle, chunk });
+    return Promise.resolve();
+  }
+
+  commitWrite(handle: WriteHandle): Promise<bigint> {
+    this.commits.push(handle);
+    return Promise.resolve(this.commitOpId);
+  }
+
+  abortWrite(handle: WriteHandle): Promise<void> {
+    this.aborts.push(handle);
+    return Promise.resolve();
   }
 
   snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {

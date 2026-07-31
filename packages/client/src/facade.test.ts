@@ -3,13 +3,22 @@ import { describe, expect, it } from 'vitest';
 import { EngineFacade } from './facade.js';
 import { emptySnapshot } from './testkit.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
-import type { CommandDescriptor, SnapshotDescriptor } from './worker/protocol.js';
+import type {
+  CommandDescriptor,
+  SnapshotDescriptor,
+  WriteHandle,
+  WriteTarget,
+} from './worker/protocol.js';
 
 class FakeTransport implements EngineTransport {
   started: ArrayBuffer[] = [];
   commands: Array<{ command: CommandDescriptor; transfer: Transferable[] }> = [];
   snapshots: Uint8Array[] = [];
   downloads: Uint8Array[] = [];
+  beginWrites: Array<{ target: WriteTarget; size: number }> = [];
+  chunks: Array<{ handle: WriteHandle; chunk: ArrayBuffer }> = [];
+  commits: WriteHandle[] = [];
+  aborts: WriteHandle[] = [];
   listeners: EngineEventListener[] = [];
   closed = false;
 
@@ -20,6 +29,26 @@ class FakeTransport implements EngineTransport {
 
   command(command: CommandDescriptor, transfer: Transferable[]): Promise<void> {
     this.commands.push({ command, transfer });
+    return Promise.resolve();
+  }
+
+  beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
+    this.beginWrites.push({ target, size });
+    return Promise.resolve(7n);
+  }
+
+  pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
+    this.chunks.push({ handle, chunk });
+    return Promise.resolve();
+  }
+
+  commitWrite(handle: WriteHandle): Promise<bigint> {
+    this.commits.push(handle);
+    return Promise.resolve(99n);
+  }
+
+  abortWrite(handle: WriteHandle): Promise<void> {
+    this.aborts.push(handle);
     return Promise.resolve();
   }
 
@@ -67,32 +96,54 @@ describe('EngineFacade', () => {
     expect(transport.closed).toBe(true);
   });
 
-  it('transfers file content on create and marks it as a file', async () => {
-    const transport = new FakeTransport();
-    const content = new Uint8Array([1, 2, 3]).buffer;
-    await new EngineFacade(transport).create(new Uint8Array(16), 'a.txt', 'file', content);
-
-    const { command, transfer } = transport.commands[0];
-    expect(command).toMatchObject({ kind: 'create', name: 'a.txt', nodeKind: 'file', content });
-    expect(transfer).toEqual([content]);
-  });
-
-  it('sends a folder create with no content and no transfer', async () => {
+  it('sends a create carrying no content and nothing to transfer', async () => {
     const transport = new FakeTransport();
     await new EngineFacade(transport).create(new Uint8Array(16), 'docs', 'folder');
 
     const { command, transfer } = transport.commands[0];
-    expect(command).toMatchObject({ kind: 'create', nodeKind: 'folder', content: null });
+    expect(command).toEqual({
+      kind: 'create',
+      parent: new Uint8Array(16),
+      name: 'docs',
+      nodeKind: 'folder',
+    });
     expect(transfer).toEqual([]);
   });
 
-  it('transfers content on updateContent', async () => {
+  it('streams a new file through begin/push/commit and returns the op id', async () => {
     const transport = new FakeTransport();
-    const content = new Uint8Array([4, 5]).buffer;
-    await new EngineFacade(transport).updateContent(new Uint8Array(16), content);
+    const facade = new EngineFacade(transport);
+    const parent = new Uint8Array(16).fill(1);
 
-    expect(transport.commands[0].command).toMatchObject({ kind: 'updateContent', content });
-    expect(transport.commands[0].transfer).toEqual([content]);
+    const handle = await facade.beginWrite({ parent, name: 'a.txt' }, 5);
+    expect(handle).toBe(7n);
+    expect(transport.beginWrites).toEqual([{ target: { parent, name: 'a.txt' }, size: 5 }]);
+
+    const first = new Uint8Array([1, 2, 3]).buffer;
+    const second = new Uint8Array([4, 5]).buffer;
+    await facade.pushChunk(handle, first);
+    await facade.pushChunk(handle, second);
+    expect(transport.chunks).toEqual([
+      { handle: 7n, chunk: first },
+      { handle: 7n, chunk: second },
+    ]);
+
+    await expect(facade.commitWrite(handle)).resolves.toBe(99n);
+    expect(transport.commits).toEqual([7n]);
+    // Content never rides a command: the write plane is the only path for bytes.
+    expect(transport.commands).toEqual([]);
+  });
+
+  it('opens a new version of an existing node and can abandon the handle', async () => {
+    const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
+    const node = new Uint8Array(16).fill(2);
+
+    const handle = await facade.beginWrite({ node }, 1024);
+    expect(transport.beginWrites).toEqual([{ target: { node }, size: 1024 }]);
+
+    await facade.abortWrite(handle);
+    expect(transport.aborts).toEqual([7n]);
   });
 
   it('carries the permission on a grant', async () => {

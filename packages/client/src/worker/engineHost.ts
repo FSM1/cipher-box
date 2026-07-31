@@ -4,7 +4,13 @@
  * never leaves it.
  */
 
-import type { CommandDescriptor, EventDescriptor, SnapshotDescriptor } from './protocol.js';
+import type {
+  CommandDescriptor,
+  EventDescriptor,
+  SnapshotDescriptor,
+  WriteHandle,
+  WriteTarget,
+} from './protocol.js';
 import type { EngineWasm } from './engineWasm.js';
 import { buildCommand, readEvent, readSnapshot } from './commandCodec.js';
 
@@ -16,6 +22,12 @@ import { buildCommand, readEvent, readSnapshot } from './commandCodec.js';
 export interface EngineHostLike {
   start(secret: ArrayBuffer): Promise<void>;
   command(command: CommandDescriptor): Promise<void>;
+  /** Opens a write handle for `size` plaintext bytes; the engine reserves them. */
+  beginWrite(target: WriteTarget, size: number): Promise<WriteHandle>;
+  pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void>;
+  /** Closes the handle and journals its op; resolves with the durable op id. */
+  commitWrite(handle: WriteHandle): Promise<bigint>;
+  abortWrite(handle: WriteHandle): Promise<void>;
   snapshot(folder: Uint8Array): Promise<SnapshotDescriptor>;
   download(node: Uint8Array): Promise<ArrayBuffer>;
   nextEvent(): Promise<EventDescriptor | null>;
@@ -54,6 +66,37 @@ export class EngineHost implements EngineHostLike {
 
   async command(command: CommandDescriptor): Promise<void> {
     await this.handle.command(buildCommand(this.wasm, command));
+  }
+
+  beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
+    if ('node' in target) {
+      return this.handle.beginWrite(
+        undefined,
+        undefined,
+        this.wasm.NodeId.fromBytes(target.node),
+        size
+      );
+    }
+    return this.handle.beginWrite(
+      this.wasm.NodeId.fromBytes(target.parent),
+      target.name,
+      undefined,
+      size
+    );
+  }
+
+  async pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
+    // The handle copies into WASM memory synchronously; a view over the
+    // transferred buffer is safe here.
+    await this.handle.pushChunk(handle, new Uint8Array(chunk));
+  }
+
+  commitWrite(handle: WriteHandle): Promise<bigint> {
+    return this.handle.commitWrite(handle);
+  }
+
+  async abortWrite(handle: WriteHandle): Promise<void> {
+    await this.handle.abortWrite(handle);
   }
 
   async snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {

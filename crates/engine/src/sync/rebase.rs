@@ -25,6 +25,8 @@ use std::collections::HashSet;
 
 use crate::seams::OpId;
 use crate::sync::model::{NodeMeta, Snapshot, collation_key, suffix_name};
+#[cfg(test)]
+use crate::sync::op::NewNode;
 use crate::sync::op::{Op, OpKind, Replaced};
 use crate::sync::record::{RecordClass, RecordReader};
 
@@ -94,6 +96,12 @@ pub enum DeadLetterReason {
     /// plane and never confirmed, so the publish may have landed: this reason
     /// is the one abandonment that must **not** retire (#819 as amended).
     AttemptsExhausted,
+    /// The op's staged content can never publish: its per-version key will not
+    /// open, its root block is gone or unreadable, or a leaf is missing from the
+    /// middle of the block set. The content key is a KDF non-edge, so none of
+    /// these is recoverable — the abandonment **releases** the version's staged
+    /// blocks rather than preserving bytes no key opens (#818).
+    ContentUnrecoverable,
 }
 
 /// One applied op, resolved for republish.
@@ -225,9 +233,9 @@ impl OpResolution {
 /// resolution and, on `Applied`, mutates `working` to reflect it.
 pub fn rebase_one(working: &mut Snapshot, local: &Snapshot, op: &Op) -> OpResolution {
     match &op.kind {
-        OpKind::Create {
-            parent, name, kind, ..
-        } => rebase_create(working, op, *parent, name, *kind),
+        OpKind::Create { parent, name, node } => {
+            rebase_create(working, op, *parent, name, node.kind())
+        }
         OpKind::Delete { target_sequence } => rebase_delete(working, op, *target_sequence),
         OpKind::Rename { new_name } => rebase_rename(working, op, new_name),
         OpKind::Relink {
@@ -653,6 +661,8 @@ mod tests {
         crate::sync::op::StagedContent {
             root_cid: b"k".to_vec(),
             plaintext_size: 1,
+            sealed_content_key: b"sealed-key-blob".to_vec(),
+            epoch: 1,
         }
     }
 
@@ -805,7 +815,14 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::create(id(2), id(0), "a.txt", NodeKind::File, 1, AT, None),
+            &Op::create(
+                id(2),
+                id(0),
+                "a.txt",
+                NewNode::File { content: None },
+                1,
+                AT,
+            ),
         );
         assert_eq!(
             res,
@@ -1168,10 +1185,11 @@ mod tests {
                 id(9),
                 id(8),
                 "x.txt",
-                NodeKind::File,
+                NewNode::File {
+                    content: Some(staged_k()),
+                },
                 1,
                 AT,
-                Some(staged_k()),
             ),
         );
         assert_eq!(res, OpResolution::DeadLetter(DeadLetterReason::TargetGone));
@@ -1206,15 +1224,36 @@ mod tests {
         let ops = vec![
             (
                 OpId(1),
-                Op::create(id(2), id(1), "a.txt", NodeKind::File, 1, AT, None),
+                Op::create(
+                    id(2),
+                    id(1),
+                    "a.txt",
+                    NewNode::File { content: None },
+                    1,
+                    AT,
+                ),
             ),
             (
                 OpId(2),
-                Op::create(id(3), id(1), "a.txt", NodeKind::File, 1, AT, None),
+                Op::create(
+                    id(3),
+                    id(1),
+                    "a.txt",
+                    NewNode::File { content: None },
+                    1,
+                    AT,
+                ),
             ), // collides → suffix
             (
                 OpId(3),
-                Op::create(id(4), id(99), "orphan", NodeKind::File, 1, AT, None),
+                Op::create(
+                    id(4),
+                    id(99),
+                    "orphan",
+                    NewNode::File { content: None },
+                    1,
+                    AT,
+                ),
             ), // dead-letter
         ];
         let report = replay(&gate_passing, &gate_passing, &ops);

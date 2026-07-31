@@ -102,8 +102,17 @@ window.cbStart = async (): Promise<string> => {
 };
 
 window.cbCreateFile = async (name: string): Promise<string> => {
+  const content = new Uint8Array([1, 2, 3]);
   try {
-    await client!.facade.create(rootNode, name, 'file', new Uint8Array([1, 2, 3]).buffer);
+    const handle = await client!.facade.beginWrite({ parent: rootNode, name }, content.byteLength);
+    try {
+      await client!.facade.pushChunk(handle, content.buffer);
+      await client!.facade.commitWrite(handle);
+    } catch (error) {
+      // A failed abort must not mask the write failure that triggered it.
+      await client!.facade.abortWrite(handle).catch(() => undefined);
+      throw error;
+    }
     return 'ok';
   } catch (error) {
     return settle(error);
@@ -112,7 +121,7 @@ window.cbCreateFile = async (name: string): Promise<string> => {
 
 window.cbCreateNode = async (name: string, kind: 'file' | 'folder'): Promise<string> => {
   try {
-    await client!.facade.create(rootNode, name, kind, null);
+    await client!.facade.create(rootNode, name, kind);
     return 'ok';
   } catch (error) {
     return settle(error);

@@ -21,7 +21,6 @@ use cipherbox_core::content::{
 };
 use cipherbox_core::error::{CodecError, Malformed};
 
-use super::chunk::SealedChunk;
 use super::limits::MAX_RESOLVED_RECORD_BYTES;
 use super::profile::ContentProfile;
 
@@ -139,8 +138,8 @@ const SIZE_KEY: &str = "size";
 const LINKS_KEY: &str = "links";
 
 /// An assembled content DAG: the version root block and the `contentCid` that
-/// addresses it. The leaf blocks live in the [`SealedChunk`]s passed to
-/// [`assemble`]; this is only the root the version metadata pins.
+/// addresses it. The leaf blocks it links are staged separately; this is only
+/// the root the version metadata pins.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentDag {
     /// The version's `contentCid` (binary CIDv1, `dag-cbor` codec) — a BLAKE3
@@ -151,30 +150,31 @@ pub struct ContentDag {
     pub root_block: Vec<u8>,
 }
 
-/// Assemble the ordered `leaves` into a version root addressed by its
+/// Assemble the ordered `leaf_cids` into a version root addressed by its
 /// `contentCid`. `plaintext_len` is the pre-seal byte length (the ranged-read
-/// size bound). Deterministic: identical leaves + length + profile give a
+/// size bound). Deterministic: identical links + length + profile give a
 /// byte-identical root block and CID.
+///
+/// Takes the leaf **addresses**, not the leaf blocks: a streaming write stages
+/// each sealed leaf as it is framed and never holds the set
+/// ([`ContentWriter`](super::write::ContentWriter)).
 ///
 /// Every caller-supplied invariant [`decode_root`] rejects on is enforced here
 /// too, in every build (not a release-compiled-out `debug_assert`): a mis-wired
 /// caller must never emit a root this crate's own decoder rejects, which would
 /// leave the published version permanently unreadable (AGENTS.md rule 8).
 pub fn assemble(
-    leaves: &[SealedChunk],
+    leaf_cids: &[Vec<u8>],
     plaintext_len: u64,
     profile: &ContentProfile,
 ) -> Result<ContentDag, DagError> {
-    if !leaves.iter().all(|leaf| is_raw_leaf_cid(&leaf.cid)) {
+    if !leaf_cids.iter().all(|cid| is_raw_leaf_cid(cid)) {
         return Err(DagError::MalformedLeafCid);
     }
-    if leaves.len() as u64 != expected_leaf_count(plaintext_len, profile.chunk_size() as u64) {
+    if leaf_cids.len() as u64 != expected_leaf_count(plaintext_len, profile.chunk_size() as u64) {
         return Err(DagError::LinkCountMismatch);
     }
-    let links = leaves
-        .iter()
-        .map(|leaf| Value::Bytes(leaf.cid.clone()))
-        .collect();
+    let links = leaf_cids.iter().cloned().map(Value::Bytes).collect();
     let mut root = Map::new();
     root.insert(VERSION_KEY, Value::Unsigned(ROOT_FORMAT_VERSION));
     root.insert(CHUNK_SIZE_KEY, Value::Unsigned(profile.chunk_size() as u64));
@@ -263,7 +263,60 @@ pub fn decode_root(root_block: &[u8]) -> Result<RootManifest, DagError> {
 /// share, so the two sides cannot diverge. `chunk_size` is nonzero at both call
 /// sites (a profile invariant on produce; the zero-chunk check runs first on
 /// decode).
-fn expected_leaf_count(plaintext_len: u64, chunk_size: u64) -> u64 {
+/// The encoded length of the root block [`assemble`] would produce for a
+/// version of `plaintext_len` bytes, without building one — what the staging
+/// admission ledger sizes a reservation from.
+///
+/// Arithmetic over the same canonical CBOR [`assemble`] emits, and held to it by
+/// `root_block_len_matches_the_assembled_root`. Fails closed on the same
+/// [`DagError::RootTooLarge`] ceiling, so a file past the flat-DAG limit is
+/// refused before a byte is staged.
+pub(crate) fn root_block_len(
+    plaintext_len: u64,
+    profile: &ContentProfile,
+) -> Result<u64, DagError> {
+    let leaves = expected_leaf_count(plaintext_len, profile.chunk_size() as u64);
+    // Saturating: a caller-declared size is an arbitrary `u64`, and an absurd
+    // one must reach the ceiling check below rather than wrap past it.
+    let len = (1u64 // the 4-entry map header
+        + text_key_len(VERSION_KEY) + uint_len(ROOT_FORMAT_VERSION)
+        + text_key_len(CHUNK_SIZE_KEY) + uint_len(profile.chunk_size() as u64)
+        + text_key_len(SIZE_KEY) + uint_len(plaintext_len)
+        + text_key_len(LINKS_KEY) + head_len(leaves))
+    .saturating_add(
+        leaves.saturating_mul(head_len(CONTENT_CID_LEN as u64) + CONTENT_CID_LEN as u64),
+    );
+    if len > MAX_RESOLVED_RECORD_BYTES as u64 {
+        return Err(DagError::RootTooLarge {
+            size: usize::try_from(len).unwrap_or(usize::MAX),
+            limit: MAX_RESOLVED_RECORD_BYTES,
+        });
+    }
+    Ok(len)
+}
+
+/// The bytes CBOR spends on an item head carrying `value` — the argument that
+/// prefixes a uint, a byte string's length, or an array's element count.
+fn head_len(value: u64) -> u64 {
+    match value {
+        0..=23 => 1,
+        24..=0xFF => 2,
+        0x100..=0xFFFF => 3,
+        0x1_0000..=0xFFFF_FFFF => 5,
+        _ => 9,
+    }
+}
+
+fn uint_len(value: u64) -> u64 {
+    head_len(value)
+}
+
+/// A map key's encoded length: the text head plus its bytes.
+fn text_key_len(key: &str) -> u64 {
+    head_len(key.len() as u64) + key.len() as u64
+}
+
+pub(crate) fn expected_leaf_count(plaintext_len: u64, chunk_size: u64) -> u64 {
     if plaintext_len == 0 {
         1
     } else {
@@ -292,12 +345,12 @@ mod tests {
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, verify_cid};
     use cipherbox_core::suite::aead::KEY_LEN;
 
-    fn framed(plaintext: &[u8], seed: u64) -> (Vec<SealedChunk>, ContentProfile) {
+    fn framed(plaintext: &[u8], seed: u64) -> (Vec<Vec<u8>>, ContentProfile) {
         let profile = ContentProfile::CI;
         let key = ContentKey::from_bytes([7u8; KEY_LEN]);
         let leaves =
             frame_and_seal(plaintext, &key, &mut SeededEntropy::new(seed), &profile).unwrap();
-        (leaves, profile)
+        (leaves.into_iter().map(|leaf| leaf.cid).collect(), profile)
     }
 
     /// Hand-build a root block with arbitrary fields, bypassing `assemble`, to
@@ -349,18 +402,14 @@ mod tests {
         let manifest = decode_root(&dag.root_block).unwrap();
         assert_eq!(manifest.chunk_size, profile.chunk_size() as u64);
         assert_eq!(manifest.size, plaintext.len() as u64);
-        assert_eq!(
-            manifest.leaf_cids,
-            leaves.iter().map(|l| l.cid.clone()).collect::<Vec<_>>(),
-            "links preserve file order"
-        );
+        assert_eq!(manifest.leaf_cids, leaves, "links preserve file order");
     }
 
     #[test]
     fn leaf_cids_use_the_raw_codec_root_uses_dag_cbor() {
         let (leaves, profile) = framed(b"abc", 5);
         let dag = assemble(&leaves, 3, &profile).unwrap();
-        assert_eq!(leaves[0].cid[1], CONTENT_CID_CODEC, "leaf is raw");
+        assert_eq!(leaves[0][1], CONTENT_CID_CODEC, "leaf is raw");
         assert_eq!(dag.content_cid[1], DAG_ROOT_CODEC, "root is dag-cbor");
     }
 
@@ -455,14 +504,11 @@ mod tests {
         assert_eq!(manifest.leaf_cids.len(), 1);
     }
 
-    /// `count` distinct well-formed leaf CIDs. `assemble` reads only `leaf.cid`,
-    /// so the root can be sized without materializing any file bytes.
-    fn dummy_leaves(count: usize) -> Vec<SealedChunk> {
+    /// `count` distinct well-formed leaf CIDs — the root can be sized without
+    /// materializing any file bytes.
+    fn dummy_leaves(count: usize) -> Vec<Vec<u8>> {
         (0..count)
-            .map(|i| SealedChunk {
-                cid: compute_cid(CONTENT_CID_CODEC, &(i as u64).to_be_bytes()),
-                sealed: Vec::new(),
-            })
+            .map(|i| compute_cid(CONTENT_CID_CODEC, &(i as u64).to_be_bytes()))
             .collect()
     }
 
@@ -516,14 +562,52 @@ mod tests {
     fn assemble_rejects_a_malformed_leaf_cid_in_every_build() {
         // The encode-side half of `decode_root`'s leaf-CID reject (rule 8).
         let profile = ContentProfile::CI;
-        let leaves = vec![SealedChunk {
-            cid: b"not-a-content-cid".to_vec(),
-            sealed: Vec::new(),
-        }];
+        let leaves = vec![b"not-a-content-cid".to_vec()];
         assert_eq!(
             assemble(&leaves, profile.chunk_size() as u64, &profile),
             Err(DagError::MalformedLeafCid)
         );
+    }
+
+    /// The arithmetic sizing and the real encoder must never drift: the staging
+    /// reservation is exact only if this holds at every leaf count where a CBOR
+    /// head width changes.
+    #[test]
+    fn root_block_len_matches_the_assembled_root() {
+        for profile in [ContentProfile::CI, ContentProfile::PRODUCTION] {
+            let chunk = profile.chunk_size() as u64;
+            // Every CBOR head width the links array and the `size` uint cross:
+            // 1, 2, 3 and 5 bytes.
+            for leaves in [0u64, 1, 23, 24, 255, 256, 300, 65_535, 65_536] {
+                let size = leaves * chunk;
+                let assembled = assemble(&dummy_leaves(leaves.max(1) as usize), size, &profile)
+                    .expect("assembles")
+                    .root_block
+                    .len() as u64;
+                assert_eq!(
+                    root_block_len(size, &profile).unwrap(),
+                    assembled,
+                    "{leaves} leaves at chunk {chunk}"
+                );
+            }
+            // A short tail exercises a `size` that is not a chunk multiple.
+            let size = 2 * chunk + 1;
+            let assembled = assemble(&dummy_leaves(3), size, &profile)
+                .expect("assembles")
+                .root_block
+                .len() as u64;
+            assert_eq!(root_block_len(size, &profile).unwrap(), assembled);
+        }
+    }
+
+    #[test]
+    fn root_block_len_refuses_a_file_past_the_flat_dag_ceiling() {
+        let profile = ContentProfile::PRODUCTION;
+        let size = 120_000u64 * profile.chunk_size() as u64;
+        assert!(matches!(
+            root_block_len(size, &profile),
+            Err(DagError::RootTooLarge { .. })
+        ));
     }
 
     #[test]

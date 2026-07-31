@@ -235,6 +235,40 @@ describe('LocalTransport', () => {
     expect(posted.transfer).toEqual([secret]);
   });
 
+  it('transfers the chunk buffer on pushChunk and resolves the write handle and op id', async () => {
+    const worker = new FakeWorker();
+    const transport = new LocalTransport(worker);
+    worker.emit({ type: 'ready' });
+
+    const parent = new Uint8Array(16).fill(1);
+    const begun = transport.beginWrite({ parent, name: 'a.txt' }, 3);
+    await tick();
+    const beginRequest = worker.posted[0];
+    expect(beginRequest.message).toMatchObject({
+      type: 'beginWrite',
+      target: { parent, name: 'a.txt' },
+      size: 3,
+    });
+    worker.emit({ type: 'response', id: beginRequest.message.id, ok: true, result: 11n });
+    await expect(begun).resolves.toBe(11n);
+
+    const chunk = new Uint8Array([1, 2, 3]).buffer;
+    const pushed = transport.pushChunk(11n, chunk);
+    await tick();
+    const pushRequest = worker.posted[1];
+    expect(pushRequest.message).toMatchObject({ type: 'pushChunk', handle: 11n, chunk });
+    expect(pushRequest.transfer).toEqual([chunk]);
+    worker.emit({ type: 'response', id: pushRequest.message.id, ok: true });
+    await expect(pushed).resolves.toBeUndefined();
+
+    const committed = transport.commitWrite(11n);
+    await tick();
+    const commitRequest = worker.posted[2];
+    expect(commitRequest.message).toMatchObject({ type: 'commitWrite', handle: 11n });
+    worker.emit({ type: 'response', id: commitRequest.message.id, ok: true, result: 2048n });
+    await expect(committed).resolves.toBe(2048n);
+  });
+
   it('latches terminal failure on fatal: in-flight and later requests both reject, not hang', async () => {
     const worker = new FakeWorker();
     const transport = new LocalTransport(worker);

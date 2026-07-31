@@ -12,8 +12,7 @@ use std::collections::BTreeSet;
 use cipherbox_core::codec::{Value, decode};
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str, verify_cid};
 use cipherbox_engine::content::{
-    ContentProfile, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, SealedChunk, assemble,
-    decode_root,
+    ContentProfile, DAG_ROOT_CODEC, DagError, ROOT_FORMAT_VERSION, assemble, decode_root,
 };
 use serde::Deserialize;
 
@@ -168,21 +167,12 @@ fn profile_of(chunk_size: u64) -> ContentProfile {
     ContentProfile::new(chunk_size as usize).expect("a vector's chunk size is nonzero")
 }
 
-/// Leaves carrying the given links. `assemble` reads only the CID, so a vector
-/// need not commit the sealed payload.
-fn leaves_with(cids: impl IntoIterator<Item = Vec<u8>>) -> Vec<SealedChunk> {
-    cids.into_iter()
-        .map(|cid| SealedChunk {
-            cid,
-            sealed: Vec::new(),
-        })
-        .collect()
-}
-
 /// A capacity vector's synthetic links: the `raw` content CID of the big-endian
 /// link index, the rule the generator froze the root CID under.
-fn capacity_leaves(count: u64) -> Vec<SealedChunk> {
-    leaves_with((0..count).map(|i| compute_cid(CONTENT_CID_CODEC, &i.to_be_bytes())))
+fn capacity_leaves(count: u64) -> Vec<Vec<u8>> {
+    (0..count)
+        .map(|i| compute_cid(CONTENT_CID_CODEC, &i.to_be_bytes()))
+        .collect()
 }
 
 #[test]
@@ -270,12 +260,8 @@ fn accept_vectors_reproduce_the_frozen_root_bytes() {
     let m = manifest();
     for v in root_accept_vectors(&m) {
         let leaf_cids: Vec<Vec<u8>> = v.leaf_cids.iter().map(|c| unhex(c)).collect();
-        let dag = assemble(
-            &leaves_with(leaf_cids.clone()),
-            v.size,
-            &profile_of(v.chunk_size),
-        )
-        .unwrap_or_else(|e| panic!("{}: accept vector must assemble, got {e:?}", v.name));
+        let dag = assemble(&leaf_cids, v.size, &profile_of(v.chunk_size))
+            .unwrap_or_else(|e| panic!("{}: accept vector must assemble, got {e:?}", v.name));
 
         assert_eq!(
             dag.root_block,

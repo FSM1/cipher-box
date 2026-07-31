@@ -89,13 +89,7 @@ fn node_id_bytes_cross_as_uint8array_and_reject_bad_length() {
 fn command_builders_expose_stable_names() {
     let node = NodeId::from_bytes(&[0u8; 16]).expect("valid node id");
     assert_eq!(
-        Command::create(
-            &node,
-            "photo.jpg".into(),
-            NodeKind::File,
-            Some(vec![1, 2, 3])
-        )
-        .name(),
+        Command::create(&node, "photo.jpg".into(), NodeKind::File).name(),
         "create"
     );
     assert_eq!(
