@@ -749,6 +749,75 @@ async fn a_content_version_uploads_registers_and_retires_as_one_block_set() {
         .expect("a replayed retire is a no-op");
 }
 
+/// An abandoned version never registers: its blocks uploaded, the publish then
+/// failed, and the `upload` calls alone are what created the accountable pin
+/// rows. Retirement therefore has to name **every** block — a root-only retire
+/// leaves the leaves charged forever against an account that can no longer
+/// reach them (#916). Hosted bytes must come back to the pre-upload figure.
+#[tokio::test]
+async fn an_abandoned_versions_whole_block_set_retires_back_to_the_pre_upload_figure() {
+    let base = require_stack!(
+        "an_abandoned_versions_whole_block_set_retires_back_to_the_pre_upload_figure"
+    );
+    let client = fresh_account(&base).await;
+
+    // Refused mid-set, the way a 413 halts a drain: the leaves before the halt
+    // landed, the ones after never did, and the root never went up at all.
+    let landed: Vec<Vec<u8>> = (0..3u8).map(|i| vec![0xB0 | i; 96]).collect();
+    let mut targets = vec!["bafyContractAbandonedRoot".to_owned()];
+    for block in &landed {
+        targets.push(
+            client
+                .upload(&leaf_cid(block), block)
+                .await
+                .unwrap_or_else(|e| panic!("a version block uploads: {e:?}"))
+                .cid,
+        );
+    }
+    targets.push("bafyContractAbandonedLeafNeverSent".to_owned());
+    assert_eq!(
+        client.quota().await.expect("quota after upload").used_bytes,
+        (landed.len() * 96) as u64,
+        "an upload with no registration behind it still charges the account"
+    );
+
+    client
+        .retire(&targets)
+        .await
+        .expect("an abandoned version retires its whole block set");
+    assert_eq!(
+        client.quota().await.expect("quota after retire").used_bytes,
+        0,
+        "abandonment returns the account to its pre-upload figure"
+    );
+}
+
+/// The retire batch is bounded fail-closed (blueprint/api.md, "Batch bounds"):
+/// an oversize array is refused, never truncated or partially applied. That
+/// refusal is what makes the engine's client-side chunking mandatory rather than
+/// cosmetic, so the bound belongs under the live gate.
+#[tokio::test]
+async fn an_oversize_retire_batch_is_refused_fail_closed() {
+    let base = require_stack!("an_oversize_retire_batch_is_refused_fail_closed");
+    let client = fresh_account(&base).await;
+
+    // One past the documented 1000-item cap.
+    let targets: Vec<String> = (0..1001).map(|i| format!("bafyContractBound{i}")).collect();
+    let error = client
+        .retire(&targets)
+        .await
+        .expect_err("an oversize retire batch must be refused");
+    assert!(
+        matches!(error, ApiError::Status { status: 400, .. }),
+        "the retire bound is fail-closed: a 400, got {error:?}"
+    );
+    // The cap itself is the boundary the engine chunks to, so it must pass.
+    client
+        .retire(&targets[..1000])
+        .await
+        .expect("a batch at the cap is accepted");
+}
+
 // --- mailbox (blueprint/api.md, Mailbox; #827) ------------------------------
 
 /// An account addressable as a mailbox recipient: the client plus its identity

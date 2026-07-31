@@ -92,9 +92,9 @@ pub enum DeadLetterReason {
     /// The network refused the op's own bytes for a reason no retry changes —
     /// an over-cap payload, not a full account.
     PayloadRefused,
-    /// The op's drain attempt budget ran out. Its record reached the record
-    /// plane and never confirmed, so the publish may have landed: this reason
-    /// is the one abandonment that must **not** retire (#819 as amended).
+    /// The op's drain attempt budget ran out. A budget spent before the record
+    /// PUT retires what the op uploaded; once a PUT is acked the publish may
+    /// have landed, so that half retires nothing (#819 as amended).
     AttemptsExhausted,
     /// The op's staged content can never publish: its per-version key will not
     /// open, its root block is gone or unreadable, or a leaf is missing from the

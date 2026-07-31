@@ -2222,20 +2222,13 @@ fn a_publish_that_never_confirms_dead_letters_once_its_attempt_budget_runs_out()
 
     // The budget is spent one non-confirming publish per pass: finite, but more
     // than one — a single lost race is a retry, not an abandonment.
-    let dead_letters =
-        |engine: &Engine<FakeSeamTypes>| block_on(engine.snapshot(ROOT)).unwrap().dead_letters;
-    let mut passes = 0;
-    while dead_letters(&engine).is_empty() {
-        tick(&world, &engine, &mut tasks);
-        passes += 1;
-        assert!(passes < 50, "the attempt budget must be finite");
-    }
+    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
     assert!(
         passes > 1,
         "one non-confirming publish is a retry, not an abandonment"
     );
     assert_eq!(
-        dead_letters(&engine),
+        dead_letters,
         vec![DeadLetter {
             op_id,
             reason: DeadLetterReason::AttemptsExhausted
@@ -2275,11 +2268,75 @@ fn an_abandoned_create_retires_the_child_name_it_registered_exactly_once() {
     );
 }
 
-/// An abandoned `updateContent` uploaded a version root no record will ever
-/// link — its file still publishes the versions it had — so the root leaves the
-/// republish inventory with the op while the file's own name stays live.
+/// An abandoned `updateContent` uploaded a version no record will ever link —
+/// its file still publishes the versions it had — so every block it uploaded
+/// leaves the republish inventory with the op while the file's own name stays
+/// live. Each upload creates its own charged pin row, so a leaf the root
+/// retirement misses spends account quota forever (#916).
 #[test]
-fn an_abandoned_version_retires_its_root_and_keeps_the_files_name() {
+fn an_abandoned_version_retires_every_block_it_uploaded_and_keeps_the_files_name() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (engine, mut tasks, version) = stage_a_second_version(&world, &blocks, &alice);
+
+    refuse_uploads_from(&blocks, MID_SET_UPLOAD, || {
+        upload_413(Some("UPLOAD_TOO_LARGE"))
+    });
+    tick(&world, &engine, &mut tasks);
+
+    let landed = version
+        .iter()
+        .filter(|cid| blocks.get(cid).is_some())
+        .count();
+    assert!(
+        (1..version.len()).contains(&landed),
+        "the halt came mid-set: some of the version is charged, not all of it"
+    );
+    assert_eq!(
+        retire_targets(&alice),
+        version,
+        "every uploaded block leaves the inventory; the file's own name does not"
+    );
+}
+
+/// Exhausting the budget on refusals raised **before** any record PUT is an
+/// abandonment too: nothing can link the version, so it retires what its uploads
+/// charged, exactly as a permanent refusal does (#916). The acked-PUT arm is the
+/// opposite case and retires nothing.
+#[test]
+fn a_version_whose_upload_budget_runs_out_retires_every_block_it_uploaded() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (engine, mut tasks, version) = stage_a_second_version(&world, &blocks, &alice);
+
+    // An unattributable 413 is charged, never abandoned on one response, so the
+    // set stalls with rows already charged until the budget runs out.
+    refuse_uploads_from(&blocks, MID_SET_UPLOAD, proxy_413);
+    let (dead_letters, _) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        dead_letters
+            .iter()
+            .map(|letter| letter.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::AttemptsExhausted]
+    );
+    assert_eq!(
+        retire_targets(&alice),
+        version,
+        "an exhausted budget retires the same block set a permanent refusal does"
+    );
+}
+
+/// The opposite arm: an acked PUT may already be resolvable at the name, so
+/// exhausting the budget there retires nothing. Unpinning content a live record
+/// still names is loss, where leaving the rows charged is only a leak (#916).
+#[test]
+fn an_unconfirmed_publish_never_retires_the_version_it_may_already_name() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -2291,28 +2348,92 @@ fn an_abandoned_version_retires_its_root_and_keeps_the_files_name() {
         name: "photo.bin".into(),
     };
     write_file(&mut engine, target, &(0..200u8).collect::<Vec<_>>()).unwrap();
-    tick(&world, &engine, &mut tasks);
-    let file = child_id(&engine, ROOT, "photo.bin");
-    assert!(retire_targets(&alice).is_empty(), "the create landed");
+    jam_name(&world.record_store, child_id(&engine, ROOT, "photo.bin"));
 
-    write_file(
-        &mut engine,
-        WriteTarget::Version { node: file },
-        &(0..120u8).collect::<Vec<_>>(),
-    )
-    .unwrap();
-    let version_root = block_on(async {
-        let queued = alice.staging_store.queued_ops().await.unwrap();
-        record_content_root_cid(&queued[0].1).unwrap().unwrap()
-    });
-    blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("UPLOAD_TOO_LARGE")))));
-    tick(&world, &engine, &mut tasks);
-
+    let (dead_letters, _) = tick_until_dead_lettered(&world, &engine, &mut tasks);
     assert_eq!(
-        retire_targets(&alice),
-        vec![encode_content_cid_str(&version_root)],
-        "the version root leaves the inventory; the file's own name does not"
+        dead_letters
+            .iter()
+            .map(|letter| letter.reason)
+            .collect::<Vec<_>>(),
+        vec![DeadLetterReason::AttemptsExhausted]
     );
+    assert!(
+        uploads(&alice) > 0,
+        "the version uploaded before the publish burned its budget"
+    );
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "an acked PUT may be live at the name, so its blocks are not ours to unpin"
+    );
+}
+
+/// The upload a refusal lands on to halt a 200-byte version mid-set: past the
+/// first leaves, well short of the 13 the CI framing produces.
+const MID_SET_UPLOAD: usize = 8;
+
+/// Refuse every upload from the `nth` on, so a halted set stays halted across
+/// the passes that retry it.
+fn refuse_uploads_from(blocks: &Blocks, nth: usize, refusal: fn() -> SeamResult<HttpResponse>) {
+    let mut sent = 0;
+    blocks.refuse_upload(Box::new(move |_| {
+        sent += 1;
+        (sent >= nth).then(refusal)
+    }));
+}
+
+/// Land one multi-leaf file, then queue a second version over it. Returns the
+/// queued version's whole block set as the registry names it: the root first,
+/// then every leaf in file order.
+fn stage_a_second_version(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+) -> (Engine<FakeSeamTypes>, Vec<BoxedTask>, Vec<String>) {
+    let (mut engine, _events, mut tasks) = boot(world, blocks, device, 42);
+    let target = WriteTarget::NewFile {
+        parent: ROOT,
+        name: "photo.bin".into(),
+    };
+    write_file(&mut engine, target, &(0..200u8).collect::<Vec<_>>()).unwrap();
+    tick(world, &engine, &mut tasks);
+    assert!(retire_targets(device).is_empty(), "the create landed");
+
+    let file = child_id(&engine, ROOT, "photo.bin");
+    let next: Vec<u8> = (0..200u8).rev().collect();
+    write_file(&mut engine, WriteTarget::Version { node: file }, &next).unwrap();
+    let version = block_on(async {
+        let queued = device.staging_store.queued_ops().await.unwrap();
+        let root_cid = record_content_root_cid(&queued[0].1).unwrap().unwrap();
+        let root_block = device
+            .staging_store
+            .staged_bytes(&root_cid)
+            .await
+            .unwrap()
+            .unwrap();
+        core::iter::once(&root_cid)
+            .chain(&decode_root(&root_block).unwrap().leaf_cids)
+            .map(|cid| encode_content_cid_str(cid))
+            .collect()
+    });
+    (engine, tasks, version)
+}
+
+/// Tick until the drain dead-letters something, and report how many passes that
+/// took — the budget is finite, but spending it takes more than one pass.
+fn tick_until_dead_lettered(
+    world: &FakeWorld,
+    engine: &Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+) -> (Vec<DeadLetter>, usize) {
+    let dead_letters = || block_on(engine.snapshot(ROOT)).unwrap().dead_letters;
+    let mut passes = 0;
+    while dead_letters().is_empty() {
+        tick(world, engine, tasks);
+        passes += 1;
+        assert!(passes < 50, "the attempt budget must be finite");
+    }
+    (dead_letters(), passes)
 }
 
 #[test]
