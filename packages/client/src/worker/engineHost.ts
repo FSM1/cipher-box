@@ -28,7 +28,6 @@ export interface EngineHostLike {
   /** Closes the handle and journals its op; resolves with the durable op id. */
   commitWrite(handle: WriteHandle): Promise<bigint>;
   abortWrite(handle: WriteHandle): Promise<void>;
-  /** Reads `folder`, or the engine's own root when `folder` is `null`. */
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
   download(node: Uint8Array): Promise<ArrayBuffer>;
   nextEvent(): Promise<EventDescriptor | null>;

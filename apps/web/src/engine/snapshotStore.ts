@@ -89,7 +89,6 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     inFlight = true;
     const id = ++generation;
     const seq = stalenessSeq;
-    // No focus asks the engine for its own root, never names one.
     void client.facade
       .snapshot(focus)
       .then(
