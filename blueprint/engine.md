@@ -188,6 +188,37 @@ name → envelope grant blob → seeds → render. Residual, honestly scoped
 epochs (which revoke nobody — pure staleness) plus within-epoch staleness;
 revocation boundaries cannot be rolled back.
 
+## Vault settings load
+
+The vault settings record (`CONTEXT.md`) resolves at cold start, ahead of any
+vault resolve, and never blocks it: every failure degrades inside the sync
+timing profile's settings budget, measured on the Scheduler seam. What it
+degrades _to_ is a trust decision, because unlike every other resolve its
+degraded outcome applies a different policy rather than showing stale data.
+
+- **Last-known-good before defaults.** The head block of a settings record
+  that cleared its sequence floor and opened is cached in `SnapshotCache` —
+  ciphertext only, like every other value in that store. A degraded load
+  prefers that copy over the built-in defaults and reports it as stale
+  alongside the reason it degraded. Being cached buys the bytes nothing: the
+  copy clears the same seal open and the same body grammar a freshly fetched
+  head block does, or it is discarded.
+- **A degraded load never widens placement.** Withholding the record, running
+  the budget out, making its head block unreadable, or failing the floor read
+  must not move a member from `External` onto CipherBox's hosted store.
+  Reverting an explicit placement choice to the hosted default is precisely
+  what an adversary who controls the record plane gains, so a load that cannot
+  authenticate the member's current choice must not invent a wider one.
+- **No last-known-good copy fails the placement decision closed.** The
+  built-in defaults describe a first run — no record anywhere, no durable
+  floor. Under any other reason, with no cached copy to fall back on, a
+  placement decision refuses the hosted upload rather than resolving to
+  `PinMode::Hosted`; the member is told their settings are unavailable.
+- **Residual.** The cached copy is bound to the account by its seal, not to a
+  point in time: a party who can write this device's durable store can replay
+  an older copy the account itself authored. Bounding that needs a freshness
+  anchor the settings body does not carry today.
+
 ## Sync core
 
 One model, two trigger sources (#33 D2): web drives it from navigation and the

@@ -9,12 +9,14 @@
 //! server-free; the head block still comes from the gateway set, and publishing
 //! still traverses registration like every other record.
 //!
-//! **A settings record that will not resolve never blocks cold start.** Every
-//! failure degrades to [`VaultSettings::default`], and the whole load is
-//! bounded by [`SyncTimingProfile::settings_load_budget`] measured on the
-//! injected scheduler. The reason is reported rather than swallowed
+//! **A settings record that will not resolve never blocks cold start.** A
+//! degraded load prefers this device's last-known-good copy and only then
+//! [`VaultSettings::default`], each step bounded by
+//! [`SyncTimingProfile::settings_load_budget`] measured on the injected
+//! scheduler. The reason is reported rather than swallowed
 //! ([`DefaultsReason`]) — silently reverting a member's placement choice to the
-//! hosted default is what an adversary who can withhold the record gains.
+//! hosted default is what an adversary who can withhold the record gains, so a
+//! degraded load never widens placement (blueprint/engine.md).
 
 use core::future::{Future, poll_fn};
 use core::num::NonZeroU64;
@@ -42,7 +44,9 @@ use crate::net::record_publish::{
     PreflightError, RecordPublishError, RecordPublishRequest, preflight_settings, publish_record,
 };
 use crate::profile::SyncTimingProfile;
-use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamError};
+use crate::seams::{
+    CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamError, SnapshotCache,
+};
 
 /// The owner's client configuration, sealed into the vault settings record.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,7 +128,18 @@ pub enum DefaultsReason {
 pub enum SettingsLoad {
     /// The published record opened and validated.
     Resolved(VaultSettings),
-    /// No usable record; the documented defaults apply.
+    /// No usable published record, but this device's last-known-good copy
+    /// opened and validated: stale but still the member's own choice.
+    Stale {
+        /// The settings this device last resolved.
+        settings: VaultSettings,
+        /// Why the published record was not used.
+        reason: DefaultsReason,
+    },
+    /// Neither a published record nor a cached one. The documented defaults
+    /// describe a first run; a placement decision taken under any other reason
+    /// fails closed rather than resolving to [`PinMode::Hosted`]
+    /// (blueprint/engine.md).
     Defaults(DefaultsReason),
 }
 
@@ -207,15 +222,18 @@ where
     Ok(receipt)
 }
 
-/// Resolve the vault settings record, bounded by
+/// Resolve the vault settings record, each stage bounded by
 /// [`SyncTimingProfile::settings_load_budget`]. Never fails: a record that will
-/// not resolve, will not open, or will not validate yields the documented
-/// defaults, because cold start must proceed without one.
-pub async fn load_settings<T, H, F, Sch>(
+/// not resolve, will not open, or will not validate degrades to this device's
+/// last-known-good settings and only then to the documented defaults, because
+/// cold start must proceed without one.
+#[allow(clippy::too_many_arguments)]
+pub async fn load_settings<T, H, F, Sn, Sch>(
     transport: &T,
     gateway: &Gateway,
     http: &H,
     floors: &F,
+    snapshots: &Sn,
     scheduler: &Sch,
     profile: &SyncTimingProfile,
     login_secret: &[u8],
@@ -224,21 +242,72 @@ where
     T: RecordTransport,
     H: Http,
     F: FloorStore,
+    Sn: SnapshotCache,
     Sch: Scheduler,
 {
     let name = settings_name(login_secret);
     let enc_secret = kdf::enc_subkey(login_secret);
-    let load = resolve_settings(transport, gateway, http, floors, &enc_secret, &name);
-    within(scheduler, profile.settings_load_budget, load)
+    let budget = profile.settings_load_budget;
+    let load = resolve_settings(
+        transport,
+        gateway,
+        http,
+        floors,
+        snapshots,
+        &enc_secret,
+        &name,
+    );
+    let loaded = within(scheduler, budget, load)
         .await
-        .unwrap_or(SettingsLoad::Defaults(DefaultsReason::TimedOut))
+        .unwrap_or(SettingsLoad::Defaults(DefaultsReason::TimedOut));
+    let SettingsLoad::Defaults(reason) = loaded else {
+        return loaded;
+    };
+    // Every degraded reason takes this arm: whichever way the published record
+    // became unusable, the settings this device last resolved outrank the
+    // hosted defaults, and reaching for them must not outlast the budget either.
+    match within(
+        scheduler,
+        budget,
+        last_known_good(snapshots, &enc_secret, &name),
+    )
+    .await
+    .flatten()
+    {
+        Some(settings) => SettingsLoad::Stale { settings, reason },
+        None => SettingsLoad::Defaults(reason),
+    }
 }
 
-async fn resolve_settings<T, H, F>(
+/// The settings head block's own snapshot-cache key, kept apart from the
+/// record-plane keys [`crate::net::resolve`] writes — those hold record bytes,
+/// this holds the block the record anchors.
+fn settings_cache_key(name: &IpnsName) -> Vec<u8> {
+    let mut key = b"settings-head/".to_vec();
+    key.extend_from_slice(name.as_str().as_bytes());
+    key
+}
+
+/// Re-open this device's cached settings head block. Being cached buys the
+/// bytes nothing: they clear the same seal and the same body grammar a freshly
+/// fetched block does, so a copy this build cannot authenticate is discarded
+/// rather than applied.
+async fn last_known_good<Sn: SnapshotCache>(
+    snapshots: &Sn,
+    enc_secret: &X25519Secret,
+    name: &IpnsName,
+) -> Option<VaultSettings> {
+    let block = snapshots.get(&settings_cache_key(name)).await.ok()??;
+    let body = open_settings_record(enc_secret, &block).ok()?;
+    decode_settings_body(&body).ok()
+}
+
+async fn resolve_settings<T, H, F, Sn>(
     transport: &T,
     gateway: &Gateway,
     http: &H,
     floors: &F,
+    snapshots: &Sn,
     enc_secret: &X25519Secret,
     name: &IpnsName,
 ) -> SettingsLoad
@@ -246,6 +315,7 @@ where
     T: RecordTransport,
     H: Http,
     F: FloorStore,
+    Sn: SnapshotCache,
 {
     let key = name.as_str().as_bytes();
     // The settings record belongs to no scope and carries no epoch, so the
@@ -278,9 +348,12 @@ where
     let Ok(settings) = decode_settings_body(&body) else {
         return SettingsLoad::Defaults(DefaultsReason::Unreadable);
     };
+    // Only a record that cleared its floor and opened becomes last-known-good,
+    // and what is stored is the sealed block, so ciphertext-only-at-rest holds.
+    let _ = snapshots.put(&settings_cache_key(name), &block).await;
     // Advancing behind the open, never ahead of it, is the floor law: a record
-    // that will not open must not raise the bar the next resolve is held to. A
-    // failed raise is host I/O, not a verdict on settings we just authenticated.
+    // that will not open must not raise the bar the next resolve is held to.
+    // Neither store failing is a verdict on settings we just authenticated.
     let _ = floor::advance_sequence_on_unseal(floors, key, sequence).await;
     SettingsLoad::Resolved(settings)
 }
