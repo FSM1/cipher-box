@@ -33,30 +33,36 @@ const GIB = 1024 * 1024 * 1024;
 /** Base32 alphabet of the CID's multibase, per `content-cid.ts`'s `CONTENT_CID_PATTERN`. */
 const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
 
-/**
- * Deterministic CID from bytes, shaped like a real `raw`-codec content CID
- * (`bafkr4i` prefix + 52 base32 chars = the 58-char body `contentCidCodec`
- * requires) so it survives the controller's shape check.
- */
+/** The CID prefix each content-plane codec takes, per `content-cid.ts`. */
+const CODEC_PREFIX = { raw: 'bafkr4i', 'dag-cbor': 'bafyr4i' } as const;
+
 class FakePinStore extends PinStore {
   readonly pinned: string[] = [];
   readonly unpinned: string[] = [];
   failPin = false;
 
-  cidFor(bytes: Uint8Array): string {
+  /**
+   * Deterministic CID from bytes, shaped like a real content CID (7-char codec
+   * prefix + 52 base32 chars = the 58-char body `contentCidCodec` requires) so
+   * it survives the controller's shape check.
+   */
+  cidFor(bytes: Uint8Array, codec: keyof typeof CODEC_PREFIX = 'raw'): string {
     const hex = createHash('sha256').update(bytes).digest('hex');
     const suffix = hex
       .slice(0, 52)
       .split('')
       .map((nibble) => BASE32_ALPHABET[parseInt(nibble, 16)])
       .join('');
-    return `bafkr4i${suffix}`;
+    return `${CODEC_PREFIX[codec]}${suffix}`;
   }
   override async pin(cid: string, bytes: Uint8Array): Promise<void> {
     if (this.failPin) {
       throw new Error('pin store unavailable');
     }
-    const actual = this.cidFor(bytes);
+    // Kubo addresses the block under the declared CID's own codec, so the fake
+    // reads the codec back off the declared address before comparing.
+    const codec = cid.startsWith(CODEC_PREFIX['dag-cbor']) ? 'dag-cbor' : 'raw';
+    const actual = this.cidFor(bytes, codec);
     if (actual !== cid) {
       throw new PinCidMismatchError(cid, actual);
     }
@@ -158,6 +164,15 @@ describe('content HTTP (real Postgres)', () => {
         .send(bytes)
         .expect(201);
       expect(res.body).toEqual({ cid, size: 2 });
+      expect(pinStore.pinned).toEqual([cid]);
+    });
+
+    it('accepts a dag-cbor-codec declared CID, pinning a DAG root under it', async () => {
+      const acct = await account();
+      const bytes = Buffer.from([0xa1, 0x61, 0x61, 0x01]);
+      const cid = pinStore.cidFor(bytes, 'dag-cbor');
+      const res = await post(acct.token, cid).send(bytes).expect(201);
+      expect(res.body).toEqual({ cid, size: 4 });
       expect(pinStore.pinned).toEqual([cid]);
     });
 
