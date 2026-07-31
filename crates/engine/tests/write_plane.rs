@@ -38,9 +38,9 @@ use cipherbox_engine::testkit::{
     OwnerRootSpec, SeededEntropy, block_on, frame_version as frame, owner_root_fixture,
 };
 use cipherbox_engine::{
-    Command, ContentProfile, DeadLetter, DeadLetterReason, Engine, EngineError, Event, EventStream,
-    GatewayConfig, LoginSecret, NodeId, NodeKind, Op, RecordSeal, StoragePolicy, SyncTimingProfile,
-    WriteTarget, stage_op,
+    BlockProgress, Command, ContentProfile, DeadLetter, DeadLetterReason, Engine, EngineError,
+    Event, EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, Op, OpPhase, RecordSeal,
+    StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -1128,6 +1128,191 @@ fn assert_no_blocks_staged(device: &FakeDevice, version: &[Vec<u8>]) {
             "an abandoned version holds no staging budget"
         );
     }
+}
+
+/// Every upload progress event of one op, in emission order.
+fn upload_progress(
+    events: &mut EventStream,
+    op_id: OpId,
+    node: NodeId,
+) -> Vec<(OpPhase, Option<BlockProgress>)> {
+    events_so_far(events)
+        .into_iter()
+        .filter_map(|event| match event {
+            Event::OpProgress {
+                op_id: id,
+                node: target,
+                phase,
+                progress,
+                ..
+            } => {
+                assert_eq!(id, Some(op_id), "progress is keyed on the driving op");
+                assert_eq!(target, node, "progress names the node being written");
+                Some((phase, progress))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The upload half of the progress surface: a host that committed a write is
+/// told when its blocks start, how many of them are confirmed, and when the
+/// whole version is on the network — all keyed on the op id `commitWrite`
+/// returned, so per-file progress needs no node-to-upload guesswork.
+#[test]
+fn an_upload_reports_its_phases_and_block_counts_keyed_on_its_op_id() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    // Multi-leaf at the CI framing, so there is real progress to count.
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &plaintext,
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+    let file = child_id(&engine, ROOT, "photo.bin");
+
+    let reported = upload_progress(&mut events, op_id, file);
+    let (phases, counts): (Vec<OpPhase>, Vec<Option<BlockProgress>>) = reported.into_iter().unzip();
+    let total = counts[0].expect("the opening phase counts blocks").total;
+    assert!(
+        total > 2,
+        "a multi-leaf version, not a degenerate single-block one"
+    );
+    let mut expected = vec![OpPhase::UploadStarted];
+    expected.extend(std::iter::repeat_n(
+        OpPhase::UploadProgress,
+        total as usize - 1,
+    ));
+    expected.push(OpPhase::UploadCompleted);
+    assert_eq!(
+        phases, expected,
+        "started, one report per confirmed leaf, then completed"
+    );
+    assert_eq!(
+        counts
+            .into_iter()
+            .map(|count| count.expect("every upload phase counts blocks").confirmed)
+            .collect::<Vec<_>>(),
+        (0..total)
+            .chain(core::iter::once(total))
+            .collect::<Vec<_>>(),
+        "the count climbs one leaf at a time and lands on the whole version"
+    );
+}
+
+/// A halted upload attempt is reported, but it is not terminal: the op keeps its
+/// place at the head of the queue and the next tick retries it. Terminal failure
+/// is the dead letter, with its reason.
+#[test]
+fn a_halted_upload_attempt_is_reported_and_leaves_the_op_queued() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+
+    let emitted = events_so_far(&mut events);
+    assert!(
+        emitted.iter().any(|event| matches!(
+            event,
+            Event::OpProgress {
+                op_id: Some(id),
+                phase: OpPhase::UploadFailed,
+                error: Some(_),
+                ..
+            } if *id == op_id
+        )),
+        "the halted attempt reaches the host with a classification"
+    );
+    assert!(
+        !emitted
+            .iter()
+            .any(|event| matches!(event, Event::DeadLetter { .. })),
+        "an unreachable upload is availability, never a terminal failure"
+    );
+    assert_eq!(
+        block_on(alice.staging_store.queued_ops()).unwrap().len(),
+        1,
+        "the op keeps its place and its staged bytes"
+    );
+}
+
+/// An over-quota refusal is a hold, not a failed attempt: the op and its
+/// reservation stand until a probe finds room (#841), and the host reads it from
+/// the snapshot rather than from a failure it cannot act on.
+#[test]
+fn an_over_quota_upload_holds_the_op_without_reporting_a_failure() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("QUOTA_EXCEEDED")))));
+    blocks.set_quota(1_000, 1_000);
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+
+    let emitted = events_so_far(&mut events);
+    assert!(
+        emitted.iter().any(|event| matches!(
+            event,
+            Event::OpProgress {
+                phase: OpPhase::UploadStarted,
+                ..
+            }
+        )),
+        "the transfer did start"
+    );
+    assert!(
+        !emitted.iter().any(|event| matches!(
+            event,
+            Event::OpProgress {
+                phase: OpPhase::UploadFailed,
+                ..
+            }
+        )),
+        "a full account is not a failed upload attempt"
+    );
+    assert_eq!(
+        block_on(engine.snapshot(ROOT))
+            .expect("a snapshot")
+            .blocked
+            .expect("the over-quota head is held")
+            .op_id,
+        op_id,
+        "the hold is what the host acts on"
+    );
 }
 
 /// An op the completion record already covers is restore residue: a data dir

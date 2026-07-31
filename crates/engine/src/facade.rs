@@ -511,21 +511,43 @@ pub enum Event {
         detail: String,
     },
     /// Progress of a content-plane transfer for one node: the driving op (if
-    /// any), the phase reached, and the failure classification on a failed
-    /// phase.
+    /// any), the phase reached, how far the transfer has got, and the failure
+    /// classification on a failed phase.
     OpProgress {
-        /// The queued op driving the transfer, if any.
+        /// The queued op driving the transfer, if any. A read of published
+        /// content is driven by no op; an upload always carries the id
+        /// [`Engine::commit_write`] returned, so a host keys progress per op.
         op_id: Option<OpId>,
         /// The node the transfer is for.
         node: NodeId,
         /// The phase reached.
         phase: OpPhase,
+        /// How far the transfer has got, on the phases that count blocks.
+        progress: Option<BlockProgress>,
         /// Failure classification for a failed phase (no key material).
         error: Option<String>,
     },
 }
 
+/// How far a content transfer has got, in whole blocks of the version's DAG
+/// (its leaves plus the root manifest). Blocks rather than bytes because a
+/// resumed upload's confirmed prefix is no longer on this device to measure,
+/// while the manifest names every block up front — and the leaves are uniform,
+/// so the fraction tracks bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockProgress {
+    /// Blocks confirmed so far, counting a previous pass's durable progress.
+    pub confirmed: u32,
+    /// Blocks the version has in total; never zero.
+    pub total: u32,
+}
+
 /// The phase an [`Event::OpProgress`] reports.
+///
+/// The upload phases are the ones the drain's content path actually reaches.
+/// Two upload outcomes are deliberately *not* phases: an over-quota hold is
+/// [`SnapshotView::blocked`], and a terminal give-up is [`Event::DeadLetter`]
+/// with its reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpPhase {
     /// A content download started.
@@ -534,6 +556,18 @@ pub enum OpPhase {
     DownloadCompleted,
     /// A content download failed.
     DownloadFailed,
+    /// The drain began uploading a queued op's content version.
+    UploadStarted,
+    /// One more of the version's blocks is confirmed on the network.
+    UploadProgress,
+    /// Every block of the version is on the network; its record publishes next.
+    UploadCompleted,
+    /// One upload attempt stopped. The op keeps its place at the head of the
+    /// queue and the next drain tick retries it, so this is not terminal.
+    UploadFailed,
+    /// The user cancelled the upload and its staged blocks were released
+    /// (`Command::CancelUpload`, #869).
+    UploadCancelled,
 }
 
 /// Errors returned by facade calls.
@@ -1549,6 +1583,7 @@ impl<T: SeamTypes> Engine<T> {
                         base: &base,
                         held: &held,
                         blocked: &blocked,
+                        events: &events,
                     }
                     .run(&DrainScope {
                         root: NodeId(root_id),
@@ -2237,12 +2272,15 @@ impl<T: SeamTypes> Engine<T> {
         ))
     }
 
-    /// Best-effort [`Event::OpProgress`] emission (a dropped receiver is fine).
+    /// Best-effort [`Event::OpProgress`] emission for a content read (a dropped
+    /// receiver is fine). A read serves published content, which no queued op
+    /// drives, so it reports neither an op id nor a block count.
     fn emit_op_progress(&self, node: NodeId, phase: OpPhase, error: Option<String>) {
         let _ = self.events.unbounded_send(Event::OpProgress {
             op_id: None,
             node,
             phase,
+            progress: None,
             error,
         });
     }
@@ -4380,6 +4418,7 @@ mod tests {
                     op_id: None,
                     node,
                     phase,
+                    progress: None,
                     error: None,
                 }
             }
@@ -4484,6 +4523,7 @@ mod tests {
                             op_id: None,
                             node,
                             phase: OpPhase::DownloadFailed,
+                            progress: None,
                             error: Some(err.to_string()),
                         },
                     ],

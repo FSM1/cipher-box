@@ -345,6 +345,8 @@ describe('serveEngine event pump over the real EngineHost', () => {
         opId: 5n,
         node: new Uint8Array(16).fill(7),
         phase: 'downloadCompleted',
+        blocksConfirmed: null,
+        blocksTotal: null,
         error: null,
       },
       { kind: 'snapshotUpdated' },

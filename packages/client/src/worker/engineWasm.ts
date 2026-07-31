@@ -26,6 +26,8 @@ export interface WasmEvent {
   readonly description?: string;
   readonly node?: Uint8Array;
   readonly phase?: number;
+  readonly blocksConfirmed?: number;
+  readonly blocksTotal?: number;
   readonly error?: string;
   readonly routingKey?: string;
   readonly detail?: string;
@@ -138,6 +140,11 @@ export interface EngineWasm {
     readonly DownloadStarted: number;
     readonly DownloadCompleted: number;
     readonly DownloadFailed: number;
+    readonly UploadStarted: number;
+    readonly UploadProgress: number;
+    readonly UploadCompleted: number;
+    readonly UploadFailed: number;
+    readonly UploadCancelled: number;
   };
   Staleness: {
     readonly Fresh: number;

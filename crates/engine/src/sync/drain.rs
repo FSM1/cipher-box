@@ -29,12 +29,13 @@ use cipherbox_core::kdf;
 use cipherbox_core::seal::{ChildRef, ReadBody, Version, open_content_key, open_read_body};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
+use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, UPLOAD_TOO_LARGE};
 use crate::content::{Gateway, SealedContent, pre_flight_quota_check};
 use crate::entropy::Entropy;
-use crate::facade::NodeId;
+use crate::facade::{BlockProgress, Event, NodeId, OpPhase};
 use crate::gate::floor;
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
@@ -292,6 +293,8 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// The over-quota hold, shared with the facade's read surface. It clears
     /// only here, on a quota probe reporting room.
     pub(crate) blocked: &'a RefCell<Option<BlockedOp>>,
+    /// The facade's outbound event stream, for upload progress.
+    pub(crate) events: &'a mpsc::UnboundedSender<Event>,
 }
 
 /// One folder's current published state, carried across the ops of one pass so
@@ -1276,9 +1279,26 @@ where
     // The content plane: staged blocks out, a published version back.
     // -----------------------------------------------------------------------
 
+    /// One version's blocks, uploaded and pinned, with the transfer's progress
+    /// reported on the event stream throughout.
+    async fn upload_version(
+        &self,
+        scope: &DrainScope<'_>,
+        applied: &AppliedOp,
+        staged: &StagedContent,
+    ) -> Result<UploadedVersion, Halt> {
+        let uploaded = self.upload_blocks(scope, applied, staged).await;
+        if let Err(halt) = &uploaded
+            && let Some(error) = upload_failure(*halt)
+        {
+            self.emit_upload(applied, OpPhase::UploadFailed, None, Some(error));
+        }
+        uploaded
+    }
+
     /// One version's blocks, uploaded and pinned: the `Version` its record
     /// carries and every content CID the registration must name.
-    async fn upload_version(
+    async fn upload_blocks(
         &self,
         scope: &DrainScope<'_>,
         applied: &AppliedOp,
@@ -1316,6 +1336,18 @@ where
         // absence is only progress up to the durable mark this pass keeps: past
         // it, a missing block is loss, and the version can never be assembled.
         let uploaded = self.upload_mark(&staged.root_cid).await?;
+        // The root manifest is block zero and goes up last, so the version's
+        // whole block count is its leaves plus one.
+        let total = blocks(content.leaf_cids().len()).saturating_add(1);
+        self.emit_upload(
+            applied,
+            OpPhase::UploadStarted,
+            Some(BlockProgress {
+                confirmed: blocks(uploaded),
+                total,
+            }),
+            None,
+        );
         for (index, leaf_cid) in content.leaf_cids().iter().enumerate() {
             match self.staged_block(leaf_cid).await? {
                 Some(block) => {
@@ -1325,6 +1357,15 @@ where
                         .await
                         .map_err(seam)?;
                     self.mark_uploaded(&staged.root_cid, index + 1).await?;
+                    self.emit_upload(
+                        applied,
+                        OpPhase::UploadProgress,
+                        Some(BlockProgress {
+                            confirmed: blocks(index + 1),
+                            total,
+                        }),
+                        None,
+                    );
                 }
                 // Absent and not covered by the mark: these bytes were never
                 // uploaded and are simply gone.
@@ -1336,12 +1377,39 @@ where
         // is the manifest every retry re-derives the plan from, so releasing it
         // before the record lands would strand a fully-uploaded version.
         self.upload_block(&staged.root_cid, &root_block).await?;
+        self.emit_upload(
+            applied,
+            OpPhase::UploadCompleted,
+            Some(BlockProgress {
+                confirmed: total,
+                total,
+            }),
+            None,
+        );
 
         let content_cids = registry_cids(&staged.root_cid, content.leaf_cids());
         Ok(UploadedVersion {
             version: content.version(*key, applied.op.authored_at.0),
             content_cids,
         })
+    }
+
+    /// Best-effort upload progress for the op driving this transfer (a dropped
+    /// receiver is fine).
+    fn emit_upload(
+        &self,
+        applied: &AppliedOp,
+        phase: OpPhase,
+        progress: Option<BlockProgress>,
+        error: Option<&str>,
+    ) {
+        let _ = self.events.unbounded_send(Event::OpProgress {
+            op_id: Some(applied.op_id),
+            node: applied.op.target,
+            phase,
+            progress,
+            error: error.map(str::to_owned),
+        });
     }
 
     /// How many of this version's leaves a previous pass durably confirmed. A
@@ -1853,6 +1921,32 @@ fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
         },
         Some(UPLOAD_TOO_LARGE) => Halt::Permanent(DeadLetterReason::PayloadRefused),
         _ => Halt::UploadAttempt,
+    }
+}
+
+/// A block count as [`BlockProgress`] carries it. The root manifest's own
+/// ceiling bounds a version's leaves far below `u32::MAX`, so the saturation is
+/// unreachable and never misreports a real transfer.
+fn blocks(count: usize) -> u32 {
+    u32::try_from(count).unwrap_or(u32::MAX)
+}
+
+/// The key-free classification an [`OpPhase::UploadFailed`] carries, or `None`
+/// where the halt is not a failed attempt: an over-quota hold keeps the op and
+/// its reservation, and the host reads it from `SnapshotView::blocked` (#841).
+fn upload_failure(halt: Halt) -> Option<&'static str> {
+    match halt {
+        Halt::Blocked { .. } => None,
+        Halt::Unclassified => Some("the upload did not complete"),
+        // Both charge the attempt budget; which one it is decides only what
+        // exhausting that budget retires, not what the host is told.
+        Halt::Attempt | Halt::UploadAttempt => {
+            Some("the upload was refused without a classification")
+        }
+        Halt::Permanent(DeadLetterReason::PayloadRefused) => {
+            Some("the network refused the payload")
+        }
+        Halt::Permanent(_) => Some("the staged version can never publish"),
     }
 }
 

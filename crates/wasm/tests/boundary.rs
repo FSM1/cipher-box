@@ -124,6 +124,7 @@ fn op_progress_getters_cross_and_stay_undefined_off_variant() {
         op_id: Some(OpId(u64::MAX)),
         node: facade::NodeId([5u8; 16]),
         phase: facade::OpPhase::DownloadFailed,
+        progress: None,
         error: Some("unavailable".into()),
     });
     assert_eq!(progress.kind(), "opProgress");
@@ -141,10 +142,13 @@ fn op_progress_getters_cross_and_stay_undefined_off_variant() {
         op_id: None,
         node: facade::NodeId([0u8; 16]),
         phase: facade::OpPhase::DownloadStarted,
+        progress: None,
         error: None,
     });
     assert!(op_less.op_id().is_none());
     assert!(op_less.error().is_none());
+    assert!(op_less.blocks_confirmed().is_none());
+    assert!(op_less.blocks_total().is_none());
     let js: JsValue = op_less.into();
     assert!(
         Reflect::get(&js, &JsValue::from_str("opId"))
@@ -158,7 +162,14 @@ fn op_progress_getters_cross_and_stay_undefined_off_variant() {
     );
 
     let other: JsValue = Event::from_facade(facade::Event::SnapshotUpdated).into();
-    for key in ["node", "phase", "error", "opId"] {
+    for key in [
+        "node",
+        "phase",
+        "error",
+        "opId",
+        "blocksConfirmed",
+        "blocksTotal",
+    ] {
         assert!(
             Reflect::get(&other, &JsValue::from_str(key))
                 .expect("getter is readable")
@@ -166,6 +177,41 @@ fn op_progress_getters_cross_and_stay_undefined_off_variant() {
             "{key} must be undefined off-variant"
         );
     }
+}
+
+/// An upload's progress crosses with its op id and its block counters: the id
+/// as `bigint` (it is a `u64`), the counters as plain JS `number`s a host can do
+/// progress arithmetic on without widening.
+#[wasm_bindgen_test]
+fn upload_progress_crosses_with_its_op_id_and_block_counters() {
+    let event = Event::from_facade(facade::Event::OpProgress {
+        op_id: Some(OpId(7)),
+        node: facade::NodeId([3u8; 16]),
+        phase: facade::OpPhase::UploadProgress,
+        progress: Some(facade::BlockProgress {
+            confirmed: 2,
+            total: 5,
+        }),
+        error: None,
+    });
+    assert_eq!(event.phase(), Some(OpPhase::UploadProgress));
+    assert_eq!(event.blocks_confirmed(), Some(2));
+    assert_eq!(event.blocks_total(), Some(5));
+
+    let js: JsValue = event.into();
+    let confirmed = Reflect::get(&js, &JsValue::from_str("blocksConfirmed"))
+        .expect("blocksConfirmed getter is readable");
+    assert_eq!(confirmed.js_typeof(), JsValue::from_str("number"));
+    assert_eq!(confirmed.as_f64(), Some(2.0));
+    let total = Reflect::get(&js, &JsValue::from_str("blocksTotal"))
+        .expect("blocksTotal getter is readable");
+    assert_eq!(total.as_f64(), Some(5.0));
+    assert_eq!(
+        Reflect::get(&js, &JsValue::from_str("opId"))
+            .expect("opId getter is readable")
+            .js_typeof(),
+        JsValue::from_str("bigint")
+    );
 }
 
 /// The snapshot read surface crosses with boundary-correct JS shapes: node ids

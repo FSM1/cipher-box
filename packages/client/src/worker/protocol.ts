@@ -27,7 +27,15 @@ export type NodeKind = 'file' | 'folder';
 export type Staleness = 'fresh' | 'reconciling' | 'stale' | 'offline';
 
 /** The phase an `opProgress` event reports (mirrors the facade `OpPhase`). */
-export type OpProgressPhase = 'downloadStarted' | 'downloadCompleted' | 'downloadFailed';
+export type OpProgressPhase =
+  | 'downloadStarted'
+  | 'downloadCompleted'
+  | 'downloadFailed'
+  | 'uploadStarted'
+  | 'uploadProgress'
+  | 'uploadCompleted'
+  | 'uploadFailed'
+  | 'uploadCancelled';
 
 /** One ancestor step in a snapshot's breadcrumb trail, as data. */
 export interface BreadcrumbDescriptor {
@@ -148,6 +156,12 @@ export type EventDescriptor =
       opId: bigint | null;
       node: Uint8Array;
       phase: OpProgressPhase;
+      /**
+       * Blocks of the version confirmed so far and its whole block count, on
+       * the phases that count them; `null` on the phases that do not.
+       */
+      blocksConfirmed: number | null;
+      blocksTotal: number | null;
       error: string | null;
     };
 
