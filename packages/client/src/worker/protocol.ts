@@ -26,7 +26,11 @@ export type NodeKind = 'file' | 'folder';
 /** The staleness ladder (mirrors the facade `Staleness`). */
 export type Staleness = 'fresh' | 'reconciling' | 'stale' | 'offline';
 
-/** The phase an `opProgress` event reports (mirrors the facade `OpPhase`). */
+/**
+ * The phase an `opProgress` event reports (mirrors the facade `OpPhase`).
+ * `uploadCompleted` means the version's blocks are on the network, not that its
+ * record published — the op leaves the pending-op overlay when it does.
+ */
 export type OpProgressPhase =
   | 'downloadStarted'
   | 'downloadCompleted'
@@ -158,7 +162,7 @@ export type EventDescriptor =
       phase: OpProgressPhase;
       /**
        * Blocks of the version confirmed so far and its whole block count, on
-       * the phases that count them; `null` on the phases that do not.
+       * the phases that count them.
        */
       blocksConfirmed: number | null;
       blocksTotal: number | null;

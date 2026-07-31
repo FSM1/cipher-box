@@ -1338,16 +1338,16 @@ where
         let uploaded = self.upload_mark(&staged.root_cid).await?;
         // The root manifest is block zero and goes up last, so the version's
         // whole block count is its leaves plus one.
-        let total = blocks(content.leaf_cids().len()).saturating_add(1);
-        self.emit_upload(
-            applied,
-            OpPhase::UploadStarted,
-            Some(BlockProgress {
-                confirmed: blocks(uploaded),
-                total,
-            }),
-            None,
-        );
+        let total = blocks(content.leaf_cids().len() + 1);
+        let emit = |phase: OpPhase, confirmed: u32| {
+            self.emit_upload(
+                applied,
+                phase,
+                Some(BlockProgress { confirmed, total }),
+                None,
+            );
+        };
+        emit(OpPhase::UploadStarted, blocks(uploaded));
         for (index, leaf_cid) in content.leaf_cids().iter().enumerate() {
             match self.staged_block(leaf_cid).await? {
                 Some(block) => {
@@ -1357,15 +1357,7 @@ where
                         .await
                         .map_err(seam)?;
                     self.mark_uploaded(&staged.root_cid, index + 1).await?;
-                    self.emit_upload(
-                        applied,
-                        OpPhase::UploadProgress,
-                        Some(BlockProgress {
-                            confirmed: blocks(index + 1),
-                            total,
-                        }),
-                        None,
-                    );
+                    emit(OpPhase::UploadProgress, blocks(index + 1));
                 }
                 // Absent and not covered by the mark: these bytes were never
                 // uploaded and are simply gone.
@@ -1377,15 +1369,7 @@ where
         // is the manifest every retry re-derives the plan from, so releasing it
         // before the record lands would strand a fully-uploaded version.
         self.upload_block(&staged.root_cid, &root_block).await?;
-        self.emit_upload(
-            applied,
-            OpPhase::UploadCompleted,
-            Some(BlockProgress {
-                confirmed: total,
-                total,
-            }),
-            None,
-        );
+        emit(OpPhase::UploadCompleted, total);
 
         let content_cids = registry_cids(&staged.root_cid, content.leaf_cids());
         Ok(UploadedVersion {
@@ -1924,9 +1908,8 @@ fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
     }
 }
 
-/// A block count as [`BlockProgress`] carries it. The root manifest's own
-/// ceiling bounds a version's leaves far below `u32::MAX`, so the saturation is
-/// unreachable and never misreports a real transfer.
+/// A block count as [`BlockProgress`] carries it; the root manifest's own
+/// ceiling bounds a version's leaves far below `u32::MAX`.
 fn blocks(count: usize) -> u32 {
     u32::try_from(count).unwrap_or(u32::MAX)
 }

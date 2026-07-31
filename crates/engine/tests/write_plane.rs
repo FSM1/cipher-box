@@ -1182,31 +1182,88 @@ fn an_upload_reports_its_phases_and_block_counts_keyed_on_its_op_id() {
     let file = child_id(&engine, ROOT, "photo.bin");
 
     let reported = upload_progress(&mut events, op_id, file);
-    let (phases, counts): (Vec<OpPhase>, Vec<Option<BlockProgress>>) = reported.into_iter().unzip();
-    let total = counts[0].expect("the opening phase counts blocks").total;
+    let total = reported[0]
+        .1
+        .expect("the opening phase counts blocks")
+        .total;
     assert!(
         total > 2,
         "a multi-leaf version, not a degenerate single-block one"
     );
-    let mut expected = vec![OpPhase::UploadStarted];
-    expected.extend(std::iter::repeat_n(
-        OpPhase::UploadProgress,
-        total as usize - 1,
-    ));
-    expected.push(OpPhase::UploadCompleted);
+    let expected: Vec<(OpPhase, u32)> = core::iter::once((OpPhase::UploadStarted, 0))
+        .chain((1..total).map(|confirmed| (OpPhase::UploadProgress, confirmed)))
+        .chain(core::iter::once((OpPhase::UploadCompleted, total)))
+        .collect();
     assert_eq!(
-        phases, expected,
-        "started, one report per confirmed leaf, then completed"
-    );
-    assert_eq!(
-        counts
+        reported
             .into_iter()
-            .map(|count| count.expect("every upload phase counts blocks").confirmed)
+            .map(|(phase, count)| (
+                phase,
+                count.expect("every upload phase counts blocks").confirmed
+            ))
             .collect::<Vec<_>>(),
-        (0..total)
-            .chain(core::iter::once(total))
+        expected,
+        "started, then one report per confirmed leaf, landing on the whole version"
+    );
+}
+
+/// A pass that stopped partway resumes from its durable mark: the opening
+/// report carries the leaves an earlier pass confirmed, and the counts pick up
+/// from there rather than replaying a leaf already on the network.
+#[test]
+fn a_resumed_upload_opens_on_the_leaves_an_earlier_pass_confirmed() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    // Two leaves land, then the pin store goes away: the pass halts holding a
+    // durable mark it must not lose.
+    let mut sent = 0;
+    blocks.refuse_upload(Box::new(move |_| {
+        sent += 1;
+        (sent > 2).then(unreachable_upload)
+    }));
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+    let file = child_id(&engine, ROOT, "photo.bin");
+    let first = upload_progress(&mut events, op_id, file);
+    let total = first[0].1.expect("the opening phase counts blocks").total;
+
+    blocks.accept_uploads();
+    tick(&world, &engine, &mut tasks);
+
+    let resumed = upload_progress(&mut events, op_id, file);
+    let (phase, opening) = resumed[0];
+    let confirmed = opening.expect("the opening phase counts blocks").confirmed;
+    assert_eq!(phase, OpPhase::UploadStarted);
+    assert!(
+        confirmed > 0 && confirmed < total,
+        "the resumed pass opens on real prior progress, not on zero"
+    );
+    let expected: Vec<(OpPhase, u32)> = core::iter::once((OpPhase::UploadStarted, confirmed))
+        .chain((confirmed + 1..total).map(|count| (OpPhase::UploadProgress, count)))
+        .chain(core::iter::once((OpPhase::UploadCompleted, total)))
+        .collect();
+    assert_eq!(
+        resumed
+            .into_iter()
+            .map(|(phase, count)| (
+                phase,
+                count.expect("every upload phase counts blocks").confirmed
+            ))
             .collect::<Vec<_>>(),
-        "the count climbs one leaf at a time and lands on the whole version"
+        expected,
+        "the resumed counts continue upward and never re-report a confirmed leaf"
     );
 }
 
@@ -1256,6 +1313,50 @@ fn a_halted_upload_attempt_is_reported_and_leaves_the_op_queued() {
         block_on(alice.staging_store.queued_ops()).unwrap().len(),
         1,
         "the op keeps its place and its staged bytes"
+    );
+}
+
+/// A permanently refused upload reports the stopped attempt *and* the dead
+/// letter that settles it. The pair is the contract: the phase says the transfer
+/// stopped, the dead letter says the op will never publish.
+#[test]
+fn a_permanently_refused_upload_reports_the_attempt_and_the_dead_letter() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("UPLOAD_TOO_LARGE")))));
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+
+    let emitted = events_so_far(&mut events);
+    assert!(
+        emitted.iter().any(|event| matches!(
+            event,
+            Event::OpProgress {
+                op_id: Some(id),
+                phase: OpPhase::UploadFailed,
+                ..
+            } if *id == op_id
+        )),
+        "the stopped transfer reaches the host"
+    );
+    assert!(
+        emitted.contains(&Event::DeadLetter {
+            op_id,
+            reason: DeadLetterReason::PayloadRefused,
+        }),
+        "and the dead letter says it will never publish"
     );
 }
 

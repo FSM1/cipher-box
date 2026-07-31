@@ -530,10 +530,8 @@ pub enum Event {
 }
 
 /// How far a content transfer has got, in whole blocks of the version's DAG
-/// (its leaves plus the root manifest). Blocks rather than bytes because a
-/// resumed upload's confirmed prefix is no longer on this device to measure,
-/// while the manifest names every block up front — and the leaves are uniform,
-/// so the fraction tracks bytes.
+/// (its leaves plus the root manifest). Blocks, not bytes: a resumed upload's
+/// confirmed prefix is no longer on this device to measure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockProgress {
     /// Blocks confirmed so far, counting a previous pass's durable progress.
@@ -543,11 +541,6 @@ pub struct BlockProgress {
 }
 
 /// The phase an [`Event::OpProgress`] reports.
-///
-/// The upload phases are the ones the drain's content path actually reaches.
-/// Two upload outcomes are deliberately *not* phases: an over-quota hold is
-/// [`SnapshotView::blocked`], and a terminal give-up is [`Event::DeadLetter`]
-/// with its reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpPhase {
     /// A content download started.
@@ -562,8 +555,9 @@ pub enum OpPhase {
     UploadProgress,
     /// Every block of the version is on the network; its record publishes next.
     UploadCompleted,
-    /// One upload attempt stopped. The op keeps its place at the head of the
-    /// queue and the next drain tick retries it, so this is not terminal.
+    /// One attempt at sending the version's blocks stopped, classified in
+    /// `error`. Not itself terminal: an [`Event::DeadLetter`] in the same pass
+    /// is what says the op will never publish.
     UploadFailed,
     /// The user cancelled the upload and its staged blocks were released
     /// (`Command::CancelUpload`, #869).
@@ -2273,8 +2267,7 @@ impl<T: SeamTypes> Engine<T> {
     }
 
     /// Best-effort [`Event::OpProgress`] emission for a content read (a dropped
-    /// receiver is fine). A read serves published content, which no queued op
-    /// drives, so it reports neither an op id nor a block count.
+    /// receiver is fine).
     fn emit_op_progress(&self, node: NodeId, phase: OpPhase, error: Option<String>) {
         let _ = self.events.unbounded_send(Event::OpProgress {
             op_id: None,
