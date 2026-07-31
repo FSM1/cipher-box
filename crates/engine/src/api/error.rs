@@ -49,9 +49,9 @@ pub enum ApiError {
     /// never the body bytes.
     Decode(String),
     /// A caller-supplied content address was not core's canonical CIDv1 base32
-    /// string, so no request was sent. Refused here because the address is
-    /// interpolated into the request URL and may originate in resolved
-    /// metadata — a non-canonical one must never reach the wire.
+    /// string under a content-plane codec, so no request was sent. Refused
+    /// here because the address is what the ingress pins under — a
+    /// non-canonical one must never reach the wire.
     MalformedContentCid,
 }
 

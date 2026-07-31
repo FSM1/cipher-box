@@ -1314,7 +1314,7 @@ where
         for (index, leaf_cid) in content.leaf_cids().iter().enumerate() {
             match self.staged_block(leaf_cid).await? {
                 Some(block) => {
-                    self.upload_block(&block).await?;
+                    self.upload_block(leaf_cid, &block).await?;
                     self.staging
                         .remove_staged_bytes(leaf_cid)
                         .await
@@ -1330,7 +1330,7 @@ where
         // The root goes up last and stays staged until the publish confirms: it
         // is the manifest every retry re-derives the plan from, so releasing it
         // before the record lands would strand a fully-uploaded version.
-        self.upload_block(&root_block).await?;
+        self.upload_block(&staged.root_cid, &root_block).await?;
 
         let content_cids = core::iter::once(&staged.root_cid)
             .chain(content.leaf_cids())
@@ -1386,12 +1386,14 @@ where
         Ok(Some(block))
     }
 
-    /// Upload one block to the pin provider. A block is only ever removed from
-    /// staging on a confirmed [`UploadResult`](crate::UploadResult), which is
-    /// what makes the still-staged set a suffix.
-    async fn upload_block(&self, block: &[u8]) -> Result<(), Halt> {
+    /// Upload one block to the pin provider under `cid`, its staging key and
+    /// own content address, so the ingress pins it where the published record
+    /// points (#906). A block is only ever removed from staging on a confirmed
+    /// [`UploadResult`](crate::UploadResult), which is what makes the
+    /// still-staged set a suffix.
+    async fn upload_block(&self, cid: &[u8], block: &[u8]) -> Result<(), Halt> {
         self.api
-            .upload(block)
+            .upload(&encode_content_cid_str(cid), block)
             .await
             .map(drop)
             .map_err(|error| classify_upload(error, block.len() as u64))

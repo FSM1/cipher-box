@@ -21,7 +21,7 @@ use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid
 use cipherbox_engine::api::{
     ApiClient, ApiError, ChallengeSigner, IdentityChallengeSigner, NameRegistration,
 };
-use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, SealedChunk, assemble};
+use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
 use cipherbox_engine::seams::{CredentialStore, Http, HttpMethod, HttpRequest};
 
 type Client = ApiClient<ReqwestHttp, MemoryCredentialStore>;
@@ -533,10 +533,7 @@ async fn upload_pins_under_the_caller_computed_content_address() {
     // A DAG root over that leaf: `dag-cbor` codec, real det-CBOR bytes — the
     // same shape a record head block takes on the metadata publish path.
     let dag = assemble(
-        &[SealedChunk {
-            cid: compute_cid(CONTENT_CID_CODEC, &leaf),
-            sealed: leaf.clone(),
-        }],
+        &[compute_cid(CONTENT_CID_CODEC, &leaf)],
         ContentProfile::CI.chunk_size() as u64,
         &ContentProfile::CI,
     )
@@ -697,14 +694,19 @@ async fn a_content_version_uploads_registers_and_retires_as_one_block_set() {
     // suffix, so a resumed drain re-sends only what has not landed.
     let mut content_cids = Vec::new();
     for block in leaves.iter().chain(core::iter::once(&root)) {
+        let declared = leaf_cid(block);
         let uploaded = client
-            .upload(block)
+            .upload(&declared, block)
             .await
             .unwrap_or_else(|e| panic!("a version block uploads: {e:?}"));
         assert_eq!(
             uploaded.size,
             block.len() as u64,
             "the ingress reports the byte count it counted"
+        );
+        assert_eq!(
+            uploaded.cid, declared,
+            "every block of the version pins under the address the drain computed"
         );
         content_cids.push(uploaded.cid);
     }
