@@ -1,0 +1,35 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "37500a3daed1",
+  "strategy": "manual-commit",
+  "branch": "feat/868-write-file-content",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "blueprint/core.md",
+    "crates/core/kat/manifest.json",
+    "crates/engine/src/content/dag.rs",
+    "crates/engine/src/content/mod.rs",
+    "crates/engine/src/facade.rs",
+    "crates/engine/src/sync/overlay.rs",
+    "crates/engine/src/sync/staging.rs",
+    "crates/engine/tests/sync.rs",
+    "crates/wasm/src/host.rs",
+    "packages/client/src/worker/engineHost.ts"
+  ],
+  "sessions": [
+    {
+      "metadata": "/37/500a3daed1/0/metadata.json",
+      "transcript": "/37/500a3daed1/0/full.jsonl",
+      "compact_transcript": "/37/500a3daed1/0/transcript.jsonl",
+      "content_hash": "/37/500a3daed1/0/content_hash.txt",
+      "prompt": "/37/500a3daed1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 315,
+    "cache_creation_tokens": 260563,
+    "cache_read_tokens": 29214482,
+    "output_tokens": 137679,
+    "api_call_count": 158
+  }
+}
