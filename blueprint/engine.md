@@ -208,16 +208,34 @@ degraded outcome applies a different policy rather than showing stale data.
   must not move a member from `External` onto CipherBox's hosted store.
   Reverting an explicit placement choice to the hosted default is precisely
   what an adversary who controls the record plane gains, so a load that cannot
-  authenticate the member's current choice must not invent a wider one.
+  authenticate the member's current choice must not invent a wider one. The
+  guarantee is relative to this device: the widest placement a degraded load
+  can report is the one this device last authenticated, never the built-in
+  default. A rollback takes the same path — pinning last-known-good is what
+  the gate already owes a rejected record.
 - **No last-known-good copy fails the placement decision closed.** The
   built-in defaults describe a first run — no record anywhere, no durable
   floor. Under any other reason, with no cached copy to fall back on, a
   placement decision refuses the hosted upload rather than resolving to
-  `PinMode::Hosted`; the member is told their settings are unavailable.
-- **Residual.** The cached copy is bound to the account by its seal, not to a
-  point in time: a party who can write this device's durable store can replay
-  an older copy the account itself authored. Bounding that needs a freshness
-  anchor the settings body does not carry today.
+  `PinMode::Hosted`; the member is told their settings are unavailable. A
+  consumer that branches only on the resolved case, letting the degraded ones
+  fall through to the defaults, reintroduces exactly the widening this policy
+  exists to prevent.
+- **Residual: the cached copy has no freshness bound.** It is bound to the
+  account by its seal alone — no sequence, no name, no time — so a party who
+  can write this device's durable store can pin it to any settings generation
+  the account ever published; every historical head block is a public,
+  content-addressed object, so only the store write is privileged. The
+  per-name sequence floor is no defence here: it is device-local and lives
+  beside the cache, so the same party moves both. That party can equally
+  _delete_ the entry and force the defaults path, which is the pre-cache
+  behaviour — so the anti-downgrade property holds against a record-plane
+  adversary, not against one already inside the device's storage. The same
+  staleness arrives with no adversary at all: a device stuck degraded keeps
+  its copy indefinitely, including a BYO credential the member has since
+  rotated, which is why the reason is reported rather than swallowed. A real
+  bound needs a per-account anchor — an EOL check or a monotonic revision in
+  the sealed body — neither of which the settings record carries today.
 
 ## Sync core
 

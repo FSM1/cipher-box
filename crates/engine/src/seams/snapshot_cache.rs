@@ -9,8 +9,9 @@ use super::SeamResult;
 /// (blueprint/web-client.md seam table). The store must treat values as
 /// opaque: arbitrary, non-decodable bytes round-trip verbatim; the
 /// conformance kit feeds it garbage to prove the store never requires
-/// parseable content. Only gate-passing records ever reach this cache — the
-/// adoption gate runs upstream, in the engine.
+/// parseable content. Nothing unauthenticated ever reaches this cache: the
+/// record plane writes only gate-passing records, the settings plane only a
+/// head block that cleared its sequence floor and opened.
 ///
 /// Keys are opaque bytes chosen by the engine. Contents survive logout by
 /// design (cache-first rendering after restart); an explicit

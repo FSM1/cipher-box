@@ -11,12 +11,11 @@
 //!
 //! **A settings record that will not resolve never blocks cold start.** A
 //! degraded load prefers this device's last-known-good copy and only then
-//! [`VaultSettings::default`], each step bounded by
+//! [`VaultSettings::default`], and the whole load is bounded by
 //! [`SyncTimingProfile::settings_load_budget`] measured on the injected
 //! scheduler. The reason is reported rather than swallowed
 //! ([`DefaultsReason`]) — silently reverting a member's placement choice to the
-//! hosted default is what an adversary who can withhold the record gains, so a
-//! degraded load never widens placement (blueprint/engine.md).
+//! hosted default is what an adversary who can withhold the record gains.
 
 use core::future::{Future, poll_fn};
 use core::num::NonZeroU64;
@@ -91,16 +90,17 @@ pub enum SettingsPublishError {
     Floor(SeamError),
 }
 
-/// Why a load fell back to [`VaultSettings::default`]. Reported rather than
-/// collapsed, because the reasons are not equally benign: `NoRecord` is a
-/// first run, while `Suppressed` and `RolledBack` are what an adversary who
-/// controls the record plane produces, and reverting a member's placement
-/// choice to the hosted default is exactly what they gain by it.
+/// Why a load did not use the published record, carried by both degraded
+/// outcomes. Reported rather than collapsed, because the reasons are not
+/// equally benign: `NoRecord` is a first run, while `Suppressed` and
+/// `RolledBack` are what an adversary who controls the record plane produces,
+/// and reverting a member's placement choice to the hosted default is exactly
+/// what they gain by it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefaultsReason {
     /// No endpoint served a record, and this device has no durable floor for
-    /// the name — the account has never published settings from anywhere this
-    /// device has seen.
+    /// the name — no evidence here that the account has ever published
+    /// settings.
     NoRecord,
     /// No usable record, but the durable sequence floor proves one was adopted
     /// here before: the record is being withheld or its head block is
@@ -136,10 +136,9 @@ pub enum SettingsLoad {
         /// Why the published record was not used.
         reason: DefaultsReason,
     },
-    /// Neither a published record nor a cached one. The documented defaults
-    /// describe a first run; a placement decision taken under any other reason
-    /// fails closed rather than resolving to [`PinMode::Hosted`]
-    /// (blueprint/engine.md).
+    /// Neither a published record nor a cached one: nothing here is the
+    /// member's choice, only the documented defaults. What a placement decision
+    /// owes this outcome is the settings-load policy in blueprint/engine.md.
     Defaults(DefaultsReason),
 }
 
@@ -222,7 +221,7 @@ where
     Ok(receipt)
 }
 
-/// Resolve the vault settings record, each stage bounded by
+/// Resolve the vault settings record, bounded by
 /// [`SyncTimingProfile::settings_load_budget`]. Never fails: a record that will
 /// not resolve, will not open, or will not validate degrades to this device's
 /// last-known-good settings and only then to the documented defaults, because
@@ -247,33 +246,27 @@ where
 {
     let name = settings_name(login_secret);
     let enc_secret = kdf::enc_subkey(login_secret);
-    let budget = profile.settings_load_budget;
+    // Held outside the budget so a load that runs out of it mid-resolve still
+    // has the cached ciphertext the resolve read on its way in.
+    let mut cached = None;
     let load = resolve_settings(
         transport,
         gateway,
         http,
         floors,
         snapshots,
+        &mut cached,
         &enc_secret,
         &name,
     );
-    let loaded = within(scheduler, budget, load)
-        .await
-        .unwrap_or(SettingsLoad::Defaults(DefaultsReason::TimedOut));
-    let SettingsLoad::Defaults(reason) = loaded else {
-        return loaded;
+    let reason = match within(scheduler, profile.settings_load_budget, load).await {
+        Some(Ok(settings)) => return SettingsLoad::Resolved(settings),
+        Some(Err(reason)) => reason,
+        None => DefaultsReason::TimedOut,
     };
-    // Every degraded reason takes this arm: whichever way the published record
-    // became unusable, the settings this device last resolved outrank the
-    // hosted defaults, and reaching for them must not outlast the budget either.
-    match within(
-        scheduler,
-        budget,
-        last_known_good(snapshots, &enc_secret, &name),
-    )
-    .await
-    .flatten()
-    {
+    // A rollback takes this arm like every other reason: pinning last-known-good
+    // is what the record plane already owes a gate failure (blueprint/engine.md).
+    match cached.and_then(|block| open_settings_head(&enc_secret, &block)) {
         Some(settings) => SettingsLoad::Stale { settings, reason },
         None => SettingsLoad::Defaults(reason),
     }
@@ -288,29 +281,25 @@ fn settings_cache_key(name: &IpnsName) -> Vec<u8> {
     key
 }
 
-/// Re-open this device's cached settings head block. Being cached buys the
-/// bytes nothing: they clear the same seal and the same body grammar a freshly
-/// fetched block does, so a copy this build cannot authenticate is discarded
-/// rather than applied.
-async fn last_known_good<Sn: SnapshotCache>(
-    snapshots: &Sn,
-    enc_secret: &X25519Secret,
-    name: &IpnsName,
-) -> Option<VaultSettings> {
-    let block = snapshots.get(&settings_cache_key(name)).await.ok()??;
-    let body = open_settings_record(enc_secret, &block).ok()?;
-    decode_settings_body(&body).ok()
+/// Open a settings head block. Being cached buys bytes nothing — the cached and
+/// the fetched copy reach their verdict here, through one seal open and one
+/// body grammar — so a copy this build cannot authenticate is discarded rather
+/// than applied.
+fn open_settings_head(enc_secret: &X25519Secret, block: &[u8]) -> Option<VaultSettings> {
+    decode_settings_body(&open_settings_record(enc_secret, block).ok()?).ok()
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn resolve_settings<T, H, F, Sn>(
     transport: &T,
     gateway: &Gateway,
     http: &H,
     floors: &F,
     snapshots: &Sn,
+    cached: &mut Option<Vec<u8>>,
     enc_secret: &X25519Secret,
     name: &IpnsName,
-) -> SettingsLoad
+) -> Result<VaultSettings, DefaultsReason>
 where
     T: RecordTransport,
     H: Http,
@@ -318,44 +307,42 @@ where
     Sn: SnapshotCache,
 {
     let key = name.as_str().as_bytes();
+    let cache_key = settings_cache_key(name);
+    // Cache-first, like every resolve (blueprint/engine.md).
+    *cached = snapshots.get(&cache_key).await.ok().flatten();
     // The settings record belongs to no scope and carries no epoch, so the
     // per-name sequence floor is its whole floor law. A floor the host cannot
     // read is never treated as no floor.
     let Ok(durable) = floor::sequence_floor(floors, key).await else {
-        return SettingsLoad::Defaults(DefaultsReason::FloorUnreadable);
+        return Err(DefaultsReason::FloorUnreadable);
     };
     let Some((sequence, record_bytes)) = fanout_get_verify(transport, name).await else {
         // A durable floor is proof this account has published settings, so
         // finding none now is a suppression rather than a first run.
-        return SettingsLoad::Defaults(match durable {
+        return Err(match durable {
             Some(_) => DefaultsReason::Suppressed,
             None => DefaultsReason::NoRecord,
         });
     };
     let floor = durable.unwrap_or(0);
     if sequence < floor {
-        return SettingsLoad::Defaults(DefaultsReason::RolledBack { floor, sequence });
+        return Err(DefaultsReason::RolledBack { floor, sequence });
     }
 
     // The record verified under a name only this account can sign for, so a
     // head block that will not come back is a withheld settings record.
     let Ok((_, block)) = fetch_head_block(gateway, http, name, &record_bytes, None).await else {
-        return SettingsLoad::Defaults(DefaultsReason::Suppressed);
+        return Err(DefaultsReason::Suppressed);
     };
-    let Ok(body) = open_settings_record(enc_secret, &block) else {
-        return SettingsLoad::Defaults(DefaultsReason::Unreadable);
-    };
-    let Ok(settings) = decode_settings_body(&body) else {
-        return SettingsLoad::Defaults(DefaultsReason::Unreadable);
-    };
+    let settings = open_settings_head(enc_secret, &block).ok_or(DefaultsReason::Unreadable)?;
     // Only a record that cleared its floor and opened becomes last-known-good,
     // and what is stored is the sealed block, so ciphertext-only-at-rest holds.
-    let _ = snapshots.put(&settings_cache_key(name), &block).await;
+    let _ = snapshots.put(&cache_key, &block).await;
     // Advancing behind the open, never ahead of it, is the floor law: a record
     // that will not open must not raise the bar the next resolve is held to.
     // Neither store failing is a verdict on settings we just authenticated.
     let _ = floor::advance_sequence_on_unseal(floors, key, sequence).await;
-    SettingsLoad::Resolved(settings)
+    Ok(settings)
 }
 
 /// Run `work`, giving up once `budget` has elapsed on the injected scheduler.

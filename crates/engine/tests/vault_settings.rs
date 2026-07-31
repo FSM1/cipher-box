@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
-use cipherbox_core::seal::seal_settings_record;
+use cipherbox_core::seal::{open_settings_record, seal_settings_record};
 use zeroize::Zeroizing;
 
 use cipherbox_engine::api::ApiClient;
@@ -748,6 +748,17 @@ fn a_record_this_build_cannot_read_prefers_the_cached_copy() {
             settings: external_only(),
             reason: DefaultsReason::Unreadable,
         },
+        "the unreadable record is refused and the device's own copy stands in",
+    );
+
+    withhold_the_record(&bob);
+    assert_eq!(
+        load(&world, &bob, &blocks, &SECRET),
+        SettingsLoad::Stale {
+            settings: external_only(),
+            reason: DefaultsReason::Suppressed,
+        },
+        "the refused record never became this device's last-known-good",
     );
 }
 
@@ -810,25 +821,27 @@ impl SnapshotCache for ServesCiphertext {
     }
 }
 
-/// Being cached buys bytes nothing: the copy clears the same seal and the same
-/// body grammar a freshly fetched head block does, or the load falls through to
-/// the defaults.
 #[test]
 fn a_cached_copy_that_does_not_authenticate_is_not_used() {
     let world = FakeWorld::new();
-    let blocks = Blocks::default();
     let device = world.device(b"me");
 
-    // Sealed to another account's enc subkey: verbatim ciphertext, wrong owner.
-    let transplanted = seal_settings_record(
+    // One planted copy per gate the cached bytes must clear: the seal, then
+    // this build's body grammar.
+    let wrong_owner = seal_settings_record(
         &kdf::enc_subkey(&OTHER_SECRET),
         &[5u8; 32],
         &hand_encoded_body("https://kubo.example"),
     )
     .expect("seal");
+    let unknown_schema = seal_settings_record(
+        &kdf::enc_subkey(&SECRET),
+        &[6u8; 32],
+        &body_with_an_unknown_pin_mode(),
+    )
+    .expect("seal");
 
-    for planted in [transplanted, b"not a settings block at all".to_vec()] {
-        serve_http(&device, &blocks, 4);
+    for planted in [wrong_owner, unknown_schema, b"not a block".to_vec()] {
         assert_eq!(
             block_on(load_settings(
                 &device.record_store,
@@ -844,6 +857,190 @@ fn a_cached_copy_that_does_not_authenticate_is_not_used() {
             "a cached copy is re-opened on every read, never trusted for being cached",
         );
     }
+}
+
+/// A snapshot cache that keeps what the engine writes visible to the test.
+#[derive(Clone, Default)]
+struct SpyCache {
+    inner: Arc<Mutex<BTreeMap<Vec<u8>, Vec<u8>>>>,
+}
+
+impl SpyCache {
+    fn values(&self) -> Vec<Vec<u8>> {
+        self.inner.lock().expect("lock").values().cloned().collect()
+    }
+}
+
+impl SnapshotCache for SpyCache {
+    async fn put(&self, cache_key: &[u8], ciphertext: &[u8]) -> SeamResult<()> {
+        self.inner
+            .lock()
+            .expect("lock")
+            .insert(cache_key.to_vec(), ciphertext.to_vec());
+        Ok(())
+    }
+
+    async fn get(&self, cache_key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
+        Ok(self.inner.lock().expect("lock").get(cache_key).cloned())
+    }
+
+    async fn remove(&self, cache_key: &[u8]) -> SeamResult<()> {
+        self.inner.lock().expect("lock").remove(cache_key);
+        Ok(())
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        self.inner.lock().expect("lock").clear();
+        Ok(())
+    }
+}
+
+/// The seam is ciphertext-only at rest, so what the load caches must be the
+/// sealed head block. Caching the opened body instead would put the member's
+/// BYO bearer in host storage in the clear, and every other test here would
+/// still pass.
+#[test]
+fn the_cache_holds_the_sealed_block_never_the_opened_body() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice-laptop");
+    publish(&world, &alice, &blocks, &SECRET, &configured());
+
+    let bob = world.device(b"alice-phone");
+    let cache = SpyCache::default();
+    serve_http(&bob, &blocks, 4);
+    assert_eq!(
+        block_on(load_settings(
+            &bob.record_store,
+            &gateway(),
+            &bob.http,
+            &bob.floor_store,
+            &cache,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &SECRET,
+        )),
+        SettingsLoad::Resolved(configured()),
+    );
+
+    let stored = cache.values();
+    assert_eq!(stored.len(), 1, "one settings head block");
+    assert!(
+        !stored[0].windows(6).any(|window| window == b"s3cret"),
+        "the BYO credential never reaches host storage in the clear",
+    );
+    assert!(
+        open_settings_record(&kdf::enc_subkey(&SECRET), &stored[0]).is_ok(),
+        "what is stored re-opens under the account's enc subkey",
+    );
+}
+
+/// A replay must not become last-known-good. The cache write sits behind the
+/// floor check and the open; hoisting it above either would let a chosen-record
+/// adversary overwrite the member's own copy permanently.
+#[test]
+fn a_rolled_back_record_never_becomes_last_known_good() {
+    let (world, blocks, bob) = device_with_warm_cache();
+    let key = settings_name(&SECRET).as_str().as_bytes().to_vec();
+    block_on(bob.floor_store.raise_sequence_floor(&key, 9)).expect("raise");
+    // Openable, and carrying the hosted default the adversary wants applied.
+    seed_settings(&bob, &blocks, &hand_encoded_body("https://kubo.example"), 3);
+
+    assert_eq!(
+        load(&world, &bob, &blocks, &SECRET),
+        SettingsLoad::Stale {
+            settings: external_only(),
+            reason: DefaultsReason::RolledBack {
+                floor: 9,
+                sequence: 3
+            },
+        },
+        "the replay is refused and the device's own copy stands in for it",
+    );
+
+    withhold_the_record(&bob);
+    assert_eq!(
+        load(&world, &bob, &blocks, &SECRET),
+        SettingsLoad::Stale {
+            settings: external_only(),
+            reason: DefaultsReason::Suppressed,
+        },
+        "the refused record left the cached copy where it found it",
+    );
+}
+
+#[test]
+fn a_second_account_on_the_device_never_sees_the_first_accounts_cached_settings() {
+    let (world, blocks, bob) = device_with_warm_cache();
+
+    // The same device stores, driving the other account's load. Nothing is
+    // published at its name, so only the cache could answer.
+    serve_http(&bob, &blocks, 4);
+    assert_eq!(
+        block_on(load_settings(
+            &bob.record_store,
+            &gateway(),
+            &bob.http,
+            &bob.floor_store,
+            &bob.snapshot_cache,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &OTHER_SECRET,
+        )),
+        SettingsLoad::Defaults(DefaultsReason::NoRecord),
+        "another account's copy is both keyed and sealed out of reach",
+    );
+}
+
+/// A snapshot cache whose reads never settle — the shape of a stalled host
+/// store.
+struct NeverReads;
+
+impl SnapshotCache for NeverReads {
+    async fn put(&self, _cache_key: &[u8], _ciphertext: &[u8]) -> SeamResult<()> {
+        Ok(())
+    }
+
+    async fn get(&self, _cache_key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
+        poll_fn(|_| Poll::<SeamResult<Option<Vec<u8>>>>::Pending).await
+    }
+
+    async fn remove(&self, _cache_key: &[u8]) -> SeamResult<()> {
+        Ok(())
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        Ok(())
+    }
+}
+
+/// The cache read is inside the budget like every other stage: a stalled host
+/// store must not turn the one load that never blocks cold start into one that
+/// does, nor push the ceiling past the profile's single budget.
+#[test]
+fn a_snapshot_cache_that_never_answers_does_not_block_cold_start() {
+    let scheduler = VirtualScheduler::new().with_auto_advance();
+    let device = FakeWorld::new().device(b"offline");
+    let profile = SyncTimingProfile::CI;
+
+    assert_eq!(
+        block_on(load_settings(
+            &device.record_store,
+            &gateway(),
+            &device.http,
+            &device.floor_store,
+            &NeverReads,
+            &scheduler,
+            &profile,
+            &SECRET,
+        )),
+        SettingsLoad::Defaults(DefaultsReason::TimedOut),
+    );
+    assert_eq!(
+        scheduler.now(),
+        UnixMillis(profile.settings_load_budget.as_millis() as u64),
+        "one budget covers the whole load, cache read included",
+    );
 }
 
 /// A body core's codec accepts and this build's schema does not.
