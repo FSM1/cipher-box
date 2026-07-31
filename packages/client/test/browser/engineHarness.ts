@@ -35,6 +35,8 @@ export interface SnapshotSuiteResult {
   }>;
   nestedAncestors: Array<{ idHex: string; name: string }>;
   rootHex: string;
+  /** The folder a rootless `snapshot(null)` answered with. */
+  rootlessFolderHex: string;
   unknownError: string;
   unknownCode: string;
   downloadError: string;
@@ -128,6 +130,8 @@ window.runSnapshotSuite = async (): Promise<SnapshotSuiteResult> => {
     if (!docs || !file) throw new Error('created children missing from the root snapshot');
 
     const nested = await facade.snapshot(docs.id);
+    // No folder named: the engine answers with its own current root.
+    const rootless = await facade.snapshot(null);
 
     let unknownError = '';
     let unknownCode = '';
@@ -158,6 +162,7 @@ window.runSnapshotSuite = async (): Promise<SnapshotSuiteResult> => {
         name: ancestor.name,
       })),
       rootHex: hex(view.root),
+      rootlessFolderHex: hex(rootless.folder),
       unknownError,
       unknownCode,
       downloadError,

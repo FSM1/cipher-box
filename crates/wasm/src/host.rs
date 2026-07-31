@@ -329,18 +329,17 @@ impl EngineHandle {
         })
     }
 
-    /// Reads a key-free [`SnapshotView`] of `folder` for a UI paint. Resolves
-    /// with the view; rejects with the engine error.
-    pub fn snapshot(&self, folder: &NodeId) -> Promise {
+    /// Reads a key-free [`SnapshotView`] for a UI paint: of `folder`, or of the
+    /// engine's own current root when `folder` is absent — a host asks for the
+    /// root, it never names one (blueprint/web-client.md "UI state law").
+    /// Resolves with the view; rejects with the engine error.
+    pub fn snapshot(&self, folder: Option<NodeId>) -> Promise {
         let engine = self.engine.clone();
-        let folder = folder.facade();
+        let folder = folder.map(|node| node.facade());
         future_to_promise(async move {
-            let view = engine
-                .read()
-                .await
-                .snapshot(folder)
-                .await
-                .map_err(engine_error)?;
+            let engine = engine.read().await;
+            let folder = folder.unwrap_or_else(|| engine.root());
+            let view = engine.snapshot(folder).await.map_err(engine_error)?;
             Ok(SnapshotView::from_facade(view).into())
         })
     }

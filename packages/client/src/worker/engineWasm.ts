@@ -91,7 +91,8 @@ export interface WasmEngineHandle {
   pushChunk(handle: bigint, chunk: Uint8Array): Promise<unknown>;
   commitWrite(handle: bigint): Promise<bigint>;
   abortWrite(handle: bigint): Promise<unknown>;
-  snapshot(folder: WasmNodeId): Promise<WasmSnapshotView>;
+  /** No folder reads the engine's own root. */
+  snapshot(folder?: WasmNodeId): Promise<WasmSnapshotView>;
   download(node: WasmNodeId): Promise<Uint8Array>;
   nextEvent(): Promise<WasmEvent | undefined>;
 }

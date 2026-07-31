@@ -56,8 +56,8 @@ export class EngineFacade {
     return this.transport.subscribe(listener);
   }
 
-  /** Reads a key-free snapshot of `folder` for a UI paint. */
-  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
+  /** Reads a key-free snapshot of `folder`, or of the vault root for `null`. */
+  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
     return this.transport.snapshot(folder);
   }
 

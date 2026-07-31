@@ -177,7 +177,7 @@ export type WorkerRequest =
   | { type: 'pushChunk'; id: number; handle: WriteHandle; chunk: ArrayBuffer }
   | { type: 'commitWrite'; id: number; handle: WriteHandle }
   | { type: 'abortWrite'; id: number; handle: WriteHandle }
-  | { type: 'snapshot'; id: number; folder: Uint8Array }
+  | { type: 'snapshot'; id: number; folder: Uint8Array | null }
   | { type: 'download'; id: number; node: Uint8Array };
 
 /** A worker → UI message. */

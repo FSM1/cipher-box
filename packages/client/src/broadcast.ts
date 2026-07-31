@@ -34,7 +34,7 @@ export interface BroadcastChannelLike {
 
 /** A follower read intent: served by the leader's engine, answered by value. */
 export type WireRead =
-  | { kind: 'snapshot'; folder: Uint8Array }
+  | { kind: 'snapshot'; folder: Uint8Array | null }
   | { kind: 'download'; node: Uint8Array };
 
 /** A follower streaming-write step, driven against the leader's engine. */

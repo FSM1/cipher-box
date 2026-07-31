@@ -180,7 +180,7 @@ export class FakeLockManager implements LockManagerLike {
 /** A minimal in-process EngineTransport for relay/orchestrator tests. */
 export class FakeEngineTransport implements EngineTransport {
   readonly commands: CommandDescriptor[] = [];
-  readonly snapshots: Uint8Array[] = [];
+  readonly snapshots: Array<Uint8Array | null> = [];
   readonly downloads: Uint8Array[] = [];
   readonly beginWrites: Array<{ target: WriteTarget; size: number }> = [];
   readonly chunks: Array<{ handle: WriteHandle; chunk: ArrayBuffer }> = [];
@@ -192,8 +192,8 @@ export class FakeEngineTransport implements EngineTransport {
   writeHandle: WriteHandle = 1n;
   commitOpId = 42n;
   respond: (command: CommandDescriptor) => Promise<void> = () => Promise.resolve();
-  respondSnapshot: (folder: Uint8Array) => Promise<SnapshotDescriptor> = (folder) =>
-    Promise.resolve(emptySnapshot(folder));
+  respondSnapshot: (folder: Uint8Array | null) => Promise<SnapshotDescriptor> = (folder) =>
+    Promise.resolve(emptySnapshot(folder ?? undefined));
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
     Promise.resolve(new ArrayBuffer(0));
   private readonly listeners = new Set<EngineEventListener>();
@@ -228,7 +228,7 @@ export class FakeEngineTransport implements EngineTransport {
     return Promise.resolve();
   }
 
-  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
+  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
     this.snapshots.push(folder);
     return this.respondSnapshot(folder);
   }

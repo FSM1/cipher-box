@@ -36,8 +36,8 @@ export interface EngineTransport {
   commitWrite(handle: WriteHandle): Promise<bigint>;
   /** Abandons the handle, releasing its reservation and staged blocks. */
   abortWrite(handle: WriteHandle): Promise<void>;
-  /** Reads a key-free snapshot of `folder` for a UI paint. */
-  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor>;
+  /** Reads a key-free snapshot of `folder`, or of the vault root for `null`. */
+  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
   /** Downloads one file node's plaintext through the verified read pipeline. */
   download(node: Uint8Array): Promise<ArrayBuffer>;
   /** Subscribes to the one-way event stream; returns an unsubscribe. */
@@ -136,7 +136,7 @@ export class LocalTransport extends CorrelatedTransport {
     );
   }
 
-  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
+  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
     return this.request<SnapshotDescriptor>(this.ready, (id) =>
       this.worker.postMessage({ type: 'snapshot', id, folder }, [])
     );
