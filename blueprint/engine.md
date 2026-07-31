@@ -508,6 +508,22 @@ contract-test suite owned by the testing-strategy blueprint (#28 D6).
   every mode's publish flow still traverses registration. `ByoIpfsConfig`
   stays sealed in vault settings; provider connection testing is engine-side
   over the Http seam (the TEE tester is gone).
+- **BYO endpoint policy** (#905): one gate over the whole config, applied
+  identically to a member-typed config and to one resolved back off the
+  network, and release-active on the encode side so nothing is published that
+  the reader would refuse. The rules: an absolute `http(s)` URL whose
+  authority is host-and-port bytes only; `https` unless the host is a
+  **literal** loopback address (`127.0.0.0/8`, `::1`, `localhost`), because
+  the probe carries the member's bearer and plaintext to anything else puts it
+  on the wire; the cloud-metadata address (`169.254.169.254`, its IPv6
+  spellings, and `fd00:ec2::254`) refused outright, since no IPFS provider
+  serves it; and an access token restricted to the bytes a header value may
+  carry. Private and link-local ranges otherwise stay **allowed** — self-hosting
+  on a LAN is the feature. The engine has no resolver and does not acquire one
+  for this: a name's address is the host's to resolve at request time, so
+  loopback is decided from the literal alone and the metadata refusal is a
+  legibility rule, not an SSRF containment boundary. Each refusal is its own
+  `ProviderError` verdict so the host can say which rule bit.
 - **Reads**: the token-authed trustless gateway is a member accelerator; any
   public trustless gateway is the no-auth fallback. The engine verifies CIDs
   client-side via core on every block/CAR response; media uses ranged fetches

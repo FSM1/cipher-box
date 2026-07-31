@@ -31,7 +31,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use crate::api::ApiClient;
-use crate::content::validate_endpoint;
+use crate::content::validate_byo_config;
 use crate::content::{ByoIpfsConfig, ByoKind, Gateway, PinMode, ProviderError, RetentionPolicy};
 use crate::entropy::{Entropy, EntropyError};
 use crate::gate::floor;
@@ -69,7 +69,7 @@ impl Default for VaultSettings {
 /// fail-closed: nothing is published.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsPublishError {
-    /// The BYO endpoint is not one the Http seam may be pointed at.
+    /// The BYO config is not one the Http seam may be pointed at.
     Endpoint(ProviderError),
     /// Core refused to encode or seal the body.
     Codec(CodecError),
@@ -326,9 +326,9 @@ enum BodyError {
     /// the live version along with its history. Unrepresentable on the encode
     /// side ([`RetentionPolicy::KeepLatest`] takes a [`NonZeroU64`]).
     RetainsNoVersions,
-    /// A BYO endpoint the Http seam may not be pointed at. A resolved record is
+    /// A BYO config the Http seam may not be pointed at. A resolved record is
     /// network input naming a host the engine will later talk to, so it clears
-    /// the same bar as a member-typed endpoint (AGENTS.md rule 8: the encode
+    /// the same bar as a member-typed config (AGENTS.md rule 8: the encode
     /// path refuses the same value, release-active).
     Endpoint(ProviderError),
 }
@@ -350,7 +350,7 @@ impl From<Malformed> for BodyError {
 /// would refuse to read back.
 fn validate(settings: &VaultSettings) -> Result<(), ProviderError> {
     match &settings.byo {
-        Some(byo) => validate_endpoint(&byo.endpoint),
+        Some(byo) => validate_byo_config(byo),
         None => Ok(()),
     }
 }
@@ -541,7 +541,7 @@ mod tests {
         let bare = VaultSettings::default();
         assert_eq!(round_trip(&bare), bare);
         let tokenless = VaultSettings {
-            byo: Some(byo("http://node.example", ByoKind::Kubo, None)),
+            byo: Some(byo("http://127.0.0.1:5001", ByoKind::Kubo, None)),
             ..VaultSettings::default()
         };
         assert_eq!(round_trip(&tokenless), tokenless);
@@ -602,18 +602,24 @@ mod tests {
         );
     }
 
-    /// The endpoint half: one predicate, both directions. The encode guard is
+    /// The BYO half: one predicate, both directions. The encode guard is
     /// release-active (`publish_settings` returns `Err`), and the reader reaches
     /// the same verdict on bytes hand-sealed past it.
     #[test]
-    fn an_endpoint_the_seam_may_not_be_pointed_at_is_refused_on_both_sides() {
-        for endpoint in ["file:///etc/passwd", "ftp://node.example", "node.example"] {
+    fn a_byo_config_the_seam_may_not_be_pointed_at_is_refused_on_both_sides() {
+        for (endpoint, token) in [
+            ("file:///etc/passwd", None),
+            ("ftp://node.example", None),
+            ("node.example", None),
+            ("http://node.example", None),
+            ("https://169.254.169.254", None),
+            ("https://node.example", Some("tok\r\nX-Evil: 1")),
+        ] {
             let settings = VaultSettings {
-                byo: Some(byo(endpoint, ByoKind::Kubo, None)),
+                byo: Some(byo(endpoint, ByoKind::Kubo, token)),
                 ..VaultSettings::default()
             };
             let refused = validate(&settings).unwrap_err();
-            assert_eq!(refused, ProviderError::InvalidEndpoint);
             assert_eq!(
                 decode_settings_body(&encode_settings_body(&settings).expect("encode"))
                     .unwrap_err(),

@@ -27,7 +27,7 @@ pub use dag::{
 };
 pub use profile::ContentProfile;
 pub use provider::{
-    ByoIpfsConfig, ByoKind, PinMode, ProviderError, test_connection, validate_endpoint,
+    ByoIpfsConfig, ByoKind, PinMode, ProviderError, test_connection, validate_byo_config,
 };
 pub use read::{
     ContentPlane, Gateway, GatewayConfig, GatewaySource, ReadError, is_plane_anchor,
