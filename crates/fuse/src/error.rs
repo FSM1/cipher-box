@@ -83,6 +83,7 @@ impl From<EngineError> for VfsError {
             | EngineError::InvalidSecret
             | EngineError::ContentSizeMismatch { .. }
             | EngineError::UnknownWriteHandle
+            | EngineError::ContentKeySealFailed { .. }
             | EngineError::Unimplemented { .. }) => VfsError::Internal {
                 message: error.to_string(),
             },
@@ -179,6 +180,7 @@ mod tests {
             OverBudgetCause::StagingBacklog,
             OverBudgetCause::StorageUnmeasured,
             OverBudgetCause::AccountQuota,
+            OverBudgetCause::TooManyWrites,
         ] {
             assert_eq!(
                 VfsError::from(EngineError::OverBudget {

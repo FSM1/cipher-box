@@ -48,6 +48,9 @@ async function journal(kind: string): Promise<void> {
 
 class JournalHost implements EngineHostLike {
   private nextHandle = 1n;
+  // Op ids are a separate id space from write handles; keep them disjoint so a
+  // client that conflates the two cannot pass against this fake.
+  private nextOpId = 1000n;
   private readonly open = new Map<bigint, { size: number; received: number }>();
 
   start(): Promise<void> {
@@ -82,7 +85,7 @@ class JournalHost implements EngineHostLike {
     if (write.received !== write.size) throw new Error('content size mismatch');
     this.open.delete(handle);
     await journal('commitWrite');
-    return handle;
+    return this.nextOpId++;
   }
 
   abortWrite(handle: bigint): Promise<void> {

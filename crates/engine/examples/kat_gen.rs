@@ -250,8 +250,7 @@ fn build_dag_root_accept() -> Vec<DagRootAcceptVector> {
         assert_eq!(manifest.chunk_size, chunk as u64, "{name}: chunk size");
         assert_eq!(manifest.size, size as u64, "{name}: size");
         assert_eq!(
-            manifest.leaf_cids,
-            leaves.iter().map(|l| l.cid.clone()).collect::<Vec<_>>(),
+            manifest.leaf_cids, leaf_cids,
             "{name}: links preserve file order"
         );
 
@@ -259,7 +258,7 @@ fn build_dag_root_accept() -> Vec<DagRootAcceptVector> {
             name: name.to_string(),
             chunk_size: chunk as u64,
             size: size as u64,
-            leaf_cids: leaves.iter().map(|l| hex::encode(&l.cid)).collect(),
+            leaf_cids: leaf_cids.iter().map(hex::encode).collect(),
             root_block: hex::encode(&dag.root_block),
             content_cid: hex::encode(&dag.content_cid),
             content_cid_str: encode_content_cid_str(&dag.content_cid),

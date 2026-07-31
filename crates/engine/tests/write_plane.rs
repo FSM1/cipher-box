@@ -20,9 +20,7 @@ use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use zeroize::Zeroizing;
 
-use cipherbox_engine::content::{
-    ContentKey, ContentWriter, DAG_ROOT_CODEC, GatewaySource, SealedChunk, decode_root,
-};
+use cipherbox_engine::content::{DAG_ROOT_CODEC, GatewaySource, SealedChunk, decode_root};
 use cipherbox_engine::facade::PendingClass;
 use cipherbox_engine::net::author::{EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::seams::{
@@ -37,7 +35,7 @@ use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
 use cipherbox_engine::testkit::{
     FakeDevice, FakeSeamTypes, FakeWorld, OWNER_ROOT_EPOCH as EPOCH,
     OWNER_ROOT_SCOPE_SEED as READ_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
-    OwnerRootSpec, SeededEntropy, block_on, owner_root_fixture,
+    OwnerRootSpec, SeededEntropy, block_on, frame_version as frame, owner_root_fixture,
 };
 use cipherbox_engine::{
     Command, ContentProfile, DeadLetter, DeadLetterReason, Engine, EngineError, Event, EventStream,
@@ -894,30 +892,11 @@ fn a_truncated_file_fails_the_commit_and_publishes_nothing() {
     );
 }
 
-/// Frame `plaintext` the way a write handle does, without the facade: every
-/// sealed block in file order, the root block, and its content address.
+/// A framed version plus its content address.
 fn frame_version(plaintext: &[u8]) -> (Vec<SealedChunk>, Vec<u8>, Vec<u8>) {
-    let mut entropy = SeededEntropy::new(99);
-    let mut writer = ContentWriter::new(
-        ContentKey::from_bytes([0x3C; 32]),
-        ContentProfile::CI,
-        plaintext.len() as u64,
-    );
-    let mut leaves = Vec::new();
-    let mut rest = plaintext;
-    while !rest.is_empty() {
-        let (remaining, leaf) = writer.push(rest, &mut entropy).unwrap();
-        if let Some(leaf) = leaf {
-            leaves.push(leaf);
-        }
-        rest = remaining;
-    }
-    let finished = writer.finish(&mut entropy).unwrap();
-    if let Some(tail) = finished.tail {
-        leaves.push(tail);
-    }
-    let root_cid = finished.content.content_cid().to_vec();
-    (leaves, finished.root_block, root_cid)
+    let (leaves, root_block, content) = frame(plaintext, [0x3C; 32], 99);
+    let root_cid = content.content_cid().to_vec();
+    (leaves, root_block, root_cid)
 }
 
 /// Put a framed version's blocks into a device's staging store.
@@ -939,9 +918,8 @@ fn stage_blocks(device: &FakeDevice, leaves: &[SealedChunk], root_block: &[u8], 
 }
 
 /// A version whose key blob will not open can never be read again, whatever its
-/// bytes say. The op dead-letters — and unlike every other abandonment, its
-/// blocks are **released** rather than preserved, since bytes no key opens are
-/// not the user's recoverable work (#818).
+/// bytes say. The op dead-letters through the failure valve, which **releases**
+/// its blocks: bytes no key opens are not the user's recoverable work (#818).
 #[test]
 fn a_version_whose_content_key_will_not_open_dead_letters_and_releases_its_blocks() {
     let world = FakeWorld::new();
@@ -1026,22 +1004,7 @@ fn an_evicted_prefix_of_the_block_set_is_loss_not_progress() {
 
     // Storage pressure evicts the *first* leaf before the drain ever runs, so
     // nothing has uploaded and no mark exists.
-    block_on(async {
-        let queued = alice.staging_store.queued_ops().await.unwrap();
-        let root_cid = record_content_root_cid(&queued[0].1).unwrap().unwrap();
-        let root_block = alice
-            .staging_store
-            .staged_bytes(&root_cid)
-            .await
-            .unwrap()
-            .unwrap();
-        let leaves = decode_root(&root_block).unwrap().leaf_cids;
-        alice
-            .staging_store
-            .remove_staged_bytes(&leaves[0])
-            .await
-            .unwrap();
-    });
+    let version = evict_leaf(&alice, |_| 0);
     tick(&world, &engine, &mut tasks);
 
     assert!(
@@ -1058,6 +1021,7 @@ fn an_evicted_prefix_of_the_block_set_is_loss_not_progress() {
         block_on(engine.view()).unwrap().children(ROOT).is_empty(),
         "no version publishes over a block nothing holds"
     );
+    assert_no_blocks_staged(&alice, &version);
 }
 
 /// The drain removes each block on its confirmed upload, so the blocks still
@@ -1084,22 +1048,7 @@ fn a_hole_in_the_staged_block_suffix_is_loss_and_fails_closed() {
     .unwrap();
 
     // The host loses one block from the middle of the set before the drain runs.
-    block_on(async {
-        let queued = alice.staging_store.queued_ops().await.unwrap();
-        let root_cid = record_content_root_cid(&queued[0].1).unwrap().unwrap();
-        let root_block = alice
-            .staging_store
-            .staged_bytes(&root_cid)
-            .await
-            .unwrap()
-            .unwrap();
-        let leaves = decode_root(&root_block).unwrap().leaf_cids;
-        alice
-            .staging_store
-            .remove_staged_bytes(&leaves[leaves.len() / 2])
-            .await
-            .unwrap();
-    });
+    let version = evict_leaf(&alice, |leaves| leaves / 2);
     tick(&world, &engine, &mut tasks);
 
     assert!(
@@ -1116,6 +1065,44 @@ fn a_hole_in_the_staged_block_suffix_is_loss_and_fails_closed() {
         block_on(engine.view()).unwrap().children(ROOT).is_empty(),
         "no short version publishes"
     );
+    assert_no_blocks_staged(&alice, &version);
+}
+
+/// Remove one of the queued version's leaves, chosen by index from the leaf
+/// count, and return every block the version framed.
+fn evict_leaf(device: &FakeDevice, index: impl Fn(usize) -> usize) -> Vec<Vec<u8>> {
+    block_on(async {
+        let queued = device.staging_store.queued_ops().await.unwrap();
+        let root_cid = record_content_root_cid(&queued[0].1).unwrap().unwrap();
+        let root_block = device
+            .staging_store
+            .staged_bytes(&root_cid)
+            .await
+            .unwrap()
+            .unwrap();
+        let leaves = decode_root(&root_block).unwrap().leaf_cids;
+        device
+            .staging_store
+            .remove_staged_bytes(&leaves[index(leaves.len())])
+            .await
+            .unwrap();
+        leaves
+            .into_iter()
+            .chain(core::iter::once(root_cid))
+            .collect()
+    })
+}
+
+/// The abandonment released the version: none of its blocks still hold staging
+/// budget, which no other assertion in these tests would notice.
+fn assert_no_blocks_staged(device: &FakeDevice, version: &[Vec<u8>]) {
+    let staged = block_on(device.staging_store.staged_keys()).unwrap();
+    for cid in version {
+        assert!(
+            !staged.contains(cid),
+            "an abandoned version holds no staging budget"
+        );
+    }
 }
 
 /// An op the completion record already covers is restore residue: a data dir
@@ -2260,6 +2247,46 @@ fn an_abandoned_create_retires_the_child_name_it_registered_exactly_once() {
         retire_targets(&alice),
         retired,
         "the abandonment ran once; later passes retire nothing again"
+    );
+}
+
+/// An abandoned `updateContent` uploaded a version root no record will ever
+/// link — its file still publishes the versions it had — so the root leaves the
+/// republish inventory with the op while the file's own name stays live.
+#[test]
+fn an_abandoned_version_retires_its_root_and_keeps_the_files_name() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let target = WriteTarget::NewFile {
+        parent: ROOT,
+        name: "photo.bin".into(),
+    };
+    write_file(&mut engine, target, &(0..200u8).collect::<Vec<_>>()).unwrap();
+    tick(&world, &engine, &mut tasks);
+    let file = child_id(&engine, ROOT, "photo.bin");
+    assert!(retire_targets(&alice).is_empty(), "the create landed");
+
+    write_file(
+        &mut engine,
+        WriteTarget::Version { node: file },
+        &(0..120u8).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let version_root = block_on(async {
+        let queued = alice.staging_store.queued_ops().await.unwrap();
+        record_content_root_cid(&queued[0].1).unwrap().unwrap()
+    });
+    blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("UPLOAD_TOO_LARGE")))));
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        retire_targets(&alice),
+        vec![encode_content_cid_str(&version_root)],
+        "the version root leaves the inventory; the file's own name does not"
     );
 }
 

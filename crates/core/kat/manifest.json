@@ -492,9 +492,10 @@
     },
     "reject": {
       "file": "vectors/content_key/content_key_reject.json",
-      "count": 13,
+      "count": 14,
       "checks": [
         "hpke-open-failed",
+        "hpke-non-contributory",
         "content-cid-mismatch",
         "truncated",
         "missing-field",

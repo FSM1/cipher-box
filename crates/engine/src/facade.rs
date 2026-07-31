@@ -611,6 +611,13 @@ pub enum EngineError {
         /// The assembly check that fired; never key material.
         check: &'static str,
     },
+    /// The version's content key could not be sealed to the owner's enc subkey,
+    /// so the commit authors no op. Deterministic and fail-closed — never
+    /// retryable availability, unlike [`Seam`](EngineError::Seam).
+    ContentKeySealFailed {
+        /// The seal check that fired; never key material.
+        check: &'static str,
+    },
     /// A host seam failed (durable op-queue I/O). Availability, never a trust
     /// decision — trust classification happens below the facade.
     Seam {
@@ -751,6 +758,9 @@ impl fmt::Display for EngineError {
                 f,
                 "this file is too large to store as a single version: [{check}]"
             ),
+            EngineError::ContentKeySealFailed { check } => {
+                write!(f, "content key seal failed: [{check}]")
+            }
             EngineError::Seam { message } => write!(f, "seam error: {message}"),
             EngineError::Entropy { message } => write!(f, "entropy error: {message}"),
             EngineError::Auth { message } => write!(f, "auth error: {message}"),
@@ -1696,6 +1706,16 @@ impl<T: SeamTypes> Engine<T> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
+        // Checked before anything is spent: a version of a node this device has
+        // no file for would journal an `updateContent` the drain can only halt
+        // on, after a whole upload's worth of staging, entropy and budget.
+        if let WriteTarget::Version { node } = &target {
+            match self.render().await?.node(*node).map(|meta| meta.kind) {
+                Some(NodeKind::Folder) => return Err(EngineError::NotAFile),
+                Some(_) => {}
+                None => return Err(EngineError::UnknownNode),
+            }
+        }
         let requested = sealed_total_bytes(size, &self.content_profile).map_err(|error| {
             EngineError::ContentTooLarge {
                 check: error.check(),
@@ -1919,9 +1939,7 @@ impl<T: SeamTypes> Engine<T> {
             &root_cid,
             finished.key.as_bytes(),
         )
-        .map_err(|e| EngineError::Seam {
-            message: format!("content key seal failed: {}", e.check()),
-        })?;
+        .map_err(|e| EngineError::ContentKeySealFailed { check: e.check() })?;
 
         let content = StagedContent {
             root_cid,

@@ -289,10 +289,23 @@ mod tests {
             AT,
         );
         let bare = Op::create(id(2), id(0), "dir", NewNode::Folder, 1, AT);
+        let empty = Op::create(
+            id(3),
+            id(0),
+            "e.txt",
+            NewNode::File { content: None },
+            1,
+            AT,
+        );
 
-        let view = apply_overlay(&base, &[with_content, bare]);
+        let view = apply_overlay(&base, &[with_content, bare, empty]);
 
         assert_eq!(view.node(id(1)).unwrap().content_version, Some(1));
         assert_eq!(view.node(id(2)).unwrap().content_version, None);
+        assert_eq!(
+            view.node(id(3)).unwrap().content_version,
+            None,
+            "an empty file create authors no version"
+        );
     }
 }

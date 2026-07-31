@@ -69,10 +69,20 @@ export class EngineHost implements EngineHostLike {
   }
 
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
-    const node = 'node' in target ? this.wasm.NodeId.fromBytes(target.node) : undefined;
-    const parent = 'node' in target ? undefined : this.wasm.NodeId.fromBytes(target.parent);
-    const name = 'node' in target ? undefined : target.name;
-    return this.handle.beginWrite(parent, name, node, size);
+    if ('node' in target) {
+      return this.handle.beginWrite(
+        undefined,
+        undefined,
+        this.wasm.NodeId.fromBytes(target.node),
+        size
+      );
+    }
+    return this.handle.beginWrite(
+      this.wasm.NodeId.fromBytes(target.parent),
+      target.name,
+      undefined,
+      size
+    );
   }
 
   async pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {

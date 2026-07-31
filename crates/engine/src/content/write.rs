@@ -73,8 +73,10 @@ impl ContentWriter {
 
     /// Absorb the head of `bytes` up to the chunk boundary, sealing a leaf if
     /// that completed one. Returns the bytes not yet absorbed, so a caller
-    /// loops until the slice is empty; every iteration either seals a leaf or
-    /// empties the slice, so the loop always makes progress.
+    /// loops until the slice is empty. Progress holds only within the declared
+    /// size: past it nothing is absorbed, and the over-push is
+    /// [`Engine::push_chunk`](crate::Engine::push_chunk)'s to fail closed
+    /// (#830).
     pub fn push<'a>(
         &mut self,
         bytes: &'a [u8],
@@ -251,14 +253,16 @@ mod tests {
         );
         let capacity = writer.pending.capacity();
         // Far past both the declared size and the chunk size.
-        let mut rest: &[u8] = &[0u8; 512];
-        loop {
-            let (remaining, _) = writer.push(rest, &mut entropy).unwrap();
-            if remaining.len() == rest.len() {
-                break;
-            }
-            rest = remaining;
-        }
+        let over = [0u8; 512];
+        let (remaining, _) = writer.push(&over, &mut entropy).unwrap();
+        assert_eq!(
+            remaining.len(),
+            over.len() - 4,
+            "the writer absorbs only up to the declaration"
+        );
+        let (again, leaf) = writer.push(remaining, &mut entropy).unwrap();
+        assert_eq!(again.len(), remaining.len(), "and nothing at all past it");
+        assert!(leaf.is_none());
         assert_eq!(writer.pending.capacity(), capacity, "the buffer never grew");
         assert_eq!(
             writer.observed_size(),

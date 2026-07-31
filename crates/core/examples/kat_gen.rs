@@ -6486,6 +6486,10 @@ fn build_content_key_reject() -> Vec<ContentKeyRejectVector> {
     let wide_enc = reframe_content_key(&blob, |m| {
         m.insert("enc", Value::Bytes(vec![0x5a; 48]));
     });
+    // A low-order point drives the KEM to an all-zero shared secret.
+    let low_order_enc = reframe_content_key(&blob, |m| {
+        m.insert("enc", Value::Bytes(low_order_x25519_point().to_vec()));
+    });
     let truncated = blob[..blob.len() / 2].to_vec();
     let base_mode_forgery = forged_base_mode_content_key(&owner, EPOCH, &cid);
     let stranger_scalar: [u8; 32] = std::array::from_fn(|i| (0x21 + i) as u8);
@@ -6595,6 +6599,14 @@ fn build_content_key_reject() -> Vec<ContentKeyRejectVector> {
             &wide_enc,
             "invalid-field-length",
             "malformed",
+        ),
+        content_key_reject_vector(
+            "low-order-enc",
+            scalar,
+            &authored(),
+            &low_order_enc,
+            "hpke-non-contributory",
+            "trust",
         ),
     ]
 }

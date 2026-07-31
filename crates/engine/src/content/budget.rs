@@ -133,7 +133,10 @@ impl StagingLedger {
         self.live.remove(&id);
     }
 
-    /// Bytes reserved by live handles and not yet staged-and-accounted.
+    /// Bytes reserved by live handles. A reservation is held whole from
+    /// admission to release, so a handle's already-staged bytes are counted
+    /// both here and in the store's `staged` total — conservative by design:
+    /// it can refuse early, never over-admit.
     pub(crate) fn reserved(&self) -> u64 {
         self.live.values().copied().fold(0, u64::saturating_add)
     }

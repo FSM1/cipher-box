@@ -33,6 +33,7 @@ describe('buildCommand', () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]).toHaveLength(3);
+    expect(calls[0][0]).toEqual({ bytes: new Uint8Array(16).fill(1) });
     expect(calls[0][1]).toBe('a.txt');
     expect(calls[0][2]).toBe(fakeWasmEnums.NodeKind.File);
   });

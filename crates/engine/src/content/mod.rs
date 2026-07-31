@@ -9,7 +9,7 @@
 //! this plane composes them and owns the framing/DAG shape and the placement,
 //! quota, and retention judgment (#630).
 
-pub mod budget;
+pub(crate) mod budget;
 pub mod chunk;
 pub mod dag;
 pub(crate) mod limits;

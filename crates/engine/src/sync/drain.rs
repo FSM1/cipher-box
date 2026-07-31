@@ -1400,11 +1400,13 @@ where
     /// Drop every staged block of an op's version.
     ///
     /// Called once its record publishes — the bytes are on the network — and on
-    /// **every** abandonment. The blocks are not the user's recoverable work
-    /// past that point: the only copy of the version's content key rides the op
-    /// record, which the abandonment deletes, so what survives is ciphertext
+    /// a failure-valve abandonment, where the blocks are not the user's
+    /// recoverable work: the only copy of the version's content key rides the
+    /// op record, which the abandonment deletes, so what survives is ciphertext
     /// nothing can ever open. Holding it would spend the staging budget forever
-    /// (#818; the dead-letter event is what surfaces the loss).
+    /// (#818; the dead-letter event is what surfaces the loss). A terminally
+    /// unrebasable op keeps its staged bytes instead (blueprint/engine.md, #33
+    /// D6), so this is not called on that path.
     ///
     /// Best-effort: a failed removal is orphan residue a later GC pass collects,
     /// never a reason to fail a landed publish.
@@ -1659,11 +1661,10 @@ where
     /// the evidence: a created node reaches it only once a parent record naming
     /// it published.
     async fn abandon(&self, scope: &DrainScope<'_>, op_id: OpId, op: &Op) -> Result<(), Halt> {
-        if !self.base.borrow().contains(op.target) {
-            retire(self.api, &registered_by(scope, op))
-                .await
-                .map_err(|_| Halt::Unclassified)?;
-        }
+        let target_published = self.base.borrow().contains(op.target);
+        retire(self.api, &registered_by(scope, op, target_published))
+            .await
+            .map_err(|_| Halt::Unclassified)?;
         self.dequeue_op(op_id).await
     }
 
@@ -1803,24 +1804,22 @@ fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
 }
 
 /// The registry rows one op's publish registered, mirroring what the publish
-/// pipeline sends (`PublishRequest::registration`). An abandoned create's child
-/// name never becomes reachable, so it leaves the republish inventory with the
-/// op — and so does the version root it pinned, which no reachable record links.
+/// pipeline sends (`PublishRequest::registration`). `target_published` is
+/// whether the op's node survives in gate-passing state.
 ///
-/// Only the root: the leaves are not separately enumerable without the manifest,
-/// and retiring the root is what drops the reference count the accelerator's
-/// own GC walks.
-fn registered_by(scope: &DrainScope<'_>, op: &Op) -> Vec<String> {
-    if !matches!(op.kind, OpKind::Create { .. }) {
-        return Vec::new();
-    }
-    core::iter::once(
+/// The child name goes only with an abandoned create whose target never became
+/// reachable — a landed node still publishes under it. The version root goes
+/// with **any** content-bearing op: no record ever links a version whose op was
+/// abandoned, whatever became of the node it was authored for.
+fn registered_by(scope: &DrainScope<'_>, op: &Op, target_published: bool) -> Vec<String> {
+    let name = (!target_published && matches!(op.kind, OpKind::Create { .. })).then(|| {
         derive_write_name(scope.write_scope_seed, &op.target.0)
             .as_str()
-            .to_owned(),
-    )
-    .chain(op.content_root_cid().map(encode_content_cid_str))
-    .collect()
+            .to_owned()
+    });
+    name.into_iter()
+        .chain(op.content_root_cid().map(encode_content_cid_str))
+        .collect()
 }
 
 #[cfg(test)]

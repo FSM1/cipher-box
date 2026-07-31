@@ -109,7 +109,8 @@ window.cbCreateFile = async (name: string): Promise<string> => {
       await client!.facade.pushChunk(handle, content.buffer);
       await client!.facade.commitWrite(handle);
     } catch (error) {
-      await client!.facade.abortWrite(handle);
+      // A failed abort must not mask the write failure that triggered it.
+      await client!.facade.abortWrite(handle).catch(() => undefined);
       throw error;
     }
     return 'ok';

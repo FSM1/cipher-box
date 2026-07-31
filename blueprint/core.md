@@ -204,6 +204,20 @@ another identity could open is unrepresentable rather than compared away, and
 the transplant vector is what proves tag `0x0b` plus the distinct HPKE info
 string — not the framing — keep the two families apart.
 
+The `content-key` KAT set is `content_key_accept` (a genesis-epoch and a
+max-epoch blob, each reproducing its exact bytes from a fixed enc + ephemeral,
+then opening back to the version's content key) and `content_key_reject`
+(tampered ciphertext, tampered `enc`, a truncated blob, a foreign recipient, the
+same base-mode forgery, `scope` and `epoch` transplants, a **swapped
+`contentCid`** — the binding that stops a key being moved onto another version's
+blocks — a forward `v` with and without an unknown clear-header field, an
+unknown clear-header field alone, a missing `enc`, and a wide and a low-order
+`enc`). It seals HPKE **auth mode** to the owner's own enc subkey over the same
+three-key clear header as the settings record, with `{scope, epoch}` bound in
+the AAD and the `contentCid` bound inside the seal. Both directions refuse a
+malformed `contentCid` release-actively (AGENTS.md rule 8): a blob whose CID the
+open path would refuse is a version whose key is gone.
+
 ## KDF edge catalog
 
 Frozen per #39 D8 (F-9). Per-node material takes the shape

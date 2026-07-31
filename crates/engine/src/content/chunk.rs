@@ -140,6 +140,23 @@ mod tests {
         assert_eq!(recovered, plaintext, "chunks reassemble to the original");
     }
 
+    /// The staging reservation is exact only while this constant is the real
+    /// per-leaf overhead, so pin it against a sealed leaf rather than against a
+    /// second copy of the wire layout's arithmetic.
+    #[test]
+    fn the_leaf_overhead_constant_matches_a_real_sealed_leaf() {
+        let key = ContentKey::from_bytes([2u8; KEY_LEN]);
+        for len in [0usize, 1, 13, 16] {
+            let leaf =
+                seal_one_chunk(&key, &vec![0xABu8; len], &mut SeededEntropy::new(4)).unwrap();
+            assert_eq!(
+                leaf.sealed.len() as u64,
+                len as u64 + SEALED_LEAF_OVERHEAD,
+                "{len}-byte chunk: the reservation must match the sealed layout"
+            );
+        }
+    }
+
     #[test]
     fn empty_input_frames_to_one_empty_leaf() {
         let key = ContentKey::from_bytes([3u8; KEY_LEN]);

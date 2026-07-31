@@ -576,7 +576,9 @@ mod tests {
     fn root_block_len_matches_the_assembled_root() {
         for profile in [ContentProfile::CI, ContentProfile::PRODUCTION] {
             let chunk = profile.chunk_size() as u64;
-            for leaves in [0u64, 1, 23, 24, 255, 256, 300] {
+            // Every CBOR head width the links array and the `size` uint cross:
+            // 1, 2, 3 and 5 bytes.
+            for leaves in [0u64, 1, 23, 24, 255, 256, 300, 65_535, 65_536] {
                 let size = leaves * chunk;
                 let assembled = assemble(&dummy_leaves(leaves.max(1) as usize), size, &profile)
                     .expect("assembles")

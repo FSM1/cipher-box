@@ -263,6 +263,14 @@ impl EngineHandle {
                     .into());
                 }
             };
+            // A float-to-int cast saturates rather than failing, so a negative
+            // or NaN size would silently reserve zero and only surface as a
+            // `contentSizeMismatch` once real chunks arrive.
+            if !size.is_finite() || size < 0.0 {
+                return Err(
+                    JsError::new("beginWrite size must be a non-negative finite number").into(),
+                );
+            }
             let handle = engine
                 .write()
                 .await
@@ -396,6 +404,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::ContentSizeMismatch { .. } => "contentSizeMismatch",
         EngineError::UnknownWriteHandle => "unknownWriteHandle",
         EngineError::ContentTooLarge { .. } => "contentTooLarge",
+        EngineError::ContentKeySealFailed { .. } => "contentKeySealFailed",
         EngineError::Seam { .. } => "seam",
         EngineError::Entropy { .. } => "entropy",
         EngineError::Auth { .. } => "auth",

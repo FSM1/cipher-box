@@ -330,8 +330,8 @@ fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
         assert_eq!(report.dead_letters.len(), 1);
         assert_eq!(report.dead_letters[0].1, DeadLetterReason::TargetGone);
 
-        // The staged bytes are preserved (the caller does NOT GC a dead-letter's
-        // bytes — the user can still recover them).
+        // A terminally unrebasable op keeps its staged bytes (blueprint/engine.md,
+        // #33 D6) — only the failure valve's abandonments release them (#818).
         assert_eq!(
             store.staged_bytes(&staged_root.root_cid).await.unwrap(),
             Some(b"sealed-bytes".to_vec()),

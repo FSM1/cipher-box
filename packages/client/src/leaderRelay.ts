@@ -216,8 +216,11 @@ export class LeaderRelay {
             return opId;
           }
           case 'abortWrite':
+            await this.transport.abortWrite(handle);
+            // Dropped only once the abort resolves: a rejected one leaves the
+            // handle owned so it can still be retried or released.
             this.writeOwners.delete(handle);
-            return this.transport.abortWrite(handle);
+            return;
         }
       })
     );

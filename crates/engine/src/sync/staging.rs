@@ -101,12 +101,12 @@ pub async fn orphan_staging_keys<S: StagingStore>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::content::{ContentKey, ContentProfile, ContentWriter, SealedChunk};
+    use crate::content::SealedChunk;
     use crate::facade::NodeId;
     use crate::seams::UnixMillis;
     use crate::sync::op::{NewNode, StagedContent};
     use crate::testkit::fakes::InMemoryStagingStore;
-    use crate::testkit::{SeededEntropy, block_on};
+    use crate::testkit::{block_on, frame_version};
     use cipherbox_core::suite::aead::KEY_LEN;
     use cipherbox_core::suite::x25519::X25519Secret;
     use std::sync::LazyLock;
@@ -125,35 +125,16 @@ mod tests {
         }
     }
 
-    /// Frame `plaintext` the way a write handle does: every sealed block in file
-    /// order, the root block, and the op's staged-content reference.
+    /// A framed version plus the op's staged-content reference to it.
     fn framed(plaintext: &[u8]) -> (Vec<SealedChunk>, Vec<u8>, StagedContent) {
-        let mut entropy = SeededEntropy::new(1);
-        let mut writer = ContentWriter::new(
-            ContentKey::from_bytes([9u8; KEY_LEN]),
-            ContentProfile::CI,
-            plaintext.len() as u64,
-        );
-        let mut blocks = Vec::new();
-        let mut rest = plaintext;
-        while !rest.is_empty() {
-            let (remaining, leaf) = writer.push(rest, &mut entropy).unwrap();
-            if let Some(leaf) = leaf {
-                blocks.push(leaf);
-            }
-            rest = remaining;
-        }
-        let finished = writer.finish(&mut entropy).unwrap();
-        if let Some(tail) = finished.tail {
-            blocks.push(tail);
-        }
+        let (blocks, root_block, content) = frame_version(plaintext, [9u8; KEY_LEN], 1);
         let staged = StagedContent {
-            root_cid: finished.content.content_cid().to_vec(),
-            plaintext_size: finished.content.size(),
+            root_cid: content.content_cid().to_vec(),
+            plaintext_size: content.size(),
             sealed_content_key: b"sealed-key-blob".to_vec(),
             epoch: 1,
         };
-        (blocks, finished.root_block, staged)
+        (blocks, root_block, staged)
     }
 
     /// Stage every block of a version, the way a write handle does.
