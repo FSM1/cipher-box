@@ -75,6 +75,12 @@ impl<'a> RecordReader<'a> {
         }
     }
 
+    /// The clear tag this reader answers to — the owner's `enc-subkey` public
+    /// half, and so the identity a classification is only valid for.
+    pub(crate) fn owner_tag(&self) -> [u8; 32] {
+        self.owner_tag
+    }
+
     /// Classify one durable record. Every discriminator that can say "not for
     /// me" runs before the [`Undecodable`](RecordClass::Undecodable) verdict,
     /// because that verdict *deletes*.

@@ -18,9 +18,13 @@ pub struct OpId(pub u64);
 /// enforcement is engine policy fed by [`StagingStore::staged_bytes_total`].
 ///
 /// Contract, enforced by the conformance kit: FIFO ordering with strictly
-/// increasing never-reused ids, durability of queue and staged bytes across
-/// reopen, and enumeration/removal exact enough that orphan GC is
-/// implementable. Hosts: IndexedDB + OPFS (web), local journal (desktop).
+/// increasing ids that are never reused — not after the highest is removed,
+/// not after the queue drains empty and the store reopens — the bytes at an id
+/// being immutable for that id's lifetime, durability of queue and staged bytes
+/// across reopen, and enumeration/removal exact enough that orphan GC is
+/// implementable. The engine reads the id progression as evidence about the
+/// queue, so a host that restarts or recycles ids is not merely untidy.
+/// Hosts: IndexedDB + OPFS (web), local journal (desktop).
 pub trait StagingStore {
     /// Appends an opaque op record to the durable FIFO queue and returns
     /// its id.

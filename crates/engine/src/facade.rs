@@ -55,7 +55,7 @@ use crate::sync::op::{NewNode, Op, Replaced, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
-use crate::sync::rebase::{QueueScan, decode_queue};
+use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
 
 pub use crate::sync::drain::BlockedOp;
 pub use crate::sync::rebase::DeadLetterReason;
@@ -1087,6 +1087,9 @@ pub struct Engine<T: SeamTypes> {
     /// Retained dead-lettered ops. Feeds [`SnapshotView`]'s dead-letter surface
     /// (#33 D6: dead letters are retained, never silent).
     dead_letters: Rc<RefCell<RetainedDeadLetters>>,
+    /// Memo of the durable queue scan every read renders through
+    /// ([`scan_queue`](Self::scan_queue)).
+    queue_scan: RefCell<QueueScanMemo>,
     /// The drain's over-quota hold, written by the drain tick and read by
     /// [`snapshot`](Self::snapshot). In-memory: a restart re-derives it from the
     /// next drain attempt's own 413 rather than trusting a stale verdict.
@@ -1139,6 +1142,7 @@ impl<T: SeamTypes> Engine<T> {
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
+                queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
@@ -2261,6 +2265,9 @@ impl<T: SeamTypes> Engine<T> {
     /// Scan the durable staging store's queue for this session. Undecodable
     /// entries are dropped from the render here; the cold-start path
     /// dead-letters and removes them from the durable queue.
+    ///
+    /// Memoized on the queue's own shape ([`QueueScanMemo`]), so reads pay the
+    /// HPKE open per owned record once per queue mutation, not once per render.
     async fn scan_queue(&self) -> Result<QueueScan, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let raw = self
@@ -2269,7 +2276,9 @@ impl<T: SeamTypes> Engine<T> {
             .queued_ops()
             .await
             .map_err(EngineError::from_seam)?;
-        Ok(decode_queue(&RecordReader::new(session.enc_subkey()), &raw))
+        let reader = RecordReader::new(session.enc_subkey());
+        let mut memo = self.queue_scan.borrow_mut();
+        Ok(memo.scan(&reader, &raw, decode_queue).clone())
     }
 
     /// This session's pending ops, FIFO.
@@ -3188,6 +3197,43 @@ mod tests {
                 view.retained_records, 1,
                 "but the count says the device is not empty"
             );
+        }
+
+        /// Ops enqueue and drain through the staging seam, not through the
+        /// engine's command path, so the memoized queue scan (#880) has to key
+        /// on the durable queue itself.
+        #[test]
+        fn a_record_enqueued_behind_the_engines_back_renders_on_the_next_read() {
+            let (mut engine, _events) = started();
+            let root = engine.root();
+            create(&mut engine, root, "mine.txt", NodeKind::File);
+            // Prime the memo with a scan that predates the enqueue below.
+            assert_eq!(block_on(engine.snapshot(root)).unwrap().children.len(), 1);
+
+            let ours = crate::sync::record::encode_op_record(
+                RecordSeal {
+                    owner_enc_secret: engine.session.as_ref().expect("started").enc_subkey(),
+                    ephemeral_scalar: Zeroizing::new([0x2B; 32]),
+                },
+                &Op::create(
+                    NodeId([8; 16]),
+                    root,
+                    "out-of-band.txt",
+                    NewNode::File { content: None },
+                    1,
+                    crate::seams::UnixMillis(1),
+                ),
+            )
+            .unwrap();
+            block_on(engine.seams.staging_store.enqueue_op(&ours)).unwrap();
+
+            let names: Vec<String> = block_on(engine.snapshot(root))
+                .unwrap()
+                .children
+                .into_iter()
+                .map(|child| child.name)
+                .collect();
+            assert_eq!(names, vec!["out-of-band.txt", "mine.txt"]);
         }
 
         #[test]
