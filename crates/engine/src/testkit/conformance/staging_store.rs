@@ -98,20 +98,28 @@ where
         "op ids must never be reused, even across reopen"
     );
 
-    // Draining the queue empty must not restart the id progression either. The
-    // engine's queue-scan memo reads an unchanged high-water id plus an
-    // unchanged length as proof that nothing was enqueued or removed (#880), so
-    // a store that allocated `max + 1` — or restarted at 1 once empty — would
-    // let a fresh op wear a drained op's id and go unread.
-    for id in [id_a, id_c, id_d] {
+    // Removing the highest id must not release it while lower ids are still
+    // queued. The engine's queue-scan memo reads an unchanged high-water id plus
+    // an unchanged length as proof that nothing was enqueued or removed (#880),
+    // so a store allocating `max(queued) + 1` would hand the next op the id it
+    // just freed and rebuild that exact pair over different records.
+    reopened.remove_op(id_d).await.unwrap();
+    let id_e = reopened.enqueue_op(b"op-e").await.unwrap();
+    assert!(
+        id_e > id_d,
+        "a removed high-water op id must never be handed out again"
+    );
+
+    // Nor may draining the queue empty restart the progression.
+    for id in [id_a, id_c, id_e] {
         reopened.remove_op(id).await.unwrap();
     }
     assert!(reopened.queued_ops().await.unwrap().is_empty());
 
     let drained = open().await;
-    let id_e = drained.enqueue_op(b"op-e").await.unwrap();
+    let id_f = drained.enqueue_op(b"op-f").await.unwrap();
     assert!(
-        id_e > id_d,
+        id_f > id_e,
         "an op id must never be reused, not even after the queue drains empty"
     );
 }
