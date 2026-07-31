@@ -54,7 +54,7 @@ pub fn encoded_len(value: &Value) -> Result<usize, CodecError> {
     Ok(len)
 }
 
-fn count_value(len: &mut usize, value: &Value, depth: usize) -> Result<(), CodecError> {
+pub(super) fn count_value(len: &mut usize, value: &Value, depth: usize) -> Result<(), CodecError> {
     check_depth(depth, *len)?;
     match value {
         Value::Unsigned(n) | Value::Negative(n) => *len += head_len(*n),
@@ -89,12 +89,12 @@ fn check_depth(depth: usize, offset: usize) -> Result<(), CodecError> {
 }
 
 /// The byte length of a text item: its head plus its UTF-8 bytes.
-fn text_len(t: &str) -> usize {
+pub(super) fn text_len(t: &str) -> usize {
     head_len(t.len() as u64) + t.len()
 }
 
 /// The byte length of a shortest-form head for `arg` (mirrors [`write_head`]).
-fn head_len(arg: u64) -> usize {
+pub(super) fn head_len(arg: u64) -> usize {
     match arg {
         0..=23 => 1,
         24..=0xff => 2,

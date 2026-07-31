@@ -9,9 +9,15 @@
 //! rewrite canonical.
 
 use super::decode::Decoder;
-use super::encode::{MAJOR_MAP, write_head, write_text, write_value};
-use super::value::{Map, canonical_key_cmp};
+use super::encode::{
+    MAJOR_MAP, count_value, head_len, text_len, write_head, write_text, write_value,
+};
+use super::value::{Map, Value, canonical_key_cmp};
 use crate::error::{CodecError, Malformed};
+
+/// The depth a top-level map's values sit at: the map itself is the enclosing
+/// item, so its entries are one level in.
+const MAP_ENTRY_DEPTH: usize = 1;
 
 /// Fields preserved through a decode the caller's schema did not recognize:
 /// key plus the exact canonical bytes of the value. Ordered canonically.
@@ -58,8 +64,7 @@ pub fn decode_map_partial(
     for _ in 0..head.arg {
         let key = d.read_map_key(prev.as_deref())?;
         let start = d.pos();
-        // Depth 1: the top-level map is the enclosing item.
-        let value = d.read_value(1)?;
+        let value = d.read_value(MAP_ENTRY_DEPTH)?;
         if is_known(&key) {
             known.push((key.clone(), value));
         } else {
@@ -79,10 +84,35 @@ pub fn decode_map_partial(
 /// emitted byte-stable. A key present on both sides is a caller bug and
 /// rejects fail-closed.
 pub fn encode_map_partial(known: &Map, unknown: &UnknownFields) -> Result<Vec<u8>, CodecError> {
-    let mut out = Vec::new();
-    let total = known.len() + unknown.len();
-    write_head(&mut out, MAJOR_MAP, total as u64);
+    let merged = merge(known, unknown)?;
+    let mut out = Vec::with_capacity(merged_len(&merged)?);
+    write_head(&mut out, MAJOR_MAP, merged.len() as u64);
+    for (key, value) in &merged {
+        write_text(&mut out, key);
+        match value {
+            MergedValue::Known(v) => write_value(&mut out, v, MAP_ENTRY_DEPTH)?,
+            MergedValue::Raw(raw) => out.extend_from_slice(raw),
+        }
+    }
+    Ok(out)
+}
 
+/// A merged entry's value: a re-built known value, or a preserved unknown
+/// value's raw canonical bytes.
+enum MergedValue<'a> {
+    Known(&'a Value),
+    Raw(&'a [u8]),
+}
+
+/// Interleave the two canonically-ordered sides into the emit sequence. Holds
+/// borrows only, so no secret bytes are copied into it. Walking the merge here
+/// rather than in each pass is what lets both rejects — collision and
+/// `depth-exceeded` — fire before the output buffer exists.
+fn merge<'a>(
+    known: &'a Map,
+    unknown: &'a UnknownFields,
+) -> Result<Vec<(&'a str, MergedValue<'a>)>, CodecError> {
+    let mut merged = Vec::with_capacity(known.len() + unknown.len());
     let mut k = known.entries().iter().peekable();
     let mut u = unknown.entries.iter().peekable();
     loop {
@@ -100,16 +130,28 @@ pub fn encode_map_partial(known: &Map, unknown: &UnknownFields) -> Result<Vec<u8
         };
         if take_known {
             let (key, value) = k.next().expect("peeked");
-            write_text(&mut out, key);
-            // Depth 1: the emitted map is the enclosing item.
-            write_value(&mut out, value, 1)?;
+            merged.push((key.as_str(), MergedValue::Known(value)));
         } else {
             let (key, raw) = u.next().expect("peeked");
-            write_text(&mut out, key);
-            out.extend_from_slice(raw);
+            merged.push((key.as_str(), MergedValue::Raw(raw)));
         }
     }
-    Ok(out)
+    Ok(merged)
+}
+
+/// The exact byte length of the merged map, sizing [`encode_map_partial`]'s one
+/// allocation for the realloc-hygiene reason [`super::encode::encode`] documents.
+/// Counting in emit order keeps `depth-exceeded`'s reported offset exact.
+fn merged_len(merged: &[(&str, MergedValue<'_>)]) -> Result<usize, CodecError> {
+    let mut len = head_len(merged.len() as u64);
+    for (key, value) in merged {
+        len += text_len(key);
+        match value {
+            MergedValue::Known(v) => count_value(&mut len, v, MAP_ENTRY_DEPTH)?,
+            MergedValue::Raw(raw) => len += raw.len(),
+        }
+    }
+    Ok(len)
 }
 
 /// Convenience for schema codecs: `true` when `key` is in `known`.
@@ -120,7 +162,7 @@ pub fn known_key_set(known: &'static [&'static str]) -> impl Fn(&str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{Value, decode, encode};
+    use crate::codec::{decode, encode};
 
     fn sample_map() -> Map {
         let mut m = Map::new();
@@ -132,6 +174,77 @@ mod tests {
         );
         m.insert("zz-later", Value::Text("kept".into()));
         m
+    }
+
+    /// A merged map big enough to force several growths from an empty `Vec`,
+    /// spanning both key-head size classes and a >23-entry map head.
+    fn wide_secret_shaped_map() -> Map {
+        let mut m = Map::new();
+        for i in 0..40u8 {
+            m.insert(format!("k{i:02}"), Value::Bytes(vec![0xAB; 32]));
+            m.insert(
+                format!("a-preserved-future-field-name-{i:02}"),
+                Value::Text("x".repeat(40)),
+            );
+        }
+        m
+    }
+
+    /// The security invariant, as `encode` pins it: the merged write runs
+    /// inside one exact reservation, so no intermediate backing store is freed
+    /// un-zeroized. `merged_len` being exact makes `capacity == len` the
+    /// witness — growing from empty leaves a doubled capacity behind.
+    #[test]
+    fn merged_write_never_reallocates() {
+        let original = encode(&Value::Map(wide_secret_shaped_map())).unwrap();
+        let (known, unknown) = decode_map_partial(&original, |key| key.starts_with('k')).unwrap();
+        assert_eq!(known.len(), 40);
+        assert_eq!(unknown.len(), 40);
+
+        let out = encode_map_partial(&known, &unknown).unwrap();
+        assert!(out.len() > 1024, "test payload must force multiple growths");
+        assert_eq!(out, original, "wire bytes unchanged");
+        // Allocator-independent oracle, plus the witness that the reservation
+        // was the one the buffer kept.
+        let sized = merged_len(&merge(&known, &unknown).unwrap()).unwrap();
+        assert_eq!(sized, out.len(), "sizing oracle diverged");
+        assert_eq!(
+            out.capacity(),
+            out.len(),
+            "buffer was resized after its up-front reservation"
+        );
+    }
+
+    /// AGENTS.md rule 8: the merged encoder's `depth-exceeded` reject is
+    /// release-active, and now fires from the sizing pass — before a byte is
+    /// allocated for the output. The deep value sits behind two preserved
+    /// unknowns, so its reported offset only matches the equivalent full-map
+    /// encode's if the sizing pass counted in emit order.
+    #[test]
+    fn merged_encode_rejects_past_max_depth() {
+        fn depth_offset(err: &CodecError) -> usize {
+            match err {
+                CodecError::Malformed(Malformed::DepthExceeded { offset }) => *offset,
+                other => panic!("expected depth-exceeded, got {}", other.check()),
+            }
+        }
+
+        let original = encode(&Value::Map(sample_map())).unwrap();
+        let (mut known, unknown) =
+            decode_map_partial(&original, known_key_set(&["v", "zz-later"])).unwrap();
+        let mut deep = Value::Null;
+        for _ in 0..crate::codec::MAX_DEPTH {
+            deep = Value::Array(vec![deep]);
+        }
+        known.insert("zz-later", deep.clone());
+        let mut full = sample_map();
+        full.insert("zz-later", deep);
+
+        assert_eq!(
+            depth_offset(&encode_map_partial(&known, &unknown).unwrap_err()),
+            depth_offset(&encode(&Value::Map(full)).unwrap_err()),
+            "merged reject offset diverged from the full-map encode"
+        );
     }
 
     #[test]
