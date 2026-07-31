@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "23b1f300ee90",
+  "strategy": "manual-commit",
+  "branch": "chore/trim-agents-md",
+  "checkpoints_count": 47,
+  "files_touched": [
+    "AGENTS.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/23/b1f300ee90/0/metadata.json",
+      "transcript": "/23/b1f300ee90/0/full.jsonl",
+      "compact_transcript": "/23/b1f300ee90/0/transcript.jsonl",
+      "content_hash": "/23/b1f300ee90/0/content_hash.txt",
+      "prompt": "/23/b1f300ee90/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 400,
+    "cache_creation_tokens": 979548,
+    "cache_read_tokens": 31322860,
+    "output_tokens": 183420,
+    "api_call_count": 203
+  }
+}
