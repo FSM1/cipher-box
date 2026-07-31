@@ -77,7 +77,7 @@ impl<'a> RecordReader<'a> {
 
     /// The clear tag this reader answers to — the owner's `enc-subkey` public
     /// half, and so the identity a classification is only valid for.
-    pub fn owner_tag(&self) -> [u8; 32] {
+    pub(crate) fn owner_tag(&self) -> [u8; 32] {
         self.owner_tag
     }
 

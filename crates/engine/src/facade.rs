@@ -55,7 +55,7 @@ use crate::sync::op::{NewNode, Op, Replaced, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
-use crate::sync::rebase::{QueueScan, QueueScanCache, decode_queue};
+use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
 
 pub use crate::sync::drain::BlockedOp;
 pub use crate::sync::rebase::DeadLetterReason;
@@ -1089,7 +1089,7 @@ pub struct Engine<T: SeamTypes> {
     dead_letters: Rc<RefCell<RetainedDeadLetters>>,
     /// Memo of the durable queue scan every read renders through
     /// ([`scan_queue`](Self::scan_queue)).
-    queue_scan: RefCell<QueueScanCache>,
+    queue_scan: RefCell<QueueScanMemo>,
     /// The drain's over-quota hold, written by the drain tick and read by
     /// [`snapshot`](Self::snapshot). In-memory: a restart re-derives it from the
     /// next drain attempt's own 413 rather than trusting a stale verdict.
@@ -1142,7 +1142,7 @@ impl<T: SeamTypes> Engine<T> {
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
-                queue_scan: RefCell::new(QueueScanCache::default()),
+                queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
@@ -2266,9 +2266,8 @@ impl<T: SeamTypes> Engine<T> {
     /// entries are dropped from the render here; the cold-start path
     /// dead-letters and removes them from the durable queue.
     ///
-    /// Memoized on the queue's own shape ([`QueueScanCache`]), so the HPKE open
-    /// per owned record is paid once per queue mutation rather than once per
-    /// read.
+    /// Memoized on the queue's own shape ([`QueueScanMemo`]), so reads pay the
+    /// HPKE open per owned record once per queue mutation, not once per render.
     async fn scan_queue(&self) -> Result<QueueScan, EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let raw = self
@@ -2278,11 +2277,8 @@ impl<T: SeamTypes> Engine<T> {
             .await
             .map_err(EngineError::from_seam)?;
         let reader = RecordReader::new(session.enc_subkey());
-        // Borrow only after the await: a `RefCell` borrow must never span one.
-        let mut cache = self.queue_scan.borrow_mut();
-        Ok(cache
-            .scan(reader.owner_tag(), &raw, |raw| decode_queue(&reader, raw))
-            .clone())
+        let mut memo = self.queue_scan.borrow_mut();
+        Ok(memo.scan(&reader, &raw, decode_queue).clone())
     }
 
     /// This session's pending ops, FIFO.
