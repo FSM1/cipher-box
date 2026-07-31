@@ -1270,50 +1270,56 @@ fn a_resumed_upload_opens_on_the_leaves_an_earlier_pass_confirmed() {
 /// A halted upload attempt is reported, but it is not terminal: the op keeps its
 /// place at the head of the queue and the next tick retries it. Terminal failure
 /// is the dead letter, with its reason.
+///
+/// Both shapes a stopped attempt takes are covered: a transport that never
+/// answered, and an unattributable 413 that is charged against the budget but
+/// abandons nothing on one response (#916).
 #[test]
 fn a_halted_upload_attempt_is_reported_and_leaves_the_op_queued() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    seed_account(&world, &blocks);
+    for refusal in [unreachable_upload(), proxy_413()] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
 
-    let alice = world.device(b"alice");
-    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    blocks.refuse_upload(Box::new(|_| Some(unreachable_upload())));
-    let op_id = write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "photo.bin".into(),
-        },
-        &(0..200u8).collect::<Vec<_>>(),
-    )
-    .expect("the write commits");
-    tick(&world, &engine, &mut tasks);
+        let alice = world.device(b"alice");
+        let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        blocks.refuse_upload(Box::new(move |_| Some(refusal.clone())));
+        let op_id = write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "photo.bin".into(),
+            },
+            &(0..200u8).collect::<Vec<_>>(),
+        )
+        .expect("the write commits");
+        tick(&world, &engine, &mut tasks);
 
-    let emitted = events_so_far(&mut events);
-    assert!(
-        emitted.iter().any(|event| matches!(
-            event,
-            Event::OpProgress {
-                op_id: Some(id),
-                phase: OpPhase::UploadFailed,
-                error: Some(_),
-                ..
-            } if *id == op_id
-        )),
-        "the halted attempt reaches the host with a classification"
-    );
-    assert!(
-        !emitted
-            .iter()
-            .any(|event| matches!(event, Event::DeadLetter { .. })),
-        "an unreachable upload is availability, never a terminal failure"
-    );
-    assert_eq!(
-        block_on(alice.staging_store.queued_ops()).unwrap().len(),
-        1,
-        "the op keeps its place and its staged bytes"
-    );
+        let emitted = events_so_far(&mut events);
+        assert!(
+            emitted.iter().any(|event| matches!(
+                event,
+                Event::OpProgress {
+                    op_id: Some(id),
+                    phase: OpPhase::UploadFailed,
+                    error: Some(_),
+                    ..
+                } if *id == op_id
+            )),
+            "the halted attempt reaches the host with a classification"
+        );
+        assert!(
+            !emitted
+                .iter()
+                .any(|event| matches!(event, Event::DeadLetter { .. })),
+            "one stopped attempt is availability, never a terminal failure"
+        );
+        assert_eq!(
+            block_on(alice.staging_store.queued_ops()).unwrap().len(),
+            1,
+            "the op keeps its place and its staged bytes"
+        );
+    }
 }
 
 /// A permanently refused upload reports the stopped attempt *and* the dead
