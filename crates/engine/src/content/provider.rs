@@ -117,16 +117,43 @@ pub async fn test_connection(
 /// no URL parser): it rejects other schemes (`file:`, `ftp:`, …), scheme-less or
 /// relative strings, and a hostless `http:///path`, closing the
 /// scheme-exfiltration / SSRF surface a raw member string would open.
+///
+/// The authority is additionally restricted to the bytes a host and port may
+/// contain. A member types this string, but the vault settings record also
+/// carries it back off the network, and it is spliced into a request URL: an
+/// endpoint carrying whitespace, a control character, or URL syntax (`@`, `?`,
+/// `#`, `\`) could reshape the request target or inject a header, and which one
+/// happens would depend on the host `Http` implementation. That decision does
+/// not belong to the seam.
 pub fn validate_endpoint(endpoint: &str) -> Result<(), ProviderError> {
     let lower = endpoint.to_ascii_lowercase();
     let authority = lower
         .strip_prefix("https://")
-        .or_else(|| lower.strip_prefix("http://"));
-    match authority {
-        // A host must follow the scheme (not empty, not straight into a path).
-        Some(rest) if !rest.is_empty() && !rest.starts_with('/') => Ok(()),
-        _ => Err(ProviderError::InvalidEndpoint),
+        .or_else(|| lower.strip_prefix("http://"))
+        .ok_or(ProviderError::InvalidEndpoint)?;
+    // A host must follow the scheme (not empty, not straight into a path).
+    let host = authority.split('/').next().unwrap_or_default();
+    if host.is_empty() || !host.bytes().all(is_authority_byte) {
+        return Err(ProviderError::InvalidEndpoint);
     }
+    // The path may still not carry URL syntax that reshapes the target.
+    if authority.bytes().any(|b| !is_path_byte(b)) {
+        return Err(ProviderError::InvalidEndpoint);
+    }
+    Ok(())
+}
+
+/// The bytes a host-and-port may contain: letters, digits, `-`, `.`, `:`, plus
+/// `[`/`]` for an IPv6 literal.
+fn is_authority_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b':' | b'[' | b']')
+}
+
+/// The bytes the trailing path may contain — everything the authority admits
+/// plus the ordinary path characters, and nothing that redirects the request
+/// (`@`, `?`, `#`, `\`) or that no URL may carry raw (controls, whitespace).
+fn is_path_byte(b: u8) -> bool {
+    is_authority_byte(b) || matches!(b, b'/' | b'_' | b'~' | b'%' | b'+' | b'=' | b'&' | b',')
 }
 
 /// The per-kind reachability probe. The endpoints are each provider's standard
@@ -252,6 +279,16 @@ mod tests {
             "http://",          // no host
             "https:///pins",    // hostless
             "",
+            // A record-sourced endpoint is spliced into a request URL, so the
+            // authority may carry only host-and-port bytes: no control
+            // characters, no whitespace, and no syntax that redirects the
+            // target or injects a header.
+            "http://host\r\nX-Evil: 1",
+            "http://host with space",
+            "http://user@evil.test",
+            "http://host/path?query",
+            "http://host/path#frag",
+            "http://host\\evil.test",
         ] {
             let cfg = ByoIpfsConfig {
                 endpoint: bad.into(),

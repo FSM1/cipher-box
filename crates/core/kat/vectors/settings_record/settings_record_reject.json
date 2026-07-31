@@ -1,0 +1,72 @@
+[
+  {
+    "name": "tampered-ciphertext",
+    "ownerSecret": "6162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+    "record": "a361760163656e6358203a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe246a63697068657274657874582399b9997ba7d092746012491c7151ed037c1b9707355a00ec12d00e5ffae374ed764eb0",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "foreign-recipient",
+    "ownerSecret": "3132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f50",
+    "record": "a361760163656e6358203a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe246a63697068657274657874582398b9997ba7d092746012491c7151ed037c1b9707355a00ec12d00e5ffae374ed764eb0",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "cross-family-transplant",
+    "ownerSecret": "6162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+    "record": "a361760163656e6358203a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe246a6369706865727465787456e29889144602df935baf97ed434ac9eda0b5a66113f9",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  },
+  {
+    "name": "short-enc",
+    "ownerSecret": "6162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+    "record": "a361760163656e63581f3a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe6a63697068657274657874582398b9997ba7d092746012491c7151ed037c1b9707355a00ec12d00e5ffae374ed764eb0",
+    "check": "invalid-field-length",
+    "class": "malformed"
+  },
+  {
+    "name": "low-order-enc",
+    "ownerSecret": "6162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+    "record": "a361760163656e635820e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b8006a63697068657274657874582398b9997ba7d092746012491c7151ed037c1b9707355a00ec12d00e5ffae374ed764eb0",
+    "check": "hpke-non-contributory",
+    "class": "trust"
+  },
+  {
+    "name": "missing-enc",
+    "ownerSecret": "6162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+    "record": "a26176016a63697068657274657874582398b9997ba7d092746012491c7151ed037c1b9707355a00ec12d00e5ffae374ed764eb0",
+    "check": "missing-field",
+    "class": "malformed"
+  },
+  {
+    "name": "missing-ciphertext",
+    "ownerSecret": "6162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+    "record": "a261760163656e6358203a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe24",
+    "check": "missing-field",
+    "class": "malformed"
+  },
+  {
+    "name": "forward-version",
+    "ownerSecret": "6162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+    "record": "a361760263656e6358203a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe246a63697068657274657874582398b9997ba7d092746012491c7151ed037c1b9707355a00ec12d00e5ffae374ed764eb0",
+    "check": "unsupported-record-version",
+    "class": "malformed"
+  },
+  {
+    "name": "unknown-header-field",
+    "ownerSecret": "6162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+    "record": "a461760163656e6358203a553d74792d727efa9b9a4cde3da1ad93f1a2d0c09cb639b1a3c0fda14cbe246573746173684f756e61757468656e746963617465646a63697068657274657874582398b9997ba7d092746012491c7151ed037c1b9707355a00ec12d00e5ffae374ed764eb0",
+    "check": "unknown-record-field",
+    "class": "malformed"
+  },
+  {
+    "name": "base-mode-forgery",
+    "ownerSecret": "6162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80",
+    "record": "a361760163656e63582021c3332b61be6a7b6ab8461e155651b17501b6e07532ecf9ab6661bd5a2ca5756a6369706865727465787458323cc7ed7173591a18d4c2884c43d7c48b2438becfdc873636a7d317e6d86487f3e9a4be8306dc37126c7e3a38dba6b9f9dfae",
+    "check": "hpke-open-failed",
+    "class": "trust"
+  }
+]

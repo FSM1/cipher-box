@@ -26,8 +26,8 @@ pub mod resolve;
 pub mod retire;
 pub mod revival;
 
-pub(crate) use adopter::assemble_head_envelope;
 pub use adopter::{LocalHead, RootAdopter};
+pub(crate) use adopter::{assemble_head_envelope, fetch_head_block};
 pub use child::ChildAdopter;
 pub(crate) use fanout::fanout_get_verify;
 pub(crate) use liveness::eol_renew_pass;
@@ -37,6 +37,7 @@ pub use liveness::{
 };
 pub use pointer_fetch::RecordPointerFetch;
 pub use publish::{PublishError, PublishOutcome, PublishReceipt, PublishRequest, publish};
+pub use record_publish::{PreflightError, RecordPublishError};
 pub use resolve::{AdoptOutcome, Adopter, OwnScopeMaterial, ResolveOutcome, Resolved, resolve};
 pub(crate) use resolve::{
     GatedResolve, HeldMaterial, refresh_base_from_outcome, resolve_and_hold, resolve_gated,

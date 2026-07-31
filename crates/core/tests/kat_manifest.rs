@@ -28,8 +28,9 @@ use cipherbox_core::payload::mailbox::{open_mailbox_payload, seal_mailbox_payloa
 use cipherbox_core::payload::pointer::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V,
-    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD,
-    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
+    SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_SETTINGS_RECORD,
     STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, StructureSigInput, build_aad, decode_ascent_link,
     decode_envelope, decode_grant_blob_payload, decode_grant_section, decode_grant_set_commitment,
     decode_history_link_payload, decode_op_record_header, decode_override_seed_payload,
@@ -37,7 +38,8 @@ use cipherbox_core::seal::{
     encode_envelope, encode_grant_section, encode_grant_set_commitment,
     encode_override_seed_payload, encode_read_body, encode_write_body, open_ascent_link,
     open_grant_blob, open_op_record, open_owner_blob, open_owner_write_blob, open_read_body,
-    seal_op_record, structure_sig_preimage, verify_grant_set, verify_structure,
+    open_settings_record, seal_op_record, seal_settings_record, structure_sig_preimage,
+    verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::aead::NONCE_LEN;
 use cipherbox_core::suite::contact::import_contact_code;
@@ -249,6 +251,14 @@ const FIXTURES: &[(&str, &str)] = &[
         "vectors/op_record/op_record_reject.json",
         include_str!("../kat/vectors/op_record/op_record_reject.json"),
     ),
+    (
+        "vectors/settings_record/settings_record_accept.json",
+        include_str!("../kat/vectors/settings_record/settings_record_accept.json"),
+    ),
+    (
+        "vectors/settings_record/settings_record_reject.json",
+        include_str!("../kat/vectors/settings_record/settings_record_reject.json"),
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -271,6 +281,39 @@ struct Manifest {
     grant: GrantManifest,
     content: ContentManifest,
     op_record: OpRecordManifest,
+    settings_record: SettingsRecordManifest,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SettingsRecordManifest {
+    struct_tag: u8,
+    v: u64,
+    hpke_mode: u8,
+    hpke_info: String,
+    accept: FileCount,
+    reject: RejectSection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SettingsRecordAcceptVector {
+    name: String,
+    owner_secret: String,
+    owner_public: String,
+    ephemeral_scalar: String,
+    body: String,
+    record: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SettingsRecordRejectVector {
+    name: String,
+    owner_secret: String,
+    record: String,
+    check: String,
+    class: String,
 }
 
 #[derive(Deserialize)]
@@ -1075,6 +1118,16 @@ fn op_record_reject_vectors(m: &Manifest) -> Vec<OpRecordRejectVector> {
     serde_json::from_str(fixture(&m.op_record.reject.file)).expect("op_record_reject shape")
 }
 
+fn settings_record_accept_vectors(m: &Manifest) -> Vec<SettingsRecordAcceptVector> {
+    serde_json::from_str(fixture(&m.settings_record.accept.file))
+        .expect("settings_record_accept shape")
+}
+
+fn settings_record_reject_vectors(m: &Manifest) -> Vec<SettingsRecordRejectVector> {
+    serde_json::from_str(fixture(&m.settings_record.reject.file))
+        .expect("settings_record_reject shape")
+}
+
 fn owner_write_blob_accept_vectors(m: &Manifest) -> Vec<HpkeStructureVector> {
     serde_json::from_str(fixture(&m.grant.owner_write_blob_accept.file))
         .expect("owner_write_blob_accept shape")
@@ -1227,6 +1280,8 @@ fn fixture_table_matches_manifest_files() {
         m.content.cid_str_reject.file.as_str(),
         m.op_record.accept.file.as_str(),
         m.op_record.reject.file.as_str(),
+        m.settings_record.accept.file.as_str(),
+        m.settings_record.reject.file.as_str(),
     ];
     let referenced_set: BTreeSet<&str> = referenced.iter().copied().collect();
     assert_eq!(
@@ -1420,6 +1475,11 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
             .map(|v| v.check),
     );
     covered.extend(op_record_reject_vectors(&m).into_iter().map(|v| v.check));
+    covered.extend(
+        settings_record_reject_vectors(&m)
+            .into_iter()
+            .map(|v| v.check),
+    );
 
     let surface: BTreeSet<String> = TrustViolation::CHECKS
         .iter()
@@ -1623,6 +1683,7 @@ const ALL_STRUCT_TAGS: &[(&str, u8)] = &[
     ("mailbox-payload", 8),
     ("owner-write-blob", 9),
     ("op-record", 10),
+    ("settings-record", 11),
 ];
 
 #[test]
@@ -3511,6 +3572,160 @@ fn op_record_reject_vectors_fire_the_named_check() {
                 v.name
             ),
         }
+    }
+}
+
+#[test]
+fn settings_record_accept_vectors_seal_reproduce_and_open() {
+    let m = manifest();
+    assert_eq!(m.settings_record.struct_tag, STRUCT_TAG_SETTINGS_RECORD);
+    assert_eq!(m.settings_record.v, SETTINGS_RECORD_V);
+    assert_eq!(m.settings_record.hpke_mode, MODE_AUTH);
+    assert_eq!(
+        m.settings_record.hpke_info.as_bytes(),
+        SETTINGS_RECORD_HPKE_INFO
+    );
+
+    let vectors = settings_record_accept_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.settings_record.accept.count,
+        "settings-record accept count drift"
+    );
+    assert!(
+        vectors.iter().any(|v| v.body.is_empty()) && vectors.iter().any(|v| !v.body.is_empty()),
+        "settings-record accept must cover both an empty and a populated body"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate settings-record accept {}",
+            v.name
+        );
+        let owner = X25519Secret::from_scalar(unhex32(&v.name, &v.owner_secret));
+        let owner_public = unhex32(&v.name, &v.owner_public);
+        assert_eq!(
+            owner.public().to_bytes(),
+            owner_public,
+            "settings-record accept {}: owner keypair",
+            v.name
+        );
+        let eph = unhex32(&v.name, &v.ephemeral_scalar);
+        let body = unhex(&v.name, &v.body);
+
+        let sealed = seal_settings_record(&owner, &eph, &body)
+            .unwrap_or_else(|e| panic!("settings-record accept {}: seal ({e})", v.name));
+        assert_eq!(
+            hex::encode(&sealed),
+            v.record,
+            "settings-record accept {}: record drift",
+            v.name
+        );
+
+        let record = unhex(&v.name, &v.record);
+        // The record is published to the zero-knowledge server, so the owner's
+        // enc-subkey public half must stay AAD-bound and unserialized.
+        let decoded = decode(&record)
+            .unwrap_or_else(|e| panic!("settings-record accept {}: decode ({e})", v.name));
+        let keys: Vec<&str> = decoded
+            .as_map()
+            .unwrap_or_else(|e| panic!("settings-record accept {}: map ({e})", v.name))
+            .entries()
+            .iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert_eq!(
+            keys,
+            ["v", "enc", "ciphertext"],
+            "settings-record accept {}: clear header must not carry the owner tag",
+            v.name
+        );
+
+        let plaintext = open_settings_record(&owner, &record)
+            .unwrap_or_else(|e| panic!("settings-record accept {}: open ({e})", v.name));
+        assert_eq!(
+            &plaintext[..],
+            &body[..],
+            "settings-record accept {}: body",
+            v.name
+        );
+    }
+}
+
+#[test]
+fn settings_record_reject_vectors_fire_the_named_check() {
+    let m = manifest();
+    let vectors = settings_record_reject_vectors(&m);
+    assert_eq!(
+        vectors.len(),
+        m.settings_record.reject.count,
+        "settings-record reject count drift"
+    );
+    let listed: BTreeSet<&str> = m
+        .settings_record
+        .reject
+        .checks
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let in_vectors: BTreeSet<&str> = vectors.iter().map(|v| v.check.as_str()).collect();
+    assert_eq!(
+        listed, in_vectors,
+        "manifest checks vs settings-record reject.json"
+    );
+    for required in [
+        "hpke-open-failed",
+        "hpke-non-contributory",
+        "invalid-field-length",
+        "missing-field",
+        "unsupported-record-version",
+        "unknown-record-field",
+    ] {
+        assert!(
+            listed.contains(required),
+            "settings-record reject must cover the {required} check"
+        );
+    }
+
+    assert!(
+        vectors.iter().any(|v| v.name == "base-mode-forgery"),
+        "settings-record reject must pin a base-mode forgery under the owner's own tag"
+    );
+    // Key-schedule separation, not framing: the transplanted op-record KEM
+    // output is a structurally valid settings header, so only the struct tag
+    // and the distinct info string can refuse it.
+    assert!(
+        vectors.iter().any(|v| v.name == "cross-family-transplant"),
+        "settings-record reject must pin a cross-family transplant from the op record"
+    );
+
+    let mut names = BTreeSet::new();
+    for v in &vectors {
+        assert!(
+            names.insert(v.name.clone()),
+            "duplicate settings-record reject {}",
+            v.name
+        );
+        let owner = X25519Secret::from_scalar(unhex32(&v.name, &v.owner_secret));
+        let record = unhex(&v.name, &v.record);
+        let err = match open_settings_record(&owner, &record) {
+            Err(e) => e,
+            Ok(_) => panic!("settings-record reject {}: open accepted it", v.name),
+        };
+        assert_eq!(
+            err.check(),
+            v.check,
+            "settings-record reject {}: check ({err})",
+            v.name
+        );
+        assert_eq!(
+            err.class(),
+            v.class,
+            "settings-record reject {}: class ({err})",
+            v.name
+        );
     }
 }
 

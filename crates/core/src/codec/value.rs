@@ -134,7 +134,7 @@ impl Value {
     /// included, since a filename is user-private metadata in a ZK system.
     ///
     /// [`encode_read_body`]: crate::seal::encode_read_body
-    pub(crate) fn zeroize_bytes(&mut self) {
+    pub fn zeroize_bytes(&mut self) {
         match self {
             Self::Bytes(b) => b.zeroize(),
             Self::Text(s) => s.zeroize(),
@@ -198,6 +198,13 @@ impl Map {
             .binary_search_by(|(k, _)| canonical_key_cmp(k, key))
             .ok()
             .map(|i| &self.entries[i].1)
+    }
+
+    pub fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
+        self.entries
+            .binary_search_by(|(k, _)| canonical_key_cmp(k, key))
+            .ok()
+            .map(|i| &mut self.entries[i].1)
     }
 
     pub fn remove(&mut self, key: &str) -> Option<Value> {

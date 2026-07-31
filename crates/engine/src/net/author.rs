@@ -16,7 +16,6 @@
 //!   [`IpnsName`] to both the body and the parent's ref.
 
 use cipherbox_core::codec::Value;
-use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
@@ -24,8 +23,8 @@ use cipherbox_core::seal::{
     grant_section_bytes, has_grant_section, seal_read_body,
 };
 
-use crate::content::DAG_ROOT_CODEC;
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
+use crate::content::root_block_cid;
 
 /// The envelope format+suite version this build authors (blueprint/core.md).
 pub const ENVELOPE_V: u64 = 1;
@@ -168,7 +167,7 @@ fn encode(envelope: Envelope) -> Result<AuthoredHead, AuthorError> {
             limit: MAX_RESOLVED_RECORD_BYTES,
         });
     }
-    let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
+    let cid = root_block_cid(&block);
     Ok(AuthoredHead {
         envelope,
         block,
@@ -228,11 +227,13 @@ pub fn new_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_core::content::{compute_cid, encode_content_cid_str};
     use cipherbox_core::ipns::IpnsName;
     use cipherbox_core::kdf;
     use cipherbox_core::seal::{decode_envelope, encode_grant_section, open_read_body};
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
+    use crate::content::DAG_ROOT_CODEC;
     use crate::testkit::{OwnerRootFixture, OwnerRootSpec, owner_root_fixture};
 
     const READ_KEY: [u8; 32] = [9u8; 32];

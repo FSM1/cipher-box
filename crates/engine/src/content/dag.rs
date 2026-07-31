@@ -17,7 +17,7 @@
 
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::content::{
-    CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid,
+    CONTENT_CID_CODEC, CONTENT_CID_LEN, CONTENT_CID_MULTIHASH, compute_cid, encode_content_cid_str,
 };
 use cipherbox_core::error::{CodecError, Malformed};
 
@@ -29,6 +29,13 @@ use super::profile::ContentProfile;
 /// (#630, engine.md:497) — core keeps the leaf `raw` codec but takes the root
 /// codec as a parameter. Single-byte, inside core's frozen content-plane set.
 pub const DAG_ROOT_CODEC: u8 = 0x71;
+
+/// A root-plane block's own content address, as a record `Value` and a link
+/// spell it. The one place the root codec meets the multibase spelling.
+#[must_use]
+pub fn root_block_cid(block: &[u8]) -> String {
+    encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, block))
+}
 
 /// The root-manifest format version this crate writes and the only one it
 /// reads. A discriminator, not a compatibility arm: a root carrying any other

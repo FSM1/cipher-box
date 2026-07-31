@@ -37,6 +37,7 @@ pub mod rotation;
 pub mod seams;
 pub mod secret_util;
 mod session;
+pub mod settings;
 pub mod storage_policy;
 pub mod sync;
 #[cfg(feature = "test-kit")]
@@ -50,9 +51,10 @@ pub use api::{
 pub use content::{
     ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
     DAG_ROOT_CODEC, DagError, Gateway, GatewayConfig, GatewaySource, PinMode, ProviderError,
-    PrunePlan, QuotaExceeded, ROOT_FORMAT_VERSION, ReadError, RootManifest, SealError, SealedChunk,
-    SealedContent, assemble, decode_root, frame_and_seal, leaf_range_for_byte_range, plan_prune,
-    pre_flight_quota_check, read_block, seal_content, test_connection, validate_endpoint,
+    PrunePlan, QuotaExceeded, ROOT_FORMAT_VERSION, ReadError, RetentionPolicy, RootManifest,
+    SealError, SealedChunk, SealedContent, assemble, decode_root, frame_and_seal,
+    leaf_range_for_byte_range, plan_prune, pre_flight_quota_check, read_block, seal_content,
+    test_connection, validate_endpoint,
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{
@@ -72,9 +74,9 @@ pub use grants::{
 };
 pub use mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 pub use net::{
-    AdoptOutcome, Adopter, HeldRecord, HeldRecords, PublishError, PublishOutcome, PublishRequest,
-    RePutResult, RecordPointerFetch, ResolveOutcome, Resolved, ReviveError, ReviveRequest,
-    RootAdopter, publish, resolve, revive,
+    AdoptOutcome, Adopter, HeldRecord, HeldRecords, PreflightError, PublishError, PublishOutcome,
+    PublishRequest, RePutResult, RecordPointerFetch, RecordPublishError, ResolveOutcome, Resolved,
+    ReviveError, ReviveRequest, RootAdopter, publish, resolve, revive,
 };
 pub use profile::SyncTimingProfile;
 pub use rotation::{
@@ -84,6 +86,10 @@ pub use rotation::{
     ScopeRootPublisher, enumerate_eager_set, reseal_scope_root, revoke_read_grant, rotate_scope,
 };
 pub use seams::{SeamError, SeamResult, SeamSet, SeamTypes};
+pub use settings::{
+    DefaultsReason, SettingsLoad, SettingsPublishError, VaultSettings, load_settings,
+    publish_settings, settings_name,
+};
 pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};
 pub use sync::{
     AppliedOp, BlockedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow,
