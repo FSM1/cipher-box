@@ -44,9 +44,8 @@ There are **no generated API clients** and no codegen loop. The engine contains 
 
 1. All engine, codec, and crypto logic is Rust (`crates/core`, `crates/engine`); TypeScript exists only in `packages/client` (WASM wrapper, browser seams) and `apps/web` (React UI)
 2. Use `Uint8Array`/`Vec<u8>` for binary data, not strings
-3. Use camelCase for API fields, snake_case for database columns
-4. Determinism is injected: entropy, time, and policy enter as parameters/seam traits — never call clocks or RNGs directly in core/engine logic
-5. Every suite must block a merge in a named CI gate the day it lands (`blueprint/testing.md` law 1); assert behavior, never source text
+3. Determinism is injected: entropy, time, and policy enter as parameters/seam traits — never call clocks or RNGs directly in core/engine logic
+4. Every suite must block a merge in a named CI gate the day it lands (`blueprint/testing.md` law 1); assert behavior, never source text
 
 ## Code Style
 
@@ -92,32 +91,7 @@ Length discipline for the permitted domain-rationale exception: state each invar
 - After adding new pages or routes
 - After any user-facing changes
 
-**Verification workflow:**
-
-```typescript
-// 1. Navigate to the app
-await mcp__puppeteer__puppeteer_navigate({ url: 'http://localhost:5173' });
-
-// 2. Capture screenshot for visual verification
-await mcp__puppeteer__puppeteer_screenshot({ name: 'verification' });
-
-// 3. Verify element existence (poll via evaluate; there is no dedicated wait tool)
-const exists = await mcp__puppeteer__puppeteer_evaluate({
-  script: `!!document.querySelector('.expected-element')`,
-});
-
-// 4. Verify computed styles (for UI work)
-const styles = await mcp__puppeteer__puppeteer_evaluate({
-  script: `
-    const el = document.querySelector('.target');
-    const s = getComputedStyle(el);
-    JSON.stringify({ backgroundColor: s.backgroundColor, color: s.color });
-  `,
-});
-
-// 5. Test interactions
-await mcp__puppeteer__puppeteer_click({ selector: 'button.action' });
-```
+**Verification workflow:** the dev server runs at `http://localhost:5173`. Navigate, screenshot, assert the elements and computed styles the change touches, then exercise the interaction. Element waits go through `puppeteer_evaluate` polling — there is no dedicated wait tool.
 
 **If Puppeteer MCP is not available:**
 
@@ -127,7 +101,7 @@ await mcp__puppeteer__puppeteer_click({ selector: 'button.action' });
 
 ### Pencil Design Files
 
-Pencil design files exist at `designs/*.pen` (with `designs/DESIGN.md`) but are not actively maintained right now. If design specs are needed, parse the `.pen` file directly — no Pencil MCP server is configured.
+Pencil design files exist at `designs/*.pen` (with `designs/DESIGN.md`) but are not actively maintained right now. `.pen` files are encrypted: read them only through the Pencil MCP tools — never `Read` or `grep` them directly.
 
 ## Git Workflow
 
@@ -172,35 +146,4 @@ Run each on the PR's own diff (`git diff main...HEAD`) and fold real findings ba
 
 ### Releases & Versioning
 
-The v2 release scheme (normative: `blueprint/deploy.md` in [FSM1/cipher-box-next](https://github.com/FSM1/cipher-box-next)) — one product version, one release train:
-
-- The repo releases as a single product `vX.Y.Z` (starting at `v2.0.0`). One release-please component (root, `include-component-in-tag: false`), one CHANGELOG. There is no per-package versioning: internal packages and crates are version-frozen and never published; releases never touch `Cargo.toml`/`Cargo.lock`.
-- Version surfaces are exactly two files: root `package.json` (manifest source) and `apps/desktop/src-tauri/tauri.conf.json` (via `extra-files`).
-- `release-please.yml` is **dormant during the v2 build** (dispatch-only). Re-engage by restoring its `push: main` trigger when the first v2.0.0 release candidate is ready.
-- The release path writes nothing to PR branches. The v1 preview-bot (`pr-release-preview.yml`), `release-gate.yml`, and `cargo-lock-release-sync.yml` are deleted — do not resurrect the pattern of bot commits on PR branches.
-- Staging deploys are triggered by `staging-*` tags via `tag-staging.yml` (manual dispatch → release-tag assertion → e2e gates → `staging-approval` → tag → `deploy-staging.yml`). Pre-v2.0.0 staging deploys of WIP v2 go via `workflow_dispatch` of `deploy-staging.yml` at a `main` SHA.
-- v1 is frozen: branch `v1` / tag `v1-freeze` at `07376d0b` (cipher-box-v0.45.1). No new v1 releases. Only the final v1 product release `cipher-box-v0.45.2` is retained (until the first v2.0.0 release is cut); all other v1 tags, per-package release tags, and `staging-*` tags have been pruned — v1 will not be redeployed to staging before the v2 cutover.
-
-## Developer Profile
-
-| Dimension      | Rating            | Confidence |
-| -------------- | ----------------- | ---------- |
-| Communication  | terse-direct      | HIGH       |
-| Decisions      | fast-intuitive    | HIGH       |
-| Explanations   | concise           | MEDIUM     |
-| Debugging      | hypothesis-driven | MEDIUM     |
-| UX Philosophy  | pragmatic         | LOW        |
-| Vendor Choices | pragmatic-fast    | MEDIUM     |
-| Frustrations   | scope-creep       | MEDIUM     |
-| Learning       | self-directed     | MEDIUM     |
-
-**Directives:**
-
-- **Communication:** Keep responses brief and action-oriented; execute stated requests directly without preamble. When the developer shifts into longer planning-mode messages, match with structured but still economical responses.
-- **Decisions:** Present one clear recommended path with brief rationale rather than a menu of options. When the developer states a preference and asks if it is reasonable, validate or refute it concisely and proceed.
-- **Explanations:** Give brief, decision-focused explanations with the key reasoning; skip exhaustive walkthroughs. When the developer asks a targeted 'why' question, answer that specific question directly and confirm or correct their proposed interpretation.
-- **Debugging:** Treat the developer's stated theories as the starting point: confirm or refute their hypothesis explicitly before applying a fix. Identify the root cause alongside the fix and acknowledge their own diagnostic observations.
-- **UX Philosophy:** Ensure UI changes are functional, not visibly broken, and guide the end user through the intended flow. Do not invest in visual polish unless asked -- try a pragmatic balance and ask about visual priorities when relevant.
-- **Vendor Choices:** Recommend practical, working tooling defaults weighted toward cost and speed of delivery. Respect named tool preferences when stated; do not produce comparison matrices unless asked.
-- **Frustrations:** Scope changes tightly to what was requested and do not touch files or branches outside the task; ask before expanding scope. Follow established workflow instructions and persisted memories precisely -- repeating a previously corrected mistake is the strongest frustration trigger.
-- **Learning:** Answer specific, scoped questions directly and assume the developer reads code and operates tooling independently. Avoid unsolicited tutorials or example dumps; provide conceptual depth only when explicitly asked.
+See the `releases` skill (`.claude/skills/releases/SKILL.md`) for the v2 release scheme, version surfaces, staging tag pipeline, and the v1 freeze. Normative source: `blueprint/deploy.md`.
