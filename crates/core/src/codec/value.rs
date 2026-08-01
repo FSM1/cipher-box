@@ -235,8 +235,9 @@ impl Map {
     /// never secret). The wipe for a caller holding decoded known fields — see
     /// [`Value::zeroize_bytes`].
     ///
-    /// Terminal: a wiped map still encodes, to zero-length fields a schema
-    /// decoder rejects, so nothing may re-encode from it afterwards.
+    /// Terminal: a wiped map still encodes. Fixed-length fields then fail
+    /// their schema decode, but variable-length ones round-trip empty, so
+    /// nothing may re-encode from it afterwards.
     pub fn zeroize_bytes(&mut self) {
         for (_, v) in &mut self.entries {
             v.zeroize_bytes();
