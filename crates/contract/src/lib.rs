@@ -120,16 +120,34 @@ pub fn random_identity_signer() -> IdentityChallengeSigner {
 /// Decode a 64-char hex string into a 32-byte scalar. `None` on any malformed
 /// input.
 pub fn hex_to_scalar(hex: &str) -> Option<[u8; 32]> {
-    if hex.len() != 64 {
+    let bytes = hex_to_bytes(hex)?;
+    bytes.try_into().ok()
+}
+
+/// Decode an even-length hex string into bytes. `None` on any malformed input.
+pub fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
+    if !hex.len().is_multiple_of(2) {
         return None;
     }
-    let mut out = [0u8; 32];
-    for (index, byte) in out.iter_mut().enumerate() {
-        let high = (hex.as_bytes()[index * 2] as char).to_digit(16)?;
-        let low = (hex.as_bytes()[index * 2 + 1] as char).to_digit(16)?;
-        *byte = ((high << 4) | low) as u8;
+    let raw = hex.as_bytes();
+    let mut out = Vec::with_capacity(hex.len() / 2);
+    for pair in raw.chunks_exact(2) {
+        let high = (pair[0] as char).to_digit(16)?;
+        let low = (pair[1] as char).to_digit(16)?;
+        out.push(((high << 4) | low) as u8);
     }
     Some(out)
+}
+
+/// Lowercase hex encoding — how the mailbox seam's byte address reaches the
+/// API's hex `recipientPublicKey` field.
+pub fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(char::from_digit((byte >> 4) as u32, 16).expect("high nibble is < 16"));
+        out.push(char::from_digit((byte & 0x0f) as u32, 16).expect("low nibble is < 16"));
+    }
+    out
 }
 
 /// The API base URL for the live stack, from `CONTRACT_API_URL`. When unset the

@@ -25,3 +25,8 @@ getrandom = "0.2"
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
 serde_json.workspace = true
+# Self-shaped dev-dependency: enables the engine's `test-kit` for the suite's
+# own tests, so a leg can drive a real engine primitive (seeded entropy, the
+# in-memory floor store) against the live API without leaking the feature into
+# any production build.
+cipherbox-engine = { workspace = true, features = ["test-kit"] }
