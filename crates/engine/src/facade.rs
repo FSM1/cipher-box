@@ -21,6 +21,7 @@ use core::pin::Pin;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use cipherbox_core::content::encode_content_cid_str;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{ReadBody, seal_content_key};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
@@ -51,7 +52,7 @@ use crate::session::SessionIdentity;
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::cancel::UploadCancels;
-use crate::sync::drain::{Drain, DrainReport, DrainScope, registry_cids};
+use crate::sync::drain::{Drain, DrainReport, DrainScope};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, StagedContent};
 use crate::sync::overlay::apply_overlay;
@@ -61,10 +62,8 @@ use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
 
 pub use crate::sync::drain::BlockedOp;
 pub use crate::sync::rebase::DeadLetterReason;
-use crate::sync::record::{RecordReader, RecordSeal, record_content_root_cid};
-use crate::sync::staging::{
-    LiveBlocks, collect_orphans, release_version_blocks, stage_op, version_leaf_cids,
-};
+use crate::sync::record::{RecordReader, RecordSeal};
+use crate::sync::staging::{LiveBlocks, collect_orphans, release_version_blocks, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{FocusWindow, focus_folders, focus_folders_due};
 
@@ -1104,6 +1103,7 @@ struct LiveWrite {
 struct LiveWrites {
     ledger: StagingLedger,
     open: BTreeMap<WriteHandle, LiveWrite>,
+    next: u64,
 }
 
 /// The re-point pointer-payload wire version the owner's own vault seals under
@@ -1383,7 +1383,7 @@ impl<T: SeamTypes> Engine<T> {
         // A crash between staging a version's blocks and journaling its op
         // leaves them referenced by nothing, so cold start is the first place
         // that residue can be reclaimed (#828).
-        self.collect_staging_orphans().await;
+        collect_orphans(&self.seams.staging_store, &self.live_blocks).await;
 
         self.spawn_liveness_loop(api.clone());
         self.spawn_resolve_tick_loop(root_name, api.clone());
@@ -1469,17 +1469,6 @@ impl<T: SeamTypes> Engine<T> {
                     .remove_op(*op_id)
                     .await
                     .map_err(ColdStartError::Seam)?;
-                // Its intent body never opened, so the version's only content
-                // key is gone and its blocks are ciphertext nothing can ever
-                // read: released under the proven-unopenable rule rather than
-                // preserved (#818, #853).
-                if let Some(root_cid) = raw
-                    .iter()
-                    .find(|(id, _)| id == op_id)
-                    .and_then(|(_, record)| record_content_root_cid(record).ok().flatten())
-                {
-                    release_version_blocks(&self.seams.staging_store, &root_cid).await;
-                }
             }
         }
 
@@ -1959,7 +1948,9 @@ impl<T: SeamTypes> Engine<T> {
             }
         };
 
-        let handle = self.live_blocks.borrow_mut().open();
+        writes.next += 1;
+        let handle = WriteHandle(writes.next);
+        self.live_blocks.borrow_mut().open(handle);
         writes.open.insert(
             handle,
             LiveWrite {
@@ -2246,27 +2237,34 @@ impl<T: SeamTypes> Engine<T> {
         Ok(())
     }
 
-    /// Undo one queued upload: retire what of it reached the network, drop the
-    /// op, release its blocks, and tell the host.
+    /// Undo one queued upload: drop the op, retire what of it reached the
+    /// network ([`UploadCancels`]), release its blocks, and tell the host.
     ///
-    /// Retiring first is what makes the leaf CIDs recoverable at all — the
-    /// staged root is the only record of them, and releasing the blocks destroys
-    /// it (#916). The retire is best-effort: a refused batch leaves pin rows
-    /// charged, which is a leak, where leaving the op queued after the user
-    /// cancelled it would be a broken guarantee.
+    /// The dequeue goes first and is the only step allowed to fail the cancel:
+    /// an op that is still queued is still publishable, and unpinning its blocks
+    /// before it has left would publish a version whose leading leaves are gone.
+    /// The retire is then best-effort — a refused batch leaves pin rows charged,
+    /// which is a leak, where refusing the cancel over it would break the
+    /// guarantee the user was given.
     async fn discard_upload(
         &self,
         op_id: OpId,
         node: NodeId,
         root_cid: &[u8],
     ) -> Result<(), EngineError> {
-        if let Some(api) = &self.api {
-            let leaf_cids = version_leaf_cids(&self.seams.staging_store, root_cid).await;
-            let _ = retire(api, &registry_cids(root_cid, &leaf_cids)).await;
-        }
-        // Dequeued before the blocks go, so no window leaves a durable op
-        // referencing content the store no longer holds.
         self.dequeue_op(op_id).await?;
+        let uploaded: Vec<String> = self
+            .cancels
+            .borrow()
+            .uploaded_by(op_id)
+            .iter()
+            .map(|cid| encode_content_cid_str(cid))
+            .collect();
+        if let Some(api) = &self.api
+            && !uploaded.is_empty()
+        {
+            let _ = retire(api, &uploaded).await;
+        }
         release_version_blocks(&self.seams.staging_store, root_cid).await;
         let _ = self.events.unbounded_send(Event::OpProgress {
             op_id: Some(op_id),
@@ -2284,11 +2282,6 @@ impl<T: SeamTypes> Engine<T> {
             .remove_op(op_id)
             .await
             .map_err(EngineError::from_seam)
-    }
-
-    /// One orphan-GC pass over the staged-byte plane (#828).
-    async fn collect_staging_orphans(&self) {
-        collect_orphans(&self.seams.staging_store, &self.live_blocks).await;
     }
 
     /// A rendered read of the current state — the gate-passing base snapshot ⊕

@@ -65,7 +65,7 @@ use crate::sync::overlay::apply_overlay;
 use crate::sync::project::project_folder;
 use crate::sync::rebase::{AppliedOp, DeadLetterReason, decode_queue, replay};
 use crate::sync::record::RecordReader;
-use crate::sync::staging::{preserve_staged_root, release_version_blocks};
+use crate::sync::staging::{preserve_dead_letter, release_version_blocks, version_leaf_cids};
 
 /// The staging key holding the drained-op high-water mark: every op id at or
 /// below the stored value has left this device's queue (#860).
@@ -191,9 +191,8 @@ enum Halt {
         /// resume probe must find room for.
         needed_bytes: u64,
     },
-    /// The user cancelled the upload. The facade already retired what it had
-    /// uploaded, released its blocks and dequeued it, so the valve does nothing
-    /// but stop the pass (#824).
+    /// The user cancelled the upload. The facade has already undone it, so the
+    /// valve does nothing but stop the pass (#824).
     Cancelled,
 }
 
@@ -474,11 +473,10 @@ where
                 continue;
             };
             // A terminally unrebasable op keeps its staged bytes, and this is
-            // what keeps them reachable once its op record is gone (#853).
-            if let Some(root_cid) = op.content_root_cid() {
-                preserve_staged_root(self.staging, root_cid)
-                    .await
-                    .map_err(seam)?;
+            // what keeps them reachable — and openable — once the abandonment
+            // has dropped its record from the queue (#853).
+            if op.content_root_cid().is_some() {
+                self.preserve_dead_letter(*op_id).await?;
             }
             self.abandon(scope, *op_id, op).await?;
             report.dead_letters.push((*op_id, op.target, *reason));
@@ -492,16 +490,16 @@ where
         }
 
         for applied in &rebased.applied {
-            let outcome = self
+            if let Err(halt) = self
                 .publish_applied(scope, &mut pass, applied, &rebased.rebased)
-                .await;
-            self.cancels.borrow_mut().leave_publish();
-            if let Err(halt) = outcome {
+                .await
+            {
                 self.apply_valve(scope, applied.op_id, &applied.op, halt, attempts, report)
                     .await;
                 return Err(halt);
             }
             self.dequeue_op(applied.op_id).await?;
+            self.cancels.borrow_mut().published(applied.op_id);
             report.published.push(applied.op_id);
         }
         Ok(())
@@ -1392,16 +1390,11 @@ where
         };
         emit(OpPhase::UploadStarted, blocks(uploaded));
         for (index, leaf_cid) in content.leaf_cids().iter().enumerate() {
-            // The block boundary a cancel gets to run at. Without it a whole
-            // version uploads inside one turn of the host's executor and the
-            // cancel guarantee collapses to "only before the op starts" (#824).
-            yield_now().await;
-            if self.cancels.borrow().is_cancelled(applied.op_id) {
-                return Err(Halt::Cancelled);
-            }
+            self.cancel_checkpoint(applied.op_id).await?;
             match self.staged_block(leaf_cid).await? {
                 Some(block) => {
                     self.upload_block(leaf_cid, &block).await?;
+                    self.cancels.borrow_mut().confirmed(applied.op_id, leaf_cid);
                     // A leaf a lost release left staged behind the mark is
                     // re-uploaded here, and must not drag the mark back down
                     // over the leaves past it — those are released, so an
@@ -1421,14 +1414,14 @@ where
                 None => {}
             }
         }
-        yield_now().await;
-        if self.cancels.borrow().is_cancelled(applied.op_id) {
-            return Err(Halt::Cancelled);
-        }
+        self.cancel_checkpoint(applied.op_id).await?;
         // The root goes up last and stays staged until the publish confirms: it
         // is the manifest every retry re-derives the plan from, so releasing it
         // before the record lands would strand a fully-uploaded version.
         self.upload_block(&staged.root_cid, &root_block).await?;
+        self.cancels
+            .borrow_mut()
+            .confirmed(applied.op_id, &staged.root_cid);
         emit(OpPhase::UploadCompleted, total);
 
         let content_cids = registry_cids(&staged.root_cid, content.leaf_cids());
@@ -1436,6 +1429,17 @@ where
             version: content.version(*key, applied.op.authored_at.0),
             content_cids,
         })
+    }
+
+    /// The block boundary a cancel gets to run at. Without the yield a whole
+    /// version uploads inside one turn of the host's executor, and the cancel
+    /// guarantee collapses to "only before the op starts" (#824).
+    async fn cancel_checkpoint(&self, op_id: OpId) -> Result<(), Halt> {
+        yield_now().await;
+        match self.cancels.borrow().is_cancelled(op_id) {
+            true => Err(Halt::Cancelled),
+            false => Ok(()),
+        }
     }
 
     /// Best-effort upload progress for the op driving this transfer (a dropped
@@ -1503,14 +1507,6 @@ where
         Ok(Some(block))
     }
 
-    /// The version manifest a staged root block carries. `None` when the block
-    /// is gone or unreadable: both callers are reconciliation paths that must
-    /// still make progress on a store that has lost bytes.
-    async fn staged_manifest(&self, root_cid: &[u8]) -> Option<SealedContent> {
-        let block = self.staged_block(root_cid).await.ok()??;
-        SealedContent::from_root_block(&block).ok()
-    }
-
     /// Upload one block to the pin provider under `cid`, its staging key and
     /// own content address, so the ingress pins it where the published record
     /// points (#906). A block is only ever removed from staging on a confirmed
@@ -1524,19 +1520,10 @@ where
             .map_err(|error| classify_upload(error, block.len() as u64))
     }
 
-    /// Drop every staged block of an op's version.
-    ///
-    /// Called once its record publishes — the bytes are on the network — and on
-    /// a failure-valve abandonment, where the blocks are not the user's
-    /// recoverable work: the only copy of the version's content key rides the
-    /// op record, which the abandonment deletes, so what survives is ciphertext
-    /// nothing can ever open. Holding it would spend the staging budget forever
-    /// (#818; the dead-letter event is what surfaces the loss). A terminally
-    /// unrebasable op keeps its staged bytes instead (blueprint/engine.md, #33
-    /// D6), so this is not called on that path.
-    ///
-    /// Best-effort: a failed removal is orphan residue a later GC pass collects,
-    /// never a reason to fail a landed publish.
+    /// Drop every staged block of an op's version — on a landed publish, and on
+    /// a failure-valve abandonment, where the only copy of the version's content
+    /// key rode the op record the abandonment deletes
+    /// (`crate::sync::staging` owns the release-or-preserve rule).
     async fn release_staged_blocks(&self, op: &Op) {
         let Some(root_cid) = op.content_root_cid() else {
             return;
@@ -1814,6 +1801,19 @@ where
         }
     }
 
+    /// Copy one queued op's record into the preserved set before the
+    /// abandonment removes it, so the version it stages stays both referenced
+    /// and openable ([`preserve_dead_letter`]).
+    async fn preserve_dead_letter(&self, op_id: OpId) -> Result<(), Halt> {
+        let queued = self.staging.queued_ops().await.map_err(seam)?;
+        let Some((_, record)) = queued.iter().find(|(id, _)| *id == op_id) else {
+            return Ok(());
+        };
+        preserve_dead_letter(self.staging, record)
+            .await
+            .map_err(seam)
+    }
+
     /// Abandon one op: retire what its publish registered, then drop it from
     /// the queue (#819 as amended by #824).
     async fn abandon(&self, scope: &DrainScope<'_>, op_id: OpId, op: &Op) -> Result<(), Halt> {
@@ -1861,11 +1861,7 @@ where
         });
         let content = match op.content_root_cid() {
             Some(root_cid) => {
-                let manifest = self.staged_manifest(root_cid).await;
-                registry_cids(
-                    root_cid,
-                    manifest.as_ref().map_or(&[], SealedContent::leaf_cids),
-                )
+                registry_cids(root_cid, &version_leaf_cids(self.staging, root_cid).await)
             }
             None => Vec::new(),
         };
@@ -2097,7 +2093,7 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
 /// batch names exactly what a register batch claimed — and every block is its
 /// own accountable pin row (blueprint/api.md "Pin/name registry"), so leaving
 /// a leaf out of a retirement spends account quota forever.
-pub(crate) fn registry_cids(root_cid: &[u8], leaf_cids: &[Vec<u8>]) -> Vec<String> {
+fn registry_cids(root_cid: &[u8], leaf_cids: &[Vec<u8>]) -> Vec<String> {
     core::iter::once(root_cid)
         .chain(leaf_cids.iter().map(Vec::as_slice))
         .map(encode_content_cid_str)

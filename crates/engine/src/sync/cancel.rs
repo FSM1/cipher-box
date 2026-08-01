@@ -10,14 +10,30 @@ use std::collections::BTreeSet;
 
 use crate::seams::OpId;
 
-/// Which uploads the user cancelled, and which one has passed publish entry.
+/// The one op the drain is carrying, and how far it has got.
+struct InFlight {
+    op_id: OpId,
+    /// The blocks confirmed on the network so far.
+    ///
+    /// Session-scoped by design: it is the only evidence a cancel has that a
+    /// block was charged by *this* upload rather than by a version that has
+    /// since published, and a retire without that evidence would unpin content
+    /// a live record still names (#916).
+    confirmed: Vec<Vec<u8>>,
+    /// Whether the version's record has been authored and PUT. Sticky across a
+    /// retry: a PUT that did not confirm may still be live at the name.
+    past_publish_entry: bool,
+}
+
+/// Which uploads the user cancelled, and what the drain is doing with the one
+/// op it carries. The drain is strictly FIFO and stops at the first op it
+/// cannot finish, so exactly one upload is ever in flight.
 #[derive(Default)]
 pub(crate) struct UploadCancels {
     /// Cancelled op ids. Held for the session: an op leaves the durable queue
     /// with its cancel and never returns, so nothing here is ever reused.
     cancelled: BTreeSet<OpId>,
-    /// The op whose version has finished uploading and is now being published.
-    publishing: Option<OpId>,
+    in_flight: Option<InFlight>,
 }
 
 impl UploadCancels {
@@ -25,7 +41,7 @@ impl UploadCancels {
     /// the caller must refuse the cancel rather than compensate a published
     /// mutation.
     pub(crate) fn request(&mut self, op_id: OpId) -> bool {
-        if self.publishing == Some(op_id) {
+        if self.carrying(op_id).is_some_and(|it| it.past_publish_entry) {
             return false;
         }
         self.cancelled.insert(op_id);
@@ -45,17 +61,45 @@ impl UploadCancels {
         if self.cancelled.contains(&op_id) {
             return false;
         }
-        self.publishing = Some(op_id);
+        self.take_up(op_id).past_publish_entry = true;
         true
     }
 
-    /// The op has left the drain's hands, published or not.
-    pub(crate) fn leave_publish(&mut self) {
-        self.publishing = None;
+    /// The op published and left the durable queue.
+    pub(crate) fn published(&mut self, op_id: OpId) {
+        if self.carrying(op_id).is_some() {
+            self.in_flight = None;
+        }
     }
 
     pub(crate) fn is_cancelled(&self, op_id: OpId) -> bool {
         self.cancelled.contains(&op_id)
+    }
+
+    /// Record one more block of `op_id`'s version as confirmed on the network.
+    pub(crate) fn confirmed(&mut self, op_id: OpId, cid: &[u8]) {
+        self.take_up(op_id).confirmed.push(cid.to_vec());
+    }
+
+    /// The blocks a cancel of `op_id` may retire.
+    pub(crate) fn uploaded_by(&self, op_id: OpId) -> &[Vec<u8>] {
+        self.carrying(op_id).map_or(&[], |it| &it.confirmed)
+    }
+
+    fn carrying(&self, op_id: OpId) -> Option<&InFlight> {
+        self.in_flight.as_ref().filter(|it| it.op_id == op_id)
+    }
+
+    /// The in-flight record for `op_id`, starting a fresh one for a new op.
+    fn take_up(&mut self, op_id: OpId) -> &mut InFlight {
+        if self.carrying(op_id).is_none() {
+            self.in_flight = Some(InFlight {
+                op_id,
+                confirmed: Vec::new(),
+                past_publish_entry: false,
+            });
+        }
+        self.in_flight.as_mut().expect("set just above")
     }
 }
 
@@ -72,13 +116,49 @@ mod tests {
             "the record is publishing; cancel must be refused"
         );
 
-        cancels.leave_publish();
         let mut cancels = UploadCancels::default();
         assert!(cancels.request(OpId(1)));
         assert!(
             !cancels.enter_publish(OpId(1)),
             "the user cancelled first; the publish must abandon"
         );
+    }
+
+    /// A publish that did not confirm may still be live at the name, so the
+    /// claim outlives the failed attempt and the op stays uncancellable.
+    #[test]
+    fn a_publish_claim_survives_an_attempt_that_did_not_confirm() {
+        let mut cancels = UploadCancels::default();
+        cancels.enter_publish(OpId(1));
+        assert!(!cancels.request(OpId(1)));
+
+        cancels.published(OpId(1));
+        assert!(
+            cancels.request(OpId(1)),
+            "once the op published and left the queue the claim is spent"
+        );
+    }
+
+    /// Only the blocks this session confirmed may be retired: a block an earlier
+    /// session sent is indistinguishable from one a published version names.
+    #[test]
+    fn only_this_sessions_confirmed_blocks_are_retirable() {
+        let mut cancels = UploadCancels::default();
+        assert!(cancels.uploaded_by(OpId(1)).is_empty());
+
+        cancels.confirmed(OpId(1), b"leaf-0");
+        cancels.confirmed(OpId(1), b"leaf-1");
+        assert_eq!(
+            cancels.uploaded_by(OpId(1)),
+            [b"leaf-0".to_vec(), b"leaf-1".to_vec()]
+        );
+
+        cancels.confirmed(OpId(2), b"other-0");
+        assert!(
+            cancels.uploaded_by(OpId(1)).is_empty(),
+            "a new upload starts the list over"
+        );
+        assert_eq!(cancels.uploaded_by(OpId(2)), [b"other-0".to_vec()]);
     }
 
     /// The hold is per op: a cancel of a queued upload must not be refused

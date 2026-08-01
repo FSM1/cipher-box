@@ -3637,13 +3637,19 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
         block_on(engine.view()).unwrap().children(ROOT).is_empty(),
         "nothing published"
     );
-    let retired = retire_targets(&alice);
+    // Every block that reached the network is a charged pin row with no
+    // reachable record behind it, so the cancel must retire exactly those and
+    // nothing the version never sent (#916).
+    let charged: Vec<String> = version
+        .iter()
+        .map(|cid| encode_content_cid_str(cid))
+        .filter(|cid| blocks.get(cid).is_some())
+        .collect();
     assert!(
-        version
-            .iter()
-            .all(|cid| retired.contains(&encode_content_cid_str(cid))),
-        "every block the version could have charged is retired, root and leaves"
+        (1..version.len()).contains(&charged.len()),
+        "the cancel landed mid-set: part of the version is charged, not all of it"
     );
+    assert_eq!(retire_targets(&alice), charged);
     assert!(
         events_so_far(&mut events).contains(&Event::OpProgress {
             op_id: Some(op_id),
@@ -3796,37 +3802,118 @@ fn a_cancelled_create_cascades_onto_its_node_and_a_cancelled_version_does_not() 
     );
 }
 
-/// A cancel that cannot carry out its removals must give the claim back: an op
-/// left both queued and claimed would halt every pass behind it forever.
+/// A cancel that cannot carry out its removals must give the claim back and
+/// unpin nothing: an op left both queued and claimed would halt every pass
+/// behind it forever, and one left queued with its leading leaves retired would
+/// publish a version whose blocks are gone.
 #[test]
-fn a_cancel_that_cannot_dequeue_leaves_the_op_publishable() {
+fn a_cancel_that_cannot_dequeue_retires_nothing_and_leaves_the_op_publishable() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
     let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let plaintext: Vec<u8> = (0..200u8).collect();
     let op_id = write_file(
         &mut engine,
         WriteTarget::NewFile {
             parent: ROOT,
             name: "photo.bin".into(),
         },
-        b"bytes that still publish",
+        &plaintext,
     )
     .unwrap();
+
+    // Part of the version is already on the network when the cancel arrives, so
+    // there is a retire batch to get wrong.
+    world.scheduler.advance(engine.profile().poll_cadence);
+    for _ in 0..4 {
+        poll_once(&mut tasks);
+    }
+    assert!(uploads(&alice) > 0);
 
     alice.staging_store.fail_remove_op();
     assert!(
         block_on(engine.command(Command::CancelUpload { op_id })).is_err(),
         "the cancel could not remove the op, so it did not happen"
     );
+    poll_each(&mut tasks);
 
-    tick(&world, &engine, &mut tasks);
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "an op that is still publishable keeps every pin its upload charged"
+    );
     assert_eq!(
         published_names(&world.record_store, &blocks, ROOT),
         vec!["photo.bin".to_owned()],
         "the op the cancel could not take is published, not wedged"
+    );
+    let file = child_id(&engine, ROOT, "photo.bin");
+    assert_eq!(
+        block_on(engine.read_content(file)).expect("the published version reads back"),
+        plaintext
+    );
+}
+
+/// The op-record header is clear and unauthenticated, and the owner tag on it is
+/// a public key any co-tenant of the origin-shared store can copy. A record that
+/// bears our tag but never opens is dead-lettered and dropped at cold start — it
+/// must not also authorize deleting the blocks its header names, or planting one
+/// would destroy a queued version whose key is intact.
+#[test]
+fn an_undecodable_record_never_authorizes_deleting_the_blocks_its_header_names() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, tasks) = boot(&world, &blocks, &alice, 42);
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &plaintext,
+    )
+    .unwrap();
+    let version = queued_version(&alice, op_id);
+
+    // The forgery: the real op's record with its sealed body corrupted, so the
+    // header — our owner tag, and the real op's content root — still reads.
+    let mut forged = block_on(alice.staging_store.queued_ops()).unwrap()[0]
+        .1
+        .clone();
+    let last = forged.len() - 1;
+    forged[last] ^= 1;
+    block_on(alice.staging_store.enqueue_op(&forged)).unwrap();
+    drop(engine);
+    drop(tasks);
+
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    assert!(
+        events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::DeadLetter {
+                reason: DeadLetterReason::Undecodable,
+                ..
+            }
+        )),
+        "the forgery must reach the path under test, not be retained short of it"
+    );
+    let staged = block_on(alice.staging_store.staged_keys()).unwrap();
+    assert!(
+        version.iter().all(|cid| staged.contains(cid)),
+        "the forged record was dropped; the version it named was not"
+    );
+
+    tick(&world, &engine, &mut tasks);
+    let file = child_id(&engine, ROOT, "photo.bin");
+    assert_eq!(
+        block_on(engine.read_content(file)).expect("the real op still publishes"),
+        plaintext
     );
 }
 
