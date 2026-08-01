@@ -1,12 +1,14 @@
 import { defineConfig, type Plugin } from 'vite';
 
+import { mockMailboxRequest, readBody } from './mockMailbox.js';
+
 /**
- * Serves the browser-suite harness and stands up an in-memory mock of the two
+ * Serves the browser-suite harness and stands up an in-memory mock of the
  * network surfaces the seams touch: the `/routing/v1` delegated-routing
- * endpoint set (for `RecordTransport`) and a couple of plain HTTP endpoints
- * (for the `Http` seam behavioral check). No crypto, no real network — the
- * mock stores and returns opaque bytes, exactly the shape the seam contracts
- * exercise.
+ * endpoint set (for `RecordTransport`), the API mailbox routes (for
+ * `Mailbox`), and a couple of plain HTTP endpoints (for the `Http` seam
+ * behavioral check). No crypto, no real network — the mock stores and returns
+ * opaque bytes, exactly the shape the seam contracts exercise.
  */
 function mockNetwork(): Plugin {
   const records = new Map<string, Buffer>();
@@ -16,6 +18,8 @@ function mockNetwork(): Plugin {
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const url = req.url ?? '';
+
+        if (mockMailboxRequest(req, res)) return;
 
         const routing = url.match(/\/routing\/v1\/ipns\/([^/?]+)/);
         if (routing) {
@@ -33,10 +37,8 @@ function mockNetwork(): Plugin {
             return;
           }
           if (req.method === 'PUT') {
-            const chunks: Buffer[] = [];
-            req.on('data', (chunk: Buffer) => chunks.push(chunk));
-            req.on('end', () => {
-              records.set(key, Buffer.concat(chunks));
+            void readBody(req).then((record) => {
+              records.set(key, record);
               res.statusCode = 200;
               res.end();
             });
@@ -61,12 +63,10 @@ function mockNetwork(): Plugin {
         }
 
         if (url.startsWith('/mock-http/echo')) {
-          const chunks: Buffer[] = [];
-          req.on('data', (chunk: Buffer) => chunks.push(chunk));
-          req.on('end', () => {
+          void readBody(req).then((body) => {
             res.statusCode = 200;
             res.setHeader('x-echo-method', req.method ?? '');
-            res.end(Buffer.concat(chunks));
+            res.end(body);
           });
           return;
         }

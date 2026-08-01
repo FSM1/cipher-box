@@ -18,6 +18,7 @@ const kitSeams = [
   'credentialStore',
   'scheduler',
   'recordTransport',
+  'mailbox',
 ] as const;
 
 function runSeam(page: Page, seam: string): Promise<SeamOutcome> {

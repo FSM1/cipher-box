@@ -22,7 +22,7 @@ async function boot(): Promise<void> {
   const { origin } = scope.location;
   const seams = makeBrowserSeams({
     recordEndpoints: [`${origin}/routing`],
-    mailboxUrl: `${origin}/mailbox`,
+    apiBaseUrl: `${origin}/mock-api/engine`,
     dbPrefix: `engine-${Date.now()}`,
   });
   const host = new EngineHost(wasm, seams, 'ci');
