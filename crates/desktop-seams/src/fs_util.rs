@@ -48,22 +48,14 @@ pub(crate) fn ensure_dir(dir: &Path) -> io::Result<()> {
 /// Durably writes `bytes` to `path`, replacing any existing file atomically.
 ///
 /// Barrier order: write a fresh temp file in the same directory, `sync_all`
-/// its contents, `rename` it over the target (atomic replace on Unix and on
-/// Windows — Rust's `fs::rename` maps to `MoveFileExW` with
-/// `MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH`), then fsync the
-/// directory so the rename itself is durable. A crash can only ever leave
-/// the old value or the new value — never a torn one.
+/// its contents, `rename` it over the target (an atomic replace on both Unix
+/// and Windows), then [`fsync_dir`] so the rename itself is durable. A crash
+/// can only ever leave the old value or the new value — never a torn one.
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let dir = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
-    let tmp = temp_path(dir);
-    // Scope the handle so it is closed before the rename.
-    {
-        let mut file = File::create(&tmp)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-    }
+    let tmp = write_synced_temp(dir, bytes)?;
     match fs::rename(&tmp, path) {
         Ok(()) => {}
         Err(err) => {
@@ -75,9 +67,9 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 }
 
 /// Durably removes a file. Idempotent: a missing file is success. The
-/// removal is barriered with a directory fsync so an ordered caller (e.g.
-/// the StagingStore's op-before-sidecar removal) can rely on it having hit
-/// the platter before the next removal begins.
+/// removal is followed by [`fsync_dir`] so an ordered caller (e.g. the
+/// StagingStore's op-before-sidecar removal) can rely on it having hit the
+/// platter before the next removal begins.
 pub(crate) fn remove_file_durable(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Ok(()) => {}
@@ -85,7 +77,8 @@ pub(crate) fn remove_file_durable(path: &Path) -> io::Result<()> {
         Err(err) => return Err(err),
     }
     if let Some(dir) = path.parent() {
-        fsync_dir(dir)?;
+        fsync_dir(dir)
+            .map_err(|err| io::Error::new(err.kind(), format!("unlink barrier: {err}")))?;
     }
     Ok(())
 }
@@ -121,19 +114,43 @@ pub(crate) fn list_file_names(dir: &Path) -> io::Result<Vec<String>> {
     Ok(names)
 }
 
-/// Fsyncs a directory so a create/rename/unlink inside it is durable.
-///
-/// Unix opens the directory and `sync_all`s it. Windows has no directory
-/// fsync; `fs::rename`'s `MOVEFILE_WRITE_THROUGH` and NTFS metadata
-/// journaling cover the same guarantee, so this is a no-op there.
+/// Barriers a directory so a create/rename/unlink inside it is durable
+/// before the next one is issued.
 #[cfg(unix)]
 fn fsync_dir(dir: &Path) -> io::Result<()> {
     File::open(dir)?.sync_all()
 }
 
 #[cfg(not(unix))]
-fn fsync_dir(_dir: &Path) -> io::Result<()> {
+fn fsync_dir(dir: &Path) -> io::Result<()> {
+    metadata_log_barrier(dir)
+}
+
+/// The [`fsync_dir`] barrier where a directory handle cannot be fsynced.
+///
+/// NTFS journals metadata to a per-volume log flushed as an LSN-ordered
+/// prefix, so `sync_all`ing a file created *after* an unlink or rename also
+/// persists it. This covers both barriers, not just unlinks: std's Windows
+/// `rename` passes `MOVEFILE_REPLACE_EXISTING` alone, never
+/// `MOVEFILE_WRITE_THROUGH` (#665). The temp carries [`TEMP_PREFIX`], so a
+/// crash before its removal leaves debris [`ensure_dir`] sweeps on reopen.
+#[cfg(any(not(unix), test))]
+fn metadata_log_barrier(dir: &Path) -> io::Result<()> {
+    // A byte of content makes the flush a data-and-metadata transaction
+    // rather than a flush of an untouched handle.
+    let path = write_synced_temp(dir, b"\0")?;
+    let _ = fs::remove_file(&path);
     Ok(())
+}
+
+/// Writes `bytes` to a fresh temp file in `dir` and `sync_all`s it, returning
+/// its path with the handle already closed.
+fn write_synced_temp(dir: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
+    let path = temp_path(dir);
+    let mut file = File::create(&path)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    Ok(path)
 }
 
 /// A process-unique filename component (`<pid>.<seq>`), so two in-flight
@@ -218,6 +235,32 @@ mod tests {
         remove_file_durable(&path).unwrap();
         remove_file_durable(&path).unwrap();
         assert_eq!(read_file_opt(&path).unwrap(), None);
+    }
+
+    #[test]
+    fn metadata_log_barrier_leaves_the_directory_as_it_found_it() {
+        let dir = tempfile::tempdir().unwrap();
+        atomic_write(&dir.path().join("value"), b"x").unwrap();
+        metadata_log_barrier(dir.path()).unwrap();
+        metadata_log_barrier(dir.path()).unwrap();
+        assert_eq!(
+            fs::read_dir(dir.path()).unwrap().count(),
+            1,
+            "successive barriers must neither collide on a temp name nor accumulate debris"
+        );
+        assert_eq!(
+            read_file_opt(&dir.path().join("value")).unwrap(),
+            Some(b"x".to_vec())
+        );
+    }
+
+    /// The barrier reports a failure rather than returning success without
+    /// having established one — an unbarriered removal is a fail-closed error,
+    /// never a fast path, because callers order two removals against it.
+    #[test]
+    fn metadata_log_barrier_fails_closed_when_it_cannot_be_established() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(metadata_log_barrier(&dir.path().join("absent")).is_err());
     }
 
     #[test]

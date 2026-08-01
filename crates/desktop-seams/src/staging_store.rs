@@ -34,12 +34,13 @@ const COUNTER_FILE: &str = "next_op_id";
 ///   reopens.
 ///
 /// **Removal ordering is a correctness property** (hard constraint 5): every
-/// mutating method fsyncs before returning, so when the engine completes an
-/// op by removing the op record *before* its sidecar, that ordering actually
-/// reaches the platter in order. A crash can then only ever leave an orphan
-/// sidecar (harmless, reclaimed by orphan-sidecar GC via [`staged_keys`] +
-/// [`remove_staged_bytes`]) — never an op record pointing at a sidecar that
-/// is already gone.
+/// mutating method barriers its directory entry before returning (see
+/// `fs_util::fsync_dir`), so when a caller completes an op by removing the
+/// op record *before* its sidecar, that
+/// ordering actually reaches the platter in order. A crash can then only ever
+/// leave an orphan sidecar (harmless, reclaimed by orphan-sidecar GC via
+/// [`staged_keys`] + [`remove_staged_bytes`]) — never an op record pointing
+/// at a sidecar that is already gone.
 pub struct FileStagingStore {
     ops_dir: PathBuf,
     staged_dir: PathBuf,
