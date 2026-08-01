@@ -18,6 +18,11 @@ mod fanout;
 mod focus;
 mod pointer_fetch;
 
+/// The registry's batch cap: the server refuses a larger array — and a larger
+/// per-entry `contentCids` array — fail-closed with a `400` (blueprint/api.md
+/// "Batch bounds"). Every bulk caller on this plane chunks to it.
+pub(crate) const REGISTRY_BATCH_MAX: usize = 1000;
+
 pub mod author;
 pub mod eol;
 pub mod liveness;

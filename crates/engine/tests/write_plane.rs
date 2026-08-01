@@ -84,6 +84,34 @@ fn upload_413(code: Option<&str>) -> SeamResult<HttpResponse> {
     })
 }
 
+/// The registry's batch bounds (blueprint/api.md): at most this many entries
+/// per register batch, and this many `contentCids` per entry.
+const REGISTER_BATCH_CAP: usize = 1000;
+
+/// The registry's fail-closed answer to a batch past its bounds: a `400`,
+/// never a truncated or partial registration (blueprint/api.md "Batch bounds").
+fn register_reply(body: Option<&[u8]>) -> SeamResult<HttpResponse> {
+    let entries: Vec<serde_json::Value> =
+        serde_json::from_slice(body.expect("a register call carries a body"))
+            .expect("a register body is a JSON array");
+    let over_cap = entries.len() > REGISTER_BATCH_CAP
+        || entries.iter().any(|entry| {
+            entry["contentCids"]
+                .as_array()
+                .is_some_and(|cids| cids.len() > REGISTER_BATCH_CAP)
+        });
+    Ok(HttpResponse {
+        status: if over_cap { 400 } else { 200 },
+        headers: Vec::new(),
+        body: if over_cap {
+            br#"{"statusCode":400,"message":"contentCids must contain no more than 1000 elements"}"#
+                .to_vec()
+        } else {
+            Vec::new()
+        },
+    })
+}
+
 /// A 413 from an intermediary that never reached the API: an HTML body, so no
 /// error envelope parses out of it at all.
 fn proxy_413() -> SeamResult<HttpResponse> {
@@ -100,6 +128,8 @@ struct Blocks {
     on_upload: Arc<Mutex<Option<UploadHook>>>,
     /// What `GET /account/quota` reports, as `(usedBytes, limitBytes)`.
     quota: Arc<Mutex<Option<(u64, u64)>>>,
+    /// A status every `POST /registry/register` answers with instead of acking.
+    register_refusal: Arc<Mutex<Option<u16>>>,
 }
 
 impl Blocks {
@@ -150,6 +180,11 @@ impl Blocks {
         *self.quota.lock().expect("lock") = Some((used_bytes, limit_bytes));
     }
 
+    /// Answer every registration with `status` instead of acking.
+    fn refuse_register(&self, status: u16) {
+        *self.register_refusal.lock().expect("lock") = Some(status);
+    }
+
     /// Answer one engine HTTP call: a content upload lands its bytes here and
     /// echoes their address, a registry call acks, and a gateway GET serves the
     /// block back. Enqueued as many times as the pass needs, so no test depends
@@ -193,6 +228,17 @@ impl Blocks {
                 "{{\"usedBytes\":{used},\"limitBytes\":{limit},\"advisory\":false}}"
             )
             .into_bytes());
+        }
+        if url.ends_with("/registry/register") {
+            if let Some(status) = *self.register_refusal.lock().expect("lock") {
+                return Ok(HttpResponse {
+                    status,
+                    headers: Vec::new(),
+                    body: format!("{{\"statusCode\":{status},\"message\":\"refused\"}}")
+                        .into_bytes(),
+                });
+            }
+            return register_reply(request.body.as_deref());
         }
         if url.contains("/registry/") {
             return ok(Vec::new());
@@ -441,6 +487,23 @@ fn registered_content_cids(device: &FakeDevice, name: &IpnsName) -> Vec<String> 
         })
         .next_back()
         .unwrap_or_default()
+}
+
+/// Every registration entry the device sent for `name`, in wire order across
+/// however many batches it took — the shape a chunked registration is asserted
+/// on (#920).
+fn registration_entries(device: &FakeDevice, name: &IpnsName) -> Vec<serde_json::Value> {
+    device
+        .http
+        .requests()
+        .iter()
+        .filter(|request| request.url.ends_with("/registry/register"))
+        .filter_map(|request| {
+            serde_json::from_slice::<Vec<serde_json::Value>>(request.body.as_deref()?).ok()
+        })
+        .flatten()
+        .filter(|entry| entry["ipnsName"] == name.as_str())
+        .collect()
 }
 
 /// The node a head block about to be uploaded was sealed for.
@@ -873,6 +936,121 @@ fn a_published_version_registers_its_whole_block_set() {
     assert!(
         registered.iter().all(|cid| blocks.get(cid).is_some()),
         "every registered CID names a block the provider holds"
+    );
+}
+
+/// A version with more blocks than the registry's per-entry `contentCids` cap
+/// splits across several entries under one name, so the registration the
+/// register-first ordering blocks on is accepted and the version publishes
+/// (#920). Unchunked, the batch is refused fail-closed and nothing is PUT.
+#[test]
+fn a_version_past_the_registration_cap_registers_in_chunks_and_publishes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    // 1001 leaves at the CI framing, plus the root: one past the cap.
+    let leaves = REGISTER_BATCH_CAP + 1;
+    let plaintext: Vec<u8> = (0..leaves * 16).map(|byte| byte as u8).collect();
+
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
+    // One HTTP reply per block, plus the metadata plane's own calls.
+    serve_http(&alice, &blocks, 4 * leaves);
+    write_file(
+        &mut engine_a,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "big.bin".into(),
+        },
+        &plaintext,
+    )
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks);
+
+    let node = child_id(&engine_a, ROOT, "big.bin");
+    let entries = registration_entries(&alice, &write_name(node));
+    let sizes: Vec<usize> = entries
+        .iter()
+        .map(|entry| entry["contentCids"].as_array().expect("contentCids").len())
+        .collect();
+    assert_eq!(
+        sizes,
+        vec![REGISTER_BATCH_CAP, 2],
+        "the registration splits at the per-entry cap"
+    );
+    let heads: Vec<&str> = entries
+        .iter()
+        .filter_map(|entry| entry["headCid"].as_str())
+        .collect();
+    assert_eq!(
+        heads.len(),
+        1,
+        "the head rides one entry; the rest carry content only"
+    );
+    assert!(
+        entries[0]["headCid"].is_string(),
+        "the head rides the first entry, so the name and its pointer land first"
+    );
+
+    let registered: Vec<String> = entries
+        .iter()
+        .flat_map(|entry| {
+            entry["contentCids"]
+                .as_array()
+                .expect("contentCids")
+                .iter()
+                .map(|cid| cid.as_str().expect("a CID string").to_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(
+        registered.len(),
+        leaves + 1,
+        "every block the version links still rides the registration exactly once"
+    );
+    assert!(
+        registered.iter().all(|cid| blocks.get(cid).is_some()),
+        "every registered CID names a block the provider holds"
+    );
+    assert!(
+        block_on(engine_a.snapshot(ROOT))
+            .unwrap()
+            .dead_letters
+            .is_empty(),
+        "a chunked registration is accepted, so the op publishes"
+    );
+}
+
+/// A registration the registry refuses is refused on every retry, and the queue
+/// is strict FIFO — so the op dead-letters instead of holding the head and
+/// re-registering every tick (#920).
+#[test]
+fn a_refused_registration_dead_letters_instead_of_holding_the_queue_head() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.refuse_register(400);
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+
+    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+    assert_eq!(passes, 1, "a refused registration is permanent on sight");
+    assert_eq!(
+        dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::PayloadRefused
+        }]
     );
 }
 

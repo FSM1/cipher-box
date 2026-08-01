@@ -16,6 +16,7 @@ use core::time::Duration;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
+use super::REGISTRY_BATCH_MAX;
 use super::eol;
 use super::fanout::{fanout_get_verify, fanout_put};
 use crate::api::{ApiClient, ApiError, NameRegistration};
@@ -58,15 +59,25 @@ impl PublishRequest<'_> {
         format!("{IPFS_PREFIX}{}", self.head_cid).into_bytes()
     }
 
-    /// The single-item registration batch for this publish (ordinary writes
-    /// register one name; name waves and sweeps batch — that is the caller's
-    /// concern, blueprint/engine.md).
-    fn registration(&self) -> NameRegistration {
-        NameRegistration {
+    /// The registration entries for this publish, split at the registry's
+    /// per-entry `contentCids` cap ([`REGISTRY_BATCH_MAX`]): a version with more
+    /// leaves than the cap registers as several entries under the same name,
+    /// which the server collapses to one name row. The head rides the first
+    /// entry, so the name and its pointer land ahead of any content row.
+    fn registrations(&self) -> Vec<NameRegistration> {
+        let mut chunks = self.content_cids.chunks(REGISTRY_BATCH_MAX);
+        let head_entry = NameRegistration {
             ipns_name: self.name.as_str().to_owned(),
             head_cid: Some(self.head_cid.clone()),
-            content_cids: self.content_cids.clone(),
-        }
+            content_cids: chunks.next().unwrap_or_default().to_vec(),
+        };
+        core::iter::once(head_entry)
+            .chain(chunks.map(|chunk| NameRegistration {
+                ipns_name: self.name.as_str().to_owned(),
+                head_cid: None,
+                content_cids: chunk.to_vec(),
+            }))
+            .collect()
     }
 }
 
@@ -117,7 +128,9 @@ pub struct PublishReceipt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PublishError {
     /// Register-first failed: the API rejected (or could not reach) the
-    /// registration, so no record was PUT — the fail-closed ordering law.
+    /// registration, so no record was PUT — the fail-closed ordering law. A
+    /// chunked registration may have landed earlier chunks, leaving rows the
+    /// caller must retire.
     Register(ApiError),
     /// No endpoint acknowledged the record PUT (the whole endpoint set is
     /// unreachable). Nothing durable happened; the caller retries later.
@@ -158,10 +171,10 @@ where
     }
 
     // Register-first, fail-closed: the record never reaches the transport unless
-    // the registration succeeds (#24 D6 / #34 D2).
-    api.register(std::slice::from_ref(&request.registration()))
-        .await
-        .map_err(PublishError::Register)?;
+    // every registration chunk succeeds (#24 D6 / #34 D2).
+    for batch in request.registrations().chunks(REGISTRY_BATCH_MAX) {
+        api.register(batch).await.map_err(PublishError::Register)?;
+    }
 
     // CAS expected sequence: floor + 1 (first publish → 1, the "no floor" 0
     // sentinel reserved). Revival raises the floor read to the recovered

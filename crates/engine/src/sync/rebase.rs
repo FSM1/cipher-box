@@ -89,8 +89,8 @@ pub enum DeadLetterReason {
     /// header format, or a newer intent grammar — is retained instead
     /// ([`RecordClass::Retained`]).
     Undecodable,
-    /// The network refused the op's own bytes for a reason no retry changes —
-    /// an over-cap payload, not a full account.
+    /// The network refused the op's own bytes or its registration for a reason
+    /// no retry changes — an over-cap payload, not a full account.
     PayloadRefused,
     /// The op's drain attempt budget ran out. A budget spent before the record
     /// PUT retires what the op uploaded; once a PUT is acked the publish may

@@ -6,26 +6,23 @@
 //! scope-root name lingers serving the tombstone until the migration window
 //! closes ([`root_retire_ready`], stubbed — see below).
 
+use super::REGISTRY_BATCH_MAX;
 use crate::api::{ApiClient, ApiError};
 use crate::seams::{CredentialStore, Http};
-
-/// The server's retire batch cap, which refuses a larger array fail-closed
-/// (blueprint/api.md "Batch bounds").
-const RETIRE_BATCH_MAX: usize = 1000;
 
 /// Batch-retire registry rows for `targets` (`ipnsName`s or CIDs). Idempotent
 /// server-side (blueprint/api.md), so a replayed batch — a resumed name wave, or
 /// a chunk a failed pass already sent — is a no-op, never an error. This is the
 /// interior-name path: it retires the moment the caller says a name is dead.
 ///
-/// Chunked to [`RETIRE_BATCH_MAX`]; a failing chunk leaves the earlier ones
+/// Chunked to [`REGISTRY_BATCH_MAX`]; a failing chunk leaves the earlier ones
 /// retired and returns `Err`.
 pub async fn retire<H, C>(api: &ApiClient<H, C>, targets: &[String]) -> Result<(), ApiError>
 where
     H: Http,
     C: CredentialStore,
 {
-    for chunk in targets.chunks(RETIRE_BATCH_MAX) {
+    for chunk in targets.chunks(REGISTRY_BATCH_MAX) {
         api.retire(chunk).await?;
     }
     Ok(())
@@ -86,7 +83,7 @@ mod tests {
     #[test]
     fn an_oversize_batch_splits_into_chunks_the_server_accepts() {
         let (http, client) = client();
-        let targets: Vec<String> = (0..RETIRE_BATCH_MAX + 1)
+        let targets: Vec<String> = (0..REGISTRY_BATCH_MAX + 1)
             .map(|i| format!("cid{i}"))
             .collect();
         for _ in 0..2 {

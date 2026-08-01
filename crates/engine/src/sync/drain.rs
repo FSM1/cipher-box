@@ -42,7 +42,7 @@ use crate::net::author::{
     AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
     author_scope_root_envelope, new_child,
 };
-use crate::net::publish::{PublishOutcome, PublishReceipt};
+use crate::net::publish::{PublishError, PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
@@ -1888,9 +1888,21 @@ fn seam(_: crate::seams::SeamError) -> Halt {
 fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
     match error {
         RecordPublishError::Upload(error) => classify_upload(error, refused_bytes),
+        RecordPublishError::Publish(PublishError::Register(error)) => classify_register(error),
         RecordPublishError::HeadCidMismatch { .. } | RecordPublishError::Publish(_) => {
             Halt::Unclassified
         }
+    }
+}
+
+/// Classify a register-first refusal. A `400` is the registry's fail-closed
+/// verdict on the batch this op builds — a malformed or over-cap entry, which
+/// no retry changes. The queue is strict FIFO, so leaving it unclassified would
+/// park the op at the head forever, re-registering every tick (#920).
+fn classify_register(error: ApiError) -> Halt {
+    match error {
+        ApiError::Status { status: 400, .. } => Halt::Permanent(DeadLetterReason::PayloadRefused),
+        _ => Halt::Unclassified,
     }
 }
 
