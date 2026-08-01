@@ -89,13 +89,21 @@ export interface HttpResponseData {
   body: Uint8Array;
 }
 
+export type CappedHttpResult =
+  | ({ kind: 'response' } & HttpResponseData)
+  | { kind: 'tooLarge'; observed: number; limit: number };
+
 /**
  * Plain HTTP for the API client, trustless gateway, and BYO providers. A pure
  * byte mover: non-2xx statuses are responses, not errors; only transport-level
  * failure rejects.
+ *
+ * `sendCapped` bounds peak memory while the body is still arriving — the cap is
+ * exclusive, so a body exactly at `maxBytes` is admitted.
  */
 export interface HttpSeam {
   send(request: HttpRequestData): Promise<HttpResponseData>;
+  sendCapped(request: HttpRequestData, maxBytes: number): Promise<CappedHttpResult>;
 }
 
 /** One pending mailbox item; `sealedPayload` is opaque (the engine unseals it). */

@@ -36,7 +36,8 @@ export interface BroadcastChannelLike {
 export type WireRead =
   | { kind: 'snapshot'; folder: Uint8Array | null }
   | { kind: 'siweChallenge' }
-  | { kind: 'download'; node: Uint8Array };
+  | { kind: 'download'; node: Uint8Array }
+  | { kind: 'downloadRange'; node: Uint8Array; offset: number; length: number };
 
 /** A follower streaming-write step, driven against the leader's engine. */
 export type WireWrite =
@@ -75,8 +76,8 @@ export type LeaderMessage =
   | { type: 'cb:leaderGone'; token: string }
   /**
    * The correlated result of a follower's command, read, or write step. A
-   * snapshot read's ok carries the descriptor in `result`; a download's carries
-   * a `Blob`; a SIWE challenge's carries the nonce string;
+   * snapshot read's ok carries the descriptor in `result`; a plaintext read's
+   * carries a `Blob`; a SIWE challenge's carries the nonce string;
    * `beginWrite`/`commitWrite` carry the handle / durable op id.
    */
   | {

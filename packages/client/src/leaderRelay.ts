@@ -184,10 +184,12 @@ export class LeaderRelay {
         return this.transport.snapshot(read.folder);
       case 'siweChallenge':
         return this.transport.siweChallenge();
+      // Wrap the plaintext in a `Blob` so the per-receiver structured clone
+      // shares the immutable backing store instead of copying the bytes.
       case 'download':
-        // Wrap the plaintext in a `Blob` so the per-receiver structured clone
-        // shares the immutable backing store instead of copying the bytes.
         return new Blob([await this.transport.download(read.node)]);
+      case 'downloadRange':
+        return new Blob([await this.transport.downloadRange(read.node, read.offset, read.length)]);
     }
   }
 

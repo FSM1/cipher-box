@@ -68,6 +68,10 @@ class FakeHost implements EngineHostLike {
     return Promise.reject(new Error('fake host serves no downloads'));
   }
 
+  downloadRange(): Promise<ArrayBuffer> {
+    return Promise.reject(new Error('fake host serves no downloads'));
+  }
+
   nextEvent(): Promise<EventDescriptor | null> {
     const next = this.queued.shift();
     if (next) return Promise.resolve(next);

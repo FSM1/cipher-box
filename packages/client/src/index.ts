@@ -31,6 +31,11 @@ export { LeaderRelay } from './leaderRelay.js';
 export { BROADCAST_CHANNEL_NAME, newClientId } from './broadcast.js';
 export type { BroadcastChannelLike } from './broadcast.js';
 
+// The tab side of the Service Worker byte pipe. The worker realm is reached by
+// URL through the `./sw` subpath, never this barrel.
+export { MediaService } from './media/service.js';
+export type { MediaReader } from './media/broker.js';
+
 // The one hex codec in TypeScript, for hosts that receive hex-encoded bytes
 // from a third-party SDK.
 export { fromHex } from './seams/bytes.js';

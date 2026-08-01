@@ -180,7 +180,8 @@ export type WorkerRequest =
   | { type: 'abortWrite'; id: number; handle: WriteHandle }
   | { type: 'snapshot'; id: number; folder: Uint8Array | null }
   | { type: 'siweChallenge'; id: number }
-  | { type: 'download'; id: number; node: Uint8Array };
+  | { type: 'download'; id: number; node: Uint8Array }
+  | { type: 'downloadRange'; id: number; node: Uint8Array; offset: number; length: number };
 
 /** A worker → UI message. */
 export type WorkerMessage =
@@ -189,9 +190,9 @@ export type WorkerMessage =
   /**
    * The correlated result of a request. A value-bearing ok response carries it:
    * a `SnapshotDescriptor` for `snapshot`, the plaintext `ArrayBuffer`
-   * (transferred, not copied) for `download`, the nonce string for
-   * `siweChallenge`, the write handle for `beginWrite`, the durable op id for
-   * `commitWrite`.
+   * (transferred, not copied) for `download`/`downloadRange`, the nonce string
+   * for `siweChallenge`, the write handle for `beginWrite`, the durable op id
+   * for `commitWrite`.
    */
   | {
       type: 'response';

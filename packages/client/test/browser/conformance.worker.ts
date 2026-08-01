@@ -87,6 +87,35 @@ async function runHttpBehavioral(): Promise<void> {
   if (!method || method[1] !== 'POST') {
     throw new Error('Http: request method was not forwarded');
   }
+
+  // A chunked body with no Content-Length is bounded by the streaming cap.
+  const overrun = await http.sendCapped(
+    { method: 'GET', url: `${origin}/mock-http/stream`, headers: [], body: null },
+    4096
+  );
+  if (overrun.kind !== 'tooLarge') {
+    throw new Error(`Http: expected tooLarge for an uncapped stream, got ${overrun.kind}`);
+  }
+  if (overrun.limit !== 4096 || overrun.observed <= 4096) {
+    throw new Error(`Http: tooLarge reported ${overrun.observed}/${overrun.limit}`);
+  }
+
+  // The cap is exclusive: a body exactly at it is admitted.
+  const atCap = await http.sendCapped(
+    {
+      method: 'POST',
+      url: `${origin}/mock-http/echo`,
+      headers: [],
+      body: new Uint8Array([1, 2, 3, 4]),
+    },
+    4
+  );
+  if (atCap.kind !== 'response') {
+    throw new Error('Http: an at-cap body was not admitted');
+  }
+  if (atCap.body.length !== 4 || atCap.body[3] !== 4) {
+    throw new Error('Http: at-cap body did not round-trip');
+  }
 }
 
 async function run(seam: string): Promise<void> {

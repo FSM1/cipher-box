@@ -4,10 +4,6 @@ use core::fmt;
 
 use super::{SeamError, SeamResult};
 
-/// The `Content-Length` response header, consulted by [`Http::send_capped`] for
-/// an up-front reject before any body bytes are read.
-pub const CONTENT_LENGTH: &str = "content-length";
-
 /// Why a size-capped fetch ([`Http::send_capped`]) did not return a body.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CappedFetchError {
@@ -149,10 +145,9 @@ pub trait Http {
     ///   `Content-Length` pre-check plus a capped streaming read that aborts
     ///   past the cap — the true peak-memory bound at the content fetch
     ///   boundary (#787).
-    /// - WASM (the JS fetch bridge) applies a `Content-Length` pre-check plus a
-    ///   post-buffer size check: it fails closed on size but is *not* a
-    ///   peak-memory bound, because the JS seam buffers the whole body before it
-    ///   reaches Rust. The streaming bound is tracked in #641.
+    /// - WASM (the JS fetch bridge) enforces the same bound in the JS seam,
+    ///   which drains `Response.body` under the cap and never materializes an
+    ///   over-cap body (#641).
     ///
     /// The default implementation only backstops: it buffers the whole body via
     /// [`send`](Self::send) and then checks the length, which bounds nothing. It

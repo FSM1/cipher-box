@@ -105,6 +105,10 @@ class JournalHost implements EngineHostLike {
     return Promise.reject(new Error('journal host serves no downloads'));
   }
 
+  downloadRange(): Promise<ArrayBuffer> {
+    return Promise.reject(new Error('journal host serves no downloads'));
+  }
+
   nextEvent(): Promise<EventDescriptor | null> {
     // No engine events in this fake; park the pump forever.
     return new Promise<EventDescriptor | null>(() => undefined);

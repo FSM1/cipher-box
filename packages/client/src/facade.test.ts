@@ -16,6 +16,7 @@ class FakeTransport implements EngineTransport {
   snapshots: Uint8Array[] = [];
   downloads: Uint8Array[] = [];
   siweChallenges = 0;
+  downloadRanges: Array<{ node: Uint8Array; offset: number; length: number }> = [];
   beginWrites: Array<{ target: WriteTarget; size: number }> = [];
   chunks: Array<{ handle: WriteHandle; chunk: ArrayBuffer }> = [];
   commits: WriteHandle[] = [];
@@ -66,6 +67,11 @@ class FakeTransport implements EngineTransport {
   download(node: Uint8Array): Promise<ArrayBuffer> {
     this.downloads.push(node);
     return Promise.resolve(new Uint8Array([1, 2, 3]).buffer);
+  }
+
+  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
+    this.downloadRanges.push({ node, offset, length });
+    return Promise.resolve(new Uint8Array([4, 5]).buffer);
   }
 
   subscribe(listener: EngineEventListener): () => void {
@@ -163,6 +169,15 @@ describe('EngineFacade', () => {
       permission: 'write',
       recipientIdentityPublicKey: recipient,
     });
+  });
+
+  it('delegates a ranged read to the transport, window intact', async () => {
+    const transport = new FakeTransport();
+    const node = new Uint8Array(16).fill(3);
+
+    const window = await new EngineFacade(transport).downloadRange(node, 4096, 2);
+    expect([...new Uint8Array(window)]).toEqual([4, 5]);
+    expect(transport.downloadRanges).toEqual([{ node, offset: 4096, length: 2 }]);
   });
 
   it('delegates snapshot and download reads to the transport', async () => {

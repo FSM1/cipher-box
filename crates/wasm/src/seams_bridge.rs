@@ -19,10 +19,9 @@
 //! crosses as `bigint` and lives in `lib.rs`, not here.
 
 use cipherbox_engine::seams::{
-    BoxedTask, CONTENT_LENGTH, CappedFetchError, CredentialStore, EndpointId, FloorStore, Http,
-    HttpMethod, HttpRequest, HttpResponse, Mailbox, MailboxItem, OpId, RecordTransport,
-    RefreshHint, RefreshHintSource, Scheduler, SeamError, SeamResult, SnapshotCache, StagingStore,
-    UnixMillis,
+    BoxedTask, CappedFetchError, CredentialStore, EndpointId, FloorStore, Http, HttpMethod,
+    HttpRequest, HttpResponse, Mailbox, MailboxItem, OpId, RecordTransport, RefreshHint,
+    RefreshHintSource, Scheduler, SeamError, SeamResult, SnapshotCache, StagingStore, UnixMillis,
 };
 use core::time::Duration;
 use js_sys::{Array, Object, Reflect, Uint8Array};
@@ -473,12 +472,22 @@ impl RecordTransport for RecordTransportAdapter {
 
 #[wasm_bindgen]
 extern "C" {
-    /// JS `HttpSeam` (packages/client) — `send(HttpRequestData)`.
+    /// JS `HttpSeam` (packages/client) — `send(HttpRequestData)` and
+    /// `sendCapped(HttpRequestData, maxBytes)`.
     #[derive(Clone)]
     pub type JsHttpSeam;
 
     #[wasm_bindgen(method, catch, js_name = send)]
     async fn send(this: &JsHttpSeam, request: JsValue) -> Result<JsValue, JsValue>;
+    /// Resolves a `CappedHttpResult`: `{kind:'response', …}` or
+    /// `{kind:'tooLarge', observed, limit}`. The JS side enforces `max_bytes`
+    /// while it drains `Response.body`, so it is the authoritative bound.
+    #[wasm_bindgen(method, catch, js_name = sendCapped)]
+    async fn send_capped(
+        this: &JsHttpSeam,
+        request: JsValue,
+        max_bytes: f64,
+    ) -> Result<JsValue, JsValue>;
 }
 
 fn http_method_str(method: HttpMethod) -> &'static str {
@@ -574,39 +583,46 @@ impl Http for HttpAdapter {
         request: HttpRequest,
         max_bytes: usize,
     ) -> Result<HttpResponse, CappedFetchError> {
-        // Residual (#641): the JS `HttpSeam.send` materializes the whole body
-        // before it returns here, so this bounds one already-buffered response,
-        // not peak memory. The Content-Length reject and the body-length check
-        // both fail closed on an over-cap block; the true streaming bound must
-        // live in the JS seam (enforce `maxBytes` while reading `Response.body`).
-        let response = self
+        let result = self
             .js
-            .send(http_request_to_js(&request))
+            .send_capped(http_request_to_js(&request), max_bytes as f64)
             .await
             .map_err(|err| CappedFetchError::Transport(seam_error(err)))?;
-        let response = http_response_from_js(response).map_err(CappedFetchError::Transport)?;
-
-        let declared = response
-            .headers
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(CONTENT_LENGTH))
-            .and_then(|(_, value)| value.parse::<u64>().ok());
-        if let Some(declared) = declared {
-            if declared > max_bytes as u64 {
-                return Err(CappedFetchError::BodyTooLarge {
-                    observed: usize::try_from(declared).unwrap_or(usize::MAX),
-                    limit: max_bytes,
-                });
+        let kind = Reflect::get(&result, &JsValue::from_str("kind"))
+            .ok()
+            .and_then(|kind| kind.as_string());
+        match kind.as_deref() {
+            Some("response") => {
+                let response =
+                    http_response_from_js(result).map_err(CappedFetchError::Transport)?;
+                // The JS seam is the streaming bound; this is the backstop a
+                // buggy seam cannot talk the engine past.
+                if response.body.len() > max_bytes {
+                    return Err(CappedFetchError::BodyTooLarge {
+                        observed: response.body.len(),
+                        limit: max_bytes,
+                    });
+                }
+                Ok(response)
             }
+            Some("tooLarge") => Err(CappedFetchError::BodyTooLarge {
+                observed: capped_count(&result, "observed"),
+                limit: capped_count(&result, "limit"),
+            }),
+            // Fail closed: an unrecognized result carries no body the engine
+            // may treat as within the cap.
+            _ => Err(CappedFetchError::Transport(SeamError::new(
+                "sendCapped returned an unknown result kind",
+            ))),
         }
-        if response.body.len() > max_bytes {
-            return Err(CappedFetchError::BodyTooLarge {
-                observed: response.body.len(),
-                limit: max_bytes,
-            });
-        }
-        Ok(response)
     }
+}
+
+/// A byte count off a `CappedHttpResult`, saturating: a count past `usize` is
+/// over any cap either way.
+fn capped_count(result: &JsValue, field: &str) -> usize {
+    let value = Reflect::get(result, &JsValue::from_str(field)).unwrap_or(JsValue::UNDEFINED);
+    usize::try_from(required_u64(value)).unwrap_or(usize::MAX)
 }
 
 // ---------------------------------------------------------------------------
@@ -706,5 +722,160 @@ impl RefreshHintSource for RefreshHintSourceAdapter {
             Ok(value) if !value.is_null() && !value.is_undefined() => Some(RefreshHint),
             _ => None,
         }
+    }
+}
+
+// Capped-fetch boundary tests. Crate-private adapters, so these live here rather
+// than in `tests/boundary.rs`. Browser-target only: `cargo test -p cipherbox-wasm
+// --target wasm32-unknown-unknown`.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::cell::Cell;
+    use js_sys::Promise;
+    use std::rc::Rc;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    /// A `JsHttpSeam` double whose `sendCapped` resolves `result`, recording the
+    /// `maxBytes` it was handed.
+    fn seam_resolving(result: JsValue) -> (JsHttpSeam, Rc<Cell<f64>>) {
+        let seen = Rc::new(Cell::new(f64::NAN));
+        let recorded = seen.clone();
+        (
+            seam_with(move |max_bytes| {
+                recorded.set(max_bytes);
+                Promise::resolve(&result)
+            }),
+            seen,
+        )
+    }
+
+    /// A `JsHttpSeam` double whose `sendCapped` returns `reply`.
+    fn seam_with(mut reply: impl FnMut(f64) -> Promise + 'static) -> JsHttpSeam {
+        let send_capped = Closure::<dyn FnMut(JsValue, f64) -> Promise>::new(
+            move |_request: JsValue, max_bytes: f64| reply(max_bytes),
+        );
+        let object = Object::new();
+        let _ = Reflect::set(
+            &object,
+            &JsValue::from_str("sendCapped"),
+            send_capped.as_ref(),
+        );
+        // The double outlives the call; the closure must not be freed under it.
+        send_capped.forget();
+        object.unchecked_into()
+    }
+
+    fn a_request() -> HttpRequest {
+        HttpRequest {
+            method: HttpMethod::Get,
+            url: "https://gw.test/ipfs/bafy?format=raw".to_owned(),
+            headers: Vec::new(),
+            body: None,
+        }
+    }
+
+    /// A `CappedHttpResult`-shaped JS object carrying `entries`.
+    fn js_result(entries: Vec<(&str, JsValue)>) -> JsValue {
+        let object = Object::new();
+        for (key, value) in entries {
+            let _ = Reflect::set(&object, &JsValue::from_str(key), &value);
+        }
+        object.into()
+    }
+
+    #[wasm_bindgen_test]
+    async fn a_response_result_crosses_the_seam_with_the_cap_it_was_given() {
+        let headers = Array::new();
+        let pair = Array::new();
+        pair.push(&JsValue::from_str("Content-Type"));
+        pair.push(&JsValue::from_str("application/vnd.ipld.raw"));
+        headers.push(&pair);
+        let (js, seen) = seam_resolving(js_result(vec![
+            ("kind", JsValue::from_str("response")),
+            ("status", JsValue::from_f64(200.0)),
+            ("headers", headers.into()),
+            ("body", Uint8Array::from(&[1u8, 2, 3][..]).into()),
+        ]));
+
+        let response = HttpAdapter { js }
+            .send_capped(a_request(), 4096)
+            .await
+            .expect("a within-cap response crosses as a response");
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, vec![1u8, 2, 3]);
+        assert_eq!(seen.get(), 4096.0, "the cap crosses as the JS number");
+    }
+
+    #[wasm_bindgen_test]
+    async fn a_response_body_over_the_cap_is_refused_even_when_the_seam_passed_it() {
+        let (js, _) = seam_resolving(js_result(vec![
+            ("kind", JsValue::from_str("response")),
+            ("status", JsValue::from_f64(200.0)),
+            ("headers", Array::new().into()),
+            ("body", Uint8Array::from(&[7u8; 64][..]).into()),
+        ]));
+
+        let err = HttpAdapter { js }
+            .send_capped(a_request(), 32)
+            .await
+            .expect_err("the engine enforces the cap the seam waved through");
+        assert_eq!(
+            err,
+            CappedFetchError::BodyTooLarge {
+                observed: 64,
+                limit: 32
+            }
+        );
+    }
+
+    #[wasm_bindgen_test]
+    async fn a_too_large_result_maps_to_the_body_too_large_verdict() {
+        let (js, _) = seam_resolving(js_result(vec![
+            ("kind", JsValue::from_str("tooLarge")),
+            ("observed", JsValue::from_f64(9001.0)),
+            ("limit", JsValue::from_f64(4096.0)),
+        ]));
+
+        let err = HttpAdapter { js }
+            .send_capped(a_request(), 4096)
+            .await
+            .expect_err("an over-cap body never returns a response");
+        assert_eq!(
+            err,
+            CappedFetchError::BodyTooLarge {
+                observed: 9001,
+                limit: 4096
+            }
+        );
+    }
+
+    #[wasm_bindgen_test]
+    async fn an_unknown_result_kind_fails_closed_as_transport() {
+        for entries in [
+            vec![("kind", JsValue::from_str("somethingElse"))],
+            vec![("status", JsValue::from_f64(200.0))],
+        ] {
+            let (js, _) = seam_resolving(js_result(entries));
+            let err = HttpAdapter { js }
+                .send_capped(a_request(), 8)
+                .await
+                .expect_err("an unrecognized result is never a body");
+            assert!(
+                matches!(err, CappedFetchError::Transport(_)),
+                "expected a transport verdict, got {err:?}"
+            );
+        }
+    }
+
+    #[wasm_bindgen_test]
+    async fn a_rejected_call_is_a_transport_failure() {
+        let js = seam_with(|_| Promise::reject(&JsValue::from_str("network down")));
+        let err = HttpAdapter { js }
+            .send_capped(a_request(), 8)
+            .await
+            .expect_err("a rejection never yields a response");
+        assert!(matches!(err, CappedFetchError::Transport(_)));
     }
 }

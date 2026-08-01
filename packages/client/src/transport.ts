@@ -42,6 +42,8 @@ export interface EngineTransport {
   siweChallenge(): Promise<string>;
   /** Downloads one file node's plaintext through the verified read pipeline. */
   download(node: Uint8Array): Promise<ArrayBuffer>;
+  /** The verified read pipeline over one byte window; only the leaves it covers are fetched. */
+  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer>;
   /** Subscribes to the one-way event stream; returns an unsubscribe. */
   subscribe(listener: EngineEventListener): () => void;
   /** Tears the transport down; pending requests reject. */
@@ -153,6 +155,12 @@ export class LocalTransport extends CorrelatedTransport {
   download(node: Uint8Array): Promise<ArrayBuffer> {
     return this.request<ArrayBuffer>(this.ready, (id) =>
       this.worker.postMessage({ type: 'download', id, node }, [])
+    );
+  }
+
+  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
+    return this.request<ArrayBuffer>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'downloadRange', id, node, offset, length }, [])
     );
   }
 

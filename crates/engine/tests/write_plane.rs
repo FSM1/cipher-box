@@ -905,6 +905,55 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
     );
 }
 
+/// A ranged read walks the same gated resolve as the whole-file read and serves
+/// the matching slice — the media pipe's read path (#641).
+#[test]
+fn a_ranged_read_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    // Several CI leaves, so a window can land inside, across, and past them.
+    let plaintext: Vec<u8> = (0..200u8).collect();
+
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine_a,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &plaintext,
+    )
+    .expect("the write commits");
+    tick(&world, &engine_a, &mut tasks);
+
+    let bob = world.device(b"alice-second-device");
+    serve_http(&bob, &blocks, 400);
+    let (mut engine_b, _events_b) = engine_on(&bob, 7);
+    block_on(engine_b.start(secret())).unwrap();
+    let node = block_on(engine_b.view()).unwrap().children(ROOT)[0].id;
+
+    let whole = block_on(engine_b.read_content(node)).expect("the verified read serves it");
+    assert_eq!(whole, plaintext);
+
+    for (offset, length) in [(0u64, 16u64), (16, 16), (15, 2), (40, 100), (190, 999)] {
+        let end = (offset + length).min(whole.len() as u64) as usize;
+        assert_eq!(
+            block_on(engine_b.read_content_range(node, offset, length))
+                .expect("the ranged read serves it"),
+            whole[offset as usize..end],
+            "range {offset}+{length}"
+        );
+    }
+    assert!(
+        block_on(engine_b.read_content_range(node, whole.len() as u64, 16))
+            .unwrap()
+            .is_empty(),
+        "a window past the end is empty, not an error"
+    );
+}
+
 /// A new version of an existing file takes the head of its version list and is
 /// what a second device downloads.
 #[test]

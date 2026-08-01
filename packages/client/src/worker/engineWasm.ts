@@ -94,6 +94,8 @@ export interface WasmEngineHandle {
   snapshot(folder?: WasmNodeId): Promise<WasmSnapshotView>;
   siweChallenge(): Promise<string>;
   download(node: WasmNodeId): Promise<Uint8Array>;
+  /** `offset`/`length` cross as plain JS numbers (the seam's `f64` convention). */
+  downloadRange(node: WasmNodeId, offset: number, length: number): Promise<Uint8Array>;
   nextEvent(): Promise<WasmEvent | undefined>;
 }
 

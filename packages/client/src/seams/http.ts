@@ -10,38 +10,95 @@
  * errors; only a transport-level failure (unreachable, aborted) rejects.
  */
 
-import type { HttpRequestData, HttpResponseData, HttpSeam } from './types.js';
+import type { CappedHttpResult, HttpRequestData, HttpResponseData, HttpSeam } from './types.js';
+
+function requestInit(request: HttpRequestData): RequestInit {
+  const headers = new Headers();
+  for (const [name, value] of request.headers) {
+    headers.append(name, value);
+  }
+
+  const init: RequestInit = {
+    method: request.method,
+    headers,
+    credentials: 'include',
+  };
+  if (request.body !== null && request.method !== 'GET' && request.method !== 'HEAD') {
+    // Copy into an ArrayBuffer-backed view: `fetch` rejects a
+    // possibly-shared `ArrayBufferLike`-backed body. v2.0 uses no
+    // SharedArrayBuffer, so this only satisfies the type.
+    init.body = new Uint8Array(request.body);
+  }
+  return init;
+}
+
+function collectHeaders(response: Response): Array<[string, string]> {
+  const headers: Array<[string, string]> = [];
+  response.headers.forEach((value, name) => {
+    headers.push([name, value]);
+  });
+  return headers;
+}
 
 export class FetchHttp implements HttpSeam {
   async send(request: HttpRequestData): Promise<HttpResponseData> {
-    const headers = new Headers();
-    for (const [name, value] of request.headers) {
-      headers.append(name, value);
-    }
-
-    const init: RequestInit = {
-      method: request.method,
-      headers,
-      credentials: 'include',
-    };
-    if (request.body !== null && request.method !== 'GET' && request.method !== 'HEAD') {
-      // Copy into an ArrayBuffer-backed view: `fetch` rejects a
-      // possibly-shared `ArrayBufferLike`-backed body. v2.0 uses no
-      // SharedArrayBuffer, so this only satisfies the type.
-      init.body = new Uint8Array(request.body);
-    }
-
-    const response = await fetch(request.url, init);
-
-    const responseHeaders: Array<[string, string]> = [];
-    response.headers.forEach((value, name) => {
-      responseHeaders.push([name, value]);
-    });
-
+    const response = await fetch(request.url, requestInit(request));
     return {
       status: response.status,
-      headers: responseHeaders,
+      headers: collectHeaders(response),
       body: new Uint8Array(await response.arrayBuffer()),
     };
+  }
+
+  /**
+   * Enforces the cap as bytes arrive, so peak memory is bounded by the cap —
+   * about twice it while the chunks are concatenated — even when Content-Length
+   * is absent or lies.
+   */
+  async sendCapped(request: HttpRequestData, maxBytes: number): Promise<CappedHttpResult> {
+    const response = await fetch(request.url, requestInit(request));
+
+    const contentLength = response.headers.get('content-length');
+    const declared = contentLength === null ? Number.NaN : Number(contentLength);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      // Release the connection instead of leaking an unread body stream.
+      await response.body?.cancel();
+      return { kind: 'tooLarge', observed: declared, limit: maxBytes };
+    }
+
+    const status = response.status;
+    const headers = collectHeaders(response);
+    const reader = response.body?.getReader();
+    if (!reader) {
+      return { kind: 'response', status, headers, body: new Uint8Array() };
+    }
+
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      // An empty chunk carries no bytes to count, so retaining it would grow the
+      // chunk list without ever tripping the cap.
+      if (!value || value.byteLength === 0) {
+        continue;
+      }
+      if (total + value.byteLength > maxBytes) {
+        await reader.cancel();
+        return { kind: 'tooLarge', observed: total + value.byteLength, limit: maxBytes };
+      }
+      chunks.push(value);
+      total += value.byteLength;
+    }
+
+    const body = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return { kind: 'response', status, headers, body };
   }
 }

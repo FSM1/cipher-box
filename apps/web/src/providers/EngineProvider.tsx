@@ -7,7 +7,8 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import type { EngineClient, SecretSource } from '@cipherbox/client';
+import type { EngineClient, MediaService, SecretSource } from '@cipherbox/client';
+import { createMediaService } from '../engine/createMediaService';
 import { LoginSecretSource } from '../engine/loginHandoff';
 import {
   createSnapshotStore,
@@ -19,6 +20,7 @@ interface EngineContextValue {
   client: EngineClient;
   snapshots: SnapshotStore;
   secrets: LoginSecretSource;
+  media: MediaService | null;
   rebuild: () => void;
 }
 
@@ -52,11 +54,18 @@ export function EngineProvider({ createClient, children }: EngineProviderProps) 
     const secrets = new LoginSecretSource();
     const client = factory.current(secrets);
     const snapshots = createSnapshotStore(client);
-    setValue({ client, snapshots, secrets, rebuild });
+    const media = createMediaService(client);
+    media?.start().catch((error: unknown) => {
+      console.error('[media] start failed', error instanceof Error ? error.message : error);
+    });
+    setValue({ client, snapshots, secrets, media, rebuild });
     return () => {
       // Drop the exporter first: no re-export capability outlives the client.
       secrets.use(null);
       snapshots.dispose();
+      media?.dispose().catch((error: unknown) => {
+        console.error('[media] dispose failed', error instanceof Error ? error.message : error);
+      });
       client.dispose().catch((error: unknown) => {
         console.error('[engine] dispose failed', error instanceof Error ? error.message : error);
       });
@@ -82,6 +91,11 @@ export function useEngine(): EngineClient | null {
 /** This tab's snapshot adapter; an inert store until the client exists. */
 export function useSnapshotStore(): SnapshotStore {
   return useEngineContext()?.snapshots ?? idleSnapshotStore;
+}
+
+/** This tab's streaming pipe; `null` where the browser has no Service Worker. */
+export function useMediaService(): MediaService | null {
+  return useEngineContext()?.media ?? null;
 }
 
 /** Where login registers its Core Kit session for a failover re-export. */

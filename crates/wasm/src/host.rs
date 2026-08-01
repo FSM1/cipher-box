@@ -378,6 +378,32 @@ impl EngineHandle {
         })
     }
 
+    /// Downloads and decrypts one byte window of a file node's content, fetching
+    /// only the leaves the window covers. The range is clamped to the file, so a
+    /// window past the end resolves empty. Resolves with the plaintext bytes as a
+    /// `Uint8Array`; rejects with the engine error.
+    #[wasm_bindgen(js_name = downloadRange)]
+    pub fn download_range(&self, node: &NodeId, offset: f64, length: f64) -> Promise {
+        let engine = self.engine.clone();
+        let node = node.facade();
+        future_to_promise(async move {
+            // A saturating float-to-int cast would silently read a different window.
+            if !offset.is_finite() || offset < 0.0 || !length.is_finite() || length < 0.0 {
+                return Err(JsError::new(
+                    "downloadRange offset and length must be non-negative finite numbers",
+                )
+                .into());
+            }
+            let bytes = engine
+                .read()
+                .await
+                .read_content_range(node, offset as u64, length as u64)
+                .await
+                .map_err(engine_error)?;
+            Ok(Uint8Array::from(bytes.as_slice()).into())
+        })
+    }
+
     /// Awaits the next event on the one-way stream, or resolves to `undefined`
     /// once the engine is gone. At most one call may be outstanding.
     #[wasm_bindgen(js_name = nextEvent)]

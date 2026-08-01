@@ -186,6 +186,7 @@ export class FakeEngineTransport implements EngineTransport {
   readonly snapshots: Array<Uint8Array | null> = [];
   readonly downloads: Uint8Array[] = [];
   siweChallenges = 0;
+  readonly downloadRanges: Array<{ node: Uint8Array; offset: number; length: number }> = [];
   readonly beginWrites: Array<{ target: WriteTarget; size: number }> = [];
   readonly chunks: Array<{ handle: WriteHandle; chunk: ArrayBuffer }> = [];
   readonly commits: WriteHandle[] = [];
@@ -201,6 +202,8 @@ export class FakeEngineTransport implements EngineTransport {
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
     Promise.resolve(new ArrayBuffer(0));
   respondSiweChallenge: () => Promise<string> = () => Promise.resolve(FAKE_SIWE_NONCE);
+  respondDownloadRange: (node: Uint8Array, offset: number, length: number) => Promise<ArrayBuffer> =
+    (_node, _offset, length) => Promise.resolve(new ArrayBuffer(length));
   private readonly listeners = new Set<EngineEventListener>();
 
   start(secret: ArrayBuffer): Promise<void> {
@@ -246,6 +249,11 @@ export class FakeEngineTransport implements EngineTransport {
   download(node: Uint8Array): Promise<ArrayBuffer> {
     this.downloads.push(node);
     return this.respondDownload(node);
+  }
+
+  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
+    this.downloadRanges.push({ node, offset, length });
+    return this.respondDownloadRange(node, offset, length);
   }
 
   subscribe(listener: EngineEventListener): () => void {

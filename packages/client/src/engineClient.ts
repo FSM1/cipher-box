@@ -160,6 +160,10 @@ export class EngineClient implements EngineTransport {
     return this.current.download(node);
   }
 
+  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
+    return this.current.downloadRange(node, offset, length);
+  }
+
   subscribe(listener: EngineEventListener): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
