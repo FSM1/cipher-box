@@ -223,7 +223,7 @@ impl std::error::Error for TrustViolation {}
 /// into upstream logs. Full redaction policy belongs to the engine.
 const DISPLAY_KEY_MAX_CHARS: usize = 64;
 
-struct DisplayKey<'a>(&'a str);
+pub(crate) struct DisplayKey<'a>(pub(crate) &'a str);
 
 impl fmt::Debug for DisplayKey<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

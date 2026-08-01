@@ -91,6 +91,41 @@ fn build_map_and_flags(entries: &FlaggedEntries) -> (Map, HashMap<String, bool>)
     (map, flags)
 }
 
+/// The wipe seam from outside `crates/core` (#902): a caller holding the known
+/// fields `decode_map_partial` split out is their terminal owner and can scrub
+/// them, in the buffer that held the secret rather than a fresh one.
+#[test]
+fn a_caller_can_wipe_what_it_decoded() {
+    const SECRET: [u8; 32] = [0xAB; 32];
+    let mut m = Map::new();
+    m.insert("contentKey", Value::Bytes(SECRET.to_vec()));
+    m.insert("futureKey", Value::Bytes(SECRET.to_vec()));
+    let bytes = encode(&Value::Map(m)).unwrap();
+
+    let (mut known, unknown) = decode_map_partial(&bytes, |k| k == "contentKey").unwrap();
+    let (key, preserved) = unknown.entries().next().unwrap();
+    assert_eq!(key, "futureKey");
+    assert!(
+        preserved.windows(SECRET.len()).any(|w| w == SECRET),
+        "the preserved raw value must carry the secret"
+    );
+    let held = match known.get("contentKey") {
+        Some(Value::Bytes(b)) if b.as_slice() == SECRET => b.capacity(),
+        other => panic!("the known field must carry the secret before the wipe: {other:?}"),
+    };
+
+    known.zeroize_bytes();
+
+    match known.get("contentKey") {
+        Some(Value::Bytes(b)) => {
+            assert!(b.is_empty(), "content key scrubbed and cleared");
+            // A wipe that swapped in a fresh `Vec` would strand the old one.
+            assert_eq!(b.capacity(), held);
+        }
+        other => panic!("the key set is left intact: {other:?}"),
+    }
+}
+
 proptest! {
     #![proptest_config(config())]
 

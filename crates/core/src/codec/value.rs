@@ -177,19 +177,17 @@ impl Map {
         Self::default()
     }
 
-    /// Insert or replace, keeping canonical order. Returns the value a
-    /// replaced entry held.
-    pub fn insert(&mut self, key: impl Into<String>, value: Value) -> Option<Value> {
+    /// Insert or replace, keeping canonical order. A replaced value is wiped
+    /// rather than handed back: the map is its terminal owner unless a caller
+    /// takes ownership, which is what [`Map::remove`] is for.
+    pub fn insert(&mut self, key: impl Into<String>, value: Value) {
         let key = key.into();
         match self
             .entries
             .binary_search_by(|(k, _)| canonical_key_cmp(k, &key))
         {
-            Ok(i) => Some(core::mem::replace(&mut self.entries[i].1, value)),
-            Err(i) => {
-                self.entries.insert(i, (key, value));
-                None
-            }
+            Ok(i) => core::mem::replace(&mut self.entries[i].1, value).zeroize_bytes(),
+            Err(i) => self.entries.insert(i, (key, value)),
         }
     }
 
@@ -207,6 +205,8 @@ impl Map {
             .map(|i| &mut self.entries[i].1)
     }
 
+    /// Take an entry out, transferring its buffers: the caller becomes their
+    /// terminal owner. The way to get at a value [`Map::insert`] would wipe.
     pub fn remove(&mut self, key: &str) -> Option<Value> {
         self.entries
             .binary_search_by(|(k, _)| canonical_key_cmp(k, key))
@@ -232,8 +232,13 @@ impl Map {
     }
 
     /// Zeroize every entry value's owned byte buffers in place (keys are text,
-    /// never secret). See [`Value::zeroize_bytes`].
-    pub(crate) fn zeroize_bytes(&mut self) {
+    /// never secret). The wipe for a caller holding decoded known fields — see
+    /// [`Value::zeroize_bytes`].
+    ///
+    /// Terminal: a wiped map still encodes. Fixed-length fields then fail
+    /// their schema decode, but variable-length ones round-trip empty, so
+    /// nothing may re-encode from it afterwards.
+    pub fn zeroize_bytes(&mut self) {
         for (_, v) in &mut self.entries {
             v.zeroize_bytes();
         }
@@ -241,7 +246,7 @@ impl Map {
 }
 
 impl FromIterator<(String, Value)> for Map {
-    /// Later duplicates replace earlier ones, like `BTreeMap`.
+    /// Later duplicates replace earlier ones; the replaced value is wiped.
     fn from_iter<I: IntoIterator<Item = (String, Value)>>(iter: I) -> Self {
         let mut map = Map::new();
         for (k, v) in iter {

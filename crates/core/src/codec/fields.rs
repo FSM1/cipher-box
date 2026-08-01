@@ -8,12 +8,16 @@
 //! canonical by construction, so re-emitting it verbatim keeps the whole
 //! rewrite canonical.
 
+use core::fmt;
+
+use zeroize::Zeroizing;
+
 use super::decode::Decoder;
 use super::encode::{
     MAJOR_MAP, count_value, head_len, text_len, write_head, write_text, write_value,
 };
 use super::value::{Map, Value, canonical_key_cmp};
-use crate::error::{CodecError, Malformed};
+use crate::error::{CodecError, DisplayKey, Malformed};
 
 /// The depth a top-level map's values sit at: the map itself is the enclosing
 /// item, so its entries are one level in.
@@ -21,15 +25,34 @@ const MAP_ENTRY_DEPTH: usize = 1;
 
 /// Fields preserved through a decode the caller's schema did not recognize:
 /// key plus the exact canonical bytes of the value. Ordered canonically.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+///
+/// A preserved value is a verbatim copy of whatever the field carried, and this
+/// set is that copy's terminal owner: the bytes sit in a zeroizing owner so the
+/// wipe is type-enforced rather than a caller's to remember, and they are kept
+/// out of every rendering (blueprint/core.md "Crypto suite"). Keys are field
+/// names, never secret.
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct UnknownFields {
-    entries: Vec<(String, Vec<u8>)>,
+    entries: Vec<(String, Zeroizing<Vec<u8>>)>,
+}
+
+impl fmt::Debug for UnknownFields {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut m = f.debug_map();
+        for (key, _) in &self.entries {
+            m.key(&DisplayKey(key)).value(&"<redacted>");
+        }
+        m.finish()
+    }
 }
 
 impl UnknownFields {
-    /// Preserved entries in canonical key order.
-    pub fn entries(&self) -> &[(String, Vec<u8>)] {
-        &self.entries
+    /// Preserved entries in canonical key order. Borrowed as plain bytes: the
+    /// wipe belongs to this set, so a borrow cannot carry it.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &[u8])> {
+        self.entries
+            .iter()
+            .map(|(key, raw)| (key.as_str(), raw.as_slice()))
     }
 
     pub fn len(&self) -> usize {
@@ -44,10 +67,26 @@ impl UnknownFields {
 /// Decode a top-level map, splitting entries into known fields (decoded
 /// values, selected by `is_known`) and unknown fields (raw canonical bytes).
 /// Every entry — known or not — passes the full strict profile.
+///
+/// The returned [`Map`] is the caller's to wipe once it is done with it
+/// ([`Map::zeroize_bytes`]); the preserved unknowns wipe themselves.
 pub fn decode_map_partial(
     bytes: &[u8],
     is_known: impl Fn(&str) -> bool,
 ) -> Result<(Map, UnknownFields), CodecError> {
+    let mut known = Map::new();
+    let unknown = decode_entries(bytes, is_known, &mut known)?;
+    Ok((known, unknown))
+}
+
+/// The entry loop, over a `known` the caller owns so it survives the success
+/// path. Anything else — a reject, or a panic out of `is_known` — leaves it to
+/// the scrub guard rather than stranding decoded secrets in freed heap.
+fn decode_entries(
+    bytes: &[u8],
+    is_known: impl Fn(&str) -> bool,
+    known: &mut Map,
+) -> Result<UnknownFields, CodecError> {
     let mut d = Decoder::new(bytes);
     let head = d.read_head()?;
     if head.major != MAJOR_MAP {
@@ -58,25 +97,39 @@ pub fn decode_map_partial(
         .into());
     }
 
-    let mut known = Vec::new();
-    let mut unknown = Vec::new();
+    let known = ScrubOnDrop(known);
+    let mut unknown = UnknownFields::default();
     let mut prev: Option<String> = None;
     for _ in 0..head.arg {
         let key = d.read_map_key(prev.as_deref())?;
         let start = d.pos();
-        let value = d.read_value(MAP_ENTRY_DEPTH)?;
+        let mut value = d.read_value(MAP_ENTRY_DEPTH)?;
         if is_known(&key) {
-            known.push((key.clone(), value));
+            known.0.insert(key.clone(), value);
         } else {
-            unknown.push((key.clone(), bytes[start..d.pos()].to_vec()));
+            // An unknown entry is decoded and *also* copied verbatim; the
+            // decoded tree is this loop's to discard, so it goes wiped.
+            unknown
+                .entries
+                .push((key.clone(), Zeroizing::new(bytes[start..d.pos()].to_vec())));
+            value.zeroize_bytes();
         }
         prev = Some(key);
     }
     d.expect_end()?;
-    Ok((
-        known.into_iter().collect(),
-        UnknownFields { entries: unknown },
-    ))
+    core::mem::forget(known);
+    Ok(unknown)
+}
+
+/// The scrub guard of [`crate::seal`], borrowing rather than owning: the known
+/// fields belong to the caller, and only the paths that never return them wipe.
+/// Disarmed by forgetting it, which leaks nothing — it holds one borrow.
+struct ScrubOnDrop<'a>(&'a mut Map);
+
+impl Drop for ScrubOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.zeroize_bytes();
+    }
 }
 
 /// Canonically re-encode a map from re-built known fields plus preserved
@@ -133,7 +186,7 @@ fn merge<'a>(
             merged.push((key.as_str(), MergedValue::Known(value)));
         } else {
             let (key, raw) = u.next().expect("peeked");
-            merged.push((key.as_str(), MergedValue::Raw(raw)));
+            merged.push((key.as_str(), MergedValue::Raw(raw.as_slice())));
         }
     }
     Ok(merged)
@@ -148,6 +201,9 @@ fn merged_len(merged: &[(&str, MergedValue<'_>)]) -> Result<usize, CodecError> {
         len += text_len(key);
         match value {
             MergedValue::Known(v) => count_value(&mut len, v, MAP_ENTRY_DEPTH)?,
+            // AGENTS.md rule 8: an empty preserved value would splice a key
+            // with nothing after it — bytes this codec's decoder rejects.
+            MergedValue::Raw([]) => return Err(Malformed::Truncated { offset: len }.into()),
             MergedValue::Raw(raw) => len += raw.len(),
         }
     }
@@ -245,6 +301,60 @@ mod tests {
             depth_offset(&encode(&Value::Map(full)).unwrap_err()),
             "merged reject offset diverged from the full-map encode"
         );
+    }
+
+    /// A preserved value never reaches a log line, and a crafted field name
+    /// cannot flood one.
+    #[test]
+    fn debug_redacts_preserved_values() {
+        let mut m = Map::new();
+        m.insert("v", Value::Unsigned(2));
+        m.insert("futureKey", Value::Bytes(vec![0xAB; 32]));
+        m.insert("z".repeat(200), Value::Unsigned(1));
+        let bytes = encode(&Value::Map(m)).unwrap();
+
+        let (_, unknown) = decode_map_partial(&bytes, known_key_set(&["v"])).unwrap();
+        let rendered = format!("{unknown:?}");
+
+        assert!(rendered.starts_with(r#"{"futureKey": "<redacted>", "zzz"#));
+        assert!(rendered.ends_with(r#"…: "<redacted>"}"#), "{rendered}");
+        assert!(rendered.len() < 160, "a crafted key flooded it: {rendered}");
+    }
+
+    /// A decode that rejects is the terminal owner of the known fields it had
+    /// already lifted out of its input.
+    #[test]
+    fn a_failed_decode_wipes_what_it_already_lifted() {
+        const SECRET: [u8; 32] = [0xAB; 32];
+        let mut m = Map::new();
+        m.insert("a", Value::Bytes(SECRET.to_vec()));
+        let mut bytes = encode(&Value::Map(m)).unwrap();
+        // A second entry the head promises and the input cuts off.
+        bytes[0] = 0xa2;
+        bytes.extend_from_slice(&[0x61, b'b', 0x18]);
+
+        let mut known = Map::new();
+        assert_eq!(
+            decode_entries(&bytes, |_| true, &mut known)
+                .unwrap_err()
+                .check(),
+            "truncated"
+        );
+        assert_eq!(known.get("a"), Some(&Value::Bytes(Vec::new())));
+    }
+
+    /// AGENTS.md rule 8: the encoder refuses to splice a preserved value that
+    /// would leave a key with nothing after it, which its decoder rejects.
+    #[test]
+    fn merged_encode_rejects_an_empty_preserved_value() {
+        let unknown = UnknownFields {
+            entries: vec![("future".into(), Zeroizing::new(Vec::new()))],
+        };
+        let mut known = Map::new();
+        known.insert("v", Value::Unsigned(2));
+
+        let err = encode_map_partial(&known, &unknown).unwrap_err();
+        assert_eq!(err.check(), "truncated");
     }
 
     #[test]
