@@ -27,10 +27,12 @@ use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
 use crate::seams::{Mailbox, SeamError, SeamResult};
 
-/// The transport's idempotency-key alphabet and bound (RFC 3986 unreserved,
-/// 1-128), enforced here on the produce side because the transport hard-rejects
-/// anything else (blueprint/api.md "Mailbox").
-fn idempotency_key_is_legal(key: &str) -> bool {
+/// The transport's sealed-payload bound (API `PostMessageDto`).
+const MAX_SEALED_BYTES: usize = 8192;
+
+/// The transport's idempotency-key alphabet and bound: RFC 3986 unreserved,
+/// 1-128 (API `PostMessageDto`).
+pub(crate) fn idempotency_key_is_legal(key: &str) -> bool {
     !key.is_empty()
         && key.len() <= 128
         && key
@@ -60,11 +62,8 @@ pub struct VerifiedMailboxItem {
 /// entropy input, never a clock or a constant).
 ///
 /// Routing and sealing use *different* keys: the [`Mailbox`] seam addresses on
-/// the recipient's secp256k1 **identity** key, while the seal targets their
-/// X25519 encryption subkey. Taking the identity as an [`EcdsaVerifier`] makes
-/// the address a valid compressed SEC1 point by construction; the idempotency
-/// key is charset-checked, so no post leaves here in a shape the transport
-/// rejects.
+/// the recipient's secp256k1 identity key, the seal targets their X25519
+/// encryption subkey (see [`Mailbox`] for the wire shape it enforces).
 #[allow(clippy::too_many_arguments)]
 pub async fn post_sealed<M: Mailbox>(
     mailbox: &M,
@@ -88,6 +87,9 @@ pub async fn post_sealed<M: Mailbox>(
         sender_signer,
         payload,
     );
+    if sealed.len() > MAX_SEALED_BYTES {
+        return Err(SeamError::new("sealed payload exceeds the transport bound"));
+    }
     mailbox
         .post(&recipient_identity.to_sec1(), &sealed, idempotency_key)
         .await
@@ -138,7 +140,6 @@ mod tests {
         X25519Secret::from_scalar([0x40; 32])
     }
 
-    /// The recipient's secp256k1 identity — the mailbox routing address.
     fn recipient_identity() -> EcdsaVerifier {
         EcdsaSigner::from_scalar(&[0x41; 32])
             .expect("valid scalar")
@@ -233,29 +234,38 @@ mod tests {
     }
 
     #[test]
-    fn an_idempotency_key_outside_the_transport_alphabet_is_refused() {
+    fn a_post_the_transport_would_reject_never_leaves_the_produce_site() {
         let hub = InMemoryMailboxHub::default();
         let recip = recipient();
+        let identity = recipient_identity();
         let poster = hub.mailbox_for(b"poster");
+
+        let post = |payload: &[u8], idempotency_key: &str| {
+            block_on(post_sealed(
+                &poster,
+                &recip.public(),
+                &identity,
+                &[0x55; 32],
+                V,
+                &sender(),
+                payload,
+                idempotency_key,
+            ))
+        };
 
         for illegal in ["grant:abc", "", &"k".repeat(129), "a b", "a/b", "é"] {
             assert!(
-                block_on(post_sealed(
-                    &poster,
-                    &recip.public(),
-                    &recipient_identity(),
-                    &[0x55; 32],
-                    V,
-                    &sender(),
-                    b"p",
-                    illegal,
-                ))
-                .is_err(),
+                post(b"p", illegal).is_err(),
                 "{illegal:?} must not reach the transport"
             );
         }
         assert!(
-            block_on(hub.mailbox_for(&recipient_identity().to_sec1()).poll())
+            post(&vec![0u8; MAX_SEALED_BYTES], "idem").is_err(),
+            "a payload sealing past the transport bound must not be posted"
+        );
+
+        assert!(
+            block_on(hub.mailbox_for(&identity.to_sec1()).poll())
                 .unwrap()
                 .is_empty(),
             "a refused post delivers nothing"

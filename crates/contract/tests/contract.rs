@@ -1075,11 +1075,8 @@ async fn mailbox_post_is_bounded_by_recipient_existence_and_blob_size() {
 
 // --- grant delivery over the live mailbox (blueprint/engine.md; #954) -------
 
-/// The mailbox seam over the engine's real API client — the production bridge
-/// from the seam's byte address to the API's hex `recipientPublicKey`. Standing
-/// it up here is what lets the grant path's *own* address and idempotency key
-/// meet the real `PostMessageDto`, instead of a hand-built fixture that happens
-/// to be well-formed.
+/// The `Mailbox` seam over the engine's real API client: byte address → the
+/// API's hex `recipientPublicKey`.
 struct ApiMailbox {
     client: Client,
 }
@@ -1144,13 +1141,8 @@ impl ScopeRootPublisher for LocalNet {
     }
 }
 
-/// A real read grant, minted by `create_read_grant`, delivers its share pointer
-/// through the live mailbox (blueprint/api.md "Mailbox").
-///
-/// The grant path picks the recipient address and the idempotency key itself:
-/// posting the X25519 subkey, or a `:`-separated key, is a `PostMessageDto` 400
-/// (#954). Driving the real primitive rather than a fixture is what binds those
-/// two choices to the served contract.
+/// A real read grant's share pointer reaches the live mailbox: the grant path's
+/// own routing address and idempotency key must satisfy `PostMessageDto` (#954).
 #[tokio::test]
 async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
     let base = require_stack!("a_read_grant_delivers_its_share_pointer_through_the_live_mailbox");

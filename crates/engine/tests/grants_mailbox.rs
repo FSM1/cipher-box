@@ -59,8 +59,6 @@ struct GrantFixture {
     owner_identity: EcdsaSigner,
     owner_identity_pub: EcdsaVerifier,
     recipient_enc: X25519Secret,
-    /// The recipient's secp256k1 identity: the mailbox routing address (the
-    /// enc subkey is only the seal target).
     recipient_identity: EcdsaVerifier,
     scope_id: [u8; 16],
     scope_seed: [u8; 32],
