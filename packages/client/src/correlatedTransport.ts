@@ -69,7 +69,7 @@ export abstract class CorrelatedTransport implements EngineTransport {
   abstract pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void>;
   abstract commitWrite(handle: WriteHandle): Promise<bigint>;
   abstract abortWrite(handle: WriteHandle): Promise<void>;
-  abstract snapshot(folder: Uint8Array): Promise<SnapshotDescriptor>;
+  abstract snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
   abstract download(node: Uint8Array): Promise<ArrayBuffer>;
   abstract close(): void;
 

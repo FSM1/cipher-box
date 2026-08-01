@@ -8,14 +8,6 @@
 import { EngineRequestError } from '@cipherbox/client';
 import type { EngineClient, SnapshotDescriptor, Staleness } from '@cipherbox/client';
 
-/**
- * The folder the first pull asks for, before any view names a root: the
- * engine's cold-start anchor (`crates/engine/src/facade.rs`, `Snapshot::new`).
- * Every later pull uses the root the engine reported. Retiring this seed needs
- * a snapshot seam that takes no folder — #900.
- */
-const VAULT_ROOT_SEED_ID: Uint8Array = new Uint8Array(16);
-
 /** A failed pull, carrying the engine's stable code so the UI can classify it. */
 export interface SnapshotError {
   message: string;
@@ -97,9 +89,8 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     inFlight = true;
     const id = ++generation;
     const seq = stalenessSeq;
-    const folder = focus ?? state.view?.root ?? VAULT_ROOT_SEED_ID;
     void client.facade
-      .snapshot(folder)
+      .snapshot(focus)
       .then(
         (view) => {
           if (id !== generation) return;

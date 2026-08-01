@@ -206,6 +206,14 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(engine.snapshots).toEqual([folder]);
   });
 
+  it('carries a rootless follower snapshot to the leader as no folder at all', async () => {
+    const { engine, follower } = wire();
+    // A follower that has not named a folder asks for the vault root; `null`
+    // must survive the structured clone rather than arrive as a seeded id.
+    await expect(follower.snapshot(null)).resolves.toEqual(emptySnapshot());
+    expect(engine.snapshots).toEqual([null]);
+  });
+
   it('serves a follower download as a Blob and rebuilds identical bytes', async () => {
     const { engine, follower } = wire();
     const plaintext = Uint8Array.from({ length: 64 }, (_, i) => (i * 11 + 5) & 0xff);

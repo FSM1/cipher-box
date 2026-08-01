@@ -90,7 +90,7 @@ export class BroadcastTransport extends CorrelatedTransport {
     return this.write<void>({ kind: 'abortWrite', handle });
   }
 
-  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
+  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
     return this.read<SnapshotDescriptor>({ kind: 'snapshot', folder });
   }
 

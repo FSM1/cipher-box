@@ -10,7 +10,7 @@ import type {
   Staleness,
 } from '@cipherbox/client';
 
-/** The folder id the store seeds its first pull with. */
+/** The anchored root id a first-run vault reports. */
 export const ROOT_ID: Uint8Array = new Uint8Array(16);
 
 export function view(
@@ -40,7 +40,8 @@ export function view(
 }
 
 interface Pull {
-  folder: Uint8Array;
+  /** The folder asked for, or `null` for "whatever the engine's root is". */
+  folder: Uint8Array | null;
   resolve: (view: SnapshotDescriptor) => void;
   reject: (error: Error) => void;
 }
@@ -59,7 +60,7 @@ export function fakeEngine() {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
-      snapshot(folder: Uint8Array) {
+      snapshot(folder: Uint8Array | null) {
         return new Promise<SnapshotDescriptor>((resolve, reject) => {
           pulls.push({ folder, resolve, reject });
         });

@@ -45,13 +45,21 @@ describe('snapshotStore', () => {
     expect([first, second]).toEqual([1, 2]);
   });
 
-  it('pulls the vault root until a focus is set', () => {
+  it('asks for the vault root rather than naming it until a focus is set', async () => {
     const engine = fakeEngine();
     const store = createSnapshotStore(engine.client);
+    // A cold start whose adopted base roots at a non-anchor id: that engine
+    // knows no all-zero node, so naming one would be `unknownNode`.
+    const adopted = new Uint8Array(16).fill(0xa7);
 
     engine.emit({ kind: 'snapshotUpdated' });
-    expect(engine.pulls[0].folder).toEqual(ROOT_ID);
+    expect(engine.pulls[0].folder).toBeNull();
     expect(store.getSnapshot().view).toBeNull();
+
+    engine.pulls[0].resolve({ ...view(adopted), root: adopted });
+    await flush();
+    expect(store.getSnapshot().error).toBeNull();
+    expect(store.getSnapshot().view?.root).toEqual(adopted);
   });
 
   it('sets the engine focus window and the cross-tab hint before pulling', async () => {

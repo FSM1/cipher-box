@@ -56,6 +56,10 @@ test.describe('engine worker host', () => {
     // The snapshot echoes the anchored all-zero root as both root and folder.
     expect(result.rootEchoed).toBe(true);
 
+    // A rootless read is answered from the engine's own root, so a host never
+    // has to name one before it has seen a view (#900).
+    expect(result.rootlessFolderHex).toBe(result.rootHex);
+
     // Both metadata creates project as pending children with no content plane.
     expect(result.children).toHaveLength(2);
     const docs = result.children.find((child) => child.name === 'docs');

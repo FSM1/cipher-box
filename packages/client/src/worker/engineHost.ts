@@ -28,7 +28,7 @@ export interface EngineHostLike {
   /** Closes the handle and journals its op; resolves with the durable op id. */
   commitWrite(handle: WriteHandle): Promise<bigint>;
   abortWrite(handle: WriteHandle): Promise<void>;
-  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor>;
+  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
   download(node: Uint8Array): Promise<ArrayBuffer>;
   nextEvent(): Promise<EventDescriptor | null>;
 }
@@ -99,8 +99,10 @@ export class EngineHost implements EngineHostLike {
     await this.handle.abortWrite(handle);
   }
 
-  async snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
-    const view = await this.handle.snapshot(this.wasm.NodeId.fromBytes(folder));
+  async snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
+    const view = await this.handle.snapshot(
+      folder === null ? undefined : this.wasm.NodeId.fromBytes(folder)
+    );
     return readSnapshot(this.wasm, view);
   }
 

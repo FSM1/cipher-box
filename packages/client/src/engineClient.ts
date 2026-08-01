@@ -148,7 +148,7 @@ export class EngineClient implements EngineTransport {
     return this.current.abortWrite(handle);
   }
 
-  snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
+  snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
     return this.current.snapshot(folder);
   }
 
