@@ -1915,42 +1915,23 @@ fn a_create_below_the_scope_root_publishes_and_projects() {
 /// The deep create's round trip: a device that never authored it adopts the
 /// non-root parent's own record — the only record that carries the depth-2
 /// child — through the child gate, on its own cold floors and cache. The
-/// facade has no descent below the scope root yet, so the assertion sits at
-/// the record plane (#895, #917).
+/// assertion sits at the record plane; its facade half is
+/// `a_second_device_lists_below_the_scope_root_once_it_focuses_there`
+/// (#895, #917).
 #[test]
 fn a_create_below_the_scope_root_is_adoptable_by_a_second_device() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    seed_account(&world, &blocks);
+    let DeepCreate {
+        bob,
+        engine_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_seen_by_a_second_device();
 
-    let alice = world.device(b"alice");
-    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
-    block_on(engine_a.command(Command::Create {
-        parent: ROOT,
-        name: "photos".into(),
-        kind: NodeKind::Folder,
-    }))
-    .unwrap();
-    tick(&world, &engine_a, &mut tasks);
-    let photos = child_id(&engine_a, ROOT, "photos");
-
-    block_on(engine_a.command(Command::Create {
-        parent: photos,
-        name: "2026".into(),
-        kind: NodeKind::Folder,
-    }))
-    .unwrap();
-    tick(&world, &engine_a, &mut tasks);
-    let deep = child_id(&engine_a, photos, "2026");
-
-    let bob = world.device(b"alice-second-device");
-    let (engine_b, _events_b, _tasks_b) = boot(&world, &blocks, &bob, 7);
     let parents = block_on(engine_b.view()).unwrap().children(ROOT);
     assert_eq!(parents.len(), 1, "device B resolves the depth-1 parent");
     assert_eq!(parents[0].id, photos);
 
-    // Device B's own seams: its cold floor store, its own cache and HTTP. Only
-    // the account's scope read seed and the network are shared with device A.
     let gateway = GatewayConfig {
         accelerator: Some(GatewaySource {
             base_url: "https://gw.test".into(),
@@ -1991,14 +1972,19 @@ fn a_create_below_the_scope_root_is_adoptable_by_a_second_device() {
 
 /// Device A creates `photos/2026`, then a second device that never authored it
 /// cold-boots onto the same network.
-fn deep_create_seen_by_a_second_device() -> (
-    FakeWorld,
-    Blocks,
-    Engine<FakeSeamTypes>,
-    Vec<BoxedTask>,
-    NodeId,
-    NodeId,
-) {
+struct DeepCreate {
+    world: FakeWorld,
+    blocks: Blocks,
+    /// Device B's own seams: its cold floor store, its own cache and HTTP. Only
+    /// the account's scope read seed and the network are shared with device A.
+    bob: FakeDevice,
+    engine_b: Engine<FakeSeamTypes>,
+    tasks_b: Vec<BoxedTask>,
+    photos: NodeId,
+    deep: NodeId,
+}
+
+fn deep_create_seen_by_a_second_device() -> DeepCreate {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -2025,7 +2011,15 @@ fn deep_create_seen_by_a_second_device() -> (
 
     let bob = world.device(b"alice-second-device");
     let (engine_b, _events_b, tasks_b) = boot(&world, &blocks, &bob, 7);
-    (world, blocks, engine_b, tasks_b, photos, deep)
+    DeepCreate {
+        world,
+        blocks,
+        bob,
+        engine_b,
+        tasks_b,
+        photos,
+        deep,
+    }
 }
 
 /// The names a device's rendered view lists under `folder`, sorted.
@@ -2087,8 +2081,12 @@ fn planted_body() -> ReadBody {
 /// child out of its own rendered view — the assertion #895 could not make.
 #[test]
 fn a_second_device_lists_below_the_scope_root_once_it_focuses_there() {
-    let (_world, _blocks, mut engine_b, _tasks_b, photos, deep) =
-        deep_create_seen_by_a_second_device();
+    let DeepCreate {
+        mut engine_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_seen_by_a_second_device();
 
     assert!(
         listed_names(&engine_b, photos).is_empty(),
@@ -2111,8 +2109,15 @@ fn a_second_device_lists_below_the_scope_root_once_it_focuses_there() {
 /// binding stops it, and last-known-good stands through all three.
 #[test]
 fn a_planted_focus_record_never_renders() {
-    let (world, blocks, mut engine_b, mut tasks_b, photos, deep) =
-        deep_create_seen_by_a_second_device();
+    let DeepCreate {
+        world,
+        blocks,
+        mut engine_b,
+        mut tasks_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_seen_by_a_second_device();
     block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
     assert_eq!(listed_names(&engine_b, photos), ["2026"]);
 
@@ -2177,8 +2182,13 @@ fn a_planted_focus_record_never_renders() {
 /// focused folder keeps rendering the state it last adopted, off the cache.
 #[test]
 fn an_unreachable_record_plane_leaves_the_focused_folder_rendering() {
-    let (world, _blocks, mut engine_b, mut tasks_b, photos, _deep) =
-        deep_create_seen_by_a_second_device();
+    let DeepCreate {
+        world,
+        mut engine_b,
+        mut tasks_b,
+        photos,
+        ..
+    } = deep_create_seen_by_a_second_device();
     block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
     assert_eq!(listed_names(&engine_b, photos), ["2026"]);
 
@@ -2195,8 +2205,13 @@ fn an_unreachable_record_plane_leaves_the_focused_folder_rendering() {
 /// reconciles (blueprint/engine.md "Sync core").
 #[test]
 fn navigation_re_resolves_a_folder_only_past_the_staleness_threshold() {
-    let (world, blocks, mut engine_b, _tasks_b, photos, _deep) =
-        deep_create_seen_by_a_second_device();
+    let DeepCreate {
+        world,
+        blocks,
+        mut engine_b,
+        photos,
+        ..
+    } = deep_create_seen_by_a_second_device();
     block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
     assert_eq!(listed_names(&engine_b, photos), ["2026"]);
 
