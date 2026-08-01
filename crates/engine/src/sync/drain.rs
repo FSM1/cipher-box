@@ -1743,9 +1743,9 @@ where
     /// Note one head block as orphaned, capped at [`REGISTRY_BATCH_MAX`] so a
     /// session whose retires keep failing bounds its leak, not its memory.
     ///
-    /// A head the live set still names is refused outright: this queue's only
-    /// consumer physically unpins, so the destructive step checks the live set
-    /// itself rather than trusting the caller to hand it a fresh head.
+    /// A head the live set still names never enters the queue: its only
+    /// consumer physically unpins, and unpinning a head a live record names is
+    /// loss, where leaving the row charged is only a leak.
     fn record_orphan_head(&self, cid: &str) {
         if self
             .held
