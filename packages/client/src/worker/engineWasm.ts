@@ -114,6 +114,7 @@ export interface EngineWasm {
     delete(node: WasmNodeId): WasmCommand;
     rename(node: WasmNodeId, newName: string): WasmCommand;
     relink(node: WasmNodeId, newParent: WasmNodeId): WasmCommand;
+    cancelUpload(opId: bigint): WasmCommand;
     setFocus(node?: WasmNodeId): WasmCommand;
     manualRefresh(): WasmCommand;
     importContact(contactCode: Uint8Array): WasmCommand;

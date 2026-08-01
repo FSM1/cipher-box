@@ -419,6 +419,8 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::OverBudget { .. } => "overBudget",
         EngineError::ContentSizeMismatch { .. } => "contentSizeMismatch",
         EngineError::UnknownWriteHandle => "unknownWriteHandle",
+        EngineError::TooLateToCancel { .. } => "tooLateToCancel",
+        EngineError::NotAnUpload { .. } => "notAnUpload",
         EngineError::ContentTooLarge { .. } => "contentTooLarge",
         EngineError::ContentKeySealFailed { .. } => "contentKeySealFailed",
         EngineError::Seam { .. } => "seam",

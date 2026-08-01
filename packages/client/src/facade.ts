@@ -108,6 +108,14 @@ export class EngineFacade {
     return this.command({ kind: 'relink', node, newParent });
   }
 
+  /**
+   * Cancel a queued upload by the op id `commitWrite` resolved with. Rejects
+   * with `tooLateToCancel` once the version's record is publishing.
+   */
+  cancelUpload(opId: bigint): Promise<void> {
+    return this.command({ kind: 'cancelUpload', opId });
+  }
+
   setFocus(node: Uint8Array | null): Promise<void> {
     return this.command({ kind: 'setFocus', node });
   }

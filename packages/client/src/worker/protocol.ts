@@ -121,6 +121,7 @@ export type CommandDescriptor =
   | { kind: 'delete'; node: Uint8Array }
   | { kind: 'rename'; node: Uint8Array; newName: string }
   | { kind: 'relink'; node: Uint8Array; newParent: Uint8Array }
+  | { kind: 'cancelUpload'; opId: bigint }
   | { kind: 'setFocus'; node: Uint8Array | null }
   | { kind: 'manualRefresh' }
   | { kind: 'importContact'; contactCode: Uint8Array }

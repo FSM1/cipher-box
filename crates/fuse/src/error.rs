@@ -84,6 +84,8 @@ impl From<EngineError> for VfsError {
             | EngineError::ContentSizeMismatch { .. }
             | EngineError::UnknownWriteHandle
             | EngineError::ContentKeySealFailed { .. }
+            | EngineError::TooLateToCancel { .. }
+            | EngineError::NotAnUpload { .. }
             | EngineError::Unimplemented { .. }) => VfsError::Internal {
                 message: error.to_string(),
             },

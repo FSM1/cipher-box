@@ -531,6 +531,15 @@ impl Command {
         })
     }
 
+    /// Cancel a queued upload by the op id `commitWrite` returned. Rejects with
+    /// `tooLateToCancel` once the version's record is publishing.
+    #[wasm_bindgen(js_name = cancelUpload)]
+    pub fn cancel_upload(op_id: u64) -> Command {
+        Self::wrap(facade::Command::CancelUpload {
+            op_id: cipherbox_engine::seams::OpId(op_id),
+        })
+    }
+
     /// Set the open folder driving the focus window (`undefined` clears it).
     #[wasm_bindgen(js_name = setFocus)]
     pub fn set_focus(node: Option<NodeId>) -> Command {

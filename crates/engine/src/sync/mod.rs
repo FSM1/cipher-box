@@ -17,6 +17,7 @@
 //! primitives themselves land with the rotation slice.
 
 pub mod boot;
+pub(crate) mod cancel;
 pub(crate) mod drain;
 pub mod model;
 pub mod op;
@@ -47,7 +48,10 @@ pub use record::{
     OpRecordError, RecordClass, RecordReader, RecordSeal, RetainedReason, encode_op_record,
     record_content_root_cid,
 };
-pub use staging::{orphan_staging_keys, stage_op};
+pub use staging::{
+    PRESERVED_ROOTS_KEY, orphan_staging_keys, preserve_staged_root, release_version_blocks,
+    stage_op,
+};
 pub use staleness::{Connectivity, classify, withheld_escalation};
 pub use tick::{
     FocusTarget, FocusWindow, ResolveMode, TickCause, TickControl, focus_folders,

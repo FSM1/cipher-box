@@ -58,12 +58,14 @@ use crate::seams::{
     StagingStore,
 };
 use crate::session::SessionIdentity;
+use crate::sync::cancel::UploadCancels;
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::project::project_folder;
 use crate::sync::rebase::{AppliedOp, DeadLetterReason, decode_queue, replay};
 use crate::sync::record::RecordReader;
+use crate::sync::staging::{preserve_staged_root, release_version_blocks};
 
 /// The staging key holding the drained-op high-water mark: every op id at or
 /// below the stored value has left this device's queue (#860).
@@ -189,6 +191,10 @@ enum Halt {
         /// resume probe must find room for.
         needed_bytes: u64,
     },
+    /// The user cancelled the upload. The facade already retired what it had
+    /// uploaded, released its blocks and dequeued it, so the valve does nothing
+    /// but stop the pass (#824).
+    Cancelled,
 }
 
 /// The one verdict every unrecoverable-content path returns: the version's key,
@@ -296,6 +302,8 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// Head blocks this session's publishes orphaned, pending retirement
     /// ([`Drain::retire_orphan_heads`]).
     pub(crate) orphan_heads: &'a RefCell<Vec<String>>,
+    /// The upload-cancel interlock, shared with the facade's cancel command.
+    pub(crate) cancels: &'a RefCell<UploadCancels>,
     /// The facade's outbound event stream, for upload progress.
     pub(crate) events: &'a mpsc::UnboundedSender<Event>,
 }
@@ -465,6 +473,13 @@ where
             let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
                 continue;
             };
+            // A terminally unrebasable op keeps its staged bytes, and this is
+            // what keeps them reachable once its op record is gone (#853).
+            if let Some(root_cid) = op.content_root_cid() {
+                preserve_staged_root(self.staging, root_cid)
+                    .await
+                    .map_err(seam)?;
+            }
             self.abandon(scope, *op_id, op).await?;
             report.dead_letters.push((*op_id, op.target, *reason));
         }
@@ -477,10 +492,11 @@ where
         }
 
         for applied in &rebased.applied {
-            if let Err(halt) = self
+            let outcome = self
                 .publish_applied(scope, &mut pass, applied, &rebased.rebased)
-                .await
-            {
+                .await;
+            self.cancels.borrow_mut().leave_publish();
+            if let Err(halt) = outcome {
                 self.apply_valve(scope, applied.op_id, &applied.op, halt, attempts, report)
                     .await;
                 return Err(halt);
@@ -502,7 +518,7 @@ where
         report: &mut DrainReport,
     ) {
         match halt {
-            Halt::Unclassified => {}
+            Halt::Unclassified | Halt::Cancelled => {}
             Halt::Attempt | Halt::UploadAttempt => {
                 if attempts.charge(op_id) < ATTEMPT_BUDGET {
                     return;
@@ -1291,19 +1307,35 @@ where
 
     /// One version's blocks, uploaded and pinned, with the transfer's progress
     /// reported on the event stream throughout.
+    ///
+    /// Publish entry — the point past which a cancel is refused — is the moment
+    /// the last block confirms: everything after it authors and publishes the
+    /// version's record with no further block boundary to stop at (#824).
     async fn upload_version(
         &self,
         scope: &DrainScope<'_>,
         applied: &AppliedOp,
         staged: &StagedContent,
     ) -> Result<UploadedVersion, Halt> {
-        let uploaded = self.upload_blocks(scope, applied, staged).await;
-        if let Err(halt) = &uploaded
-            && let Some(error) = upload_failure(*halt)
-        {
-            self.emit_upload(applied, OpPhase::UploadFailed, None, Some(error));
+        let uploaded = match self.upload_blocks(scope, applied, staged).await {
+            Ok(uploaded) => uploaded,
+            Err(halt) => {
+                // A cancel that landed inside one of the loop's awaits released
+                // this version's blocks, so the halt it reported is that
+                // cancel's shadow, not a failure of the upload.
+                if self.cancels.borrow().is_cancelled(applied.op_id) {
+                    return Err(Halt::Cancelled);
+                }
+                if let Some(error) = upload_failure(halt) {
+                    self.emit_upload(applied, OpPhase::UploadFailed, None, Some(error));
+                }
+                return Err(halt);
+            }
+        };
+        if !self.cancels.borrow_mut().enter_publish(applied.op_id) {
+            return Err(Halt::Cancelled);
         }
-        uploaded
+        Ok(uploaded)
     }
 
     /// One version's blocks, uploaded and pinned: the `Version` its record
@@ -1360,6 +1392,13 @@ where
         };
         emit(OpPhase::UploadStarted, blocks(uploaded));
         for (index, leaf_cid) in content.leaf_cids().iter().enumerate() {
+            // The block boundary a cancel gets to run at. Without it a whole
+            // version uploads inside one turn of the host's executor and the
+            // cancel guarantee collapses to "only before the op starts" (#824).
+            yield_now().await;
+            if self.cancels.borrow().is_cancelled(applied.op_id) {
+                return Err(Halt::Cancelled);
+            }
             match self.staged_block(leaf_cid).await? {
                 Some(block) => {
                     self.upload_block(leaf_cid, &block).await?;
@@ -1381,6 +1420,10 @@ where
                 None if index >= uploaded => return Err(CONTENT_LOST),
                 None => {}
             }
+        }
+        yield_now().await;
+        if self.cancels.borrow().is_cancelled(applied.op_id) {
+            return Err(Halt::Cancelled);
         }
         // The root goes up last and stays staged until the publish confirms: it
         // is the manifest every retry re-derives the plan from, so releasing it
@@ -1495,15 +1538,10 @@ where
     /// Best-effort: a failed removal is orphan residue a later GC pass collects,
     /// never a reason to fail a landed publish.
     async fn release_staged_blocks(&self, op: &Op) {
-        let Some(staged) = op.staged_content() else {
+        let Some(root_cid) = op.content_root_cid() else {
             return;
         };
-        if let Some(content) = self.staged_manifest(&staged.root_cid).await {
-            for leaf_cid in content.leaf_cids() {
-                let _ = self.staging.remove_staged_bytes(leaf_cid).await;
-            }
-        }
-        let _ = self.staging.remove_staged_bytes(&staged.root_cid).await;
+        release_version_blocks(self.staging, root_cid).await;
     }
 
     /// The parent a node is published under, from the base the pass repaints as
@@ -1931,6 +1969,22 @@ fn seam(_: crate::seams::SeamError) -> Halt {
     Halt::Unclassified
 }
 
+/// Hand control back to the host's executor once, so a facade command queued
+/// behind this task gets a turn. The engine runs pinned to one execution
+/// context, so a long await-free stretch is one the host cannot interrupt.
+async fn yield_now() {
+    let mut yielded = false;
+    core::future::poll_fn(move |cx| {
+        if yielded {
+            return core::task::Poll::Ready(());
+        }
+        yielded = true;
+        cx.waker().wake_by_ref();
+        core::task::Poll::Pending
+    })
+    .await;
+}
+
 /// Classify a publish failure for the valve. Only the head-block upload and the
 /// register-first call carry a server verdict this pass can act on; everything
 /// else is availability.
@@ -2023,7 +2077,8 @@ fn blocks(count: usize) -> u32 {
 /// its reservation, and the host reads it from `SnapshotView::blocked` (#841).
 fn upload_failure(halt: Halt) -> Option<&'static str> {
     match halt {
-        Halt::Blocked { .. } => None,
+        // A cancel reports `UploadCancelled` from the facade that ordered it.
+        Halt::Blocked { .. } | Halt::Cancelled => None,
         Halt::Unclassified => Some("the upload did not complete"),
         // Both charge the attempt budget; which one it is decides only what
         // exhausting that budget retires, not what the host is told.
@@ -2042,7 +2097,7 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
 /// batch names exactly what a register batch claimed — and every block is its
 /// own accountable pin row (blueprint/api.md "Pin/name registry"), so leaving
 /// a leaf out of a retirement spends account quota forever.
-fn registry_cids(root_cid: &[u8], leaf_cids: &[Vec<u8>]) -> Vec<String> {
+pub(crate) fn registry_cids(root_cid: &[u8], leaf_cids: &[Vec<u8>]) -> Vec<String> {
     core::iter::once(root_cid)
         .chain(leaf_cids.iter().map(Vec::as_slice))
         .map(encode_content_cid_str)

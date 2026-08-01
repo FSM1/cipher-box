@@ -54,6 +54,8 @@ export function buildCommand(wasm: EngineWasm, descriptor: CommandDescriptor): W
       return wasm.Command.rename(nodeId(wasm, descriptor.node), descriptor.newName);
     case 'relink':
       return wasm.Command.relink(nodeId(wasm, descriptor.node), nodeId(wasm, descriptor.newParent));
+    case 'cancelUpload':
+      return wasm.Command.cancelUpload(descriptor.opId);
     case 'setFocus':
       return wasm.Command.setFocus(
         descriptor.node === null ? undefined : nodeId(wasm, descriptor.node)

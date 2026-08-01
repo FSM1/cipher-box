@@ -37,6 +37,23 @@ describe('buildCommand', () => {
     expect(calls[0][1]).toBe('a.txt');
     expect(calls[0][2]).toBe(fakeWasmEnums.NodeKind.File);
   });
+
+  it('passes an upload cancel through as the bigint op id, not a number', () => {
+    const calls: unknown[][] = [];
+    const wasm = {
+      ...fakeWasmEnums,
+      Command: {
+        cancelUpload: (...args: unknown[]) => {
+          calls.push(args);
+          return {};
+        },
+      },
+    } as unknown as EngineWasm;
+
+    buildCommand(wasm, { kind: 'cancelUpload', opId: 2n ** 60n });
+
+    expect(calls).toEqual([[2n ** 60n]]);
+  });
 });
 
 describe('readEvent', () => {
