@@ -23,8 +23,9 @@ use core::cmp::Ordering;
 use core::fmt;
 use std::collections::BTreeSet;
 
-use crate::codec::{Map, Value, decode, encode};
-use crate::error::{CodecError, DisplayKey, Malformed, TrustViolation};
+use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
+use crate::codec::{Map, Value, decode, encode, fmt_redacted_keys};
+use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::suite::secret::{SECRET_LEN, SecretBytes};
 
 // ---------------------------------------------------------------------------
@@ -321,15 +322,10 @@ pub fn decode_read_body(bytes: &[u8]) -> Result<ReadBody, CodecError> {
 /// caller is the terminal owner and must zeroize it (the seal path,
 /// [`seal_read_body`](super::seal_read_body), does).
 ///
-/// Encoding does *not* re-check uniqueness — persisting callers go through
-/// [`seal_read_body`](super::seal_read_body) (or [`ReadBody::validate`]), which
-/// refuses to seal a body that would not reopen; the `debug_assert` only catches
-/// that divergence early in tests.
+/// Uniqueness is re-checked release-active (AGENTS.md rule 8): these bytes are
+/// what a peer decodes, and [`decode_read_body`] hard-rejects a duplicate child.
 pub fn encode_read_body(body: &ReadBody) -> Result<Vec<u8>, CodecError> {
-    debug_assert!(
-        body.validate().is_ok(),
-        "encoding a read-body that violates child uniqueness; its bytes would reject on decode"
-    );
+    body.validate()?;
     let mut m = Map::new();
     match body {
         ReadBody::Folder {
@@ -371,38 +367,6 @@ pub fn encode_read_body(body: &ReadBody) -> Result<Vec<u8>, CodecError> {
     let mut value = Value::Map(m);
     let guard = ScrubOnDrop(&mut value);
     encode(guard.0)
-}
-
-/// Scrubs a codec-owned transient `Value` tree on drop, so the secret copies it
-/// carries (inline content keys, scope seeds) are wiped on both normal return
-/// and panic-unwind (blueprint/core.md terminal-owner rule). It borrows rather
-/// than owns the tree, leaving the wiped buffers observable to a caller/test
-/// after the guard falls.
-pub(crate) struct ScrubOnDrop<'a>(pub(crate) &'a mut Value);
-
-impl Drop for ScrubOnDrop<'_> {
-    fn drop(&mut self) {
-        self.0.zeroize_bytes();
-    }
-}
-
-/// The owning sibling of [`ScrubOnDrop`], for the decode side: it takes the
-/// decoded tree by value and scrubs it on drop, covering Ok, Err, and unwind.
-/// Owning rather than borrowing because decode holds a live `&Map` into the
-/// tree, which a `&mut` guard cannot coexist with; read it via [`Self::value`].
-pub(crate) struct ScrubOwned(pub(crate) Value);
-
-impl ScrubOwned {
-    /// Borrow the guarded tree for reading.
-    pub(crate) fn value(&self) -> &Value {
-        &self.0
-    }
-}
-
-impl Drop for ScrubOwned {
-    fn drop(&mut self) {
-        self.0.zeroize_bytes();
-    }
 }
 
 /// Fail-closed uniqueness over a set of grant blinded tags (#39 D7): a
@@ -467,21 +431,14 @@ pub(super) fn bytes_fixed<const N: usize>(
     })
 }
 
-/// Fields a schema decode did not recognize, kept as the canonical values the
-/// decoder built. The seal layer's counterpart to [`crate::codec::UnknownFields`],
-/// which preserves raw bytes for the partial codec.
-///
-/// Every value is a verbatim copy of what the field carried — cloned out of the
-/// decoded tree, so it outlives that tree's scrub guard. This set is the copies'
-/// terminal owner and wipes them on drop; keys are field names, never secret,
-/// and are kept out of every rendering all the same.
+/// The seal layer's counterpart to [`crate::codec::UnknownFields`], holding the
+/// values a decode built rather than the partial codec's raw bytes. Same
+/// terminal-owner wipe and redacted rendering; the clones it holds outlive the
+/// decoded tree's scrub guard, so the wipe has to be its own.
 #[derive(Clone, Default, PartialEq, Eq)]
-pub struct PreservedFields {
-    entries: Vec<(String, Value)>,
-}
+pub struct PreservedFields(Map);
 
 impl PreservedFields {
-    /// An empty set — the construction path, which preserves nothing.
     pub fn new() -> Self {
         Self::default()
     }
@@ -489,54 +446,42 @@ impl PreservedFields {
     /// The preserved entries in canonical key order. Borrowed as plain values:
     /// the wipe belongs to this set, so a borrow cannot carry it.
     pub fn entries(&self) -> &[(String, Value)] {
-        &self.entries
+        self.0.entries()
     }
 
-    /// Add a field a caller wants carried through the next encode — the
-    /// construction path for a key this build's schema does not type, such as
-    /// the envelope's `grantSection`. The encode side re-imposes canonical
-    /// order, so insertion order does not reach the wire.
-    pub fn push(&mut self, key: String, value: Value) {
-        self.entries.push((key, value));
+    pub fn get(&self, key: &str) -> Option<&Value> {
+        self.0.get(key)
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.0.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.0.is_empty()
     }
 
-    /// The wipe [`Drop`] runs.
-    fn wipe(&mut self) {
-        for (_, v) in &mut self.entries {
-            v.zeroize_bytes();
-        }
+    /// Carry a field this build's schema does not type through the next encode.
+    pub(crate) fn insert(&mut self, key: String, value: Value) {
+        self.0.insert(key, value);
     }
 }
 
 impl FromIterator<(String, Value)> for PreservedFields {
     fn from_iter<I: IntoIterator<Item = (String, Value)>>(iter: I) -> Self {
-        Self {
-            entries: iter.into_iter().collect(),
-        }
+        Self(iter.into_iter().collect())
     }
 }
 
 impl fmt::Debug for PreservedFields {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut m = f.debug_map();
-        for (key, _) in &self.entries {
-            m.key(&DisplayKey(key)).value(&"<redacted>");
-        }
-        m.finish()
+        fmt_redacted_keys(f, self.0.entries().iter().map(|(k, _)| k.as_str()))
     }
 }
 
 impl Drop for PreservedFields {
     fn drop(&mut self) {
-        self.wipe();
+        self.0.zeroize_bytes();
     }
 }
 
@@ -589,8 +534,8 @@ mod tests {
     }
 
     /// Encode a folder read-body directly through the codec, bypassing
-    /// `encode_read_body`'s uniqueness debug-assert — the way a hostile or buggy
-    /// peer's bytes arrive, so decode-side uniqueness rejection can be tested.
+    /// `encode_read_body`'s uniqueness check — the way a hostile or buggy peer's
+    /// bytes arrive, so decode-side uniqueness rejection can be tested.
     fn raw_folder_bytes(children: &[ChildRef]) -> Vec<u8> {
         let mut m = Map::new();
         m.insert("kind", Value::Text("folder".into()));
@@ -682,7 +627,7 @@ mod tests {
             "the clone outlives the decoded tree carrying the secret verbatim"
         );
 
-        unknown.wipe();
+        unknown.0.zeroize_bytes();
         assert_eq!(unknown.entries()[0].1, Value::Bytes(Vec::new()));
         assert_eq!(unknown.entries()[0].0, "futureKey", "keys are not secret");
     }
@@ -691,17 +636,15 @@ mod tests {
     /// cannot flood one.
     #[test]
     fn preserved_fields_debug_redacts_its_values() {
-        let preserved: PreservedFields = [
-            ("futureKey".to_string(), Value::Bytes(vec![0xAB; 32])),
-            ("z".repeat(200), Value::Unsigned(1)),
-        ]
-        .into_iter()
-        .collect();
+        let preserved: PreservedFields = [("futureKey".to_string(), Value::Bytes(vec![0xAB; 32]))]
+            .into_iter()
+            .collect();
 
-        let rendered = format!("{preserved:?}");
-        assert!(rendered.starts_with(r#"{"futureKey": "<redacted>", "zzz"#));
-        assert!(rendered.ends_with(r#"…: "<redacted>"}"#), "{rendered}");
-        assert!(rendered.len() < 160, "a crafted key flooded it: {rendered}");
+        assert_eq!(
+            format!("{preserved:?}"),
+            r#"{"futureKey": "<redacted>"}"#,
+            "a preserved value must never reach a log line"
+        );
     }
 
     #[test]
@@ -805,6 +748,14 @@ mod tests {
             NodeKind::Folder,
             "typed kind wins over unknown"
         );
+    }
+
+    /// AGENTS.md rule 8, release-active: the encoder refuses a body its own
+    /// decoder would reject, rather than producing an unopenable folder.
+    #[test]
+    fn encode_rejects_a_body_decode_would_refuse() {
+        let dup = folder(vec![child(1, "a", b"ipns-a"), child(1, "b", b"ipns-b")]);
+        assert_eq!(encode_read_body(&dup).unwrap_err().check(), "duplicate-id");
     }
 
     #[test]

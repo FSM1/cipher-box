@@ -269,9 +269,7 @@ pub enum Malformed {
     /// unknown field of the same key (caller bug; rejected fail-closed).
     UnknownFieldCollision { key: String },
     /// An encode of a map [`crate::codec::Map::zeroize_bytes`] already wiped
-    /// (caller bug; rejected fail-closed). The wipe is terminal: its fields are
-    /// zero-length, and the variable-length ones re-decode as empty rather than
-    /// failing, so emitting from one is silent data loss.
+    /// (caller bug; rejected fail-closed).
     WipedMap,
     /// A schema decode required a field that the map did not carry. *Malformed*,
     /// not trust: an absent field is structurally incomplete input, carrying no

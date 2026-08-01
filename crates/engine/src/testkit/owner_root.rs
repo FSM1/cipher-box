@@ -5,7 +5,6 @@
 //! Sealing inputs (nonces, HPKE ephemerals, the pseudonym seed) are fixed
 //! constants, keeping the head block byte-for-byte reproducible across runs.
 
-use cipherbox_core::codec::Value;
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
@@ -15,7 +14,7 @@ use cipherbox_core::seal::{
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedOwnerBlob, SignedOwnerWriteBlob,
     SignedSealed, StructureSigInput, WriteBody, encode_envelope, encode_grant_section,
     encode_write_body, seal, seal_owner_blob, seal_owner_write_blob, seal_read_body,
-    sign_grant_set, sign_structure,
+    set_grant_section, sign_grant_set, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -194,10 +193,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         &folder,
     )
     .unwrap();
-    envelope.unknown.push(
-        "grantSection".to_string(),
-        Value::Bytes(encode_grant_section(&grant_section).unwrap()),
-    );
+    set_grant_section(&mut envelope, encode_grant_section(&grant_section).unwrap());
 
     let head_block = encode_envelope(&envelope).unwrap();
     let head_cid_str = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));

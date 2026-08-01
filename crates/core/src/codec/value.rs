@@ -10,7 +10,7 @@ use core::fmt;
 
 use zeroize::Zeroize;
 
-use crate::error::Malformed;
+use crate::error::{CodecError, Malformed};
 
 /// A value in the deterministic profile's data model.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -236,10 +236,11 @@ impl Map {
     /// never secret). The wipe for a caller holding decoded known fields — see
     /// [`Value::zeroize_bytes`].
     ///
-    /// Terminal: the map is marked wiped and every encoder then refuses it
-    /// ([`Map::is_wiped`]). Without that mark a wiped map still encodes —
-    /// fixed-length fields fail their schema decode afterwards, but
-    /// variable-length ones round-trip empty, which is silent data loss.
+    /// Terminal: the map is marked wiped and every encoder then refuses it.
+    /// Without that mark a wiped map still encodes — fixed-length fields fail
+    /// their schema decode afterwards, but variable-length ones round-trip
+    /// empty, which is silent data loss. The mark rides the map, not its
+    /// values, so a value lifted back out through [`Map::remove`] carries none.
     pub fn zeroize_bytes(&mut self) {
         for (_, v) in &mut self.entries {
             v.zeroize_bytes();
@@ -247,10 +248,12 @@ impl Map {
         self.wiped = true;
     }
 
-    /// Whether [`Map::zeroize_bytes`] has emptied this map's fields. The
-    /// encoders read it to refuse a map whose values are gone.
-    pub fn is_wiped(&self) -> bool {
-        self.wiped
+    /// The encoders' read of that mark, release-active on both passes.
+    pub(crate) fn reject_if_wiped(&self) -> Result<(), CodecError> {
+        if self.wiped {
+            return Err(Malformed::WipedMap.into());
+        }
+        Ok(())
     }
 }
 

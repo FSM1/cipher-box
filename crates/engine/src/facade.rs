@@ -4125,14 +4125,13 @@ mod tests {
 
         use core::task::{Context, Poll, Waker};
 
-        use cipherbox_core::codec::Value;
         use cipherbox_core::content::{compute_cid, encode_content_cid_str};
         use cipherbox_core::ipns::{IpnsName, IpnsRecord};
         use cipherbox_core::kdf;
         use cipherbox_core::payload::RepointObject;
         use cipherbox_core::seal::{
             ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody, encode_envelope,
-            seal_read_body,
+            seal_read_body, set_grant_section,
         };
         use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
@@ -4623,9 +4622,7 @@ mod tests {
                     seal_read_body(&read_key, &[13u8; 24], 1, envelope_id, scope, epoch, body)
                         .unwrap();
                 if with_grant_section {
-                    envelope
-                        .unknown
-                        .push("grantSection".to_string(), Value::Bytes(vec![1, 2, 3]));
+                    set_grant_section(&mut envelope, vec![1, 2, 3]);
                 }
                 let head_block = encode_envelope(&envelope).unwrap();
                 let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));

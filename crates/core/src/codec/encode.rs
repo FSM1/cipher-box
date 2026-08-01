@@ -1,7 +1,7 @@
 //! The deterministic encoder. Canonical by construction: shortest-form
 //! arguments, definite lengths, and [`super::Map`]'s ordering invariant are
-//! the only forms this module can emit, so [`check_depth`] is the one way
-//! encoding fails.
+//! the only forms this module can emit, so [`check_depth`] and
+//! [`Map::reject_if_wiped`] are the only ways encoding fails.
 
 use super::value::{Map, Value};
 use crate::error::{CodecError, Malformed};
@@ -38,10 +38,11 @@ pub fn encode(value: &Value) -> Result<Vec<u8>, CodecError> {
 ///
 /// # Panics
 ///
-/// If `value` nests to [`super::MAX_DEPTH`]. Use [`encode`] for any tree whose
-/// depth comes from input rather than from the schema.
+/// If `value` nests to [`super::MAX_DEPTH`], or carries a map [`Map::zeroize_bytes`]
+/// already wiped. Use [`encode`] for any tree whose depth comes from input
+/// rather than from the schema.
 pub fn encode_fixed_depth(value: &Value) -> Vec<u8> {
-    encode(value).expect("fixed-shape tree is within MAX_DEPTH")
+    encode(value).expect("fixed-shape, unwiped tree")
 }
 
 /// The exact number of bytes [`encode`] emits for `value`. Mirrors
@@ -67,7 +68,7 @@ pub(super) fn count_value(len: &mut usize, value: &Value, depth: usize) -> Resul
             }
         }
         Value::Map(map) => {
-            reject_wiped(map)?;
+            map.reject_if_wiped()?;
             *len += head_len(map.len() as u64);
             for (k, v) in map.entries() {
                 *len += text_len(k);
@@ -85,17 +86,6 @@ pub(super) fn count_value(len: &mut usize, value: &Value, depth: usize) -> Resul
 fn check_depth(depth: usize, offset: usize) -> Result<(), CodecError> {
     if depth >= super::MAX_DEPTH {
         return Err(Malformed::DepthExceeded { offset }.into());
-    }
-    Ok(())
-}
-
-/// The terminal half of [`Map::zeroize_bytes`]: a wiped map's fields are all
-/// zero-length, and a variable-length schema read round-trips one as empty
-/// instead of rejecting it, so emitting from a wiped map is silent data loss.
-/// Release-active on both passes, like [`check_depth`].
-pub(super) fn reject_wiped(map: &Map) -> Result<(), CodecError> {
-    if map.is_wiped() {
-        return Err(Malformed::WipedMap.into());
     }
     Ok(())
 }
@@ -154,7 +144,7 @@ fn write_map_head_and_entries(
     map: &Map,
     depth: usize,
 ) -> Result<(), CodecError> {
-    reject_wiped(map)?;
+    map.reject_if_wiped()?;
     write_head(out, MAJOR_MAP, map.len() as u64);
     for (k, v) in map.entries() {
         write_text(out, k);
@@ -270,10 +260,8 @@ mod tests {
         assert_eq!(super::super::decode(&bytes).unwrap(), deepest);
     }
 
-    /// AGENTS.md rule 8's misuse-resistance sibling, release-active: a wiped map
-    /// re-encodes to fields its own decoder accepts as empty, so the wipe is
-    /// terminal and both passes refuse it — at every nesting level, since the
-    /// hazard is a version map inside a body, not only a top-level map.
+    /// The wipe is terminal, and both passes enforce it at every nesting level —
+    /// the hazard is a version map inside a body, not only a top-level map.
     #[test]
     fn a_wiped_map_refuses_to_encode() {
         let mut value = secret_shaped_value(2);
@@ -291,7 +279,6 @@ mod tests {
             panic!("expected a version map")
         };
         version.zeroize_bytes();
-        assert!(version.is_wiped());
 
         assert_eq!(encoded_len(&value).unwrap_err().check(), "wiped-map");
         assert_eq!(encode(&value).unwrap_err().check(), "wiped-map");

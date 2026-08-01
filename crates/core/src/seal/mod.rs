@@ -37,7 +37,7 @@ pub use content_key::{
 };
 pub use envelope::{
     Envelope, decode_envelope, encode_envelope, grant_section_bytes, has_grant_section,
-    open_read_body, seal_read_body,
+    open_read_body, seal_read_body, set_grant_section,
 };
 pub use grant::{
     AscentLink, GrantBlobPayload, GrantSetCommitment, GrantSetEntry, HistoryLinkPayload,

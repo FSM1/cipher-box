@@ -38,10 +38,11 @@ use crate::suite::hpke::{self, ENC_LEN, HpkeCiphertext};
 use crate::suite::secret::{SECRET_LEN, SecretBytes};
 use crate::suite::x25519::{X25519Public, X25519Secret};
 
+use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
+
 use super::aad::{AadContext, build_aad};
 use super::body::{
-    PreservedFields, ScrubOnDrop, ScrubOwned, assert_grant_tags_unique, bytes_fixed,
-    collect_unknown, merge_unknown, req,
+    PreservedFields, assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown, req,
 };
 
 /// The HPKE `info` for every grant-section seal. The structured AAD already

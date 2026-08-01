@@ -14,8 +14,9 @@ use zeroize::Zeroizing;
 
 use super::decode::Decoder;
 use super::encode::{
-    MAJOR_MAP, count_value, head_len, reject_wiped, text_len, write_head, write_text, write_value,
+    MAJOR_MAP, count_value, head_len, text_len, write_head, write_text, write_value,
 };
+use super::scrub::ScrubOnDrop;
 use super::value::{Map, Value, canonical_key_cmp};
 use crate::error::{CodecError, DisplayKey, Malformed};
 
@@ -38,12 +39,22 @@ pub struct UnknownFields {
 
 impl fmt::Debug for UnknownFields {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut m = f.debug_map();
-        for (key, _) in &self.entries {
-            m.key(&DisplayKey(key)).value(&"<redacted>");
-        }
-        m.finish()
+        fmt_redacted_keys(f, self.entries.iter().map(|(key, _)| key.as_str()))
     }
+}
+
+/// Render a preserved-field set as keys only, with the field names bounded the
+/// way the error surface bounds writer-controlled keys. Shared by both
+/// preserve-unknowns carriers so neither can grow a value into a log line.
+pub(crate) fn fmt_redacted_keys<'a>(
+    f: &mut fmt::Formatter<'_>,
+    keys: impl Iterator<Item = &'a str>,
+) -> fmt::Result {
+    let mut m = f.debug_map();
+    for key in keys {
+        m.key(&DisplayKey(key)).value(&"<redacted>");
+    }
+    m.finish()
 }
 
 impl UnknownFields {
@@ -121,25 +132,13 @@ fn decode_entries(
     Ok(unknown)
 }
 
-/// The scrub guard of [`crate::seal`], borrowing rather than owning: the known
-/// fields belong to the caller, and only the paths that never return them wipe.
-/// Disarmed by forgetting it, which leaks nothing — it holds one borrow.
-struct ScrubOnDrop<'a>(&'a mut Map);
-
-impl Drop for ScrubOnDrop<'_> {
-    fn drop(&mut self) {
-        self.0.zeroize_bytes();
-    }
-}
-
 /// Canonically re-encode a map from re-built known fields plus preserved
 /// unknown fields: one merged map in canonical key order, unknown values
 /// emitted byte-stable. A key present on both sides is a caller bug and
 /// rejects fail-closed.
 pub fn encode_map_partial(known: &Map, unknown: &UnknownFields) -> Result<Vec<u8>, CodecError> {
-    // The merged map's own head is written here, so its wiped mark is read here
-    // too — the nested ones ride `count_value`/`write_value`.
-    reject_wiped(known)?;
+    // This writes the merged head itself, so the known side's mark is read here.
+    known.reject_if_wiped()?;
     let merged = merge(known, unknown)?;
     let mut out = Vec::with_capacity(merged_len(&merged)?);
     write_head(&mut out, MAJOR_MAP, merged.len() as u64);
