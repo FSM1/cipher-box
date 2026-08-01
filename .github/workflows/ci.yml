@@ -642,11 +642,14 @@ jobs:
           key: macos-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: macos-cargo-
 
+      # The load harness is excluded alongside the contract crate: both are
+      # ubuntu-only dispatch tooling, and these platform legs exist for the
+      # adapter surface. Its unit tests run in the Linux job.
       - name: Cargo check (workspace)
-        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets
+        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude cipherbox-load --all-targets
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract
+        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude cipherbox-load
 
   cargo-windows:
     name: Cargo Check & Test (Windows)
@@ -670,10 +673,10 @@ jobs:
           restore-keys: windows-cargo-
 
       - name: Cargo check (workspace)
-        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --all-targets
+        run: cargo check --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude cipherbox-load --all-targets
 
       - name: Cargo test (workspace)
-        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract
+        run: cargo test --workspace --exclude cipherbox-desktop --exclude cipherbox-contract --exclude cipherbox-load
 
   # The live contract suite (blueprint/testing.md "The contract suite"): the
   # sdk-e2e descendant and the sole contract enforcement. It stands up the CI

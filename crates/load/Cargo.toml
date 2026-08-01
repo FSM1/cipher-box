@@ -1,0 +1,29 @@
+[package]
+name = "cipherbox-load"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The dispatch-tier load harness (blueprint/testing.md, Dispatch / scheduled):
+# v1's tests/load scenarios ported onto the v2 API surface. It drives the
+# engine's real API client, so the numbers describe the shipping client path and
+# the harness cannot drift from the contract. Load runs are dispatch-only
+# (.github/workflows/load-test.yml); the unit tests in this crate block merges in
+# the `Cargo Check & Test (Linux)` gate.
+
+[[bin]]
+name = "cipherbox-load"
+path = "src/main.rs"
+
+[dependencies]
+cipherbox-core.workspace = true
+cipherbox-engine.workspace = true
+# rustls rather than the contract crate's featureless reqwest: the staging
+# target is reached over https through Caddy.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+tokio = { version = "1", features = ["rt", "net", "time"] }
+getrandom = "0.2"
+serde_json.workspace = true

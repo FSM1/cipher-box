@@ -257,7 +257,7 @@ One new `nightly.yml` (cron) owns the scheduled slots testing.md defined:
   before it blocks a release.
 
 Dispatch-only (unscheduled): the load harness against local or staging
-(`load-test.yml` ports with its BYO scenarios), and the real Web3Auth
+(`load-test.yml` re-engaged over `crates/load`, BYO scenarios included), and the real Web3Auth
 Core Kit login job against staging with the test credentials — the honest
 inherited limitation testing.md records; never a PR gate.
 
@@ -276,7 +276,7 @@ Workflows (all edited in place, per #28 D7):
 | `deploy-staging.yml`                                                                   | **Edited** — `build-tee` and redis plumbing out, gateway `forward_auth` wiring and volume-wipe cutover support in; VPS mechanics unchanged                                                                                                                                                                                                |
 | `desktop-staging-release.yml`                                                          | **Becomes `desktop-release.yml`** — triggers on `v*`, attaches to the release-please release, `mark-latest` dies                                                                                                                                                                                                                          |
 | `deploy-landing.yml`                                                                   | **Ports** — env-name mismatch fixed                                                                                                                                                                                                                                                                                                       |
-| `load-test.yml`                                                                        | **Ports** — dispatch-only                                                                                                                                                                                                                                                                                                                 |
+| `load-test.yml`                                                                        | **Ported** — dispatch-only, over `crates/load`                                                                                                                                                                                                                                                                                            |
 | `pr-title.yml`, `zizmor.yml`, `codecov-base.yml`                                       | **Port as-is**                                                                                                                                                                                                                                                                                                                            |
 
 Docker, scripts, hooks:

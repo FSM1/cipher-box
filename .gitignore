@@ -45,6 +45,9 @@ packages/client/test-results/
 /tc*.png
 /after-*.png
 
+# Load harness metrics reports (uploaded as a dispatch-run artifact)
+load-reports/
+
 # Temporary files
 temp/*
 tests/e2e/test-results/*

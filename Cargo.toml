@@ -11,6 +11,7 @@ members = [
     "crates/fuse",
     "crates/desktop-seams",
     "crates/contract",
+    "crates/load",
     "apps/desktop/src-tauri",
 ]
 

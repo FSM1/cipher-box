@@ -1,54 +1,55 @@
-# DORMANT during the v2 build: tests/load was demolished with the v1 layout;
-# the load harness ports back per blueprint/testing.md (dispatch tier).
+# The dispatch tier's load harness (blueprint/testing.md, blueprint/deploy.md).
+# Never a PR gate: it is a load generator, and the only thing it can be pointed
+# at is a loopback stack this job stands up, or staging behind the `staging`
+# environment's approval. The harness crate's own unit tests block merges in
+# CI's `Cargo Check & Test (Linux)` job.
 name: Load Tests
 
 on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Target environment'
+        description: 'Target'
         required: true
         default: 'local'
         type: choice
         options:
           - local
           - staging
-      client_count:
-        description: 'Number of concurrent clients'
+      scenario:
+        description: 'Scenario'
+        required: true
+        default: 'mixed'
+        type: choice
+        options:
+          - content-ingest
+          - gateway-read
+          - name-wave
+          - mixed
+          - byo-advisory
+      clients:
+        description: 'Concurrent accounts (staging caps at 8)'
         required: false
         default: '5'
-      scenario:
-        description: 'Test scenario to run'
-        required: true
-        default: 'mixed-workload'
-        type: choice
-        options:
-          - upload-throughput
-          - ipns-publish-storm
-          - mixed-workload
-          - sustained-load
-          - spike-test
-          - byo-upload-throughput
-          - byo-mixed-workload
-          - byo-capacity-ceiling
-      load_test_byo_endpoint:
-        description: 'BYO provider endpoint (byo-* scenarios only)'
+      ops_per_client:
+        description: 'Iterations per account (staging caps at 50)'
         required: false
-        default: 'https://api.pinata.cloud'
-      load_test_byo_protocol:
-        description: 'BYO provider protocol'
+        default: '20'
+      block_bytes:
+        description: 'Upload block size in bytes, max 2 MiB'
         required: false
-        default: 'pinata'
-        type: choice
-        options:
-          - pinata
-          - psa
-          - kubo
-      load_test_byo_provider_name:
-        description: 'BYO provider label for reports'
+        default: '65536'
+      batch_size:
+        description: 'Registry batch size, max 1000'
         required: false
-        default: 'pinata'
+        default: '25'
+      ramp_ms:
+        description: 'Per-client start stagger in ms; 0 is a spike'
+        required: false
+        default: '0'
 
+# Two runs against the same target would measure each other. Queue rather than
+# cancel, so a staging run already loading the 2-vCPU box finishes cleanly.
 concurrency:
   group: load-test-${{ inputs.environment }}
   cancel-in-progress: false
@@ -57,10 +58,10 @@ permissions: {}
 
 jobs:
   load-test:
-    name: 'Load Test: ${{ inputs.scenario }} (${{ inputs.client_count }} clients)'
+    name: 'Load Test: ${{ inputs.scenario }} on ${{ inputs.environment }}'
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment == 'staging' && 'staging' || '' }}
-    timeout-minutes: 60
+    timeout-minutes: 45
     permissions:
       contents: read
 
@@ -70,7 +71,7 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: cipherbox_test
+          POSTGRES_DB: cipherbox_load
         ports:
           - 5432:5432
         options: >-
@@ -78,7 +79,6 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-
       ipfs:
         image: ipfs/kubo:v0.42.0
         ports:
@@ -91,146 +91,102 @@ jobs:
           --health-retries 10
           --health-start-period 30s
 
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    env:
+      SCENARIO: ${{ inputs.scenario }}
+      CLIENTS: ${{ inputs.clients }}
+      OPS_PER_CLIENT: ${{ inputs.ops_per_client }}
+      BLOCK_BYTES: ${{ inputs.block_bytes }}
+      BATCH_SIZE: ${{ inputs.batch_size }}
+      RAMP_MS: ${{ inputs.ramp_ms }}
+      TARGET: ${{ inputs.environment }}
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
-      - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: 'package.json'
           cache: 'pnpm'
 
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: linux-cargo-
+
       - name: Install dependencies
+        if: inputs.environment == 'local'
         run: pnpm install --frozen-lockfile
 
-      - name: Install mock-ipns-routing dependencies
-        run: |
-          cd tools/mock-ipns-routing
-          npm install
-          npm run build
-
-      - name: Build packages
-        run: |
-          pnpm --filter @cipherbox/crypto build
-          pnpm --filter @cipherbox/core build
-          pnpm --filter @cipherbox/api-client build
-          pnpm --filter @cipherbox/sdk-core build
-          pnpm --filter @cipherbox/sdk build
-          pnpm --filter @cipherbox/api build
-
-      - name: Create API .env
+      - name: Stand up the local API over the CI stack
         if: inputs.environment == 'local'
-        run: |
-          echo "NODE_ENV=test" > apps/api/.env
-          echo "DB_HOST=localhost" >> apps/api/.env
-          echo "DB_PORT=5432" >> apps/api/.env
-          echo "DB_USERNAME=postgres" >> apps/api/.env
-          echo "DB_PASSWORD=postgres" >> apps/api/.env
-          echo "DB_DATABASE=cipherbox_test" >> apps/api/.env
-          echo "JWT_SECRET=e2e-test-jwt-secret-key-for-ci" >> apps/api/.env
-          echo "CORS_ALLOWED_ORIGINS=http://localhost:5173" >> apps/api/.env
-          echo "IPFS_PROVIDER=local" >> apps/api/.env
-          echo "IPFS_LOCAL_API_URL=http://localhost:5001" >> apps/api/.env
-          echo "IPFS_LOCAL_GATEWAY_URL=http://localhost:8080" >> apps/api/.env
-          echo "DELEGATED_ROUTING_URL=http://localhost:3001" >> apps/api/.env
-          echo "REDIS_HOST=localhost" >> apps/api/.env
-          echo "REDIS_PORT=6379" >> apps/api/.env
-          echo "TEST_LOGIN_SECRET=e2e-test-secret-ci-only" >> apps/api/.env
-          echo "IDENTITY_JWT_PRIVATE_KEY=${{ secrets.IDENTITY_JWT_PRIVATE_KEY }}" >> apps/api/.env
-          echo "THROTTLE_BYPASS_SECRET=ci-throttle-bypass-secret" >> apps/api/.env
-
-      - name: Start mock IPNS routing
-        if: inputs.environment == 'local'
-        run: |
-          cd tools/mock-ipns-routing
-          node dist/server.js &
-          sleep 2
-
-      - name: Start API server
-        if: inputs.environment == 'local'
-        run: |
-          pnpm --filter @cipherbox/api start:prod &
-          for i in $(seq 1 30); do
-            if curl -fsS http://localhost:3000/health > /dev/null 2>&1; then
-              echo "API is ready"
-              break
-            fi
-            sleep 1
-          done
-          if ! curl -fsS http://localhost:3000/health > /dev/null 2>&1; then
-            echo "API failed to start within 30s"
-            exit 1
-          fi
         env:
-          NODE_ENV: test
           DB_HOST: localhost
           DB_PORT: 5432
           DB_USERNAME: postgres
           DB_PASSWORD: postgres
-          DB_DATABASE: cipherbox_test
-          JWT_SECRET: e2e-test-jwt-secret-key-for-ci
-          CORS_ALLOWED_ORIGINS: http://localhost:5173
-          IPFS_PROVIDER: local
-          IPFS_LOCAL_API_URL: http://localhost:5001
-          IPFS_LOCAL_GATEWAY_URL: http://localhost:8080
-          DELEGATED_ROUTING_URL: http://localhost:3001
-          REDIS_HOST: localhost
-          REDIS_PORT: 6379
-          TEST_LOGIN_SECRET: e2e-test-secret-ci-only
-
-      - name: Set environment variables
+          DB_DATABASE: cipherbox_load
+          NODE_ENV: test
+          JWT_SECRET: load-harness-jwt-secret
+          KUBO_API_URL: http://localhost:5001
+          TEST_LOGIN_SECRET: load-harness-secret
+          # A whole run provisions its accounts from one IP, so the per-IP auth
+          # bucket would cap how many virtual clients can exist. Honored only on
+          # an undeployed profile (apps/api/src/ops/throttling.ts).
+          THROTTLE_AUTH_LIMIT: '500'
         run: |
-          if [ "${{ inputs.environment }}" = "staging" ]; then
-            echo "LOAD_TEST_API_URL=${{ vars.STAGING_API_URL }}" >> $GITHUB_ENV
-            echo "LOAD_TEST_SECRET=${{ secrets.STAGING_TEST_LOGIN_SECRET }}" >> $GITHUB_ENV
-            echo "THROTTLE_BYPASS_SECRET=${{ secrets.STAGING_THROTTLE_BYPASS_SECRET }}" >> $GITHUB_ENV
-          else
-            echo "LOAD_TEST_API_URL=http://localhost:3000" >> $GITHUB_ENV
-            echo "LOAD_TEST_SECRET=e2e-test-secret-ci-only" >> $GITHUB_ENV
-            echo "THROTTLE_BYPASS_SECRET=ci-throttle-bypass-secret" >> $GITHUB_ENV
-          fi
-          # BYO-IPFS provider config — only exported for byo-* scenarios
-          if [[ "${{ inputs.scenario }}" == byo-* ]]; then
-            if [ -z "${{ secrets.LOAD_TEST_BYO_AUTH_TOKEN }}" ]; then
-              echo "::error::LOAD_TEST_BYO_AUTH_TOKEN secret is not set. Required for byo-* scenarios."
+          pnpm --filter @cipherbox/api migration:run
+          pnpm --filter @cipherbox/api build
+          node apps/api/dist/main.js > /tmp/api.log 2>&1 &
+          curl -fsS --retry 60 --retry-connrefused --retry-delay 1 http://localhost:3000/health \
+            || { echo '--- API log ---'; cat /tmp/api.log; exit 1; }
+
+      - name: Resolve the target
+        env:
+          STAGING_API_URL: ${{ vars.STAGING_API_URL }}
+          STAGING_GATEWAY_URL: ${{ vars.STAGING_GATEWAY_URL }}
+          STAGING_TEST_LOGIN_SECRET: ${{ secrets.STAGING_TEST_LOGIN_SECRET }}
+        run: |
+          if [ "$TARGET" = 'staging' ]; then
+            if [ -z "$STAGING_API_URL" ] || [ -z "$STAGING_TEST_LOGIN_SECRET" ]; then
+              echo '::error::staging runs need the STAGING_API_URL variable and STAGING_TEST_LOGIN_SECRET secret'
               exit 1
             fi
-            echo "BYO_IPFS_ENDPOINT=${{ inputs.load_test_byo_endpoint }}" >> $GITHUB_ENV
-            echo "BYO_IPFS_AUTH_TOKEN=${{ secrets.LOAD_TEST_BYO_AUTH_TOKEN }}" >> $GITHUB_ENV
-            echo "BYO_IPFS_PROTOCOL=${{ inputs.load_test_byo_protocol }}" >> $GITHUB_ENV
-            echo "BYO_IPFS_PROVIDER_NAME=${{ inputs.load_test_byo_provider_name }}" >> $GITHUB_ENV
+            echo "LOAD_TEST_API_URL=$STAGING_API_URL" >> "$GITHUB_ENV"
+            echo "LOAD_TEST_GATEWAY_URL=$STAGING_GATEWAY_URL" >> "$GITHUB_ENV"
+            echo "::add-mask::$STAGING_TEST_LOGIN_SECRET"
+            echo "LOAD_TEST_SECRET=$STAGING_TEST_LOGIN_SECRET" >> "$GITHUB_ENV"
+          else
+            echo 'LOAD_TEST_API_URL=http://localhost:3000' >> "$GITHUB_ENV"
+            echo 'LOAD_TEST_GATEWAY_URL=http://localhost:8080' >> "$GITHUB_ENV"
+            echo 'LOAD_TEST_SECRET=load-harness-secret' >> "$GITHUB_ENV"
           fi
-          CLIENT_COUNT="${{ inputs.client_count }}"
-          if ! [[ "$CLIENT_COUNT" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Invalid client_count: '$CLIENT_COUNT' (must be a positive integer)" >&2
-            exit 1
-          fi
-          echo "LOAD_TEST_CLIENTS=$CLIENT_COUNT" >> $GITHUB_ENV
 
-      - name: Run load test
-        working-directory: tests/load
+      # The harness refuses a target the flags and the environment disagree
+      # about: `local` only ever reaches loopback and `staging` only ever reaches
+      # a non-loopback https URL, so a mis-dispatched run fails before it loads
+      # anything. Bounds on clients/ops are enforced per target too.
+      - name: Run the load harness
         run: |
-          pnpm exec vitest run --no-coverage "${{ inputs.scenario }}"
+          cargo run --release -p cipherbox-load -- \
+            --scenario "$SCENARIO" \
+            --target "$TARGET" \
+            --clients "$CLIENTS" \
+            --ops-per-client "$OPS_PER_CLIENT" \
+            --block-bytes "$BLOCK_BYTES" \
+            --batch-size "$BATCH_SIZE" \
+            --ramp-ms "$RAMP_MS"
 
-      - name: Upload metrics report
+      - name: Upload the metrics report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: load-test-metrics-${{ inputs.scenario }}-${{ inputs.client_count }}clients
-          path: tests/load/metrics-*.json
+          name: load-metrics-${{ inputs.scenario }}-${{ inputs.environment }}
+          path: load-reports/*.json
           retention-days: 30
-          if-no-files-found: ignore
+          if-no-files-found: warn
