@@ -99,8 +99,8 @@ pub enum SettingsPublishError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DefaultsReason {
     /// No endpoint served a record, and this device has no durable floor for
-    /// the name — no evidence here that the account has ever published
-    /// settings.
+    /// the name. Floor evidence only: a cached last-known-good block can
+    /// accompany this, since the floor advance is not gated on the cache write.
     NoRecord,
     /// No usable record, but the durable sequence floor proves one was adopted
     /// here before: the record is being withheld or its head block is
@@ -308,7 +308,8 @@ where
 {
     let key = name.as_str().as_bytes();
     let cache_key = settings_cache_key(name);
-    // Cache-first, like every resolve (blueprint/engine.md).
+    // Read ahead of the resolve so a degraded outcome has last-known-good to
+    // fall back on; the cache never short-circuits the fetch.
     *cached = snapshots.get(&cache_key).await.ok().flatten();
     // The settings record belongs to no scope and carries no epoch, so the
     // per-name sequence floor is its whole floor law. A floor the host cannot
