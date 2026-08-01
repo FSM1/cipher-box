@@ -23,6 +23,7 @@ use zeroize::Zeroizing;
 use cipherbox_engine::content::{DAG_ROOT_CODEC, GatewaySource, SealedChunk, decode_root};
 use cipherbox_engine::facade::PendingClass;
 use cipherbox_engine::net::author::{EnvelopeAuthoring, author_child_envelope};
+use cipherbox_engine::net::{ChildAdopter, ResolveOutcome, resolve};
 use cipherbox_engine::seams::{
     BoxedTask, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
     StagingStore, UnixMillis,
@@ -1617,6 +1618,83 @@ fn a_create_below_the_scope_root_publishes_and_projects() {
     let view = block_on(engine.snapshot(photos)).unwrap();
     assert_eq!(view.children.len(), 1);
     assert_eq!(view.children[0].name, "2026");
+}
+
+/// The deep create's round trip: a device that never authored it adopts the
+/// non-root parent's own record — the only record that carries the depth-2
+/// child — through the child gate, on its own cold floors and cache. The
+/// facade has no descent below the scope root yet, so the assertion sits at
+/// the record plane (#895, #917).
+#[test]
+fn a_create_below_the_scope_root_is_adoptable_by_a_second_device() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks);
+    let photos = child_id(&engine_a, ROOT, "photos");
+
+    block_on(engine_a.command(Command::Create {
+        parent: photos,
+        name: "2026".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks);
+    let deep = child_id(&engine_a, photos, "2026");
+
+    let bob = world.device(b"alice-second-device");
+    let (engine_b, _events_b, _tasks_b) = boot(&world, &blocks, &bob, 7);
+    let parents = block_on(engine_b.view()).unwrap().children(ROOT);
+    assert_eq!(parents.len(), 1, "device B resolves the depth-1 parent");
+    assert_eq!(parents[0].id, photos);
+
+    // Device B's own seams: its cold floor store, its own cache and HTTP. Only
+    // the account's scope read seed and the network are shared with device A.
+    let gateway = GatewayConfig {
+        accelerator: Some(GatewaySource {
+            base_url: "https://gw.test".into(),
+            bearer: None,
+        }),
+        public_fallbacks: Vec::new(),
+    }
+    .into_gateway();
+    let adopter = ChildAdopter::new(
+        &gateway,
+        &bob.http,
+        &bob.floor_store,
+        SCOPE,
+        Zeroizing::new(READ_SCOPE_SEED),
+        photos.0,
+    );
+    let outcome = block_on(resolve(
+        &bob.record_store,
+        &bob.snapshot_cache,
+        &adopter,
+        &write_name(photos),
+    ))
+    .expect("the parent record resolves")
+    .outcome;
+    let ResolveOutcome::Adopted(adopted) = outcome else {
+        panic!("the parent record passes device B's child gate, got {outcome:?}");
+    };
+    let ReadBody::Folder { children, .. } = adopted.read_body else {
+        panic!("expected a folder body");
+    };
+    assert_eq!(children.len(), 1, "device B reads the depth-2 create");
+    assert_eq!(children[0].name, "2026");
+    assert_eq!(
+        children[0].id, deep.0,
+        "and the same node id device A published it under"
+    );
 }
 
 /// A source-remove that will not publish compensates its own dest-add rather
