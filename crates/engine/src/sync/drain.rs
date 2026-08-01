@@ -1332,9 +1332,10 @@ where
         })?;
 
         // File order, root last, each leaf removed on its confirmed
-        // `UploadResult` — so the blocks still staged are a **suffix**. An
-        // absence is only progress up to the durable mark this pass keeps: past
-        // it, a missing block is loss, and the version can never be assembled.
+        // `UploadResult` — but a lost release can strand one staged anywhere
+        // below the mark (#924). An absence is only progress up to the durable
+        // mark this pass keeps: past it, a missing block is loss, and the
+        // version can never be assembled.
         let uploaded = self.upload_mark(&staged.root_cid).await?;
         // The root manifest is block zero and goes up last, so the version's
         // whole block count is its leaves plus one.
