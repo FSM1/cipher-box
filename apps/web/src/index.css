@@ -1,0 +1,156 @@
+/* ==========================================================================
+   Design Tokens - Terminal/Hacker Aesthetic
+   ========================================================================== */
+
+:root {
+  /* Color Primitives */
+  --color-black: #000000;
+  --color-green-primary: #00d084;
+  --color-green-dim: #006644;
+  --color-green-darker: #003322;
+  --color-green-glow: #00d08466; /* 40% opacity for shadows */
+  --color-error: #ef4444;
+  --color-warning: #ff6b00;
+  --color-warning-dim: #994400;
+  --color-warning-bg: #3d1a00;
+
+  /* Background & Text */
+  --color-background: var(--color-black);
+  --color-border-dim: var(--color-green-darker);
+  --color-text-primary: var(--color-green-primary);
+  --color-text-secondary: var(--color-green-dim);
+  --color-text-dim: #4a5a4e; /* Dim gray-green for hints */
+
+  /* Typography */
+  --font-family-mono: 'JetBrains Mono', monospace;
+  --font-size-xxs: 9px; /* Footer */
+  --font-size-xs: 10px; /* Status text */
+  --font-size-sm: 11px; /* Body, buttons */
+  --font-size-md: 13px; /* Banner headline */
+  --font-size-xl: 24px; /* Login logo */
+
+  /* Font Weights */
+  --font-weight-normal: 400;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  /* Spacing (from design file) */
+  --spacing-xs: 8px;
+  --spacing-sm: 12px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+
+  /* Effects */
+  --glow-green: 0 0 10px var(--color-green-glow);
+  --border-thickness: 1px;
+
+  /* Remove color-scheme to enforce dark mode only */
+  color-scheme: dark;
+}
+
+/* ==========================================================================
+   Global Resets
+   ========================================================================== */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ==========================================================================
+   Base Styles
+   ========================================================================== */
+
+html {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  font-weight: var(--font-weight-normal);
+  color: var(--color-text-primary);
+  background-color: var(--color-background);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100vh;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+}
+
+/* Links */
+a {
+  color: var(--color-text-primary);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Focus styles for accessibility */
+:focus-visible {
+  outline: 2px solid var(--color-green-primary);
+  outline-offset: 2px;
+}
+
+/* Selection */
+::selection {
+  background-color: var(--color-green-primary);
+  color: var(--color-black);
+}
+
+/* ==========================================================================
+   Utilities
+   ========================================================================== */
+
+.matrix-canvas {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ==========================================================================
+   Chrome
+   ========================================================================== */
+
+.logout-link {
+  background: none;
+  border: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  text-transform: lowercase;
+  cursor: pointer;
+}
+
+.logout-link:hover:not(:disabled) {
+  color: var(--color-text-primary);
+}
+
+.logout-link:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

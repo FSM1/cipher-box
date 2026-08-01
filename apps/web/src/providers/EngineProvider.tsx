@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import type { EngineClient, SecretSource } from '@cipherbox/client';
 import { LoginSecretSource } from '../engine/loginHandoff';
 import {
@@ -11,6 +19,7 @@ interface EngineContextValue {
   client: EngineClient;
   snapshots: SnapshotStore;
   secrets: LoginSecretSource;
+  rebuild: () => void;
 }
 
 // `undefined` distinguishes "no provider above me" from "provider mounted,
@@ -26,20 +35,24 @@ export interface EngineProviderProps {
 /**
  * Owns everything scoped to this tab's one engine (blueprint/web-client.md
  * "Engine hosting and tab leadership"): the client, the snapshot store over it,
- * and the failover secret source — built on mount, torn down together on
- * unmount, never duplicated. Construction runs in an effect so a StrictMode
- * double-mount disposes the throwaway client rather than leaking a second lock
- * contender.
+ * and the failover secret source — built together, torn down together, never
+ * duplicated. Construction runs in an effect so a StrictMode double-mount
+ * disposes the throwaway client rather than leaking a second lock contender.
  */
 export function EngineProvider({ createClient, children }: EngineProviderProps) {
   const [value, setValue] = useState<EngineContextValue | null>(null);
+  const [generation, setGeneration] = useState(0);
   const factory = useRef(createClient);
+
+  // `facade.logout` closes the client for good, so the tab needs a new one
+  // before it can log in again.
+  const rebuild = useCallback(() => setGeneration((current) => current + 1), []);
 
   useEffect(() => {
     const secrets = new LoginSecretSource();
     const client = factory.current(secrets);
     const snapshots = createSnapshotStore(client);
-    setValue({ client, snapshots, secrets });
+    setValue({ client, snapshots, secrets, rebuild });
     return () => {
       // Drop the exporter first: no re-export capability outlives the client.
       secrets.use(null);
@@ -48,7 +61,7 @@ export function EngineProvider({ createClient, children }: EngineProviderProps) 
         console.error('[engine] dispose failed', error instanceof Error ? error.message : error);
       });
     };
-  }, []);
+  }, [generation, rebuild]);
 
   return <EngineContext.Provider value={value}>{children}</EngineContext.Provider>;
 }
@@ -75,3 +88,11 @@ export function useSnapshotStore(): SnapshotStore {
 export function useLoginSecretSource(): LoginSecretSource | null {
   return useEngineContext()?.secrets ?? null;
 }
+
+/** Replaces this tab's engine client with a fresh one; a no-op before the first. */
+export function useRebuildEngine(): () => void {
+  const rebuild = useEngineContext()?.rebuild;
+  return rebuild ?? noop;
+}
+
+const noop = () => undefined;
