@@ -23,6 +23,8 @@ export interface Auth {
   error: string | null;
   loginWithGoogle(): Promise<void>;
   loginWithEmail(email: string): Promise<void>;
+  /** Issues the single-use nonce the wallet's EIP-4361 message embeds. */
+  siweChallenge(): Promise<string>;
   /** Exchanges a wallet-signed SIWE message; secondary to the Core Kit methods. */
   loginWithWallet(message: string, signature: Uint8Array): Promise<void>;
   logout(): Promise<void>;
@@ -102,6 +104,13 @@ export function useAuth(): Auth {
   const loginWithGoogle = useCallback(() => login('google'), [login]);
   const loginWithEmail = useCallback((email: string) => login('email', email), [login]);
 
+  // Outside `exclusively`: the nonce is one step inside the wallet flow, whose
+  // handoff takes the lock at `loginWithWallet`.
+  const siweChallenge = useCallback(async (): Promise<string> => {
+    if (!client) throw new Error('the engine is not ready to accept a login');
+    return client.facade.siweChallenge();
+  }, [client]);
+
   const loginWithWallet = useCallback(
     (message: string, signature: Uint8Array) =>
       exclusively(async () => {
@@ -150,6 +159,7 @@ export function useAuth(): Auth {
     error: error ?? coreKitError,
     loginWithGoogle,
     loginWithEmail,
+    siweChallenge,
     loginWithWallet,
     logout,
   };

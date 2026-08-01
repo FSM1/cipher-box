@@ -7,7 +7,6 @@ import { LoginError } from '../components/auth/LoginError';
 import { WalletLoginButton } from '../components/auth/WalletLoginButton';
 import { MatrixBackground } from '../components/MatrixBackground';
 import { StagingBanner } from '../components/StagingBanner';
-import { apiBaseUrl } from '../engine/config';
 
 /**
  * The vault's front door: the Core Kit methods plus SIWE
@@ -21,6 +20,7 @@ export function LoginPage() {
     error,
     loginWithGoogle,
     loginWithEmail,
+    siweChallenge,
     loginWithWallet,
   } = useAuth();
   const navigate = useNavigate();
@@ -69,8 +69,8 @@ export function LoginPage() {
             </div>
 
             <WalletLoginButton
+              requestNonce={siweChallenge}
               onLogin={loginWithWallet}
-              apiBaseUrl={apiBaseUrl(import.meta.env)}
               disabled={!isReady || isBusy}
             />
           </div>

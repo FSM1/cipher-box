@@ -15,6 +15,7 @@ class FakeTransport implements EngineTransport {
   commands: Array<{ command: CommandDescriptor; transfer: Transferable[] }> = [];
   snapshots: Uint8Array[] = [];
   downloads: Uint8Array[] = [];
+  siweChallenges = 0;
   beginWrites: Array<{ target: WriteTarget; size: number }> = [];
   chunks: Array<{ handle: WriteHandle; chunk: ArrayBuffer }> = [];
   commits: WriteHandle[] = [];
@@ -55,6 +56,11 @@ class FakeTransport implements EngineTransport {
   snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
     this.snapshots.push(folder);
     return Promise.resolve(emptySnapshot(folder));
+  }
+
+  siweChallenge(): Promise<string> {
+    this.siweChallenges += 1;
+    return Promise.resolve('nonce123456789ab');
   }
 
   download(node: Uint8Array): Promise<ArrayBuffer> {
@@ -172,6 +178,14 @@ describe('EngineFacade', () => {
     const content = await facade.download(node);
     expect([...new Uint8Array(content)]).toEqual([1, 2, 3]);
     expect(transport.downloads).toEqual([node]);
+  });
+
+  it('reads the SIWE nonce over the transport rather than the API', async () => {
+    const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
+
+    await expect(facade.siweChallenge()).resolves.toBe('nonce123456789ab');
+    expect(transport.siweChallenges).toBe(1);
   });
 
   it('delegates event subscription to the transport', () => {

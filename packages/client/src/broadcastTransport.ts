@@ -94,6 +94,10 @@ export class BroadcastTransport extends CorrelatedTransport {
     return this.read<SnapshotDescriptor>({ kind: 'snapshot', folder });
   }
 
+  siweChallenge(): Promise<string> {
+    return this.read<string>({ kind: 'siweChallenge' });
+  }
+
   async download(node: Uint8Array): Promise<ArrayBuffer> {
     // The leader answers with a `Blob` handle (shared backing, no byte copy);
     // materialize the bytes only here, in the requesting follower.

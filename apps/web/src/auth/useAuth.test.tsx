@@ -1,7 +1,13 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { authStore } from '../stores/auth.store';
-import { authWrapper, fakeCoreKitSession, fakeEngineClient, SECRET_HEX } from '../test/authFakes';
+import {
+  authWrapper,
+  FAKE_NONCE,
+  fakeCoreKitSession,
+  fakeEngineClient,
+  SECRET_HEX,
+} from '../test/authFakes';
 import { useLoginSecretSource } from '../providers/EngineProvider';
 import { useAuth } from './useAuth';
 
@@ -62,6 +68,16 @@ describe('useAuth', () => {
     expect(engine.calls.started).toEqual([]);
     expect(coreKit.calls.exports).toBe(0);
     expect(authStore.getState()).toMatchObject({ isAuthenticated: true, method: 'wallet' });
+  });
+
+  it('reads the SIWE nonce from the facade, never from the API', async () => {
+    const engine = fakeEngineClient();
+    const coreKit = fakeCoreKitSession();
+    const { result } = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+
+    await expect(result.current.auth.siweChallenge()).resolves.toBe(FAKE_NONCE);
+    expect(engine.calls.siweChallenges).toBe(1);
   });
 
   it('tears down the engine and the Core Kit session on logout', async () => {

@@ -97,6 +97,10 @@ class JournalHost implements EngineHostLike {
     return Promise.reject(new Error('journal host serves no snapshots'));
   }
 
+  siweChallenge(): Promise<string> {
+    return Promise.reject(new Error('journal host serves no siwe challenges'));
+  }
+
   download(): Promise<ArrayBuffer> {
     return Promise.reject(new Error('journal host serves no downloads'));
   }

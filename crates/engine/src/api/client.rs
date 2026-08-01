@@ -141,6 +141,9 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         };
         let response = ok_or_err(self.http.send(request).await?)?;
         let body: SiweChallengeResponse = decode(&response)?;
+        if !is_eip4361_nonce(&body.nonce) {
+            return Err(ApiError::Decode("unusable siwe nonce".into()));
+        }
         Ok(SiweNonce {
             nonce: body.nonce,
             expires_at: body.expires_at,
@@ -594,6 +597,14 @@ fn is_success(status: u16) -> bool {
     (200..300).contains(&status)
 }
 
+/// EIP-4361 fixes the nonce at 8+ alphanumerics. The check is fail-closed
+/// rather than cosmetic: the nonce is interpolated verbatim into the text a
+/// wallet signs, so anything outside that class lets a hostile challenge
+/// response inject extra fields into the signed message.
+fn is_eip4361_nonce(nonce: &str) -> bool {
+    (8..=128).contains(&nonce.len()) && nonce.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
 /// Serialize a request body. The client's own request types are always
 /// serializable, so a failure is a programmer error, not a runtime condition.
 fn to_json<B: Serialize + ?Sized>(body: &B) -> Vec<u8> {
@@ -888,13 +899,38 @@ mod tests {
         let (http, _creds, client) = fakes();
         http.enqueue_response(json_response(
             200,
-            json!({ "nonce": "nonce-123", "expiresAt": "2026-01-01T00:00:00Z" }),
+            json!({ "nonce": "a1b2c3d4e5f60718", "expiresAt": "2026-01-01T00:00:00Z" }),
         ));
         let nonce = block_on(client.siwe_challenge()).expect("nonce");
-        assert_eq!(nonce.nonce, "nonce-123");
+        assert_eq!(nonce.nonce, "a1b2c3d4e5f60718");
         let request = &http.requests()[0];
         assert_eq!(request.url, "http://api.test/auth/siwe/challenge");
         assert!(request.body.is_none());
+    }
+
+    /// The nonce lands verbatim in the text a wallet signs, so anything outside
+    /// EIP-4361's alphanumeric class is refused rather than forwarded.
+    #[test]
+    fn siwe_challenge_refuses_a_nonce_outside_the_eip4361_class() {
+        for unusable in [
+            "short7",
+            "has-a-hyphen-in-it",
+            "line\nbreak12345",
+            "spaced out nonce",
+            "",
+            &"a".repeat(129),
+        ] {
+            let (http, _creds, client) = fakes();
+            http.enqueue_response(json_response(
+                200,
+                json!({ "nonce": unusable, "expiresAt": "2026-01-01T00:00:00Z" }),
+            ));
+            assert_eq!(
+                block_on(client.siwe_challenge()).unwrap_err(),
+                ApiError::Decode("unusable siwe nonce".into()),
+                "accepted {unusable:?}"
+            );
+        }
     }
 
     #[test]

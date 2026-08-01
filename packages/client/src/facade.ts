@@ -148,6 +148,16 @@ export class EngineFacade {
     return this.command({ kind: 'rotateNow', node });
   }
 
+  /**
+   * Issues the single-use nonce an EIP-4361 message must embed, so the host
+   * builds one without reaching the API itself. SIWE is a secondary method: the
+   * engine refuses this before [`start`](EngineFacade#start), exactly as it
+   * refuses the [`siweLogin`](EngineFacade#siweLogin) that would spend it.
+   */
+  siweChallenge(): Promise<string> {
+    return this.transport.siweChallenge();
+  }
+
   siweLogin(message: string, signature: Uint8Array): Promise<void> {
     return this.command({ kind: 'siweLogin', message, signature });
   }

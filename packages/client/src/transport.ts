@@ -38,6 +38,8 @@ export interface EngineTransport {
   abortWrite(handle: WriteHandle): Promise<void>;
   /** Reads a key-free snapshot of `folder`, or of the vault root for `null`. */
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
+  /** Issues the single-use nonce an EIP-4361 message must embed. */
+  siweChallenge(): Promise<string>;
   /** Downloads one file node's plaintext through the verified read pipeline. */
   download(node: Uint8Array): Promise<ArrayBuffer>;
   /** Subscribes to the one-way event stream; returns an unsubscribe. */
@@ -139,6 +141,12 @@ export class LocalTransport extends CorrelatedTransport {
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
     return this.request<SnapshotDescriptor>(this.ready, (id) =>
       this.worker.postMessage({ type: 'snapshot', id, folder }, [])
+    );
+  }
+
+  siweChallenge(): Promise<string> {
+    return this.request<string>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'siweChallenge', id }, [])
     );
   }
 

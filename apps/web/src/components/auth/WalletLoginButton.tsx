@@ -3,14 +3,14 @@ import { useConnect, useDisconnect, useSignMessage } from 'wagmi';
 import { mainnet } from 'wagmi/chains';
 import { hexToBytes } from 'viem';
 import { createSiweMessage } from 'viem/siwe';
-import { requestSiweNonce } from '../../auth/siweNonce';
 import { errorMessage } from '../../lib/errorMessage';
 import { LoginError } from './LoginError';
 
 interface WalletLoginButtonProps {
+  /** Reads the single-use nonce the EIP-4361 message embeds, from the facade. */
+  requestNonce: () => Promise<string>;
   /** Hands the signed EIP-4361 message to the facade. */
   onLogin: (message: string, signature: Uint8Array) => Promise<void>;
-  apiBaseUrl: string;
   disabled?: boolean;
 }
 
@@ -28,7 +28,7 @@ const PHASE_LABEL: Record<Phase, string> = {
  * identity"): wagmi collects the wallet signature here and the facade forwards
  * it.
  */
-export function WalletLoginButton({ onLogin, apiBaseUrl, disabled }: WalletLoginButtonProps) {
+export function WalletLoginButton({ requestNonce, onLogin, disabled }: WalletLoginButtonProps) {
   const { connectors, connectAsync } = useConnect();
   const { signMessageAsync } = useSignMessage();
   const { disconnect } = useDisconnect();
@@ -67,7 +67,7 @@ export function WalletLoginButton({ onLogin, apiBaseUrl, disabled }: WalletLogin
         address: account,
         chainId: mainnet.id,
         domain: window.location.host,
-        nonce: await requestSiweNonce(apiBaseUrl),
+        nonce: await requestNonce(),
         uri: window.location.origin,
         version: '1',
         statement: 'Sign in to CipherBox encrypted storage',

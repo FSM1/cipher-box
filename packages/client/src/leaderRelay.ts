@@ -13,10 +13,15 @@
  * ride the outbound wire, exactly the facade's event surface.
  */
 
-import type { BroadcastChannelLike, FollowerMessage, LeaderMessage } from './broadcast.js';
+import type {
+  BroadcastChannelLike,
+  FollowerMessage,
+  LeaderMessage,
+  WireRead,
+} from './broadcast.js';
 import { EngineRequestError } from './correlatedTransport.js';
 import type { EngineTransport } from './transport.js';
-import type { WriteHandle } from './worker/protocol.js';
+import type { SnapshotDescriptor, WriteHandle } from './worker/protocol.js';
 import { WriteQueue } from './writeQueue.js';
 
 /** The correlated ack envelope addressing one follower request. */
@@ -166,17 +171,27 @@ export class LeaderRelay {
     const { clientId, requestId, read } = message;
     const ack = { type: 'cb:response', token: this.token, clientId, requestId } as const;
     try {
-      if (read.kind === 'snapshot') {
-        const result = await this.transport.snapshot(read.folder);
-        this.post({ ...ack, ok: true, result });
-      } else {
-        // Wrap the plaintext in a `Blob` so the per-receiver structured clone
-        // shares the immutable backing store instead of copying the bytes.
-        const bytes = await this.transport.download(read.node);
-        this.post({ ...ack, ok: true, result: new Blob([bytes]) });
-      }
+      this.post({ ...ack, ok: true, result: await this.serve(read) });
     } catch (error) {
       this.post({ ...ack, ok: false, ...wireError(error) });
+    }
+  }
+
+  /**
+   * Serves one follower read off the leader's engine. The annotated return type
+   * makes the switch exhaustive over [`WireRead`], so a new kind fails to
+   * compile instead of leaving the follower's request unanswered.
+   */
+  private async serve(read: WireRead): Promise<SnapshotDescriptor | Blob | string> {
+    switch (read.kind) {
+      case 'snapshot':
+        return this.transport.snapshot(read.folder);
+      case 'siweChallenge':
+        return this.transport.siweChallenge();
+      case 'download':
+        // Wrap the plaintext in a `Blob` so the per-receiver structured clone
+        // shares the immutable backing store instead of copying the bytes.
+        return new Blob([await this.transport.download(read.node)]);
     }
   }
 

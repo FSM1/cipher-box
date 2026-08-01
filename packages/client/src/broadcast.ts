@@ -35,6 +35,7 @@ export interface BroadcastChannelLike {
 /** A follower read intent: served by the leader's engine, answered by value. */
 export type WireRead =
   | { kind: 'snapshot'; folder: Uint8Array | null }
+  | { kind: 'siweChallenge' }
   | { kind: 'download'; node: Uint8Array };
 
 /** A follower streaming-write step, driven against the leader's engine. */
@@ -75,7 +76,8 @@ export type LeaderMessage =
   /**
    * The correlated result of a follower's command, read, or write step. A
    * snapshot read's ok carries the descriptor in `result`; a download's carries
-   * a `Blob`; `beginWrite`/`commitWrite` carry the handle / durable op id.
+   * a `Blob`; a SIWE challenge's carries the nonce string;
+   * `beginWrite`/`commitWrite` carry the handle / durable op id.
    */
   | {
       type: 'cb:response';
@@ -83,7 +85,7 @@ export type LeaderMessage =
       clientId: string;
       requestId: number;
       ok: true;
-      result?: SnapshotDescriptor | Blob | bigint;
+      result?: SnapshotDescriptor | Blob | bigint | string;
     }
   /**
    * A failed command/read. `error` is the human-readable diagnostic; `code` is

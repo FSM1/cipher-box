@@ -225,6 +225,14 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(engine.downloads).toEqual([node]);
   });
 
+  it('serves a follower SIWE challenge off the leader engine', async () => {
+    const { engine, follower } = wire();
+    engine.respondSiweChallenge = () => Promise.resolve('leaderNonce12345');
+
+    await expect(follower.siweChallenge()).resolves.toBe('leaderNonce12345');
+    expect(engine.siweChallenges).toBe(1);
+  });
+
   it('propagates a read rejection back to the follower with the stable code', async () => {
     const { engine, follower } = wire();
     engine.respondSnapshot = () =>

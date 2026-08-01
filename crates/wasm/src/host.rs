@@ -344,6 +344,22 @@ impl EngineHandle {
         })
     }
 
+    /// Issues the single-use nonce an EIP-4361 message must embed. Resolves
+    /// with the nonce as a string; rejects with the engine error.
+    #[wasm_bindgen(js_name = siweChallenge)]
+    pub fn siwe_challenge(&self) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            let nonce = engine
+                .read()
+                .await
+                .siwe_challenge()
+                .await
+                .map_err(engine_error)?;
+            Ok(JsValue::from_str(&nonce))
+        })
+    }
+
     /// Downloads and decrypts one file node's content through the verified
     /// read pipeline. Resolves with the plaintext bytes as a `Uint8Array`;
     /// rejects with the engine error.

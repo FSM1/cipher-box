@@ -178,6 +178,7 @@ export type WorkerRequest =
   | { type: 'commitWrite'; id: number; handle: WriteHandle }
   | { type: 'abortWrite'; id: number; handle: WriteHandle }
   | { type: 'snapshot'; id: number; folder: Uint8Array | null }
+  | { type: 'siweChallenge'; id: number }
   | { type: 'download'; id: number; node: Uint8Array };
 
 /** A worker → UI message. */
@@ -187,10 +188,16 @@ export type WorkerMessage =
   /**
    * The correlated result of a request. A value-bearing ok response carries it:
    * a `SnapshotDescriptor` for `snapshot`, the plaintext `ArrayBuffer`
-   * (transferred, not copied) for `download`, the write handle for `beginWrite`,
-   * the durable op id for `commitWrite`.
+   * (transferred, not copied) for `download`, the nonce string for
+   * `siweChallenge`, the write handle for `beginWrite`, the durable op id for
+   * `commitWrite`.
    */
-  | { type: 'response'; id: number; ok: true; result?: SnapshotDescriptor | ArrayBuffer | bigint }
+  | {
+      type: 'response';
+      id: number;
+      ok: true;
+      result?: SnapshotDescriptor | ArrayBuffer | bigint | string;
+    }
   /**
    * A failed request. `error` is the human-readable diagnostic; `code` is the
    * engine's stable machine-readable error code (the wasm host's camelCase

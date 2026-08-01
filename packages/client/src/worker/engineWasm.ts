@@ -92,6 +92,7 @@ export interface WasmEngineHandle {
   commitWrite(handle: bigint): Promise<bigint>;
   abortWrite(handle: bigint): Promise<unknown>;
   snapshot(folder?: WasmNodeId): Promise<WasmSnapshotView>;
+  siweChallenge(): Promise<string>;
   download(node: WasmNodeId): Promise<Uint8Array>;
   nextEvent(): Promise<WasmEvent | undefined>;
 }
