@@ -38,10 +38,10 @@ use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
 use crate::hex::hex_lower;
 use crate::net::{
-    Adopter, ChildAdopter, EolRenewResult, FolderRefresh, FolderRefreshReport, HeldMaterial,
+    Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome, RE_PUT_INTERVAL,
     RecordPointerFetch, ResolveOutcome, RootAdopter, eol_renew_pass, keyless_re_put,
-    refresh_base_from_outcome, resolve, resolve_and_hold, run_liveness_loop,
+    refresh_base_from_outcome, resolve_and_hold, resolve_child, run_liveness_loop,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
@@ -62,7 +62,7 @@ pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::staging::stage_op;
 use crate::sync::staleness::{Connectivity, classify};
-use crate::sync::tick::{FocusWindow, focus_folders, on_access_refresh_due};
+use crate::sync::tick::{FocusWindow, focus_folders, focus_folders_due};
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
 /// non-secret, and location-independent — routes and commands key on it,
@@ -880,16 +880,17 @@ fn node_attrs(meta: &NodeMeta) -> NodeAttrs {
     }
 }
 
-/// Stamp every folder a focus pass merged with the caller's clock reading, so
-/// the on-access threshold measures from the last gate-passing merge. A folder
-/// the pass could not merge keeps its old stamp and stays due.
+/// Stamp every folder a focus pass attempted against the caller's clock
+/// reading. Attempts, not merges: an unresolvable folder must not turn every
+/// navigation into a fresh endpoint fan-out, and the poll leg refreshes the
+/// window regardless, so recovery stays automatic.
 fn stamp_focus_refreshed(
     stamps: &RefCell<BTreeMap<NodeId, UnixMillis>>,
-    report: &FolderRefreshReport,
+    folders: &[NodeId],
     now: UnixMillis,
 ) {
     let mut stamps = stamps.borrow_mut();
-    for folder in &report.refreshed {
+    for folder in folders {
         stamps.insert(*folder, now);
     }
 }
@@ -1131,9 +1132,9 @@ pub struct Engine<T: SeamTypes> {
     /// open, whose record and whole ancestor chain every resolve tick refreshes.
     /// Shared with the tick loop, which reads it on each pass.
     focus: Rc<RefCell<FocusWindow>>,
-    /// When each focus folder last merged a gate-passing body, so a navigation
-    /// inside the staleness threshold renders state already held instead of
-    /// re-resolving (blueprint/engine.md: refresh on access past the threshold).
+    /// When each focus folder was last refreshed, so a navigation inside the
+    /// staleness threshold renders state already held instead of re-probing the
+    /// record plane (blueprint/engine.md: refresh on access past the threshold).
     focus_refreshed: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
     /// Retained dead-lettered ops. Feeds [`SnapshotView`]'s dead-letter surface
     /// (#33 D6: dead letters are retained, never silent).
@@ -1592,7 +1593,7 @@ impl<T: SeamTypes> Engine<T> {
                 if let Some(read_seed) = &read_seed
                     && !open.is_empty()
                 {
-                    let report = FolderRefresh {
+                    let changed = FolderRefresh {
                         transport: &transport,
                         snapshot_cache: &snapshot_cache,
                         http: &http,
@@ -1604,8 +1605,8 @@ impl<T: SeamTypes> Engine<T> {
                     }
                     .run(&open)
                     .await;
-                    stamp_focus_refreshed(&focus_refreshed, &report, scheduler.now());
-                    if report.changed {
+                    stamp_focus_refreshed(&focus_refreshed, &open, scheduler.now());
+                    if changed {
                         let _ = events.unbounded_send(Event::SnapshotUpdated);
                     }
                 }
@@ -1784,31 +1785,23 @@ impl<T: SeamTypes> Engine<T> {
     }
 
     /// Refresh the focus window's folders that are past the on-access staleness
-    /// threshold, returning whether the base changed. A folder refreshed inside
-    /// the threshold is left alone — the window still rides every resolve tick.
+    /// threshold, returning whether the base changed.
     async fn refresh_focus_on_access(&self, now: UnixMillis) -> bool {
-        let due: Vec<NodeId> = {
-            let refreshed = self.focus_refreshed.borrow();
-            focus_folders(&self.snapshot.borrow(), &self.focus.borrow())
-                .into_iter()
-                .filter(|folder| {
-                    refreshed
-                        .get(folder)
-                        .is_none_or(|last| on_access_refresh_due(now, *last, &self.profile))
-                })
-                .collect()
-        };
+        let due = focus_folders_due(
+            &self.snapshot.borrow(),
+            &self.focus.borrow(),
+            &self.focus_refreshed.borrow(),
+            now,
+            &self.profile,
+        );
         if due.is_empty() {
             return false;
         }
-        // The vault root scope: granted-subscope focus is a later slice. A
-        // missing read seed is missing held material (availability), never a
-        // trust verdict — the window simply does not refresh this pass.
         let scope_id = self.snapshot.borrow().root.0;
         let Some(scope_read_seed) = self.scope_read_seeds.borrow().get(&scope_id).cloned() else {
             return false;
         };
-        let report = FolderRefresh {
+        let changed = FolderRefresh {
             transport: &self.seams.record_transport,
             snapshot_cache: &self.seams.snapshot_cache,
             http: &self.seams.http,
@@ -1820,8 +1813,8 @@ impl<T: SeamTypes> Engine<T> {
         }
         .run(&due)
         .await;
-        stamp_focus_refreshed(&self.focus_refreshed, &report, now);
-        report.changed
+        stamp_focus_refreshed(&self.focus_refreshed, &due, now);
+        changed
     }
 
     // -----------------------------------------------------------------------
@@ -2305,39 +2298,17 @@ impl<T: SeamTypes> Engine<T> {
             scope_read_seed,
             node.0,
         );
-        let resolved = resolve(
+        let adopted = resolve_child(
             &self.seams.record_transport,
             &self.seams.snapshot_cache,
             &adopter,
             &name,
         )
         .await
-        .map_err(|e| EngineError::ContentUnavailable {
-            message: e.message().to_owned(),
+        .map_err(|e| match e {
+            ChildResolveError::Unavailable(message) => EngineError::ContentUnavailable { message },
+            ChildResolveError::Gate(gate) => EngineError::from_gate(gate),
         })?;
-        // One at-floor re-open serves both non-adopt outcomes: `Current` carries
-        // the re-fetched bytes, `NoUpdate` falls back to the cached
-        // last-known-good; neither advances a floor.
-        let adopted = 'adopted: {
-            let record_bytes = match resolved.outcome {
-                ResolveOutcome::Adopted(adopted) => break 'adopted adopted,
-                ResolveOutcome::TrustViolation(rejection) => {
-                    return Err(EngineError::from_gate(GateError::Rejected(rejection)));
-                }
-                ResolveOutcome::Current { record_bytes } => record_bytes,
-                ResolveOutcome::NoUpdate => {
-                    resolved
-                        .last_known_good
-                        .ok_or_else(|| EngineError::ContentUnavailable {
-                            message: "no record source reachable and no cached record".to_owned(),
-                        })?
-                }
-            };
-            adopter
-                .open_at_floor(&name, &record_bytes)
-                .await
-                .map_err(EngineError::from_gate)?
-        };
 
         let ReadBody::File { versions, .. } = adopted.read_body else {
             // The parent's child ref said file: a sealed folder body is a kind

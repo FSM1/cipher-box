@@ -21,10 +21,10 @@ use cipherbox_core::seal::{Envelope, ReadBody, has_grant_section, open_read_body
 use zeroize::Zeroizing;
 
 use super::adopter::{LocalHead, assemble_head_envelope, reject};
-use super::resolve::{AdoptOutcome, Adopter};
+use super::resolve::{AdoptOutcome, Adopter, ResolveOutcome, resolve};
 use crate::content::Gateway;
 use crate::gate::{Adopted, GateError, GateStage, floor};
-use crate::seams::{FloorStore, Http};
+use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 
 /// The child-record [`Adopter`] for one non-root node of an owned scope.
 /// Borrows the content seams from the live session; terminally owns a
@@ -188,6 +188,54 @@ impl<H: Http, F: FloorStore> ChildAdopter<'_, H, F> {
             envelope,
         ))
     }
+}
+
+/// Why a child-record resolve produced no adopted body.
+pub(crate) enum ChildResolveError {
+    /// No reachable source and no cached record — availability staleness.
+    Unavailable(String),
+    /// The record failed the gate — fail-closed.
+    Gate(GateError),
+}
+
+/// One child record's cache-first gated resolve: the child gate on a strictly
+/// newer record, then an at-floor re-open of the current or cached bytes so a
+/// process starting over durable floors still renders.
+///
+/// Both read paths that descend below the scope root — a file's content read
+/// and the focus-window folder refresh — walk this one function, so neither can
+/// drift on which outcome is staleness and which is a fail-closed violation.
+pub(crate) async fn resolve_child<T, S, H, F>(
+    transport: &T,
+    snapshot_cache: &S,
+    adopter: &ChildAdopter<'_, H, F>,
+    name: &IpnsName,
+) -> Result<Adopted, ChildResolveError>
+where
+    T: RecordTransport,
+    S: SnapshotCache,
+    H: Http,
+    F: FloorStore,
+{
+    let resolved = resolve(transport, snapshot_cache, adopter, name)
+        .await
+        .map_err(|e| ChildResolveError::Unavailable(e.message().to_owned()))?;
+    let record_bytes = match resolved.outcome {
+        ResolveOutcome::Adopted(adopted) => return Ok(adopted),
+        ResolveOutcome::TrustViolation(rejection) => {
+            return Err(ChildResolveError::Gate(GateError::Rejected(rejection)));
+        }
+        ResolveOutcome::Current { record_bytes } => record_bytes,
+        ResolveOutcome::NoUpdate => resolved.last_known_good.ok_or_else(|| {
+            ChildResolveError::Unavailable(
+                "no record source reachable and no cached record".to_owned(),
+            )
+        })?,
+    };
+    adopter
+        .open_at_floor(name, &record_bytes)
+        .await
+        .map_err(ChildResolveError::Gate)
 }
 
 impl<H: Http, F: FloorStore> Adopter for ChildAdopter<'_, H, F> {

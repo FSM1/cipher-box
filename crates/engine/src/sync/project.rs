@@ -83,22 +83,11 @@ pub(crate) fn project_folder(
             meta.content_version = prior.content_version;
             meta.record_sequence = prior.record_sequence;
         }
-        changed |= snapshot.node(id) != Some(&meta) || link_raises(snapshot, folder, child);
+        changed |= snapshot.node(id) != Some(&meta);
         snapshot.upsert_node(meta);
-        snapshot.link(folder, id, child.link_counter);
+        changed |= snapshot.link(folder, id, child.link_counter);
     }
     changed
-}
-
-/// Whether linking `child` under `folder` would establish the link or raise its
-/// counter — [`Snapshot::link`] merges monotonically, so a lower counter is a
-/// no-op and not a change.
-fn link_raises(snapshot: &Snapshot, folder: NodeId, child: &ChildRef) -> bool {
-    snapshot
-        .links_to(NodeId(child.id))
-        .into_iter()
-        .find(|link| link.parent == folder)
-        .is_none_or(|link| link.link_counter < child.link_counter)
 }
 
 /// Fold a verified file read-body's plaintext `(size, mtime)` and version count

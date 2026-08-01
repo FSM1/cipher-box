@@ -30,8 +30,9 @@ pub mod revival;
 pub use adopter::{LocalHead, RootAdopter};
 pub(crate) use adopter::{assemble_head_envelope, fetch_head_block};
 pub use child::ChildAdopter;
+pub(crate) use child::{ChildResolveError, resolve_child};
 pub(crate) use fanout::fanout_get_verify;
-pub(crate) use focus::{FolderRefresh, FolderRefreshReport};
+pub(crate) use focus::FolderRefresh;
 pub(crate) use liveness::eol_renew_pass;
 pub use liveness::{
     EolRenewResult, HeldRecord, HeldRecords, LivenessControl, RE_PUT_INTERVAL, RePutResult,
