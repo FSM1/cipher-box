@@ -452,7 +452,7 @@
             }
           },
           "400": {
-            "description": "Malformed batch (invalid entry, name, or CID)"
+            "description": "Malformed or over-cap batch; the body carries code REGISTRY_BATCH_REFUSED"
           },
           "401": {
             "description": "Missing or invalid access token"
@@ -506,7 +506,7 @@
             }
           },
           "400": {
-            "description": "Malformed batch"
+            "description": "Malformed or over-cap batch; the body carries code REGISTRY_BATCH_REFUSED"
           },
           "401": {
             "description": "Missing or invalid access token"

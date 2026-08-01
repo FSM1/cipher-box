@@ -20,8 +20,10 @@ use cipherbox_contract::{
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 use cipherbox_engine::api::{
     ApiClient, ApiError, ChallengeSigner, IdentityChallengeSigner, NameRegistration,
+    REGISTRY_BATCH_REFUSED,
 };
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
+use cipherbox_engine::net::REGISTRY_BATCH_MAX;
 use cipherbox_engine::seams::{CredentialStore, Http, HttpMethod, HttpRequest};
 
 type Client = ApiClient<ReqwestHttp, MemoryCredentialStore>;
@@ -825,18 +827,22 @@ async fn an_oversize_retire_batch_is_refused_fail_closed() {
 
 /// A register entry's `contentCids` is bounded fail-closed the same way
 /// (blueprint/api.md "Batch bounds"): an oversize array is refused, never
-/// truncated. Register-first blocks the record PUT on this call, so a version
-/// past the cap could never publish without the engine's chunking (#920).
+/// truncated, and the refusal carries the `code` the engine's failure valve
+/// dead-letters on. Register-first blocks the record PUT on this call, so a
+/// version past the cap could never publish without the chunking (#920).
 #[tokio::test]
 async fn an_oversize_register_entry_is_refused_fail_closed() {
     let base = require_stack!("an_oversize_register_entry_is_refused_fail_closed");
     let client = fresh_account(&base).await;
 
     let name = "k51contractRegisterBound".to_owned();
-    let cids: Vec<String> = (0..1001).map(|i| format!("bafyContractEntry{i}")).collect();
+    let head = "bafyContractEntryHead".to_owned();
+    let cids: Vec<String> = (0..REGISTRY_BATCH_MAX + 1)
+        .map(|i| format!("bafyContractEntry{i}"))
+        .collect();
     let over_cap = NameRegistration {
         ipns_name: name.clone(),
-        head_cid: Some("bafyContractEntryHead".to_owned()),
+        head_cid: Some(head.clone()),
         content_cids: cids.clone(),
     };
     let error = client
@@ -844,23 +850,30 @@ async fn an_oversize_register_entry_is_refused_fail_closed() {
         .await
         .expect_err("an oversize register entry must be refused");
     assert!(
-        matches!(error, ApiError::Status { status: 400, .. }),
-        "the per-entry contentCids bound is fail-closed: a 400, got {error:?}"
+        matches!(
+            &error,
+            ApiError::Status {
+                status: 400,
+                code: Some(code),
+                ..
+            } if code == REGISTRY_BATCH_REFUSED
+        ),
+        "the per-entry contentCids bound is fail-closed and stamped: {error:?}"
     );
 
-    // The engine's chunks are exactly this shape: the cap-sized entry carrying
-    // the head, then a content-only entry for the remainder under one name.
+    // The shape the engine's chunker sends: the cap-sized entry carrying the
+    // head, then a content-only entry for the remainder under the same name.
     client
         .register(&[
             NameRegistration {
                 ipns_name: name.clone(),
-                head_cid: Some("bafyContractEntryHead".to_owned()),
-                content_cids: cids[..1000].to_vec(),
+                head_cid: Some(head),
+                content_cids: cids[..REGISTRY_BATCH_MAX].to_vec(),
             },
             NameRegistration {
                 ipns_name: name,
                 head_cid: None,
-                content_cids: cids[1000..].to_vec(),
+                content_cids: cids[REGISTRY_BATCH_MAX..].to_vec(),
             },
         ])
         .await

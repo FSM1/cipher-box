@@ -19,7 +19,7 @@ const CID_OR_NAME = /^[A-Za-z0-9]{1,256}$/;
 
 /** Batch bounds: bulk name waves and sweeps are large but not unbounded. */
 export const MAX_BATCH = 1000;
-const MAX_CONTENT_CIDS = 1000;
+export const MAX_CONTENT_CIDS = 1000;
 
 export class RegisterEntryDto {
   @ApiProperty({

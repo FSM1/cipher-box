@@ -61,7 +61,9 @@ decay) inverted into structure.
   version with more leaves than the per-entry cap registers as several entries
   under one `ipnsName`, the head riding the first; the server collapses them to
   one name row, and a bare re-register carrying no `headCid` leaves the stored
-  head untouched.
+  head untouched. The refusal carries `code: REGISTRY_BATCH_REFUSED`, so a
+  client classifies on the gate's own discriminator rather than on a bare `400`
+  an intermediary could have answered.
 - **Register-first, fail-closed**: registration precedes the first publish of a
   name, and publish is blocked on it. A live-but-uninventoried name is
   structurally impossible; the worst failure is a registered-never-published

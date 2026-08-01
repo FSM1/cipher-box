@@ -12,6 +12,11 @@ pub const QUOTA_EXCEEDED: &str = "QUOTA_EXCEEDED";
 /// the request: the same bytes are refused on every retry.
 pub const UPLOAD_TOO_LARGE: &str = "UPLOAD_TOO_LARGE";
 
+/// The 400 `code` the registry's batch gate stamps: an over-cap or malformed
+/// batch, refused identically on every retry (blueprint/api.md "Batch bounds").
+/// A 400 without it never reached that gate.
+pub const REGISTRY_BATCH_REFUSED: &str = "REGISTRY_BATCH_REFUSED";
+
 /// A failure of an API call.
 ///
 /// Diagnostic strings carried here are the API's own error messages, never key
