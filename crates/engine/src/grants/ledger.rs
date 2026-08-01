@@ -124,7 +124,7 @@ pub fn enforce_committed_ledger(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cipherbox_core::seal::GrantSetEntry;
+    use cipherbox_core::seal::{GrantSetEntry, PreservedFields};
     use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 
     fn commitment(entries: Vec<GrantSetEntry>) -> GrantSetCommitment {
@@ -132,7 +132,7 @@ mod tests {
             ipns_name: b"scope-root".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
             entries,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 

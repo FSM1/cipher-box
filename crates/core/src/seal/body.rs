@@ -24,7 +24,7 @@ use core::fmt;
 use std::collections::BTreeSet;
 
 use crate::codec::{Map, Value, decode, encode};
-use crate::error::{CodecError, Malformed, TrustViolation};
+use crate::error::{CodecError, DisplayKey, Malformed, TrustViolation};
 use crate::suite::secret::{SECRET_LEN, SecretBytes};
 
 // ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ pub struct ChildRef {
     pub link_counter: u64,
     /// Preserved unknown fields (never any of the known keys); re-emitted
     /// canonically on rewrite.
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const CHILD_KNOWN: &[&str] = &["id", "ipnsName", "kind", "linkCounter", "name"];
@@ -134,7 +134,7 @@ pub struct Version {
     /// The injected modification time.
     pub modified_at: u64,
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const VERSION_KNOWN: &[&str] = &["contentCid", "contentKey", "modifiedAt", "size"];
@@ -152,7 +152,7 @@ impl Version {
             content_key: SecretBytes::new(content_key),
             size,
             modified_at,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -229,13 +229,13 @@ pub enum ReadBody {
         created_at: u64,
         modified_at: u64,
         children: Vec<ChildRef>,
-        unknown: Vec<(String, Value)>,
+        unknown: PreservedFields,
     },
     File {
         created_at: u64,
         modified_at: u64,
         versions: Vec<Version>,
-        unknown: Vec<(String, Value)>,
+        unknown: PreservedFields,
     },
 }
 
@@ -467,10 +467,83 @@ pub(super) fn bytes_fixed<const N: usize>(
     })
 }
 
+/// Fields a schema decode did not recognize, kept as the canonical values the
+/// decoder built. The seal layer's counterpart to [`crate::codec::UnknownFields`],
+/// which preserves raw bytes for the partial codec.
+///
+/// Every value is a verbatim copy of what the field carried — cloned out of the
+/// decoded tree, so it outlives that tree's scrub guard. This set is the copies'
+/// terminal owner and wipes them on drop; keys are field names, never secret,
+/// and are kept out of every rendering all the same.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct PreservedFields {
+    entries: Vec<(String, Value)>,
+}
+
+impl PreservedFields {
+    /// An empty set — the construction path, which preserves nothing.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The preserved entries in canonical key order. Borrowed as plain values:
+    /// the wipe belongs to this set, so a borrow cannot carry it.
+    pub fn entries(&self) -> &[(String, Value)] {
+        &self.entries
+    }
+
+    /// Add a field a caller wants carried through the next encode — the
+    /// construction path for a key this build's schema does not type, such as
+    /// the envelope's `grantSection`. The encode side re-imposes canonical
+    /// order, so insertion order does not reach the wire.
+    pub fn push(&mut self, key: String, value: Value) {
+        self.entries.push((key, value));
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// The wipe [`Drop`] runs.
+    fn wipe(&mut self) {
+        for (_, v) in &mut self.entries {
+            v.zeroize_bytes();
+        }
+    }
+}
+
+impl FromIterator<(String, Value)> for PreservedFields {
+    fn from_iter<I: IntoIterator<Item = (String, Value)>>(iter: I) -> Self {
+        Self {
+            entries: iter.into_iter().collect(),
+        }
+    }
+}
+
+impl fmt::Debug for PreservedFields {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut m = f.debug_map();
+        for (key, _) in &self.entries {
+            m.key(&DisplayKey(key)).value(&"<redacted>");
+        }
+        m.finish()
+    }
+}
+
+impl Drop for PreservedFields {
+    fn drop(&mut self) {
+        self.wipe();
+    }
+}
+
 /// The map entries whose key is not in `known`, cloned as canonical values.
 /// Because the source map decoded strict det-CBOR, each value is already
 /// canonical, so re-encoding it verbatim keeps the whole rewrite byte-stable.
-pub(super) fn collect_unknown(map: &Map, known: &[&str]) -> Vec<(String, Value)> {
+pub(super) fn collect_unknown(map: &Map, known: &[&str]) -> PreservedFields {
     map.entries()
         .iter()
         .filter(|(k, _)| !known.contains(&k.as_str()))
@@ -483,8 +556,8 @@ pub(super) fn collect_unknown(map: &Map, known: &[&str]) -> Vec<(String, Value)>
 /// skip-on-collision guard is for the *construction* path: a caller-built
 /// `unknown` list carrying a schema key can never overwrite the typed value and
 /// forge bytes that disagree with it. `Map::insert` re-imposes canonical order.
-pub(super) fn merge_unknown(map: &mut Map, unknown: &[(String, Value)]) {
-    for (k, v) in unknown {
+pub(super) fn merge_unknown(map: &mut Map, unknown: &PreservedFields) {
+    for (k, v) in unknown.entries() {
         if !map.contains_key(k) {
             map.insert(k.clone(), v.clone());
         }
@@ -502,7 +575,7 @@ mod tests {
             ipns_name: ipns.to_vec(),
             kind: NodeKind::File,
             link_counter: 0,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -511,7 +584,7 @@ mod tests {
             created_at: 100,
             modified_at: 200,
             children,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -556,7 +629,7 @@ mod tests {
                 Version::new(b"cid-new".to_vec(), [9; 32], 4096, 2),
                 Version::new(b"cid-old".to_vec(), [8; 32], 1024, 1),
             ],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let bytes = encode_read_body(&body).unwrap();
         let decoded = decode_read_body(&bytes).expect("decodes");
@@ -586,6 +659,51 @@ mod tests {
         );
     }
 
+    /// A preserved field is a clone the decoded tree's scrub guard cannot reach,
+    /// so this set is its terminal owner — and the same wipe runs from `Drop`.
+    #[test]
+    fn preserved_fields_own_the_wipe_of_what_a_decode_cloned_out() {
+        const SECRET: [u8; 32] = [0xAB; 32];
+        let mut m = Map::new();
+        m.insert("kind", Value::Text("folder".into()));
+        m.insert("children", Value::Array(vec![]));
+        m.insert("createdAt", Value::Unsigned(1));
+        m.insert("modifiedAt", Value::Unsigned(2));
+        m.insert("futureKey", Value::Bytes(SECRET.to_vec()));
+        let bytes = encode(&Value::Map(m)).unwrap();
+
+        let ReadBody::Folder { mut unknown, .. } = decode_read_body(&bytes).expect("decodes")
+        else {
+            panic!("expected folder");
+        };
+        assert_eq!(
+            unknown.entries()[0].1,
+            Value::Bytes(SECRET.to_vec()),
+            "the clone outlives the decoded tree carrying the secret verbatim"
+        );
+
+        unknown.wipe();
+        assert_eq!(unknown.entries()[0].1, Value::Bytes(Vec::new()));
+        assert_eq!(unknown.entries()[0].0, "futureKey", "keys are not secret");
+    }
+
+    /// A preserved value never reaches a log line, and a crafted field name
+    /// cannot flood one.
+    #[test]
+    fn preserved_fields_debug_redacts_its_values() {
+        let preserved: PreservedFields = [
+            ("futureKey".to_string(), Value::Bytes(vec![0xAB; 32])),
+            ("z".repeat(200), Value::Unsigned(1)),
+        ]
+        .into_iter()
+        .collect();
+
+        let rendered = format!("{preserved:?}");
+        assert!(rendered.starts_with(r#"{"futureKey": "<redacted>", "zzz"#));
+        assert!(rendered.ends_with(r#"…: "<redacted>"}"#), "{rendered}");
+        assert!(rendered.len() < 160, "a crafted key flooded it: {rendered}");
+    }
+
     #[test]
     fn unknown_read_body_field_preserved_byte_stable() {
         // A folder body with a future top-level field the current schema does
@@ -605,7 +723,7 @@ mod tests {
         );
         if let ReadBody::Folder { unknown, .. } = &decoded {
             assert_eq!(unknown.len(), 1);
-            assert_eq!(unknown[0].0, "futureField");
+            assert_eq!(unknown.entries()[0].0, "futureField");
         } else {
             panic!("expected folder");
         }
@@ -676,7 +794,9 @@ mod tests {
             created_at: 1,
             modified_at: 2,
             children: Vec::new(),
-            unknown: vec![("kind".to_string(), Value::Text("file".into()))],
+            unknown: [("kind".to_string(), Value::Text("file".into()))]
+                .into_iter()
+                .collect(),
         };
         let bytes = encode_read_body(&body).unwrap();
         let decoded = decode_read_body(&bytes).expect("decodes");
@@ -696,7 +816,7 @@ mod tests {
             created_at: 1,
             modified_at: 2,
             versions: vec![Version::new(b"c".to_vec(), [0; 32], 1, 1)],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         assert!(file.validate().is_ok());
     }

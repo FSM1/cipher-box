@@ -13,10 +13,10 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, Envelope, GrantBlobPayload, GrantSection, GrantSetCommitment, GrantSetEntry,
-    OverrideSeedPayload, Permission, ReadBody, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_WRITE_BODY, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput,
-    WriteBody, encode_write_body, seal, seal_grant_blob, seal_owner_blob, seal_read_body,
-    sign_grant_set, sign_structure,
+    OverrideSeedPayload, Permission, PreservedFields, ReadBody, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_WRITE_BODY, SignedGrantBlob, SignedOwnerBlob, SignedSealed,
+    StructureSigInput, WriteBody, encode_write_body, seal, seal_grant_blob, seal_owner_blob,
+    seal_read_body, sign_grant_set, sign_structure,
 };
 use cipherbox_core::suite::contact::ContactCode;
 use cipherbox_core::suite::ecdsa::{
@@ -131,7 +131,7 @@ impl GrantFixture {
             enc: grant_blob.enc,
             ciphertext: grant_blob.ciphertext.clone(),
             signature: sign(STRUCT_TAG_GRANT_BLOB, Some(tag), &grant_blob.ciphertext),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
 
         // The owner blob (a mandatory scope-root structure): the override seed
@@ -154,7 +154,7 @@ impl GrantFixture {
             enc: owner_blob.enc,
             ciphertext: owner_blob.ciphertext.clone(),
             signature: sign(STRUCT_TAG_OWNER_BLOB, None, &owner_blob.ciphertext),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
 
         // A write-body structure, to exercise the multi-structure loop.
@@ -162,7 +162,7 @@ impl GrantFixture {
             grant_ledger: Vec::new(),
             write_history_link: Vec::new(),
             direct_child_scope_index: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let write_body_aad = AadContext {
             v: V,
@@ -180,7 +180,7 @@ impl GrantFixture {
         let write_body_signed = SignedSealed {
             signature: sign(STRUCT_TAG_WRITE_BODY, None, &write_body_sealed),
             sealed: write_body_sealed,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
 
         // The owner-signed commitment: the recipient's tag is committed as a read
@@ -190,7 +190,7 @@ impl GrantFixture {
             ipns_name: name.as_str().as_bytes().to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
             entries: vec![GrantSetEntry::new(tag, Permission::Read, [0xC0; 32])],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let commitment_sig = sign_grant_set(&owner_identity, &commitment).expect("signs");
         let grant_section = GrantSection {
@@ -202,14 +202,14 @@ impl GrantFixture {
             ascent_link: None,
             history_links: Vec::new(),
             write_body: write_body_signed,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
 
         let folder = ReadBody::Folder {
             created_at: 0,
             modified_at: 0,
             children: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let envelope = seal_read_body(
             &read_key,
@@ -323,7 +323,7 @@ impl GrantFixture {
                 ),
             )
             .to_bytes(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
 
         let mut commitment = self.commitment.clone();

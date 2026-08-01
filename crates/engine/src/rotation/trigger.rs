@@ -162,7 +162,7 @@ pub fn revoke_read_grant(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cipherbox_core::seal::{GrantSetEntry, Permission, verify_grant_set};
+    use cipherbox_core::seal::{GrantSetEntry, Permission, PreservedFields, verify_grant_set};
     use cipherbox_core::suite::ecdsa::EcdsaSignature;
 
     fn owner() -> EcdsaSigner {
@@ -183,7 +183,7 @@ mod tests {
             ipns_name: b"n".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
             entries,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let sig = sign_grant_set(&owner(), &c).unwrap().to_compact();
         let ledger = vec![

@@ -67,6 +67,7 @@ pub(super) fn count_value(len: &mut usize, value: &Value, depth: usize) -> Resul
             }
         }
         Value::Map(map) => {
+            reject_wiped(map)?;
             *len += head_len(map.len() as u64);
             for (k, v) in map.entries() {
                 *len += text_len(k);
@@ -84,6 +85,17 @@ pub(super) fn count_value(len: &mut usize, value: &Value, depth: usize) -> Resul
 fn check_depth(depth: usize, offset: usize) -> Result<(), CodecError> {
     if depth >= super::MAX_DEPTH {
         return Err(Malformed::DepthExceeded { offset }.into());
+    }
+    Ok(())
+}
+
+/// The terminal half of [`Map::zeroize_bytes`]: a wiped map's fields are all
+/// zero-length, and a variable-length schema read round-trips one as empty
+/// instead of rejecting it, so emitting from a wiped map is silent data loss.
+/// Release-active on both passes, like [`check_depth`].
+pub(super) fn reject_wiped(map: &Map) -> Result<(), CodecError> {
+    if map.is_wiped() {
+        return Err(Malformed::WipedMap.into());
     }
     Ok(())
 }
@@ -142,6 +154,7 @@ fn write_map_head_and_entries(
     map: &Map,
     depth: usize,
 ) -> Result<(), CodecError> {
+    reject_wiped(map)?;
     write_head(out, MAJOR_MAP, map.len() as u64);
     for (k, v) in map.entries() {
         write_text(out, k);
@@ -255,6 +268,38 @@ mod tests {
         let bytes = encode(&deepest).expect("the deepest admissible tree encodes");
         assert_eq!(encoded_len(&deepest).unwrap(), bytes.len());
         assert_eq!(super::super::decode(&bytes).unwrap(), deepest);
+    }
+
+    /// AGENTS.md rule 8's misuse-resistance sibling, release-active: a wiped map
+    /// re-encodes to fields its own decoder accepts as empty, so the wipe is
+    /// terminal and both passes refuse it — at every nesting level, since the
+    /// hazard is a version map inside a body, not only a top-level map.
+    #[test]
+    fn a_wiped_map_refuses_to_encode() {
+        let mut value = secret_shaped_value(2);
+        assert!(encode(&value).is_ok(), "encodes before the wipe");
+
+        // Wipe one nested version map, the way a caller scrubbing decoded known
+        // fields would, and leave the enclosing tree untouched.
+        let Value::Map(body) = &mut value else {
+            panic!("expected a map body")
+        };
+        let Some(Value::Array(versions)) = body.get_mut("versions") else {
+            panic!("expected a version list")
+        };
+        let Value::Map(version) = &mut versions[0] else {
+            panic!("expected a version map")
+        };
+        version.zeroize_bytes();
+        assert!(version.is_wiped());
+
+        assert_eq!(encoded_len(&value).unwrap_err().check(), "wiped-map");
+        assert_eq!(encode(&value).unwrap_err().check(), "wiped-map");
+        let mut out = Vec::new();
+        assert_eq!(
+            write_value(&mut out, &value, 0).unwrap_err().check(),
+            "wiped-map"
+        );
     }
 
     /// The security invariant: encoding secret-bearing bytes never reallocates,

@@ -230,7 +230,7 @@ mod tests {
     use crate::net::author::{EnvelopeAuthoring, author_child_envelope};
     use crate::seams::{HttpResponse, RecordTransport};
     use crate::testkit::{FakeWorld, block_on};
-    use cipherbox_core::seal::ReadBody;
+    use cipherbox_core::seal::{PreservedFields, ReadBody};
 
     const READ_KEY: [u8; 32] = [8u8; 32];
     const NONCE: [u8; 24] = [6u8; 24];
@@ -248,7 +248,7 @@ mod tests {
             created_at: 0,
             modified_at: 0,
             children: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         author_child_envelope(EnvelopeAuthoring {
             node_id: binding.node_id,
@@ -257,8 +257,8 @@ mod tests {
             read_key: &READ_KEY,
             nonce: &NONCE,
             body: &body,
-            carried_unknown: Vec::new(),
-            carried_epoch_tag_unknown: Vec::new(),
+            carried_unknown: PreservedFields::new(),
+            carried_epoch_tag_unknown: PreservedFields::new(),
         })
         .unwrap()
     }

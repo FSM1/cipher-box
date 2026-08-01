@@ -29,7 +29,8 @@ pub use aad::{
     StructTagSpec, build_aad,
 };
 pub use body::{
-    ChildRef, NodeKind, ReadBody, Version, decode_read_body, encode_read_body, name_cmp,
+    ChildRef, NodeKind, PreservedFields, ReadBody, Version, decode_read_body, encode_read_body,
+    name_cmp,
 };
 pub use content_key::{
     CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, content_key_aad, open_content_key, seal_content_key,

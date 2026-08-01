@@ -22,11 +22,12 @@
 use core::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
-use cipherbox_core::codec::Value;
 use cipherbox_core::content::{encode_content_cid_str, verify_cid};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
-use cipherbox_core::seal::{ChildRef, ReadBody, Version, open_content_key, open_read_body};
+use cipherbox_core::seal::{
+    ChildRef, PreservedFields, ReadBody, Version, open_content_key, open_read_body,
+};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
@@ -315,12 +316,12 @@ struct FolderState {
     /// The scope root carries the grant section and authors through a different
     /// envelope path; every other folder is a plain child record.
     is_scope_root: bool,
-    envelope_unknown: Vec<(String, Value)>,
-    epoch_tag_unknown: Vec<(String, Value)>,
+    envelope_unknown: PreservedFields,
+    epoch_tag_unknown: PreservedFields,
     created_at: u64,
     modified_at: u64,
     children: Vec<ChildRef>,
-    body_unknown: Vec<(String, Value)>,
+    body_unknown: PreservedFields,
     /// The record sequence this folder was last loaded or published at.
     sequence: u64,
 }
@@ -355,8 +356,8 @@ struct DestAdd {
 struct LoadedNode {
     name: IpnsName,
     sequence: u64,
-    envelope_unknown: Vec<(String, Value)>,
-    epoch_tag_unknown: Vec<(String, Value)>,
+    envelope_unknown: PreservedFields,
+    epoch_tag_unknown: PreservedFields,
     body: ReadBody,
 }
 
@@ -978,8 +979,8 @@ where
                 false,
                 &child.body,
                 content_cids,
-                Vec::new(),
-                Vec::new(),
+                PreservedFields::new(),
+                PreservedFields::new(),
             )
             .await?;
 
@@ -1618,8 +1619,8 @@ where
         is_scope_root: bool,
         body: &ReadBody,
         content_cids: Vec<String>,
-        carried_unknown: Vec<(String, Value)>,
-        carried_epoch_tag_unknown: Vec<(String, Value)>,
+        carried_unknown: PreservedFields,
+        carried_epoch_tag_unknown: PreservedFields,
     ) -> Result<Published, Halt> {
         let read_key = self.node_read_key(scope, &node.0);
         let nonce = self.nonce()?;

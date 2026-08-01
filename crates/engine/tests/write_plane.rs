@@ -14,7 +14,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
-    ChildRef, NodeKind as CoreNodeKind, ReadBody, decode_envelope, open_read_body,
+    ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody, decode_envelope, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -4455,7 +4455,7 @@ fn child_ref(id: [u8; 16], name: &str, kind: CoreNodeKind) -> ChildRef {
         ipns_name: write_name(NodeId(id)).as_str().as_bytes().to_vec(),
         kind,
         link_counter: 1,
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     }
 }
 

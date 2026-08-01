@@ -35,10 +35,10 @@ use cipherbox_core::seal::{
     self, AAD_DOMAIN, AadContext, AscentLink, CONTENT_KEY_HPKE_INFO, CONTENT_KEY_V, ChildRef,
     ChildScopeRef, GrantBlobPayload, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry,
     HistoryLinkPayload, NodeKind, OP_RECORD_HPKE_INFO, OP_RECORD_V, OpRecordHeader,
-    OverrideSeedPayload, OwnerWriteBlobPayload, Permission, ReadBody, SETTINGS_RECORD_HPKE_INFO,
-    SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY, STRUCT_TAG_GRANT_BLOB,
-    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD, STRUCT_TAG_OP_RECORD,
-    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
+    OverrideSeedPayload, OwnerWriteBlobPayload, Permission, PreservedFields, ReadBody,
+    SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_CONTENT_KEY,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_MAILBOX_PAYLOAD,
+    STRUCT_TAG_OP_RECORD, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY,
     STRUCT_TAG_SETTINGS_RECORD, STRUCT_TAG_WRITE_BODY, STRUCT_TAGS, SettingsRecordHeader,
     SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedSealed, StructureSigInput, Version,
     WriteBody, build_aad, content_key_aad, decode_ascent_link, decode_envelope,
@@ -2741,7 +2741,7 @@ fn sample_folder() -> ReadBody {
                 ipns_name: b"ipns-name-a".to_vec(),
                 kind: NodeKind::File,
                 link_counter: 1,
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             },
             ChildRef {
                 id: [0x22; 16],
@@ -2749,10 +2749,10 @@ fn sample_folder() -> ReadBody {
                 ipns_name: b"ipns-name-b".to_vec(),
                 kind: NodeKind::Folder,
                 link_counter: 2,
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             },
         ],
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     }
 }
 
@@ -2765,7 +2765,7 @@ fn sample_file() -> ReadBody {
             Version::new(b"content-cid-new".to_vec(), [0x77; 32], 8192, 2500),
             Version::new(b"content-cid-old".to_vec(), [0x66; 32], 4096, 1500),
         ],
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     }
 }
 
@@ -2940,13 +2940,13 @@ fn build_read_body_accept() -> Vec<ReadBodyAcceptVector> {
         created_at: 1,
         modified_at: 2,
         children: Vec::new(),
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
     let single_version = ReadBody::File {
         created_at: 3,
         modified_at: 4,
         versions: vec![Version::new(b"cid".to_vec(), [0x55; 32], 512, 4)],
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
     let cases: Vec<(&str, ReadBody)> = vec![
         ("empty-folder", empty_folder),
@@ -4526,7 +4526,7 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
             ChildScopeRef::new([0x55; 16], b"child-scope-ipns-a".to_vec()),
             ChildScopeRef::new([0x66; 16], b"child-scope-ipns-b".to_vec()),
         ],
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
     // Write epoch 1: no prior write epoch, so no history link, and a scope root
     // with no descendant scopes and no grants yet.
@@ -4534,7 +4534,7 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
         grant_ledger: Vec::new(),
         write_history_link: Vec::new(),
         direct_child_scope_index: Vec::new(),
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
     let read_only = WriteBody {
         grant_ledger: vec![GrantLedgerEntry::new(
@@ -4545,7 +4545,7 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
         )],
         write_history_link: b"h".to_vec(),
         direct_child_scope_index: vec![ChildScopeRef::new([0x77; 16], b"one-child".to_vec())],
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
     let cases: Vec<(&str, WriteBody)> = vec![
         ("full", full),
@@ -4674,7 +4674,7 @@ fn section_commitment(entries: Vec<GrantSetEntry>) -> GrantSetCommitment {
         ipns_name: b"grant-section-scope-root".to_vec(),
         owner_pseudonym_pk: [0x88; 32],
         entries,
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     }
 }
 
@@ -4684,7 +4684,7 @@ fn section_grant_blob(tag: u8) -> SignedGrantBlob {
         enc: [0x0a; 32],
         ciphertext: vec![0x0b, 0x0c, 0x0d],
         signature: [0x0e; 64],
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     }
 }
 
@@ -4700,32 +4700,32 @@ fn build_grant_section_accept() -> Vec<SectionAcceptVector> {
             enc: [0x20; 32],
             ciphertext: vec![0x21, 0x22],
             signature: [0x23; 64],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         },
         owner_write_blob: Some(seal::SignedOwnerWriteBlob {
             enc: [0x24; 32],
             ciphertext: vec![0x25, 0x26],
             signature: [0x27; 64],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }),
         ascent_link: Some(SignedAscentLink {
             ascent_public: [0x30; 32],
             enc: [0x31; 32],
             ciphertext: vec![0x32, 0x33],
             signature: [0x34; 64],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }),
         history_links: vec![SignedSealed {
             sealed: vec![0x40, 0x41, 0x42],
             signature: [0x43; 64],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }],
         write_body: SignedSealed {
             sealed: vec![0x50, 0x51, 0x52],
             signature: [0x53; 64],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         },
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
     // Epoch 1 at the vault root: no grants, no history link, no ascent link.
     let minimal = seal::GrantSection {
@@ -4736,7 +4736,7 @@ fn build_grant_section_accept() -> Vec<SectionAcceptVector> {
             enc: [0x20; 32],
             ciphertext: vec![0x21],
             signature: [0x23; 64],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         },
         owner_write_blob: None,
         ascent_link: None,
@@ -4744,9 +4744,9 @@ fn build_grant_section_accept() -> Vec<SectionAcceptVector> {
         write_body: SignedSealed {
             sealed: vec![0x50],
             signature: [0x53; 64],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         },
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
     let cases: Vec<(&str, seal::GrantSection)> =
         vec![("full", full), ("vault-root-epoch-1", minimal)];
@@ -5584,7 +5584,7 @@ fn grant_set_sample() -> GrantSetCommitment {
             GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
             GrantSetEntry::new([0x03; 32], Permission::Write, [0x04; 32]),
         ],
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     }
 }
 

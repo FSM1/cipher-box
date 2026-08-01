@@ -3363,7 +3363,7 @@ mod tests {
     mod snapshot_read {
         use super::*;
 
-        use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind, ReadBody};
+        use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody};
 
         use crate::gate::Adopted;
         use crate::net::{ResolveOutcome, refresh_base_from_outcome};
@@ -3376,7 +3376,7 @@ mod tests {
                     created_at: 0,
                     modified_at: 456,
                     children,
-                    unknown: Vec::new(),
+                    unknown: PreservedFields::new(),
                 },
                 sequence: 2,
                 epoch: 1,
@@ -3390,7 +3390,7 @@ mod tests {
                 ipns_name: vec![id],
                 kind,
                 link_counter: 1,
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             }
         }
 
@@ -3621,7 +3621,7 @@ mod tests {
         use cipherbox_core::ipns::{IpnsName, IpnsRecord};
         use cipherbox_core::kdf;
         use cipherbox_core::payload::RepointObject;
-        use cipherbox_core::seal::ReadBody;
+        use cipherbox_core::seal::{PreservedFields, ReadBody};
         use cipherbox_core::suite::ecdsa::EcdsaSigner;
         use cipherbox_core::suite::ed25519::Ed25519Signer;
 
@@ -3703,7 +3703,7 @@ mod tests {
                             created_at: 0,
                             modified_at: 0,
                             children: Vec::new(),
-                            unknown: Vec::new(),
+                            unknown: PreservedFields::new(),
                         },
                         sequence: 1,
                         epoch: 1,
@@ -3815,7 +3815,7 @@ mod tests {
         /// A gate-passing `Adopted` folder carrying one child — the projected
         /// material a newer live resolve folds into the shared base cell.
         fn adopted_with_child(child_id: [u8; 16], name: &str) -> Adopted {
-            use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind};
+            use cipherbox_core::seal::{ChildRef, NodeKind as CoreNodeKind, PreservedFields};
             Adopted {
                 read_body: ReadBody::Folder {
                     created_at: 0,
@@ -3826,9 +3826,9 @@ mod tests {
                         ipns_name: vec![1],
                         kind: CoreNodeKind::File,
                         link_counter: 1,
-                        unknown: Vec::new(),
+                        unknown: PreservedFields::new(),
                     }],
-                    unknown: Vec::new(),
+                    unknown: PreservedFields::new(),
                 },
                 sequence: 2,
                 epoch: 1,
@@ -4131,7 +4131,8 @@ mod tests {
         use cipherbox_core::kdf;
         use cipherbox_core::payload::RepointObject;
         use cipherbox_core::seal::{
-            ChildRef, NodeKind as CoreNodeKind, ReadBody, encode_envelope, seal_read_body,
+            ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody, encode_envelope,
+            seal_read_body,
         };
         use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
@@ -4179,7 +4180,7 @@ mod tests {
                     ipns_name: child_name().as_str().as_bytes().to_vec(),
                     kind: CoreNodeKind::File,
                     link_counter: 1,
-                    unknown: Vec::new(),
+                    unknown: PreservedFields::new(),
                 }],
                 // At the read epoch (write plane == read plane here), so the
                 // cold-seeded write floor opens it and the owner recovers its
@@ -4601,7 +4602,7 @@ mod tests {
                     created_at: 0,
                     modified_at: CHILD_MTIME,
                     versions,
-                    unknown: Vec::new(),
+                    unknown: PreservedFields::new(),
                 }
             }
 
@@ -4624,7 +4625,7 @@ mod tests {
                 if with_grant_section {
                     envelope
                         .unknown
-                        .push(("grantSection".to_string(), Value::Bytes(vec![1, 2, 3])));
+                        .push("grantSection".to_string(), Value::Bytes(vec![1, 2, 3]));
                 }
                 let head_block = encode_envelope(&envelope).unwrap();
                 let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));
@@ -5130,7 +5131,7 @@ mod tests {
                     created_at: 0,
                     modified_at: 0,
                     children: Vec::new(),
-                    unknown: Vec::new(),
+                    unknown: PreservedFields::new(),
                 };
                 let (head_block, head_cid) =
                     sealed_child_head(CHILD_ID, SCOPE, EPOCH, &folder_body, false);

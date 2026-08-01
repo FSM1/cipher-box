@@ -32,7 +32,7 @@ use zeroize::Zeroize;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, GrantBlobPayload, GrantLedgerEntry, GrantSection, GrantSetCommitment,
-    HistoryLinkPayload, OverrideSeedPayload, OwnerWriteBlobPayload, Permission,
+    HistoryLinkPayload, OverrideSeedPayload, OwnerWriteBlobPayload, Permission, PreservedFields,
     STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedAscentLink, SignedGrantBlob,
     SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody,
@@ -265,7 +265,7 @@ pub fn reseal_scope_root<E: Entropy>(
             enc: sealed.enc,
             ciphertext: sealed.ciphertext,
             signature,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         });
     }
     grant_blobs.sort_by(|a, b| a.tag.cmp(&b.tag));
@@ -283,7 +283,7 @@ pub fn reseal_scope_root<E: Entropy>(
             enc: sealed.enc,
             ciphertext: sealed.ciphertext,
             signature,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     };
 
@@ -314,7 +314,7 @@ pub fn reseal_scope_root<E: Entropy>(
             enc: sealed.enc,
             ciphertext: sealed.ciphertext,
             signature,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         })
     };
 
@@ -334,7 +334,7 @@ pub fn reseal_scope_root<E: Entropy>(
                 enc: link.enc,
                 ciphertext: link.ciphertext,
                 signature,
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             })
         }
         None => None,
@@ -353,7 +353,7 @@ pub fn reseal_scope_root<E: Entropy>(
         history_links.push(SignedSealed {
             sealed,
             signature,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         });
     }
 
@@ -363,7 +363,7 @@ pub fn reseal_scope_root<E: Entropy>(
             grant_ledger: committed.grant_ledger.to_vec(),
             write_history_link: committed.write_history_link.to_vec(),
             direct_child_scope_index: committed.direct_child_scope_index.to_vec(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let mut plaintext = encode_write_body(&wb).map_err(ResealError::Encode)?;
         let write_seed = kdf::write_seed(seeds.write_scope_seed, &scope_id);
@@ -381,7 +381,7 @@ pub fn reseal_scope_root<E: Entropy>(
         SignedSealed {
             sealed,
             signature,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     };
 
@@ -394,7 +394,7 @@ pub fn reseal_scope_root<E: Entropy>(
         ascent_link,
         history_links,
         write_body,
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     })
 }
 
@@ -474,7 +474,7 @@ mod tests {
                 ipns_name: b"scope-root-name".to_vec(),
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
                 entries,
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             };
             let sig = sign_grant_set(&self.owner_ecdsa, &commitment)
                 .unwrap()
@@ -675,7 +675,7 @@ mod tests {
             ascent_public: ascent.ascent_public,
             enc: ascent.enc,
             ciphertext: ascent.ciphertext.clone(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let ascent_payload =
             open_ascent_link(&fx.parent_node_seed, &ascent_ctx, &ascent_link).unwrap();
@@ -726,7 +726,7 @@ mod tests {
         let carried = vec![SignedSealed {
             sealed: b"prior-epoch-link".to_vec(),
             signature: [0x01; 64],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }];
         let mut e = SeededEntropy::new(3);
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &carried).expect("reseal");
@@ -755,7 +755,7 @@ mod tests {
             ipns_name: b"n".to_vec(),
             owner_pseudonym_pk: fx.pseudonym.verifying_key().to_bytes(),
             entries,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let ledger = vec![
             GrantLedgerEntry::new(
@@ -910,7 +910,7 @@ mod tests {
                 Permission::Read,
                 [0x02; 32],
             )],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let sig = sign_grant_set(&fx.owner_ecdsa, &commitment)
             .unwrap()

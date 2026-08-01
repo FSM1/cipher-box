@@ -281,7 +281,7 @@ mod tests {
     use cipherbox_core::ipns::{IpnsName, IpnsRecord};
     use cipherbox_core::kdf;
     use cipherbox_core::payload::RepointObject;
-    use cipherbox_core::seal::ReadBody;
+    use cipherbox_core::seal::{PreservedFields, ReadBody};
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
 
@@ -353,7 +353,7 @@ mod tests {
                         created_at: 0,
                         modified_at: 0,
                         children: Vec::new(),
-                        unknown: Vec::new(),
+                        unknown: PreservedFields::new(),
                     },
                     sequence: 1,
                     epoch: 1,

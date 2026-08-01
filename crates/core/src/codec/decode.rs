@@ -13,9 +13,44 @@ use crate::error::{CodecError, Malformed, TrustViolation};
 /// Decode exactly one deterministic-profile item spanning the whole input.
 pub fn decode(bytes: &[u8]) -> Result<Value, CodecError> {
     let mut d = Decoder::new(bytes);
-    let value = d.read_value(0)?;
+    let mut value = d.read_value(0)?;
+    let guard = InFlight(&mut value);
     d.expect_end()?;
+    core::mem::forget(guard);
     Ok(value)
+}
+
+/// Wipes what a decode has already read when a later read rejects. Every
+/// decoded buffer is a verbatim copy of what the input carried — inline content
+/// keys and seed material on the seal surfaces — and the decoder owns it until
+/// it returns, below any guard a caller can install (blueprint/core.md "Crypto
+/// suite": key material lives only in zeroizing owners). Borrows rather than
+/// owns, so forgetting it disarms it and leaks nothing.
+struct InFlight<'a, T: Scrub>(&'a mut T);
+
+/// What an [`InFlight`] guard wipes.
+trait Scrub {
+    fn scrub(&mut self);
+}
+
+impl Scrub for Value {
+    fn scrub(&mut self) {
+        self.zeroize_bytes();
+    }
+}
+
+impl Scrub for Vec<Value> {
+    fn scrub(&mut self) {
+        for value in self {
+            value.zeroize_bytes();
+        }
+    }
+}
+
+impl<T: Scrub> Drop for InFlight<'_, T> {
+    fn drop(&mut self) {
+        self.0.scrub();
+    }
 }
 
 pub(super) struct Decoder<'a> {
@@ -165,21 +200,29 @@ impl<'a> Decoder<'a> {
             }
             MAJOR_ARRAY => {
                 let mut items = Vec::new();
+                let guard = InFlight(&mut items);
                 for _ in 0..head.arg {
-                    items.push(self.read_value(depth + 1)?);
+                    guard.0.push(self.read_value(depth + 1)?);
                 }
+                core::mem::forget(guard);
                 Ok(Value::Array(items))
             }
             MAJOR_MAP => {
-                let mut entries: Vec<(String, Value)> = Vec::new();
+                // Keys are field names, never secret, so they sit outside the
+                // guard and carry the ascending-order check.
+                let mut keys: Vec<String> = Vec::new();
+                let mut values = Vec::new();
+                let guard = InFlight(&mut values);
                 for _ in 0..head.arg {
-                    let key = self.read_map_key(entries.last().map(|(k, _)| k.as_str()))?;
+                    let key = self.read_map_key(keys.last().map(String::as_str))?;
                     let value = self.read_value(depth + 1)?;
-                    entries.push((key, value));
+                    keys.push(key);
+                    guard.0.push(value);
                 }
+                core::mem::forget(guard);
                 // Order and uniqueness were enforced entry-by-entry, so this
                 // rebuild cannot reorder or drop anything.
-                Ok(Value::Map(entries.into_iter().collect::<Map>()))
+                Ok(Value::Map(keys.into_iter().zip(values).collect::<Map>()))
             }
             // Dispatch on the additional info, never the argument: ai 25–27
             // carry float bit patterns in `arg`, which would otherwise alias
@@ -228,5 +271,40 @@ impl<'a> Decoder<'a> {
             }
         }
         Ok(key.to_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The guard standing between a mid-item reject and a heap holding every
+    /// secret the decode had already lifted out of its input.
+    #[test]
+    fn the_in_flight_guard_wipes_what_it_guards() {
+        let mut items = vec![Value::Bytes(vec![0xAB; 32]), Value::Unsigned(7)];
+        drop(InFlight(&mut items));
+        assert_eq!(items[0], Value::Bytes(Vec::new()));
+        assert_eq!(items[1], Value::Unsigned(7), "shape and scalars kept");
+
+        let mut value = Value::Array(vec![Value::Text("secret-file.txt".into())]);
+        drop(InFlight(&mut value));
+        assert_eq!(
+            value.as_array().unwrap()[0],
+            Value::Text(String::new()),
+            "the whole-tree guard wipes nested buffers too"
+        );
+    }
+
+    /// The map arm accumulates keys and values apart; the ordering checks still
+    /// see the previous key.
+    #[test]
+    fn map_key_order_checks_survive_the_split_accumulators() {
+        // {"b": 1, "a": 2}
+        let unsorted = [0xa2, 0x61, b'b', 0x01, 0x61, b'a', 0x02];
+        assert_eq!(decode(&unsorted).unwrap_err().check(), "unsorted-map-keys");
+        // {"a": 1, "a": 2}
+        let duplicate = [0xa2, 0x61, b'a', 0x01, 0x61, b'a', 0x02];
+        assert_eq!(decode(&duplicate).unwrap_err().check(), "duplicate-map-key");
     }
 }

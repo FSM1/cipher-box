@@ -123,7 +123,7 @@ fn map_kind(kind: CoreNodeKind) -> NodeKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cipherbox_core::seal::ChildRef;
+    use cipherbox_core::seal::{ChildRef, PreservedFields};
 
     fn node_id(b: u8) -> NodeId {
         NodeId([b; 16])
@@ -136,7 +136,7 @@ mod tests {
             ipns_name: vec![id],
             kind,
             link_counter,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -153,7 +153,7 @@ mod tests {
                 created_at: 0,
                 modified_at: 0,
                 children,
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             },
             sequence,
             epoch: 0,
@@ -370,7 +370,7 @@ mod tests {
                 created_at: 5,
                 modified_at: 777,
                 children: Vec::new(),
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             },
             sequence: 1,
             epoch: 0,

@@ -1476,11 +1476,12 @@ fn reject_checks_list_matches_vectors_and_error_surface() {
     }
 }
 
-/// The whole error surface is vector-pinned save the one check `decode` and the
-/// suite decoders can never emit: `unknown-field-collision` (an
-/// `encode_map_partial` caller bug), which stays unit-test-pinned in
-/// src/codec/fields.rs. This is the crate-wide extension of the reject-coverage
-/// law across the codec, contact, hpke, seal, ipns, and payload families.
+/// The whole error surface is vector-pinned save the two checks `decode` and
+/// the suite decoders can never emit — both encoder caller bugs, unit-test
+/// pinned instead: `unknown-field-collision` (src/codec/fields.rs) and
+/// `wiped-map` (src/codec/encode.rs). This is the crate-wide extension of the
+/// reject-coverage law across the codec, contact, hpke, seal, ipns, and payload
+/// families.
 #[test]
 fn every_crate_check_is_pinned_by_a_vector_family() {
     let m = manifest();
@@ -1545,11 +1546,14 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
         .map(|s| s.to_string())
         .collect();
     let uncovered: Vec<&String> = surface.difference(&covered).collect();
-    let expected_uncovered = "unknown-field-collision".to_string();
+    let expected_uncovered = [
+        "unknown-field-collision".to_string(),
+        "wiped-map".to_string(),
+    ];
     assert_eq!(
         uncovered,
-        vec![&expected_uncovered],
-        "every crate check but the one unit-pinned collision check must have a reject vector"
+        expected_uncovered.iter().collect::<Vec<_>>(),
+        "every crate check but the unit-pinned encoder caller-bug checks must have a reject vector"
     );
     assert!(
         covered.is_subset(&surface),

@@ -14,7 +14,7 @@ use zeroize::Zeroizing;
 
 use super::decode::Decoder;
 use super::encode::{
-    MAJOR_MAP, count_value, head_len, text_len, write_head, write_text, write_value,
+    MAJOR_MAP, count_value, head_len, reject_wiped, text_len, write_head, write_text, write_value,
 };
 use super::value::{Map, Value, canonical_key_cmp};
 use crate::error::{CodecError, DisplayKey, Malformed};
@@ -137,6 +137,9 @@ impl Drop for ScrubOnDrop<'_> {
 /// emitted byte-stable. A key present on both sides is a caller bug and
 /// rejects fail-closed.
 pub fn encode_map_partial(known: &Map, unknown: &UnknownFields) -> Result<Vec<u8>, CodecError> {
+    // The merged map's own head is written here, so its wiped mark is read here
+    // too — the nested ones ride `count_value`/`write_value`.
+    reject_wiped(known)?;
     let merged = merge(known, unknown)?;
     let mut out = Vec::with_capacity(merged_len(&merged)?);
     write_head(&mut out, MAJOR_MAP, merged.len() as u64);
@@ -355,6 +358,20 @@ mod tests {
 
         let err = encode_map_partial(&known, &unknown).unwrap_err();
         assert_eq!(err.check(), "truncated");
+    }
+
+    /// The merged encoder reads the wiped mark on the known side it writes the
+    /// head for; a rewrite after a scrub would otherwise publish a record whose
+    /// variable-length fields silently came back empty.
+    #[test]
+    fn merged_encode_rejects_a_wiped_known_side() {
+        let original = encode(&Value::Map(sample_map())).unwrap();
+        let (mut known, unknown) =
+            decode_map_partial(&original, known_key_set(&["v", "id"])).unwrap();
+        known.zeroize_bytes();
+
+        let err = encode_map_partial(&known, &unknown).unwrap_err();
+        assert_eq!(err.check(), "wiped-map");
     }
 
     #[test]

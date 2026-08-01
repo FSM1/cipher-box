@@ -170,6 +170,7 @@ pub fn canonical_key_cmp(a: &str, b: &str) -> Ordering {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Map {
     entries: Vec<(String, Value)>,
+    wiped: bool,
 }
 
 impl Map {
@@ -235,13 +236,21 @@ impl Map {
     /// never secret). The wipe for a caller holding decoded known fields — see
     /// [`Value::zeroize_bytes`].
     ///
-    /// Terminal: a wiped map still encodes. Fixed-length fields then fail
-    /// their schema decode, but variable-length ones round-trip empty, so
-    /// nothing may re-encode from it afterwards.
+    /// Terminal: the map is marked wiped and every encoder then refuses it
+    /// ([`Map::is_wiped`]). Without that mark a wiped map still encodes —
+    /// fixed-length fields fail their schema decode afterwards, but
+    /// variable-length ones round-trip empty, which is silent data loss.
     pub fn zeroize_bytes(&mut self) {
         for (_, v) in &mut self.entries {
             v.zeroize_bytes();
         }
+        self.wiped = true;
+    }
+
+    /// Whether [`Map::zeroize_bytes`] has emptied this map's fields. The
+    /// encoders read it to refuse a map whose values are gone.
+    pub fn is_wiped(&self) -> bool {
+        self.wiped
     }
 }
 

@@ -21,7 +21,9 @@ use crate::error::CodecError;
 use crate::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use crate::suite::secret::SECRET_LEN;
 
-use super::body::{assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown, req};
+use super::body::{
+    PreservedFields, assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown, req,
+};
 use super::grant::Permission;
 
 // ---------------------------------------------------------------------------
@@ -42,7 +44,7 @@ pub struct GrantLedgerEntry {
     /// The recipient's blinded tag (the grant blob's key).
     pub tag: [u8; SECRET_LEN],
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const LEDGER_ENTRY_KNOWN: &[&str] = &["permission", "recipientEncPk", "recipientIdentityPk", "tag"];
@@ -60,7 +62,7 @@ impl GrantLedgerEntry {
             recipient_enc_pk,
             permission,
             tag,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -115,7 +117,7 @@ pub struct ChildScopeRef {
     /// The child scope root's opaque `ipnsName` bytes.
     pub ipns_name: Vec<u8>,
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const CHILD_SCOPE_KNOWN: &[&str] = &["ipnsName", "scopeId"];
@@ -126,7 +128,7 @@ impl ChildScopeRef {
         Self {
             scope_id,
             ipns_name,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -164,7 +166,7 @@ pub struct WriteBody {
     /// The directly-descendant scope roots (the F-4 cascade index).
     pub direct_child_scope_index: Vec<ChildScopeRef>,
     /// Preserved unknown top-level fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const WRITE_BODY_KNOWN: &[&str] = &["directChildScopeIndex", "grantLedger", "writeHistoryLink"];
@@ -247,7 +249,7 @@ mod tests {
                 [0x55; 16],
                 b"child-scope-name".to_vec(),
             )],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -266,7 +268,7 @@ mod tests {
             grant_ledger: Vec::new(),
             write_history_link: Vec::new(),
             direct_child_scope_index: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let bytes = encode_write_body(&body).expect("encodes");
         assert_eq!(decode_write_body(&bytes).unwrap(), body);
@@ -380,7 +382,7 @@ mod tests {
             ],
             write_history_link: Vec::new(),
             direct_child_scope_index: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         assert_eq!(
             encode_write_body(&body).unwrap_err().check(),
