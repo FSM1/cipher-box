@@ -129,6 +129,11 @@ impl fmt::Debug for HttpResponse {
 /// Non-2xx statuses are responses, not errors — a seam `Err` is reserved
 /// for transport-level failure (unreachable, aborted).
 ///
+/// One obligation the transport owns: a request the engine sent over `https`
+/// must not be replayed over `http` by following a redirect, or an
+/// `Authorization` header would reach the clear network past the engine's
+/// transport decision (blueprint/engine.md "Content plane").
+///
 /// No conformance kit ships for this seam: it has no seam-local durable
 /// semantics; its behavior is exercised end-to-end by the live contract
 /// suite (blueprint/testing.md).

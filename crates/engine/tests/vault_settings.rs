@@ -652,8 +652,15 @@ fn settings_the_reader_would_refuse_are_never_published() {
         "http://api.test",
     );
 
-    // A scheme the Http seam must never be pointed at.
-    for endpoint in ["file:///etc/passwd", "ftp://node.example"] {
+    // Endpoints the Http seam must never be pointed at: a foreign scheme, and
+    // the two policy refusals — plaintext to a non-loopback host, and the cloud
+    // metadata address.
+    for (endpoint, verdict) in [
+        ("file:///etc/passwd", ProviderError::InvalidEndpoint),
+        ("ftp://node.example", ProviderError::InvalidEndpoint),
+        ("http://node.example", ProviderError::InsecureTransport),
+        ("https://169.254.169.254", ProviderError::BlockedAddress),
+    ] {
         let settings = VaultSettings {
             byo: Some(ByoIpfsConfig {
                 endpoint: endpoint.to_owned(),
@@ -675,7 +682,7 @@ fn settings_the_reader_would_refuse_are_never_published() {
         ));
         assert_eq!(
             outcome.unwrap_err(),
-            SettingsPublishError::Endpoint(ProviderError::InvalidEndpoint),
+            SettingsPublishError::Byo(verdict),
             "the guard returns Err in every build, never a stripped assertion",
         );
         assert!(
@@ -712,17 +719,16 @@ fn a_body_carrying_a_refused_endpoint_is_rejected_on_the_way_back_in() {
     ));
 
     // Hand-sealed past the encode guard: the decode side must refuse the same
-    // invariant, or a resolved record could point the engine at any URL.
-    seed_settings(
-        &device,
-        &blocks,
-        &hand_encoded_body("file:///etc/passwd"),
-        2,
-    );
-    assert_eq!(
-        load(&world, &device, &blocks, &SECRET),
-        SettingsLoad::Defaults(DefaultsReason::Unreadable),
-    );
+    // invariant, or a resolved record could point the engine at any URL — or at
+    // a public host over plaintext, putting the member's bearer on the wire.
+    for (sequence, endpoint) in [(2, "file:///etc/passwd"), (3, "http://kubo.example")] {
+        seed_settings(&device, &blocks, &hand_encoded_body(endpoint), sequence);
+        assert_eq!(
+            load(&world, &device, &blocks, &SECRET),
+            SettingsLoad::Defaults(DefaultsReason::Unreadable),
+            "{endpoint}",
+        );
+    }
 }
 
 /// A settings body built straight in core's codec, bypassing the encode guard.
