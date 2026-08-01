@@ -1352,11 +1352,11 @@ where
             match self.staged_block(leaf_cid).await? {
                 Some(block) => {
                     self.upload_block(leaf_cid, &block).await?;
+                    self.mark_uploaded(&staged.root_cid, index + 1).await?;
                     self.staging
                         .remove_staged_bytes(leaf_cid)
                         .await
                         .map_err(seam)?;
-                    self.mark_uploaded(&staged.root_cid, index + 1).await?;
                     emit(OpPhase::UploadProgress, blocks(index + 1));
                 }
                 // Absent and not covered by the mark: these bytes were never
@@ -1417,8 +1417,12 @@ where
         Ok(<[u8; 4]>::try_from(count).map_or(0, |c| u32::from_be_bytes(c) as usize))
     }
 
-    /// Record that `count` of this version's leaves have uploaded. Written after
-    /// the removal, so the mark never claims more than the store has released.
+    /// Record that `count` of this version's leaves have uploaded. Written
+    /// *before* the leaf is released, so an interruption between the two leaves
+    /// that leaf both marked and staged and the next pass simply re-uploads and
+    /// re-removes it. The reverse order strands a released leaf behind the mark,
+    /// where the hole guard reads bytes that did upload as unrecoverable loss
+    /// and the valve destroys the version (#924).
     async fn mark_uploaded(&self, root_cid: &[u8], count: usize) -> Result<(), Halt> {
         let mut mark = root_cid.to_vec();
         mark.extend_from_slice(&(count as u32).to_be_bytes());

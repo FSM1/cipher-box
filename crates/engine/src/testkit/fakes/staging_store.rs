@@ -12,6 +12,8 @@ struct Inner {
     fail_queued_ops: bool,
     fail_remove_op: bool,
     enqueue_budget: Option<u64>,
+    staged_write_budget: Option<(Vec<u8>, u64)>,
+    staged_removal_budget: Option<(Vec<u8>, u64)>,
 }
 
 impl Default for Inner {
@@ -23,6 +25,8 @@ impl Default for Inner {
             fail_queued_ops: false,
             fail_remove_op: false,
             enqueue_budget: None,
+            staged_write_budget: None,
+            staged_removal_budget: None,
         }
     }
 }
@@ -53,6 +57,37 @@ impl InMemoryStagingStore {
     /// sequence and see what the earlier entries already committed.
     pub fn fail_enqueue_after(&self, budget: u64) {
         self.inner.lock().expect("lock").enqueue_budget = Some(budget);
+    }
+
+    /// Lets `budget` writes at `staging_key` through, fails the next one, and
+    /// then lets every write through again — so a test can drop a caller
+    /// between two durable effects at an exact step and let its retry proceed.
+    pub fn fail_staged_write_after(&self, staging_key: &[u8], budget: u64) {
+        self.inner.lock().expect("lock").staged_write_budget = Some((staging_key.to_vec(), budget));
+    }
+
+    /// The removal counterpart of [`Self::fail_staged_write_after`]: the other
+    /// side of every crash window between a durable write and a release.
+    pub fn fail_staged_removal_after(&self, staging_key: &[u8], budget: u64) {
+        self.inner.lock().expect("lock").staged_removal_budget =
+            Some((staging_key.to_vec(), budget));
+    }
+}
+
+/// Charge one call at `staging_key` against a one-shot injected failure.
+/// `true` when this is the call that must fail, which also disarms it.
+fn interrupts(budget: &mut Option<(Vec<u8>, u64)>, staging_key: &[u8]) -> bool {
+    match budget {
+        Some((key, _)) if key != staging_key => false,
+        Some((_, 0)) => {
+            *budget = None;
+            true
+        }
+        Some((_, remaining)) => {
+            *remaining -= 1;
+            false
+        }
+        None => false,
     }
 }
 
@@ -88,11 +123,11 @@ impl StagingStore for InMemoryStagingStore {
     }
 
     async fn put_staged_bytes(&self, staging_key: &[u8], bytes: &[u8]) -> SeamResult<()> {
-        self.inner
-            .lock()
-            .expect("lock")
-            .staged
-            .insert(staging_key.to_vec(), bytes.to_vec());
+        let mut inner = self.inner.lock().expect("lock");
+        if interrupts(&mut inner.staged_write_budget, staging_key) {
+            return Err(SeamError::new("put_staged_bytes unavailable"));
+        }
+        inner.staged.insert(staging_key.to_vec(), bytes.to_vec());
         Ok(())
     }
 
@@ -107,7 +142,11 @@ impl StagingStore for InMemoryStagingStore {
     }
 
     async fn remove_staged_bytes(&self, staging_key: &[u8]) -> SeamResult<()> {
-        self.inner.lock().expect("lock").staged.remove(staging_key);
+        let mut inner = self.inner.lock().expect("lock");
+        if interrupts(&mut inner.staged_removal_budget, staging_key) {
+            return Err(SeamError::new("remove_staged_bytes unavailable"));
+        }
+        inner.staged.remove(staging_key);
         Ok(())
     }
 
