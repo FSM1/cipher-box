@@ -1094,9 +1094,9 @@ fn a_hole_in_the_staged_block_suffix_is_loss_and_fails_closed() {
     assert_no_blocks_staged(&alice, &version);
 }
 
-/// Remove one of the queued version's leaves, chosen by index from the leaf
-/// count, and return every block the version framed.
-fn evict_leaf(device: &FakeDevice, index: impl Fn(usize) -> usize) -> Vec<Vec<u8>> {
+/// The version the head queued op carries: its root CID and its leaf CIDs, in
+/// file order — the order the drain uploads and releases them in.
+fn staged_version(device: &FakeDevice) -> (Vec<u8>, Vec<Vec<u8>>) {
     block_on(async {
         let queued = device.staging_store.queued_ops().await.unwrap();
         let root_cid = record_content_root_cid(&queued[0].1).unwrap().unwrap();
@@ -1107,16 +1107,255 @@ fn evict_leaf(device: &FakeDevice, index: impl Fn(usize) -> usize) -> Vec<Vec<u8
             .unwrap()
             .unwrap();
         let leaves = decode_root(&root_block).unwrap().leaf_cids;
+        (root_cid, leaves)
+    })
+}
+
+/// Remove one of the queued version's leaves, chosen by index from the leaf
+/// count, and return every block the version framed.
+fn evict_leaf(device: &FakeDevice, index: impl Fn(usize) -> usize) -> Vec<Vec<u8>> {
+    let (root_cid, leaves) = staged_version(device);
+    block_on(
         device
             .staging_store
-            .remove_staged_bytes(&leaves[index(leaves.len())])
-            .await
-            .unwrap();
-        leaves
-            .into_iter()
-            .chain(core::iter::once(root_cid))
-            .collect()
-    })
+            .remove_staged_bytes(&leaves[index(leaves.len())]),
+    )
+    .unwrap();
+    leaves
+        .into_iter()
+        .chain(core::iter::once(root_cid))
+        .collect()
+}
+
+/// The durable upload mark as [`UPLOAD_MARK_KEY`] holds it: the version root it
+/// names and the leaf count it claims.
+fn upload_mark(device: &FakeDevice) -> Option<(Vec<u8>, u32)> {
+    let stored = block_on(device.staging_store.staged_bytes(UPLOAD_MARK_KEY)).unwrap()?;
+    let (root, count) = stored.split_at(stored.len() - 4);
+    Some((root.to_vec(), u32::from_be_bytes(count.try_into().unwrap())))
+}
+
+/// A second device that only ever saw the network reads `plaintext` back off
+/// the published version — the end-to-end statement that no leaf was lost.
+fn assert_round_trips(world: &FakeWorld, blocks: &Blocks, name: &str, plaintext: &[u8]) {
+    let bob = world.device(b"alice-second-device");
+    serve_http(&bob, blocks, 400);
+    let (mut engine_b, _events_b) = engine_on(&bob, 7);
+    block_on(engine_b.start(secret()))
+        .expect("the second device cold-starts off the published record plane");
+    let children = block_on(engine_b.view()).unwrap().children(ROOT);
+    let file = children
+        .iter()
+        .find(|child| child.name == name)
+        .expect("the version published");
+    assert_eq!(
+        block_on(engine_b.read_content(file.id)).expect("the verified read serves it"),
+        plaintext,
+        "every leaf is on the network and the version assembles from them"
+    );
+}
+
+/// The per-leaf durable sequence is `upload → mark → release`, and an
+/// interruption at the mark must cost the version nothing: those bytes reached
+/// the pin store, so the write is recoverable by definition. Every leaf is
+/// interrupted in turn, since the window is reachable on any of them (#924).
+#[test]
+fn an_interrupted_leaf_mark_never_costs_the_version_its_uploaded_bytes() {
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    let leaves = frame_version(&plaintext).0.len();
+    assert!(
+        leaves > 2,
+        "a multi-leaf version, so the interior interruption points are real"
+    );
+
+    for interrupted in 0..leaves {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+
+        let alice = world.device(b"alice");
+        let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        // The mark for leaf `interrupted` never lands: the process, or the
+        // staging store, died the instant after that leaf uploaded.
+        alice
+            .staging_store
+            .interrupt_staged_write_after(UPLOAD_MARK_KEY, interrupted as u64);
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "photo.bin".into(),
+            },
+            &plaintext,
+        )
+        .expect("the write commits");
+        let (root_cid, _) = staged_version(&alice);
+        tick(&world, &engine, &mut tasks);
+
+        assert_eq!(
+            upload_mark(&alice),
+            (interrupted > 0).then_some((root_cid, interrupted as u32)),
+            "the pass stopped at exactly the interruption point under test"
+        );
+        assert!(
+            !events_so_far(&mut events)
+                .iter()
+                .any(|event| matches!(event, Event::DeadLetter { .. })),
+            "an interrupted durable sequence is an outage, never an abandonment"
+        );
+        assert!(
+            !block_on(alice.staging_store.queued_ops())
+                .unwrap()
+                .is_empty(),
+            "the op keeps its place at the head of the queue for the next pass"
+        );
+
+        // The staging store is back: the next pass must finish the very version
+        // whose leaves already uploaded.
+        tick(&world, &engine, &mut tasks);
+
+        assert!(
+            !events_so_far(&mut events)
+                .iter()
+                .any(|event| matches!(event, Event::DeadLetter { .. })),
+            "the resumed pass reads the residue as progress, not as content loss"
+        );
+        assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
+    }
+}
+
+/// The residue that marking first leaves — a leaf both marked and still staged
+/// — costs nothing: the next pass re-uploads it, a pinned CID short-circuiting
+/// the transfer (#819), and re-removes it.
+#[test]
+fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() {
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    let leaf_count = frame_version(&plaintext).0.len();
+
+    for interrupted in 0..leaf_count {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+
+        let alice = world.device(b"alice");
+        let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "photo.bin".into(),
+            },
+            &plaintext,
+        )
+        .expect("the write commits");
+        let (root_cid, leaves) = staged_version(&alice);
+        alice
+            .staging_store
+            .interrupt_staged_removal_after(&leaves[interrupted], 0);
+        tick(&world, &engine, &mut tasks);
+
+        assert_eq!(
+            upload_mark(&alice),
+            Some((root_cid, interrupted as u32 + 1)),
+            "the mark covers the leaf whose release was interrupted"
+        );
+        assert!(
+            block_on(alice.staging_store.staged_keys())
+                .unwrap()
+                .contains(&leaves[interrupted]),
+            "that leaf is still staged: marked and present is the residue this ordering leaves"
+        );
+
+        tick(&world, &engine, &mut tasks);
+
+        assert!(
+            !events_so_far(&mut events)
+                .iter()
+                .any(|event| matches!(event, Event::DeadLetter { .. })),
+            "a marked, still-staged leaf is re-uploaded, never read as loss"
+        );
+        assert_eq!(
+            block_on(alice.staging_store.staged_keys()).unwrap(),
+            vec![DRAINED_OP_MARK_KEY.to_vec(), UPLOAD_MARK_KEY.to_vec()],
+            "the retry re-removes it, so the residue holds no staging budget"
+        );
+        assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
+    }
+}
+
+/// A release that is *reported done* and never persists is the other half of
+/// the same crash: leaf 0 comes back from the dead behind a mark that later
+/// leaves already advanced. Re-uploading it must not pull the mark back down
+/// over the leaves between — those are released, so an uncovered one reads as
+/// loss and the valve destroys the version. That is #924 with one extra step,
+/// and it is reachable because `packages/client` flushes a staged write but
+/// releases with a bare `removeEntry`.
+#[test]
+fn a_re_uploaded_leaf_never_pulls_the_mark_back_over_leaves_it_covers() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &plaintext,
+    )
+    .expect("the write commits");
+    let (root_cid, leaves) = staged_version(&alice);
+    assert!(
+        leaves.len() > 4,
+        "enough leaves for the mark to advance past the lost release"
+    );
+
+    // Every pass stops at leaf 3, so what it leaves durably behind is what the
+    // next pass has to work from.
+    let stop_at = block_on(alice.staging_store.staged_bytes(&leaves[3]))
+        .unwrap()
+        .unwrap();
+    blocks.refuse_upload(Box::new(move |block| {
+        (block == stop_at).then(unreachable_upload)
+    }));
+    alice.staging_store.drop_staged_removal_after(&leaves[0], 0);
+
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        upload_mark(&alice),
+        Some((root_cid.clone(), 3)),
+        "three leaves uploaded and marked before the pass stopped"
+    );
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&leaves[0]),
+        "the lost release left leaf 0 staged behind a mark that already covers it"
+    );
+
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        upload_mark(&alice),
+        Some((root_cid, 3)),
+        "re-uploading leaf 0 leaves the mark where it stood: it only ever rises"
+    );
+
+    blocks.accept_uploads();
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        !events_so_far(&mut events)
+            .iter()
+            .any(|event| matches!(event, Event::DeadLetter { .. })),
+        "leaves 1 and 2 stay covered, so nothing reads their absence as loss"
+    );
+    assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
 }
 
 /// The abandonment released the version: none of its blocks still hold staging

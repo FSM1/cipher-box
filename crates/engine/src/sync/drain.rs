@@ -1332,9 +1332,10 @@ where
         })?;
 
         // File order, root last, each leaf removed on its confirmed
-        // `UploadResult` — so the blocks still staged are a **suffix**. An
-        // absence is only progress up to the durable mark this pass keeps: past
-        // it, a missing block is loss, and the version can never be assembled.
+        // `UploadResult` — but a lost release can strand one staged anywhere
+        // below the mark (#924). An absence is only progress up to the durable
+        // mark this pass keeps: past it, a missing block is loss, and the
+        // version can never be assembled.
         let uploaded = self.upload_mark(&staged.root_cid).await?;
         // The root manifest is block zero and goes up last, so the version's
         // whole block count is its leaves plus one.
@@ -1352,11 +1353,17 @@ where
             match self.staged_block(leaf_cid).await? {
                 Some(block) => {
                     self.upload_block(leaf_cid, &block).await?;
+                    // A leaf a lost release left staged behind the mark is
+                    // re-uploaded here, and must not drag the mark back down
+                    // over the leaves past it — those are released, so an
+                    // uncovered one reads as loss (#924).
+                    if index + 1 > uploaded {
+                        self.mark_uploaded(&staged.root_cid, index + 1).await?;
+                    }
                     self.staging
                         .remove_staged_bytes(leaf_cid)
                         .await
                         .map_err(seam)?;
-                    self.mark_uploaded(&staged.root_cid, index + 1).await?;
                     emit(OpPhase::UploadProgress, blocks(index + 1));
                 }
                 // Absent and not covered by the mark: these bytes were never
@@ -1417,8 +1424,11 @@ where
         Ok(<[u8; 4]>::try_from(count).map_or(0, |c| u32::from_be_bytes(c) as usize))
     }
 
-    /// Record that `count` of this version's leaves have uploaded. Written after
-    /// the removal, so the mark never claims more than the store has released.
+    /// Record that `count` of this version's leaves have uploaded. A high-water
+    /// mark, written *before* the leaf is released: it may over-claim a leaf
+    /// still staged, which the next pass re-uploads, but must never lag or
+    /// regress below one already released — the hole guard would read those
+    /// uploaded bytes as loss (#924).
     async fn mark_uploaded(&self, root_cid: &[u8], count: usize) -> Result<(), Halt> {
         let mut mark = root_cid.to_vec();
         mark.extend_from_slice(&(count as u32).to_be_bytes());
