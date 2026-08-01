@@ -3649,7 +3649,22 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
         (1..version.len()).contains(&charged.len()),
         "the cancel landed mid-set: part of the version is charged, not all of it"
     );
-    assert_eq!(retire_targets(&alice), charged);
+    // Both halves of the retire fire — the facade's, against what it could see
+    // when the cancel landed, and the drain's, against the complete confirmed
+    // set once it stops. Their union is the invariant; the overlap is an
+    // idempotent replay, which is why this compares sets and not batches.
+    let batches = retire_batches(&alice);
+    assert_eq!(
+        batches.len(),
+        2,
+        "a block confirming inside the facade's window is only covered by the drain's batch"
+    );
+    let mut retired = retire_targets(&alice);
+    retired.sort();
+    retired.dedup();
+    let mut expected = charged.clone();
+    expected.sort();
+    assert_eq!(retired, expected);
     assert!(
         events_so_far(&mut events).contains(&Event::OpProgress {
             op_id: Some(op_id),
@@ -3659,6 +3674,68 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
             error: None,
         }),
         "the host is told the upload was cancelled, keyed on its own op"
+    );
+}
+
+/// A cancel releases leaves the durable mark still covers, and leaves that mark
+/// behind naming a root nothing will ever upload again. That residue must not
+/// reach the next version: a mark read as this version's progress would skip
+/// leaves it never sent and publish a manifest naming blocks nobody holds
+/// (#924's mark, #824's release).
+#[test]
+fn a_cancelled_versions_upload_mark_never_counts_towards_the_next_one() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let cancelled = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "abandoned.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let root_cid = queued_version(&alice, cancelled)[0].clone();
+
+    world.scheduler.advance(engine.profile().poll_cadence);
+    for _ in 0..4 {
+        poll_once(&mut tasks);
+    }
+    block_on(engine.command(Command::CancelUpload { op_id: cancelled })).unwrap();
+    poll_each(&mut tasks);
+
+    let mark = block_on(alice.staging_store.staged_bytes(UPLOAD_MARK_KEY))
+        .unwrap()
+        .expect("the cancelled pass left its progress mark behind");
+    assert!(
+        mark.starts_with(&root_cid),
+        "the residue names the cancelled root, so the next version must not read it as progress"
+    );
+
+    let plaintext: Vec<u8> = (0..200u8).rev().collect();
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "kept.bin".into(),
+        },
+        &plaintext,
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let bob = world.device(b"alice-second-device");
+    serve_http(&bob, &blocks, 400);
+    let (mut engine_b, _events_b) = engine_on(&bob, 7);
+    block_on(engine_b.start(secret())).unwrap();
+    let kept = child_id(&engine_b, ROOT, "kept.bin");
+    assert_eq!(
+        block_on(engine_b.read_content(kept)).expect("every leaf of the next version was sent"),
+        plaintext
     );
 }
 
@@ -3965,6 +4042,56 @@ fn orphan_residue_is_collected_and_a_live_handles_blocks_are_not() {
     );
 }
 
+/// A release that reports done without dropping the bytes strands a staged leaf
+/// (#924's residue shape). On the cancel path nothing re-runs that release — the
+/// op is gone from the queue — so orphan GC is the only thing that reclaims it,
+/// and it does so precisely because nothing references it any more.
+#[test]
+fn a_leaf_a_lost_release_stranded_on_a_cancel_is_reclaimed_by_the_next_sweep() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    // The last leaf: far past where the cancel interrupts the upload, so the
+    // drain never removes it and the facade's release is its only cleaner.
+    let version = queued_version(&alice, op_id);
+    let stranded = version.last().expect("a multi-leaf version").clone();
+
+    world.scheduler.advance(engine.profile().poll_cadence);
+    for _ in 0..4 {
+        poll_once(&mut tasks);
+    }
+    alice.staging_store.drop_staged_removal_after(&stranded, 0);
+    block_on(engine.command(Command::CancelUpload { op_id })).unwrap();
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&stranded),
+        "the fixture must actually strand a leaf, or the sweep has nothing to prove"
+    );
+
+    // The pass that notices the cancel sweeps behind itself, so the residue does
+    // not wait a whole cadence.
+    poll_each(&mut tasks);
+    assert!(
+        !block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&stranded),
+        "nothing references it once its op is gone, so the sweep takes it"
+    );
+}
+
 /// A terminally unrebasable op keeps its staged bytes — and keeping them is only
 /// real if they survive the cold start that drops the op record, and the GC pass
 /// that runs there (#853).
@@ -4224,12 +4351,17 @@ fn uploaded_cids(device: &FakeDevice) -> Vec<String> {
 
 /// Every target this device has asked the registry to retire, in order.
 fn retire_targets(device: &FakeDevice) -> Vec<String> {
+    retire_batches(device).into_iter().flatten().collect()
+}
+
+/// The retire calls this device made, one entry per batch.
+fn retire_batches(device: &FakeDevice) -> Vec<Vec<String>> {
     device
         .http
         .requests()
         .iter()
         .filter(|request| request.url.ends_with("/registry/retire"))
-        .flat_map(|request| {
+        .map(|request| {
             let body = request
                 .body
                 .as_deref()

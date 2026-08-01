@@ -516,7 +516,14 @@ where
         report: &mut DrainReport,
     ) {
         match halt {
-            Halt::Unclassified | Halt::Cancelled => {}
+            Halt::Unclassified => {}
+            // The facade undid the op against the blocks it could see when the
+            // cancel landed. One more can confirm inside that window — the
+            // upload the drain was already awaiting — and it would be charged
+            // with nothing left to reach it, so the complete set is retired
+            // here. Idempotent, so the overlap with the facade's batch is a
+            // no-op (#916).
+            Halt::Cancelled => self.retire_cancelled(op_id).await,
             Halt::Attempt | Halt::UploadAttempt => {
                 if attempts.charge(op_id) < ATTEMPT_BUDGET {
                     return;
@@ -1798,6 +1805,22 @@ where
             let mut orphans = self.orphan_heads.borrow_mut();
             let sent = pending.len().min(orphans.len());
             orphans.drain(..sent);
+        }
+    }
+
+    /// Retire every block a cancelled op put on the network. Best-effort: a
+    /// refused batch leaves pin rows charged, which is a leak, where failing the
+    /// pass over an op that is already gone would be a stuck queue.
+    async fn retire_cancelled(&self, op_id: OpId) {
+        let cids: Vec<String> = self
+            .cancels
+            .borrow()
+            .uploaded_by(op_id)
+            .iter()
+            .map(|cid| encode_content_cid_str(cid))
+            .collect();
+        if !cids.is_empty() {
+            let _ = retire(self.api, &cids).await;
         }
     }
 
