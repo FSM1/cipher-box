@@ -1352,7 +1352,13 @@ where
             match self.staged_block(leaf_cid).await? {
                 Some(block) => {
                     self.upload_block(leaf_cid, &block).await?;
-                    self.mark_uploaded(&staged.root_cid, index + 1).await?;
+                    // A leaf a lost release left staged behind the mark is
+                    // re-uploaded here, and must not drag the mark back down
+                    // over the leaves past it — those are released, so an
+                    // uncovered one reads as loss (#924).
+                    if index + 1 > uploaded {
+                        self.mark_uploaded(&staged.root_cid, index + 1).await?;
+                    }
                     self.staging
                         .remove_staged_bytes(leaf_cid)
                         .await
@@ -1417,12 +1423,11 @@ where
         Ok(<[u8; 4]>::try_from(count).map_or(0, |c| u32::from_be_bytes(c) as usize))
     }
 
-    /// Record that `count` of this version's leaves have uploaded. Written
-    /// *before* the leaf is released, so an interruption between the two leaves
-    /// that leaf both marked and staged and the next pass simply re-uploads and
-    /// re-removes it. The reverse order strands a released leaf behind the mark,
-    /// where the hole guard reads bytes that did upload as unrecoverable loss
-    /// and the valve destroys the version (#924).
+    /// Record that `count` of this version's leaves have uploaded. A high-water
+    /// mark, written *before* the leaf is released: it may over-claim a leaf
+    /// still staged, which the next pass re-uploads, but must never lag or
+    /// regress below one already released — the hole guard would read those
+    /// uploaded bytes as loss (#924).
     async fn mark_uploaded(&self, root_cid: &[u8], count: usize) -> Result<(), Halt> {
         let mut mark = root_cid.to_vec();
         mark.extend_from_slice(&(count as u32).to_be_bytes());

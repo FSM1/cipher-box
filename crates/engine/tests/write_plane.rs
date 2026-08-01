@@ -1147,7 +1147,7 @@ fn assert_round_trips(world: &FakeWorld, blocks: &Blocks, name: &str, plaintext:
     let file = children
         .iter()
         .find(|child| child.name == name)
-        .expect("the interrupted version still published");
+        .expect("the version published");
     assert_eq!(
         block_on(engine_b.read_content(file.id)).expect("the verified read serves it"),
         plaintext,
@@ -1156,12 +1156,9 @@ fn assert_round_trips(world: &FakeWorld, blocks: &Blocks, name: &str, plaintext:
 }
 
 /// The per-leaf durable sequence is `upload → mark → release`, and an
-/// interruption anywhere in it must cost the version nothing: the bytes reached
-/// the pin store, so the write is recoverable by definition. This drops the
-/// process at the *mark* of every leaf in turn — under the reverse ordering
-/// each of these strands an already-released leaf behind the mark, the hole
-/// guard reads it as `ContentUnrecoverable`, and the valve destroys a write
-/// whose bytes had in fact uploaded (#924).
+/// interruption at the mark must cost the version nothing: those bytes reached
+/// the pin store, so the write is recoverable by definition. Every leaf is
+/// interrupted in turn, since the window is reachable on any of them (#924).
 #[test]
 fn an_interrupted_leaf_mark_never_costs_the_version_its_uploaded_bytes() {
     let plaintext: Vec<u8> = (0..200u8).collect();
@@ -1182,7 +1179,7 @@ fn an_interrupted_leaf_mark_never_costs_the_version_its_uploaded_bytes() {
         // staging store, died the instant after that leaf uploaded.
         alice
             .staging_store
-            .fail_staged_write_after(UPLOAD_MARK_KEY, interrupted as u64);
+            .interrupt_staged_write_after(UPLOAD_MARK_KEY, interrupted as u64);
         write_file(
             &mut engine,
             WriteTarget::NewFile {
@@ -1227,13 +1224,74 @@ fn an_interrupted_leaf_mark_never_costs_the_version_its_uploaded_bytes() {
     }
 }
 
-/// The window marking first opens, shown to be harmless: an interruption
-/// between a leaf's mark and its release leaves that leaf both marked *and*
-/// staged. The `Some` arm re-uploads it regardless of the mark — a pinned CID
-/// short-circuits (#819) — and re-removes it, so no arm of the loop misreads
-/// the residue.
+/// The residue that marking first leaves — a leaf both marked and still staged
+/// — costs nothing: the next pass re-uploads it, a pinned CID short-circuiting
+/// the transfer (#819), and re-removes it.
 #[test]
 fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() {
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    let leaf_count = frame_version(&plaintext).0.len();
+
+    for interrupted in 0..leaf_count {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+
+        let alice = world.device(b"alice");
+        let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "photo.bin".into(),
+            },
+            &plaintext,
+        )
+        .expect("the write commits");
+        let (root_cid, leaves) = staged_version(&alice);
+        alice
+            .staging_store
+            .interrupt_staged_removal_after(&leaves[interrupted], 0);
+        tick(&world, &engine, &mut tasks);
+
+        assert_eq!(
+            upload_mark(&alice),
+            Some((root_cid, interrupted as u32 + 1)),
+            "the mark covers the leaf whose release was interrupted"
+        );
+        assert!(
+            block_on(alice.staging_store.staged_keys())
+                .unwrap()
+                .contains(&leaves[interrupted]),
+            "that leaf is still staged: marked and present is the residue this ordering leaves"
+        );
+
+        tick(&world, &engine, &mut tasks);
+
+        assert!(
+            !events_so_far(&mut events)
+                .iter()
+                .any(|event| matches!(event, Event::DeadLetter { .. })),
+            "a marked, still-staged leaf is re-uploaded, never read as loss"
+        );
+        assert_eq!(
+            block_on(alice.staging_store.staged_keys()).unwrap(),
+            vec![DRAINED_OP_MARK_KEY.to_vec(), UPLOAD_MARK_KEY.to_vec()],
+            "the retry re-removes it, so the residue holds no staging budget"
+        );
+        assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
+    }
+}
+
+/// A release that is *reported done* and never persists is the other half of
+/// the same crash: leaf 0 comes back from the dead behind a mark that later
+/// leaves already advanced. Re-uploading it must not pull the mark back down
+/// over the leaves between — those are released, so an uncovered one reads as
+/// loss and the valve destroys the version. That is #924 with one extra step,
+/// and it is reachable because `packages/client` flushes a staged write but
+/// releases with a bare `removeEntry`.
+#[test]
+fn a_re_uploaded_leaf_never_pulls_the_mark_back_over_leaves_it_covers() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -1251,33 +1309,51 @@ fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() 
     )
     .expect("the write commits");
     let (root_cid, leaves) = staged_version(&alice);
-    alice.staging_store.fail_staged_removal_after(&leaves[0], 0);
+    assert!(
+        leaves.len() > 4,
+        "enough leaves for the mark to advance past the lost release"
+    );
+
+    // Every pass stops at leaf 3, so what it leaves durably behind is what the
+    // next pass has to work from.
+    let stop_at = block_on(alice.staging_store.staged_bytes(&leaves[3]))
+        .unwrap()
+        .unwrap();
+    blocks.refuse_upload(Box::new(move |block| {
+        (block == stop_at).then(unreachable_upload)
+    }));
+    alice.staging_store.drop_staged_removal_after(&leaves[0], 0);
+
     tick(&world, &engine, &mut tasks);
 
     assert_eq!(
         upload_mark(&alice),
-        Some((root_cid, 1)),
-        "the mark covers the leaf whose release was interrupted"
+        Some((root_cid.clone(), 3)),
+        "three leaves uploaded and marked before the pass stopped"
     );
     assert!(
         block_on(alice.staging_store.staged_keys())
             .unwrap()
             .contains(&leaves[0]),
-        "that leaf is still staged: marked and present is the residue this ordering leaves"
+        "the lost release left leaf 0 staged behind a mark that already covers it"
     );
 
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        upload_mark(&alice),
+        Some((root_cid, 3)),
+        "re-uploading leaf 0 leaves the mark where it stood: it only ever rises"
+    );
+
+    blocks.accept_uploads();
     tick(&world, &engine, &mut tasks);
 
     assert!(
         !events_so_far(&mut events)
             .iter()
             .any(|event| matches!(event, Event::DeadLetter { .. })),
-        "a marked, still-staged leaf is re-uploaded, never read as loss"
-    );
-    assert_eq!(
-        block_on(alice.staging_store.staged_keys()).unwrap(),
-        vec![DRAINED_OP_MARK_KEY.to_vec(), UPLOAD_MARK_KEY.to_vec()],
-        "the retry re-removes it, so the residue holds no staging budget"
+        "leaves 1 and 2 stay covered, so nothing reads their absence as loss"
     );
     assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
 }

@@ -14,6 +14,7 @@ struct Inner {
     enqueue_budget: Option<u64>,
     staged_write_budget: Option<(Vec<u8>, u64)>,
     staged_removal_budget: Option<(Vec<u8>, u64)>,
+    dropped_removal_budget: Option<(Vec<u8>, u64)>,
 }
 
 impl Default for Inner {
@@ -27,6 +28,7 @@ impl Default for Inner {
             enqueue_budget: None,
             staged_write_budget: None,
             staged_removal_budget: None,
+            dropped_removal_budget: None,
         }
     }
 }
@@ -59,23 +61,32 @@ impl InMemoryStagingStore {
         self.inner.lock().expect("lock").enqueue_budget = Some(budget);
     }
 
-    /// Lets `budget` writes at `staging_key` through, fails the next one, and
-    /// then lets every write through again — so a test can drop a caller
-    /// between two durable effects at an exact step and let its retry proceed.
-    pub fn fail_staged_write_after(&self, staging_key: &[u8], budget: u64) {
+    /// Lets `budget` writes at `staging_key` through, fails the next one, then
+    /// disarms — a caller dropped at an exact step whose retry still proceeds.
+    pub fn interrupt_staged_write_after(&self, staging_key: &[u8], budget: u64) {
         self.inner.lock().expect("lock").staged_write_budget = Some((staging_key.to_vec(), budget));
     }
 
-    /// The removal counterpart of [`Self::fail_staged_write_after`]: the other
-    /// side of every crash window between a durable write and a release.
-    pub fn fail_staged_removal_after(&self, staging_key: &[u8], budget: u64) {
+    /// The removal counterpart of [`Self::interrupt_staged_write_after`]: the
+    /// other side of every crash window between a durable write and a release.
+    pub fn interrupt_staged_removal_after(&self, staging_key: &[u8], budget: u64) {
         self.inner.lock().expect("lock").staged_removal_budget =
+            Some((staging_key.to_vec(), budget));
+    }
+
+    /// Reports the next removal at `staging_key` past `budget` as done without
+    /// dropping the bytes — an unlink that never reached the disk while a later
+    /// write did, which is what a host that releases staged bytes without a
+    /// durability barrier leaves behind after a crash.
+    pub fn drop_staged_removal_after(&self, staging_key: &[u8], budget: u64) {
+        self.inner.lock().expect("lock").dropped_removal_budget =
             Some((staging_key.to_vec(), budget));
     }
 }
 
 /// Charge one call at `staging_key` against a one-shot injected failure.
-/// `true` when this is the call that must fail, which also disarms it.
+/// `true` when this is the call that must fail, which also disarms it. Each
+/// injector holds one armed key, so arming a second replaces the first.
 fn interrupts(budget: &mut Option<(Vec<u8>, u64)>, staging_key: &[u8]) -> bool {
     match budget {
         Some((key, _)) if key != staging_key => false,
@@ -145,6 +156,9 @@ impl StagingStore for InMemoryStagingStore {
         let mut inner = self.inner.lock().expect("lock");
         if interrupts(&mut inner.staged_removal_budget, staging_key) {
             return Err(SeamError::new("remove_staged_bytes unavailable"));
+        }
+        if interrupts(&mut inner.dropped_removal_budget, staging_key) {
+            return Ok(());
         }
         inner.staged.remove(staging_key);
         Ok(())
