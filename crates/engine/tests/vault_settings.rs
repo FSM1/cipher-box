@@ -4,8 +4,9 @@
 //! same account that only ever saw the network (#870).
 //!
 //! Its contract is the inverse of the write plane's: a settings record that
-//! will not resolve must never block cold start, so every failure degrades to
-//! the documented defaults inside a scheduler-measured budget.
+//! will not resolve must never block cold start, so every failure degrades —
+//! to this device's last-known-good copy where one opens, and only then to the
+//! documented defaults — inside a scheduler-measured budget.
 
 use core::future::poll_fn;
 use core::num::NonZeroU64;
