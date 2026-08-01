@@ -89,8 +89,6 @@ fn commands_before_start_are_rejected_not_started() {
     assert_eq!(result, Err(EngineError::NotStarted));
 }
 
-/// SIWE is a secondary method: the nonce is refused before the host prompts a
-/// wallet for it, exactly as the `siweLogin` that would spend it is.
 #[test]
 fn a_siwe_challenge_before_start_is_rejected_not_started() {
     let world = FakeWorld::new();

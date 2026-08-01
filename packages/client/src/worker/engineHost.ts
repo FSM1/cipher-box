@@ -29,7 +29,6 @@ export interface EngineHostLike {
   commitWrite(handle: WriteHandle): Promise<bigint>;
   abortWrite(handle: WriteHandle): Promise<void>;
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
-  /** Issues the single-use nonce an EIP-4361 message must embed. */
   siweChallenge(): Promise<string>;
   download(node: Uint8Array): Promise<ArrayBuffer>;
   nextEvent(): Promise<EventDescriptor | null>;

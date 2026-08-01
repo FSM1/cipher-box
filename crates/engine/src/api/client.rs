@@ -908,8 +908,6 @@ mod tests {
         assert!(request.body.is_none());
     }
 
-    /// The nonce lands verbatim in the text a wallet signs, so anything outside
-    /// EIP-4361's alphanumeric class is refused rather than forwarded.
     #[test]
     fn siwe_challenge_refuses_a_nonce_outside_the_eip4361_class() {
         for unusable in [
@@ -918,17 +916,42 @@ mod tests {
             "line\nbreak12345",
             "spaced out nonce",
             "",
+            "1234567",
             &"a".repeat(129),
+            // `char::is_alphanumeric` would accept both; the ASCII class must
+            // not — a confusable nonce is one a wallet renders unreadably.
+            "١٢٣٤٥٦٧٨",
+            "ＡＢＣＤＥＦＧＨ",
         ] {
             let (http, _creds, client) = fakes();
             http.enqueue_response(json_response(
                 200,
                 json!({ "nonce": unusable, "expiresAt": "2026-01-01T00:00:00Z" }),
             ));
+            let error = block_on(client.siwe_challenge()).unwrap_err();
             assert_eq!(
-                block_on(client.siwe_challenge()).unwrap_err(),
+                error,
                 ApiError::Decode("unusable siwe nonce".into()),
                 "accepted {unusable:?}"
+            );
+            assert!(
+                unusable.is_empty() || !error.to_string().contains(unusable),
+                "the refusal echoed the offending nonce"
+            );
+        }
+    }
+
+    #[test]
+    fn siwe_challenge_accepts_the_class_boundaries() {
+        for usable in ["12345678", &"a".repeat(128)] {
+            let (http, _creds, client) = fakes();
+            http.enqueue_response(json_response(
+                200,
+                json!({ "nonce": usable, "expiresAt": "2026-01-01T00:00:00Z" }),
+            ));
+            assert_eq!(
+                block_on(client.siwe_challenge()).expect("nonce").nonce,
+                usable
             );
         }
     }

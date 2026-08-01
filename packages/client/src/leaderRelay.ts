@@ -171,18 +171,14 @@ export class LeaderRelay {
     const { clientId, requestId, read } = message;
     const ack = { type: 'cb:response', token: this.token, clientId, requestId } as const;
     try {
-      this.post({ ...ack, ok: true, result: await this.serve(read) });
+      this.post({ ...ack, ok: true, result: await this.readValue(read) });
     } catch (error) {
       this.post({ ...ack, ok: false, ...wireError(error) });
     }
   }
 
-  /**
-   * Serves one follower read off the leader's engine. The annotated return type
-   * makes the switch exhaustive over [`WireRead`], so a new kind fails to
-   * compile instead of leaving the follower's request unanswered.
-   */
-  private async serve(read: WireRead): Promise<SnapshotDescriptor | Blob | string> {
+  /** The annotated return type keeps the switch exhaustive over `WireRead`. */
+  private async readValue(read: WireRead): Promise<SnapshotDescriptor | Blob | string> {
     switch (read.kind) {
       case 'snapshot':
         return this.transport.snapshot(read.folder);

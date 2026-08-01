@@ -62,12 +62,15 @@ export function WalletLoginButton({ requestNonce, onLogin, disabled }: WalletLog
       const [account] = accounts;
       if (!account) throw new Error('the wallet returned no account');
 
+      // The nonce first, then the phase: the label promises a wallet prompt
+      // that only appears once the message exists.
+      const nonce = await requestNonce();
       setPhase('signing');
       const message = createSiweMessage({
         address: account,
         chainId: mainnet.id,
         domain: window.location.host,
-        nonce: await requestNonce(),
+        nonce,
         uri: window.location.origin,
         version: '1',
         statement: 'Sign in to CipherBox encrypted storage',

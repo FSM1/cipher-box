@@ -1,11 +1,12 @@
 //! The production engine host: constructs the one engine instance over the
-//! browser seams and exposes `start` / `command` / `snapshot` / `download` /
-//! `nextEvent` to the worker.
+//! browser seams and exposes `start` / `command` / `snapshot` / `siweChallenge`
+//! / `download` / `nextEvent` to the worker.
 //!
 //! Loaded inside `packages/client`'s dedicated engine worker (never the UI
 //! realm). The single engine sits behind an async RwLock: `start`/`command`
-//! take the write lock and serialize, while the reads (`snapshot`, `download`)
-//! share the read lock — a long download never blocks a snapshot. `nextEvent`
+//! take the write lock and serialize, while the reads (`snapshot`,
+//! `siweChallenge`, `download`) share the read lock — a long download never
+//! blocks a snapshot. `nextEvent`
 //! reads the independent event stream and runs concurrently with a command.
 //!
 //! Key material lives only in this worker's WASM linear memory: the login

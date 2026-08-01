@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { emptySnapshot, fakeWasmEnums } from '../testkit.js';
+import { emptySnapshot, FAKE_SIWE_NONCE, fakeWasmEnums } from '../testkit.js';
 import { LocalTransport, type EngineWorkerLike } from '../transport.js';
 import { EngineHost, type EngineHostLike } from './engineHost.js';
 import type { EngineWasm, WasmEngineHandle, WasmEvent } from './engineWasm.js';
@@ -68,7 +68,6 @@ class ReadHost implements EngineHostLike {
   respondSnapshot: () => Promise<SnapshotDescriptor> = () => Promise.resolve(SNAPSHOT);
   respondDownload: () => Promise<ArrayBuffer> = () =>
     Promise.resolve(new Uint8Array([9, 8, 7]).buffer);
-  respondSiweChallenge: () => Promise<string> = () => Promise.resolve('nonce123456789ab');
   siweChallenges = 0;
 
   start(): Promise<void> {
@@ -106,7 +105,7 @@ class ReadHost implements EngineHostLike {
 
   siweChallenge(): Promise<string> {
     this.siweChallenges += 1;
-    return this.respondSiweChallenge();
+    return Promise.resolve(FAKE_SIWE_NONCE);
   }
 
   download(node: Uint8Array): Promise<ArrayBuffer> {
@@ -153,7 +152,7 @@ describe('serveEngine read requests', () => {
     serveEngine(scope, host);
     const transport = new LocalTransport(worker);
 
-    await expect(transport.siweChallenge()).resolves.toBe('nonce123456789ab');
+    await expect(transport.siweChallenge()).resolves.toBe(FAKE_SIWE_NONCE);
     expect(host.siweChallenges).toBe(1);
   });
 

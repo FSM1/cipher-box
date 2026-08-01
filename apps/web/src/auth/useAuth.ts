@@ -104,8 +104,6 @@ export function useAuth(): Auth {
   const loginWithGoogle = useCallback(() => login('google'), [login]);
   const loginWithEmail = useCallback((email: string) => login('email', email), [login]);
 
-  // Outside `exclusively`: the nonce is one step inside the wallet flow, whose
-  // handoff takes the lock at `loginWithWallet`.
   const siweChallenge = useCallback(async (): Promise<string> => {
     if (!client) throw new Error('the engine is not ready to accept a login');
     return client.facade.siweChallenge();

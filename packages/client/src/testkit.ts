@@ -49,6 +49,9 @@ export const fakeWasmEnums = {
   },
 } as const;
 
+/** A nonce inside the EIP-4361 class the engine enforces. */
+export const FAKE_SIWE_NONCE = 'nonce123456789ab';
+
 /** A minimal empty snapshot descriptor for transport-plumbing assertions. */
 export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): SnapshotDescriptor {
   return {
@@ -197,7 +200,7 @@ export class FakeEngineTransport implements EngineTransport {
     Promise.resolve(emptySnapshot(folder ?? undefined));
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
     Promise.resolve(new ArrayBuffer(0));
-  respondSiweChallenge: () => Promise<string> = () => Promise.resolve('nonce123456789ab');
+  respondSiweChallenge: () => Promise<string> = () => Promise.resolve(FAKE_SIWE_NONCE);
   private readonly listeners = new Set<EngineEventListener>();
 
   start(secret: ArrayBuffer): Promise<void> {

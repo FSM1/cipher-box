@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { EngineFacade } from './facade.js';
-import { emptySnapshot } from './testkit.js';
+import { emptySnapshot, FAKE_SIWE_NONCE } from './testkit.js';
 import type { EngineEventListener, EngineTransport } from './transport.js';
 import type {
   CommandDescriptor,
@@ -60,7 +60,7 @@ class FakeTransport implements EngineTransport {
 
   siweChallenge(): Promise<string> {
     this.siweChallenges += 1;
-    return Promise.resolve('nonce123456789ab');
+    return Promise.resolve(FAKE_SIWE_NONCE);
   }
 
   download(node: Uint8Array): Promise<ArrayBuffer> {
@@ -184,7 +184,7 @@ describe('EngineFacade', () => {
     const transport = new FakeTransport();
     const facade = new EngineFacade(transport);
 
-    await expect(facade.siweChallenge()).resolves.toBe('nonce123456789ab');
+    await expect(facade.siweChallenge()).resolves.toBe(FAKE_SIWE_NONCE);
     expect(transport.siweChallenges).toBe(1);
   });
 
