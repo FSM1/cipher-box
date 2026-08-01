@@ -482,12 +482,6 @@ fn leaf_cid(bytes: &[u8]) -> String {
     encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, bytes))
 }
 
-/// The engine's own content address for a head block — the `dag-cbor` codec a
-/// record `Value` spells, the address `PreflightedHead` publishes under.
-fn head_cid(bytes: &[u8]) -> String {
-    encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, bytes))
-}
-
 /// Fetch one block back from the stack's trustless gateway by CID — the read
 /// path's view of what the ingress actually pinned.
 async fn fetch_block(cid: &str) -> Vec<u8> {
@@ -824,7 +818,7 @@ async fn every_head_block_a_retrying_publish_orphaned_retires_back_to_the_pre_up
     let attempts: Vec<Vec<u8>> = (0..3u8).map(|i| vec![0xC0 | i; 96]).collect();
     let mut heads = Vec::new();
     for block in &attempts {
-        let declared = head_cid(block);
+        let declared = leaf_cid(block);
         let uploaded = client
             .upload(&declared, block)
             .await

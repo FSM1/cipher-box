@@ -1742,7 +1742,19 @@ where
 
     /// Note one head block as orphaned, capped at [`REGISTRY_BATCH_MAX`] so a
     /// session whose retires keep failing bounds its leak, not its memory.
+    ///
+    /// A head the live set still names is refused outright: this queue's only
+    /// consumer physically unpins, so the destructive step checks the live set
+    /// itself rather than trusting the caller to hand it a fresh head.
     fn record_orphan_head(&self, cid: &str) {
+        if self
+            .held
+            .borrow()
+            .values()
+            .any(|record| record.head_cid == cid)
+        {
+            return;
+        }
         let mut orphans = self.orphan_heads.borrow_mut();
         if orphans.len() < REGISTRY_BATCH_MAX {
             orphans.push(cid.to_owned());
@@ -1758,7 +1770,9 @@ where
             return;
         }
         if retire(self.api, &pending).await.is_ok() {
-            self.orphan_heads.borrow_mut().drain(..pending.len());
+            let mut orphans = self.orphan_heads.borrow_mut();
+            let sent = pending.len().min(orphans.len());
+            orphans.drain(..sent);
         }
     }
 
@@ -1963,9 +1977,9 @@ fn orphaned_head(error: &RecordPublishError) -> bool {
         }
         RecordPublishError::HeadCidMismatch { .. } => true,
         RecordPublishError::Publish(error) => match error {
-            PublishError::Register(_) | PublishError::FloorRead(_) | PublishError::EmptyHeadCid => {
-                true
-            }
+            PublishError::Register(_) | PublishError::FloorRead(_) => true,
+            // Nothing was ever addressed, so there is no CID to retire.
+            PublishError::EmptyHeadCid => false,
             // No ack is not proof nothing stored: unpinning a head a live
             // record may still name is loss, where the row is only a leak
             // (#916).
@@ -2137,6 +2151,12 @@ mod tests {
             ),
             (
                 RecordPublishError::Publish(PublishError::EmptyHeadCid),
+                false,
+            ),
+            (
+                RecordPublishError::Publish(PublishError::FloorRead(crate::seams::SeamError::new(
+                    "floor",
+                ))),
                 true,
             ),
             (
