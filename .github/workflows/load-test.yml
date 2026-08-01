@@ -146,24 +146,29 @@ jobs:
           curl -fsS --retry 60 --retry-connrefused --retry-delay 1 http://localhost:3000/health \
             || { echo '--- API log ---'; cat /tmp/api.log; exit 1; }
 
+      # The harness defaults its own loopback URLs, so a local run only needs
+      # the shared test-login secret.
       - name: Resolve the target
         env:
           STAGING_API_URL: ${{ vars.STAGING_API_URL }}
           STAGING_GATEWAY_URL: ${{ vars.STAGING_GATEWAY_URL }}
           STAGING_TEST_LOGIN_SECRET: ${{ secrets.STAGING_TEST_LOGIN_SECRET }}
+          STAGING_GATEWAY_TOKEN: ${{ secrets.STAGING_GATEWAY_TOKEN }}
         run: |
           if [ "$TARGET" = 'staging' ]; then
             if [ -z "$STAGING_API_URL" ] || [ -z "$STAGING_TEST_LOGIN_SECRET" ]; then
               echo '::error::staging runs need the STAGING_API_URL variable and STAGING_TEST_LOGIN_SECRET secret'
               exit 1
             fi
+            if [ "$SCENARIO" = 'gateway-read' ] && [ -z "$STAGING_GATEWAY_TOKEN" ]; then
+              echo '::error::gateway-read on staging needs the STAGING_GATEWAY_TOKEN secret; the read accelerator is behind forward_auth'
+              exit 1
+            fi
             echo "LOAD_TEST_API_URL=$STAGING_API_URL" >> "$GITHUB_ENV"
             echo "LOAD_TEST_GATEWAY_URL=$STAGING_GATEWAY_URL" >> "$GITHUB_ENV"
-            echo "::add-mask::$STAGING_TEST_LOGIN_SECRET"
             echo "LOAD_TEST_SECRET=$STAGING_TEST_LOGIN_SECRET" >> "$GITHUB_ENV"
+            echo "LOAD_TEST_GATEWAY_TOKEN=$STAGING_GATEWAY_TOKEN" >> "$GITHUB_ENV"
           else
-            echo 'LOAD_TEST_API_URL=http://localhost:3000' >> "$GITHUB_ENV"
-            echo 'LOAD_TEST_GATEWAY_URL=http://localhost:8080' >> "$GITHUB_ENV"
             echo 'LOAD_TEST_SECRET=load-harness-secret' >> "$GITHUB_ENV"
           fi
 

@@ -1,28 +1,26 @@
-//! The five scenarios, each aimed at one v2 API surface.
-//!
-//! v1's `upload-throughput`, `ipns-publish-storm`, `mixed-workload`,
-//! `sustained-load`, `spike-test` and the `byo-*` family do not map across
-//! one-for-one: v2 moved publish/resolve off the API entirely (clients PUT
-//! `/routing/v1` themselves) and reads off the API process onto the read
-//! accelerator. What ports is the shape of the load — bulk name registration,
-//! block ingest, block reads, an interleaved mix, and a BYO account's advisory
-//! rows. Sustained and spike runs are `--ops-per-client` and `--ramp-ms` on
-//! those scenarios rather than scenarios of their own.
+//! The five scenarios, each aimed at one v2 API surface. Sustained and spike
+//! profiles are `--ops-per-client` and `--ramp-ms` on these, not scenarios of
+//! their own (crates/load/README.md).
 
+use cipherbox_desktop_seams::ReqwestHttp;
 use cipherbox_engine::api::NameRegistration;
 
 use crate::metrics::Collector;
 use crate::plan::{RunPlan, Scenario};
 use crate::runner::{
-    VirtualClient, leaf_cid, measure, measure_http, pace, random_bytes, random_token,
-    synthetic_ipns_name,
+    VirtualClient, gateway_get, leaf_cid, measure, measure_served, pace, random_bytes,
+    random_token, synthetic_ipns_names,
 };
-use crate::seams::LoadHttp;
 
-pub async fn drive(
+/// How many batches of registered targets may sit pending before the run
+/// retires them, so a long wave's memory tracks the batch size rather than the
+/// run length.
+const RETIRE_DRAIN_BATCHES: usize = 4;
+
+pub(crate) async fn drive(
     virtual_client: &VirtualClient,
     plan: &RunPlan,
-    http: &LoadHttp,
+    http: &ReqwestHttp,
     collector: &mut Collector,
 ) {
     match plan.scenario {
@@ -34,52 +32,48 @@ pub async fn drive(
     }
 }
 
+/// Upload one caller-addressed block, returning its content address.
+async fn upload_block(
+    virtual_client: &VirtualClient,
+    plan: &RunPlan,
+    collector: &mut Collector,
+) -> Option<String> {
+    let block = random_bytes(plan.block_bytes as usize);
+    let cid = leaf_cid(&block);
+    measure(
+        collector,
+        "content-upload",
+        u64::from(plan.block_bytes),
+        virtual_client.client.upload(&cid, &block),
+    )
+    .await
+    .map(|_| cid)
+}
+
 /// Hosted content ingress: one request, one caller-addressed block.
 async fn content_ingest(virtual_client: &VirtualClient, plan: &RunPlan, collector: &mut Collector) {
     let mut pinned = Vec::new();
     for _ in 0..plan.ops_per_client {
-        let block = random_bytes(plan.block_bytes as usize);
-        let cid = leaf_cid(&block);
-        let uploaded = measure(
-            collector,
-            "content-upload",
-            u64::from(plan.block_bytes),
-            virtual_client.client.upload(&cid, &block),
-        )
-        .await;
-        if uploaded.is_some() {
+        if let Some(cid) = upload_block(virtual_client, plan, collector).await {
             pinned.push(cid);
         }
+        drain_if_full(virtual_client, plan, collector, &mut pinned).await;
         pace(plan).await;
     }
-    retire_all(virtual_client, plan, collector, pinned).await;
+    retire(virtual_client, plan, collector, pinned).await;
 }
 
-/// Read-accelerator throughput. The API process serves no bytes in v2, so the
-/// read leg goes straight to the trustless gateway.
+/// Read-accelerator throughput, over a small set of blocks the run seeds.
 async fn gateway_read(
     virtual_client: &VirtualClient,
     plan: &RunPlan,
-    http: &LoadHttp,
+    http: &ReqwestHttp,
     collector: &mut Collector,
 ) {
-    let Some(gateway) = plan.gateway_url.as_deref() else {
-        return;
-    };
-    let seed_count = plan.ops_per_client.min(4);
+    let gateway = plan.gateway_url.as_deref().unwrap_or_default();
     let mut seeded = Vec::new();
-    for _ in 0..seed_count {
-        let block = random_bytes(plan.block_bytes as usize);
-        let cid = leaf_cid(&block);
-        if measure(
-            collector,
-            "content-upload",
-            u64::from(plan.block_bytes),
-            virtual_client.client.upload(&cid, &block),
-        )
-        .await
-        .is_some()
-        {
+    for _ in 0..plan.ops_per_client.min(4) {
+        if let Some(cid) = upload_block(virtual_client, plan, collector).await {
             seeded.push(cid);
         }
         pace(plan).await;
@@ -91,15 +85,15 @@ async fn gateway_read(
     for index in 0..plan.ops_per_client {
         let cid = &seeded[index as usize % seeded.len()];
         let url = format!("{gateway}/ipfs/{cid}?format=raw");
-        measure_http(
+        measure_served(
             collector,
             "gateway-read",
-            http.get(&url, plan.gateway_token.as_deref()),
+            gateway_get(http, &url, plan.gateway_token.as_deref()),
         )
         .await;
         pace(plan).await;
     }
-    retire_all(virtual_client, plan, collector, seeded).await;
+    retire(virtual_client, plan, collector, seeded).await;
 }
 
 /// Registry cadence under a name wave: bulk registration of freshly derived
@@ -107,62 +101,38 @@ async fn gateway_read(
 async fn name_wave(virtual_client: &VirtualClient, plan: &RunPlan, collector: &mut Collector) {
     let mut names = Vec::new();
     for _ in 0..plan.ops_per_client {
-        let batch: Vec<NameRegistration> = (0..plan.batch_size)
-            .map(|_| NameRegistration {
-                ipns_name: synthetic_ipns_name(),
+        let batch: Vec<NameRegistration> = synthetic_ipns_names(plan.batch_size)
+            .into_iter()
+            .map(|ipns_name| NameRegistration {
+                ipns_name,
                 head_cid: None,
                 content_cids: Vec::new(),
             })
             .collect();
-        if measure(
-            collector,
-            "registry-register",
-            0,
-            virtual_client.client.register(&batch),
-        )
-        .await
-        .is_some()
-        {
+        if register(virtual_client, collector, &batch).await {
             names.extend(batch.into_iter().map(|entry| entry.ipns_name));
         }
+        drain_if_full(virtual_client, plan, collector, &mut names).await;
         pace(plan).await;
     }
-    retire_all(virtual_client, plan, collector, names).await;
+    retire(virtual_client, plan, collector, names).await;
 }
 
-/// The interleaved profile: ingest, register-first, quota, and a mailbox
+/// The interleaved profile: ingest, registration, quota, and a mailbox
 /// round-trip on one account.
 async fn mixed(virtual_client: &VirtualClient, plan: &RunPlan, collector: &mut Collector) {
     let mut targets = Vec::new();
     for _ in 0..plan.ops_per_client {
-        let block = random_bytes(plan.block_bytes as usize);
-        let cid = leaf_cid(&block);
-        let uploaded = measure(
-            collector,
-            "content-upload",
-            u64::from(plan.block_bytes),
-            virtual_client.client.upload(&cid, &block),
-        )
-        .await;
-
-        if uploaded.is_some() {
-            let name = synthetic_ipns_name();
+        if let Some(cid) = upload_block(virtual_client, plan, collector).await {
             let batch = [NameRegistration {
-                ipns_name: name.clone(),
+                ipns_name: synthetic_ipns_names(1).remove(0),
                 head_cid: None,
-                content_cids: vec![cid.clone()],
+                content_cids: vec![cid],
             }];
-            if measure(
-                collector,
-                "registry-register",
-                0,
-                virtual_client.client.register(&batch),
-            )
-            .await
-            .is_some()
-            {
-                targets.push(name);
-                targets.push(cid);
+            if register(virtual_client, collector, &batch).await {
+                let [entry] = batch;
+                targets.push(entry.ipns_name);
+                targets.extend(entry.content_cids);
             }
         }
 
@@ -196,9 +166,10 @@ async fn mixed(virtual_client: &VirtualClient, plan: &RunPlan, collector: &mut C
             )
             .await;
         }
+        drain_if_full(virtual_client, plan, collector, &mut targets).await;
         pace(plan).await;
     }
-    retire_all(virtual_client, plan, collector, targets).await;
+    retire(virtual_client, plan, collector, targets).await;
 }
 
 /// A BYO account's registry path: its bytes never touch the API, so it only
@@ -218,35 +189,55 @@ async fn byo_advisory(virtual_client: &VirtualClient, plan: &RunPlan, collector:
 
     let mut targets = Vec::new();
     for _ in 0..plan.ops_per_client {
-        let batch: Vec<NameRegistration> = (0..plan.batch_size)
-            .map(|_| NameRegistration {
-                ipns_name: synthetic_ipns_name(),
+        let batch: Vec<NameRegistration> = synthetic_ipns_names(plan.batch_size)
+            .into_iter()
+            .map(|ipns_name| NameRegistration {
+                ipns_name,
                 head_cid: None,
                 content_cids: vec![leaf_cid(&random_bytes(64))],
             })
             .collect();
-        if measure(
-            collector,
-            "registry-register",
-            0,
-            virtual_client.client.register(&batch),
-        )
-        .await
-        .is_some()
-        {
+        if register(virtual_client, collector, &batch).await {
             for entry in batch {
                 targets.push(entry.ipns_name);
                 targets.extend(entry.content_cids);
             }
         }
         measure(collector, "account-quota", 0, virtual_client.client.quota()).await;
+        drain_if_full(virtual_client, plan, collector, &mut targets).await;
         pace(plan).await;
     }
-    retire_all(virtual_client, plan, collector, targets).await;
+    retire(virtual_client, plan, collector, targets).await;
 }
 
-/// Retire everything the run registered, in batches the registry accepts.
-async fn retire_all(
+async fn register(
+    virtual_client: &VirtualClient,
+    collector: &mut Collector,
+    batch: &[NameRegistration],
+) -> bool {
+    measure(
+        collector,
+        "registry-register",
+        0,
+        virtual_client.client.register(batch),
+    )
+    .await
+    .is_some()
+}
+
+async fn drain_if_full(
+    virtual_client: &VirtualClient,
+    plan: &RunPlan,
+    collector: &mut Collector,
+    targets: &mut Vec<String>,
+) {
+    if targets.len() >= plan.batch_size as usize * RETIRE_DRAIN_BATCHES {
+        retire(virtual_client, plan, collector, std::mem::take(targets)).await;
+    }
+}
+
+/// Retire what the run registered, in batches the registry accepts.
+async fn retire(
     virtual_client: &VirtualClient,
     plan: &RunPlan,
     collector: &mut Collector,

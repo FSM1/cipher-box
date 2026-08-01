@@ -1,9 +1,5 @@
-//! Per-operation samples and their aggregation.
-//!
-//! v2 has no throttle bypass, so a 429 is an expected shape of a load run, not
-//! a defect. It is counted apart from failures: folding the two together would
-//! either hide a real error behind rate limiting or fail a run for behaving
-//! exactly as the API's per-surface buckets promise.
+//! Per-operation samples and their aggregation. Rate limiting is counted apart
+//! from failure — see `outcome_of` in `runner.rs`.
 
 /// What one operation did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,10 +54,6 @@ impl Collector {
         self.samples.extend(other.samples);
     }
 
-    pub fn samples(&self) -> &[Sample] {
-        &self.samples
-    }
-
     /// Aggregate into one summary per operation plus an all-operations total,
     /// with `wall_ms` the elapsed run time that throughput is divided by.
     pub fn summarize(&self, wall_ms: f64) -> Vec<OpSummary> {
@@ -102,19 +94,27 @@ pub struct OpSummary {
     pub ops_per_sec: f64,
     pub bytes: u64,
     pub bytes_per_sec: f64,
+    /// The first failure this operation saw — the reason behind the counts.
+    pub first_failure: Option<String>,
 }
 
 impl OpSummary {
     fn of<'a>(op: &'static str, samples: impl Iterator<Item = &'a Sample>, wall_ms: f64) -> Self {
         let mut latencies: Vec<f64> = Vec::new();
         let (mut ok, mut throttled, mut failed, mut bytes) = (0u64, 0u64, 0u64, 0u64);
+        let mut first_failure = None;
         for sample in samples {
             latencies.push(sample.latency_ms);
             bytes += sample.bytes;
             match sample.outcome {
                 Outcome::Ok => ok += 1,
                 Outcome::Throttled => throttled += 1,
-                Outcome::Failed => failed += 1,
+                Outcome::Failed => {
+                    failed += 1;
+                    if first_failure.is_none() {
+                        first_failure.clone_from(&sample.detail);
+                    }
+                }
             }
         }
         latencies.sort_by(f64::total_cmp);
@@ -133,23 +133,16 @@ impl OpSummary {
             ops_per_sec: count as f64 / seconds,
             bytes,
             bytes_per_sec: bytes as f64 / seconds,
+            first_failure,
         }
     }
 
     pub fn error_rate(&self) -> f64 {
-        rate(self.failed, self.count)
-    }
-
-    pub fn throttled_rate(&self) -> f64 {
-        rate(self.throttled, self.count)
-    }
-}
-
-fn rate(part: u64, whole: u64) -> f64 {
-    if whole == 0 {
-        0.0
-    } else {
-        part as f64 / whole as f64
+        if self.count == 0 {
+            0.0
+        } else {
+            self.failed as f64 / self.count as f64
+        }
     }
 }
 
@@ -202,7 +195,6 @@ mod tests {
         let upload = &collector.summarize(1_000.0)[0];
         assert_eq!((upload.ok, upload.throttled, upload.failed), (1, 1, 1));
         assert!((upload.error_rate() - 1.0 / 3.0).abs() < 1e-9);
-        assert!((upload.throttled_rate() - 1.0 / 3.0).abs() < 1e-9);
     }
 
     #[test]
@@ -213,7 +205,7 @@ mod tests {
         }
         let upload = &collector.summarize(1_000.0)[0];
         assert_eq!(upload.error_rate(), 0.0);
-        assert_eq!(upload.throttled_rate(), 1.0);
+        assert_eq!(upload.throttled, 4);
     }
 
     #[test]
@@ -255,13 +247,20 @@ mod tests {
         let mut right = Collector::default();
         right.record(sample("upload", Outcome::Ok, 3.0));
         left.absorb(right);
-        assert_eq!(left.samples().len(), 2);
+        assert_eq!(left.summarize(1_000.0)[0].count, 2);
     }
 
     #[test]
-    fn the_first_failure_detail_surfaces_for_a_run_that_produced_nothing() {
+    fn the_first_failure_detail_surfaces_on_the_collector_and_on_its_operation() {
         let mut collector = Collector::default();
+        collector.record(sample("login", Outcome::Ok, 1.0));
         collector.record(sample("login", Outcome::Failed, 1.0).with_detail("connection refused"));
+        collector.record(sample("login", Outcome::Failed, 1.0).with_detail("later, ignored"));
+
         assert_eq!(collector.first_failure(), Some("connection refused"));
+        assert_eq!(
+            collector.summarize(1_000.0)[0].first_failure.as_deref(),
+            Some("connection refused")
+        );
     }
 }

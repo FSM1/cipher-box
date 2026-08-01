@@ -257,7 +257,9 @@ One new `nightly.yml` (cron) owns the scheduled slots testing.md defined:
   before it blocks a release.
 
 Dispatch-only (unscheduled): the load harness against local or staging
-(`load-test.yml` re-engaged over `crates/load`, BYO scenarios included), and the real Web3Auth
+(`load-test.yml` re-engaged over `crates/load`; the BYO scenario covers the
+API-side advisory-pin path, and external-provider throughput waits on the
+engine's provider layer), and the real Web3Auth
 Core Kit login job against staging with the test credentials — the honest
 inherited limitation testing.md records; never a PR gate.
 

@@ -1,10 +1,10 @@
 //! Pass/fail bands for a dispatched run.
 //!
-//! Staging is one 2-vCPU VPS whose cores Kubo and someguy share
-//! (blueprint/deploy.md), so its bands describe that ceiling rather than any
-//! headroom the hardware does not have. They exist to catch a collapse — a
-//! regression that takes latency from hundreds of milliseconds to seconds, or
-//! turns a clean run into an error storm — not to police normal variance.
+//! The bands catch a collapse — latency from hundreds of milliseconds to
+//! seconds, or a clean run turning into an error storm — not normal variance,
+//! and staging's describe the 2-vCPU ceiling rather than headroom it does not
+//! have. They read the `all` row, which spans provisioning and teardown too, so
+//! they are a whole-run collapse detector and never a per-surface SLO.
 
 use crate::metrics::OpSummary;
 use crate::plan::{Scenario, Target};
@@ -13,15 +13,6 @@ use crate::plan::{Scenario, Target};
 pub struct Thresholds {
     pub p95_ms: f64,
     pub max_error_rate: f64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Breach(pub String);
-
-impl std::fmt::Display for Breach {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
 }
 
 /// The band for a scenario on a target. Content ingest and gateway reads move
@@ -40,33 +31,38 @@ pub fn thresholds_for(scenario: Scenario, target: Target) -> Thresholds {
     }
 }
 
-/// Evaluate the `all` row of a run. Throttling is reported but never breaches:
-/// v2 removed the throttle bypass, so per-surface 429s are the API keeping its
-/// promise, and a harness that failed on them would only be measuring the
-/// buckets it was told about.
-pub fn evaluate(thresholds: Thresholds, summaries: &[OpSummary]) -> Vec<Breach> {
-    let Some(total) = summaries.iter().find(|s| s.op == "all") else {
-        return vec![Breach("the run recorded no operations at all".to_owned())];
+/// Evaluate the `all` row. Throttling is reported but never breaches on its
+/// own; a run where nothing succeeded does, since it measured nothing.
+pub fn evaluate(thresholds: Thresholds, summaries: &[OpSummary]) -> Vec<String> {
+    let Some(total) = summaries
+        .iter()
+        .find(|summary| summary.op == "all")
+        .filter(|summary| summary.count > 0)
+    else {
+        return vec!["the run recorded no operations at all".to_owned()];
     };
-    let mut breaches = Vec::new();
-    if total.count == 0 {
-        breaches.push(Breach("the run recorded no operations at all".to_owned()));
-        return breaches;
+    if total.ok == 0 {
+        return vec![format!(
+            "no operation succeeded: {} throttled, {} failed",
+            total.throttled, total.failed
+        )];
     }
+
+    let mut breaches = Vec::new();
     if total.p95_ms > thresholds.p95_ms {
-        breaches.push(Breach(format!(
+        breaches.push(format!(
             "p95 {:.0}ms exceeds the {:.0}ms band",
             total.p95_ms, thresholds.p95_ms
-        )));
+        ));
     }
     if total.error_rate() > thresholds.max_error_rate {
-        breaches.push(Breach(format!(
+        breaches.push(format!(
             "error rate {:.2}% exceeds the {:.2}% band ({} of {} operations failed)",
             total.error_rate() * 100.0,
             thresholds.max_error_rate * 100.0,
             total.failed,
             total.count
-        )));
+        ));
     }
     breaches
 }
@@ -110,7 +106,7 @@ mod tests {
         let rows = summaries(&[(Outcome::Ok, 50.0), (Outcome::Ok, 9_000.0)]);
         let breaches = evaluate(bands, &rows);
         assert_eq!(breaches.len(), 1);
-        assert!(breaches[0].0.contains("p95"), "{}", breaches[0]);
+        assert!(breaches[0].contains("p95"), "{}", breaches[0]);
     }
 
     #[test]
@@ -119,14 +115,27 @@ mod tests {
         let rows = summaries(&[(Outcome::Failed, 10.0), (Outcome::Ok, 10.0)]);
         let breaches = evaluate(bands, &rows);
         assert_eq!(breaches.len(), 1);
-        assert!(breaches[0].0.contains("error rate"), "{}", breaches[0]);
+        assert!(breaches[0].contains("error rate"), "{}", breaches[0]);
     }
 
     #[test]
-    fn throttling_alone_never_breaches() {
+    fn throttling_alongside_real_work_never_breaches() {
         let bands = thresholds_for(Scenario::Mixed, Target::Local);
-        let rows = summaries(&[(Outcome::Throttled, 10.0); 20]);
-        assert!(evaluate(bands, &rows).is_empty());
+        let mut samples = vec![(Outcome::Throttled, 10.0); 20];
+        samples.push((Outcome::Ok, 10.0));
+        assert!(evaluate(bands, &summaries(&samples)).is_empty());
+    }
+
+    #[test]
+    fn a_wholly_throttled_run_breaches_because_it_measured_nothing() {
+        let bands = thresholds_for(Scenario::Mixed, Target::Local);
+        let breaches = evaluate(bands, &summaries(&[(Outcome::Throttled, 10.0); 20]));
+        assert_eq!(breaches.len(), 1);
+        assert!(
+            breaches[0].contains("no operation succeeded"),
+            "{}",
+            breaches[0]
+        );
     }
 
     #[test]
@@ -134,6 +143,6 @@ mod tests {
         let bands = thresholds_for(Scenario::Mixed, Target::Local);
         let breaches = evaluate(bands, &summaries(&[]));
         assert_eq!(breaches.len(), 1);
-        assert!(breaches[0].0.contains("no operations"), "{}", breaches[0]);
+        assert!(breaches[0].contains("no operations"), "{}", breaches[0]);
     }
 }

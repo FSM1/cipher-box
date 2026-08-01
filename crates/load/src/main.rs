@@ -2,7 +2,7 @@
 
 use std::process::ExitCode;
 
-use cipherbox_load::plan::{ProcessEnv, RunPlan, Scenario, build_plan, parse_args};
+use cipherbox_load::plan::{RunPlan, Scenario, build_plan, parse_args, process_env};
 use cipherbox_load::report::{print_summary, report_file_name, to_json};
 use cipherbox_load::runner;
 use cipherbox_load::thresholds::{evaluate, thresholds_for};
@@ -20,9 +20,9 @@ options:
   --report-dir <path>    where the JSON report is written  (default load-reports)
 
 environment:
-  LOAD_TEST_API_URL      required for staging; loopback-only for local
-  LOAD_TEST_SECRET       required; must equal the API's TEST_LOGIN_SECRET
-  LOAD_TEST_GATEWAY_URL  read accelerator, for the gateway-read scenario
+  LOAD_TEST_API_URL        required for staging; loopback-only for local
+  LOAD_TEST_SECRET         required; must equal the API's TEST_LOGIN_SECRET
+  LOAD_TEST_GATEWAY_URL    read accelerator, for the gateway-read scenario
   LOAD_TEST_GATEWAY_TOKEN  bearer token for a gateway behind forward_auth";
 
 fn main() -> ExitCode {
@@ -38,11 +38,11 @@ fn main() -> ExitCode {
 fn run() -> Result<ExitCode, String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!("{USAGE}\n\nscenarios: {}", scenario_names());
+        println!("{USAGE}\n\nscenarios: {}", Scenario::names());
         return Ok(ExitCode::SUCCESS);
     }
     let flags = parse_args(&args).map_err(|error| error.to_string())?;
-    let plan = build_plan(&flags, &ProcessEnv).map_err(|error| error.to_string())?;
+    let plan = build_plan(&flags, process_env).map_err(|error| error.to_string())?;
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -77,12 +77,4 @@ fn write_report(plan: &RunPlan, json: &str) -> Result<(), String> {
     std::fs::write(&path, json).map_err(|error| format!("write {}: {error}", path.display()))?;
     println!("report: {}", path.display());
     Ok(())
-}
-
-fn scenario_names() -> String {
-    Scenario::ALL
-        .iter()
-        .map(|scenario| scenario.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
 }

@@ -25,6 +25,7 @@ publish = false
 
 [workspace.dependencies]
 cipherbox-core = { path = "crates/core" }
+cipherbox-desktop-seams = { path = "crates/desktop-seams" }
 cipherbox-engine = { path = "crates/engine" }
 base64 = "0.22"
 futures-channel = "0.3"

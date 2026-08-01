@@ -8,25 +8,26 @@ use std::future::Future;
 use std::time::{Duration, Instant};
 
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
+use cipherbox_desktop_seams::ReqwestHttp;
 use cipherbox_engine::api::{ApiClient, ApiError};
+use cipherbox_engine::seams::{Http, HttpMethod, HttpRequest};
 
 use crate::metrics::{Collector, Outcome, Sample};
-use crate::plan::RunPlan;
+use crate::plan::{MAX_BLOCK_BYTES, RunPlan};
 use crate::scenarios;
-use crate::seams::{LoadHttp, MemoryCredentialStore};
+use crate::seams::{MemoryCredentialStore, build_http};
 
-pub type Client = ApiClient<LoadHttp, MemoryCredentialStore>;
+pub(crate) type Client = ApiClient<ReqwestHttp, MemoryCredentialStore>;
 
 /// One authenticated account driving load.
-pub struct VirtualClient {
-    pub index: u32,
-    pub client: Client,
+pub(crate) struct VirtualClient {
+    pub(crate) client: Client,
     /// The account's identity `publicKey` — its own mailbox address.
-    pub public_key: String,
+    pub(crate) public_key: String,
 }
 
 /// The HTTP status an error carries, where the client kept one.
-pub fn status_of(error: &ApiError) -> Option<u16> {
+fn status_of(error: &ApiError) -> Option<u16> {
     match error {
         ApiError::Status { status, .. } => Some(*status),
         ApiError::Unauthorized => Some(401),
@@ -35,9 +36,19 @@ pub fn status_of(error: &ApiError) -> Option<u16> {
     }
 }
 
+/// Rate limiting is the one failure a load run expects: v2 has no throttle
+/// bypass, so a 429 is the API keeping its promise, not a defect.
+fn outcome_of(error: &ApiError) -> Outcome {
+    if status_of(error) == Some(429) {
+        Outcome::Throttled
+    } else {
+        Outcome::Failed
+    }
+}
+
 /// Time one operation and file it under `op`. Returns `None` on any failure so
 /// a scenario can skip the rest of an iteration without unwinding the run.
-pub async fn measure<T>(
+pub(crate) async fn measure<T>(
     collector: &mut Collector,
     op: &'static str,
     bytes: u64,
@@ -46,64 +57,68 @@ pub async fn measure<T>(
     let started = Instant::now();
     let result = call.await;
     let latency_ms = started.elapsed().as_secs_f64() * 1_000.0;
-    match result {
-        Ok(value) => {
-            collector.record(Sample::new(op, Outcome::Ok, latency_ms).with_bytes(bytes));
-            Some(value)
-        }
-        Err(error) => {
-            let outcome = if status_of(&error) == Some(429) {
-                Outcome::Throttled
-            } else {
-                Outcome::Failed
-            };
-            collector.record(Sample::new(op, outcome, latency_ms).with_detail(error.to_string()));
-            None
-        }
-    }
+    collector.record(match &result {
+        Ok(_) => Sample::new(op, Outcome::Ok, latency_ms).with_bytes(bytes),
+        Err(error) => Sample::new(op, outcome_of(error), latency_ms).with_detail(error.to_string()),
+    });
+    result.ok()
 }
 
-/// Time one direct HTTP call — the read accelerator, which is not on the API
-/// client — and file it under `op`.
-pub async fn measure_http(
+/// Like [`measure`], but the call itself reports how many bytes it moved.
+pub(crate) async fn measure_served(
     collector: &mut Collector,
     op: &'static str,
-    call: impl Future<Output = Result<(u16, Vec<u8>), String>>,
-) -> Option<Vec<u8>> {
+    call: impl Future<Output = Result<u64, ApiError>>,
+) -> Option<u64> {
     let started = Instant::now();
     let result = call.await;
     let latency_ms = started.elapsed().as_secs_f64() * 1_000.0;
-    match result {
-        Ok((status, body)) if (200..300).contains(&status) => {
-            let bytes = body.len() as u64;
-            collector.record(Sample::new(op, Outcome::Ok, latency_ms).with_bytes(bytes));
-            Some(body)
-        }
-        Ok((status, _)) => {
-            let outcome = if status == 429 {
-                Outcome::Throttled
-            } else {
-                Outcome::Failed
-            };
-            collector.record(
-                Sample::new(op, outcome, latency_ms).with_detail(format!("status {status}")),
-            );
-            None
-        }
-        Err(detail) => {
-            collector.record(Sample::new(op, Outcome::Failed, latency_ms).with_detail(detail));
-            None
-        }
-    }
+    collector.record(match &result {
+        Ok(bytes) => Sample::new(op, Outcome::Ok, latency_ms).with_bytes(*bytes),
+        Err(error) => Sample::new(op, outcome_of(error), latency_ms).with_detail(error.to_string()),
+    });
+    result.ok()
 }
 
-pub async fn pace(plan: &RunPlan) {
+/// Fetch one block off the read accelerator, returning the bytes served. Reads
+/// go straight to the gateway: the API process serves no bytes in v2.
+pub(crate) async fn gateway_get(
+    http: &ReqwestHttp,
+    url: &str,
+    token: Option<&str>,
+) -> Result<u64, ApiError> {
+    let headers = token
+        .map(|token| vec![("Authorization".to_owned(), format!("Bearer {token}"))])
+        .unwrap_or_default();
+    let request = HttpRequest {
+        method: HttpMethod::Get,
+        url: url.to_owned(),
+        headers,
+        body: None,
+    };
+    // A block is bounded by the API's own ceiling, so a gateway that answers
+    // with something larger is refused rather than buffered.
+    let response = http
+        .send_capped(request, MAX_BLOCK_BYTES as usize)
+        .await
+        .map_err(|error| ApiError::Decode(format!("gateway fetch: {error:?}")))?;
+    if !(200..300).contains(&response.status) {
+        return Err(ApiError::Status {
+            status: response.status,
+            message: None,
+            code: None,
+        });
+    }
+    Ok(response.body.len() as u64)
+}
+
+pub(crate) async fn pace(plan: &RunPlan) {
     if plan.pace_ms > 0 {
         tokio::time::sleep(Duration::from_millis(plan.pace_ms)).await;
     }
 }
 
-pub fn random_bytes(len: usize) -> Vec<u8> {
+pub(crate) fn random_bytes(len: usize) -> Vec<u8> {
     let mut out = vec![0u8; len];
     getrandom::getrandom(&mut out).expect("os rng");
     out
@@ -111,25 +126,36 @@ pub fn random_bytes(len: usize) -> Vec<u8> {
 
 const BASE36: &[u8; 36] = b"abcdefghijklmnopqrstuvwxyz0123456789";
 
-/// A random lowercase-alphanumeric token — the shape the registry's
-/// `CID_OR_NAME` guard accepts.
-pub fn random_token(len: usize) -> String {
-    random_bytes(len)
-        .into_iter()
-        .map(|byte| BASE36[usize::from(byte) % BASE36.len()] as char)
+fn to_base36(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| BASE36[usize::from(*byte) % BASE36.len()] as char)
         .collect()
 }
 
-/// A synthetic name for the inventory. It never resolves — the registry is
-/// zero-knowledge about the encoding and only guards column width — and the run
-/// retires every name it registers.
-pub fn synthetic_ipns_name() -> String {
-    format!("k51{}", random_token(59))
+/// A random lowercase-alphanumeric token — the shape the registry's
+/// `CID_OR_NAME` guard accepts.
+pub(crate) fn random_token(len: usize) -> String {
+    to_base36(&random_bytes(len))
+}
+
+/// The suffix length that puts a synthetic name in the shape of a libp2p-key
+/// CID while staying inside the registry's 128-character column.
+const NAME_SUFFIX_LEN: usize = 59;
+
+/// Synthetic names for the inventory, drawn from one entropy read. They never
+/// resolve — the registry is zero-knowledge about the encoding and only guards
+/// column width — and a run retires every name it registers.
+pub(crate) fn synthetic_ipns_names(count: u32) -> Vec<String> {
+    random_bytes(NAME_SUFFIX_LEN * count as usize)
+        .chunks(NAME_SUFFIX_LEN)
+        .map(|chunk| format!("k51{}", to_base36(chunk)))
+        .collect()
 }
 
 /// The engine's content address for a sealed leaf: the `raw` codec core fixes
 /// for content blocks.
-pub fn leaf_cid(bytes: &[u8]) -> String {
+pub(crate) fn leaf_cid(bytes: &[u8]) -> String {
     encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, bytes))
 }
 
@@ -137,7 +163,7 @@ pub fn leaf_cid(bytes: &[u8]) -> String {
 /// crashed run never leaves a later one sharing its accounts and quota.
 async fn provision(
     plan: &RunPlan,
-    http: &LoadHttp,
+    http: &ReqwestHttp,
     run_id: &str,
     collector: &mut Collector,
 ) -> Vec<VirtualClient> {
@@ -158,7 +184,6 @@ async fn provision(
         .await;
         if let Some(outcome) = outcome {
             clients.push(VirtualClient {
-                index,
                 client,
                 public_key: outcome.public_key,
             });
@@ -179,12 +204,11 @@ async fn teardown(clients: Vec<VirtualClient>, collector: &mut Collector) {
     }
 }
 
-/// Run the plan and return every sample it produced plus the wall-clock time
-/// the whole run took. Provisioning and teardown sit inside that window: they
-/// are API surface the run exercised, so throughput is the honest whole-run
-/// rate rather than a load-phase rate divided by a shorter clock.
+/// Run the plan, returning every sample it produced and the wall-clock time the
+/// whole run took — provisioning and teardown included, since they are API
+/// surface the run exercised.
 pub async fn run(plan: &RunPlan) -> Result<(Collector, f64), String> {
-    let http = LoadHttp::new()?;
+    let http = build_http()?;
     let run_id = random_token(6);
     let mut collector = Collector::default();
     let started = Instant::now();
@@ -205,15 +229,12 @@ pub async fn run(plan: &RunPlan) -> Result<(Collector, f64), String> {
     );
 
     let mut tasks = Vec::new();
-    for virtual_client in clients {
+    for (index, virtual_client) in clients.into_iter().enumerate() {
         let plan = plan.clone();
         let http = http.clone();
         tasks.push(tokio::task::spawn_local(async move {
             if plan.ramp_ms > 0 {
-                tokio::time::sleep(Duration::from_millis(
-                    plan.ramp_ms * u64::from(virtual_client.index),
-                ))
-                .await;
+                tokio::time::sleep(Duration::from_millis(plan.ramp_ms * index as u64)).await;
             }
             let mut collector = Collector::default();
             scenarios::drive(&virtual_client, &plan, &http, &mut collector).await;
@@ -239,16 +260,14 @@ mod tests {
     use cipherbox_engine::seams::SeamError;
 
     #[test]
-    fn a_synthetic_name_satisfies_the_registry_name_guard() {
-        let name = synthetic_ipns_name();
-        assert!(name.len() <= 128);
-        assert!(name.chars().all(|c| c.is_ascii_alphanumeric()), "{name}");
-    }
-
-    #[test]
-    fn synthetic_names_do_not_repeat() {
-        let first = synthetic_ipns_name();
-        assert_ne!(first, synthetic_ipns_name());
+    fn synthetic_names_satisfy_the_registry_name_guard_and_do_not_repeat() {
+        let names = synthetic_ipns_names(8);
+        assert_eq!(names.len(), 8);
+        for name in &names {
+            assert!(name.len() <= 128);
+            assert!(name.chars().all(|c| c.is_ascii_alphanumeric()), "{name}");
+        }
+        assert_ne!(names[0], names[1]);
     }
 
     #[test]

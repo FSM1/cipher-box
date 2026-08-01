@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use crate::metrics::OpSummary;
 use crate::plan::RunPlan;
-use crate::thresholds::{Breach, Thresholds};
+use crate::thresholds::Thresholds;
 
 pub fn print_summary(plan: &RunPlan, summaries: &[OpSummary], wall_ms: f64) {
     println!(
@@ -40,6 +40,11 @@ pub fn print_summary(plan: &RunPlan, summaries: &[OpSummary], wall_ms: f64) {
             total.bytes as f64 / (1024.0 * 1024.0)
         );
     }
+    for row in summaries.iter().filter(|row| row.op != "all") {
+        if let Some(detail) = &row.first_failure {
+            println!("{} first failure: {detail}", row.op);
+        }
+    }
 }
 
 pub fn to_json(
@@ -47,7 +52,7 @@ pub fn to_json(
     summaries: &[OpSummary],
     wall_ms: f64,
     thresholds: Thresholds,
-    breaches: &[Breach],
+    breaches: &[String],
 ) -> String {
     let operations: Vec<Value> = summaries
         .iter()
@@ -65,6 +70,7 @@ pub fn to_json(
                 "opsPerSec": round(row.ops_per_sec),
                 "bytes": row.bytes,
                 "bytesPerSec": round(row.bytes_per_sec),
+                "firstFailure": row.first_failure,
             })
         })
         .collect();
@@ -80,7 +86,7 @@ pub fn to_json(
         "rampMs": plan.ramp_ms,
         "wallMs": round(wall_ms),
         "thresholds": { "p95Ms": thresholds.p95_ms, "maxErrorRate": thresholds.max_error_rate },
-        "breaches": breaches.iter().map(|breach| breach.0.clone()).collect::<Vec<_>>(),
+        "breaches": breaches,
         "operations": operations,
     });
     serde_json::to_string_pretty(&report).expect("serialize report")
@@ -129,9 +135,10 @@ mod tests {
         let mut collector = Collector::default();
         collector.record(Sample::new("content-upload", Outcome::Ok, 12.0).with_bytes(1_024));
         collector.record(Sample::new("content-upload", Outcome::Throttled, 3.0));
+        collector.record(Sample::new("content-upload", Outcome::Failed, 4.0).with_detail("boom"));
         let summaries = collector.summarize(1_000.0);
         let bands = thresholds_for(Scenario::ContentIngest, Target::Local);
-        let breaches = vec![Breach("p95 9000ms exceeds the 2000ms band".into())];
+        let breaches = vec!["p95 9000ms exceeds the 2000ms band".to_owned()];
 
         let rendered = to_json(&plan(), &summaries, 1_000.0, bands, &breaches);
         let value: Value = serde_json::from_str(&rendered).expect("valid json");
@@ -140,6 +147,7 @@ mod tests {
         assert_eq!(value["clients"], 2);
         assert_eq!(value["operations"][0]["op"], "content-upload");
         assert_eq!(value["operations"][0]["throttled"], 1);
+        assert_eq!(value["operations"][0]["firstFailure"], "boom");
         assert_eq!(value["operations"][1]["op"], "all");
         assert_eq!(value["breaches"].as_array().expect("array").len(), 1);
         assert_eq!(value["thresholds"]["p95Ms"], 2_000.0);

@@ -1,100 +1,32 @@
-//! The production-shaped seams the harness drives the engine's API client over.
+//! The seams the harness drives the engine's API client over.
+//!
+//! The transport is the desktop production seam, not a harness-local one, so a
+//! run exercises the same byte mover the shipping client uses.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use cipherbox_engine::seams::{
-    CredentialStore, Http, HttpMethod, HttpRequest, HttpResponse, SeamError, SeamResult,
-};
+use cipherbox_desktop_seams::ReqwestHttp;
+use cipherbox_engine::seams::{CredentialStore, SeamResult};
 
-/// A real reqwest client. Clones share one connection pool, so every virtual
-/// client should be built from a clone rather than its own [`LoadHttp::new`] —
-/// otherwise the harness measures TCP and TLS handshakes instead of the API.
-#[derive(Clone)]
-pub struct LoadHttp {
-    client: reqwest::Client,
+/// Build the one transport every virtual client clones. Clones share the
+/// connection pool, so the harness measures the API rather than repeated TLS
+/// handshakes.
+pub(crate) fn build_http() -> Result<ReqwestHttp, String> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|error| format!("build reqwest client: {error}"))?;
+    Ok(ReqwestHttp::with_client(client))
 }
 
-impl LoadHttp {
-    pub fn new() -> Result<Self, String> {
-        reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
-            .build()
-            .map(|client| Self { client })
-            .map_err(|error| format!("build reqwest client: {error}"))
-    }
-
-    /// A direct request, for the read accelerator and other surfaces that are
-    /// not part of the API client.
-    pub async fn get(&self, url: &str, bearer: Option<&str>) -> Result<(u16, Vec<u8>), String> {
-        let mut builder = self.client.get(url);
-        if let Some(token) = bearer {
-            builder = builder.bearer_auth(token);
-        }
-        let response = builder
-            .send()
-            .await
-            .map_err(|error| format!("gateway send: {error}"))?;
-        let status = response.status().as_u16();
-        let body = response
-            .bytes()
-            .await
-            .map_err(|error| format!("gateway body: {error}"))?
-            .to_vec();
-        Ok((status, body))
-    }
-}
-
-impl Http for LoadHttp {
-    async fn send(&self, request: HttpRequest) -> SeamResult<HttpResponse> {
-        let method = match request.method {
-            HttpMethod::Get => reqwest::Method::GET,
-            HttpMethod::Post => reqwest::Method::POST,
-            HttpMethod::Put => reqwest::Method::PUT,
-            HttpMethod::Patch => reqwest::Method::PATCH,
-            HttpMethod::Delete => reqwest::Method::DELETE,
-            HttpMethod::Head => reqwest::Method::HEAD,
-        };
-        let mut builder = self.client.request(method, &request.url);
-        for (name, value) in &request.headers {
-            builder = builder.header(name, value);
-        }
-        if let Some(body) = request.body {
-            builder = builder.body(body);
-        }
-        let response = builder
-            .send()
-            .await
-            .map_err(|error| SeamError::new(format!("reqwest send: {error}")))?;
-        let status = response.status().as_u16();
-        let headers = response
-            .headers()
-            .iter()
-            .map(|(name, value)| {
-                (
-                    name.as_str().to_owned(),
-                    value.to_str().unwrap_or_default().to_owned(),
-                )
-            })
-            .collect();
-        let body = response
-            .bytes()
-            .await
-            .map_err(|error| SeamError::new(format!("reqwest body: {error}")))?
-            .to_vec();
-        Ok(HttpResponse {
-            status,
-            headers,
-            body,
-        })
-    }
-}
-
-/// An in-memory refresh-token store: one per virtual client, so their sessions
-/// stay independent.
+/// An in-memory refresh-token store, one per virtual client so their sessions
+/// stay independent. The engine's in-memory fake lives behind its `test-kit`
+/// feature, which a normal dependency must not enable.
 #[derive(Clone, Default)]
-pub struct MemoryCredentialStore {
+pub(crate) struct MemoryCredentialStore {
     inner: Rc<RefCell<Option<Vec<u8>>>>,
 }
 

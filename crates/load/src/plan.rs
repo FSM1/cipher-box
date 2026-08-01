@@ -7,6 +7,7 @@
 //! the workflow's gated `staging` environment, and there is no third target.
 
 use std::collections::BTreeMap;
+use std::net::IpAddr;
 
 /// A load scenario. Each maps to one v2 API surface (blueprint/api.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,8 +48,17 @@ impl Scenario {
     }
 
     /// Whether the scenario reads blocks back off the read accelerator.
-    pub fn needs_gateway(self) -> bool {
+    fn needs_gateway(self) -> bool {
         self == Scenario::GatewayRead
+    }
+
+    /// The wire names, for usage text and error messages.
+    pub fn names() -> String {
+        Self::ALL
+            .iter()
+            .map(|scenario| scenario.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -78,14 +88,14 @@ impl Target {
     /// Concurrent-account ceiling. Staging is one 2-vCPU VPS whose cores Kubo
     /// and someguy already share (blueprint/deploy.md), so its ceiling is the
     /// hardware, not the harness.
-    pub fn max_clients(self) -> u32 {
+    pub fn max_clients(self) -> u64 {
         match self {
             Target::Local => 50,
             Target::Staging => 8,
         }
     }
 
-    pub fn max_ops_per_client(self) -> u32 {
+    pub fn max_ops_per_client(self) -> u64 {
         match self {
             Target::Local => 500,
             Target::Staging => 50,
@@ -174,23 +184,8 @@ where
 
 /// The environment lookup, injected so the guard is testable without touching
 /// the process environment.
-pub trait EnvSource {
-    fn get(&self, key: &str) -> Option<String>;
-}
-
-/// The real process environment.
-pub struct ProcessEnv;
-
-impl EnvSource for ProcessEnv {
-    fn get(&self, key: &str) -> Option<String> {
-        std::env::var(key).ok().filter(|v| !v.is_empty())
-    }
-}
-
-impl EnvSource for BTreeMap<String, String> {
-    fn get(&self, key: &str) -> Option<String> {
-        BTreeMap::get(self, key).cloned().filter(|v| !v.is_empty())
-    }
+pub fn process_env(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|value| !value.is_empty())
 }
 
 /// The host portion of an `http(s)://host[:port]/...` URL.
@@ -207,157 +202,163 @@ fn host_of(url: &str) -> Option<&str> {
 }
 
 fn is_loopback(host: &str) -> bool {
-    host == "localhost" || host == "::1" || host == "127.0.0.1" || host.starts_with("127.")
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
 }
 
-fn resolve_api_url(target: Target, env: &impl EnvSource) -> Result<String, PlanError> {
-    let configured = env.get("LOAD_TEST_API_URL");
+/// Every URL the harness may reach passes the target's host policy — the API
+/// and the read accelerator alike, since a bearer token rides to the latter.
+fn guard_url(target: Target, key: &str, url: &str) -> Result<(), PlanError> {
+    let host = host_of(url).ok_or_else(|| bad(format!("{key} `{url}` is not an http(s) URL")))?;
     match target {
-        Target::Local => {
-            let url = configured.unwrap_or_else(|| DEFAULT_LOCAL_API_URL.to_owned());
-            let host = host_of(&url)
-                .ok_or_else(|| bad(format!("LOAD_TEST_API_URL `{url}` is not an http(s) URL")))?;
-            if !is_loopback(host) {
-                return Err(bad(format!(
-                    "target `local` refuses the non-loopback host `{host}`; dispatch with --target staging to reach a deployed stack"
-                )));
-            }
-            Ok(url)
+        Target::Local if !is_loopback(host) => Err(bad(format!(
+            "target `local` refuses the non-loopback host `{host}` in {key}; dispatch with --target staging to reach a deployed stack"
+        ))),
+        Target::Staging if is_loopback(host) => Err(bad(format!(
+            "target `staging` refuses the loopback host `{host}` in {key}; use --target local"
+        ))),
+        Target::Staging if !url.starts_with("https://") => {
+            Err(bad(format!("target `staging` requires an https {key}")))
         }
-        Target::Staging => {
-            let url = configured.ok_or_else(|| {
-                bad("target `staging` requires LOAD_TEST_API_URL; it is supplied by the workflow's gated staging environment")
-            })?;
-            if !url.starts_with("https://") {
-                return Err(bad("target `staging` requires an https LOAD_TEST_API_URL"));
-            }
-            let host = host_of(&url)
-                .ok_or_else(|| bad(format!("LOAD_TEST_API_URL `{url}` is not an http(s) URL")))?;
-            if is_loopback(host) {
-                return Err(bad(format!(
-                    "target `staging` refuses the loopback host `{host}`; use --target local"
-                )));
-            }
-            Ok(url)
-        }
+        _ => Ok(()),
     }
+}
+
+fn resolve_api_url(
+    target: Target,
+    env: &impl Fn(&str) -> Option<String>,
+) -> Result<String, PlanError> {
+    let url = match (env("LOAD_TEST_API_URL"), target) {
+        (Some(url), _) => url,
+        (None, Target::Local) => DEFAULT_LOCAL_API_URL.to_owned(),
+        (None, Target::Staging) => {
+            return Err(bad(
+                "target `staging` requires LOAD_TEST_API_URL; it is supplied by the workflow's gated staging environment",
+            ));
+        }
+    };
+    guard_url(target, "LOAD_TEST_API_URL", &url)?;
+    Ok(url)
 }
 
 fn resolve_gateway_url(
     scenario: Scenario,
     target: Target,
-    env: &impl EnvSource,
+    env: &impl Fn(&str) -> Option<String>,
 ) -> Result<Option<String>, PlanError> {
     if !scenario.needs_gateway() {
         return Ok(None);
     }
-    match env.get("LOAD_TEST_GATEWAY_URL") {
-        Some(url) => {
-            host_of(&url).ok_or_else(|| {
-                bad(format!(
-                    "LOAD_TEST_GATEWAY_URL `{url}` is not an http(s) URL"
-                ))
-            })?;
-            Ok(Some(url))
+    let url = match (env("LOAD_TEST_GATEWAY_URL"), target) {
+        (Some(url), _) => url,
+        (None, Target::Local) => DEFAULT_LOCAL_GATEWAY_URL.to_owned(),
+        (None, Target::Staging) => {
+            return Err(bad(
+                "scenario `gateway-read` requires LOAD_TEST_GATEWAY_URL on a deployed target",
+            ));
         }
-        None if target == Target::Local => Ok(Some(DEFAULT_LOCAL_GATEWAY_URL.to_owned())),
-        None => Err(bad(
-            "scenario `gateway-read` requires LOAD_TEST_GATEWAY_URL on a deployed target",
-        )),
-    }
+    };
+    guard_url(target, "LOAD_TEST_GATEWAY_URL", &url)?;
+    Ok(Some(url))
 }
 
+/// Every dimension of a run is bounded, so no flag combination can turn a
+/// dispatched run into an unbounded one.
 fn bounded(
-    flags: &BTreeMap<String, String>,
+    flags: &mut BTreeMap<String, String>,
     key: &str,
-    default: u32,
-    max: u32,
-) -> Result<u32, PlanError> {
-    let Some(raw) = flags.get(key) else {
+    default: u64,
+    min: u64,
+    max: u64,
+) -> Result<u64, PlanError> {
+    let Some(raw) = flags.remove(key) else {
         return Ok(default);
     };
-    let value: u32 = raw
+    let value: u64 = raw
         .parse()
-        .map_err(|_| bad(format!("`--{key}` expects a positive integer, got `{raw}`")))?;
-    if value == 0 {
-        return Err(bad(format!("`--{key}` must be at least 1")));
-    }
-    if value > max {
-        return Err(bad(format!("`--{key}` is capped at {max}, got {value}")));
+        .map_err(|_| bad(format!("`--{key}` expects a whole number, got `{raw}`")))?;
+    if value < min || value > max {
+        return Err(bad(format!(
+            "`--{key}` must be between {min} and {max}, got {value}"
+        )));
     }
     Ok(value)
 }
 
-fn millis(flags: &BTreeMap<String, String>, key: &str, default: u64) -> Result<u64, PlanError> {
-    let Some(raw) = flags.get(key) else {
-        return Ok(default);
-    };
-    raw.parse().map_err(|_| {
-        bad(format!(
-            "`--{key}` expects a non-negative integer, got `{raw}`"
-        ))
-    })
-}
+/// A ceiling on the two delay flags: a run whose every other dimension is
+/// bounded should not be able to stall for a day between operations.
+const MAX_DELAY_MS: u64 = 60_000;
 
 /// Resolve command-line flags and the environment into a bounds-checked plan.
+/// Flags are consumed as they are read, so anything left over was misspelled.
 pub fn build_plan(
     flags: &BTreeMap<String, String>,
-    env: &impl EnvSource,
+    env: impl Fn(&str) -> Option<String>,
 ) -> Result<RunPlan, PlanError> {
-    let known = [
-        "scenario",
-        "target",
-        "clients",
-        "ops-per-client",
-        "block-bytes",
-        "batch-size",
-        "pace-ms",
-        "ramp-ms",
-        "report-dir",
-    ];
-    if let Some(unknown) = flags.keys().find(|k| !known.contains(&k.as_str())) {
-        return Err(bad(format!("unknown flag `--{unknown}`")));
-    }
+    let mut flags = flags.clone();
 
     let scenario_name = flags
-        .get("scenario")
+        .remove("scenario")
         .ok_or_else(|| bad("`--scenario` is required"))?;
-    let scenario = Scenario::parse(scenario_name).ok_or_else(|| {
-        let names: Vec<&str> = Scenario::ALL.iter().map(|s| s.as_str()).collect();
+    let scenario = Scenario::parse(&scenario_name).ok_or_else(|| {
         bad(format!(
             "unknown scenario `{scenario_name}`; expected one of {}",
-            names.join(", ")
+            Scenario::names()
         ))
     })?;
     let target_name = flags
-        .get("target")
+        .remove("target")
         .ok_or_else(|| bad("`--target` is required"))?;
-    let target = Target::parse(target_name).ok_or_else(|| {
+    let target = Target::parse(&target_name).ok_or_else(|| {
         bad(format!(
             "unknown target `{target_name}`; expected local or staging"
         ))
     })?;
 
-    Ok(RunPlan {
+    let plan = RunPlan {
         scenario,
         target,
-        api_url: resolve_api_url(target, env)?,
-        gateway_url: resolve_gateway_url(scenario, target, env)?,
-        gateway_token: env.get("LOAD_TEST_GATEWAY_TOKEN"),
-        test_login_secret: env.get("LOAD_TEST_SECRET").ok_or_else(|| {
+        api_url: resolve_api_url(target, &env)?,
+        gateway_url: resolve_gateway_url(scenario, target, &env)?,
+        gateway_token: env("LOAD_TEST_GATEWAY_TOKEN"),
+        test_login_secret: env("LOAD_TEST_SECRET").ok_or_else(|| {
             bad("LOAD_TEST_SECRET is required; it must equal the API's TEST_LOGIN_SECRET")
         })?,
-        clients: bounded(flags, "clients", 5, target.max_clients())?,
-        ops_per_client: bounded(flags, "ops-per-client", 20, target.max_ops_per_client())?,
-        block_bytes: bounded(flags, "block-bytes", 64 * 1024, MAX_BLOCK_BYTES)?,
-        batch_size: bounded(flags, "batch-size", 25, MAX_BATCH)?,
-        pace_ms: millis(flags, "pace-ms", target.default_pace_ms())?,
-        ramp_ms: millis(flags, "ramp-ms", 0)?,
+        clients: bounded(&mut flags, "clients", 5, 1, target.max_clients())? as u32,
+        ops_per_client: bounded(
+            &mut flags,
+            "ops-per-client",
+            20,
+            1,
+            target.max_ops_per_client(),
+        )? as u32,
+        block_bytes: bounded(
+            &mut flags,
+            "block-bytes",
+            64 * 1024,
+            1,
+            u64::from(MAX_BLOCK_BYTES),
+        )? as u32,
+        batch_size: bounded(&mut flags, "batch-size", 25, 1, u64::from(MAX_BATCH))? as u32,
+        pace_ms: bounded(
+            &mut flags,
+            "pace-ms",
+            target.default_pace_ms(),
+            0,
+            MAX_DELAY_MS,
+        )?,
+        ramp_ms: bounded(&mut flags, "ramp-ms", 0, 0, MAX_DELAY_MS)?,
         report_dir: flags
-            .get("report-dir")
-            .cloned()
+            .remove("report-dir")
             .unwrap_or_else(|| "load-reports".to_owned()),
-    })
+    };
+
+    if let Some(unknown) = flags.keys().next() {
+        return Err(bad(format!("unknown flag `--{unknown}`")));
+    }
+    Ok(plan)
 }
 
 #[cfg(test)]
@@ -375,8 +376,14 @@ mod tests {
         env(pairs)
     }
 
-    fn local_env() -> BTreeMap<String, String> {
-        env(&[("LOAD_TEST_SECRET", "load-secret")])
+    /// The env closure the guard reads, backed by a fixture map.
+    fn lookup(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
+        let map = env(pairs);
+        move |key: &str| map.get(key).cloned().filter(|value| !value.is_empty())
+    }
+
+    fn local_env() -> impl Fn(&str) -> Option<String> {
+        lookup(&[("LOAD_TEST_SECRET", "load-secret")])
     }
 
     #[test]
@@ -420,7 +427,7 @@ mod tests {
     fn an_unknown_flag_is_refused() {
         let error = build_plan(
             &flags(&[("scenario", "mixed"), ("target", "local"), ("vus", "9")]),
-            &local_env(),
+            local_env(),
         )
         .expect_err("refused");
         assert!(error.0.contains("unknown flag `--vus`"), "{error}");
@@ -430,7 +437,7 @@ mod tests {
     fn local_defaults_to_loopback() {
         let plan = build_plan(
             &flags(&[("scenario", "mixed"), ("target", "local")]),
-            &local_env(),
+            local_env(),
         )
         .expect("plan");
         assert_eq!(plan.api_url, "http://localhost:3000");
@@ -441,7 +448,7 @@ mod tests {
     fn local_refuses_a_non_loopback_url() {
         let error = build_plan(
             &flags(&[("scenario", "mixed"), ("target", "local")]),
-            &env(&[
+            lookup(&[
                 ("LOAD_TEST_SECRET", "s"),
                 ("LOAD_TEST_API_URL", "https://api.staging.example.com"),
             ]),
@@ -454,14 +461,14 @@ mod tests {
     fn staging_requires_an_https_url_from_the_environment() {
         let missing = build_plan(
             &flags(&[("scenario", "mixed"), ("target", "staging")]),
-            &local_env(),
+            local_env(),
         )
         .expect_err("refused");
         assert!(missing.0.contains("LOAD_TEST_API_URL"), "{missing}");
 
         let plaintext = build_plan(
             &flags(&[("scenario", "mixed"), ("target", "staging")]),
-            &env(&[
+            lookup(&[
                 ("LOAD_TEST_SECRET", "s"),
                 ("LOAD_TEST_API_URL", "http://api.staging.example.com"),
             ]),
@@ -474,7 +481,7 @@ mod tests {
     fn staging_refuses_a_loopback_url() {
         let error = build_plan(
             &flags(&[("scenario", "mixed"), ("target", "staging")]),
-            &env(&[
+            lookup(&[
                 ("LOAD_TEST_SECRET", "s"),
                 ("LOAD_TEST_API_URL", "https://127.0.0.1:3000"),
             ]),
@@ -485,20 +492,22 @@ mod tests {
 
     #[test]
     fn staging_caps_clients_below_the_two_vcpu_ceiling() {
-        let staging_env = env(&[
-            ("LOAD_TEST_SECRET", "s"),
-            ("LOAD_TEST_API_URL", "https://api.staging.example.com"),
-        ]);
+        let staging_env = || {
+            lookup(&[
+                ("LOAD_TEST_SECRET", "s"),
+                ("LOAD_TEST_API_URL", "https://api.staging.example.com"),
+            ])
+        };
         let error = build_plan(
             &flags(&[
                 ("scenario", "mixed"),
                 ("target", "staging"),
                 ("clients", "40"),
             ]),
-            &staging_env,
+            staging_env(),
         )
         .expect_err("refused");
-        assert!(error.0.contains("capped at 8"), "{error}");
+        assert!(error.0.contains("between 1 and 8"), "{error}");
 
         let plan = build_plan(
             &flags(&[
@@ -506,7 +515,7 @@ mod tests {
                 ("target", "staging"),
                 ("clients", "8"),
             ]),
-            &staging_env,
+            staging_env(),
         )
         .expect("plan");
         assert_eq!(plan.clients, 8);
@@ -524,10 +533,10 @@ mod tests {
                 ("target", "local"),
                 ("block-bytes", "4194304"),
             ]),
-            &local_env(),
+            local_env(),
         )
         .expect_err("refused");
-        assert!(error.0.contains("capped at 2097152"), "{error}");
+        assert!(error.0.contains("between 1 and 2097152"), "{error}");
     }
 
     #[test]
@@ -538,10 +547,10 @@ mod tests {
                 ("target", "local"),
                 ("batch-size", "1001"),
             ]),
-            &local_env(),
+            local_env(),
         )
         .expect_err("refused");
-        assert!(error.0.contains("capped at 1000"), "{error}");
+        assert!(error.0.contains("between 1 and 1000"), "{error}");
     }
 
     #[test]
@@ -554,7 +563,7 @@ mod tests {
                         ("target", "local"),
                         ("clients", value)
                     ]),
-                    &local_env(),
+                    local_env(),
                 )
                 .is_err(),
                 "`--clients {value}` should be refused"
@@ -566,7 +575,7 @@ mod tests {
     fn a_missing_login_secret_is_refused() {
         let error = build_plan(
             &flags(&[("scenario", "mixed"), ("target", "local")]),
-            &env(&[]),
+            lookup(&[]),
         )
         .expect_err("refused");
         assert!(error.0.contains("LOAD_TEST_SECRET"), "{error}");
@@ -576,24 +585,67 @@ mod tests {
     fn the_gateway_url_is_resolved_only_for_the_read_scenario() {
         let read = build_plan(
             &flags(&[("scenario", "gateway-read"), ("target", "local")]),
-            &local_env(),
+            local_env(),
         )
         .expect("plan");
         assert_eq!(read.gateway_url.as_deref(), Some("http://localhost:8080"));
 
         let ingest = build_plan(
             &flags(&[("scenario", "content-ingest"), ("target", "local")]),
-            &local_env(),
+            local_env(),
         )
         .expect("plan");
         assert_eq!(ingest.gateway_url, None);
     }
 
     #[test]
+    fn the_gateway_url_passes_the_same_host_policy_as_the_api_url() {
+        let error = build_plan(
+            &flags(&[("scenario", "gateway-read"), ("target", "local")]),
+            lookup(&[
+                ("LOAD_TEST_SECRET", "s"),
+                ("LOAD_TEST_GATEWAY_URL", "https://gateway.example.com"),
+            ]),
+        )
+        .expect_err("refused");
+        assert!(error.0.contains("LOAD_TEST_GATEWAY_URL"), "{error}");
+        assert!(error.0.contains("non-loopback"), "{error}");
+
+        let plaintext = build_plan(
+            &flags(&[("scenario", "gateway-read"), ("target", "staging")]),
+            lookup(&[
+                ("LOAD_TEST_SECRET", "s"),
+                ("LOAD_TEST_API_URL", "https://api.staging.example.com"),
+                (
+                    "LOAD_TEST_GATEWAY_URL",
+                    "http://gateway.staging.example.com",
+                ),
+            ]),
+        )
+        .expect_err("refused");
+        assert!(
+            plaintext.0.contains("https LOAD_TEST_GATEWAY_URL"),
+            "{plaintext}"
+        );
+    }
+
+    #[test]
+    fn loopback_recognition_spans_the_whole_127_block_and_nothing_that_merely_looks_like_it() {
+        assert!(is_loopback("localhost"));
+        assert!(is_loopback("LocalHost"));
+        assert!(is_loopback("127.0.0.1"));
+        assert!(is_loopback("127.99.4.7"));
+        assert!(is_loopback("::1"));
+        assert!(!is_loopback("127.evil.example.com"));
+        assert!(!is_loopback("1270.0.0.1"));
+        assert!(!is_loopback("localhost.evil.example.com"));
+    }
+
+    #[test]
     fn a_deployed_gateway_read_needs_an_explicit_gateway_url() {
         let error = build_plan(
             &flags(&[("scenario", "gateway-read"), ("target", "staging")]),
-            &env(&[
+            lookup(&[
                 ("LOAD_TEST_SECRET", "s"),
                 ("LOAD_TEST_API_URL", "https://api.staging.example.com"),
             ]),
@@ -619,7 +671,7 @@ mod tests {
     fn a_credential_prefixed_url_cannot_smuggle_a_loopback_target() {
         let error = build_plan(
             &flags(&[("scenario", "mixed"), ("target", "local")]),
-            &env(&[
+            lookup(&[
                 ("LOAD_TEST_SECRET", "s"),
                 ("LOAD_TEST_API_URL", "http://localhost@api.example.com/"),
             ]),
