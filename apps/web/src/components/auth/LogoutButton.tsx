@@ -9,6 +9,8 @@ export function LogoutButton() {
   const signOut = async () => {
     try {
       await logout();
+    } catch {
+      // `useAuth` already surfaces the failure as `error`.
     } finally {
       navigate('/');
     }

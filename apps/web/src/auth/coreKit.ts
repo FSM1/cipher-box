@@ -57,7 +57,9 @@ class Web3AuthSession implements CoreKitSession {
     });
     if (this.coreKit.status !== COREKIT_STATUS.LOGGED_IN) {
       // REQUIRED_SHARE: MFA is on and this device holds no factor. Recovery and
-      // device approval are not built yet, so fail rather than half-log-in.
+      // device approval are not built yet, so fail rather than half-log-in, and
+      // end the partial session rather than leave it resident on the device.
+      await this.coreKit.logout().catch(() => undefined);
       throw new Error('this device needs approval or a recovery phrase before it can sign in');
     }
     await this.coreKit.commitChanges();

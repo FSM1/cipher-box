@@ -161,6 +161,30 @@ describe('useAuth', () => {
     await expect(secrets.provideSecret()).rejects.toThrow(/no login session/);
   });
 
+  it('refuses a second sign-in while the first is still in flight', async () => {
+    let release!: () => void;
+    const engine = fakeEngineClient({ start: () => new Promise<void>((r) => (release = r)) });
+    const coreKit = fakeCoreKitSession();
+    const { result } = mount(engine, coreKit);
+    await waitFor(() => expect(result.current.auth.isReady).toBe(true));
+
+    let first!: Promise<void>;
+    act(() => {
+      first = result.current.auth.loginWithGoogle();
+    });
+    await waitFor(() => expect(engine.calls.started).toHaveLength(1));
+
+    await expect(result.current.auth.loginWithGoogle()).rejects.toThrow(
+      /another sign-in is already in progress/
+    );
+    expect(coreKit.calls.logins).toHaveLength(1);
+
+    await act(async () => {
+      release();
+      await first;
+    });
+  });
+
   it('keeps the login secret out of React state and the auth store', async () => {
     const engine = fakeEngineClient();
     const coreKit = fakeCoreKitSession();

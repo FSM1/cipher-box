@@ -101,10 +101,13 @@ export function authWrapper(client: EngineClient, session: CoreKitSession) {
 /** `authWrapper` plus the wallet-side providers the login *page* also mounts. */
 export function pageWrapper(client: EngineClient, session: CoreKitSession) {
   const Auth = authWrapper(client, session);
+  // One client per wrapper, not per render: wagmi's cache must survive a
+  // re-render or the wallet flow reads as a fresh, disconnected mount.
+  const queries = new QueryClient();
   return function Wrapper({ children }: { children: ReactNode }) {
     return (
       <WagmiProvider config={wagmiConfig} reconnectOnMount={false}>
-        <QueryClientProvider client={new QueryClient()}>
+        <QueryClientProvider client={queries}>
           <Auth>{children}</Auth>
         </QueryClientProvider>
       </WagmiProvider>

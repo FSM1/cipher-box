@@ -38,6 +38,13 @@ describe('engineHostConfig', () => {
     expect(config.apiBaseUrl).toBe('http://localhost:3000');
     expect(config.recordEndpoints).toEqual(['https://delegated-ipfs.dev']);
   });
+
+  it('reads a blank API origin as unconfigured rather than as a base URL', () => {
+    // `VITE_API_URL=` reads as `''`, which `new URL` rejects outright.
+    expect(engineHostConfig({ VITE_API_URL: '' }, artifact).apiBaseUrl).toBe(
+      'http://localhost:3000'
+    );
+  });
 });
 
 describe('environment', () => {

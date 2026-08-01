@@ -8,7 +8,8 @@ export type Environment = 'local' | 'ci' | 'staging' | 'production';
 
 /** The API origin the engine authenticates and publishes against. */
 export function apiBaseUrl(env: Partial<ImportMetaEnv>): string {
-  return env.VITE_API_URL ?? DEFAULT_API_URL;
+  // `VITE_API_URL=` reads as `''`, which `new URL` rejects rather than defaults.
+  return env.VITE_API_URL || DEFAULT_API_URL;
 }
 
 const ENVIRONMENTS: readonly Environment[] = ['local', 'ci', 'staging', 'production'];
