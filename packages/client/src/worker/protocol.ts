@@ -26,8 +26,20 @@ export type NodeKind = 'file' | 'folder';
 /** The staleness ladder (mirrors the facade `Staleness`). */
 export type Staleness = 'fresh' | 'reconciling' | 'stale' | 'offline';
 
-/** The phase an `opProgress` event reports (mirrors the facade `OpPhase`). */
-export type OpProgressPhase = 'downloadStarted' | 'downloadCompleted' | 'downloadFailed';
+/**
+ * The phase an `opProgress` event reports (mirrors the facade `OpPhase`).
+ * `uploadCompleted` means the version's blocks are on the network, not that its
+ * record published — the op leaves the pending-op overlay when it does.
+ */
+export type OpProgressPhase =
+  | 'downloadStarted'
+  | 'downloadCompleted'
+  | 'downloadFailed'
+  | 'uploadStarted'
+  | 'uploadProgress'
+  | 'uploadCompleted'
+  | 'uploadFailed'
+  | 'uploadCancelled';
 
 /** One ancestor step in a snapshot's breadcrumb trail, as data. */
 export interface BreadcrumbDescriptor {
@@ -148,6 +160,12 @@ export type EventDescriptor =
       opId: bigint | null;
       node: Uint8Array;
       phase: OpProgressPhase;
+      /**
+       * Blocks of the version confirmed so far and its whole block count, on
+       * the phases that count them.
+       */
+      blocksConfirmed: number | null;
+      blocksTotal: number | null;
       error: string | null;
     };
 

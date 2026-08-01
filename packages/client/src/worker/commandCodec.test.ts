@@ -67,6 +67,8 @@ describe('readEvent', () => {
       opId: 7n,
       node,
       phase: 'downloadFailed',
+      blocksConfirmed: null,
+      blocksTotal: null,
       error: 'unavailable',
     });
   });
@@ -78,6 +80,29 @@ describe('readEvent', () => {
       opId: null,
       node: new Uint8Array(16),
       phase: 'downloadStarted',
+      blocksConfirmed: null,
+      blocksTotal: null,
+      error: null,
+    });
+  });
+
+  it('carries an upload phase and its block counters through to the descriptor', () => {
+    const node = new Uint8Array(16).fill(4);
+    const event: WasmEvent = {
+      kind: 'opProgress',
+      opId: 9n,
+      node,
+      phase: fakeWasm.OpPhase.UploadProgress,
+      blocksConfirmed: 3,
+      blocksTotal: 8,
+    };
+    expect(readEvent(fakeWasm, event)).toEqual({
+      kind: 'opProgress',
+      opId: 9n,
+      node,
+      phase: 'uploadProgress',
+      blocksConfirmed: 3,
+      blocksTotal: 8,
       error: null,
     });
   });

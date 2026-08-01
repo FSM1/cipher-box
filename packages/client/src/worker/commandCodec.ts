@@ -119,6 +119,16 @@ function opPhase(wasm: EngineWasm, phase: number | undefined): OpProgressPhase {
       return 'downloadCompleted';
     case wasm.OpPhase.DownloadFailed:
       return 'downloadFailed';
+    case wasm.OpPhase.UploadStarted:
+      return 'uploadStarted';
+    case wasm.OpPhase.UploadProgress:
+      return 'uploadProgress';
+    case wasm.OpPhase.UploadCompleted:
+      return 'uploadCompleted';
+    case wasm.OpPhase.UploadFailed:
+      return 'uploadFailed';
+    case wasm.OpPhase.UploadCancelled:
+      return 'uploadCancelled';
     default:
       // Fail closed: an unmapped value means a JS/WASM version mismatch, not a
       // safe-to-ignore state (the event pump turns this throw into a fatal).
@@ -217,6 +227,8 @@ export function readEvent(wasm: EngineWasm, event: WasmEvent): EventDescriptor {
         opId: event.opId ?? null,
         node: event.node ?? new Uint8Array(),
         phase: opPhase(wasm, event.phase),
+        blocksConfirmed: event.blocksConfirmed ?? null,
+        blocksTotal: event.blocksTotal ?? null,
         error: event.error ?? null,
       };
     default:

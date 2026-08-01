@@ -222,6 +222,16 @@ pub enum OpPhase {
     DownloadCompleted,
     /// A content download failed.
     DownloadFailed,
+    /// The drain began uploading a queued op's content version.
+    UploadStarted,
+    /// One more of the version's blocks is confirmed on the network.
+    UploadProgress,
+    /// Every block of the version is on the network.
+    UploadCompleted,
+    /// One upload attempt stopped; the op retries on the next drain tick.
+    UploadFailed,
+    /// The user cancelled the upload.
+    UploadCancelled,
 }
 
 impl From<facade::OpPhase> for OpPhase {
@@ -230,6 +240,11 @@ impl From<facade::OpPhase> for OpPhase {
             facade::OpPhase::DownloadStarted => OpPhase::DownloadStarted,
             facade::OpPhase::DownloadCompleted => OpPhase::DownloadCompleted,
             facade::OpPhase::DownloadFailed => OpPhase::DownloadFailed,
+            facade::OpPhase::UploadStarted => OpPhase::UploadStarted,
+            facade::OpPhase::UploadProgress => OpPhase::UploadProgress,
+            facade::OpPhase::UploadCompleted => OpPhase::UploadCompleted,
+            facade::OpPhase::UploadFailed => OpPhase::UploadFailed,
+            facade::OpPhase::UploadCancelled => OpPhase::UploadCancelled,
         }
     }
 }
@@ -709,6 +724,26 @@ impl Event {
         }
     }
 
+    /// `opProgress`: blocks of the version confirmed so far, on the phases that
+    /// count them; otherwise `undefined`.
+    #[wasm_bindgen(getter, js_name = blocksConfirmed)]
+    pub fn blocks_confirmed(&self) -> Option<u32> {
+        match self.inner {
+            facade::Event::OpProgress { progress, .. } => progress.map(|p| p.confirmed),
+            _ => None,
+        }
+    }
+
+    /// `opProgress`: the version's whole block count, on the phases that count
+    /// them; otherwise `undefined`.
+    #[wasm_bindgen(getter, js_name = blocksTotal)]
+    pub fn blocks_total(&self) -> Option<u32> {
+        match self.inner {
+            facade::Event::OpProgress { progress, .. } => progress.map(|p| p.total),
+            _ => None,
+        }
+    }
+
     /// `opProgress`: the key-free failure classification for a failed phase;
     /// otherwise `undefined`.
     #[wasm_bindgen(getter)]
@@ -848,6 +883,7 @@ mod tests {
             op_id: None,
             node: facade::NodeId([0u8; 16]),
             phase: facade::OpPhase::DownloadStarted,
+            progress: None,
             error: None,
         });
         assert_eq!(progress.kind(), "opProgress");
@@ -859,17 +895,35 @@ mod tests {
             op_id: Some(OpId(7)),
             node: facade::NodeId([3u8; 16]),
             phase: facade::OpPhase::DownloadFailed,
+            progress: None,
             error: Some("unavailable".into()),
         });
         assert_eq!(progress.op_id(), Some(7));
         assert_eq!(progress.node(), Some(vec![3u8; 16]));
         assert_eq!(progress.phase(), Some(OpPhase::DownloadFailed));
         assert_eq!(progress.error(), Some("unavailable".into()));
+        assert!(progress.blocks_confirmed().is_none());
+
+        let upload = Event::from_facade(facade::Event::OpProgress {
+            op_id: Some(OpId(9)),
+            node: facade::NodeId([4u8; 16]),
+            phase: facade::OpPhase::UploadProgress,
+            progress: Some(facade::BlockProgress {
+                confirmed: 3,
+                total: 8,
+            }),
+            error: None,
+        });
+        assert_eq!(upload.op_id(), Some(9));
+        assert_eq!(upload.phase(), Some(OpPhase::UploadProgress));
+        assert_eq!(upload.blocks_confirmed(), Some(3));
+        assert_eq!(upload.blocks_total(), Some(8));
 
         let op_less = Event::from_facade(facade::Event::OpProgress {
             op_id: None,
             node: facade::NodeId([0u8; 16]),
             phase: facade::OpPhase::DownloadStarted,
+            progress: None,
             error: None,
         });
         assert!(op_less.op_id().is_none());

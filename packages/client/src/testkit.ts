@@ -27,7 +27,16 @@ export const fakeWasmEnums = {
   PendingClass: { None: 0, Metadata: 1, Content: 2 },
   Permission: { Read: 0, Write: 1 },
   Staleness: { Fresh: 0, Reconciling: 1, Stale: 2, Offline: 3 },
-  OpPhase: { DownloadStarted: 0, DownloadCompleted: 1, DownloadFailed: 2 },
+  OpPhase: {
+    DownloadStarted: 0,
+    DownloadCompleted: 1,
+    DownloadFailed: 2,
+    UploadStarted: 3,
+    UploadProgress: 4,
+    UploadCompleted: 5,
+    UploadFailed: 6,
+    UploadCancelled: 7,
+  },
   DeadLetterReason: {
     TargetGone: 0,
     DestinationGone: 1,
