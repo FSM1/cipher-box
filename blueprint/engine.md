@@ -142,7 +142,13 @@ bytes (#28 D2).
   target that never landed costs nothing. An op whose record PUT was
   **acknowledged** retires nothing: the record may be resolvable at its name, and
   unpinning content a live record still references is loss, where leaving the
-  rows charged is only a leak.
+  rows charged is only a leak. A publish that fails **before the record reaches
+  the transport** — register-first, the floor read, the head-CID echo — is the
+  mirror case: its head block already uploaded under its own charged row, no
+  record can name it, and the retry re-authors under a fresh seal nonce, so the
+  drain retires that head at the end of the pass that orphaned it, per attempt.
+  A fan-out that acknowledged nothing does **not** qualify: no ack is not proof
+  nothing stored.
 
 ## Adoption gate and floors
 

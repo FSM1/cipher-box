@@ -1146,6 +1146,10 @@ pub struct Engine<T: SeamTypes> {
     /// [`snapshot`](Self::snapshot). In-memory: a restart re-derives it from the
     /// next drain attempt's own 413 rather than trusting a stale verdict.
     blocked: Rc<RefCell<Option<BlockedOp>>>,
+    /// Head blocks the drain uploaded for a publish that never reached the
+    /// record transport, pending retirement. Session-lived so a retire the
+    /// registry refused goes out again on a later pass (#921).
+    orphan_heads: Rc<RefCell<Vec<String>>>,
     /// Session-alive latch: cleared on drop so the spawned liveness loop
     /// stops at its next wake instead of re-PUTting after the engine is gone.
     alive: Rc<Cell<bool>>,
@@ -1198,6 +1202,7 @@ impl<T: SeamTypes> Engine<T> {
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
+                orphan_heads: Rc::new(RefCell::new(Vec::new())),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
                 api: None,
@@ -1510,6 +1515,7 @@ impl<T: SeamTypes> Engine<T> {
         let scope_write_seeds = self.scope_write_seeds.clone();
         let dead_letters = self.dead_letters.clone();
         let blocked = self.blocked.clone();
+        let orphan_heads = self.orphan_heads.clone();
         let transport = self.seams.record_transport.clone();
         let snapshot_cache = self.seams.snapshot_cache.clone();
         let floors = self.seams.floor_store.clone();
@@ -1630,6 +1636,7 @@ impl<T: SeamTypes> Engine<T> {
                         base: &base,
                         held: &held,
                         blocked: &blocked,
+                        orphan_heads: &orphan_heads,
                         events: &events,
                     }
                     .run(&DrainScope {

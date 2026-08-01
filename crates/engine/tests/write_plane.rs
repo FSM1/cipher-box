@@ -191,8 +191,14 @@ impl Blocks {
     }
 
     /// Answer every registration with a 400 carrying `body` instead of acking.
+    /// Retirement keeps answering, so a pass can still clear what it orphaned.
     fn refuse_register(&self, body: Vec<u8>) {
         *self.register_refusal.lock().expect("lock") = Some(body);
+    }
+
+    /// Let every registration through again.
+    fn accept_registrations(&self) {
+        *self.register_refusal.lock().expect("lock") = None;
     }
 
     /// Answer one engine HTTP call: a content upload lands its bytes here and
@@ -3438,6 +3444,88 @@ fn an_unconfirmed_publish_never_retires_the_version_it_may_already_name() {
     );
 }
 
+/// Register-first stops a publish only after its head block has uploaded and
+/// charged its own pin row, and each attempt re-authors under a fresh seal
+/// nonce — so a retrying op orphans a byte-different head every pass. Each
+/// leaves the inventory on the pass that orphaned it, and the abandonment still
+/// owes back the name on top (#921). The refusal is an intermediary's `400`, so
+/// it is charged rather than permanent and the op survives to retry.
+#[test]
+fn every_head_block_a_retrying_op_orphaned_leaves_the_inventory() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    create(&mut engine, "photos");
+    let photos = child_id(&engine, ROOT, "photos");
+    blocks.refuse_register(proxy_400());
+    let mut heads = Vec::new();
+    for attempt in 1..=3 {
+        tick(&world, &engine, &mut tasks);
+        heads = uploaded_cids(&alice);
+        assert_eq!(heads.len(), attempt, "one head block per attempt");
+        assert_eq!(
+            retire_targets(&alice),
+            heads,
+            "an orphaned head leaves the inventory on its own pass, not on a retry that \
+             re-authors"
+        );
+    }
+    assert_eq!(
+        heads
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        heads.len(),
+        "every attempt authored its own head under a fresh nonce"
+    );
+
+    // The op kept its place; a permanent refusal now abandons it.
+    blocks.accept_registrations();
+    blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("UPLOAD_TOO_LARGE")))));
+    tick(&world, &engine, &mut tasks);
+
+    let mut expected = heads;
+    expected.push(write_name(photos).as_str().to_owned());
+    assert_eq!(
+        retire_targets(&alice),
+        expected,
+        "the abandonment owes back the name on top of every head the retries charged"
+    );
+}
+
+/// A PUT fan-out that acknowledges nothing is not proof that nothing stored:
+/// an endpoint may hold the record and have lost its ack. Retiring that head
+/// would unpin the block a record still resolvable at the name points at —
+/// loss, where leaving the row charged is only a leak (#916 as extended by
+/// #921).
+#[test]
+fn a_publish_that_reached_the_transport_never_retires_its_head() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    create(&mut engine, "photos");
+    for endpoint in world.record_store.endpoints() {
+        world.record_store.fail_put_endpoint(&endpoint);
+    }
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        uploads(&alice),
+        1,
+        "the head block went up before the fan-out refused it"
+    );
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "a head the record plane may already hold is not ours to unpin"
+    );
+}
+
 /// The upload a refusal lands on to halt a 200-byte version mid-set: past the
 /// first leaves, well short of the 13 the CI framing produces.
 const MID_SET_UPLOAD: usize = 8;
@@ -3612,12 +3700,25 @@ fn events_so_far(events: &mut EventStream) -> Vec<Event> {
 
 /// How many content uploads this device has sent.
 fn uploads(device: &FakeDevice) -> usize {
+    uploaded_cids(device).len()
+}
+
+/// The address each of this device's uploads declared, in order.
+fn uploaded_cids(device: &FakeDevice) -> Vec<String> {
     device
         .http
         .requests()
         .iter()
         .filter(|request| request.url.ends_with("/content/upload"))
-        .count()
+        .map(|request| {
+            request
+                .headers
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
+                .map(|(_, value)| value.clone())
+                .expect("an upload declares its CID")
+        })
+        .collect()
 }
 
 /// Every target this device has asked the registry to retire, in order.

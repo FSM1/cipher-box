@@ -48,8 +48,8 @@ use crate::net::record_publish::{
 };
 use crate::net::retire::retire;
 use crate::net::{
-    Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, ResolveOutcome, RootAdopter,
-    assemble_head_envelope, fanout_get_verify, resolve,
+    Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, REGISTRY_BATCH_MAX, ResolveOutcome,
+    RootAdopter, assemble_head_envelope, fanout_get_verify, resolve,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
@@ -293,6 +293,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// The over-quota hold, shared with the facade's read surface. It clears
     /// only here, on a quota probe reporting room.
     pub(crate) blocked: &'a RefCell<Option<BlockedOp>>,
+    /// Head blocks this session's publishes orphaned, pending retirement
+    /// ([`Drain::retire_orphan_heads`]).
+    pub(crate) orphan_heads: &'a RefCell<Vec<String>>,
     /// The facade's outbound event stream, for upload progress.
     pub(crate) events: &'a mpsc::UnboundedSender<Event>,
 }
@@ -412,8 +415,15 @@ where
     Sch: Scheduler + Clone + 'static,
 {
     /// Run one pass: rebase the queue onto gate-passing state and publish every
-    /// applied op it can, stopping at the first it cannot.
+    /// applied op it can, stopping at the first it cannot, then clear what the
+    /// pass orphaned.
     pub(crate) async fn run(&self, scope: &DrainScope<'_>) -> DrainReport {
+        let report = self.drain_queue(scope).await;
+        self.retire_orphan_heads().await;
+        report
+    }
+
+    async fn drain_queue(&self, scope: &DrainScope<'_>) -> DrainReport {
         let mut report = DrainReport::default();
         let Ok(Queue { mine, all_ids }) = self.queued_ops(scope, &mut report).await else {
             return report;
@@ -1686,7 +1696,12 @@ where
             },
         )
         .await
-        .map_err(|error| classify_publish(error, head.block.len() as u64))?;
+        .map_err(|error| {
+            if orphaned_head(&error) {
+                self.record_orphan_head(preflighted.cid());
+            }
+            classify_publish(error, head.block.len() as u64)
+        })?;
         match outcome {
             PublishOutcome::Published { .. } => Ok(record_bytes),
             // Both burned a CAS sequence at this name without a record we could
@@ -1723,6 +1738,28 @@ where
     /// Remove a resolved op from the durable queue.
     async fn dequeue_op(&self, op_id: OpId) -> Result<(), Halt> {
         self.staging.remove_op(op_id).await.map_err(seam)
+    }
+
+    /// Note one head block as orphaned, capped at [`REGISTRY_BATCH_MAX`] so a
+    /// session whose retires keep failing bounds its leak, not its memory.
+    fn record_orphan_head(&self, cid: &str) {
+        let mut orphans = self.orphan_heads.borrow_mut();
+        if orphans.len() < REGISTRY_BATCH_MAX {
+            orphans.push(cid.to_owned());
+        }
+    }
+
+    /// Retire the head blocks this session's publishes orphaned
+    /// ([`orphaned_head`]). A refused retire keeps them pending for the next
+    /// pass rather than losing the only record of what to retire.
+    async fn retire_orphan_heads(&self) {
+        let pending = self.orphan_heads.borrow().clone();
+        if pending.is_empty() {
+            return;
+        }
+        if retire(self.api, &pending).await.is_ok() {
+            self.orphan_heads.borrow_mut().drain(..pending.len());
+        }
     }
 
     /// Abandon one op: retire what its publish registered, then drop it from
@@ -1910,6 +1947,27 @@ fn classify_register(error: ApiError) -> Halt {
     match code.as_deref() {
         Some(REGISTRY_BATCH_REFUSED) => Halt::Permanent(DeadLetterReason::PayloadRefused),
         _ => Halt::UploadAttempt,
+    }
+}
+
+/// Whether a failed publish left its head block charged and unreachable: the
+/// upload landed under its own pin row, no record naming it reached the
+/// transport, and the retry re-authors under a fresh seal nonce
+/// (blueprint/engine.md "Resolve/publish pipeline: Retirement", #921).
+fn orphaned_head(error: &RecordPublishError) -> bool {
+    match error {
+        // A refused upload charged no row.
+        RecordPublishError::Upload(_) => false,
+        RecordPublishError::HeadCidMismatch { .. } => true,
+        RecordPublishError::Publish(error) => match error {
+            PublishError::Register(_) | PublishError::FloorRead(_) | PublishError::EmptyHeadCid => {
+                true
+            }
+            // No ack is not proof nothing stored: unpinning a head a live
+            // record may still name is loss, where the row is only a leak
+            // (#916).
+            PublishError::AllEndpointsFailed => false,
+        },
     }
 }
 
