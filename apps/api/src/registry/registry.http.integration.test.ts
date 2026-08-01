@@ -161,7 +161,26 @@ describe('registry HTTP surface (real Postgres)', () => {
       // The engine's failure valve dead-letters on this code, never on the
       // status alone — a 400 from anything but this gate must not carry it.
       expect(response.body.code).toBe(REGISTRY_BATCH_REFUSED);
+      // Constraint strings only: an error body that echoed the rejected entry
+      // would put the caller's name and CIDs everywhere it is logged.
+      expect(response.body.message).toEqual(expect.arrayContaining([expect.any(String)]));
+      expect(JSON.stringify(response.body)).not.toContain('k51overcap');
       expect(await namesFor(acct.id)).toHaveLength(0);
+    });
+
+    it('refuses an explicit null headCid rather than clearing the stored head', async () => {
+      const acct = await account();
+      await request(http())
+        .post('/registry/register')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .send([{ ipnsName: 'k51nullhead', headCid: 'bafyKeepMe', contentCids: [] }])
+        .expect(201);
+      await request(http())
+        .post('/registry/register')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .send([{ ipnsName: 'k51nullhead', headCid: null, contentCids: [] }])
+        .expect(400);
+      expect((await namesFor(acct.id))[0].headCid).toBe('bafyKeepMe');
     });
 
     it('splits an over-cap version across entries under one name, keeping the head', async () => {

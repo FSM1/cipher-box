@@ -3,10 +3,10 @@ import {
   ArrayMaxSize,
   IsArray,
   IsBoolean,
-  IsOptional,
   IsString,
   Matches,
   MaxLength,
+  ValidateIf,
 } from 'class-validator';
 
 /**
@@ -36,7 +36,10 @@ export class RegisterEntryDto {
     required: false,
     description: 'Current head (metadata) CID this name publishes; omit to register the name only.',
   })
-  @IsOptional()
+  // Omitted, never null: a chunked registration's continuation entries leave
+  // the field out so the stored head survives, and an explicit null would clear
+  // it instead. Refused rather than silently ignored (blueprint/api.md).
+  @ValidateIf((entry: RegisterEntryDto) => entry.headCid !== undefined)
   @IsString()
   @MaxLength(256)
   @Matches(CID_OR_NAME, { message: 'headCid must be a bare CID token' })

@@ -1,4 +1,5 @@
 import { BadRequestException, ParseArrayPipe, PipeTransform } from '@nestjs/common';
+import { ValidationError } from 'class-validator';
 import {
   MAX_BATCH,
   REGISTER_ARRAY_OPTIONS,
@@ -7,8 +8,25 @@ import {
 } from './dto/registry.dto';
 import { batchRefusedBody } from './registry-error-codes';
 
+/** The constraint strings alone: a validation error also carries the rejected
+ * entry, and echoing a caller's whole batch back into an error body puts its
+ * names and CIDs everywhere the response is logged. */
+function constraintMessages(errors: ValidationError[]): string[] {
+  return errors.flatMap((error) => [
+    ...Object.values(error.constraints ?? {}),
+    ...constraintMessages(error.children ?? []),
+  ]);
+}
+
 /** Every batch-gate refusal carries the same stable `code` (see its home). */
-const refuse = (message: unknown) => new BadRequestException(batchRefusedBody(message));
+const refuse = (error: unknown) =>
+  new BadRequestException(
+    batchRefusedBody(
+      Array.isArray(error) && error.every((item) => item instanceof ValidationError)
+        ? constraintMessages(error)
+        : error
+    )
+  );
 
 /** Reject an oversize batch up front, before per-item validation runs. */
 class BatchSizePipe implements PipeTransform {
