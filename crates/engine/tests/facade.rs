@@ -31,7 +31,6 @@ fn secret() -> LoginSecret {
 fn unimplemented_commands() -> Vec<(Command, &'static str)> {
     let node = NodeId([1; 16]);
     vec![
-        (Command::SetFocus { node: Some(node) }, "setFocus"),
         (Command::ManualRefresh, "manualRefresh"),
         (
             Command::ImportContact {
@@ -134,6 +133,27 @@ fn unimplemented_commands_return_their_typed_error() {
             "`{expected_name}` must reject as typed-unimplemented until its slice lands"
         );
     }
+}
+
+/// Focus is recorded whatever the window resolves to: a node absent from
+/// gate-passing state has nothing to descend into, which is not an error.
+#[test]
+fn set_focus_records_a_window_with_nothing_to_resolve() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).unwrap();
+
+    assert_eq!(
+        block_on(engine.command(Command::SetFocus {
+            node: Some(NodeId([1; 16]))
+        })),
+        Ok(None)
+    );
+    assert_eq!(
+        block_on(engine.command(Command::SetFocus { node: None })),
+        Ok(None)
+    );
 }
 
 #[test]

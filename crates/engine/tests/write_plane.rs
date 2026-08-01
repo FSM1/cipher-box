@@ -1989,6 +1989,210 @@ fn a_create_below_the_scope_root_is_adoptable_by_a_second_device() {
     );
 }
 
+/// Device A's deep create, as a second device that never authored it sees it:
+/// returns `(world, blocks, bob, engine_b, tasks_b, photos, deep)`.
+fn deep_create_seen_by_a_second_device() -> (
+    FakeWorld,
+    Blocks,
+    Engine<FakeSeamTypes>,
+    Vec<BoxedTask>,
+    NodeId,
+    NodeId,
+) {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks);
+    let photos = child_id(&engine_a, ROOT, "photos");
+
+    block_on(engine_a.command(Command::Create {
+        parent: photos,
+        name: "2026".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks);
+    let deep = child_id(&engine_a, photos, "2026");
+
+    let bob = world.device(b"alice-second-device");
+    let (engine_b, _events_b, tasks_b) = boot(&world, &blocks, &bob, 7);
+    (world, blocks, engine_b, tasks_b, photos, deep)
+}
+
+/// The names a device's rendered view lists under `folder`, sorted.
+fn listed_names(engine: &Engine<FakeSeamTypes>, folder: NodeId) -> Vec<String> {
+    let mut names: Vec<String> = block_on(engine.snapshot(folder))
+        .expect("a folder view")
+        .children
+        .into_iter()
+        .map(|child| child.name)
+        .collect();
+    names.sort();
+    names
+}
+
+/// Publish a transplanted record under `folder`'s write name at the next
+/// sequence: a well-formed child record sealed for a **different** node. It
+/// verifies under the name and its head CID matches, so only the child gate's
+/// envelope id/scope binding stands between it and the base snapshot.
+fn transplant_record(
+    records: &InMemoryRecordStore,
+    blocks: &Blocks,
+    folder: NodeId,
+    foreign: NodeId,
+) {
+    let (sequence, _) = published(records, folder);
+    let head = author_child_envelope(EnvelopeAuthoring {
+        node_id: foreign.0,
+        scope_id: SCOPE,
+        epoch: EPOCH,
+        read_key: &read_key_of(foreign),
+        nonce: &[0x5A; 24],
+        body: &ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: vec![ChildRef {
+                id: [0x9B; 16],
+                name: "planted".into(),
+                ipns_name: write_name(NodeId([0x9B; 16])).as_str().as_bytes().to_vec(),
+                kind: CoreNodeKind::Folder,
+                link_counter: 1,
+                unknown: Vec::new(),
+            }],
+            unknown: Vec::new(),
+        },
+        carried_unknown: Vec::new(),
+        carried_epoch_tag_unknown: Vec::new(),
+    })
+    .expect("a well-formed child record for the wrong node");
+    blocks.put(head.block.clone());
+
+    let record = IpnsRecord::create_v2(
+        &write_signer(folder),
+        format!("/ipfs/{}", head.cid).as_bytes(),
+        sequence + 1,
+        TTL_NANOS,
+        EOL,
+    )
+    .marshal();
+    for endpoint in records.endpoints() {
+        records.seed_record(&endpoint, write_name(folder).as_str(), record.clone());
+    }
+}
+
+/// The facade half of the deep create's round trip: a device that never
+/// authored the subtree sets focus on the depth-1 parent and lists the depth-2
+/// child out of its own rendered view — the assertion #895 could not make.
+#[test]
+fn a_second_device_lists_below_the_scope_root_once_it_focuses_there() {
+    let (_world, _blocks, mut engine_b, _tasks_b, photos, deep) =
+        deep_create_seen_by_a_second_device();
+
+    assert!(
+        listed_names(&engine_b, photos).is_empty(),
+        "the vault-pointer leg lifts the root's direct children only"
+    );
+
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+
+    let view = block_on(engine_b.snapshot(photos)).unwrap();
+    assert_eq!(view.children.len(), 1, "the focus refresh descended");
+    assert_eq!(view.children[0].name, "2026");
+    assert_eq!(
+        view.children[0].id, deep,
+        "and under the node id device A published it with"
+    );
+}
+
+/// The focus refresh is fail-closed: a transplanted record published under the
+/// focused folder's name is a trust violation, never staleness — it never
+/// renders, and last-known-good stands.
+#[test]
+fn a_transplanted_focus_record_never_renders() {
+    let (world, blocks, mut engine_b, mut tasks_b, photos, deep) =
+        deep_create_seen_by_a_second_device();
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    assert_eq!(listed_names(&engine_b, photos), ["2026"]);
+
+    // The tick leg is live: a legitimate concurrent record at the focused name
+    // reconciles without any further navigation.
+    let added = NodeId([0x27; 16]);
+    concurrent_add(
+        &world.record_store,
+        &blocks,
+        photos,
+        ChildRef {
+            id: added.0,
+            name: "2027".into(),
+            ipns_name: write_name(added).as_str().as_bytes().to_vec(),
+            kind: CoreNodeKind::Folder,
+            link_counter: 1,
+            unknown: Vec::new(),
+        },
+    );
+    tick(&world, &engine_b, &mut tasks_b);
+    assert_eq!(listed_names(&engine_b, photos), ["2026", "2027"]);
+
+    transplant_record(&world.record_store, &blocks, photos, deep);
+    tick(&world, &engine_b, &mut tasks_b);
+
+    assert_eq!(
+        listed_names(&engine_b, photos),
+        ["2026", "2027"],
+        "the transplant failed the child gate; last-known-good is pinned"
+    );
+}
+
+/// Navigation refreshes a folder only past the staleness threshold: a repeat
+/// visit renders state already held, and the same navigation past the threshold
+/// reconciles (blueprint/engine.md "Sync core").
+#[test]
+fn navigation_re_resolves_a_folder_only_past_the_staleness_threshold() {
+    let (world, blocks, mut engine_b, _tasks_b, photos, _deep) =
+        deep_create_seen_by_a_second_device();
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    assert_eq!(listed_names(&engine_b, photos), ["2026"]);
+
+    let added = NodeId([0x27; 16]);
+    concurrent_add(
+        &world.record_store,
+        &blocks,
+        photos,
+        ChildRef {
+            id: added.0,
+            name: "2027".into(),
+            ipns_name: write_name(added).as_str().as_bytes().to_vec(),
+            kind: CoreNodeKind::Folder,
+            link_counter: 1,
+            unknown: Vec::new(),
+        },
+    );
+
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    assert_eq!(
+        listed_names(&engine_b, photos),
+        ["2026"],
+        "a repeat visit inside the threshold renders what is already held"
+    );
+
+    world.scheduler.advance(engine_b.profile().stale_after);
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    assert_eq!(
+        listed_names(&engine_b, photos),
+        ["2026", "2027"],
+        "past the threshold the same navigation reconciles"
+    );
+}
+
 /// A source-remove that will not publish compensates its own dest-add rather
 /// than leaving the child linked under both parents.
 #[test]

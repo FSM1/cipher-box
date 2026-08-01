@@ -380,20 +380,17 @@ where
 
 /// Fold a completed resolve's verdict into the shared base cell. A gate-passing
 /// `Adopted` re-projects ([`project_root`], merging over the current base) and
-/// installs the result, returning true (the caller emits `SnapshotUpdated`);
-/// `Current`/`NoUpdate`/`TrustViolation` leave last-known-good intact and return
-/// false. Non-await by construction — the short borrows never span an `.await`
-/// (facade single-threaded executor rule).
+/// returns whether the merge changed anything (the caller emits
+/// `SnapshotUpdated`); `Current`/`NoUpdate`/`TrustViolation` leave
+/// last-known-good intact and return false. Non-await by construction — the
+/// short borrows never span an `.await` (facade single-threaded executor rule).
 pub(crate) fn refresh_base_from_outcome(
     base: &RefCell<Snapshot>,
     root: NodeId,
     outcome: &ResolveOutcome,
 ) -> bool {
     match outcome {
-        ResolveOutcome::Adopted(adopted) => {
-            project_root(&mut base.borrow_mut(), root, adopted);
-            true
-        }
+        ResolveOutcome::Adopted(adopted) => project_root(&mut base.borrow_mut(), root, adopted),
         _ => false,
     }
 }
@@ -1094,11 +1091,14 @@ mod tests {
                 2,
             ));
 
-            assert!(refresh_base_from_outcome(
-                &cell,
-                root,
-                &ResolveOutcome::Adopted(adopted_with_one_child(child_id)),
-            ));
+            assert!(
+                !refresh_base_from_outcome(
+                    &cell,
+                    root,
+                    &ResolveOutcome::Adopted(adopted_with_one_child(child_id)),
+                ),
+                "re-projecting the same body repaints nothing"
+            );
 
             let base = cell.borrow();
             let child = base.node(NodeId(child_id)).expect("child still projected");

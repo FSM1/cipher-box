@@ -98,6 +98,20 @@ pub fn focus_set(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<FocusTarget> {
     targets
 }
 
+/// The focus window's folder targets **below** the scope root, nearest first.
+/// The root rides the vault-pointer leg of the same tick, so it is not a folder
+/// target here; every remaining entry is a child record resolved through the
+/// child gate.
+pub fn focus_folders(snapshot: &Snapshot, focus: &FocusWindow) -> Vec<NodeId> {
+    focus_set(snapshot, focus)
+        .into_iter()
+        .filter_map(|target| match target {
+            FocusTarget::Folder(node) if node != snapshot.root => Some(node),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Whether a cached folder outside the focus window is due for an on-access
 /// refresh: it was last refreshed longer ago than the staleness threshold. No
 /// background churn — this fires only when the folder is actually accessed.
@@ -234,6 +248,35 @@ mod tests {
                 FocusTarget::Folder(id(1)),
                 FocusTarget::Folder(id(0)),
             ]
+        );
+    }
+
+    #[test]
+    fn focus_folders_are_the_chain_below_the_root_nearest_first() {
+        let mut snap = Snapshot::new(id(0));
+        snap.upsert_node(NodeMeta::new(id(1), "a", NodeKind::Folder));
+        snap.upsert_node(NodeMeta::new(id(2), "b", NodeKind::Folder));
+        snap.link(id(0), id(1), 1);
+        snap.link(id(1), id(2), 1);
+
+        let focus = FocusWindow {
+            open_folder: Some(id(2)),
+            open_shared_scopes: vec![id(7)],
+        };
+        assert_eq!(focus_folders(&snap, &focus), vec![id(2), id(1)]);
+        assert!(focus_folders(&snap, &FocusWindow::default()).is_empty());
+    }
+
+    #[test]
+    fn focus_folders_on_the_root_itself_is_empty() {
+        let snap = Snapshot::new(id(0));
+        let focus = FocusWindow {
+            open_folder: Some(id(0)),
+            open_shared_scopes: Vec::new(),
+        };
+        assert!(
+            focus_folders(&snap, &focus).is_empty(),
+            "the root rides the vault-pointer leg, never the child gate"
         );
     }
 

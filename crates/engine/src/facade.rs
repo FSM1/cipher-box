@@ -38,10 +38,10 @@ use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
 use crate::hex::hex_lower;
 use crate::net::{
-    Adopter, ChildAdopter, EolRenewResult, HeldMaterial, HeldRecord, HeldRecords, LivenessControl,
-    PublishError, PublishOutcome, RE_PUT_INTERVAL, RecordPointerFetch, ResolveOutcome, RootAdopter,
-    eol_renew_pass, keyless_re_put, refresh_base_from_outcome, resolve, resolve_and_hold,
-    run_liveness_loop,
+    Adopter, ChildAdopter, EolRenewResult, FolderRefresh, FolderRefreshReport, HeldMaterial,
+    HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome, RE_PUT_INTERVAL,
+    RecordPointerFetch, ResolveOutcome, RootAdopter, eol_renew_pass, keyless_re_put,
+    refresh_base_from_outcome, resolve, resolve_and_hold, run_liveness_loop,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
@@ -62,6 +62,7 @@ pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
 use crate::sync::staging::stage_op;
 use crate::sync::staleness::{Connectivity, classify};
+use crate::sync::tick::{FocusWindow, focus_folders, on_access_refresh_due};
 
 /// The stable 16-byte node identifier (`id16`, blueprint/core.md). Public,
 /// non-secret, and location-independent — routes and commands key on it,
@@ -879,6 +880,20 @@ fn node_attrs(meta: &NodeMeta) -> NodeAttrs {
     }
 }
 
+/// Stamp every folder a focus pass merged with the caller's clock reading, so
+/// the on-access threshold measures from the last gate-passing merge. A folder
+/// the pass could not merge keeps its old stamp and stays due.
+fn stamp_focus_refreshed(
+    stamps: &RefCell<BTreeMap<NodeId, UnixMillis>>,
+    report: &FolderRefreshReport,
+    now: UnixMillis,
+) {
+    let mut stamps = stamps.borrow_mut();
+    for folder in &report.refreshed {
+        stamps.insert(*folder, now);
+    }
+}
+
 /// Emit an [`Event::RenewalFailed`] for every sub-EOL renewal that did not land
 /// (a lost CAS race or a fail-closed publish failure). A comfortably-ahead or
 /// republished record emits nothing. Best-effort over the in-process channel: a
@@ -1112,6 +1127,14 @@ pub struct Engine<T: SeamTypes> {
     /// [`scope_read_seeds`](Self::scope_read_seeds); the drain derives each new
     /// node's `ipnsName` and its narrow per-name signer from them.
     scope_write_seeds: Rc<RefCell<ScopeWriteSeeds>>,
+    /// The open focus window ([`Command::SetFocus`]): the folder the host has
+    /// open, whose record and whole ancestor chain every resolve tick refreshes.
+    /// Shared with the tick loop, which reads it on each pass.
+    focus: Rc<RefCell<FocusWindow>>,
+    /// When each focus folder last merged a gate-passing body, so a navigation
+    /// inside the staleness threshold renders state already held instead of
+    /// re-resolving (blueprint/engine.md: refresh on access past the threshold).
+    focus_refreshed: Rc<RefCell<BTreeMap<NodeId, UnixMillis>>>,
     /// Retained dead-lettered ops. Feeds [`SnapshotView`]'s dead-letter surface
     /// (#33 D6: dead letters are retained, never silent).
     dead_letters: Rc<RefCell<RetainedDeadLetters>>,
@@ -1169,6 +1192,8 @@ impl<T: SeamTypes> Engine<T> {
                 sync_status: Rc::new(RefCell::new(SyncStatus::default())),
                 scope_read_seeds: Rc::new(RefCell::new(BTreeMap::new())),
                 scope_write_seeds: Rc::new(RefCell::new(BTreeMap::new())),
+                focus: Rc::new(RefCell::new(FocusWindow::default())),
+                focus_refreshed: Rc::new(RefCell::new(BTreeMap::new())),
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
@@ -1495,6 +1520,8 @@ impl<T: SeamTypes> Engine<T> {
         let alive = self.alive.clone();
         let sync_status = self.sync_status.clone();
         let scope_read_seeds = self.scope_read_seeds.clone();
+        let focus = self.focus.clone();
+        let focus_refreshed = self.focus_refreshed.clone();
         let profile = self.profile;
         let interval = self.profile.poll_cadence;
         let owner_identity = session.owner_identity();
@@ -1556,11 +1583,36 @@ impl<T: SeamTypes> Engine<T> {
                         let _ = events.unbounded_send(Event::SnapshotUpdated);
                     }
                 }
+                let read_seed = scope_read_seeds.borrow().get(&root_id).cloned();
+                // The focus window's folders below the root — the read leg for a
+                // subtree this device did not author. It runs before the drain,
+                // so the queue rebases onto the deepest state this pass
+                // reconciled, not just the root's.
+                let open = focus_folders(&base.borrow(), &focus.borrow());
+                if let Some(read_seed) = &read_seed
+                    && !open.is_empty()
+                {
+                    let report = FolderRefresh {
+                        transport: &transport,
+                        snapshot_cache: &snapshot_cache,
+                        http: &http,
+                        floors: &floors,
+                        gateway: &gateway,
+                        base: &base,
+                        scope_id: root_id,
+                        scope_read_seed: read_seed,
+                    }
+                    .run(&open)
+                    .await;
+                    stamp_focus_refreshed(&focus_refreshed, &report, scheduler.now());
+                    if report.changed {
+                        let _ = events.unbounded_send(Event::SnapshotUpdated);
+                    }
+                }
                 // The drain rides the same tick: it publishes onto exactly the
                 // gate-passing state this pass just reconciled. Both scope seeds
                 // are required — without them there is no name to publish under
                 // and no key to seal with, so the queue simply waits.
-                let read_seed = scope_read_seeds.borrow().get(&root_id).cloned();
                 let write_seed = scope_write_seeds.borrow().get(&root_id).cloned();
                 if let (Some(read_seed), Some(write_seed)) = (read_seed, write_seed) {
                     let report = Drain {
@@ -1707,6 +1759,17 @@ impl<T: SeamTypes> Engine<T> {
                 );
                 self.stage_and_notify(&op).await
             }
+            Command::SetFocus { node } => {
+                self.focus.borrow_mut().open_folder = node;
+                // Navigation is the tick model's second trigger source (#33 D2):
+                // refresh the newly-focused chain now rather than waiting out a
+                // poll cadence, and only past the staleness threshold — a repeat
+                // visit renders the state already held.
+                if self.refresh_focus_on_access(authored_at).await {
+                    let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+                }
+                Ok(None)
+            }
             Command::SiweLogin { message, signature } => {
                 let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
                 api.siwe_login(&message, &hex_lower(&signature))
@@ -1718,6 +1781,47 @@ impl<T: SeamTypes> Engine<T> {
                 command: other.name(),
             }),
         }
+    }
+
+    /// Refresh the focus window's folders that are past the on-access staleness
+    /// threshold, returning whether the base changed. A folder refreshed inside
+    /// the threshold is left alone — the window still rides every resolve tick.
+    async fn refresh_focus_on_access(&self, now: UnixMillis) -> bool {
+        let due: Vec<NodeId> = {
+            let refreshed = self.focus_refreshed.borrow();
+            focus_folders(&self.snapshot.borrow(), &self.focus.borrow())
+                .into_iter()
+                .filter(|folder| {
+                    refreshed
+                        .get(folder)
+                        .is_none_or(|last| on_access_refresh_due(now, *last, &self.profile))
+                })
+                .collect()
+        };
+        if due.is_empty() {
+            return false;
+        }
+        // The vault root scope: granted-subscope focus is a later slice. A
+        // missing read seed is missing held material (availability), never a
+        // trust verdict — the window simply does not refresh this pass.
+        let scope_id = self.snapshot.borrow().root.0;
+        let Some(scope_read_seed) = self.scope_read_seeds.borrow().get(&scope_id).cloned() else {
+            return false;
+        };
+        let report = FolderRefresh {
+            transport: &self.seams.record_transport,
+            snapshot_cache: &self.seams.snapshot_cache,
+            http: &self.seams.http,
+            floors: &self.seams.floor_store,
+            gateway: &self.gateway,
+            base: &self.snapshot,
+            scope_id,
+            scope_read_seed: &scope_read_seed,
+        }
+        .run(&due)
+        .await;
+        stamp_focus_refreshed(&self.focus_refreshed, &report, now);
+        report.changed
     }
 
     // -----------------------------------------------------------------------

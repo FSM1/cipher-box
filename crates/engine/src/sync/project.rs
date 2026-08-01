@@ -14,22 +14,26 @@ use crate::facade::{NodeId, NodeKind};
 use crate::gate::Adopted;
 use crate::sync::model::{NodeMeta, Snapshot};
 
-/// Merge a gate-passing adopted **scope root** body into `snapshot`. A body that
-/// is not a folder leaves the snapshot untouched.
-pub(crate) fn project_root(snapshot: &mut Snapshot, root: NodeId, adopted: &Adopted) {
-    if let ReadBody::Folder {
-        modified_at,
-        children,
-        ..
-    } = &adopted.read_body
-    {
-        project_folder(snapshot, root, children, adopted.sequence, *modified_at);
+/// Merge a gate-passing adopted **scope root** body into `snapshot`, reporting
+/// whether anything changed. A body that is not a folder leaves the snapshot
+/// untouched.
+pub(crate) fn project_root(snapshot: &mut Snapshot, root: NodeId, adopted: &Adopted) -> bool {
+    match &adopted.read_body {
+        ReadBody::Folder {
+            modified_at,
+            children,
+            ..
+        } => project_folder(snapshot, root, children, adopted.sequence, *modified_at),
+        ReadBody::File { .. } => false,
     }
 }
 
-/// Merge one folder's gate-passing children into `snapshot` **in place**.
-/// Children the folder no longer names are unlinked, and dropped entirely once
-/// no parent links them.
+/// Merge one folder's gate-passing children into `snapshot` **in place**,
+/// reporting whether the merge changed anything. Children the folder no longer
+/// names are unlinked, and dropped entirely once no parent links them.
+///
+/// The change report is what keeps a repeated projection of the same body from
+/// repainting the host: the focus-window refresh re-merges a folder every tick.
 ///
 /// Only a gate-passing body reaches here — the gate already enforced child
 /// id/ipnsName uniqueness at unseal — so child uniqueness is trusted and not
@@ -47,8 +51,10 @@ pub(crate) fn project_folder(
     children: &[ChildRef],
     sequence: u64,
     modified_at: u64,
-) {
+) -> bool {
+    let mut changed = false;
     if let Some(node) = snapshot.node_mut(folder) {
+        changed |= node.record_sequence != sequence || node.mtime != Some(modified_at);
         node.record_sequence = sequence;
         node.mtime = Some(modified_at);
     }
@@ -59,6 +65,7 @@ pub(crate) fn project_folder(
         .map(|node| node.id)
         .filter(|id| !children.iter().any(|child| child.id == id.0))
         .collect();
+    changed |= !departed.is_empty();
     for id in departed {
         snapshot.unlink(folder, id);
         if snapshot.links_to(id).is_empty() {
@@ -76,9 +83,22 @@ pub(crate) fn project_folder(
             meta.content_version = prior.content_version;
             meta.record_sequence = prior.record_sequence;
         }
+        changed |= snapshot.node(id) != Some(&meta) || link_raises(snapshot, folder, child);
         snapshot.upsert_node(meta);
         snapshot.link(folder, id, child.link_counter);
     }
+    changed
+}
+
+/// Whether linking `child` under `folder` would establish the link or raise its
+/// counter — [`Snapshot::link`] merges monotonically, so a lower counter is a
+/// no-op and not a change.
+fn link_raises(snapshot: &Snapshot, folder: NodeId, child: &ChildRef) -> bool {
+    snapshot
+        .links_to(NodeId(child.id))
+        .into_iter()
+        .find(|link| link.parent == folder)
+        .is_none_or(|link| link.link_counter < child.link_counter)
 }
 
 /// Fold a verified file read-body's plaintext `(size, mtime)` and version count
@@ -178,6 +198,59 @@ mod tests {
         );
         assert_eq!(snap.parent_of(node_id(1)), Some(root));
         assert_eq!(snap.parent_of(node_id(2)), Some(root));
+    }
+
+    #[test]
+    fn project_root_reports_a_change_only_when_the_body_moves_the_base() {
+        let root = node_id(0);
+        let first = adopted_folder(vec![child(1, "a", CoreNodeKind::Folder, 1)], 5);
+        let mut snap = Snapshot::new(root);
+
+        assert!(
+            project_root(&mut snap, root, &first),
+            "the first projection"
+        );
+        assert!(
+            !project_root(&mut snap, root, &first),
+            "the identical body repaints nothing"
+        );
+        assert!(
+            !project_root(
+                &mut snap,
+                root,
+                &adopted_folder(vec![child(1, "a", CoreNodeKind::Folder, 0)], 5),
+            ),
+            "a lower link counter is a monotonic no-op, not a change"
+        );
+        assert!(
+            project_root(
+                &mut snap,
+                root,
+                &adopted_folder(vec![child(1, "renamed", CoreNodeKind::Folder, 1)], 5),
+            ),
+            "a renamed child is a change"
+        );
+        assert!(
+            project_root(&mut snap, root, &adopted_folder(vec![], 5)),
+            "a departed child is a change"
+        );
+        assert!(
+            !project_root(
+                &mut snap,
+                root,
+                &Adopted {
+                    read_body: ReadBody::File {
+                        created_at: 0,
+                        modified_at: 0,
+                        versions: Vec::new(),
+                        unknown: Vec::new(),
+                    },
+                    sequence: 9,
+                    epoch: 0,
+                },
+            ),
+            "a non-folder body leaves the snapshot untouched"
+        );
     }
 
     #[test]
