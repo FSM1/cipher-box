@@ -1956,8 +1956,11 @@ fn classify_register(error: ApiError) -> Halt {
 /// (blueprint/engine.md "Resolve/publish pipeline: Retirement", #921).
 fn orphaned_head(error: &RecordPublishError) -> bool {
     match error {
-        // A refused upload charged no row.
-        RecordPublishError::Upload(_) => false,
+        // A status answer is the server's own refusal, so it charged no row; a
+        // dropped connection or an unreadable 2xx may have left one behind.
+        RecordPublishError::Upload(error) => {
+            matches!(error, ApiError::Transport(_) | ApiError::Decode(_))
+        }
         RecordPublishError::HeadCidMismatch { .. } => true,
         RecordPublishError::Publish(error) => match error {
             PublishError::Register(_) | PublishError::FloorRead(_) | PublishError::EmptyHeadCid => {
@@ -2112,6 +2115,56 @@ mod tests {
                 refusal(code),
                 Halt::UploadAttempt,
                 "a 413 the API did not stamp is a proxy, and supports neither verdict"
+            );
+        }
+    }
+
+    /// The destruction-critical arm: a fan-out that acked nothing may still
+    /// have stored the record, so its head stays pinned. Everything else here
+    /// stopped short of the transport with a charged row behind it, or with no
+    /// row at all.
+    #[test]
+    fn only_a_publish_that_never_reached_the_transport_orphans_its_head() {
+        use RecordPublishError::Upload;
+        for (error, orphaned) in [
+            (
+                RecordPublishError::Publish(PublishError::AllEndpointsFailed),
+                false,
+            ),
+            (
+                RecordPublishError::Publish(PublishError::Register(ApiError::NotAuthenticated)),
+                true,
+            ),
+            (
+                RecordPublishError::Publish(PublishError::EmptyHeadCid),
+                true,
+            ),
+            (
+                RecordPublishError::HeadCidMismatch {
+                    expected: "a".to_owned(),
+                    returned: "b".to_owned(),
+                },
+                true,
+            ),
+            (
+                Upload(ApiError::Status {
+                    status: 413,
+                    message: None,
+                    code: Some(UPLOAD_TOO_LARGE.to_owned()),
+                }),
+                false,
+            ),
+            (Upload(ApiError::NotAuthenticated), false),
+            (
+                Upload(ApiError::Transport(crate::seams::SeamError::new("dropped"))),
+                true,
+            ),
+            (Upload(ApiError::Decode("short body".to_owned())), true),
+        ] {
+            assert_eq!(
+                orphaned_head(&error),
+                orphaned,
+                "{error:?} orphans its head block: {orphaned}"
             );
         }
     }
