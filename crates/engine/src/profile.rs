@@ -38,8 +38,9 @@ pub struct SyncTimingProfile {
     /// bounds the read-only-survivor residual.
     pub pointer_consult_interval: Duration,
     /// Ceiling on the vault settings load. A settings record that will not
-    /// resolve must never block cold start, so the load yields the documented
-    /// defaults once this elapses (v1's 10 s, carried forward).
+    /// resolve must never block cold start, so once this elapses the load
+    /// yields the device's last-known-good settings, or the documented defaults
+    /// where it has none (v1's 10 s, carried forward).
     pub settings_load_budget: Duration,
 }
 

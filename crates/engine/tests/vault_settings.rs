@@ -4,8 +4,9 @@
 //! same account that only ever saw the network (#870).
 //!
 //! Its contract is the inverse of the write plane's: a settings record that
-//! will not resolve must never block cold start, so every failure degrades to
-//! the documented defaults inside a scheduler-measured budget.
+//! will not resolve must never block cold start, so every failure degrades —
+//! to this device's last-known-good copy where one opens, and only then to the
+//! documented defaults — inside a scheduler-measured budget.
 
 use core::future::poll_fn;
 use core::num::NonZeroU64;
@@ -16,14 +17,14 @@ use std::sync::{Arc, Mutex};
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
-use cipherbox_core::seal::seal_settings_record;
+use cipherbox_core::seal::{open_settings_record, seal_settings_record};
 use zeroize::Zeroizing;
 
 use cipherbox_engine::api::ApiClient;
 use cipherbox_engine::content::{ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, PinMode};
 use cipherbox_engine::seams::{
     EndpointId, FloorStore, HttpRequest, HttpResponse, RecordTransport, Scheduler, SeamError,
-    SeamResult, UnixMillis,
+    SeamResult, SnapshotCache, UnixMillis,
 };
 use cipherbox_engine::testkit::fakes::VirtualScheduler;
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
@@ -175,6 +176,7 @@ fn load(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, secret: &[u8]) 
         &gateway(),
         &device.http,
         &device.floor_store,
+        &device.snapshot_cache,
         &world.scheduler,
         &SyncTimingProfile::CI,
         secret,
@@ -498,6 +500,7 @@ fn an_unresolvable_settings_name_does_not_block_cold_start_past_the_budget() {
         &gateway(),
         &device.http,
         &device.floor_store,
+        &device.snapshot_cache,
         &scheduler,
         &profile,
         &SECRET,
@@ -573,6 +576,7 @@ fn an_unavailable_head_block_yields_defaults() {
             &gateway(),
             &device.http,
             &device.floor_store,
+            &device.snapshot_cache,
             &world.scheduler,
             &SyncTimingProfile::CI,
             &SECRET,
@@ -622,12 +626,16 @@ fn a_floor_the_host_cannot_read_is_reported_apart_from_an_unusable_record() {
         SettingsLoad::Resolved(_)
     ));
 
+    // A device that never resolved these settings, so nothing but the floor
+    // read stands between the load and its verdict.
+    let cold = world.device(b"cold");
     assert_eq!(
         block_on(load_settings(
-            &device.record_store,
+            &cold.record_store,
             &gateway(),
-            &device.http,
+            &cold.http,
             &UnreadableFloors,
+            &cold.snapshot_cache,
             &world.scheduler,
             &SyncTimingProfile::CI,
             &SECRET,
@@ -635,6 +643,416 @@ fn a_floor_the_host_cannot_read_is_reported_apart_from_an_unusable_record() {
         SettingsLoad::Defaults(DefaultsReason::FloorUnreadable),
         "a floor the host cannot read is never treated as no floor",
     );
+}
+
+// ---------------------------------------------------------------------------
+// Last-known-good: a degraded load never widens placement
+// ---------------------------------------------------------------------------
+
+/// "Never put my bytes in CipherBox's store" — the choice a degraded load must
+/// not silently revert to [`PinMode::Hosted`].
+fn external_only() -> VaultSettings {
+    VaultSettings {
+        pin_mode: PinMode::External,
+        byo: Some(ByoIpfsConfig {
+            endpoint: "https://kubo.example".to_owned(),
+            kind: ByoKind::Kubo,
+            access_token: None,
+        }),
+        retention: RetentionPolicy::KeepAll,
+    }
+}
+
+/// A device holding `external_only` as its last-known-good copy, plus the
+/// world and block plane it resolved them from.
+fn device_with_warm_cache() -> (FakeWorld, Blocks, FakeDevice) {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice-laptop");
+    publish(&world, &alice, &blocks, &SECRET, &external_only());
+
+    let bob = world.device(b"alice-phone");
+    assert_eq!(
+        load(&world, &bob, &blocks, &SECRET),
+        SettingsLoad::Resolved(external_only()),
+        "the copy cached below is one this device actually resolved",
+    );
+    (world, blocks, bob)
+}
+
+/// Stop every endpoint serving records: the durable floor is then the only
+/// proof the account ever published settings, which is a suppression.
+fn withhold_the_record(device: &FakeDevice) {
+    for endpoint in device.record_store.endpoints() {
+        device.record_store.fail_endpoint(&endpoint);
+    }
+}
+
+/// The headline. An adversary who can withhold the record must not be able to
+/// move a member from `External` onto CipherBox's hosted store.
+#[test]
+fn a_withheld_record_never_downgrades_external_to_hosted() {
+    let (world, blocks, bob) = device_with_warm_cache();
+    withhold_the_record(&bob);
+
+    let degraded = load(&world, &bob, &blocks, &SECRET);
+    let SettingsLoad::Stale { settings, reason } = degraded else {
+        panic!("a withheld record must degrade to last-known-good, got {degraded:?}");
+    };
+    assert_eq!(reason, DefaultsReason::Suppressed);
+    assert_eq!(
+        settings.pin_mode,
+        PinMode::External,
+        "withholding the record must never widen placement to the hosted default",
+    );
+    assert_eq!(
+        settings,
+        external_only(),
+        "stale, but the member's own choice"
+    );
+}
+
+#[test]
+fn a_load_that_runs_out_of_budget_prefers_the_cached_copy() {
+    let (_world, _blocks, bob) = device_with_warm_cache();
+    let scheduler = VirtualScheduler::new().with_auto_advance();
+
+    assert_eq!(
+        block_on(load_settings(
+            &NeverAnswers,
+            &gateway(),
+            &bob.http,
+            &bob.floor_store,
+            &bob.snapshot_cache,
+            &scheduler,
+            &SyncTimingProfile::CI,
+            &SECRET,
+        )),
+        SettingsLoad::Stale {
+            settings: external_only(),
+            reason: DefaultsReason::TimedOut,
+        },
+    );
+}
+
+#[test]
+fn a_record_this_build_cannot_read_prefers_the_cached_copy() {
+    let (world, blocks, bob) = device_with_warm_cache();
+    // Openable under the account's enc subkey, but carrying a discriminant no
+    // build of this schema knows — the shape of a record that authenticates and
+    // still yields no settings.
+    seed_settings(&bob, &blocks, &body_with_an_unknown_pin_mode(), 2);
+
+    assert_eq!(
+        load(&world, &bob, &blocks, &SECRET),
+        SettingsLoad::Stale {
+            settings: external_only(),
+            reason: DefaultsReason::Unreadable,
+        },
+        "the unreadable record is refused and the device's own copy stands in",
+    );
+
+    withhold_the_record(&bob);
+    assert_eq!(
+        load(&world, &bob, &blocks, &SECRET),
+        SettingsLoad::Stale {
+            settings: external_only(),
+            reason: DefaultsReason::Suppressed,
+        },
+        "the refused record never became this device's last-known-good",
+    );
+}
+
+#[test]
+fn a_floor_the_host_cannot_read_prefers_the_cached_copy() {
+    let (world, _blocks, bob) = device_with_warm_cache();
+
+    assert_eq!(
+        block_on(load_settings(
+            &bob.record_store,
+            &gateway(),
+            &bob.http,
+            &UnreadableFloors,
+            &bob.snapshot_cache,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &SECRET,
+        )),
+        SettingsLoad::Stale {
+            settings: external_only(),
+            reason: DefaultsReason::FloorUnreadable,
+        },
+    );
+}
+
+/// With no cached copy the load reports `Defaults`, which is the verdict a
+/// placement decision fails closed on (blueprint/engine.md) — it must never be
+/// confusable with settings the member chose.
+#[test]
+fn a_degraded_load_with_no_cached_copy_reports_defaults_not_stale() {
+    let (world, blocks, bob) = device_with_warm_cache();
+    block_on(bob.snapshot_cache.clear()).expect("forget this device");
+    withhold_the_record(&bob);
+
+    assert_eq!(
+        load(&world, &bob, &blocks, &SECRET),
+        SettingsLoad::Defaults(DefaultsReason::Suppressed),
+    );
+}
+
+/// A snapshot cache that answers every key with bytes of the test's choosing —
+/// the shape of a tampered or transplanted last-known-good entry.
+struct ServesCiphertext(Vec<u8>);
+
+impl SnapshotCache for ServesCiphertext {
+    async fn put(&self, _cache_key: &[u8], _ciphertext: &[u8]) -> SeamResult<()> {
+        Ok(())
+    }
+
+    async fn get(&self, _cache_key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
+        Ok(Some(self.0.clone()))
+    }
+
+    async fn remove(&self, _cache_key: &[u8]) -> SeamResult<()> {
+        Ok(())
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_cached_copy_that_does_not_authenticate_is_not_used() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+
+    // One planted copy per gate the cached bytes must clear: the seal, then
+    // this build's body grammar.
+    let wrong_owner = seal_settings_record(
+        &kdf::enc_subkey(&OTHER_SECRET),
+        &[5u8; 32],
+        &hand_encoded_body("https://kubo.example"),
+    )
+    .expect("seal");
+    let unknown_schema = seal_settings_record(
+        &kdf::enc_subkey(&SECRET),
+        &[6u8; 32],
+        &body_with_an_unknown_pin_mode(),
+    )
+    .expect("seal");
+
+    for planted in [wrong_owner, unknown_schema, b"not a block".to_vec()] {
+        assert_eq!(
+            block_on(load_settings(
+                &device.record_store,
+                &gateway(),
+                &device.http,
+                &device.floor_store,
+                &ServesCiphertext(planted),
+                &world.scheduler,
+                &SyncTimingProfile::CI,
+                &SECRET,
+            )),
+            SettingsLoad::Defaults(DefaultsReason::NoRecord),
+            "a cached copy is re-opened on every read, never trusted for being cached",
+        );
+    }
+}
+
+/// A snapshot cache that keeps what the engine writes visible to the test.
+#[derive(Clone, Default)]
+struct SpyCache {
+    inner: Arc<Mutex<BTreeMap<Vec<u8>, Vec<u8>>>>,
+}
+
+impl SpyCache {
+    fn values(&self) -> Vec<Vec<u8>> {
+        self.inner.lock().expect("lock").values().cloned().collect()
+    }
+}
+
+impl SnapshotCache for SpyCache {
+    async fn put(&self, cache_key: &[u8], ciphertext: &[u8]) -> SeamResult<()> {
+        self.inner
+            .lock()
+            .expect("lock")
+            .insert(cache_key.to_vec(), ciphertext.to_vec());
+        Ok(())
+    }
+
+    async fn get(&self, cache_key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
+        Ok(self.inner.lock().expect("lock").get(cache_key).cloned())
+    }
+
+    async fn remove(&self, cache_key: &[u8]) -> SeamResult<()> {
+        self.inner.lock().expect("lock").remove(cache_key);
+        Ok(())
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        self.inner.lock().expect("lock").clear();
+        Ok(())
+    }
+}
+
+/// The seam is ciphertext-only at rest, so what the load caches must be the
+/// sealed head block. Caching the opened body instead would put the member's
+/// BYO bearer in host storage in the clear, and every other test here would
+/// still pass.
+#[test]
+fn the_cache_holds_the_sealed_block_never_the_opened_body() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let alice = world.device(b"alice-laptop");
+    publish(&world, &alice, &blocks, &SECRET, &configured());
+
+    let bob = world.device(b"alice-phone");
+    let cache = SpyCache::default();
+    serve_http(&bob, &blocks, 4);
+    assert_eq!(
+        block_on(load_settings(
+            &bob.record_store,
+            &gateway(),
+            &bob.http,
+            &bob.floor_store,
+            &cache,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &SECRET,
+        )),
+        SettingsLoad::Resolved(configured()),
+    );
+
+    let stored = cache.values();
+    assert_eq!(stored.len(), 1, "one settings head block");
+    assert!(
+        !stored[0].windows(6).any(|window| window == b"s3cret"),
+        "the BYO credential never reaches host storage in the clear",
+    );
+    assert!(
+        open_settings_record(&kdf::enc_subkey(&SECRET), &stored[0]).is_ok(),
+        "what is stored re-opens under the account's enc subkey",
+    );
+}
+
+/// A replay must not become last-known-good. The cache write sits behind the
+/// floor check and the open; hoisting it above either would let a chosen-record
+/// adversary overwrite the member's own copy permanently.
+#[test]
+fn a_rolled_back_record_never_becomes_last_known_good() {
+    let (world, blocks, bob) = device_with_warm_cache();
+    let key = settings_name(&SECRET).as_str().as_bytes().to_vec();
+    block_on(bob.floor_store.raise_sequence_floor(&key, 9)).expect("raise");
+    // Openable, and carrying the hosted default the adversary wants applied.
+    seed_settings(&bob, &blocks, &hand_encoded_body("https://kubo.example"), 3);
+
+    assert_eq!(
+        load(&world, &bob, &blocks, &SECRET),
+        SettingsLoad::Stale {
+            settings: external_only(),
+            reason: DefaultsReason::RolledBack {
+                floor: 9,
+                sequence: 3
+            },
+        },
+        "the replay is refused and the device's own copy stands in for it",
+    );
+
+    withhold_the_record(&bob);
+    assert_eq!(
+        load(&world, &bob, &blocks, &SECRET),
+        SettingsLoad::Stale {
+            settings: external_only(),
+            reason: DefaultsReason::Suppressed,
+        },
+        "the refused record left the cached copy where it found it",
+    );
+}
+
+#[test]
+fn a_second_account_on_the_device_never_sees_the_first_accounts_cached_settings() {
+    let (world, blocks, bob) = device_with_warm_cache();
+
+    // The same device stores, driving the other account's load. Nothing is
+    // published at its name, so only the cache could answer.
+    serve_http(&bob, &blocks, 4);
+    assert_eq!(
+        block_on(load_settings(
+            &bob.record_store,
+            &gateway(),
+            &bob.http,
+            &bob.floor_store,
+            &bob.snapshot_cache,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &OTHER_SECRET,
+        )),
+        SettingsLoad::Defaults(DefaultsReason::NoRecord),
+        "another account's copy is both keyed and sealed out of reach",
+    );
+}
+
+/// A snapshot cache whose reads never settle — the shape of a stalled host
+/// store.
+struct NeverReads;
+
+impl SnapshotCache for NeverReads {
+    async fn put(&self, _cache_key: &[u8], _ciphertext: &[u8]) -> SeamResult<()> {
+        Ok(())
+    }
+
+    async fn get(&self, _cache_key: &[u8]) -> SeamResult<Option<Vec<u8>>> {
+        poll_fn(|_| Poll::<SeamResult<Option<Vec<u8>>>>::Pending).await
+    }
+
+    async fn remove(&self, _cache_key: &[u8]) -> SeamResult<()> {
+        Ok(())
+    }
+
+    async fn clear(&self) -> SeamResult<()> {
+        Ok(())
+    }
+}
+
+/// The cache read is inside the budget like every other stage: a stalled host
+/// store must not turn the one load that never blocks cold start into one that
+/// does, nor push the ceiling past the profile's single budget.
+#[test]
+fn a_snapshot_cache_that_never_answers_does_not_block_cold_start() {
+    let scheduler = VirtualScheduler::new().with_auto_advance();
+    let device = FakeWorld::new().device(b"offline");
+    let profile = SyncTimingProfile::CI;
+
+    assert_eq!(
+        block_on(load_settings(
+            &device.record_store,
+            &gateway(),
+            &device.http,
+            &device.floor_store,
+            &NeverReads,
+            &scheduler,
+            &profile,
+            &SECRET,
+        )),
+        SettingsLoad::Defaults(DefaultsReason::TimedOut),
+    );
+    assert_eq!(
+        scheduler.now(),
+        UnixMillis(profile.settings_load_budget.as_millis() as u64),
+        "one budget covers the whole load, cache read included",
+    );
+}
+
+/// A body core's codec accepts and this build's schema does not.
+fn body_with_an_unknown_pin_mode() -> Vec<u8> {
+    use cipherbox_core::codec::{Map, Value, encode};
+
+    let mut m = Map::new();
+    m.insert("byo", Value::Null);
+    m.insert("keepLatest", Value::Null);
+    m.insert("pinMode", Value::Text("everywhere".to_owned()));
+    encode(&Value::Map(m)).expect("encode")
 }
 
 // ---------------------------------------------------------------------------
@@ -723,10 +1141,18 @@ fn a_body_carrying_a_refused_endpoint_is_rejected_on_the_way_back_in() {
     // a public host over plaintext, putting the member's bearer on the wire.
     for (sequence, endpoint) in [(2, "file:///etc/passwd"), (3, "http://kubo.example")] {
         seed_settings(&device, &blocks, &hand_encoded_body(endpoint), sequence);
+        let degraded = load(&world, &device, &blocks, &SECRET);
+        let SettingsLoad::Stale { settings, reason } = degraded else {
+            panic!("{endpoint}: the refused body degrades to last-known-good, got {degraded:?}");
+        };
+        assert_eq!(reason, DefaultsReason::Unreadable, "{endpoint}");
         assert_eq!(
-            load(&world, &device, &blocks, &SECRET),
-            SettingsLoad::Defaults(DefaultsReason::Unreadable),
-            "{endpoint}",
+            settings
+                .byo
+                .expect("the cached copy carries a provider")
+                .endpoint,
+            "https://kubo.example",
+            "{endpoint}: the refused endpoint never reaches the caller",
         );
     }
 }
