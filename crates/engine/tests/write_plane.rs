@@ -3582,6 +3582,83 @@ fn queued_version(device: &FakeDevice, op_id: OpId) -> Vec<Vec<u8>> {
     })
 }
 
+/// The focus window's folder refresh runs before the drain each pass (#945) and
+/// merges a folder's *published* children into the base. A cancelled upload was
+/// never published, so the refresh cannot carry it back into the folder the user
+/// is looking at.
+#[test]
+fn a_focus_refresh_never_renders_back_an_upload_the_user_cancelled() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    // Authored on one device and resolved on another, so the focusing device
+    // knows the folder's own name and its refresh really descends into it.
+    let author = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &author, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let photos = child_id(&engine_a, ROOT, "photos");
+
+    let alice = world.device(b"alice-second-device");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 7);
+    block_on(engine.command(Command::SetFocus { node: Some(photos) })).unwrap();
+
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: photos,
+            name: "holiday.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    assert_eq!(
+        listed_names(&engine, photos),
+        vec!["holiday.bin".to_owned()]
+    );
+    let version = queued_version(&alice, op_id);
+
+    world.scheduler.advance(engine.profile().poll_cadence);
+    for _ in 0..4 {
+        poll_once(&mut tasks);
+    }
+    assert!(uploads(&alice) > 0, "the cancel lands mid-transfer");
+    block_on(engine.command(Command::CancelUpload { op_id })).unwrap();
+    // Finish the pass the cancel interrupted: drain, then sweep.
+    tick(&world, &engine, &mut tasks);
+
+    // Another writer's child, discoverable only by the focus refresh — without
+    // it this test could pass with the refresh never running at all.
+    concurrent_add(
+        &world.record_store,
+        &blocks,
+        photos,
+        file_ref([0xC1; 16], "from-elsewhere.bin"),
+    );
+    // The next pass refreshes the focused folder before its drain, which is the
+    // ordering the overlap turns on (#945).
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        listed_names(&engine, photos),
+        vec!["from-elsewhere.bin".to_owned()],
+        "the refresh merged what published and left the cancelled upload gone"
+    );
+    assert!(
+        published_names(&world.record_store, &blocks, photos)
+            .iter()
+            .all(|name| name != "holiday.bin"),
+        "the cancelled version never reaches the record plane"
+    );
+    assert_no_blocks_staged(&alice, &version);
+}
+
 /// The acceptance case: a cancel that lands while the drain is mid-upload stops
 /// it at the next block boundary, releases every block of the version, retires
 /// what already reached the network, and publishes nothing.
