@@ -4,7 +4,14 @@
  */
 
 import { MEDIA_PORT_OFFER, type MessagePortLike } from '../media/protocol.js';
-import { MediaPipe, type MediaPipeScopeLike } from './pipe.js';
+import {
+  RELAY_DELIVER,
+  RELAY_PORT,
+  RELAY_SELF,
+  RELAY_WHOAMI,
+  type RelayMessage,
+} from '../portCourier.js';
+import { MediaPipe, type MediaPipeScopeLike, type WindowClientLike } from './pipe.js';
 import {
   appShellClaims,
   deleteStaleCaches,
@@ -29,12 +36,14 @@ export interface FetchEventLike {
 /** The client that sent a message; its `id` is the one `FetchEventLike.clientId` carries. */
 export interface MessageSourceLike {
   readonly id: string;
+  postMessage(message: unknown): void;
 }
 
 export interface PortMessageEventLike {
   readonly data: unknown;
   readonly ports: readonly MessagePortLike[];
   readonly source?: MessageSourceLike | null;
+  waitUntil?(promise: Promise<unknown>): void;
 }
 
 export interface ServiceWorkerEventMap {
@@ -122,11 +131,45 @@ export function installServiceWorker(
   });
 
   scope.addEventListener('message', (event) => {
-    const data = event.data as { type?: unknown } | null;
-    if (data?.type !== MEDIA_PORT_OFFER) return;
+    const data = event.data as { type?: unknown; to?: unknown } | null;
+    if (data?.type === MEDIA_PORT_OFFER) {
+      const port = event.ports[0];
+      if (port) pipe.adoptPort(port, event.source?.id);
+      return;
+    }
+    // Port brokerage between two tabs. The worker names a client to itself and
+    // forwards the far end of a channel; it reads neither and keeps no state, so
+    // its death costs a re-broker and never a channel already open.
+    if (data?.type === RELAY_WHOAMI) {
+      const source = event.source;
+      if (source) {
+        const self: RelayMessage = { type: RELAY_SELF, id: source.id };
+        source.postMessage(self);
+      }
+      return;
+    }
+    if (data?.type !== RELAY_DELIVER) return;
     const port = event.ports[0];
-    if (port) pipe.adoptPort(port, event.source?.id);
+    if (!port || typeof data.to !== 'string') return;
+    const delivery = deliverPort(scope, data.to, port);
+    if (event.waitUntil) event.waitUntil(delivery);
   });
+}
+
+async function deliverPort(
+  scope: ServiceWorkerScopeLike,
+  to: string,
+  port: MessagePortLike
+): Promise<void> {
+  // A tab that the worker has not claimed yet is still a legitimate target.
+  const clients = await scope.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  const target: WindowClientLike | undefined = clients.find((client) => client.id === to);
+  if (!target) {
+    port.close();
+    return;
+  }
+  const message: RelayMessage = { type: RELAY_PORT };
+  target.postMessage(message, [port]);
 }
 
 const ignore = (): void => undefined;

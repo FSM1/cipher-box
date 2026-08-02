@@ -30,6 +30,8 @@ export { BroadcastTransport } from './broadcastTransport.js';
 export { LeaderRelay } from './leaderRelay.js';
 export { BROADCAST_CHANNEL_NAME, newClientId } from './broadcast.js';
 export type { BroadcastChannelLike } from './broadcast.js';
+export { ServiceWorkerCourier, defaultCourier } from './portCourier.js';
+export type { PortCourier, CourierContainerLike, CourierOptions } from './portCourier.js';
 
 // The tab side of the Service Worker byte pipe.
 export { MediaService } from './media/service.js';

@@ -91,11 +91,18 @@ mechanism; the invariant — one engine writer per origin — is D4's):
   publishes. Web Locks auto-release on tab close, crash, or discard, which is
   exactly the failover primitive needed.
 - **Followers are thin mirrors, not engines**: a non-leader tab spawns no
-  worker and holds no keys. It renders view projections broadcast by the
-  leader and sends commands as data. Both directions ride a
-  `BroadcastChannel`: projections and events are plain structured-clone data;
-  commands carry at most `Blob`/`File` handles (structured clone shares the
-  immutable backing store — no byte copies for uploads).
+  worker and holds no keys. It renders view projections served by the leader
+  and sends commands as data. Commands, events, and election ride a
+  `BroadcastChannel`: events are plain structured-clone data and commands carry
+  at most `Blob`/`File` handles (structured clone shares the immutable backing
+  store — no byte copies for uploads). Read **results** — snapshot projections
+  and file plaintext — do not: a `BroadcastChannel` delivers to every
+  same-origin context that opened it, so each follower brokers a private
+  `MessagePort` to the leader through the Service Worker (the only cross-tab
+  route for a transferable) and reads over that, buffers transferred rather
+  than cloned. The channel only rendezvouses the port. A tab with no Service
+  Worker mirrors nothing — reads fail closed rather than fall back to the
+  shared channel.
 - **Failover**: the lock releases → some follower acquires it, spawns a fresh
   engine worker, and rehydrates from the durable seams (floors, op queue,
   staged bytes, snapshot cache — all origin-shared). Ops journal durably

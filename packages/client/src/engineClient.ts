@@ -22,6 +22,7 @@ import { fanOut } from './correlatedTransport.js';
 import { EngineFacade } from './facade.js';
 import { LeaderRelay } from './leaderRelay.js';
 import { LeaderElection, type LockManagerLike } from './leadership.js';
+import { defaultCourier, type PortCourier } from './portCourier.js';
 import { requestStoragePersistence } from './storagePersistence.js';
 import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './transport.js';
 import { LocalTransport } from './transport.js';
@@ -47,6 +48,8 @@ export interface EngineClientConfig {
   locks: LockManagerLike;
   /** Builds the broadcast channel; each tab keeps one for its lifetime. */
   createChannel?: () => BroadcastChannelLike;
+  /** Brokers the private port a follower reads over; defaults to the tab's Service Worker. */
+  courier?: PortCourier;
   /** Spawns and bootstraps the engine worker (leader only). */
   spawnWorker: () => EngineWorkerLike;
   /** Re-derives the secret for a failover cold-start. */
@@ -72,6 +75,7 @@ export class EngineClient implements EngineTransport {
 
   private readonly channel: BroadcastChannelLike;
   private readonly clientId: string;
+  private readonly courier: PortCourier;
   private readonly election: LeaderElection;
 
   private role: EngineClientRole = 'follower';
@@ -88,6 +92,7 @@ export class EngineClient implements EngineTransport {
   constructor(private readonly config: EngineClientConfig) {
     this.clientId = config.clientId ?? newClientId();
     this.channel = (config.createChannel ?? defaultChannel)();
+    this.courier = config.courier ?? defaultCourier();
 
     this.installFollower();
 
@@ -194,7 +199,7 @@ export class EngineClient implements EngineTransport {
   }
 
   private installFollower(): BroadcastTransport {
-    const follower = new BroadcastTransport(this.channel, this.clientId);
+    const follower = new BroadcastTransport(this.channel, this.clientId, this.courier);
     this.current = follower;
     this.innerUnsub = follower.subscribe((event) => this.fanOut(event));
     return follower;
@@ -257,7 +262,7 @@ export class EngineClient implements EngineTransport {
       this.role = 'leader';
       this.current = local;
       this.innerUnsub = local.subscribe((event) => this.fanOut(event));
-      this.relay = new LeaderRelay(this.channel, local);
+      this.relay = new LeaderRelay(this.channel, local, this.courier);
       if (this.ownFocus) this.relay.reportLocalFocus(this.clientId, this.ownFocus);
     } catch (error) {
       this.abortPromotion(local, error);

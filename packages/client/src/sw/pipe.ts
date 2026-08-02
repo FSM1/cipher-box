@@ -19,12 +19,15 @@ import { safeMimeType } from '../media/range.js';
 export interface WindowClientLike {
   /** Matches `FetchEventLike.clientId`, so a request can be aimed at one tab. */
   readonly id?: string;
-  postMessage(message: MediaPortRequest): void;
+  postMessage(message: unknown, transfer?: MessagePortLike[]): void;
 }
 
 /** The subset of `ServiceWorkerGlobalScope.clients` the pipe drives. */
 export interface ClientsLike {
-  matchAll(options: { type: 'window' }): Promise<readonly WindowClientLike[]>;
+  matchAll(options: {
+    type: 'window';
+    includeUncontrolled?: boolean;
+  }): Promise<readonly WindowClientLike[]>;
 }
 
 /** The subset of a Service Worker global scope the pipe drives. */
@@ -230,7 +233,8 @@ export class MediaPipe {
     // An unidentified client has no target, so it falls back to asking everyone.
     const owner = clients.filter((client) => client.id === clientId);
     const targets = clientId !== ANONYMOUS_CLIENT && owner.length > 0 ? owner : clients;
-    for (const client of targets) client.postMessage({ type: MEDIA_PORT_REQUEST });
+    const ask: MediaPortRequest = { type: MEDIA_PORT_REQUEST };
+    for (const client of targets) client.postMessage(ask);
     return this.waitForPort(clientId);
   }
 

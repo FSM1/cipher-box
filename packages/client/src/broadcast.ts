@@ -1,7 +1,10 @@
 /**
  * The cross-tab broadcast wire (blueprint/web-client.md "Followers are thin
- * mirrors"). Followers send commands to the leader and receive view projections
- * plus the one-way event stream back, all over a single `BroadcastChannel`.
+ * mirrors"). Followers send commands to the leader and receive the one-way event
+ * stream back over a single `BroadcastChannel`; every read **result** — snapshot
+ * projections and file plaintext — travels instead over the follower's private
+ * port ([`ReadPortRequest`](ReadPortRequest)), which the channel exists only to
+ * rendezvous.
  *
  * Security shape, structural not by discipline:
  * - The login **secret never crosses** — the keyless follower transport takes no
@@ -39,6 +42,29 @@ export type WireRead =
   | { kind: 'download'; node: Uint8Array }
   | { kind: 'downloadRange'; node: Uint8Array; offset: number; length: number };
 
+/** Follower → leader, over that follower's private read port. */
+export type ReadPortRequest =
+  /** Names the sender, binding the port to the client the leader already knows. */
+  | { type: 'cb:portHello'; clientId: string }
+  /** A correlated read; the leader answers with a matching `cb:portResult`. */
+  | { type: 'cb:portRead'; requestId: number; read: WireRead };
+
+/**
+ * Leader → follower, over that follower's private read port. A `download` /
+ * `downloadRange` result is the plaintext buffer itself, transferred rather than
+ * cloned; a snapshot carries the descriptor; a SIWE challenge the nonce string.
+ */
+export type ReadPortResponse =
+  /** The leader adopted the port, stamped with the leadership that owns it. */
+  | { type: 'cb:portReady'; token: string }
+  | {
+      type: 'cb:portResult';
+      requestId: number;
+      ok: true;
+      result?: SnapshotDescriptor | ArrayBuffer | string;
+    }
+  | { type: 'cb:portResult'; requestId: number; ok: false; error: string; code?: string };
+
 /** A follower streaming-write step, driven against the leader's engine. */
 export type WireWrite =
   | { kind: 'beginWrite'; target: WriteTarget; size: number }
@@ -52,8 +78,8 @@ export type FollowerMessage =
   | { type: 'cb:hello'; clientId: string }
   /** A correlated command; the leader answers with a matching `response`. */
   | { type: 'cb:command'; clientId: string; requestId: number; command: CommandDescriptor }
-  /** A correlated read; the leader answers with a value-bearing `response`. */
-  | { type: 'cb:read'; clientId: string; requestId: number; read: WireRead }
+  /** Asks the leader to publish the address a read port can be opened to. */
+  | { type: 'cb:portWanted'; clientId: string }
   /** A correlated write step, run against the leader's engine write handle. */
   | { type: 'cb:write'; clientId: string; requestId: number; write: WireWrite }
   /** This tab's currently open folder (for the leader's focus-window union). */
@@ -74,11 +100,11 @@ export type LeaderMessage =
   | { type: 'cb:leader'; token: string }
   /** The current leader is stepping down (graceful teardown); re-arm the gate. */
   | { type: 'cb:leaderGone'; token: string }
+  /** Where a follower may open its private read port to this leadership. */
+  | { type: 'cb:portHost'; token: string; address: string }
   /**
-   * The correlated result of a follower's command, read, or write step. A
-   * snapshot read's ok carries the descriptor in `result`; a plaintext read
-   * carries a `Blob`; a SIWE challenge carries the nonce string;
-   * `beginWrite`/`commitWrite` carry the handle / durable op id.
+   * The correlated result of a follower's command or write step;
+   * `beginWrite`/`commitWrite` carry the handle / durable op id in `result`.
    */
   | {
       type: 'cb:response';
@@ -86,10 +112,10 @@ export type LeaderMessage =
       clientId: string;
       requestId: number;
       ok: true;
-      result?: SnapshotDescriptor | Blob | bigint | string;
+      result?: WriteHandle;
     }
   /**
-   * A failed command/read. `error` is the human-readable diagnostic; `code` is
+   * A failed command/write. `error` is the human-readable diagnostic; `code` is
    * the engine's stable machine-readable error code when the failure came from
    * the engine.
    */
