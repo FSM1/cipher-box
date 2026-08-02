@@ -312,11 +312,10 @@ jobs:
   # real-Postgres concurrency/interleaving tests — registry register-vs-retire
   # phantom and duplicate-insert, mailbox pending-cap, and the advisory-lock
   # lock_timeout DoS guard — run against a live Postgres. They are named
-  # `*.itest.ts`, which the unit job's `*.test.ts` glob does not match; this job
-  # owns them. Each test provisions its own randomized throwaway database and
-  # drops only that one. NOT yet a required check (a new required context
-  # deadlocks open PRs that predate it) — flip to required after this lands on
-  # main and open PRs rebase.
+  # `*.itest.ts`; this job owns them. Each test provisions its own
+  # randomized throwaway database and drops only that one. NOT yet a required
+  # check (a new required context deadlocks open PRs that predate it) — flip to
+  # required after this lands on main and open PRs rebase.
   api-integration:
     name: API Integration (real Postgres)
     needs: [changes, lint]

@@ -209,7 +209,7 @@ describe('RegistryService concurrency (real Postgres)', () => {
 
   // The lock timeout is disabled in these interleaving tests so the gate — not
   // the wall clock — controls when a blocked operation proceeds; the timeout's
-  // own effect is proven in advisory-lock.integration.test.ts.
+  // own effect is proven in advisory-lock.itest.ts.
   function buildService(ds: DataSource, pinStore: PinStore): RegistryService {
     return new RegistryService(
       db.dataSource.getRepository(PinnedCid) as never,

@@ -107,7 +107,7 @@ interface SumQueryBuilder {
  * unpin guard's session lock has no effect against a single-threaded fake, so
  * its recount runs directly against the in-memory pins repo. The genuine
  * advisory-lock/lock_timeout/refcount semantics are proven on a real Postgres
- * in registry.service.integration.test.ts; here only the row LOGIC is unit
+ * in registry.service.itest.ts; here only the row LOGIC is unit
  * tested.
  */
 function fakeDataSource(repos: Array<[unknown, unknown]>): DataSource {

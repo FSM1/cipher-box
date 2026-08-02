@@ -59,7 +59,7 @@ reviews:
         - Determinism: entropy/time/policy must enter via parameters or
           seam traits, never direct clock/RNG calls
 
-    - path: '**/*.test.ts'
+    - path: '**/*.{test,itest}.ts'
       instructions: |
         Focus on test coverage, edge cases, and test quality.
         Ensure tests are meaningful and not just for coverage metrics.
