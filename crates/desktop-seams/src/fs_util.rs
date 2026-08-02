@@ -63,7 +63,7 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
             return Err(err);
         }
     }
-    fsync_dir(dir)
+    fsync_dir(dir).map_err(|err| io::Error::new(err.kind(), format!("write barrier: {err}")))
 }
 
 /// Durably removes a file. Idempotent: a missing file is success. The
