@@ -3705,6 +3705,10 @@ fn a_cancelled_versions_upload_mark_never_counts_towards_the_next_one() {
     for _ in 0..4 {
         poll_once(&mut tasks);
     }
+    assert!(
+        uploads(&alice) > 0,
+        "only a partial upload leaves a mark, so the cancel must land mid-transfer"
+    );
     block_on(engine.command(Command::CancelUpload { op_id: cancelled })).unwrap();
     poll_each(&mut tasks);
 
@@ -3933,6 +3937,52 @@ fn a_cancel_that_cannot_dequeue_retires_nothing_and_leaves_the_op_publishable() 
     );
 }
 
+/// The facade publishes the cancel claim before its removal commits, so the pass
+/// that stops on that claim cannot assume the op has left the queue. Its retire
+/// is gated on a removal of its own: proving the op is gone is what makes
+/// unpinning its leaves safe, and a removal it cannot make means it retires
+/// nothing rather than stranding a still-publishable version (#824).
+#[test]
+fn the_drains_cancel_retire_is_gated_on_the_op_leaving_the_durable_queue() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .unwrap();
+
+    world.scheduler.advance(engine.profile().poll_cadence);
+    for _ in 0..4 {
+        poll_once(&mut tasks);
+    }
+    assert!(
+        uploads(&alice) > 0,
+        "the cancel must land mid-transfer, not before it started"
+    );
+    block_on(engine.command(Command::CancelUpload { op_id })).expect("the upload is cancellable");
+    let facade_batches = retire_batches(&alice).len();
+
+    // The drain now stops on the claim with no removal available to it, which
+    // is indistinguishable from the op never having left the queue.
+    alice.staging_store.fail_remove_op();
+    poll_each(&mut tasks);
+
+    assert_eq!(
+        retire_batches(&alice).len(),
+        facade_batches,
+        "a pass that cannot prove the op left the queue unpins nothing"
+    );
+}
+
 /// The op-record header is clear and unauthenticated, and the owner tag on it is
 /// a public key any co-tenant of the origin-shared store can copy. A record that
 /// bears our tag but never opens is dead-lettered and dropped at cold start — it
@@ -4072,6 +4122,10 @@ fn a_leaf_a_lost_release_stranded_on_a_cancel_is_reclaimed_by_the_next_sweep() {
     for _ in 0..4 {
         poll_once(&mut tasks);
     }
+    assert!(
+        uploads(&alice) > 0,
+        "the cancel must land mid-transfer, not before it started"
+    );
     alice.staging_store.drop_staged_removal_after(&stranded, 0);
     block_on(engine.command(Command::CancelUpload { op_id })).unwrap();
     assert!(

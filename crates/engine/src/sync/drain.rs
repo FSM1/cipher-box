@@ -523,7 +523,17 @@ where
             // with nothing left to reach it, so the complete set is retired
             // here. Idempotent, so the overlap with the facade's batch is a
             // no-op (#916).
-            Halt::Cancelled => self.retire_cancelled(op_id).await,
+            //
+            // The dequeue gates the retire on the rule the facade's own path
+            // follows: the claim is published before that removal commits, so
+            // an op reaching here may still be queued — and unpinning the
+            // leading leaves of something still publishable would land a
+            // version whose blocks are gone (#824).
+            Halt::Cancelled => {
+                if self.dequeue_op(op_id).await.is_ok() {
+                    self.retire_cancelled(op_id).await;
+                }
+            }
             Halt::Attempt | Halt::UploadAttempt => {
                 if attempts.charge(op_id) < ATTEMPT_BUDGET {
                     return;

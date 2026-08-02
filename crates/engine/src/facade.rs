@@ -2224,17 +2224,20 @@ impl<T: SeamTypes> Engine<T> {
             self.cancels.borrow_mut().withdraw(op_id);
             return Err(error);
         }
+        // The primary op is already gone, so the overlay is stale either way:
+        // the host is told even when a cascade step fails part way.
+        let mut cascaded = Ok(());
         for (later_id, later) in cascade {
-            match later.content_root_cid() {
-                Some(root_cid) => {
-                    self.discard_upload(later_id, later.target, root_cid)
-                        .await?
-                }
-                None => self.dequeue_op(later_id).await?,
+            cascaded = match later.content_root_cid() {
+                Some(root_cid) => self.discard_upload(later_id, later.target, root_cid).await,
+                None => self.dequeue_op(later_id).await,
+            };
+            if cascaded.is_err() {
+                break;
             }
         }
         let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-        Ok(())
+        cascaded
     }
 
     /// Undo one queued upload: drop the op, retire what of it reached the

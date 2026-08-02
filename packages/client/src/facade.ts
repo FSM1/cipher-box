@@ -110,7 +110,8 @@ export class EngineFacade {
 
   /**
    * Cancel a queued upload by the op id `commitWrite` resolved with. Rejects
-   * with `tooLateToCancel` once the version's record is publishing.
+   * with `notAnUpload` when the op carries no content, and with
+   * `tooLateToCancel` once the version's record is publishing.
    */
   cancelUpload(opId: bigint): Promise<void> {
     return this.command({ kind: 'cancelUpload', opId });

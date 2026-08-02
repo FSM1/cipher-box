@@ -122,6 +122,8 @@ impl std::error::Error for VfsError {}
 
 #[cfg(test)]
 mod tests {
+    use cipherbox_engine::seams::OpId;
+
     use super::*;
 
     #[test]
@@ -201,6 +203,8 @@ mod tests {
             EngineError::NotStarted,
             EngineError::AlreadyStarted,
             EngineError::InvalidSecret,
+            EngineError::TooLateToCancel { op_id: OpId(1) },
+            EngineError::NotAnUpload { op_id: OpId(2) },
             EngineError::Unimplemented { command: "grant" },
             EngineError::Seam {
                 message: "fsync failed".into(),

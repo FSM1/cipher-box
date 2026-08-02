@@ -532,6 +532,7 @@ impl Command {
     }
 
     /// Cancel a queued upload by the op id `commitWrite` returned. Rejects with
+    /// `notAnUpload` when the op carries no content, and with
     /// `tooLateToCancel` once the version's record is publishing.
     #[wasm_bindgen(js_name = cancelUpload)]
     pub fn cancel_upload(op_id: u64) -> Command {
