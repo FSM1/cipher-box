@@ -18,11 +18,18 @@ mod fanout;
 mod focus;
 mod pointer_fetch;
 
+/// The registry's batch cap: the server refuses a larger array — and a larger
+/// per-entry `contentCids` array — fail-closed with a `400` (blueprint/api.md
+/// "Batch bounds"). [`register`] and [`retire`] are the callers that chunk to
+/// it, so nothing on this plane sends the raw client an unbounded batch.
+pub const REGISTRY_BATCH_MAX: usize = 1000;
+
 pub mod author;
 pub mod eol;
 pub mod liveness;
 pub mod publish;
 pub mod record_publish;
+pub mod register;
 pub mod resolve;
 pub mod retire;
 pub mod revival;
@@ -41,6 +48,7 @@ pub use liveness::{
 pub use pointer_fetch::RecordPointerFetch;
 pub use publish::{PublishError, PublishOutcome, PublishReceipt, PublishRequest, publish};
 pub use record_publish::{PreflightError, RecordPublishError};
+pub use register::register;
 pub use resolve::{AdoptOutcome, Adopter, OwnScopeMaterial, ResolveOutcome, Resolved, resolve};
 pub(crate) use resolve::{
     GatedResolve, HeldMaterial, refresh_base_from_outcome, resolve_and_hold, resolve_gated,

@@ -32,7 +32,7 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
-use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, UPLOAD_TOO_LARGE};
+use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
 use crate::content::{Gateway, SealedContent, pre_flight_quota_check};
 use crate::entropy::Entropy;
 use crate::facade::{BlockProgress, Event, NodeId, OpPhase};
@@ -42,7 +42,7 @@ use crate::net::author::{
     AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
     author_scope_root_envelope, new_child,
 };
-use crate::net::publish::{PublishOutcome, PublishReceipt};
+use crate::net::publish::{PublishError, PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
@@ -175,9 +175,9 @@ enum Halt {
     /// against the attempt budget, because a retry re-signs at the same
     /// sequence and a jammed name would otherwise retry forever.
     Attempt,
-    /// An upload refusal this pass cannot attribute. Charged like
-    /// [`Halt::Attempt`], but raised strictly **before** the record PUT — so
-    /// exhausting the budget may retire what the op uploaded, which an acked
+    /// An upload or registration refusal this pass cannot attribute. Charged
+    /// like [`Halt::Attempt`], but raised strictly **before** the record PUT —
+    /// so exhausting the budget may retire what the op uploaded, which an acked
     /// PUT's may not.
     UploadAttempt,
     /// Classified-permanent: the same bytes are refused on every retry.
@@ -1880,17 +1880,36 @@ fn seam(_: crate::seams::SeamError) -> Halt {
     Halt::Unclassified
 }
 
-/// Classify a publish failure for the valve. Only the head-block upload carries
-/// a server verdict this pass can act on; everything else is availability.
+/// Classify a publish failure for the valve. Only the head-block upload and the
+/// register-first call carry a server verdict this pass can act on; everything
+/// else is availability.
 ///
 /// `refused_bytes` is what the upload asked for, so a block entered here records
 /// the figure its resume probe must find room for.
 fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
     match error {
         RecordPublishError::Upload(error) => classify_upload(error, refused_bytes),
+        RecordPublishError::Publish(PublishError::Register(error)) => classify_register(error),
         RecordPublishError::HeadCidMismatch { .. } | RecordPublishError::Publish(_) => {
             Halt::Unclassified
         }
+    }
+}
+
+/// Classify a register-first refusal on the discriminator the registry stamps,
+/// never the status alone (the [`classify_upload`] discipline): the batch this
+/// op builds is refused identically on every retry, and the queue is strict
+/// FIFO, so an unclassified refusal parks the op at the head forever (#920).
+fn classify_register(error: ApiError) -> Halt {
+    let ApiError::Status {
+        status: 400, code, ..
+    } = error
+    else {
+        return Halt::Unclassified;
+    };
+    match code.as_deref() {
+        Some(REGISTRY_BATCH_REFUSED) => Halt::Permanent(DeadLetterReason::PayloadRefused),
+        _ => Halt::UploadAttempt,
     }
 }
 
@@ -1934,7 +1953,7 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
         // Both charge the attempt budget; which one it is decides only what
         // exhausting that budget retires, not what the host is told.
         Halt::Attempt | Halt::UploadAttempt => {
-            Some("the upload was refused without a classification")
+            Some("the network refused it without a classification")
         }
         Halt::Permanent(DeadLetterReason::PayloadRefused) => {
             Some("the network refused the payload")

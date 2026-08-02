@@ -12,9 +12,11 @@ import {
 } from '../testing/http-integration-app';
 import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integration-db';
 import { AccountController } from './account.controller';
+import { MAX_CONTENT_CIDS } from './dto/registry.dto';
 import { NameInventory } from './entities/name-inventory.entity';
 import { PinnedCid } from './entities/pinned-cid.entity';
 import { PinStore } from './pin-store';
+import { REGISTRY_BATCH_REFUSED } from './registry-error-codes';
 import { RegistryController } from './registry.controller';
 import { AccountService } from './services/account.service';
 import { RegistryService } from './services/registry.service';
@@ -147,6 +149,64 @@ describe('registry HTTP surface (real Postgres)', () => {
       expect(await namesFor(acct.id)).toHaveLength(0);
       expect((await pinsFor(acct.id)).some((r) => r.cid === 'bafyX')).toBe(false);
     });
+
+    it('refuses an over-cap contentCids and stamps the batch-refused code', async () => {
+      const acct = await account();
+      const contentCids = Array.from({ length: MAX_CONTENT_CIDS + 1 }, (_, i) => `bafyOverCap${i}`);
+      const response = await request(http())
+        .post('/registry/register')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .send([{ ipnsName: 'k51overcap', contentCids }])
+        .expect(400);
+      // The engine's failure valve dead-letters on this code, never on the
+      // status alone — a 400 from anything but this gate must not carry it.
+      expect(response.body.code).toBe(REGISTRY_BATCH_REFUSED);
+      // Constraint strings only: an error body that echoed the rejected entry
+      // would put the caller's name and CIDs everywhere it is logged.
+      expect(response.body.message).toEqual(expect.arrayContaining([expect.any(String)]));
+      expect(JSON.stringify(response.body)).not.toContain('k51overcap');
+      expect(JSON.stringify(response.body)).not.toContain(contentCids[0]);
+      expect(await namesFor(acct.id)).toHaveLength(0);
+      expect(await pinsFor(acct.id)).toHaveLength(0);
+    });
+
+    it('refuses an explicit null headCid rather than clearing the stored head', async () => {
+      const acct = await account();
+      await request(http())
+        .post('/registry/register')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .send([{ ipnsName: 'k51nullhead', headCid: 'bafyKeepMe', contentCids: [] }])
+        .expect(201);
+      const refused = await request(http())
+        .post('/registry/register')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .send([{ ipnsName: 'k51nullhead', headCid: null, contentCids: [] }])
+        .expect(400);
+      // DTO validation refuses inside ParseArrayPipe, which hands its
+      // exceptionFactory flattened strings — the code must survive that path.
+      expect(refused.body.code).toBe(REGISTRY_BATCH_REFUSED);
+      expect(refused.body.message).toEqual(expect.arrayContaining([expect.any(String)]));
+      expect((await namesFor(acct.id))[0].headCid).toBe('bafyKeepMe');
+    });
+
+    it('splits an over-cap version across entries under one name, keeping the head', async () => {
+      const acct = await account();
+      // The shape the engine's chunker sends: the head rides the first entry,
+      // the remainder follows as content-only entries under the same name.
+      await request(http())
+        .post('/registry/register')
+        .set('Authorization', `Bearer ${acct.token}`)
+        .send([
+          { ipnsName: 'k51chunked', headCid: 'bafyChunkedHead', contentCids: ['bafyChunkA'] },
+          { ipnsName: 'k51chunked', contentCids: ['bafyChunkB'] },
+        ])
+        .expect(201);
+      const names = await namesFor(acct.id);
+      expect(names).toHaveLength(1);
+      expect(names[0].headCid).toBe('bafyChunkedHead');
+      const cids = (await pinsFor(acct.id)).map((r) => r.cid).sort();
+      expect(cids).toEqual(['bafyChunkA', 'bafyChunkB', 'bafyChunkedHead']);
+    });
   });
 
   describe('retire — union liveness, refcounted unpin', () => {
@@ -187,11 +247,13 @@ describe('registry HTTP surface (real Postgres)', () => {
 
     it('rejects an over-length target at the pipe (256-char cap)', async () => {
       const acct = await account();
-      await request(http())
+      const refused = await request(http())
         .post('/registry/retire')
         .set('Authorization', `Bearer ${acct.token}`)
         .send(['a'.repeat(257)])
         .expect(400);
+      expect(refused.body.code).toBe(REGISTRY_BATCH_REFUSED);
+      expect(refused.body.message).toEqual(expect.arrayContaining([expect.any(String)]));
     });
   });
 

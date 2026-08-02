@@ -18,6 +18,7 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::eol;
 use super::fanout::{fanout_get_verify, fanout_put};
+use super::register::register;
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{
@@ -60,7 +61,8 @@ impl PublishRequest<'_> {
 
     /// The single-item registration batch for this publish (ordinary writes
     /// register one name; name waves and sweeps batch — that is the caller's
-    /// concern, blueprint/engine.md).
+    /// concern, blueprint/engine.md). [`register`] carries the registry's batch
+    /// bounds, so a version past the per-entry cap splits there.
     fn registration(&self) -> NameRegistration {
         NameRegistration {
             ipns_name: self.name.as_str().to_owned(),
@@ -159,7 +161,7 @@ where
 
     // Register-first, fail-closed: the record never reaches the transport unless
     // the registration succeeds (#24 D6 / #34 D2).
-    api.register(std::slice::from_ref(&request.registration()))
+    register(api, std::slice::from_ref(&request.registration()))
         .await
         .map_err(PublishError::Register)?;
 

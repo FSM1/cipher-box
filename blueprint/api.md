@@ -57,7 +57,13 @@ decay) inverted into structure.
   caps `contentCids` at 1000 per entry), enforced fail-closed with `400` before
   per-item validation and published as `maxItems` in the OpenAPI document. A bulk
   caller — a name wave, or an abandoned version whose leaves all need retiring —
-  chunks to the cap; retire is idempotent, so a replayed chunk is a no-op.
+  chunks to the cap; retire is idempotent, so a replayed chunk is a no-op. A
+  version with more leaves than the per-entry cap registers as several entries
+  under one `ipnsName`, the head riding the first; the server collapses them to
+  one name row, and a bare re-register carrying no `headCid` leaves the stored
+  head untouched. The refusal carries `code: REGISTRY_BATCH_REFUSED`, so a
+  client classifies on the gate's own discriminator rather than on a bare `400`
+  an intermediary could have answered.
 - **Register-first, fail-closed**: registration precedes the first publish of a
   name, and publish is blocked on it. A live-but-uninventoried name is
   structurally impossible; the worst failure is a registered-never-published
