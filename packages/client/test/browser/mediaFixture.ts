@@ -7,6 +7,9 @@
 /** Bytes produced tab-side, by the harness's own in-page reader. */
 export const TAB_SEED = 7;
 
+/** A second tab's bytes, so one tab's stream can never pass as another's. */
+export const SECOND_TAB_SEED = 83;
+
 /** Bytes produced only inside the leader's engine worker. */
 export const LEADER_SEED = 199;
 

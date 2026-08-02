@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 import { hex } from './hexUtil.js';
-import { fixtureSlice, LEADER_SEED, TAB_SEED } from './mediaFixture.js';
+import { fixtureSlice, LEADER_SEED, SECOND_TAB_SEED, TAB_SEED } from './mediaFixture.js';
 import type { MediaFetchResult } from './media.js';
 
 /**
@@ -15,7 +15,7 @@ import type { MediaFetchResult } from './media.js';
 
 interface MediaHarness {
   cbMediaEngine(options: { lockName: string; channelName: string }): Promise<string>;
-  cbMediaStart(options: { reader: 'local' | 'engine' }): Promise<boolean>;
+  cbMediaStart(options: { reader: 'local' | 'engine'; seed?: number }): Promise<boolean>;
   cbMediaAwaitControl(): Promise<boolean>;
   cbMediaTicket(size: number, mimeType: string): string;
   cbMediaFetch(url: string, range: string | null): Promise<MediaFetchResult>;
@@ -45,7 +45,7 @@ function names(): { lockName: string; channelName: string } {
 interface Tab {
   page: Page;
   engine(lockName: string, channelName: string): Promise<string>;
-  start(reader: 'local' | 'engine'): Promise<boolean>;
+  start(reader: 'local' | 'engine', seed?: number): Promise<boolean>;
   awaitControl(): Promise<boolean>;
   ticket(size: number): Promise<string>;
   fetch(url: string, range?: string): Promise<MediaFetchResult>;
@@ -68,8 +68,11 @@ async function openTab(context: BrowserContext): Promise<Tab> {
         lockName,
         channelName,
       }),
-    start: (reader) =>
-      page.evaluate((r) => (window as unknown as MediaHarness).cbMediaStart({ reader: r }), reader),
+    start: (reader, seed) =>
+      page.evaluate((opts) => (window as unknown as MediaHarness).cbMediaStart(opts), {
+        reader,
+        seed,
+      }),
     awaitControl: () =>
       page.evaluate(() => (window as unknown as MediaHarness).cbMediaAwaitControl()),
     ticket: (size) =>
@@ -93,10 +96,10 @@ async function openTab(context: BrowserContext): Promise<Tab> {
   };
 }
 
-/** A controlled tab whose broker serves the tab-seeded fixture. */
-async function localTab(context: BrowserContext): Promise<Tab> {
+/** A controlled tab whose broker serves the fixture bytes for `seed`. */
+async function localTab(context: BrowserContext, seed?: number): Promise<Tab> {
   const tab = await openTab(context);
-  expect(await tab.start('local')).toBe(true);
+  expect(await tab.start('local', seed)).toBe(true);
   expect(await tab.awaitControl()).toBe(true);
   return tab;
 }
@@ -180,8 +183,8 @@ test.describe('Service Worker media brokerage over a real byte pipe', () => {
   });
 
   test('two open tabs each stream from their own broker', async ({ context }) => {
-    const a = await localTab(context);
-    const b = await localTab(context);
+    const a = await localTab(context, TAB_SEED);
+    const b = await localTab(context, SECOND_TAB_SEED);
     const sizeA = 4096;
     const sizeB = 2048;
     const ticketA = await a.ticket(sizeA);
@@ -195,7 +198,7 @@ test.describe('Service Worker media brokerage over a real byte pipe', () => {
     expect(fromA.status).toBe(200);
     expect(fromA.bodyHex).toBe(hex(fixtureSlice(0, sizeA, TAB_SEED)));
     expect(fromB.status).toBe(200);
-    expect(fromB.bodyHex).toBe(hex(fixtureSlice(0, sizeB, TAB_SEED)));
+    expect(fromB.bodyHex).toBe(hex(fixtureSlice(0, sizeB, SECOND_TAB_SEED)));
 
     await b.dispose();
     await a.dispose();
