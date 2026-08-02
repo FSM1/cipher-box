@@ -3,14 +3,14 @@ import { useConnect, useDisconnect, useSignMessage } from 'wagmi';
 import { mainnet } from 'wagmi/chains';
 import { hexToBytes } from 'viem';
 import { createSiweMessage } from 'viem/siwe';
-import { requestSiweNonce } from '../../auth/siweNonce';
 import { errorMessage } from '../../lib/errorMessage';
 import { LoginError } from './LoginError';
 
 interface WalletLoginButtonProps {
+  /** Reads the single-use nonce the EIP-4361 message embeds, from the facade. */
+  requestNonce: () => Promise<string>;
   /** Hands the signed EIP-4361 message to the facade. */
   onLogin: (message: string, signature: Uint8Array) => Promise<void>;
-  apiBaseUrl: string;
   disabled?: boolean;
 }
 
@@ -28,7 +28,7 @@ const PHASE_LABEL: Record<Phase, string> = {
  * identity"): wagmi collects the wallet signature here and the facade forwards
  * it.
  */
-export function WalletLoginButton({ onLogin, apiBaseUrl, disabled }: WalletLoginButtonProps) {
+export function WalletLoginButton({ requestNonce, onLogin, disabled }: WalletLoginButtonProps) {
   const { connectors, connectAsync } = useConnect();
   const { signMessageAsync } = useSignMessage();
   const { disconnect } = useDisconnect();
@@ -62,12 +62,15 @@ export function WalletLoginButton({ onLogin, apiBaseUrl, disabled }: WalletLogin
       const [account] = accounts;
       if (!account) throw new Error('the wallet returned no account');
 
+      // The nonce first, then the phase: the label promises a wallet prompt
+      // that only appears once the message exists.
+      const nonce = await requestNonce();
       setPhase('signing');
       const message = createSiweMessage({
         address: account,
         chainId: mainnet.id,
         domain: window.location.host,
-        nonce: await requestSiweNonce(apiBaseUrl),
+        nonce,
         uri: window.location.origin,
         version: '1',
         statement: 'Sign in to CipherBox encrypted storage',

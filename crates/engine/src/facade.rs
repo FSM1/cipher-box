@@ -2103,6 +2103,18 @@ impl<T: SeamTypes> Engine<T> {
             .map_err(EngineError::from_seam)
     }
 
+    /// Issues the single-use nonce an EIP-4361 message must embed, so the host
+    /// collects a wallet signature without reaching the API itself
+    /// (blueprint/web-client.md: `apps/web` holds no seam of its own). Fails
+    /// `NotStarted` before [`start`](Self::start), like the
+    /// [`Command::SiweLogin`] that spends the nonce — SIWE is a secondary
+    /// method (blueprint/engine.md "API client").
+    pub async fn siwe_challenge(&self) -> Result<String, EngineError> {
+        let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
+        let nonce = api.siwe_challenge().await.map_err(EngineError::from_api)?;
+        Ok(nonce.nonce)
+    }
+
     /// A rendered read of the current state — the gate-passing base snapshot ⊕
     /// the pending-op overlay — for FUSE-shaped reads (children/lookup/attrs/
     /// statfs). Fails `NotStarted` before [`start`](Self::start).

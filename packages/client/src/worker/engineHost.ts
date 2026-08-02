@@ -29,6 +29,7 @@ export interface EngineHostLike {
   commitWrite(handle: WriteHandle): Promise<bigint>;
   abortWrite(handle: WriteHandle): Promise<void>;
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
+  siweChallenge(): Promise<string>;
   download(node: Uint8Array): Promise<ArrayBuffer>;
   nextEvent(): Promise<EventDescriptor | null>;
 }
@@ -104,6 +105,10 @@ export class EngineHost implements EngineHostLike {
       folder === null ? undefined : this.wasm.NodeId.fromBytes(folder)
     );
     return readSnapshot(this.wasm, view);
+  }
+
+  siweChallenge(): Promise<string> {
+    return this.handle.siweChallenge();
   }
 
   async download(node: Uint8Array): Promise<ArrayBuffer> {

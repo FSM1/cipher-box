@@ -60,6 +60,10 @@ class FakeHost implements EngineHostLike {
     return Promise.reject(new Error('fake host serves no snapshots'));
   }
 
+  siweChallenge(): Promise<string> {
+    return Promise.reject(new Error('fake host serves no siwe challenges'));
+  }
+
   download(): Promise<ArrayBuffer> {
     return Promise.reject(new Error('fake host serves no downloads'));
   }

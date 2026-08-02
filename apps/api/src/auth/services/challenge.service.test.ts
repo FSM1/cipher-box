@@ -45,6 +45,13 @@ describe('ChallengeService', () => {
     expect(() => service.consume(challenge, 'siwe')).toThrow(UnauthorizedException);
   });
 
+  // The engine hard-rejects a nonce outside this class, because the nonce lands
+  // verbatim in the text a wallet signs. Pinned here, at the producer, so a
+  // change of alphabet fails a unit gate rather than every wallet login.
+  it('issues a nonce inside the EIP-4361 class the engine enforces', () => {
+    expect(service.issueSiweNonce().nonce).toMatch(/^[A-Za-z0-9]{8,128}$/);
+  });
+
   it('rejects unknown challenges', () => {
     expect(() => service.consume('never-issued', 'identity', PUBLIC_KEY)).toThrow(
       UnauthorizedException

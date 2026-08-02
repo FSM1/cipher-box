@@ -49,6 +49,9 @@ export const fakeWasmEnums = {
   },
 } as const;
 
+/** A nonce inside the EIP-4361 class the engine enforces. */
+export const FAKE_SIWE_NONCE = 'nonce123456789ab';
+
 /** A minimal empty snapshot descriptor for transport-plumbing assertions. */
 export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): SnapshotDescriptor {
   return {
@@ -182,6 +185,7 @@ export class FakeEngineTransport implements EngineTransport {
   readonly commands: CommandDescriptor[] = [];
   readonly snapshots: Array<Uint8Array | null> = [];
   readonly downloads: Uint8Array[] = [];
+  siweChallenges = 0;
   readonly beginWrites: Array<{ target: WriteTarget; size: number }> = [];
   readonly chunks: Array<{ handle: WriteHandle; chunk: ArrayBuffer }> = [];
   readonly commits: WriteHandle[] = [];
@@ -196,6 +200,7 @@ export class FakeEngineTransport implements EngineTransport {
     Promise.resolve(emptySnapshot(folder ?? undefined));
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
     Promise.resolve(new ArrayBuffer(0));
+  respondSiweChallenge: () => Promise<string> = () => Promise.resolve(FAKE_SIWE_NONCE);
   private readonly listeners = new Set<EngineEventListener>();
 
   start(secret: ArrayBuffer): Promise<void> {
@@ -231,6 +236,11 @@ export class FakeEngineTransport implements EngineTransport {
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
     this.snapshots.push(folder);
     return this.respondSnapshot(folder);
+  }
+
+  siweChallenge(): Promise<string> {
+    this.siweChallenges += 1;
+    return this.respondSiweChallenge();
   }
 
   download(node: Uint8Array): Promise<ArrayBuffer> {

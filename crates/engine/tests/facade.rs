@@ -2,7 +2,7 @@
 //! and event-stream plumbing over a fully faked seam set.
 
 use cipherbox_engine::net::RE_PUT_INTERVAL;
-use cipherbox_engine::seams::{Scheduler, UnixMillis};
+use cipherbox_engine::seams::{HttpResponse, Scheduler, UnixMillis};
 use cipherbox_engine::testkit::{FakeDevice, FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
     Command, ContentProfile, Engine, EngineError, EventStream, GatewayConfig, LoginSecret, NodeId,
@@ -86,6 +86,39 @@ fn commands_before_start_are_rejected_not_started() {
 
     let result = block_on(engine.command(Command::ManualRefresh));
     assert_eq!(result, Err(EngineError::NotStarted));
+}
+
+#[test]
+fn a_siwe_challenge_before_start_is_rejected_not_started() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (engine, _events) = new_engine(&device);
+
+    assert_eq!(
+        block_on(engine.siwe_challenge()),
+        Err(EngineError::NotStarted)
+    );
+}
+
+#[test]
+fn a_started_engine_serves_the_nonce_from_its_api_client() {
+    let world = FakeWorld::new();
+    let device = world.device(b"alice-pk");
+    let (mut engine, _events) = new_engine(&device);
+    block_on(engine.start(secret())).expect("start");
+
+    device.http.enqueue_response(HttpResponse {
+        status: 200,
+        headers: vec![("Content-Type".to_owned(), "application/json".to_owned())],
+        body: br#"{"nonce":"a1b2c3d4e5f60718","expiresAt":"2026-01-01T00:00:00Z"}"#.to_vec(),
+    });
+
+    assert_eq!(
+        block_on(engine.siwe_challenge()),
+        Ok("a1b2c3d4e5f60718".to_owned())
+    );
+    let request = device.http.requests().pop().expect("one request");
+    assert!(request.url.ends_with("/auth/siwe/challenge"), "{request:?}");
 }
 
 #[test]

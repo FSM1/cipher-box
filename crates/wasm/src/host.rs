@@ -1,11 +1,12 @@
 //! The production engine host: constructs the one engine instance over the
-//! browser seams and exposes `start` / `command` / `snapshot` / `download` /
-//! `nextEvent` to the worker.
+//! browser seams and exposes `start` / `command` / `snapshot` / `siweChallenge`
+//! / `download` / `nextEvent` to the worker.
 //!
 //! Loaded inside `packages/client`'s dedicated engine worker (never the UI
 //! realm). The single engine sits behind an async RwLock: `start`/`command`
-//! take the write lock and serialize, while the reads (`snapshot`, `download`)
-//! share the read lock — a long download never blocks a snapshot. `nextEvent`
+//! take the write lock and serialize, while the reads (`snapshot`,
+//! `siweChallenge`, `download`) share the read lock — a long download never
+//! blocks a snapshot. `nextEvent`
 //! reads the independent event stream and runs concurrently with a command.
 //!
 //! Key material lives only in this worker's WASM linear memory: the login
@@ -341,6 +342,22 @@ impl EngineHandle {
             let folder = folder.unwrap_or_else(|| engine.root());
             let view = engine.snapshot(folder).await.map_err(engine_error)?;
             Ok(SnapshotView::from_facade(view).into())
+        })
+    }
+
+    /// Issues the single-use nonce an EIP-4361 message must embed. Resolves
+    /// with the nonce as a string; rejects with the engine error.
+    #[wasm_bindgen(js_name = siweChallenge)]
+    pub fn siwe_challenge(&self) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            let nonce = engine
+                .read()
+                .await
+                .siwe_challenge()
+                .await
+                .map_err(engine_error)?;
+            Ok(JsValue::from_str(&nonce))
         })
     }
 

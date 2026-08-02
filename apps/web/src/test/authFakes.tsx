@@ -15,25 +15,39 @@ import { EngineProvider } from '../providers/EngineProvider';
 /** A 32-byte scalar in the hex shape Core Kit exports. */
 export const SECRET_HEX = '0f'.repeat(32);
 
+/** The nonce the fake facade issues for a SIWE challenge. */
+export const FAKE_NONCE = 'nonce123456789ab';
+
 export interface EngineCalls {
   /** The buffers `start` was handed, still live so a test can check zeroization. */
   started: ArrayBuffer[];
   /** What each buffer held on arrival, before the handoff scrubbed it. */
   secrets: Uint8Array[];
   siwe: { message: string; signature: Uint8Array }[];
+  siweChallenges: number;
   logouts: number;
 }
 
 export function fakeEngineClient(
   overrides: Partial<Record<'start' | 'logout', () => Promise<void>>> = {}
 ) {
-  const calls: EngineCalls = { started: [], secrets: [], logouts: 0, siwe: [] };
+  const calls: EngineCalls = {
+    started: [],
+    secrets: [],
+    logouts: 0,
+    siwe: [],
+    siweChallenges: 0,
+  };
   const client = {
     facade: {
       start(secret: ArrayBuffer) {
         calls.started.push(secret);
         calls.secrets.push(new Uint8Array(secret).slice());
         return overrides.start?.() ?? Promise.resolve();
+      },
+      siweChallenge() {
+        calls.siweChallenges += 1;
+        return Promise.resolve(FAKE_NONCE);
       },
       siweLogin(message: string, signature: Uint8Array) {
         calls.siwe.push({ message, signature });

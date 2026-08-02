@@ -73,6 +73,11 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
           post({ type: 'response', id: request.id, ok: true, result });
           return;
         }
+        case 'siweChallenge': {
+          const result = await host.siweChallenge();
+          post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
         case 'download': {
           const result = await host.download(request.node);
           // Transfer the plaintext buffer: no byte copy through the boundary.

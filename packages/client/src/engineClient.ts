@@ -152,6 +152,10 @@ export class EngineClient implements EngineTransport {
     return this.current.snapshot(folder);
   }
 
+  siweChallenge(): Promise<string> {
+    return this.current.siweChallenge();
+  }
+
   download(node: Uint8Array): Promise<ArrayBuffer> {
     return this.current.download(node);
   }

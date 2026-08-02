@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { emptySnapshot, fakeWasmEnums } from '../testkit.js';
+import { emptySnapshot, FAKE_SIWE_NONCE, fakeWasmEnums } from '../testkit.js';
 import { LocalTransport, type EngineWorkerLike } from '../transport.js';
 import { EngineHost, type EngineHostLike } from './engineHost.js';
 import type { EngineWasm, WasmEngineHandle, WasmEvent } from './engineWasm.js';
@@ -68,6 +68,7 @@ class ReadHost implements EngineHostLike {
   respondSnapshot: () => Promise<SnapshotDescriptor> = () => Promise.resolve(SNAPSHOT);
   respondDownload: () => Promise<ArrayBuffer> = () =>
     Promise.resolve(new Uint8Array([9, 8, 7]).buffer);
+  siweChallenges = 0;
 
   start(): Promise<void> {
     return Promise.resolve();
@@ -100,6 +101,11 @@ class ReadHost implements EngineHostLike {
   snapshot(folder: Uint8Array): Promise<SnapshotDescriptor> {
     this.snapshots.push(folder);
     return this.respondSnapshot();
+  }
+
+  siweChallenge(): Promise<string> {
+    this.siweChallenges += 1;
+    return Promise.resolve(FAKE_SIWE_NONCE);
   }
 
   download(node: Uint8Array): Promise<ArrayBuffer> {
@@ -138,6 +144,16 @@ describe('serveEngine read requests', () => {
     );
     expect(response).toBeDefined();
     expect(response!.transfer).toEqual([content]);
+  });
+
+  it('serves a SIWE challenge end to end over the transport', async () => {
+    const { scope, worker } = loopback();
+    const host = new ReadHost();
+    serveEngine(scope, host);
+    const transport = new LocalTransport(worker);
+
+    await expect(transport.siweChallenge()).resolves.toBe(FAKE_SIWE_NONCE);
+    expect(host.siweChallenges).toBe(1);
   });
 
   it('maps a rejected read to a correlated error response with the stable code', async () => {
@@ -316,6 +332,7 @@ describe('serveEngine event pump over the real EngineHost', () => {
       commitWrite: () => Promise.resolve(1n),
       abortWrite: () => Promise.resolve(undefined),
       snapshot: () => Promise.reject(new Error('unused')),
+      siweChallenge: () => Promise.reject(new Error('unused')),
       download: () => Promise.reject(new Error('unused')),
       nextEvent: () =>
         pumped.length > 0

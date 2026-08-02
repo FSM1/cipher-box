@@ -301,7 +301,12 @@ async fn siwe_secondary_surface_is_reachable_and_gated() {
 
     // The nonce endpoint issues a fresh nonce.
     let nonce = expect_auth("siwe nonce", client.siwe_challenge().await);
-    assert!(!nonce.nonce.is_empty(), "a nonce is issued");
+    assert!(
+        (8..=128).contains(&nonce.nonce.len())
+            && nonce.nonce.chars().all(|c| c.is_ascii_alphanumeric()),
+        "the live API issues a nonce inside the EIP-4361 class the client enforces, got {:?}",
+        nonce.nonce
+    );
 
     // A well-formed-but-unlinked SIWE login is refused (the wallet is not
     // linked to any account). The signature is shaped to pass DTO validation
