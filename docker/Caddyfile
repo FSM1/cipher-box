@@ -15,8 +15,25 @@ api-staging.cipherbox.cc {
 app-staging.cipherbox.cc {
 	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin-key.pem
 	root * /srv/web
-	try_files {path} /index.html
-	file_server
+
+	# 'wasm-unsafe-eval' is required: Chromium blocks all WebAssembly compilation
+	# without it, killing the engine worker and the Core Kit tssLib. default-src is
+	# omitted so login and API calls to third-party origins stay unrestricted.
+	header {
+		Content-Security-Policy "script-src 'self' 'wasm-unsafe-eval'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+		X-Content-Type-Options nosniff
+	}
+
+	# Fingerprinted assets must 404 when absent; the SPA fallback would otherwise
+	# answer a missing script or wasm module with a 200 text/html index.html.
+	handle /assets/* {
+		file_server
+	}
+
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
 }
 
 :80 {
