@@ -165,6 +165,7 @@ function baseView(): WasmSnapshotView {
   return {
     root: new Uint8Array(16),
     folder: new Uint8Array(16),
+    folderName: '',
     children: [],
     ancestors: [],
     deadLetters: [],
@@ -178,6 +179,7 @@ describe('readSnapshot', () => {
     const view: WasmSnapshotView = {
       root: new Uint8Array(16).fill(1),
       folder: new Uint8Array(16).fill(2),
+      folderName: 'holiday',
       children: [
         {
           id: new Uint8Array(16).fill(3),
@@ -221,6 +223,7 @@ describe('readSnapshot', () => {
     expect(readSnapshot(fakeWasm, view)).toEqual({
       root: new Uint8Array(16).fill(1),
       folder: new Uint8Array(16).fill(2),
+      folderName: 'holiday',
       children: [
         {
           id: new Uint8Array(16).fill(3),

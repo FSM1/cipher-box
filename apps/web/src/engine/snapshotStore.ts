@@ -7,6 +7,7 @@
 
 import { EngineRequestError } from '@cipherbox/client';
 import type { EngineClient, SnapshotDescriptor, Staleness } from '@cipherbox/client';
+import { sameNode } from '../lib/nodeId';
 
 /** A failed pull, carrying the engine's stable code so the UI can classify it. */
 export interface SnapshotError {
@@ -152,10 +153,4 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
 function describe(error: unknown): SnapshotError {
   if (error instanceof EngineRequestError) return { message: error.message, code: error.code };
   return { message: error instanceof Error ? error.message : String(error) };
-}
-
-/** Node ids compare by value: callers hand in a fresh array per render. */
-function sameNode(a: Uint8Array | null, b: Uint8Array | null): boolean {
-  if (a === null || b === null) return a === b;
-  return a.length === b.length && a.every((byte, i) => byte === b[i]);
 }

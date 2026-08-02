@@ -222,6 +222,7 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
     let view: JsValue = SnapshotView::from_facade(facade::SnapshotView {
         root: facade::NodeId([1u8; 16]),
         folder: facade::NodeId([2u8; 16]),
+        folder_name: "holiday".into(),
         children: vec![
             facade::SnapshotChild {
                 id: facade::NodeId([3u8; 16]),
@@ -273,6 +274,12 @@ fn snapshot_view_getters_cross_with_boundary_shapes() {
     assert_eq!(
         folder.unchecked_into::<Uint8Array>().to_vec(),
         vec![2u8; 16]
+    );
+
+    assert_eq!(
+        get(&view, "folderName").as_string().as_deref(),
+        Some("holiday"),
+        "folderName must cross under that JS name"
     );
 
     assert_eq!(

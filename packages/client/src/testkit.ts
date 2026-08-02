@@ -58,6 +58,7 @@ export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): Snapshot
   return {
     root: new Uint8Array(16),
     folder,
+    folderName: '',
     children: [],
     ancestors: [],
     deadLetters: [],

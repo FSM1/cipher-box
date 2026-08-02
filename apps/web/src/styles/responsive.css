@@ -1,0 +1,108 @@
+/* ==========================================================================
+   Responsive Styles - breakpoint 768px
+   ========================================================================== */
+
+@media (max-width: 768px) {
+  /* Shell collapses to a single column; the sidebar has no mobile overlay. */
+  .app-shell {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'header'
+      'main'
+      'footer';
+  }
+
+  .app-sidebar {
+    display: none;
+  }
+
+  .app-header {
+    padding: var(--spacing-xs) var(--spacing-sm);
+  }
+
+  .app-footer {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    justify-content: center;
+    gap: var(--spacing-sm);
+  }
+
+  .footer-center {
+    display: none;
+  }
+
+  .footer-left,
+  .footer-right {
+    flex-shrink: 0;
+  }
+
+  .user-menu-email {
+    max-width: 120px;
+  }
+
+  .file-browser {
+    padding: 0 var(--spacing-sm) var(--spacing-sm);
+  }
+
+  .breadcrumb-nav {
+    padding: var(--spacing-xs);
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .breadcrumb-item {
+    max-width: 100px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Rows become two lines: name on top, size and date beneath it. */
+  .file-list-header {
+    grid-template-columns: 1fr;
+  }
+
+  .file-list-header-size,
+  .file-list-header-date {
+    display: none;
+  }
+
+  .file-list-item {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      'name'
+      'meta';
+    gap: 4px;
+  }
+
+  .file-list-item-row-bottom {
+    grid-area: meta;
+    display: flex;
+    gap: var(--spacing-sm);
+  }
+
+  .file-list-item-size,
+  .file-list-item-date {
+    grid-area: auto;
+  }
+
+  .empty-state {
+    margin: var(--spacing-md);
+    min-height: 200px;
+  }
+}
+
+/* ==========================================================================
+   Touch Interactions
+   ========================================================================== */
+
+.file-list-item {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+@media (pointer: coarse) {
+  .file-list-item:active {
+    background-color: var(--color-green-darker);
+  }
+}

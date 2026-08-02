@@ -1,0 +1,55 @@
+/* ==========================================================================
+   Breadcrumb Navigation - Terminal Aesthetic
+   ========================================================================== */
+
+.breadcrumb-nav {
+  display: flex;
+  align-items: center;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  padding: var(--spacing-xs) 0;
+  min-height: 2.5rem;
+}
+
+.breadcrumb-prefix {
+  color: var(--color-text-secondary);
+}
+
+.breadcrumb-separator {
+  color: var(--color-text-secondary);
+  margin: 0 2px;
+}
+
+.breadcrumb-item {
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  padding: 2px 4px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-normal);
+  border-radius: 0;
+  transition: color 0.15s ease;
+}
+
+.breadcrumb-item:hover {
+  color: var(--color-text-primary);
+}
+
+.breadcrumb-item:focus {
+  outline: none;
+  background-color: var(--color-green-darker);
+}
+
+.breadcrumb-item:focus-visible {
+  outline: 1px solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+/* The folder on screen - slightly more prominent than its ancestors. */
+.breadcrumb-item--current {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}

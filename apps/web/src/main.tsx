@@ -2,6 +2,10 @@
 import './polyfills';
 import './index.css';
 import './styles/login.css';
+import './styles/layout.css';
+import './styles/file-browser.css';
+import './styles/breadcrumbs.css';
+import './styles/responsive.css';
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';

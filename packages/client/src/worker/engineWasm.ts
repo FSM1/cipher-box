@@ -69,6 +69,7 @@ export interface WasmBlockedOp {
 export interface WasmSnapshotView {
   readonly root: Uint8Array;
   readonly folder: Uint8Array;
+  readonly folderName: string;
   readonly children: WasmSnapshotChild[];
   readonly ancestors: WasmBreadcrumb[];
   readonly deadLetters: readonly WasmDeadLetter[];
