@@ -68,52 +68,105 @@ fn file_credential_store_passes_the_credential_store_kit() {
 // StagingStore desktop-specific durability — beyond what the kit asserts.
 // ---------------------------------------------------------------------------
 
-/// The json-record-before-bin-sidecar removal ordering (hard constraint 5).
+/// The json-record-before-bin-sidecar removal ordering (hard constraint 5),
+/// asserted at **every** interruption point in one op's life rather than only
+/// on the happy path.
 ///
-/// Simulates a crash at the kill point *between* `remove_op` (the op record,
-/// the "json" of the v1 journal) and `remove_staged_bytes` (the sidecar):
-/// after reopen the op is durably gone while the sidecar survives as a
-/// harmless orphan — never the dangerous inverse (an op record referencing a
-/// sidecar that is already gone). Orphan-sidecar GC then reclaims it.
+/// After each kill point the store is dropped and reopened, and the surviving
+/// state must never be the dangerous inverse — an op record whose staged
+/// sidecar is already gone. What it may leave is an orphan sidecar, which
+/// orphan-sidecar GC ([`StagingStore::staged_keys`] + `remove_staged_bytes`)
+/// reclaims.
 #[test]
 fn staging_store_removal_ordering_leaves_only_a_reclaimable_orphan() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("staging");
 
+    // Kill point 1: bytes staged, op not yet journaled.
     block_on(async {
         let store = FileStagingStore::open(&path).unwrap();
-        let op_id = store.enqueue_op(b"update-content-op").await.unwrap();
         store
             .put_staged_bytes(b"chunk-key", b"sealed-ciphertext")
             .await
             .unwrap();
-
-        // Engine completes the op: op record removed durably FIRST...
-        store.remove_op(op_id).await.unwrap();
-        // ...and the process dies here, before remove_staged_bytes.
     });
+    assert_survivors(
+        &path,
+        Survivors {
+            op: false,
+            sidecar: true,
+        },
+    );
 
-    // Reopen (post-"crash"): the op is gone, the sidecar is an orphan.
+    // Kill point 2: op journaled, nothing removed yet.
+    let op_id = block_on(async {
+        let store = FileStagingStore::open(&path).unwrap();
+        store.enqueue_op(b"update-content-op").await.unwrap()
+    });
+    assert_survivors(
+        &path,
+        Survivors {
+            op: true,
+            sidecar: true,
+        },
+    );
+
+    // Kill point 3: op record removed, sidecar not yet — the orphan.
     block_on(async {
-        let reopened = FileStagingStore::open(&path).unwrap();
-        assert!(
-            reopened.queued_ops().await.unwrap().is_empty(),
-            "the op record must be durably gone after remove_op"
-        );
-        assert_eq!(
-            reopened.staged_bytes(b"chunk-key").await.unwrap(),
-            Some(b"sealed-ciphertext".to_vec()),
-            "the sidecar must survive as a harmless orphan, never a dangling op"
-        );
+        let store = FileStagingStore::open(&path).unwrap();
+        store.remove_op(op_id).await.unwrap();
+    });
+    assert_survivors(
+        &path,
+        Survivors {
+            op: false,
+            sidecar: true,
+        },
+    );
 
-        // Orphan-sidecar GC reclaims it.
+    // Kill point 4: GC reclaims the orphan and the budget goes back to zero.
+    block_on(async {
+        let store = FileStagingStore::open(&path).unwrap();
         assert_eq!(
-            reopened.staged_keys().await.unwrap(),
+            store.staged_keys().await.unwrap(),
             vec![b"chunk-key".to_vec()]
         );
-        reopened.remove_staged_bytes(b"chunk-key").await.unwrap();
-        assert!(reopened.staged_keys().await.unwrap().is_empty());
-        assert_eq!(reopened.staged_bytes_total().await.unwrap(), 0);
+        store.remove_staged_bytes(b"chunk-key").await.unwrap();
+        assert_eq!(store.staged_bytes_total().await.unwrap(), 0);
+    });
+    assert_survivors(
+        &path,
+        Survivors {
+            op: false,
+            sidecar: false,
+        },
+    );
+}
+
+/// What one kill point expects to find after the store is reopened.
+struct Survivors {
+    op: bool,
+    sidecar: bool,
+}
+
+/// Reopens the staging store and asserts exactly what survived the kill point.
+fn assert_survivors(path: &std::path::Path, expected: Survivors) {
+    assert!(
+        !expected.op || expected.sidecar,
+        "no kill point may expect an op record without the sidecar it references"
+    );
+    block_on(async {
+        let store = FileStagingStore::open(path).unwrap();
+        assert_eq!(
+            !store.queued_ops().await.unwrap().is_empty(),
+            expected.op,
+            "op record survival"
+        );
+        let staged = store.staged_bytes(b"chunk-key").await.unwrap();
+        assert_eq!(staged.is_some(), expected.sidecar, "sidecar survival");
+        if expected.sidecar {
+            assert_eq!(staged.as_deref(), Some(&b"sealed-ciphertext"[..]));
+        }
     });
 }
 
