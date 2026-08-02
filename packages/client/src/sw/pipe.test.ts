@@ -86,7 +86,6 @@ function streamingPort(chunks: Uint8Array[]): FakePort {
       port.deliver({
         type: 'cb:media:head',
         requestId: message.requestId,
-        ok: true,
         status: 206,
         headers: [['content-type', 'video/mp4']],
       });
@@ -109,7 +108,6 @@ function stalledPort(): FakePort {
     port.deliver({
       type: 'cb:media:head',
       requestId: message.requestId,
-      ok: true,
       status: 200,
       headers: [],
     });
@@ -220,7 +218,6 @@ describe('MediaPipe.respond', () => {
         self.deliver({
           type: 'cb:media:head',
           requestId: message.requestId,
-          ok: true,
           status: 200,
           headers: [],
         });
@@ -238,14 +235,13 @@ describe('MediaPipe.respond', () => {
     await expect(reader?.read()).rejects.toThrow('boom');
   });
 
-  it('turns a not-ok head into a bodiless response and never pulls', async () => {
+  it('turns an error-status head into a bodiless response and never pulls', async () => {
     const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
     const port = new FakePort((message, self) => {
       if (message.type !== 'cb:media:open') return;
       self.deliver({
         type: 'cb:media:head',
         requestId: message.requestId,
-        ok: false,
         status: 404,
         headers: [],
       });
@@ -446,17 +442,42 @@ describe('MediaPipe client routing', () => {
     ]);
   });
 
-  it('falls back to the newest port for a client it holds none for', async () => {
-    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
-    const a = streamingPort([new Uint8Array([1])]);
+  it('re-brokers to the owning tab instead of borrowing another client port', async () => {
+    vi.useFakeTimers();
+    const scope = new FakeScope();
+    const pipe = new MediaPipe(scope, TIMEOUTS);
     const b = streamingPort([new Uint8Array([2])]);
-    pipe.adoptPort(a, 'client-a');
-    pipe.adoptPort(b, 'client-b');
+    pipe.adoptPort(b, 'tab-b');
 
-    const response = await pipe.respond(streamRequest(), 'client-never-seen');
+    const pending = pipe.respond(streamRequest(), 'tab-a');
+    await vi.advanceTimersByTimeAsync(TIMEOUTS.brokerTimeoutMs);
+    const response = await pending;
+    vi.useRealTimers();
 
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([2]));
-    expect(a.countOf('cb:media:open')).toBe(0);
+    // Tab B's registry never minted tab A's ticket, so its port cannot answer.
+    expect(b.countOf('cb:media:open')).toBe(0);
+    expect(scope.brokeredTo).toEqual(['tab-a']);
+    expect(response.status).toBe(503);
+  });
+
+  it('keeps a client waiting when an unrelated client offers a port', async () => {
+    vi.useFakeTimers();
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+
+    const pending = pipe.respond(streamRequest(), 'tab-a');
+    await vi.advanceTimersByTimeAsync(TIMEOUTS.brokerTimeoutMs / 2);
+    const other = streamingPort([new Uint8Array([9])]);
+    pipe.adoptPort(other, 'tab-b');
+    await vi.advanceTimersByTimeAsync(1);
+    expect(other.countOf('cb:media:open')).toBe(0);
+
+    const own = streamingPort([new Uint8Array([4])]);
+    pipe.adoptPort(own, 'tab-a');
+    const response = await pending;
+    vi.useRealTimers();
+
+    expect(response.status).toBe(206);
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([4]));
   });
 
   it('closes only the port of the client being replaced', () => {
@@ -494,19 +515,19 @@ describe('MediaPipe client routing', () => {
     const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
     const live = streamingPort([new Uint8Array([3])]);
     const dead = new FakePort();
-    pipe.adoptPort(live, 'client-live');
-    pipe.adoptPort(dead, 'client-dead');
+    pipe.adoptPort(live, 'tab-a');
+    pipe.adoptPort(dead, 'tab-b');
 
-    const pending = pipe.respond(streamRequest(), 'client-dead');
-    await vi.advanceTimersByTimeAsync(TIMEOUTS.responseTimeoutMs);
+    const pending = pipe.respond(streamRequest(), 'tab-b');
+    await vi.advanceTimersByTimeAsync(TIMEOUTS.responseTimeoutMs + TIMEOUTS.brokerTimeoutMs);
     const response = await pending;
     vi.useRealTimers();
 
     expect(dead.closed).toBe(true);
     expect(dead.countOf('cb:media:open')).toBe(1);
-    // The dead client's entry is gone, so the retry falls back to a live port.
-    expect(response.status).toBe(206);
-    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([3]));
+    // The retry re-brokers its own tab rather than answering off another's port.
+    expect(live.countOf('cb:media:open')).toBe(0);
+    expect(response.status).toBe(503);
   });
 });
 
@@ -518,11 +539,11 @@ describe('MediaPipe port-message validation', () => {
     });
 
   it.each([
-    { case: 'a status outside the HTTP range', ok: true, status: 999, headers: [] },
-    { case: 'a status that is not an integer', ok: true, status: 200.5, headers: [] },
-    { case: 'headers that are not string pairs', ok: true, status: 200, headers: 'video/mp4' },
-    { case: 'headers holding a malformed pair', ok: true, status: 200, headers: [['only']] },
-    { case: 'an ok flag that is not a boolean', ok: 'yes', status: 200, headers: [] },
+    { case: 'a status outside the HTTP range', status: 999, headers: [] },
+    { case: 'a status that is not an integer', status: 200.5, headers: [] },
+    { case: 'a status that is not a number', status: '200', headers: [] },
+    { case: 'headers that are not string pairs', status: 200, headers: 'video/mp4' },
+    { case: 'headers holding a malformed pair', status: 200, headers: [['only']] },
   ])('never builds a response from a head with $case', async (head) => {
     vi.useFakeTimers();
     const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
@@ -530,7 +551,6 @@ describe('MediaPipe port-message validation', () => {
       headPort((requestId) => ({
         type: 'cb:media:head',
         requestId,
-        ok: head.ok,
         status: head.status,
         headers: head.headers,
       }))
@@ -551,7 +571,6 @@ describe('MediaPipe port-message validation', () => {
         self.deliver({
           type: 'cb:media:head',
           requestId: message.requestId,
-          ok: true,
           status: 200,
           headers: [],
         });
@@ -581,7 +600,6 @@ describe('MediaPipe port-message validation', () => {
         self.deliver({
           type: 'cb:media:head',
           requestId: message.requestId,
-          ok: true,
           status: 200,
           headers: [],
         });
@@ -599,7 +617,7 @@ describe('MediaPipe port-message validation', () => {
   });
 });
 
-describe('MediaPipe cache policy', () => {
+describe('MediaPipe response headers', () => {
   it('marks every status it synthesizes no-store', async () => {
     vi.useFakeTimers();
     const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
@@ -629,7 +647,7 @@ describe('MediaPipe cache policy', () => {
     expect(streamed.headers.get('content-type')).toBe('video/mp4');
   });
 
-  it('marks a not-ok head no-store', async () => {
+  it('marks an error-status head no-store', async () => {
     const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
     pipe.adoptPort(
       new FakePort((message, self) => {
@@ -637,7 +655,6 @@ describe('MediaPipe cache policy', () => {
         self.deliver({
           type: 'cb:media:head',
           requestId: message.requestId,
-          ok: false,
           status: 404,
           headers: [],
         });
@@ -648,5 +665,26 @@ describe('MediaPipe cache policy', () => {
 
     expect(response.status).toBe(404);
     expect(response.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('hardens a body head the port left executable', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    pipe.adoptPort(
+      new FakePort((message, self) => {
+        if (message.type !== 'cb:media:open') return;
+        self.deliver({
+          type: 'cb:media:head',
+          requestId: message.requestId,
+          status: 200,
+          headers: [['content-type', 'text/html']],
+        });
+      })
+    );
+
+    const response = await pipe.respond(streamRequest());
+
+    expect(response.headers.get('content-type')).toBe('application/octet-stream');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(response.headers.get('content-security-policy')).toBe("default-src 'none'; sandbox");
   });
 });

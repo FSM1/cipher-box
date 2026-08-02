@@ -80,19 +80,13 @@ export class MediaBroker {
   ): void {
     const source = this.registry.lookup(ticket);
     if (source === undefined) {
-      post(port, { type: 'cb:media:head', requestId, ok: false, status: 404, headers: [] });
+      post(port, { type: 'cb:media:head', requestId, status: 404, headers: [] });
       return;
     }
 
     const head = resolveMediaRequest(range, source.size, source.mimeType);
     if (head.status === 416) {
-      post(port, {
-        type: 'cb:media:head',
-        requestId,
-        ok: false,
-        status: head.status,
-        headers: head.headers,
-      });
+      post(port, { type: 'cb:media:head', requestId, status: head.status, headers: head.headers });
       return;
     }
 
@@ -102,13 +96,7 @@ export class MediaBroker {
       end: head.window.offset + head.window.length,
       pump: Promise.resolve(),
     });
-    post(port, {
-      type: 'cb:media:head',
-      requestId,
-      ok: true,
-      status: head.status,
-      headers: head.headers,
-    });
+    post(port, { type: 'cb:media:head', requestId, status: head.status, headers: head.headers });
   }
 
   private pull(port: MessagePortLike, requestId: number): void {

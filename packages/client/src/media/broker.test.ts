@@ -128,7 +128,7 @@ describe('MediaBroker', () => {
     }
 
     const head = h.received[0];
-    expect(head).toMatchObject({ ok: true, status: 206 });
+    expect(head).toMatchObject({ type: 'cb:media:head', status: 206 });
     expect(head.type === 'cb:media:head' ? head.headers : []).toContainEqual([
       'content-range',
       `bytes 3-12/${size}`,
@@ -157,9 +157,7 @@ describe('MediaBroker', () => {
     h.send({ type: 'cb:media:pull', requestId: 5 });
     await flush();
 
-    expect(h.received).toEqual([
-      { type: 'cb:media:head', requestId: 5, ok: false, status: 404, headers: [] },
-    ]);
+    expect(h.received).toEqual([{ type: 'cb:media:head', requestId: 5, status: 404, headers: [] }]);
     expect(h.reader.calls).toEqual([]);
   });
 
@@ -172,7 +170,7 @@ describe('MediaBroker', () => {
     await flush();
 
     const head = h.received[0];
-    expect(head).toMatchObject({ type: 'cb:media:head', ok: false, status: 416 });
+    expect(head).toMatchObject({ type: 'cb:media:head', status: 416 });
     expect(head.type === 'cb:media:head' ? head.headers : []).toContainEqual([
       'content-range',
       'bytes */16',
@@ -189,7 +187,7 @@ describe('MediaBroker', () => {
     await waitFor(() => h.received.length === 2, 'end');
 
     expect(kinds(h.received)).toEqual(['cb:media:head', 'cb:media:end']);
-    expect(h.received[0]).toMatchObject({ ok: true, status: 200 });
+    expect(h.received[0]).toMatchObject({ type: 'cb:media:head', status: 200 });
     expect(h.reader.calls).toEqual([]);
   });
 

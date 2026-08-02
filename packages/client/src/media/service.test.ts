@@ -199,11 +199,11 @@ describe('MediaService', () => {
     );
     channels[0].port2.postMessage({ type: 'cb:media:open', requestId: 1, ticket, range: null });
 
-    expect(answers[0]).toMatchObject({ type: 'cb:media:head', ok: true, status: 200 });
+    expect(answers[0]).toMatchObject({ type: 'cb:media:head', status: 200 });
 
     expect(service.revokeStreamUrl(url)).toBe(true);
     channels[0].port2.postMessage({ type: 'cb:media:open', requestId: 2, ticket, range: null });
-    expect(answers[1]).toMatchObject({ ok: false, status: 404 });
+    expect(answers[1]).toMatchObject({ type: 'cb:media:head', status: 404 });
   });
 
   it('revokes the absolute form of a minted url and reports an unknown one', async () => {

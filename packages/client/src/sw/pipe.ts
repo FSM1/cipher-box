@@ -13,6 +13,7 @@ import {
   type MediaResponse,
   type MessagePortLike,
 } from '../media/protocol.js';
+import { safeMimeType } from '../media/range.js';
 
 /** The subset of a window client the pipe drives (injectable). */
 export interface WindowClientLike {
@@ -67,7 +68,7 @@ export class MediaPipe {
    * ticket.
    */
   private readonly ports = new Map<string, PortEntry>();
-  private readonly portWaiters = new Set<() => void>();
+  private readonly portWaiters = new Set<(adopted: string) => void>();
   private readonly sinks = new Map<number, ResponseSink>();
   /** The armed pull deadline per request, so a cancel can disarm its own. */
   private readonly pullTimers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -96,11 +97,9 @@ export class MediaPipe {
     const listener = (event: MessageEvent): void => this.onMessage(port, event);
     port.addEventListener('message', listener);
     port.start?.();
-    // Insertion order is adoption order, which is what the newest-port fallback reads.
+    // Insertion order is adoption order, which the anonymous fallback reads.
     this.ports.set(clientId, { port, listener });
-    const waiters = [...this.portWaiters];
-    this.portWaiters.clear();
-    for (const waiter of waiters) waiter();
+    for (const waiter of [...this.portWaiters]) waiter(clientId);
   }
 
   async respond(request: Request, clientId: string = ANONYMOUS_CLIENT): Promise<Response> {
@@ -123,7 +122,7 @@ export class MediaPipe {
         this.discardPort(port);
         continue;
       }
-      if (!head.ok) return sealed(head.status, head.headers);
+      if (head.status >= 300) return sealed(head.status, head.headers);
       return sealed(head.status, head.headers, this.body(port, requestId));
     }
     return sealed(503);
@@ -235,10 +234,11 @@ export class MediaPipe {
     return this.waitForPort(clientId);
   }
 
-  /** A client the pipe holds no port for falls back to the newest port offered. */
+  /** Only an unidentified client may borrow a port, and only the newest offered. */
   private portFor(clientId: string): MessagePortLike | null {
     const own = this.ports.get(clientId);
     if (own) return own.port;
+    if (clientId !== ANONYMOUS_CLIENT) return null;
     let newest: PortEntry | undefined;
     for (const entry of this.ports.values()) newest = entry;
     return newest?.port ?? null;
@@ -246,8 +246,10 @@ export class MediaPipe {
 
   private waitForPort(clientId: string): Promise<MessagePortLike | null> {
     return new Promise((resolve) => {
-      const waiter = (): void => {
+      const waiter = (adopted: string): void => {
+        if (adopted !== clientId && clientId !== ANONYMOUS_CLIENT) return;
         clearTimeout(timer);
+        this.portWaiters.delete(waiter);
         resolve(this.portFor(clientId));
       };
       const timer = setTimeout(() => {
@@ -310,6 +312,13 @@ function sealed(
     }
   }
   merged.set('cache-control', 'no-store');
+  // A ticket URL is same-origin and navigable, and the port that named the type
+  // is untrusted input, so a body only ever renders under a clamped type.
+  if (body !== null) {
+    merged.set('content-type', safeMimeType(merged.get('content-type') ?? ''));
+    merged.set('x-content-type-options', 'nosniff');
+    merged.set('content-security-policy', "default-src 'none'; sandbox");
+  }
   return new Response(body, { status, headers: merged });
 }
 
@@ -319,7 +328,6 @@ function asResponse(data: unknown): MediaResponse | null {
   const message = data as {
     type?: unknown;
     requestId?: unknown;
-    ok?: unknown;
     status?: unknown;
     headers?: unknown;
     chunk?: unknown;
@@ -330,13 +338,12 @@ function asResponse(data: unknown): MediaResponse | null {
 
   switch (message.type) {
     case 'cb:media:head': {
-      const { ok, status, headers } = message;
-      if (typeof ok !== 'boolean') return null;
+      const { status, headers } = message;
       // Outside this range `Response` throws, which would kill the fetch handler.
       if (typeof status !== 'number' || !Number.isInteger(status)) return null;
       if (status < 200 || status > 599) return null;
       if (!isHeaderPairs(headers)) return null;
-      return { type: 'cb:media:head', requestId, ok, status, headers };
+      return { type: 'cb:media:head', requestId, status, headers };
     }
     case 'cb:media:chunk':
       if (!(message.chunk instanceof ArrayBuffer)) return null;

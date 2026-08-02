@@ -22,29 +22,30 @@ const INTERVAL_FORM = /^(\d+)-(\d*)$/;
  * attacker-chosen type would execute as the app itself. Only non-executable
  * media types survive; SVG scripts, so it is not one of them.
  */
-function safeMimeType(mimeType: string): string {
+export function safeMimeType(mimeType: string): string {
   const type = mimeType.split(';')[0].trim().toLowerCase();
   const playable =
     type.startsWith('audio/') || type.startsWith('video/') || type.startsWith('image/');
   return playable && !type.startsWith('image/svg') ? type : 'application/octet-stream';
 }
 
-/** Belt to `safeMimeType`'s braces: no sniffing, and nothing the body names may load or run. */
+/**
+ * Belt to `safeMimeType`'s braces: no sniffing, and nothing the body names may
+ * load or run. `no-store` keeps vault plaintext out of the HTTP cache — the pipe
+ * hands the media element decrypted bytes, and nothing decrypted may outlive the
+ * response.
+ */
 const hardening: Array<[string, string]> = [
+  ['cache-control', 'no-store'],
   ['x-content-type-options', 'nosniff'],
   ['content-security-policy', "default-src 'none'; sandbox"],
 ];
 
-/**
- * `no-store` keeps vault plaintext out of the HTTP cache: the pipe hands the
- * media element decrypted bytes, and nothing decrypted may outlive the response.
- */
 function baseHeaders(mimeType: string, length: number): Array<[string, string]> {
   return [
     ['content-type', safeMimeType(mimeType)],
     ['content-length', String(length)],
     ['accept-ranges', 'bytes'],
-    ['cache-control', 'no-store'],
     ...hardening,
   ];
 }
@@ -52,11 +53,7 @@ function baseHeaders(mimeType: string, length: number): Array<[string, string]> 
 function unsatisfiable(totalSize: number): MediaHead {
   return {
     status: 416,
-    headers: [
-      ['content-range', `bytes */${totalSize}`],
-      ['cache-control', 'no-store'],
-      ...hardening,
-    ],
+    headers: [['content-range', `bytes */${totalSize}`], ...hardening],
   };
 }
 

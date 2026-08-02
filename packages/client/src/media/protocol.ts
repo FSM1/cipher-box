@@ -35,7 +35,6 @@ export type MediaResponse =
   | {
       type: 'cb:media:head';
       requestId: number;
-      ok: boolean;
       status: number;
       headers: Array<[string, string]>;
     }
@@ -46,14 +45,14 @@ export type MediaResponse =
   /** The read failed; the response body errors out. */
   | { type: 'cb:media:error'; requestId: number; message: string };
 
-/** Tab → Service Worker, carrying the tab's end of a fresh `MessageChannel`. */
-export type MediaPortOffer = { type: 'cb:media:port' };
-
-/** Service Worker → every window client, when it holds no usable port. */
-export type MediaPortRequest = { type: 'cb:media:needPort' };
-
 export const MEDIA_PORT_OFFER = 'cb:media:port';
 export const MEDIA_PORT_REQUEST = 'cb:media:needPort';
+
+/** Tab → Service Worker, carrying the tab's end of a fresh `MessageChannel`. */
+export type MediaPortOffer = { type: typeof MEDIA_PORT_OFFER };
+
+/** Service Worker → every window client, when it holds no usable port. */
+export type MediaPortRequest = { type: typeof MEDIA_PORT_REQUEST };
 
 /** The ticket in a `/stream/<ticket>` path, or `null` for any other path. */
 export function ticketFromPath(pathname: string): string | null {
