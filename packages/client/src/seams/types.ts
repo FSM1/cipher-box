@@ -98,8 +98,8 @@ export type CappedHttpResult =
  * byte mover: non-2xx statuses are responses, not errors; only transport-level
  * failure rejects.
  *
- * `sendCapped` bounds peak memory while the body is still arriving — the cap is
- * exclusive, so a body exactly at `maxBytes` is admitted.
+ * `sendCapped` bounds peak memory while the body is still arriving; `maxBytes`
+ * is inclusive, so a body of exactly `maxBytes` is admitted.
  */
 export interface HttpSeam {
   send(request: HttpRequestData): Promise<HttpResponseData>;

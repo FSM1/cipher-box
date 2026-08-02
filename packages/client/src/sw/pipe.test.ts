@@ -1,62 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type {
-  MediaPortRequest,
-  MediaRequest,
-  MediaResponse,
-  MessagePortLike,
-} from '../media/protocol.js';
+import type { MediaPortRequest } from '../media/protocol.js';
+import { FakePort } from './testDoubles.js';
 import { MediaPipe, type ClientsLike, type MediaPipeScopeLike } from './pipe.js';
 
 const ORIGIN = 'https://vault.example';
 const TIMEOUTS = { brokerTimeoutMs: 1000, responseTimeoutMs: 100, pullTimeoutMs: 2000 };
-
-type Reply = (message: MediaRequest, port: FakePort) => void;
-
-class FakePort implements MessagePortLike {
-  readonly sent: MediaRequest[] = [];
-  closed = false;
-  started = false;
-  private listeners: Array<(event: MessageEvent) => void> = [];
-
-  constructor(private readonly reply?: Reply) {}
-
-  postMessage(message: unknown): void {
-    this.sent.push(message as MediaRequest);
-    this.reply?.(message as MediaRequest, this);
-  }
-
-  addEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
-    this.listeners.push(listener);
-  }
-
-  removeEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
-    this.listeners = this.listeners.filter((entry) => entry !== listener);
-  }
-
-  start(): void {
-    this.started = true;
-  }
-
-  close(): void {
-    this.closed = true;
-  }
-
-  deliver(response: MediaResponse): void {
-    this.deliverRaw(response);
-  }
-
-  /** Delivers whatever a version-skewed or hostile port might post. */
-  deliverRaw(data: unknown): void {
-    for (const listener of [...this.listeners]) {
-      listener({ data } as unknown as MessageEvent);
-    }
-  }
-
-  countOf(type: MediaRequest['type']): number {
-    return this.sent.filter((message) => message.type === type).length;
-  }
-}
 
 class FakeScope implements MediaPipeScopeLike {
   readonly brokered: MediaPortRequest[] = [];

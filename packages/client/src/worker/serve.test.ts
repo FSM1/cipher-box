@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { emptySnapshot, FAKE_SIWE_NONCE, fakeWasmEnums } from '../testkit.js';
+import { emptySnapshot, FAKE_SIWE_NONCE, fakeWasmEnums, StubEngineHost } from '../testkit.js';
 import { LocalTransport, type EngineWorkerLike } from '../transport.js';
-import { EngineHost, type EngineHostLike } from './engineHost.js';
+import { EngineHost } from './engineHost.js';
 import type { EngineWasm, WasmEngineHandle, WasmEvent } from './engineWasm.js';
 import type {
   EventDescriptor,
@@ -58,7 +58,7 @@ const SNAPSHOT: SnapshotDescriptor = {
   retainedRecords: 0,
 };
 
-class ReadHost implements EngineHostLike {
+class ReadHost extends StubEngineHost {
   readonly snapshots: Uint8Array[] = [];
   readonly downloads: Uint8Array[] = [];
   readonly downloadRanges: Array<{ node: Uint8Array; offset: number; length: number }> = [];

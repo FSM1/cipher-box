@@ -1,10 +1,6 @@
 /**
  * The app-shell precache (blueprint/web-client.md: a vault you can mutate
  * offline is a vault whose UI must boot offline).
- *
- * `precacheAppShell` is the only writer and it writes only manifest entries;
- * `CacheLike` exposes no `put`, so vault data — never in the manifest — cannot
- * structurally reach the cache.
  */
 
 import { STREAM_PATH_PREFIX } from '../media/protocol.js';
@@ -102,9 +98,8 @@ export async function respondFromAppShell(
   fetchFn: typeof fetch,
   origin: string
 ): Promise<Response | undefined> {
-  if (request.method !== 'GET') return undefined;
+  if (!sameOriginGet(request, origin)) return undefined;
   const url = new URL(request.url);
-  if (url.origin !== origin) return undefined;
 
   const cache = await caches.open(APP_SHELL_CACHE);
   if (request.mode === 'navigate') {

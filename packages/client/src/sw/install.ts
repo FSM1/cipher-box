@@ -97,7 +97,6 @@ export function installServiceWorker(
     event.waitUntil(learning);
   });
 
-  // One listener, because two would both `respondWith` and throw InvalidStateError.
   scope.addEventListener('fetch', (event) => {
     const request = event.request;
     if (pipe.handles(new URL(request.url))) {

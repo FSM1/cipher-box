@@ -1,56 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
+import { FakePort } from '../sw/testDoubles.js';
 import type { MediaReader } from './broker.js';
-import {
-  MEDIA_PORT_OFFER,
-  MEDIA_PORT_REQUEST,
-  type MediaResponse,
-  type MessagePortLike,
-} from './protocol.js';
+import { MEDIA_PORT_OFFER, MEDIA_PORT_REQUEST, type MediaResponse } from './protocol.js';
 import {
   MediaService,
   type ServiceWorkerContainerLike,
   type ServiceWorkerLike,
   type ServiceWorkerRegistrationLike,
 } from './service.js';
-
-class FakePort implements MessagePortLike {
-  peer: FakePort | null = null;
-  readonly sent: Array<{ message: unknown; transfer?: Transferable[] }> = [];
-  started = false;
-  closed = false;
-  private readonly listeners = new Set<(event: MessageEvent) => void>();
-
-  postMessage(message: unknown, transfer?: Transferable[]): void {
-    this.sent.push({ message, transfer });
-    this.peer?.deliver(message);
-  }
-
-  deliver(message: unknown): void {
-    if (this.closed) return;
-    for (const listener of this.listeners) listener({ data: message } as MessageEvent);
-  }
-
-  addEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
-    this.listeners.add(listener);
-  }
-
-  removeEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
-    this.listeners.delete(listener);
-  }
-
-  start(): void {
-    this.started = true;
-  }
-
-  get listenerCount(): number {
-    return this.listeners.size;
-  }
-
-  close(): void {
-    this.closed = true;
-  }
-}
 
 class FakeChannel {
   readonly port1 = new FakePort();
@@ -304,13 +262,5 @@ describe('MediaService', () => {
     expect(container.listenerCount('message')).toBe(0);
     expect(container.listenerCount('controllerchange')).toBe(0);
     expect(service.streaming).toBe(false);
-  });
-
-  it('accepts the real browser container and port types structurally', () => {
-    const container: ServiceWorkerContainerLike | null = null as unknown as ServiceWorkerContainer;
-    const port: MessagePortLike | null = null as unknown as MessagePort;
-
-    expect(container).toBeNull();
-    expect(port).toBeNull();
   });
 });

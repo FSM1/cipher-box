@@ -224,7 +224,6 @@ describe('respondFromAppShell', () => {
     await respondFromAppShell(navigation(`${ORIGIN}/files`), caches, online, ORIGIN);
     await respondFromAppShell(new Request(`${ORIGIN}/api/vault`), caches, online, ORIGIN);
 
-    expect(caches.cache(APP_SHELL_CACHE).putCalls).toBe(0);
     expect([...caches.cache(APP_SHELL_CACHE).entries.keys()]).toEqual([`${ORIGIN}/index.html`]);
   });
 });

@@ -10,6 +10,7 @@ import {
 import type { EngineClient, MediaService, SecretSource } from '@cipherbox/client';
 import { createMediaService } from '../engine/createMediaService';
 import { LoginSecretSource } from '../engine/loginHandoff';
+import { errorMessage } from '../lib/errorMessage';
 import {
   createSnapshotStore,
   idleSnapshotStore,
@@ -55,20 +56,20 @@ export function EngineProvider({ createClient, children }: EngineProviderProps) 
     const client = factory.current(secrets);
     const snapshots = createSnapshotStore(client);
     const media = createMediaService(client);
-    media?.start().catch((error: unknown) => {
-      console.error('[media] start failed', error instanceof Error ? error.message : error);
-    });
+    media
+      ?.start()
+      .catch((error: unknown) => console.error('[media] start failed', errorMessage(error)));
     setValue({ client, snapshots, secrets, media, rebuild });
     return () => {
       // Drop the exporter first: no re-export capability outlives the client.
       secrets.use(null);
       snapshots.dispose();
-      media?.dispose().catch((error: unknown) => {
-        console.error('[media] dispose failed', error instanceof Error ? error.message : error);
-      });
-      client.dispose().catch((error: unknown) => {
-        console.error('[engine] dispose failed', error instanceof Error ? error.message : error);
-      });
+      media
+        ?.dispose()
+        .catch((error: unknown) => console.error('[media] dispose failed', errorMessage(error)));
+      client
+        .dispose()
+        .catch((error: unknown) => console.error('[engine] dispose failed', errorMessage(error)));
     };
   }, [generation, rebuild]);
 

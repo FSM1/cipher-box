@@ -102,8 +102,6 @@ window.cbMediaStart = async ({ reader }: MediaStartOptions): Promise<boolean> =>
     reader: reader === 'engine' ? engineReader : localReader,
   });
   await service.start();
-  // A registration does not control the tab until it claims, and only a
-  // controlled tab streams; wait for that before reporting the pipe live.
   await window.cbMediaAwaitControl();
   return service.streaming;
 };

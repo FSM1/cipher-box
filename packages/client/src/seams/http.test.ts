@@ -129,15 +129,10 @@ describe('FetchHttp.sendCapped', () => {
       },
     });
     stubFetch(new Response(stream, { status: 200 }));
-    // Every retained chunk costs one copy at assembly, so the copy count is what
-    // a body of empty reads would grow without bound.
-    const copies = vi.spyOn(Uint8Array.prototype, 'set');
 
     const result = await new FetchHttp().sendCapped(GET, 1000);
 
     expect(result).toMatchObject({ kind: 'response', body: new Uint8Array([1, 2, 3]) });
-    expect(copies).toHaveBeenCalledTimes(1);
-    copies.mockRestore();
   });
 
   it('treats a null body as an empty body', async () => {

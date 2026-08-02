@@ -1,5 +1,6 @@
 /** The tab-side server for the media byte pipe, answering over a brokered `MessagePort`. */
 
+import { errorMessage } from '../errorMessage.js';
 import {
   MEDIA_WINDOW_BYTES,
   type MediaRequest,
@@ -78,15 +79,19 @@ export class MediaBroker {
     ticket: string,
     range: string | null
   ): void {
+    const postHead = (status: number, headers: Array<[string, string]>): void => {
+      post(port, { type: 'cb:media:head', requestId, status, headers });
+    };
+
     const source = this.registry.lookup(ticket);
     if (source === undefined) {
-      post(port, { type: 'cb:media:head', requestId, status: 404, headers: [] });
+      postHead(404, []);
       return;
     }
 
     const head = resolveMediaRequest(range, source.size, source.mimeType);
     if (head.status === 416) {
-      post(port, { type: 'cb:media:head', requestId, status: head.status, headers: head.headers });
+      postHead(head.status, head.headers);
       return;
     }
 
@@ -96,7 +101,7 @@ export class MediaBroker {
       end: head.window.offset + head.window.length,
       pump: Promise.resolve(),
     });
-    post(port, { type: 'cb:media:head', requestId, status: head.status, headers: head.headers });
+    postHead(head.status, head.headers);
   }
 
   private pull(port: MessagePortLike, requestId: number): void {
@@ -105,8 +110,17 @@ export class MediaBroker {
     cursor.pump = cursor.pump.then(() => this.pump(port, requestId, cursor));
   }
 
+  /**
+   * Whether this cursor still owns the request. A close or a superseding open
+   * can land at any await, and answering off a dropped cursor would post another
+   * stream's plaintext under this request id.
+   */
+  private isCurrent(requestId: number, cursor: Cursor): boolean {
+    return this.streams.get(requestId) === cursor;
+  }
+
   private async pump(port: MessagePortLike, requestId: number, cursor: Cursor): Promise<void> {
-    if (this.streams.get(requestId) !== cursor) return;
+    if (!this.isCurrent(requestId, cursor)) return;
 
     const remaining = cursor.end - cursor.offset;
     if (remaining <= 0) {
@@ -119,7 +133,7 @@ export class MediaBroker {
     const length = Math.min(this.windowBytes, remaining);
     try {
       const chunk = await this.reader.downloadRange(cursor.node, offset, length);
-      if (this.streams.get(requestId) !== cursor) return;
+      if (!this.isCurrent(requestId, cursor)) return;
       cursor.offset = offset + chunk.byteLength;
       // A short read means the live version is smaller than the head promised;
       // ending here is a clean EOF, where under-delivering content-length is a
@@ -128,19 +142,15 @@ export class MediaBroker {
       const response: MediaResponse = { type: 'cb:media:chunk', requestId, chunk };
       port.postMessage(response, [chunk]);
     } catch (error) {
-      if (this.streams.get(requestId) !== cursor) return;
+      if (!this.isCurrent(requestId, cursor)) return;
       this.streams.delete(requestId);
-      post(port, { type: 'cb:media:error', requestId, message: describe(error) });
+      post(port, { type: 'cb:media:error', requestId, message: errorMessage(error) });
     }
   }
 }
 
 function post(port: MessagePortLike, response: MediaResponse): void {
   port.postMessage(response);
-}
-
-function describe(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** A same-origin port is still untrusted input: anything off-shape is dropped. */

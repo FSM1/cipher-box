@@ -10,8 +10,7 @@ const MANIFEST_FILE = 'precache-manifest.json';
 
 /**
  * The app-shell manifest the Service Worker precaches on install: every emitted
- * chunk, as same-origin absolute paths. Never the worker itself — a worker that
- * precached itself could never be replaced.
+ * chunk, as same-origin absolute paths.
  */
 function precacheManifest(): Plugin {
   return {

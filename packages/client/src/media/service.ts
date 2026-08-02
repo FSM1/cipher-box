@@ -68,6 +68,7 @@ export class MediaService {
     return this.channel !== null && this.config.container.controller !== null;
   }
 
+  /** Streaming is an enhancement: a failure degrades the tab, never its boot. */
   start(): Promise<void> {
     this.startup ??= this.begin();
     return this.startup;
@@ -102,9 +103,8 @@ export class MediaService {
 
   private async begin(): Promise<void> {
     const container = this.config.container;
-    // Streaming is an enhancement: a failed registration degrades the tab, never
-    // its boot. The `/` scope is load-bearing — the pipe intercepts `/stream/`
-    // and the precache serves the app shell from the root.
+    // The `/` scope is load-bearing — the pipe intercepts `/stream/` and the
+    // precache serves the app shell from the root.
     try {
       this.registration = await container.register(this.config.scriptUrl, {
         scope: '/',

@@ -11,10 +11,7 @@ export function serviceWorkerScript(env: Partial<ImportMetaEnv>): {
   return env.DEV ? { url: '/src/sw.ts', type: 'module' } : { url: '/sw.js', type: 'classic' };
 }
 
-/**
- * This tab's streaming pipe, or `null` where the browser offers no Service
- * Worker — an insecure context loses streaming, never its boot.
- */
+/** This tab's streaming pipe, or `null` where the browser offers no Service Worker. */
 export function createMediaService(reader: MediaReader): MediaService | null {
   if (!('serviceWorker' in navigator)) return null;
   const script = serviceWorkerScript(import.meta.env);

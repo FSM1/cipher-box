@@ -1,20 +1,19 @@
 /**
- * Cache doubles for the Service Worker unit suite. Excluded from the build
+ * Doubles for the Service Worker and media unit suites. Excluded from the build
  * (tsconfig.build.json).
  */
 
+import type { MediaRequest, MediaResponse, MessagePortLike } from '../media/protocol.js';
 import type { CacheLike, CacheStorageLike } from './precache.js';
 
 export const SW_ORIGIN = 'https://vault.example';
 
 export class FakeCache implements CacheLike {
   readonly entries = new Map<string, string>();
-  putCalls = 0;
-  /** URLs the real `Cache.addAll` would reject on, so its atomicity is testable. */
+  /** URLs the real `Cache.addAll` would reject on. */
   readonly unreachable = new Set<string>();
 
   async addAll(requests: readonly string[]): Promise<void> {
-    // The real `addAll` is atomic: one non-OK response rejects the whole call.
     if (requests.some((request) => this.unreachable.has(request))) {
       throw new TypeError('addAll: a request did not respond OK');
     }
@@ -32,11 +31,6 @@ export class FakeCache implements CacheLike {
 
   async delete(request: string): Promise<boolean> {
     return this.entries.delete(request);
-  }
-
-  /** Not on `CacheLike`; present only so a test can prove nothing calls it. */
-  put(): void {
-    this.putCalls += 1;
   }
 }
 
@@ -70,3 +64,62 @@ export const manifestFetch = (body: string, ok = true): typeof fetch =>
 export const failingFetch: typeof fetch = (async () => {
   throw new TypeError('offline');
 }) as unknown as typeof fetch;
+
+/** Answers a post synchronously, standing in for the far side of the port. */
+export type PortReply = (message: MediaRequest, port: FakePort) => void;
+
+/**
+ * One end of a `MessageChannel`. A post reaches the far side either through
+ * `peer` (a wired pair) or through `reply` (a scripted answer).
+ */
+export class FakePort implements MessagePortLike {
+  peer: FakePort | null = null;
+  readonly sent: Array<MediaRequest | MediaResponse> = [];
+  started = false;
+  closed = false;
+  private listeners: Array<(event: MessageEvent) => void> = [];
+
+  constructor(private readonly reply?: PortReply) {}
+
+  postMessage(message: unknown): void {
+    this.sent.push(message as MediaRequest);
+    this.reply?.(message as MediaRequest, this);
+    this.peer?.deliverRaw(message);
+  }
+
+  addEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
+    this.listeners.push(listener);
+  }
+
+  removeEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
+    this.listeners = this.listeners.filter((entry) => entry !== listener);
+  }
+
+  start(): void {
+    this.started = true;
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  deliver(response: MediaResponse): void {
+    this.deliverRaw(response);
+  }
+
+  /** Delivers whatever a version-skewed or hostile port might post. */
+  deliverRaw(data: unknown): void {
+    if (this.closed) return;
+    for (const listener of [...this.listeners]) {
+      listener({ data } as unknown as MessageEvent);
+    }
+  }
+
+  get listenerCount(): number {
+    return this.listeners.length;
+  }
+
+  countOf(type: MediaRequest['type']): number {
+    return this.sent.filter((message) => message.type === type).length;
+  }
+}

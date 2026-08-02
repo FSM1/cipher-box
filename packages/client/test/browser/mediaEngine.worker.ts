@@ -5,11 +5,11 @@
  * travelled the broadcast wire to the leader's worker.
  */
 import { serveEngine, type WorkerScopeLike } from '../../src/worker/serve.js';
-import type { EngineHostLike } from '../../src/worker/engineHost.js';
-import type { EventDescriptor, SnapshotDescriptor } from '../../src/worker/protocol.js';
+import { StubEngineHost } from '../../src/testkit.js';
+import type { EventDescriptor } from '../../src/worker/protocol.js';
 import { fixtureBuffer, LEADER_SEED } from './mediaFixture.js';
 
-class MediaHost implements EngineHostLike {
+class MediaHost extends StubEngineHost {
   start(): Promise<void> {
     return Promise.resolve();
   }
@@ -18,28 +18,8 @@ class MediaHost implements EngineHostLike {
     return Promise.resolve();
   }
 
-  beginWrite(): Promise<bigint> {
-    return Promise.reject(new Error('media host serves no writes'));
-  }
-
-  pushChunk(): Promise<void> {
-    return Promise.reject(new Error('media host serves no writes'));
-  }
-
-  commitWrite(): Promise<bigint> {
-    return Promise.reject(new Error('media host serves no writes'));
-  }
-
   abortWrite(): Promise<void> {
     return Promise.resolve();
-  }
-
-  snapshot(): Promise<SnapshotDescriptor> {
-    return Promise.reject(new Error('media host serves no snapshots'));
-  }
-
-  download(): Promise<ArrayBuffer> {
-    return Promise.reject(new Error('media host serves whole files only by range'));
   }
 
   downloadRange(_node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {

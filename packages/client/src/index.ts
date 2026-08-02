@@ -31,8 +31,7 @@ export { LeaderRelay } from './leaderRelay.js';
 export { BROADCAST_CHANNEL_NAME, newClientId } from './broadcast.js';
 export type { BroadcastChannelLike } from './broadcast.js';
 
-// The tab side of the Service Worker byte pipe. The worker realm is reached by
-// URL through the `./sw` subpath, never this barrel.
+// The tab side of the Service Worker byte pipe.
 export { MediaService } from './media/service.js';
 export type { MediaReader } from './media/broker.js';
 
