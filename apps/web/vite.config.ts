@@ -49,7 +49,9 @@ function serviceWorkerBuild(): Plugin {
           emptyOutDir: false,
           rollupOptions: {
             input: SW_ENTRY,
-            output: { entryFileNames: SW_FILE, codeSplitting: false },
+            // `iife` keeps the classic-script contract: an `es` chunk reaching for
+            // a dynamic import emits `import.meta`, which a classic worker rejects.
+            output: { entryFileNames: SW_FILE, codeSplitting: false, format: 'iife' },
           },
         },
       });

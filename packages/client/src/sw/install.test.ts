@@ -142,6 +142,18 @@ describe('installServiceWorker', () => {
     ).toBeUndefined();
   });
 
+  it('serves a precached asset on a restart, before the re-learn settles', async () => {
+    const scope = new FakeScope();
+    // A restarted worker: the cache is warm from an earlier run, but this
+    // instance has learned nothing when the browser dispatches the fetch.
+    await scope.caches.cache(APP_SHELL_CACHE).addAll([`${ORIGIN}/assets/app.js`]);
+    installServiceWorker(scope, { pipe: new FakePipe(), fetchFn: failingFetch });
+
+    const response = await dispatchFetch(scope, new Request(`${ORIGIN}/assets/app.js`));
+
+    expect(await response?.text()).toBe(`body:${ORIGIN}/assets/app.js`);
+  });
+
   it('installs cleanly when no manifest is published', async () => {
     const { scope } = await wire(failingFetch);
 

@@ -1,8 +1,33 @@
-import type { EngineClient, SecretSource } from '@cipherbox/client';
+import type { EngineClient, MediaService, SecretSource } from '@cipherbox/client';
 import { render, renderHook, screen } from '@testing-library/react';
 import { StrictMode, type ReactNode } from 'react';
-import { describe, expect, it, vi } from 'vitest';
-import { EngineProvider, useEngine, useLoginSecretSource } from './EngineProvider';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EngineProvider, useEngine, useLoginSecretSource, useMediaService } from './EngineProvider';
+
+// The real factory reads `navigator.serviceWorker`, which jsdom does not
+// implement; the seam is what lets both outcomes be exercised.
+const mediaControl = vi.hoisted(() => ({
+  create: (): MediaService | null => null,
+}));
+vi.mock('../engine/createMediaService', () => ({
+  createMediaService: () => mediaControl.create(),
+}));
+
+afterEach(() => {
+  mediaControl.create = () => null;
+});
+
+/** A media service that records only whether it was started and disposed. */
+function mediaLedger(log: string[] = []) {
+  const media = {
+    start: () => Promise.resolve(),
+    dispose: () => {
+      log.push('media');
+      return Promise.resolve();
+    },
+  } as unknown as MediaService;
+  return { media, log };
+}
 
 /** Counts the clients a provider builds and disposes; that is all it touches. */
 function clientLedger() {
@@ -80,6 +105,45 @@ describe('EngineProvider', () => {
     );
 
     expect(built.length - disposed.length).toBe(1);
+  });
+
+  it("hands consumers this tab's media service", () => {
+    const { createClient } = clientLedger();
+    const { media } = mediaLedger();
+    mediaControl.create = () => media;
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <EngineProvider createClient={createClient}>{children}</EngineProvider>
+    );
+
+    const { result } = renderHook(() => useMediaService(), { wrapper });
+
+    expect(result.current).toBe(media);
+  });
+
+  it('reports no media service where the browser offers no Service Worker', () => {
+    const { createClient } = clientLedger();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <EngineProvider createClient={createClient}>{children}</EngineProvider>
+    );
+
+    const { result } = renderHook(() => useMediaService(), { wrapper });
+
+    expect(result.current).toBeNull();
+  });
+
+  it("disposes this tab's media service with the provider", async () => {
+    const { createClient } = clientLedger();
+    const { media, log } = mediaLedger();
+    mediaControl.create = () => media;
+
+    const { unmount } = render(
+      <EngineProvider createClient={createClient}>
+        <span />
+      </EngineProvider>
+    );
+    unmount();
+
+    await vi.waitFor(() => expect(log).toEqual(['media']));
   });
 
   it('rejects a consumer mounted outside the provider', () => {

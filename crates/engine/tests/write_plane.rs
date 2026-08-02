@@ -946,12 +946,14 @@ fn a_ranged_read_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
             "range {offset}+{length}"
         );
     }
-    assert!(
-        block_on(engine_b.read_content_range(node, whole.len() as u64, 16))
-            .unwrap()
-            .is_empty(),
-        "a window past the end is empty, not an error"
-    );
+    for offset in [whole.len() as u64, whole.len() as u64 + 1, u64::MAX] {
+        assert!(
+            block_on(engine_b.read_content_range(node, offset, 16))
+                .unwrap()
+                .is_empty(),
+            "a window past the end is empty, not an error: offset {offset}"
+        );
+    }
 }
 
 /// A new version of an existing file takes the head of its version list and is

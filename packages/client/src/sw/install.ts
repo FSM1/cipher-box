@@ -11,6 +11,7 @@ import {
   precacheAppShell,
   readPrecachedUrls,
   respondFromAppShell,
+  sameOriginGet,
   type CacheStorageLike,
 } from './precache.js';
 
@@ -72,25 +73,28 @@ export function installServiceWorker(
   const origin = scope.location.origin;
 
   let precached: ReadonlySet<string> = new Set();
+  let learned = false;
   const refresh = async (): Promise<void> => {
     precached = await readPrecachedUrls(scope.caches);
+    learned = true;
   };
   // A restarted worker gets no fresh `install`, so it re-learns the shell here.
-  void refresh().catch(ignore);
+  let learning = refresh().catch(ignore);
 
   scope.addEventListener('install', (event) => {
     void scope.skipWaiting();
     // A manifest entry that will not cache degrades to no offline shell, never a
     // failed install.
-    event.waitUntil(precacheAppShell(scope.caches, fetchFn, origin).then(refresh).catch(ignore));
+    learning = precacheAppShell(scope.caches, fetchFn, origin).then(refresh).catch(ignore);
+    event.waitUntil(learning);
   });
 
   scope.addEventListener('activate', (event) => {
-    event.waitUntil(
-      deleteStaleCaches(scope.caches)
-        .then(() => scope.clients.claim())
-        .then(refresh)
-    );
+    learning = deleteStaleCaches(scope.caches)
+      .then(() => scope.clients.claim())
+      .then(refresh)
+      .catch(ignore);
+    event.waitUntil(learning);
   });
 
   // One listener, because two would both `respondWith` and throw InvalidStateError.
@@ -100,12 +104,22 @@ export function installServiceWorker(
       event.respondWith(pipe.respond(request, event.clientId));
       return;
     }
-    if (!appShellClaims(request, origin, precached)) return;
-    event.respondWith(
+    const answer = (): Promise<Response> =>
       respondFromAppShell(request, scope.caches, fetchFn, origin).then(
         (response) => response ?? fetchFn(request)
-      )
-    );
+      );
+    // The browser restarts a stopped worker to dispatch this, so the first fetch
+    // can outrun the re-learn. Claiming on an empty set would miss the shell.
+    if (!learned && sameOriginGet(request, origin)) {
+      event.respondWith(
+        learning.then(() =>
+          appShellClaims(request, origin, precached) ? answer() : fetchFn(request)
+        )
+      );
+      return;
+    }
+    if (!appShellClaims(request, origin, precached)) return;
+    event.respondWith(answer());
   });
 
   scope.addEventListener('message', (event) => {

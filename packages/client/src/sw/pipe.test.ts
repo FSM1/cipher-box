@@ -60,12 +60,18 @@ class FakePort implements MessagePortLike {
 
 class FakeScope implements MediaPipeScopeLike {
   readonly brokered: MediaPortRequest[] = [];
+  /** Which tab each request was aimed at, so scoping is observable. */
+  readonly brokeredTo: string[] = [];
   readonly location = { origin: ORIGIN };
   readonly clients: ClientsLike = {
-    matchAll: async () => [
-      { postMessage: (message: MediaPortRequest): void => void this.brokered.push(message) },
-      { postMessage: (message: MediaPortRequest): void => void this.brokered.push(message) },
-    ],
+    matchAll: async () =>
+      ['tab-a', 'tab-b'].map((id) => ({
+        id,
+        postMessage: (message: MediaPortRequest): void => {
+          this.brokered.push(message);
+          this.brokeredTo.push(id);
+        },
+      })),
   };
 }
 
@@ -182,6 +188,29 @@ describe('MediaPipe.respond', () => {
     await response.body?.cancel();
 
     expect(port.sent.some((message) => message.type === 'cb:media:close')).toBe(true);
+  });
+
+  it('leaves the port open when a cancelled body outlives its pull deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+      const stalled = stalledPort();
+      pipe.adoptPort(stalled);
+
+      const response = await pipe.respond(streamRequest());
+      const reader = response.body?.getReader();
+      void reader?.read();
+      await Promise.resolve();
+      await reader?.cancel();
+
+      // The pull this cancelled left a deadline armed; firing it must not take
+      // the port down under the bodies still streaming on it.
+      await vi.advanceTimersByTimeAsync(TIMEOUTS.pullTimeoutMs * 2);
+
+      expect(stalled.closed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('errors the response body when the port reports a read failure', async () => {
@@ -313,6 +342,32 @@ describe('MediaPipe.respond', () => {
     const response = await pending;
     expect(response.status).toBe(503);
     expect(second.countOf('cb:media:open')).toBe(1);
+  });
+
+  it('asks only the tab that needs a port, leaving other tabs brokered', async () => {
+    vi.useFakeTimers();
+    const scope = new FakeScope();
+    const pipe = new MediaPipe(scope, TIMEOUTS);
+
+    const pending = pipe.respond(streamRequest(), 'tab-b');
+    await vi.advanceTimersByTimeAsync(TIMEOUTS.brokerTimeoutMs);
+    await pending;
+    vi.useRealTimers();
+
+    expect(scope.brokeredTo).toEqual(['tab-b']);
+  });
+
+  it('asks every tab when the request carries no client identity', async () => {
+    vi.useFakeTimers();
+    const scope = new FakeScope();
+    const pipe = new MediaPipe(scope, TIMEOUTS);
+
+    const pending = pipe.respond(streamRequest());
+    await vi.advanceTimersByTimeAsync(TIMEOUTS.brokerTimeoutMs);
+    await pending;
+    vi.useRealTimers();
+
+    expect(scope.brokeredTo).toEqual(['tab-a', 'tab-b']);
   });
 
   it('answers 503 when no tab offers a port within the broker timeout', async () => {

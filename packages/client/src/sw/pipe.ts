@@ -16,6 +16,8 @@ import {
 
 /** The subset of a window client the pipe drives (injectable). */
 export interface WindowClientLike {
+  /** Matches `FetchEventLike.clientId`, so a request can be aimed at one tab. */
+  readonly id?: string;
   postMessage(message: MediaPortRequest): void;
 }
 
@@ -67,6 +69,8 @@ export class MediaPipe {
   private readonly ports = new Map<string, PortEntry>();
   private readonly portWaiters = new Set<() => void>();
   private readonly sinks = new Map<number, ResponseSink>();
+  /** The armed pull deadline per request, so a cancel can disarm its own. */
+  private readonly pullTimers = new Map<number, ReturnType<typeof setTimeout>>();
   private nextRequestId = 1;
   private readonly brokerTimeoutMs: number;
   private readonly responseTimeoutMs: number;
@@ -164,6 +168,9 @@ export class MediaPipe {
       {
         pull: (controller) => this.pullWindow(port, requestId, controller),
         cancel: () => {
+          // The pull this cancels leaves its timer armed, and that timer discards
+          // the port — taking every other body streaming on it down too.
+          this.clearPull(requestId);
           this.sinks.delete(requestId);
           this.post(port, { type: 'cb:media:close', requestId });
         },
@@ -179,7 +186,7 @@ export class MediaPipe {
   ): Promise<void> {
     return new Promise<void>((resolve) => {
       const settle = (finish: () => void): void => {
-        clearTimeout(timer);
+        this.clearPull(requestId);
         this.sinks.delete(requestId);
         finish();
         resolve();
@@ -192,6 +199,7 @@ export class MediaPipe {
           controller.error(new Error('media pull timed out'));
         });
       }, this.pullTimeoutMs);
+      this.pullTimers.set(requestId, timer);
       this.sinks.set(requestId, {
         port,
         deliver: (response) => {
@@ -218,7 +226,12 @@ export class MediaPipe {
     const held = this.portFor(clientId);
     if (held) return held;
     const clients = await this.scope.clients.matchAll({ type: 'window' });
-    for (const client of clients) client.postMessage({ type: MEDIA_PORT_REQUEST });
+    // Only the tab that needs a port may re-broker: a tab that answers replaces
+    // its channel, and the superseded broker drops the cursors of live bodies.
+    // An unidentified client has no target, so it falls back to asking everyone.
+    const owner = clients.filter((client) => client.id === clientId);
+    const targets = clientId !== ANONYMOUS_CLIENT && owner.length > 0 ? owner : clients;
+    for (const client of targets) client.postMessage({ type: MEDIA_PORT_REQUEST });
     return this.waitForPort(clientId);
   }
 
@@ -243,6 +256,13 @@ export class MediaPipe {
       }, this.brokerTimeoutMs);
       this.portWaiters.add(waiter);
     });
+  }
+
+  private clearPull(requestId: number): void {
+    const timer = this.pullTimers.get(requestId);
+    if (timer === undefined) return;
+    clearTimeout(timer);
+    this.pullTimers.delete(requestId);
   }
 
   private post(port: MessagePortLike, message: MediaRequest): void {
@@ -279,7 +299,16 @@ function sealed(
   headers: Array<[string, string]> = [],
   body: BodyInit | null = null
 ): Response {
-  const merged = new Headers(headers);
+  const merged = new Headers();
+  // `asResponse` proves the pairs are strings, not that they are legal header
+  // tokens; a name or value `Headers` rejects must not fail the whole response.
+  for (const [name, value] of headers) {
+    try {
+      merged.append(name, value);
+    } catch {
+      continue;
+    }
+  }
   merged.set('cache-control', 'no-store');
   return new Response(body, { status, headers: merged });
 }

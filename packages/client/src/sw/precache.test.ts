@@ -62,6 +62,35 @@ describe('precacheAppShell', () => {
     expect([...caches.cache(APP_SHELL_CACHE).entries.keys()]).toEqual([`${ORIGIN}/index.html`]);
   });
 
+  it('caches the reachable entries when one manifest entry will not cache', async () => {
+    const caches = new FakeCacheStorage();
+    caches.cache(APP_SHELL_CACHE).unreachable.add(`${ORIGIN}/assets/gone.js`);
+
+    await precacheAppShell(
+      caches,
+      manifestFetch('["/index.html","/assets/gone.js","/assets/app.js"]'),
+      ORIGIN
+    );
+
+    expect([...caches.cache(APP_SHELL_CACHE).entries.keys()]).toEqual([
+      `${ORIGIN}/index.html`,
+      `${ORIGIN}/assets/app.js`,
+    ]);
+  });
+
+  it('keeps an entry the manifest still lists when its refresh fails', async () => {
+    const caches = new FakeCacheStorage();
+
+    await precacheAppShell(caches, manifestFetch('["/index.html","/assets/app.js"]'), ORIGIN);
+    caches.cache(APP_SHELL_CACHE).unreachable.add(`${ORIGIN}/assets/app.js`);
+    await precacheAppShell(caches, manifestFetch('["/index.html","/assets/app.js"]'), ORIGIN);
+
+    expect([...caches.cache(APP_SHELL_CACHE).entries.keys()]).toEqual([
+      `${ORIGIN}/index.html`,
+      `${ORIGIN}/assets/app.js`,
+    ]);
+  });
+
   it('prunes entries a later manifest no longer lists', async () => {
     const caches = new FakeCacheStorage();
 

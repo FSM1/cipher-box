@@ -10,8 +10,14 @@ export const SW_ORIGIN = 'https://vault.example';
 export class FakeCache implements CacheLike {
   readonly entries = new Map<string, string>();
   putCalls = 0;
+  /** URLs the real `Cache.addAll` would reject on, so its atomicity is testable. */
+  readonly unreachable = new Set<string>();
 
   async addAll(requests: readonly string[]): Promise<void> {
+    // The real `addAll` is atomic: one non-OK response rejects the whole call.
+    if (requests.some((request) => this.unreachable.has(request))) {
+      throw new TypeError('addAll: a request did not respond OK');
+    }
     for (const request of requests) this.entries.set(request, `body:${request}`);
   }
 

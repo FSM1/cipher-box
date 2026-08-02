@@ -76,8 +76,8 @@ export type LeaderMessage =
   | { type: 'cb:leaderGone'; token: string }
   /**
    * The correlated result of a follower's command, read, or write step. A
-   * snapshot read's ok carries the descriptor in `result`; a plaintext read's
-   * carries a `Blob`; a SIWE challenge's carries the nonce string;
+   * snapshot read's ok carries the descriptor in `result`; a plaintext read
+   * carries a `Blob`; a SIWE challenge carries the nonce string;
    * `beginWrite`/`commitWrite` carry the handle / durable op id.
    */
   | {

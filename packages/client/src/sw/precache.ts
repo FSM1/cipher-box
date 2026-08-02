@@ -45,8 +45,18 @@ export async function precacheAppShell(
   if (!urls) return;
 
   const cache = await caches.open(APP_SHELL_CACHE);
-  await cache.addAll(urls);
+  // `addAll` is atomic, so one entry that will not cache would drop the whole
+  // shell; per entry, a miss costs only that asset.
+  for (const url of urls) {
+    try {
+      await cache.addAll([url]);
+    } catch {
+      continue;
+    }
+  }
 
+  // Pruning follows the manifest, not what cached: an entry the build still
+  // lists is wanted even when this pass failed to refresh it.
   const wanted = new Set(urls);
   for (const entry of await cache.keys()) {
     if (!wanted.has(entry.url)) await cache.delete(entry.url);
@@ -66,16 +76,19 @@ export async function deleteStaleCaches(caches: CacheStorageLike): Promise<void>
   }
 }
 
+/** The requests the shell could ever own; the cheap gate before the claim itself. */
+export function sameOriginGet(request: Request, origin: string): boolean {
+  return request.method === 'GET' && new URL(request.url).origin === origin;
+}
+
 /** Whether the shell owns this request — decided synchronously, before `respondWith`. */
 export function appShellClaims(
   request: Request,
   origin: string,
   precached: ReadonlySet<string>
 ): boolean {
-  if (request.method !== 'GET') return false;
-  const url = new URL(request.url);
-  if (url.origin !== origin) return false;
-  return request.mode === 'navigate' || precached.has(url.toString());
+  if (!sameOriginGet(request, origin)) return false;
+  return request.mode === 'navigate' || precached.has(new URL(request.url).toString());
 }
 
 /**
