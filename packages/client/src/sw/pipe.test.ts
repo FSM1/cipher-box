@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { MediaPortRequest } from '../media/protocol.js';
 import { FakePort } from './testDoubles.js';
-import { MediaPipe, type ClientsLike, type MediaPipeScopeLike } from './pipe.js';
+import type { ClientsLike } from './clients.js';
+import { MediaPipe, type MediaPipeScopeLike } from './pipe.js';
 
 const ORIGIN = 'https://vault.example';
 const TIMEOUTS = { brokerTimeoutMs: 1000, responseTimeoutMs: 100, pullTimeoutMs: 2000 };

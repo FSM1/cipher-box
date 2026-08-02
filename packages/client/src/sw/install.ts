@@ -3,15 +3,11 @@
  * precache (blueprint/web-client.md "Content paths").
  */
 
-import { MEDIA_PORT_OFFER, type MessagePortLike } from '../media/protocol.js';
-import {
-  RELAY_DELIVER,
-  RELAY_PORT,
-  RELAY_SELF,
-  RELAY_WHOAMI,
-  type RelayMessage,
-} from '../portCourier.js';
-import { MediaPipe, type MediaPipeScopeLike, type WindowClientLike } from './pipe.js';
+import { MEDIA_PORT_OFFER } from '../media/protocol.js';
+import { RELAY_DELIVER, RELAY_SELF, RELAY_WHOAMI, type MessagePortLike } from '../portRelay.js';
+import type { ClientsLike } from './clients.js';
+import { MediaPipe, type MediaPipeScopeLike } from './pipe.js';
+import { deliverPort } from './relay.js';
 import {
   appShellClaims,
   deleteStaleCaches,
@@ -56,7 +52,7 @@ export interface ServiceWorkerEventMap {
 /** The subset of a Service Worker global scope the wiring drives (injectable). */
 export interface ServiceWorkerScopeLike extends MediaPipeScopeLike {
   readonly caches: CacheStorageLike;
-  readonly clients: MediaPipeScopeLike['clients'] & { claim(): Promise<void> };
+  readonly clients: ClientsLike & { claim(): Promise<void> };
   skipWaiting(): Promise<void> | void;
   addEventListener<K extends keyof ServiceWorkerEventMap>(
     type: K,
@@ -132,44 +128,26 @@ export function installServiceWorker(
 
   scope.addEventListener('message', (event) => {
     const data = event.data as { type?: unknown; to?: unknown } | null;
-    if (data?.type === MEDIA_PORT_OFFER) {
-      const port = event.ports[0];
-      if (port) pipe.adoptPort(port, event.source?.id);
-      return;
-    }
-    // Port brokerage between two tabs. The worker names a client to itself and
-    // forwards the far end of a channel; it reads neither and keeps no state, so
-    // its death costs a re-broker and never a channel already open.
-    if (data?.type === RELAY_WHOAMI) {
-      const source = event.source;
-      if (source) {
-        const self: RelayMessage = { type: RELAY_SELF, id: source.id };
-        source.postMessage(self);
+    const port: MessagePortLike | undefined = event.ports[0];
+    switch (data?.type) {
+      case MEDIA_PORT_OFFER:
+        if (port) pipe.adoptPort(port, event.source?.id);
+        return;
+      case RELAY_WHOAMI:
+        event.source?.postMessage({ type: RELAY_SELF, id: event.source.id });
+        return;
+      case RELAY_DELIVER: {
+        if (!port) return;
+        if (typeof data.to !== 'string') {
+          port.close();
+          return;
+        }
+        const delivery = deliverPort(scope.clients, data.to, port);
+        event.waitUntil?.(delivery);
+        return;
       }
-      return;
     }
-    if (data?.type !== RELAY_DELIVER) return;
-    const port = event.ports[0];
-    if (!port || typeof data.to !== 'string') return;
-    const delivery = deliverPort(scope, data.to, port);
-    if (event.waitUntil) event.waitUntil(delivery);
   });
-}
-
-async function deliverPort(
-  scope: ServiceWorkerScopeLike,
-  to: string,
-  port: MessagePortLike
-): Promise<void> {
-  // A tab that the worker has not claimed yet is still a legitimate target.
-  const clients = await scope.clients.matchAll({ type: 'window', includeUncontrolled: true });
-  const target: WindowClientLike | undefined = clients.find((client) => client.id === to);
-  if (!target) {
-    port.close();
-    return;
-  }
-  const message: RelayMessage = { type: RELAY_PORT };
-  target.postMessage(message, [port]);
 }
 
 const ignore = (): void => undefined;

@@ -7,9 +7,8 @@
  */
 
 import type { BroadcastChannelLike } from './broadcast.js';
-import type { MessagePortLike } from './media/protocol.js';
+import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { LockManagerLike, LockRequestCallback } from './leadership.js';
-import type { PortCourier } from './portCourier.js';
 import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './transport.js';
 import type { EngineHostLike } from './worker/engineHost.js';
 import type {
@@ -177,7 +176,7 @@ export class FakeChannel implements BroadcastChannelLike {
 /**
  * One end of a channel. Delivery is asynchronous and structured-cloned, like a
  * real `MessagePort`; `transferred` records what the sender asked to move, so a
- * test can tell a transfer from a copy.
+ * test can tell a transfer from a clone.
  */
 export class FakeChannelPort implements MessagePortLike {
   peer: FakeChannelPort | null = null;
@@ -221,6 +220,12 @@ export class FakeChannelPort implements MessagePortLike {
  */
 export class FakeCourierNetwork {
   private readonly inboxes = new Map<string, Set<(port: MessagePortLike) => void>>();
+  private readonly opened: FakeChannelPort[] = [];
+
+  /** Every non-empty transfer list posted on this network's ports, in order. */
+  get transfers(): unknown[][] {
+    return this.opened.flatMap((port) => port.transferred.filter((list) => list.length > 0));
+  }
 
   courier(address: string): PortCourier {
     return {
@@ -240,18 +245,12 @@ export class FakeCourierNetwork {
     const far = new FakeChannelPort();
     near.peer = far;
     far.peer = near;
+    this.opened.push(near, far);
     const handlers = this.inboxes.get(to);
     if (handlers) for (const handler of [...handlers]) handler(far);
     return near;
   }
 }
-
-/** A courier with no Service Worker behind it: every brokerage step refuses. */
-export const brokenCourier: PortCourier = {
-  address: () => Promise.reject(new Error('no broker')),
-  connect: () => Promise.reject(new Error('no broker')),
-  onPort: () => () => undefined,
-};
 
 interface Held {
   release: () => void;

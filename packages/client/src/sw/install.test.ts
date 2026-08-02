@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { MEDIA_PORT_OFFER, type MessagePortLike } from '../media/protocol.js';
-import { RELAY_DELIVER, RELAY_PORT, RELAY_SELF, RELAY_WHOAMI } from '../portCourier.js';
-import type { WindowClientLike } from './pipe.js';
+import { MEDIA_PORT_OFFER } from '../media/protocol.js';
+import {
+  RELAY_DELIVER,
+  RELAY_PORT,
+  RELAY_SELF,
+  RELAY_WHOAMI,
+  type MessagePortLike,
+} from '../portRelay.js';
+import type { WindowClientLike } from './clients.js';
 import {
   installServiceWorker,
   type ExtendableEventLike,

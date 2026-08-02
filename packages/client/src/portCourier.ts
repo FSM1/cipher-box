@@ -1,37 +1,19 @@
 /**
- * Cross-context `MessagePort` brokerage. A `BroadcastChannel` carries no
- * transferables and delivers to every context that opened it, so the origin's
- * Service Worker is the only route by which one tab can hand another a private
- * port. It forwards the port untouched and keeps no state of its own: a killed
- * worker costs a re-broker, never a channel already open.
+ * The tab side of the port relay ([`portRelay`](./portRelay.ts)): it drives the
+ * Service Worker that forwards ports between same-origin contexts. The tab must
+ * already have that worker registered — `MediaService` does it — and a tab that
+ * has none gets [`unavailableCourier`](unavailableCourier), which refuses.
  */
 
-import type { MessagePortLike } from './media/protocol.js';
-
-/** Tab → Service Worker: name the sending client back to itself. */
-export const RELAY_WHOAMI = 'cb:relay:whoami';
-/** Service Worker → the asking tab: that tab's own client id. */
-export const RELAY_SELF = 'cb:relay:self';
-/** Tab → Service Worker, carrying the far end of a fresh `MessageChannel`. */
-export const RELAY_DELIVER = 'cb:relay:deliver';
-/** Service Worker → the addressed tab, carrying that far end. */
-export const RELAY_PORT = 'cb:relay:port';
-
-export type RelayMessage =
-  | { type: typeof RELAY_WHOAMI }
-  | { type: typeof RELAY_SELF; id: string }
-  | { type: typeof RELAY_DELIVER; to: string }
-  | { type: typeof RELAY_PORT };
-
-/** Opens private point-to-point channels between same-origin contexts. */
-export interface PortCourier {
-  /** This context's address, for another context to `connect` to. */
-  address(): Promise<string>;
-  /** Opens a channel to `to`, returning this side's end. */
-  connect(to: string): Promise<MessagePortLike>;
-  /** Registers for channels opened to this context; the return unsubscribes. */
-  onPort(handler: (port: MessagePortLike) => void): () => void;
-}
+import {
+  RELAY_DELIVER,
+  RELAY_PORT,
+  RELAY_SELF,
+  RELAY_WHOAMI,
+  type MessagePortLike,
+  type PortCourier,
+  type RelayMessage,
+} from './portRelay.js';
 
 /** The `ServiceWorker` surface a brokerage step drives. */
 export interface CourierWorkerLike {
@@ -92,8 +74,7 @@ export class ServiceWorkerCourier implements PortCourier {
   async connect(to: string): Promise<MessagePortLike> {
     const worker = await this.worker();
     const channel = this.createChannel();
-    const deliver: RelayMessage = { type: RELAY_DELIVER, to };
-    worker.postMessage(deliver, [channel.port2]);
+    worker.postMessage({ type: RELAY_DELIVER, to } satisfies RelayMessage, [channel.port2]);
     channel.port1.start?.();
     return channel.port1;
   }
@@ -130,57 +111,41 @@ export class ServiceWorkerCourier implements PortCourier {
         reject(new Error('the Service Worker did not name this client'));
       }, this.timeoutMs);
       this.container.addEventListener('message', listener);
-      const whoami: RelayMessage = { type: RELAY_WHOAMI };
-      worker.postMessage(whoami);
+      worker.postMessage({ type: RELAY_WHOAMI } satisfies RelayMessage);
     });
   }
 
   private async worker(): Promise<CourierWorkerLike> {
     const controller = this.container.controller;
     if (controller) return controller;
-    const registration = await withTimeout(this.container.ready, this.timeoutMs, NO_WORKER);
-    if (!registration.active) throw new Error(NO_WORKER);
-    return registration.active;
+    let timer: ReturnType<typeof setTimeout>;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(NO_WORKER)), this.timeoutMs);
+    });
+    try {
+      const registration = await Promise.race([this.container.ready, deadline]);
+      if (!registration.active) throw new Error(NO_WORKER);
+      return registration.active;
+    } finally {
+      clearTimeout(timer!);
+    }
   }
 }
 
 /**
- * Follower reads travel over a brokered port and never fall back onto the shared
- * bus, so a browser without a Service Worker mirrors nothing.
+ * The courier a context with no Service Worker gets. Follower reads travel over
+ * a brokered port and never fall back onto the shared channel, so such a tab
+ * mirrors nothing.
  */
-class UnavailableCourier implements PortCourier {
-  address(): Promise<string> {
-    return Promise.reject(new Error(NO_WORKER));
-  }
+export const unavailableCourier: PortCourier = {
+  address: () => Promise.reject(new Error(NO_WORKER)),
+  connect: () => Promise.reject(new Error(NO_WORKER)),
+  onPort: () => () => undefined,
+};
 
-  connect(): Promise<MessagePortLike> {
-    return Promise.reject(new Error(NO_WORKER));
-  }
-
-  onPort(): () => void {
-    return () => undefined;
-  }
-}
-
-/** This tab's courier, or a refusing one where the browser offers no Service Worker. */
+/** This tab's courier, or the refusing one where the browser offers no Service Worker. */
 export function defaultCourier(): PortCourier {
   const container = (globalThis as { navigator?: { serviceWorker?: CourierContainerLike } })
     .navigator?.serviceWorker;
-  return container ? new ServiceWorkerCourier(container) : new UnavailableCourier();
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(message)), ms);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      }
-    );
-  });
+  return container ? new ServiceWorkerCourier(container) : unavailableCourier;
 }

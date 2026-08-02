@@ -1,15 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import type { MessagePortLike } from './media/protocol.js';
+import type { MessagePortLike } from './portRelay.js';
 import {
-  RELAY_DELIVER,
-  RELAY_PORT,
-  RELAY_SELF,
-  RELAY_WHOAMI,
   ServiceWorkerCourier,
   type CourierContainerLike,
   type CourierWorkerLike,
 } from './portCourier.js';
+import { RELAY_DELIVER, RELAY_PORT, RELAY_SELF, RELAY_WHOAMI } from './portRelay.js';
 import { FakeChannelPort } from './testkit.js';
 
 /** The worker the tab posts brokerage steps to, plus what it received. */

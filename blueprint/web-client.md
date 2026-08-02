@@ -97,12 +97,13 @@ mechanism; the invariant — one engine writer per origin — is D4's):
   at most `Blob`/`File` handles (structured clone shares the immutable backing
   store — no byte copies for uploads). Read **results** — snapshot projections
   and file plaintext — do not: a `BroadcastChannel` delivers to every
-  same-origin context that opened it, so each follower brokers a private
-  `MessagePort` to the leader through the Service Worker (the only cross-tab
-  route for a transferable) and reads over that, buffers transferred rather
-  than cloned. The channel only rendezvouses the port. A tab with no Service
-  Worker mirrors nothing — reads fail closed rather than fall back to the
-  shared channel.
+  same-origin context that opened it, so each follower publishes a rendezvous
+  address on the channel and the leader opens it a private `MessagePort`
+  through the Service Worker (the only cross-tab route for a transferable),
+  buffers transferred rather than cloned. A follower takes only a port that
+  greets it with the active leadership token, and a tab with no Service Worker
+  mirrors nothing — reads fail closed rather than fall back to the shared
+  channel.
 - **Failover**: the lock releases → some follower acquires it, spawns a fresh
   engine worker, and rehydrates from the durable seams (floors, op queue,
   staged bytes, snapshot cache — all origin-shared). Ops journal durably
@@ -211,6 +212,10 @@ all living in `packages/client` and running inside the engine worker realm:
   back through the port. The SW holds no keys, no crypto, and no state worth
   keeping — a killed SW or broken port just re-brokers and re-buffers.
   Follower tabs route media through the leader the same way.
+- **The same Service Worker brokers the follower read port**: it names a client
+  back to itself and forwards one end of a `MessageChannel` to the client a tab
+  addresses. It reads neither end and keeps no state, so a killed worker costs a
+  re-broker, never a channel already open.
 - **The same Service Worker precaches the app shell** (engineering judgment,
   implied by #33 D6's full offline parity): a vault you can mutate offline is
   a vault whose UI must boot offline. Cached snapshots + the op queue then

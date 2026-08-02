@@ -11,9 +11,7 @@ import { EngineClient } from '../../src/engineClient.js';
 import type { PendingClass } from '../../src/worker/protocol.js';
 import { awaitElection } from './election.js';
 import { hex, unhex } from './hexUtil.js';
-
-/** The dev server transpiles TS per module, so the worker must be a module worker. */
-const SW_SCRIPT = '/sw.ts';
+import { awaitServiceWorkerControl } from './serviceWorker.js';
 
 const JOURNAL_DB = 'cb-leadership-journal';
 const JOURNAL_STORE = 'ops';
@@ -90,15 +88,18 @@ const observed: ObservedMessage[] = [];
 const rootNode = new Uint8Array(16);
 
 /** Every byte anywhere in a message, as one hex run a plaintext search can scan. */
-function collectBytes(value: unknown, into: number[] = []): string {
-  if (value instanceof ArrayBuffer) into.push(...new Uint8Array(value));
-  else if (ArrayBuffer.isView(value)) {
-    into.push(...new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
-  } else if (Array.isArray(value)) for (const entry of value) collectBytes(entry, into);
-  else if (value && typeof value === 'object') {
-    for (const entry of Object.values(value)) collectBytes(entry, into);
-  }
-  return hex(Uint8Array.from(into));
+function collectBytes(value: unknown): string {
+  const found: number[] = [];
+  const walk = (node: unknown): void => {
+    if (node instanceof ArrayBuffer) for (const byte of new Uint8Array(node)) found.push(byte);
+    else if (ArrayBuffer.isView(node)) {
+      const view = new Uint8Array(node.buffer, node.byteOffset, node.byteLength);
+      for (const byte of view) found.push(byte);
+    } else if (Array.isArray(node)) for (const entry of node) walk(entry);
+    else if (node && typeof node === 'object') for (const entry of Object.values(node)) walk(entry);
+  };
+  walk(value);
+  return hex(Uint8Array.from(found));
 }
 
 function settle(error: unknown): string {
@@ -109,28 +110,16 @@ function settle(error: unknown): string {
 // A valid secp256k1 identity scalar placeholder (the journal fake ignores it).
 const secret = (): ArrayBuffer => new Uint8Array(32).fill(1).buffer;
 
-const WORKER_URLS: Record<NonNullable<HarnessOptions['worker']>, () => URL> = {
-  engine: () => new URL('./engine.worker.ts', import.meta.url),
-  media: () => new URL('./mediaEngine.worker.ts', import.meta.url),
-  journal: () => new URL('./journalEngine.worker.ts', import.meta.url),
+const WORKER_URLS: Record<NonNullable<HarnessOptions['worker']>, URL> = {
+  engine: new URL('./engine.worker.ts', import.meta.url),
+  media: new URL('./mediaEngine.worker.ts', import.meta.url),
+  journal: new URL('./journalEngine.worker.ts', import.meta.url),
 };
 
-/** A follower reads over a Service-Worker-brokered port, so every tab needs one. */
-async function awaitServiceWorker(): Promise<void> {
-  await navigator.serviceWorker.register(SW_SCRIPT, { scope: '/', type: 'module' });
-  await navigator.serviceWorker.ready;
-  for (
-    let attempt = 0;
-    attempt < 200 && navigator.serviceWorker.controller === null;
-    attempt += 1
-  ) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-}
-
 window.cbCreate = async ({ lockName, channelName, worker }: HarnessOptions): Promise<void> => {
-  await awaitServiceWorker();
-  const workerUrl = WORKER_URLS[worker ?? 'journal']();
+  // A follower reads over a Service-Worker-brokered port, so every tab needs one.
+  await awaitServiceWorkerControl();
+  const workerUrl = WORKER_URLS[worker ?? 'journal'];
   client = new EngineClient({
     locks: navigator.locks,
     lockName,

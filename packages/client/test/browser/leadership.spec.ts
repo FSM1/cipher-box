@@ -1,6 +1,7 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
 import type { DownloadResult, ObservedMessage, RangeResult, SnapshotResult } from './leadership.js';
+import { hex } from './hexUtil.js';
 import { fixtureSlice, LEADER_SEED } from './mediaFixture.js';
 
 /**
@@ -33,10 +34,6 @@ interface LeadershipHarness {
   cbJournalRecords(): Promise<unknown[]>;
   cbHeldLocks(lockName: string): Promise<number>;
   cbResetJournal(): Promise<void>;
-}
-
-function hex(bytes: Uint8Array): string {
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 let testSeq = 0;
@@ -276,7 +273,6 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
       'cb:bye',
       'cb:hello',
       'cb:leader',
-      'cb:portHost',
       'cb:portWanted',
     ]);
     // ...and not one byte of the plaintext the follower streamed.

@@ -5,15 +5,6 @@
  * and no state beyond the port it currently has.
  */
 
-/** The subset of `MessagePort` the pipe and the broker drive (injectable). */
-export interface MessagePortLike {
-  postMessage(message: unknown, transfer?: Transferable[]): void;
-  addEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
-  removeEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
-  start?(): void;
-  close(): void;
-}
-
 /** Ticket URLs live under one path prefix so the fetch handler can be exact. */
 export const STREAM_PATH_PREFIX = '/stream/';
 

@@ -3,7 +3,8 @@
  * (tsconfig.build.json).
  */
 
-import type { MediaRequest, MediaResponse, MessagePortLike } from '../media/protocol.js';
+import type { MediaRequest, MediaResponse } from '../media/protocol.js';
+import type { MessagePortLike } from '../portRelay.js';
 import type { CacheLike, CacheStorageLike } from './precache.js';
 
 export const SW_ORIGIN = 'https://vault.example';
