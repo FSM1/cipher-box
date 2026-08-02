@@ -22,7 +22,7 @@ use zeroize::Zeroizing;
 
 use cipherbox_engine::content::{DAG_ROOT_CODEC, GatewaySource, SealedChunk, decode_root};
 use cipherbox_engine::facade::PendingClass;
-use cipherbox_engine::net::author::{EnvelopeAuthoring, author_child_envelope};
+use cipherbox_engine::net::author::{AuthoredHead, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::{ChildAdopter, ResolveOutcome, resolve};
 use cipherbox_engine::seams::{
     BoxedTask, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
@@ -2154,42 +2154,23 @@ fn a_create_below_the_scope_root_publishes_and_projects() {
 /// The deep create's round trip: a device that never authored it adopts the
 /// non-root parent's own record — the only record that carries the depth-2
 /// child — through the child gate, on its own cold floors and cache. The
-/// facade has no descent below the scope root yet, so the assertion sits at
-/// the record plane (#895, #917).
+/// assertion sits at the record plane; its facade half is
+/// `a_second_device_lists_below_the_scope_root_once_it_focuses_there`
+/// (#895, #917).
 #[test]
 fn a_create_below_the_scope_root_is_adoptable_by_a_second_device() {
-    let world = FakeWorld::new();
-    let blocks = Blocks::default();
-    seed_account(&world, &blocks);
+    let DeepCreate {
+        bob,
+        engine_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_seen_by_a_second_device();
 
-    let alice = world.device(b"alice");
-    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
-    block_on(engine_a.command(Command::Create {
-        parent: ROOT,
-        name: "photos".into(),
-        kind: NodeKind::Folder,
-    }))
-    .unwrap();
-    tick(&world, &engine_a, &mut tasks);
-    let photos = child_id(&engine_a, ROOT, "photos");
-
-    block_on(engine_a.command(Command::Create {
-        parent: photos,
-        name: "2026".into(),
-        kind: NodeKind::Folder,
-    }))
-    .unwrap();
-    tick(&world, &engine_a, &mut tasks);
-    let deep = child_id(&engine_a, photos, "2026");
-
-    let bob = world.device(b"alice-second-device");
-    let (engine_b, _events_b, _tasks_b) = boot(&world, &blocks, &bob, 7);
     let parents = block_on(engine_b.view()).unwrap().children(ROOT);
     assert_eq!(parents.len(), 1, "device B resolves the depth-1 parent");
     assert_eq!(parents[0].id, photos);
 
-    // Device B's own seams: its cold floor store, its own cache and HTTP. Only
-    // the account's scope read seed and the network are shared with device A.
     let gateway = GatewayConfig {
         accelerator: Some(GatewaySource {
             base_url: "https://gw.test".into(),
@@ -2225,6 +2206,274 @@ fn a_create_below_the_scope_root_is_adoptable_by_a_second_device() {
     assert_eq!(
         children[0].id, deep.0,
         "and the same node id device A published it under"
+    );
+}
+
+/// Device A creates `photos/2026`, then a second device that never authored it
+/// cold-boots onto the same network.
+struct DeepCreate {
+    world: FakeWorld,
+    blocks: Blocks,
+    /// Device B's own seams: its cold floor store, its own cache and HTTP. Only
+    /// the account's scope read seed and the network are shared with device A.
+    bob: FakeDevice,
+    engine_b: Engine<FakeSeamTypes>,
+    tasks_b: Vec<BoxedTask>,
+    photos: NodeId,
+    deep: NodeId,
+}
+
+fn deep_create_seen_by_a_second_device() -> DeepCreate {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks);
+    let photos = child_id(&engine_a, ROOT, "photos");
+
+    block_on(engine_a.command(Command::Create {
+        parent: photos,
+        name: "2026".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks);
+    let deep = child_id(&engine_a, photos, "2026");
+
+    let bob = world.device(b"alice-second-device");
+    let (engine_b, _events_b, tasks_b) = boot(&world, &blocks, &bob, 7);
+    DeepCreate {
+        world,
+        blocks,
+        bob,
+        engine_b,
+        tasks_b,
+        photos,
+        deep,
+    }
+}
+
+/// The names a device's rendered view lists under `folder`, sorted.
+fn listed_names(engine: &Engine<FakeSeamTypes>, folder: NodeId) -> Vec<String> {
+    let mut names: Vec<String> = block_on(engine.snapshot(folder))
+        .expect("a folder view")
+        .children
+        .into_iter()
+        .map(|child| child.name)
+        .collect();
+    names.sort();
+    names
+}
+
+/// A record planted under `folder`'s write name. It verifies under that name
+/// and its head CID matches, so only the child gate's bindings stand between it
+/// and the base snapshot; each field is one binding a test bends away from
+/// `folder`'s own.
+struct Planted<'a> {
+    node_id: [u8; 16],
+    scope_id: [u8; 16],
+    read_key: [u8; 32],
+    body: &'a ReadBody,
+}
+
+fn plant_record(
+    records: &InMemoryRecordStore,
+    blocks: &Blocks,
+    folder: NodeId,
+    planted: Planted<'_>,
+) {
+    let head = author_child_envelope(EnvelopeAuthoring {
+        node_id: planted.node_id,
+        scope_id: planted.scope_id,
+        epoch: EPOCH,
+        read_key: &planted.read_key,
+        nonce: &[0x5A; 24],
+        body: planted.body,
+        carried_unknown: Vec::new(),
+        carried_epoch_tag_unknown: Vec::new(),
+    })
+    .expect("a well-formed child record");
+    publish_next_record(records, blocks, folder, &head);
+}
+
+/// A folder body listing one child that exists nowhere else — what a planted
+/// record would add if the gate let it through.
+fn planted_body() -> ReadBody {
+    ReadBody::Folder {
+        created_at: 0,
+        modified_at: 0,
+        children: vec![child_ref([0x9B; 16], "planted", CoreNodeKind::Folder)],
+        unknown: Vec::new(),
+    }
+}
+
+/// The facade half of the deep create's round trip: a device that never
+/// authored the subtree sets focus on the depth-1 parent and lists the depth-2
+/// child out of its own rendered view — the assertion #895 could not make.
+#[test]
+fn a_second_device_lists_below_the_scope_root_once_it_focuses_there() {
+    let DeepCreate {
+        mut engine_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_seen_by_a_second_device();
+
+    assert!(
+        listed_names(&engine_b, photos).is_empty(),
+        "the vault-pointer leg lifts the root's direct children only"
+    );
+
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+
+    let view = block_on(engine_b.snapshot(photos)).unwrap();
+    assert_eq!(view.children.len(), 1, "the focus refresh descended");
+    assert_eq!(view.children[0].name, "2026");
+    assert_eq!(
+        view.children[0].id, deep,
+        "and under the node id device A published it with"
+    );
+}
+
+/// The focus refresh is fail-closed on every binding the child gate holds. Each
+/// planted record is strictly newer and otherwise well-formed; only the bent
+/// binding stops it, and last-known-good stands through all three.
+#[test]
+fn a_planted_focus_record_never_renders() {
+    let DeepCreate {
+        world,
+        blocks,
+        mut engine_b,
+        mut tasks_b,
+        photos,
+        deep,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    assert_eq!(listed_names(&engine_b, photos), ["2026"]);
+
+    // The tick leg is live: a legitimate concurrent record at the focused name
+    // reconciles without any further navigation. Without this the negatives
+    // below would pass on a leg that never ran.
+    concurrent_add(
+        &world.record_store,
+        &blocks,
+        photos,
+        child_ref([0x27; 16], "2027", CoreNodeKind::Folder),
+    );
+    tick(&world, &engine_b, &mut tasks_b);
+    assert_eq!(listed_names(&engine_b, photos), ["2026", "2027"]);
+
+    let held = ["2026", "2027"];
+    for (planted, bent) in [
+        (
+            Planted {
+                node_id: deep.0,
+                scope_id: SCOPE,
+                read_key: read_key_of(deep),
+                body: &planted_body(),
+            },
+            "a record sealed for another node",
+        ),
+        (
+            Planted {
+                node_id: photos.0,
+                scope_id: [0xF0; 16],
+                read_key: read_key_of(photos),
+                body: &planted_body(),
+            },
+            "a record sealed under another scope",
+        ),
+        (
+            Planted {
+                node_id: photos.0,
+                scope_id: SCOPE,
+                read_key: read_key_of(photos),
+                body: &ReadBody::File {
+                    created_at: 0,
+                    modified_at: 0,
+                    versions: Vec::new(),
+                    unknown: Vec::new(),
+                },
+            },
+            "a record whose sealed body is a file",
+        ),
+    ] {
+        plant_record(&world.record_store, &blocks, photos, planted);
+        tick(&world, &engine_b, &mut tasks_b);
+        assert_eq!(
+            listed_names(&engine_b, photos),
+            held,
+            "{bent} never renders; last-known-good is pinned"
+        );
+    }
+}
+
+/// An unreachable record plane is availability staleness, never data loss: the
+/// focused folder keeps rendering the state it last adopted, off the cache.
+#[test]
+fn an_unreachable_record_plane_leaves_the_focused_folder_rendering() {
+    let DeepCreate {
+        world,
+        mut engine_b,
+        mut tasks_b,
+        photos,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    assert_eq!(listed_names(&engine_b, photos), ["2026"]);
+
+    for endpoint in world.record_store.endpoints() {
+        world.record_store.fail_endpoint(&endpoint);
+    }
+    tick(&world, &engine_b, &mut tasks_b);
+
+    assert_eq!(listed_names(&engine_b, photos), ["2026"]);
+}
+
+/// Navigation refreshes a folder only past the staleness threshold: a repeat
+/// visit renders state already held, and the same navigation past the threshold
+/// reconciles (blueprint/engine.md "Sync core").
+#[test]
+fn navigation_re_resolves_a_folder_only_past_the_staleness_threshold() {
+    let DeepCreate {
+        world,
+        blocks,
+        mut engine_b,
+        photos,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    assert_eq!(listed_names(&engine_b, photos), ["2026"]);
+
+    concurrent_add(
+        &world.record_store,
+        &blocks,
+        photos,
+        child_ref([0x27; 16], "2027", CoreNodeKind::Folder),
+    );
+
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    assert_eq!(
+        listed_names(&engine_b, photos),
+        ["2026"],
+        "a repeat visit inside the threshold renders what is already held"
+    );
+
+    world.scheduler.advance(engine_b.profile().stale_after);
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    assert_eq!(
+        listed_names(&engine_b, photos),
+        ["2026", "2027"],
+        "past the threshold the same navigation reconciles"
     );
 }
 
@@ -3250,8 +3499,7 @@ fn concurrent_root_add(records: &InMemoryRecordStore, blocks: &Blocks, extra: Ch
 /// Another writer publishes `folder`'s next record, adding `extra` on top of
 /// whatever the folder currently carries.
 fn concurrent_add(records: &InMemoryRecordStore, blocks: &Blocks, folder: NodeId, extra: ChildRef) {
-    let name = write_name(folder);
-    let (sequence, head_cid) = published(records, folder);
+    let (_, head_cid) = published(records, folder);
     let envelope =
         decode_envelope(&blocks.get(&head_cid).expect("the head block")).expect("decodes");
     let read_key = read_key_of(folder);
@@ -3282,8 +3530,19 @@ fn concurrent_add(records: &InMemoryRecordStore, blocks: &Blocks, folder: NodeId
         carried_epoch_tag_unknown: envelope.epoch_tag_unknown.clone(),
     })
     .expect("the concurrent writer authors a valid record");
-    blocks.put(head.block.clone());
+    publish_next_record(records, blocks, folder, &head);
+}
 
+/// Publish `head` under `folder`'s write name at the sequence after its current
+/// record — how every "another writer moved this folder on" fixture lands.
+fn publish_next_record(
+    records: &InMemoryRecordStore,
+    blocks: &Blocks,
+    folder: NodeId,
+    head: &AuthoredHead,
+) {
+    let (sequence, _) = published(records, folder);
+    blocks.put(head.block.clone());
     let record = IpnsRecord::create_v2(
         &write_signer(folder),
         format!("/ipfs/{}", head.cid).as_bytes(),
@@ -3293,6 +3552,6 @@ fn concurrent_add(records: &InMemoryRecordStore, blocks: &Blocks, folder: NodeId
     )
     .marshal();
     for endpoint in records.endpoints() {
-        records.seed_record(&endpoint, name.as_str(), record.clone());
+        records.seed_record(&endpoint, write_name(folder).as_str(), record.clone());
     }
 }

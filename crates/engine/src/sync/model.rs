@@ -123,22 +123,25 @@ impl Snapshot {
         self.nodes.get(&id).map(|n| n.record_sequence)
     }
 
-    /// Adds a parent→child link. Idempotent on `(parent, child)`: a repeat
-    /// keeps the higher `link_counter` (a re-link never lowers it).
-    pub fn link(&mut self, parent: NodeId, child: NodeId, link_counter: u64) {
+    /// Adds a parent→child link, reporting whether the link was established or
+    /// its counter raised. Idempotent on `(parent, child)`: a repeat keeps the
+    /// higher `link_counter` (a re-link never lowers it).
+    pub fn link(&mut self, parent: NodeId, child: NodeId, link_counter: u64) -> bool {
         if let Some(existing) = self
             .links
             .iter_mut()
             .find(|l| l.parent == parent && l.child == child)
         {
+            let raised = existing.link_counter < link_counter;
             existing.link_counter = existing.link_counter.max(link_counter);
-            return;
+            return raised;
         }
         self.links.push(Link {
             parent,
             child,
             link_counter,
         });
+        true
     }
 
     /// Links `child` under `parent` with a **fresh winning counter** — one

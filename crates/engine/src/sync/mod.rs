@@ -50,8 +50,9 @@ pub use record::{
 pub use staging::{orphan_staging_keys, stage_op};
 pub use staleness::{Connectivity, classify, withheld_escalation};
 pub use tick::{
-    FocusTarget, FocusWindow, ResolveMode, TickCause, TickControl, focus_set, jittered_cadence,
-    on_access_refresh_due, resolve_mode, run_tick_loop,
+    FocusTarget, FocusWindow, ResolveMode, TickCause, TickControl, focus_folders,
+    focus_folders_due, focus_set, jittered_cadence, on_access_refresh_due, resolve_mode,
+    run_tick_loop,
 };
 
 /// Whole milliseconds of `duration`, truncating and saturating — the engine's
