@@ -185,6 +185,26 @@ fn open_dag_error(e: DagError) -> OpenError {
     }
 }
 
+/// Make room in `buf` for `additional` more bytes, wiping the allocation it
+/// leaves behind.
+///
+/// A `Zeroizing<Vec<u8>>` wipes only the allocation it currently owns, so
+/// letting `Vec` reallocate would free the old one with plaintext still in it
+/// (AGENTS.md 7). Doubling keeps the new allocation within twice the leaves
+/// already authenticated, so an unproven size field still cannot commit an
+/// outsized one.
+fn grow_wiping(buf: &mut Zeroizing<Vec<u8>>, additional: usize) {
+    let needed = buf.len().saturating_add(additional);
+    if needed <= buf.capacity() {
+        return;
+    }
+    let mut grown = Zeroizing::new(Vec::with_capacity(
+        buf.capacity().saturating_mul(2).max(needed),
+    ));
+    grown.extend_from_slice(buf);
+    std::mem::swap(buf, &mut grown);
+}
+
 /// Fetch, verify, and reassemble the plaintext window `[offset, offset +
 /// length)` of one content version, fetching only the leaves it covers. The
 /// request is clamped to the version, so an offset at or past the end yields no
@@ -225,10 +245,11 @@ pub async fn open_content_range<H: Http>(
     }
     let chunk_size = manifest.chunk_size;
     let leaves = leaf_range_for_byte_range(offset, length, chunk_size, manifest.leaf_cids.len());
-    // Preallocate up to a fixed budget, then grow as leaves arrive: the size is
-    // authenticated but unproven until every leaf is fetched, so a large size
-    // field must not commit an outsized allocation upfront (on wasm32 it would
-    // also truncate). The assembled-length cross-check below is the gate.
+    // Preallocate up to a fixed budget, then grow through `grow_wiping` as
+    // leaves arrive: the size is authenticated but unproven until every leaf is
+    // fetched, so a large size field must not commit an outsized allocation
+    // upfront (on wasm32 it would also truncate). The assembled-length
+    // cross-check below is the gate.
     let prealloc = length.min(limits::MAX_RESOLVED_RECORD_BYTES as u64) as usize;
     // Owns already-assembled plaintext until it is handed to the caller: the
     // trust rejects below abandon a partly-filled buffer (AGENTS.md 7).
@@ -258,6 +279,7 @@ pub async fn open_content_range<H: Http>(
         let to = (offset.saturating_add(length))
             .saturating_sub(leaf_start)
             .min(expected) as usize;
+        grow_wiping(&mut plaintext, to - from);
         plaintext.extend_from_slice(&chunk[from..to]);
     }
     if plaintext.len() as u64 != length {

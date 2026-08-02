@@ -16,7 +16,7 @@ use cipherbox_engine::content::{
     ContentKey, ContentProfile, SealedContent, assemble, open_content_range, seal_one_chunk,
 };
 use cipherbox_engine::testkit::{
-    SeededEntropy, block_on, block_store, frame_version, gateway, serve,
+    SeededEntropy, block_on, block_store, frame_version, frame_version_with, gateway, serve,
 };
 
 const CONTENT_KEY: [u8; KEY_LEN] = [0x5Au8; KEY_LEN];
@@ -181,5 +181,45 @@ fn a_mid_read_trust_reject_wipes_what_the_assembly_buffer_already_holds() {
     assert!(
         !seen.leaked,
         "the abandoned assembly buffer reached the allocator unwiped"
+    );
+}
+
+#[test]
+fn outgrowing_the_assembly_buffer_wipes_the_allocation_it_leaves_behind() {
+    const MARKER: u8 = 0xC5;
+    // The assembly buffer preallocates a 4 MiB budget, so growth is only
+    // reachable from a window wider than that: two 2 MiB leaves fill the budget
+    // exactly and a 16-byte tail leaf forces the grow.
+    const BIG_CHUNK: usize = 2 * 1024 * 1024;
+    let profile = ContentProfile::new(BIG_CHUNK).expect("nonzero chunk size");
+    let mut plaintext = vec![MARKER; BIG_CHUNK];
+    plaintext.extend_from_slice(&vec![0x11u8; BIG_CHUNK]);
+    plaintext.extend_from_slice(&[0x22u8; CHUNK]);
+    let (leaves, root_block, content) = frame_version_with(&plaintext, CONTENT_KEY, 4, profile);
+
+    let mut blocks = block_store(&leaves);
+    blocks.insert(encode_content_cid_str(content.content_cid()), root_block);
+    let http = serve(&blocks);
+    let version = content.version(CONTENT_KEY, 0);
+
+    let seen = watched(MARKER, || {
+        block_on(open_content_range(
+            &gateway(),
+            &http,
+            &version,
+            0,
+            plaintext.len() as u64,
+        ))
+    });
+
+    assert_eq!(
+        seen.outcome.expect("range read").len(),
+        plaintext.len(),
+        "the whole window the caller asked for"
+    );
+    assert!(seen.inspected > 0, "the watchdog scanned nothing");
+    assert!(
+        !seen.leaked,
+        "the outgrown assembly buffer reached the allocator unwiped"
     );
 }

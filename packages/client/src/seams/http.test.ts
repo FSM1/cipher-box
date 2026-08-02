@@ -90,6 +90,24 @@ describe('FetchHttp.sendCapped', () => {
     expect(body.cancelled()).toBe(true);
   });
 
+  // `abc` converts to NaN and `-1` to a finite value under the cap, so neither
+  // trips the declared-size check; the streaming cap is the only gate left.
+  it.each(['abc', '-1'])(
+    'falls through to the streaming cap on Content-Length %s',
+    async (declared) => {
+      const body = producedBody(100, 100);
+      stubFetch(
+        new Response(body.stream, { status: 200, headers: { 'content-length': declared } })
+      );
+
+      const result = await new FetchHttp().sendCapped(GET, 1000);
+
+      expect(result).toEqual({ kind: 'tooLarge', observed: 1100, limit: 1000 });
+      expect(body.produced()).toBeLessThanOrEqual(1100);
+      expect(body.cancelled()).toBe(true);
+    }
+  );
+
   it('admits a body exactly at the cap with its bytes intact', async () => {
     const body = producedBody(100, 10);
     stubFetch(new Response(body.stream, { status: 200 }));
