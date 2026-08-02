@@ -9,10 +9,19 @@
 //! storage. That bound is admitted whole at `beginWrite`
 //! ([`crate::content::StagingLedger`]); this module owns the journal entry and
 //! the staged-byte hygiene that outlives it.
+//!
+//! One rule decides a staged version's fate, and it lives here: **preserved when
+//! the engine gave up on the op, released when the user did** (#853). Preserved
+//! on a terminally unrebasable dead letter ([`preserve_dead_letter`]); released
+//! on a cancel, on a version proven unopenable (#818), and on a staged root that
+//! cannot be expanded ([`release_version_blocks`]).
+
+use std::collections::{BTreeMap, HashSet};
 
 use cipherbox_core::content::verify_cid;
 
 use crate::content::decode_root;
+use crate::facade::WriteHandle;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
 use crate::sync::drain::{DRAINED_OP_MARK_KEY, OP_ATTEMPTS_KEY, UPLOAD_MARK_KEY};
 use crate::sync::op::Op;
@@ -47,38 +56,278 @@ pub async fn stage_op<S: StagingStore>(
     store.enqueue_op(&record).await
 }
 
+/// The staging key holding the **op records** of dead letters whose staged bytes
+/// are preserved, `u32`-length-prefixed behind a one-byte format tag.
+///
+/// It holds the whole record, not just the root CID, because the record is the
+/// only carrier of the version's content key — a KDF non-edge nothing can
+/// re-derive (#818). Preserving the blocks without it would keep ciphertext no
+/// key ever opens, which is the condition that *releases* a version, not the one
+/// that preserves it. Orphan GC reads each entry's root keylessly through the
+/// same frozen clear header a queue entry exposes ([`record_content_root_cid`]),
+/// and treats this key as referenced.
+pub(crate) const PRESERVED_DEAD_LETTERS_KEY: &[u8] = b"cipherbox/preserved-dead-letters";
+
+/// The preserved record's format tag. The staging store is shared with whatever
+/// build wrote it, so bytes that merely happen to be well-shaped must not parse.
+const PRESERVED_FORMAT_V1: u8 = 1;
+
+/// Drop every staged block of one version: the leaves its root manifest lists,
+/// in file order, then the root itself. File order keeps the blocks that remain
+/// a suffix at every step, which is the invariant the drain's resume reads.
+///
+/// Best-effort: a failed removal is orphan residue a later GC pass collects.
+pub(crate) async fn release_version_blocks<S: StagingStore>(store: &S, root_cid: &[u8]) {
+    for leaf_cid in version_leaf_cids(store, root_cid).await {
+        let _ = store.remove_staged_bytes(&leaf_cid).await;
+    }
+    let _ = store.remove_staged_bytes(root_cid).await;
+}
+
+/// The leaves a staged root manifest lists, in file order. Empty when the root
+/// is gone, fails its own CID, or does not decode — every caller is a
+/// reconciliation path that must still make progress on a store that has lost
+/// bytes.
+pub(crate) async fn version_leaf_cids<S: StagingStore>(store: &S, root_cid: &[u8]) -> Vec<Vec<u8>> {
+    let Ok(Some(block)) = store.staged_bytes(root_cid).await else {
+        return Vec::new();
+    };
+    if verify_cid(root_cid, &block).is_err() {
+        return Vec::new();
+    }
+    decode_root(&block).map(|m| m.leaf_cids).unwrap_or_default()
+}
+
+/// Keep one dead letter's op record after it leaves the durable queue, so orphan
+/// GC keeps the blocks it names and the version stays openable (#853).
+///
+/// Fails closed on a preserved record this build cannot read: overwriting it
+/// would drop the dead letters it already holds, and those are exactly what the
+/// contract promises to keep.
+pub(crate) async fn preserve_dead_letter<S: StagingStore>(
+    store: &S,
+    record: &[u8],
+) -> SeamResult<()> {
+    let mut kept = read_preserved_dead_letters(store)
+        .await?
+        .ok_or_else(|| SeamError::new("preserve_dead_letter: unreadable preserved record"))?;
+    if kept.iter().any(|held| held == record) {
+        return Ok(());
+    }
+    kept.push(record.to_vec());
+    write_preserved_dead_letters(store, &kept).await
+}
+
+/// The dead letters the store holds. `None` when the record is present but not
+/// one this build wrote — the fail-safe direction is to preserve, so a caller
+/// must freeze rather than treat it as empty.
+async fn read_preserved_dead_letters<S: StagingStore>(
+    store: &S,
+) -> SeamResult<Option<Vec<Vec<u8>>>> {
+    let Some(stored) = store.staged_bytes(PRESERVED_DEAD_LETTERS_KEY).await? else {
+        return Ok(Some(Vec::new()));
+    };
+    let Some(mut rest) = stored.strip_prefix(&[PRESERVED_FORMAT_V1]) else {
+        return Ok(None);
+    };
+    let mut kept = Vec::new();
+    while !rest.is_empty() {
+        let Some((len, tail)) = rest.split_at_checked(4) else {
+            return Ok(None);
+        };
+        let len = u32::from_be_bytes(len.try_into().expect("4 bytes")) as usize;
+        // A zero-length entry is not a record, and would loop forever.
+        let Some((record, next)) = tail.split_at_checked(len).filter(|_| len > 0) else {
+            return Ok(None);
+        };
+        kept.push(record.to_vec());
+        rest = next;
+    }
+    Ok(Some(kept))
+}
+
+/// Fails closed on a record too long to length-prefix, and on an empty one:
+/// writing either would silently unpin every dead letter behind it, which the
+/// reader hard-rejects (AGENTS.md rule 8).
+///
+/// An empty list removes the key rather than storing a tag-only record, so a
+/// device that has never dead-lettered spends no staging budget on this.
+async fn write_preserved_dead_letters<S: StagingStore>(
+    store: &S,
+    kept: &[Vec<u8>],
+) -> SeamResult<()> {
+    if kept.is_empty() {
+        return store.remove_staged_bytes(PRESERVED_DEAD_LETTERS_KEY).await;
+    }
+    let mut bytes = vec![PRESERVED_FORMAT_V1];
+    for record in kept {
+        let len = u32::try_from(record.len())
+            .ok()
+            .filter(|len| *len > 0)
+            .ok_or_else(|| SeamError::new("preserved dead letter is not length-prefixable"))?;
+        bytes.extend_from_slice(&len.to_be_bytes());
+        bytes.extend_from_slice(record);
+    }
+    store
+        .put_staged_bytes(PRESERVED_DEAD_LETTERS_KEY, &bytes)
+        .await
+}
+
+/// The staging keys write handles hold outside the durable queue.
+///
+/// A handle stages every block under its own content address before any op
+/// references it, so nothing in the queue can vouch for those blocks and orphan
+/// GC would otherwise collect a version mid-write. The handle records each key
+/// here **before** the bytes are staged, and keeps them until its op is
+/// journaled or its blocks are released.
+#[derive(Default)]
+pub(crate) struct LiveBlocks {
+    by_handle: BTreeMap<WriteHandle, Vec<Vec<u8>>>,
+    /// Bumped by every open and every recorded key. A GC sweep spans many
+    /// awaits, so it reads this to tell that the live set it read is still the
+    /// whole live set — counting only handles would miss an already-open one
+    /// staging its tail and root mid-sweep.
+    generation: u64,
+}
+
+impl LiveBlocks {
+    /// Start holding `handle`'s staging keys.
+    pub(crate) fn open(&mut self, handle: WriteHandle) {
+        self.generation += 1;
+        self.by_handle.insert(handle, Vec::new());
+    }
+
+    /// Hold one more staging key for `handle`, before its bytes are staged.
+    pub(crate) fn record(&mut self, handle: WriteHandle, key: &[u8]) {
+        self.generation += 1;
+        if let Some(keys) = self.by_handle.get_mut(&handle) {
+            keys.push(key.to_vec());
+        }
+    }
+
+    /// Stop holding `handle`'s keys, returning them so a caller that is
+    /// abandoning the write can release the blocks.
+    pub(crate) fn close(&mut self, handle: WriteHandle) -> Vec<Vec<u8>> {
+        self.by_handle.remove(&handle).unwrap_or_default()
+    }
+
+    /// Every key currently held, across all open handles.
+    pub(crate) fn keys(&self) -> Vec<Vec<u8>> {
+        self.by_handle.values().flatten().cloned().collect()
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+/// One orphan-GC pass: expand every staged root into its leaf set and remove the
+/// blocks nothing references (#828). Runs at cold start and after each drain
+/// pass.
+///
+/// Best-effort throughout — a store that cannot enumerate or remove leaves its
+/// residue for the next pass — and it also prunes [`PRESERVED_DEAD_LETTERS_KEY`] of
+/// roots whose bytes are already gone, so that record cannot grow without bound.
+pub(crate) async fn collect_orphans<S: StagingStore>(
+    store: &S,
+    live: &core::cell::RefCell<LiveBlocks>,
+) {
+    let (generation, live_keys) = {
+        let live = live.borrow();
+        (live.generation(), live.keys())
+    };
+    let Ok(orphans) = orphan_staging_keys(store, &live_keys).await else {
+        return;
+    };
+    for key in orphans {
+        // A block staged since the scan is not in the live set this pass read,
+        // and its owning handle has not journaled an op that references it —
+        // abandoning the sweep is the only safe reading of that.
+        if live.borrow().generation() != generation {
+            return;
+        }
+        let _ = store.remove_staged_bytes(&key).await;
+    }
+    prune_preserved_dead_letters(store).await;
+}
+
+/// Drop preserved dead letters whose blocks the store no longer holds.
+async fn prune_preserved_dead_letters<S: StagingStore>(store: &S) {
+    let Ok(Some(kept)) = read_preserved_dead_letters(store).await else {
+        return;
+    };
+    let mut live = Vec::with_capacity(kept.len());
+    for record in &kept {
+        let Ok(Some(root)) = record_content_root_cid(record) else {
+            continue;
+        };
+        if matches!(store.staged_bytes(&root).await, Ok(Some(_))) {
+            live.push(record.clone());
+        }
+    }
+    if live.len() != kept.len() {
+        let _ = write_preserved_dead_letters(store, &live).await;
+    }
+}
+
 /// Staging keys held by the store that nothing references — orphan residue from
 /// a superseded or abandoned upload, safe to GC (#33 D6 staged-bytes hygiene).
 ///
-/// Two things reference a block. A **queued record**'s content root rides its
+/// Three things reference a block. A **queued record**'s content root rides its
 /// clear header, and since a version stages one block per key, a root is
 /// expanded into the leaf keys its own manifest lists — so a foreign account's
-/// or a forward-version record's whole block set is retained. An **open write
-/// handle**'s leaves are staged before any op is journaled, so they are
+/// or a forward-version record's whole block set is retained. A **preserved dead
+/// letter**'s record is read the same way, which is what keeps the bytes the
+/// contract promises once that record has left the queue (#853). An **open write
+/// handle**'s blocks are staged before any op is journaled, so they are
 /// unreferenced by construction and must be passed in as `live`; collecting them
 /// mid-write would publish a version whose manifest names blocks nothing holds.
 ///
-/// Fail-closed: an unreadable queue entry, or a referenced root the store cannot
-/// produce or this build cannot decode, classes **nothing** an orphan.
+/// Fail-closed: an unreadable queue entry, an unreadable preserved record, or a
+/// referenced root the store cannot produce or this build cannot decode, classes
+/// **nothing** an orphan. A root that cannot be expanded therefore freezes the
+/// whole pass — self-clearing, because the drain classifies that same root
+/// permanent and releases the version.
 pub async fn orphan_staging_keys<S: StagingStore>(
     store: &S,
     live: &[Vec<u8>],
 ) -> SeamResult<Vec<Vec<u8>>> {
-    let queued = store.queued_ops().await?;
     // The drain's own queue bookkeeping is not upload residue.
-    let mut referenced = std::collections::HashSet::from([
+    let mut referenced = HashSet::from([
         DRAINED_OP_MARK_KEY.to_vec(),
         OP_ATTEMPTS_KEY.to_vec(),
         UPLOAD_MARK_KEY.to_vec(),
+        PRESERVED_DEAD_LETTERS_KEY.to_vec(),
     ]);
     referenced.extend(live.iter().cloned());
-    for (_, record) in &queued {
+    // Enumerated first, so an idle store answers without reading the queue at
+    // all, and a version journaled mid-pass is decided by a queue read that
+    // already covers it.
+    let candidates: Vec<Vec<u8>> = store
+        .staged_keys()
+        .await?
+        .into_iter()
+        .filter(|key| !referenced.contains(key))
+        .collect();
+    if candidates.is_empty() {
+        return Ok(candidates);
+    }
+    let Some(preserved) = read_preserved_dead_letters(store).await? else {
+        return Ok(Vec::new());
+    };
+    let queued = store.queued_ops().await?;
+    let mut roots = Vec::new();
+    for record in preserved.iter().chain(queued.iter().map(|(_, r)| r)) {
         let Ok(root) = record_content_root_cid(record) else {
             // An unreadable record may still reference staged bytes, and its
             // root is unknowable.
             return Ok(Vec::new());
         };
-        let Some(root) = root else { continue };
+        if let Some(root) = root {
+            roots.push(root);
+        }
+    }
+    for root in roots {
         // The drain removes each block as it uploads, so a root whose bytes are
         // gone is a finished upload with nothing left to expand.
         if let Some(block) = store.staged_bytes(&root).await? {
@@ -89,13 +338,10 @@ pub async fn orphan_staging_keys<S: StagingStore>(
         }
         referenced.insert(root);
     }
-    let orphans = store
-        .staged_keys()
-        .await?
+    Ok(candidates
         .into_iter()
         .filter(|key| !referenced.contains(key))
-        .collect();
-    Ok(orphans)
+        .collect())
 }
 
 #[cfg(test)]
@@ -105,6 +351,7 @@ mod tests {
     use crate::facade::NodeId;
     use crate::seams::UnixMillis;
     use crate::sync::op::{NewNode, StagedContent};
+    use crate::sync::record::{RecordClass, RecordReader};
     use crate::testkit::fakes::InMemoryStagingStore;
     use crate::testkit::{block_on, frame_version};
     use cipherbox_core::suite::aead::KEY_LEN;
@@ -393,6 +640,133 @@ mod tests {
                 orphan_staging_keys(&store, &[]).await.unwrap(),
                 vec![b"orphan".to_vec()],
                 "a retained record's blocks are referenced, not collectible"
+            );
+        });
+    }
+
+    /// The dead-letter contract keeps a terminally unrebasable op's staged
+    /// bytes, but the abandonment removes its op record — so without a second
+    /// reference source GC reclaims exactly what was promised (#853).
+    #[test]
+    fn a_preserved_dead_letters_block_set_is_never_collected() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let record = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            preserve_dead_letter(&store, &record).await.unwrap();
+            store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
+
+            assert_eq!(
+                orphan_staging_keys(&store, &[]).await.unwrap(),
+                vec![b"orphan".to_vec()],
+                "the preserved root and every leaf it lists stay referenced"
+            );
+        });
+    }
+
+    /// Preserving the whole record, not just the root, is what keeps the version
+    /// openable: the sealed content key is a KDF non-edge and the record is its
+    /// only carrier (#818).
+    #[test]
+    fn a_preserved_dead_letter_still_carries_the_key_that_opens_its_version() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (_, _, staged) = framed(b"forty bytes of content ------------------");
+            let op = content_op(1, staged);
+            preserve_dead_letter(&store, &encode_op_record(seal(1), &op).unwrap())
+                .await
+                .unwrap();
+
+            let kept = read_preserved_dead_letters(&store).await.unwrap().unwrap();
+            assert_eq!(
+                RecordReader::new(&OWNER).classify(&kept[0]),
+                RecordClass::Mine(op),
+                "the preserved bytes reopen to the intent, sealed key included"
+            );
+        });
+    }
+
+    /// The fail-safe direction here is to preserve, so a preserved record this
+    /// build cannot read must freeze the pass rather than read as empty.
+    #[test]
+    fn an_unreadable_preserved_record_makes_orphan_gc_conservative() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
+            // A wrong tag, a length prefix past the end, and a zero-length entry
+            // that would otherwise loop forever.
+            for stored in [
+                b"not a preserved record".to_vec(),
+                vec![PRESERVED_FORMAT_V1, 0, 0, 0, 9, 1, 2],
+                vec![PRESERVED_FORMAT_V1, 0, 0, 0, 0],
+            ] {
+                store
+                    .put_staged_bytes(PRESERVED_DEAD_LETTERS_KEY, &stored)
+                    .await
+                    .unwrap();
+                assert!(read_preserved_dead_letters(&store).await.unwrap().is_none());
+                assert!(orphan_staging_keys(&store, &[]).await.unwrap().is_empty());
+                assert!(
+                    preserve_dead_letter(&store, b"record").await.is_err(),
+                    "overwriting it would drop the dead letters it already holds"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn preserved_dead_letters_round_trip_and_prune_to_the_blocks_still_held() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            let root_cid = staged.root_cid.clone();
+            let held = encode_op_record(seal(1), &content_op(1, staged)).unwrap();
+            let (_, _, gone) = framed(b"another forty bytes of content ----------");
+            let collected = encode_op_record(seal(2), &content_op(2, gone)).unwrap();
+            preserve_dead_letter(&store, &held).await.unwrap();
+            preserve_dead_letter(&store, &collected).await.unwrap();
+            assert_eq!(
+                read_preserved_dead_letters(&store).await.unwrap().unwrap(),
+                vec![held.clone(), collected]
+            );
+
+            prune_preserved_dead_letters(&store).await;
+            assert_eq!(
+                read_preserved_dead_letters(&store).await.unwrap().unwrap(),
+                vec![held],
+                "a dead letter whose blocks are gone preserves nothing"
+            );
+
+            release_version_blocks(&store, &root_cid).await;
+            prune_preserved_dead_letters(&store).await;
+            assert!(
+                store
+                    .staged_bytes(PRESERVED_DEAD_LETTERS_KEY)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "an empty list spends no staging budget"
+            );
+        });
+    }
+
+    /// A release drops the whole set — every leaf the manifest lists, then the
+    /// root — so an abandoned version holds no budget.
+    #[test]
+    fn releasing_a_version_drops_every_block_of_it() {
+        let store = InMemoryStagingStore::default();
+        block_on(async {
+            let (blocks, root_block, staged) = framed(b"forty bytes of content ------------------");
+            put_blocks(&store, &blocks, &root_block, &staged).await;
+            store.put_staged_bytes(b"other", b"kept").await.unwrap();
+
+            release_version_blocks(&store, &staged.root_cid).await;
+            assert_eq!(
+                store.staged_keys().await.unwrap(),
+                vec![b"other".to_vec()],
+                "the version's whole block set goes, and nothing else"
             );
         });
     }

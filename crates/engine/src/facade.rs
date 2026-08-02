@@ -21,6 +21,7 @@ use core::pin::Pin;
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
+use cipherbox_core::content::encode_content_cid_str;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{ReadBody, seal_content_key};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
@@ -37,6 +38,7 @@ use crate::content::{
 use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
 use crate::hex::hex_lower;
+use crate::net::retire::retire;
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome, RE_PUT_INTERVAL,
@@ -49,9 +51,10 @@ use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore,
 use crate::session::SessionIdentity;
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
+use crate::sync::cancel::UploadCancels;
 use crate::sync::drain::{Drain, DrainReport, DrainScope};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
-use crate::sync::op::{NewNode, Op, Replaced, StagedContent};
+use crate::sync::op::{NewNode, Op, OpKind, Replaced, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
@@ -60,7 +63,7 @@ use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
 pub use crate::sync::drain::BlockedOp;
 pub use crate::sync::rebase::DeadLetterReason;
 use crate::sync::record::{RecordReader, RecordSeal};
-use crate::sync::staging::stage_op;
+use crate::sync::staging::{LiveBlocks, collect_orphans, release_version_blocks, stage_op};
 use crate::sync::staleness::{Connectivity, classify};
 use crate::sync::tick::{FocusWindow, focus_folders, focus_folders_due};
 
@@ -364,6 +367,20 @@ pub enum Command {
         /// The node the destination name currently holds, if any.
         replacing: Option<NodeId>,
     },
+    /// Cancel a queued upload, releasing its staged blocks and retiring
+    /// whatever of it already reached the network.
+    ///
+    /// Content-only: for a metadata op a compensating mutation is already
+    /// equivalent, while for an upload it is not — a compensating delete still
+    /// pushes the whole file through the network and never returns the staging
+    /// budget. Guaranteed until the version's last block confirms and refused
+    /// after with [`EngineError::TooLateToCancel`], so a cancel never mutates
+    /// published state (#824).
+    CancelUpload {
+        /// The queue id [`Engine::commit_write`] returned.
+        op_id: OpId,
+    },
+
     // --- focus and refresh ---
     /// Set the open folder driving the focus window; `None` when no folder
     /// is open.
@@ -448,6 +465,7 @@ impl Command {
             Command::Rename { .. } => "rename",
             Command::Relink { .. } => "relink",
             Command::Move { .. } => "move",
+            Command::CancelUpload { .. } => "cancelUpload",
             Command::SetFocus { .. } => "setFocus",
             Command::ManualRefresh => "manualRefresh",
             Command::ImportContact { .. } => "importContact",
@@ -632,6 +650,20 @@ pub enum EngineError {
     /// A write-handle call named a handle this engine does not hold — never
     /// minted, or already committed, failed, or aborted.
     UnknownWriteHandle,
+    /// [`Command::CancelUpload`] named an op that is no longer cancellable: its
+    /// version's last block confirmed and its record is publishing, or it has
+    /// already left the durable queue. Never converted into a compensating
+    /// delete, which would substitute an irreversible published mutation (#824).
+    TooLateToCancel {
+        /// The op the cancel named.
+        op_id: OpId,
+    },
+    /// [`Command::CancelUpload`] named a queued op that carries no upload. A
+    /// metadata op is undone by a compensating mutation, not a cancel.
+    NotAnUpload {
+        /// The op the cancel named.
+        op_id: OpId,
+    },
     /// The file is past the flat-DAG ceiling: its root would inline more leaf
     /// links than a readable block can hold, so no device could ever serve it
     /// back. A format limit, not a budget verdict
@@ -783,6 +815,16 @@ impl fmt::Display for EngineError {
                 "the file changed while it was being read: {declared} bytes were declared and {observed} arrived"
             ),
             EngineError::UnknownWriteHandle => f.write_str("unknown write handle"),
+            EngineError::TooLateToCancel { op_id } => write!(
+                f,
+                "upload {} is already publishing and can no longer be cancelled",
+                op_id.0
+            ),
+            EngineError::NotAnUpload { op_id } => write!(
+                f,
+                "queued op {} carries no upload to cancel; undo it with a compensating change",
+                op_id.0
+            ),
             EngineError::ContentTooLarge { check } => write!(
                 f,
                 "this file is too large to store as a single version: [{check}]"
@@ -1091,6 +1133,11 @@ pub struct Engine<T: SeamTypes> {
     /// only: a restart drops every reservation, and the blocks a dropped handle
     /// staged are unreferenced and collectible as orphans.
     writes: RefCell<LiveWrites>,
+    /// The staging keys those handles hold — orphan GC's live set, shared with
+    /// the tick loop that sweeps after each drain pass.
+    live_blocks: Rc<RefCell<LiveBlocks>>,
+    /// The upload-cancel interlock, shared with the drain the tick loop runs.
+    cancels: Rc<RefCell<UploadCancels>>,
     /// The API base URL the liveness loop's [`ApiClient`] registers renewals
     /// against. Empty until the auth/config slice supplies it; the register-first
     /// renewal is a no-op against an empty base until then.
@@ -1187,6 +1234,8 @@ impl<T: SeamTypes> Engine<T> {
                 storage_policy,
                 content_profile,
                 writes: RefCell::new(LiveWrites::default()),
+                live_blocks: Rc::new(RefCell::new(LiveBlocks::default())),
+                cancels: Rc::new(RefCell::new(UploadCancels::default())),
                 api_base_url,
                 gateway: gateway.into_gateway(),
                 events,
@@ -1330,6 +1379,11 @@ impl<T: SeamTypes> Engine<T> {
         // A successful cold start is a successful reconcile: stamp it so the
         // ladder starts Fresh rather than Reconciling.
         self.sync_status.borrow_mut().last_success = Some(self.seams.scheduler.now());
+
+        // A crash between staging a version's blocks and journaling its op
+        // leaves them referenced by nothing, so cold start is the first place
+        // that residue can be reclaimed (#828).
+        collect_orphans(&self.seams.staging_store, &self.live_blocks).await;
 
         self.spawn_liveness_loop(api.clone());
         self.spawn_resolve_tick_loop(root_name, api.clone());
@@ -1516,6 +1570,8 @@ impl<T: SeamTypes> Engine<T> {
         let dead_letters = self.dead_letters.clone();
         let blocked = self.blocked.clone();
         let orphan_heads = self.orphan_heads.clone();
+        let cancels = self.cancels.clone();
+        let live_blocks = self.live_blocks.clone();
         let transport = self.seams.record_transport.clone();
         let snapshot_cache = self.seams.snapshot_cache.clone();
         let floors = self.seams.floor_store.clone();
@@ -1637,6 +1693,7 @@ impl<T: SeamTypes> Engine<T> {
                         held: &held,
                         blocked: &blocked,
                         orphan_heads: &orphan_heads,
+                        cancels: &cancels,
                         events: &events,
                     }
                     .run(&DrainScope {
@@ -1650,6 +1707,9 @@ impl<T: SeamTypes> Engine<T> {
                     .await;
                     surface_drain_report(&events, &dead_letters, &report);
                 }
+                // After the drain, so the pass's own removals are swept in the
+                // same tick rather than a cadence later (#828).
+                collect_orphans(&staging, &live_blocks).await;
                 // `Adopted`/`Current` are the reconciled outcomes: both prove the
                 // record plane answered with gate-passing state, so both stamp
                 // the ladder's `last_success` (#33 D4).
@@ -1767,6 +1827,7 @@ impl<T: SeamTypes> Engine<T> {
                 );
                 self.stage_and_notify(&op).await
             }
+            Command::CancelUpload { op_id } => self.cancel_upload(op_id).await.map(|()| None),
             Command::SetFocus { node } => {
                 self.focus.borrow_mut().open_folder = node;
                 // Navigation is the tick model's second trigger source (#33 D2):
@@ -1889,6 +1950,7 @@ impl<T: SeamTypes> Engine<T> {
 
         writes.next += 1;
         let handle = WriteHandle(writes.next);
+        self.live_blocks.borrow_mut().open(handle);
         writes.open.insert(
             handle,
             LiveWrite {
@@ -1951,11 +2013,8 @@ impl<T: SeamTypes> Engine<T> {
                 leaf
             };
             if let Some(leaf) = leaf {
-                self.seams
-                    .staging_store
-                    .put_staged_bytes(&leaf.cid, &leaf.sealed)
-                    .await
-                    .map_err(EngineError::from_seam)?;
+                self.stage_handle_block(handle, &leaf.cid, &leaf.sealed)
+                    .await?;
             }
             if rest.is_empty() {
                 return Ok(());
@@ -1976,14 +2035,16 @@ impl<T: SeamTypes> Engine<T> {
         // Taken out of the ledger up front: from here the handle is spent
         // whatever happens, and its reservation must not outlive it.
         let write = self.take_write(handle)?;
-        let mut staged = write.writer.staged_leaf_cids().to_vec();
-        match self.commit_write_inner(write, &mut staged).await {
+        match self.commit_write_inner(handle, write).await {
             Ok(op_id) => {
+                // The journaled op now references the blocks, so GC no longer
+                // needs the handle to vouch for them.
+                self.live_blocks.borrow_mut().close(handle);
                 let _ = self.events.unbounded_send(Event::SnapshotUpdated);
                 Ok(op_id)
             }
             Err(error) => {
-                self.release_blocks(&staged).await;
+                self.release_handle_blocks(handle).await;
                 Err(error)
             }
         }
@@ -1992,10 +2053,10 @@ impl<T: SeamTypes> Engine<T> {
     /// Abandon a write handle: release its reservation and the blocks it staged.
     /// Idempotent — an unknown handle is already gone.
     pub async fn abort_write(&mut self, handle: WriteHandle) {
-        let Ok(write) = self.take_write(handle) else {
+        if self.take_write(handle).is_err() {
             return;
-        };
-        self.release_blocks(write.writer.staged_leaf_cids()).await;
+        }
+        self.release_handle_blocks(handle).await;
     }
 
     /// Remove a handle from the ledger, releasing its budget reservation.
@@ -2009,20 +2070,35 @@ impl<T: SeamTypes> Engine<T> {
         Ok(write)
     }
 
-    /// Drop staged blocks no op will ever reference. Best-effort: a failed
-    /// removal is orphan residue a later GC pass collects.
-    async fn release_blocks(&self, keys: &[Vec<u8>]) {
+    /// Stage one of a handle's blocks, recording its key as live **before** the
+    /// bytes land so an orphan-GC pass in the same turn cannot collect it.
+    async fn stage_handle_block(
+        &self,
+        handle: WriteHandle,
+        cid: &[u8],
+        sealed: &[u8],
+    ) -> Result<(), EngineError> {
+        self.live_blocks.borrow_mut().record(handle, cid);
+        self.seams
+            .staging_store
+            .put_staged_bytes(cid, sealed)
+            .await
+            .map_err(EngineError::from_seam)
+    }
+
+    /// Drop every block a handle staged — no op will ever reference them.
+    /// Best-effort: a failed removal is orphan residue a later GC pass collects.
+    async fn release_handle_blocks(&self, handle: WriteHandle) {
+        let keys = self.live_blocks.borrow_mut().close(handle);
         for key in keys {
-            let _ = self.seams.staging_store.remove_staged_bytes(key).await;
+            let _ = self.seams.staging_store.remove_staged_bytes(&key).await;
         }
     }
 
-    /// `staged` accumulates every block this commit puts into the store, so a
-    /// failure after the tail or the root landed still releases them.
     async fn commit_write_inner(
         &self,
+        handle: WriteHandle,
         write: LiveWrite,
-        staged: &mut Vec<Vec<u8>>,
     ) -> Result<OpId, EngineError> {
         let LiveWrite {
             node,
@@ -2043,20 +2119,12 @@ impl<T: SeamTypes> Engine<T> {
             .map_err(seal_error)?;
 
         if let Some(tail) = &finished.tail {
-            staged.push(tail.cid.clone());
-            self.seams
-                .staging_store
-                .put_staged_bytes(&tail.cid, &tail.sealed)
-                .await
-                .map_err(EngineError::from_seam)?;
+            self.stage_handle_block(handle, &tail.cid, &tail.sealed)
+                .await?;
         }
         let root_cid = finished.content.content_cid().to_vec();
-        staged.push(root_cid.clone());
-        self.seams
-            .staging_store
-            .put_staged_bytes(&root_cid, &finished.root_block)
-            .await
-            .map_err(EngineError::from_seam)?;
+        self.stage_handle_block(handle, &root_cid, &finished.root_block)
+            .await?;
 
         // The `{scope, epoch}` the key blob's AAD binds — see `seal_content_key`
         // for why they are values and not key inputs.
@@ -2120,6 +2188,103 @@ impl<T: SeamTypes> Engine<T> {
         let api = self.api.as_ref().ok_or(EngineError::NotStarted)?;
         let nonce = api.siwe_challenge().await.map_err(EngineError::from_api)?;
         Ok(nonce.nonce)
+    }
+
+    /// Cancel one queued upload ([`Command::CancelUpload`]).
+    ///
+    /// Staged bytes are **released**, not preserved: the rule that splits the
+    /// two is whether the engine gave up on the op or the user did (#824).
+    async fn cancel_upload(&self, op_id: OpId) -> Result<(), EngineError> {
+        let queued = self.scan_queue().await?.mine;
+        let Some((_, op)) = queued.iter().find(|(id, _)| *id == op_id) else {
+            return Err(EngineError::TooLateToCancel { op_id });
+        };
+        let Some(root_cid) = op.content_root_cid().map(<[u8]>::to_vec) else {
+            return Err(EngineError::NotAnUpload { op_id });
+        };
+        // Claimed before anything is undone, and refused once the drain holds
+        // the op for publish — cancel never mutates published state.
+        if !self.cancels.borrow_mut().request(op_id) {
+            return Err(EngineError::TooLateToCancel { op_id });
+        }
+        let node = op.target;
+        // A cancelled create takes every later queued op on the node it will
+        // never bring into being; a cancelled version takes nothing, since
+        // versions are independent full writes.
+        let cascade: Vec<(OpId, Op)> = match op.kind {
+            OpKind::Create { .. } => queued
+                .iter()
+                .filter(|(id, later)| *id > op_id && later.target == node)
+                .cloned()
+                .collect(),
+            _ => Vec::new(),
+        };
+
+        if let Err(error) = self.discard_upload(op_id, node, &root_cid).await {
+            self.cancels.borrow_mut().withdraw(op_id);
+            return Err(error);
+        }
+        // The primary op is already gone, so the overlay is stale either way:
+        // the host is told even when a cascade step fails part way.
+        let mut cascaded = Ok(());
+        for (later_id, later) in cascade {
+            cascaded = match later.content_root_cid() {
+                Some(root_cid) => self.discard_upload(later_id, later.target, root_cid).await,
+                None => self.dequeue_op(later_id).await,
+            };
+            if cascaded.is_err() {
+                break;
+            }
+        }
+        let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+        cascaded
+    }
+
+    /// Undo one queued upload: drop the op, retire what of it reached the
+    /// network ([`UploadCancels`]), release its blocks, and tell the host.
+    ///
+    /// The dequeue goes first and is the only step allowed to fail the cancel:
+    /// an op that is still queued is still publishable, and unpinning its blocks
+    /// before it has left would publish a version whose leading leaves are gone.
+    /// The retire is then best-effort — a refused batch leaves pin rows charged,
+    /// which is a leak, where refusing the cancel over it would break the
+    /// guarantee the user was given.
+    async fn discard_upload(
+        &self,
+        op_id: OpId,
+        node: NodeId,
+        root_cid: &[u8],
+    ) -> Result<(), EngineError> {
+        self.dequeue_op(op_id).await?;
+        let uploaded: Vec<String> = self
+            .cancels
+            .borrow()
+            .uploaded_by(op_id)
+            .iter()
+            .map(|cid| encode_content_cid_str(cid))
+            .collect();
+        if let Some(api) = &self.api
+            && !uploaded.is_empty()
+        {
+            let _ = retire(api, &uploaded).await;
+        }
+        release_version_blocks(&self.seams.staging_store, root_cid).await;
+        let _ = self.events.unbounded_send(Event::OpProgress {
+            op_id: Some(op_id),
+            node,
+            phase: OpPhase::UploadCancelled,
+            progress: None,
+            error: None,
+        });
+        Ok(())
+    }
+
+    async fn dequeue_op(&self, op_id: OpId) -> Result<(), EngineError> {
+        self.seams
+            .staging_store
+            .remove_op(op_id)
+            .await
+            .map_err(EngineError::from_seam)
     }
 
     /// A rendered read of the current state — the gate-passing base snapshot ⊕

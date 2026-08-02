@@ -374,11 +374,41 @@ fn secret() -> LoginSecret {
     LoginSecret::new(SECRET.to_vec())
 }
 
-/// Poll every spawned loop once with a no-op waker (the loops never yield
-/// inside a pass over the synchronous fakes).
+/// A waker that only records that it fired — enough to tell a cooperative
+/// yield (which wakes itself) from a parked sleep (which does not).
+struct WokenFlag(Mutex<bool>);
+
+impl std::task::Wake for WokenFlag {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        *self.0.lock().expect("lock") = true;
+    }
+}
+
+/// Poll every spawned loop until each is parked on a timer rather than on the
+/// drain's block-boundary yield, and report the last round's verdicts.
 fn poll_each(tasks: &mut [BoxedTask]) -> Vec<Poll<()>> {
+    let flag = Arc::new(WokenFlag(Mutex::new(false)));
+    let waker = Waker::from(flag.clone());
+    let mut cx = Context::from_waker(&waker);
+    loop {
+        *flag.0.lock().expect("lock") = false;
+        let polls: Vec<_> = tasks.iter_mut().map(|t| t.as_mut().poll(&mut cx)).collect();
+        if !*flag.0.lock().expect("lock") {
+            return polls;
+        }
+    }
+}
+
+/// Poll every spawned loop exactly once, leaving a yielded drain mid-pass.
+fn poll_once(tasks: &mut [BoxedTask]) {
     let mut cx = Context::from_waker(Waker::noop());
-    tasks.iter_mut().map(|t| t.as_mut().poll(&mut cx)).collect()
+    for task in tasks.iter_mut() {
+        let _ = task.as_mut().poll(&mut cx);
+    }
 }
 
 /// Run one resolve-tick interval, which is also one drain pass.
@@ -3526,6 +3556,735 @@ fn a_publish_that_reached_the_transport_never_retires_its_head() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Cancel, and the staged-byte lifetime around it (#824, #828, #853).
+// ---------------------------------------------------------------------------
+
+/// The version an op has staged: its root first, then every leaf in file order.
+fn queued_version(device: &FakeDevice, op_id: OpId) -> Vec<Vec<u8>> {
+    block_on(async {
+        let queued = device.staging_store.queued_ops().await.unwrap();
+        let record = &queued
+            .iter()
+            .find(|(id, _)| *id == op_id)
+            .expect("the op is queued")
+            .1;
+        let root_cid = record_content_root_cid(record).unwrap().unwrap();
+        let root_block = device
+            .staging_store
+            .staged_bytes(&root_cid)
+            .await
+            .unwrap()
+            .unwrap();
+        core::iter::once(root_cid)
+            .chain(decode_root(&root_block).unwrap().leaf_cids)
+            .collect()
+    })
+}
+
+/// The focus window's folder refresh runs before the drain each pass (#945) and
+/// merges a folder's *published* children into the base. A cancelled upload was
+/// never published, so the refresh cannot carry it back into the folder the user
+/// is looking at.
+#[test]
+fn a_focus_refresh_never_renders_back_an_upload_the_user_cancelled() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    // Authored on one device and resolved on another, so the focusing device
+    // knows the folder's own name and its refresh really descends into it.
+    let author = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks_a) = boot(&world, &blocks, &author, 42);
+    block_on(engine_a.command(Command::Create {
+        parent: ROOT,
+        name: "photos".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap();
+    tick(&world, &engine_a, &mut tasks_a);
+    let photos = child_id(&engine_a, ROOT, "photos");
+
+    let alice = world.device(b"alice-second-device");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 7);
+    block_on(engine.command(Command::SetFocus { node: Some(photos) })).unwrap();
+
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: photos,
+            name: "holiday.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    assert_eq!(
+        listed_names(&engine, photos),
+        vec!["holiday.bin".to_owned()]
+    );
+    let version = queued_version(&alice, op_id);
+
+    world.scheduler.advance(engine.profile().poll_cadence);
+    for _ in 0..4 {
+        poll_once(&mut tasks);
+    }
+    assert!(uploads(&alice) > 0, "the cancel lands mid-transfer");
+    block_on(engine.command(Command::CancelUpload { op_id })).unwrap();
+    // Finish the pass the cancel interrupted: drain, then sweep.
+    tick(&world, &engine, &mut tasks);
+
+    // Another writer's child, discoverable only by the focus refresh — without
+    // it this test could pass with the refresh never running at all.
+    concurrent_add(
+        &world.record_store,
+        &blocks,
+        photos,
+        file_ref([0xC1; 16], "from-elsewhere.bin"),
+    );
+    // The next pass refreshes the focused folder before its drain, which is the
+    // ordering the overlap turns on (#945).
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        listed_names(&engine, photos),
+        vec!["from-elsewhere.bin".to_owned()],
+        "the refresh merged what published and left the cancelled upload gone"
+    );
+    assert!(
+        published_names(&world.record_store, &blocks, photos)
+            .iter()
+            .all(|name| name != "holiday.bin"),
+        "the cancelled version never reaches the record plane"
+    );
+    assert_no_blocks_staged(&alice, &version);
+}
+
+/// The acceptance case: a cancel that lands while the drain is mid-upload stops
+/// it at the next block boundary, releases every block of the version, retires
+/// what already reached the network, and publishes nothing.
+#[test]
+fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits");
+    let version = queued_version(&alice, op_id);
+    let file = block_on(engine.view()).unwrap().children(ROOT)[0].id;
+
+    // Each poll resumes the drain at its next block boundary, so a handful of
+    // them leave it parked with part of the version already on the network.
+    world.scheduler.advance(engine.profile().poll_cadence);
+    for _ in 0..4 {
+        poll_once(&mut tasks);
+    }
+    assert!(
+        uploads(&alice) > 0,
+        "the cancel must land mid-transfer, not before it started"
+    );
+
+    block_on(engine.command(Command::CancelUpload { op_id })).expect("the upload is cancellable");
+    poll_each(&mut tasks);
+
+    assert_no_blocks_staged(&alice, &version);
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .iter()
+            .all(|key| key.as_slice() == DRAINED_OP_MARK_KEY || key.as_slice() == UPLOAD_MARK_KEY),
+        "the staging budget holds nothing but queue bookkeeping"
+    );
+    assert!(
+        block_on(alice.staging_store.queued_ops())
+            .unwrap()
+            .is_empty(),
+        "the cancelled op left the durable queue"
+    );
+    assert!(
+        block_on(engine.view()).unwrap().children(ROOT).is_empty(),
+        "nothing published"
+    );
+    // Every block that reached the network is a charged pin row with no
+    // reachable record behind it, so the cancel must retire exactly those and
+    // nothing the version never sent (#916).
+    let charged: Vec<String> = version
+        .iter()
+        .map(|cid| encode_content_cid_str(cid))
+        .filter(|cid| blocks.get(cid).is_some())
+        .collect();
+    assert!(
+        (1..version.len()).contains(&charged.len()),
+        "the cancel landed mid-set: part of the version is charged, not all of it"
+    );
+    // Both halves of the retire fire — the facade's, against what it could see
+    // when the cancel landed, and the drain's, against the complete confirmed
+    // set once it stops. Their union is the invariant; the overlap is an
+    // idempotent replay, which is why this compares sets and not batches.
+    let batches = retire_batches(&alice);
+    assert_eq!(
+        batches.len(),
+        2,
+        "a block confirming inside the facade's window is only covered by the drain's batch"
+    );
+    let mut retired = retire_targets(&alice);
+    retired.sort();
+    retired.dedup();
+    let mut expected = charged.clone();
+    expected.sort();
+    assert_eq!(retired, expected);
+    assert!(
+        events_so_far(&mut events).contains(&Event::OpProgress {
+            op_id: Some(op_id),
+            node: file,
+            phase: OpPhase::UploadCancelled,
+            progress: None,
+            error: None,
+        }),
+        "the host is told the upload was cancelled, keyed on its own op"
+    );
+}
+
+/// A cancel releases leaves the durable mark still covers, and leaves that mark
+/// behind naming a root nothing will ever upload again. That residue must not
+/// reach the next version: a mark read as this version's progress would skip
+/// leaves it never sent and publish a manifest naming blocks nobody holds
+/// (#924's mark, #824's release).
+#[test]
+fn a_cancelled_versions_upload_mark_never_counts_towards_the_next_one() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let cancelled = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "abandoned.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let root_cid = queued_version(&alice, cancelled)[0].clone();
+
+    world.scheduler.advance(engine.profile().poll_cadence);
+    for _ in 0..4 {
+        poll_once(&mut tasks);
+    }
+    assert!(
+        uploads(&alice) > 0,
+        "only a partial upload leaves a mark, so the cancel must land mid-transfer"
+    );
+    block_on(engine.command(Command::CancelUpload { op_id: cancelled })).unwrap();
+    poll_each(&mut tasks);
+
+    let mark = block_on(alice.staging_store.staged_bytes(UPLOAD_MARK_KEY))
+        .unwrap()
+        .expect("the cancelled pass left its progress mark behind");
+    assert!(
+        mark.starts_with(&root_cid),
+        "the residue names the cancelled root, so the next version must not read it as progress"
+    );
+
+    let plaintext: Vec<u8> = (0..200u8).rev().collect();
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "kept.bin".into(),
+        },
+        &plaintext,
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    let bob = world.device(b"alice-second-device");
+    serve_http(&bob, &blocks, 400);
+    let (mut engine_b, _events_b) = engine_on(&bob, 7);
+    block_on(engine_b.start(secret())).unwrap();
+    let kept = child_id(&engine_b, ROOT, "kept.bin");
+    assert_eq!(
+        block_on(engine_b.read_content(kept)).expect("every leaf of the next version was sent"),
+        plaintext
+    );
+}
+
+/// Cancel is guaranteed only until publish entry. Once the version's record has
+/// published, the op has left the queue and a cancel is refused rather than
+/// converted into a compensating delete of published state.
+#[test]
+fn a_cancel_after_the_version_published_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        b"published bytes",
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        block_on(engine.command(Command::CancelUpload { op_id })),
+        Err(EngineError::TooLateToCancel { op_id })
+    );
+    assert_eq!(
+        block_on(engine.view()).unwrap().children(ROOT).len(),
+        1,
+        "the published file is untouched"
+    );
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "a refused cancel unpins nothing"
+    );
+}
+
+/// Cancel is content-only: a metadata op is undone by a compensating mutation,
+/// which costs neither the network nor the staging budget.
+#[test]
+fn a_cancel_of_a_metadata_op_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "folder".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap()
+    .expect("the create queues");
+
+    assert_eq!(
+        block_on(engine.command(Command::CancelUpload { op_id })),
+        Err(EngineError::NotAnUpload { op_id })
+    );
+    assert_eq!(
+        block_on(alice.staging_store.queued_ops()).unwrap().len(),
+        1,
+        "the refused cancel left the op queued"
+    );
+}
+
+/// A cancelled create takes every later queued op on the node it will never
+/// bring into being; a cancelled version takes nothing, since versions are
+/// independent full writes.
+#[test]
+fn a_cancelled_create_cascades_onto_its_node_and_a_cancelled_version_does_not() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    // A landed file, so a later version of it has something to update.
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "kept.bin".into(),
+        },
+        b"kept bytes",
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    let kept = child_id(&engine, ROOT, "kept.bin");
+
+    let create = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "doomed.bin".into(),
+        },
+        b"doomed bytes",
+    )
+    .unwrap();
+    let doomed = child_id(&engine, ROOT, "doomed.bin");
+    block_on(engine.command(Command::Rename {
+        node: doomed,
+        new_name: "renamed.bin".into(),
+    }))
+    .unwrap();
+    let version = write_file(
+        &mut engine,
+        WriteTarget::Version { node: kept },
+        b"a new version",
+    )
+    .unwrap();
+
+    block_on(engine.command(Command::CancelUpload { op_id: create })).expect("the create cancels");
+    let queued: Vec<OpId> = block_on(alice.staging_store.queued_ops())
+        .unwrap()
+        .into_iter()
+        .map(|(op_id, _)| op_id)
+        .collect();
+    assert_eq!(
+        queued,
+        vec![version],
+        "the rename of the cancelled node went with it; the unrelated version stayed"
+    );
+
+    block_on(engine.command(Command::CancelUpload { op_id: version }))
+        .expect("the version cancels");
+    assert!(
+        block_on(alice.staging_store.queued_ops())
+            .unwrap()
+            .is_empty()
+    );
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["kept.bin".to_owned()],
+        "neither cancelled op published"
+    );
+}
+
+/// A cancel that cannot carry out its removals must give the claim back and
+/// unpin nothing: an op left both queued and claimed would halt every pass
+/// behind it forever, and one left queued with its leading leaves retired would
+/// publish a version whose blocks are gone.
+#[test]
+fn a_cancel_that_cannot_dequeue_retires_nothing_and_leaves_the_op_publishable() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &plaintext,
+    )
+    .unwrap();
+
+    // Part of the version is already on the network when the cancel arrives, so
+    // there is a retire batch to get wrong.
+    world.scheduler.advance(engine.profile().poll_cadence);
+    for _ in 0..4 {
+        poll_once(&mut tasks);
+    }
+    assert!(uploads(&alice) > 0);
+
+    alice.staging_store.fail_remove_op();
+    assert!(
+        block_on(engine.command(Command::CancelUpload { op_id })).is_err(),
+        "the cancel could not remove the op, so it did not happen"
+    );
+    poll_each(&mut tasks);
+
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "an op that is still publishable keeps every pin its upload charged"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["photo.bin".to_owned()],
+        "the op the cancel could not take is published, not wedged"
+    );
+    let file = child_id(&engine, ROOT, "photo.bin");
+    assert_eq!(
+        block_on(engine.read_content(file)).expect("the published version reads back"),
+        plaintext
+    );
+}
+
+/// The facade publishes the cancel claim before its removal commits, so the pass
+/// that stops on that claim cannot assume the op has left the queue. Its retire
+/// is gated on a removal of its own: proving the op is gone is what makes
+/// unpinning its leaves safe, and a removal it cannot make means it retires
+/// nothing rather than stranding a still-publishable version (#824).
+#[test]
+fn the_drains_cancel_retire_is_gated_on_the_op_leaving_the_durable_queue() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .unwrap();
+
+    world.scheduler.advance(engine.profile().poll_cadence);
+    for _ in 0..4 {
+        poll_once(&mut tasks);
+    }
+    assert!(
+        uploads(&alice) > 0,
+        "the cancel must land mid-transfer, not before it started"
+    );
+    block_on(engine.command(Command::CancelUpload { op_id })).expect("the upload is cancellable");
+    let facade_batches = retire_batches(&alice).len();
+
+    // The drain now stops on the claim with no removal available to it, which
+    // is indistinguishable from the op never having left the queue.
+    alice.staging_store.fail_remove_op();
+    poll_each(&mut tasks);
+
+    assert_eq!(
+        retire_batches(&alice).len(),
+        facade_batches,
+        "a pass that cannot prove the op left the queue unpins nothing"
+    );
+}
+
+/// The op-record header is clear and unauthenticated, and the owner tag on it is
+/// a public key any co-tenant of the origin-shared store can copy. A record that
+/// bears our tag but never opens is dead-lettered and dropped at cold start — it
+/// must not also authorize deleting the blocks its header names, or planting one
+/// would destroy a queued version whose key is intact.
+#[test]
+fn an_undecodable_record_never_authorizes_deleting_the_blocks_its_header_names() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, tasks) = boot(&world, &blocks, &alice, 42);
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &plaintext,
+    )
+    .unwrap();
+    let version = queued_version(&alice, op_id);
+
+    // The forgery: the real op's record with its sealed body corrupted, so the
+    // header — our owner tag, and the real op's content root — still reads.
+    let mut forged = block_on(alice.staging_store.queued_ops()).unwrap()[0]
+        .1
+        .clone();
+    let last = forged.len() - 1;
+    forged[last] ^= 1;
+    block_on(alice.staging_store.enqueue_op(&forged)).unwrap();
+    drop(engine);
+    drop(tasks);
+
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    assert!(
+        events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::DeadLetter {
+                reason: DeadLetterReason::Undecodable,
+                ..
+            }
+        )),
+        "the forgery must reach the path under test, not be retained short of it"
+    );
+    let staged = block_on(alice.staging_store.staged_keys()).unwrap();
+    assert!(
+        version.iter().all(|cid| staged.contains(cid)),
+        "the forged record was dropped; the version it named was not"
+    );
+
+    tick(&world, &engine, &mut tasks);
+    let file = child_id(&engine, ROOT, "photo.bin");
+    assert_eq!(
+        block_on(engine.read_content(file)).expect("the real op still publishes"),
+        plaintext
+    );
+}
+
+/// Orphan GC runs after each drain pass and reclaims blocks nothing references —
+/// the residue of a crash between staging a version and journaling its op.
+#[test]
+fn orphan_residue_is_collected_and_a_live_handles_blocks_are_not() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (leaves, root_block, root_cid) = frame_version(&(0..40u8).collect::<Vec<_>>());
+    stage_blocks(&alice, &leaves, &root_block, &root_cid);
+
+    // A write handle mid-stream: its blocks are staged before any op references
+    // them, so only the live set keeps GC off them.
+    let handle = block_on(engine.begin_write(
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "in-flight.bin".into(),
+        },
+        200,
+    ))
+    .unwrap();
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    block_on(engine.push_chunk(handle, &plaintext[..64])).unwrap();
+
+    tick(&world, &engine, &mut tasks);
+
+    let staged = block_on(alice.staging_store.staged_keys()).unwrap();
+    for orphan in leaves.iter().map(|leaf| leaf.cid.clone()).chain([root_cid]) {
+        assert!(
+            !staged.contains(&orphan),
+            "unreferenced residue is collected"
+        );
+    }
+
+    // The handle finishing and publishing is the only assertion that proves the
+    // sweep left its blocks alone: a collected leaf fails the drain, not this.
+    block_on(engine.push_chunk(handle, &plaintext[64..])).unwrap();
+    block_on(engine.commit_write(handle)).expect("the handle still holds every block it staged");
+    tick(&world, &engine, &mut tasks);
+    let file = child_id(&engine, ROOT, "in-flight.bin");
+    assert_eq!(
+        block_on(engine.read_content(file)).expect("the published version reads back"),
+        plaintext
+    );
+}
+
+/// A release that reports done without dropping the bytes strands a staged leaf
+/// (#924's residue shape). On the cancel path nothing re-runs that release — the
+/// op is gone from the queue — so orphan GC is the only thing that reclaims it,
+/// and it does so precisely because nothing references it any more.
+#[test]
+fn a_leaf_a_lost_release_stranded_on_a_cancel_is_reclaimed_by_the_next_sweep() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .unwrap();
+    // The last leaf: far past where the cancel interrupts the upload, so the
+    // drain never removes it and the facade's release is its only cleaner.
+    let version = queued_version(&alice, op_id);
+    let stranded = version.last().expect("a multi-leaf version").clone();
+
+    world.scheduler.advance(engine.profile().poll_cadence);
+    for _ in 0..4 {
+        poll_once(&mut tasks);
+    }
+    assert!(
+        uploads(&alice) > 0,
+        "the cancel must land mid-transfer, not before it started"
+    );
+    alice.staging_store.drop_staged_removal_after(&stranded, 0);
+    block_on(engine.command(Command::CancelUpload { op_id })).unwrap();
+    assert!(
+        block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&stranded),
+        "the fixture must actually strand a leaf, or the sweep has nothing to prove"
+    );
+
+    // The pass that notices the cancel sweeps behind itself, so the residue does
+    // not wait a whole cadence.
+    poll_each(&mut tasks);
+    assert!(
+        !block_on(alice.staging_store.staged_keys())
+            .unwrap()
+            .contains(&stranded),
+        "nothing references it once its op is gone, so the sweep takes it"
+    );
+}
+
+/// A terminally unrebasable op keeps its staged bytes — and keeping them is only
+/// real if they survive the cold start that drops the op record, and the GC pass
+/// that runs there (#853).
+#[test]
+fn a_dead_lettered_ops_blocks_survive_a_cold_start_and_a_gc_pass() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    // A version of a node no gate-passing state holds: terminally unrebasable.
+    let (leaves, root_block, root_cid) = frame_version(&(0..40u8).collect::<Vec<_>>());
+    stage_blocks(&alice, &leaves, &root_block, &root_cid);
+    stage(
+        &alice,
+        &Op::update_content(
+            NodeId([0xAB; 16]),
+            StagedContent {
+                root_cid: root_cid.clone(),
+                plaintext_size: 40,
+                sealed_content_key: b"never opened".to_vec(),
+                epoch: EPOCH,
+            },
+            1,
+            UnixMillis(4_242),
+        ),
+        Some(&root_block),
+    );
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::DeadLetter {
+                reason: DeadLetterReason::TargetGone,
+                ..
+            }
+        )),
+        "the op is terminally unrebasable, not unrecoverable content"
+    );
+    let version: Vec<Vec<u8>> = leaves
+        .iter()
+        .map(|leaf| leaf.cid.clone())
+        .chain([root_cid])
+        .collect();
+    let after_drain = block_on(alice.staging_store.staged_keys()).unwrap();
+    assert!(
+        version.iter().all(|cid| after_drain.contains(cid)),
+        "a dead letter preserves its staged bytes"
+    );
+    drop(engine);
+
+    let (engine, _events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    tick(&world, &engine, &mut tasks);
+    let after_restart = block_on(alice.staging_store.staged_keys()).unwrap();
+    assert!(
+        version.iter().all(|cid| after_restart.contains(cid)),
+        "and keeps them across the cold start that removed the op record"
+    );
+}
+
 /// The upload a refusal lands on to halt a 200-byte version mid-set: past the
 /// first leaves, well short of the 13 the CI framing produces.
 const MID_SET_UPLOAD: usize = 8;
@@ -3723,12 +4482,17 @@ fn uploaded_cids(device: &FakeDevice) -> Vec<String> {
 
 /// Every target this device has asked the registry to retire, in order.
 fn retire_targets(device: &FakeDevice) -> Vec<String> {
+    retire_batches(device).into_iter().flatten().collect()
+}
+
+/// The retire calls this device made, one entry per batch.
+fn retire_batches(device: &FakeDevice) -> Vec<Vec<String>> {
     device
         .http
         .requests()
         .iter()
         .filter(|request| request.url.ends_with("/registry/retire"))
-        .flat_map(|request| {
+        .map(|request| {
             let body = request
                 .body
                 .as_deref()

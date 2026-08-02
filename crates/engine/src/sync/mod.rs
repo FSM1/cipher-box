@@ -17,6 +17,7 @@
 //! primitives themselves land with the rotation slice.
 
 pub mod boot;
+pub(crate) mod cancel;
 pub(crate) mod drain;
 pub mod model;
 pub mod op;

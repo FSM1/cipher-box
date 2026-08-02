@@ -99,12 +99,6 @@ impl ContentWriter {
         self.observed
     }
 
-    /// The leaves framed so far, in file order — the staging keys an abandoned
-    /// write must release.
-    pub fn staged_leaf_cids(&self) -> &[Vec<u8>] {
-        &self.leaf_cids
-    }
-
     /// Seal the tail and assemble the root. An empty version frames to exactly
     /// one empty leaf, so every version has at least one addressable block.
     pub fn finish(mut self, entropy: &mut impl Entropy) -> Result<FinishedContent, SealError> {
