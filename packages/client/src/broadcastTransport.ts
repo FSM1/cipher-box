@@ -15,9 +15,10 @@
  * context.
  *
  * Reads take a different wire: the channel only rendezvouses a private
- * `MessagePort` the leader opens to this tab, and every snapshot and plaintext
- * window comes back over that port, so no other same-origin context is a
- * receiver.
+ * `MessagePort` this tab dials to the leader, and every snapshot and plaintext
+ * window comes back over that port — so a same-origin context that merely opened
+ * the channel is no longer a receiver. The rendezvous is as authenticated as the
+ * `cb:leader` beacon and no more: same origin remains the trust boundary.
  */
 
 import {
@@ -63,9 +64,11 @@ export class BroadcastTransport extends CorrelatedTransport {
   private portPromise: Promise<MessagePortLike> | null = null;
   private releasePort: (() => void) | null = null;
   private portGeneration = 0;
-  // The parked brokerage, so teardown and a leadership swap settle it at once
-  // instead of leaving a read to wait out the timeout.
+  // The parked brokerage step. `abortBrokerage` lets teardown and a leadership
+  // swap settle it at once instead of leaving a read to wait out the timeout.
   private abortBrokerage: ((error: Error) => void) | null = null;
+  private settleHost: ((address: string) => void) | null = null;
+  private settleBrokerage: (() => void) | null = null;
   private readonly portTimeoutMs: number;
 
   private readonly onMessage = (event: MessageEvent): void => this.receive(event.data);
@@ -153,74 +156,49 @@ export class BroadcastTransport extends CorrelatedTransport {
   }
 
   /**
-   * Publishes this tab's courier address and takes the port the leader opens to
-   * it. Any same-origin context can dial that address, so a port counts only
-   * once it opens with the active leadership's token.
+   * Dials the address this leadership published and takes the port back. The
+   * follower opens the channel itself, so nothing but its own dial can hand it a
+   * port, and the leader's greeting must still carry the active leader's token.
    */
-  private brokerPort(): Promise<MessagePortLike> {
+  private async brokerPort(): Promise<MessagePortLike> {
+    await this.leaderReady;
     // Fenced from the leadership this brokerage started under, not from the one
     // in force when a read first asked for a port.
-    let generation = 0;
-    return this.leaderReady
-      .then(() => {
-        generation = this.portGeneration;
-        return this.courier.address();
-      })
-      .then(
-        (address) =>
-          new Promise<MessagePortLike>((resolve, reject) => {
-            const offers = new Set<MessagePortLike>();
-            const finish = (): void => {
-              clearTimeout(timer);
-              stop();
-              this.abortBrokerage = null;
-            };
-            const take = (port: MessagePortLike, release: () => void): void => {
-              finish();
-              offers.delete(port);
-              for (const other of offers) other.close();
-              if (generation !== this.portGeneration) {
-                release();
-                reject(retryError());
-                return;
-              }
-              this.releasePort = release;
-              resolve(port);
-            };
-            const abort = (error: Error): void => {
-              finish();
-              for (const offer of offers) offer.close();
-              reject(error);
-            };
-            const timer = setTimeout(
-              () => abort(new Error('the leader opened no read port')),
-              this.portTimeoutMs
-            );
-            const stop = this.courier.onPort((port) => {
-              offers.add(port);
-              this.awaitReady(port, (release) => take(port, release));
-            });
-            this.abortBrokerage = abort;
-            this.channel.postMessage({
-              type: 'cb:portWanted',
-              clientId: this.clientId,
-              address,
-            });
-          })
-      );
+    const generation = this.portGeneration;
+    if (this.closed) throw retryError();
+    const port = await this.courier.connect(await this.awaitHost());
+    const release = this.bindPort(port);
+    try {
+      port.postMessage({ type: 'cb:portHello', clientId: this.clientId } satisfies ReadPortRequest);
+      await this.awaitAdoption();
+      if (this.closed || generation !== this.portGeneration) throw retryError();
+    } catch (error) {
+      release();
+      throw error;
+    }
+    this.releasePort = release;
+    return port;
   }
 
-  /** Binds the read listener and reports the port once it greets us as leader. */
-  private awaitReady(port: MessagePortLike, adopt: (release: () => void) => void): void {
+  /**
+   * Binds the read listener, which answers only once the leader has greeted:
+   * until then this port has proved nothing and settles no request.
+   */
+  private bindPort(port: MessagePortLike): () => void {
+    let adopted = false;
     const listener = (event: MessageEvent): void => {
       const message = event.data as ReadPortResponse | { type?: unknown };
       if (message.type === 'cb:portReady') {
         const { token } = message as Extract<ReadPortResponse, { type: 'cb:portReady' }>;
-        if (!this.fromActiveLeader(token)) return;
-        adopt(() => {
-          port.removeEventListener('message', listener);
-          port.close();
-        });
+        if (adopted || !this.fromActiveLeader(token)) return;
+        adopted = true;
+        this.settleBrokerage?.();
+        return;
+      }
+      if (!adopted) return;
+      if (message.type === 'cb:portClosed') {
+        this.dropPort(retryError());
+        this.rejectPending(retryError());
         return;
       }
       if (message.type !== 'cb:portResult') return;
@@ -230,6 +208,52 @@ export class BroadcastTransport extends CorrelatedTransport {
     };
     port.addEventListener('message', listener);
     port.start?.();
+    return () => {
+      port.removeEventListener('message', listener);
+      port.close();
+    };
+  }
+
+  /** Asks where this leadership takes read ports, for this leadership only. */
+  private awaitHost(): Promise<string> {
+    return this.awaitBrokerage<string>('the leader published no read port host', (settle) => {
+      this.settleHost = settle;
+      this.channel.postMessage({ type: 'cb:portWanted', clientId: this.clientId });
+    });
+  }
+
+  /** The leader's proof it holds the far end, stamped with its leadership token. */
+  private awaitAdoption(): Promise<void> {
+    return this.awaitBrokerage<void>('the leader did not adopt the read port', (settle) => {
+      this.settleBrokerage = settle;
+    });
+  }
+
+  /** One brokerage step: settled by the wire, by a timeout, or by `dropPort`. */
+  private awaitBrokerage<T>(
+    timeoutMessage: string,
+    arm: (settle: (value: T) => void) => void
+  ): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const finish = (): void => {
+        clearTimeout(timer);
+        this.settleHost = null;
+        this.settleBrokerage = null;
+        this.abortBrokerage = null;
+      };
+      const timer = setTimeout(() => {
+        finish();
+        reject(new Error(timeoutMessage));
+      }, this.portTimeoutMs);
+      this.abortBrokerage = (error) => {
+        finish();
+        reject(error);
+      };
+      arm((value) => {
+        finish();
+        resolve(value);
+      });
+    });
   }
 
   /** Retires the port bound to a leadership this follower has left behind. */
@@ -288,6 +312,12 @@ export class BroadcastTransport extends CorrelatedTransport {
       case 'cb:leaderGone':
         this.onLeaderGone((message as Extract<LeaderMessage, { type: 'cb:leaderGone' }>).token);
         return;
+      case 'cb:portHost': {
+        const host = message as Extract<LeaderMessage, { type: 'cb:portHost' }>;
+        if (!this.fromActiveLeader(host.token) || typeof host.address !== 'string') return;
+        this.settleHost?.(host.address);
+        return;
+      }
       case 'cb:response': {
         const response = message as Extract<LeaderMessage, { type: 'cb:response' }>;
         if (response.clientId !== this.clientId) return;

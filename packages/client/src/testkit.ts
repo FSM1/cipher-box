@@ -188,7 +188,9 @@ export class FakeChannelPort implements MessagePortLike {
   postMessage(message: unknown, transfer?: Transferable[]): void {
     if (this.closed) return;
     this.transferred.push(transfer ? [...transfer] : []);
-    const delivered = structuredClone(message);
+    // Honors the transfer list, so a sender that reads a moved buffer afterwards
+    // fails here exactly as it would against a real port.
+    const delivered = structuredClone(message, transfer ? { transfer } : undefined);
     queueMicrotask(() => this.peer?.receive(delivered));
   }
 

@@ -95,14 +95,15 @@ mechanism; the invariant — one engine writer per origin — is D4's):
   and sends commands as data. Commands, events, and election ride a
   `BroadcastChannel`: events are plain structured-clone data and commands carry
   at most `Blob`/`File` handles (structured clone shares the immutable backing
-  store — no byte copies for uploads). Read **results** — snapshot projections
-  and file plaintext — do not: a `BroadcastChannel` delivers to every
-  same-origin context that opened it, so each follower publishes a rendezvous
-  address on the channel and the leader opens it a private `MessagePort`
-  through the Service Worker (the only cross-tab route for a transferable),
-  buffers transferred rather than cloned. A follower takes only a port that
-  greets it with the active leadership token, and a tab with no Service Worker
-  mirrors nothing — reads fail closed rather than fall back to the shared
+  store — no byte copies for uploads), so an upload's plaintext still reaches
+  every context holding the channel. Read **results** — snapshot projections
+  and file plaintext — do not: each follower dials the leader a private
+  `MessagePort` through the Service Worker (the only cross-tab route for a
+  transferable) and reads over that, buffers transferred rather than cloned.
+  The leadership token gating the port is itself broadcast, so it bounds
+  accidental and passive delivery, never a same-origin context that read the
+  beacon — same origin remains the trust boundary. A tab with no Service Worker
+  mirrors nothing: reads fail closed rather than fall back to the shared
   channel.
 - **Failover**: the lock releases → some follower acquires it, spawns a fresh
   engine worker, and rehydrates from the durable seams (floors, op queue,

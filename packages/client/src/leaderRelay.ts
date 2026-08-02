@@ -9,9 +9,11 @@
  * - each tab's open folder → the leader's **focus-window union**, so freshness
  *   follows whichever tab is focused (the RefreshHintSource seam, cross-tab).
  *
- * No plaintext rides the channel: only key-free `EventDescriptor`s and write
- * acks. A follower's reads are answered over a private `PortCourier` port the
- * leader opens to it, one per follower per leadership.
+ * Nothing the leader sends on the channel carries plaintext: only key-free
+ * `EventDescriptor`s and command/write acks. Read results go to the private
+ * `PortCourier` port that follower dialed, one per follower per leadership. The
+ * follower→leader direction is unchanged and still broadcasts command arguments
+ * and upload chunks.
  */
 
 import type {
@@ -35,7 +37,17 @@ type Ack = { type: 'cb:response'; token: string; clientId: string; requestId: nu
 interface ReadPortEntry {
   readonly port: MessagePortLike;
   readonly listener: (event: MessageEvent) => void;
+  clientId: string | null;
+  /** Reclaims a port that never named itself, so an unnamed one cannot pile up. */
+  readonly naming: ReturnType<typeof setTimeout>;
 }
+
+export interface LeaderRelayOptions {
+  /** How long a freshly dialed port has to name the follower behind it. */
+  namingTimeoutMs?: number;
+}
+
+const DEFAULT_NAMING_TIMEOUT_MS = 5000;
 
 /** Projects a caught failure onto the wire's `error`/`code` fields. */
 function wireError(error: unknown): { error: string; code?: string } {
@@ -92,8 +104,10 @@ export class LeaderRelay {
   // across tabs, so this binds every step to the tab that owns the upload — and
   // lets a departing tab's handles be released.
   private readonly writeOwners = new Map<WriteHandle, string>();
-  private readonly readPorts = new Map<string, ReadPortEntry>();
+  private readonly readPorts = new Set<ReadPortEntry>();
+  private readonly namingTimeoutMs: number;
   private readonly unsubscribe: () => void;
+  private readonly unsubscribePorts: () => void;
   private closed = false;
   // An unguessable per-leadership capability. It stamps every leader→follower
   // message so followers reject forged acks/events from a non-leader same-origin
@@ -104,9 +118,12 @@ export class LeaderRelay {
   constructor(
     private readonly channel: BroadcastChannelLike,
     private readonly transport: EngineTransport,
-    private readonly courier: PortCourier
+    private readonly courier: PortCourier,
+    options: LeaderRelayOptions = {}
   ) {
+    this.namingTimeoutMs = options.namingTimeoutMs ?? DEFAULT_NAMING_TIMEOUT_MS;
     this.channel.addEventListener('message', this.onMessage);
+    this.unsubscribePorts = this.courier.onPort((port) => this.adoptPort(port));
     this.unsubscribe = this.transport.subscribe((event) => {
       this.post({ type: 'cb:event', token: this.token, event });
     });
@@ -129,7 +146,8 @@ export class LeaderRelay {
     this.post({ type: 'cb:leaderGone', token: this.token });
     this.closed = true;
     this.releaseWrites(null);
-    for (const clientId of [...this.readPorts.keys()]) this.detachPort(clientId);
+    this.unsubscribePorts();
+    for (const entry of [...this.readPorts]) this.detachPort(entry);
     this.unsubscribe();
     this.channel.removeEventListener('message', this.onMessage);
   }
@@ -143,16 +161,9 @@ export class LeaderRelay {
       case 'cb:command':
         void this.forward(message as Extract<FollowerMessage, { type: 'cb:command' }>);
         return;
-      case 'cb:portWanted': {
-        const { clientId, address } = message as Extract<
-          FollowerMessage,
-          { type: 'cb:portWanted' }
-        >;
-        if (typeof clientId === 'string' && typeof address === 'string') {
-          void this.openReadPort(clientId, address);
-        }
+      case 'cb:portWanted':
+        void this.announceHost();
         return;
-      }
       case 'cb:write':
         this.serveWrite(message as Extract<FollowerMessage, { type: 'cb:write' }>);
         return;
@@ -165,7 +176,7 @@ export class LeaderRelay {
         const { clientId } = message as Extract<FollowerMessage, { type: 'cb:bye' }>;
         if (this.focus.remove(clientId)) this.refreshHint();
         this.releaseWrites(clientId);
-        this.detachPort(clientId);
+        this.detachPortOf(clientId);
         return;
       }
     }
@@ -189,40 +200,55 @@ export class LeaderRelay {
   }
 
   /**
-   * Opens one follower's read port. The leader dials the address the follower
-   * published rather than publishing its own, so the only ports it ever serves
-   * are the ones it opened itself.
+   * Publishes where this leadership takes read ports. A follower dials it rather
+   * than publishing an address of its own, so no context can push a port at a
+   * tab that never asked for one. Silent without a broker: the asking follower's
+   * read then fails closed on its own gate.
    */
-  private async openReadPort(clientId: string, address: string): Promise<void> {
-    let port: MessagePortLike;
+  private async announceHost(): Promise<void> {
     try {
-      port = await this.courier.connect(address);
+      const address = await this.courier.address();
+      this.post({ type: 'cb:portHost', token: this.token, address });
     } catch {
-      // No broker, no port: the follower's read fails closed on its own gate
-      // rather than falling back onto the shared channel.
       return;
     }
+  }
+
+  private adoptPort(port: MessagePortLike): void {
     if (this.closed) {
       port.close();
       return;
     }
-    // A re-brokering follower supersedes the port it held before.
-    this.detachPort(clientId);
-    const listener = (event: MessageEvent): void => this.onPortMessage(port, event.data);
-    port.addEventListener('message', listener);
+    const entry: ReadPortEntry = {
+      port,
+      clientId: null,
+      listener: (event) => this.onPortMessage(entry, event.data),
+      naming: setTimeout(() => this.detachPort(entry), this.namingTimeoutMs),
+    };
+    port.addEventListener('message', entry.listener);
     port.start?.();
-    this.readPorts.set(clientId, { port, listener });
-    this.postPort(port, { type: 'cb:portReady', token: this.token });
+    this.readPorts.add(entry);
   }
 
   /** A same-origin port is untrusted input: anything off-shape is dropped. */
-  private onPortMessage(port: MessagePortLike, data: unknown): void {
+  private onPortMessage(entry: ReadPortEntry, data: unknown): void {
     if (this.closed) return;
     const message = data as ReadPortRequest | { type?: unknown };
-    if (message.type !== 'cb:portRead') return;
+    if (message.type === 'cb:portHello') {
+      const { clientId } = message as Extract<ReadPortRequest, { type: 'cb:portHello' }>;
+      if (entry.clientId !== null || typeof clientId !== 'string') return;
+      // A re-brokering follower supersedes the port it held before.
+      this.detachPortOf(clientId);
+      clearTimeout(entry.naming);
+      entry.clientId = clientId;
+      this.postPort(entry.port, { type: 'cb:portReady', token: this.token });
+      return;
+    }
+    // A port serves reads only once named — that name is how `cb:bye` reclaims it.
+    if (entry.clientId === null || message.type !== 'cb:portRead') return;
     const { requestId, read } = message as Extract<ReadPortRequest, { type: 'cb:portRead' }>;
     if (typeof requestId !== 'number') return;
-    void this.serveRead(port, requestId, read);
+    void this.serveRead(entry.port, requestId, read);
   }
 
   private async serveRead(port: MessagePortLike, requestId: number, read: WireRead): Promise<void> {
@@ -262,10 +288,14 @@ export class LeaderRelay {
     port.postMessage(message, transfer);
   }
 
-  private detachPort(clientId: string): void {
-    const entry = this.readPorts.get(clientId);
-    if (!entry) return;
-    this.readPorts.delete(clientId);
+  private detachPortOf(clientId: string): void {
+    for (const entry of this.readPorts) if (entry.clientId === clientId) this.detachPort(entry);
+  }
+
+  private detachPort(entry: ReadPortEntry): void {
+    clearTimeout(entry.naming);
+    this.readPorts.delete(entry);
+    this.postPort(entry.port, { type: 'cb:portClosed' });
     entry.port.removeEventListener('message', entry.listener);
     entry.port.close();
   }

@@ -3,9 +3,14 @@ import { describe, expect, it } from 'vitest';
 import { BroadcastTransport } from './broadcastTransport.js';
 import { EngineRequestError } from './correlatedTransport.js';
 import { LeaderRelay } from './leaderRelay.js';
-import type { PortCourier } from './portRelay.js';
 import { unavailableCourier } from './portCourier.js';
-import { emptySnapshot, FakeBus, FakeCourierNetwork, FakeEngineTransport } from './testkit.js';
+import {
+  emptySnapshot,
+  FakeBus,
+  FakeChannelPort,
+  FakeCourierNetwork,
+  FakeEngineTransport,
+} from './testkit.js';
 import type { EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -236,8 +241,11 @@ describe('broadcast transport ↔ leader relay', () => {
     const content = await follower.download(node);
     expect([...new Uint8Array(content)]).toEqual([...plaintext]);
     expect(engine.downloads).toEqual([node]);
-    // The buffer moves rather than being cloned into the follower.
-    expect(ports.transfers.at(-1)?.[0]).toBeInstanceOf(ArrayBuffer);
+    // The buffer moves rather than being cloned: the leader's copy is detached,
+    // so the plaintext leaves its heap instead of lingering there.
+    const moved = ports.transfers.at(-1)?.[0] as ArrayBuffer;
+    expect(moved).toBeInstanceOf(ArrayBuffer);
+    expect(moved.byteLength).toBe(0);
   });
 
   it('serves a follower SIWE challenge off the leader engine', async () => {
@@ -328,6 +336,7 @@ describe('broadcast transport ↔ leader relay', () => {
     expect([...new Set(observed.map((m) => (m as { type: string }).type))].sort()).toEqual([
       'cb:hello',
       'cb:leader',
+      'cb:portHost',
       'cb:portWanted',
     ]);
     const serialized = JSON.stringify(observed, (_key, value: unknown) =>
@@ -336,39 +345,128 @@ describe('broadcast transport ↔ leader relay', () => {
     for (const byte of plaintext.slice(0, 8)) expect(serialized).not.toContain(`,${byte},`);
   });
 
-  it('takes no read port from a context that is not the active leader', async () => {
+  it('settles nothing on a port that never greeted with the active leader token', async () => {
     const bus = new FakeBus();
     const ports = new FakeCourierNetwork();
     const engine = new FakeEngineTransport();
+    engine.respond = () => new Promise(() => undefined); // the real leader never answers
     engine.respondSnapshot = () => Promise.resolve(emptySnapshot(new Uint8Array(16).fill(2)));
-    // The real leader answers the rendezvous late, leaving the window an attacker
-    // would race into wide open.
-    const leader = ports.courier('leader');
-    const slowLeader: PortCourier = {
-      address: () => leader.address(),
-      connect: (to) => tick().then(() => leader.connect(to)),
-      onPort: (handler) => leader.onPort(handler),
-    };
-    new LeaderRelay(bus.channel(), engine, slowLeader);
-    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
+    new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'), {
+      portTimeoutMs: 40,
+    });
     await follower.start();
 
-    // Any same-origin context can dial the address a follower publishes. One that
-    // does not greet with the leadership token must not carry a single read.
-    const impostor = ports.courier('impostor');
-    const pending = follower.snapshot(new Uint8Array(16));
-    await tick();
-    const forged = await impostor.connect('f');
-    forged.postMessage({ type: 'cb:portReady', token: 'forged-token' });
-    forged.postMessage({ type: 'cb:portReady' });
-    const seen: unknown[] = [];
-    forged.addEventListener('message', (event) => seen.push(event.data));
-    forged.start?.();
+    // An impostor answers the rendezvous with its own address, then forges both a
+    // greeting and results. Request ids are shared with commands and writes, so a
+    // follower that took an ungreeted result would settle those too.
+    ports.courier('impostor').onPort((port) => {
+      port.addEventListener('message', () => {
+        port.postMessage({ type: 'cb:portReady', token: 'forged-token' });
+        port.postMessage({ type: 'cb:portReady' });
+        for (let requestId = 1; requestId <= 4; requestId += 1) {
+          port.postMessage({ type: 'cb:portResult', requestId, ok: true });
+        }
+      });
+      port.start?.();
+    });
+    const attacker = bus.channel();
+    attacker.addEventListener('message', (event) => {
+      if ((event.data as { type?: string }).type !== 'cb:portWanted') return;
+      attacker.postMessage({ type: 'cb:portHost', token: 'forged-token', address: 'impostor' });
+      attacker.postMessage({ type: 'cb:portHost', address: 'impostor' });
+    });
 
-    // The real leader still serves the read, and the impostor was sent nothing.
-    await expect(pending).resolves.toMatchObject({ folder: new Uint8Array(16).fill(2) });
+    const command = follower.command({ kind: 'manualRefresh' }, []);
+    let commandSettled = false;
+    void command.then(
+      () => (commandSettled = true),
+      () => (commandSettled = true)
+    );
+
+    // The forged host is ignored, so the read reaches the real leader's engine,
+    // and the forged results settled nothing on the way.
+    await expect(follower.snapshot(new Uint8Array(16))).resolves.toMatchObject({
+      folder: new Uint8Array(16).fill(2),
+    });
+    expect(commandSettled).toBe(false);
+  });
+
+  /**
+   * The honest limit of the token gate: it is broadcast on the channel, so it
+   * bounds accidental and passive delivery, never a same-origin context that
+   * bothered to read the beacon. Recorded so the guarantee is not overstated.
+   */
+  it('adopts a port greeting with the real broadcast token, whoever sent it', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    new LeaderRelay(bus.channel(), new FakeEngineTransport(), ports.courier('leader'));
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'), {
+      portTimeoutMs: 40,
+    });
+
+    // The impostor reads the leadership token off the channel and replays it.
+    let stolen: string | undefined;
+    const attacker = bus.channel();
+    attacker.addEventListener('message', (event) => {
+      const message = event.data as { type?: string; token?: string };
+      if (message.type === 'cb:leader') stolen = message.token;
+      if (message.type !== 'cb:portWanted') return;
+      attacker.postMessage({ type: 'cb:portHost', token: stolen, address: 'impostor' });
+    });
+    ports.courier('impostor').onPort((port) => {
+      port.addEventListener('message', () => {
+        port.postMessage({ type: 'cb:portReady', token: stolen });
+        port.postMessage({
+          type: 'cb:portResult',
+          requestId: 1,
+          ok: true,
+          result: emptySnapshot(new Uint8Array(16).fill(9)),
+        });
+      });
+      port.start?.();
+    });
+    await follower.start();
+
+    await expect(follower.snapshot(new Uint8Array(16))).resolves.toMatchObject({
+      folder: new Uint8Array(16).fill(9),
+    });
+  });
+
+  it('rejects a read whose port the leader detached under a live leadership', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
+    await follower.snapshot(null); // brokers and adopts the port
+
+    engine.respondSnapshot = () => new Promise(() => undefined); // never answers
+    const inFlight = follower.snapshot(null);
     await tick();
-    expect(seen).toEqual([]);
+    // A `cb:bye` any same-origin context can post makes the leader drop that port.
+    // Without a closing notice the read would wait on a wire that is gone.
+    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f' });
+    await expect(inFlight).rejects.toThrow(/retry/);
+
+    // The next read re-brokers against the same live leader.
+    engine.respondSnapshot = (folder) => Promise.resolve(emptySnapshot(folder ?? undefined));
+    await expect(follower.snapshot(null)).resolves.toMatchObject({ staleness: 'fresh' });
+  });
+
+  it('reclaims a dialed port that never named the follower behind it', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    new LeaderRelay(bus.channel(), new FakeEngineTransport(), ports.courier('leader'), {
+      namingTimeoutMs: 5,
+    });
+
+    // Any same-origin context can dial the leader; one that never names itself
+    // would otherwise sit in the relay for the rest of the leadership.
+    const squatter = (await ports.courier('squatter').connect('leader')) as FakeChannelPort;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(squatter.peer!.closed).toBe(true);
   });
 
   it('fails a read closed when no port can be brokered, never falling back to the channel', async () => {

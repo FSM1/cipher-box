@@ -273,6 +273,7 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
       'cb:bye',
       'cb:hello',
       'cb:leader',
+      'cb:portHost',
       'cb:portWanted',
     ]);
     // ...and not one byte of the plaintext the follower streamed.

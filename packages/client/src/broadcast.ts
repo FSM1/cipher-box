@@ -44,8 +44,10 @@ export type WireRead =
 
 /** Follower → leader, over that follower's private read port. */
 export type ReadPortRequest =
+  /** Names the sender, binding the port to a client the leader can reclaim it for. */
+  | { type: 'cb:portHello'; clientId: string }
   /** A correlated read; the leader answers with a matching `cb:portResult`. */
-  { type: 'cb:portRead'; requestId: number; read: WireRead };
+  | { type: 'cb:portRead'; requestId: number; read: WireRead };
 
 /**
  * Leader → follower, over that follower's private read port. A `download` /
@@ -53,8 +55,11 @@ export type ReadPortRequest =
  * cloned; a snapshot carries the descriptor; a SIWE challenge the nonce string.
  */
 export type ReadPortResponse =
-  /** The leader's first word on a port it opened, naming the leadership behind it. */
+  /** The leader adopted this port, naming the leadership that answers on it. */
   | { type: 'cb:portReady'; token: string }
+  /** The leader is dropping this port. A closed `MessagePort` fires no event on
+   * the far side, so without this a read would wait on a wire that is gone. */
+  | { type: 'cb:portClosed' }
   | {
       type: 'cb:portResult';
       requestId: number;
@@ -76,8 +81,8 @@ export type FollowerMessage =
   | { type: 'cb:hello'; clientId: string }
   /** A correlated command; the leader answers with a matching `response`. */
   | { type: 'cb:command'; clientId: string; requestId: number; command: CommandDescriptor }
-  /** Asks the leader to open this follower's read port, at `address`. */
-  | { type: 'cb:portWanted'; clientId: string; address: string }
+  /** Asks the leader where a read port may be opened to it. */
+  | { type: 'cb:portWanted'; clientId: string }
   /** A correlated write step, run against the leader's engine write handle. */
   | { type: 'cb:write'; clientId: string; requestId: number; write: WireWrite }
   /** This tab's currently open folder (for the leader's focus-window union). */
@@ -98,6 +103,8 @@ export type LeaderMessage =
   | { type: 'cb:leader'; token: string }
   /** The current leader is stepping down (graceful teardown); re-arm the gate. */
   | { type: 'cb:leaderGone'; token: string }
+  /** Where a follower may open its private read port to this leadership. */
+  | { type: 'cb:portHost'; token: string; address: string }
   /**
    * The correlated result of a follower's command or write step;
    * `beginWrite`/`commitWrite` carry the handle / durable op id in `result`.
