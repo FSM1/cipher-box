@@ -799,6 +799,79 @@ async fn an_abandoned_versions_whole_block_set_retires_back_to_the_pre_upload_fi
     );
 }
 
+/// A record's head block goes up through the same charged ingress a content
+/// block does, and every publish attempt authors its own under a fresh seal
+/// nonce — so an op that retried left one charged, unreferenced head row per
+/// attempt. Retiring only the last of them leaves the rest spending the quota
+/// that refuses later uploads (#921).
+#[tokio::test]
+async fn every_head_block_a_retrying_publish_orphaned_retires_back_to_the_pre_upload_figure() {
+    let base = require_stack!(
+        "every_head_block_a_retrying_publish_orphaned_retires_back_to_the_pre_upload_figure"
+    );
+    let client = fresh_account(&base).await;
+
+    // Three attempts at one record: byte-different heads under distinct
+    // addresses, each uploaded and then registered under the same name the way
+    // register-first composes it.
+    let name = "k51contractOrphanedHeads".to_owned();
+    let attempts: Vec<Vec<u8>> = (0..3u8).map(|i| vec![0xC0 | i; 96]).collect();
+    let mut heads = Vec::new();
+    for block in &attempts {
+        let declared = leaf_cid(block);
+        let uploaded = client
+            .upload(&declared, block)
+            .await
+            .unwrap_or_else(|e| panic!("a head block uploads: {e:?}"));
+        assert_eq!(
+            uploaded.cid, declared,
+            "a head block pins under the address the drain computed"
+        );
+        client
+            .register(&[NameRegistration {
+                ipns_name: name.clone(),
+                head_cid: Some(declared.clone()),
+                content_cids: Vec::new(),
+            }])
+            .await
+            .expect("register-first names the head the attempt authored");
+        heads.push(declared);
+    }
+    assert_eq!(
+        client.quota().await.expect("quota after upload").used_bytes,
+        (attempts.len() * 96) as u64,
+        "each attempt's head charges the account on its own"
+    );
+
+    // Retiring only the head the last attempt registered is what the leak looks
+    // like: the earlier two stay charged.
+    client
+        .retire(&heads[2..])
+        .await
+        .expect("retire the last attempt's head");
+    assert_eq!(
+        client
+            .quota()
+            .await
+            .expect("quota after a partial retire")
+            .used_bytes,
+        (2 * 96) as u64,
+        "the heads the earlier attempts orphaned are still charged"
+    );
+
+    let mut targets = heads[..2].to_vec();
+    targets.push(name);
+    client
+        .retire(&targets)
+        .await
+        .expect("retire every head the retries orphaned");
+    assert_eq!(
+        client.quota().await.expect("quota after retire").used_bytes,
+        0,
+        "retiring every orphaned head returns the account to its pre-upload figure"
+    );
+}
+
 /// The retire batch is bounded fail-closed (blueprint/api.md, "Batch bounds"):
 /// an oversize array is refused, never truncated or partially applied. That
 /// refusal is what makes the engine's client-side chunking mandatory rather than

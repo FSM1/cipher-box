@@ -48,8 +48,8 @@ use crate::net::record_publish::{
 };
 use crate::net::retire::retire;
 use crate::net::{
-    Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, ResolveOutcome, RootAdopter,
-    assemble_head_envelope, fanout_get_verify, resolve,
+    Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, REGISTRY_BATCH_MAX, ResolveOutcome,
+    RootAdopter, assemble_head_envelope, fanout_get_verify, resolve,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
@@ -293,6 +293,9 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// The over-quota hold, shared with the facade's read surface. It clears
     /// only here, on a quota probe reporting room.
     pub(crate) blocked: &'a RefCell<Option<BlockedOp>>,
+    /// Head blocks this session's publishes orphaned, pending retirement
+    /// ([`Drain::retire_orphan_heads`]).
+    pub(crate) orphan_heads: &'a RefCell<Vec<String>>,
     /// The facade's outbound event stream, for upload progress.
     pub(crate) events: &'a mpsc::UnboundedSender<Event>,
 }
@@ -412,8 +415,15 @@ where
     Sch: Scheduler + Clone + 'static,
 {
     /// Run one pass: rebase the queue onto gate-passing state and publish every
-    /// applied op it can, stopping at the first it cannot.
+    /// applied op it can, stopping at the first it cannot, then clear what the
+    /// pass orphaned.
     pub(crate) async fn run(&self, scope: &DrainScope<'_>) -> DrainReport {
+        let report = self.drain_queue(scope).await;
+        self.retire_orphan_heads().await;
+        report
+    }
+
+    async fn drain_queue(&self, scope: &DrainScope<'_>) -> DrainReport {
         let mut report = DrainReport::default();
         let Ok(Queue { mine, all_ids }) = self.queued_ops(scope, &mut report).await else {
             return report;
@@ -1686,7 +1696,12 @@ where
             },
         )
         .await
-        .map_err(|error| classify_publish(error, head.block.len() as u64))?;
+        .map_err(|error| {
+            if orphaned_head(&error) {
+                self.record_orphan_head(preflighted.cid());
+            }
+            classify_publish(error, head.block.len() as u64)
+        })?;
         match outcome {
             PublishOutcome::Published { .. } => Ok(record_bytes),
             // Both burned a CAS sequence at this name without a record we could
@@ -1723,6 +1738,42 @@ where
     /// Remove a resolved op from the durable queue.
     async fn dequeue_op(&self, op_id: OpId) -> Result<(), Halt> {
         self.staging.remove_op(op_id).await.map_err(seam)
+    }
+
+    /// Note one head block as orphaned, capped at [`REGISTRY_BATCH_MAX`] so a
+    /// session whose retires keep failing bounds its leak, not its memory.
+    ///
+    /// A head the live set still names never enters the queue: its only
+    /// consumer physically unpins, and unpinning a head a live record names is
+    /// loss, where leaving the row charged is only a leak.
+    fn record_orphan_head(&self, cid: &str) {
+        if self
+            .held
+            .borrow()
+            .values()
+            .any(|record| record.head_cid == cid)
+        {
+            return;
+        }
+        let mut orphans = self.orphan_heads.borrow_mut();
+        if orphans.len() < REGISTRY_BATCH_MAX {
+            orphans.push(cid.to_owned());
+        }
+    }
+
+    /// Retire the head blocks this session's publishes orphaned
+    /// ([`orphaned_head`]). A refused retire keeps them pending for the next
+    /// pass rather than losing the only record of what to retire.
+    async fn retire_orphan_heads(&self) {
+        let pending = self.orphan_heads.borrow().clone();
+        if pending.is_empty() {
+            return;
+        }
+        if retire(self.api, &pending).await.is_ok() {
+            let mut orphans = self.orphan_heads.borrow_mut();
+            let sent = pending.len().min(orphans.len());
+            orphans.drain(..sent);
+        }
     }
 
     /// Abandon one op: retire what its publish registered, then drop it from
@@ -1913,6 +1964,30 @@ fn classify_register(error: ApiError) -> Halt {
     }
 }
 
+/// Whether a failed publish left its head block charged and unreachable: the
+/// upload landed under its own pin row, no record naming it reached the
+/// transport, and the retry re-authors under a fresh seal nonce
+/// (blueprint/engine.md "Resolve/publish pipeline: Retirement", #921).
+fn orphaned_head(error: &RecordPublishError) -> bool {
+    match error {
+        // A status answer is the server's own refusal, so it charged no row; a
+        // dropped connection or an unreadable 2xx may have left one behind.
+        RecordPublishError::Upload(error) => {
+            matches!(error, ApiError::Transport(_) | ApiError::Decode(_))
+        }
+        RecordPublishError::HeadCidMismatch { .. } => true,
+        RecordPublishError::Publish(error) => match error {
+            PublishError::Register(_) | PublishError::FloorRead(_) => true,
+            // Nothing was ever addressed, so there is no CID to retire.
+            PublishError::EmptyHeadCid => false,
+            // No ack is not proof nothing stored: unpinning a head a live
+            // record may still name is loss, where the row is only a leak
+            // (#916).
+            PublishError::AllEndpointsFailed => false,
+        },
+    }
+}
+
 /// Classify a content-upload failure for the valve. The same server verdicts a
 /// head-block upload can carry, since content blocks and head blocks go through
 /// one endpoint.
@@ -2054,6 +2129,62 @@ mod tests {
                 refusal(code),
                 Halt::UploadAttempt,
                 "a 413 the API did not stamp is a proxy, and supports neither verdict"
+            );
+        }
+    }
+
+    /// The destruction-critical arm: a fan-out that acked nothing may still
+    /// have stored the record, so its head stays pinned. Everything else here
+    /// stopped short of the transport with a charged row behind it, or with no
+    /// row at all.
+    #[test]
+    fn only_a_publish_that_never_reached_the_transport_orphans_its_head() {
+        use RecordPublishError::Upload;
+        for (error, orphaned) in [
+            (
+                RecordPublishError::Publish(PublishError::AllEndpointsFailed),
+                false,
+            ),
+            (
+                RecordPublishError::Publish(PublishError::Register(ApiError::NotAuthenticated)),
+                true,
+            ),
+            (
+                RecordPublishError::Publish(PublishError::EmptyHeadCid),
+                false,
+            ),
+            (
+                RecordPublishError::Publish(PublishError::FloorRead(crate::seams::SeamError::new(
+                    "floor",
+                ))),
+                true,
+            ),
+            (
+                RecordPublishError::HeadCidMismatch {
+                    expected: "a".to_owned(),
+                    returned: "b".to_owned(),
+                },
+                true,
+            ),
+            (
+                Upload(ApiError::Status {
+                    status: 413,
+                    message: None,
+                    code: Some(UPLOAD_TOO_LARGE.to_owned()),
+                }),
+                false,
+            ),
+            (Upload(ApiError::NotAuthenticated), false),
+            (
+                Upload(ApiError::Transport(crate::seams::SeamError::new("dropped"))),
+                true,
+            ),
+            (Upload(ApiError::Decode("short body".to_owned())), true),
+        ] {
+            assert_eq!(
+                orphaned_head(&error),
+                orphaned,
+                "{error:?} orphans its head block: {orphaned}"
             );
         }
     }
