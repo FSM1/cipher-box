@@ -51,9 +51,11 @@ export class FetchHttp implements HttpSeam {
   }
 
   /**
-   * Enforces the cap as bytes arrive, so peak memory is bounded by the cap —
-   * about twice it while the chunks are concatenated — even when Content-Length
-   * is absent or lies.
+   * Enforces the cap as bytes arrive, even when Content-Length is absent or
+   * lies. `fetch` hands over whole chunks, so the drain aborts on the chunk
+   * that would pass the cap: the retained body never exceeds `maxBytes`, and
+   * peak memory is `maxBytes` — about twice it while the chunks are
+   * concatenated — plus that one chunk.
    */
   async sendCapped(request: HttpRequestData, maxBytes: number): Promise<CappedHttpResult> {
     const response = await fetch(request.url, requestInit(request));

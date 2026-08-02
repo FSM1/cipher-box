@@ -10,6 +10,9 @@
 //!   header; records the request for assertions.
 //! - `GET /teapot` — returns 418, to prove a non-2xx status is a response,
 //!   not a seam error.
+//! - `GET /stream/<n>` — `n` bytes with `Transfer-Encoding: chunked` and no
+//!   `Content-Length`, so a capped read has only the streaming drain to gate
+//!   on.
 //!
 //! Every response carries `Connection: close`, so each request is one
 //! connection and the accept loop stays single-threaded.
@@ -103,6 +106,9 @@ fn handle_conn(
     // blocking reads with a safety timeout.
     stream.set_nonblocking(false)?;
     stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    // A capped read aborts mid-body, leaving a large write unread; bound it so
+    // the accept thread cannot wedge the suite.
+    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
 
     let mut buf = Vec::new();
     let mut chunk = [0u8; 2048];
@@ -155,6 +161,11 @@ fn handle_conn(
         body: body.clone(),
     });
 
+    if let Some(size) = path.strip_prefix("/stream/") {
+        let size = size.parse().unwrap_or(0);
+        return write_chunked_response(&mut stream, &vec![b'x'; size]);
+    }
+
     let (status, reason, extra_headers, response_body): (u16, &str, Vec<(&str, &str)>, Vec<u8>) =
         if let Some(_key) = path.strip_prefix("/routing/v1/ipns/") {
             if method == "PUT" {
@@ -202,6 +213,17 @@ fn write_response(
     head.push_str("\r\n");
     stream.write_all(head.as_bytes())?;
     stream.write_all(body)?;
+    stream.flush()
+}
+
+/// Writes the body as one chunked frame. The client may abort mid-body, so a
+/// write failure is the expected end of a capped read, not a test failure.
+fn write_chunked_response(stream: &mut TcpStream, body: &[u8]) -> std::io::Result<()> {
+    stream
+        .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n")?;
+    write!(stream, "{:x}\r\n", body.len())?;
+    stream.write_all(body)?;
+    stream.write_all(b"\r\n0\r\n\r\n")?;
     stream.flush()
 }
 
