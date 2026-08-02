@@ -311,8 +311,8 @@ jobs:
   # The first-class API integration suite (blueprint/testing.md law 1): the
   # real-Postgres concurrency/interleaving tests — registry register-vs-retire
   # phantom and duplicate-insert, mailbox pending-cap, and the advisory-lock
-  # lock_timeout DoS guard — run against a live Postgres. The unit job excludes
-  # `*.integration.test.ts`; this job owns them. Each test provisions its own
+  # lock_timeout DoS guard — run against a live Postgres. They are named
+  # `*.itest.ts`; this job owns them. Each test provisions its own
   # randomized throwaway database and drops only that one. NOT yet a required
   # check (a new required context deadlocks open PRs that predate it) — flip to
   # required after this lands on main and open PRs rebase.
