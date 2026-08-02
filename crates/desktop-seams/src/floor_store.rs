@@ -35,10 +35,9 @@ pub struct FileFloorStore {
     epoch_dir: PathBuf,
     seq_dir: PathBuf,
     intent_dir: PathBuf,
-    /// Serializes the read-modify-write in [`Self::raise_floor`]. Concurrent
-    /// raises on one key could otherwise interleave read/read/write-high/
-    /// write-low and durably regress the floor — a loss no intent record can
-    /// heal, because both commits succeeded and cleared their own records.
+    /// Serializes the read-modify-write in [`Self::raise_floor`] within this
+    /// handle: interleaved raises can durably regress a floor, and intent
+    /// replay cannot heal that loss (#704).
     write_lock: Mutex<()>,
 }
 
@@ -187,9 +186,8 @@ impl FloorStore for FileFloorStore {
     }
 }
 
-/// The 4-byte little-endian key-length prefix, rejecting a key the prefix
-/// cannot represent. Truncating instead would reframe the record: the decoder
-/// would read a short key and then parse key bytes as the next raise's value.
+/// The 4-byte little-endian key-length prefix. Fails closed on a key the
+/// prefix cannot represent: a truncated length reframes the whole record.
 fn intent_key_len(len: u64) -> SeamResult<[u8; 4]> {
     u32::try_from(len)
         .map(u32::to_le_bytes)
@@ -220,8 +218,8 @@ fn corrupt_intent() -> SeamError {
 }
 
 /// Reads a fixed slice at `start`, failing closed if it runs past the record.
-/// The end offset is checked: `len` comes from the corrupt-controlled length
-/// prefix, so on a 32-bit target it can wrap `usize`.
+/// `len` is corrupt-controlled, so `start + len` can wrap `usize` on a 32-bit
+/// target.
 fn intent_slice(bytes: &[u8], start: usize, len: usize) -> SeamResult<&[u8]> {
     start
         .checked_add(len)
@@ -276,7 +274,6 @@ mod tests {
         );
     }
 
-    /// A record claiming more key bytes than it carries fails closed.
     #[test]
     fn decode_rejects_an_oversized_key_length() {
         let mut bytes = vec![INTENT_TAG_EPOCH];
@@ -284,28 +281,19 @@ mod tests {
         assert!(decode_intent(&bytes).is_err());
     }
 
-    /// An end offset past `usize` fails closed rather than wrapping into an
-    /// in-range slice — the length is corrupt-controlled, and on a 32-bit
-    /// target it can exceed what the start offset leaves.
     #[test]
     fn intent_slice_fails_closed_on_an_overflowing_end() {
-        assert!(intent_slice(b"abc", usize::MAX, 1).is_err());
         assert!(intent_slice(b"abc", 1, usize::MAX).is_err());
     }
 
-    /// Encode fails closed on a key the 4-byte prefix cannot represent instead
-    /// of truncating it — a truncated prefix reframes the record and the
-    /// decoder would parse key bytes as the next raise.
     #[test]
     fn encode_rejects_a_key_longer_than_its_length_prefix() {
         assert!(intent_key_len(u32::MAX as u64).is_ok());
         assert!(intent_key_len(u32::MAX as u64 + 1).is_err());
     }
 
-    /// Two writers racing on one key cannot interleave read/read/write-high/
-    /// write-low: whichever lands second re-reads the raised floor and keeps
-    /// it. A durable regression here is unhealable — both commits return `Ok`
-    /// and clear their own intent records, leaving nothing for replay.
+    /// The #704 regression: with the raises unserialized, the low one can read
+    /// the pre-raise floor and land last.
     #[test]
     fn concurrent_raises_never_regress_a_floor() {
         let dir = tempfile::tempdir().unwrap();
