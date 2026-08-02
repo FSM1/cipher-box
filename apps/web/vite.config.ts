@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { build, type Plugin } from 'vite';
@@ -9,57 +12,75 @@ const SW_FILE = 'sw.js';
 const MANIFEST_FILE = 'precache-manifest.json';
 
 /**
- * The app-shell manifest the Service Worker precaches on install: every emitted
- * chunk, as same-origin absolute paths.
+ * The app-shell pair, sharing one build id: the manifest the Service Worker
+ * precaches on install — every emitted chunk, as same-origin absolute paths —
+ * and the worker itself, stamped with a digest of those same bytes so the shell
+ * cache rotates with the output.
+ *
+ * The worker is a second pass so it lands unhashed at the output root — its
+ * scope is bounded by its own URL path — and as a classic script, not the ES
+ * module the app's chunk graph would emit.
  */
-function precacheManifest(): Plugin {
-  return {
-    name: 'cipherbox:precache-manifest',
-    enforce: 'post',
-    generateBundle(_options, bundle) {
-      const shell = Object.keys(bundle)
-        .filter((fileName) => !fileName.endsWith('.map'))
-        .map((fileName) => `/${fileName}`)
-        .sort();
-      this.emitFile({
-        type: 'asset',
-        fileName: MANIFEST_FILE,
-        source: `${JSON.stringify(shell, null, 2)}\n`,
-      });
-    },
-  };
-}
+function appShell(): Plugin[] {
+  let buildId: string | null = null;
 
-/**
- * A separate pass so the worker lands unhashed at the output root — its scope is
- * bounded by its own URL path — and as a classic script, not the ES module the
- * app's chunk graph would emit.
- */
-function serviceWorkerBuild(): Plugin {
-  return {
-    name: 'cipherbox:service-worker',
-    apply: 'build',
-    async closeBundle() {
-      await build({
-        configFile: false,
-        logLevel: 'warn',
-        build: {
-          outDir: OUT_DIR,
-          emptyOutDir: false,
-          rollupOptions: {
-            input: SW_ENTRY,
-            // `iife` keeps the classic-script contract: an `es` chunk reaching for
-            // a dynamic import emits `import.meta`, which a classic worker rejects.
-            output: { entryFileNames: SW_FILE, codeSplitting: false, format: 'iife' },
-          },
-        },
-      });
+  return [
+    {
+      name: 'cipherbox:precache-manifest',
+      enforce: 'post',
+      generateBundle(_options, bundle) {
+        const fileNames = Object.keys(bundle)
+          .filter((fileName) => !fileName.endsWith('.map'))
+          .sort();
+
+        const digest = createHash('sha256');
+        for (const fileName of fileNames) {
+          const output = bundle[fileName];
+          digest.update(fileName);
+          digest.update(output.type === 'chunk' ? output.code : output.source);
+        }
+        buildId = digest.digest('hex').slice(0, 16);
+
+        const shell = fileNames.map((fileName) => `/${fileName}`);
+        this.emitFile({
+          type: 'asset',
+          fileName: MANIFEST_FILE,
+          source: `${JSON.stringify(shell, null, 2)}\n`,
+        });
+      },
     },
-  };
+    {
+      name: 'cipherbox:service-worker',
+      apply: 'build',
+      async closeBundle() {
+        if (buildId === null)
+          throw new Error('the precache manifest emitted no app-shell build id');
+        await build({
+          configFile: false,
+          logLevel: 'warn',
+          define: { __APP_SHELL_BUILD_ID__: JSON.stringify(buildId) },
+          build: {
+            outDir: OUT_DIR,
+            emptyOutDir: false,
+            rollupOptions: {
+              input: SW_ENTRY,
+              // `iife` keeps the classic-script contract: an `es` chunk reaching for
+              // a dynamic import emits `import.meta`, which a classic worker rejects.
+              output: { entryFileNames: SW_FILE, codeSplitting: false, format: 'iife' },
+            },
+          },
+        });
+        // The worker's bytes must vary per deploy or the browser finds no update
+        // to install, and the shell it precached is never rotated.
+        const emitted = await readFile(join(OUT_DIR, SW_FILE), 'utf8');
+        if (!emitted.includes(buildId)) throw new Error(`${SW_FILE} did not take the build stamp`);
+      },
+    },
+  ];
 }
 
 export default defineConfig({
-  plugins: [react(), precacheManifest(), serviceWorkerBuild()],
+  plugins: [react(), ...appShell()],
   // `@cipherbox/client`'s engine worker dynamically imports the wasm-bindgen ES
   // module, which a classic worker cannot do (blueprint/web-client.md).
   worker: { format: 'es' },
