@@ -22,7 +22,7 @@ pub mod fakes;
 mod owner_root;
 mod world;
 
-pub use content::frame_version;
+pub use content::{block_store, frame_version, gateway, requested_cid, serve};
 pub use entropy::SeededEntropy;
 pub use executor::block_on;
 pub use owner_root::{

@@ -480,8 +480,7 @@ extern "C" {
     #[wasm_bindgen(method, catch, js_name = send)]
     async fn send(this: &JsHttpSeam, request: JsValue) -> Result<JsValue, JsValue>;
     /// Resolves a `CappedHttpResult`: `{kind:'response', …}` or
-    /// `{kind:'tooLarge', observed, limit}`. The JS side enforces `max_bytes`
-    /// while it drains `Response.body`, so it is the authoritative bound.
+    /// `{kind:'tooLarge', observed, limit}`.
     #[wasm_bindgen(method, catch, js_name = sendCapped)]
     async fn send_capped(
         this: &JsHttpSeam,

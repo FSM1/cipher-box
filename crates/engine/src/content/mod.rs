@@ -51,7 +51,7 @@ use crate::seams::Http;
 /// addresses under it.
 ///
 /// The three always come from one decoded root manifest, so the published
-/// [`Version`] cannot disagree with the manifest [`open_content`] checks it
+/// [`Version`] cannot disagree with the manifest [`open_content_range`] checks it
 /// against — the encode side of that reject is unrepresentable rather than
 /// merely guarded (AGENTS.md rule 8; #812 guard 3).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,17 +185,6 @@ fn open_dag_error(e: DagError) -> OpenError {
     }
 }
 
-/// Fetch, verify, and reassemble one content version's whole plaintext — the
-/// read dual of [`ContentWriter`]. The full-file case of
-/// [`open_content_range`].
-pub async fn open_content<H: Http>(
-    gateway: &Gateway,
-    http: &H,
-    version: &Version,
-) -> Result<Vec<u8>, OpenError> {
-    open_content_range(gateway, http, version, 0, version.size).await
-}
-
 /// Fetch, verify, and reassemble the plaintext window `[offset, offset +
 /// length)` of one content version, fetching only the leaves it covers. The
 /// request is clamped to the version, so an offset at or past the end yields no
@@ -241,7 +230,9 @@ pub async fn open_content_range<H: Http>(
     // field must not commit an outsized allocation upfront (on wasm32 it would
     // also truncate). The assembled-length cross-check below is the gate.
     let prealloc = length.min(limits::MAX_RESOLVED_RECORD_BYTES as u64) as usize;
-    let mut plaintext = Vec::with_capacity(prealloc);
+    // Owns already-assembled plaintext until it is handed to the caller: the
+    // trust rejects below abandon a partly-filled buffer (AGENTS.md 7).
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(prealloc));
     for index in leaves {
         let leaf_cid = &manifest.leaf_cids[index];
         let leaf_cid_str = encode_content_cid_str(leaf_cid);
@@ -275,7 +266,8 @@ pub async fn open_content_range<H: Http>(
             plaintext.len(),
         )));
     }
-    Ok(plaintext)
+    // The caller becomes the terminal owner of the window it asked for.
+    Ok(std::mem::take(&mut *plaintext))
 }
 
 #[cfg(test)]
@@ -317,7 +309,7 @@ mod tests {
         assert_eq!(content.size(), plaintext.len() as u64);
     }
 
-    /// The encode side of [`open_content`]'s manifest-vs-version size reject:
+    /// The encode side of [`open_content_range`]'s manifest-vs-version size reject:
     /// both figures come from one value, so they cannot be made to disagree
     /// (AGENTS.md rule 8; #812 guard 3). Fires in a release build.
     #[test]
@@ -367,9 +359,8 @@ mod tests {
 
     mod ranged {
         use super::*;
-        use crate::seams::{HttpResponse, SeamError};
-        use crate::testkit::block_on;
         use crate::testkit::fakes::ScriptedHttp;
+        use crate::testkit::{block_on, block_store, gateway, requested_cid, serve};
         use std::collections::BTreeMap;
 
         const CONTENT_KEY: [u8; KEY_LEN] = [0x5Au8; KEY_LEN];
@@ -399,10 +390,7 @@ mod tests {
         fn from_leaves(leaves: Vec<SealedChunk>, size: u64) -> Fixture {
             let leaf_cids: Vec<Vec<u8>> = leaves.iter().map(|leaf| leaf.cid.clone()).collect();
             let dag = assemble(&leaf_cids, size, &ContentProfile::CI).unwrap();
-            let mut blocks = BTreeMap::new();
-            for leaf in &leaves {
-                blocks.insert(encode_content_cid_str(&leaf.cid), leaf.sealed.clone());
-            }
+            let mut blocks = block_store(&leaves);
             blocks.insert(
                 encode_content_cid_str(&dag.content_cid),
                 dag.root_block.clone(),
@@ -411,45 +399,6 @@ mod tests {
                 version: Version::new(dag.content_cid, CONTENT_KEY, size, 0),
                 blocks,
             }
-        }
-
-        fn gateway() -> Gateway {
-            Gateway {
-                accelerator: None,
-                public_fallbacks: vec![GatewaySource {
-                    base_url: "https://public.gw.test".into(),
-                    bearer: None,
-                }],
-            }
-        }
-
-        /// The CID a trustless-gateway raw-block URL addresses.
-        fn requested_cid(url: &str) -> String {
-            url.rsplit('/')
-                .next()
-                .and_then(|tail| tail.split('?').next())
-                .unwrap_or_default()
-                .to_owned()
-        }
-
-        /// Serve `blocks` for more requests than any test here makes; anything
-        /// unstored is an availability failure.
-        fn serve(blocks: &BTreeMap<String, Vec<u8>>) -> ScriptedHttp {
-            let http = ScriptedHttp::default();
-            for _ in 0..32 {
-                let blocks = blocks.clone();
-                http.enqueue_derived(move |request| {
-                    match blocks.get(&requested_cid(&request.url)) {
-                        Some(block) => Ok(HttpResponse {
-                            status: 200,
-                            headers: Vec::new(),
-                            body: block.clone(),
-                        }),
-                        None => Err(SeamError::new("no such block")),
-                    }
-                });
-            }
-            http
         }
 
         /// Every CID fetched, in request order.
@@ -560,20 +509,6 @@ mod tests {
         }
 
         #[test]
-        fn the_full_range_equals_the_whole_file_read() {
-            let plaintext: Vec<u8> = (0..100u8).collect();
-            let fixture = fixture(&plaintext);
-            let (out, _) = read_range(&fixture, 0, plaintext.len() as u64);
-            assert_eq!(out, plaintext);
-            let http = serve(&fixture.blocks);
-            assert_eq!(
-                block_on(open_content(&gateway(), &http, &fixture.version)).unwrap(),
-                plaintext,
-                "the whole-file read is the full-range case"
-            );
-        }
-
-        #[test]
         fn every_offset_and_length_matches_the_whole_file_slice() {
             let plaintext: Vec<u8> = (0..48u8).collect();
             let fixture = fixture(&plaintext);
@@ -585,6 +520,9 @@ mod tests {
                     assert_eq!(out, plaintext[start..end], "range {offset}+{length}");
                 }
             }
+            // The whole-file read `Engine::read_content` issues.
+            let (out, _) = read_range(&fixture, 0, u64::MAX);
+            assert_eq!(out, plaintext, "an unbounded window is the whole file");
         }
 
         /// The encode side of the per-leaf length reject: the framer splits on

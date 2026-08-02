@@ -33,7 +33,7 @@ use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
     ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, Refused,
-    SealError, StagingLedger, open_content, open_content_range, sealed_total_bytes,
+    SealError, StagingLedger, open_content_range, sealed_total_bytes,
 };
 use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
@@ -2390,20 +2390,10 @@ impl<T: SeamTypes> Engine<T> {
             return Err(EngineError::NotStarted);
         }
         self.emit_op_progress(node, OpPhase::DownloadStarted, None);
-        match self.read_content_inner(node).await {
-            Ok((plaintext, size, modified_at, version_count)) => {
-                // The verified head version is gate-passing state, so it may
-                // legally touch the base node's projected size/mtime. Repaint
-                // only on a real change — a repeat read must not cascade.
-                if project_child_version(
-                    &mut self.snapshot.borrow_mut(),
-                    node,
-                    size,
-                    modified_at,
-                    version_count,
-                ) {
-                    let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-                }
+        // The range clamps to the version's size, so the whole file is the
+        // unbounded window.
+        match self.read_content_range(node, 0, u64::MAX).await {
+            Ok(plaintext) => {
                 self.emit_op_progress(node, OpPhase::DownloadCompleted, None);
                 Ok(plaintext)
             }
@@ -2431,6 +2421,9 @@ impl<T: SeamTypes> Engine<T> {
         let bytes = open_content_range(&self.gateway, &self.seams.http, &version, offset, length)
             .await
             .map_err(open_engine_error)?;
+        // The verified head version is gate-passing state, so it may legally
+        // touch the base node's projected size/mtime. Repaint only on a real
+        // change — a repeat read must not cascade.
         if project_child_version(
             &mut self.snapshot.borrow_mut(),
             node,
@@ -2441,21 +2434,6 @@ impl<T: SeamTypes> Engine<T> {
             let _ = self.events.unbounded_send(Event::SnapshotUpdated);
         }
         Ok(bytes)
-    }
-
-    /// The verified read pipeline behind [`read_content`](Self::read_content):
-    /// [`head_version`](Self::head_version) → [`open_content`] (version-DAG
-    /// fetch, per-leaf unseal, length cross-checks). Returns the plaintext plus
-    /// the head version's `(size, modifiedAt)` and the body's version count.
-    async fn read_content_inner(
-        &self,
-        node: NodeId,
-    ) -> Result<(Vec<u8>, u64, u64, u64), EngineError> {
-        let (version, version_count) = self.head_version(node).await?;
-        let plaintext = open_content(&self.gateway, &self.seams.http, &version)
-            .await
-            .map_err(open_engine_error)?;
-        Ok((plaintext, version.size, version.modified_at, version_count))
     }
 
     /// Resolve one file node's head content version: base-snapshot lookup →
@@ -2540,9 +2518,11 @@ impl<T: SeamTypes> Engine<T> {
                 message: "sealed body kind disagrees with the child ref".to_owned(),
             });
         };
-        // Newest-first; head is current (crates/core/src/seal/body.rs).
+        // Newest-first; head is current (crates/core/src/seal/body.rs). Clone the
+        // head rather than moving it out: `into_iter().next()` bitwise-moves slot
+        // 0, so its content key would reach the allocator unzeroized.
         let version_count = versions.len() as u64;
-        let Some(version) = versions.into_iter().next() else {
+        let Some(version) = versions.first().cloned() else {
             return Err(EngineError::ContentUnavailable {
                 message: "file has no published content version".to_owned(),
             });
