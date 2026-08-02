@@ -142,9 +142,10 @@ pub trait Http {
     /// adoption. Both real transports — desktop (`reqwest`) and WASM (the JS
     /// fetch bridge) — enforce one bound the same way: a `Content-Length`
     /// pre-check, then a streaming drain that aborts as soon as the accumulated
-    /// body would pass the cap. The transport hands over whole chunks, so peak
-    /// memory is `max_bytes` plus at most the one chunk that tripped the cap;
-    /// the body itself is never accumulated past `max_bytes` (#641, #787).
+    /// body would pass the cap. The body is never accumulated past `max_bytes`;
+    /// the transport hands over whole chunks, so peak memory is `max_bytes` —
+    /// twice that on the arm that concatenates the chunks at the end — plus at
+    /// most the one chunk that tripped the cap (#641, #787).
     ///
     /// The default implementation only backstops: it buffers the whole body via
     /// [`send`](Self::send) and then checks the length, which bounds nothing. It

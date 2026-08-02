@@ -341,7 +341,7 @@ async fn reqwest_http_capped_fetch_rejects_a_chunk_larger_than_the_cap() {
     // Chunked, so no Content-Length pre-check applies and the first chunk the
     // transport hands over already exceeds the cap on its own.
     let error = http
-        .send_capped(stream_request(&server, 1024 * 1024), 16)
+        .send_capped(stream_request(&server, 64 * 1024), 16)
         .await
         .expect_err("an over-cap body must fail closed");
 
@@ -350,7 +350,7 @@ async fn reqwest_http_capped_fetch_rejects_a_chunk_larger_than_the_cap() {
             assert_eq!(limit, 16);
             assert!(observed > limit, "observed {observed} must exceed the cap");
             assert!(
-                observed < 1024 * 1024,
+                observed < 64 * 1024,
                 "the drain must abort at a chunk, not buffer the whole body ({observed} bytes)"
             );
         }
