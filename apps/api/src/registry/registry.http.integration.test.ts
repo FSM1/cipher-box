@@ -165,7 +165,9 @@ describe('registry HTTP surface (real Postgres)', () => {
       // would put the caller's name and CIDs everywhere it is logged.
       expect(response.body.message).toEqual(expect.arrayContaining([expect.any(String)]));
       expect(JSON.stringify(response.body)).not.toContain('k51overcap');
+      expect(JSON.stringify(response.body)).not.toContain(contentCids[0]);
       expect(await namesFor(acct.id)).toHaveLength(0);
+      expect(await pinsFor(acct.id)).toHaveLength(0);
     });
 
     it('refuses an explicit null headCid rather than clearing the stored head', async () => {
@@ -175,11 +177,15 @@ describe('registry HTTP surface (real Postgres)', () => {
         .set('Authorization', `Bearer ${acct.token}`)
         .send([{ ipnsName: 'k51nullhead', headCid: 'bafyKeepMe', contentCids: [] }])
         .expect(201);
-      await request(http())
+      const refused = await request(http())
         .post('/registry/register')
         .set('Authorization', `Bearer ${acct.token}`)
         .send([{ ipnsName: 'k51nullhead', headCid: null, contentCids: [] }])
         .expect(400);
+      // DTO validation refuses inside ParseArrayPipe, which hands its
+      // exceptionFactory flattened strings — the code must survive that path.
+      expect(refused.body.code).toBe(REGISTRY_BATCH_REFUSED);
+      expect(refused.body.message).toEqual(expect.arrayContaining([expect.any(String)]));
       expect((await namesFor(acct.id))[0].headCid).toBe('bafyKeepMe');
     });
 
@@ -241,11 +247,13 @@ describe('registry HTTP surface (real Postgres)', () => {
 
     it('rejects an over-length target at the pipe (256-char cap)', async () => {
       const acct = await account();
-      await request(http())
+      const refused = await request(http())
         .post('/registry/retire')
         .set('Authorization', `Bearer ${acct.token}`)
         .send(['a'.repeat(257)])
         .expect(400);
+      expect(refused.body.code).toBe(REGISTRY_BATCH_REFUSED);
+      expect(refused.body.message).toEqual(expect.arrayContaining([expect.any(String)]));
     });
   });
 

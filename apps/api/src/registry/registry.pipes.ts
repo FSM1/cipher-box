@@ -18,15 +18,17 @@ function constraintMessages(errors: ValidationError[]): string[] {
   ]);
 }
 
-/** Every batch-gate refusal carries the same stable `code` (see its home). */
-const refuse = (error: unknown) =>
-  new BadRequestException(
-    batchRefusedBody(
-      Array.isArray(error) && error.every((item) => item instanceof ValidationError)
-        ? constraintMessages(error)
-        : error
-    )
-  );
+/** `ParseArrayPipe` hands its `exceptionFactory` already-flattened strings; the
+ * size and length guards hand a single string. */
+function messagesOf(error: unknown): string[] {
+  if (!Array.isArray(error)) return [String(error)];
+  return error.every((item) => item instanceof ValidationError)
+    ? constraintMessages(error)
+    : error.map(String);
+}
+
+/** Every batch-gate refusal answers the one documented body (see its home). */
+const refuse = (error: unknown) => new BadRequestException(batchRefusedBody(messagesOf(error)));
 
 /** Reject an oversize batch up front, before per-item validation runs. */
 class BatchSizePipe implements PipeTransform {

@@ -19,7 +19,7 @@ import {
   RETIRE_TARGET_MAX_LENGTH,
   RetireResponseDto,
 } from './dto/registry.dto';
-import { REGISTRY_BATCH_REFUSED } from './registry-error-codes';
+import { BatchRefusedDto, REGISTRY_BATCH_REFUSED } from './registry-error-codes';
 import { registerBodyPipes, retireBodyPipes } from './registry.pipes';
 import { RegistryService } from './services/registry.service';
 
@@ -54,6 +54,7 @@ export class RegistryController {
   @ApiCreatedResponse({ type: RegisterResponseDto })
   @ApiResponse({
     status: 400,
+    type: BatchRefusedDto,
     description: `Malformed or over-cap batch; the body carries code ${REGISTRY_BATCH_REFUSED}`,
   })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })
@@ -82,6 +83,7 @@ export class RegistryController {
   @ApiCreatedResponse({ type: RetireResponseDto })
   @ApiResponse({
     status: 400,
+    type: BatchRefusedDto,
     description: `Malformed or over-cap batch; the body carries code ${REGISTRY_BATCH_REFUSED}`,
   })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token' })

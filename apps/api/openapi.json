@@ -452,7 +452,14 @@
             }
           },
           "400": {
-            "description": "Malformed or over-cap batch; the body carries code REGISTRY_BATCH_REFUSED"
+            "description": "Malformed or over-cap batch; the body carries code REGISTRY_BATCH_REFUSED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchRefusedDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid access token"
@@ -506,7 +513,14 @@
             }
           },
           "400": {
-            "description": "Malformed or over-cap batch; the body carries code REGISTRY_BATCH_REFUSED"
+            "description": "Malformed or over-cap batch; the body carries code REGISTRY_BATCH_REFUSED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchRefusedDto"
+                }
+              }
+            }
           },
           "401": {
             "description": "Missing or invalid access token"
@@ -1112,6 +1126,38 @@
         "required": [
           "names",
           "cids"
+        ]
+      },
+      "BatchRefusedDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 400
+          },
+          "message": {
+            "description": "Constraint strings only — never the rejected entry",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "error": {
+            "type": "string",
+            "example": "Bad Request"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "REGISTRY_BATCH_REFUSED"
+            ]
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "error",
+          "code"
         ]
       },
       "RetireResponseDto": {
