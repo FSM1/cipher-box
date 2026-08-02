@@ -20,6 +20,20 @@ const navigation = (url: string): Request =>
   ({ method: 'GET', url, mode: 'navigate' }) as unknown as Request;
 
 describe('precacheAppShell', () => {
+  it('requests the manifest same-origin and uncached', async () => {
+    const calls: Array<[string, RequestInit | undefined]> = [];
+    const recording = (async (input: string, init?: RequestInit) => {
+      calls.push([input, init]);
+      return new Response('["/index.html"]');
+    }) as unknown as typeof fetch;
+
+    await precacheAppShell(new FakeCacheStorage(), recording, ORIGIN);
+
+    // A cached manifest would pin the shell to a superseded deploy.
+    expect(calls[0][0]).toBe(`${ORIGIN}/precache-manifest.json`);
+    expect(calls[0][1]?.cache).toBe('no-store');
+  });
+
   it('caches every same-origin manifest entry', async () => {
     const caches = new FakeCacheStorage();
 

@@ -374,6 +374,9 @@ impl EngineHandle {
                 .read_content(node)
                 .await
                 .map_err(engine_error)?;
+            // Terminal owner of the Rust-side plaintext: the copy crosses into
+            // the JS heap here, so this buffer is wiped rather than freed.
+            let bytes = Zeroizing::new(bytes);
             Ok(Uint8Array::from(bytes.as_slice()).into())
         })
     }
@@ -400,6 +403,7 @@ impl EngineHandle {
                 .read_content_range(node, offset as u64, length as u64)
                 .await
                 .map_err(engine_error)?;
+            let bytes = Zeroizing::new(bytes);
             Ok(Uint8Array::from(bytes.as_slice()).into())
         })
     }

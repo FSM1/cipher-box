@@ -80,7 +80,7 @@ const engineReader: MediaReader = {
   },
 };
 
-window.cbMediaEngine = ({ lockName, channelName }: MediaEngineOptions): Promise<string> => {
+window.cbMediaEngine = async ({ lockName, channelName }: MediaEngineOptions): Promise<string> => {
   client = new EngineClient({
     locks: navigator.locks,
     lockName,
@@ -90,10 +90,14 @@ window.cbMediaEngine = ({ lockName, channelName }: MediaEngineOptions): Promise<
         type: 'module',
       }),
   });
-  // Let the lock election settle so the caller's role assertion is meaningful.
-  return new Promise<string>((resolve) =>
-    setTimeout(() => resolve(client?.currentRole() ?? 'none'), 50)
-  );
+  // The caller asserts an exact role, so wait for the election rather than
+  // guessing at how long a loaded CI machine needs to settle it.
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const role = client?.currentRole() ?? 'none';
+    if (role !== 'none') return role;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return 'none';
 };
 
 window.cbMediaStart = async ({ reader }: MediaStartOptions): Promise<boolean> => {
@@ -156,6 +160,7 @@ window.cbMediaDispose = async (): Promise<void> => {
   await client?.dispose();
   client = null;
   readerCalls = 0;
+  portRequests = 0;
   const registrations = await navigator.serviceWorker.getRegistrations();
   await Promise.all(registrations.map((registration) => registration.unregister()));
 };
