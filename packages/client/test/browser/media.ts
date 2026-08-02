@@ -8,6 +8,7 @@ import { EngineClient } from '../../src/engineClient.js';
 import { MediaService } from '../../src/media/service.js';
 import { MEDIA_PORT_REQUEST } from '../../src/media/protocol.js';
 import type { MediaReader } from '../../src/media/broker.js';
+import { awaitElection } from './election.js';
 import { hex } from './hexUtil.js';
 import { fixtureBuffer, TAB_SEED } from './mediaFixture.js';
 
@@ -80,7 +81,7 @@ const engineReader: MediaReader = {
   },
 };
 
-window.cbMediaEngine = async ({ lockName, channelName }: MediaEngineOptions): Promise<string> => {
+window.cbMediaEngine = ({ lockName, channelName }: MediaEngineOptions): Promise<string> => {
   client = new EngineClient({
     locks: navigator.locks,
     lockName,
@@ -90,14 +91,7 @@ window.cbMediaEngine = async ({ lockName, channelName }: MediaEngineOptions): Pr
         type: 'module',
       }),
   });
-  // The caller asserts an exact role, so wait for the election rather than
-  // guessing at how long a loaded CI machine needs to settle it.
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const role = client?.currentRole() ?? 'none';
-    if (role !== 'none') return role;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  return 'none';
+  return awaitElection(client, lockName);
 };
 
 window.cbMediaStart = async ({ reader }: MediaStartOptions): Promise<boolean> => {
