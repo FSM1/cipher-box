@@ -10,13 +10,8 @@
  * every op the dead leader had already accepted — no accepted work is lost.
  */
 import { serveEngine, type WorkerScopeLike } from '../../src/worker/serve.js';
-import type { EngineHostLike } from '../../src/worker/engineHost.js';
-import type {
-  CommandDescriptor,
-  EventDescriptor,
-  SnapshotDescriptor,
-  WriteTarget,
-} from '../../src/worker/protocol.js';
+import { StubEngineHost } from '../../src/testkit.js';
+import type { CommandDescriptor, EventDescriptor, WriteTarget } from '../../src/worker/protocol.js';
 
 const DB_NAME = 'cb-leadership-journal';
 const STORE = 'ops';
@@ -46,7 +41,7 @@ async function journal(kind: string): Promise<void> {
   }
 }
 
-class JournalHost implements EngineHostLike {
+class JournalHost extends StubEngineHost {
   private nextHandle = 1n;
   // Op ids are a separate id space from write handles; keep them disjoint so a
   // client that conflates the two cannot pass against this fake.
@@ -91,18 +86,6 @@ class JournalHost implements EngineHostLike {
   abortWrite(handle: bigint): Promise<void> {
     this.open.delete(handle);
     return Promise.resolve();
-  }
-
-  snapshot(): Promise<SnapshotDescriptor> {
-    return Promise.reject(new Error('journal host serves no snapshots'));
-  }
-
-  siweChallenge(): Promise<string> {
-    return Promise.reject(new Error('journal host serves no siwe challenges'));
-  }
-
-  download(): Promise<ArrayBuffer> {
-    return Promise.reject(new Error('journal host serves no downloads'));
   }
 
   nextEvent(): Promise<EventDescriptor | null> {

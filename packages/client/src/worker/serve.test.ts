@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { emptySnapshot, FAKE_SIWE_NONCE, fakeWasmEnums } from '../testkit.js';
+import { emptySnapshot, FAKE_SIWE_NONCE, fakeWasmEnums, StubEngineHost } from '../testkit.js';
 import { LocalTransport, type EngineWorkerLike } from '../transport.js';
-import { EngineHost, type EngineHostLike } from './engineHost.js';
+import { EngineHost } from './engineHost.js';
 import type { EngineWasm, WasmEngineHandle, WasmEvent } from './engineWasm.js';
 import type {
   EventDescriptor,
@@ -58,9 +58,10 @@ const SNAPSHOT: SnapshotDescriptor = {
   retainedRecords: 0,
 };
 
-class ReadHost implements EngineHostLike {
+class ReadHost extends StubEngineHost {
   readonly snapshots: Uint8Array[] = [];
   readonly downloads: Uint8Array[] = [];
+  readonly downloadRanges: Array<{ node: Uint8Array; offset: number; length: number }> = [];
   readonly beginWrites: Array<{ target: WriteTarget; size: number }> = [];
   readonly chunks: Array<{ handle: bigint; bytes: number[] }> = [];
   readonly commits: bigint[] = [];
@@ -68,6 +69,8 @@ class ReadHost implements EngineHostLike {
   respondSnapshot: () => Promise<SnapshotDescriptor> = () => Promise.resolve(SNAPSHOT);
   respondDownload: () => Promise<ArrayBuffer> = () =>
     Promise.resolve(new Uint8Array([9, 8, 7]).buffer);
+  respondDownloadRange: () => Promise<ArrayBuffer> = () =>
+    Promise.resolve(new Uint8Array([5, 4]).buffer);
   siweChallenges = 0;
 
   start(): Promise<void> {
@@ -113,6 +116,11 @@ class ReadHost implements EngineHostLike {
     return this.respondDownload();
   }
 
+  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
+    this.downloadRanges.push({ node, offset, length });
+    return this.respondDownloadRange();
+  }
+
   nextEvent(): Promise<EventDescriptor | null> {
     return new Promise<EventDescriptor | null>(() => undefined);
   }
@@ -138,6 +146,24 @@ describe('serveEngine read requests', () => {
 
     const content = await transport.download(new Uint8Array(16).fill(4));
     expect([...new Uint8Array(content)]).toEqual([9, 8, 7]);
+
+    const response = toUi.find(
+      (entry) => entry.message.type === 'response' && 'result' in entry.message
+    );
+    expect(response).toBeDefined();
+    expect(response!.transfer).toEqual([content]);
+  });
+
+  it('serves a downloadRange with its window and the plaintext buffer transferred', async () => {
+    const { scope, worker, toUi } = loopback();
+    const host = new ReadHost();
+    serveEngine(scope, host);
+    const transport = new LocalTransport(worker);
+
+    const node = new Uint8Array(16).fill(4);
+    const content = await transport.downloadRange(node, 1024, 2);
+    expect([...new Uint8Array(content)]).toEqual([5, 4]);
+    expect(host.downloadRanges).toEqual([{ node, offset: 1024, length: 2 }]);
 
     const response = toUi.find(
       (entry) => entry.message.type === 'response' && 'result' in entry.message
@@ -334,6 +360,7 @@ describe('serveEngine event pump over the real EngineHost', () => {
       snapshot: () => Promise.reject(new Error('unused')),
       siweChallenge: () => Promise.reject(new Error('unused')),
       download: () => Promise.reject(new Error('unused')),
+      downloadRange: () => Promise.reject(new Error('unused')),
       nextEvent: () =>
         pumped.length > 0
           ? Promise.resolve(pumped.shift())

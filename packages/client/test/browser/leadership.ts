@@ -9,6 +9,7 @@
  */
 import { EngineClient } from '../../src/engineClient.js';
 import type { PendingClass } from '../../src/worker/protocol.js';
+import { awaitElection } from './election.js';
 import { hex, unhex } from './hexUtil.js';
 
 const JOURNAL_DB = 'cb-leadership-journal';
@@ -73,7 +74,7 @@ function settle(error: unknown): string {
 // A valid secp256k1 identity scalar placeholder (the journal fake ignores it).
 const secret = (): ArrayBuffer => new Uint8Array(32).fill(1).buffer;
 
-window.cbCreate = ({ lockName, channelName, worker }: HarnessOptions): Promise<void> => {
+window.cbCreate = async ({ lockName, channelName, worker }: HarnessOptions): Promise<void> => {
   const workerUrl =
     worker === 'engine'
       ? new URL('./engine.worker.ts', import.meta.url)
@@ -86,8 +87,7 @@ window.cbCreate = ({ lockName, channelName, worker }: HarnessOptions): Promise<v
     // Failover re-derivation: a real login re-exports this from Core Kit.
     secretSource: { provideSecret: () => Promise.resolve(secret()) },
   });
-  // Let the lock election settle so role() is meaningful to the caller.
-  return new Promise<void>((resolve) => setTimeout(resolve, 50));
+  await awaitElection(client, lockName);
 };
 
 window.cbRole = (): string => client?.currentRole() ?? 'none';

@@ -41,6 +41,7 @@ pub use write::{ContentWriter, FinishedContent};
 use cipherbox_core::content::{compute_cid, encode_content_cid_str, open_chunk};
 use cipherbox_core::seal::Version;
 use cipherbox_core::suite::secret::SECRET_LEN;
+use zeroize::Zeroizing;
 
 use crate::entropy::EntropyError;
 use crate::seams::Http;
@@ -50,7 +51,7 @@ use crate::seams::Http;
 /// addresses under it.
 ///
 /// The three always come from one decoded root manifest, so the published
-/// [`Version`] cannot disagree with the manifest [`open_content`] checks it
+/// [`Version`] cannot disagree with the manifest [`open_content_range`] checks it
 /// against — the encode side of that reject is unrepresentable rather than
 /// merely guarded (AGENTS.md rule 8; #812 guard 3).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,14 +185,41 @@ fn open_dag_error(e: DagError) -> OpenError {
     }
 }
 
-/// Fetch, verify, and reassemble one content version's plaintext — the read
-/// dual of [`ContentWriter`]: DAG root fetch (CID-verified fail-closed) →
-/// manifest-vs-version size cross-check → per-leaf CID-verified fetch + unseal
-/// under the version content key → reassembled-length cross-check.
-pub async fn open_content<H: Http>(
+/// Make room in `buf` for `additional` more bytes, wiping the allocation it
+/// leaves behind.
+///
+/// A `Zeroizing<Vec<u8>>` wipes only the allocation it currently owns, so
+/// letting `Vec` reallocate would free the old one with plaintext still in it
+/// (AGENTS.md 7). Doubling keeps the new allocation within twice the leaves
+/// already authenticated, so an unproven size field still cannot commit an
+/// outsized one.
+fn grow_wiping(buf: &mut Zeroizing<Vec<u8>>, additional: usize) {
+    let needed = buf.len().saturating_add(additional);
+    if needed <= buf.capacity() {
+        return;
+    }
+    let mut grown = Zeroizing::new(Vec::with_capacity(
+        buf.capacity().saturating_mul(2).max(needed),
+    ));
+    grown.extend_from_slice(buf);
+    std::mem::swap(buf, &mut grown);
+}
+
+/// Fetch, verify, and reassemble the plaintext window `[offset, offset +
+/// length)` of one content version, fetching only the leaves it covers. The
+/// request is clamped to the version, so an offset at or past the end yields no
+/// bytes.
+///
+/// Every leaf must unseal to the length the flat framing implies — `chunk_size`
+/// but for the final one. A disagreement is a fail-closed trust violation: a
+/// short middle leaf shifts every downstream byte, so tolerating one would serve
+/// silently misaligned plaintext.
+pub async fn open_content_range<H: Http>(
     gateway: &Gateway,
     http: &H,
     version: &Version,
+    offset: u64,
+    length: u64,
 ) -> Result<Vec<u8>, OpenError> {
     let root_cid_str = encode_content_cid_str(&version.content_cid);
     let root_block = read_block(
@@ -211,29 +239,57 @@ pub async fn open_content<H: Http>(
         )));
     }
 
-    // Preallocate up to a fixed budget, then grow as leaves arrive: the size is
-    // authenticated but unproven until every leaf is fetched, so a large size
-    // field must not commit an outsized allocation upfront (on wasm32 it would
-    // also truncate). The reassembled-length cross-check below is the gate.
-    let prealloc = manifest.size.min(limits::MAX_RESOLVED_RECORD_BYTES as u64) as usize;
-    let mut plaintext = Vec::with_capacity(prealloc);
-    for leaf_cid in &manifest.leaf_cids {
+    let length = length.min(manifest.size.saturating_sub(offset));
+    if length == 0 {
+        return Ok(Vec::new());
+    }
+    let chunk_size = manifest.chunk_size;
+    let leaves = leaf_range_for_byte_range(offset, length, chunk_size, manifest.leaf_cids.len());
+    // Preallocate up to a fixed budget, then grow through `grow_wiping` as
+    // leaves arrive: the size is authenticated but unproven until every leaf is
+    // fetched, so a large size field must not commit an outsized allocation
+    // upfront (on wasm32 it would also truncate). The assembled-length
+    // cross-check below is the gate.
+    let prealloc = length.min(limits::MAX_RESOLVED_RECORD_BYTES as u64) as usize;
+    // Owns already-assembled plaintext until it is handed to the caller: the
+    // trust rejects below abandon a partly-filled buffer (AGENTS.md 7).
+    let mut plaintext = Zeroizing::new(Vec::with_capacity(prealloc));
+    for index in leaves {
+        let leaf_cid = &manifest.leaf_cids[index];
         let leaf_cid_str = encode_content_cid_str(leaf_cid);
         let sealed = read_block(gateway, http, &leaf_cid_str, leaf_cid, ContentPlane::Leaf)
             .await
             .map_err(open_read_error)?;
-        let chunk = open_chunk(version.content_key(), &sealed)
-            .map_err(|e| OpenError::Trust(format!("leaf unseal rejected: [{}]", e.check())))?;
-        plaintext.extend_from_slice(&chunk);
+        // Terminal owner of this leaf's plaintext: a ranged read discards the
+        // trimmed head and tail, so they must not outlive the loop (AGENTS.md 7).
+        let chunk = Zeroizing::new(
+            open_chunk(version.content_key(), &sealed)
+                .map_err(|e| OpenError::Trust(format!("leaf unseal rejected: [{}]", e.check())))?,
+        );
+
+        let leaf_start = (index as u64).saturating_mul(chunk_size);
+        let expected = chunk_size.min(manifest.size.saturating_sub(leaf_start));
+        if chunk.len() as u64 != expected {
+            return Err(OpenError::Trust(format!(
+                "leaf {index} unsealed to {} bytes, not the {expected} the manifest implies",
+                chunk.len()
+            )));
+        }
+        let from = offset.saturating_sub(leaf_start).min(expected) as usize;
+        let to = (offset.saturating_add(length))
+            .saturating_sub(leaf_start)
+            .min(expected) as usize;
+        grow_wiping(&mut plaintext, to - from);
+        plaintext.extend_from_slice(&chunk[from..to]);
     }
-    if plaintext.len() as u64 != manifest.size {
+    if plaintext.len() as u64 != length {
         return Err(OpenError::Trust(format!(
-            "reassembled length {} disagrees with manifest size {}",
+            "assembled length {} disagrees with the {length}-byte range requested",
             plaintext.len(),
-            manifest.size
         )));
     }
-    Ok(plaintext)
+    // The caller becomes the terminal owner of the window it asked for.
+    Ok(std::mem::take(&mut *plaintext))
 }
 
 #[cfg(test)]
@@ -275,7 +331,7 @@ mod tests {
         assert_eq!(content.size(), plaintext.len() as u64);
     }
 
-    /// The encode side of [`open_content`]'s manifest-vs-version size reject:
+    /// The encode side of [`open_content_range`]'s manifest-vs-version size reject:
     /// both figures come from one value, so they cannot be made to disagree
     /// (AGENTS.md rule 8; #812 guard 3). Fires in a release build.
     #[test]
@@ -321,5 +377,269 @@ mod tests {
     #[test]
     fn framing_is_deterministic() {
         assert_eq!(sealed(b"determinism", 7).0, sealed(b"determinism", 7).0);
+    }
+
+    mod ranged {
+        use super::*;
+        use crate::testkit::fakes::ScriptedHttp;
+        use crate::testkit::{block_on, block_store, gateway, requested_cid, serve};
+        use std::collections::BTreeMap;
+
+        const CONTENT_KEY: [u8; KEY_LEN] = [0x5Au8; KEY_LEN];
+
+        /// A version and the blocks that serve it, keyed by gateway address.
+        struct Fixture {
+            version: Version,
+            blocks: BTreeMap<String, Vec<u8>>,
+        }
+
+        /// Frame `plaintext` at the CI profile (16-byte chunks) into a version
+        /// whose every block is served by the returned store.
+        fn fixture(plaintext: &[u8]) -> Fixture {
+            let key = ContentKey::from_bytes(CONTENT_KEY);
+            let leaves = frame_and_seal(
+                plaintext,
+                &key,
+                &mut SeededEntropy::new(1),
+                &ContentProfile::CI,
+            )
+            .unwrap();
+            from_leaves(leaves, plaintext.len() as u64)
+        }
+
+        /// Assemble a version over already-sealed `leaves` declaring `size` —
+        /// the seam a hostile manifest is built through.
+        fn from_leaves(leaves: Vec<SealedChunk>, size: u64) -> Fixture {
+            let leaf_cids: Vec<Vec<u8>> = leaves.iter().map(|leaf| leaf.cid.clone()).collect();
+            let dag = assemble(&leaf_cids, size, &ContentProfile::CI).unwrap();
+            let mut blocks = block_store(&leaves);
+            blocks.insert(
+                encode_content_cid_str(&dag.content_cid),
+                dag.root_block.clone(),
+            );
+            Fixture {
+                version: Version::new(dag.content_cid, CONTENT_KEY, size, 0),
+                blocks,
+            }
+        }
+
+        /// Every CID fetched, in request order.
+        fn fetched(http: &ScriptedHttp) -> Vec<String> {
+            http.requests()
+                .iter()
+                .map(|request| requested_cid(&request.url))
+                .collect()
+        }
+
+        /// The gateway address of leaf `index` of `fixture`'s version.
+        fn leaf_address(fixture: &Fixture, index: usize) -> String {
+            let root =
+                fixture.blocks[&encode_content_cid_str(&fixture.version.content_cid)].clone();
+            encode_content_cid_str(&decode_root(&root).unwrap().leaf_cids[index])
+        }
+
+        fn read_range(fixture: &Fixture, offset: u64, length: u64) -> (Vec<u8>, Vec<String>) {
+            let http = serve(&fixture.blocks);
+            let out = block_on(open_content_range(
+                &gateway(),
+                &http,
+                &fixture.version,
+                offset,
+                length,
+            ))
+            .unwrap();
+            (out, fetched(&http))
+        }
+
+        #[test]
+        fn a_chunk_aligned_range_serves_exactly_its_own_leaf() {
+            let plaintext: Vec<u8> = (0..48u8).collect();
+            let fixture = fixture(&plaintext);
+            let (out, cids) = read_range(&fixture, 16, 16);
+            assert_eq!(out, plaintext[16..32]);
+            assert_eq!(
+                cids,
+                vec![
+                    encode_content_cid_str(&fixture.version.content_cid),
+                    leaf_address(&fixture, 1),
+                ],
+                "the root plus the one leaf the range covers, nothing else"
+            );
+        }
+
+        #[test]
+        fn a_range_straddling_a_leaf_boundary_is_assembled_from_both() {
+            let plaintext: Vec<u8> = (0..48u8).collect();
+            let fixture = fixture(&plaintext);
+            let (out, cids) = read_range(&fixture, 15, 2);
+            assert_eq!(out, plaintext[15..17]);
+            assert_eq!(
+                cids,
+                vec![
+                    encode_content_cid_str(&fixture.version.content_cid),
+                    leaf_address(&fixture, 0),
+                    leaf_address(&fixture, 1),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_suffix_range_running_past_the_end_is_clamped() {
+            let plaintext: Vec<u8> = (0..40u8).collect();
+            let fixture = fixture(&plaintext);
+            let (out, _) = read_range(&fixture, 33, 1000);
+            assert_eq!(out, plaintext[33..], "clamped to the version's own size");
+        }
+
+        #[test]
+        fn an_offset_at_or_past_the_end_yields_no_bytes_and_no_leaf_fetch() {
+            let fixture = fixture(&(0..40u8).collect::<Vec<_>>());
+            for offset in [40u64, 41, u64::MAX] {
+                let (out, cids) = read_range(&fixture, offset, 16);
+                assert!(out.is_empty(), "offset {offset} is past the end");
+                assert_eq!(
+                    cids,
+                    vec![encode_content_cid_str(&fixture.version.content_cid)],
+                    "only the root is consulted"
+                );
+            }
+        }
+
+        #[test]
+        fn a_zero_length_range_yields_no_bytes() {
+            let fixture = fixture(&(0..40u8).collect::<Vec<_>>());
+            let (out, cids) = read_range(&fixture, 8, 0);
+            assert!(out.is_empty());
+            assert_eq!(cids.len(), 1, "no leaf is fetched for an empty window");
+        }
+
+        #[test]
+        fn only_the_leaves_the_window_covers_are_fetched() {
+            // 5 leaves at 16 bytes; the window sits inside leaves 2..4.
+            let plaintext: Vec<u8> = (0..80u8).collect();
+            let fixture = fixture(&plaintext);
+            let (out, cids) = read_range(&fixture, 40, 20);
+            assert_eq!(out, plaintext[40..60]);
+            assert_eq!(
+                cids,
+                vec![
+                    encode_content_cid_str(&fixture.version.content_cid),
+                    leaf_address(&fixture, 2),
+                    leaf_address(&fixture, 3),
+                ]
+            );
+        }
+
+        #[test]
+        fn every_offset_and_length_matches_the_whole_file_slice() {
+            let plaintext: Vec<u8> = (0..48u8).collect();
+            let fixture = fixture(&plaintext);
+            for offset in 0..=48u64 {
+                for length in 0..=8u64 {
+                    let (out, _) = read_range(&fixture, offset, length);
+                    let start = offset.min(48) as usize;
+                    let end = (offset + length).min(48) as usize;
+                    assert_eq!(out, plaintext[start..end], "range {offset}+{length}");
+                }
+            }
+            // The whole-file read `Engine::read_content` issues.
+            let (out, _) = read_range(&fixture, 0, u64::MAX);
+            assert_eq!(out, plaintext, "an unbounded window is the whole file");
+        }
+
+        /// The encode side of the per-leaf length reject: the framer splits on
+        /// the chunk boundary, so a short non-final leaf is unrepresentable
+        /// rather than merely guarded (AGENTS.md rule 8). Fires in a release
+        /// build.
+        #[test]
+        fn the_framer_cannot_produce_a_short_non_final_leaf() {
+            let chunk_size = ContentProfile::CI.chunk_size();
+            let key = ContentKey::from_bytes(CONTENT_KEY);
+            for len in [0usize, 1, 15, 16, 17, 40, 100] {
+                let leaves = frame_and_seal(
+                    &vec![7u8; len],
+                    &key,
+                    &mut SeededEntropy::new(1),
+                    &ContentProfile::CI,
+                )
+                .unwrap();
+                for (index, leaf) in leaves.iter().enumerate() {
+                    let chunk = open_chunk(&CONTENT_KEY, &leaf.sealed).unwrap();
+                    let expected = if index + 1 < leaves.len() {
+                        chunk_size
+                    } else {
+                        len - index * chunk_size
+                    };
+                    assert_eq!(chunk.len(), expected, "{len}-byte version, leaf {index}");
+                }
+            }
+        }
+
+        #[test]
+        fn a_short_middle_leaf_fails_closed_as_a_trust_violation() {
+            // Leaf 1 carries 8 bytes where the framing implies 16; the manifest
+            // is otherwise well-formed — 3 leaves for 40 bytes at a 16-byte chunk.
+            let key = ContentKey::from_bytes(CONTENT_KEY);
+            let mut entropy = SeededEntropy::new(2);
+            let leaves: Vec<SealedChunk> = [16usize, 8, 16]
+                .into_iter()
+                .map(|len| seal_one_chunk(&key, &vec![0xA5u8; len], &mut entropy).unwrap())
+                .collect();
+            let fixture = from_leaves(leaves, 40);
+            let http = serve(&fixture.blocks);
+
+            let err = block_on(open_content_range(
+                &gateway(),
+                &http,
+                &fixture.version,
+                0,
+                40,
+            ))
+            .unwrap_err();
+            match err {
+                OpenError::Trust(message) => assert!(
+                    message.contains("leaf 1"),
+                    "the reject names the offending leaf: {message}"
+                ),
+                other => panic!("expected a trust violation, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn a_final_leaf_disagreeing_with_the_declared_size_fails_closed() {
+            // Two full leaves declared as 24 bytes: the final leaf unseals to 16
+            // where the manifest implies 8.
+            let key = ContentKey::from_bytes(CONTENT_KEY);
+            let mut entropy = SeededEntropy::new(3);
+            let leaves: Vec<SealedChunk> = (0..2)
+                .map(|_| seal_one_chunk(&key, &[0xC3u8; 16], &mut entropy).unwrap())
+                .collect();
+            let fixture = from_leaves(leaves, 24);
+            let http = serve(&fixture.blocks);
+
+            let err = block_on(open_content_range(
+                &gateway(),
+                &http,
+                &fixture.version,
+                16,
+                8,
+            ))
+            .unwrap_err();
+            assert!(matches!(err, OpenError::Trust(_)), "got {err:?}");
+        }
+
+        #[test]
+        fn a_manifest_disagreeing_with_the_version_size_fails_closed_before_any_leaf() {
+            let fixture = fixture(&(0..40u8).collect::<Vec<_>>());
+            let version = Version::new(fixture.version.content_cid.clone(), CONTENT_KEY, 41, 0);
+            let http = serve(&fixture.blocks);
+            let err = block_on(open_content_range(&gateway(), &http, &version, 0, 16)).unwrap_err();
+            assert!(matches!(err, OpenError::Trust(_)), "got {err:?}");
+            assert_eq!(
+                fetched(&http).len(),
+                1,
+                "no leaf is fetched past the reject"
+            );
+        }
     }
 }

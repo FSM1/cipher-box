@@ -66,6 +66,10 @@ export class EngineFacade {
     return this.transport.download(node);
   }
 
+  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
+    return this.transport.downloadRange(node, offset, length);
+  }
+
   /** Creates an empty node. File content is written through a write handle. */
   create(parent: Uint8Array, name: string, kind: NodeKind): Promise<void> {
     return this.command({ kind: 'create', parent, name, nodeKind: kind });

@@ -9,6 +9,7 @@
 import type { BroadcastChannelLike } from './broadcast.js';
 import type { LockManagerLike, LockRequestCallback } from './leadership.js';
 import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './transport.js';
+import type { EngineHostLike } from './worker/engineHost.js';
 import type {
   CommandDescriptor,
   EventDescriptor,
@@ -64,6 +65,60 @@ export function emptySnapshot(folder: Uint8Array = new Uint8Array(16)): Snapshot
     retainedRecords: 0,
     staleness: 'fresh',
   };
+}
+
+const notStubbed = (method: string): Promise<never> =>
+  Promise.reject(new Error(`${method} not stubbed`));
+
+/**
+ * The base for every `EngineHostLike` double: a method a double does not
+ * override rejects, so a new member of the interface lands here once instead of
+ * in each double.
+ */
+export class StubEngineHost implements EngineHostLike {
+  start(_secret: ArrayBuffer): Promise<void> {
+    return notStubbed('start');
+  }
+
+  command(_command: CommandDescriptor): Promise<void> {
+    return notStubbed('command');
+  }
+
+  beginWrite(_target: WriteTarget, _size: number): Promise<WriteHandle> {
+    return notStubbed('beginWrite');
+  }
+
+  pushChunk(_handle: WriteHandle, _chunk: ArrayBuffer): Promise<void> {
+    return notStubbed('pushChunk');
+  }
+
+  commitWrite(_handle: WriteHandle): Promise<bigint> {
+    return notStubbed('commitWrite');
+  }
+
+  abortWrite(_handle: WriteHandle): Promise<void> {
+    return notStubbed('abortWrite');
+  }
+
+  snapshot(_folder: Uint8Array | null): Promise<SnapshotDescriptor> {
+    return notStubbed('snapshot');
+  }
+
+  siweChallenge(): Promise<string> {
+    return notStubbed('siweChallenge');
+  }
+
+  download(_node: Uint8Array): Promise<ArrayBuffer> {
+    return notStubbed('download');
+  }
+
+  downloadRange(_node: Uint8Array, _offset: number, _length: number): Promise<ArrayBuffer> {
+    return notStubbed('downloadRange');
+  }
+
+  nextEvent(): Promise<EventDescriptor | null> {
+    return notStubbed('nextEvent');
+  }
 }
 
 /** A same-origin broadcast bus: a posted message reaches every *other* channel. */
@@ -186,6 +241,7 @@ export class FakeEngineTransport implements EngineTransport {
   readonly snapshots: Array<Uint8Array | null> = [];
   readonly downloads: Uint8Array[] = [];
   siweChallenges = 0;
+  readonly downloadRanges: Array<{ node: Uint8Array; offset: number; length: number }> = [];
   readonly beginWrites: Array<{ target: WriteTarget; size: number }> = [];
   readonly chunks: Array<{ handle: WriteHandle; chunk: ArrayBuffer }> = [];
   readonly commits: WriteHandle[] = [];
@@ -201,6 +257,8 @@ export class FakeEngineTransport implements EngineTransport {
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
     Promise.resolve(new ArrayBuffer(0));
   respondSiweChallenge: () => Promise<string> = () => Promise.resolve(FAKE_SIWE_NONCE);
+  respondDownloadRange: (node: Uint8Array, offset: number, length: number) => Promise<ArrayBuffer> =
+    (_node, _offset, length) => Promise.resolve(new ArrayBuffer(length));
   private readonly listeners = new Set<EngineEventListener>();
 
   start(secret: ArrayBuffer): Promise<void> {
@@ -246,6 +304,11 @@ export class FakeEngineTransport implements EngineTransport {
   download(node: Uint8Array): Promise<ArrayBuffer> {
     this.downloads.push(node);
     return this.respondDownload(node);
+  }
+
+  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
+    this.downloadRanges.push({ node, offset, length });
+    return this.respondDownloadRange(node, offset, length);
   }
 
   subscribe(listener: EngineEventListener): () => void {

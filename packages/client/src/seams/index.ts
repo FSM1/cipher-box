@@ -25,6 +25,7 @@ export type {
   HttpSeam,
   HttpRequestData,
   HttpResponseData,
+  CappedHttpResult,
   MailboxSeam,
   MailboxItemData,
   RefreshHintSourceSeam,

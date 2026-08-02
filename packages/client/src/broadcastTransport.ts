@@ -105,6 +105,11 @@ export class BroadcastTransport extends CorrelatedTransport {
     return content.arrayBuffer();
   }
 
+  async downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
+    const content = await this.read<Blob>({ kind: 'downloadRange', node, offset, length });
+    return content.arrayBuffer();
+  }
+
   private read<T>(read: WireRead): Promise<T> {
     return this.request<T>(this.leaderReady, (requestId) =>
       this.channel.postMessage({ type: 'cb:read', clientId: this.clientId, requestId, read })

@@ -23,7 +23,7 @@ use std::rc::Rc;
 
 use cipherbox_core::content::encode_content_cid_str;
 use cipherbox_core::ipns::IpnsName;
-use cipherbox_core::seal::{ReadBody, seal_content_key};
+use cipherbox_core::seal::{ReadBody, Version, seal_content_key};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use futures_channel::mpsc;
 use futures_core::Stream;
@@ -33,7 +33,7 @@ use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
     ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, Refused,
-    SealError, StagingLedger, open_content, sealed_total_bytes,
+    SealError, StagingLedger, open_content_range, sealed_total_bytes,
 };
 use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
@@ -2390,20 +2390,10 @@ impl<T: SeamTypes> Engine<T> {
             return Err(EngineError::NotStarted);
         }
         self.emit_op_progress(node, OpPhase::DownloadStarted, None);
-        match self.read_content_inner(node).await {
-            Ok((plaintext, size, modified_at, version_count)) => {
-                // The verified head version is gate-passing state, so it may
-                // legally touch the base node's projected size/mtime. Repaint
-                // only on a real change — a repeat read must not cascade.
-                if project_child_version(
-                    &mut self.snapshot.borrow_mut(),
-                    node,
-                    size,
-                    modified_at,
-                    version_count,
-                ) {
-                    let _ = self.events.unbounded_send(Event::SnapshotUpdated);
-                }
+        // The range clamps to the version's size, so the whole file is the
+        // unbounded window.
+        match self.read_content_range(node, 0, u64::MAX).await {
+            Ok(plaintext) => {
                 self.emit_op_progress(node, OpPhase::DownloadCompleted, None);
                 Ok(plaintext)
             }
@@ -2414,15 +2404,42 @@ impl<T: SeamTypes> Engine<T> {
         }
     }
 
-    /// The verified read pipeline behind [`read_content`](Self::read_content):
-    /// base-snapshot lookup → gated child resolve →
-    /// [`open_content`] (version-DAG fetch, per-leaf unseal, length
-    /// cross-checks). Returns the plaintext plus the head version's
-    /// `(size, modifiedAt)` and the body's version count.
-    async fn read_content_inner(
+    /// Read one byte window of a file node's plaintext, fetching only the leaves
+    /// the window covers (blueprint/engine.md "Content plane"). Emits no
+    /// [`Event::OpProgress`]: a media element issues one ranged read per seek and
+    /// per buffer refill, and a phase pair each would drown the stream.
+    pub async fn read_content_range(
         &self,
         node: NodeId,
-    ) -> Result<(Vec<u8>, u64, u64, u64), EngineError> {
+        offset: u64,
+        length: u64,
+    ) -> Result<Vec<u8>, EngineError> {
+        if !self.started {
+            return Err(EngineError::NotStarted);
+        }
+        let (version, version_count) = self.head_version(node).await?;
+        let bytes = open_content_range(&self.gateway, &self.seams.http, &version, offset, length)
+            .await
+            .map_err(open_engine_error)?;
+        // The verified head version is gate-passing state, so it may legally
+        // touch the base node's projected size/mtime. Repaint only on a real
+        // change — a repeat read must not cascade.
+        if project_child_version(
+            &mut self.snapshot.borrow_mut(),
+            node,
+            version.size,
+            version.modified_at,
+            version_count,
+        ) {
+            let _ = self.events.unbounded_send(Event::SnapshotUpdated);
+        }
+        Ok(bytes)
+    }
+
+    /// Resolve one file node's head content version: base-snapshot lookup →
+    /// gated child resolve → head of the sealed body's version list. Returns
+    /// the version and the body's version count.
+    async fn head_version(&self, node: NodeId) -> Result<(Version, u64), EngineError> {
         // The base snapshot alone answers the lookup (kind and ipnsName never
         // come from the overlay) — no full render for a single node. The borrow
         // never spans an await.
@@ -2501,32 +2518,20 @@ impl<T: SeamTypes> Engine<T> {
                 message: "sealed body kind disagrees with the child ref".to_owned(),
             });
         };
-        // Newest-first; head is current (crates/core/src/seal/body.rs).
-        let Some(version) = versions.first() else {
+        // Newest-first; head is current (crates/core/src/seal/body.rs). Clone the
+        // head rather than moving it out: `into_iter().next()` bitwise-moves slot
+        // 0, so its content key would reach the allocator unzeroized.
+        let version_count = versions.len() as u64;
+        let Some(version) = versions.first().cloned() else {
             return Err(EngineError::ContentUnavailable {
                 message: "file has no published content version".to_owned(),
             });
         };
-
-        let plaintext = open_content(&self.gateway, &self.seams.http, version)
-            .await
-            .map_err(|e| match e {
-                OpenError::Trust(message) => EngineError::TrustViolation { message },
-                OpenError::Unavailable(message) => EngineError::ContentUnavailable { message },
-                OpenError::UnsupportedFormat { version } => {
-                    EngineError::UnsupportedContentFormat { version }
-                }
-            })?;
-        Ok((
-            plaintext,
-            version.size,
-            version.modified_at,
-            versions.len() as u64,
-        ))
+        Ok((version, version_count))
     }
 
-    /// Best-effort [`Event::OpProgress`] emission for a content read (a dropped
-    /// receiver is fine).
+    /// Best-effort [`Event::OpProgress`] emission for a full content read (a
+    /// dropped receiver is fine).
     fn emit_op_progress(&self, node: NodeId, phase: OpPhase, error: Option<String>) {
         let _ = self.events.unbounded_send(Event::OpProgress {
             op_id: None,
@@ -2655,6 +2660,17 @@ impl<T: SeamTypes> Engine<T> {
     /// The measured storage split this engine runs under.
     pub fn storage_policy(&self) -> &StoragePolicy {
         &self.storage_policy
+    }
+}
+
+/// Map a verified-read failure onto the facade error surface.
+fn open_engine_error(error: OpenError) -> EngineError {
+    match error {
+        OpenError::Trust(message) => EngineError::TrustViolation { message },
+        OpenError::Unavailable(message) => EngineError::ContentUnavailable { message },
+        OpenError::UnsupportedFormat { version } => {
+            EngineError::UnsupportedContentFormat { version }
+        }
     }
 }
 

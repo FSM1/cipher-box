@@ -7,8 +7,10 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import type { EngineClient, SecretSource } from '@cipherbox/client';
+import type { EngineClient, MediaService, SecretSource } from '@cipherbox/client';
+import { createMediaService } from '../engine/createMediaService';
 import { LoginSecretSource } from '../engine/loginHandoff';
+import { errorMessage } from '../lib/errorMessage';
 import {
   createSnapshotStore,
   idleSnapshotStore,
@@ -19,6 +21,7 @@ interface EngineContextValue {
   client: EngineClient;
   snapshots: SnapshotStore;
   secrets: LoginSecretSource;
+  media: MediaService | null;
   rebuild: () => void;
 }
 
@@ -52,14 +55,21 @@ export function EngineProvider({ createClient, children }: EngineProviderProps) 
     const secrets = new LoginSecretSource();
     const client = factory.current(secrets);
     const snapshots = createSnapshotStore(client);
-    setValue({ client, snapshots, secrets, rebuild });
+    const media = createMediaService(client);
+    media
+      ?.start()
+      .catch((error: unknown) => console.error('[media] start failed', errorMessage(error)));
+    setValue({ client, snapshots, secrets, media, rebuild });
     return () => {
       // Drop the exporter first: no re-export capability outlives the client.
       secrets.use(null);
       snapshots.dispose();
-      client.dispose().catch((error: unknown) => {
-        console.error('[engine] dispose failed', error instanceof Error ? error.message : error);
-      });
+      media
+        ?.dispose()
+        .catch((error: unknown) => console.error('[media] dispose failed', errorMessage(error)));
+      client
+        .dispose()
+        .catch((error: unknown) => console.error('[engine] dispose failed', errorMessage(error)));
     };
   }, [generation, rebuild]);
 
@@ -82,6 +92,11 @@ export function useEngine(): EngineClient | null {
 /** This tab's snapshot adapter; an inert store until the client exists. */
 export function useSnapshotStore(): SnapshotStore {
   return useEngineContext()?.snapshots ?? idleSnapshotStore;
+}
+
+/** This tab's streaming pipe; `null` where the browser has no Service Worker. */
+export function useMediaService(): MediaService | null {
+  return useEngineContext()?.media ?? null;
 }
 
 /** Where login registers its Core Kit session for a failover re-export. */

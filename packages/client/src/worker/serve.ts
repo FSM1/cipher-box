@@ -10,6 +10,7 @@
  * order with no drops.
  */
 
+import { errorMessage } from '../errorMessage.js';
 import { WriteQueue } from '../writeQueue.js';
 import type { EngineHostLike } from './engineHost.js';
 import type { WorkerMessage, WorkerRequest } from './protocol.js';
@@ -28,10 +29,6 @@ export interface WorkerScopeLike {
   addEventListener(type: 'message', listener: (event: MessageEvent<WorkerRequest>) => void): void;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** The engine's stable error code, when the thrown value carries one. */
 function errorCode(error: unknown): string | undefined {
   const code = (error as { code?: unknown } | null)?.code;
@@ -41,6 +38,9 @@ function errorCode(error: unknown): string | undefined {
 /** Wires `scope` to `host`, then signals readiness. */
 export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void {
   const post = (message: WorkerMessage): void => scope.postMessage(message);
+  // Transfer the plaintext buffer: no byte copy through the boundary.
+  const postOwned = (id: number, result: ArrayBuffer): void =>
+    scope.postMessage({ type: 'response', id, ok: true, result }, [result]);
   const writes = new WriteQueue();
 
   const handle = async (request: WorkerRequest): Promise<void> => {
@@ -78,12 +78,15 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
           post({ type: 'response', id: request.id, ok: true, result });
           return;
         }
-        case 'download': {
-          const result = await host.download(request.node);
-          // Transfer the plaintext buffer: no byte copy through the boundary.
-          scope.postMessage({ type: 'response', id: request.id, ok: true, result }, [result]);
+        case 'download':
+          postOwned(request.id, await host.download(request.node));
           return;
-        }
+        case 'downloadRange':
+          postOwned(
+            request.id,
+            await host.downloadRange(request.node, request.offset, request.length)
+          );
+          return;
         default:
           return; // ignore non-request messages (e.g. a bootstrap handshake)
       }

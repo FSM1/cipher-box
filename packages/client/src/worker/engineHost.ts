@@ -31,7 +31,18 @@ export interface EngineHostLike {
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
   siweChallenge(): Promise<string>;
   download(node: Uint8Array): Promise<ArrayBuffer>;
+  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer>;
   nextEvent(): Promise<EventDescriptor | null>;
+}
+
+/**
+ * The handle returns a JS-owned copy (never a WASM-memory view); reuse its exact
+ * backing buffer for the transfer, re-slicing only a partial view.
+ */
+function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+    ? (bytes.buffer as ArrayBuffer)
+    : (bytes.slice().buffer as ArrayBuffer);
 }
 
 export class EngineHost implements EngineHostLike {
@@ -112,12 +123,13 @@ export class EngineHost implements EngineHostLike {
   }
 
   async download(node: Uint8Array): Promise<ArrayBuffer> {
-    const bytes = await this.handle.download(this.wasm.NodeId.fromBytes(node));
-    // The handle returns a JS-owned copy (never a WASM-memory view); reuse its
-    // exact backing buffer for the transfer, re-slicing only a partial view.
-    return bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
-      ? (bytes.buffer as ArrayBuffer)
-      : (bytes.slice().buffer as ArrayBuffer);
+    return ownedBuffer(await this.handle.download(this.wasm.NodeId.fromBytes(node)));
+  }
+
+  async downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
+    return ownedBuffer(
+      await this.handle.downloadRange(this.wasm.NodeId.fromBytes(node), offset, length)
+    );
   }
 
   async nextEvent(): Promise<EventDescriptor | null> {

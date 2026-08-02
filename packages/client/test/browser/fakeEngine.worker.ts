@@ -10,16 +10,12 @@
  *   the single event pump streams in order.
  */
 import { serveEngine, type WorkerScopeLike } from '../../src/worker/serve.js';
-import type { EngineHostLike } from '../../src/worker/engineHost.js';
-import type {
-  CommandDescriptor,
-  EventDescriptor,
-  SnapshotDescriptor,
-} from '../../src/worker/protocol.js';
+import { StubEngineHost } from '../../src/testkit.js';
+import type { CommandDescriptor, EventDescriptor } from '../../src/worker/protocol.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-class FakeHost implements EngineHostLike {
+class FakeHost extends StubEngineHost {
   private commandCount = 0;
   private queued: EventDescriptor[] = [];
   private waiters: Array<(event: EventDescriptor | null) => void> = [];
@@ -40,32 +36,8 @@ class FakeHost implements EngineHostLike {
     await sleep(this.commandCount === 1 ? 40 : 5);
   }
 
-  beginWrite(): Promise<bigint> {
-    return Promise.reject(new Error('fake host serves no writes'));
-  }
-
-  pushChunk(): Promise<void> {
-    return Promise.reject(new Error('fake host serves no writes'));
-  }
-
-  commitWrite(): Promise<bigint> {
-    return Promise.reject(new Error('fake host serves no writes'));
-  }
-
   abortWrite(): Promise<void> {
     return Promise.resolve();
-  }
-
-  snapshot(): Promise<SnapshotDescriptor> {
-    return Promise.reject(new Error('fake host serves no snapshots'));
-  }
-
-  siweChallenge(): Promise<string> {
-    return Promise.reject(new Error('fake host serves no siwe challenges'));
-  }
-
-  download(): Promise<ArrayBuffer> {
-    return Promise.reject(new Error('fake host serves no downloads'));
   }
 
   nextEvent(): Promise<EventDescriptor | null> {

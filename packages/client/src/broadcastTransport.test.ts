@@ -233,6 +233,41 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(engine.siweChallenges).toBe(1);
   });
 
+  it('serves a follower downloadRange as a Blob and rebuilds the window bytes', async () => {
+    const { engine, follower } = wire();
+    const file = Uint8Array.from({ length: 256 }, (_, i) => (i * 3 + 1) & 0xff);
+    engine.respondDownloadRange = (_node, offset, length) =>
+      Promise.resolve(file.slice(offset, offset + length).buffer);
+
+    const node = new Uint8Array(16).fill(6);
+    const window = await follower.downloadRange(node, 64, 32);
+    expect([...new Uint8Array(window)]).toEqual([...file.slice(64, 96)]);
+    // A dropped or clamped offset slices the wrong plaintext with every
+    // integrity check still passing.
+    expect(engine.downloadRanges).toEqual([{ node, offset: 64, length: 32 }]);
+  });
+
+  it('rejects an in-flight downloadRange retryably when the leader steps down', async () => {
+    const bus = new FakeBus();
+    const engineA = new FakeEngineTransport();
+    engineA.respondDownloadRange = () => new Promise(() => undefined); // leader A never answers
+    const relayA = new LeaderRelay(bus.channel(), engineA);
+    const follower = new BroadcastTransport(bus.channel(), 'f');
+    await follower.start();
+
+    const inFlight = follower.downloadRange(new Uint8Array(16), 0, 8);
+    await tick();
+    relayA.close();
+    await expect(inFlight).rejects.toThrow(/retry/);
+
+    // The next leader serves the retry, so the swap costs a retry, never a hang.
+    const engineB = new FakeEngineTransport();
+    engineB.respondDownloadRange = () => Promise.resolve(new Uint8Array([1, 2]).buffer);
+    new LeaderRelay(bus.channel(), engineB);
+    const retried = await follower.downloadRange(new Uint8Array(16), 0, 2);
+    expect([...new Uint8Array(retried)]).toEqual([1, 2]);
+  });
+
   it('propagates a read rejection back to the follower with the stable code', async () => {
     const { engine, follower } = wire();
     engine.respondSnapshot = () =>

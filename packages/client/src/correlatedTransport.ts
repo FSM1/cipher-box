@@ -72,6 +72,7 @@ export abstract class CorrelatedTransport implements EngineTransport {
   abstract snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
   abstract siweChallenge(): Promise<string>;
   abstract download(node: Uint8Array): Promise<ArrayBuffer>;
+  abstract downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer>;
   abstract close(): void;
 
   subscribe(listener: EngineEventListener): () => void {

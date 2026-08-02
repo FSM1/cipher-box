@@ -8,5 +8,5 @@
     // The worker body is debugged in the browser from apps/web's build.
     "sourceMap": true
   },
-  "exclude": ["src/**/*.test.ts", "src/testkit.ts"]
+  "exclude": ["src/**/*.test.ts", "src/testkit.ts", "src/sw/testDoubles.ts"]
 }

@@ -50,6 +50,16 @@ function mockNetwork(): Plugin {
           return;
         }
 
+        if (url.startsWith('/mock-http/stream')) {
+          // Chunked with no Content-Length: only the streaming cap can bound it.
+          res.statusCode = 200;
+          for (let sent = 0; sent < 64 * 1024; sent += 1024) {
+            res.write(Buffer.alloc(1024, 7));
+          }
+          res.end();
+          return;
+        }
+
         if (url.startsWith('/mock-http/echo')) {
           const chunks: Buffer[] = [];
           req.on('data', (chunk: Buffer) => chunks.push(chunk));

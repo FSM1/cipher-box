@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./sw": {
+      "types": "./dist/sw/serviceWorker.d.ts",
+      "import": "./dist/sw/serviceWorker.js"
     }
   },
   "scripts": {
