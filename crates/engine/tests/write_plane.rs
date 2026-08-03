@@ -41,8 +41,8 @@ use cipherbox_engine::testkit::{
 };
 use cipherbox_engine::{
     BlockProgress, Command, ContentProfile, DeadLetter, DeadLetterReason, Engine, EngineError,
-    Event, EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, Op, OpPhase, RecordSeal,
-    StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
+    Event, EventStream, GatewayConfig, LoginSecret, MAX_OPEN_STREAMS, NodeId, NodeKind, Op,
+    OpPhase, RecordSeal, StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -839,6 +839,43 @@ fn write_file(
     block_on(engine.commit_write(handle))
 }
 
+/// Alice publishes `plaintext` as `clip.bin` under the root, handing back her
+/// engine and pump tasks so a caller can republish over it.
+fn publish_clip(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    plaintext: &[u8],
+) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>, NodeId) {
+    let alice = world.device(b"alice");
+    let (mut engine, events, mut tasks) = boot(world, blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        plaintext,
+    )
+    .expect("the write commits");
+    tick(world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    (engine, events, tasks, node)
+}
+
+/// A started second device of the same account, its block plane wired for
+/// `calls` HTTP calls — the reader that only ever saw the network.
+fn open_reader(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    calls: usize,
+) -> (FakeDevice, Engine<FakeSeamTypes>, EventStream) {
+    let device = world.device(b"alice-second-device");
+    serve_http(&device, blocks, calls);
+    let (mut engine, events) = engine_on(&device, 7);
+    block_on(engine.start(secret())).unwrap();
+    (device, engine, events)
+}
+
 /// The slice's headline: content bytes sliced by the client, sealed and staged
 /// per block by the engine, uploaded and published by the drain, and downloaded
 /// and verified byte-for-byte by a second device that only ever saw the network.
@@ -905,10 +942,10 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
     );
 }
 
-/// A ranged read walks the same gated resolve as the whole-file read and serves
-/// the matching slice — the media pipe's read path (#641).
+/// A stream's windows serve the matching slices of the whole-file read — the
+/// media pipe's read path (#641).
 #[test]
-fn a_ranged_read_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
+fn a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -937,23 +974,161 @@ fn a_ranged_read_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
     let whole = block_on(engine_b.read_content(node)).expect("the verified read serves it");
     assert_eq!(whole, plaintext);
 
+    let stream = block_on(engine_b.open_content_stream(node)).expect("the stream opens");
     for (offset, length) in [(0u64, 16u64), (16, 16), (15, 2), (40, 100), (190, 999)] {
         let end = (offset + length).min(whole.len() as u64) as usize;
         assert_eq!(
-            block_on(engine_b.read_content_range(node, offset, length))
-                .expect("the ranged read serves it"),
+            block_on(engine_b.read_stream(stream, offset, length)).expect("the window serves it"),
             whole[offset as usize..end],
             "range {offset}+{length}"
         );
     }
     for offset in [whole.len() as u64, whole.len() as u64 + 1, u64::MAX] {
         assert!(
-            block_on(engine_b.read_content_range(node, offset, 16))
+            block_on(engine_b.read_stream(stream, offset, 16))
                 .unwrap()
                 .is_empty(),
             "a window past the end is empty, not an error: offset {offset}"
         );
     }
+    engine_b.close_stream(stream);
+}
+
+/// Past [`MAX_OPEN_STREAMS`] an open is refused fail-closed, never evicting a
+/// live stream.
+#[test]
+fn opening_past_the_stream_ceiling_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let plaintext: Vec<u8> = (0..64u8).collect();
+
+    let (_engine_a, _events_a, _tasks, node) = publish_clip(&world, &blocks, &plaintext);
+    // A few calls per open, plus the reads below.
+    let (_bob, engine_b, _events_b) = open_reader(&world, &blocks, MAX_OPEN_STREAMS * 8 + 64);
+
+    let handles: Vec<_> = (0..MAX_OPEN_STREAMS)
+        .map(|open| {
+            block_on(engine_b.open_content_stream(node))
+                .unwrap_or_else(|err| panic!("stream {open} opens: {err}"))
+        })
+        .collect();
+
+    assert_eq!(
+        block_on(engine_b.open_content_stream(node)),
+        Err(EngineError::TooManyStreams),
+        "the open past the ceiling is refused"
+    );
+
+    // The refusal did not evict: an earlier handle still serves its version.
+    assert_eq!(
+        block_on(engine_b.read_stream(handles[0], 0, 16)).expect("the first stream still reads"),
+        plaintext[..16]
+    );
+
+    // Closing one frees exactly one slot.
+    engine_b.close_stream(handles[0]);
+    let reopened = block_on(engine_b.open_content_stream(node)).expect("a freed slot admits one");
+    assert_eq!(
+        block_on(engine_b.open_content_stream(node)),
+        Err(EngineError::TooManyStreams),
+        "the table is full again"
+    );
+    engine_b.close_stream(reopened);
+}
+
+/// A stream pins the head version it opened on: a head change mid-stream leaves
+/// every later window a slice of the pinned version, never a splice of two
+/// (#948).
+#[test]
+fn a_stream_serves_the_pinned_version_across_a_head_change() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    // Same length, disjoint bytes: a spliced window is a wrong-byte failure, not
+    // a length one, so the assertion catches the splice itself.
+    let first: Vec<u8> = (0..200u8).collect();
+    let second: Vec<u8> = (0..200u8).map(|byte| 255 - byte).collect();
+
+    let (mut engine_a, _events_a, mut tasks, node) = publish_clip(&world, &blocks, &first);
+    let (_bob, engine_b, _events_b) = open_reader(&world, &blocks, 400);
+
+    let stream = block_on(engine_b.open_content_stream(node)).expect("the stream opens");
+    let mut assembled = block_on(engine_b.read_stream(stream, 0, 16)).expect("the first window");
+
+    // The owner's other device republishes the file under a new version while
+    // the stream is mid-body.
+    write_file(&mut engine_a, WriteTarget::Version { node }, &second).expect("the update commits");
+    tick(&world, &engine_a, &mut tasks);
+
+    while (assembled.len() as u64) < first.len() as u64 {
+        let window = block_on(engine_b.read_stream(stream, assembled.len() as u64, 16))
+            .expect("a later window");
+        assert!(
+            !window.is_empty(),
+            "a window short of the end made no progress"
+        );
+        assembled.extend_from_slice(&window);
+    }
+    assert_eq!(
+        assembled, first,
+        "the whole body is a slice of the version the stream opened on"
+    );
+
+    // The head really did move: a fresh read serves the new version, so the
+    // pinning above is not just a stale-resolve artifact.
+    assert_eq!(
+        block_on(engine_b.read_content(node)).expect("the head version reads"),
+        second
+    );
+
+    engine_b.close_stream(stream);
+    assert_eq!(
+        block_on(engine_b.read_stream(stream, 0, 16)),
+        Err(EngineError::UnknownStreamHandle),
+        "a closed handle reads nothing"
+    );
+}
+
+/// A stream resolves, gates, and verifies its root once, however many windows it
+/// serves — the per-window cost #641's ranged read paid on every megabyte.
+#[test]
+fn a_stream_pays_one_resolve_and_one_root_fetch_for_the_whole_body() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    let window = ContentProfile::CI.chunk_size();
+    // One window per leaf, so the leaf fetches a stream makes are countable.
+    let leaves = plaintext.len().div_ceil(window);
+
+    let (_engine_a, _events_a, _tasks, node) = publish_clip(&world, &blocks, &plaintext);
+    let (bob, engine_b, _events_b) = open_reader(&world, &blocks, 400);
+
+    let stream = block_on(engine_b.open_content_stream(node)).expect("the stream opens");
+    // Every routing endpoint goes dark once the stream is open: a window that
+    // re-resolved the node would fail here rather than serve.
+    for endpoint in world.record_store.endpoints() {
+        world.record_store.fail_endpoint(&endpoint);
+    }
+
+    let fetches_at_open = bob.http.requests().len();
+    let mut assembled = Vec::new();
+    while assembled.len() < plaintext.len() {
+        let bytes = block_on(engine_b.read_stream(stream, assembled.len() as u64, window as u64))
+            .expect("a window off the pinned version");
+        assert!(
+            !bytes.is_empty(),
+            "a window short of the end made no progress"
+        );
+        assembled.extend_from_slice(&bytes);
+    }
+    assert_eq!(assembled, plaintext);
+    assert_eq!(
+        bob.http.requests().len() - fetches_at_open,
+        leaves,
+        "one leaf per window and no root re-fetch"
+    );
 }
 
 /// A new version of an existing file takes the head of its version list and is

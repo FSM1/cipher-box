@@ -14,6 +14,7 @@ import type {
   CommandDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
+  StreamHandle,
   WorkerMessage,
   WorkerRequest,
   WriteHandle,
@@ -42,8 +43,15 @@ export interface EngineTransport {
   siweChallenge(): Promise<string>;
   /** Downloads one file node's plaintext through the verified read pipeline. */
   download(node: Uint8Array): Promise<ArrayBuffer>;
-  /** The verified read pipeline over one byte window; only the leaves it covers are fetched. */
-  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer>;
+  /**
+   * Opens a read stream over one file node, pinned to the head content version
+   * for the handle's life so no window can come from a different one.
+   */
+  openContentStream(node: Uint8Array): Promise<StreamHandle>;
+  /** One byte window of a pinned stream; only the leaves it covers are fetched. */
+  readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer>;
+  /** Releases the stream; an unknown handle is already gone. */
+  closeStream(handle: StreamHandle): Promise<void>;
   /** Subscribes to the one-way event stream; returns an unsubscribe. */
   subscribe(listener: EngineEventListener): () => void;
   /** Tears the transport down; pending requests reject. */
@@ -158,9 +166,21 @@ export class LocalTransport extends CorrelatedTransport {
     );
   }
 
-  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
+  openContentStream(node: Uint8Array): Promise<StreamHandle> {
+    return this.request<StreamHandle>(this.ready, (id) =>
+      this.worker.postMessage({ type: 'openContentStream', id, node }, [])
+    );
+  }
+
+  readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
     return this.request<ArrayBuffer>(this.ready, (id) =>
-      this.worker.postMessage({ type: 'downloadRange', id, node, offset, length }, [])
+      this.worker.postMessage({ type: 'readStream', id, handle, offset, length }, [])
+    );
+  }
+
+  closeStream(handle: StreamHandle): Promise<void> {
+    return this.dispatch(this.ready, (id) =>
+      this.worker.postMessage({ type: 'closeStream', id, handle }, [])
     );
   }
 

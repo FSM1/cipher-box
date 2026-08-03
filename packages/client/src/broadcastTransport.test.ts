@@ -257,39 +257,64 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(engine.siweChallenges).toBe(1);
   });
 
-  it('serves a follower downloadRange over the private port and rebuilds the window bytes', async () => {
+  it('serves a follower stream window over the private port and rebuilds the window bytes', async () => {
     const { engine, follower } = wire();
     const file = Uint8Array.from({ length: 256 }, (_, i) => (i * 3 + 1) & 0xff);
-    engine.respondDownloadRange = (_node, offset, length) =>
+    engine.respondReadStream = (_handle, offset, length) =>
       Promise.resolve(file.slice(offset, offset + length).buffer);
 
     const node = new Uint8Array(16).fill(6);
-    const window = await follower.downloadRange(node, 64, 32);
+    const handle = await follower.openContentStream(node);
+    const window = await follower.readStream(handle, 64, 32);
+    await follower.closeStream(handle);
+
     expect([...new Uint8Array(window)]).toEqual([...file.slice(64, 96)]);
     // A dropped or clamped offset slices the wrong plaintext with every
     // integrity check still passing.
-    expect(engine.downloadRanges).toEqual([{ node, offset: 64, length: 32 }]);
+    expect(engine.opened).toEqual([node]);
+    expect(engine.reads).toEqual([{ handle, offset: 64, length: 32 }]);
+    expect(engine.closedStreams).toEqual([handle]);
   });
 
-  it('rejects an in-flight downloadRange retryably when the leader steps down', async () => {
+  it('refuses a stream handle the asking follower does not own', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+    const owner = new BroadcastTransport(bus.channel(), 'owner', ports.courier('owner'));
+    const other = new BroadcastTransport(bus.channel(), 'other', ports.courier('other'));
+    await owner.start();
+    await other.start();
+
+    const handle = await owner.openContentStream(new Uint8Array(16));
+    // A handle is a capability: the relay binds it to the tab that opened it.
+    await expect(other.readStream(handle, 0, 8)).rejects.toMatchObject({
+      code: 'unknownStreamHandle',
+    });
+    expect(engine.reads).toEqual([]);
+  });
+
+  it('rejects an in-flight stream read retryably when the leader steps down', async () => {
     const bus = new FakeBus();
     const ports = new FakeCourierNetwork();
     const engineA = new FakeEngineTransport();
-    engineA.respondDownloadRange = () => new Promise(() => undefined); // leader A never answers
+    engineA.respondReadStream = () => new Promise(() => undefined); // leader A never answers
     const relayA = new LeaderRelay(bus.channel(), engineA, ports.courier('leaderA'));
     const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
     await follower.start();
 
-    const inFlight = follower.downloadRange(new Uint8Array(16), 0, 8);
+    const handle = await follower.openContentStream(new Uint8Array(16));
+    const inFlight = follower.readStream(handle, 0, 8);
     await tick();
     relayA.close();
     await expect(inFlight).rejects.toThrow(/retry/);
 
     // The next leader serves the retry, so the swap costs a retry, never a hang.
     const engineB = new FakeEngineTransport();
-    engineB.respondDownloadRange = () => Promise.resolve(new Uint8Array([1, 2]).buffer);
+    engineB.respondReadStream = () => Promise.resolve(new Uint8Array([1, 2]).buffer);
     new LeaderRelay(bus.channel(), engineB, ports.courier('leaderB'));
-    const retried = await follower.downloadRange(new Uint8Array(16), 0, 2);
+    const reopened = await follower.openContentStream(new Uint8Array(16));
+    const retried = await follower.readStream(reopened, 0, 2);
     expect([...new Uint8Array(retried)]).toEqual([1, 2]);
   });
 
@@ -315,7 +340,7 @@ describe('broadcast transport ↔ leader relay', () => {
     const ports = new FakeCourierNetwork();
     const engine = new FakeEngineTransport();
     const plaintext = Uint8Array.from({ length: 96 }, (_, i) => (i * 17 + 9) & 0xff);
-    engine.respondDownloadRange = (_node, offset, length) =>
+    engine.respondReadStream = (_handle, offset, length) =>
       Promise.resolve(plaintext.slice(offset, offset + length).buffer);
     engine.respondSnapshot = () => Promise.resolve(emptySnapshot(new Uint8Array(16).fill(8)));
     new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
@@ -327,9 +352,11 @@ describe('broadcast transport ↔ leader relay', () => {
 
     const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
     await follower.snapshot(new Uint8Array(16));
+    const handle = await follower.openContentStream(new Uint8Array(16).fill(6));
     for (let offset = 0; offset < 96; offset += 32) {
-      await follower.downloadRange(new Uint8Array(16).fill(6), offset, 32);
+      await follower.readStream(handle, offset, 32);
     }
+    await follower.closeStream(handle);
     await tick();
 
     // Election and rendezvous only — every read result rode the private port.
@@ -453,6 +480,35 @@ describe('broadcast transport ↔ leader relay', () => {
     // The next read re-brokers against the same live leader.
     engine.respondSnapshot = (folder) => Promise.resolve(emptySnapshot(folder ?? undefined));
     await expect(follower.snapshot(null)).resolves.toMatchObject({ staleness: 'fresh' });
+  });
+
+  it('wipes a read window nobody can receive rather than leaving the plaintext behind', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
+    await follower.snapshot(null); // brokers and adopts the port
+
+    const plaintext = Uint8Array.of(1, 2, 3, 4);
+    let release!: () => void;
+    engine.respondDownload = async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return plaintext.buffer;
+    };
+
+    // Awaited only after the wipe, so the rejection is handled from the outset.
+    const settled = expect(follower.download(new Uint8Array(16).fill(1))).rejects.toThrow(/retry/);
+    await tick();
+    // Any same-origin context can post this; the leader then drops the port the
+    // window was going to be transferred down.
+    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f' });
+    await tick();
+    release();
+    await settled;
+    await tick();
+
+    expect([...plaintext]).toEqual([0, 0, 0, 0]);
   });
 
   it('reclaims a dialed port that never named the follower behind it', async () => {
@@ -722,6 +778,42 @@ describe('leader relay write handles', () => {
     expect(engine.aborts).toEqual([orphan]);
     await expect(staying.pushChunk(kept, chunk(1))).resolves.toBeUndefined();
     expect(engine.chunks.map((entry) => entry.handle)).toEqual([kept]);
+  });
+
+  it('keeps serving a live follower after a cb:bye it never sent', async () => {
+    const { bus, ports, engine } = bench();
+    const follower = new BroadcastTransport(bus.channel(), 'f1', ports.courier('f1'));
+    await follower.beginWrite({ node: node(1) }, 4);
+
+    // Any same-origin context can forge this. It costs the tab its open handles,
+    // but must not refuse every handle it asks for afterwards.
+    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f1' });
+    await tick();
+
+    engine.writeHandle = 2n;
+    await expect(follower.beginWrite({ node: node(2) }, 4)).resolves.toBe(2n);
+  });
+
+  it('refuses a handle minted for a client that left mid-mint, spelled as the engine spells it', async () => {
+    const { bus, engine } = bench();
+    // No courier: the forged `cb:bye` then has no read port to detach, so the
+    // refusal below is the relay's own and not a dropped-port retry.
+    const follower = new BroadcastTransport(bus.channel(), 'f1', unavailableCourier, {
+      portTimeoutMs: 5,
+    });
+    let releaseMint!: (handle: bigint) => void;
+    engine.beginWrite = () => new Promise((resolve) => (releaseMint = resolve));
+
+    const pending = follower.beginWrite({ node: node(1) }, 4);
+    await tick();
+    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f1' });
+    await tick();
+    releaseMint(7n);
+
+    await expect(pending).rejects.toMatchObject({ code: 'unknownWriteHandle' });
+    // The handle the sweep could not see is released, not stranded.
+    await tick();
+    expect(engine.aborts).toEqual([7n]);
   });
 
   it('releases every open handle when the leader steps down', async () => {

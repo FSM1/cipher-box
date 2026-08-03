@@ -205,22 +205,14 @@ fn grow_wiping(buf: &mut Zeroizing<Vec<u8>>, additional: usize) {
     std::mem::swap(buf, &mut grown);
 }
 
-/// Fetch, verify, and reassemble the plaintext window `[offset, offset +
-/// length)` of one content version, fetching only the leaves it covers. The
-/// request is clamped to the version, so an offset at or past the end yields no
-/// bytes.
-///
-/// Every leaf must unseal to the length the flat framing implies — `chunk_size`
-/// but for the final one. A disagreement is a fail-closed trust violation: a
-/// short middle leaf shifts every downstream byte, so tolerating one would serve
-/// silently misaligned plaintext.
-pub async fn open_content_range<H: Http>(
+/// Fetch and verify one version's DAG root, returning the manifest its leaves
+/// are read against. The manifest is complete on its own, so a caller may hold
+/// it and read many windows without re-verifying the root.
+pub(crate) async fn open_content_root<H: Http>(
     gateway: &Gateway,
     http: &H,
     version: &Version,
-    offset: u64,
-    length: u64,
-) -> Result<Vec<u8>, OpenError> {
+) -> Result<RootManifest, OpenError> {
     let root_cid_str = encode_content_cid_str(&version.content_cid);
     let root_block = read_block(
         gateway,
@@ -238,7 +230,48 @@ pub async fn open_content_range<H: Http>(
             manifest.size, version.size
         )));
     }
+    Ok(manifest)
+}
 
+/// Fetch, verify, and reassemble the plaintext window `[offset, offset +
+/// length)` of one content version, fetching only the leaves it covers. The
+/// request is clamped to the version, so an offset at or past the end yields no
+/// bytes.
+///
+/// Every leaf must unseal to the length the flat framing implies — `chunk_size`
+/// but for the final one. A disagreement is a fail-closed trust violation: a
+/// short middle leaf shifts every downstream byte, so tolerating one would serve
+/// silently misaligned plaintext.
+pub async fn open_content_range<H: Http>(
+    gateway: &Gateway,
+    http: &H,
+    version: &Version,
+    offset: u64,
+    length: u64,
+) -> Result<Vec<u8>, OpenError> {
+    let manifest = open_content_root(gateway, http, version).await?;
+    read_pinned_range(gateway, http, version, &manifest, offset, length).await
+}
+
+/// [`open_content_range`]'s leaf half, against a `manifest` [`open_content_root`]
+/// already verified against `version`.
+pub(crate) async fn read_pinned_range<H: Http>(
+    gateway: &Gateway,
+    http: &H,
+    version: &Version,
+    manifest: &RootManifest,
+    offset: u64,
+    length: u64,
+) -> Result<Vec<u8>, OpenError> {
+    // `manifest` and `version` arrive as separate arguments: re-assert the
+    // pairing rather than trust the caller, or another version's manifest frames
+    // this version's leaves with only the AEAD to catch it.
+    if manifest.size != version.size {
+        return Err(OpenError::Trust(format!(
+            "manifest size {} disagrees with version size {}",
+            manifest.size, version.size
+        )));
+    }
     let length = length.min(manifest.size.saturating_sub(offset));
     if length == 0 {
         return Ok(Vec::new());

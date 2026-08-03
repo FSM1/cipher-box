@@ -61,7 +61,9 @@ const SNAPSHOT: SnapshotDescriptor = {
 class ReadHost extends StubEngineHost {
   readonly snapshots: Uint8Array[] = [];
   readonly downloads: Uint8Array[] = [];
-  readonly downloadRanges: Array<{ node: Uint8Array; offset: number; length: number }> = [];
+  readonly opened: Uint8Array[] = [];
+  readonly reads: Array<{ handle: bigint; offset: number; length: number }> = [];
+  readonly closedStreams: bigint[] = [];
   readonly beginWrites: Array<{ target: WriteTarget; size: number }> = [];
   readonly chunks: Array<{ handle: bigint; bytes: number[] }> = [];
   readonly commits: bigint[] = [];
@@ -69,7 +71,7 @@ class ReadHost extends StubEngineHost {
   respondSnapshot: () => Promise<SnapshotDescriptor> = () => Promise.resolve(SNAPSHOT);
   respondDownload: () => Promise<ArrayBuffer> = () =>
     Promise.resolve(new Uint8Array([9, 8, 7]).buffer);
-  respondDownloadRange: () => Promise<ArrayBuffer> = () =>
+  respondReadStream: () => Promise<ArrayBuffer> = () =>
     Promise.resolve(new Uint8Array([5, 4]).buffer);
   siweChallenges = 0;
 
@@ -116,9 +118,19 @@ class ReadHost extends StubEngineHost {
     return this.respondDownload();
   }
 
-  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
-    this.downloadRanges.push({ node, offset, length });
-    return this.respondDownloadRange();
+  openContentStream(node: Uint8Array): Promise<bigint> {
+    this.opened.push(node);
+    return Promise.resolve(11n);
+  }
+
+  readStream(handle: bigint, offset: number, length: number): Promise<ArrayBuffer> {
+    this.reads.push({ handle, offset, length });
+    return this.respondReadStream();
+  }
+
+  closeStream(handle: bigint): Promise<void> {
+    this.closedStreams.push(handle);
+    return Promise.resolve();
   }
 
   nextEvent(): Promise<EventDescriptor | null> {
@@ -154,19 +166,24 @@ describe('serveEngine read requests', () => {
     expect(response!.transfer).toEqual([content]);
   });
 
-  it('serves a downloadRange with its window and the plaintext buffer transferred', async () => {
+  it('serves a stream window with its args and the plaintext buffer transferred', async () => {
     const { scope, worker, toUi } = loopback();
     const host = new ReadHost();
     serveEngine(scope, host);
     const transport = new LocalTransport(worker);
 
     const node = new Uint8Array(16).fill(4);
-    const content = await transport.downloadRange(node, 1024, 2);
+    const handle = await transport.openContentStream(node);
+    const content = await transport.readStream(handle, 1024, 2);
+    await transport.closeStream(handle);
+
     expect([...new Uint8Array(content)]).toEqual([5, 4]);
-    expect(host.downloadRanges).toEqual([{ node, offset: 1024, length: 2 }]);
+    expect(host.opened).toEqual([node]);
+    expect(host.reads).toEqual([{ handle, offset: 1024, length: 2 }]);
+    expect(host.closedStreams).toEqual([handle]);
 
     const response = toUi.find(
-      (entry) => entry.message.type === 'response' && 'result' in entry.message
+      (entry) => entry.message.type === 'response' && (entry.transfer?.length ?? 0) > 0
     );
     expect(response).toBeDefined();
     expect(response!.transfer).toEqual([content]);
@@ -360,7 +377,9 @@ describe('serveEngine event pump over the real EngineHost', () => {
       snapshot: () => Promise.reject(new Error('unused')),
       siweChallenge: () => Promise.reject(new Error('unused')),
       download: () => Promise.reject(new Error('unused')),
-      downloadRange: () => Promise.reject(new Error('unused')),
+      openContentStream: () => Promise.reject(new Error('unused')),
+      readStream: () => Promise.reject(new Error('unused')),
+      closeStream: () => Promise.reject(new Error('unused')),
       nextEvent: () =>
         pumped.length > 0
           ? Promise.resolve(pumped.shift())

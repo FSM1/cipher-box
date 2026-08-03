@@ -22,7 +22,7 @@ interface LeadershipHarness {
   }): Promise<void>;
   cbObserve(channelName: string): void;
   cbObserved(): ObservedMessage[];
-  cbDownloadRange(offset: number, length: number): Promise<RangeResult>;
+  cbReadStream(offset: number, length: number): Promise<RangeResult>;
   cbRole(): string;
   cbStart(): Promise<string>;
   cbCreateFile(name: string): Promise<string>;
@@ -56,7 +56,7 @@ function harness(page: Page): {
   ): Promise<void>;
   observe(channelName: string): Promise<void>;
   observed(): Promise<ObservedMessage[]>;
-  downloadRange(offset: number, length: number): Promise<RangeResult>;
+  readStream(offset: number, length: number): Promise<RangeResult>;
   role(): Promise<string>;
   start(): Promise<string>;
   createFile(name: string): Promise<string>;
@@ -83,10 +83,9 @@ function harness(page: Page): {
         channelName
       ),
     observed: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbObserved()),
-    downloadRange: (offset, length) =>
+    readStream: (offset, length) =>
       page.evaluate(
-        (args) =>
-          (window as unknown as LeadershipHarness).cbDownloadRange(args.offset, args.length),
+        (args) => (window as unknown as LeadershipHarness).cbReadStream(args.offset, args.length),
         { offset, length }
       ),
     role: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbRole()),
@@ -260,7 +259,7 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     // Three ranged windows, as a media element playing in the follower would.
     const WINDOW = 1024;
     for (let offset = 0; offset < 3 * WINDOW; offset += WINDOW) {
-      const read = await follower.downloadRange(offset, WINDOW);
+      const read = await follower.readStream(offset, WINDOW);
       expect(read.error).toBeUndefined();
       // Only the leader's worker holds `LEADER_SEED`, so these bytes prove the
       // read crossed to the leader engine and came back over the private port.

@@ -8,8 +8,13 @@
 /** Ticket URLs live under one path prefix so the fetch handler can be exact. */
 export const STREAM_PATH_PREFIX = '/stream/';
 
-/** The plaintext window read per pull: peak memory on both sides of the port is one window, never the file. */
-export const MEDIA_WINDOW_BYTES = 1024 * 1024;
+/**
+ * The plaintext window read per pull: peak memory on both sides of the port is
+ * one window, never the file. Exactly one content chunk, so a window at a
+ * chunk-aligned offset covers exactly one leaf (`ContentProfile::PRODUCTION`,
+ * frozen by blueprint/engine.md "Content plane").
+ */
+export const MEDIA_WINDOW_BYTES = 1_048_536;
 
 /** Service Worker → port. */
 export type MediaRequest =

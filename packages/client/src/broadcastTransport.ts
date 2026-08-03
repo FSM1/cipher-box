@@ -27,6 +27,7 @@ import {
   type ReadPortRequest,
   type ReadPortResponse,
   type WireRead,
+  type WireStream,
   type WireWrite,
 } from './broadcast.js';
 import { CorrelatedTransport } from './correlatedTransport.js';
@@ -34,6 +35,7 @@ import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type {
   CommandDescriptor,
   SnapshotDescriptor,
+  StreamHandle,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -43,6 +45,12 @@ const DEFAULT_PORT_TIMEOUT_MS = 5000;
 
 export interface BroadcastTransportOptions {
   portTimeoutMs?: number;
+  /**
+   * Fires when leadership moves while this tab stays a follower. The engine
+   * behind this transport is replaced but the transport object is not, so
+   * whatever the owner holds against the old engine has to be retired here.
+   */
+  onLeadershipChange?: () => void;
 }
 
 export class BroadcastTransport extends CorrelatedTransport {
@@ -70,6 +78,7 @@ export class BroadcastTransport extends CorrelatedTransport {
   private settleHost: ((address: string) => void) | null = null;
   private settleBrokerage: (() => void) | null = null;
   private readonly portTimeoutMs: number;
+  private readonly onLeadershipChange: () => void;
 
   private readonly onMessage = (event: MessageEvent): void => this.receive(event.data);
 
@@ -81,6 +90,7 @@ export class BroadcastTransport extends CorrelatedTransport {
   ) {
     super();
     this.portTimeoutMs = options.portTimeoutMs ?? DEFAULT_PORT_TIMEOUT_MS;
+    this.onLeadershipChange = options.onLeadershipChange ?? ((): void => undefined);
     this.armLeaderReady();
     this.channel.addEventListener('message', this.onMessage);
     // Announce ourselves so a live leader replies with a `leader` beacon.
@@ -134,13 +144,29 @@ export class BroadcastTransport extends CorrelatedTransport {
     return this.read<ArrayBuffer>({ kind: 'download', node });
   }
 
-  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
-    return this.read<ArrayBuffer>({ kind: 'downloadRange', node, offset, length });
+  openContentStream(node: Uint8Array): Promise<StreamHandle> {
+    return this.stream<StreamHandle>({ kind: 'openContentStream', node });
+  }
+
+  readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
+    return this.stream<ArrayBuffer>({ kind: 'readStream', handle, offset, length });
+  }
+
+  closeStream(handle: StreamHandle): Promise<void> {
+    return this.stream<void>({ kind: 'closeStream', handle });
   }
 
   private read<T>(read: WireRead): Promise<T> {
+    return this.overPort<T>((requestId) => ({ type: 'cb:portRead', requestId, read }));
+  }
+
+  private stream<T>(stream: WireStream): Promise<T> {
+    return this.overPort<T>((requestId) => ({ type: 'cb:portStream', requestId, stream }));
+  }
+
+  private overPort<T>(build: (requestId: number) => ReadPortRequest): Promise<T> {
     return this.request<T, MessagePortLike>(this.ensurePort(), (requestId, port) => {
-      port.postMessage({ type: 'cb:portRead', requestId, read } satisfies ReadPortRequest);
+      port.postMessage(build(requestId));
     });
   }
 
@@ -350,6 +376,7 @@ export class BroadcastTransport extends CorrelatedTransport {
       // leader crashed): reject requests bound to it so the UI retries the new
       // leader. New commands go to the new leader once the token is adopted.
       this.rejectPending(retryError());
+      this.onLeadershipChange();
     }
     this.leaderToken = token;
     this.resolveLeaderReady();
@@ -363,6 +390,7 @@ export class BroadcastTransport extends CorrelatedTransport {
     this.leaderToken = null;
     this.dropPort(retryError());
     this.rejectPending(retryError());
+    this.onLeadershipChange();
     // Re-arm so subsequent commands await the next leader rather than resolving
     // against the departed one.
     this.armLeaderReady();

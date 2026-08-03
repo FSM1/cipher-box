@@ -1,15 +1,38 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { EngineClient, type EngineClientConfig } from './engineClient.js';
-import { FakeBus, FakeEngineWorker, FakeLockManager } from './testkit.js';
+import { LeaderRelay } from './leaderRelay.js';
+import type { LockManagerLike } from './leadership.js';
+import {
+  FakeBus,
+  FakeCourierNetwork,
+  FakeEngineTransport,
+  FakeEngineWorker,
+  FakeLockManager,
+} from './testkit.js';
 import type { EventDescriptor } from './worker/protocol.js';
 
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+/**
+ * Pins a tab as a follower: the lock is never granted, so it is never promoted.
+ * The request still settles on abort, so `dispose()` can await its election.
+ */
+const neverGrant: LockManagerLike = {
+  request: (_name, options) =>
+    new Promise((_resolve, reject) => {
+      options.signal?.addEventListener('abort', () =>
+        reject(new DOMException('aborted', 'AbortError'))
+      );
+    }),
+};
 
 /** A shared origin: one lock manager, one broadcast bus, one worker registry. */
 function origin() {
   const locks = new FakeLockManager();
   const bus = new FakeBus();
+  const ports = new FakeCourierNetwork();
+  let tabs = 0;
   const workers: FakeEngineWorker[] = [];
   const spawnWorker = (): FakeEngineWorker => {
     const worker = new FakeEngineWorker();
@@ -24,6 +47,7 @@ function origin() {
       locks,
       createChannel: () => bus.channel(),
       spawnWorker,
+      courier: ports.courier(`tab${(tabs += 1)}`),
       ...overrides,
     });
 
@@ -101,6 +125,40 @@ describe('EngineClient leadership + transport swap', () => {
       (m) => (m as { type?: string }).type === 'start'
     );
     expect(startPosted).toBe(true);
+    await follower.dispose();
+  });
+
+  it('refuses a stream handle minted by a leadership that has been replaced', async () => {
+    const { tab, workers } = origin();
+    const secretSource = {
+      provideSecret: (): Promise<ArrayBuffer> => Promise.resolve(new Uint8Array([1]).buffer),
+    };
+    const leader = tab();
+    const follower = tab({ secretSource });
+    await tick();
+    await follower.facade.start(new Uint8Array([9]).buffer);
+
+    const stale = await follower.openContentStream(new Uint8Array(16).fill(1));
+
+    await leader.dispose();
+    await tick();
+    await tick();
+    expect(follower.currentRole()).toBe('leader');
+
+    // The promoted tab's engine mints from 1 too, so a carried-over handle would
+    // alias the next stream it opens (`EngineClient.streams`).
+    const reopened = await follower.openContentStream(new Uint8Array(16).fill(2));
+    expect(reopened).not.toBe(stale);
+    await follower.readStream(reopened, 0, 8);
+    const promoted = workers[workers.length - 1];
+    expect(promoted.posted).toContainEqual(
+      expect.objectContaining({ type: 'readStream', handle: 1n, offset: 0, length: 8 })
+    );
+
+    await expect(follower.readStream(stale, 0, 8)).rejects.toMatchObject({
+      code: 'unknownStreamHandle',
+    });
+
     await follower.dispose();
   });
 
@@ -303,5 +361,47 @@ describe('EngineClient leadership + transport swap', () => {
     expect(errors.map((error) => error.message)).toEqual(['host blew up']);
     await client.dispose();
     vi.unstubAllGlobals();
+  });
+
+  it('refuses a stream handle across a leader change while this tab stays a follower', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engineA = new FakeEngineTransport();
+    const relayA = new LeaderRelay(bus.channel(), engineA, ports.courier('leaderA'));
+    const follower = new EngineClient({
+      locks: neverGrant,
+      createChannel: () => bus.channel(),
+      spawnWorker: () => {
+        throw new Error('follower never spawns');
+      },
+      courier: ports.courier('f'),
+      clientId: 'f',
+    });
+    await tick();
+
+    const stale = await follower.openContentStream(new Uint8Array(16).fill(1));
+    relayA.close();
+    await tick();
+
+    const engineB = new FakeEngineTransport();
+    const relayB = new LeaderRelay(bus.channel(), engineB, ports.courier('leaderB'));
+    for (let i = 0; i < 4; i += 1) await tick();
+    expect(follower.currentRole()).toBe('follower');
+
+    // The fence has to fire on a leadership this tab merely observed, not only
+    // on one it was promoted through (`EngineClient.streams`).
+    const fresh = await follower.openContentStream(new Uint8Array(16).fill(2));
+    const window_ = await follower.readStream(fresh, 0, 8);
+    expect(window_.byteLength).toBe(8);
+    expect(engineB.reads).toEqual([{ handle: 1n, offset: 0, length: 8 }]);
+
+    await expect(follower.readStream(stale, 0, 8)).rejects.toMatchObject({
+      code: 'unknownStreamHandle',
+    });
+    // The refused stale read never reached the replacement engine.
+    expect(engineB.reads).toHaveLength(1);
+
+    await follower.dispose();
+    relayB.close();
   });
 });

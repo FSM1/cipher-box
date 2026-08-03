@@ -18,7 +18,7 @@
 
 import { BROADCAST_CHANNEL_NAME, newClientId, type BroadcastChannelLike } from './broadcast.js';
 import { BroadcastTransport } from './broadcastTransport.js';
-import { fanOut } from './correlatedTransport.js';
+import { fanOut, unknownHandle } from './correlatedTransport.js';
 import { EngineFacade } from './facade.js';
 import { LeaderRelay } from './leaderRelay.js';
 import { LeaderElection, type LockManagerLike } from './leadership.js';
@@ -30,6 +30,7 @@ import { LocalTransport } from './transport.js';
 import type {
   CommandDescriptor,
   SnapshotDescriptor,
+  StreamHandle,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -81,6 +82,19 @@ export class EngineClient implements EngineTransport {
 
   private role: EngineClientRole = 'follower';
   private current!: EngineTransport;
+  /**
+   * The open read streams, as this client's own handle → the live engine's.
+   *
+   * The engine's `StreamHandle` is a per-engine counter that restarts at 1, so a
+   * handle from a departed leader names a live stream over a *different* node on
+   * the next one — the two-version splice #948 closes inside one engine, leaking
+   * straight back in across engines. Handing out an id that is monotonic for
+   * this client's whole life and dropping the table on every swap makes a stale
+   * handle unmatchable rather than ambiguous.
+   */
+  private readonly streams = new Map<StreamHandle, StreamHandle>();
+  private nextStream = 0n;
+  private generation = 0;
   private relay: LeaderRelay | null = null;
   private innerUnsub!: () => void;
   private readonly listeners = new Set<EngineEventListener>();
@@ -166,8 +180,27 @@ export class EngineClient implements EngineTransport {
     return this.current.download(node);
   }
 
-  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
-    return this.current.downloadRange(node, offset, length);
+  async openContentStream(node: Uint8Array): Promise<StreamHandle> {
+    const generation = this.generation;
+    const inner = await this.current.openContentStream(node);
+    // The engine that minted this went away mid-open; its stream went with it.
+    if (generation !== this.generation) throw unknownHandle('stream');
+    this.nextStream += 1n;
+    this.streams.set(this.nextStream, inner);
+    return this.nextStream;
+  }
+
+  readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
+    const inner = this.streams.get(handle);
+    if (inner === undefined) return Promise.reject(unknownHandle('stream'));
+    return this.current.readStream(inner, offset, length);
+  }
+
+  closeStream(handle: StreamHandle): Promise<void> {
+    const inner = this.streams.get(handle);
+    if (inner === undefined) return Promise.resolve();
+    this.streams.delete(handle);
+    return this.current.closeStream(inner);
   }
 
   subscribe(listener: EngineEventListener): () => void {
@@ -199,9 +232,26 @@ export class EngineClient implements EngineTransport {
     this.channel.close();
   }
 
+  /** Installs the live transport, retiring the streams the previous one held. */
+  private swapCurrent(transport: EngineTransport): void {
+    this.current = transport;
+    this.retireStreams();
+  }
+
+  /** Retires every open stream: the engine that minted them is gone. */
+  private retireStreams(): void {
+    this.generation += 1;
+    this.streams.clear();
+  }
+
   private installFollower(): BroadcastTransport {
-    const follower = new BroadcastTransport(this.channel, this.clientId, this.courier);
-    this.current = follower;
+    // Leadership moving between two *other* tabs replaces the engine without
+    // replacing this transport, so the stream fence rides the same signal as the
+    // transport's own port fence.
+    const follower = new BroadcastTransport(this.channel, this.clientId, this.courier, {
+      onLeadershipChange: () => this.retireStreams(),
+    });
+    this.swapCurrent(follower);
     this.innerUnsub = follower.subscribe((event) => this.fanOut(event));
     return follower;
   }
@@ -261,7 +311,7 @@ export class EngineClient implements EngineTransport {
       // Startup resolved: only now install the transport as active, wire events,
       // and announce the relay so followers route commands to a live worker.
       this.role = 'leader';
-      this.current = local;
+      this.swapCurrent(local);
       this.innerUnsub = local.subscribe((event) => this.fanOut(event));
       this.relay = new LeaderRelay(this.channel, local, this.courier);
       if (this.ownFocus) this.relay.reportLocalFocus(this.clientId, this.ownFocus);

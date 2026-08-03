@@ -49,6 +49,7 @@ declare global {
     cbMediaTicket(size: number, mimeType: string): string;
     cbMediaFetch(url: string, range: string | null): Promise<MediaFetchResult>;
     cbMediaReaderCalls(): number;
+    cbMediaOpenCalls(): number;
     cbMediaPortRequests(): number;
     cbMediaDispose(): Promise<void>;
   }
@@ -57,6 +58,7 @@ declare global {
 let service: MediaService | null = null;
 let client: EngineClient | null = null;
 let readerCalls = 0;
+let openCalls = 0;
 let portRequests = 0;
 
 // A worker that restarted lost its port and must ask for one; counting the asks
@@ -65,20 +67,30 @@ navigator.serviceWorker.addEventListener('message', (event: MessageEvent) => {
   if ((event.data as { type?: unknown } | null)?.type === MEDIA_PORT_REQUEST) portRequests += 1;
 });
 
-/** Serves the tab's own fixture, counting reads so the spec can see windowing. */
+/** Serves the tab's own fixture, counting opens and reads so the spec can see windowing. */
 const localReader = (seed: number): MediaReader => ({
-  downloadRange: (_node, offset, length) => {
+  openContentStream: () => {
+    openCalls += 1;
+    return Promise.resolve(1n);
+  },
+  readStream: (_handle, offset, length) => {
     readerCalls += 1;
     return Promise.resolve(fixtureBuffer(offset, length, seed));
   },
+  closeStream: () => Promise.resolve(),
 });
 
 /** Routes every read through this tab's engine client — a follower's wire. */
 const engineReader: MediaReader = {
-  downloadRange: (node, offset, length) => {
-    readerCalls += 1;
-    return client!.downloadRange(node, offset, length);
+  openContentStream: (node) => {
+    openCalls += 1;
+    return client!.openContentStream(node);
   },
+  readStream: (handle, offset, length) => {
+    readerCalls += 1;
+    return client!.readStream(handle, offset, length);
+  },
+  closeStream: (handle) => client!.closeStream(handle),
 };
 
 window.cbMediaEngine = ({ lockName, channelName }: MediaEngineOptions): Promise<string> => {
@@ -114,6 +126,8 @@ window.cbMediaTicket = (size: number, mimeType: string): string =>
 
 window.cbMediaReaderCalls = (): number => readerCalls;
 
+window.cbMediaOpenCalls = (): number => openCalls;
+
 window.cbMediaPortRequests = (): number => portRequests;
 
 window.cbMediaFetch = async (url: string, range: string | null): Promise<MediaFetchResult> => {
@@ -146,6 +160,7 @@ window.cbMediaDispose = async (): Promise<void> => {
   await client?.dispose();
   client = null;
   readerCalls = 0;
+  openCalls = 0;
   portRequests = 0;
   const registrations = await navigator.serviceWorker.getRegistrations();
   await Promise.all(registrations.map((registration) => registration.unregister()));

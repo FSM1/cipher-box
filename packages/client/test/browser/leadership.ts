@@ -67,7 +67,7 @@ declare global {
     cbCreate(options: HarnessOptions): Promise<void>;
     cbObserve(channelName: string): void;
     cbObserved(): ObservedMessage[];
-    cbDownloadRange(offset: number, length: number): Promise<RangeResult>;
+    cbReadStream(offset: number, length: number): Promise<RangeResult>;
     cbRole(): string;
     cbStart(): Promise<string>;
     cbCreateFile(name: string): Promise<string>;
@@ -196,12 +196,16 @@ window.cbSnapshot = async (folderHex: string): Promise<SnapshotResult> => {
   }
 };
 
-window.cbDownloadRange = async (offset: number, length: number): Promise<RangeResult> => {
+window.cbReadStream = async (offset: number, length: number): Promise<RangeResult> => {
+  let handle: bigint | null = null;
   try {
-    const window_ = await client!.downloadRange(rootNode, offset, length);
+    handle = await client!.openContentStream(rootNode);
+    const window_ = await client!.readStream(handle, offset, length);
     return { bytesHex: hex(new Uint8Array(window_)) };
   } catch (error) {
     return { error: settle(error) };
+  } finally {
+    if (handle !== null) await client!.closeStream(handle).catch(() => undefined);
   }
 };
 

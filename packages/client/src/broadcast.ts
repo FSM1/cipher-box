@@ -23,6 +23,7 @@ import type {
   CommandDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
+  StreamHandle,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -39,20 +40,33 @@ export interface BroadcastChannelLike {
 export type WireRead =
   | { kind: 'snapshot'; folder: Uint8Array | null }
   | { kind: 'siweChallenge' }
-  | { kind: 'download'; node: Uint8Array }
-  | { kind: 'downloadRange'; node: Uint8Array; offset: number; length: number };
+  | { kind: 'download'; node: Uint8Array };
 
-/** Follower → leader, over that follower's private read port. */
+/** A follower ranged-read step, driven against the leader's engine stream. */
+export type WireStream =
+  | { kind: 'openContentStream'; node: Uint8Array }
+  | { kind: 'readStream'; handle: StreamHandle; offset: number; length: number }
+  | { kind: 'closeStream'; handle: StreamHandle };
+
+/**
+ * Follower → leader, over that follower's private read port. Streams ride here
+ * rather than on the channel because a `readStream` window *is* plaintext. Port
+ * ownership is self-asserted, so binding a handle to a client is lifecycle
+ * bookkeeping, not authorization — same origin remains the trust boundary.
+ */
 export type ReadPortRequest =
   /** Names the sender, binding the port to a client the leader can reclaim it for. */
   | { type: 'cb:portHello'; clientId: string }
   /** A correlated read; the leader answers with a matching `cb:portResult`. */
-  | { type: 'cb:portRead'; requestId: number; read: WireRead };
+  | { type: 'cb:portRead'; requestId: number; read: WireRead }
+  /** A correlated ranged-read step, run against the leader's engine stream. */
+  | { type: 'cb:portStream'; requestId: number; stream: WireStream };
 
 /**
- * Leader → follower, over that follower's private read port. A `download` /
- * `downloadRange` result is the plaintext buffer itself, transferred rather than
- * cloned; a snapshot carries the descriptor; a SIWE challenge the nonce string.
+ * Leader → follower, over that follower's private read port. A `download` or
+ * `readStream` result is the plaintext buffer itself, transferred rather than
+ * cloned; a snapshot carries the descriptor; a SIWE challenge the nonce string;
+ * an `openContentStream` the handle naming the pinned content version.
  */
 export type ReadPortResponse =
   /** The leader adopted this port, naming the leadership that answers on it. */
@@ -64,7 +78,7 @@ export type ReadPortResponse =
       type: 'cb:portResult';
       requestId: number;
       ok: true;
-      result?: SnapshotDescriptor | ArrayBuffer | string;
+      result?: SnapshotDescriptor | ArrayBuffer | string | StreamHandle;
     }
   | { type: 'cb:portResult'; requestId: number; ok: false; error: string; code?: string };
 

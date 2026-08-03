@@ -16,6 +16,7 @@ import type {
   NodeKind,
   Permission,
   SnapshotDescriptor,
+  StreamHandle,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -66,8 +67,22 @@ export class EngineFacade {
     return this.transport.download(node);
   }
 
-  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
-    return this.transport.downloadRange(node, offset, length);
+  /**
+   * Opens a read stream over one file node, pinned to the head content version
+   * for the handle's life. Released with `closeStream`.
+   */
+  openContentStream(node: Uint8Array): Promise<StreamHandle> {
+    return this.transport.openContentStream(node);
+  }
+
+  /** Reads one byte window of an open stream's pinned version. */
+  readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
+    return this.transport.readStream(handle, offset, length);
+  }
+
+  /** Releases a read stream; an unknown handle is already gone. */
+  closeStream(handle: StreamHandle): Promise<void> {
+    return this.transport.closeStream(handle);
   }
 
   /** Creates an empty node. File content is written through a write handle. */

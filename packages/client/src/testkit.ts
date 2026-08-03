@@ -15,6 +15,7 @@ import type {
   CommandDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
+  StreamHandle,
   WorkerMessage,
   WriteHandle,
   WriteTarget,
@@ -114,8 +115,16 @@ export class StubEngineHost implements EngineHostLike {
     return notStubbed('download');
   }
 
-  downloadRange(_node: Uint8Array, _offset: number, _length: number): Promise<ArrayBuffer> {
-    return notStubbed('downloadRange');
+  openContentStream(_node: Uint8Array): Promise<StreamHandle> {
+    return notStubbed('openContentStream');
+  }
+
+  readStream(_handle: StreamHandle, _offset: number, _length: number): Promise<ArrayBuffer> {
+    return notStubbed('readStream');
+  }
+
+  closeStream(_handle: StreamHandle): Promise<void> {
+    return notStubbed('closeStream');
   }
 
   nextEvent(): Promise<EventDescriptor | null> {
@@ -324,7 +333,9 @@ export class FakeEngineTransport implements EngineTransport {
   readonly snapshots: Array<Uint8Array | null> = [];
   readonly downloads: Uint8Array[] = [];
   siweChallenges = 0;
-  readonly downloadRanges: Array<{ node: Uint8Array; offset: number; length: number }> = [];
+  readonly opened: Uint8Array[] = [];
+  readonly reads: Array<{ handle: StreamHandle; offset: number; length: number }> = [];
+  readonly closedStreams: StreamHandle[] = [];
   readonly beginWrites: Array<{ target: WriteTarget; size: number }> = [];
   readonly chunks: Array<{ handle: WriteHandle; chunk: ArrayBuffer }> = [];
   readonly commits: WriteHandle[] = [];
@@ -333,6 +344,8 @@ export class FakeEngineTransport implements EngineTransport {
   closed = false;
   /** What `beginWrite` hands back and what `commitWrite` resolves with. */
   writeHandle: WriteHandle = 1n;
+  /** What `openContentStream` hands back. */
+  streamHandle: StreamHandle = 1n;
   commitOpId = 42n;
   respond: (command: CommandDescriptor) => Promise<void> = () => Promise.resolve();
   respondSnapshot: (folder: Uint8Array | null) => Promise<SnapshotDescriptor> = (folder) =>
@@ -340,8 +353,12 @@ export class FakeEngineTransport implements EngineTransport {
   respondDownload: (node: Uint8Array) => Promise<ArrayBuffer> = () =>
     Promise.resolve(new ArrayBuffer(0));
   respondSiweChallenge: () => Promise<string> = () => Promise.resolve(FAKE_SIWE_NONCE);
-  respondDownloadRange: (node: Uint8Array, offset: number, length: number) => Promise<ArrayBuffer> =
-    (_node, _offset, length) => Promise.resolve(new ArrayBuffer(length));
+  respondReadStream: (
+    handle: StreamHandle,
+    offset: number,
+    length: number
+  ) => Promise<ArrayBuffer> = (_handle, _offset, length) =>
+    Promise.resolve(new ArrayBuffer(length));
   private readonly listeners = new Set<EngineEventListener>();
 
   start(secret: ArrayBuffer): Promise<void> {
@@ -389,9 +406,19 @@ export class FakeEngineTransport implements EngineTransport {
     return this.respondDownload(node);
   }
 
-  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
-    this.downloadRanges.push({ node, offset, length });
-    return this.respondDownloadRange(node, offset, length);
+  openContentStream(node: Uint8Array): Promise<StreamHandle> {
+    this.opened.push(node);
+    return Promise.resolve(this.streamHandle);
+  }
+
+  readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
+    this.reads.push({ handle, offset, length });
+    return this.respondReadStream(handle, offset, length);
+  }
+
+  closeStream(handle: StreamHandle): Promise<void> {
+    this.closedStreams.push(handle);
+    return Promise.resolve();
   }
 
   subscribe(listener: EngineEventListener): () => void {
@@ -414,11 +441,15 @@ export class FakeEngineWorker implements EngineWorkerLike {
   terminated = false;
   private messageListeners: Array<(event: MessageEvent<WorkerMessage>) => void> = [];
 
-  postMessage(message: { id?: number }): void {
+  /** What `openContentStream` answers with — every engine's counter starts at 1. */
+  streamHandle: StreamHandle = 1n;
+
+  postMessage(message: { id?: number; type?: string }): void {
     this.posted.push(message);
-    if (typeof message.id === 'number') {
-      queueMicrotask(() => this.emit({ type: 'response', id: message.id!, ok: true }));
-    }
+    if (typeof message.id !== 'number') return;
+    const id = message.id;
+    const result = message.type === 'openContentStream' ? this.streamHandle : undefined;
+    queueMicrotask(() => this.emit({ type: 'response', id, ok: true, result }));
   }
 
   addEventListener(type: 'message' | 'error', listener: unknown): void {

@@ -16,6 +16,7 @@ import type {
   CommandDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
+  StreamHandle,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -39,6 +40,21 @@ export class EngineRequestError extends Error {
     this.name = 'EngineRequestError';
     this.code = code;
   }
+}
+
+/** Which of the engine's handle tables a step addresses. */
+export type HandleKind = 'write' | 'stream';
+
+/**
+ * Refuses a step on a handle the refusing layer cannot serve, spelled exactly
+ * like the engine's own unknown-handle error: a probing tab learns nothing a
+ * legitimate one would not. Mirrors `EngineError::Unknown*Handle`.
+ */
+export function unknownHandle(kind: HandleKind): EngineRequestError {
+  return new EngineRequestError(
+    `unknown ${kind} handle`,
+    kind === 'write' ? 'unknownWriteHandle' : 'unknownStreamHandle'
+  );
 }
 
 /**
@@ -73,7 +89,9 @@ export abstract class CorrelatedTransport implements EngineTransport {
   abstract snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
   abstract siweChallenge(): Promise<string>;
   abstract download(node: Uint8Array): Promise<ArrayBuffer>;
-  abstract downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer>;
+  abstract openContentStream(node: Uint8Array): Promise<StreamHandle>;
+  abstract readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer>;
+  abstract closeStream(handle: StreamHandle): Promise<void>;
   abstract close(): void;
 
   subscribe(listener: EngineEventListener): () => void {

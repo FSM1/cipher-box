@@ -33,7 +33,8 @@ use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
     ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, Refused,
-    SealError, StagingLedger, open_content_range, sealed_total_bytes,
+    RootManifest, SealError, StagingLedger, open_content_range, open_content_root,
+    read_pinned_range, sealed_total_bytes,
 };
 use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
@@ -88,6 +89,17 @@ pub struct NodeId(pub [u8; 16]);
 /// #815).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WriteHandle(pub u64);
+
+/// A live ranged-read stream, minted by [`Engine::open_content_stream`].
+///
+/// The head version and its verified DAG root manifest are pinned when the
+/// stream opens, so every window [`Engine::read_stream`] serves is a slice of
+/// that one authenticated object. Re-resolving per window would let a head
+/// change mid-stream splice two versions into one response body, which no
+/// downstream check can detect — every byte is still CID-verified and unsealed
+/// under its own version's key (#948).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct StreamHandle(pub u64);
 
 /// What a write handle is writing to.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -654,6 +666,11 @@ pub enum EngineError {
     /// A write-handle call named a handle this engine does not hold — never
     /// minted, or already committed, failed, or aborted.
     UnknownWriteHandle,
+    /// A read named a stream handle this engine does not hold — never minted,
+    /// or already closed.
+    UnknownStreamHandle,
+    /// The open-stream table is already at [`MAX_OPEN_STREAMS`]; close one first.
+    TooManyStreams,
     /// [`Command::CancelUpload`] named an op that is no longer cancellable: its
     /// version's last block confirmed and its record is publishing, or it has
     /// already left the durable queue. Never converted into a compensating
@@ -819,6 +836,11 @@ impl fmt::Display for EngineError {
                 "the file changed while it was being read: {declared} bytes were declared and {observed} arrived"
             ),
             EngineError::UnknownWriteHandle => f.write_str("unknown write handle"),
+            EngineError::UnknownStreamHandle => f.write_str("unknown stream handle"),
+            EngineError::TooManyStreams => write!(
+                f,
+                "too many read streams are already open; at most {MAX_OPEN_STREAMS} may be open at once, so close one first"
+            ),
             EngineError::TooLateToCancel { op_id } => write!(
                 f,
                 "upload {} is already publishing and can no longer be cancelled",
@@ -1110,6 +1132,28 @@ struct LiveWrites {
     next: u64,
 }
 
+/// What one [`StreamHandle`] pins: the head version resolved at open (holding
+/// its content key) and the root manifest its leaves are read against.
+struct LiveStream {
+    version: Version,
+    manifest: RootManifest,
+}
+
+/// How many read streams may be open at once.
+///
+/// A host holds one stream per open media element, so a real UI is two orders
+/// below this; the ceiling exists because each entry pins a content key and a
+/// root manifest carrying a CID per MiB of file, which an unbounded table turns
+/// into a memory and key-pinning DoS ([`EngineError::TooManyStreams`]).
+pub const MAX_OPEN_STREAMS: usize = 256;
+
+/// The engine's live read streams, bounded by [`MAX_OPEN_STREAMS`].
+#[derive(Default)]
+struct LiveStreams {
+    open: BTreeMap<StreamHandle, Rc<LiveStream>>,
+    next: u64,
+}
+
 /// The re-point pointer-payload wire version the owner's own vault seals under
 /// and the cold-start walk verifies against (`crates/core` pointer payload) — the
 /// sole v2 version (CONTEXT.md "Vault pointer").
@@ -1137,6 +1181,9 @@ pub struct Engine<T: SeamTypes> {
     /// only: a restart drops every reservation, and the blocks a dropped handle
     /// staged are unreferenced and collectible as orphans.
     writes: RefCell<LiveWrites>,
+    /// Live read streams and the content version each pins. In memory only: a
+    /// restart drops them, and a host reopens.
+    streams: RefCell<LiveStreams>,
     /// The staging keys those handles hold — orphan GC's live set, shared with
     /// the tick loop that sweeps after each drain pass.
     live_blocks: Rc<RefCell<LiveBlocks>>,
@@ -1238,6 +1285,7 @@ impl<T: SeamTypes> Engine<T> {
                 storage_policy,
                 content_profile,
                 writes: RefCell::new(LiveWrites::default()),
+                streams: RefCell::new(LiveStreams::default()),
                 live_blocks: Rc::new(RefCell::new(LiveBlocks::default())),
                 cancels: Rc::new(RefCell::new(UploadCancels::default())),
                 api_base_url,
@@ -2399,9 +2447,7 @@ impl<T: SeamTypes> Engine<T> {
             return Err(EngineError::NotStarted);
         }
         self.emit_op_progress(node, OpPhase::DownloadStarted, None);
-        // The range clamps to the version's size, so the whole file is the
-        // unbounded window.
-        match self.read_content_range(node, 0, u64::MAX).await {
+        match self.read_whole(node).await {
             Ok(plaintext) => {
                 self.emit_op_progress(node, OpPhase::DownloadCompleted, None);
                 Ok(plaintext)
@@ -2413,26 +2459,97 @@ impl<T: SeamTypes> Engine<T> {
         }
     }
 
-    /// Read one byte window of a file node's plaintext, fetching only the leaves
-    /// the window covers (blueprint/engine.md "Content plane"). Emits no
-    /// [`Event::OpProgress`]: a media element issues one ranged read per seek and
-    /// per buffer refill, and a phase pair each would drown the stream.
-    pub async fn read_content_range(
+    /// [`read_content`](Engine::read_content) without its progress phases.
+    async fn read_whole(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
+        let (version, version_count) = self.head_version(node).await?;
+        // The range clamps to the version's size, so the whole file is the
+        // unbounded window.
+        let bytes = open_content_range(&self.gateway, &self.seams.http, &version, 0, u64::MAX)
+            .await
+            .map_err(open_engine_error)?;
+        self.project_head(node, &version, version_count);
+        Ok(bytes)
+    }
+
+    /// Open a ranged-read stream over a file node, pinning the head version and
+    /// its verified root manifest for the handle's whole life ([`StreamHandle`]).
+    ///
+    /// This is where a media read pays its resolve, its adoption gate, and its
+    /// root-manifest fetch — once, not once per window. Closed with
+    /// [`close_stream`](Engine::close_stream).
+    pub async fn open_content_stream(&self, node: NodeId) -> Result<StreamHandle, EngineError> {
+        if !self.started {
+            return Err(EngineError::NotStarted);
+        }
+        // Refused before the resolve so a caller past the ceiling spends no
+        // network on it; re-checked at the insert, the only borrow that is
+        // atomic against opens which interleaved on the awaits between.
+        if self.streams.borrow().open.len() >= MAX_OPEN_STREAMS {
+            return Err(EngineError::TooManyStreams);
+        }
+        let (version, version_count) = self.head_version(node).await?;
+        let manifest = open_content_root(&self.gateway, &self.seams.http, &version)
+            .await
+            .map_err(open_engine_error)?;
+        self.project_head(node, &version, version_count);
+        let mut streams = self.streams.borrow_mut();
+        if streams.open.len() >= MAX_OPEN_STREAMS {
+            return Err(EngineError::TooManyStreams);
+        }
+        streams.next += 1;
+        let handle = StreamHandle(streams.next);
+        streams
+            .open
+            .insert(handle, Rc::new(LiveStream { version, manifest }));
+        Ok(handle)
+    }
+
+    /// Read one byte window of an open stream's pinned version, fetching only
+    /// the leaves the window covers. Clamped to the pinned version, so an offset
+    /// at or past its end yields no bytes. Emits no [`Event::OpProgress`]: a
+    /// media element pulls a window per seek and per buffer refill, and a phase
+    /// pair each would drown the stream.
+    pub async fn read_stream(
         &self,
-        node: NodeId,
+        handle: StreamHandle,
         offset: u64,
         length: u64,
     ) -> Result<Vec<u8>, EngineError> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
-        let (version, version_count) = self.head_version(node).await?;
-        let bytes = open_content_range(&self.gateway, &self.seams.http, &version, offset, length)
-            .await
-            .map_err(open_engine_error)?;
-        // The verified head version is gate-passing state, so it may legally
-        // touch the base node's projected size/mtime. Repaint only on a real
-        // change — a repeat read must not cascade.
+        // Lifted out of the map so the borrow does not span the awaits below;
+        // the pinned content key zeroizes when the last `Rc` drops.
+        let stream = self
+            .streams
+            .borrow()
+            .open
+            .get(&handle)
+            .map(Rc::clone)
+            .ok_or(EngineError::UnknownStreamHandle)?;
+        read_pinned_range(
+            &self.gateway,
+            &self.seams.http,
+            &stream.version,
+            &stream.manifest,
+            offset,
+            length,
+        )
+        .await
+        .map_err(open_engine_error)
+    }
+
+    /// Release a read stream. Idempotent — an unknown handle is already gone.
+    pub fn close_stream(&self, handle: StreamHandle) {
+        self.streams.borrow_mut().open.remove(&handle);
+    }
+
+    /// Repaint the base node from a head version a read has just verified.
+    ///
+    /// The verified head is gate-passing state, so it may legally touch the base
+    /// node's projected size/mtime. Repaint only on a real change — a repeat read
+    /// must not cascade.
+    fn project_head(&self, node: NodeId, version: &Version, version_count: u64) {
         if project_child_version(
             &mut self.snapshot.borrow_mut(),
             node,
@@ -2442,7 +2559,6 @@ impl<T: SeamTypes> Engine<T> {
         ) {
             let _ = self.events.unbounded_send(Event::SnapshotUpdated);
         }
-        Ok(bytes)
     }
 
     /// Resolve one file node's head content version: base-snapshot lookup →
