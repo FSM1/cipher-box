@@ -37,11 +37,17 @@ function mockNetwork(): Plugin {
             return;
           }
           if (req.method === 'PUT') {
-            void readBody(req).then((record) => {
-              records.set(key, record);
-              res.statusCode = 200;
-              res.end();
-            });
+            void readBody(req).then(
+              (record) => {
+                records.set(key, record);
+                res.statusCode = 200;
+                res.end();
+              },
+              () => {
+                res.statusCode = 400;
+                res.end();
+              }
+            );
             return;
           }
         }
@@ -63,11 +69,17 @@ function mockNetwork(): Plugin {
         }
 
         if (url.startsWith('/mock-http/echo')) {
-          void readBody(req).then((body) => {
-            res.statusCode = 200;
-            res.setHeader('x-echo-method', req.method ?? '');
-            res.end(body);
-          });
+          void readBody(req).then(
+            (body) => {
+              res.statusCode = 200;
+              res.setHeader('x-echo-method', req.method ?? '');
+              res.end(body);
+            },
+            () => {
+              res.statusCode = 400;
+              res.end();
+            }
+          );
           return;
         }
 
