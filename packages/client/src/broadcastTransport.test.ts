@@ -4,6 +4,7 @@ import { BroadcastTransport } from './broadcastTransport.js';
 import { EngineRequestError } from './correlatedTransport.js';
 import { LeaderRelay } from './leaderRelay.js';
 import { unavailableCourier } from './portCourier.js';
+import type { MessagePortLike, PortCourier } from './portRelay.js';
 import {
   emptySnapshot,
   FakeBus,
@@ -518,6 +519,37 @@ describe('broadcast transport ↔ leader relay', () => {
     new LeaderRelay(bus.channel(), engineB, ports.courier('leaderB'));
     await expect(queued).resolves.toMatchObject({ staleness: 'fresh' });
     expect(engineB.snapshots).toHaveLength(1);
+  });
+
+  it('notifies an adopted read port that it is closing when the leader steps down', async () => {
+    const bus = new FakeBus();
+    const engine = new FakeEngineTransport();
+    const near = new FakeChannelPort();
+    const far = new FakeChannelPort();
+    near.peer = far;
+    far.peer = near;
+
+    let deliver: ((port: MessagePortLike) => void) | null = null;
+    const courier: PortCourier = {
+      address: () => Promise.resolve('leader'),
+      connect: () => Promise.reject(new Error('unused')),
+      onPort: (handler) => {
+        deliver = handler;
+        return () => (deliver = null);
+      },
+    };
+
+    const relay = new LeaderRelay(bus.channel(), engine, courier);
+    deliver!(far);
+    far.receive({ type: 'cb:portHello', clientId: 'f' }); // named, so it outlives the naming timeout
+    await tick();
+
+    const seen: string[] = [];
+    near.addEventListener('message', (event) => seen.push((event.data as { type: string }).type));
+    relay.close();
+    await tick();
+
+    expect(seen).toContain('cb:portClosed');
   });
 
   it('re-arms on leadership change: an in-flight command rejects retryably, later commands await the next leader (P1-3)', async () => {

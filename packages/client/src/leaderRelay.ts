@@ -144,10 +144,12 @@ export class LeaderRelay {
     // leader that is gone. A crashed leader can't send this; the next leader's
     // fresh token covers that path.
     this.post({ type: 'cb:leaderGone', token: this.token });
-    this.closed = true;
-    this.releaseWrites(null);
+    // Detach before latching: `postPort` drops messages once closed, so the
+    // `cb:portClosed` notice has to go out while the relay is still open.
     this.unsubscribePorts();
     for (const entry of [...this.readPorts]) this.detachPort(entry);
+    this.closed = true;
+    this.releaseWrites(null);
     this.unsubscribe();
     this.channel.removeEventListener('message', this.onMessage);
   }

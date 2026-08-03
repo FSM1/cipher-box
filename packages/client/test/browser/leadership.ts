@@ -118,7 +118,10 @@ const WORKER_URLS: Record<NonNullable<HarnessOptions['worker']>, URL> = {
 
 window.cbCreate = async ({ lockName, channelName, worker }: HarnessOptions): Promise<void> => {
   // A follower reads over a Service-Worker-brokered port, so every tab needs one.
-  await awaitServiceWorkerControl();
+  // Fail here rather than letting the miss resurface as a port-brokerage timeout.
+  if (!(await awaitServiceWorkerControl())) {
+    throw new Error('no Service Worker took control of this tab');
+  }
   const workerUrl = WORKER_URLS[worker ?? 'journal'];
   client = new EngineClient({
     locks: navigator.locks,
