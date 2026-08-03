@@ -1,0 +1,212 @@
+ok so 2 tasks:
+- cleaning up the #655 checkboxes and filing everything under applicable subissues. see https://github.com/FSM1/cipher-box/issues/655#issuecomment-5171549467 as well as some memory.md file for details.
+- handle the #980 integration following #982 being merged. see https://github.com/FSM1/cipher-box/pull/980#issuecomment-5171398675 for details.
+
+---
+
+ok please kick off all 3 gates on #980. there's a coderabbit slot ready and waiting for it the moment those 3 land.
+
+---
+
+yeah I am waiting for you to land all 3 gates and the cli review before flipping #980 to ready.
+
+---
+
+while all that is happening, just a quick follow up to ensure that all necessary `blocked by` and `blocks` edges on all the newly created issues from the #655 cleanup (and subsequent board reorg) are acurately marked
+
+---
+
+have depency edges been marked both ways for #1005?
+
+---
+
+<task-notification>
+<task-id>a22744fa5d7555e64</task-id>
+<tool-use-id>toolu_01Rw5xyxPtmQMqLewwNEtMxr</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/a22744fa5d7555e64.output</output-file>
+<status>completed</status>
+<summary>Agent "Apply review findings to #980" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All seven items are applied, committed as `bd66b1425`, and pushed. PR #980 remains a draft.
+
+## Per-item results
+
+**1. HIGH — stream fence now follows leadership changes**
+`BroadcastTransport` gained an `onLeadershipChange` hook (`packages/client/src/broadcastTransport.ts:48-53`, `:81`, `:93`), fired from exactly the two places that already call `dropPort()` — `onLeader()` `:379` and `onLeaderGone()` `:393`. `EngineClient` extracted `retireStreams()` (`packages/client/src/engineClient.ts:245-249`) out of `swapCurrent`, and `installFollower()` (`:252-258`) registers it. Port fence and stream fence now move together. Did NOT switch to relay-minted opaque handles.
+Test: `packages/client/src/engineClient.test.ts:352` `refuses a stream handle across a leader change while this tab stays a follower`. **Verified failing with the hook removed** (`1 failed | 284 passed`), passing with it.
+One adaptation: your `neverGrant` stub had to honour the abort signal, otherwise `LeaderElection.close()` awaits a promise that never settles and `dispose()` hangs — the test timed out at 5s before I fixed it. It still never grants the lock, so the follower path is what's tested. All your assertions kept.
+
+**2. MEDIUM — live-stream table capped**
+`MAX_OPEN_STREAMS = 256` (`crates/engine/src/facade.rs:1147-1153`), new `EngineError::TooManyStreams { limit }` (`:669`, Display `:842`), refused fail-closed in `open_content_stream` (`:2490-2511`) — once before the resolve so a caller past the ceiling spends no network, and again inside the `borrow_mut`, the only check atomic against opens that interleaved on the awaits. Wired through `crates/wasm/src/host.rs:482` (`"tooManyStreams"`) and `crates/fuse/src/error.rs:70` (`VfsError::Unavailable`); both matches are exhaustive so nothing fell through. `detachPort` untouched — no release-on-port-loss.
+Test: `crates/engine/tests/write_plane.rs:962` `opening_past_the_stream_ceiling_is_refused` — opens 256, asserts the 257th is refused, asserts the refusal evicted nothing, asserts closing one frees exactly one slot.
+
+**3. `read_content_range` deleted — with one correction to your brief**
+It had a live non-test caller: `Engine::read_content` called it with `(node, 0, u64::MAX)`. That caller is a whole-file single-window read, structurally immune to the #948 splice, so rather than delete blind its body became a **private** window-less `read_whole` (`facade.rs:2467`); `read_content` keeps its `OpProgress` phases. The public ranged API is gone — a FUSE implementer now finds only `open_content_stream`. `open_content_range` is kept (still used by `read_whole`, `crates/engine/src/content/`, and `tests/content_wipe.rs`).
+Tests: `write_plane.rs:911`, renamed to `a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file`, same five window cases and three past-the-end cases, now driving `open_content_stream`/`read_stream`/`close_stream`.
+
+**4. Ownership comment corrected** — `packages/client/src/broadcast.ts:51-56`. Now states the port is as authenticated as the `cb:leader` beacon and no more, its owner self-asserted, so the binding is lifecycle bookkeeping and not authorization. Four lines, no apologia.
+
+**5. Undelivered plaintext wiped** — `answerPort` now takes the `ReadPortEntry` instead of a bare port (`leaderRelay.ts:296-310`) and checks `this.readPorts.has(entry)` after the read resolves, mirroring `MediaBroker.pump`'s `isCurrent`. Zeroization is at the terminal owner only: the wipe happens on the path where the buffer is never transferred and the function returns without posting.
+Test: `broadcastTransport.test.ts:485` `wipes a read window nobody can receive rather than leaving the plaintext behind`. **Verified failing with the wipe branch removed.**
+
+**6. `departed` bounded, forged `cb:bye` no longer permanent** — `departed` is now populated only when a mint is actually in flight (`leaderRelay.ts:208-209`) and evicted the moment the last mint it guarded settles (`endMint`, `:466-474`, driven from `bind`'s `finally`). Also cleared on `cb:portHello` adoption (`:274`). A forged `cb:bye` against an idle tab now records nothing at all.
+Test: `broadcastTransport.test.ts:759` `keeps serving a live follower after a cb:bye it never sent`. **Verified failing with the guard reverted to the unconditional add.**
+
+**7. Error-code spelling** — `bind` now takes a `HandleKind` string-literal union and throws `unknownHandle(kind)` (`leaderRelay.ts:456`), yielding `unknownWriteHandle`/`unknownStreamHandle`. Since `kind` determines the map, `bind`/`release` derive it via `owners(kind)` (`:476`) rather than passing both.
+Test: `broadcastTransport.test.ts:773` `refuses a handle minted for a client that left mid-mint, spelled as the engine spells it`. **Verified failing with the old `'unknownHandle'` string.**
+
+## Gate results
+
+| Gate | Result |
+|---|---|
+| `pnpm -r --if-present run typecheck` | client, api, web all Done — 0 errors |
+| `pnpm -r --if-present run test` | client **288** (baseline 284, +4 new), api **178**, web **99** — 0 failed |
+| `pnpm --filter @cipherbox/client run test:browser` | **29 passed** (baseline 29) |
+| `cargo fmt --all` | applied; `--check` clean |
+| `cargo check --workspace` | Finished, 0 errors, 0 warnings |
+| `cargo test -p cipherbox-engine` | **773 passed, 0 failed** across 12 binaries |
+| `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown` | Finished, 0 errors — run because `EngineError` changed and `--workspace` never builds wasm32 |
+| `pnpm exec eslint .` | clean |
+
+All re-run against the committed tree after the pre-commit hook's eslint/prettier pass. Worktree clean; `/Users/myankelev/Code/random/cipher-box` untouched. No `CARGO_TARGET_DIR` set or shared.
+
+Two things worth your attention:
+
+- The TS side does not recognise the new `tooManyStreams` code. It will surface as an `EngineRequestError` with an unhandled `code` rather than a specific UI message. In scope terms the refusal is correct and fail-closed; whether `apps/web` should render something distinct is a follow-up I did not file.
+- Your brief said `read_content_range`'s only remaining callers were the two tests. That was wrong — `read_content` used it. I folded it in rather than deleting a live path, as described above.</result>
+<usage><subagent_tokens>156412</subagent_tokens><tool_uses>71</tool_uses><duration_ms>709111</duration_ms></usage>
+</task-notification>
+
+---
+
+sure, agreed with the ui polish gap being filed as a separate issue. please go ahead and create the issue. make sure that dependecy edges are marked on this new issue (if applicable)
+
+---
+
+<task-notification>
+<task-id>a51ddf4f8908149f0</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/a51ddf4f8908149f0.output</output-file>
+<status>completed</status>
+<summary>Agent "Simplify gate on #980" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>`/simplify` gate complete. PR #980 is still a draft at `ceb1d85ac`.
+
+## What changed — one commit, `ceb1d85ac`
+
+**Speculative generality removed**
+- `crates/engine/src/facade.rs:672` — `EngineError::TooManyStreams { limit }` → unit variant. Nothing read `limit` except `Display` and a tautological test assertion, and `MAX_OPEN_STREAMS` is already `pub`-exported for a host that wants the ceiling. Rendered message and the wasm `"tooManyStreams"` code are byte-identical. Propagated to `crates/fuse/src/error.rs:71`, `crates/wasm/src/host.rs:482`, and two assertions in `write_plane.rs`.
+
+**Rationale stated once, at its home**
+- The unbounded-table DoS argument appeared three times (error variant doc, `MAX_OPEN_STREAMS` doc, test doc). Now only on `facade.rs:1146` (`MAX_OPEN_STREAMS`), with the variant and the test cross-referencing it.
+- The #948 pinning counterfactual appeared on `StreamHandle` (its home) and again on `write_plane.rs:1041`. Trimmed to the home.
+- `engineClient.test.ts:148,:387` — two test comments re-derived the `EngineClient.streams` doc block; now one-line cross-references.
+
+**Absence-justifying / caller-side prose deleted**
+- `facade.rs:2465` — `read_whole`'s "Kept private and window-less: …" justified an argument that isn't there.
+- `facade.rs:2554` — `project_head`'s "and only once the read succeeded, so a fail-closed rejection folds nothing" describes a caller-side ordering the function cannot enforce.
+- `content/mod.rs:257` — the 4-line defence of the repeated size check tightened to 3 lines. **The check itself is untouched**, per your ruling.
+- `broadcast.ts:47` — dropped the redundant "as authenticated as the `cb:leader` beacon and no more" clause; the trust-boundary sentence stays.
+
+**Duplication**
+- `unknownHandle(kind)` hoisted to `correlatedTransport.ts:45`, beside `EngineRequestError`. `engineClient.ts` had its own `unknownStreamHandle()` producing the identical message+code — two independent spellings of one wire-visible contract, added in the same commit. Both `leaderRelay.ts` and `engineClient.ts` now import it.
+- `write_plane.rs:842,865` — new `publish_clip` / `open_reader` helpers replace three verbatim copies of the 22-line two-device preamble (the file already uses this convention: `boot`, `write_file`).
+
+**Type error**
+- `testkit.ts:445` — `FakeEngineWorker.streamHandle` was typed `WriteHandle`. Now `StreamHandle`. Compiled before only because both alias `bigint`.
+
+## Deliberately left alone
+
+All five items you flagged as load-bearing, untouched: the double stream-ceiling check, `onLeadershipChange`/`retireStreams`, the doubled `manifest.size != version.size`, `departed`/`endMint`, `MEDIA_WINDOW_BYTES`. No test assertion was removed.
+
+Four findings I judged out of scope rather than rejecting:
+
+1. **`MediaBroker` pins one engine stream per HTTP Range request, not per ticket** (`media/broker.ts:151`). `sw/pipe.ts` mints a fresh `requestId` per intercepted fetch, so a `&lt;video&gt;` re-pays `head_version` + root-manifest fetch on every Range request and every seek — for a 4 GiB file that is ~150 KB of manifest re-downloaded per seek. Pinning per *ticket* with a refcount would also give a stronger form of the #948 invariant (one version across a whole playback, not per response). **This is a behavior change, so I did not make it** — worth an issue.
+2. **`RootManifest.leaf_cids: Vec&lt;Vec&lt;u8&gt;&gt;`** (`content/dag.rs:208`, not in this diff) is now long-lived state under the pin — one heap allocation per MiB of file, up to 256 streams. Every leaf CID is a fixed 36 bytes and `is_raw_leaf_cid` already enforces it, so `Box&lt;[[u8; CONTENT_CID_LEN]]&gt;` would collapse ~4096 allocations to 1 per open stream. Touches an untouched file's decode path; out of scope here.
+3. **`EngineClient`'s handle-remap table** exists because the engine mints `StreamHandle` as a per-engine counter from 1. Seeding `LiveStreams.next` from the injected `Entropy` seam would make staleness self-detecting and let `EngineClient` go back to pass-through. Note that `WriteHandle` has the same property and no fence — so the codebase currently says "stream handles need a client-side table, write handles don't" with nothing expressing why. Larger than this PR.
+4. **`LeaderRelay`'s `HandleKind` plumbing** — `unknownHandle`, `owners()`, `releaseHandles`, and `bind` each re-branch on the tag, and every `bind`/`release` call site re-supplies the closer. A `HandleTable` record would collapse it, but `bind`'s failure path closes a write handle via bare `abortWrite` while `release` routes it through `this.writes.run(...)`; unifying them would change behavior, so I left it.
+
+## Gate results, from the worktree root
+
+| Gate | Result |
+|---|---|
+| `pnpm -r --if-present run typecheck` | pass — api, client, web |
+| `pnpm -r --if-present run test` | client **288**, api **178**, web **99** — all at baseline |
+| `pnpm --filter @cipherbox/client run test:browser` | **29 passed** |
+| `cargo fmt --all --check` | clean |
+| `cargo check --workspace` | clean |
+| `cargo test -p cipherbox-engine` | **800 passed**, 0 failed |
+| `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown` | clean |
+| `pnpm exec eslint .` | exit 0 |
+
+**One correction to your brief:** the engine baseline is **800**, not 773. I verified by stashing my changes and re-running at `bd66b1425` — it also reports 800, so the stated figure was stale and my change is test-count-neutral.</result>
+<usage><subagent_tokens>153828</subagent_tokens><tool_uses>68</tool_uses><duration_ms>921771</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>bgqpdhb3x</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/bgqpdhb3x.output</output-file>
+<status>completed</status>
+<summary>Background command "Run CodeRabbit CLI review" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok please handle #973 in a background agent as a separate PR.
+
+---
+
+<task-notification>
+<task-id>aed43c67135382078</task-id>
+<tool-use-id>toolu_01V4AHC1uHjuiT8y8V8WvgxN</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/aed43c67135382078.output</output-file>
+<status>completed</status>
+<summary>Agent "Fix 973 v1 primitives in review tooling" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done.
+
+## PR
+
+**https://github.com/FSM1/cipher-box/pull/1011** — draft, base `main`, branch `chore/973-crypto-privacy-review-v2-primitives`, commit `355c6d925`. Two files, +232/−181. Body contains `Closes #973`. Not marked ready; no CodeRabbit review requested.
+
+## Grep counts
+
+| Term | command before → after | agent before → after |
+|---|---|---|
+| `AES`/`ECIES`/`PBKDF2`/`Argon2`/`Web Crypto`/`TEE` (combined) | present → **0** | present → **0** |
+| XChaCha20 | 0 → 2 | 0 → 2 |
+| BLAKE3 | 0 → 1 | 0 → 2 |
+| HPKE | 0 → 7 | 0 → 2 |
+| X25519 | 0 → 3 | 0 → 3 |
+| Ed25519 | 0 → 2 | 0 → 3 |
+| secp256k1 | 0 → 1 | 0 → 3 |
+
+## Deleted vs. rewritten
+
+**Deleted outright** (no v2 analogue): the two TEE security rules including `ipnsPrivateKey`-to-TEE; the "TEE: trusted for IPNS republishing" trust-model row; the "TEE boundaries respected" checklist item; "IPNS keys encrypted with TEE public key" sign-off item; the PBKDF2/Argon2 "Weak Key Derivation" pattern; the "Missing Authentication" AES-CBC/GCM pattern; the "Predictable Randomness" `Math.random` pattern (folded into nonce reuse, since core takes injected entropy); RSA pitfalls from the expertise list.
+
+**Rewritten**: the algorithm table (8 rows, v2 suite); Phase 2 discovery grep (was `*.ts`/`*.js` hunting for `AES|ECIES`, now Rust-first over `crates`); Phase 3.1–3.5 checklists; Phase 4 negative/edge/attack case lists; the sign-off compliance checklist; the vulnerability-pattern examples (TS → Rust); the agent's key hierarchy (v1 random-key tree → seeded per-scope derivation with the write-plane mirror and rotation semantics); the agent's critical-rules block, expertise section, and Rust test-case scaffolding.
+
+**Invariants added**: adoption gate as a fail-closed trust boundary with its stages enumerated and failure typed disjoint from malformed/availability; frozen KDF edge catalog with the `keyed_hash(derive_key(ctx, seed), id16)` shape and the separation requirement; encode/decode fail-closed symmetry citing `crates/core/src/seal/body.rs` `assert_children_unique` and calling out release-stripped `debug_assert!`; zeroize-at-terminal-owner. Plus supporting v2 checks: HPKE auth mode where sender authentication is load-bearing, floor law, IPNS pubkey from the name itself, deterministic-CBOR strictness with unknown-field tolerance, injected entropy/time, KAT accept+reject obligation for new tags/edges.
+
+## Judgment calls
+
+- **Fixed inside the agent file, beyond the issue's letter**: the `&lt;structured_returns&gt;` report location still pointed at `.planning/security/REVIEW-[timestamp].md`, which contradicts the command file's own rule that reports never enter the repo tree. Corrected to scratchpad/inline. One-line, same file, prevents the subagent violating its caller.
+- **`landing/`** — untouched, as instructed. Marketing copy for the deployed v1 system.
+- **`CONTEXT.md:15`** — untouched, but flagged in the PR body: the owner-blob glossary entry still says the override seed is "ECIES-wrapped to the vault owner's identity key", while `blueprint/core.md` specifies HPKE to the X25519 enc subkey. That is a real inconsistency in the normative corpus itself, not tooling drift; it deserves its own issue rather than riding this PR.
+
+## Notes
+
+The worktree has no `node_modules`, so the husky `pre-commit` hook failed with `Command "lint-staged" not found`. I ran the main checkout's `markdownlint` (repo config) and `prettier --write` against my two files first — both clean, prettier only realigned the algorithm table — then committed with `--no-verify`. No writes to the main checkout.</result>
+<usage><subagent_tokens>97772</subagent_tokens><tool_uses>42</tool_uses><duration_ms>366233</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-aed43c67135382078</worktreePath><worktreeBranch>worktree-agent-aed43c67135382078</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+#980 is currently  being reviewed by coderabbit web.
+
+please update any stale CONTEXT.md references to V1.* encryption architecture.
