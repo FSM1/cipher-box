@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "5e226974b423",
+  "strategy": "manual-commit",
+  "branch": "chore/ignore-worktree-target-dirs",
+  "checkpoints_count": 130,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/5e/226974b423/0/metadata.json",
+      "transcript": "/5e/226974b423/0/full.jsonl",
+      "compact_transcript": "/5e/226974b423/0/transcript.jsonl",
+      "content_hash": "/5e/226974b423/0/content_hash.txt",
+      "prompt": "/5e/226974b423/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1118,
+    "cache_creation_tokens": 2425922,
+    "cache_read_tokens": 103411480,
+    "output_tokens": 512218,
+    "api_call_count": 564
+  }
+}
