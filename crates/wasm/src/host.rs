@@ -409,10 +409,12 @@ impl EngineHandle {
         future_to_promise(async move {
             // A float-to-int cast saturates and truncates, either of which would
             // silently read a different window than the caller named.
-            let whole = |value: f64| value.is_finite() && value >= 0.0 && value.fract() == 0.0;
+            let whole = |value: f64| {
+                value.is_finite() && value >= 0.0 && value < u64::MAX as f64 && value.fract() == 0.0
+            };
             if !whole(offset) || !whole(length) {
                 return Err(JsError::new(
-                    "readStream offset and length must be non-negative whole numbers",
+                    "readStream offset and length must be whole numbers in the u64 range",
                 )
                 .into());
             }

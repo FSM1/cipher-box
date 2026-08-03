@@ -129,7 +129,7 @@ describe('EngineClient leadership + transport swap', () => {
   });
 
   it('refuses a stream handle minted by a leadership that has been replaced', async () => {
-    const { tab } = origin();
+    const { tab, workers } = origin();
     const secretSource = {
       provideSecret: (): Promise<ArrayBuffer> => Promise.resolve(new Uint8Array([1]).buffer),
     };
@@ -149,6 +149,12 @@ describe('EngineClient leadership + transport swap', () => {
     // alias the next stream it opens (`EngineClient.streams`).
     const reopened = await follower.openContentStream(new Uint8Array(16).fill(2));
     expect(reopened).not.toBe(stale);
+    await follower.readStream(reopened, 0, 8);
+    const promoted = workers[workers.length - 1];
+    expect(promoted.posted).toContainEqual(
+      expect.objectContaining({ type: 'readStream', handle: 1n, offset: 0, length: 8 })
+    );
+
     await expect(follower.readStream(stale, 0, 8)).rejects.toMatchObject({
       code: 'unknownStreamHandle',
     });
@@ -384,11 +390,16 @@ describe('EngineClient leadership + transport swap', () => {
 
     // The fence has to fire on a leadership this tab merely observed, not only
     // on one it was promoted through (`EngineClient.streams`).
-    await follower.openContentStream(new Uint8Array(16).fill(2));
+    const fresh = await follower.openContentStream(new Uint8Array(16).fill(2));
+    const window_ = await follower.readStream(fresh, 0, 8);
+    expect(window_.byteLength).toBe(8);
+    expect(engineB.reads).toEqual([{ handle: 1n, offset: 0, length: 8 }]);
+
     await expect(follower.readStream(stale, 0, 8)).rejects.toMatchObject({
       code: 'unknownStreamHandle',
     });
-    expect(engineB.reads).toEqual([]);
+    // The refused stale read never reached the replacement engine.
+    expect(engineB.reads).toHaveLength(1);
 
     await follower.dispose();
     relayB.close();
