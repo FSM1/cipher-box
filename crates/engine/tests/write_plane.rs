@@ -41,8 +41,8 @@ use cipherbox_engine::testkit::{
 };
 use cipherbox_engine::{
     BlockProgress, Command, ContentProfile, DeadLetter, DeadLetterReason, Engine, EngineError,
-    Event, EventStream, GatewayConfig, LoginSecret, NodeId, NodeKind, Op, OpPhase, RecordSeal,
-    StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
+    Event, EventStream, GatewayConfig, LoginSecret, MAX_OPEN_STREAMS, NodeId, NodeKind, Op,
+    OpPhase, RecordSeal, StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -905,10 +905,10 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
     );
 }
 
-/// A ranged read walks the same gated resolve as the whole-file read and serves
-/// the matching slice — the media pipe's read path (#641).
+/// A stream's windows serve the matching slices of the whole-file read — the
+/// media pipe's read path (#641).
 #[test]
-fn a_ranged_read_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
+fn a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
@@ -937,23 +937,88 @@ fn a_ranged_read_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
     let whole = block_on(engine_b.read_content(node)).expect("the verified read serves it");
     assert_eq!(whole, plaintext);
 
+    let stream = block_on(engine_b.open_content_stream(node)).expect("the stream opens");
     for (offset, length) in [(0u64, 16u64), (16, 16), (15, 2), (40, 100), (190, 999)] {
         let end = (offset + length).min(whole.len() as u64) as usize;
         assert_eq!(
-            block_on(engine_b.read_content_range(node, offset, length))
-                .expect("the ranged read serves it"),
+            block_on(engine_b.read_stream(stream, offset, length)).expect("the window serves it"),
             whole[offset as usize..end],
             "range {offset}+{length}"
         );
     }
     for offset in [whole.len() as u64, whole.len() as u64 + 1, u64::MAX] {
         assert!(
-            block_on(engine_b.read_content_range(node, offset, 16))
+            block_on(engine_b.read_stream(stream, offset, 16))
                 .unwrap()
                 .is_empty(),
             "a window past the end is empty, not an error: offset {offset}"
         );
     }
+    engine_b.close_stream(stream);
+}
+
+/// The live-stream table is bounded: each open stream pins a content key and a
+/// root manifest, so an unbounded one is a memory and key-pinning DoS. Past the
+/// ceiling the open is refused fail-closed, never evicting a live stream.
+#[test]
+fn opening_past_the_stream_ceiling_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let plaintext: Vec<u8> = (0..64u8).collect();
+
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine_a,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &plaintext,
+    )
+    .expect("the write commits");
+    tick(&world, &engine_a, &mut tasks);
+    let node = child_id(&engine_a, ROOT, "clip.bin");
+
+    let bob = world.device(b"alice-second-device");
+    // A few calls per open, plus the reads below.
+    serve_http(&bob, &blocks, MAX_OPEN_STREAMS * 8 + 64);
+    let (mut engine_b, _events_b) = engine_on(&bob, 7);
+    block_on(engine_b.start(secret())).unwrap();
+
+    let handles: Vec<_> = (0..MAX_OPEN_STREAMS)
+        .map(|open| {
+            block_on(engine_b.open_content_stream(node))
+                .unwrap_or_else(|err| panic!("stream {open} opens: {err}"))
+        })
+        .collect();
+
+    assert_eq!(
+        block_on(engine_b.open_content_stream(node)),
+        Err(EngineError::TooManyStreams {
+            limit: MAX_OPEN_STREAMS
+        }),
+        "the open past the ceiling is refused"
+    );
+
+    // The refusal did not evict: an earlier handle still serves its version.
+    assert_eq!(
+        block_on(engine_b.read_stream(handles[0], 0, 16)).expect("the first stream still reads"),
+        plaintext[..16]
+    );
+
+    // Closing one frees exactly one slot.
+    engine_b.close_stream(handles[0]);
+    let reopened = block_on(engine_b.open_content_stream(node)).expect("a freed slot admits one");
+    assert_eq!(
+        block_on(engine_b.open_content_stream(node)),
+        Err(EngineError::TooManyStreams {
+            limit: MAX_OPEN_STREAMS
+        }),
+        "the table is full again"
+    );
+    engine_b.close_stream(reopened);
 }
 
 /// A stream pins the head version it opened on: a head change mid-stream leaves

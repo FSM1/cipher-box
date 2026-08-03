@@ -239,12 +239,22 @@ export class EngineClient implements EngineTransport {
   /** Installs the live transport, retiring the streams the previous one held. */
   private swapCurrent(transport: EngineTransport): void {
     this.current = transport;
+    this.retireStreams();
+  }
+
+  /** Retires every open stream: the engine that minted them is gone. */
+  private retireStreams(): void {
     this.generation += 1;
     this.streams.clear();
   }
 
   private installFollower(): BroadcastTransport {
-    const follower = new BroadcastTransport(this.channel, this.clientId, this.courier);
+    // Leadership moving between two *other* tabs replaces the engine without
+    // replacing this transport, so the stream fence rides the same signal as the
+    // transport's own port fence.
+    const follower = new BroadcastTransport(this.channel, this.clientId, this.courier, {
+      onLeadershipChange: () => this.retireStreams(),
+    });
     this.swapCurrent(follower);
     this.innerUnsub = follower.subscribe((event) => this.fanOut(event));
     return follower;

@@ -50,13 +50,16 @@ export interface LeaderRelayOptions {
 
 const DEFAULT_NAMING_TIMEOUT_MS = 5000;
 
+/** Which handle table a step addresses. */
+type HandleKind = 'write' | 'stream';
+
 /**
  * Refuses a step on a handle the asking tab does not own. Handle ids are one
  * global namespace across tabs, so the refusal is spelled exactly like the
  * engine's own unknown-handle error: a probing tab learns nothing a legitimate
  * one would not.
  */
-function unknownHandle(kind: 'write' | 'stream'): EngineRequestError {
+function unknownHandle(kind: HandleKind): EngineRequestError {
   return new EngineRequestError(
     `unknown ${kind} handle`,
     kind === 'write' ? 'unknownWriteHandle' : 'unknownStreamHandle'
@@ -124,7 +127,10 @@ export class LeaderRelay {
   // Clients that left while one of their handles was still being minted. The
   // mint completes after an await, so without this the release sweep runs
   // against a map the handle has not landed in yet and the handle is stranded.
+  // An entry lives only as long as the mints it guards: one that outlived them
+  // would refuse every later handle from a tab that is in fact still running.
   private readonly departed = new Set<string>();
+  private readonly mintsInFlight = new Map<string, number>();
   private readonly readPorts = new Set<ReadPortEntry>();
   private readonly namingTimeoutMs: number;
   private readonly unsubscribe: () => void;
@@ -199,7 +205,8 @@ export class LeaderRelay {
       case 'cb:bye': {
         const { clientId } = message as Extract<FollowerMessage, { type: 'cb:bye' }>;
         if (this.focus.remove(clientId)) this.refreshHint();
-        this.departed.add(clientId);
+        // Only a mint the sweep below cannot see needs guarding.
+        if (this.mintsInFlight.has(clientId)) this.departed.add(clientId);
         this.releaseHandles(clientId);
         this.detachPortOf(clientId);
         return;
@@ -262,8 +269,10 @@ export class LeaderRelay {
     if (message.type === 'cb:portHello') {
       const { clientId } = message as Extract<ReadPortRequest, { type: 'cb:portHello' }>;
       if (entry.clientId !== null || typeof clientId !== 'string') return;
-      // A re-brokering follower supersedes the port it held before.
+      // A re-brokering follower supersedes the port it held before, and by
+      // greeting proves it outlived whatever `cb:bye` marked it departed.
       this.detachPortOf(clientId);
+      this.departed.delete(clientId);
       clearTimeout(entry.naming);
       entry.clientId = clientId;
       this.postPort(entry.port, { type: 'cb:portReady', token: this.token });
@@ -277,30 +286,42 @@ export class LeaderRelay {
     if (typeof requestId !== 'number') return;
     if (message.type === 'cb:portRead') {
       const { read } = message as Extract<ReadPortRequest, { type: 'cb:portRead' }>;
-      void this.answerPort(entry.port, requestId, () => this.readValue(read));
+      void this.answerPort(entry, requestId, () => this.readValue(read));
       return;
     }
     if (message.type !== 'cb:portStream') return;
     const { stream } = message as Extract<ReadPortRequest, { type: 'cb:portStream' }>;
-    void this.answerPort(entry.port, requestId, () => this.streamStep(clientId, stream));
+    void this.answerPort(entry, requestId, () => this.streamStep(clientId, stream));
   }
 
   /** Runs one port-borne step and posts its correlated result down that port. */
   private async answerPort(
-    port: MessagePortLike,
+    entry: ReadPortEntry,
     requestId: number,
     step: () => Promise<SnapshotDescriptor | ArrayBuffer | string | StreamHandle | undefined>
   ): Promise<void> {
     try {
       const result = await step();
+      if (this.closed || !this.readPorts.has(entry)) {
+        // The port went away while the read ran, so nobody will receive this
+        // window: wipe it rather than leave plaintext for the collector
+        // (AGENTS.md 7 — with no transfer to make, this frame is its last owner).
+        if (result instanceof ArrayBuffer) new Uint8Array(result).fill(0);
+        return;
+      }
       // Transferred, not cloned: the plaintext leaves this tab's heap outright.
       this.postPort(
-        port,
+        entry.port,
         { type: 'cb:portResult', requestId, ok: true, result },
         result instanceof ArrayBuffer ? [result] : undefined
       );
     } catch (error) {
-      this.postPort(port, { type: 'cb:portResult', requestId, ok: false, ...wireError(error) });
+      this.postPort(entry.port, {
+        type: 'cb:portResult',
+        requestId,
+        ok: false,
+        ...wireError(error),
+      });
     }
   }
 
@@ -344,7 +365,7 @@ export class LeaderRelay {
     if (write.kind === 'beginWrite') {
       void this.answerStep(ack, () =>
         this.bind(
-          this.writeOwners,
+          'write',
           clientId,
           this.transport.beginWrite(write.target, write.size),
           (handle) => this.transport.abortWrite(handle)
@@ -393,7 +414,7 @@ export class LeaderRelay {
   ): Promise<StreamHandle | ArrayBuffer | undefined> {
     if (stream.kind === 'openContentStream') {
       return this.bind(
-        this.streamOwners,
+        'stream',
         clientId,
         this.transport.openContentStream(stream.node),
         (handle) => this.transport.closeStream(handle)
@@ -428,18 +449,38 @@ export class LeaderRelay {
    * instead if that client (or this relay) left while the mint was in flight.
    */
   private async bind(
-    owners: Map<bigint, string>,
+    kind: HandleKind,
     clientId: string,
     minting: Promise<bigint>,
     close: (handle: bigint) => Promise<unknown>
   ): Promise<bigint> {
-    const handle = await minting;
-    if (this.closed || this.departed.has(clientId)) {
-      void close(handle).catch(() => undefined);
-      throw new EngineRequestError('unknown handle', 'unknownHandle');
+    this.mintsInFlight.set(clientId, (this.mintsInFlight.get(clientId) ?? 0) + 1);
+    try {
+      const handle = await minting;
+      if (this.closed || this.departed.has(clientId)) {
+        void close(handle).catch(() => undefined);
+        throw unknownHandle(kind);
+      }
+      this.owners(kind).set(handle, clientId);
+      return handle;
+    } finally {
+      this.endMint(clientId);
     }
-    owners.set(handle, clientId);
-    return handle;
+  }
+
+  /** Drops the `departed` guard once the last mint it covered has settled. */
+  private endMint(clientId: string): void {
+    const left = (this.mintsInFlight.get(clientId) ?? 1) - 1;
+    if (left > 0) {
+      this.mintsInFlight.set(clientId, left);
+      return;
+    }
+    this.mintsInFlight.delete(clientId);
+    this.departed.delete(clientId);
+  }
+
+  private owners(kind: HandleKind): Map<bigint, string> {
+    return kind === 'write' ? this.writeOwners : this.streamOwners;
   }
 
   /**
@@ -450,17 +491,18 @@ export class LeaderRelay {
    * version in the engine just as long.
    */
   private releaseHandles(clientId: string | null): void {
-    this.release(this.writeOwners, clientId, (handle) =>
+    this.release('write', clientId, (handle) =>
       this.writes.run(handle, () => this.transport.abortWrite(handle))
     );
-    this.release(this.streamOwners, clientId, (handle) => this.transport.closeStream(handle));
+    this.release('stream', clientId, (handle) => this.transport.closeStream(handle));
   }
 
   private release(
-    owners: Map<bigint, string>,
+    kind: HandleKind,
     clientId: string | null,
     close: (handle: bigint) => Promise<unknown>
   ): void {
+    const owners = this.owners(kind);
     for (const [handle, owner] of owners) {
       if (clientId !== null && owner !== clientId) continue;
       owners.delete(handle);

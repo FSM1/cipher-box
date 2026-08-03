@@ -50,8 +50,10 @@ export type WireStream =
 
 /**
  * Follower → leader, over that follower's private read port. Streams ride here
- * rather than on the channel because a `readStream` window *is* plaintext, and
- * because possession of the port authenticates the owner of a stream handle.
+ * rather than on the channel because a `readStream` window *is* plaintext. The
+ * port is as authenticated as the `cb:leader` beacon and no more — its owner is
+ * self-asserted — so binding a handle to a client is lifecycle bookkeeping, not
+ * authorization; same origin remains the trust boundary.
  */
 export type ReadPortRequest =
   /** Names the sender, binding the port to a client the leader can reclaim it for. */

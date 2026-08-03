@@ -67,6 +67,10 @@ impl From<EngineError> for VfsError {
             }
             EngineError::OverBudget { cause, .. } => VfsError::OverBudget(cause),
             EngineError::ContentUnavailable { message } => VfsError::Unavailable { message },
+            // Retryable once the mount closes a stream, not a storage verdict.
+            error @ EngineError::TooManyStreams { .. } => VfsError::Unavailable {
+                message: error.to_string(),
+            },
             EngineError::UnsupportedContentFormat { version } => VfsError::Unavailable {
                 message: format!("unsupported content format version {version}"),
             },

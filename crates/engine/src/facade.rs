@@ -669,6 +669,13 @@ pub enum EngineError {
     /// A read named a stream handle this engine does not hold — never minted,
     /// or already closed.
     UnknownStreamHandle,
+    /// Too many read streams are already open ([`MAX_OPEN_STREAMS`]). Each open
+    /// stream pins a content key and a root manifest, so an unbounded table is
+    /// a memory and key-pinning DoS.
+    TooManyStreams {
+        /// The ceiling that refused it, so a host can size its own pool.
+        limit: usize,
+    },
     /// [`Command::CancelUpload`] named an op that is no longer cancellable: its
     /// version's last block confirmed and its record is publishing, or it has
     /// already left the durable queue. Never converted into a compensating
@@ -835,6 +842,10 @@ impl fmt::Display for EngineError {
             ),
             EngineError::UnknownWriteHandle => f.write_str("unknown write handle"),
             EngineError::UnknownStreamHandle => f.write_str("unknown stream handle"),
+            EngineError::TooManyStreams { limit } => write!(
+                f,
+                "too many read streams are already open; at most {limit} may be open at once, so close one first"
+            ),
             EngineError::TooLateToCancel { op_id } => write!(
                 f,
                 "upload {} is already publishing and can no longer be cancelled",
@@ -1133,7 +1144,15 @@ struct LiveStream {
     manifest: RootManifest,
 }
 
-/// The engine's live read streams.
+/// How many read streams may be open at once.
+///
+/// A host holds one stream per open media element, so a real UI is two orders
+/// below this; the ceiling exists because each entry pins a content key and a
+/// root manifest carrying a CID per MiB of file, which an unbounded table turns
+/// into a memory and key-pinning DoS.
+pub const MAX_OPEN_STREAMS: usize = 256;
+
+/// The engine's live read streams, bounded by [`MAX_OPEN_STREAMS`].
 #[derive(Default)]
 struct LiveStreams {
     open: BTreeMap<StreamHandle, Rc<LiveStream>>,
@@ -2433,9 +2452,7 @@ impl<T: SeamTypes> Engine<T> {
             return Err(EngineError::NotStarted);
         }
         self.emit_op_progress(node, OpPhase::DownloadStarted, None);
-        // The range clamps to the version's size, so the whole file is the
-        // unbounded window.
-        match self.read_content_range(node, 0, u64::MAX).await {
+        match self.read_whole(node).await {
             Ok(plaintext) => {
                 self.emit_op_progress(node, OpPhase::DownloadCompleted, None);
                 Ok(plaintext)
@@ -2447,20 +2464,14 @@ impl<T: SeamTypes> Engine<T> {
         }
     }
 
-    /// Read one byte window of a file node's plaintext, fetching only the leaves
-    /// the window covers (blueprint/engine.md "Content plane"). A stream reads
-    /// many windows off one version; this reads one off the current head.
-    pub async fn read_content_range(
-        &self,
-        node: NodeId,
-        offset: u64,
-        length: u64,
-    ) -> Result<Vec<u8>, EngineError> {
-        if !self.started {
-            return Err(EngineError::NotStarted);
-        }
+    /// [`read_content`](Engine::read_content) without its progress phases. Kept
+    /// private and window-less: a multi-window read pins one version instead
+    /// ([`StreamHandle`], [`open_content_stream`](Engine::open_content_stream)).
+    async fn read_whole(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
         let (version, version_count) = self.head_version(node).await?;
-        let bytes = open_content_range(&self.gateway, &self.seams.http, &version, offset, length)
+        // The range clamps to the version's size, so the whole file is the
+        // unbounded window.
+        let bytes = open_content_range(&self.gateway, &self.seams.http, &version, 0, u64::MAX)
             .await
             .map_err(open_engine_error)?;
         self.project_head(node, &version, version_count);
@@ -2477,12 +2488,25 @@ impl<T: SeamTypes> Engine<T> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
+        // Refused before the resolve so a caller past the ceiling spends no
+        // network on it; re-checked at the insert, the only borrow that is
+        // atomic against opens which interleaved on the awaits between.
+        if self.streams.borrow().open.len() >= MAX_OPEN_STREAMS {
+            return Err(EngineError::TooManyStreams {
+                limit: MAX_OPEN_STREAMS,
+            });
+        }
         let (version, version_count) = self.head_version(node).await?;
         let manifest = open_content_root(&self.gateway, &self.seams.http, &version)
             .await
             .map_err(open_engine_error)?;
         self.project_head(node, &version, version_count);
         let mut streams = self.streams.borrow_mut();
+        if streams.open.len() >= MAX_OPEN_STREAMS {
+            return Err(EngineError::TooManyStreams {
+                limit: MAX_OPEN_STREAMS,
+            });
+        }
         streams.next += 1;
         let handle = StreamHandle(streams.next);
         streams

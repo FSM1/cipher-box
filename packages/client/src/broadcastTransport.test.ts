@@ -482,6 +482,35 @@ describe('broadcast transport ↔ leader relay', () => {
     await expect(follower.snapshot(null)).resolves.toMatchObject({ staleness: 'fresh' });
   });
 
+  it('wipes a read window nobody can receive rather than leaving the plaintext behind', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
+    await follower.snapshot(null); // brokers and adopts the port
+
+    const plaintext = Uint8Array.of(1, 2, 3, 4);
+    let release!: () => void;
+    engine.respondDownload = async () => {
+      await new Promise<void>((resolve) => (release = resolve));
+      return plaintext.buffer;
+    };
+
+    // Awaited only after the wipe, so the rejection is handled from the outset.
+    const settled = expect(follower.download(new Uint8Array(16).fill(1))).rejects.toThrow(/retry/);
+    await tick();
+    // Any same-origin context can post this; the leader then drops the port the
+    // window was going to be transferred down.
+    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f' });
+    await tick();
+    release();
+    await settled;
+    await tick();
+
+    expect([...plaintext]).toEqual([0, 0, 0, 0]);
+  });
+
   it('reclaims a dialed port that never named the follower behind it', async () => {
     const bus = new FakeBus();
     const ports = new FakeCourierNetwork();
@@ -749,6 +778,42 @@ describe('leader relay write handles', () => {
     expect(engine.aborts).toEqual([orphan]);
     await expect(staying.pushChunk(kept, chunk(1))).resolves.toBeUndefined();
     expect(engine.chunks.map((entry) => entry.handle)).toEqual([kept]);
+  });
+
+  it('keeps serving a live follower after a cb:bye it never sent', async () => {
+    const { bus, ports, engine } = bench();
+    const follower = new BroadcastTransport(bus.channel(), 'f1', ports.courier('f1'));
+    await follower.beginWrite({ node: node(1) }, 4);
+
+    // Any same-origin context can forge this. It costs the tab its open handles,
+    // but must not refuse every handle it asks for afterwards.
+    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f1' });
+    await tick();
+
+    engine.writeHandle = 2n;
+    await expect(follower.beginWrite({ node: node(2) }, 4)).resolves.toBe(2n);
+  });
+
+  it('refuses a handle minted for a client that left mid-mint, spelled as the engine spells it', async () => {
+    const { bus, engine } = bench();
+    // No courier: the forged `cb:bye` then has no read port to detach, so the
+    // refusal below is the relay's own and not a dropped-port retry.
+    const follower = new BroadcastTransport(bus.channel(), 'f1', unavailableCourier, {
+      portTimeoutMs: 5,
+    });
+    let releaseMint!: (handle: bigint) => void;
+    engine.beginWrite = () => new Promise((resolve) => (releaseMint = resolve));
+
+    const pending = follower.beginWrite({ node: node(1) }, 4);
+    await tick();
+    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f1' });
+    await tick();
+    releaseMint(7n);
+
+    await expect(pending).rejects.toMatchObject({ code: 'unknownWriteHandle' });
+    // The handle the sweep could not see is released, not stranded.
+    await tick();
+    expect(engine.aborts).toEqual([7n]);
   });
 
   it('releases every open handle when the leader steps down', async () => {
