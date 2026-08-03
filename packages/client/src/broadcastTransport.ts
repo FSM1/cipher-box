@@ -47,7 +47,7 @@ export interface BroadcastTransportOptions {
   portTimeoutMs?: number;
   /**
    * Fires when leadership moves while this tab stays a follower. The engine
-   * behind this transport is replaced without the transport object being, so
+   * behind this transport is replaced but the transport object is not, so
    * whatever the owner holds against the old engine has to be retired here.
    */
   onLeadershipChange?: () => void;

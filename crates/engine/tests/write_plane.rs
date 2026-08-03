@@ -1064,6 +1064,10 @@ fn a_stream_serves_the_pinned_version_across_a_head_change() {
     while (assembled.len() as u64) < first.len() as u64 {
         let window = block_on(engine_b.read_stream(stream, assembled.len() as u64, 16))
             .expect("a later window");
+        assert!(
+            !window.is_empty(),
+            "a window short of the end made no progress"
+        );
         assembled.extend_from_slice(&window);
     }
     assert_eq!(
@@ -1113,6 +1117,10 @@ fn a_stream_pays_one_resolve_and_one_root_fetch_for_the_whole_body() {
     while assembled.len() < plaintext.len() {
         let bytes = block_on(engine_b.read_stream(stream, assembled.len() as u64, window as u64))
             .expect("a window off the pinned version");
+        assert!(
+            !bytes.is_empty(),
+            "a window short of the end made no progress"
+        );
         assembled.extend_from_slice(&bytes);
     }
     assert_eq!(assembled, plaintext);

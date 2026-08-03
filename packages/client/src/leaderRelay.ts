@@ -10,7 +10,7 @@
  *   follows whichever tab is focused (the RefreshHintSource seam, cross-tab).
  *
  * Nothing the leader sends on the channel carries plaintext: only key-free
- * `EventDescriptor`s and command/write acks. Read and ranged-read results go to
+ * `EventDescriptor`s and command/write acks. Read and stream results go to
  * the private `PortCourier` port that follower dialed, one per follower per
  * leadership. The follower→leader direction is unchanged and still broadcasts
  * command arguments and upload chunks.
@@ -391,7 +391,7 @@ export class LeaderRelay {
     );
   }
 
-  /** One ranged-read step, owned by the tab holding the port it arrived on. */
+  /** One `readStream` step, owned by the tab holding the port it arrived on. */
   private async streamStep(
     clientId: string,
     stream: WireStream
