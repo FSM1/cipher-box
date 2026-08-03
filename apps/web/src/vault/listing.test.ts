@@ -44,6 +44,19 @@ describe('listingRows', () => {
     expect(row.modified).not.toBe('...');
   });
 
+  it('renders an mtime past the Date range rather than throwing out of Intl', () => {
+    // A u64 mtime authored elsewhere must not blank the listing.
+    const [row] = listingRows([child({ mtime: 8_640_000_000_000_001n })]);
+
+    expect(row.modified).toBe('-');
+  });
+
+  it('renders the largest mtime the Date range still admits', () => {
+    const [row] = listingRows([child({ mtime: 8_640_000_000_000_000n })]);
+
+    expect(row.modified).not.toBe('-');
+  });
+
   it('has no size column for a folder', () => {
     const [row] = listingRows([child({ kind: 'folder', name: 'docs' })]);
 

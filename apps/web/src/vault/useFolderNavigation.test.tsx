@@ -176,6 +176,35 @@ describe('the vault browser read path', () => {
     expect(screen.getByTestId('parent-dir-row')).toBeDefined();
   });
 
+  it.each([['Enter'], [' ']])('opens a folder from the keyboard with %j', async (key) => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(
+      engine,
+      folderView({
+        children: [
+          {
+            id: DOCS,
+            name: 'documents',
+            kind: 'folder',
+            size: null,
+            mtime: null,
+            pending: 'none',
+            deadLetter: false,
+            contentVersion: null,
+          },
+        ],
+      })
+    );
+
+    await act(async () => {
+      fireEvent.keyDown(screen.getByTestId('file-list-item'), { key });
+      await Promise.resolve();
+    });
+
+    expect(engine.focus).toEqual([DOCS]);
+  });
+
   it('builds the breadcrumb chain from the ancestor trail, root first', async () => {
     const engine = fakeEngine();
     renderBrowser(engine, folderPath(SUB));

@@ -22,7 +22,7 @@ export function FileListItem({ row, onOpen }: FileListItemProps) {
       tabIndex={0}
       onDoubleClick={open}
       onKeyDown={(event) => {
-        if (event.key !== 'Enter') return;
+        if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
         open();
       }}
