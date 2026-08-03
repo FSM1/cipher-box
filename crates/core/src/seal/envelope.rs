@@ -20,7 +20,8 @@ use crate::suite::aead::{KEY_LEN, NONCE_LEN};
 
 use super::aad::{AadContext, STRUCT_TAG_READ_BODY};
 use super::body::{
-    ReadBody, bytes_fixed, collect_unknown, decode_read_body, encode_read_body, merge_unknown, req,
+    PreservedFields, ReadBody, bytes_fixed, collect_unknown, decode_read_body, encode_read_body,
+    merge_unknown, req,
 };
 
 /// A node's kind-uniform envelope. `scope`/`epoch` are the flattened `epochTag`
@@ -40,9 +41,9 @@ pub struct Envelope {
     pub read_sealed: Vec<u8>,
     /// Preserved unknown top-level fields (`writeSealed`, `grantSection`, and
     /// any future additive field), re-emitted canonically on rewrite.
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
     /// Preserved unknown fields inside `epochTag`.
-    pub epoch_tag_unknown: Vec<(String, Value)>,
+    pub epoch_tag_unknown: PreservedFields,
 }
 
 const ENVELOPE_KNOWN: &[&str] = &["epochTag", "id", "readSealed", "v"];
@@ -78,18 +79,24 @@ pub fn decode_envelope(bytes: &[u8]) -> Result<Envelope, CodecError> {
 /// bytes for [`super::decode_grant_section`], so the engine never matches raw
 /// `Value`s; `None` when the field is absent or not a byte string.
 pub fn grant_section_bytes(env: &Envelope) -> Option<&[u8]> {
-    env.unknown
-        .iter()
-        .find(|(key, _)| key == "grantSection")
-        .and_then(|(_, value)| value.as_bytes().ok())
+    env.unknown.get(GRANT_SECTION_KEY)?.as_bytes().ok()
 }
 
 /// Whether the envelope carries a `grantSection` key at all, regardless of its
 /// value — the scope-root marker (a child envelope must carry none). Stricter
 /// than [`grant_section_bytes`], which also requires a byte-string value.
 pub fn has_grant_section(env: &Envelope) -> bool {
-    env.unknown.iter().any(|(key, _)| key == "grantSection")
+    env.unknown.get(GRANT_SECTION_KEY).is_some()
 }
+
+/// Attach the scope-root marker, the writer half of [`grant_section_bytes`].
+/// The key and its byte-string shape live here rather than at each caller.
+pub fn set_grant_section(env: &mut Envelope, section: Vec<u8>) {
+    env.unknown
+        .insert(GRANT_SECTION_KEY.to_string(), Value::Bytes(section));
+}
+
+const GRANT_SECTION_KEY: &str = "grantSection";
 
 /// Encode an envelope to its canonical det-CBOR plaintext.
 pub fn encode_envelope(env: &Envelope) -> Result<Vec<u8>, CodecError> {
@@ -142,8 +149,8 @@ pub fn seal_read_body(
         scope,
         epoch,
         read_sealed,
-        unknown: Vec::new(),
-        epoch_tag_unknown: Vec::new(),
+        unknown: PreservedFields::new(),
+        epoch_tag_unknown: PreservedFields::new(),
     })
 }
 
@@ -181,9 +188,9 @@ mod tests {
                 ipns_name: b"child-name".to_vec(),
                 kind: NodeKind::File,
                 link_counter: 1,
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             }],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -255,7 +262,7 @@ mod tests {
 
         let decoded = decode_envelope(&bytes).expect("tolerant decode");
         assert_eq!(decoded.unknown.len(), 1);
-        assert_eq!(decoded.unknown[0].0, "writeSealed");
+        assert_eq!(decoded.unknown.entries()[0].0, "writeSealed");
         assert_eq!(
             encode_envelope(&decoded).unwrap(),
             bytes,
@@ -272,10 +279,7 @@ mod tests {
         let mut env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
         assert_eq!(grant_section_bytes(&env), None, "absent without the field");
 
-        env.unknown.push((
-            "grantSection".to_string(),
-            Value::Bytes(b"section-bytes".to_vec()),
-        ));
+        set_grant_section(&mut env, b"section-bytes".to_vec());
         assert_eq!(
             grant_section_bytes(&env),
             Some(b"section-bytes".as_slice()),
@@ -289,7 +293,7 @@ mod tests {
         let nonce = [4u8; NONCE_LEN];
         let mut env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
         env.unknown
-            .push(("grantSection".to_string(), Value::Unsigned(7)));
+            .insert("grantSection".to_string(), Value::Unsigned(7));
         assert_eq!(
             grant_section_bytes(&env),
             None,
@@ -307,13 +311,12 @@ mod tests {
         // A non-bytes value still marks the key present (stricter than
         // grant_section_bytes, which requires a byte string).
         env.unknown
-            .push(("grantSection".to_string(), Value::Unsigned(7)));
+            .insert("grantSection".to_string(), Value::Unsigned(7));
         assert!(has_grant_section(&env));
         assert_eq!(grant_section_bytes(&env), None);
 
         let mut env = seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &folder()).unwrap();
-        env.unknown
-            .push(("grantSection".to_string(), Value::Bytes(b"s".to_vec())));
+        set_grant_section(&mut env, b"s".to_vec());
         assert!(has_grant_section(&env));
     }
 
@@ -351,7 +354,7 @@ mod tests {
                     ipns_name: b"x".to_vec(),
                     kind: NodeKind::File,
                     link_counter: 0,
-                    unknown: Vec::new(),
+                    unknown: PreservedFields::new(),
                 },
                 ChildRef {
                     id: [9; 16],
@@ -359,10 +362,10 @@ mod tests {
                     ipns_name: b"y".to_vec(),
                     kind: NodeKind::File,
                     link_counter: 0,
-                    unknown: Vec::new(),
+                    unknown: PreservedFields::new(),
                 },
             ],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         assert_eq!(
             seal_read_body(&key, &nonce, 2, [1; 16], [2; 16], 5, &dup)

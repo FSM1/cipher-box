@@ -280,7 +280,8 @@ mod tests {
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
     use crate::testkit::{SeededEntropy, block_on};
     use cipherbox_core::seal::{
-        GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission, sign_grant_set,
+        GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission, PreservedFields,
+        sign_grant_set,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -359,7 +360,7 @@ mod tests {
                 ipns_name: b"scope-root".to_vec(),
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
                 entries: vec![GrantSetEntry::new([0xa1; 32], Permission::Read, [0x02; 32])],
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             };
             let sig = sign_grant_set(&self.owner_ecdsa, &commitment)
                 .unwrap()

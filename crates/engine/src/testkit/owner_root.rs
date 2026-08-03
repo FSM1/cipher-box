@@ -5,16 +5,16 @@
 //! Sealing inputs (nonces, HPKE ephemerals, the pseudonym seed) are fixed
 //! constants, keeping the head block byte-for-byte reproducible across runs.
 
-use cipherbox_core::codec::Value;
 use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, ChildRef, Envelope, GrantSection, GrantSetCommitment, OverrideSeedPayload,
-    OwnerWriteBlobPayload, ReadBody, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
-    STRUCT_TAG_WRITE_BODY, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput,
-    WriteBody, encode_envelope, encode_grant_section, encode_write_body, seal, seal_owner_blob,
-    seal_owner_write_blob, seal_read_body, sign_grant_set, sign_structure,
+    OwnerWriteBlobPayload, PreservedFields, ReadBody, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedOwnerBlob, SignedOwnerWriteBlob,
+    SignedSealed, StructureSigInput, WriteBody, encode_envelope, encode_grant_section,
+    encode_write_body, seal, seal_owner_blob, seal_owner_write_blob, seal_read_body,
+    set_grant_section, sign_grant_set, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -118,7 +118,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         signature: sign(STRUCT_TAG_OWNER_BLOB, &sealed_owner.ciphertext),
         enc: sealed_owner.enc,
         ciphertext: sealed_owner.ciphertext,
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
 
     // Write body — a second seed-bearing structure the gate authenticates.
@@ -130,14 +130,14 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
             grant_ledger: Vec::new(),
             write_history_link: Vec::new(),
             direct_child_scope_index: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         })
         .unwrap(),
     );
     let write_body = SignedSealed {
         signature: sign(STRUCT_TAG_WRITE_BODY, &write_body_sealed),
         sealed: write_body_sealed,
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
 
     let owner_write_blob = owner_write_blob_epoch.map(|write_epoch| {
@@ -152,7 +152,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
             signature: sign(STRUCT_TAG_OWNER_WRITE_BLOB, &sealed.ciphertext),
             enc: sealed.enc,
             ciphertext: sealed.ciphertext,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     });
 
@@ -160,7 +160,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         ipns_name: name.as_str().as_bytes().to_vec(),
         owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
         entries: Vec::new(),
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
     let commitment_sig = sign_grant_set(owner_identity, &commitment)
         .unwrap()
@@ -174,14 +174,14 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         ascent_link: None,
         history_links: Vec::new(),
         write_body,
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
 
     let folder = ReadBody::Folder {
         created_at: 0,
         modified_at: 0,
         children,
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
     let mut envelope = seal_read_body(
         &read_key,
@@ -193,10 +193,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         &folder,
     )
     .unwrap();
-    envelope.unknown.push((
-        "grantSection".to_string(),
-        Value::Bytes(encode_grant_section(&grant_section).unwrap()),
-    ));
+    set_grant_section(&mut envelope, encode_grant_section(&grant_section).unwrap());
 
     let head_block = encode_envelope(&envelope).unwrap();
     let head_cid_str = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &head_block));

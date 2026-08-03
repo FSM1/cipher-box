@@ -30,7 +30,9 @@ use crate::suite::ed25519::SIGNATURE_LEN as ED_SIG_LEN;
 use crate::suite::hpke::ENC_LEN;
 use crate::suite::secret::SECRET_LEN;
 
-use super::body::{assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown, req};
+use super::body::{
+    PreservedFields, assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown, req,
+};
 use super::grant::{GrantSetCommitment, decode_grant_set_commitment, encode_grant_set_commitment};
 
 /// A grant blob as published in the grant section: its recipient blinded `tag`
@@ -48,7 +50,7 @@ pub struct SignedGrantBlob {
     /// The 64-byte Ed25519 structure signature over `H(ciphertext)`.
     pub signature: [u8; ED_SIG_LEN],
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const GRANT_BLOB_KNOWN: &[&str] = &["ciphertext", "enc", "sig", "tag"];
@@ -87,7 +89,7 @@ pub struct SignedOwnerBlob {
     /// The 64-byte Ed25519 structure signature over `H(ciphertext)`.
     pub signature: [u8; ED_SIG_LEN],
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const OWNER_BLOB_KNOWN: &[&str] = &["ciphertext", "enc", "sig"];
@@ -127,7 +129,7 @@ pub struct SignedOwnerWriteBlob {
     /// The 64-byte Ed25519 structure signature over `H(ciphertext)`.
     pub signature: [u8; ED_SIG_LEN],
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const OWNER_WRITE_BLOB_KNOWN: &[&str] = &["ciphertext", "enc", "sig"];
@@ -166,7 +168,7 @@ pub struct SignedAscentLink {
     /// The 64-byte Ed25519 structure signature over `H(ciphertext)`.
     pub signature: [u8; ED_SIG_LEN],
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const ASCENT_LINK_KNOWN: &[&str] = &["ascentPublic", "ciphertext", "enc", "sig"];
@@ -204,7 +206,7 @@ pub struct SignedSealed {
     /// The 64-byte Ed25519 structure signature over `H(sealed)`.
     pub signature: [u8; ED_SIG_LEN],
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const SEALED_KNOWN: &[&str] = &["sealed", "sig"];
@@ -255,7 +257,7 @@ pub struct GrantSection {
     /// The scope root's sealed write-body.
     pub write_body: SignedSealed,
     /// Preserved unknown top-level fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const GRANT_SECTION_KNOWN: &[&str] = &[
@@ -374,7 +376,7 @@ mod tests {
             ipns_name: b"scope-root-name".to_vec(),
             owner_pseudonym_pk: [0x88; 32],
             entries,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -384,7 +386,7 @@ mod tests {
             enc: [0x0a; ENC_LEN],
             ciphertext: vec![0x0b, 0x0c],
             signature: [0x0d; ED_SIG_LEN],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -400,32 +402,32 @@ mod tests {
                 enc: [0x20; ENC_LEN],
                 ciphertext: vec![0x21, 0x22],
                 signature: [0x23; ED_SIG_LEN],
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             },
             owner_write_blob: Some(SignedOwnerWriteBlob {
                 enc: [0x24; ENC_LEN],
                 ciphertext: vec![0x25, 0x26],
                 signature: [0x27; ED_SIG_LEN],
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             }),
             ascent_link: Some(SignedAscentLink {
                 ascent_public: [0x30; ENC_LEN],
                 enc: [0x31; ENC_LEN],
                 ciphertext: vec![0x32, 0x33],
                 signature: [0x34; ED_SIG_LEN],
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             }),
             history_links: vec![SignedSealed {
                 sealed: vec![0x40, 0x41],
                 signature: [0x42; ED_SIG_LEN],
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             }],
             write_body: SignedSealed {
                 sealed: vec![0x50, 0x51],
                 signature: [0x52; ED_SIG_LEN],
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             },
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -453,7 +455,7 @@ mod tests {
                 enc: [0x20; ENC_LEN],
                 ciphertext: vec![0x21],
                 signature: [0x23; ED_SIG_LEN],
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             },
             owner_write_blob: None,
             ascent_link: None,
@@ -461,9 +463,9 @@ mod tests {
             write_body: SignedSealed {
                 sealed: vec![0x50],
                 signature: [0x52; ED_SIG_LEN],
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             },
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let bytes = encode_grant_section(&section).expect("encodes");
         assert_eq!(decode_grant_section(&bytes).unwrap(), section);

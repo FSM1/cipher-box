@@ -22,10 +22,11 @@ use cipherbox_core::error::{CodecError, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, AscentLink, Envelope, GrantSection, GrantSetCommitment, Permission, ReadBody,
-    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, StructureSigInput, open_ascent_link,
-    open_grant_blob, open_owner_blob, open_read_body, verify_grant_set, verify_structure,
+    AadContext, AscentLink, Envelope, GrantSection, GrantSetCommitment, Permission,
+    PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
+    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
+    STRUCT_TAG_WRITE_BODY, StructureSigInput, open_ascent_link, open_grant_blob, open_owner_blob,
+    open_read_body, verify_grant_set, verify_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
@@ -524,7 +525,7 @@ pub async fn adopt_deferred<F: FloorStore>(
             ascent_public: ascent.ascent_public,
             enc: ascent.enc,
             ciphertext: ascent.ciphertext.clone(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         // Cross-check the recovered override seed: the ascent public key is
         // published, so anyone can seal a rogue payload to it. The seed the link

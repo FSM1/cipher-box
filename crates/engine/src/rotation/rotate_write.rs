@@ -642,7 +642,7 @@ async fn collect_subtree<R: WriteSubtreeResolver>(
 mod tests {
     use super::*;
     use crate::testkit::{SeededEntropy, block_on};
-    use cipherbox_core::seal::sign_grant_set;
+    use cipherbox_core::seal::{PreservedFields, sign_grant_set};
     use std::cell::RefCell;
     use std::collections::{HashMap, HashSet};
     use std::rc::Rc;
@@ -669,7 +669,7 @@ mod tests {
             ipns_name: name.as_str().as_bytes().to_vec(),
             owner_pseudonym_pk: [0x22; 32],
             entries: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let sig = sign_grant_set(owner, &c).unwrap().to_compact();
         (c, sig)

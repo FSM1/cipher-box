@@ -38,10 +38,11 @@ use crate::suite::hpke::{self, ENC_LEN, HpkeCiphertext};
 use crate::suite::secret::{SECRET_LEN, SecretBytes};
 use crate::suite::x25519::{X25519Public, X25519Secret};
 
+use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
+
 use super::aad::{AadContext, build_aad};
 use super::body::{
-    ScrubOnDrop, ScrubOwned, assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown,
-    req,
+    PreservedFields, assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown, req,
 };
 
 /// The HPKE `info` for every grant-section seal. The structured AAD already
@@ -102,7 +103,7 @@ pub struct GrantBlobPayload {
     pub epoch: u64,
     pointer_read_key: SecretBytes,
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const GRANT_BLOB_KNOWN: &[&str] = &["epoch", "pointerReadKey", "readScopeSeed", "writeScopeSeed"];
@@ -120,7 +121,7 @@ impl GrantBlobPayload {
             write_scope_seed: write_scope_seed.map(SecretBytes::new),
             epoch,
             pointer_read_key: SecretBytes::new(pointer_read_key),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -275,7 +276,7 @@ pub struct OverrideSeedPayload {
     /// The epoch this override seed belongs to.
     pub epoch: u64,
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const OVERRIDE_SEED_KNOWN: &[&str] = &["epoch", "overrideSeed"];
@@ -286,7 +287,7 @@ impl OverrideSeedPayload {
         Self {
             override_seed: SecretBytes::new(override_seed),
             epoch,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -408,7 +409,7 @@ pub struct OwnerWriteBlobPayload {
     /// The write epoch this write-scope seed belongs to.
     pub write_epoch: u64,
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const OWNER_WRITE_BLOB_KNOWN: &[&str] = &["writeEpoch", "writeScopeSeed"];
@@ -419,7 +420,7 @@ impl OwnerWriteBlobPayload {
         Self {
             write_scope_seed: SecretBytes::new(write_scope_seed),
             write_epoch,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -545,7 +546,7 @@ pub struct AscentLink {
     /// The HPKE ciphertext (`ciphertext || tag`) of the override-seed payload.
     pub ciphertext: Vec<u8>,
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const ASCENT_LINK_KNOWN: &[&str] = &["ascentPublic", "ciphertext", "enc"];
@@ -600,7 +601,7 @@ pub fn seal_ascent_link(
         ascent_public: ascent_public.to_bytes(),
         enc: sealed.enc,
         ciphertext: sealed.ciphertext,
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     })
 }
 
@@ -644,7 +645,7 @@ pub struct HistoryLinkPayload {
     /// The previous epoch this seed belongs to.
     pub prev_epoch: u64,
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const HISTORY_LINK_KNOWN: &[&str] = &["prevEpoch", "prevSeed"];
@@ -655,7 +656,7 @@ impl HistoryLinkPayload {
         Self {
             prev_seed: SecretBytes::new(prev_seed),
             prev_epoch,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -767,7 +768,7 @@ pub struct GrantSetEntry {
     /// The writer pseudonym public key (Ed25519).
     pub pseudonym_pk: [u8; 32],
     /// Preserved unknown fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const GRANT_SET_ENTRY_KNOWN: &[&str] = &["permission", "pseudonymPk", "tag"];
@@ -779,7 +780,7 @@ impl GrantSetEntry {
             tag,
             permission,
             pseudonym_pk,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -823,7 +824,7 @@ pub struct GrantSetCommitment {
     /// The committed grants.
     pub entries: Vec<GrantSetEntry>,
     /// Preserved unknown top-level fields (never any of the known keys).
-    pub unknown: Vec<(String, Value)>,
+    pub unknown: PreservedFields,
 }
 
 const GRANT_SET_KNOWN: &[&str] = &["entries", "ipnsName", "ownerPseudonymPk"];
@@ -1095,7 +1096,7 @@ mod tests {
                 GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
                 GrantSetEntry::new([0x03; 32], Permission::Write, [0x04; 32]),
             ],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let bytes = encode_grant_set_commitment(&c).expect("encodes");
         assert_eq!(decode_grant_set_commitment(&bytes).unwrap(), c);
@@ -1154,7 +1155,7 @@ mod tests {
                 GrantSetEntry::new([0x01; 32], Permission::Read, [0x02; 32]),
                 GrantSetEntry::new([0x01; 32], Permission::Write, [0x04; 32]),
             ],
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         assert_eq!(
             encode_grant_set_commitment(&c).unwrap_err().check(),

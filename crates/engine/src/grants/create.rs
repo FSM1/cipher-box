@@ -28,8 +28,8 @@
 use cipherbox_core::error::CodecError;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission, SignedSealed,
-    sign_grant_set,
+    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission,
+    PreservedFields, SignedSealed, sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{
     EcdsaSigner, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
@@ -322,7 +322,7 @@ where
             Permission::Read,
             recipient_pseudonym_pk,
         )],
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
     let commitment_sig = sign_grant_set(owner.identity_signer, &commitment)
         .map_err(CreateGrantError::CommitmentEncode)?
@@ -635,7 +635,7 @@ mod tests {
                 ipns_name: DESCENDANT_NAME.to_vec(),
                 owner_pseudonym_pk: pseudonym.verifying_key().to_bytes(),
                 entries: Vec::new(),
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             };
             let commitment_sig = sign_grant_set(&owner_identity(), &commitment)
                 .unwrap()
@@ -736,7 +736,7 @@ mod tests {
             ipns_name: PARENT_NAME.to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
             entries: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let parent_commitment_sig = sign_grant_set(&owner_identity, &parent_commitment)
             .unwrap()
@@ -844,7 +844,7 @@ mod tests {
             ipns_name: PARENT_NAME.to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
             entries: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let parent_commitment_sig = sign_grant_set(&owner_identity, &parent_commitment)
             .unwrap()
@@ -1185,7 +1185,7 @@ mod tests {
             ascent_public: ascent.ascent_public,
             enc: ascent.enc,
             ciphertext: ascent.ciphertext.clone(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let descend = open_ascent_link(&parent_node_seed, &ascent_ctx, &link)
             .expect("grantee derivation opens the descendant ascent link");

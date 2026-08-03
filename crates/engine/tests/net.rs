@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use cipherbox_core::error::TrustViolation;
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
-use cipherbox_core::seal::ReadBody;
+use cipherbox_core::seal::{PreservedFields, ReadBody};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use cipherbox_engine::SyncTimingProfile;
@@ -166,7 +166,7 @@ impl Adopter for StubAdopter {
                         created_at: 0,
                         modified_at: 0,
                         children: Vec::new(),
-                        unknown: Vec::new(),
+                        unknown: PreservedFields::new(),
                     },
                     sequence,
                     epoch: 1,

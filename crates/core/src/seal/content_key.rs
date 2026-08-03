@@ -20,11 +20,12 @@
 
 use zeroize::Zeroizing;
 
+use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 use crate::codec::{Map, Value, decode, encode, encode_fixed_depth};
 use crate::content::is_wellformed_content_cid;
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::seal::aad::{AAD_DOMAIN, STRUCT_TAG_CONTENT_KEY};
-use crate::seal::body::{ScrubOnDrop, ScrubOwned, bytes_fixed, req};
+use crate::seal::body::{bytes_fixed, req};
 use crate::suite::hpke::{self, ENC_LEN};
 use crate::suite::secret::SECRET_LEN;
 use crate::suite::x25519::X25519Secret;

@@ -14,7 +14,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{
-    ChildRef, NodeKind as CoreNodeKind, ReadBody, decode_envelope, open_read_body,
+    ChildRef, NodeKind as CoreNodeKind, PreservedFields, ReadBody, decode_envelope, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -2596,8 +2596,8 @@ fn plant_record(
         read_key: &planted.read_key,
         nonce: &[0x5A; 24],
         body: planted.body,
-        carried_unknown: Vec::new(),
-        carried_epoch_tag_unknown: Vec::new(),
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
     })
     .expect("a well-formed child record");
     publish_next_record(records, blocks, folder, &head);
@@ -2610,7 +2610,7 @@ fn planted_body() -> ReadBody {
         created_at: 0,
         modified_at: 0,
         children: vec![child_ref([0x9B; 16], "planted", CoreNodeKind::Folder)],
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     }
 }
 
@@ -2700,7 +2700,7 @@ fn a_planted_focus_record_never_renders() {
                     created_at: 0,
                     modified_at: 0,
                     versions: Vec::new(),
-                    unknown: Vec::new(),
+                    unknown: PreservedFields::new(),
                 },
             },
             "a record whose sealed body is a file",
@@ -4455,7 +4455,7 @@ fn child_ref(id: [u8; 16], name: &str, kind: CoreNodeKind) -> ChildRef {
         ipns_name: write_name(NodeId(id)).as_str().as_bytes().to_vec(),
         kind,
         link_counter: 1,
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     }
 }
 

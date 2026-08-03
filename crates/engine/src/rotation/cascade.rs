@@ -589,7 +589,7 @@ mod tests {
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
     use crate::testkit::{SeededEntropy, block_on};
     use cipherbox_core::seal::{
-        AadContext, AscentLink, GrantSetEntry, Permission, STRUCT_TAG_ASCENT_LINK,
+        AadContext, AscentLink, GrantSetEntry, Permission, PreservedFields, STRUCT_TAG_ASCENT_LINK,
         STRUCT_TAG_OWNER_BLOB, open_ascent_link, open_owner_blob, sign_grant_set,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
@@ -652,7 +652,7 @@ mod tests {
                 ipns_name: format!("ipns-{byte:02x}").into_bytes(),
                 owner_pseudonym_pk: self.pseudonym.verifying_key().to_bytes(),
                 entries: vec![GrantSetEntry::new(tag, Permission::Read, [0x02; 32])],
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             };
             let commitment_sig = sign_grant_set(&self.ecdsa, &commitment)
                 .unwrap()
@@ -792,7 +792,7 @@ mod tests {
                 ascent_public: ascent.ascent_public,
                 enc: ascent.enc,
                 ciphertext: ascent.ciphertext.clone(),
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             };
             open_ascent_link(parent_node_seed, &ctx, &link)
                 .ok()

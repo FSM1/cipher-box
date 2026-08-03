@@ -15,12 +15,11 @@
 //!   unrepresentable: [`new_child`] feeds one [`NodeKind`] and one typed
 //!   [`IpnsName`] to both the body and the parent's ref.
 
-use cipherbox_core::codec::Value;
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
-    ChildRef, Envelope, NodeKind, ReadBody, Version, decode_grant_section, encode_envelope,
-    grant_section_bytes, has_grant_section, seal_read_body,
+    ChildRef, Envelope, NodeKind, PreservedFields, ReadBody, Version, decode_grant_section,
+    encode_envelope, grant_section_bytes, has_grant_section, seal_read_body,
 };
 
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
@@ -106,9 +105,9 @@ pub struct EnvelopeAuthoring<'a> {
     /// The body to seal.
     pub body: &'a ReadBody,
     /// Top-level envelope fields carried forward from the previous record.
-    pub carried_unknown: Vec<(String, Value)>,
+    pub carried_unknown: PreservedFields,
     /// `epochTag` fields carried forward from the previous record.
-    pub carried_epoch_tag_unknown: Vec<(String, Value)>,
+    pub carried_epoch_tag_unknown: PreservedFields,
 }
 
 /// Author a **child** record's envelope: a non-scope-root node, which must
@@ -225,13 +224,13 @@ pub fn new_child(
             created_at: authored_at,
             modified_at: authored_at,
             children: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         },
         NewNodeBody::File { versions } => ReadBody::File {
             created_at: authored_at,
             modified_at: authored_at,
             versions,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         },
     };
     NewChild {
@@ -241,7 +240,7 @@ pub fn new_child(
             ipns_name: ipns_name.as_str().as_bytes().to_vec(),
             kind,
             link_counter,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         },
         body,
     }
@@ -250,6 +249,7 @@ pub fn new_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_core::codec::Value;
     use cipherbox_core::content::{compute_cid, encode_content_cid_str};
     use cipherbox_core::ipns::IpnsName;
     use cipherbox_core::kdf;
@@ -271,11 +271,11 @@ mod tests {
             created_at: 1,
             modified_at: 2,
             children: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
-    fn authoring(body: &ReadBody, carried: Vec<(String, Value)>) -> EnvelopeAuthoring<'_> {
+    fn authoring(body: &ReadBody, carried: PreservedFields) -> EnvelopeAuthoring<'_> {
         EnvelopeAuthoring {
             node_id: [1u8; 16],
             scope_id: [2u8; 16],
@@ -284,12 +284,14 @@ mod tests {
             nonce: &NONCE,
             body,
             carried_unknown: carried,
-            carried_epoch_tag_unknown: Vec::new(),
+            carried_epoch_tag_unknown: PreservedFields::new(),
         }
     }
 
-    fn grant_section_field() -> Vec<(String, Value)> {
-        vec![("grantSection".to_owned(), Value::Bytes(b"section".to_vec()))]
+    fn grant_section_field() -> PreservedFields {
+        [("grantSection".to_owned(), Value::Bytes(b"section".to_vec()))]
+            .into_iter()
+            .collect()
     }
 
     /// A real scope root's grant section and the name its commitment binds.
@@ -305,11 +307,13 @@ mod tests {
         })
     }
 
-    fn carried_section(fixture: &OwnerRootFixture) -> Vec<(String, Value)> {
-        vec![(
+    fn carried_section(fixture: &OwnerRootFixture) -> PreservedFields {
+        [(
             "grantSection".to_owned(),
             Value::Bytes(encode_grant_section(&fixture.grant_section).expect("encodes")),
         )]
+        .into_iter()
+        .collect()
     }
 
     #[test]
@@ -351,7 +355,8 @@ mod tests {
         // A root that lost its section is a root no reader can open: child
         // adoption refuses the missing marker and the gate has no commitment.
         assert_eq!(
-            author_scope_root_envelope(authoring(&folder(), Vec::new()), &name()).unwrap_err(),
+            author_scope_root_envelope(authoring(&folder(), PreservedFields::new()), &name())
+                .unwrap_err(),
             AuthorError::MissingGrantSection,
         );
     }
@@ -359,7 +364,7 @@ mod tests {
     #[test]
     fn an_authored_head_decodes_back_to_the_body_it_sealed() {
         let body = folder();
-        let head = author_child_envelope(authoring(&body, Vec::new())).unwrap();
+        let head = author_child_envelope(authoring(&body, PreservedFields::new())).unwrap();
         let decoded = decode_envelope(&head.block).unwrap();
         assert_eq!(decoded, head.envelope, "the block is the envelope");
         assert_eq!(open_read_body(&decoded, &READ_KEY).unwrap(), body);
@@ -386,18 +391,18 @@ mod tests {
                 ipns_name: i.to_be_bytes().to_vec(),
                 kind: NodeKind::File,
                 link_counter: 1,
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             })
             .collect();
         let body = ReadBody::Folder {
             created_at: 0,
             modified_at: 0,
             children,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         assert!(
             matches!(
-                author_child_envelope(authoring(&body, Vec::new())).unwrap_err(),
+                author_child_envelope(authoring(&body, PreservedFields::new())).unwrap_err(),
                 AuthorError::HeadTooLarge { limit, .. } if limit == MAX_RESOLVED_RECORD_BYTES
             ),
             "an over-cap head must fail closed on the produce side"
@@ -416,20 +421,21 @@ mod tests {
             ipns_name: ipns_name.to_vec(),
             kind: NodeKind::File,
             link_counter: 1,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let folder = |children| ReadBody::Folder {
             created_at: 0,
             modified_at: 0,
             children,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         for children in [
             vec![child(7, b"n"), child(7, b"other")],
             vec![child(7, b"n"), child(8, b"n")],
         ] {
             assert!(matches!(
-                author_child_envelope(authoring(&folder(children), Vec::new())).unwrap_err(),
+                author_child_envelope(authoring(&folder(children), PreservedFields::new()))
+                    .unwrap_err(),
                 AuthorError::Seal(_)
             ));
         }

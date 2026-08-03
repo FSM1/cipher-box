@@ -17,12 +17,12 @@ use cipherbox_core::kdf;
 use cipherbox_core::payload::{RepointObject, open_pointer_payload, seal_pointer_payload};
 use cipherbox_core::seal::{
     AadContext, Envelope, GrantBlobPayload, GrantSection, GrantSetCommitment, OverrideSeedPayload,
-    OwnerWriteBlobPayload, ReadBody, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB,
-    STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
-    STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, SignedAscentLink, SignedGrantBlob,
-    SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody,
-    encode_write_body, open_grant_blob, seal, seal_ascent_link, seal_grant_blob, seal_owner_blob,
-    seal_owner_write_blob, seal_read_body, sign_grant_set, sign_structure,
+    OwnerWriteBlobPayload, PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_READ_BODY, STRUCT_TAG_WRITE_BODY, SignedAscentLink,
+    SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput,
+    WriteBody, encode_write_body, open_grant_blob, seal, seal_ascent_link, seal_grant_blob,
+    seal_owner_blob, seal_owner_write_blob, seal_read_body, sign_grant_set, sign_structure,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -131,7 +131,7 @@ impl Fixture {
             enc: owner_blob_enc,
             ciphertext: owner_blob_ct.clone(),
             signature: sign(STRUCT_TAG_OWNER_BLOB, None, &owner_blob_ct),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
 
         // Write-body (a second seed-bearing structure, to exercise the loop).
@@ -139,7 +139,7 @@ impl Fixture {
             grant_ledger: Vec::new(),
             write_history_link: Vec::new(),
             direct_child_scope_index: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let write_body_aad = AadContext {
             v: V,
@@ -157,7 +157,7 @@ impl Fixture {
         let signed_write_body = SignedSealed {
             signature: sign(STRUCT_TAG_WRITE_BODY, None, &write_body_sealed),
             sealed: write_body_sealed,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
 
         // Owner-write-blob (the write-plane mirror of the owner blob): its AAD
@@ -182,7 +182,7 @@ impl Fixture {
             signature: sign(STRUCT_TAG_OWNER_WRITE_BLOB, None, &owner_write.ciphertext),
             enc: owner_write.enc,
             ciphertext: owner_write.ciphertext,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
 
         // Grant-set commitment (grant-less scope: the owner pseudonym is the
@@ -191,7 +191,7 @@ impl Fixture {
             ipns_name: name.as_str().as_bytes().to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
             entries: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let commitment_sig = sign_grant_set(&owner_identity, &commitment)
             .expect("signs")
@@ -205,7 +205,7 @@ impl Fixture {
             ascent_link: None,
             history_links: Vec::new(),
             write_body: signed_write_body,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
 
         // Valid empty-folder read-body sealed into the envelope.
@@ -213,7 +213,7 @@ impl Fixture {
             created_at: 0,
             modified_at: 0,
             children: Vec::new(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         };
         let valid_envelope = seal_read_body(
             &read_key,
@@ -279,8 +279,8 @@ impl Fixture {
             scope: self.scope_id,
             epoch: self.epoch,
             read_sealed,
-            unknown: Vec::new(),
-            epoch_tag_unknown: Vec::new(),
+            unknown: PreservedFields::new(),
+            epoch_tag_unknown: PreservedFields::new(),
         }
     }
 
@@ -368,7 +368,7 @@ impl Fixture {
             enc: link.enc,
             ciphertext: link.ciphertext,
             signature: sign_structure(&self.owner_pseudonym, &input).to_bytes(),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         }
     }
 
@@ -882,7 +882,7 @@ fn run_floor_scenario(rule: &str) {
                 enc: blob.enc,
                 ciphertext: blob.ciphertext.clone(),
                 signature: sign_structure(&fx.owner_pseudonym, &input).to_bytes(),
-                unknown: Vec::new(),
+                unknown: PreservedFields::new(),
             };
             let mut candidate = fx.candidate(1);
             candidate.grant_section.grant_blobs.push(signed_blob);
@@ -1107,7 +1107,7 @@ fn non_empty_history_link_authenticates_and_rejects_tamper_and_replay() {
     candidate.grant_section.history_links.push(SignedSealed {
         sealed: sealed.clone(),
         signature: sign_link(fx.epoch, &sealed),
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     });
     block_on(adopt(
         &InMemoryFloorStore::default(),
@@ -1123,7 +1123,7 @@ fn non_empty_history_link_authenticates_and_rejects_tamper_and_replay() {
     tampered.grant_section.history_links.push(SignedSealed {
         sealed: bad,
         signature: sign_link(fx.epoch, &sealed),
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     });
     let rej = block_on(adopt(
         &InMemoryFloorStore::default(),
@@ -1141,7 +1141,7 @@ fn non_empty_history_link_authenticates_and_rejects_tamper_and_replay() {
     replayed.grant_section.history_links.push(SignedSealed {
         sealed: sealed.clone(),
         signature: sign_link(fx.epoch + 1, &sealed),
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     });
     let rej = block_on(adopt(
         &InMemoryFloorStore::default(),
@@ -1284,7 +1284,7 @@ fn cross_epoch_structure_replay_rejected_at_grant_section() {
         created_at: 0,
         modified_at: 0,
         children: Vec::new(),
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
     let envelope_e2 = seal_read_body(
         &fx.read_key,
@@ -1425,7 +1425,7 @@ fn envelope_scope_must_equal_reader_scope() {
         created_at: 0,
         modified_at: 0,
         children: Vec::new(),
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
     let envelope_b = seal_read_body(
         &fx.read_key,

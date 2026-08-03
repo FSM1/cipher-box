@@ -268,6 +268,9 @@ pub enum Malformed {
     /// A rewrite supplied a known field that collides with a preserved
     /// unknown field of the same key (caller bug; rejected fail-closed).
     UnknownFieldCollision { key: String },
+    /// An encode of a map [`crate::codec::Map::zeroize_bytes`] already wiped
+    /// (caller bug; rejected fail-closed).
+    WipedMap,
     /// A schema decode required a field that the map did not carry. *Malformed*,
     /// not trust: an absent field is structurally incomplete input, carrying no
     /// evidence a canonical form was tampered — the same class as a truncation.
@@ -362,6 +365,7 @@ impl Malformed {
         "depth-exceeded",
         "unexpected-type",
         "unknown-field-collision",
+        "wiped-map",
         "missing-field",
         "invalid-identity-key",
         "invalid-enc-subkey",
@@ -391,6 +395,7 @@ impl Malformed {
             Self::DepthExceeded { .. } => "depth-exceeded",
             Self::UnexpectedType { .. } => "unexpected-type",
             Self::UnknownFieldCollision { .. } => "unknown-field-collision",
+            Self::WipedMap => "wiped-map",
             Self::MissingField { .. } => "missing-field",
             Self::InvalidIdentityKey => "invalid-identity-key",
             Self::InvalidEncSubkey => "invalid-enc-subkey",
@@ -435,7 +440,8 @@ impl fmt::Display for Malformed {
             } => write!(f, " (field {field}: expected {expected}, found {found})"),
             Self::UnknownRecordField { key } => write!(f, " (key {:?})", DisplayKey(key)),
             Self::UnsupportedRecordVersion { version } => write!(f, " (version {version})"),
-            Self::InvalidIdentityKey
+            Self::WipedMap
+            | Self::InvalidIdentityKey
             | Self::InvalidEncSubkey
             | Self::InvalidBindingSigEncoding
             | Self::InvalidNodeKind

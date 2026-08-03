@@ -21,9 +21,9 @@ use std::collections::BTreeSet;
 
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, open_chunk, seal_chunk, verify_cid};
 use cipherbox_core::seal::{
-    AadContext, ChildRef, NodeKind, ReadBody, STRUCT_TAG_READ_BODY, Version, decode_envelope,
-    decode_read_body, encode_envelope, encode_read_body, name_cmp, open_read_body, seal,
-    seal_read_body, unseal,
+    AadContext, ChildRef, NodeKind, PreservedFields, ReadBody, STRUCT_TAG_READ_BODY, Version,
+    decode_envelope, decode_read_body, encode_envelope, encode_read_body, name_cmp, open_read_body,
+    seal, seal_read_body, unseal,
 };
 use proptest::prelude::*;
 
@@ -65,7 +65,7 @@ fn arb_child() -> impl Strategy<Value = ChildRef> {
             ipns_name,
             kind,
             link_counter,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         })
 }
 
@@ -104,7 +104,7 @@ fn arb_read_body() -> impl Strategy<Value = ReadBody> {
             created_at,
             modified_at,
             children: dedup_children(children),
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         });
     let file = (
         any::<u64>(),
@@ -115,7 +115,7 @@ fn arb_read_body() -> impl Strategy<Value = ReadBody> {
             created_at,
             modified_at,
             versions,
-            unknown: Vec::new(),
+            unknown: PreservedFields::new(),
         });
     prop_oneof![folder, file]
 }

@@ -7,14 +7,20 @@ use super::encode::{
     MAJOR_ARRAY, MAJOR_BYTES, MAJOR_MAP, MAJOR_NEGATIVE, MAJOR_SIMPLE, MAJOR_TEXT, MAJOR_UNSIGNED,
     SIMPLE_FALSE, SIMPLE_NULL, SIMPLE_TRUE,
 };
+use super::scrub::ScrubOnDrop;
 use super::value::{Map, Value, canonical_key_cmp};
 use crate::error::{CodecError, Malformed, TrustViolation};
 
 /// Decode exactly one deterministic-profile item spanning the whole input.
+///
+/// A reject anywhere past the first byte leaves the decoder holding values it
+/// has already read, so every accumulator here stands under a [`ScrubOnDrop`].
 pub fn decode(bytes: &[u8]) -> Result<Value, CodecError> {
     let mut d = Decoder::new(bytes);
-    let value = d.read_value(0)?;
+    let mut value = d.read_value(0)?;
+    let guard = ScrubOnDrop(&mut value);
     d.expect_end()?;
+    core::mem::forget(guard);
     Ok(value)
 }
 
@@ -165,18 +171,22 @@ impl<'a> Decoder<'a> {
             }
             MAJOR_ARRAY => {
                 let mut items = Vec::new();
+                let guard = ScrubOnDrop(&mut items);
                 for _ in 0..head.arg {
-                    items.push(self.read_value(depth + 1)?);
+                    guard.0.push(self.read_value(depth + 1)?);
                 }
+                core::mem::forget(guard);
                 Ok(Value::Array(items))
             }
             MAJOR_MAP => {
                 let mut entries: Vec<(String, Value)> = Vec::new();
+                let guard = ScrubOnDrop(&mut entries);
                 for _ in 0..head.arg {
-                    let key = self.read_map_key(entries.last().map(|(k, _)| k.as_str()))?;
+                    let key = self.read_map_key(guard.0.last().map(|(k, _)| k.as_str()))?;
                     let value = self.read_value(depth + 1)?;
-                    entries.push((key, value));
+                    guard.0.push((key, value));
                 }
+                core::mem::forget(guard);
                 // Order and uniqueness were enforced entry-by-entry, so this
                 // rebuild cannot reorder or drop anything.
                 Ok(Value::Map(entries.into_iter().collect::<Map>()))

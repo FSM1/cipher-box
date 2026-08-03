@@ -405,7 +405,7 @@ mod tests {
 
     use cipherbox_core::error::TrustViolation;
     use cipherbox_core::ipns::{IpnsName, IpnsRecord};
-    use cipherbox_core::seal::ReadBody;
+    use cipherbox_core::seal::{PreservedFields, ReadBody};
     use cipherbox_core::suite::ed25519::Ed25519Signer;
     use zeroize::Zeroizing;
 
@@ -482,7 +482,7 @@ mod tests {
                             created_at: 0,
                             modified_at: 0,
                             children: Vec::new(),
-                            unknown: Vec::new(),
+                            unknown: PreservedFields::new(),
                         },
                         sequence,
                         epoch: 1,
@@ -1024,7 +1024,7 @@ mod tests {
         use core::cell::RefCell;
 
         use cipherbox_core::error::TrustViolation;
-        use cipherbox_core::seal::{ChildRef, NodeKind, ReadBody};
+        use cipherbox_core::seal::{ChildRef, NodeKind, PreservedFields, ReadBody};
 
         use crate::facade::NodeId;
         use crate::gate::Adopted;
@@ -1043,9 +1043,9 @@ mod tests {
                         ipns_name: vec![1],
                         kind: NodeKind::File,
                         link_counter: 1,
-                        unknown: Vec::new(),
+                        unknown: PreservedFields::new(),
                     }],
-                    unknown: Vec::new(),
+                    unknown: PreservedFields::new(),
                 },
                 sequence: 2,
                 epoch: 1,
