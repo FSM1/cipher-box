@@ -40,25 +40,31 @@ into the repository tree and do NOT commit them.
 
 ## Project Security Rules
 
-Reference the project's AGENTS.md security rules:
+Normative sources: `blueprint/core.md` (primitives, KDF edge catalog, wire
+format, KAT regime) and `CONTEXT.md` (ubiquitous language). AGENTS.md "Critical
+Security Rules" restates them; where they disagree, the blueprint wins.
 
-- Never store privateKey in localStorage/sessionStorage
-- Never log sensitive keys
-- Never send unencrypted keys to server
-- Always use ECIES for key wrapping
-- Always use AES-256-GCM for content encryption
-- Server NEVER has access to plaintext or unencrypted keys
-- Always encrypt ipnsPrivateKey with TEE public key before sending
-- TEE decrypts IPNS keys in hardware only, signs, and immediately discards
+- Never store `privateKey` or any seed in localStorage/sessionStorage
+- Never log sensitive keys or seeds
+- Never send unencrypted keys to the server — the server is zero-knowledge
+- All crypto lives in `crates/core`; TypeScript has no codec or crypto of its own
+- Nothing derives a key outside the frozen KDF edge catalog
+- Every resolved record passes the adoption gate; a failure is a fail-closed trust violation, never mere staleness
+- Zeroize at the terminal owner only — a callee must not zero a caller-owned buffer
+- Encode/decode fail-closed symmetry: wherever decode hard-rejects an invariant, the matching encode path returns `Err` under a release-active check, never `debug_assert!`/`assert!`
 
 ## Cryptographic Standards
 
-| Algorithm      | Use Case           | Notes                              |
-| -------------- | ------------------ | ---------------------------------- |
-| AES-256-GCM    | Content encryption | Authenticated encryption required  |
-| ECIES          | Key wrapping       | For asymmetric key transport       |
-| Web Crypto API | Browser crypto     | No polyfills or JS implementations |
-| Uint8Array     | Binary data        | Never strings for crypto data      |
+| Algorithm                                              | Use Case                     | Notes                                                                     |
+| ------------------------------------------------------ | ---------------------------- | ------------------------------------------------------------------------- |
+| XChaCha20-Poly1305                                     | Sealing                      | 24-byte nonce; sealed bodies, structures, content bytes                   |
+| BLAKE3 `derive_key` / `keyed_hash`                     | Key derivation               | The whole edge catalog; ids are fixed-length message input, never context |
+| RFC 9180 HPKE, X25519-HKDF-SHA256 + XChaCha20-Poly1305 | Sealing to a person          | Base mode for grant blobs and mailbox; auth mode for HPKE-to-self records |
+| X25519 ECDH                                            | Pairwise secrets             | Blinded tags, writer-pseudonym derivation                                 |
+| secp256k1 ECDSA, RFC 6979                              | Identity signing             | Grant-set commitment, subkey binding, re-point object                     |
+| Ed25519                                                | Pseudonym and record signing | Structure signatures; IPNS records                                        |
+| Deterministic CBOR, RFC 8949 §4.2                      | Wire format                  | DAG-CBOR blocks; one strictness policy everywhere                         |
+| `Vec<u8>` / `Uint8Array`                               | Binary data                  | Never strings for crypto data                                             |
 
 </execution_context>
 
@@ -87,17 +93,18 @@ Use AskUserQuestion:
 Based on scope, identify files to review:
 
 ```bash
-# Find crypto-related files
-grep -r -l "encrypt\|decrypt\|crypto\|Crypto\|cipher\|AES\|ECIES\|privateKey\|publicKey" --include="*.ts" --include="*.js" . | grep -v node_modules | grep -v ".test."
+# Find crypto-related files (crates/core and crates/engine own the crypto)
+grep -r -l "seal\|unseal\|derive_key\|keyed_hash\|hpke\|Hpke\|Zeroizing\|privateKey\|publicKey" --include="*.rs" --include="*.ts" crates packages apps | grep -v node_modules | grep -v "/target/"
 ```
 
 Also search for:
 
-- Key management code
+- New or changed KDF edges, structure tags, and AAD construction
+- Adoption-gate stages and anything that classifies a gate failure
+- Encode paths whose decode counterpart hard-rejects an invariant
+- Key material lifetimes: `Zeroizing` owners, borrows, and zeroize calls
 - Authentication/authorization
-- Data serialization of sensitive data
 - API endpoints handling secrets
-- Storage operations for keys
 
 ## Phase 3: Security Analysis
 
@@ -105,45 +112,57 @@ For each file/section, analyze through these lenses:
 
 ### 3.1 Cryptographic Correctness
 
-- [ ] Correct algorithm usage (AES-256-GCM, not AES-CBC without MAC)
-- [ ] Proper IV/nonce generation (crypto.getRandomValues, never predictable)
-- [ ] IV/nonce never reused with same key
-- [ ] Authenticated encryption used (GCM, not just encryption)
-- [ ] Key sizes appropriate (256-bit for AES, appropriate curves for EC)
+- [ ] Primitive matches the role in the `blueprint/core.md` suite table; nothing outside it
+- [ ] HPKE auth mode wherever sender authentication is load-bearing (the HPKE-to-self record families) — base mode there is a forgery hole when the recipient half is public by construction
+- [ ] Nonces and HPKE ephemerals come from injected entropy, never an RNG called inside core
+- [ ] Nonce never reused under the same key
+- [ ] AAD binds `(v, id, scope, epoch, structTag)` under the `cipherbox/v2` domain separator, so a downgrade or transplant fails the tag
 - [ ] No deprecated algorithms (MD5, SHA1 for security, DES, RC4)
 
 ### 3.2 Key Management
 
-- [ ] Keys derived using proper KDF (not just hashing)
+- [ ] Every derivation is a frozen KDF edge-catalog edge — no ad-hoc context strings, no inline hashing of a seed
+- [ ] Edge inputs use the frozen shape: `keyed_hash(key = derive_key("<edge context>", seed), message = id16)`, ids as fixed-length message input
+- [ ] Separation holds: a new edge cannot produce equal output to an existing one for equal inputs
+- [ ] Key hierarchy follows the scope/epoch model (scope seed → node seed → read and structure keys; write scope seed → write seed → writeKey and IPNS keypair)
+- [ ] Rotation stays an O(1) root cut plus a lazy wave: a fresh random override seed, a history link backward-only, no eager re-encryption of content bytes
+- [ ] Stated non-edges stay non-edges (content keys, override seeds, scope seeds at grant cuts are random)
+- [ ] Sealing to a person targets the recipient's X25519 encryption subkey, never their identity key
 - [ ] Keys never logged or exposed in errors
-- [ ] Keys cleared from memory after use
-- [ ] Key hierarchy follows spec (rootFolderKey → folderKey → fileKey)
-- [ ] Key wrapping uses ECIES as specified
+- [ ] Key material lives in `Zeroizing` owning types; zeroize happens at the terminal owner only, never in a callee that borrows a caller's buffer
 - [ ] No hardcoded keys or secrets
 
 ### 3.3 Trust Boundaries
 
-- [ ] Client-side encryption before any server transmission
-- [ ] Server never receives plaintext keys
-- [ ] TEE boundaries respected (encrypted IPNS keys only)
-- [ ] No trust assumptions on server for key material
+- [ ] Client-side sealing before any server transmission
+- [ ] Server never receives plaintext or key material
+- [ ] Every resolved record passes the adoption gate before adoption — signature verify, commitment verify, structure signatures against committed write pseudonyms, strictly-newer sequence vs floor, epoch at or above the scope floor, unseal success
+- [ ] A gate failure is typed as a trust violation, disjoint from malformed/availability errors — never degraded to staleness or a silent retry
+- [ ] Floors advance only on an AAD-confirmed unseal or the owner-vouched re-point object, never from a raw blob epoch field
+- [ ] IPNS verification takes the Ed25519 public key from the name itself, never a DB column or side channel
+- [ ] The republisher stays keyless: re-PUT round-trips foreign signed bytes byte-stable with no key material
 
 ### 3.4 Implementation Safety
 
-- [ ] Using Web Crypto API (not crypto-js or similar)
-- [ ] Uint8Array for all binary data
-- [ ] Constant-time comparison for authentication tokens
+- [ ] Crypto lives in `crates/core` — no crypto or codec implemented in TypeScript
+- [ ] Encode/decode fail-closed symmetry: a decode-side hard reject has a matching release-active encode-side `Err`, following the `crates/core/src/seal/body.rs` `assert_children_unique` convention — `debug_assert!`/`assert!` are stripped in release and let a build sign bytes its own decoder rejects
+- [ ] Decoders accept the deterministic CBOR profile only; duplicate keys, non-canonical encodings, and wrong major types reject
+- [ ] Unknown fields tolerated, preserved byte-stable, re-emitted canonically on rewrite
+- [ ] Purity holds: no clock, no RNG, no I/O in core — entropy, time, and policy enter as parameters
+- [ ] `Vec<u8>` / `Uint8Array` for all binary data
+- [ ] Constant-time comparison for tags and authentication tokens
 - [ ] No sensitive data in error messages
 - [ ] No sensitive data in logs
-- [ ] Proper error handling (no silent failures in crypto)
+- [ ] Proper error handling (no silent failures in crypto); every rejection names the check that fired
+- [ ] New structure tags and KDF edges extend the KAT manifest with accept and reject vectors before merge
 
 ### 3.5 Data Flow Security
 
-- [ ] Sensitive data encrypted at rest
-- [ ] Sensitive data encrypted in transit
+- [ ] Sensitive data sealed at rest
+- [ ] Sensitive data sealed in transit
 - [ ] No sensitive data in URLs or query params
-- [ ] No sensitive data in localStorage/sessionStorage (except encrypted)
-- [ ] Metadata leakage minimized
+- [ ] No seeds or private keys in localStorage/sessionStorage
+- [ ] Metadata leakage minimized — the envelope stays kind-uniform, blinded tags leak only blob count
 
 ## Phase 4: Generate Test Cases
 
@@ -159,26 +178,29 @@ For each crypto operation found, generate test cases:
 
 - Invalid key format
 - Corrupted ciphertext
-- Wrong key for decryption
-- Tampered authenticated data (GCM tag modification)
-- Truncated ciphertext
+- Wrong key for unseal
+- Tampered Poly1305 tag
+- Truncated ciphertext, and a short or low-order HPKE `enc`
+- AAD transplant: wrong `scope`, `epoch`, `structTag`, or `v`
+- Base-mode forgery where auth mode is required
 
 ### Edge Cases
 
-- Empty plaintext encryption
-- Very large data encryption (chunking behavior)
+- Empty plaintext seal
+- Very large data (chunking behavior)
 - Unicode/binary data handling
-- Concurrent encryption operations
-- Key rotation scenarios
-- Re-encryption with new keys
+- Concurrent seal operations
+- Rotation: an epoch-lagged node read backward through history links
+- Re-seal at a new epoch under the lazy wave
 
 ### Attack Scenarios
 
-- Replay attacks (nonce reuse detection)
-- Padding oracle (if applicable)
+- Replay attacks (sequence vs floor)
+- Downgrade attacks (`v` bound into the AAD)
 - Timing attacks (constant-time operations)
-- Key confusion attacks
-- Downgrade attacks
+- Key confusion: cross-family transplant between structure tags
+- Floor rollback from a raw blob epoch field
+- Forward regression: an old-seed holder reaching a newer epoch
 
 ## Phase 5: Generate Report
 
@@ -263,23 +285,18 @@ Report template:
 
 #### Unit Tests
 
-```typescript
-describe('[component] security', () => {
-  // Positive cases
-  it('should [expected behavior]', () => {
-    // Test suggestion
-  });
+```rust
+// Accept vector: exact bytes under a fixed key/nonce (or fixed ephemeral), then open
+#[test]
+fn [component]_accept_[case]() {}
 
-  // Negative cases
-  it('should reject [invalid input]', () => {
-    // Test suggestion
-  });
+// Reject vector: the check that must fire, named
+#[test]
+fn [component]_reject_[invalid_input]() {}
 
-  // Edge cases
-  it('should handle [edge case]', () => {
-    // Test suggestion
-  });
-});
+// Edge case
+#[test]
+fn [component]_handles_[edge_case]() {}
 ```
 
 #### Integration Tests
@@ -296,13 +313,15 @@ describe('[component] security', () => {
 
 Based on project security rules:
 
-- [ ] No privateKey in localStorage/sessionStorage
-- [ ] No sensitive keys logged
+- [ ] No `privateKey` or seed in localStorage/sessionStorage
+- [ ] No sensitive keys or seeds logged
 - [ ] No unencrypted keys sent to server
-- [ ] ECIES used for key wrapping
-- [ ] AES-256-GCM used for content encryption
+- [ ] Only `blueprint/core.md` suite primitives used
+- [ ] Every derivation is a frozen KDF edge-catalog edge
+- [ ] Adoption gate enforced fail-closed on every resolved record
+- [ ] Encode-side release-active `Err` mirrors every decode-side hard reject
+- [ ] Zeroize at the terminal owner only
 - [ ] Server has zero knowledge of plaintext
-- [ ] IPNS keys encrypted with TEE public key
 
 ## Recommendations Summary
 
@@ -374,56 +393,77 @@ Use AskUserQuestion:
 
 ## Common Crypto Vulnerabilities to Check
 
-### Nonce/IV Reuse
+### Nonce Reuse / Self-Sourced Randomness
 
-```typescript
-// BAD: Reusing IV
-const iv = new Uint8Array(12); // zeros!
-// GOOD: Random IV each time
-const iv = crypto.getRandomValues(new Uint8Array(12));
+```rust
+// BAD: a fixed nonce, or one core drew itself
+let nonce = [0u8; 24];
+// GOOD: fresh per seal, from injected entropy — core owns no RNG
+let nonce = entropy.nonce_24();
 ```
 
-### Missing Authentication
+### Missing Sender Authentication
 
-```typescript
-// BAD: AES-CBC without MAC
-// GOOD: AES-GCM (authenticated)
+```rust
+// BAD: HPKE base mode where the recipient half is public by construction —
+// any party who can see it can seal a well-formed record
+hpke_seal_base(recipient_enc_pk, aad, plaintext)
+// GOOD: auth mode binds the sender's static key
+hpke_seal_auth(sender_enc_sk, recipient_enc_pk, aad, plaintext)
 ```
 
-### Weak Key Derivation
+### Off-Catalog Key Derivation
 
-```typescript
-// BAD: Simple hash
-const key = await crypto.subtle.digest('SHA-256', password);
-// GOOD: PBKDF2/Argon2 with iterations
+```rust
+// BAD: an ad-hoc context string, id smuggled in as variable context
+blake3::derive_key(&format!("cipherbox/v2/node/{id}"), seed);
+// GOOD: a catalog edge — id is fixed-length message input
+kdf::node_seed(scope_seed, id16);
+```
+
+### Encode/Decode Asymmetry
+
+```rust
+// BAD: stripped in release — the build signs bytes its own decoder rejects
+debug_assert!(children_unique(&children));
+// GOOD: release-active, returns Err
+assert_children_unique(&children)?;
+```
+
+### Over-Eager Zeroization
+
+```rust
+// BAD: a callee zeroing a buffer its caller still owns and will reuse
+fn seal(key: &mut [u8; 32]) { /* … */ key.zeroize(); }
+// GOOD: zeroize at the terminal owner; callees borrow
+fn seal(key: &Zeroizing<[u8; 32]>) { /* … */ }
+```
+
+### Trust Violation Degraded to Staleness
+
+```rust
+// BAD: a failed gate stage becomes a retry, and the record is adopted later
+Err(_) => Ok(Adoption::Stale),
+// GOOD: fail closed, naming the check that fired
+Err(e) => Err(TrustViolation::StructureSignature(e)),
 ```
 
 ### Timing Attacks
 
-```typescript
-// BAD: Early return on mismatch
-if (a[i] !== b[i]) return false;
-// GOOD: Constant-time comparison
+```rust
+// BAD: early return on mismatch
+if a[i] != b[i] { return false; }
+// GOOD: constant-time comparison
+a.ct_eq(b).into()
 ```
 
 ### Key in Logs/Errors
 
-```typescript
+```rust
 // BAD
-console.log('Key:', key);
-throw new Error(`Failed with key ${key}`);
+tracing::debug!(?seed, "derived node seed");
 // GOOD
-console.log('Key operation failed');
-throw new Error('Decryption failed');
-```
-
-### Predictable Randomness
-
-```typescript
-// BAD
-Math.random();
-// GOOD
-crypto.getRandomValues();
+tracing::debug!("node seed derivation failed");
 ```
 
 </vulnerability_patterns>

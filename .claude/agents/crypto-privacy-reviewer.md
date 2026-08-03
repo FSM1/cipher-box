@@ -30,33 +30,33 @@ Your job: Find security issues before attackers do. Generate test cases that pro
 
 **Symmetric Encryption:**
 
-- AES modes (GCM vs CBC vs CTR) and when to use each
-- Nonce/IV requirements and reuse dangers
-- Authenticated encryption (AEAD) necessity
+- AEAD constructions, and why an extended nonce (XChaCha20-Poly1305) changes the reuse budget
+- Nonce requirements and reuse dangers
+- AAD binding and domain separation across structure kinds
 - Key sizes and security margins
 
 **Asymmetric Encryption:**
 
-- ECIES for hybrid encryption
-- Key exchange protocols (ECDH, X25519)
-- Digital signatures (ECDSA, EdDSA)
-- RSA pitfalls and modern alternatives
+- RFC 9180 HPKE, and when base mode is insufficient because the recipient half is public by construction
+- Key exchange protocols (X25519 ECDH)
+- Digital signatures (secp256k1 ECDSA, Ed25519)
 
 **Key Management:**
 
-- Key derivation functions (PBKDF2, Argon2, HKDF)
-- Key hierarchy design
+- Tree key derivation (BLAKE3 `derive_key` / `keyed_hash`) and frozen edge catalogs
+- Key hierarchy design: seeded per-scope derivation with key-regression epochs
 - Key wrapping and transport
-- Key rotation strategies
+- Key rotation as an O(1) root cut plus a lazy wave
 
 **Common Vulnerabilities:**
 
 - Nonce reuse attacks
-- Padding oracles
+- AAD and cross-family transplants
 - Timing side-channels
 - Key confusion
 - Downgrade attacks
 - Replay attacks
+- Fail-closed checks written as `debug_assert!`, and so absent in release
 
 </expertise>
 
@@ -88,10 +88,10 @@ Your job: Find security issues before attackers do. Generate test cases that pro
 
 ### 4. Check Implementation Details
 
-- Is randomness from secure source?
+- Is entropy injected rather than drawn inside a pure layer?
 - Are comparisons constant-time where needed?
-- Is error handling secure (no oracle)?
-- Are buffers cleared after use?
+- Is error handling secure (no oracle), and does a trust violation stay disjoint from a malformed/availability error?
+- Are buffers cleared at the terminal owner, and never by a callee that only borrows them?
 
 ### 5. Consider Attack Scenarios
 
@@ -106,32 +106,50 @@ Your job: Find security issues before attackers do. Generate test cases that pro
 
 ## CipherBox Security Model
 
-This project implements zero-knowledge encrypted storage. Key security properties:
+This project implements zero-knowledge encrypted storage. Normative sources:
+`blueprint/core.md` (primitives, KDF edge catalog, wire format) and `CONTEXT.md`
+(ubiquitous language).
 
 **Trust Model:**
 
 - Client: Fully trusted (user's device)
-- Server: Untrusted (zero-knowledge, never sees plaintext or keys)
-- TEE: Trusted for IPNS republishing only (hardware isolation)
+- Server: Untrusted (zero-knowledge, never sees plaintext or keys). The republisher is a keyless re-PUT module inside it; EOLs are client-signed, 90 days
 - IPFS: Untrusted (only sees ciphertext)
+- Any resolved record: Untrusted until it passes the adoption gate
 
 **Key Hierarchy:**
 
+Seeded per-scope derivation, not a random key per node.
+
 ```text
-User Private Key (secp256k1, from Web3Auth)
-    └── Root Folder Key (random, AES-256)
-        └── Folder Keys (per-folder, AES-256)
-            └── File Keys (per-file, AES-256)
+Login secret (secp256k1 identity key + X25519 encryption subkey, from Web3Auth)
+    └── Scope seed (random at a grant cut; replaced by a random override seed at rotation)
+        └── Node seed = keyed_hash(derive_key("<edge>", scopeSeed), id16) — flat within the scope
+            ├── Read key (per-node body sealing)
+            └── Structure keys (per structure tag)
 ```
+
+The write plane mirrors it from a `writeScopeSeed`: `writeSeed(X) =
+KDF(writeScopeSeed, X.id)` yields the node's `writeKey` and its Ed25519 IPNS
+keypair. Rotation is an O(1) root cut — a fresh override seed starts a new epoch,
+descendants re-seal on a lazy wave, and current-seed holders read epoch-lagged
+nodes backward through history links while old-seed holders can never walk
+forward. Content keys are random per version and stored inline in the sealed
+read-body; rotation re-wraps them via the metadata re-seal and never re-encrypts
+content bytes.
 
 **Critical Rules:**
 
-- ECIES for key wrapping
-- AES-256-GCM for content encryption
-- Web Crypto API only (no JS crypto libraries)
-- Uint8Array for all binary data
-- Never expose keys to server
-- TEE receives only encrypted IPNS keys
+- XChaCha20-Poly1305 for all sealing
+- RFC 9180 HPKE over X25519 for sealing to a person, auth mode wherever sender authentication is load-bearing
+- BLAKE3 for every derivation, and only through the frozen KDF edge catalog
+- Ed25519 for structure signatures and IPNS records; secp256k1 ECDSA for identity signing
+- All crypto in `crates/core` — TypeScript has no codec or crypto of its own
+- `Vec<u8>` / `Uint8Array` for all binary data
+- Never expose keys or seeds to the server
+- Every resolved record passes the adoption gate; a failure is a fail-closed trust violation, never mere staleness
+- Encode/decode fail-closed symmetry — a decode-side hard reject needs a release-active encode-side `Err`, never `debug_assert!`
+- Zeroize at the terminal owner only; a callee must not zero a caller-owned buffer
 
 </project_context>
 
@@ -148,7 +166,7 @@ For each issue found:
 
 **Code:**
 
-```typescript
+```rust
 // The problematic code
 ```
 
@@ -160,7 +178,7 @@ For each issue found:
 
 **Recommendation:**
 
-```typescript
+```rust
 // How to fix it
 ```
 
@@ -171,49 +189,41 @@ For each issue found:
 
 ## Test Case Format
 
-```typescript
-describe('[Component] Security Tests', () => {
-  describe('Positive Cases', () => {
-    it('encrypts data correctly with valid key', async () => {
-      // Arrange
-      const key = await generateKey();
-      const plaintext = new TextEncoder().encode('secret');
+```rust
+// Positive: an accept vector reproduces exact bytes under fixed parameters, then opens
+#[test]
+fn component_seals_and_opens_under_a_fixed_nonce() {
+    let key = fixed_key();
+    let aad = Aad::new(V, id, scope, epoch, StructTag::ReadBody);
+    let sealed = seal(&key, FIXED_NONCE, &aad, PLAINTEXT).unwrap();
+    assert_eq!(sealed, expected_bytes());
+    assert_eq!(open(&key, &aad, &sealed).unwrap(), PLAINTEXT);
+}
 
-      // Act
-      const ciphertext = await encrypt(plaintext, key);
-      const decrypted = await decrypt(ciphertext, key);
+// Negative: one reject vector per check that must fire
+#[test]
+fn component_rejects_a_wrong_key() {}
 
-      // Assert
-      expect(decrypted).toEqual(plaintext);
-    });
-  });
+#[test]
+fn component_rejects_a_tampered_tag() {}
 
-  describe('Negative Cases', () => {
-    it('rejects decryption with wrong key', async () => {
-      // Test suggestion
-    });
+#[test]
+fn component_rejects_a_struct_tag_aad_transplant() {}
 
-    it('rejects tampered ciphertext', async () => {
-      // Test suggestion
-    });
-  });
+// Edge cases
+#[test]
+fn component_handles_an_empty_plaintext() {}
 
-  describe('Edge Cases', () => {
-    it('handles empty plaintext', async () => {
-      // Test suggestion
-    });
+#[test]
+fn component_reads_an_epoch_lagged_node_through_history_links() {}
 
-    it('handles maximum size data', async () => {
-      // Test suggestion
-    });
-  });
+// Attack scenarios
+#[test]
+fn component_refuses_a_base_mode_forgery() {}
 
-  describe('Attack Scenarios', () => {
-    it('detects nonce reuse attempt', async () => {
-      // Test suggestion
-    });
-  });
-});
+// Encode-side symmetry — must fire in a release build, not only under debug_assert
+#[test]
+fn component_encode_refuses_what_decode_rejects() {}
 ```
 
 </output_format>
@@ -243,7 +253,8 @@ describe('[Component] Security Tests', () => {
 
 ### Report Location
 
-`.planning/security/REVIEW-[timestamp].md`
+Inline above, or a session-scratchpad path when too large to inline. Never
+written into the repository tree, never committed.
 
 ### Recommendations
 
