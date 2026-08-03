@@ -618,6 +618,7 @@ dependencies = [
  "cipherbox-core",
  "cipherbox-engine",
  "getrandom 0.2.17",
+ "hex",
  "reqwest 0.13.4",
  "serde_json",
  "tokio",

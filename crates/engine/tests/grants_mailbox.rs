@@ -59,6 +59,7 @@ struct GrantFixture {
     owner_identity: EcdsaSigner,
     owner_identity_pub: EcdsaVerifier,
     recipient_enc: X25519Secret,
+    recipient_identity: EcdsaVerifier,
     scope_id: [u8; 16],
     scope_seed: [u8; 32],
     epoch: u64,
@@ -83,6 +84,9 @@ impl GrantFixture {
         let owner_pseudonym = Ed25519Signer::from_seed([0x22; 32]);
         let owner_enc = X25519Secret::from_scalar([0x33; 32]);
         let recipient_enc = X25519Secret::from_scalar([0x44; 32]);
+        let recipient_identity = EcdsaSigner::from_scalar(&[0x45; 32])
+            .expect("valid scalar")
+            .verifying_key();
 
         let scope_id = [0x55; 16];
         let root_id = [0x55; 16];
@@ -228,6 +232,7 @@ impl GrantFixture {
             owner_identity,
             owner_identity_pub,
             recipient_enc,
+            recipient_identity,
             scope_id,
             scope_seed,
             epoch,
@@ -359,14 +364,14 @@ impl GrantFixture {
 fn two_instance_share_accept_end_to_end() {
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient_address = fx.recipient_enc.public().to_bytes();
+    let recipient_address = fx.recipient_identity.to_sec1();
     let owner_device = world.device(b"owner-inbox");
     let recipient_device = world.device(&recipient_address);
 
     block_on(post_sealed(
         &owner_device.mailbox,
         &fx.recipient_enc.public(),
-        &recipient_address,
+        &fx.recipient_identity,
         &EPH_MAILBOX,
         V,
         &fx.owner_identity,
@@ -455,7 +460,7 @@ fn two_instance_share_accept_end_to_end() {
     block_on(post_sealed(
         &owner_device.mailbox,
         &fx.recipient_enc.public(),
-        &recipient_address,
+        &fx.recipient_identity,
         &EPH_MAILBOX,
         V,
         &fx.owner_identity,
@@ -496,14 +501,14 @@ fn two_instance_share_accept_end_to_end() {
 fn uncommitted_tag_is_rejected_before_the_gate() {
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient_address = fx.recipient_enc.public().to_bytes();
+    let recipient_address = fx.recipient_identity.to_sec1();
     let recipient_device = world.device(&recipient_address);
     let poster = world.device(b"owner-inbox");
 
     block_on(post_sealed(
         &poster.mailbox,
         &fx.recipient_enc.public(),
-        &recipient_address,
+        &fx.recipient_identity,
         &EPH_MAILBOX,
         V,
         &fx.owner_identity,
@@ -564,7 +569,7 @@ fn uncommitted_tag_is_rejected_before_the_gate() {
 fn unauthenticated_sender_is_dropped_and_wrong_contact_is_rejected() {
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient_address = fx.recipient_enc.public().to_bytes();
+    let recipient_address = fx.recipient_identity.to_sec1();
     let recipient_device = world.device(&recipient_address);
     let poster = world.device(b"poster");
 
@@ -583,7 +588,7 @@ fn unauthenticated_sender_is_dropped_and_wrong_contact_is_rejected() {
     block_on(post_sealed(
         &poster.mailbox,
         &fx.recipient_enc.public(),
-        &recipient_address,
+        &fx.recipient_identity,
         &EPH_MAILBOX,
         V,
         &attacker,
@@ -630,14 +635,14 @@ fn unauthenticated_sender_is_dropped_and_wrong_contact_is_rejected() {
 fn a_failed_gate_never_acks_the_item() {
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient_address = fx.recipient_enc.public().to_bytes();
+    let recipient_address = fx.recipient_identity.to_sec1();
     let recipient_device = world.device(&recipient_address);
     let poster = world.device(b"owner-inbox");
 
     block_on(post_sealed(
         &poster.mailbox,
         &fx.recipient_enc.public(),
-        &recipient_address,
+        &fx.recipient_identity,
         &EPH_MAILBOX,
         V,
         &fx.owner_identity,
@@ -698,7 +703,7 @@ fn a_failed_gate_never_acks_the_item() {
 fn a_failed_persist_never_acks_the_item() {
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
     let poster = world.device(b"owner-inbox");
     let item = deliver_pointer(
         &fx,
@@ -746,7 +751,7 @@ fn a_failed_persist_never_acks_the_item() {
 fn a_persist_failure_leaves_the_floor_unadvanced_and_redelivery_recovers() {
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
     let poster = world.device(b"owner-inbox");
     let item = deliver_pointer(
         &fx,
@@ -836,7 +841,7 @@ fn a_persist_failure_leaves_the_floor_unadvanced_and_redelivery_recovers() {
 fn a_failed_ack_after_commit_recovers_via_idempotent_reack() {
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
     let poster = world.device(b"owner-inbox");
     let item = deliver_pointer(
         &fx,
@@ -932,7 +937,7 @@ fn a_failed_ack_after_commit_recovers_via_idempotent_reack() {
 fn a_sequence_replay_for_an_unheld_scope_stays_rejected() {
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
     let poster = world.device(b"owner-inbox");
     let item = deliver_pointer(
         &fx,
@@ -989,7 +994,7 @@ fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
 
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient_address = fx.recipient_enc.public().to_bytes();
+    let recipient_address = fx.recipient_identity.to_sec1();
     let recipient = world.device(&recipient_address);
     let poster = world.device(b"owner-inbox");
     let contact = import_contact(&fx.owner_contact).unwrap();
@@ -1036,7 +1041,7 @@ fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
     block_on(post_sealed(
         &poster.mailbox,
         &fx.recipient_enc.public(),
-        &recipient_address,
+        &fx.recipient_identity,
         &EPH_MAILBOX,
         V,
         &fx.owner_identity,
@@ -1103,11 +1108,10 @@ fn deliver_pointer(
     signer: &EcdsaSigner,
     pointer: &SharePointer,
 ) -> VerifiedMailboxItem {
-    let recipient_address = fx.recipient_enc.public().to_bytes();
     block_on(post_sealed(
         &poster.mailbox,
         &fx.recipient_enc.public(),
-        &recipient_address,
+        &fx.recipient_identity,
         &EPH_MAILBOX,
         V,
         signer,
@@ -1138,7 +1142,7 @@ fn inbox_len(fx: &GrantFixture, recipient: &FakeDevice) -> usize {
 fn pointer_sharer_mismatch_is_rejected_and_unacked() {
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
     let poster = world.device(b"owner-inbox");
 
     let mut pointer = fx.share_pointer();
@@ -1172,7 +1176,7 @@ fn pointer_sharer_mismatch_is_rejected_and_unacked() {
 fn tampered_commitment_is_rejected_at_the_gate_and_unacked() {
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
     let poster = world.device(b"owner-inbox");
     let item = deliver_pointer(
         &fx,
@@ -1214,7 +1218,7 @@ fn tampered_commitment_is_rejected_at_the_gate_and_unacked() {
 fn no_blob_at_tag_is_rejected_and_unacked() {
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
     let poster = world.device(b"owner-inbox");
     let item = deliver_pointer(
         &fx,
@@ -1253,7 +1257,7 @@ fn no_blob_at_tag_is_rejected_and_unacked() {
 fn tampered_grant_blob_fails_open_and_is_unacked() {
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
     let poster = world.device(b"owner-inbox");
     let item = deliver_pointer(
         &fx,
@@ -1291,7 +1295,7 @@ fn tampered_grant_blob_fails_open_and_is_unacked() {
 fn resolved_name_mismatch_is_rejected_and_unacked() {
     let fx = GrantFixture::new();
     let world = FakeWorld::new();
-    let recipient = world.device(&fx.recipient_enc.public().to_bytes());
+    let recipient = world.device(&fx.recipient_identity.to_sec1());
     let poster = world.device(b"owner-inbox");
     let item = deliver_pointer(
         &fx,

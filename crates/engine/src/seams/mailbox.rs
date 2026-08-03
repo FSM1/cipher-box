@@ -24,6 +24,12 @@ pub struct MailboxItem {
 ///   ack deletes, and acking is idempotent.
 /// - **Idempotent post**: re-posting with an already-seen idempotency key
 ///   for the same recipient creates no second item.
+/// - **Wire shape**: `recipient_public_key` is the recipient's compressed SEC1
+///   secp256k1 **identity** key (33 bytes) — the account the transport resolves
+///   an inbox from, never the X25519 subkey the payload is sealed to
+///   (blueprint/api.md "Mailbox"). `sealed_payload` is at most 8 KiB and
+///   `idempotency_key` is 1-128 RFC 3986 unreserved characters, both as the
+///   API's `PostMessageDto` fixes them.
 ///
 /// v2.0 rides the API mailbox via the engine's own API client on both
 /// platforms; a decentralized inbox stays swappable behind this trait

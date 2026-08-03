@@ -25,7 +25,20 @@ use cipherbox_core::payload::{open_mailbox_payload, seal_mailbox_payload};
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
-use crate::seams::{Mailbox, SeamResult};
+use crate::seams::{Mailbox, SeamError, SeamResult};
+
+/// The transport's sealed-payload bound (API `PostMessageDto`).
+const MAX_SEALED_BYTES: usize = 8192;
+
+/// The transport's idempotency-key alphabet and bound: RFC 3986 unreserved,
+/// 1-128 (API `PostMessageDto`).
+pub(crate) fn idempotency_key_is_legal(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 128
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'~' | b'-'))
+}
 
 /// An opened, sender-authenticated mailbox item: the transport id needed to
 /// [`ack`], the verified sender identity to anchor against a contact, and the
@@ -43,25 +56,30 @@ pub struct VerifiedMailboxItem {
 }
 
 /// Seal `payload` to `recipient_enc_pub` (sender-signed inside the seal) and
-/// post it to `recipient_address`'s inbox with a sender-supplied idempotency
+/// post it to `recipient_identity`'s inbox with a sender-supplied idempotency
 /// key. `ephemeral_scalar` is injected, fresh-per-call HPKE entropy (reuse under
 /// one recipient is a catastrophic break — the caller sources it from the
 /// entropy input, never a clock or a constant).
 ///
-/// `recipient_address` is the opaque pubkey the [`Mailbox`] seam routes on; in
-/// v2.0 that is the recipient's encryption-subkey public bytes, i.e. the same
-/// key `payload` is sealed to.
+/// Routing and sealing use *different* keys: the [`Mailbox`] seam addresses on
+/// the recipient's secp256k1 identity key, the seal targets their X25519
+/// encryption subkey (see [`Mailbox`] for the wire shape it enforces).
 #[allow(clippy::too_many_arguments)]
 pub async fn post_sealed<M: Mailbox>(
     mailbox: &M,
     recipient_enc_pub: &X25519Public,
-    recipient_address: &[u8],
+    recipient_identity: &EcdsaVerifier,
     ephemeral_scalar: &[u8; 32],
     v: u64,
     sender_signer: &EcdsaSigner,
     payload: &[u8],
     idempotency_key: &str,
 ) -> SeamResult<()> {
+    if !idempotency_key_is_legal(idempotency_key) {
+        return Err(SeamError::new(
+            "idempotency key must be 1-128 unreserved characters",
+        ));
+    }
     let sealed = seal_mailbox_payload(
         recipient_enc_pub,
         ephemeral_scalar,
@@ -69,8 +87,11 @@ pub async fn post_sealed<M: Mailbox>(
         sender_signer,
         payload,
     );
+    if sealed.len() > MAX_SEALED_BYTES {
+        return Err(SeamError::new("sealed payload exceeds the transport bound"));
+    }
     mailbox
-        .post(recipient_address, &sealed, idempotency_key)
+        .post(&recipient_identity.to_sec1(), &sealed, idempotency_key)
         .await
 }
 
@@ -119,18 +140,24 @@ mod tests {
         X25519Secret::from_scalar([0x40; 32])
     }
 
+    fn recipient_identity() -> EcdsaVerifier {
+        EcdsaSigner::from_scalar(&[0x41; 32])
+            .expect("valid scalar")
+            .verifying_key()
+    }
+
     #[test]
     fn post_then_poll_round_trips_a_verified_item() {
         let hub = InMemoryMailboxHub::default();
         let recip = recipient();
-        let address = recip.public().to_bytes();
+        let address = recipient_identity().to_sec1();
         let sender_box = hub.mailbox_for(b"sender-inbox");
         let recip_box = hub.mailbox_for(&address);
 
         block_on(post_sealed(
             &sender_box,
             &recip.public(),
-            &address,
+            &recipient_identity(),
             &[0x51; 32],
             V,
             &sender(),
@@ -149,7 +176,7 @@ mod tests {
     fn unauthenticated_items_are_dropped_before_resolve() {
         let hub = InMemoryMailboxHub::default();
         let recip = recipient();
-        let address = recip.public().to_bytes();
+        let address = recipient_identity().to_sec1();
         let recip_box = hub.mailbox_for(&address);
         let poster = hub.mailbox_for(b"poster");
 
@@ -160,7 +187,7 @@ mod tests {
         block_on(post_sealed(
             &poster,
             &other.public(),
-            &address,
+            &recipient_identity(),
             &[0x52; 32],
             V,
             &sender(),
@@ -174,17 +201,89 @@ mod tests {
     }
 
     #[test]
+    fn routing_addresses_the_identity_key_not_the_seal_target() {
+        let hub = InMemoryMailboxHub::default();
+        let recip = recipient();
+        let poster = hub.mailbox_for(b"poster");
+
+        block_on(post_sealed(
+            &poster,
+            &recip.public(),
+            &recipient_identity(),
+            &[0x54; 32],
+            V,
+            &sender(),
+            b"p",
+            "idem",
+        ))
+        .unwrap();
+
+        assert!(
+            block_on(hub.mailbox_for(&recip.public().to_bytes()).poll())
+                .unwrap()
+                .is_empty(),
+            "the encryption subkey addresses no inbox"
+        );
+        assert_eq!(
+            block_on(hub.mailbox_for(&recipient_identity().to_sec1()).poll())
+                .unwrap()
+                .len(),
+            1,
+            "the identity key is the routing address"
+        );
+    }
+
+    #[test]
+    fn a_post_the_transport_would_reject_never_leaves_the_produce_site() {
+        let hub = InMemoryMailboxHub::default();
+        let recip = recipient();
+        let identity = recipient_identity();
+        let poster = hub.mailbox_for(b"poster");
+
+        let post = |payload: &[u8], idempotency_key: &str| {
+            block_on(post_sealed(
+                &poster,
+                &recip.public(),
+                &identity,
+                &[0x55; 32],
+                V,
+                &sender(),
+                payload,
+                idempotency_key,
+            ))
+        };
+
+        for illegal in ["grant:abc", "", &"k".repeat(129), "a b", "a/b", "é"] {
+            assert!(
+                post(b"p", illegal).is_err(),
+                "{illegal:?} must not reach the transport"
+            );
+        }
+        assert!(
+            post(&vec![0u8; MAX_SEALED_BYTES], "idem").is_err(),
+            "a payload sealing past the transport bound must not be posted"
+        );
+
+        assert!(
+            block_on(hub.mailbox_for(&identity.to_sec1()).poll())
+                .unwrap()
+                .is_empty(),
+            "a refused post delivers nothing"
+        );
+    }
+
+    #[test]
     fn ack_removes_only_after_the_call() {
         let hub = InMemoryMailboxHub::default();
         let recip = recipient();
-        let address = recip.public().to_bytes();
+        let address = recipient_identity().to_sec1();
         let recip_box = hub.mailbox_for(&address);
         let poster = hub.mailbox_for(b"poster");
 
         block_on(post_sealed(
             &poster,
             &recip.public(),
-            &address,
+            &recipient_identity(),
             &[0x53; 32],
             V,
             &sender(),

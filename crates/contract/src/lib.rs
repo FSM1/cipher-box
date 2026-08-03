@@ -119,17 +119,22 @@ pub fn random_identity_signer() -> IdentityChallengeSigner {
 
 /// Decode a 64-char hex string into a 32-byte scalar. `None` on any malformed
 /// input.
-pub fn hex_to_scalar(hex: &str) -> Option<[u8; 32]> {
-    if hex.len() != 64 {
+pub fn hex_to_scalar(hex_str: &str) -> Option<[u8; 32]> {
+    if hex_str.len() != 64 {
         return None;
     }
-    let mut out = [0u8; 32];
-    for (index, byte) in out.iter_mut().enumerate() {
-        let high = (hex.as_bytes()[index * 2] as char).to_digit(16)?;
-        let low = (hex.as_bytes()[index * 2 + 1] as char).to_digit(16)?;
-        *byte = ((high << 4) | low) as u8;
-    }
-    Some(out)
+    hex_to_bytes(hex_str)?.try_into().ok()
+}
+
+/// Decode an even-length hex string into bytes. `None` on any malformed input.
+pub fn hex_to_bytes(hex_str: &str) -> Option<Vec<u8>> {
+    hex::decode(hex_str).ok()
+}
+
+/// Lowercase hex — how the mailbox seam's byte address reaches the API's hex
+/// `recipientPublicKey` field.
+pub fn bytes_to_hex(bytes: &[u8]) -> String {
+    hex::encode(bytes)
 }
 
 /// The API base URL for the live stack, from `CONTRACT_API_URL`. When unset the

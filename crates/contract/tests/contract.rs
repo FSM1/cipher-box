@@ -14,17 +14,37 @@
 //! sets it (and boots the stack), so the assertions always run there.
 
 use cipherbox_contract::{
-    MemoryCredentialStore, ReqwestHttp, api_url, gateway_url, hex_to_scalar, prod_api_url,
-    random_identity_signer, test_login_secret,
+    MemoryCredentialStore, ReqwestHttp, api_url, bytes_to_hex, gateway_url, hex_to_bytes,
+    hex_to_scalar, prod_api_url, random_identity_signer, test_login_secret,
 };
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
+use cipherbox_core::seal::{
+    ChildScopeRef, GrantSetCommitment, Permission, PreservedFields, sign_grant_set,
+};
+use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
+use cipherbox_core::suite::ed25519::Ed25519Signer;
+use cipherbox_core::suite::x25519::X25519Secret;
 use cipherbox_engine::api::{
     ApiClient, ApiError, ChallengeSigner, IdentityChallengeSigner, NameRegistration,
     REGISTRY_BATCH_REFUSED,
 };
 use cipherbox_engine::content::{ContentProfile, DAG_ROOT_CODEC, assemble};
+use cipherbox_engine::grants::{
+    GrantRecipient, GranteeScopePlan, OwnerGrantKeys, ParentScopePlan, SharePointer,
+    create_read_grant,
+};
+use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::net::REGISTRY_BATCH_MAX;
-use cipherbox_engine::seams::{CredentialStore, Http, HttpMethod, HttpRequest};
+use cipherbox_engine::rotation::{
+    PrevEpochSeed, ResealSeeds, ResealedScopeRoot, ResolveFailure, ScopeRootIdentity,
+    ScopeRootPublishError, ScopeRootPublisher, SweepResolver, SweepTarget,
+};
+use cipherbox_engine::seams::{
+    CredentialStore, Http, HttpMethod, HttpRequest, Mailbox, MailboxItem as SealedMailboxItem,
+    SeamError, SeamResult,
+};
+use cipherbox_engine::testkit::SeededEntropy;
+use cipherbox_engine::testkit::fakes::InMemoryFloorStore;
 
 type Client = ApiClient<ReqwestHttp, MemoryCredentialStore>;
 
@@ -1053,4 +1073,201 @@ async fn mailbox_post_is_bounded_by_recipient_existence_and_blob_size() {
         matches!(error, ApiError::Status { status: 413, .. }),
         "an oversized sealed blob is a 413, got {error:?}"
     );
+}
+
+// --- grant delivery over the live mailbox (blueprint/engine.md; #954) -------
+
+/// The `Mailbox` seam over the engine's real API client: byte address → the
+/// API's hex `recipientPublicKey`.
+struct ApiMailbox {
+    client: Client,
+}
+
+impl Mailbox for ApiMailbox {
+    async fn post(
+        &self,
+        recipient_public_key: &[u8],
+        sealed_payload: &[u8],
+        idempotency_key: &str,
+    ) -> SeamResult<()> {
+        self.client
+            .mailbox_post(
+                &bytes_to_hex(recipient_public_key),
+                sealed_payload,
+                idempotency_key,
+            )
+            .await
+            .map(|_| ())
+            .map_err(|error| SeamError::new(format!("mailbox post: {error}")))
+    }
+
+    async fn poll(&self) -> SeamResult<Vec<SealedMailboxItem>> {
+        let items = self
+            .client
+            .mailbox_poll()
+            .await
+            .map_err(|error| SeamError::new(format!("mailbox poll: {error}")))?;
+        Ok(items
+            .into_iter()
+            .map(|item| SealedMailboxItem {
+                item_id: item.id,
+                sealed_payload: item.blob,
+            })
+            .collect())
+    }
+
+    async fn ack(&self, item_id: &str) -> SeamResult<()> {
+        self.client
+            .mailbox_ack(item_id)
+            .await
+            .map_err(|error| SeamError::new(format!("mailbox ack: {error}")))
+    }
+}
+
+/// A `SweepResolver` + `ScopeRootPublisher` that keeps the grant's network side
+/// local: this leg asserts the *delivery* the grant path emits, not IPNS.
+struct LocalNet;
+
+impl SweepResolver for LocalNet {
+    async fn resolve(&self, _scope: &ChildScopeRef) -> Result<SweepTarget, ResolveFailure> {
+        Err(ResolveFailure::Rejected)
+    }
+}
+
+impl ScopeRootPublisher for LocalNet {
+    async fn publish_scope_root(
+        &self,
+        _record: &ResealedScopeRoot,
+    ) -> Result<(), ScopeRootPublishError> {
+        Ok(())
+    }
+}
+
+/// A real read grant's share pointer reaches the live mailbox: the grant path's
+/// own routing address and idempotency key must satisfy `PostMessageDto` (#954).
+#[tokio::test]
+async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
+    let base = require_stack!("a_read_grant_delivers_its_share_pointer_through_the_live_mailbox");
+    const V: u64 = 1;
+
+    let (owner_client, _) = addressable_account(&base, "contract-grant-owner").await;
+    let (recipient_client, recipient_key_hex) =
+        addressable_account(&base, "contract-grant-recipient").await;
+
+    // The recipient's mailbox address is their account identity key, exactly as
+    // the API stores it — normalized compressed SEC1.
+    let recipient_identity =
+        EcdsaVerifier::from_sec1(&hex_to_bytes(&recipient_key_hex).expect("account key is hex"))
+            .expect("account publicKey is a compressed secp256k1 point");
+
+    let owner_enc = X25519Secret::from_scalar([0x11; 32]);
+    let owner_enc_pub = owner_enc.public();
+    let owner_identity = EcdsaSigner::from_scalar(&[0x33; 32]).expect("valid scalar");
+    let owner_pseudonym = Ed25519Signer::from_seed([0x22; 32]);
+    let recipient_enc = X25519Secret::from_scalar([0x44; 32]);
+    let recipient_enc_pub = recipient_enc.public();
+
+    let parent_node_seed = [0x44u8; 32];
+    let grantee_write_scope_seed = [0x55u8; 32];
+    let grantee_pointer_read_key = [0x66u8; 32];
+    let parent_override_seed = [0x0au8; 32];
+    let parent_write_scope_seed = [0x0bu8; 32];
+    let parent_pointer_read_key = [0x0cu8; 32];
+    let parent_commitment = GrantSetCommitment {
+        ipns_name: b"contract-parent-scope-root".to_vec(),
+        owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+        entries: Vec::new(),
+        unknown: PreservedFields::new(),
+    };
+    let parent_commitment_sig = sign_grant_set(&owner_identity, &parent_commitment)
+        .expect("sign the parent commitment")
+        .to_compact();
+
+    let mut entropy = SeededEntropy::new(954);
+    let floors = InMemoryFloorStore::default();
+    let net = LocalNet;
+    let mailbox = ApiMailbox {
+        client: owner_client,
+    };
+
+    create_read_grant(
+        &mut entropy,
+        &floors,
+        &net,
+        &net,
+        &mailbox,
+        &GranteeScopePlan {
+            v: V,
+            scope_id: [0x5c; 16],
+            parent_node_seed: &parent_node_seed,
+            owner_enc_pub: &owner_enc_pub,
+            write_scope_seed: &grantee_write_scope_seed,
+            write_epoch: 1,
+            pointer_read_key: &grantee_pointer_read_key,
+            subtree_child_index: &[],
+        },
+        &GrantRecipient {
+            identity_pk: recipient_identity,
+            enc_pub: &recipient_enc_pub,
+            display_name: "Shared Folder".to_string(),
+        },
+        &OwnerGrantKeys {
+            enc_secret: &owner_enc,
+            identity_signer: &owner_identity,
+            pseudonym_signer: &owner_pseudonym,
+        },
+        &ParentScopePlan {
+            identity: ScopeRootIdentity {
+                v: V,
+                scope_id: [0x0e; 16],
+                ipns_name: b"contract-parent-scope-root",
+                owner_enc_pub: &owner_enc_pub,
+                parent_node_seed: None,
+                pseudonym_signer: &owner_pseudonym,
+            },
+            seeds: ResealSeeds {
+                override_seed: &parent_override_seed,
+                read_epoch: 3,
+                prev: None::<PrevEpochSeed<'_>>,
+                write_scope_seed: &parent_write_scope_seed,
+                write_epoch: 2,
+                pointer_read_key: &parent_pointer_read_key,
+            },
+            commitment: &parent_commitment,
+            commitment_sig: &parent_commitment_sig,
+            grant_ledger: &[],
+            write_history_link: &[],
+            current_child_index: &[],
+            carried_history_links: &[],
+        },
+    )
+    .await
+    .expect("the live mailbox accepts the grant path's own address and idempotency key");
+
+    // The pointer landed in the recipient's real inbox, opens under their
+    // encryption subkey, and carries the owner's signature — so the address the
+    // grant path chose is the one the API routes on.
+    let recipient_mailbox = ApiMailbox {
+        client: recipient_client,
+    };
+    let items = poll_verified(&recipient_mailbox, &recipient_enc, V)
+        .await
+        .expect("recipient polls its inbox");
+    assert_eq!(items.len(), 1, "exactly one delivered share pointer");
+    assert_eq!(
+        items[0].sender_identity,
+        owner_identity.verifying_key(),
+        "the pointer is sender-authenticated as the owner"
+    );
+    let pointer = SharePointer::decode(&items[0].payload).expect("decode the share pointer");
+    assert_eq!(pointer.permission, Permission::Read);
+    assert_eq!(
+        pointer.sharer_identity_pk,
+        owner_identity.verifying_key().to_sec1()
+    );
+
+    recipient_mailbox
+        .ack(&items[0].item_id)
+        .await
+        .expect("ack the delivered pointer");
 }

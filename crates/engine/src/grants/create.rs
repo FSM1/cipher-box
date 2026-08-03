@@ -31,9 +31,7 @@ use cipherbox_core::seal::{
     ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission,
     PreservedFields, SignedSealed, sign_grant_set,
 };
-use cipherbox_core::suite::ecdsa::{
-    EcdsaSigner, IDENTITY_PUBLIC_LEN, SIGNATURE_LEN as ECDSA_SIG_LEN,
-};
+use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
@@ -89,10 +87,14 @@ pub struct GranteeScopePlan<'a> {
 
 /// The recipient of the read grant.
 pub struct GrantRecipient<'a> {
-    /// Compressed secp256k1 SEC1 identity key (for the ledger + share pointer).
-    pub identity_pk: [u8; IDENTITY_PUBLIC_LEN],
-    /// X25519 encryption subkey public key: the grant-blob HPKE wrap target and
-    /// the mailbox routing address.
+    /// secp256k1 identity key — the ledger entry and the mailbox routing
+    /// address. Source it from the imported [`Contact`], whose binding
+    /// signature is what ties it to `enc_pub`.
+    ///
+    /// [`Contact`]: super::Contact
+    pub identity_pk: EcdsaVerifier,
+    /// X25519 encryption subkey public key: the grant-blob and mailbox HPKE
+    /// wrap target.
     pub enc_pub: &'a X25519Public,
     /// Courtesy host label carried in the share pointer.
     pub display_name: String,
@@ -213,8 +215,8 @@ pub enum CreateGrantError {
     ParentPublish(ScopeRootPublishError),
     /// Posting the sealed share pointer to the recipient mailbox failed.
     /// Post-publish: both scope roots are published and the parent index is
-    /// updated; only the share pointer is missing. Retry re-posts under the
-    /// same idempotency key.
+    /// updated; only the share pointer is missing. A retry posts a fresh item —
+    /// delivery is at-least-once, and the accept flow is the dedup point.
     Mailbox(SeamError),
 }
 
@@ -328,7 +330,7 @@ where
         .map_err(CreateGrantError::CommitmentEncode)?
         .to_compact();
     let ledger = vec![GrantLedgerEntry::new(
-        recipient.identity_pk,
+        recipient.identity_pk.to_sec1(),
         recipient.enc_pub.to_bytes(),
         Permission::Read,
         tag,
@@ -507,17 +509,21 @@ where
     entropy
         .fill(&mut *ephemeral)
         .map_err(CreateGrantError::Entropy)?;
-    let recipient_address = recipient.enc_pub.to_bytes();
-    // Key off the per-recipient blinded tag, not the shared scope_id: the API
-    // stores sha256(senderPublicKey : idempotencyKey) per recipient, so a
-    // scope-derived key would be identical across two recipients of the same
-    // folder and let the server correlate the sharing edge. The tag is
-    // deterministic (retry-safe), 32-byte high-entropy, and differs per recipient.
-    let idempotency_key = format!("grant:{}", hex_lower(&tag));
+    // Fresh random, never derived: the API keeps only
+    // sha256(senderPublicKey : idempotencyKey), so any key an observer can
+    // recompute hands it back the sender→recipient edge. The blinded tag is
+    // public (`kdf::blinded_tag`) and ships in the clear in every scope root's
+    // grant section, so deriving from it would rebuild that edge — and the
+    // granted folder — from a cached record.
+    let mut idempotency_bytes = [0u8; 16];
+    entropy
+        .fill(&mut idempotency_bytes)
+        .map_err(CreateGrantError::Entropy)?;
+    let idempotency_key = format!("grant-{}", hex_lower(&idempotency_bytes));
     post_sealed(
         mailbox,
         recipient.enc_pub,
-        &recipient_address,
+        &recipient.identity_pk,
         &ephemeral,
         grantee.v,
         owner.identity_signer,
@@ -584,6 +590,11 @@ mod tests {
     }
     fn recipient_enc() -> X25519Secret {
         X25519Secret::from_scalar([0x44; 32])
+    }
+    fn recipient_identity() -> EcdsaVerifier {
+        EcdsaSigner::from_scalar(&[0x45; 32])
+            .expect("valid scalar")
+            .verifying_key()
     }
 
     /// A combined `SweepResolver` + `ScopeRootPublisher` fake: it records every
@@ -686,23 +697,31 @@ mod tests {
         }
     }
 
-    /// A `Mailbox` fake that records the idempotency key of every post, so a test
-    /// can assert two recipients of the same folder get distinct keys.
+    /// What the grant path actually put on the wire for one post.
+    #[derive(Clone)]
+    struct PostedDelivery {
+        address: Vec<u8>,
+        idempotency_key: String,
+    }
+
+    /// A `Mailbox` fake that records every post, so a test can assert the
+    /// delivery values the grant path chose.
     #[derive(Clone, Default)]
     struct RecordingMailbox {
-        idempotency_keys: Rc<RefCell<Vec<String>>>,
+        posts: Rc<RefCell<Vec<PostedDelivery>>>,
     }
 
     impl Mailbox for RecordingMailbox {
         async fn post(
             &self,
-            _recipient_public_key: &[u8],
+            recipient_public_key: &[u8],
             _sealed_payload: &[u8],
             idempotency_key: &str,
         ) -> crate::seams::SeamResult<()> {
-            self.idempotency_keys
-                .borrow_mut()
-                .push(idempotency_key.to_owned());
+            self.posts.borrow_mut().push(PostedDelivery {
+                address: recipient_public_key.to_vec(),
+                idempotency_key: idempotency_key.to_owned(),
+            });
             Ok(())
         }
         async fn poll(&self) -> crate::seams::SeamResult<Vec<crate::seams::MailboxItem>> {
@@ -713,9 +732,10 @@ mod tests {
         }
     }
 
-    /// The mailbox idempotency key the primitive posts for `recipient_enc` over
-    /// the fixed grantee folder (empty subtree, converged, publishing OK).
-    fn idempotency_key_for(recipient_enc: &X25519Secret) -> String {
+    /// The delivery the primitive posts for `recipient_enc` over the fixed
+    /// grantee folder (empty subtree, converged, publishing OK), with the
+    /// grant's blinded tag alongside it.
+    fn delivery_for(entropy_seed: u64, recipient_enc: &X25519Secret) -> (PostedDelivery, [u8; 32]) {
         let floors = InMemoryFloorStore::default();
         let net = FakeNet::new(Ok(()));
         let recorder = RecordingMailbox::default();
@@ -742,7 +762,7 @@ mod tests {
             .unwrap()
             .to_compact();
 
-        let mut entropy = SeededEntropy::new(7);
+        let mut entropy = SeededEntropy::new(entropy_seed);
         let grantee = GranteeScopePlan {
             v: V,
             scope_id: GRANTEE_SCOPE,
@@ -754,7 +774,7 @@ mod tests {
             subtree_child_index: &[],
         };
         let recipient = GrantRecipient {
-            identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
+            identity_pk: recipient_identity(),
             enc_pub: &recipient_pub,
             display_name: "Shared Folder".to_string(),
         };
@@ -787,7 +807,7 @@ mod tests {
             current_child_index: &[],
             carried_history_links: &[],
         };
-        block_on(create_read_grant(
+        let outcome = block_on(create_read_grant(
             &mut entropy,
             &floors,
             &net,
@@ -800,9 +820,9 @@ mod tests {
         ))
         .expect("grant creation succeeds");
 
-        let keys = recorder.idempotency_keys.borrow();
-        assert_eq!(keys.len(), 1, "exactly one mailbox post per grant");
-        keys[0].clone()
+        let posts = recorder.posts.borrow();
+        assert_eq!(posts.len(), 1, "exactly one mailbox post per grant");
+        (posts[0].clone(), outcome.tag)
     }
 
     /// A read grant with the given subtree, run against fresh fakes on seed
@@ -824,7 +844,7 @@ mod tests {
             block_on(floors.raise_epoch_floor(&scope, epoch)).unwrap();
         }
         let hub = InMemoryMailboxHub::default();
-        let mailbox = hub.mailbox_for(&recipient_enc().public().to_bytes());
+        let mailbox = hub.mailbox_for(&recipient_identity().to_sec1());
 
         let owner_enc = owner_enc();
         let owner_enc_pub = owner_enc.public();
@@ -863,7 +883,7 @@ mod tests {
                 subtree_child_index: subtree,
             };
             let recipient = GrantRecipient {
-                identity_pk: [0x02; IDENTITY_PUBLIC_LEN],
+                identity_pk: recipient_identity(),
                 enc_pub: &recipient_pub,
                 display_name: "Shared Folder".to_string(),
             };
@@ -964,7 +984,7 @@ mod tests {
         );
 
         // The recipient receives the sealed share pointer.
-        let recip_box = hub.mailbox_for(&recipient_enc().public().to_bytes());
+        let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
         let items = block_on(poll_verified(&recip_box, &recipient_enc(), V)).unwrap();
         assert_eq!(items.len(), 1);
         let pointer = SharePointer::decode(&items[0].payload).unwrap();
@@ -1000,7 +1020,7 @@ mod tests {
         }
         // Fail-closed: no grantee/parent record published, no share pointer.
         assert!(published.is_empty(), "nothing published on a refused grant");
-        let recip_box = hub.mailbox_for(&recipient_enc().public().to_bytes());
+        let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
         let items = block_on(poll_verified(&recip_box, &recipient_enc(), V)).unwrap();
         assert!(items.is_empty(), "no share pointer on a refused grant");
     }
@@ -1039,7 +1059,7 @@ mod tests {
         assert_eq!(published.len(), 1, "grantee root committed, parent not");
         assert_eq!(published[0].scope_id, GRANTEE_SCOPE);
         // No share pointer is posted when publishing aborts before the mailbox step.
-        let recip_box = hub.mailbox_for(&recipient_enc().public().to_bytes());
+        let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
         let items = block_on(poll_verified(&recip_box, &recipient_enc(), V)).unwrap();
         assert!(items.is_empty(), "no share pointer when publish aborts");
     }
@@ -1073,7 +1093,7 @@ mod tests {
         assert_eq!(published[0].scope_id, GRANTEE_SCOPE);
         // Fail-safe: with no share pointer the recipient cannot locate the grantee
         // root, so the partial commit exposes nothing.
-        let recip_box = hub.mailbox_for(&recipient_enc().public().to_bytes());
+        let recip_box = hub.mailbox_for(&recipient_identity().to_sec1());
         let items = block_on(poll_verified(&recip_box, &recipient_enc(), V)).unwrap();
         assert!(
             items.is_empty(),
@@ -1097,17 +1117,38 @@ mod tests {
     }
 
     #[test]
-    fn idempotency_key_differs_per_recipient_for_the_same_folder() {
-        // The mailbox idempotency key binds the per-recipient blinded tag, not the
-        // shared scope_id: two recipients of the SAME folder must post distinct
-        // keys so the server can't correlate the sharing edge via
-        // sha256(sender : key).
-        let key_a = idempotency_key_for(&recipient_enc());
-        let key_b = idempotency_key_for(&X25519Secret::from_scalar([0x77; 32]));
-        assert!(key_a.starts_with("grant:"));
+    fn the_idempotency_key_is_entropy_drawn_and_carries_no_public_material() {
+        // The API keeps only sha256(sender : key), so a key an observer can
+        // recompute hands back the sharing edge. The blinded tag is public and
+        // ships in the clear in the grant section, so it must not appear here.
+        let (a, tag) = delivery_for(7, &recipient_enc());
+        let (b, _) = delivery_for(9, &recipient_enc());
+
         assert_ne!(
-            key_a, key_b,
-            "same folder, different recipients → different idempotency keys"
+            a.idempotency_key, b.idempotency_key,
+            "the key follows the entropy seam, not the grant's own material"
+        );
+        assert!(
+            !a.idempotency_key.contains(&hex_lower(&tag)),
+            "the public blinded tag never reaches the wire as the key"
+        );
+    }
+
+    #[test]
+    fn delivery_is_addressed_and_keyed_in_the_shape_the_transport_accepts() {
+        // #954: the grant path posted the X25519 subkey as the routing address
+        // and a `grant:`-prefixed key, each a `PostMessageDto` refusal.
+        let (delivery, _) = delivery_for(7, &recipient_enc());
+
+        assert_eq!(
+            delivery.address,
+            recipient_identity().to_sec1(),
+            "routing address is the recipient's compressed SEC1 identity key"
+        );
+        assert!(
+            crate::mailbox::idempotency_key_is_legal(&delivery.idempotency_key),
+            "idempotency key {:?} leaves the transport alphabet",
+            delivery.idempotency_key
         );
     }
 
