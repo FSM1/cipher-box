@@ -108,6 +108,19 @@ describe('FetchHttp.sendCapped', () => {
     }
   );
 
+  it('rejects a single chunk larger than the whole cap', async () => {
+    const body = producedBody(4096, 4);
+    stubFetch(new Response(body.stream, { status: 200 }));
+
+    const result = await new FetchHttp().sendCapped(GET, 1000);
+
+    // Nothing is accumulated before the first chunk, so the whole overshoot is
+    // that one chunk — the peak the seam's bound admits.
+    expect(result).toEqual({ kind: 'tooLarge', observed: 4096, limit: 1000 });
+    expect(body.produced()).toBe(4096);
+    expect(body.cancelled()).toBe(true);
+  });
+
   it('admits a body exactly at the cap with its bytes intact', async () => {
     const body = producedBody(100, 10);
     stubFetch(new Response(body.stream, { status: 200 }));

@@ -129,7 +129,7 @@ impl Http for ReqwestHttp {
 
         // Reject a body that declares itself over the cap before reading a byte;
         // a missing or lying Content-Length is still bounded by the streaming
-        // cap below, which is the true peak-memory bound (#787).
+        // drain below (#787).
         if let Some(declared) = response.content_length() {
             if declared > max_bytes as u64 {
                 return Err(CappedFetchError::BodyTooLarge {

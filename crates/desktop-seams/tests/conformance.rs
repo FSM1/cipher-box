@@ -15,7 +15,9 @@ use cipherbox_desktop_seams::{
     FileCredentialStore, FileFloorStore, FileSnapshotCache, FileStagingStore, ReqwestHttp,
     ReqwestRecordTransport, TokioScheduler,
 };
-use cipherbox_engine::seams::{CredentialStore, Http, HttpMethod, HttpRequest, StagingStore};
+use cipherbox_engine::seams::{
+    CappedFetchError, CredentialStore, Http, HttpMethod, HttpRequest, StagingStore,
+};
 use cipherbox_engine::testkit::{block_on, conformance};
 
 mod mock_http;
@@ -329,6 +331,54 @@ async fn reqwest_http_returns_non_2xx_as_a_response_not_an_error() {
         .expect("a non-2xx status is a response, never a seam Err");
 
     assert_eq!(response.status, 418);
+}
+
+#[tokio::test]
+async fn reqwest_http_capped_fetch_rejects_a_chunk_larger_than_the_cap() {
+    let server = MockServer::start();
+    let http = ReqwestHttp::new().expect("client builds");
+
+    // Chunked, so no Content-Length pre-check applies and the first chunk the
+    // transport hands over already exceeds the cap on its own.
+    let error = http
+        .send_capped(stream_request(&server, 64 * 1024), 16)
+        .await
+        .expect_err("an over-cap body must fail closed");
+
+    match error {
+        CappedFetchError::BodyTooLarge { observed, limit } => {
+            assert_eq!(limit, 16);
+            assert!(observed > limit, "observed {observed} must exceed the cap");
+            assert!(
+                observed < 64 * 1024,
+                "the drain must abort at a chunk, not buffer the whole body ({observed} bytes)"
+            );
+        }
+        other => panic!("expected BodyTooLarge, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn reqwest_http_capped_fetch_admits_a_chunked_body_at_the_cap() {
+    let server = MockServer::start();
+    let http = ReqwestHttp::new().expect("client builds");
+
+    let response = http
+        .send_capped(stream_request(&server, 64), 64)
+        .await
+        .expect("the cap is inclusive");
+
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, vec![b'x'; 64]);
+}
+
+fn stream_request(server: &MockServer, bytes: usize) -> HttpRequest {
+    HttpRequest {
+        method: HttpMethod::Get,
+        url: format!("{}/stream/{bytes}", server.base_url()),
+        headers: Vec::new(),
+        body: None,
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ pub enum CappedFetchError {
     BodyTooLarge {
         /// The observed lower bound on the body size — the declared
         /// `Content-Length` if that alone exceeded the cap, else the bytes
-        /// accumulated when the streaming read passed the cap.
+        /// drained so far including the chunk that passed it.
         observed: usize,
         /// The enforced ceiling (`max_bytes`).
         limit: usize,
@@ -139,15 +139,13 @@ pub trait Http {
 
     /// Like [`send`](Self::send), but fails closed if the response body would
     /// exceed `max_bytes`, so a lying/huge gateway cannot force an over-cap
-    /// adoption. The strength of the bound differs by transport:
-    ///
-    /// - Desktop (`reqwest`) enforces it *while* reading the body — a
-    ///   `Content-Length` pre-check plus a capped streaming read that aborts
-    ///   past the cap — the true peak-memory bound at the content fetch
-    ///   boundary (#787).
-    /// - WASM (the JS fetch bridge) enforces the same bound in the JS seam,
-    ///   which drains `Response.body` under the cap and never materializes an
-    ///   over-cap body (#641).
+    /// adoption. Both real transports — desktop (`reqwest`) and WASM (the JS
+    /// fetch bridge) — enforce one bound the same way: a `Content-Length`
+    /// pre-check, then a streaming drain that aborts as soon as the accumulated
+    /// body would pass the cap. The body is never accumulated past `max_bytes`;
+    /// the transport hands over whole chunks, so peak memory is `max_bytes` —
+    /// twice that on the arm that concatenates the chunks at the end — plus at
+    /// most the one chunk that tripped the cap (#641, #787).
     ///
     /// The default implementation only backstops: it buffers the whole body via
     /// [`send`](Self::send) and then checks the length, which bounds nothing. It
