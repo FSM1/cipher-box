@@ -23,6 +23,8 @@ export type MediaReaderKind = 'local' | 'engine';
 
 export interface MediaStartOptions {
   reader: MediaReaderKind;
+  /** Fixture seed for the local reader; defaults to `TAB_SEED`. */
+  seed?: number;
 }
 
 export interface MediaEngineOptions {
@@ -66,12 +68,12 @@ navigator.serviceWorker.addEventListener('message', (event: MessageEvent) => {
 });
 
 /** Serves the tab's own fixture, counting reads so the spec can see windowing. */
-const localReader: MediaReader = {
+const localReader = (seed: number): MediaReader => ({
   downloadRange: (_node, offset, length) => {
     readerCalls += 1;
-    return Promise.resolve(fixtureBuffer(offset, length, TAB_SEED));
+    return Promise.resolve(fixtureBuffer(offset, length, seed));
   },
-};
+});
 
 /** Routes every read through this tab's engine client — a follower's wire. */
 const engineReader: MediaReader = {
@@ -94,12 +96,12 @@ window.cbMediaEngine = ({ lockName, channelName }: MediaEngineOptions): Promise<
   return awaitElection(client, lockName);
 };
 
-window.cbMediaStart = async ({ reader }: MediaStartOptions): Promise<boolean> => {
+window.cbMediaStart = async ({ reader, seed }: MediaStartOptions): Promise<boolean> => {
   service = new MediaService({
     container: navigator.serviceWorker,
     scriptUrl: SW_SCRIPT,
     scriptType: 'module',
-    reader: reader === 'engine' ? engineReader : localReader,
+    reader: reader === 'engine' ? engineReader : localReader(seed ?? TAB_SEED),
   });
   await service.start();
   await window.cbMediaAwaitControl();
