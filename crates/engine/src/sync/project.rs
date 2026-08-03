@@ -232,7 +232,7 @@ mod tests {
                         created_at: 0,
                         modified_at: 0,
                         versions: Vec::new(),
-                        unknown: Vec::new(),
+                        unknown: PreservedFields::new(),
                     },
                     sequence: 9,
                     epoch: 0,

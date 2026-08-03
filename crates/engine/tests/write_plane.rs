@@ -2596,8 +2596,8 @@ fn plant_record(
         read_key: &planted.read_key,
         nonce: &[0x5A; 24],
         body: planted.body,
-        carried_unknown: Vec::new(),
-        carried_epoch_tag_unknown: Vec::new(),
+        carried_unknown: PreservedFields::new(),
+        carried_epoch_tag_unknown: PreservedFields::new(),
     })
     .expect("a well-formed child record");
     publish_next_record(records, blocks, folder, &head);
@@ -2610,7 +2610,7 @@ fn planted_body() -> ReadBody {
         created_at: 0,
         modified_at: 0,
         children: vec![child_ref([0x9B; 16], "planted", CoreNodeKind::Folder)],
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     }
 }
 
@@ -2700,7 +2700,7 @@ fn a_planted_focus_record_never_renders() {
                     created_at: 0,
                     modified_at: 0,
                     versions: Vec::new(),
-                    unknown: Vec::new(),
+                    unknown: PreservedFields::new(),
                 },
             },
             "a record whose sealed body is a file",
