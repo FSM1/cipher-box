@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 target/
+# Worktree-local CARGO_TARGET_DIR: a shared target dir silently reuses stale
+# test binaries across worktrees, so each one gets its own `target-<name>/`.
+target-*/
 *.tsbuildinfo
 
 # Environment files
