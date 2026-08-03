@@ -55,23 +55,24 @@ impl<T: Scrub> Drop for ScrubOnDrop<'_, T> {
 
 /// The owning sibling, for a decode that holds a live `&Map` into the tree —
 /// which a `&mut` guard cannot coexist with. Read it via [`Self::value`].
-pub(crate) struct ScrubOwned(pub(crate) Value);
+pub(crate) struct ScrubOwned<T: Scrub>(pub(crate) T);
 
-impl ScrubOwned {
-    pub(crate) fn value(&self) -> &Value {
+impl<T: Scrub> ScrubOwned<T> {
+    pub(crate) fn value(&self) -> &T {
         &self.0
     }
 }
 
-impl Drop for ScrubOwned {
+impl<T: Scrub> Drop for ScrubOwned<T> {
     fn drop(&mut self) {
-        self.0.zeroize_bytes();
+        self.0.scrub();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use core::cell::Cell;
 
     /// The guard standing between a mid-item reject and a heap holding every
     /// secret the pass had already lifted out of its input.
@@ -97,7 +98,7 @@ mod tests {
     }
 
     #[test]
-    fn an_owning_guard_wipes_the_tree_it_took() {
+    fn an_owning_guard_lends_out_the_tree_it_took() {
         let mut m = Map::new();
         m.insert("contentKey", Value::Bytes(vec![0xAB; 32]));
         let guard = ScrubOwned(Value::Map(m));
@@ -106,5 +107,24 @@ mod tests {
             Some(&Value::Bytes(vec![0xAB; 32])),
             "readable while the guard stands"
         );
+    }
+
+    /// A stand-in for the guarded tree. The owning guard drops what it wipes,
+    /// so the wipe is only observable from the scrubbed value's own side.
+    struct SpyTree<'a>(&'a Cell<bool>);
+
+    impl Scrub for SpyTree<'_> {
+        fn scrub(&mut self) {
+            self.0.set(true);
+        }
+    }
+
+    #[test]
+    fn an_owning_guard_wipes_the_tree_it_took() {
+        let scrubbed = Cell::new(false);
+        let guard = ScrubOwned(SpyTree(&scrubbed));
+        assert!(!scrubbed.get(), "not before the guard falls");
+        drop(guard);
+        assert!(scrubbed.get(), "the tree the guard owns is wiped on drop");
     }
 }
