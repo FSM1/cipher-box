@@ -6,6 +6,7 @@ import type { EngineEventListener, EngineTransport } from './transport.js';
 import type {
   CommandDescriptor,
   SnapshotDescriptor,
+  StreamHandle,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -16,7 +17,9 @@ class FakeTransport implements EngineTransport {
   snapshots: Uint8Array[] = [];
   downloads: Uint8Array[] = [];
   siweChallenges = 0;
-  downloadRanges: Array<{ node: Uint8Array; offset: number; length: number }> = [];
+  opened: Uint8Array[] = [];
+  reads: Array<{ handle: StreamHandle; offset: number; length: number }> = [];
+  closedStreams: StreamHandle[] = [];
   beginWrites: Array<{ target: WriteTarget; size: number }> = [];
   chunks: Array<{ handle: WriteHandle; chunk: ArrayBuffer }> = [];
   commits: WriteHandle[] = [];
@@ -69,9 +72,19 @@ class FakeTransport implements EngineTransport {
     return Promise.resolve(new Uint8Array([1, 2, 3]).buffer);
   }
 
-  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
-    this.downloadRanges.push({ node, offset, length });
+  openContentStream(node: Uint8Array): Promise<StreamHandle> {
+    this.opened.push(node);
+    return Promise.resolve(3n);
+  }
+
+  readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
+    this.reads.push({ handle, offset, length });
     return Promise.resolve(new Uint8Array([4, 5]).buffer);
+  }
+
+  closeStream(handle: StreamHandle): Promise<void> {
+    this.closedStreams.push(handle);
+    return Promise.resolve();
   }
 
   subscribe(listener: EngineEventListener): () => void {
@@ -171,13 +184,19 @@ describe('EngineFacade', () => {
     });
   });
 
-  it('delegates a ranged read to the transport, window intact', async () => {
+  it('delegates the stream trio to the transport, window intact', async () => {
     const transport = new FakeTransport();
+    const facade = new EngineFacade(transport);
     const node = new Uint8Array(16).fill(3);
 
-    const window = await new EngineFacade(transport).downloadRange(node, 4096, 2);
+    const handle = await facade.openContentStream(node);
+    const window = await facade.readStream(handle, 4096, 2);
+    await facade.closeStream(handle);
+
     expect([...new Uint8Array(window)]).toEqual([4, 5]);
-    expect(transport.downloadRanges).toEqual([{ node, offset: 4096, length: 2 }]);
+    expect(transport.opened).toEqual([node]);
+    expect(transport.reads).toEqual([{ handle, offset: 4096, length: 2 }]);
+    expect(transport.closedStreams).toEqual([handle]);
   });
 
   it('delegates snapshot and download reads to the transport', async () => {

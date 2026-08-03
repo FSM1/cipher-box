@@ -16,6 +16,7 @@ import type {
   CommandDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
+  StreamHandle,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -73,7 +74,9 @@ export abstract class CorrelatedTransport implements EngineTransport {
   abstract snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
   abstract siweChallenge(): Promise<string>;
   abstract download(node: Uint8Array): Promise<ArrayBuffer>;
-  abstract downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer>;
+  abstract openContentStream(node: Uint8Array): Promise<StreamHandle>;
+  abstract readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer>;
+  abstract closeStream(handle: StreamHandle): Promise<void>;
   abstract close(): void;
 
   subscribe(listener: EngineEventListener): () => void {

@@ -83,6 +83,7 @@ impl From<EngineError> for VfsError {
             | EngineError::InvalidSecret
             | EngineError::ContentSizeMismatch { .. }
             | EngineError::UnknownWriteHandle
+            | EngineError::UnknownStreamHandle
             | EngineError::ContentKeySealFailed { .. }
             | EngineError::TooLateToCancel { .. }
             | EngineError::NotAnUpload { .. }

@@ -22,7 +22,7 @@ use cipherbox_engine::facade::{Engine, EngineError, EventStream, LoginSecret};
 use cipherbox_engine::seams::OpId;
 use cipherbox_engine::{
     ContentProfile, Entropy, EntropyError, GatewayConfig, GatewaySource, SeamSet, SeamTypes,
-    StoragePlatform, StoragePolicy, SyncTimingProfile, WriteHandle, WriteTarget,
+    StoragePlatform, StoragePolicy, StreamHandle, SyncTimingProfile, WriteHandle, WriteTarget,
 };
 use js_sys::{Promise, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
@@ -381,30 +381,59 @@ impl EngineHandle {
         })
     }
 
-    /// Downloads and decrypts one byte window of a file node's content, fetching
-    /// only the leaves the window covers. The range is clamped to the file, so a
-    /// window past the end resolves empty. Resolves with the plaintext bytes as a
-    /// `Uint8Array`; rejects with the engine error.
-    #[wasm_bindgen(js_name = downloadRange)]
-    pub fn download_range(&self, node: &NodeId, offset: f64, length: f64) -> Promise {
+    /// Opens a ranged-read stream over a file node, pinning the head version for
+    /// the handle's whole life so no window can come from a different one.
+    /// Resolves with the handle id; rejects with the engine error.
+    #[wasm_bindgen(js_name = openContentStream)]
+    pub fn open_content_stream(&self, node: &NodeId) -> Promise {
         let engine = self.engine.clone();
         let node = node.facade();
         future_to_promise(async move {
-            // A saturating float-to-int cast would silently read a different window.
-            if !offset.is_finite() || offset < 0.0 || !length.is_finite() || length < 0.0 {
+            let handle = engine
+                .read()
+                .await
+                .open_content_stream(node)
+                .await
+                .map_err(engine_error)?;
+            Ok(JsValue::from(handle.0))
+        })
+    }
+
+    /// Decrypts one byte window of an open stream's pinned version, fetching
+    /// only the leaves the window covers. The range is clamped to the version,
+    /// so a window past the end resolves empty. Resolves with the plaintext
+    /// bytes as a `Uint8Array`; rejects with the engine error.
+    #[wasm_bindgen(js_name = readStream)]
+    pub fn read_stream(&self, handle: u64, offset: f64, length: f64) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            // A float-to-int cast saturates and truncates, either of which would
+            // silently read a different window than the caller named.
+            let whole = |value: f64| value.is_finite() && value >= 0.0 && value.fract() == 0.0;
+            if !whole(offset) || !whole(length) {
                 return Err(JsError::new(
-                    "downloadRange offset and length must be non-negative finite numbers",
+                    "readStream offset and length must be non-negative whole numbers",
                 )
                 .into());
             }
             let bytes = engine
                 .read()
                 .await
-                .read_content_range(node, offset as u64, length as u64)
+                .read_stream(StreamHandle(handle), offset as u64, length as u64)
                 .await
                 .map_err(engine_error)?;
             let bytes = Zeroizing::new(bytes);
             Ok(Uint8Array::from(bytes.as_slice()).into())
+        })
+    }
+
+    /// Releases a read stream. Always resolves — an unknown handle is already gone.
+    #[wasm_bindgen(js_name = closeStream)]
+    pub fn close_stream(&self, handle: u64) -> Promise {
+        let engine = self.engine.clone();
+        future_to_promise(async move {
+            engine.read().await.close_stream(StreamHandle(handle));
+            Ok(JsValue::UNDEFINED)
         })
     }
 
@@ -449,6 +478,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::OverBudget { .. } => "overBudget",
         EngineError::ContentSizeMismatch { .. } => "contentSizeMismatch",
         EngineError::UnknownWriteHandle => "unknownWriteHandle",
+        EngineError::UnknownStreamHandle => "unknownStreamHandle",
         EngineError::TooLateToCancel { .. } => "tooLateToCancel",
         EngineError::NotAnUpload { .. } => "notAnUpload",
         EngineError::ContentTooLarge { .. } => "contentTooLarge",

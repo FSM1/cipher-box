@@ -81,12 +81,20 @@ export function serveEngine(scope: WorkerScopeLike, host: EngineHostLike): void 
         case 'download':
           postOwned(request.id, await host.download(request.node));
           return;
-        case 'downloadRange':
+        case 'openContentStream': {
+          const result = await host.openContentStream(request.node);
+          post({ type: 'response', id: request.id, ok: true, result });
+          return;
+        }
+        case 'readStream':
           postOwned(
             request.id,
-            await host.downloadRange(request.node, request.offset, request.length)
+            await host.readStream(request.handle, request.offset, request.length)
           );
           return;
+        case 'closeStream':
+          await host.closeStream(request.handle);
+          break;
         default:
           return; // ignore non-request messages (e.g. a bootstrap handshake)
       }

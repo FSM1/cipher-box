@@ -22,8 +22,16 @@ class MediaHost extends StubEngineHost {
     return Promise.resolve();
   }
 
-  downloadRange(_node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
+  openContentStream(_node: Uint8Array): Promise<bigint> {
+    return Promise.resolve(1n);
+  }
+
+  readStream(_handle: bigint, offset: number, length: number): Promise<ArrayBuffer> {
     return Promise.resolve(fixtureBuffer(offset, length, LEADER_SEED));
+  }
+
+  closeStream(_handle: bigint): Promise<void> {
+    return Promise.resolve();
   }
 
   nextEvent(): Promise<EventDescriptor | null> {

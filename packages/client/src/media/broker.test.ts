@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { MediaBroker, type MediaReader } from './broker.js';
+import type { StreamHandle } from '../worker/protocol.js';
 import type { MediaRequest, MediaResponse } from './protocol.js';
 import { StreamRegistry } from './registry.js';
 
@@ -18,16 +19,30 @@ interface ReadCall {
 
 class FakeReader implements MediaReader {
   readonly calls: ReadCall[] = [];
+  readonly opens: Uint8Array[] = [];
+  readonly closes: StreamHandle[] = [];
   concurrent = 0;
   maxConcurrent = 0;
   /** Set to make reads reject. */
   failure: Error | null = null;
   /** Set below the registered size to model a version that shrank after the ticket was minted. */
   liveSize: number | null = null;
+  private nextHandle = 1n;
+  private readonly live = new Set<StreamHandle>();
 
   constructor(private readonly bytes: Uint8Array) {}
 
-  async downloadRange(_node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
+  async openContentStream(node: Uint8Array): Promise<StreamHandle> {
+    this.opens.push(node);
+    // A real open resolves, gates, and fetches the root manifest; it suspends.
+    await flush();
+    const handle = this.nextHandle++;
+    this.live.add(handle);
+    return handle;
+  }
+
+  async readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
+    if (!this.live.has(handle)) throw new Error('unknown stream handle');
     this.calls.push({ offset, length });
     this.concurrent += 1;
     this.maxConcurrent = Math.max(this.maxConcurrent, this.concurrent);
@@ -40,6 +55,12 @@ class FakeReader implements MediaReader {
     } finally {
       this.concurrent -= 1;
     }
+  }
+
+  closeStream(handle: StreamHandle): Promise<void> {
+    this.closes.push(handle);
+    this.live.delete(handle);
+    return Promise.resolve();
   }
 }
 
@@ -147,6 +168,26 @@ describe('MediaBroker', () => {
       { offset: 7, length: 4 },
       { offset: 11, length: 2 },
     ]);
+  });
+
+  it('pins one engine stream for the whole body and releases it at the end', async () => {
+    const size = 20;
+    const h = harness(size);
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    await waitFor(() => h.received.length === 1, 'head');
+    for (let pull = 0; pull < 6; pull += 1) {
+      h.send({ type: 'cb:media:pull', requestId: 1 });
+      await flush();
+    }
+    await waitFor(() => kinds(h.received).includes('cb:media:end'), 'end');
+
+    expect(bodyOf(h.received)).toEqual(plaintext(size));
+    // One open however many windows the body took: no per-window resolve, and
+    // no window that could come from a different content version.
+    expect(h.reader.opens).toEqual([NODE]);
+    expect(h.reader.calls).toHaveLength(5);
+    expect(h.reader.closes).toEqual([1n]);
   });
 
   it('answers an unknown ticket with a 404 head and reads nothing', async () => {

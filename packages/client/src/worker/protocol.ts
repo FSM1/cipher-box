@@ -150,6 +150,13 @@ export type WriteTarget = { parent: Uint8Array; name: string } | { node: Uint8Ar
 /** An open write handle's id — the engine's `u64`, opaque to this layer. */
 export type WriteHandle = bigint;
 
+/**
+ * An open read stream's id — the engine's `u64`, opaque to this layer. The
+ * stream pins one content version, so every window read against the handle is a
+ * slice of one authenticated object.
+ */
+export type StreamHandle = bigint;
+
 /** One event the engine emitted, as data (mirrors the facade `Event`). */
 export type EventDescriptor =
   | { kind: 'snapshotUpdated' }
@@ -183,7 +190,9 @@ export type WorkerRequest =
   | { type: 'snapshot'; id: number; folder: Uint8Array | null }
   | { type: 'siweChallenge'; id: number }
   | { type: 'download'; id: number; node: Uint8Array }
-  | { type: 'downloadRange'; id: number; node: Uint8Array; offset: number; length: number };
+  | { type: 'openContentStream'; id: number; node: Uint8Array }
+  | { type: 'readStream'; id: number; handle: StreamHandle; offset: number; length: number }
+  | { type: 'closeStream'; id: number; handle: StreamHandle };
 
 /** A worker → UI message. */
 export type WorkerMessage =
@@ -192,9 +201,9 @@ export type WorkerMessage =
   /**
    * The correlated result of a request. A value-bearing ok response carries it:
    * a `SnapshotDescriptor` for `snapshot`, the plaintext `ArrayBuffer`
-   * (transferred, not copied) for `download`/`downloadRange`, the nonce string
-   * for `siweChallenge`, the write handle for `beginWrite`, the durable op id
-   * for `commitWrite`.
+   * (transferred, not copied) for `download`/`readStream`, the nonce string
+   * for `siweChallenge`, the write handle for `beginWrite`, the stream handle
+   * for `openContentStream`, the durable op id for `commitWrite`.
    */
   | {
       type: 'response';

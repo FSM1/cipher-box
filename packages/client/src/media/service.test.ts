@@ -71,7 +71,9 @@ class FakeContainer implements ServiceWorkerContainerLike {
 const ORIGIN = 'https://vault.example';
 
 const reader: MediaReader = {
-  downloadRange: (_node, _offset, length) => Promise.resolve(new ArrayBuffer(length)),
+  openContentStream: () => Promise.resolve(1n),
+  readStream: (_handle, _offset, length) => Promise.resolve(new ArrayBuffer(length)),
+  closeStream: () => Promise.resolve(),
 };
 
 interface Setup {

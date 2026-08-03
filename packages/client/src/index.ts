@@ -59,4 +59,5 @@ export type {
   BreadcrumbDescriptor,
   WriteTarget,
   WriteHandle,
+  StreamHandle,
 } from './worker/protocol.js';

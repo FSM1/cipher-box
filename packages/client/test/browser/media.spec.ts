@@ -4,6 +4,7 @@ import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 import { hex } from './hexUtil.js';
 import { fixtureSlice, LEADER_SEED, SECOND_TAB_SEED, TAB_SEED } from './mediaFixture.js';
 import type { MediaFetchResult } from './media.js';
+import { MEDIA_WINDOW_BYTES } from '../../src/media/protocol.js';
 
 /**
  * The Service Worker media-brokerage slice of the merge-blocking browser suite
@@ -20,13 +21,12 @@ interface MediaHarness {
   cbMediaTicket(size: number, mimeType: string): string;
   cbMediaFetch(url: string, range: string | null): Promise<MediaFetchResult>;
   cbMediaReaderCalls(): number;
+  cbMediaOpenCalls(): number;
   cbMediaPortRequests(): number;
   cbMediaDispose(): Promise<void>;
 }
 
 const MIME = 'video/mp4';
-const WINDOW_BYTES = 1024 * 1024;
-
 let testSeq = 0;
 
 function digestOf(bytes: Uint8Array): string {
@@ -50,6 +50,7 @@ interface Tab {
   ticket(size: number): Promise<string>;
   fetch(url: string, range?: string): Promise<MediaFetchResult>;
   readerCalls(): Promise<number>;
+  openCalls(): Promise<number>;
   portRequests(): Promise<number>;
   dispose(): Promise<void>;
 }
@@ -90,6 +91,7 @@ async function openTab(context: BrowserContext): Promise<Tab> {
       ),
     readerCalls: () =>
       page.evaluate(() => (window as unknown as MediaHarness).cbMediaReaderCalls()),
+    openCalls: () => page.evaluate(() => (window as unknown as MediaHarness).cbMediaOpenCalls()),
     portRequests: () =>
       page.evaluate(() => (window as unknown as MediaHarness).cbMediaPortRequests()),
     dispose: () => page.evaluate(() => (window as unknown as MediaHarness).cbMediaDispose()),
@@ -169,7 +171,7 @@ test.describe('Service Worker media brokerage over a real byte pipe', () => {
     context,
   }) => {
     const tab = await localTab(context);
-    const size = WINDOW_BYTES * 2 + 512 * 1024;
+    const size = MEDIA_WINDOW_BYTES * 2 + 512 * 1024;
 
     const result = await tab.fetch(await tab.ticket(size));
 
@@ -177,7 +179,9 @@ test.describe('Service Worker media brokerage over a real byte pipe', () => {
     expect(result.byteLength).toBe(size);
     expect(result.digestHex).toBe(digestOf(fixtureSlice(0, size, TAB_SEED)));
     // Peak memory is one window, not the file: one read per window, no more.
-    expect(await tab.readerCalls()).toBe(Math.ceil(size / WINDOW_BYTES));
+    expect(await tab.readerCalls()).toBe(Math.ceil(size / MEDIA_WINDOW_BYTES));
+    // And one pinned version for the whole body, not one resolve per window.
+    expect(await tab.openCalls()).toBe(1);
 
     await tab.dispose();
   });

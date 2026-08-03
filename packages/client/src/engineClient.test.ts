@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { EngineClient, type EngineClientConfig } from './engineClient.js';
-import { FakeBus, FakeEngineWorker, FakeLockManager } from './testkit.js';
+import { FakeBus, FakeCourierNetwork, FakeEngineWorker, FakeLockManager } from './testkit.js';
 import type { EventDescriptor } from './worker/protocol.js';
 
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
@@ -10,6 +10,8 @@ const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0
 function origin() {
   const locks = new FakeLockManager();
   const bus = new FakeBus();
+  const ports = new FakeCourierNetwork();
+  let tabs = 0;
   const workers: FakeEngineWorker[] = [];
   const spawnWorker = (): FakeEngineWorker => {
     const worker = new FakeEngineWorker();
@@ -24,6 +26,7 @@ function origin() {
       locks,
       createChannel: () => bus.channel(),
       spawnWorker,
+      courier: ports.courier(`tab${(tabs += 1)}`),
       ...overrides,
     });
 
@@ -101,6 +104,36 @@ describe('EngineClient leadership + transport swap', () => {
       (m) => (m as { type?: string }).type === 'start'
     );
     expect(startPosted).toBe(true);
+    await follower.dispose();
+  });
+
+  it('refuses a stream handle minted by a leadership that has been replaced', async () => {
+    const { tab } = origin();
+    const secretSource = {
+      provideSecret: (): Promise<ArrayBuffer> => Promise.resolve(new Uint8Array([1]).buffer),
+    };
+    const leader = tab();
+    const follower = tab({ secretSource });
+    await tick();
+    await follower.facade.start(new Uint8Array([9]).buffer);
+
+    const stale = await follower.openContentStream(new Uint8Array(16).fill(1));
+
+    await leader.dispose();
+    await tick();
+    await tick();
+    expect(follower.currentRole()).toBe('leader');
+
+    // The promoted tab's fresh engine mints from 1 as well, so a handle carried
+    // across the swap would name whatever that engine opened next — a different
+    // node's bytes served at this stream's offsets, with every integrity check
+    // still passing.
+    const reopened = await follower.openContentStream(new Uint8Array(16).fill(2));
+    expect(reopened).not.toBe(stale);
+    await expect(follower.readStream(stale, 0, 8)).rejects.toMatchObject({
+      code: 'unknownStreamHandle',
+    });
+
     await follower.dispose();
   });
 

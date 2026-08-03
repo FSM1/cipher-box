@@ -8,6 +8,7 @@ import type {
   CommandDescriptor,
   EventDescriptor,
   SnapshotDescriptor,
+  StreamHandle,
   WriteHandle,
   WriteTarget,
 } from './protocol.js';
@@ -31,7 +32,10 @@ export interface EngineHostLike {
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor>;
   siweChallenge(): Promise<string>;
   download(node: Uint8Array): Promise<ArrayBuffer>;
-  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer>;
+  /** Opens a read stream pinned to the node's current head content version. */
+  openContentStream(node: Uint8Array): Promise<StreamHandle>;
+  readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer>;
+  closeStream(handle: StreamHandle): Promise<void>;
   nextEvent(): Promise<EventDescriptor | null>;
 }
 
@@ -126,10 +130,16 @@ export class EngineHost implements EngineHostLike {
     return ownedBuffer(await this.handle.download(this.wasm.NodeId.fromBytes(node)));
   }
 
-  async downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
-    return ownedBuffer(
-      await this.handle.downloadRange(this.wasm.NodeId.fromBytes(node), offset, length)
-    );
+  openContentStream(node: Uint8Array): Promise<StreamHandle> {
+    return this.handle.openContentStream(this.wasm.NodeId.fromBytes(node));
+  }
+
+  async readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
+    return ownedBuffer(await this.handle.readStream(handle, offset, length));
+  }
+
+  async closeStream(handle: StreamHandle): Promise<void> {
+    await this.handle.closeStream(handle);
   }
 
   async nextEvent(): Promise<EventDescriptor | null> {

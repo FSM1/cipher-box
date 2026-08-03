@@ -27,6 +27,7 @@ import {
   type ReadPortRequest,
   type ReadPortResponse,
   type WireRead,
+  type WireStream,
   type WireWrite,
 } from './broadcast.js';
 import { CorrelatedTransport } from './correlatedTransport.js';
@@ -34,6 +35,7 @@ import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type {
   CommandDescriptor,
   SnapshotDescriptor,
+  StreamHandle,
   WriteHandle,
   WriteTarget,
 } from './worker/protocol.js';
@@ -134,13 +136,29 @@ export class BroadcastTransport extends CorrelatedTransport {
     return this.read<ArrayBuffer>({ kind: 'download', node });
   }
 
-  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer> {
-    return this.read<ArrayBuffer>({ kind: 'downloadRange', node, offset, length });
+  openContentStream(node: Uint8Array): Promise<StreamHandle> {
+    return this.stream<StreamHandle>({ kind: 'openContentStream', node });
+  }
+
+  readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
+    return this.stream<ArrayBuffer>({ kind: 'readStream', handle, offset, length });
+  }
+
+  closeStream(handle: StreamHandle): Promise<void> {
+    return this.stream<void>({ kind: 'closeStream', handle });
   }
 
   private read<T>(read: WireRead): Promise<T> {
+    return this.overPort<T>((requestId) => ({ type: 'cb:portRead', requestId, read }));
+  }
+
+  private stream<T>(stream: WireStream): Promise<T> {
+    return this.overPort<T>((requestId) => ({ type: 'cb:portStream', requestId, stream }));
+  }
+
+  private overPort<T>(build: (requestId: number) => ReadPortRequest): Promise<T> {
     return this.request<T, MessagePortLike>(this.ensurePort(), (requestId, port) => {
-      port.postMessage({ type: 'cb:portRead', requestId, read } satisfies ReadPortRequest);
+      port.postMessage(build(requestId));
     });
   }
 

@@ -2,18 +2,26 @@
 
 import { errorMessage } from '../errorMessage.js';
 import type { MessagePortLike } from '../portRelay.js';
+import type { StreamHandle } from '../worker/protocol.js';
 import { MEDIA_WINDOW_BYTES, type MediaRequest, type MediaResponse } from './protocol.js';
 import { resolveMediaRequest } from './range.js';
 import type { StreamRegistry } from './registry.js';
 
-/** The one engine capability the pipe needs; `EngineClient` satisfies it. */
+/** The engine capabilities the pipe needs; `EngineClient` satisfies them. */
 export interface MediaReader {
-  downloadRange(node: Uint8Array, offset: number, length: number): Promise<ArrayBuffer>;
+  openContentStream(node: Uint8Array): Promise<StreamHandle>;
+  readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer>;
+  closeStream(handle: StreamHandle): Promise<void>;
 }
 
 /** An open response body: the unread remainder of a resolved window. */
 interface Cursor {
   readonly node: Uint8Array;
+  /**
+   * The engine stream every window of this response is read against, opened on
+   * the first pull — a request abandoned after its head costs nothing.
+   */
+  stream: Promise<StreamHandle> | null;
   /** The mint-time window end, pulled in when a read proves the version is shorter. */
   end: number;
   offset: number;
@@ -50,7 +58,15 @@ export class MediaBroker {
     }
     this.port = null;
     this.listener = null;
-    this.streams.clear();
+    for (const requestId of [...this.streams.keys()]) this.drop(requestId);
+  }
+
+  /** Forgets a cursor and releases the engine stream it pinned, if it opened one. */
+  private drop(requestId: number): void {
+    const cursor = this.streams.get(requestId);
+    if (cursor === undefined) return;
+    this.streams.delete(requestId);
+    void cursor.stream?.then((handle) => this.reader.closeStream(handle)).catch(() => undefined);
   }
 
   private dispatch(port: MessagePortLike, data: unknown): void {
@@ -64,7 +80,7 @@ export class MediaBroker {
         this.pull(port, request.requestId);
         return;
       case 'cb:media:close':
-        this.streams.delete(request.requestId);
+        this.drop(request.requestId);
         return;
     }
   }
@@ -78,6 +94,9 @@ export class MediaBroker {
     const postHead = (status: number, headers: Array<[string, string]>): void => {
       post(port, { type: 'cb:media:head', requestId, status, headers });
     };
+
+    // A repeat id supersedes whatever it names, whatever this open resolves to.
+    this.drop(requestId);
 
     const source = this.registry.lookup(ticket);
     if (source === undefined) {
@@ -93,6 +112,7 @@ export class MediaBroker {
 
     this.streams.set(requestId, {
       node: source.node,
+      stream: null,
       offset: head.window.offset,
       end: head.window.offset + head.window.length,
       pump: Promise.resolve(),
@@ -120,7 +140,7 @@ export class MediaBroker {
 
     const remaining = cursor.end - cursor.offset;
     if (remaining <= 0) {
-      this.streams.delete(requestId);
+      this.drop(requestId);
       post(port, { type: 'cb:media:end', requestId });
       return;
     }
@@ -128,8 +148,16 @@ export class MediaBroker {
     const offset = cursor.offset;
     const length = Math.min(this.windowBytes, remaining);
     try {
-      const chunk = await this.reader.downloadRange(cursor.node, offset, length);
+      cursor.stream ??= this.reader.openContentStream(cursor.node);
+      const handle = await cursor.stream;
       if (!this.isCurrent(requestId, cursor)) return;
+      const chunk = await this.reader.readStream(handle, offset, length);
+      if (!this.isCurrent(requestId, cursor)) {
+        // Nobody will receive this window; wipe it rather than leave plaintext
+        // for the collector (AGENTS.md 7 — this is its terminal owner).
+        new Uint8Array(chunk).fill(0);
+        return;
+      }
       cursor.offset = offset + chunk.byteLength;
       // A short read means the live version is smaller than the head promised;
       // ending here is a clean EOF, where under-delivering content-length is a
@@ -139,7 +167,7 @@ export class MediaBroker {
       port.postMessage(response, [chunk]);
     } catch (error) {
       if (!this.isCurrent(requestId, cursor)) return;
-      this.streams.delete(requestId);
+      this.drop(requestId);
       post(port, { type: 'cb:media:error', requestId, message: errorMessage(error) });
     }
   }

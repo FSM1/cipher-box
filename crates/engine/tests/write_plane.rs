@@ -956,6 +956,125 @@ fn a_ranged_read_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
     }
 }
 
+/// A stream pins the head version it opened on: a head change mid-stream leaves
+/// every later window a slice of the pinned version, never a splice of two
+/// (#948). Every byte of a spliced body is still CID-verified and unsealed under
+/// its own version's key, so nothing downstream could detect it.
+#[test]
+fn a_stream_serves_the_pinned_version_across_a_head_change() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    // Same length, disjoint bytes: a spliced window is a wrong-byte failure, not
+    // a length one, so the assertion catches the splice itself.
+    let first: Vec<u8> = (0..200u8).collect();
+    let second: Vec<u8> = (0..200u8).map(|byte| 255 - byte).collect();
+
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine_a,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &first,
+    )
+    .expect("the write commits");
+    tick(&world, &engine_a, &mut tasks);
+    let node = child_id(&engine_a, ROOT, "clip.bin");
+
+    let bob = world.device(b"alice-second-device");
+    serve_http(&bob, &blocks, 400);
+    let (mut engine_b, _events_b) = engine_on(&bob, 7);
+    block_on(engine_b.start(secret())).unwrap();
+
+    let stream = block_on(engine_b.open_content_stream(node)).expect("the stream opens");
+    let mut assembled = block_on(engine_b.read_stream(stream, 0, 16)).expect("the first window");
+
+    // The owner's other device republishes the file under a new version while
+    // the stream is mid-body.
+    write_file(&mut engine_a, WriteTarget::Version { node }, &second).expect("the update commits");
+    tick(&world, &engine_a, &mut tasks);
+
+    while (assembled.len() as u64) < first.len() as u64 {
+        let window = block_on(engine_b.read_stream(stream, assembled.len() as u64, 16))
+            .expect("a later window");
+        assembled.extend_from_slice(&window);
+    }
+    assert_eq!(
+        assembled, first,
+        "the whole body is a slice of the version the stream opened on"
+    );
+
+    // The head really did move: a fresh read serves the new version, so the
+    // pinning above is not just a stale-resolve artifact.
+    assert_eq!(
+        block_on(engine_b.read_content(node)).expect("the head version reads"),
+        second
+    );
+
+    engine_b.close_stream(stream);
+    assert_eq!(
+        block_on(engine_b.read_stream(stream, 0, 16)),
+        Err(EngineError::UnknownStreamHandle),
+        "a closed handle reads nothing"
+    );
+}
+
+/// A stream resolves, gates, and verifies its root once, however many windows it
+/// serves — the per-window cost #641's ranged read paid on every megabyte.
+#[test]
+fn a_stream_pays_one_resolve_and_one_root_fetch_for_the_whole_body() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    let window = ContentProfile::CI.chunk_size();
+    // One window per leaf, so the leaf fetches a stream makes are countable.
+    let leaves = plaintext.len().div_ceil(window);
+
+    let alice = world.device(b"alice");
+    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine_a,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        &plaintext,
+    )
+    .expect("the write commits");
+    tick(&world, &engine_a, &mut tasks);
+    let node = child_id(&engine_a, ROOT, "clip.bin");
+
+    let bob = world.device(b"alice-second-device");
+    serve_http(&bob, &blocks, 400);
+    let (mut engine_b, _events_b) = engine_on(&bob, 7);
+    block_on(engine_b.start(secret())).unwrap();
+
+    let stream = block_on(engine_b.open_content_stream(node)).expect("the stream opens");
+    // Every routing endpoint goes dark once the stream is open: a window that
+    // re-resolved the node would fail here rather than serve.
+    for endpoint in world.record_store.endpoints() {
+        world.record_store.fail_endpoint(&endpoint);
+    }
+
+    let fetches_at_open = bob.http.requests().len();
+    let mut assembled = Vec::new();
+    while assembled.len() < plaintext.len() {
+        let bytes = block_on(engine_b.read_stream(stream, assembled.len() as u64, window as u64))
+            .expect("a window off the pinned version");
+        assembled.extend_from_slice(&bytes);
+    }
+    assert_eq!(assembled, plaintext);
+    assert_eq!(
+        bob.http.requests().len() - fetches_at_open,
+        leaves,
+        "one leaf per window and no root re-fetch"
+    );
+}
+
 /// A new version of an existing file takes the head of its version list and is
 /// what a second device downloads.
 #[test]

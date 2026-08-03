@@ -257,39 +257,64 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(engine.siweChallenges).toBe(1);
   });
 
-  it('serves a follower downloadRange over the private port and rebuilds the window bytes', async () => {
+  it('serves a follower stream window over the private port and rebuilds the window bytes', async () => {
     const { engine, follower } = wire();
     const file = Uint8Array.from({ length: 256 }, (_, i) => (i * 3 + 1) & 0xff);
-    engine.respondDownloadRange = (_node, offset, length) =>
+    engine.respondReadStream = (_handle, offset, length) =>
       Promise.resolve(file.slice(offset, offset + length).buffer);
 
     const node = new Uint8Array(16).fill(6);
-    const window = await follower.downloadRange(node, 64, 32);
+    const handle = await follower.openContentStream(node);
+    const window = await follower.readStream(handle, 64, 32);
+    await follower.closeStream(handle);
+
     expect([...new Uint8Array(window)]).toEqual([...file.slice(64, 96)]);
     // A dropped or clamped offset slices the wrong plaintext with every
     // integrity check still passing.
-    expect(engine.downloadRanges).toEqual([{ node, offset: 64, length: 32 }]);
+    expect(engine.opened).toEqual([node]);
+    expect(engine.reads).toEqual([{ handle, offset: 64, length: 32 }]);
+    expect(engine.closedStreams).toEqual([handle]);
   });
 
-  it('rejects an in-flight downloadRange retryably when the leader steps down', async () => {
+  it('refuses a stream handle the asking follower does not own', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+    const owner = new BroadcastTransport(bus.channel(), 'owner', ports.courier('owner'));
+    const other = new BroadcastTransport(bus.channel(), 'other', ports.courier('other'));
+    await owner.start();
+    await other.start();
+
+    const handle = await owner.openContentStream(new Uint8Array(16));
+    // A handle is a capability: the relay binds it to the tab that opened it.
+    await expect(other.readStream(handle, 0, 8)).rejects.toMatchObject({
+      code: 'unknownStreamHandle',
+    });
+    expect(engine.reads).toEqual([]);
+  });
+
+  it('rejects an in-flight stream read retryably when the leader steps down', async () => {
     const bus = new FakeBus();
     const ports = new FakeCourierNetwork();
     const engineA = new FakeEngineTransport();
-    engineA.respondDownloadRange = () => new Promise(() => undefined); // leader A never answers
+    engineA.respondReadStream = () => new Promise(() => undefined); // leader A never answers
     const relayA = new LeaderRelay(bus.channel(), engineA, ports.courier('leaderA'));
     const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
     await follower.start();
 
-    const inFlight = follower.downloadRange(new Uint8Array(16), 0, 8);
+    const handle = await follower.openContentStream(new Uint8Array(16));
+    const inFlight = follower.readStream(handle, 0, 8);
     await tick();
     relayA.close();
     await expect(inFlight).rejects.toThrow(/retry/);
 
     // The next leader serves the retry, so the swap costs a retry, never a hang.
     const engineB = new FakeEngineTransport();
-    engineB.respondDownloadRange = () => Promise.resolve(new Uint8Array([1, 2]).buffer);
+    engineB.respondReadStream = () => Promise.resolve(new Uint8Array([1, 2]).buffer);
     new LeaderRelay(bus.channel(), engineB, ports.courier('leaderB'));
-    const retried = await follower.downloadRange(new Uint8Array(16), 0, 2);
+    const reopened = await follower.openContentStream(new Uint8Array(16));
+    const retried = await follower.readStream(reopened, 0, 2);
     expect([...new Uint8Array(retried)]).toEqual([1, 2]);
   });
 
@@ -315,7 +340,7 @@ describe('broadcast transport ↔ leader relay', () => {
     const ports = new FakeCourierNetwork();
     const engine = new FakeEngineTransport();
     const plaintext = Uint8Array.from({ length: 96 }, (_, i) => (i * 17 + 9) & 0xff);
-    engine.respondDownloadRange = (_node, offset, length) =>
+    engine.respondReadStream = (_handle, offset, length) =>
       Promise.resolve(plaintext.slice(offset, offset + length).buffer);
     engine.respondSnapshot = () => Promise.resolve(emptySnapshot(new Uint8Array(16).fill(8)));
     new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
@@ -327,9 +352,11 @@ describe('broadcast transport ↔ leader relay', () => {
 
     const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
     await follower.snapshot(new Uint8Array(16));
+    const handle = await follower.openContentStream(new Uint8Array(16).fill(6));
     for (let offset = 0; offset < 96; offset += 32) {
-      await follower.downloadRange(new Uint8Array(16).fill(6), offset, 32);
+      await follower.readStream(handle, offset, 32);
     }
+    await follower.closeStream(handle);
     await tick();
 
     // Election and rendezvous only — every read result rode the private port.

@@ -10,10 +10,10 @@
  *   follows whichever tab is focused (the RefreshHintSource seam, cross-tab).
  *
  * Nothing the leader sends on the channel carries plaintext: only key-free
- * `EventDescriptor`s and command/write acks. Read results go to the private
- * `PortCourier` port that follower dialed, one per follower per leadership. The
- * follower→leader direction is unchanged and still broadcasts command arguments
- * and upload chunks.
+ * `EventDescriptor`s and command/write acks. Read and ranged-read results go to
+ * the private `PortCourier` port that follower dialed, one per follower per
+ * leadership. The follower→leader direction is unchanged and still broadcasts
+ * command arguments and upload chunks.
  */
 
 import type {
@@ -23,11 +23,12 @@ import type {
   ReadPortRequest,
   ReadPortResponse,
   WireRead,
+  WireStream,
 } from './broadcast.js';
 import { EngineRequestError } from './correlatedTransport.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
-import type { SnapshotDescriptor, WriteHandle } from './worker/protocol.js';
+import type { SnapshotDescriptor, StreamHandle, WriteHandle } from './worker/protocol.js';
 import { WriteQueue } from './writeQueue.js';
 
 /** The correlated ack envelope addressing one follower request. */
@@ -48,6 +49,19 @@ export interface LeaderRelayOptions {
 }
 
 const DEFAULT_NAMING_TIMEOUT_MS = 5000;
+
+/**
+ * Refuses a step on a handle the asking tab does not own. Handle ids are one
+ * global namespace across tabs, so the refusal is spelled exactly like the
+ * engine's own unknown-handle error: a probing tab learns nothing a legitimate
+ * one would not.
+ */
+function unknownHandle(kind: 'write' | 'stream'): EngineRequestError {
+  return new EngineRequestError(
+    `unknown ${kind} handle`,
+    kind === 'write' ? 'unknownWriteHandle' : 'unknownStreamHandle'
+  );
+}
 
 /** Projects a caught failure onto the wire's `error`/`code` fields. */
 function wireError(error: unknown): { error: string; code?: string } {
@@ -104,6 +118,13 @@ export class LeaderRelay {
   // across tabs, so this binds every step to the tab that owns the upload — and
   // lets a departing tab's handles be released.
   private readonly writeOwners = new Map<WriteHandle, string>();
+  // Same binding for read streams: a handle is a capability, and a stream left
+  // open pins a content version (and its key) in the leader's engine.
+  private readonly streamOwners = new Map<StreamHandle, string>();
+  // Clients that left while one of their handles was still being minted. The
+  // mint completes after an await, so without this the release sweep runs
+  // against a map the handle has not landed in yet and the handle is stranded.
+  private readonly departed = new Set<string>();
   private readonly readPorts = new Set<ReadPortEntry>();
   private readonly namingTimeoutMs: number;
   private readonly unsubscribe: () => void;
@@ -149,7 +170,7 @@ export class LeaderRelay {
     this.unsubscribePorts();
     for (const entry of [...this.readPorts]) this.detachPort(entry);
     this.closed = true;
-    this.releaseWrites(null);
+    this.releaseHandles(null);
     this.unsubscribe();
     this.channel.removeEventListener('message', this.onMessage);
   }
@@ -158,6 +179,7 @@ export class LeaderRelay {
     if (this.closed) return;
     switch (message.type) {
       case 'cb:hello':
+        this.departed.delete((message as Extract<FollowerMessage, { type: 'cb:hello' }>).clientId);
         this.post({ type: 'cb:leader', token: this.token });
         return;
       case 'cb:command':
@@ -177,7 +199,8 @@ export class LeaderRelay {
       case 'cb:bye': {
         const { clientId } = message as Extract<FollowerMessage, { type: 'cb:bye' }>;
         if (this.focus.remove(clientId)) this.refreshHint();
-        this.releaseWrites(clientId);
+        this.departed.add(clientId);
+        this.releaseHandles(clientId);
         this.detachPortOf(clientId);
         return;
       }
@@ -246,16 +269,30 @@ export class LeaderRelay {
       this.postPort(entry.port, { type: 'cb:portReady', token: this.token });
       return;
     }
-    // A port serves reads only once named — that name is how `cb:bye` reclaims it.
-    if (entry.clientId === null || message.type !== 'cb:portRead') return;
-    const { requestId, read } = message as Extract<ReadPortRequest, { type: 'cb:portRead' }>;
+    // A port serves reads only once named — that name is how `cb:bye` reclaims it,
+    // and how a stream step is bound to the tab that owns the handle.
+    const clientId = entry.clientId;
+    if (clientId === null) return;
+    const requestId = (message as { requestId?: unknown }).requestId;
     if (typeof requestId !== 'number') return;
-    void this.serveRead(entry.port, requestId, read);
+    if (message.type === 'cb:portRead') {
+      const { read } = message as Extract<ReadPortRequest, { type: 'cb:portRead' }>;
+      void this.answerPort(entry.port, requestId, () => this.readValue(read));
+      return;
+    }
+    if (message.type !== 'cb:portStream') return;
+    const { stream } = message as Extract<ReadPortRequest, { type: 'cb:portStream' }>;
+    void this.answerPort(entry.port, requestId, () => this.streamStep(clientId, stream));
   }
 
-  private async serveRead(port: MessagePortLike, requestId: number, read: WireRead): Promise<void> {
+  /** Runs one port-borne step and posts its correlated result down that port. */
+  private async answerPort(
+    port: MessagePortLike,
+    requestId: number,
+    step: () => Promise<SnapshotDescriptor | ArrayBuffer | string | StreamHandle | undefined>
+  ): Promise<void> {
     try {
-      const result = await this.readValue(read);
+      const result = await step();
       // Transferred, not cloned: the plaintext leaves this tab's heap outright.
       this.postPort(
         port,
@@ -276,8 +313,6 @@ export class LeaderRelay {
         return this.transport.siweChallenge();
       case 'download':
         return this.transport.download(read.node);
-      case 'downloadRange':
-        return this.transport.downloadRange(read.node, read.offset, read.length);
     }
   }
 
@@ -307,24 +342,27 @@ export class LeaderRelay {
     const ack: Ack = { type: 'cb:response', token: this.token, clientId, requestId };
 
     if (write.kind === 'beginWrite') {
-      void this.answerWrite(ack, async () => {
-        const handle = await this.transport.beginWrite(write.target, write.size);
-        this.writeOwners.set(handle, clientId);
-        return handle;
-      });
+      void this.answerStep(ack, () =>
+        this.bind(
+          this.writeOwners,
+          clientId,
+          this.transport.beginWrite(write.target, write.size),
+          (handle) => this.transport.abortWrite(handle)
+        )
+      );
       return;
     }
 
     const handle = write.handle;
     if (this.writeOwners.get(handle) !== clientId) {
-      this.post({ ...ack, ok: false, error: 'unknown write handle', code: 'unknownWriteHandle' });
+      this.post({ ...ack, ok: false, ...wireError(unknownHandle('write')) });
       return;
     }
 
     // Enqueued synchronously, before any await: `WriteQueue` orders a handle's
     // steps by call order.
     void this.writes.run(handle, () =>
-      this.answerWrite(ack, async () => {
+      this.answerStep(ack, async () => {
         switch (write.kind) {
           case 'pushChunk':
             // Materialize the follower's shared `Blob` only here, then transfer
@@ -348,27 +386,85 @@ export class LeaderRelay {
     );
   }
 
-  /** Runs one write step and posts its correlated ack. */
-  private async answerWrite(ack: Ack, step: () => Promise<bigint | void>): Promise<void> {
+  /** One ranged-read step, owned by the tab holding the port it arrived on. */
+  private async streamStep(
+    clientId: string,
+    stream: WireStream
+  ): Promise<StreamHandle | ArrayBuffer | undefined> {
+    if (stream.kind === 'openContentStream') {
+      return this.bind(
+        this.streamOwners,
+        clientId,
+        this.transport.openContentStream(stream.node),
+        (handle) => this.transport.closeStream(handle)
+      );
+    }
+
+    const handle = stream.handle;
+    if (this.streamOwners.get(handle) !== clientId) throw unknownHandle('stream');
+
+    if (stream.kind === 'closeStream') {
+      await this.transport.closeStream(handle);
+      // Dropped only once the close resolves: a rejected one leaves the handle
+      // owned, so the release sweep still knows to free the pin it holds.
+      this.streamOwners.delete(handle);
+      return undefined;
+    }
+    return this.transport.readStream(handle, stream.offset, stream.length);
+  }
+
+  /** Runs one handle-bound step and posts its correlated ack. */
+  private async answerStep(ack: Ack, step: () => Promise<bigint | void>): Promise<void> {
     try {
       const result = await step();
-      this.post(typeof result === 'bigint' ? { ...ack, ok: true, result } : { ...ack, ok: true });
+      this.post(result === undefined ? { ...ack, ok: true } : { ...ack, ok: true, result });
     } catch (error) {
       this.post({ ...ack, ok: false, ...wireError(error) });
     }
   }
 
   /**
-   * Abandons handles this relay can no longer serve — `clientId`'s, or all of
-   * them on teardown. A stranded handle holds its byte reservation against the
-   * staging ledger for the rest of the session, so every later write on every
-   * tab is refused as over-budget.
+   * Records the minted handle against the client that asked for it, releasing it
+   * instead if that client (or this relay) left while the mint was in flight.
    */
-  private releaseWrites(clientId: string | null): void {
-    for (const [handle, owner] of this.writeOwners) {
+  private async bind(
+    owners: Map<bigint, string>,
+    clientId: string,
+    minting: Promise<bigint>,
+    close: (handle: bigint) => Promise<unknown>
+  ): Promise<bigint> {
+    const handle = await minting;
+    if (this.closed || this.departed.has(clientId)) {
+      void close(handle).catch(() => undefined);
+      throw new EngineRequestError('unknown handle', 'unknownHandle');
+    }
+    owners.set(handle, clientId);
+    return handle;
+  }
+
+  /**
+   * Abandons handles this relay can no longer serve — `clientId`'s, or all of
+   * them on teardown. A stranded write handle holds its byte reservation against
+   * the staging ledger for the rest of the session, so every later write on every
+   * tab is refused as over-budget; a stranded read stream pins its content
+   * version in the engine just as long.
+   */
+  private releaseHandles(clientId: string | null): void {
+    this.release(this.writeOwners, clientId, (handle) =>
+      this.writes.run(handle, () => this.transport.abortWrite(handle))
+    );
+    this.release(this.streamOwners, clientId, (handle) => this.transport.closeStream(handle));
+  }
+
+  private release(
+    owners: Map<bigint, string>,
+    clientId: string | null,
+    close: (handle: bigint) => Promise<unknown>
+  ): void {
+    for (const [handle, owner] of owners) {
       if (clientId !== null && owner !== clientId) continue;
-      this.writeOwners.delete(handle);
-      void this.writes.run(handle, () => this.transport.abortWrite(handle)).catch(() => undefined);
+      owners.delete(handle);
+      void close(handle).catch(() => undefined);
     }
   }
 
