@@ -686,6 +686,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cipherbox-load"
+version = "0.0.0"
+dependencies = [
+ "cipherbox-core",
+ "cipherbox-desktop-seams",
+ "cipherbox-engine",
+ "getrandom 0.2.17",
+ "reqwest 0.12.28",
+ "serde_json",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "cipherbox-wasm"
 version = "0.0.0"
 dependencies = [
