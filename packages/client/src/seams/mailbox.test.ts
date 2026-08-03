@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { toBase64 } from './bytes.js';
 import { ApiMailbox } from './mailbox.js';
-import type { HttpRequestData, HttpResponseData, HttpSeam } from './types.js';
+import type { CappedHttpResult, HttpRequestData, HttpResponseData, HttpSeam } from './types.js';
 
 const BASE = 'https://api.example/';
 const SEALED = new Uint8Array([0, 1, 2, 250, 255]);
@@ -21,6 +21,14 @@ class ScriptedHttp implements HttpSeam {
       return Promise.reject(new Error(`unscripted request: ${request.method} ${request.url}`));
     }
     return Promise.resolve({ status: 200, headers: [], body: new Uint8Array(), ...next });
+  }
+
+  async sendCapped(request: HttpRequestData, maxBytes: number): Promise<CappedHttpResult> {
+    const response = await this.send(request);
+    if (response.body.byteLength > maxBytes) {
+      return { kind: 'tooLarge', observed: response.body.byteLength, limit: maxBytes };
+    }
+    return { kind: 'response', ...response };
   }
 }
 
