@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import { MEDIA_PORT_OFFER, type MessagePortLike } from '../media/protocol.js';
+import { MEDIA_PORT_OFFER } from '../media/protocol.js';
+import {
+  RELAY_DELIVER,
+  RELAY_PORT,
+  RELAY_SELF,
+  RELAY_WHOAMI,
+  type MessagePortLike,
+} from '../portRelay.js';
+import type { WindowClientLike } from './clients.js';
 import {
   installServiceWorker,
   type ExtendableEventLike,
@@ -17,13 +25,25 @@ import {
   SW_ORIGIN as ORIGIN,
 } from './testDoubles.js';
 
+/** A window client, recording what the worker forwarded to it. */
+class FakeWindow implements WindowClientLike {
+  readonly received: Array<{ message: unknown; transfer: MessagePortLike[] }> = [];
+
+  constructor(readonly id: string) {}
+
+  postMessage(message: unknown, transfer?: MessagePortLike[]): void {
+    this.received.push({ message, transfer: transfer ? [...transfer] : [] });
+  }
+}
+
 class FakeScope implements ServiceWorkerScopeLike {
   readonly location = { origin: ORIGIN };
   readonly caches = new FakeCacheStorage();
+  readonly windows: FakeWindow[] = [];
   skipWaitingCalls = 0;
   claimCalls = 0;
   readonly clients = {
-    matchAll: async () => [],
+    matchAll: async (): Promise<readonly WindowClientLike[]> => this.windows,
     claim: async (): Promise<void> => void (this.claimCalls += 1),
   };
   private readonly listeners = new Map<string, (event: never) => void>();
@@ -180,7 +200,7 @@ describe('installServiceWorker', () => {
     scope.dispatch('message', {
       data: { type: MEDIA_PORT_OFFER },
       ports: [port],
-      source: { id: 'window-7' },
+      source: { id: 'window-7', postMessage: () => undefined },
     });
     scope.dispatch('message', { data: { type: 'other' }, ports: [{} as MessagePortLike] });
 
@@ -194,5 +214,73 @@ describe('installServiceWorker', () => {
     scope.dispatch('message', { data: { type: MEDIA_PORT_OFFER }, ports: [port], source: null });
 
     expect(pipe.adopted).toEqual([{ port, clientId: undefined }]);
+  });
+});
+
+describe('service worker port brokerage', () => {
+  const closable = (): MessagePortLike & { closed: boolean } => {
+    const port = {
+      closed: false,
+      close: () => void (port.closed = true),
+    } as unknown as MessagePortLike & { closed: boolean };
+    return port;
+  };
+
+  it('names the asking client back to itself', async () => {
+    const { scope } = await wire(manifestFetch('["/index.html"]'));
+    const named: unknown[] = [];
+
+    scope.dispatch('message', {
+      data: { type: RELAY_WHOAMI },
+      ports: [],
+      source: { id: 'window-3', postMessage: (message) => void named.push(message) },
+    });
+
+    expect(named).toEqual([{ type: RELAY_SELF, id: 'window-3' }]);
+  });
+
+  it('forwards a delivered port to the addressed client and nobody else', async () => {
+    const { scope } = await wire(manifestFetch('["/index.html"]'));
+    const target = new FakeWindow('window-9');
+    const bystander = new FakeWindow('window-1');
+    scope.windows.push(bystander, target);
+    const port = closable();
+
+    const extended: Promise<unknown>[] = [];
+    scope.dispatch('message', {
+      data: { type: RELAY_DELIVER, to: 'window-9' },
+      ports: [port],
+      waitUntil: (promise) => void extended.push(promise),
+    });
+    await Promise.all(extended);
+
+    expect(target.received).toEqual([{ message: { type: RELAY_PORT }, transfer: [port] }]);
+    expect(bystander.received).toEqual([]);
+  });
+
+  it('closes a port addressed to a client that is gone', async () => {
+    const { scope } = await wire(manifestFetch('["/index.html"]'));
+    const port = closable();
+
+    const extended: Promise<unknown>[] = [];
+    scope.dispatch('message', {
+      data: { type: RELAY_DELIVER, to: 'window-gone' },
+      ports: [port],
+      waitUntil: (promise) => void extended.push(promise),
+    });
+    await Promise.all(extended);
+
+    expect(port.closed).toBe(true);
+  });
+
+  it('drops a delivery naming no client', async () => {
+    const { scope } = await wire(manifestFetch('["/index.html"]'));
+    const target = new FakeWindow('window-9');
+    scope.windows.push(target);
+    const port = closable();
+
+    scope.dispatch('message', { data: { type: RELAY_DELIVER }, ports: [port] });
+
+    expect(target.received).toEqual([]);
   });
 });

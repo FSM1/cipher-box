@@ -7,6 +7,7 @@
  */
 
 import type { BroadcastChannelLike } from './broadcast.js';
+import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { LockManagerLike, LockRequestCallback } from './leadership.js';
 import type { EngineEventListener, EngineTransport, EngineWorkerLike } from './transport.js';
 import type { EngineHostLike } from './worker/engineHost.js';
@@ -169,6 +170,87 @@ export class FakeChannel implements BroadcastChannelLike {
   close(): void {
     this.closed = true;
     this.onClose(this);
+  }
+}
+
+/**
+ * One end of a channel. Delivery is asynchronous and structured-cloned, like a
+ * real `MessagePort`; `transferred` records what the sender asked to move, so a
+ * test can tell a transfer from a clone.
+ */
+export class FakeChannelPort implements MessagePortLike {
+  peer: FakeChannelPort | null = null;
+  readonly transferred: unknown[][] = [];
+  started = false;
+  closed = false;
+  private listeners: Array<(event: MessageEvent) => void> = [];
+
+  postMessage(message: unknown, transfer?: Transferable[]): void {
+    if (this.closed) return;
+    this.transferred.push(transfer ? [...transfer] : []);
+    // Honors the transfer list, so a sender that reads a moved buffer afterwards
+    // fails here exactly as it would against a real port.
+    const delivered = structuredClone(message, transfer ? { transfer } : undefined);
+    queueMicrotask(() => this.peer?.receive(delivered));
+  }
+
+  addEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
+    this.listeners.push(listener);
+  }
+
+  removeEventListener(_type: 'message', listener: (event: MessageEvent) => void): void {
+    this.listeners = this.listeners.filter((entry) => entry !== listener);
+  }
+
+  start(): void {
+    this.started = true;
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  receive(data: unknown): void {
+    if (this.closed) return;
+    for (const listener of [...this.listeners]) listener({ data } as MessageEvent);
+  }
+}
+
+/**
+ * An origin's worth of couriers: `connect` opens a real pair of linked ports and
+ * hands the far end to the courier registered at that address.
+ */
+export class FakeCourierNetwork {
+  private readonly inboxes = new Map<string, Set<(port: MessagePortLike) => void>>();
+  private readonly opened: FakeChannelPort[] = [];
+
+  /** Every non-empty transfer list posted on this network's ports, in order. */
+  get transfers(): unknown[][] {
+    return this.opened.flatMap((port) => port.transferred.filter((list) => list.length > 0));
+  }
+
+  courier(address: string): PortCourier {
+    return {
+      address: () => Promise.resolve(address),
+      connect: (to) => Promise.resolve(this.open(to)),
+      onPort: (handler) => {
+        const handlers = this.inboxes.get(address) ?? new Set();
+        handlers.add(handler);
+        this.inboxes.set(address, handlers);
+        return () => handlers.delete(handler);
+      },
+    };
+  }
+
+  private open(to: string): MessagePortLike {
+    const near = new FakeChannelPort();
+    const far = new FakeChannelPort();
+    near.peer = far;
+    far.peer = near;
+    this.opened.push(near, far);
+    const handlers = this.inboxes.get(to);
+    if (handlers) for (const handler of [...handlers]) handler(far);
+    return near;
   }
 }
 

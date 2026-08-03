@@ -91,11 +91,20 @@ mechanism; the invariant — one engine writer per origin — is D4's):
   publishes. Web Locks auto-release on tab close, crash, or discard, which is
   exactly the failover primitive needed.
 - **Followers are thin mirrors, not engines**: a non-leader tab spawns no
-  worker and holds no keys. It renders view projections broadcast by the
-  leader and sends commands as data. Both directions ride a
-  `BroadcastChannel`: projections and events are plain structured-clone data;
-  commands carry at most `Blob`/`File` handles (structured clone shares the
-  immutable backing store — no byte copies for uploads).
+  worker and holds no keys. It renders view projections served by the leader
+  and sends commands as data. Commands, events, and election ride a
+  `BroadcastChannel`: events are plain structured-clone data and commands carry
+  at most `Blob`/`File` handles (structured clone shares the immutable backing
+  store — no byte copies for uploads), so an upload's plaintext still reaches
+  every context holding the channel. Read **results** — snapshot projections
+  and file plaintext — do not: each follower dials the leader a private
+  `MessagePort` through the Service Worker (the only cross-tab route for a
+  transferable) and reads over that, buffers transferred rather than cloned.
+  The leadership token gating the port is itself broadcast, so it bounds
+  accidental and passive delivery, never a same-origin context that read the
+  beacon — same origin remains the trust boundary. A tab with no Service Worker
+  mirrors nothing: reads fail closed rather than fall back to the shared
+  channel.
 - **Failover**: the lock releases → some follower acquires it, spawns a fresh
   engine worker, and rehydrates from the durable seams (floors, op queue,
   staged bytes, snapshot cache — all origin-shared). Ops journal durably
@@ -204,6 +213,10 @@ all living in `packages/client` and running inside the engine worker realm:
   back through the port. The SW holds no keys, no crypto, and no state worth
   keeping — a killed SW or broken port just re-brokers and re-buffers.
   Follower tabs route media through the leader the same way.
+- **The same Service Worker brokers the follower read port**: it names a client
+  back to itself and forwards one end of a `MessageChannel` to the client a tab
+  addresses. It reads neither end and keeps no state, so a killed worker costs a
+  re-broker, never a channel already open.
 - **The same Service Worker precaches the app shell** (engineering judgment,
   implied by #33 D6's full offline parity): a vault you can mutate offline is
   a vault whose UI must boot offline. Cached snapshots + the op queue then

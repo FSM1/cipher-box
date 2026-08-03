@@ -3,8 +3,11 @@
  * precache (blueprint/web-client.md "Content paths").
  */
 
-import { MEDIA_PORT_OFFER, type MessagePortLike } from '../media/protocol.js';
+import { MEDIA_PORT_OFFER } from '../media/protocol.js';
+import { RELAY_DELIVER, RELAY_SELF, RELAY_WHOAMI, type MessagePortLike } from '../portRelay.js';
+import type { ClientsLike } from './clients.js';
 import { MediaPipe, type MediaPipeScopeLike } from './pipe.js';
+import { deliverPort } from './relay.js';
 import {
   appShellClaims,
   deleteStaleCaches,
@@ -29,12 +32,14 @@ export interface FetchEventLike {
 /** The client that sent a message; its `id` is the one `FetchEventLike.clientId` carries. */
 export interface MessageSourceLike {
   readonly id: string;
+  postMessage(message: unknown): void;
 }
 
 export interface PortMessageEventLike {
   readonly data: unknown;
   readonly ports: readonly MessagePortLike[];
   readonly source?: MessageSourceLike | null;
+  waitUntil?(promise: Promise<unknown>): void;
 }
 
 export interface ServiceWorkerEventMap {
@@ -47,7 +52,7 @@ export interface ServiceWorkerEventMap {
 /** The subset of a Service Worker global scope the wiring drives (injectable). */
 export interface ServiceWorkerScopeLike extends MediaPipeScopeLike {
   readonly caches: CacheStorageLike;
-  readonly clients: MediaPipeScopeLike['clients'] & { claim(): Promise<void> };
+  readonly clients: ClientsLike & { claim(): Promise<void> };
   skipWaiting(): Promise<void> | void;
   addEventListener<K extends keyof ServiceWorkerEventMap>(
     type: K,
@@ -122,10 +127,26 @@ export function installServiceWorker(
   });
 
   scope.addEventListener('message', (event) => {
-    const data = event.data as { type?: unknown } | null;
-    if (data?.type !== MEDIA_PORT_OFFER) return;
-    const port = event.ports[0];
-    if (port) pipe.adoptPort(port, event.source?.id);
+    const data = event.data as { type?: unknown; to?: unknown } | null;
+    const port: MessagePortLike | undefined = event.ports[0];
+    switch (data?.type) {
+      case MEDIA_PORT_OFFER:
+        if (port) pipe.adoptPort(port, event.source?.id);
+        return;
+      case RELAY_WHOAMI:
+        event.source?.postMessage({ type: RELAY_SELF, id: event.source.id });
+        return;
+      case RELAY_DELIVER: {
+        if (!port) return;
+        if (typeof data.to !== 'string') {
+          port.close();
+          return;
+        }
+        const delivery = deliverPort(scope.clients, data.to, port);
+        event.waitUntil?.(delivery);
+        return;
+      }
+    }
   });
 }
 

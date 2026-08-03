@@ -1,12 +1,8 @@
 /** The tab-side server for the media byte pipe, answering over a brokered `MessagePort`. */
 
 import { errorMessage } from '../errorMessage.js';
-import {
-  MEDIA_WINDOW_BYTES,
-  type MediaRequest,
-  type MediaResponse,
-  type MessagePortLike,
-} from './protocol.js';
+import type { MessagePortLike } from '../portRelay.js';
+import { MEDIA_WINDOW_BYTES, type MediaRequest, type MediaResponse } from './protocol.js';
 import { resolveMediaRequest } from './range.js';
 import type { StreamRegistry } from './registry.js';
 

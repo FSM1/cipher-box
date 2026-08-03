@@ -3,17 +3,32 @@ import { describe, expect, it } from 'vitest';
 import { BroadcastTransport } from './broadcastTransport.js';
 import { EngineRequestError } from './correlatedTransport.js';
 import { LeaderRelay } from './leaderRelay.js';
-import { emptySnapshot, FakeBus, FakeEngineTransport } from './testkit.js';
+import { unavailableCourier } from './portCourier.js';
+import type { MessagePortLike, PortCourier } from './portRelay.js';
+import {
+  emptySnapshot,
+  FakeBus,
+  FakeChannelPort,
+  FakeCourierNetwork,
+  FakeEngineTransport,
+} from './testkit.js';
 import type { EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
-function wire(): { engine: FakeEngineTransport; relay: LeaderRelay; follower: BroadcastTransport } {
+function wire(): {
+  bus: FakeBus;
+  ports: FakeCourierNetwork;
+  engine: FakeEngineTransport;
+  relay: LeaderRelay;
+  follower: BroadcastTransport;
+} {
   const bus = new FakeBus();
+  const ports = new FakeCourierNetwork();
   const engine = new FakeEngineTransport();
-  const relay = new LeaderRelay(bus.channel(), engine);
-  const follower = new BroadcastTransport(bus.channel(), 'follower-1');
-  return { engine, relay, follower };
+  const relay = new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+  const follower = new BroadcastTransport(bus.channel(), 'follower-1', ports.courier('follower-1'));
+  return { bus, ports, engine, relay, follower };
 }
 
 describe('broadcast transport ↔ leader relay', () => {
@@ -26,21 +41,23 @@ describe('broadcast transport ↔ leader relay', () => {
   it('takes no secret: start just awaits a live leader, wire carries only a hello', async () => {
     const bus = new FakeBus();
     const posted: unknown[] = [];
+    const ports = new FakeCourierNetwork();
     const leaderChannel = bus.channel();
     leaderChannel.addEventListener('message', (event) => posted.push(event.data));
     // A relay makes a leader "present" so start resolves.
-    new LeaderRelay(leaderChannel, new FakeEngineTransport());
-    const follower = new BroadcastTransport(bus.channel(), 'f');
+    new LeaderRelay(leaderChannel, new FakeEngineTransport(), ports.courier('leader'));
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
 
     // The keyless follower transport receives no secret at all — `start` has no
     // secret parameter; it resolves once a leader beacon arrives.
     await follower.start();
+    await tick(); // let the eager read-port rendezvous land on the wire too
 
     // The only thing the follower put on the wire is its self-announcing hello.
     const followerPosts = posted.filter(
       (m) => (m as { clientId?: string }).clientId === 'f'
     ) as Array<{ type: string }>;
-    expect(followerPosts.map((m) => m.type)).toEqual(['cb:hello']);
+    expect(followerPosts.map((m) => m.type)).toEqual(['cb:hello', 'cb:portWanted']);
   });
 
   it('never echoes the leader secret onto any leader→follower message (structural)', async () => {
@@ -53,14 +70,15 @@ describe('broadcast transport ↔ leader relay', () => {
     const sentinel = Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + 3) & 0xff);
     await engine.start(sentinel.buffer.slice(0));
 
-    new LeaderRelay(bus.channel(), engine);
+    const ports = new FakeCourierNetwork();
+    new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
 
     // Capture everything the leader broadcasts to followers (events + responses).
     const leaderPosts: unknown[] = [];
     const spy = bus.channel();
     spy.addEventListener('message', (event) => leaderPosts.push(event.data));
 
-    const follower = new BroadcastTransport(bus.channel(), 'f');
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
     await follower.start();
 
     // A command whose engine handling rejects: the relay forwards the failure as
@@ -215,8 +233,8 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(engine.snapshots).toEqual([null]);
   });
 
-  it('serves a follower download as a Blob and rebuilds identical bytes', async () => {
-    const { engine, follower } = wire();
+  it('serves a follower download over the private port and rebuilds identical bytes', async () => {
+    const { engine, follower, ports } = wire();
     const plaintext = Uint8Array.from({ length: 64 }, (_, i) => (i * 11 + 5) & 0xff);
     engine.respondDownload = () => Promise.resolve(plaintext.buffer.slice(0));
 
@@ -224,6 +242,11 @@ describe('broadcast transport ↔ leader relay', () => {
     const content = await follower.download(node);
     expect([...new Uint8Array(content)]).toEqual([...plaintext]);
     expect(engine.downloads).toEqual([node]);
+    // The buffer moves rather than being cloned: the leader's copy is detached,
+    // so the plaintext leaves its heap instead of lingering there.
+    const moved = ports.transfers.at(-1)?.[0] as ArrayBuffer;
+    expect(moved).toBeInstanceOf(ArrayBuffer);
+    expect(moved.byteLength).toBe(0);
   });
 
   it('serves a follower SIWE challenge off the leader engine', async () => {
@@ -234,7 +257,7 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(engine.siweChallenges).toBe(1);
   });
 
-  it('serves a follower downloadRange as a Blob and rebuilds the window bytes', async () => {
+  it('serves a follower downloadRange over the private port and rebuilds the window bytes', async () => {
     const { engine, follower } = wire();
     const file = Uint8Array.from({ length: 256 }, (_, i) => (i * 3 + 1) & 0xff);
     engine.respondDownloadRange = (_node, offset, length) =>
@@ -250,10 +273,11 @@ describe('broadcast transport ↔ leader relay', () => {
 
   it('rejects an in-flight downloadRange retryably when the leader steps down', async () => {
     const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
     const engineA = new FakeEngineTransport();
     engineA.respondDownloadRange = () => new Promise(() => undefined); // leader A never answers
-    const relayA = new LeaderRelay(bus.channel(), engineA);
-    const follower = new BroadcastTransport(bus.channel(), 'f');
+    const relayA = new LeaderRelay(bus.channel(), engineA, ports.courier('leaderA'));
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
     await follower.start();
 
     const inFlight = follower.downloadRange(new Uint8Array(16), 0, 8);
@@ -264,7 +288,7 @@ describe('broadcast transport ↔ leader relay', () => {
     // The next leader serves the retry, so the swap costs a retry, never a hang.
     const engineB = new FakeEngineTransport();
     engineB.respondDownloadRange = () => Promise.resolve(new Uint8Array([1, 2]).buffer);
-    new LeaderRelay(bus.channel(), engineB);
+    new LeaderRelay(bus.channel(), engineB, ports.courier('leaderB'));
     const retried = await follower.downloadRange(new Uint8Array(16), 0, 2);
     expect([...new Uint8Array(retried)]).toEqual([1, 2]);
   });
@@ -286,50 +310,202 @@ describe('broadcast transport ↔ leader relay', () => {
     });
   });
 
-  it('rejects a forged read response bearing a wrong or absent leader token', async () => {
+  it('keeps every read result off the channel: a second context sees only rendezvous traffic', async () => {
     const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
     const engine = new FakeEngineTransport();
-    engine.respondSnapshot = () => new Promise(() => undefined); // the real leader never answers
-    new LeaderRelay(bus.channel(), engine);
-    const follower = new BroadcastTransport(bus.channel(), 'f');
+    const plaintext = Uint8Array.from({ length: 96 }, (_, i) => (i * 17 + 9) & 0xff);
+    engine.respondDownloadRange = (_node, offset, length) =>
+      Promise.resolve(plaintext.slice(offset, offset + length).buffer);
+    engine.respondSnapshot = () => Promise.resolve(emptySnapshot(new Uint8Array(16).fill(8)));
+    new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+
+    // A same-origin context that opened the engine channel and does nothing else.
+    const observed: unknown[] = [];
+    const eavesdropper = bus.channel();
+    eavesdropper.addEventListener('message', (event) => observed.push(event.data));
+
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
+    await follower.snapshot(new Uint8Array(16));
+    for (let offset = 0; offset < 96; offset += 32) {
+      await follower.downloadRange(new Uint8Array(16).fill(6), offset, 32);
+    }
+    await tick();
+
+    // Election and rendezvous only — every read result rode the private port.
+    expect(observed.length).toBeGreaterThan(0);
+    expect([...new Set(observed.map((m) => (m as { type: string }).type))].sort()).toEqual([
+      'cb:hello',
+      'cb:leader',
+      'cb:portHost',
+      'cb:portWanted',
+    ]);
+    const serialized = JSON.stringify(observed, (_key, value: unknown) =>
+      value instanceof Uint8Array ? [...value] : value
+    );
+    for (const byte of plaintext.slice(0, 8)) expect(serialized).not.toContain(`,${byte},`);
+  });
+
+  it('settles nothing on a port that never greeted with the active leader token', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    engine.respond = () => new Promise(() => undefined); // the real leader never answers
+    engine.respondSnapshot = () => Promise.resolve(emptySnapshot(new Uint8Array(16).fill(2)));
+    new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'), {
+      portTimeoutMs: 40,
+    });
     await follower.start();
 
-    const pending = follower.snapshot(new Uint8Array(16));
-    let settled = false;
-    void pending.then(
-      () => (settled = true),
-      () => (settled = true)
-    );
-    await tick();
-
-    const forgedView: SnapshotDescriptor = emptySnapshot();
+    // An impostor answers the rendezvous with its own address, then forges both a
+    // greeting and results. Request ids are shared with commands and writes, so a
+    // follower that took an ungreeted result would settle those too.
+    ports.courier('impostor').onPort((port) => {
+      port.addEventListener('message', () => {
+        port.postMessage({ type: 'cb:portReady', token: 'forged-token' });
+        port.postMessage({ type: 'cb:portReady' });
+        for (let requestId = 1; requestId <= 4; requestId += 1) {
+          port.postMessage({ type: 'cb:portResult', requestId, ok: true });
+        }
+      });
+      port.start?.();
+    });
     const attacker = bus.channel();
-    attacker.postMessage({
-      type: 'cb:response',
-      token: 'forged-token',
-      clientId: 'f',
-      requestId: 1,
-      ok: true,
-      result: forgedView,
+    attacker.addEventListener('message', (event) => {
+      if ((event.data as { type?: string }).type !== 'cb:portWanted') return;
+      attacker.postMessage({ type: 'cb:portHost', token: 'forged-token', address: 'impostor' });
+      attacker.postMessage({ type: 'cb:portHost', address: 'impostor' });
     });
-    attacker.postMessage({
-      type: 'cb:response',
-      clientId: 'f',
-      requestId: 1,
-      ok: true,
-      result: forgedView,
+
+    const command = follower.command({ kind: 'manualRefresh' }, []);
+    let commandSettled = false;
+    void command.then(
+      () => (commandSettled = true),
+      () => (commandSettled = true)
+    );
+
+    // The forged host is ignored, so the read reaches the real leader's engine,
+    // and the forged results settled nothing on the way.
+    await expect(follower.snapshot(new Uint8Array(16))).resolves.toMatchObject({
+      folder: new Uint8Array(16).fill(2),
     });
+    expect(commandSettled).toBe(false);
+  });
+
+  /**
+   * The honest limit of the token gate: it is broadcast on the channel, so it
+   * bounds accidental and passive delivery, never a same-origin context that
+   * bothered to read the beacon. Recorded so the guarantee is not overstated.
+   */
+  it('adopts a port greeting with the real broadcast token, whoever sent it', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    new LeaderRelay(bus.channel(), new FakeEngineTransport(), ports.courier('leader'));
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'), {
+      portTimeoutMs: 40,
+    });
+
+    // The impostor reads the leadership token off the channel and replays it.
+    let stolen: string | undefined;
+    const attacker = bus.channel();
+    attacker.addEventListener('message', (event) => {
+      const message = event.data as { type?: string; token?: string };
+      if (message.type === 'cb:leader') stolen = message.token;
+      if (message.type !== 'cb:portWanted') return;
+      attacker.postMessage({ type: 'cb:portHost', token: stolen, address: 'impostor' });
+    });
+    ports.courier('impostor').onPort((port) => {
+      port.addEventListener('message', () => {
+        port.postMessage({ type: 'cb:portReady', token: stolen });
+        port.postMessage({
+          type: 'cb:portResult',
+          requestId: 1,
+          ok: true,
+          result: emptySnapshot(new Uint8Array(16).fill(9)),
+        });
+      });
+      port.start?.();
+    });
+    await follower.start();
+
+    await expect(follower.snapshot(new Uint8Array(16))).resolves.toMatchObject({
+      folder: new Uint8Array(16).fill(9),
+    });
+  });
+
+  it('rejects a read whose port the leader detached under a live leadership', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
+    await follower.snapshot(null); // brokers and adopts the port
+
+    engine.respondSnapshot = () => new Promise(() => undefined); // never answers
+    const inFlight = follower.snapshot(null);
+    await tick();
+    // A `cb:bye` any same-origin context can post makes the leader drop that port.
+    // Without a closing notice the read would wait on a wire that is gone.
+    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f' });
+    await expect(inFlight).rejects.toThrow(/retry/);
+
+    // The next read re-brokers against the same live leader.
+    engine.respondSnapshot = (folder) => Promise.resolve(emptySnapshot(folder ?? undefined));
+    await expect(follower.snapshot(null)).resolves.toMatchObject({ staleness: 'fresh' });
+  });
+
+  it('reclaims a dialed port that never named the follower behind it', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    new LeaderRelay(bus.channel(), new FakeEngineTransport(), ports.courier('leader'), {
+      namingTimeoutMs: 5,
+    });
+
+    // Any same-origin context can dial the leader; one that never names itself
+    // would otherwise sit in the relay for the rest of the leadership.
+    const squatter = (await ports.courier('squatter').connect('leader')) as FakeChannelPort;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+
+    expect(squatter.peer!.closed).toBe(true);
+  });
+
+  it('fails a read closed when no port can be brokered, never falling back to the channel', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    new LeaderRelay(bus.channel(), engine, unavailableCourier);
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'), {
+      portTimeoutMs: 20,
+    });
+    await follower.start();
+
+    await expect(follower.snapshot(new Uint8Array(16))).rejects.toThrow(/read port/);
+    expect(engine.snapshots).toEqual([]);
+  });
+
+  it('re-brokers a read port after the follower that held it left', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+    const first = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
+    await first.snapshot(null);
+    first.close(); // posts `cb:bye`, so the leader reclaims that port
     await tick();
 
-    expect(settled).toBe(false);
+    const second = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
+    await expect(second.snapshot(null)).resolves.toMatchObject({ staleness: 'fresh' });
+    expect(engine.snapshots).toHaveLength(2);
   });
 
   it('rejects an in-flight read retryably when the leader steps down', async () => {
     const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
     const engineA = new FakeEngineTransport();
     engineA.respondSnapshot = () => new Promise(() => undefined); // leader A never answers
-    const relayA = new LeaderRelay(bus.channel(), engineA);
-    const follower = new BroadcastTransport(bus.channel(), 'f');
+    const relayA = new LeaderRelay(bus.channel(), engineA, ports.courier('leaderA'));
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
     await follower.start();
 
     const inFlight = follower.snapshot(new Uint8Array(16));
@@ -340,17 +516,49 @@ describe('broadcast transport ↔ leader relay', () => {
     // A read issued with no leader parks, then resolves against the next leader.
     const queued = follower.snapshot(new Uint8Array(16).fill(4));
     const engineB = new FakeEngineTransport();
-    new LeaderRelay(bus.channel(), engineB);
+    new LeaderRelay(bus.channel(), engineB, ports.courier('leaderB'));
     await expect(queued).resolves.toMatchObject({ staleness: 'fresh' });
     expect(engineB.snapshots).toHaveLength(1);
   });
 
+  it('notifies an adopted read port that it is closing when the leader steps down', async () => {
+    const bus = new FakeBus();
+    const engine = new FakeEngineTransport();
+    const near = new FakeChannelPort();
+    const far = new FakeChannelPort();
+    near.peer = far;
+    far.peer = near;
+
+    let deliver: ((port: MessagePortLike) => void) | null = null;
+    const courier: PortCourier = {
+      address: () => Promise.resolve('leader'),
+      connect: () => Promise.reject(new Error('unused')),
+      onPort: (handler) => {
+        deliver = handler;
+        return () => (deliver = null);
+      },
+    };
+
+    const relay = new LeaderRelay(bus.channel(), engine, courier);
+    deliver!(far);
+    far.receive({ type: 'cb:portHello', clientId: 'f' }); // named, so it outlives the naming timeout
+    await tick();
+
+    const seen: string[] = [];
+    near.addEventListener('message', (event) => seen.push((event.data as { type: string }).type));
+    relay.close();
+    await tick();
+
+    expect(seen).toContain('cb:portClosed');
+  });
+
   it('re-arms on leadership change: an in-flight command rejects retryably, later commands await the next leader (P1-3)', async () => {
     const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
     const engineA = new FakeEngineTransport();
     engineA.respond = () => new Promise(() => undefined); // leader A never answers
-    const relayA = new LeaderRelay(bus.channel(), engineA);
-    const follower = new BroadcastTransport(bus.channel(), 'f');
+    const relayA = new LeaderRelay(bus.channel(), engineA, ports.courier('leaderA'));
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
     await follower.start(); // leader A present
 
     const inFlight = follower.command({ kind: 'manualRefresh' }, []);
@@ -372,17 +580,18 @@ describe('broadcast transport ↔ leader relay', () => {
 
     // A fresh leader is elected → the queued command resolves against it.
     const engineB = new FakeEngineTransport();
-    new LeaderRelay(bus.channel(), engineB);
+    new LeaderRelay(bus.channel(), engineB, ports.courier('leaderB'));
     await queued;
     expect(engineB.commands.map((c) => c.kind)).toEqual(['manualRefresh']);
   });
 
   it('rejects a forged response/event bearing a wrong or absent leader token (P1-4)', async () => {
     const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
     const engine = new FakeEngineTransport();
     engine.respond = () => new Promise(() => undefined); // the real leader never answers
-    new LeaderRelay(bus.channel(), engine);
-    const follower = new BroadcastTransport(bus.channel(), 'f');
+    new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
     await follower.start();
 
     const pending = follower.command({ kind: 'manualRefresh' }, []);
@@ -421,19 +630,25 @@ describe('broadcast transport ↔ leader relay', () => {
 });
 
 describe('leader relay write handles', () => {
-  function bench(): { bus: FakeBus; engine: FakeEngineTransport; relay: LeaderRelay } {
+  function bench(): {
+    bus: FakeBus;
+    ports: FakeCourierNetwork;
+    engine: FakeEngineTransport;
+    relay: LeaderRelay;
+  } {
     const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
     const engine = new FakeEngineTransport();
-    const relay = new LeaderRelay(bus.channel(), engine);
-    return { bus, engine, relay };
+    const relay = new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+    return { bus, ports, engine, relay };
   }
 
   const chunk = (seq: number): ArrayBuffer => Uint8Array.of(seq).buffer;
   const node = (fill: number): Uint8Array => new Uint8Array(16).fill(fill);
 
   it('applies pipelined chunks for one handle in send order', async () => {
-    const { bus, engine } = bench();
-    const follower = new BroadcastTransport(bus.channel(), 'f1');
+    const { bus, ports, engine } = bench();
+    const follower = new BroadcastTransport(bus.channel(), 'f1', ports.courier('f1'));
     const applied: number[] = [];
     // Later chunks settle faster: unserialized they would overtake earlier ones,
     // scrambling the plaintext while every integrity check still passes.
@@ -451,8 +666,8 @@ describe('leader relay write handles', () => {
   });
 
   it('keeps distinct handles concurrent', async () => {
-    const { bus, engine } = bench();
-    const follower = new BroadcastTransport(bus.channel(), 'f1');
+    const { bus, ports, engine } = bench();
+    const follower = new BroadcastTransport(bus.channel(), 'f1', ports.courier('f1'));
     let releaseFirst!: () => void;
     engine.pushChunk = (handle) =>
       handle === 1n ? new Promise<void>((resolve) => (releaseFirst = resolve)) : Promise.resolve();
@@ -474,9 +689,9 @@ describe('leader relay write handles', () => {
   });
 
   it('rejects a write step against a handle the sender does not own', async () => {
-    const { bus, engine } = bench();
-    const owner = new BroadcastTransport(bus.channel(), 'owner');
-    const other = new BroadcastTransport(bus.channel(), 'other');
+    const { bus, ports, engine } = bench();
+    const owner = new BroadcastTransport(bus.channel(), 'owner', ports.courier('owner'));
+    const other = new BroadcastTransport(bus.channel(), 'other', ports.courier('other'));
     const handle = await owner.beginWrite({ node: node(4) }, 4);
 
     await expect(other.pushChunk(handle, chunk(9))).rejects.toMatchObject({
@@ -493,9 +708,9 @@ describe('leader relay write handles', () => {
   });
 
   it('aborts a departing client handles and leaves the other client alone', async () => {
-    const { bus, engine } = bench();
-    const leaving = new BroadcastTransport(bus.channel(), 'leaving');
-    const staying = new BroadcastTransport(bus.channel(), 'staying');
+    const { bus, ports, engine } = bench();
+    const leaving = new BroadcastTransport(bus.channel(), 'leaving', ports.courier('leaving'));
+    const staying = new BroadcastTransport(bus.channel(), 'staying', ports.courier('staying'));
     engine.writeHandle = 1n;
     const orphan = await leaving.beginWrite({ node: node(1) }, 4);
     engine.writeHandle = 2n;
@@ -510,8 +725,8 @@ describe('leader relay write handles', () => {
   });
 
   it('releases every open handle when the leader steps down', async () => {
-    const { bus, engine, relay } = bench();
-    const follower = new BroadcastTransport(bus.channel(), 'f1');
+    const { bus, ports, engine, relay } = bench();
+    const follower = new BroadcastTransport(bus.channel(), 'f1', ports.courier('f1'));
     const handle = await follower.beginWrite({ node: node(5) }, 4);
 
     relay.close();

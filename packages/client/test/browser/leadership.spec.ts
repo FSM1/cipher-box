@@ -1,6 +1,8 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
-import type { DownloadResult, SnapshotResult } from './leadership.js';
+import type { DownloadResult, ObservedMessage, RangeResult, SnapshotResult } from './leadership.js';
+import { hex } from './hexUtil.js';
+import { fixtureSlice, LEADER_SEED } from './mediaFixture.js';
 
 /**
  * The tab-leadership slice of the merge-blocking browser suite
@@ -16,8 +18,11 @@ interface LeadershipHarness {
   cbCreate(options: {
     lockName: string;
     channelName: string;
-    worker?: 'journal' | 'engine';
+    worker?: 'journal' | 'engine' | 'media';
   }): Promise<void>;
+  cbObserve(channelName: string): void;
+  cbObserved(): ObservedMessage[];
+  cbDownloadRange(offset: number, length: number): Promise<RangeResult>;
   cbRole(): string;
   cbStart(): Promise<string>;
   cbCreateFile(name: string): Promise<string>;
@@ -44,7 +49,14 @@ async function openTab(context: BrowserContext): Promise<Page> {
 }
 
 function harness(page: Page): {
-  create(lockName: string, channelName: string, worker?: 'journal' | 'engine'): Promise<void>;
+  create(
+    lockName: string,
+    channelName: string,
+    worker?: 'journal' | 'engine' | 'media'
+  ): Promise<void>;
+  observe(channelName: string): Promise<void>;
+  observed(): Promise<ObservedMessage[]>;
+  downloadRange(offset: number, length: number): Promise<RangeResult>;
   role(): Promise<string>;
   start(): Promise<string>;
   createFile(name: string): Promise<string>;
@@ -65,6 +77,18 @@ function harness(page: Page): {
         channelName,
         worker,
       }),
+    observe: (channelName) =>
+      page.evaluate(
+        (name) => (window as unknown as LeadershipHarness).cbObserve(name),
+        channelName
+      ),
+    observed: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbObserved()),
+    downloadRange: (offset, length) =>
+      page.evaluate(
+        (args) =>
+          (window as unknown as LeadershipHarness).cbDownloadRange(args.offset, args.length),
+        { offset, length }
+      ),
     role: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbRole()),
     start: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbStart()),
     createFile: (name) =>
@@ -210,6 +234,51 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     const download = await follower.download(file!.idHex);
     expect(download.bytes).toBeUndefined();
     expect(download.code).toBe('contentUnavailable');
+
+    await a.dispose();
+    await b.dispose();
+  });
+
+  test('a follower streams plaintext while a second same-origin context sees no payload', async ({
+    context,
+  }) => {
+    const { lockName, channelName } = names();
+    const a = harness(await openTab(context));
+    const b = harness(await openTab(context));
+    // A third tab that drives no engine and only listens on the origin channel —
+    // exactly what every same-origin document used to be handed plaintext.
+    const eavesdropper = harness(await openTab(context));
+    await eavesdropper.observe(channelName);
+
+    await a.create(lockName, channelName, 'media');
+    await b.create(lockName, channelName, 'media');
+    const leader = (await a.role()) === 'leader' ? a : b;
+    const follower = leader === a ? b : a;
+    expect(await leader.start()).toBe('ok');
+    expect(await follower.start()).toBe('ok');
+
+    // Three ranged windows, as a media element playing in the follower would.
+    const WINDOW = 1024;
+    for (let offset = 0; offset < 3 * WINDOW; offset += WINDOW) {
+      const read = await follower.downloadRange(offset, WINDOW);
+      expect(read.error).toBeUndefined();
+      // Only the leader's worker holds `LEADER_SEED`, so these bytes prove the
+      // read crossed to the leader engine and came back over the private port.
+      expect(read.bytesHex).toBe(hex(fixtureSlice(offset, WINDOW, LEADER_SEED)));
+    }
+
+    const observed = await eavesdropper.observed();
+    // The channel still carries election and the port rendezvous...
+    expect([...new Set(observed.map((message) => message.type))].sort()).toEqual([
+      'cb:bye',
+      'cb:hello',
+      'cb:leader',
+      'cb:portHost',
+      'cb:portWanted',
+    ]);
+    // ...and not one byte of the plaintext the follower streamed.
+    const seen = observed.map((message) => message.bytesHex).join('');
+    expect(seen).not.toContain(hex(fixtureSlice(0, 32, LEADER_SEED)));
 
     await a.dispose();
     await b.dispose();

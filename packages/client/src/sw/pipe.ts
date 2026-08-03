@@ -8,24 +8,12 @@ import {
   MEDIA_PORT_REQUEST,
   STREAM_PATH_PREFIX,
   ticketFromPath,
-  type MediaPortRequest,
   type MediaRequest,
   type MediaResponse,
-  type MessagePortLike,
 } from '../media/protocol.js';
 import { safeMimeType } from '../media/range.js';
-
-/** The subset of a window client the pipe drives (injectable). */
-export interface WindowClientLike {
-  /** Matches `FetchEventLike.clientId`, so a request can be aimed at one tab. */
-  readonly id?: string;
-  postMessage(message: MediaPortRequest): void;
-}
-
-/** The subset of `ServiceWorkerGlobalScope.clients` the pipe drives. */
-export interface ClientsLike {
-  matchAll(options: { type: 'window' }): Promise<readonly WindowClientLike[]>;
-}
+import type { MessagePortLike } from '../portRelay.js';
+import type { ClientsLike } from './clients.js';
 
 /** The subset of a Service Worker global scope the pipe drives. */
 export interface MediaPipeScopeLike {

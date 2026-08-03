@@ -9,23 +9,45 @@
  * - each tab's open folder → the leader's **focus-window union**, so freshness
  *   follows whichever tab is focused (the RefreshHintSource seam, cross-tab).
  *
- * No keys and no plaintext leave the worker: only key-free `EventDescriptor`s
- * ride the outbound wire, exactly the facade's event surface.
+ * Nothing the leader sends on the channel carries plaintext: only key-free
+ * `EventDescriptor`s and command/write acks. Read results go to the private
+ * `PortCourier` port that follower dialed, one per follower per leadership. The
+ * follower→leader direction is unchanged and still broadcasts command arguments
+ * and upload chunks.
  */
 
 import type {
   BroadcastChannelLike,
   FollowerMessage,
   LeaderMessage,
+  ReadPortRequest,
+  ReadPortResponse,
   WireRead,
 } from './broadcast.js';
 import { EngineRequestError } from './correlatedTransport.js';
+import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
 import type { SnapshotDescriptor, WriteHandle } from './worker/protocol.js';
 import { WriteQueue } from './writeQueue.js';
 
 /** The correlated ack envelope addressing one follower request. */
 type Ack = { type: 'cb:response'; token: string; clientId: string; requestId: number };
+
+/** One follower's read port, with the listener bound to it. */
+interface ReadPortEntry {
+  readonly port: MessagePortLike;
+  readonly listener: (event: MessageEvent) => void;
+  clientId: string | null;
+  /** Reclaims a port that never named itself, so an unnamed one cannot pile up. */
+  readonly naming: ReturnType<typeof setTimeout>;
+}
+
+export interface LeaderRelayOptions {
+  /** How long a freshly dialed port has to name the follower behind it. */
+  namingTimeoutMs?: number;
+}
+
+const DEFAULT_NAMING_TIMEOUT_MS = 5000;
 
 /** Projects a caught failure onto the wire's `error`/`code` fields. */
 function wireError(error: unknown): { error: string; code?: string } {
@@ -82,7 +104,10 @@ export class LeaderRelay {
   // across tabs, so this binds every step to the tab that owns the upload — and
   // lets a departing tab's handles be released.
   private readonly writeOwners = new Map<WriteHandle, string>();
+  private readonly readPorts = new Set<ReadPortEntry>();
+  private readonly namingTimeoutMs: number;
   private readonly unsubscribe: () => void;
+  private readonly unsubscribePorts: () => void;
   private closed = false;
   // An unguessable per-leadership capability. It stamps every leader→follower
   // message so followers reject forged acks/events from a non-leader same-origin
@@ -92,9 +117,13 @@ export class LeaderRelay {
 
   constructor(
     private readonly channel: BroadcastChannelLike,
-    private readonly transport: EngineTransport
+    private readonly transport: EngineTransport,
+    private readonly courier: PortCourier,
+    options: LeaderRelayOptions = {}
   ) {
+    this.namingTimeoutMs = options.namingTimeoutMs ?? DEFAULT_NAMING_TIMEOUT_MS;
     this.channel.addEventListener('message', this.onMessage);
+    this.unsubscribePorts = this.courier.onPort((port) => this.adoptPort(port));
     this.unsubscribe = this.transport.subscribe((event) => {
       this.post({ type: 'cb:event', token: this.token, event });
     });
@@ -115,6 +144,10 @@ export class LeaderRelay {
     // leader that is gone. A crashed leader can't send this; the next leader's
     // fresh token covers that path.
     this.post({ type: 'cb:leaderGone', token: this.token });
+    // Detach before latching: `postPort` drops messages once closed, so the
+    // `cb:portClosed` notice has to go out while the relay is still open.
+    this.unsubscribePorts();
+    for (const entry of [...this.readPorts]) this.detachPort(entry);
     this.closed = true;
     this.releaseWrites(null);
     this.unsubscribe();
@@ -130,8 +163,8 @@ export class LeaderRelay {
       case 'cb:command':
         void this.forward(message as Extract<FollowerMessage, { type: 'cb:command' }>);
         return;
-      case 'cb:read':
-        void this.serveRead(message as Extract<FollowerMessage, { type: 'cb:read' }>);
+      case 'cb:portWanted':
+        void this.announceHost();
         return;
       case 'cb:write':
         this.serveWrite(message as Extract<FollowerMessage, { type: 'cb:write' }>);
@@ -145,6 +178,7 @@ export class LeaderRelay {
         const { clientId } = message as Extract<FollowerMessage, { type: 'cb:bye' }>;
         if (this.focus.remove(clientId)) this.refreshHint();
         this.releaseWrites(clientId);
+        this.detachPortOf(clientId);
         return;
       }
     }
@@ -167,30 +201,105 @@ export class LeaderRelay {
     }
   }
 
-  private async serveRead(message: Extract<FollowerMessage, { type: 'cb:read' }>): Promise<void> {
-    const { clientId, requestId, read } = message;
-    const ack = { type: 'cb:response', token: this.token, clientId, requestId } as const;
+  /**
+   * Publishes where this leadership takes read ports. A follower dials it rather
+   * than publishing an address of its own, so no context can push a port at a
+   * tab that never asked for one. Silent without a broker: the asking follower's
+   * read then fails closed on its own gate.
+   */
+  private async announceHost(): Promise<void> {
     try {
-      this.post({ ...ack, ok: true, result: await this.readValue(read) });
+      const address = await this.courier.address();
+      this.post({ type: 'cb:portHost', token: this.token, address });
+    } catch {
+      return;
+    }
+  }
+
+  private adoptPort(port: MessagePortLike): void {
+    if (this.closed) {
+      port.close();
+      return;
+    }
+    const entry: ReadPortEntry = {
+      port,
+      clientId: null,
+      listener: (event) => this.onPortMessage(entry, event.data),
+      naming: setTimeout(() => this.detachPort(entry), this.namingTimeoutMs),
+    };
+    port.addEventListener('message', entry.listener);
+    port.start?.();
+    this.readPorts.add(entry);
+  }
+
+  /** A same-origin port is untrusted input: anything off-shape is dropped. */
+  private onPortMessage(entry: ReadPortEntry, data: unknown): void {
+    if (this.closed) return;
+    const message = data as ReadPortRequest | { type?: unknown };
+    if (message.type === 'cb:portHello') {
+      const { clientId } = message as Extract<ReadPortRequest, { type: 'cb:portHello' }>;
+      if (entry.clientId !== null || typeof clientId !== 'string') return;
+      // A re-brokering follower supersedes the port it held before.
+      this.detachPortOf(clientId);
+      clearTimeout(entry.naming);
+      entry.clientId = clientId;
+      this.postPort(entry.port, { type: 'cb:portReady', token: this.token });
+      return;
+    }
+    // A port serves reads only once named — that name is how `cb:bye` reclaims it.
+    if (entry.clientId === null || message.type !== 'cb:portRead') return;
+    const { requestId, read } = message as Extract<ReadPortRequest, { type: 'cb:portRead' }>;
+    if (typeof requestId !== 'number') return;
+    void this.serveRead(entry.port, requestId, read);
+  }
+
+  private async serveRead(port: MessagePortLike, requestId: number, read: WireRead): Promise<void> {
+    try {
+      const result = await this.readValue(read);
+      // Transferred, not cloned: the plaintext leaves this tab's heap outright.
+      this.postPort(
+        port,
+        { type: 'cb:portResult', requestId, ok: true, result },
+        result instanceof ArrayBuffer ? [result] : undefined
+      );
     } catch (error) {
-      this.post({ ...ack, ok: false, ...wireError(error) });
+      this.postPort(port, { type: 'cb:portResult', requestId, ok: false, ...wireError(error) });
     }
   }
 
   /** The annotated return type keeps the switch exhaustive over `WireRead`. */
-  private async readValue(read: WireRead): Promise<SnapshotDescriptor | Blob | string> {
+  private readValue(read: WireRead): Promise<SnapshotDescriptor | ArrayBuffer | string> {
     switch (read.kind) {
       case 'snapshot':
         return this.transport.snapshot(read.folder);
       case 'siweChallenge':
         return this.transport.siweChallenge();
-      // Wrap the plaintext in a `Blob` so the per-receiver structured clone
-      // shares the immutable backing store instead of copying the bytes.
       case 'download':
-        return new Blob([await this.transport.download(read.node)]);
+        return this.transport.download(read.node);
       case 'downloadRange':
-        return new Blob([await this.transport.downloadRange(read.node, read.offset, read.length)]);
+        return this.transport.downloadRange(read.node, read.offset, read.length);
     }
+  }
+
+  private postPort(
+    port: MessagePortLike,
+    message: ReadPortResponse,
+    transfer?: Transferable[]
+  ): void {
+    if (this.closed) return;
+    port.postMessage(message, transfer);
+  }
+
+  private detachPortOf(clientId: string): void {
+    for (const entry of this.readPorts) if (entry.clientId === clientId) this.detachPort(entry);
+  }
+
+  private detachPort(entry: ReadPortEntry): void {
+    clearTimeout(entry.naming);
+    this.readPorts.delete(entry);
+    this.postPort(entry.port, { type: 'cb:portClosed' });
+    entry.port.removeEventListener('message', entry.listener);
+    entry.port.close();
   }
 
   private serveWrite(message: Extract<FollowerMessage, { type: 'cb:write' }>): void {

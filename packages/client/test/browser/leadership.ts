@@ -11,6 +11,7 @@ import { EngineClient } from '../../src/engineClient.js';
 import type { PendingClass } from '../../src/worker/protocol.js';
 import { awaitElection } from './election.js';
 import { hex, unhex } from './hexUtil.js';
+import { awaitServiceWorkerControl } from './serviceWorker.js';
 
 const JOURNAL_DB = 'cb-leadership-journal';
 const JOURNAL_STORE = 'ops';
@@ -18,8 +19,24 @@ const JOURNAL_STORE = 'ops';
 export interface HarnessOptions {
   lockName: string;
   channelName: string;
-  /** Which engine worker the leader spawns: the journal fake (default) or the real WASM engine. */
-  worker?: 'journal' | 'engine';
+  /**
+   * Which engine worker the leader spawns: the journal fake (default), the real
+   * WASM engine, or the fake that serves ranged plaintext.
+   */
+  worker?: 'journal' | 'engine' | 'media';
+}
+
+/** A page.evaluate-safe ranged-read projection; bytes as hex. */
+export interface RangeResult {
+  bytesHex?: string;
+  error?: string;
+}
+
+/** One message a second same-origin context saw on the engine channel. */
+export interface ObservedMessage {
+  type: string;
+  /** Every byte the message carries anywhere in its shape, as one hex run. */
+  bytesHex: string;
 }
 
 /** A page.evaluate-safe download projection; `code` is the engine's stable error code. */
@@ -48,6 +65,9 @@ export interface SnapshotResult {
 declare global {
   interface Window {
     cbCreate(options: HarnessOptions): Promise<void>;
+    cbObserve(channelName: string): void;
+    cbObserved(): ObservedMessage[];
+    cbDownloadRange(offset: number, length: number): Promise<RangeResult>;
     cbRole(): string;
     cbStart(): Promise<string>;
     cbCreateFile(name: string): Promise<string>;
@@ -63,8 +83,24 @@ declare global {
 }
 
 let client: EngineClient | null = null;
+const observed: ObservedMessage[] = [];
 
 const rootNode = new Uint8Array(16);
+
+/** Every byte anywhere in a message, as one hex run a plaintext search can scan. */
+function collectBytes(value: unknown): string {
+  const found: number[] = [];
+  const walk = (node: unknown): void => {
+    if (node instanceof ArrayBuffer) for (const byte of new Uint8Array(node)) found.push(byte);
+    else if (ArrayBuffer.isView(node)) {
+      const view = new Uint8Array(node.buffer, node.byteOffset, node.byteLength);
+      for (const byte of view) found.push(byte);
+    } else if (Array.isArray(node)) for (const entry of node) walk(entry);
+    else if (node && typeof node === 'object') for (const entry of Object.values(node)) walk(entry);
+  };
+  walk(value);
+  return hex(Uint8Array.from(found));
+}
 
 function settle(error: unknown): string {
   if (error === undefined) return 'ok';
@@ -74,11 +110,19 @@ function settle(error: unknown): string {
 // A valid secp256k1 identity scalar placeholder (the journal fake ignores it).
 const secret = (): ArrayBuffer => new Uint8Array(32).fill(1).buffer;
 
+const WORKER_URLS: Record<NonNullable<HarnessOptions['worker']>, URL> = {
+  engine: new URL('./engine.worker.ts', import.meta.url),
+  media: new URL('./mediaEngine.worker.ts', import.meta.url),
+  journal: new URL('./journalEngine.worker.ts', import.meta.url),
+};
+
 window.cbCreate = async ({ lockName, channelName, worker }: HarnessOptions): Promise<void> => {
-  const workerUrl =
-    worker === 'engine'
-      ? new URL('./engine.worker.ts', import.meta.url)
-      : new URL('./journalEngine.worker.ts', import.meta.url);
+  // A follower reads over a Service-Worker-brokered port, so every tab needs one.
+  // Fail here rather than letting the miss resurface as a port-brokerage timeout.
+  if (!(await awaitServiceWorkerControl())) {
+    throw new Error('no Service Worker took control of this tab');
+  }
+  const workerUrl = WORKER_URLS[worker ?? 'journal'];
   client = new EngineClient({
     locks: navigator.locks,
     lockName,
@@ -151,6 +195,32 @@ window.cbSnapshot = async (folderHex: string): Promise<SnapshotResult> => {
     return { error: settle(error) };
   }
 };
+
+window.cbDownloadRange = async (offset: number, length: number): Promise<RangeResult> => {
+  try {
+    const window_ = await client!.downloadRange(rootNode, offset, length);
+    return { bytesHex: hex(new Uint8Array(window_)) };
+  } catch (error) {
+    return { error: settle(error) };
+  }
+};
+
+/**
+ * Opens the engine channel from a context that drives no engine at all — the
+ * same-origin eavesdropper the read port exists to shut out.
+ */
+window.cbObserve = (channelName: string): void => {
+  const channel = new BroadcastChannel(channelName);
+  channel.addEventListener('message', (event: MessageEvent) => {
+    const message = event.data as { type?: unknown };
+    observed.push({
+      type: typeof message?.type === 'string' ? message.type : '(untyped)',
+      bytesHex: collectBytes(message),
+    });
+  });
+};
+
+window.cbObserved = (): ObservedMessage[] => observed;
 
 window.cbDownload = async (nodeHex: string): Promise<DownloadResult> => {
   try {

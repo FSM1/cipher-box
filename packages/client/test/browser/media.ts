@@ -11,9 +11,7 @@ import type { MediaReader } from '../../src/media/broker.js';
 import { awaitElection } from './election.js';
 import { hex } from './hexUtil.js';
 import { fixtureBuffer, TAB_SEED } from './mediaFixture.js';
-
-/** The dev server transpiles TS per module, so the worker must be a module worker. */
-const SW_SCRIPT = '/sw.ts';
+import { awaitServiceWorkerControl, SW_SCRIPT } from './serviceWorker.js';
 
 /** Bodies above this are asserted by digest; hex would blow up the page bridge. */
 const HEX_BODY_LIMIT = 64 * 1024;
@@ -109,13 +107,7 @@ window.cbMediaStart = async ({ reader, seed }: MediaStartOptions): Promise<boole
 };
 
 /** A registration does not control the tab until it claims; a fetch before that misses the pipe. */
-window.cbMediaAwaitControl = async (): Promise<boolean> => {
-  for (let attempt = 0; attempt < 200; attempt += 1) {
-    if (navigator.serviceWorker.controller !== null) return true;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  return false;
-};
+window.cbMediaAwaitControl = (): Promise<boolean> => awaitServiceWorkerControl();
 
 window.cbMediaTicket = (size: number, mimeType: string): string =>
   service!.createStreamUrl({ node: new Uint8Array(16).fill(3), size, mimeType });

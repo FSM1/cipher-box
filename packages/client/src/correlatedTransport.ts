@@ -7,7 +7,8 @@
  *
  * A subclass supplies only its readiness gate and its send primitive; this base
  * owns the pending map, the no-hang request skeleton, response settlement, the
- * terminal-failure latch, and the event fan-out.
+ * terminal-failure latch, and the event fan-out. A gate may resolve with the
+ * wire the send needs — a follower's read gate yields its private port.
  */
 
 import type { EngineEventListener, EngineTransport } from './transport.js';
@@ -92,10 +93,13 @@ export abstract class CorrelatedTransport implements EngineTransport {
    * is never stranded. Resolves with the response's result value (`undefined`
    * for a plain ack).
    */
-  protected request<T>(readyGate: Promise<void>, send: (id: number) => void): Promise<T> {
+  protected request<T, G = void>(
+    readyGate: Promise<G>,
+    send: (id: number, gate: G) => void
+  ): Promise<T> {
     if (this.terminalError) return Promise.reject(this.terminalError);
     return readyGate.then(
-      () =>
+      (gate) =>
         new Promise<T>((resolve, reject) => {
           if (this.terminalError) {
             reject(this.terminalError);
@@ -104,7 +108,7 @@ export abstract class CorrelatedTransport implements EngineTransport {
           const id = this.nextId++;
           this.pending.set(id, { resolve: resolve as (result: unknown) => void, reject });
           try {
-            send(id);
+            send(id, gate);
           } catch (error) {
             this.pending.delete(id);
             reject(error instanceof Error ? error : new Error(String(error)));
