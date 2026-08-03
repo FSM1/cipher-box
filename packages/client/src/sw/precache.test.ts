@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   APP_SHELL_CACHE,
@@ -119,7 +119,7 @@ describe('precacheAppShell', () => {
 });
 
 describe('deleteStaleCaches', () => {
-  it('drops cipherbox caches from earlier deploys and keeps the shell', async () => {
+  it('drops shell caches from earlier deploys and keeps the live one', async () => {
     const caches = new FakeCacheStorage();
     caches.cache(APP_SHELL_CACHE);
     caches.cache('cipherbox-app-shell-v0');
@@ -128,6 +128,33 @@ describe('deleteStaleCaches', () => {
     await deleteStaleCaches(caches);
 
     expect([...caches.opened.keys()]).toEqual([APP_SHELL_CACHE, 'unrelated-cache']);
+  });
+});
+
+describe('the build stamp', () => {
+  /** Loads a fresh module instance under the stamp the web build defines. */
+  const loadStamped = async (buildId: string): Promise<typeof import('./precache.js')> => {
+    vi.resetModules();
+    vi.stubGlobal('__APP_SHELL_BUILD_ID__', buildId);
+    return import('./precache.js');
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('rotates the shell cache so a redeploy installs fresh and evicts its predecessor', async () => {
+    const caches = new FakeCacheStorage();
+    const first = await loadStamped('build-1');
+    const second = await loadStamped('build-2');
+    expect(second.APP_SHELL_CACHE).not.toBe(first.APP_SHELL_CACHE);
+
+    await first.precacheAppShell(caches, manifestFetch('["/assets/old.js"]'), ORIGIN);
+    await second.precacheAppShell(caches, manifestFetch('["/assets/new.js"]'), ORIGIN);
+    await second.deleteStaleCaches(caches);
+
+    expect([...caches.opened.keys()]).toEqual([second.APP_SHELL_CACHE]);
+    expect([...(await second.readPrecachedUrls(caches))]).toEqual([`${ORIGIN}/assets/new.js`]);
   });
 });
 

@@ -5,13 +5,19 @@
 
 import { STREAM_PATH_PREFIX } from '../media/protocol.js';
 
-export const APP_SHELL_CACHE = 'cipherbox-app-shell';
+/** Stamped by the web build from the build output's digest; absent in dev. */
+declare const __APP_SHELL_BUILD_ID__: string | undefined;
+
+const CACHE_PREFIX = 'cipherbox-app-shell';
+const BUILD_ID = typeof __APP_SHELL_BUILD_ID__ === 'string' ? __APP_SHELL_BUILD_ID__ : 'dev';
+
+/** Keyed by build id so a deploy installs fresh and `activate` evicts the shell it superseded. */
+export const APP_SHELL_CACHE = `${CACHE_PREFIX}-${BUILD_ID}`;
 
 const PRECACHE_MANIFEST_URL = '/precache-manifest.json';
 
 /** The document a navigation falls back to when the network is unreachable. */
 const APP_SHELL_DOCUMENT = '/index.html';
-const CACHE_PREFIX = 'cipherbox-';
 
 /** The subset of `Cache` the shell drives (injectable). */
 export interface CacheLike {
