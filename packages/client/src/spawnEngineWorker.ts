@@ -10,7 +10,7 @@ import type { EngineWorkerBootstrap } from './worker/engineWorker.js';
 
 /** What a host tab must know to stand the engine worker up. */
 export interface EngineHostConfig {
-  /** Base URL of the CipherBox API; the mailbox collection hangs off it. */
+  /** Base URL of the CipherBox API; the `Mailbox` seam appends its own routes. */
   apiBaseUrl: string;
   /** `/routing/v1` origins: someguy plus at least one public endpoint. */
   recordEndpoints: string[];
@@ -35,7 +35,7 @@ export function spawnEngineWorker(
   const bootstrap: EngineWorkerBootstrap = {
     type: 'bootstrap',
     recordEndpoints: config.recordEndpoints,
-    mailboxUrl: `${config.apiBaseUrl.replace(/\/+$/, '')}/mailbox/messages`,
+    apiBaseUrl: config.apiBaseUrl,
     dbPrefix: config.dbPrefix,
     wasmModuleUrl: config.wasmModuleUrl,
     wasmBinaryUrl: config.wasmBinaryUrl,

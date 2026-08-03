@@ -19,8 +19,8 @@ import {
 export interface BrowserSeamsConfig {
   /** Delegated-routing endpoint set for `RecordTransport` (someguy + public). */
   recordEndpoints: string[];
-  /** Absolute URL of the API mailbox collection. */
-  mailboxUrl: string;
+  /** Absolute base URL of the API; `Mailbox` appends its own routes. */
+  apiBaseUrl: string;
   /** Prefix for the IndexedDB/OPFS store names (namespaces per origin/test). */
   dbPrefix?: string;
 }
@@ -45,7 +45,7 @@ export function makeBrowserSeams(config: BrowserSeamsConfig): BrowserSeams {
     floorStore: new IdbFloorStore(`${prefix}-floors`),
     recordTransport: new FetchRecordTransport(config.recordEndpoints),
     http,
-    mailbox: new ApiMailbox(http, config.mailboxUrl),
+    mailbox: new ApiMailbox(http, config.apiBaseUrl),
     refreshHints: new QueueRefreshHintSource(),
     scheduler: new WorkerScheduler(),
     stagingStore: new OpfsStagingStore(`${prefix}-staging`),

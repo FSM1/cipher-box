@@ -22,7 +22,7 @@ describe('spawnEngineWorker', () => {
       {
         type: 'bootstrap',
         recordEndpoints: ['https://routing.example.test'],
-        mailboxUrl: 'https://api.example.test/mailbox/messages',
+        apiBaseUrl: 'https://api.example.test/',
         dbPrefix: undefined,
         wasmModuleUrl: '/wasm/cipherbox_wasm.js',
         wasmBinaryUrl: '/wasm/cipherbox_wasm_bg.wasm',
