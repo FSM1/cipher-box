@@ -226,6 +226,13 @@ fn guard_url(target: Target, key: &str, url: &str) -> Result<(), PlanError> {
     }
 }
 
+/// Both readers concatenate base and path (`crates/engine/src/api/client.rs`
+/// `url`, and the gateway URL in `crates/load/src/scenarios.rs`), so a trailing
+/// slash on an operator-supplied base would request `//content/upload`.
+fn normalize_base(url: String) -> String {
+    url.trim_end_matches('/').to_owned()
+}
+
 fn resolve_api_url(
     target: Target,
     env: &impl Fn(&str) -> Option<String>,
@@ -240,7 +247,7 @@ fn resolve_api_url(
         }
     };
     guard_url(target, "LOAD_TEST_API_URL", &url)?;
-    Ok(url)
+    Ok(normalize_base(url))
 }
 
 fn resolve_gateway_url(
@@ -261,7 +268,7 @@ fn resolve_gateway_url(
         }
     };
     guard_url(target, "LOAD_TEST_GATEWAY_URL", &url)?;
-    Ok(Some(url))
+    Ok(Some(normalize_base(url)))
 }
 
 /// Every dimension of a run is bounded, so no flag combination can turn a
@@ -652,6 +659,27 @@ mod tests {
         )
         .expect_err("refused");
         assert!(error.0.contains("LOAD_TEST_GATEWAY_URL"), "{error}");
+    }
+
+    #[test]
+    fn a_trailing_slash_never_survives_into_a_request_path() {
+        let plan = build_plan(
+            &flags(&[("scenario", "gateway-read"), ("target", "staging")]),
+            lookup(&[
+                ("LOAD_TEST_SECRET", "s"),
+                ("LOAD_TEST_API_URL", "https://api.staging.example.com//"),
+                (
+                    "LOAD_TEST_GATEWAY_URL",
+                    "https://gateway.staging.example.com/",
+                ),
+            ]),
+        )
+        .expect("plan");
+        assert_eq!(plan.api_url, "https://api.staging.example.com");
+        assert_eq!(
+            plan.gateway_url.as_deref(),
+            Some("https://gateway.staging.example.com")
+        );
     }
 
     #[test]

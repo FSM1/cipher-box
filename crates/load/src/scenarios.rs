@@ -17,6 +17,10 @@ use crate::runner::{
 /// run length.
 const RETIRE_DRAIN_BATCHES: usize = 4;
 
+/// Entropy behind each advisory CID, drawn one batch at a time so a large
+/// `--batch-size` does not spend the run's wall clock in per-row OS reads.
+const ADVISORY_CID_BYTES: usize = 64;
+
 pub(crate) async fn drive(
     virtual_client: &VirtualClient,
     plan: &RunPlan,
@@ -189,12 +193,14 @@ async fn byo_advisory(virtual_client: &VirtualClient, plan: &RunPlan, collector:
 
     let mut targets = Vec::new();
     for _ in 0..plan.ops_per_client {
+        let seed = random_bytes(ADVISORY_CID_BYTES * plan.batch_size as usize);
         let batch: Vec<NameRegistration> = synthetic_ipns_names(plan.batch_size)
             .into_iter()
-            .map(|ipns_name| NameRegistration {
+            .zip(seed.chunks(ADVISORY_CID_BYTES))
+            .map(|(ipns_name, block)| NameRegistration {
                 ipns_name,
                 head_cid: None,
-                content_cids: vec![leaf_cid(&random_bytes(64))],
+                content_cids: vec![leaf_cid(block)],
             })
             .collect();
         if register(virtual_client, collector, &batch).await {

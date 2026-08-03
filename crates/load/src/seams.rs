@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use cipherbox_desktop_seams::ReqwestHttp;
 use cipherbox_engine::seams::{CredentialStore, SeamResult};
+use zeroize::Zeroizing;
 
 /// Build the one transport every virtual client clones. Clones share the
 /// connection pool, so the harness measures the API rather than repeated TLS
@@ -25,19 +26,22 @@ pub(crate) fn build_http() -> Result<ReqwestHttp, String> {
 /// An in-memory refresh-token store, one per virtual client so their sessions
 /// stay independent. The engine's in-memory fake lives behind its `test-kit`
 /// feature, which a normal dependency must not enable.
+///
+/// The store is the token's terminal owner, so the buffer is wiped on replace,
+/// clear, and drop alike.
 #[derive(Clone, Default)]
 pub(crate) struct MemoryCredentialStore {
-    inner: Rc<RefCell<Option<Vec<u8>>>>,
+    inner: Rc<RefCell<Option<Zeroizing<Vec<u8>>>>>,
 }
 
 impl CredentialStore for MemoryCredentialStore {
     async fn store_refresh_token(&self, refresh_token: &[u8]) -> SeamResult<()> {
-        *self.inner.borrow_mut() = Some(refresh_token.to_vec());
+        *self.inner.borrow_mut() = Some(Zeroizing::new(refresh_token.to_vec()));
         Ok(())
     }
 
     async fn load_refresh_token(&self) -> SeamResult<Option<Vec<u8>>> {
-        Ok(self.inner.borrow().clone())
+        Ok(self.inner.borrow().as_ref().map(|token| token.to_vec()))
     }
 
     async fn clear_refresh_token(&self) -> SeamResult<()> {

@@ -242,14 +242,27 @@ pub async fn run(plan: &RunPlan) -> Result<(Collector, f64), String> {
         }));
     }
 
+    // A virtual client that panics must not skip teardown, or the run strands
+    // its provisioned accounts and their quota on a shared target. Record the
+    // join failure, tear down every client that came back, then report.
     let mut clients = Vec::new();
+    let mut join_error = None;
     for task in tasks {
-        let (virtual_client, samples) = task.await.map_err(|error| error.to_string())?;
-        collector.absorb(samples);
-        clients.push(virtual_client);
+        match task.await {
+            Ok((virtual_client, samples)) => {
+                collector.absorb(samples);
+                clients.push(virtual_client);
+            }
+            Err(error) => {
+                join_error.get_or_insert_with(|| error.to_string());
+            }
+        }
     }
 
     teardown(clients, &mut collector).await;
+    if let Some(error) = join_error {
+        return Err(format!("a virtual client did not finish: {error}"));
+    }
     Ok((collector, started.elapsed().as_secs_f64() * 1_000.0))
 }
 
