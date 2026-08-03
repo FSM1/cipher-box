@@ -2,6 +2,7 @@
 //! write-ahead intent record for cross-key atomic batch commits.
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use cipherbox_engine::seams::{FloorNamespace, FloorRaise, FloorStore, SeamError, SeamResult};
 
@@ -34,6 +35,10 @@ pub struct FileFloorStore {
     epoch_dir: PathBuf,
     seq_dir: PathBuf,
     intent_dir: PathBuf,
+    /// Serializes the read-modify-write in [`Self::raise_floor`] within this
+    /// handle: interleaved raises can durably regress a floor, and intent
+    /// replay cannot heal that loss (#704).
+    write_lock: Mutex<()>,
 }
 
 /// Intent-record tag for an epoch-namespace raise.
@@ -58,6 +63,7 @@ impl FileFloorStore {
             epoch_dir,
             seq_dir,
             intent_dir,
+            write_lock: Mutex::new(()),
         };
         store.replay_intents()?;
         Ok(store)
@@ -79,6 +85,10 @@ impl FileFloorStore {
     }
 
     fn raise_floor(&self, dir: &Path, key: &[u8], value: u64, op: &str) -> SeamResult<u64> {
+        let _guard = self
+            .write_lock
+            .lock()
+            .map_err(|_| SeamError::new(format!("{op}: floor write lock poisoned")))?;
         let current = self.read_floor(dir, key, op)?;
         let raised = current.map_or(value, |stored| stored.max(value));
         // Monotonic-max: only touch the platter when the floor actually
@@ -167,7 +177,7 @@ impl FloorStore for FileFloorStore {
             return Ok(Vec::new());
         }
         let intent_path = self.intent_dir.join(unique_component());
-        atomic_write(&intent_path, &encode_intent(raises))
+        atomic_write(&intent_path, &encode_intent(raises)?)
             .map_err(|err| seam_err("floor_store write intent", &err))?;
         let resulting = self.apply_raises(raises, "floor_store commit_floors")?;
         remove_file_durable(&intent_path)
@@ -176,10 +186,18 @@ impl FloorStore for FileFloorStore {
     }
 }
 
+/// The 4-byte little-endian key-length prefix. Fails closed on a key the
+/// prefix cannot represent: a truncated length reframes the whole record.
+fn intent_key_len(len: u64) -> SeamResult<[u8; 4]> {
+    u32::try_from(len)
+        .map(u32::to_le_bytes)
+        .map_err(|_| SeamError::new("floor_store: intent key exceeds its 4-byte length prefix"))
+}
+
 /// Serializes a batch into the intent record: for each raise, a 1-byte
 /// namespace tag, a 4-byte little-endian key length, the key bytes, then the
 /// 8-byte little-endian value.
-fn encode_intent(raises: &[FloorRaise]) -> Vec<u8> {
+fn encode_intent(raises: &[FloorRaise]) -> SeamResult<Vec<u8>> {
     let mut out = Vec::new();
     for raise in raises {
         let tag = match raise.namespace {
@@ -187,11 +205,11 @@ fn encode_intent(raises: &[FloorRaise]) -> Vec<u8> {
             FloorNamespace::Sequence => INTENT_TAG_SEQUENCE,
         };
         out.push(tag);
-        out.extend_from_slice(&(raise.key.len() as u32).to_le_bytes());
+        out.extend_from_slice(&intent_key_len(raise.key.len() as u64)?);
         out.extend_from_slice(&raise.key);
         out.extend_from_slice(&raise.value.to_le_bytes());
     }
-    out
+    Ok(out)
 }
 
 /// The corruption error surfaced by [`decode_intent`].
@@ -200,8 +218,13 @@ fn corrupt_intent() -> SeamError {
 }
 
 /// Reads a fixed slice at `start`, failing closed if it runs past the record.
+/// `len` is corrupt-controlled, so `start + len` can wrap `usize` on a 32-bit
+/// target.
 fn intent_slice(bytes: &[u8], start: usize, len: usize) -> SeamResult<&[u8]> {
-    bytes.get(start..start + len).ok_or_else(corrupt_intent)
+    start
+        .checked_add(len)
+        .and_then(|end| bytes.get(start..end))
+        .ok_or_else(corrupt_intent)
 }
 
 /// Parses an intent record. The record is written whole through the
@@ -245,12 +268,63 @@ mod tests {
             FloorRaise::sequence(b"k51-name".to_vec(), 42),
             FloorRaise::epoch(Vec::new(), 1),
         ];
-        assert_eq!(decode_intent(&encode_intent(&raises)).unwrap(), raises);
+        assert_eq!(
+            decode_intent(&encode_intent(&raises).unwrap()).unwrap(),
+            raises
+        );
+    }
+
+    #[test]
+    fn decode_rejects_an_oversized_key_length() {
+        let mut bytes = vec![INTENT_TAG_EPOCH];
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode_intent(&bytes).is_err());
+    }
+
+    #[test]
+    fn intent_slice_fails_closed_on_an_overflowing_end() {
+        assert!(intent_slice(b"abc", 1, usize::MAX).is_err());
+    }
+
+    #[test]
+    fn encode_rejects_a_key_longer_than_its_length_prefix() {
+        assert!(intent_key_len(u32::MAX as u64).is_ok());
+        assert!(intent_key_len(u32::MAX as u64 + 1).is_err());
+    }
+
+    /// The #704 regression: with the raises unserialized, the low one can read
+    /// the pre-raise floor and land last.
+    #[test]
+    fn concurrent_raises_never_regress_a_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FileFloorStore::open(dir.path().join("floors")).unwrap();
+
+        for key in 0u64..32 {
+            let key = key.to_le_bytes();
+            let barrier = std::sync::Barrier::new(2);
+            std::thread::scope(|scope| {
+                let racers = [2u64, 1].map(|value| {
+                    let (store, barrier) = (&store, &barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        block_on(store.raise_epoch_floor(&key, value)).unwrap()
+                    })
+                });
+                for racer in racers {
+                    racer.join().unwrap();
+                }
+            });
+            assert_eq!(
+                block_on(store.epoch_floor(&key)).unwrap(),
+                Some(2),
+                "the low raise must never land on the platter after the high one"
+            );
+        }
     }
 
     #[test]
     fn decode_rejects_a_truncated_intent() {
-        let bytes = encode_intent(&[FloorRaise::epoch(b"scope".to_vec(), 7)]);
+        let bytes = encode_intent(&[FloorRaise::epoch(b"scope".to_vec(), 7)]).unwrap();
         assert!(decode_intent(&bytes[..bytes.len() - 1]).is_err());
     }
 
@@ -276,7 +350,7 @@ mod tests {
         ];
         atomic_write(
             &path.join("intent").join("crashed-commit"),
-            &encode_intent(&interrupted),
+            &encode_intent(&interrupted).unwrap(),
         )
         .unwrap();
 
@@ -319,8 +393,16 @@ mod tests {
             FloorRaise::sequence(b"name-b".to_vec(), 9),
         ];
         let intent_dir = path.join("intent");
-        atomic_write(&intent_dir.join("commit-1"), &encode_intent(&first)).unwrap();
-        atomic_write(&intent_dir.join("commit-2"), &encode_intent(&second)).unwrap();
+        atomic_write(
+            &intent_dir.join("commit-1"),
+            &encode_intent(&first).unwrap(),
+        )
+        .unwrap();
+        atomic_write(
+            &intent_dir.join("commit-2"),
+            &encode_intent(&second).unwrap(),
+        )
+        .unwrap();
 
         block_on(async {
             let reopened = FileFloorStore::open(&path).unwrap();
@@ -347,7 +429,7 @@ mod tests {
         FileFloorStore::open(&path).unwrap();
 
         // A valid record truncated by one byte: structurally corrupt, not torn.
-        let good = encode_intent(&[FloorRaise::epoch(b"scope".to_vec(), 1)]);
+        let good = encode_intent(&[FloorRaise::epoch(b"scope".to_vec(), 1)]).unwrap();
         atomic_write(
             &path.join("intent").join("corrupt"),
             &good[..good.len() - 1],
