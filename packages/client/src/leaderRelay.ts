@@ -25,7 +25,7 @@ import type {
   WireRead,
   WireStream,
 } from './broadcast.js';
-import { EngineRequestError } from './correlatedTransport.js';
+import { EngineRequestError, unknownHandle, type HandleKind } from './correlatedTransport.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
 import type { SnapshotDescriptor, StreamHandle, WriteHandle } from './worker/protocol.js';
@@ -49,22 +49,6 @@ export interface LeaderRelayOptions {
 }
 
 const DEFAULT_NAMING_TIMEOUT_MS = 5000;
-
-/** Which handle table a step addresses. */
-type HandleKind = 'write' | 'stream';
-
-/**
- * Refuses a step on a handle the asking tab does not own. Handle ids are one
- * global namespace across tabs, so the refusal is spelled exactly like the
- * engine's own unknown-handle error: a probing tab learns nothing a legitimate
- * one would not.
- */
-function unknownHandle(kind: HandleKind): EngineRequestError {
-  return new EngineRequestError(
-    `unknown ${kind} handle`,
-    kind === 'write' ? 'unknownWriteHandle' : 'unknownStreamHandle'
-  );
-}
 
 /** Projects a caught failure onto the wire's `error`/`code` fields. */
 function wireError(error: unknown): { error: string; code?: string } {

@@ -669,13 +669,8 @@ pub enum EngineError {
     /// A read named a stream handle this engine does not hold — never minted,
     /// or already closed.
     UnknownStreamHandle,
-    /// Too many read streams are already open ([`MAX_OPEN_STREAMS`]). Each open
-    /// stream pins a content key and a root manifest, so an unbounded table is
-    /// a memory and key-pinning DoS.
-    TooManyStreams {
-        /// The ceiling that refused it, so a host can size its own pool.
-        limit: usize,
-    },
+    /// The open-stream table is already at [`MAX_OPEN_STREAMS`]; close one first.
+    TooManyStreams,
     /// [`Command::CancelUpload`] named an op that is no longer cancellable: its
     /// version's last block confirmed and its record is publishing, or it has
     /// already left the durable queue. Never converted into a compensating
@@ -842,9 +837,9 @@ impl fmt::Display for EngineError {
             ),
             EngineError::UnknownWriteHandle => f.write_str("unknown write handle"),
             EngineError::UnknownStreamHandle => f.write_str("unknown stream handle"),
-            EngineError::TooManyStreams { limit } => write!(
+            EngineError::TooManyStreams => write!(
                 f,
-                "too many read streams are already open; at most {limit} may be open at once, so close one first"
+                "too many read streams are already open; at most {MAX_OPEN_STREAMS} may be open at once, so close one first"
             ),
             EngineError::TooLateToCancel { op_id } => write!(
                 f,
@@ -1149,7 +1144,7 @@ struct LiveStream {
 /// A host holds one stream per open media element, so a real UI is two orders
 /// below this; the ceiling exists because each entry pins a content key and a
 /// root manifest carrying a CID per MiB of file, which an unbounded table turns
-/// into a memory and key-pinning DoS.
+/// into a memory and key-pinning DoS ([`EngineError::TooManyStreams`]).
 pub const MAX_OPEN_STREAMS: usize = 256;
 
 /// The engine's live read streams, bounded by [`MAX_OPEN_STREAMS`].
@@ -2464,9 +2459,7 @@ impl<T: SeamTypes> Engine<T> {
         }
     }
 
-    /// [`read_content`](Engine::read_content) without its progress phases. Kept
-    /// private and window-less: a multi-window read pins one version instead
-    /// ([`StreamHandle`], [`open_content_stream`](Engine::open_content_stream)).
+    /// [`read_content`](Engine::read_content) without its progress phases.
     async fn read_whole(&self, node: NodeId) -> Result<Vec<u8>, EngineError> {
         let (version, version_count) = self.head_version(node).await?;
         // The range clamps to the version's size, so the whole file is the
@@ -2492,9 +2485,7 @@ impl<T: SeamTypes> Engine<T> {
         // network on it; re-checked at the insert, the only borrow that is
         // atomic against opens which interleaved on the awaits between.
         if self.streams.borrow().open.len() >= MAX_OPEN_STREAMS {
-            return Err(EngineError::TooManyStreams {
-                limit: MAX_OPEN_STREAMS,
-            });
+            return Err(EngineError::TooManyStreams);
         }
         let (version, version_count) = self.head_version(node).await?;
         let manifest = open_content_root(&self.gateway, &self.seams.http, &version)
@@ -2503,9 +2494,7 @@ impl<T: SeamTypes> Engine<T> {
         self.project_head(node, &version, version_count);
         let mut streams = self.streams.borrow_mut();
         if streams.open.len() >= MAX_OPEN_STREAMS {
-            return Err(EngineError::TooManyStreams {
-                limit: MAX_OPEN_STREAMS,
-            });
+            return Err(EngineError::TooManyStreams);
         }
         streams.next += 1;
         let handle = StreamHandle(streams.next);
@@ -2559,8 +2548,7 @@ impl<T: SeamTypes> Engine<T> {
     ///
     /// The verified head is gate-passing state, so it may legally touch the base
     /// node's projected size/mtime. Repaint only on a real change — a repeat read
-    /// must not cascade — and only once the read succeeded, so a fail-closed
-    /// rejection folds nothing.
+    /// must not cascade.
     fn project_head(&self, node: NodeId, version: &Version, version_count: u64) {
         if project_child_version(
             &mut self.snapshot.borrow_mut(),

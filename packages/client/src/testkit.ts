@@ -442,7 +442,7 @@ export class FakeEngineWorker implements EngineWorkerLike {
   private messageListeners: Array<(event: MessageEvent<WorkerMessage>) => void> = [];
 
   /** What `openContentStream` answers with — every engine's counter starts at 1. */
-  streamHandle: WriteHandle = 1n;
+  streamHandle: StreamHandle = 1n;
 
   postMessage(message: { id?: number; type?: string }): void {
     this.posted.push(message);

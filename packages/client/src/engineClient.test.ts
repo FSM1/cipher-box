@@ -145,10 +145,8 @@ describe('EngineClient leadership + transport swap', () => {
     await tick();
     expect(follower.currentRole()).toBe('leader');
 
-    // The promoted tab's fresh engine mints from 1 as well, so a handle carried
-    // across the swap would name whatever that engine opened next — a different
-    // node's bytes served at this stream's offsets, with every integrity check
-    // still passing.
+    // The promoted tab's engine mints from 1 too, so a carried-over handle would
+    // alias the next stream it opens (`EngineClient.streams`).
     const reopened = await follower.openContentStream(new Uint8Array(16).fill(2));
     expect(reopened).not.toBe(stale);
     await expect(follower.readStream(stale, 0, 8)).rejects.toMatchObject({
@@ -384,9 +382,8 @@ describe('EngineClient leadership + transport swap', () => {
     for (let i = 0; i < 4; i += 1) await tick();
     expect(follower.currentRole()).toBe('follower');
 
-    // Every engine's stream counter restarts at 1, so a handle carried across a
-    // leadership this tab merely observed would name a live stream over a
-    // different node on the new leader's engine.
+    // The fence has to fire on a leadership this tab merely observed, not only
+    // on one it was promoted through (`EngineClient.streams`).
     await follower.openContentStream(new Uint8Array(16).fill(2));
     await expect(follower.readStream(stale, 0, 8)).rejects.toMatchObject({
       code: 'unknownStreamHandle',

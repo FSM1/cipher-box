@@ -18,7 +18,7 @@
 
 import { BROADCAST_CHANNEL_NAME, newClientId, type BroadcastChannelLike } from './broadcast.js';
 import { BroadcastTransport } from './broadcastTransport.js';
-import { EngineRequestError, fanOut } from './correlatedTransport.js';
+import { fanOut, unknownHandle } from './correlatedTransport.js';
 import { EngineFacade } from './facade.js';
 import { LeaderRelay } from './leaderRelay.js';
 import { LeaderElection, type LockManagerLike } from './leadership.js';
@@ -67,10 +67,6 @@ export interface EngineClientConfig {
 }
 
 export type EngineClientRole = 'follower' | 'leader' | 'closed';
-
-/** The engine's own verdict for a handle it does not hold, spelled the same way. */
-const unknownStreamHandle = (): EngineRequestError =>
-  new EngineRequestError('unknown stream handle', 'unknownStreamHandle');
 
 /**
  * The object handed to `EngineFacade`: it *is* the transport, delegating to the
@@ -188,7 +184,7 @@ export class EngineClient implements EngineTransport {
     const generation = this.generation;
     const inner = await this.current.openContentStream(node);
     // The engine that minted this went away mid-open; its stream went with it.
-    if (generation !== this.generation) throw unknownStreamHandle();
+    if (generation !== this.generation) throw unknownHandle('stream');
     this.nextStream += 1n;
     this.streams.set(this.nextStream, inner);
     return this.nextStream;
@@ -196,7 +192,7 @@ export class EngineClient implements EngineTransport {
 
   readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
     const inner = this.streams.get(handle);
-    if (inner === undefined) return Promise.reject(unknownStreamHandle());
+    if (inner === undefined) return Promise.reject(unknownHandle('stream'));
     return this.current.readStream(inner, offset, length);
   }
 

@@ -479,7 +479,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::ContentSizeMismatch { .. } => "contentSizeMismatch",
         EngineError::UnknownWriteHandle => "unknownWriteHandle",
         EngineError::UnknownStreamHandle => "unknownStreamHandle",
-        EngineError::TooManyStreams { .. } => "tooManyStreams",
+        EngineError::TooManyStreams => "tooManyStreams",
         EngineError::TooLateToCancel { .. } => "tooLateToCancel",
         EngineError::NotAnUpload { .. } => "notAnUpload",
         EngineError::ContentTooLarge { .. } => "contentTooLarge",

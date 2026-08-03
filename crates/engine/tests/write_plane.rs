@@ -839,6 +839,43 @@ fn write_file(
     block_on(engine.commit_write(handle))
 }
 
+/// Alice publishes `plaintext` as `clip.bin` under the root, handing back her
+/// engine and pump tasks so a caller can republish over it.
+fn publish_clip(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    plaintext: &[u8],
+) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>, NodeId) {
+    let alice = world.device(b"alice");
+    let (mut engine, events, mut tasks) = boot(world, blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "clip.bin".into(),
+        },
+        plaintext,
+    )
+    .expect("the write commits");
+    tick(world, &engine, &mut tasks);
+    let node = child_id(&engine, ROOT, "clip.bin");
+    (engine, events, tasks, node)
+}
+
+/// A started second device of the same account, its block plane wired for
+/// `calls` HTTP calls — the reader that only ever saw the network.
+fn open_reader(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    calls: usize,
+) -> (FakeDevice, Engine<FakeSeamTypes>, EventStream) {
+    let device = world.device(b"alice-second-device");
+    serve_http(&device, blocks, calls);
+    let (mut engine, events) = engine_on(&device, 7);
+    block_on(engine.start(secret())).unwrap();
+    (device, engine, events)
+}
+
 /// The slice's headline: content bytes sliced by the client, sealed and staged
 /// per block by the engine, uploaded and published by the drain, and downloaded
 /// and verified byte-for-byte by a second device that only ever saw the network.
@@ -957,9 +994,8 @@ fn a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
     engine_b.close_stream(stream);
 }
 
-/// The live-stream table is bounded: each open stream pins a content key and a
-/// root manifest, so an unbounded one is a memory and key-pinning DoS. Past the
-/// ceiling the open is refused fail-closed, never evicting a live stream.
+/// Past [`MAX_OPEN_STREAMS`] an open is refused fail-closed, never evicting a
+/// live stream.
 #[test]
 fn opening_past_the_stream_ceiling_is_refused() {
     let world = FakeWorld::new();
@@ -967,25 +1003,9 @@ fn opening_past_the_stream_ceiling_is_refused() {
     seed_account(&world, &blocks);
     let plaintext: Vec<u8> = (0..64u8).collect();
 
-    let alice = world.device(b"alice");
-    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
-    write_file(
-        &mut engine_a,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "clip.bin".into(),
-        },
-        &plaintext,
-    )
-    .expect("the write commits");
-    tick(&world, &engine_a, &mut tasks);
-    let node = child_id(&engine_a, ROOT, "clip.bin");
-
-    let bob = world.device(b"alice-second-device");
+    let (_engine_a, _events_a, _tasks, node) = publish_clip(&world, &blocks, &plaintext);
     // A few calls per open, plus the reads below.
-    serve_http(&bob, &blocks, MAX_OPEN_STREAMS * 8 + 64);
-    let (mut engine_b, _events_b) = engine_on(&bob, 7);
-    block_on(engine_b.start(secret())).unwrap();
+    let (_bob, engine_b, _events_b) = open_reader(&world, &blocks, MAX_OPEN_STREAMS * 8 + 64);
 
     let handles: Vec<_> = (0..MAX_OPEN_STREAMS)
         .map(|open| {
@@ -996,9 +1016,7 @@ fn opening_past_the_stream_ceiling_is_refused() {
 
     assert_eq!(
         block_on(engine_b.open_content_stream(node)),
-        Err(EngineError::TooManyStreams {
-            limit: MAX_OPEN_STREAMS
-        }),
+        Err(EngineError::TooManyStreams),
         "the open past the ceiling is refused"
     );
 
@@ -1013,9 +1031,7 @@ fn opening_past_the_stream_ceiling_is_refused() {
     let reopened = block_on(engine_b.open_content_stream(node)).expect("a freed slot admits one");
     assert_eq!(
         block_on(engine_b.open_content_stream(node)),
-        Err(EngineError::TooManyStreams {
-            limit: MAX_OPEN_STREAMS
-        }),
+        Err(EngineError::TooManyStreams),
         "the table is full again"
     );
     engine_b.close_stream(reopened);
@@ -1023,8 +1039,7 @@ fn opening_past_the_stream_ceiling_is_refused() {
 
 /// A stream pins the head version it opened on: a head change mid-stream leaves
 /// every later window a slice of the pinned version, never a splice of two
-/// (#948). Every byte of a spliced body is still CID-verified and unsealed under
-/// its own version's key, so nothing downstream could detect it.
+/// (#948).
 #[test]
 fn a_stream_serves_the_pinned_version_across_a_head_change() {
     let world = FakeWorld::new();
@@ -1035,24 +1050,8 @@ fn a_stream_serves_the_pinned_version_across_a_head_change() {
     let first: Vec<u8> = (0..200u8).collect();
     let second: Vec<u8> = (0..200u8).map(|byte| 255 - byte).collect();
 
-    let alice = world.device(b"alice");
-    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
-    write_file(
-        &mut engine_a,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "clip.bin".into(),
-        },
-        &first,
-    )
-    .expect("the write commits");
-    tick(&world, &engine_a, &mut tasks);
-    let node = child_id(&engine_a, ROOT, "clip.bin");
-
-    let bob = world.device(b"alice-second-device");
-    serve_http(&bob, &blocks, 400);
-    let (mut engine_b, _events_b) = engine_on(&bob, 7);
-    block_on(engine_b.start(secret())).unwrap();
+    let (mut engine_a, _events_a, mut tasks, node) = publish_clip(&world, &blocks, &first);
+    let (_bob, engine_b, _events_b) = open_reader(&world, &blocks, 400);
 
     let stream = block_on(engine_b.open_content_stream(node)).expect("the stream opens");
     let mut assembled = block_on(engine_b.read_stream(stream, 0, 16)).expect("the first window");
@@ -1099,24 +1098,8 @@ fn a_stream_pays_one_resolve_and_one_root_fetch_for_the_whole_body() {
     // One window per leaf, so the leaf fetches a stream makes are countable.
     let leaves = plaintext.len().div_ceil(window);
 
-    let alice = world.device(b"alice");
-    let (mut engine_a, _events_a, mut tasks) = boot(&world, &blocks, &alice, 42);
-    write_file(
-        &mut engine_a,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "clip.bin".into(),
-        },
-        &plaintext,
-    )
-    .expect("the write commits");
-    tick(&world, &engine_a, &mut tasks);
-    let node = child_id(&engine_a, ROOT, "clip.bin");
-
-    let bob = world.device(b"alice-second-device");
-    serve_http(&bob, &blocks, 400);
-    let (mut engine_b, _events_b) = engine_on(&bob, 7);
-    block_on(engine_b.start(secret())).unwrap();
+    let (_engine_a, _events_a, _tasks, node) = publish_clip(&world, &blocks, &plaintext);
+    let (bob, engine_b, _events_b) = open_reader(&world, &blocks, 400);
 
     let stream = block_on(engine_b.open_content_stream(node)).expect("the stream opens");
     // Every routing endpoint goes dark once the stream is open: a window that

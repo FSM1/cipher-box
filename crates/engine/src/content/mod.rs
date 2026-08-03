@@ -263,10 +263,9 @@ pub(crate) async fn read_pinned_range<H: Http>(
     offset: u64,
     length: u64,
 ) -> Result<Vec<u8>, OpenError> {
-    // The two arrive as separate values, so re-assert the pairing rather than
-    // assume it: a manifest from another version would otherwise be read at this
-    // version's key, and the AEAD would be the only thing standing between the
-    // caller and a differently-framed body.
+    // `manifest` and `version` arrive as separate arguments: re-assert the
+    // pairing rather than trust the caller, or another version's manifest frames
+    // this version's leaves with only the AEAD to catch it.
     if manifest.size != version.size {
         return Err(OpenError::Trust(format!(
             "manifest size {} disagrees with version size {}",

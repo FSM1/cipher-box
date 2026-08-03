@@ -42,6 +42,21 @@ export class EngineRequestError extends Error {
   }
 }
 
+/** Which of the engine's handle tables a step addresses. */
+export type HandleKind = 'write' | 'stream';
+
+/**
+ * Refuses a step on a handle the refusing layer cannot serve, spelled exactly
+ * like the engine's own unknown-handle error: a probing tab learns nothing a
+ * legitimate one would not. Mirrors `EngineError::Unknown*Handle`.
+ */
+export function unknownHandle(kind: HandleKind): EngineRequestError {
+  return new EngineRequestError(
+    `unknown ${kind} handle`,
+    kind === 'write' ? 'unknownWriteHandle' : 'unknownStreamHandle'
+  );
+}
+
 /**
  * Delivers one event to every listener, isolating a throwing subscriber so it
  * cannot drop the event for the rest.
