@@ -18,7 +18,9 @@ use cipherbox_contract::{
     hex_to_scalar, prod_api_url, random_identity_signer, test_login_secret,
 };
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
-use cipherbox_core::seal::{ChildScopeRef, GrantSetCommitment, Permission, sign_grant_set};
+use cipherbox_core::seal::{
+    ChildScopeRef, GrantSetCommitment, Permission, PreservedFields, sign_grant_set,
+};
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -1175,7 +1177,7 @@ async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
         ipns_name: b"contract-parent-scope-root".to_vec(),
         owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
         entries: Vec::new(),
-        unknown: Vec::new(),
+        unknown: PreservedFields::new(),
     };
     let parent_commitment_sig = sign_grant_set(&owner_identity, &parent_commitment)
         .expect("sign the parent commitment")
