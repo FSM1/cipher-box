@@ -1,16 +1,30 @@
-import { useParams } from 'react-router-dom';
-import { LogoutButton } from '../components/auth/LogoutButton';
+import { useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../auth/useAuth';
+import { FileBrowser } from '../components/file-browser/FileBrowser';
+import { AppShell } from '../components/layout/AppShell';
 
-/** Placeholder for the vault browser (#805). */
+/**
+ * The vault browser. No route guard framework: an unauthenticated tab redirects
+ * on facade auth state (blueprint/web-client.md "Composition").
+ */
 export function FilesPage() {
-  // Routes key on the stable node id; an absent id is the vault's current root
-  // (blueprint/web-client.md "UI state law").
-  const { nodeId } = useParams<{ nodeId: string }>();
+  const { isAuthenticated, isReady } = useAuth();
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (isReady && !isAuthenticated) navigate('/');
+  }, [isAuthenticated, isReady, navigate]);
+
   return (
-    <main>
-      <h1>Files</h1>
-      <p data-testid="files-node">{nodeId ?? 'root'}</p>
-      <LogoutButton />
-    </main>
+    <AppShell>
+      {isAuthenticated ? (
+        <FileBrowser />
+      ) : (
+        <p className="file-browser-loading" data-testid="files-signing-in">
+          {'// CHECKING SESSION...'}
+        </p>
+      )}
+    </AppShell>
   );
 }

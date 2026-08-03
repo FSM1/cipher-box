@@ -233,6 +233,10 @@ pub struct SnapshotView {
     pub root: NodeId,
     /// The folder this view lists.
     pub folder: NodeId,
+    /// That folder's own name, empty at the root. A host cannot recover it from
+    /// `ancestors` (which starts at the parent) and must not cache a name across
+    /// a navigation, so the view carries it.
+    pub folder_name: String,
     /// Direct children, deterministically ordered by node id.
     pub children: Vec<SnapshotChild>,
     /// Ancestor trail from the folder's parent up to and including the root,
@@ -2350,6 +2354,10 @@ impl<T: SeamTypes> Engine<T> {
                     .unwrap_or_default(),
             })
             .collect();
+        let folder_name = rendered
+            .node(folder)
+            .map(|meta| meta.name.clone())
+            .unwrap_or_default();
         let dead_letters = dead
             .iter()
             .map(|(op_id, (_, reason))| DeadLetter {
@@ -2368,6 +2376,7 @@ impl<T: SeamTypes> Engine<T> {
         Ok(SnapshotView {
             root: rendered.root,
             folder,
+            folder_name,
             children,
             ancestors,
             dead_letters,
@@ -3439,6 +3448,7 @@ mod tests {
             assert!(view.dead_letters.is_empty());
             assert_eq!(view.retained_records, 0);
             assert!(view.ancestors.is_empty(), "the root has no ancestors");
+            assert!(view.folder_name.is_empty(), "the root has no name");
         }
 
         #[test]
@@ -3573,6 +3583,10 @@ mod tests {
                     },
                 ],
                 "nearest first, ending at the root"
+            );
+            assert_eq!(
+                view.folder_name, "sub",
+                "the listed folder names itself; the trail starts at its parent"
             );
         }
 

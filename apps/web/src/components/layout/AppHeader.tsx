@@ -1,0 +1,16 @@
+import { UserMenu } from './UserMenu';
+
+/** Wordmark and account menu. */
+export function AppHeader() {
+  return (
+    <header className="app-header" data-testid="app-header">
+      <div className="header-left">
+        <span className="header-prompt">&gt;</span>
+        <span className="header-logo">CIPHERBOX</span>
+      </div>
+      <div className="header-right">
+        <UserMenu />
+      </div>
+    </header>
+  );
+}

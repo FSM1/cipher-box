@@ -419,6 +419,12 @@ impl SnapshotView {
         self.inner.folder.0.to_vec()
     }
 
+    /// The listed folder's own name, empty at the root.
+    #[wasm_bindgen(getter, js_name = folderName)]
+    pub fn folder_name(&self) -> String {
+        self.inner.folder_name.clone()
+    }
+
     /// Direct children, deterministically ordered by node id.
     #[wasm_bindgen(getter)]
     pub fn children(&self) -> Vec<SnapshotChild> {
@@ -953,6 +959,7 @@ mod tests {
         let view = SnapshotView::from_facade(facade::SnapshotView {
             root: facade::NodeId([1u8; 16]),
             folder: facade::NodeId([2u8; 16]),
+            folder_name: "holiday".into(),
             children: vec![
                 facade::SnapshotChild {
                     id: facade::NodeId([3u8; 16]),
@@ -1000,6 +1007,7 @@ mod tests {
 
         assert_eq!(view.root(), vec![1u8; 16]);
         assert_eq!(view.folder(), vec![2u8; 16]);
+        assert_eq!(view.folder_name(), "holiday");
         let dead_letters = view.dead_letters();
         assert_eq!(
             dead_letters

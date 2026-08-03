@@ -21,6 +21,7 @@ export function view(
   return {
     root: ROOT_ID,
     folder,
+    folderName: '',
     children: Array.from({ length: children }, (_, i) => ({
       id: new Uint8Array(16).fill(i + 1),
       name: `child-${i}`,

@@ -97,6 +97,8 @@ export interface SnapshotChildDescriptor {
 export interface SnapshotDescriptor {
   root: Uint8Array;
   folder: Uint8Array;
+  /** The listed folder's own name, empty at the root. */
+  folderName: string;
   children: SnapshotChildDescriptor[];
   ancestors: BreadcrumbDescriptor[];
   deadLetters: DeadLetterDescriptor[];

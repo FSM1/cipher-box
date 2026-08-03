@@ -245,6 +245,7 @@ export function readSnapshot(wasm: EngineWasm, view: WasmSnapshotView): Snapshot
   return {
     root: view.root,
     folder: view.folder,
+    folderName: view.folderName,
     children: view.children.map((child) => ({
       id: child.id,
       name: child.name,

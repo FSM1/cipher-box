@@ -1,0 +1,36 @@
+interface ParentDirRowProps {
+  onActivate: () => void;
+}
+
+/** The `[..]` row that opens the parent folder, first in every non-root list. */
+export function ParentDirRow({ onActivate }: ParentDirRowProps) {
+  return (
+    <div
+      className="file-list-item file-list-item--parent"
+      role="row"
+      tabIndex={0}
+      onDoubleClick={onActivate}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        onActivate();
+      }}
+      data-testid="parent-dir-row"
+    >
+      <div className="file-list-item-row-top" role="gridcell">
+        <span className="file-list-item-icon" aria-hidden="true">
+          [..]
+        </span>
+        <span className="file-list-item-name">PARENT_DIR</span>
+      </div>
+      <div className="file-list-item-row-bottom">
+        <span className="file-list-item-size" role="gridcell">
+          -
+        </span>
+        <span className="file-list-item-date" role="gridcell">
+          -
+        </span>
+      </div>
+    </div>
+  );
+}
