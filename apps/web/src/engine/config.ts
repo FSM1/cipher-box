@@ -9,10 +9,17 @@ const DEFAULT_ROUTING_ENDPOINTS = 'https://delegated-ipfs.dev';
 /** The deployments the build-time environment names. */
 export type Environment = 'local' | 'ci' | 'staging' | 'production';
 
-/** The API origin the engine authenticates and publishes against. */
+/**
+ * The API origin the engine authenticates and publishes against. Trimmed, since
+ * it is concatenated into request URLs; a whitespace-only value trims to blank
+ * rather than defaulting, so the engine's own edge check refuses it instead of
+ * a misconfigured deployment quietly talking to the user's own machine.
+ */
 export function apiBaseUrl(env: Partial<ImportMetaEnv>): string {
   // `VITE_API_URL=` reads as `''`, which `new URL` rejects rather than defaults.
-  return env.VITE_API_URL || DEFAULT_API_URL;
+  return env.VITE_API_URL === undefined || env.VITE_API_URL === ''
+    ? DEFAULT_API_URL
+    : env.VITE_API_URL.trim();
 }
 
 const ENVIRONMENTS: readonly Environment[] = ['local', 'ci', 'staging', 'production'];
@@ -29,6 +36,15 @@ const LOGIN_ENV = ['VITE_WEB3AUTH_CLIENT_ID', 'VITE_WEB3AUTH_VERIFIER'] as const
  * against — a working build pointed at whatever answers on the user's machine.
  */
 const DEPLOY_ENV = [...LOGIN_ENV, 'VITE_API_URL'] as const;
+
+/**
+ * A variable's configured value, or `undefined` when it carries none. Absent,
+ * empty and whitespace-only are one state: a repo variable set to a stray space
+ * or newline is unset, not configured.
+ */
+function configured(value: string | undefined): string | undefined {
+  return value?.trim() || undefined;
+}
 
 /** Reads a comma-separated variable as a trimmed, blank-free list. */
 function list(value: string | undefined): string[] {
@@ -70,9 +86,10 @@ export function engineHostConfig(
     apiBaseUrl: apiBaseUrl(env),
     recordEndpoints,
     // The content gateway has no default: unset reads nothing rather than
-    // reaching for an endpoint nobody chose. A blank accelerator would build a
-    // gateway source with no base URL, so it reads as unset.
-    acceleratorBaseUrl: env.VITE_READ_ACCELERATOR_URL || undefined,
+    // reaching for an endpoint nobody chose. Dormant is the fail-closed state,
+    // so a blank value must land there rather than configuring a gateway source
+    // whose every request fails.
+    acceleratorBaseUrl: configured(env.VITE_READ_ACCELERATOR_URL),
     publicGateways: list(env.VITE_PUBLIC_GATEWAYS),
     ...artifact,
   };
@@ -80,12 +97,13 @@ export function engineHostConfig(
 
 /** Of the variables Core Kit login needs, those `env` does not supply. */
 export function missingLoginEnv(env: Partial<ImportMetaEnv>): string[] {
-  return LOGIN_ENV.filter((name) => !env[name]);
+  return LOGIN_ENV.filter((name) => configured(env[name]) === undefined);
 }
 
 /** The Web3Auth identifiers a Core Kit session is built from; refuses a build missing any. */
 export function loginEnv(env: Partial<ImportMetaEnv>): { clientId: string; verifier: string } {
-  const { VITE_WEB3AUTH_CLIENT_ID: clientId, VITE_WEB3AUTH_VERIFIER: verifier } = env;
+  const clientId = configured(env.VITE_WEB3AUTH_CLIENT_ID);
+  const verifier = configured(env.VITE_WEB3AUTH_VERIFIER);
   if (!clientId || !verifier) {
     throw new Error(`${missingLoginEnv(env).join(' and ')} must be configured`);
   }
@@ -99,5 +117,6 @@ export function loginEnv(env: Partial<ImportMetaEnv>): { clientId: string; verif
  * exempt.
  */
 export function missingDeployEnv(env: Partial<ImportMetaEnv>): string[] {
-  return DEPLOYED.includes(environment(env)) ? DEPLOY_ENV.filter((name) => !env[name]) : [];
+  if (!DEPLOYED.includes(environment(env))) return [];
+  return DEPLOY_ENV.filter((name) => configured(env[name]) === undefined);
 }

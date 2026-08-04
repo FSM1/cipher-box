@@ -63,9 +63,25 @@ describe('engineHostConfig', () => {
     expect(config.acceleratorBaseUrl).toBeUndefined();
     expect(config.publicGateways).toEqual([]);
     expect(engineHostConfig({ VITE_PUBLIC_GATEWAYS: ' , ' }, artifact).publicGateways).toEqual([]);
+    for (const unset of ['', '   ']) {
+      // Whitespace would configure a gateway source with an unusable base URL —
+      // reads then fail per-request instead of staying dormant.
+      expect(
+        engineHostConfig({ VITE_READ_ACCELERATOR_URL: unset }, artifact).acceleratorBaseUrl
+      ).toBeUndefined();
+    }
+  });
+
+  it('trims a configured API origin, which is concatenated into request URLs', () => {
     expect(
-      engineHostConfig({ VITE_READ_ACCELERATOR_URL: '' }, artifact).acceleratorBaseUrl
-    ).toBeUndefined();
+      engineHostConfig({ VITE_API_URL: ' https://api.example.test\n' }, artifact).apiBaseUrl
+    ).toBe('https://api.example.test');
+  });
+
+  it('never defaults a whitespace API origin to localhost', () => {
+    // Defaulting here would point a misconfigured deployment at whatever answers
+    // on the user's machine; the engine's own edge check refuses a blank base.
+    expect(engineHostConfig({ VITE_API_URL: '   ' }, artifact).apiBaseUrl).toBe('');
   });
 });
 
@@ -83,14 +99,23 @@ describe('missingDeployEnv', () => {
       'VITE_WEB3AUTH_VERIFIER',
       'VITE_API_URL',
     ]);
-    // A variable substituted as blank is as unusable as an absent one.
-    expect(missingDeployEnv({ ...deployed, VITE_WEB3AUTH_VERIFIER: '' })).toEqual([
-      'VITE_WEB3AUTH_VERIFIER',
-    ]);
+    // A variable substituted as blank is as unusable as an absent one, and a
+    // whitespace-only one is blank — a repo variable set to a stray space or
+    // newline must not sail through the gate this build exists to fail on.
+    for (const blank of ['', '   ', '\n']) {
+      expect(missingDeployEnv({ ...deployed, VITE_WEB3AUTH_VERIFIER: blank })).toEqual([
+        'VITE_WEB3AUTH_VERIFIER',
+      ]);
+      expect(missingDeployEnv({ ...deployed, VITE_WEB3AUTH_CLIENT_ID: blank })).toEqual([
+        'VITE_WEB3AUTH_CLIENT_ID',
+      ]);
+    }
   });
 
   it('refuses a deployed build with no API origin, which would default to localhost', () => {
-    expect(missingDeployEnv({ ...deployed, VITE_API_URL: '' })).toEqual(['VITE_API_URL']);
+    for (const blank of ['', '   ']) {
+      expect(missingDeployEnv({ ...deployed, VITE_API_URL: blank })).toEqual(['VITE_API_URL']);
+    }
   });
 
   it('passes a fully configured deployment', () => {
@@ -111,10 +136,20 @@ describe('loginEnv', () => {
     });
   });
 
+  it('trims the identifiers, which are sent to Web3Auth verbatim', () => {
+    expect(
+      loginEnv({ VITE_WEB3AUTH_CLIENT_ID: ' client\n', VITE_WEB3AUTH_VERIFIER: 'v ' })
+    ).toEqual({ clientId: 'client', verifier: 'v' });
+  });
+
   it('refuses a build missing one, naming it', () => {
     expect(() => loginEnv({ VITE_WEB3AUTH_CLIENT_ID: 'client' })).toThrow(
       /^VITE_WEB3AUTH_VERIFIER must be configured$/
     );
+    // Whitespace is missing, not configured.
+    expect(() =>
+      loginEnv({ VITE_WEB3AUTH_CLIENT_ID: 'client', VITE_WEB3AUTH_VERIFIER: '   ' })
+    ).toThrow(/^VITE_WEB3AUTH_VERIFIER must be configured$/);
   });
 });
 

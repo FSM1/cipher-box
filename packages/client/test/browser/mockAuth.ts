@@ -71,11 +71,15 @@ function login(res: ServerResponse, dto: Fields): void {
 type Fields = Record<string, unknown>;
 
 function parse(body: Buffer): Fields {
+  let parsed: unknown;
   try {
-    return JSON.parse(body.toString('utf8')) as Fields;
+    parsed = JSON.parse(body.toString('utf8'));
   } catch {
     return {};
   }
+  // `JSON.parse('null')` is a valid parse of a non-object: reading a field off
+  // it throws inside the response callback, and the request never answers.
+  return typeof parsed === 'object' && parsed !== null ? (parsed as Fields) : {};
 }
 
 function field(dto: Fields, name: string): string | null {
