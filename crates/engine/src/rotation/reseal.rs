@@ -413,7 +413,6 @@ fn ctx_for(v: u64, scope_id: [u8; 16], epoch: u64, struct_tag: u8) -> AadContext
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secret_util::ct_eq_32;
     use crate::testkit::SeededEntropy;
     use cipherbox_core::seal::{
         GrantSetEntry, encode_grant_section, open_ascent_link, open_grant_blob, open_history_link,
@@ -421,6 +420,7 @@ mod tests {
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
+    use cipherbox_core::suite::secret::ct_eq;
     use cipherbox_core::suite::x25519::X25519Secret;
 
     const V: u64 = 2;
@@ -603,16 +603,13 @@ mod tests {
         let ctx = ctx_for(V, SCOPE, 5, STRUCT_TAG_GRANT_BLOB);
         let read_payload =
             open_grant_blob(&fx.read_grantee, &read_gb.enc, &ctx, &read_gb.ciphertext).unwrap();
-        assert!(ct_eq_32(read_payload.read_scope_seed(), &override_seed));
+        assert!(ct_eq(read_payload.read_scope_seed(), &override_seed));
         assert!(
             read_payload.write_scope_seed().is_none(),
             "read grant, no write seed"
         );
         assert_eq!(read_payload.epoch, 5);
-        assert!(ct_eq_32(
-            read_payload.pointer_read_key(),
-            &fx.pointer_read_key
-        ));
+        assert!(ct_eq(read_payload.pointer_read_key(), &fx.pointer_read_key));
 
         let write_gb = section
             .grant_blobs
@@ -621,9 +618,9 @@ mod tests {
             .unwrap();
         let write_payload =
             open_grant_blob(&fx.write_grantee, &write_gb.enc, &ctx, &write_gb.ciphertext).unwrap();
-        assert!(ct_eq_32(write_payload.read_scope_seed(), &override_seed));
+        assert!(ct_eq(write_payload.read_scope_seed(), &override_seed));
         assert!(
-            ct_eq_32(
+            ct_eq(
                 write_payload.write_scope_seed().unwrap(),
                 &fx.write_scope_seed
             ),
@@ -639,7 +636,7 @@ mod tests {
             &section.owner_blob.ciphertext,
         )
         .unwrap();
-        assert!(ct_eq_32(owner_payload.override_seed(), &override_seed));
+        assert!(ct_eq(owner_payload.override_seed(), &override_seed));
 
         // Owner-write-blob → write scope seed, AAD bound to the WRITE epoch (1),
         // structure signature bound to the READ epoch (5, the envelope's).
@@ -650,10 +647,7 @@ mod tests {
         let owb_ctx = ctx_for(V, SCOPE, 1, STRUCT_TAG_OWNER_WRITE_BLOB);
         let owb_payload =
             open_owner_write_blob(&fx.owner_enc, &owb.enc, &owb_ctx, &owb.ciphertext).unwrap();
-        assert!(ct_eq_32(
-            owb_payload.write_scope_seed(),
-            &fx.write_scope_seed
-        ));
+        assert!(ct_eq(owb_payload.write_scope_seed(), &fx.write_scope_seed));
         assert_eq!(owb_payload.write_epoch, 1);
         let owb_sig_input = StructureSigInput::over_ciphertext(
             SCOPE,
@@ -679,7 +673,7 @@ mod tests {
         };
         let ascent_payload =
             open_ascent_link(&fx.parent_node_seed, &ascent_ctx, &ascent_link).unwrap();
-        assert!(ct_eq_32(ascent_payload.override_seed(), &override_seed));
+        assert!(ct_eq(ascent_payload.override_seed(), &override_seed));
 
         // History link → prev seed under the new epoch's structure key.
         assert_eq!(section.history_links.len(), 1);
@@ -687,7 +681,7 @@ mod tests {
         let hl_ctx = ctx_for(V, SCOPE, 5, STRUCT_TAG_HISTORY_LINK);
         let hl = open_history_link(hl_key.as_bytes(), &hl_ctx, &section.history_links[0].sealed)
             .unwrap();
-        assert!(ct_eq_32(hl.prev_seed(), &prev_seed));
+        assert!(ct_eq(hl.prev_seed(), &prev_seed));
         assert_eq!(hl.prev_epoch, 4);
 
         // The whole section encodes (the release-active dup-tag guard passes).
@@ -844,7 +838,7 @@ mod tests {
             .unwrap();
         let payload =
             open_grant_blob(&fx.read_grantee, &read_gb.enc, &ctx, &read_gb.ciphertext).unwrap();
-        assert!(ct_eq_32(payload.read_scope_seed(), &new_seed));
+        assert!(ct_eq(payload.read_scope_seed(), &new_seed));
     }
 
     #[test]

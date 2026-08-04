@@ -17,10 +17,8 @@
 
 use std::collections::BTreeMap;
 
-use cipherbox_core::suite::secret::SecretBytes;
+use cipherbox_core::suite::secret::{SecretBytes, ct_eq};
 use zeroize::Zeroizing;
-
-use crate::secret_util::ct_eq_32;
 
 /// The last-confirmed override seed and epoch for one scope — the canonical
 /// owner-session view. `seed` is secret material; it zeroizes on drop.
@@ -115,13 +113,13 @@ pub fn cross_check(
     unseal_seed: &[u8; 32],
     epoch: u64,
 ) -> OwnerEntry {
-    if !ct_eq_32(owner_blob_seed, unseal_seed) {
+    if !ct_eq(owner_blob_seed, unseal_seed) {
         return OwnerEntry::Abuse(AbuseEvent {
             description: "owner-blob seed disagrees with the unsealed scope seed".to_string(),
         });
     }
     if let Some(ascent) = ascent_link_seed {
-        if !ct_eq_32(ascent, unseal_seed) {
+        if !ct_eq(ascent, unseal_seed) {
             return OwnerEntry::Abuse(AbuseEvent {
                 description: "ascent-link seed disagrees with the unsealed scope seed".to_string(),
             });
@@ -147,14 +145,14 @@ mod tests {
         let mut cache = OwnerSeedCache::new();
         match outcome {
             OwnerEntry::Confirmed { seed, epoch } => {
-                assert!(ct_eq_32(&seed, &SEED), "seed mismatch");
+                assert!(ct_eq(&seed, &SEED), "seed mismatch");
                 assert_eq!(epoch, 4);
                 cache.refresh(SCOPE, seed, epoch);
             }
             OwnerEntry::Abuse(_) => panic!("agreement must confirm"),
         }
         assert!(
-            ct_eq_32(cache.get(&SCOPE).unwrap().seed(), &SEED),
+            ct_eq(cache.get(&SCOPE).unwrap().seed(), &SEED),
             "cached seed mismatch"
         );
         assert_eq!(cache.get(&SCOPE).unwrap().epoch, 4);
@@ -193,7 +191,7 @@ mod tests {
         cache.refresh(SCOPE, Zeroizing::new(SEED), 1);
         cache.refresh(SCOPE, Zeroizing::new(OTHER), 2);
         assert!(
-            ct_eq_32(cache.get(&SCOPE).unwrap().seed(), &OTHER),
+            ct_eq(cache.get(&SCOPE).unwrap().seed(), &OTHER),
             "cached seed mismatch"
         );
         assert_eq!(cache.get(&SCOPE).unwrap().epoch, 2);

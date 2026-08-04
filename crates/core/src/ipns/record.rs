@@ -21,8 +21,6 @@
 //! `"ipns-signature:" || data`, and the signed `data.Value` must equal the
 //! top-level `value`.
 
-use zeroize::Zeroize;
-
 use crate::codec::{Map, Value, decode, encode_fixed_depth};
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::suite::ed25519::{Ed25519Signature, Ed25519Signer, SIGNATURE_LEN};
@@ -368,20 +366,6 @@ fn varint_field(number: u64, v: u64) -> ProtoField {
         wire_type: WIRE_VARINT,
         raw,
         value: FieldValue::Varint,
-    }
-}
-
-impl Drop for IpnsRecord {
-    fn drop(&mut self) {
-        // Records hold no secret material, but `raw` and the decoded `Bytes`
-        // view are separate allocations — wipe both so published bytes do not
-        // linger.
-        for f in &mut self.fields {
-            f.raw.zeroize();
-            if let FieldValue::Bytes(b) = &mut f.value {
-                b.zeroize();
-            }
-        }
     }
 }
 

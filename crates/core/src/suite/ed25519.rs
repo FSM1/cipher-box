@@ -8,6 +8,7 @@ use core::fmt;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
 
 use super::secret::SECRET_LEN;
+use crate::hex::lower as hex_lower;
 
 /// Length of an Ed25519 public key and of a signature's halves-combined form.
 pub const PUBLIC_LEN: usize = 32;
@@ -99,15 +100,6 @@ impl fmt::Debug for Ed25519Signature {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Ed25519Signature({})", hex_lower(&self.0))
     }
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push(char::from_digit((b >> 4) as u32, 16).expect("nibble"));
-        s.push(char::from_digit((b & 0xf) as u32, 16).expect("nibble"));
-    }
-    s
 }
 
 #[cfg(test)]

@@ -30,13 +30,12 @@ use cipherbox_core::seal::{
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
-use cipherbox_core::suite::secret::SecretBytes;
+use cipherbox_core::suite::secret::{SecretBytes, ct_eq};
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use crate::gate::floor;
 use crate::seams::{FloorStore, SeamError};
-use crate::secret_util::ct_eq_32;
 
 /// The six ordered stages of the adoption gate. The stage a rejection names is
 /// the first stage that failed; earlier stages all passed.
@@ -537,7 +536,7 @@ pub async fn adopt_deferred<F: FloorStore>(
         let node_seed = kdf::node_seed(payload.override_seed(), &candidate.envelope.id);
         let derived_read_key = kdf::read_key(node_seed.as_bytes());
         if payload.epoch != candidate.envelope.epoch
-            || !ct_eq_32(derived_read_key.as_bytes(), reader.read_key)
+            || !ct_eq(derived_read_key.as_bytes(), reader.read_key)
         {
             return Err(reject(
                 GateStage::GrantSection,
@@ -602,7 +601,7 @@ pub async fn adopt_deferred<F: FloorStore>(
             .map_err(|e| reject(GateStage::Unseal, RejectionReason::Trust(e)))?;
         let node_seed = kdf::node_seed(seed.as_bytes(), &candidate.envelope.id);
         let derived_read_key = kdf::read_key(node_seed.as_bytes());
-        if !ct_eq_32(derived_read_key.as_bytes(), reader.read_key) {
+        if !ct_eq(derived_read_key.as_bytes(), reader.read_key) {
             return Err(reject(
                 GateStage::Unseal,
                 RejectionReason::Trust(TrustViolation::SealOpenFailed.into()),

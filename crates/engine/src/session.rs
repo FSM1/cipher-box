@@ -174,7 +174,7 @@ impl fmt::Debug for SessionIdentity {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secret_util::ct_eq_32;
+    use cipherbox_core::suite::secret::ct_eq;
 
     fn identity(secret: &[u8]) -> SessionIdentity {
         SessionIdentity::derive(&LoginSecret::new(secret.to_vec())).expect("valid identity")
@@ -203,7 +203,7 @@ mod tests {
             b.scope_pointer_signer(&scope).verifying_key().to_bytes(),
         );
         assert!(
-            ct_eq_32(
+            ct_eq(
                 a.pointer_read_key(&scope).as_bytes(),
                 b.pointer_read_key(&scope).as_bytes(),
             ),

@@ -1,12 +1,11 @@
 //! Lowercase hex encoding — a neutral wire/diagnostic helper.
 //!
 //! Not crypto: a byte-to-hex encoding of already-public bytes (a SEC1 public
-//! key, a compact signature, a scope_id). Lives outside the signing module so
-//! unrelated domains (e.g. rotation diagnostics) can format public bytes
-//! without coupling to `api::signer` internals.
+//! key, a compact signature, a scope id). Secret material is never formatted —
+//! it redacts instead ([`crate::suite::secret::SecretBytes`]).
 
 /// Lowercase hex encoding of `bytes`.
-pub(crate) fn hex_lower(bytes: &[u8]) -> String {
+pub fn lower(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         out.push(char::from_digit((byte >> 4) as u32, 16).expect("high nibble is < 16"));
@@ -20,7 +19,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn hex_lower_pads_each_byte() {
-        assert_eq!(hex_lower(&[0x00, 0x0f, 0xa0, 0xff]), "000fa0ff");
+    fn lower_pads_each_byte() {
+        assert_eq!(lower(&[0x00, 0x0f, 0xa0, 0xff]), "000fa0ff");
     }
 }

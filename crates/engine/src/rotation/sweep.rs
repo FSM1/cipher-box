@@ -61,9 +61,10 @@ use super::eager_set::{ChildIndexResolver, EnumerationError, ResolveFailure, enu
 use super::reseal::{CommittedSet, ResealError, ResealSeeds, ScopeRootIdentity, reseal_scope_root};
 use super::rotate::{ResealedScopeRoot, ScopeRootPublishError, ScopeRootPublisher};
 use crate::entropy::Entropy;
+use crate::gate::floor;
 use crate::grants::child_index::canonicalize;
-use crate::hex::hex_lower;
 use crate::seams::{FloorStore, Scheduler, SeamError};
+use cipherbox_core::hex::lower as hex_lower;
 
 /// One scope root's current re-seal material, as resolved from its published
 /// record: everything [`reseal_scope_root`] needs **except** a self-identifying
@@ -317,11 +318,10 @@ where
         // Epoch-lag predicate, computed purely from published state: a node lags
         // when its record epoch is below its scope's durable floor. No floor (or
         // a record at/above it) means nothing to converge.
-        let floor = floors
-            .epoch_floor(&scope_id)
+        let durable = floor::read_epoch_floor(floors, &scope_id)
             .await
             .map_err(SweepError::Floor)?;
-        let Some(floor_epoch) = floor else {
+        let Some(floor_epoch) = durable else {
             outcome.already_converged.push(scope_id);
             continue;
         };
@@ -492,7 +492,6 @@ where
 mod tests {
     use super::*;
     use crate::seams::UnixMillis;
-    use crate::secret_util::ct_eq_32;
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
     use crate::testkit::{SeededEntropy, block_on};
     use cipherbox_core::seal::{
@@ -500,6 +499,7 @@ mod tests {
         STRUCT_TAG_OWNER_BLOB, open_owner_blob, sign_grant_set,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
+    use cipherbox_core::suite::secret::ct_eq;
     use cipherbox_core::suite::x25519::X25519Secret;
     use std::rc::Rc;
 
@@ -921,7 +921,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            ct_eq_32(payload.override_seed(), &[0x01; 32]),
+            ct_eq(payload.override_seed(), &[0x01; 32]),
             "sweep reused the existing seed, minted none"
         );
     }

@@ -53,7 +53,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use cipherbox_core::seal::ChildScopeRef;
 
 use crate::grants::child_index::canonicalize;
-use crate::hex::hex_lower;
+use cipherbox_core::hex::lower as hex_lower;
 
 /// Why a descendant scope root's own direct-child index could not be
 /// authoritatively obtained. Mirrors the adoption gate's `Rejected` vs `Seam`

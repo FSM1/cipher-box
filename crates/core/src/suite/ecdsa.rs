@@ -14,6 +14,7 @@ use k256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256};
 
 use super::secret::SECRET_LEN;
+use crate::hex::lower as hex_lower;
 
 /// Length of a compressed secp256k1 public key (SEC1).
 pub const IDENTITY_PUBLIC_LEN: usize = 33;
@@ -129,15 +130,6 @@ impl fmt::Debug for EcdsaSignature {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "EcdsaSignature({})", hex_lower(&self.to_compact()))
     }
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push(char::from_digit((b >> 4) as u32, 16).expect("nibble"));
-        s.push(char::from_digit((b & 0xf) as u32, 16).expect("nibble"));
-    }
-    s
 }
 
 #[cfg(test)]

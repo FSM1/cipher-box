@@ -65,8 +65,8 @@ use cipherbox_core::suite::secret::SECRET_LEN;
 
 use super::eager_set::ResolveFailure;
 use crate::entropy::{Entropy, EntropyError};
-use crate::hex::hex_lower;
 use crate::sync::pointer::{PointerError, SessionRole, seal_repoint};
+use cipherbox_core::hex::lower as hex_lower;
 
 /// One node of the write scope's subtree, resolved from its **current** published
 /// record — its id, the name it currently sits at, and its child node ids. The

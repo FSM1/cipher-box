@@ -20,6 +20,7 @@ use super::eol;
 use super::fanout::{fanout_get_verify, fanout_put};
 use super::register::register;
 use crate::api::{ApiClient, ApiError, NameRegistration};
+use crate::gate::floor;
 use crate::profile::SyncTimingProfile;
 use crate::seams::{
     CredentialStore, EndpointId, FloorStore, Http, RecordTransport, Scheduler, SeamError,
@@ -171,8 +172,7 @@ where
     // failure is fail-closed — only a successful read with no floor defaults to
     // 0 (blueprint/engine.md floor law).
     let name_bytes = request.name.as_str().as_bytes();
-    let durable = floors
-        .sequence_floor(name_bytes)
+    let durable = floor::sequence_floor(floors, name_bytes)
         .await
         .map_err(PublishError::FloorRead)?
         .unwrap_or(0);

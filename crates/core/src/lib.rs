@@ -8,6 +8,7 @@
 pub mod codec;
 pub mod content;
 pub mod error;
+pub mod hex;
 pub mod ipns;
 pub mod kdf;
 pub mod payload;

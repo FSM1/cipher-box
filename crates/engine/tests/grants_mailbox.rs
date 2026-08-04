@@ -23,6 +23,7 @@ use cipherbox_core::suite::ecdsa::{
     EcdsaSignature, EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN,
 };
 use cipherbox_core::suite::ed25519::Ed25519Signer;
+use cipherbox_core::suite::secret::ct_eq;
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use cipherbox_engine::api::ApiClient;
@@ -35,7 +36,6 @@ use cipherbox_engine::grants::{
 };
 use cipherbox_engine::mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
 use cipherbox_engine::seams::{FloorStore, HttpMethod, HttpResponse, Mailbox, RecordTransport};
-use cipherbox_engine::secret_util::ct_eq_32;
 use cipherbox_engine::testkit::fakes::InMemoryCredentialStore;
 use cipherbox_engine::testkit::fakes::ScriptedHttp;
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, block_on};
@@ -436,7 +436,7 @@ fn two_instance_share_accept_end_to_end() {
     assert!(received.contains(fx.name.as_str().as_bytes()));
     // The pointer read key was persisted from the unsealed grant blob.
     assert!(
-        ct_eq_32(
+        ct_eq(
             received.iter().next().unwrap().pointer_read_key(),
             &POINTER_READ_KEY
         ),
@@ -1023,7 +1023,7 @@ fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
     assert!(outcome1.newly_added);
     assert_eq!(received.iter().next().unwrap().permission, Permission::Read);
     assert!(
-        ct_eq_32(
+        ct_eq(
             received.iter().next().unwrap().pointer_read_key(),
             &POINTER_READ_KEY
         ),
@@ -1080,7 +1080,7 @@ fn reaccept_self_heals_changed_permission_and_rotated_pointer_key() {
         "permission healed to the new committed value"
     );
     assert!(
-        ct_eq_32(healed.pointer_read_key(), &ROTATED_POINTER_READ_KEY),
+        ct_eq(healed.pointer_read_key(), &ROTATED_POINTER_READ_KEY),
         "pointer read key healed to the rotated value"
     );
     assert_eq!(
@@ -1412,7 +1412,7 @@ fn owner_entry_seed_disagreement_raises_an_abuse_event() {
     // → a confirmed owner read (no abuse).
     match cross_check(&unseal_seed, Some(&unseal_seed), &unseal_seed, fx.epoch) {
         OwnerEntry::Confirmed { seed, epoch } => {
-            assert!(ct_eq_32(&seed, &unseal_seed), "seed mismatch");
+            assert!(ct_eq(&seed, &unseal_seed), "seed mismatch");
             assert_eq!(epoch, fx.epoch);
         }
         OwnerEntry::Abuse(_) => panic!("agreement must confirm"),

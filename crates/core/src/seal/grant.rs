@@ -26,8 +26,6 @@
 //! encoded plaintext (which carries those seeds) is zeroized at its terminal
 //! owner — the seal path — before it drops.
 
-use core::fmt;
-
 use zeroize::Zeroize;
 
 use crate::codec::{Map, Value, decode, encode};
@@ -95,7 +93,7 @@ impl Permission {
 /// hint and the stable pointer read key. `write_scope_seed` is present only for
 /// write grants. Seeds are secret material in zeroizing owning types with a
 /// redacted `Debug`; read them through the accessors.
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantBlobPayload {
     read_scope_seed: SecretBytes,
     write_scope_seed: Option<SecretBytes>,
@@ -140,37 +138,6 @@ impl GrantBlobPayload {
         self.pointer_read_key.as_bytes()
     }
 }
-
-impl fmt::Debug for GrantBlobPayload {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("GrantBlobPayload")
-            .field("read_scope_seed", &"<redacted>")
-            .field(
-                "write_scope_seed",
-                &self.write_scope_seed.as_ref().map(|_| "<redacted>"),
-            )
-            .field("epoch", &self.epoch)
-            .field("pointer_read_key", &"<redacted>")
-            .field("unknown", &self.unknown)
-            .finish()
-    }
-}
-
-impl PartialEq for GrantBlobPayload {
-    /// Equality is for KAT/round-trip comparison, not a security operation, so
-    /// the seed byte comparison needs no constant-time guarantee (mirrors
-    /// [`super::body::Version`]).
-    fn eq(&self, other: &Self) -> bool {
-        self.read_scope_seed.as_bytes() == other.read_scope_seed.as_bytes()
-            && self.write_scope_seed.as_ref().map(SecretBytes::as_bytes)
-                == other.write_scope_seed.as_ref().map(SecretBytes::as_bytes)
-            && self.epoch == other.epoch
-            && self.pointer_read_key.as_bytes() == other.pointer_read_key.as_bytes()
-            && self.unknown == other.unknown
-    }
-}
-
-impl Eq for GrantBlobPayload {}
 
 /// Decode a grant-blob plaintext (strict det-CBOR, unknown fields preserved).
 ///
@@ -270,7 +237,7 @@ pub fn open_grant_blob(
 /// The sealed plaintext of an owner blob and of an ascent link: the scope's
 /// current override seed plus the epoch it belongs to. The seed is secret
 /// material in a zeroizing owning type; read it through [`Self::override_seed`].
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OverrideSeedPayload {
     override_seed: SecretBytes,
     /// The epoch this override seed belongs to.
@@ -296,26 +263,6 @@ impl OverrideSeedPayload {
         self.override_seed.as_bytes()
     }
 }
-
-impl fmt::Debug for OverrideSeedPayload {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("OverrideSeedPayload")
-            .field("override_seed", &"<redacted>")
-            .field("epoch", &self.epoch)
-            .field("unknown", &self.unknown)
-            .finish()
-    }
-}
-
-impl PartialEq for OverrideSeedPayload {
-    fn eq(&self, other: &Self) -> bool {
-        self.override_seed.as_bytes() == other.override_seed.as_bytes()
-            && self.epoch == other.epoch
-            && self.unknown == other.unknown
-    }
-}
-
-impl Eq for OverrideSeedPayload {}
 
 /// Decode an override-seed plaintext (strict det-CBOR, unknown fields preserved).
 ///
@@ -403,7 +350,7 @@ pub fn open_owner_blob(
 /// subkey; never shared with the ascent link (which would leak write capability
 /// to ancestor read-only readers). The seed is secret material in a zeroizing
 /// owning type; read it through [`Self::write_scope_seed`].
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnerWriteBlobPayload {
     write_scope_seed: SecretBytes,
     /// The write epoch this write-scope seed belongs to.
@@ -429,26 +376,6 @@ impl OwnerWriteBlobPayload {
         self.write_scope_seed.as_bytes()
     }
 }
-
-impl fmt::Debug for OwnerWriteBlobPayload {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("OwnerWriteBlobPayload")
-            .field("write_scope_seed", &"<redacted>")
-            .field("write_epoch", &self.write_epoch)
-            .field("unknown", &self.unknown)
-            .finish()
-    }
-}
-
-impl PartialEq for OwnerWriteBlobPayload {
-    fn eq(&self, other: &Self) -> bool {
-        self.write_scope_seed.as_bytes() == other.write_scope_seed.as_bytes()
-            && self.write_epoch == other.write_epoch
-            && self.unknown == other.unknown
-    }
-}
-
-impl Eq for OwnerWriteBlobPayload {}
 
 /// Decode an owner-write-blob plaintext (strict det-CBOR, unknown fields
 /// preserved).
@@ -639,7 +566,7 @@ pub fn open_ascent_link(
 /// belongs to. Symmetrically sealed under the current epoch's structure key
 /// (struct tag `history-link`) via [`super::seal`]. The seed is secret material
 /// in a zeroizing owning type.
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryLinkPayload {
     prev_seed: SecretBytes,
     /// The previous epoch this seed belongs to.
@@ -665,26 +592,6 @@ impl HistoryLinkPayload {
         self.prev_seed.as_bytes()
     }
 }
-
-impl fmt::Debug for HistoryLinkPayload {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("HistoryLinkPayload")
-            .field("prev_seed", &"<redacted>")
-            .field("prev_epoch", &self.prev_epoch)
-            .field("unknown", &self.unknown)
-            .finish()
-    }
-}
-
-impl PartialEq for HistoryLinkPayload {
-    fn eq(&self, other: &Self) -> bool {
-        self.prev_seed.as_bytes() == other.prev_seed.as_bytes()
-            && self.prev_epoch == other.prev_epoch
-            && self.unknown == other.unknown
-    }
-}
-
-impl Eq for HistoryLinkPayload {}
 
 /// Decode a history-link plaintext (strict det-CBOR, unknown fields preserved).
 ///
@@ -909,6 +816,68 @@ mod tests {
             epoch: 4,
             struct_tag,
         }
+    }
+
+    /// Every seed-bearing payload renders each secret field as exactly the
+    /// redaction marker, so no rendering (hex, decimal, or otherwise) of the
+    /// bytes can appear (security rule 2: never log key material). Counting
+    /// markers rather than searching for byte spellings is what makes this hold
+    /// for a field added later.
+    #[test]
+    fn seed_payload_debug_renders_every_secret_field_as_the_redaction_marker() {
+        const SEED: [u8; SECRET_LEN] = [0xab; SECRET_LEN];
+        const MARKER: &str = "SecretBytes(redacted)";
+
+        // (rendered payload, number of `SecretBytes` fields it holds)
+        let cases = [
+            (
+                format!(
+                    "{:?}",
+                    GrantBlobPayload::new(SEED, Some(SEED), 4, [0xcd; SECRET_LEN])
+                ),
+                3,
+            ),
+            (format!("{:?}", OverrideSeedPayload::new(SEED, 4)), 1),
+            (format!("{:?}", OwnerWriteBlobPayload::new(SEED, 4)), 1),
+            (format!("{:?}", HistoryLinkPayload::new(SEED, 4)), 1),
+        ];
+        for (rendered, secret_fields) in cases {
+            assert_eq!(
+                rendered.matches(MARKER).count(),
+                secret_fields,
+                "every secret field must render as {MARKER}: {rendered}"
+            );
+            // 0xab/0xcd in the two renderings a leak would take.
+            for spelling in ["ab", "cd", "171", "205"] {
+                assert!(
+                    !rendered.contains(spelling),
+                    "seed bytes leaked into Debug as {spelling}: {rendered}"
+                );
+            }
+        }
+    }
+
+    /// The derived `PartialEq` still discriminates a one-byte seed difference
+    /// and a present-vs-absent optional seed — the round-trip property the KAT
+    /// comparisons rest on.
+    #[test]
+    fn seed_payload_equality_discriminates_seed_and_presence() {
+        const SEED: [u8; SECRET_LEN] = [0xab; SECRET_LEN];
+        let mut other_seed = SEED;
+        other_seed[SECRET_LEN - 1] ^= 0x01;
+
+        assert_eq!(
+            OverrideSeedPayload::new(SEED, 4),
+            OverrideSeedPayload::new(SEED, 4)
+        );
+        assert_ne!(
+            OverrideSeedPayload::new(SEED, 4),
+            OverrideSeedPayload::new(other_seed, 4)
+        );
+        assert_ne!(
+            GrantBlobPayload::new(SEED, Some(SEED), 4, [0xcd; SECRET_LEN]),
+            GrantBlobPayload::new(SEED, None, 4, [0xcd; SECRET_LEN])
+        );
     }
 
     #[test]
