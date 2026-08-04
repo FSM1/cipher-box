@@ -16,9 +16,10 @@ use super::decode::Decoder;
 use super::encode::{
     MAJOR_MAP, count_value, head_len, text_len, write_head, write_text, write_value,
 };
+use super::redact::fmt_redacted_keys;
 use super::scrub::ScrubOnDrop;
 use super::value::{Map, Value, canonical_key_cmp};
-use crate::error::{CodecError, DisplayKey, Malformed};
+use crate::error::{CodecError, Malformed};
 
 /// The depth a top-level map's values sit at: the map itself is the enclosing
 /// item, so its entries are one level in.
@@ -41,20 +42,6 @@ impl fmt::Debug for UnknownFields {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt_redacted_keys(f, self.entries.iter().map(|(key, _)| key.as_str()))
     }
-}
-
-/// Render a preserved-field set as keys only, with the field names bounded the
-/// way the error surface bounds writer-controlled keys. Shared by both
-/// preserve-unknowns carriers so neither can grow a value into a log line.
-pub(crate) fn fmt_redacted_keys<'a>(
-    f: &mut fmt::Formatter<'_>,
-    keys: impl Iterator<Item = &'a str>,
-) -> fmt::Result {
-    let mut m = f.debug_map();
-    for key in keys {
-        m.key(&DisplayKey(key)).value(&"<redacted>");
-    }
-    m.finish()
 }
 
 impl UnknownFields {

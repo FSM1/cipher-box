@@ -23,6 +23,7 @@
 //! here — that is the gate's crypto step. This codec only frames and enforces
 //! structure (lengths, required fields, tag uniqueness), fail-closed.
 
+use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 use crate::codec::{Map, Value, decode, encode};
 use crate::error::CodecError;
 use crate::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
@@ -274,9 +275,12 @@ const GRANT_SECTION_KNOWN: &[&str] = &[
 /// Decode a grant section (strict det-CBOR, unknown fields preserved). Fails
 /// closed on a malformed frame, a duplicate grant-blob tag (`duplicate-grant-tag`,
 /// #39 D7), or a duplicate-tag commitment (surfaced by the commitment codec).
+///
+/// The transient decoded tree carries a verbatim copy of the whole signed blob
+/// set, so it is scrubbed on drop via [`ScrubOwned`].
 pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
-    let value = decode(bytes)?;
-    let map = value.as_map()?;
+    let value = ScrubOwned(decode(bytes)?);
+    let map = value.value().as_map()?;
 
     let commitment = decode_grant_set_commitment(req(map, "commitment")?.as_bytes()?)?;
     let commitment_sig = bytes_fixed::<ECDSA_SIG_LEN>(req(map, "commitmentSig")?, "commitmentSig")?;
@@ -363,7 +367,11 @@ pub fn encode_grant_section(section: &GrantSection) -> Result<Vec<u8>, CodecErro
     }
     m.insert("writeBody", section.write_body.to_value());
     merge_unknown(&mut m, &section.unknown);
-    encode(&Value::Map(m))
+    // The transient tree copies the whole signed blob set; the drop guard wipes
+    // it on both return and panic-unwind.
+    let mut value = Value::Map(m);
+    let guard = ScrubOnDrop(&mut value);
+    encode(guard.0)
 }
 
 #[cfg(test)]
@@ -442,6 +450,18 @@ mod tests {
             bytes,
             "byte-stable"
         );
+    }
+
+    /// The decoder's [`ScrubOwned`] wipes only its own transient tree: the blob
+    /// set it lifted out survives (terminal-owner rule).
+    #[test]
+    fn decode_scrub_preserves_the_blob_set_it_lifted_out() {
+        let bytes = encode_grant_section(&sample()).expect("encodes");
+        let decoded = decode_grant_section(&bytes).expect("decodes");
+        assert_eq!(decoded.grant_blobs[0].ciphertext, vec![0x0b, 0x0c]);
+        assert_eq!(decoded.owner_blob.ciphertext, vec![0x21, 0x22]);
+        assert_eq!(decoded.write_body.sealed, vec![0x50, 0x51]);
+        assert_eq!(decoded.commitment.ipns_name, b"scope-root-name");
     }
 
     #[test]

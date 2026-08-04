@@ -16,13 +16,14 @@
 mod decode;
 mod encode;
 mod fields;
+mod redact;
 pub(crate) mod scrub;
 mod value;
 
 pub use decode::decode;
 pub use encode::{encode, encode_fixed_depth, encoded_len};
-pub(crate) use fields::fmt_redacted_keys;
 pub use fields::{UnknownFields, decode_map_partial, encode_map_partial, known_key_set};
+pub(crate) use redact::{RedactedBytes, RedactedText, fmt_redacted_keys};
 pub use value::{Map, Value, canonical_key_cmp};
 
 /// Maximum nesting depth the decoder admits. A profile constant: deeper input

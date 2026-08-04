@@ -10,10 +10,11 @@ use core::fmt;
 
 use zeroize::Zeroize;
 
-use crate::error::{CodecError, Malformed};
+use super::redact::{RedactedBytes, RedactedText};
+use crate::error::{CodecError, DisplayKey, Malformed};
 
 /// A value in the deterministic profile's data model.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Value {
     /// Major type 0: `0 ..= u64::MAX`.
     Unsigned(u64),
@@ -147,6 +148,36 @@ impl Value {
             Self::Unsigned(_) | Self::Negative(_) | Self::Bool(_) | Self::Null => {}
         }
     }
+
+    /// CBOR diagnostic notation (RFC 8949 §8), restricted to the profile's data
+    /// model. KAT accept vectors pin this rendering via their `diag` field.
+    ///
+    /// Not a [`fmt::Display`] impl: the rendering carries the value verbatim, so
+    /// it has to be asked for by name rather than being reachable from a stray
+    /// `{}` in a log line (see [`super::redact`]).
+    pub fn to_diag(&self) -> String {
+        Diag(self).to_string()
+    }
+}
+
+/// A decoded tree is sealed-body plaintext, so it renders shape and lengths
+/// only; [`Value::to_diag`] is the deliberate full rendering.
+impl fmt::Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unsigned(n) => f.debug_tuple("Unsigned").field(n).finish(),
+            Self::Negative(n) => f.debug_tuple("Negative").field(n).finish(),
+            Self::Bytes(b) => f
+                .debug_tuple("Bytes")
+                .field(&RedactedBytes(b.len()))
+                .finish(),
+            Self::Text(t) => f.debug_tuple("Text").field(&RedactedText::of(t)).finish(),
+            Self::Array(items) => f.debug_tuple("Array").field(items).finish(),
+            Self::Map(map) => f.debug_tuple("Map").field(map).finish(),
+            Self::Bool(b) => f.debug_tuple("Bool").field(b).finish(),
+            Self::Null => f.write_str("Null"),
+        }
+    }
 }
 
 fn unexpected(expected: &'static str, found: &Value) -> Malformed {
@@ -167,10 +198,22 @@ pub fn canonical_key_cmp(a: &str, b: &str) -> Ordering {
 
 /// A map whose entries are always unique-keyed and canonically ordered.
 /// Building one cannot produce a non-canonical encoding.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 pub struct Map {
     entries: Vec<(String, Value)>,
     wiped: bool,
+}
+
+/// Keys are field names, so they render — bounded the way the error surface
+/// bounds writer-controlled keys; the values redact themselves.
+impl fmt::Debug for Map {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut m = f.debug_map();
+        for (key, value) in &self.entries {
+            m.key(&DisplayKey(key)).value(value);
+        }
+        m.finish()
+    }
 }
 
 impl Map {
@@ -268,46 +311,46 @@ impl FromIterator<(String, Value)> for Map {
     }
 }
 
-impl fmt::Display for Value {
-    /// CBOR diagnostic notation (RFC 8949 §8), restricted to the profile's
-    /// data model. KAT accept vectors pin this rendering via their `diag`
-    /// field.
+/// The diagnostic-notation renderer behind [`Value::to_diag`].
+struct Diag<'a>(&'a Value);
+
+impl fmt::Display for Diag<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unsigned(n) => write!(f, "{n}"),
-            Self::Negative(n) => write!(f, "{}", -1 - i128::from(*n)),
-            Self::Bytes(b) => {
+        match self.0 {
+            Value::Unsigned(n) => write!(f, "{n}"),
+            Value::Negative(n) => write!(f, "{}", -1 - i128::from(*n)),
+            Value::Bytes(b) => {
                 write!(f, "h'")?;
                 for byte in b {
                     write!(f, "{byte:02x}")?;
                 }
                 write!(f, "'")
             }
-            Self::Text(t) => write_diag_text(f, t),
-            Self::Array(items) => {
+            Value::Text(t) => write_diag_text(f, t),
+            Value::Array(items) => {
                 write!(f, "[")?;
                 for (i, item) in items.iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{item}")?;
+                    write!(f, "{}", Diag(item))?;
                 }
                 write!(f, "]")
             }
-            Self::Map(map) => {
+            Value::Map(map) => {
                 write!(f, "{{")?;
                 for (i, (k, v)) in map.entries().iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
                     write_diag_text(f, k)?;
-                    write!(f, ": {v}")?;
+                    write!(f, ": {}", Diag(v))?;
                 }
                 write!(f, "}}")
             }
-            Self::Bool(true) => write!(f, "true"),
-            Self::Bool(false) => write!(f, "false"),
-            Self::Null => write!(f, "null"),
+            Value::Bool(true) => write!(f, "true"),
+            Value::Bool(false) => write!(f, "false"),
+            Value::Null => write!(f, "null"),
         }
     }
 }
@@ -416,9 +459,38 @@ mod tests {
             assert_eq!(Value::from_i64(n).as_i64().unwrap(), n);
         }
         assert!(Value::Negative(u64::MAX).as_i64().is_err());
-        assert_eq!(
-            Value::Negative(u64::MAX).to_string(),
-            "-18446744073709551616"
+        assert_eq!(Value::Negative(u64::MAX).to_diag(), "-18446744073709551616");
+    }
+
+    /// The rule-2 property: no `{:?}` of a decoded tree can carry the bytes or
+    /// the text it decoded, however deeply they are nested.
+    #[test]
+    fn debug_redacts_every_buffer_but_keeps_shape() {
+        let mut version = Map::new();
+        version.insert("contentKey", Value::Bytes(vec![0xab; SECRET_LEN_TEST]));
+        version.insert("size", Value::Unsigned(4096));
+        let mut root = Map::new();
+        root.insert("versions", Value::Array(vec![Value::Map(version)]));
+        root.insert("name", Value::Text("tax-return-2026.pdf".into()));
+        let rendered = format!("{:?}", Value::Map(root));
+
+        assert!(!rendered.contains("171"), "no byte values: {rendered}");
+        assert!(!rendered.contains("ab"), "no hex either: {rendered}");
+        assert!(!rendered.contains("tax-return"), "no text: {rendered}");
+        assert!(rendered.contains("<32 bytes redacted>"), "{rendered}");
+        assert!(rendered.contains("<19 chars redacted>"), "{rendered}");
+        assert!(
+            rendered.contains("\"contentKey\"") && rendered.contains("4096"),
+            "field names and scalars survive: {rendered}"
         );
+    }
+
+    /// The diagnostic rendering is the deliberate full one, and it is reachable
+    /// only by name.
+    #[test]
+    fn to_diag_renders_verbatim() {
+        let mut m = Map::new();
+        m.insert("k", Value::Bytes(vec![0xab, 0xcd]));
+        assert_eq!(Value::Map(m).to_diag(), "{\"k\": h'abcd'}");
     }
 }

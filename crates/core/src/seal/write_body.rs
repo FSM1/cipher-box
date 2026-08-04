@@ -16,9 +16,11 @@
 //! re-sealing a write-body under shared write never strips a newer client's
 //! fields.
 
+use core::fmt;
 use core::num::NonZeroU64;
 
-use crate::codec::{Map, Value, decode, encode};
+use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
+use crate::codec::{Map, RedactedBytes, Value, decode, encode};
 use crate::error::{CodecError, Malformed};
 use crate::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use crate::suite::secret::SECRET_LEN;
@@ -36,7 +38,10 @@ use super::grant::Permission;
 /// One authoritative grant-ledger row. The identity key is the 33-byte
 /// compressed secp256k1 SEC1 form; the encryption subkey is a 32-byte X25519
 /// public key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The recipient keys and blinded tag are the scope's sealed social graph, so
+/// they render redacted.
+#[derive(Clone, PartialEq, Eq)]
 pub struct GrantLedgerEntry {
     /// The recipient's compressed secp256k1 identity public key (SEC1).
     pub recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
@@ -71,6 +76,25 @@ const LEDGER_ENTRY_KNOWN: &[&str] = &[
     "recipientIdentityPk",
     "tag",
 ];
+
+impl fmt::Debug for GrantLedgerEntry {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("GrantLedgerEntry")
+            .field(
+                "recipient_identity_pk",
+                &RedactedBytes(self.recipient_identity_pk.len()),
+            )
+            .field(
+                "recipient_enc_pk",
+                &RedactedBytes(self.recipient_enc_pk.len()),
+            )
+            .field("permission", &self.permission)
+            .field("tag", &RedactedBytes(self.tag.len()))
+            .field("expires_at", &self.expires_at)
+            .field("unknown", &self.unknown)
+            .finish()
+    }
+}
 
 impl GrantLedgerEntry {
     /// A ledger entry that never expires and preserves no unknown fields.
@@ -144,7 +168,8 @@ impl GrantLedgerEntry {
 // ---------------------------------------------------------------------------
 
 /// One directly-descendant scope root, enumerated for the F-4 rotation cascade.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `ipns_name` is sealed-body plaintext, so it renders redacted.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ChildScopeRef {
     /// The child scope root's node id (16-byte UUID) = its scope id.
     pub scope_id: [u8; 16],
@@ -155,6 +180,16 @@ pub struct ChildScopeRef {
 }
 
 const CHILD_SCOPE_KNOWN: &[&str] = &["ipnsName", "scopeId"];
+
+impl fmt::Debug for ChildScopeRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChildScopeRef")
+            .field("scope_id", &self.scope_id)
+            .field("ipns_name", &RedactedBytes(self.ipns_name.len()))
+            .field("unknown", &self.unknown)
+            .finish()
+    }
+}
 
 impl ChildScopeRef {
     /// A child-scope ref with no preserved unknown fields.
@@ -209,9 +244,13 @@ const WRITE_BODY_KNOWN: &[&str] = &["directChildScopeIndex", "grantLedger", "wri
 ///
 /// Scope-root-only by construction; this codec cannot enforce that — whether a
 /// node is a scope root is the engine's decision.
+///
+/// The transient decoded tree carries verbatim copies of the recipient keys,
+/// blinded tags and child-scope `ipnsName`s, so it is scrubbed on drop via
+/// [`ScrubOwned`].
 pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
-    let value = decode(bytes)?;
-    let map = value.as_map()?;
+    let value = ScrubOwned(decode(bytes)?);
+    let map = value.value().as_map()?;
 
     let mut grant_ledger = Vec::new();
     for item in req(map, "grantLedger")?.as_array()? {
@@ -271,7 +310,11 @@ pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
         Value::Bytes(body.write_history_link.clone()),
     );
     merge_unknown(&mut m, &body.unknown);
-    encode(&Value::Map(m))
+    // The transient tree copies the ledger's recipient keys and tags; the drop
+    // guard wipes it on both return and panic-unwind.
+    let mut value = Value::Map(m);
+    let guard = ScrubOnDrop(&mut value);
+    encode(guard.0)
 }
 
 #[cfg(test)]
@@ -291,6 +334,36 @@ mod tests {
             )],
             unknown: PreservedFields::new(),
         }
+    }
+
+    /// The decoder's [`ScrubOwned`] wipes only its own transient tree: the
+    /// values it lifted out survive (terminal-owner rule).
+    #[test]
+    fn decode_scrub_preserves_the_values_it_lifted_out() {
+        let bytes = encode_write_body(&sample()).expect("encodes");
+        let decoded = decode_write_body(&bytes).expect("decodes");
+        assert_eq!(decoded.grant_ledger[0].tag, [0x21; SECRET_LEN]);
+        assert_eq!(decoded.grant_ledger[0].recipient_identity_pk, [0x02; 33]);
+        assert_eq!(decoded.write_history_link, b"sealed-write-history");
+        assert_eq!(
+            decoded.direct_child_scope_index[0].ipns_name,
+            b"child-scope-name"
+        );
+    }
+
+    /// The ledger is the scope's sealed social graph; no `{:?}` may carry it.
+    #[test]
+    fn debug_redacts_recipient_keys_tags_and_child_scope_names() {
+        let body = sample();
+        let rendered = format!("{body:?}");
+        assert!(!rendered.contains("child-scope-name"), "{rendered}");
+        assert!(!rendered.contains("33, 33"), "no tag bytes: {rendered}");
+        assert!(rendered.contains("<33 bytes redacted>"), "{rendered}");
+        assert!(rendered.contains("<16 bytes redacted>"), "{rendered}");
+        assert!(
+            rendered.contains("Read") && rendered.contains("Write"),
+            "permissions still legible: {rendered}"
+        );
     }
 
     #[test]

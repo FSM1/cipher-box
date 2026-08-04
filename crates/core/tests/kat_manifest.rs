@@ -1632,7 +1632,7 @@ fn accept_vectors_decode_reencode_and_render_diag() {
             v.name
         );
         assert_eq!(
-            value.to_string(),
+            value.to_diag(),
             v.diag,
             "accept vector {}: diagnostic-notation drift",
             v.name
@@ -1647,7 +1647,11 @@ fn reject_vectors_fire_the_named_check() {
         let bytes = unhex(&v.name, &v.hex);
         let err = match decode(&bytes) {
             Err(e) => e,
-            Ok(value) => panic!("reject vector {}: decoder accepted it as {value}", v.name),
+            Ok(value) => panic!(
+                "reject vector {}: decoder accepted it as {}",
+                v.name,
+                value.to_diag()
+            ),
         };
         assert_eq!(
             err.check(),

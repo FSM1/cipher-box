@@ -24,7 +24,7 @@ use core::fmt;
 use std::collections::BTreeSet;
 
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
-use crate::codec::{Map, Value, decode, encode, fmt_redacted_keys};
+use crate::codec::{Map, RedactedBytes, RedactedText, Value, decode, encode, fmt_redacted_keys};
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::suite::secret::{SECRET_LEN, SecretBytes};
 
@@ -66,7 +66,9 @@ impl NodeKind {
 /// A folder's link to one child (#27 D7). Immutable identity fields plus the
 /// monotonic `link_counter`; `unknown` preserves any newer-client fields
 /// byte-stable.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `name` and `ipns_name` are sealed-body plaintext, so they render redacted.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ChildRef {
     /// The child's location-independent node id (16-byte UUID).
     pub id: [u8; 16],
@@ -84,6 +86,19 @@ pub struct ChildRef {
 }
 
 const CHILD_KNOWN: &[&str] = &["id", "ipnsName", "kind", "linkCounter", "name"];
+
+impl fmt::Debug for ChildRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChildRef")
+            .field("id", &self.id)
+            .field("name", &RedactedText::of(&self.name))
+            .field("ipns_name", &RedactedBytes(self.ipns_name.len()))
+            .field("kind", &self.kind)
+            .field("link_counter", &self.link_counter)
+            .field("unknown", &self.unknown)
+            .finish()
+    }
+}
 
 impl ChildRef {
     fn from_value(v: &Value) -> Result<Self, CodecError> {
@@ -544,6 +559,24 @@ mod tests {
         m.insert("createdAt", Value::Unsigned(100));
         m.insert("modifiedAt", Value::Unsigned(200));
         encode(&Value::Map(m)).unwrap()
+    }
+
+    /// The filename set is exactly what a zero-knowledge server must never see,
+    /// so no `{:?}` of a decoded folder may carry it — nor the child names it
+    /// resolves through.
+    #[test]
+    fn debug_of_a_folder_body_redacts_child_names_and_ipns_names() {
+        let body = folder(vec![child(1, "tax-return-2026.pdf", b"k51q-secret-name")]);
+        let rendered = format!("{body:?}");
+
+        assert!(!rendered.contains("tax-return"), "no filename: {rendered}");
+        assert!(!rendered.contains("k51q"), "no ipnsName: {rendered}");
+        assert!(rendered.contains("<19 chars redacted>"), "{rendered}");
+        assert!(rendered.contains("<16 bytes redacted>"), "{rendered}");
+        assert!(
+            rendered.contains("File") && rendered.contains("link_counter"),
+            "structure still legible: {rendered}"
+        );
     }
 
     #[test]
