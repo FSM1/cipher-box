@@ -17,6 +17,16 @@ import type { TooLargeResult } from './types.js';
 export type CappedBody = { kind: 'body'; body: Uint8Array } | TooLargeResult;
 
 export async function drainCapped(response: Response, maxBytes: number): Promise<CappedBody> {
+  // Both size comparisons below are false for a NaN or infinite cap, so an
+  // unusable bound would drain without one. A cap that cannot bound is a
+  // refusal, never an unbounded read.
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
+    await response.body?.cancel();
+    throw new RangeError(
+      `drainCapped: maxBytes must be a non-negative safe integer, got ${maxBytes}`
+    );
+  }
+
   const contentLength = response.headers.get('content-length');
   const declared = contentLength === null ? Number.NaN : Number(contentLength);
   if (Number.isFinite(declared) && declared > maxBytes) {

@@ -146,4 +146,27 @@ describe('FetchHttp deadlines', () => {
       new FetchHttp().sendCapped({ ...GET, timeoutMs: 5 }, 1_000_000)
     ).rejects.toMatchObject({ name: 'TimeoutError' });
   });
+
+  // A deadline that cannot bound must refuse: these values build no signal, so
+  // an unguarded seam would send them as unbounded requests.
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, 1.5])(
+    'refuses a %s deadline instead of sending unbounded',
+    async (timeoutMs) => {
+      const fetches = recordingFetch();
+
+      await expect(new FetchHttp().send({ ...GET, timeoutMs })).rejects.toThrow(RangeError);
+      await expect(new FetchHttp().sendCapped({ ...GET, timeoutMs }, 1000)).rejects.toThrow(
+        RangeError
+      );
+      expect(fetches.inits).toEqual([]);
+    }
+  );
+
+  it('treats a zero deadline as a real deadline, not as unbounded', async () => {
+    const fetches = recordingFetch();
+
+    await new FetchHttp().send({ ...GET, timeoutMs: 0 });
+
+    expect(fetches.inits[0]?.signal).toBeInstanceOf(AbortSignal);
+  });
 });

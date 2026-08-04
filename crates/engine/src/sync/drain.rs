@@ -2249,6 +2249,13 @@ mod tests {
                 true,
             ),
             (
+                RecordPublishError::Publish(PublishError::RecordTooLarge {
+                    size: 10_241,
+                    limit: 10_240,
+                }),
+                true,
+            ),
+            (
                 RecordPublishError::HeadCidMismatch {
                     expected: "a".to_owned(),
                     returned: "b".to_owned(),

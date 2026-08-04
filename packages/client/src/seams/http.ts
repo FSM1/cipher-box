@@ -27,9 +27,13 @@ function requestInit(request: HttpRequestData): RequestInit {
     credentials: request.credentials ?? 'omit',
   };
   const timeoutMs = request.timeoutMs;
-  // `>= 0`, so a zero deadline aborts here as it does on desktop's `reqwest`
-  // rather than reading as "unbounded" on one host only.
-  if (typeof timeoutMs === 'number' && timeoutMs >= 0) {
+  if (timeoutMs !== undefined && timeoutMs !== null) {
+    // A negative or non-finite deadline builds no signal, silently widening a
+    // bounded request to unbounded. Zero stays a real deadline that aborts
+    // here, as it does on desktop's `reqwest`.
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0) {
+      throw new RangeError(`timeoutMs must be a non-negative safe integer, got ${timeoutMs}`);
+    }
     // Bounds the whole exchange, body stream included — the reader below
     // rejects when the signal fires mid-drain.
     init.signal = AbortSignal.timeout(timeoutMs);

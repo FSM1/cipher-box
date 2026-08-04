@@ -143,4 +143,31 @@ describe('drainCapped', () => {
       body: new Uint8Array(),
     });
   });
+
+  // A cap that cannot bound must refuse. `NaN` and `Infinity` are the dangerous
+  // pair: both size comparisons go false, so an unguarded drain runs unbounded.
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, 1.5])(
+    'refuses a %s cap without reading the body',
+    async (maxBytes) => {
+      const body = producedBody(100, 100);
+
+      await expect(drainCapped(respond(body), maxBytes)).rejects.toThrow(RangeError);
+      expect(body.produced()).toBe(0);
+      expect(body.cancelled()).toBe(true);
+    }
+  );
+
+  it('admits a zero cap only for an empty body', async () => {
+    expect(await drainCapped(new Response(null, { status: 204 }), 0)).toEqual({
+      kind: 'body',
+      body: new Uint8Array(),
+    });
+
+    const body = producedBody(1, 1);
+    expect(await drainCapped(respond(body), 0)).toEqual({
+      kind: 'tooLarge',
+      observed: 1,
+      limit: 0,
+    });
+  });
 });
