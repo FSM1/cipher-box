@@ -26,9 +26,11 @@
 //!   wave (root re-pointed last) with the three-channel re-point, register-first
 //!   inventory swap, and root linger. The write-plane sibling of `rotate_scope`.
 //!
-//! The read-plane seams' production implementations over the real transport live
-//! in [`crate::net::rotation`]; the write-plane [`WriteWavePublisher`] is still
-//! faked in tests (#1014).
+//! [`ChildIndexResolver`] and [`ScopeRootPublisher`] have production
+//! implementations over the real transport in [`crate::net::rotation`].
+//! [`CascadeResealResolver`] and [`SweepResolver`] are still faked in tests
+//! (#1025), as are the write-plane [`WriteSubtreeResolver`] and
+//! [`WriteWavePublisher`] (#1026).
 
 pub mod cascade;
 pub mod eager_set;
