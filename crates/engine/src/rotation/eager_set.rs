@@ -151,9 +151,9 @@ impl EagerSet {
 /// The one impure edge of the walk: resolve + gate + unseal a descendant scope
 /// root's write-body and yield its `direct_child_scope_index` (its next-level
 /// adjacency). The traversal itself is pure and deterministic; only this edge
-/// touches the network and the adoption gate. The real resolve/gate/unseal
-/// wiring lands in a later slice / the facade — the walk depends only on this
-/// contract, and tests fake it.
+/// touches the network and the adoption gate. The production resolve/gate/unseal
+/// wiring is [`crate::net::rotation::OwnerRotationNet`]; the walk depends only
+/// on this contract, and tests fake it.
 pub trait ChildIndexResolver {
     /// Return `child`'s own `direct_child_scope_index`, or a fail-closed
     /// [`ResolveFailure`] if its record cannot be authoritatively obtained. An
@@ -170,8 +170,7 @@ pub trait ChildIndexResolver {
     /// `scope_id` independently of the gated parent record. The walk keys
     /// visited / dedup / rotation identity on `scope_id`, so an independently
     /// influenced `scope_id` would dedup or rotate the wrong scope key — a silent
-    /// revocation hole defeating the eager-set completeness guarantee. Enforcement
-    /// of this obligation in the real resolver-wiring slice is tracked in #745.
+    /// revocation hole defeating the eager-set completeness guarantee.
     async fn direct_child_index(
         &self,
         child: &ChildScopeRef,

@@ -213,7 +213,7 @@ pub fn reseal_scope_root<E: Entropy>(
     // Fail-closed BEFORE any seal (see `ResealError::LedgerDivergesFromCommitment`
     // and the module's revocation-completeness rule). Reseal trusts each entry's
     // `recipient_enc_pk` verbatim from the committed ledger; the tag<->enc_pk
-    // binding is enforced at resolve time (#745).
+    // binding is enforced at resolve time.
     enforce_committed_ledger(committed.commitment, committed.grant_ledger)
         .map_err(|_| ResealError::LedgerDivergesFromCommitment)?;
 
@@ -221,12 +221,17 @@ pub fn reseal_scope_root<E: Entropy>(
     let read_epoch = seeds.read_epoch;
     let signer = identity.pseudonym_signer;
 
-    let sign_over = |struct_tag: u8,
-                     recipient_tag: Option<[u8; SECRET_LEN]>,
-                     bytes: &[u8],
-                     epoch| {
-        let input =
-            StructureSigInput::over_ciphertext(scope_id, epoch, struct_tag, recipient_tag, bytes);
+    // Every structure signature binds the READ epoch, whatever epoch its own AAD
+    // seals under: the gate recomputes each preimage from the authenticated
+    // envelope, whose epoch tag is the read epoch (gate/adoption.rs stage 3).
+    let sign_over = |struct_tag: u8, recipient_tag: Option<[u8; SECRET_LEN]>, bytes: &[u8]| {
+        let input = StructureSigInput::over_ciphertext(
+            scope_id,
+            read_epoch,
+            struct_tag,
+            recipient_tag,
+            bytes,
+        );
         sign_structure(signer, &input).to_bytes()
     };
 
@@ -254,12 +259,7 @@ pub fn reseal_scope_root<E: Entropy>(
         let sealed = seal_grant_blob(&recipient_pub, &ephemeral, &ctx, &payload);
         ephemeral.zeroize();
         let sealed = sealed.map_err(ResealError::Encode)?;
-        let signature = sign_over(
-            STRUCT_TAG_GRANT_BLOB,
-            Some(entry.tag),
-            &sealed.ciphertext,
-            read_epoch,
-        );
+        let signature = sign_over(STRUCT_TAG_GRANT_BLOB, Some(entry.tag), &sealed.ciphertext);
         grant_blobs.push(SignedGrantBlob {
             tag: entry.tag,
             enc: sealed.enc,
@@ -278,7 +278,7 @@ pub fn reseal_scope_root<E: Entropy>(
         let sealed = seal_owner_blob(identity.owner_enc_pub, &ephemeral, &ctx, &payload);
         ephemeral.zeroize();
         let sealed = sealed.map_err(ResealError::Encode)?;
-        let signature = sign_over(STRUCT_TAG_OWNER_BLOB, None, &sealed.ciphertext, read_epoch);
+        let signature = sign_over(STRUCT_TAG_OWNER_BLOB, None, &sealed.ciphertext);
         SignedOwnerBlob {
             enc: sealed.enc,
             ciphertext: sealed.ciphertext,
@@ -289,9 +289,7 @@ pub fn reseal_scope_root<E: Entropy>(
 
     // --- Owner-write-blob: the write-scope seed wrapped to the owner (the
     // write-plane mirror of the owner blob), authored wherever the write-body
-    // lives. Its AAD binds the write epoch (the write plane's own clock); its
-    // structure signature binds the read epoch, like every structure the gate
-    // authenticates from the envelope. ---
+    // lives. Its AAD binds the write epoch — the write plane's own clock. ---
     let owner_write_blob = {
         let payload = OwnerWriteBlobPayload::new(*seeds.write_scope_seed, seeds.write_epoch);
         let mut ephemeral = fill::<32, E>(entropy)?;
@@ -304,12 +302,7 @@ pub fn reseal_scope_root<E: Entropy>(
         let sealed = seal_owner_write_blob(identity.owner_enc_pub, &ephemeral, &ctx, &payload);
         ephemeral.zeroize();
         let sealed = sealed.map_err(ResealError::Encode)?;
-        let signature = sign_over(
-            STRUCT_TAG_OWNER_WRITE_BLOB,
-            None,
-            &sealed.ciphertext,
-            read_epoch,
-        );
+        let signature = sign_over(STRUCT_TAG_OWNER_WRITE_BLOB, None, &sealed.ciphertext);
         Some(SignedOwnerWriteBlob {
             enc: sealed.enc,
             ciphertext: sealed.ciphertext,
@@ -328,7 +321,7 @@ pub fn reseal_scope_root<E: Entropy>(
             let link = seal_ascent_link(parent_node_seed, &ephemeral, &ctx, &payload);
             ephemeral.zeroize();
             let link = link.map_err(ResealError::Encode)?;
-            let signature = sign_over(STRUCT_TAG_ASCENT_LINK, None, &link.ciphertext, read_epoch);
+            let signature = sign_over(STRUCT_TAG_ASCENT_LINK, None, &link.ciphertext);
             Some(SignedAscentLink {
                 ascent_public: link.ascent_public,
                 enc: link.enc,
@@ -349,7 +342,7 @@ pub fn reseal_scope_root<E: Entropy>(
         let payload = HistoryLinkPayload::new(*prev.seed, prev.epoch);
         let sealed = seal_history_link(structure_key.as_bytes(), &nonce, &ctx, &payload)
             .map_err(ResealError::Encode)?;
-        let signature = sign_over(STRUCT_TAG_HISTORY_LINK, None, &sealed, read_epoch);
+        let signature = sign_over(STRUCT_TAG_HISTORY_LINK, None, &sealed);
         history_links.push(SignedSealed {
             sealed,
             signature,
@@ -377,7 +370,7 @@ pub fn reseal_scope_root<E: Entropy>(
         );
         let sealed = seal(write_key.as_bytes(), &nonce, &ctx, &plaintext);
         plaintext.zeroize();
-        let signature = sign_over(STRUCT_TAG_WRITE_BODY, None, &sealed, seeds.write_epoch);
+        let signature = sign_over(STRUCT_TAG_WRITE_BODY, None, &sealed);
         SignedSealed {
             sealed,
             signature,

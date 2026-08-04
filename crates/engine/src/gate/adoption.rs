@@ -247,7 +247,7 @@ pub struct ReaderContext<'a> {
     /// `candidate.grant_section.ascent_link` is `Some`; a `None` here against a
     /// present ascent link is fail-closed
     /// (cannot verify).
-    pub parent_node_seed: Option<[u8; 32]>,
+    pub parent_node_seed: Option<&'a [u8; 32]>,
     /// The reader's HPKE seed source, opened at the unseal stage; `None` for a
     /// holder that already possesses the read key.
     pub seed_blob: Option<SeedBlob<'a>>,
@@ -464,8 +464,8 @@ pub async fn adopt_deferred<F: FloorStore>(
     )?;
     // Recipient-tag `None` — owner-scoped, not per-grantee. Its sealed AAD binds
     // the write epoch, yet its structure signature is recomputed at the read
-    // epoch off the authenticated envelope (dual-epoch rationale stated once at
-    // rotation/reseal.rs owner-write-blob).
+    // epoch off the authenticated envelope (produce side: `sign_over` in
+    // rotation/reseal.rs).
     if let Some(owner_write) = &section.owner_write_blob {
         authenticate(
             STRUCT_TAG_OWNER_WRITE_BLOB,
@@ -531,7 +531,7 @@ pub async fn adopt_deferred<F: FloorStore>(
         // carries is this scope root's current override seed (CONTEXT.md "Ascent
         // link"/"Override seed"), so it must belong to this epoch and derive this
         // node's read key — the ascent-link half of engine.md:406-408.
-        let payload = open_ascent_link(&parent_node_seed, &aad, &link)
+        let payload = open_ascent_link(parent_node_seed, &aad, &link)
             .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
         let node_seed = kdf::node_seed(payload.override_seed(), &candidate.envelope.id);
         let derived_read_key = kdf::read_key(node_seed.as_bytes());

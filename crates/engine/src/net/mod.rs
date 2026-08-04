@@ -33,6 +33,7 @@ pub mod register;
 pub mod resolve;
 pub mod retire;
 pub mod revival;
+pub mod rotation;
 
 pub use adopter::{LocalHead, RootAdopter};
 pub(crate) use adopter::{assemble_head_envelope, fetch_head_block};
@@ -55,3 +56,4 @@ pub(crate) use resolve::{
 };
 pub use retire::{retire, root_retire_ready};
 pub use revival::{ReviveError, ReviveRequest, revive};
+pub use rotation::{OwnerRotationKeys, OwnerRotationNet};

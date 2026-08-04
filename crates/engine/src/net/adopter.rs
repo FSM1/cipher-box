@@ -65,6 +65,10 @@ pub struct RootAdopter<'a, H, F> {
     assembled: RefCell<Option<Candidate>>,
     /// A head block the caller already holds ([`Self::hold_local_head`]).
     local_head: RefCell<Option<LocalHead>>,
+    /// The reader's own ancestor node seed for this scope root, required
+    /// whenever the resolved record carries an ascent link — every interior
+    /// scope root does ([`Self::under_parent_node_seed`]).
+    parent_node_seed: Option<Zeroizing<[u8; 32]>>,
 }
 
 impl<'a, H, F> RootAdopter<'a, H, F> {
@@ -87,7 +91,17 @@ impl<'a, H, F> RootAdopter<'a, H, F> {
             root_scope_id,
             assembled: RefCell::new(None),
             local_head: RefCell::new(None),
+            parent_node_seed: None,
         }
+    }
+
+    /// Supply the reader's ancestor node seed, `nodeSeed(parentOverrideSeed,
+    /// scopeId)`. The vault root carries no ascent link and needs none; every
+    /// interior scope root carries one, and the gate fails closed without the
+    /// seed it derives the expected ascent keypair from.
+    pub(crate) fn under_parent_node_seed(mut self, seed: Zeroizing<[u8; 32]>) -> Self {
+        self.parent_node_seed = Some(seed);
+        self
     }
 
     /// Supply a head block the caller already holds, so a self-adopt of our own
@@ -137,63 +151,9 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
 
 impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
     async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<AdoptOutcome, GateError> {
-        let candidate = self.assemble_candidate(name, record_bytes).await?;
-
-        // Step 6 — owner-blob ReaderContext. The vault owner recovers its own root
-        // scope seed from the record's owner blob (the read-plane seed source) and
-        // derives the read key; the gate re-opens the same blob, cross-checks the
-        // seed derives this key, and unseals the read-body.
-        let env = &candidate.envelope;
-        let owner_blob = &candidate.grant_section.owner_blob;
-        let owner_blob_aad = owner_blob_aad(env);
-        let read_scope_seed = self
-            .open_read_scope_seed(env, owner_blob)
-            .map_err(|e| reject(GateStage::Unseal, e))?;
-
-        // The derived read key is secret; this fn is its terminal owner, so it
-        // zeroizes on drop (the gate borrows it and never zeroizes a caller buffer).
-        // The recovered scope read seed rides the outcome on a gate pass — the
-        // engine's per-scope seed cell feeds the child read pipeline from it.
-        let node_seed = kdf::node_seed(&read_scope_seed, &env.id);
-        let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
-
-        let reader = ReaderContext {
-            owner_identity: self.owner_identity,
-            scope_id: self.root_scope_id,
-            read_key: &read_key,
-            parent_node_seed: None,
-            seed_blob: Some(SeedBlob::Owner {
-                enc_secret: self.owner_enc_secret,
-                enc: owner_blob.enc,
-                ciphertext: owner_blob.ciphertext.clone(),
-                aad: owner_blob_aad,
-            }),
-        };
-
-        // Step 7 — the gate owns all trust; the owner reader surfaces no gate write
-        // seed (that arm is the write-grantee's). The owner's own write-scope seed
-        // is recovered from the owner-write-blob below for cold-start self-renewal.
-        let (adopted, _) = match adopt(self.floors, &reader, &candidate).await {
-            Ok(pass) => pass,
-            Err(err) => {
-                // Keep the candidate for the equal-floor recovery path — it
-                // re-resolves the same head CID otherwise.
-                *self.assembled.borrow_mut() = Some(candidate);
-                return Err(err);
-            }
-        };
-
-        let write_scope_seed = match &candidate.grant_section.owner_write_blob {
-            // Re-authorable, NOT a trust failure — held keyless.
-            None => None,
-            Some(owb) => self.recover_write_scope_seed(env, owb).await?,
-        };
-        Ok(AdoptOutcome {
-            adopted,
-            write_scope_seed,
-            node_id: env.id,
-            read_scope_seed: Some(read_scope_seed),
-        })
+        self.adopt_root(name, record_bytes)
+            .await
+            .map(|(_, outcome)| outcome)
     }
 
     async fn recover_own_scope_material(
@@ -255,6 +215,79 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
             read_scope_seed,
             write_scope_seed,
         }))
+    }
+}
+
+impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
+    /// The gate pass **plus** the candidate it authenticated, for the callers
+    /// that need the record's own grant section (the rotation seams' gated
+    /// scope-root read) rather than only the read-body outcome.
+    pub(crate) async fn adopt_root(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> Result<(Candidate, AdoptOutcome), GateError> {
+        let candidate = self.assemble_candidate(name, record_bytes).await?;
+
+        // Step 6 — owner-blob ReaderContext. The vault owner recovers its own root
+        // scope seed from the record's owner blob (the read-plane seed source) and
+        // derives the read key; the gate re-opens the same blob, cross-checks the
+        // seed derives this key, and unseals the read-body.
+        let env = &candidate.envelope;
+        let owner_blob = &candidate.grant_section.owner_blob;
+        let owner_blob_aad = owner_blob_aad(env);
+        let read_scope_seed = self
+            .open_read_scope_seed(env, owner_blob)
+            .map_err(|e| reject(GateStage::Unseal, e))?;
+
+        // The derived read key is secret; this fn is its terminal owner, so it
+        // zeroizes on drop (the gate borrows it and never zeroizes a caller buffer).
+        // The recovered scope read seed rides the outcome on a gate pass — the
+        // engine's per-scope seed cell feeds the child read pipeline from it.
+        let node_seed = kdf::node_seed(&read_scope_seed, &env.id);
+        let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
+
+        let reader = ReaderContext {
+            owner_identity: self.owner_identity,
+            scope_id: self.root_scope_id,
+            read_key: &read_key,
+            parent_node_seed: self.parent_node_seed.as_deref(),
+            seed_blob: Some(SeedBlob::Owner {
+                enc_secret: self.owner_enc_secret,
+                enc: owner_blob.enc,
+                ciphertext: owner_blob.ciphertext.clone(),
+                aad: owner_blob_aad,
+            }),
+        };
+
+        // Step 7 — the gate owns all trust; the owner reader surfaces no gate write
+        // seed (that arm is the write-grantee's). The owner's own write-scope seed
+        // is recovered from the owner-write-blob below for cold-start self-renewal.
+        let (adopted, _) = match adopt(self.floors, &reader, &candidate).await {
+            Ok(pass) => pass,
+            Err(err) => {
+                // Keep the candidate for the equal-floor recovery path — it
+                // re-resolves the same head CID otherwise.
+                *self.assembled.borrow_mut() = Some(candidate);
+                return Err(err);
+            }
+        };
+
+        let write_scope_seed = match &candidate.grant_section.owner_write_blob {
+            // Re-authorable, NOT a trust failure — held keyless.
+            None => None,
+            Some(owb) => self.recover_write_scope_seed(env, owb).await?,
+        };
+        let node_id = env.id;
+        Ok((
+            candidate,
+            AdoptOutcome {
+                adopted,
+                write_scope_seed,
+                node_id,
+                read_scope_seed: Some(read_scope_seed),
+            },
+        ))
     }
 }
 
@@ -489,6 +522,8 @@ mod tests {
                 scope_id,
                 root_id,
                 children: Vec::new(),
+                child_scope_index: Vec::new(),
+                parent_node_seed: None,
                 owner_write_blob_epoch: owb_write_epoch,
             });
 

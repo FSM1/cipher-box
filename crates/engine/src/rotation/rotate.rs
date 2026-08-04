@@ -47,8 +47,9 @@ use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
 /// A fully re-sealed scope-root record handed to the [`ScopeRootPublisher`]: its
 /// identity, the epochs it publishes at, and the signed grant section. Assembling
 /// the envelope bytes (read-body re-seal + IPNS record signing) and moving them
-/// CAS over the content plane + `/routing/v1` transport is the publisher's job —
-/// the network wiring deferred to #745/#746, faked in this slice's tests.
+/// CAS over the content plane + `/routing/v1` transport is the publisher's job.
+/// It carries no seed: the publisher recovers the freshly minted override seed
+/// from `section`'s own owner blob, so this type is not a key-material carrier.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResealedScopeRoot {
     /// The scope-root node id (== scope id).
@@ -63,8 +64,8 @@ pub struct ResealedScopeRoot {
     pub section: GrantSection,
 }
 
-/// Why a scope-root publish did not durably land as the freshest record. Both
-/// variants mean the rotation must not advance its floor — nothing was cut.
+/// Why a scope-root publish did not durably land as the freshest record. Every
+/// variant means the rotation must not advance its floor — nothing was cut.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeRootPublishError {
     /// Register-first or the record PUT failed; nothing durable landed. Retryable.
@@ -72,6 +73,19 @@ pub enum ScopeRootPublishError {
     /// A concurrent writer's record at a higher sequence won the CAS race; the
     /// caller re-resolves and rebases before retrying.
     LostRace,
+    /// The scope root the publish had to read first failed the adoption gate — a
+    /// fail-closed trust violation, never staleness (AGENTS.md rule 6). Kept
+    /// distinct from [`Self::NotPublished`] so a forged or transplanted record
+    /// is never retried as if it were a flaky endpoint.
+    Rejected,
+}
+
+impl ScopeRootPublishError {
+    /// Whether re-running the publish could clear this: an availability stall or
+    /// a lost race, but never a trust rejection.
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::NotPublished | Self::LostRace)
+    }
 }
 
 impl core::fmt::Display for ScopeRootPublishError {
@@ -79,6 +93,9 @@ impl core::fmt::Display for ScopeRootPublishError {
         match self {
             ScopeRootPublishError::NotPublished => f.write_str("scope-root record not published"),
             ScopeRootPublishError::LostRace => f.write_str("scope-root publish lost the CAS race"),
+            ScopeRootPublishError::Rejected => {
+                f.write_str("scope-root record rejected by adoption gate")
+            }
         }
     }
 }
@@ -90,9 +107,10 @@ impl std::error::Error for ScopeRootPublishError {}
 /// The one impure edge of `rotate_scope` besides the seams, mirroring the
 /// eager-set walk's `ChildIndexResolver`: the traversal/composition is pure and
 /// deterministic, and only this edge touches the content plane and the
-/// `/routing/v1` transport. The real implementation wraps the content-plane block
-/// store, register-first, and [`net::publish`](crate::net::publish) CAS (#745/#746);
-/// this slice's tests fake it.
+/// `/routing/v1` transport. The production implementation
+/// ([`crate::net::rotation::OwnerRotationNet`]) wraps the content-plane block
+/// store, register-first, and [`net::publish`](crate::net::publish) CAS; tests
+/// fake it.
 pub trait ScopeRootPublisher {
     /// Register-first CAS-publish `record` at its scope root's `ipnsName`. `Ok`
     /// means the record is durably the freshest at the name; `Err` means nothing

@@ -19,14 +19,18 @@
 //!   revoke): re-key the root **and every transitively-reachable descendant scope
 //!   root** with a **fresh** override seed (`prev = Some`), threaded top-down.
 //!   This — not the sweep — completes a read revoke by locking out cached
-//!   descendant seeds. Proven in simulation; production resolver wiring is
-//!   #745/#746.
+//!   descendant seeds.
 //!
 //! - [`rotate_write`] — `rotateScopeWrite`, the owner-only write-plane rotation:
 //!   a fresh write override seed, a bumped `writeEpoch`, and a child-first name
 //!   wave (root re-pointed last) with the three-channel re-point, register-first
-//!   inventory swap, and root linger. The write-plane sibling of `rotate_scope`;
-//!   proven in simulation against faked resolve/publish seams (#745/#746).
+//!   inventory swap, and root linger. The write-plane sibling of `rotate_scope`.
+//!
+//! [`ChildIndexResolver`] and [`ScopeRootPublisher`] have production
+//! implementations over the real transport in [`crate::net::rotation`].
+//! [`CascadeResealResolver`] and [`SweepResolver`] are still faked in tests
+//! (#1025), as are the write-plane [`WriteSubtreeResolver`] and
+//! [`WriteWavePublisher`] (#1026).
 
 pub mod cascade;
 pub mod eager_set;

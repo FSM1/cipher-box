@@ -609,7 +609,7 @@ fn run_matrix_case(name: &str) -> Result<Adopted, GateError> {
         owner_identity: &fx.owner_identity_verifier,
         scope_id: fx.scope_id,
         read_key: &fx.read_key,
-        parent_node_seed: reader_parent_seed,
+        parent_node_seed: reader_parent_seed.as_ref(),
         seed_blob: Some(fx.owner_seed_blob(tamper_seed_blob)),
     };
     // The matrix asserts only the adoption verdict.
@@ -1170,7 +1170,8 @@ fn ascent_authority_is_reader_derived_not_candidate_supplied() {
     let mut candidate = fx.candidate(1);
     candidate.grant_section.ascent_link = Some(fx.ascent_link_under(&[0xAB; 32]));
     let mut reader = fx.reader();
-    reader.parent_node_seed = Some([0xCD; 32]);
+    let wrong_seed = [0xCD; 32];
+    reader.parent_node_seed = Some(&wrong_seed);
     let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
     let rej = err.rejection().unwrap();
     assert_eq!(rej.stage, GateStage::GrantSection);
@@ -1202,7 +1203,7 @@ fn ascent_adopts_when_reader_seed_matches_sealed_link() {
     let mut candidate = fx.candidate(1);
     candidate.grant_section.ascent_link = Some(fx.ascent_link_under(&parent_seed));
     let mut reader = fx.reader();
-    reader.parent_node_seed = Some(parent_seed);
+    reader.parent_node_seed = Some(&parent_seed);
     let (adopted, _) = block_on(adopt(&floors, &reader, &candidate)).expect("valid ascent adopts");
     assert_eq!(adopted.sequence, 1);
 }
@@ -1226,7 +1227,7 @@ fn ascent_link_aad_must_bind_to_the_envelope() {
     let mut candidate = fx.candidate(1);
     candidate.grant_section.ascent_link = Some(fx.ascent_link_under_aad(&parent_seed, foreign_aad));
     let mut reader = fx.reader();
-    reader.parent_node_seed = Some(parent_seed);
+    reader.parent_node_seed = Some(&parent_seed);
     let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
     let rej = err.rejection().unwrap();
     assert_eq!(rej.stage, GateStage::GrantSection);
@@ -1246,7 +1247,7 @@ fn ascent_link_rogue_seed_fails_read_key_cross_check() {
     candidate.grant_section.ascent_link =
         Some(fx.ascent_link_full(&parent_seed, fx.ascent_aad(), rogue));
     let mut reader = fx.reader();
-    reader.parent_node_seed = Some(parent_seed);
+    reader.parent_node_seed = Some(&parent_seed);
     let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
     let rej = err.rejection().unwrap();
     assert_eq!(rej.stage, GateStage::GrantSection);
@@ -1266,7 +1267,7 @@ fn ascent_link_stale_epoch_payload_rejected() {
     candidate.grant_section.ascent_link =
         Some(fx.ascent_link_full(&parent_seed, fx.ascent_aad(), stale));
     let mut reader = fx.reader();
-    reader.parent_node_seed = Some(parent_seed);
+    reader.parent_node_seed = Some(&parent_seed);
     let err = block_on(adopt(&floors, &reader, &candidate)).unwrap_err();
     let rej = err.rejection().unwrap();
     assert_eq!(rej.stage, GateStage::GrantSection);

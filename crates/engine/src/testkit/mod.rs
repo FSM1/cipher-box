@@ -26,7 +26,7 @@ pub use content::{block_store, frame_version, frame_version_with, gateway, reque
 pub use entropy::SeededEntropy;
 pub use executor::block_on;
 pub use owner_root::{
-    OWNER_ROOT_EPOCH, OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture,
-    OwnerRootSpec, owner_root_fixture,
+    OWNER_ROOT_EPOCH, OWNER_ROOT_PSEUDONYM_SEED, OWNER_ROOT_SCOPE_SEED,
+    OWNER_ROOT_WRITE_SCOPE_SEED, OwnerRootFixture, OwnerRootSpec, owner_root_fixture,
 };
 pub use world::{FakeDevice, FakeSeamTypes, FakeWorld};

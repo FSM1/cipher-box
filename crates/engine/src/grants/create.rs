@@ -12,8 +12,8 @@
 //! # Simulation boundary
 //!
 //! Deterministic-simulation slice: entropy is the injected [`Entropy`] seam and
-//! the read/floor/publish/mailbox effects are faked. Production resolver/
-//! publisher wiring is deferred to #745/#746 (mirroring #744/#747/#749/#760).
+//! the read/floor/publish/mailbox effects are faked in tests. The production
+//! resolver/publisher this composes over lives in [`crate::net::rotation`].
 //!
 //! # Deferred (follow-on slices of #635)
 //!
