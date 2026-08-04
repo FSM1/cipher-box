@@ -2,9 +2,12 @@
 //! per-name sequence floors (blueprint/engine.md "Adoption gate and floors",
 //! #39 D4 / #38 D4).
 //!
-//! Floors are engine state, held behind the [`FloorStore`] seam. This module
-//! is the *only* place that advances them, and it advances them only the four
-//! ways the law admits:
+//! Floors are engine state, held behind the [`FloorStore`] seam. Every read
+//! goes through this module's accessors, and it is the only place that advances
+//! them **from the record plane** — the owner-authored rotation cut raises the
+//! read-epoch floor directly ([`crate::rotation::rotate`],
+//! [`crate::rotation::cascade`]). The record-plane advances are the four the law
+//! admits:
 //!
 //! 1. **Advance on AAD-confirmed unseal** ([`advance_on_unseal`] for
 //!    gate-adopted roots, [`advance_sequence_on_unseal`] for child records) —

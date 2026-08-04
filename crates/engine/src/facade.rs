@@ -38,7 +38,6 @@ use crate::content::{
 };
 use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
-use crate::hex::hex_lower;
 use crate::net::retire::retire;
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
@@ -60,6 +59,7 @@ use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
 use crate::sync::rebase::{QueueScan, QueueScanMemo, decode_queue};
+use cipherbox_core::hex::lower as hex_lower;
 
 pub use crate::sync::drain::BlockedOp;
 pub use crate::sync::rebase::DeadLetterReason;

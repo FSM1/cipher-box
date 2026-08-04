@@ -494,8 +494,8 @@ mod tests {
     #[test]
     fn mints_a_fresh_override_seed_distinct_from_the_current() {
         // The published owner blob decrypts to a NEW seed, not the current one.
-        use crate::secret_util::ct_eq_32;
         use cipherbox_core::seal::{STRUCT_TAG_OWNER_BLOB, open_owner_blob};
+        use cipherbox_core::suite::secret::ct_eq;
 
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
@@ -554,7 +554,7 @@ mod tests {
         };
         let payload = open_owner_blob(&fx.owner_enc, &ob.enc, &ctx, &ob.ciphertext).unwrap();
         assert!(
-            !ct_eq_32(payload.override_seed(), &current_seed),
+            !ct_eq(payload.override_seed(), &current_seed),
             "rotation minted a fresh seed, not the current one"
         );
     }

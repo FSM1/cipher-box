@@ -41,7 +41,6 @@ use zeroize::Zeroizing;
 use crate::entropy::{Entropy, EntropyError};
 use crate::grants::SharePointer;
 use crate::grants::child_index::{canonicalize, insert_child, remove_child};
-use crate::hex::hex_lower;
 use crate::mailbox::post_sealed;
 use crate::rotation::{
     CommittedSet, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, ScopeRootIdentity,
@@ -49,6 +48,7 @@ use crate::rotation::{
     reseal_scope_root, sweep_pass,
 };
 use crate::seams::{FloorStore, Mailbox, SeamError};
+use cipherbox_core::hex::lower as hex_lower;
 
 /// The fresh grantee scope minted at the granted folder. `scope_id` is the
 /// folder's node id (a scope root's node id is its scope id). The read grant
@@ -548,7 +548,6 @@ mod tests {
     use crate::grants::recipient_blinded_tag;
     use crate::mailbox::poll_verified;
     use crate::rotation::{PrevEpochSeed, ResolveFailure, SweepTarget};
-    use crate::secret_util::ct_eq_32;
     use crate::testkit::fakes::{InMemoryFloorStore, InMemoryMailboxHub};
     use crate::testkit::{SeededEntropy, block_on};
     use cipherbox_core::seal::{
@@ -557,6 +556,7 @@ mod tests {
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
     use cipherbox_core::suite::ed25519::Ed25519Signer;
+    use cipherbox_core::suite::secret::ct_eq;
     use cipherbox_core::suite::x25519::X25519Secret;
     use std::cell::RefCell;
     use std::rc::Rc;
@@ -1231,7 +1231,7 @@ mod tests {
         let descend = open_ascent_link(&parent_node_seed, &ascent_ctx, &link)
             .expect("grantee derivation opens the descendant ascent link");
         assert!(
-            ct_eq_32(descend.override_seed(), &[0x71; SECRET_LEN]),
+            ct_eq(descend.override_seed(), &[0x71; SECRET_LEN]),
             "ascent link yields the descendant override seed under the grantee derivation"
         );
     }

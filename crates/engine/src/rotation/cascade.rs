@@ -72,8 +72,8 @@ use super::rotate::{
 };
 use crate::entropy::Entropy;
 use crate::grants::child_index::canonicalize;
-use crate::hex::hex_lower;
 use crate::seams::{BoxedTask, FloorStore, Scheduler, SeamError};
+use cipherbox_core::hex::lower as hex_lower;
 
 /// One descendant scope root's current re-seal material, as resolved from its
 /// published record — everything [`reseal_scope_root`] needs **except** the
@@ -585,7 +585,6 @@ fn canonicalize_frontier(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::secret_util::ct_eq_32;
     use crate::testkit::fakes::{InMemoryFloorStore, VirtualScheduler};
     use crate::testkit::{SeededEntropy, block_on};
     use cipherbox_core::seal::{
@@ -593,6 +592,7 @@ mod tests {
         STRUCT_TAG_OWNER_BLOB, open_ascent_link, open_owner_blob, sign_grant_set,
     };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
+    use cipherbox_core::suite::secret::ct_eq;
     use cipherbox_core::suite::x25519::X25519Secret;
     use std::cell::RefCell;
     use std::collections::HashMap;
@@ -992,7 +992,7 @@ mod tests {
         for s in [0x0au8, 0x0b, 0x0c] {
             let fresh = net.published_seed(s);
             assert!(
-                !ct_eq_32(&fresh, &net.pre_cascade_seed(s)),
+                !ct_eq(&fresh, &net.pre_cascade_seed(s)),
                 "scope {s:#x} got a fresh seed, not its old one"
             );
             seeds.push(fresh);
@@ -1000,7 +1000,7 @@ mod tests {
         seeds.push(net.published_seed(0x00));
         for i in 0..seeds.len() {
             for j in (i + 1)..seeds.len() {
-                assert!(!ct_eq_32(&seeds[i], &seeds[j]), "seeds {i}/{j} distinct");
+                assert!(!ct_eq(&seeds[i], &seeds[j]), "seeds {i}/{j} distinct");
             }
         }
 
@@ -1026,7 +1026,7 @@ mod tests {
         let old = net.pre_cascade_seed(0x0a);
         let published = net.published_seed(0x0a);
         assert!(
-            !ct_eq_32(&published, &old),
+            !ct_eq(&published, &old),
             "a sweep would keep the old seed; the cascade minted a fresh one"
         );
         assert_eq!(net.published_epoch(0x0a), 5, "epoch bumped 4 -> 5");
@@ -1054,7 +1054,7 @@ mod tests {
         let old_read_key = kdf::read_key(kdf::node_seed(&old, &id).as_bytes());
         let fresh_read_key = kdf::read_key(kdf::node_seed(&fresh, &id).as_bytes());
         assert!(
-            !ct_eq_32(old_read_key.as_bytes(), fresh_read_key.as_bytes()),
+            !ct_eq(old_read_key.as_bytes(), fresh_read_key.as_bytes()),
             "the cached old seed no longer derives A's current read key"
         );
     }
@@ -1080,7 +1080,7 @@ mod tests {
             .ascent_seed_under(0x0b, under_new.as_bytes())
             .expect("B's ascent opens under A's NEW parent derivation");
         assert!(
-            ct_eq_32(&recovered, &b_fresh),
+            ct_eq(&recovered, &b_fresh),
             "the ascent link carries B's fresh override seed"
         );
 
@@ -1186,7 +1186,7 @@ mod tests {
             .count();
         assert_eq!(d_rekeys, 1, "D re-keyed exactly once at the agreed name");
         assert!(
-            !ct_eq_32(&net.published_seed(0x0d), &[0x0d; 32]),
+            !ct_eq(&net.published_seed(0x0d), &[0x0d; 32]),
             "D got a fresh seed"
         );
         assert_eq!(spawned, 1, "the repaired cascade enqueues the sweep");
@@ -1301,11 +1301,11 @@ mod tests {
         let (a1, b1) = build();
         let (a2, b2) = build();
         assert!(
-            ct_eq_32(&a1, &a2) && ct_eq_32(&b1, &b2),
+            ct_eq(&a1, &a2) && ct_eq(&b1, &b2),
             "same seed → same fresh seeds"
         );
-        assert!(!ct_eq_32(&a1, &[0x0a; 32]), "A never keeps its old seed");
-        assert!(!ct_eq_32(&b1, &[0x0b; 32]), "B never keeps its old seed");
+        assert!(!ct_eq(&a1, &[0x0a; 32]), "A never keeps its old seed");
+        assert!(!ct_eq(&b1, &[0x0b; 32]), "B never keeps its old seed");
     }
 
     #[test]
@@ -1317,6 +1317,6 @@ mod tests {
         assert_eq!(outcome.rekeyed[0].scope_id, sid(0x00));
         assert_eq!(block_on(floors.epoch_floor(&sid(0x00))).unwrap(), Some(5));
         assert_eq!(spawned, 1);
-        assert!(!ct_eq_32(&net.published_seed(0x00), &[0x00; 32]));
+        assert!(!ct_eq(&net.published_seed(0x00), &[0x00; 32]));
     }
 }

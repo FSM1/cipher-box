@@ -116,7 +116,7 @@ impl ReceivedShare {
         self.sharer_identity_pk == other.sharer_identity_pk
             && self.display_name == other.display_name
             && self.permission == other.permission
-            && crate::secret_util::ct_eq_32(self.pointer_read_key(), other.pointer_read_key())
+            && self.pointer_read_key == other.pointer_read_key
     }
 }
 
@@ -561,6 +561,7 @@ fn fixed<const N: usize>(v: &Value, field: &'static str) -> Result<[u8; N], Code
 mod tests {
     use super::*;
     use cipherbox_core::codec::encode;
+    use cipherbox_core::suite::secret::ct_eq;
 
     fn pointer() -> SharePointer {
         SharePointer {
@@ -637,7 +638,7 @@ mod tests {
         let stored = list.iter().next().unwrap();
         assert_eq!(stored.permission, Permission::Write);
         assert!(
-            crate::secret_util::ct_eq_32(stored.pointer_read_key(), &[0x9C; 32]),
+            ct_eq(stored.pointer_read_key(), &[0x9C; 32]),
             "pointer read key mismatch"
         );
     }
@@ -675,7 +676,7 @@ mod tests {
             "healed field rolled back"
         );
         assert!(
-            crate::secret_util::ct_eq_32(stored.pointer_read_key(), &[0x8A; 32]),
+            ct_eq(stored.pointer_read_key(), &[0x8A; 32]),
             "pointer read key mismatch"
         );
     }

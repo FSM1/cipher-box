@@ -12,6 +12,7 @@ use core::fmt;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use super::secret::{SECRET_LEN, SecretBytes};
+use crate::hex::lower as hex_lower;
 
 /// An X25519 secret scalar. Dalek clamps it on use, so any 32 injected bytes
 /// are a valid secret.
@@ -129,15 +130,6 @@ impl fmt::Debug for X25519Public {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "X25519Public({})", hex_lower(&self.to_bytes()))
     }
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push(char::from_digit((b >> 4) as u32, 16).expect("nibble"));
-        s.push(char::from_digit((b & 0xf) as u32, 16).expect("nibble"));
-    }
-    s
 }
 
 #[cfg(test)]

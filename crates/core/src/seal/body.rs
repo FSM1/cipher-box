@@ -125,7 +125,7 @@ impl ChildRef {
 /// The private `content_key` is random per-version symmetric key material, held
 /// in a zeroizing owner ([`SecretBytes`]) with a redacted `Debug` (never-log-keys
 /// rule); read it through [`Version::content_key`].
-#[derive(Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Version {
     /// The content CID bytes.
     pub content_cid: Vec<u8>,
@@ -190,33 +190,6 @@ impl Version {
         Value::Map(m)
     }
 }
-
-impl fmt::Debug for Version {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Version")
-            .field("content_cid", &self.content_cid)
-            .field("content_key", &"<redacted>")
-            .field("size", &self.size)
-            .field("modified_at", &self.modified_at)
-            .field("unknown", &self.unknown)
-            .finish()
-    }
-}
-
-impl PartialEq for Version {
-    /// Equality is for KAT/round-trip comparison of test vectors, not a
-    /// security operation, so the content-key byte comparison needs no
-    /// constant-time guarantee (mirrors `kdf::EdgeProbeOutput`).
-    fn eq(&self, other: &Self) -> bool {
-        self.content_cid == other.content_cid
-            && self.content_key.as_bytes() == other.content_key.as_bytes()
-            && self.size == other.size
-            && self.modified_at == other.modified_at
-            && self.unknown == other.unknown
-    }
-}
-
-impl Eq for Version {}
 
 // ---------------------------------------------------------------------------
 // The read-body tagged union.

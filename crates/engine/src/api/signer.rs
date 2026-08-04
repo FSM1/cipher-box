@@ -8,7 +8,7 @@
 
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
-use crate::hex::hex_lower;
+use cipherbox_core::hex::lower as hex_lower;
 
 /// Produces the two hex fields the `/auth/challenge` + `/auth/login` flow
 /// needs: the identity public key and a signature over a challenge string.
