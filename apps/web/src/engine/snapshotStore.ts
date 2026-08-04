@@ -32,6 +32,8 @@ export interface SnapshotStore {
   getStaleness(): Staleness;
   /** Points the adapter (and the engine's focus window) at a folder. */
   setFocus(node: Uint8Array | null): void;
+  /** Re-pulls the focused folder, for a UI offering a retry after a failure. */
+  retry(): void;
   /** Releases the event subscription. */
   dispose(): void;
 }
@@ -44,6 +46,7 @@ export const idleSnapshotStore: SnapshotStore = {
   getSnapshot: () => IDLE,
   getStaleness: () => 'reconciling',
   setFocus: () => undefined,
+  retry: () => undefined,
   dispose: () => undefined,
 };
 
@@ -143,6 +146,7 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
         }
       );
     },
+    retry: pull,
     dispose() {
       unsubscribe();
       listeners.clear();

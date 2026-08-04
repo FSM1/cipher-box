@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { MediaBroker, type MediaReader } from './broker.js';
+import { MediaBroker, type MediaBrokerOptions, type MediaReader } from './broker.js';
 import type { StreamHandle } from '../worker/protocol.js';
 import type { MediaRequest, MediaResponse } from './protocol.js';
 import { StreamRegistry } from './registry.js';
@@ -86,11 +86,16 @@ interface Harness {
 
 const openHarnesses: Array<() => void> = [];
 
-function harness(size: number, windowBytes = WINDOW): Harness {
+/** Zero linger by default, so a released pin evicts on the next flush. */
+function harness(size: number, options: MediaBrokerOptions = {}): Harness {
   const reader = new FakeReader(plaintext(size));
   const registry = new StreamRegistry('https://vault.example', () => 'ticket-1');
   registry.register({ node: NODE, size, mimeType: 'video/mp4' });
-  const broker = new MediaBroker(registry, reader, windowBytes);
+  const broker = new MediaBroker(registry, reader, {
+    windowBytes: WINDOW,
+    lingerMs: 0,
+    ...options,
+  });
 
   const channel = new MessageChannel();
   const received: MediaResponse[] = [];
@@ -181,6 +186,7 @@ describe('MediaBroker', () => {
       await flush();
     }
     await waitFor(() => kinds(h.received).includes('cb:media:end'), 'end');
+    await waitFor(() => h.reader.closes.length === 1, 'stream released');
 
     expect(bodyOf(h.received)).toEqual(plaintext(size));
     // One open however many windows the body took: no per-window resolve, and
@@ -188,6 +194,77 @@ describe('MediaBroker', () => {
     expect(h.reader.opens).toEqual([NODE]);
     expect(h.reader.calls).toHaveLength(5);
     expect(h.reader.closes).toEqual([1n]);
+  });
+
+  it('shares one engine stream across concurrent responses for a ticket', async () => {
+    const h = harness(20);
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: 'bytes=0-3' });
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: h.ticket, range: 'bytes=8-11' });
+    await waitFor(() => h.received.length === 2, 'heads');
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(
+      () => h.received.filter((message) => message.type === 'cb:media:chunk').length === 2,
+      'both chunks'
+    );
+
+    // The second range pays no resolve and no root-manifest fetch of its own.
+    expect(h.reader.opens).toEqual([NODE]);
+    expect(h.reader.closes).toEqual([]);
+  });
+
+  it('holds the pin across a seek that closes its body before opening the next', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => h.received.length === 2, 'first chunk');
+    h.send({ type: 'cb:media:close', requestId: 1 });
+    await flush();
+
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: h.ticket, range: 'bytes=8-11' });
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(() => h.received.length === 4, 'seeked chunk');
+
+    // One version for the whole playback, not one per Range request.
+    expect(h.reader.opens).toEqual([NODE]);
+    expect(h.reader.closes).toEqual([]);
+    expect(h.reader.calls).toEqual([
+      { offset: 0, length: 4 },
+      { offset: 8, length: 4 },
+    ]);
+  });
+
+  it('releases the pin once its last cursor drops and nothing re-opens it', async () => {
+    const h = harness(20);
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => h.received.length === 2, 'first chunk');
+    h.send({ type: 'cb:media:close', requestId: 1 });
+
+    await waitFor(() => h.reader.closes.length === 1, 'stream released');
+    expect(h.reader.closes).toEqual([1n]);
+  });
+
+  it('re-opens a ticket whose stream failed instead of replaying the failure', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+    h.reader.failure = new Error('gateway unreachable');
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => kinds(h.received).includes('cb:media:error'), 'error');
+
+    h.reader.failure = null;
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(
+      () => h.received.filter((message) => message.type === 'cb:media:chunk').length === 1,
+      'chunk after recovery'
+    );
+
+    expect(h.reader.opens).toEqual([NODE, NODE]);
   });
 
   it('answers an unknown ticket with a 404 head and reads nothing', async () => {

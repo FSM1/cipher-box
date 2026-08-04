@@ -58,6 +58,12 @@ export class MediaPipe {
   private readonly ports = new Map<string, PortEntry>();
   private readonly portWaiters = new Set<(adopted: string) => void>();
   private readonly sinks = new Map<number, ResponseSink>();
+  /**
+   * Every response body still streaming and the port it reads from. A sink only
+   * exists while a pull is in flight, so this is the only record that can tell a
+   * dying port which of the tab's cursors it must release.
+   */
+  private readonly bodies = new Map<number, MessagePortLike>();
   /** The armed pull deadline per request, so a cancel can disarm its own. */
   private readonly pullTimers = new Map<number, ReturnType<typeof setTimeout>>();
   private nextRequestId = 1;
@@ -151,6 +157,7 @@ export class MediaPipe {
 
   /** A zero high-water mark keeps exactly one window in flight: pull on demand. */
   private body(port: MessagePortLike, requestId: number): ReadableStream<Uint8Array> {
+    this.bodies.set(requestId, port);
     return new ReadableStream<Uint8Array>(
       {
         pull: (controller) => this.pullWindow(port, requestId, controller),
@@ -159,11 +166,17 @@ export class MediaPipe {
           // the port — taking every other body streaming on it down too.
           this.clearPull(requestId);
           this.sinks.delete(requestId);
-          this.post(port, { type: 'cb:media:close', requestId });
+          this.closeBody(port, requestId);
         },
       },
       { highWaterMark: 0 }
     );
+  }
+
+  /** Ends a body and tells the tab to release the cursor and pin behind it. */
+  private closeBody(port: MessagePortLike, requestId: number): void {
+    this.bodies.delete(requestId);
+    this.post(port, { type: 'cb:media:close', requestId });
   }
 
   private pullWindow(
@@ -195,9 +208,11 @@ export class MediaPipe {
               settle(() => controller.enqueue(new Uint8Array(response.chunk)));
               return;
             case 'cb:media:end':
+              this.bodies.delete(requestId);
               settle(() => controller.close());
               return;
             case 'cb:media:error':
+              this.bodies.delete(requestId);
               settle(() => controller.error(new Error(response.message)));
               return;
             default:
@@ -271,6 +286,13 @@ export class MediaPipe {
     const entry = this.ports.get(clientId);
     if (!entry) return;
     this.ports.delete(clientId);
+    // `MessagePort` has no close event, so this is the tab's only notice that
+    // the bodies reading over this port are gone; without it their cursors and
+    // the engine streams they pin survive until the tab re-brokers or disposes.
+    // Posted before the port is disentangled, or it never leaves.
+    for (const [requestId, bound] of [...this.bodies]) {
+      if (bound === entry.port) this.closeBody(entry.port, requestId);
+    }
     entry.port.removeEventListener('message', entry.listener);
     entry.port.close();
     // Bodies still pulling on the dead port would hang forever; failing them

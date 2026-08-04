@@ -42,6 +42,17 @@ export class EngineRequestError extends Error {
   }
 }
 
+/**
+ * Whether a failed engine request can succeed on a retry once the host frees the
+ * resource it refused over. `tooManyStreams` is the ceiling on open read streams
+ * — closing one makes the same call succeed — so a caller must offer a retry
+ * rather than present a dead end. Neighbouring codes like `unknownStreamHandle`
+ * are terminal for the request that raised them.
+ */
+export function isRecoverableEngineError(code: string | undefined): boolean {
+  return code === 'tooManyStreams';
+}
+
 /** Which of the engine's handle tables a step addresses. */
 export type HandleKind = 'write' | 'stream';
 

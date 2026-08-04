@@ -1,3 +1,4 @@
+import { EngineRequestError } from '@cipherbox/client';
 import type { SnapshotDescriptor } from '@cipherbox/client';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -259,6 +260,66 @@ describe('the vault browser read path', () => {
 
     expect(screen.queryByTestId('file-list-item')).toBeNull();
     expect(screen.getByTestId('file-browser-loading')).toBeDefined();
+  });
+
+  it('offers a retry for the stream ceiling and keeps the listing under it', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(
+      engine,
+      folderView({
+        children: [
+          {
+            id: NOTE,
+            name: 'clip.mp4',
+            kind: 'file',
+            size: 1024n,
+            mtime: null,
+            pending: 'none',
+            deadLetter: false,
+            contentVersion: 1n,
+          },
+        ],
+      })
+    );
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+      engine.pulls[engine.pulls.length - 1].reject(
+        new EngineRequestError('too many read streams are already open', 'tooManyStreams')
+      );
+      await Promise.resolve();
+    });
+
+    // Recoverable in kind, not just in wording: the folder is still on screen.
+    expect(screen.queryByTestId('file-browser-error')).toBeNull();
+    expect(screen.getByTestId('file-browser-notice')).toBeDefined();
+    expect(rowNames().map((name) => name.textContent)).toEqual(['clip.mp4']);
+
+    const before = engine.pulls.length;
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('file-browser-retry'));
+      await Promise.resolve();
+    });
+    expect(engine.pulls.length).toBe(before + 1);
+  });
+
+  it('renders a terminal engine failure without a retry', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+
+    await act(async () => {
+      engine.emit({ kind: 'snapshotUpdated' });
+      engine.pulls[engine.pulls.length - 1].reject(
+        new EngineRequestError('root failed the adoption gate', 'trustViolation')
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId('file-browser-error').textContent).toBe(
+      'root failed the adoption gate'
+    );
+    expect(screen.queryByTestId('file-browser-retry')).toBeNull();
   });
 
   it('refuses a route param that is not a node id', () => {

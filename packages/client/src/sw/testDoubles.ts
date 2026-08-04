@@ -83,6 +83,9 @@ export class FakePort implements MessagePortLike {
   constructor(private readonly reply?: PortReply) {}
 
   postMessage(message: unknown): void {
+    // A disentangled port delivers nothing, so a post ordered after `close`
+    // must not count as one the far side saw.
+    if (this.closed) return;
     this.sent.push(message as MediaRequest);
     this.reply?.(message as MediaRequest, this);
     this.peer?.deliverRaw(message);

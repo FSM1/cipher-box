@@ -23,6 +23,29 @@
   border: var(--border-thickness) solid rgb(239 68 68 / 20%);
 }
 
+/* A refusal a retry clears, so it reads as a backoff rather than a verdict. */
+.file-browser-notice {
+  display: flex;
+  gap: var(--spacing-sm);
+  align-items: baseline;
+  margin-bottom: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-warning);
+  background-color: var(--color-warning-bg);
+  border: var(--border-thickness) solid var(--color-warning);
+}
+
+.file-browser-notice button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  background: none;
+  border: var(--border-thickness) solid currentcolor;
+  cursor: pointer;
+}
+
 .file-browser-loading {
   padding: var(--spacing-sm) 0;
   font-family: var(--font-family-mono);

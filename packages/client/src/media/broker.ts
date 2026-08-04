@@ -14,14 +14,35 @@ export interface MediaReader {
   closeStream(handle: StreamHandle): Promise<void>;
 }
 
+/**
+ * A `<video>` closes a body before opening the range it seeks to, so a pin whose
+ * count hits zero is held this long before its engine stream is released.
+ */
+const DEFAULT_PIN_LINGER_MS = 5000;
+
+export interface MediaBrokerOptions {
+  /** The plaintext window read per pull; defaults to `MEDIA_WINDOW_BYTES`. */
+  windowBytes?: number;
+  /** How long a ticket's engine stream outlives its last cursor. */
+  lingerMs?: number;
+}
+
+/**
+ * The one engine stream every response for a ticket reads against, opened on the
+ * first pull — a ticket answered with a head and then abandoned costs no
+ * resolve. Pinning per ticket rather than per request holds a single content
+ * version across a whole playback, not merely one response (#948).
+ */
+interface Pin {
+  readonly node: Uint8Array;
+  stream: Promise<StreamHandle> | null;
+  cursors: number;
+  linger: ReturnType<typeof setTimeout> | null;
+}
+
 /** An open response body: the unread remainder of a resolved window. */
 interface Cursor {
-  readonly node: Uint8Array;
-  /**
-   * The engine stream every window of this response is read against, opened on
-   * the first pull — a request abandoned after its head costs nothing.
-   */
-  stream: Promise<StreamHandle> | null;
+  readonly ticket: string;
   /** The mint-time window end, pulled in when a read proves the version is shorter. */
   end: number;
   offset: number;
@@ -30,15 +51,21 @@ interface Cursor {
 }
 
 export class MediaBroker {
-  private readonly streams = new Map<number, Cursor>();
+  private readonly cursors = new Map<number, Cursor>();
+  private readonly pins = new Map<string, Pin>();
+  private readonly windowBytes: number;
+  private readonly lingerMs: number;
   private port: MessagePortLike | null = null;
   private listener: ((event: MessageEvent) => void) | null = null;
 
   constructor(
     private readonly registry: StreamRegistry,
     private readonly reader: MediaReader,
-    private readonly windowBytes: number = MEDIA_WINDOW_BYTES
-  ) {}
+    options: MediaBrokerOptions = {}
+  ) {
+    this.windowBytes = options.windowBytes ?? MEDIA_WINDOW_BYTES;
+    this.lingerMs = options.lingerMs ?? DEFAULT_PIN_LINGER_MS;
+  }
 
   /** The pipe carries one port; a fresh offer supersedes the port it replaces. */
   serve(port: MessagePortLike): void {
@@ -58,15 +85,64 @@ export class MediaBroker {
     }
     this.port = null;
     this.listener = null;
-    for (const requestId of [...this.streams.keys()]) this.drop(requestId);
+    for (const requestId of [...this.cursors.keys()]) this.drop(requestId);
+    // A superseded port has no reader left to serve, so nothing lingers.
+    for (const ticket of [...this.pins.keys()]) this.evict(ticket);
   }
 
-  /** Forgets a cursor and releases the engine stream it pinned, if it opened one. */
+  /** Forgets a cursor and gives up its share of the ticket's engine stream. */
   private drop(requestId: number): void {
-    const cursor = this.streams.get(requestId);
+    const cursor = this.cursors.get(requestId);
     if (cursor === undefined) return;
-    this.streams.delete(requestId);
-    void cursor.stream?.then((handle) => this.reader.closeStream(handle)).catch(() => undefined);
+    this.cursors.delete(requestId);
+    this.release(cursor.ticket);
+  }
+
+  private acquire(ticket: string, node: Uint8Array): void {
+    const pin = this.pins.get(ticket);
+    if (pin === undefined) {
+      this.pins.set(ticket, { node, stream: null, cursors: 1, linger: null });
+      return;
+    }
+    if (pin.linger !== null) clearTimeout(pin.linger);
+    pin.linger = null;
+    pin.cursors += 1;
+  }
+
+  private release(ticket: string): void {
+    const pin = this.pins.get(ticket);
+    if (pin === undefined) return;
+    pin.cursors -= 1;
+    if (pin.cursors > 0) return;
+    pin.linger = setTimeout(() => this.evict(ticket), this.lingerMs);
+  }
+
+  /** Closes a ticket's engine stream. A pin re-acquired since is left alone. */
+  private evict(ticket: string): void {
+    const pin = this.pins.get(ticket);
+    if (pin === undefined || pin.cursors > 0) return;
+    if (pin.linger !== null) clearTimeout(pin.linger);
+    this.pins.delete(ticket);
+    void pin.stream?.then((handle) => this.reader.closeStream(handle)).catch(() => undefined);
+  }
+
+  /**
+   * Forgets a ticket's engine stream after a failed open or read, so the next
+   * pull re-opens rather than replaying the failure for every cursor sharing it.
+   */
+  private repin(ticket: string): void {
+    const pin = this.pins.get(ticket);
+    if (pin === undefined || pin.stream === null) return;
+    const stream = pin.stream;
+    pin.stream = null;
+    void stream.then((handle) => this.reader.closeStream(handle)).catch(() => undefined);
+  }
+
+  private pinnedStream(ticket: string): Promise<StreamHandle> {
+    const pin = this.pins.get(ticket);
+    if (pin === undefined) return Promise.reject(new Error('the stream ticket was released'));
+    pin.stream ??= this.reader.openContentStream(pin.node);
+    return pin.stream;
   }
 
   private dispatch(port: MessagePortLike, data: unknown): void {
@@ -110,9 +186,9 @@ export class MediaBroker {
       return;
     }
 
-    this.streams.set(requestId, {
-      node: source.node,
-      stream: null,
+    this.acquire(ticket, source.node);
+    this.cursors.set(requestId, {
+      ticket,
       offset: head.window.offset,
       end: head.window.offset + head.window.length,
       pump: Promise.resolve(),
@@ -121,7 +197,7 @@ export class MediaBroker {
   }
 
   private pull(port: MessagePortLike, requestId: number): void {
-    const cursor = this.streams.get(requestId);
+    const cursor = this.cursors.get(requestId);
     if (cursor === undefined) return;
     cursor.pump = cursor.pump.then(() => this.pump(port, requestId, cursor));
   }
@@ -132,7 +208,7 @@ export class MediaBroker {
    * stream's plaintext under this request id.
    */
   private isCurrent(requestId: number, cursor: Cursor): boolean {
-    return this.streams.get(requestId) === cursor;
+    return this.cursors.get(requestId) === cursor;
   }
 
   private async pump(port: MessagePortLike, requestId: number, cursor: Cursor): Promise<void> {
@@ -148,8 +224,7 @@ export class MediaBroker {
     const offset = cursor.offset;
     const length = Math.min(this.windowBytes, remaining);
     try {
-      cursor.stream ??= this.reader.openContentStream(cursor.node);
-      const handle = await cursor.stream;
+      const handle = await this.pinnedStream(cursor.ticket);
       if (!this.isCurrent(requestId, cursor)) return;
       const chunk = await this.reader.readStream(handle, offset, length);
       if (!this.isCurrent(requestId, cursor)) {
@@ -166,6 +241,7 @@ export class MediaBroker {
       const response: MediaResponse = { type: 'cb:media:chunk', requestId, chunk };
       port.postMessage(response, [chunk]);
     } catch (error) {
+      this.repin(cursor.ticket);
       if (!this.isCurrent(requestId, cursor)) return;
       this.drop(requestId);
       post(port, { type: 'cb:media:error', requestId, message: errorMessage(error) });
