@@ -18,8 +18,9 @@
 use cipherbox_core::error::CodecError;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
-    ChildRef, Envelope, NodeKind, PreservedFields, ReadBody, Version, decode_grant_section,
-    encode_envelope, grant_section_bytes, has_grant_section, seal_read_body,
+    ChildRef, Envelope, GrantSection, NodeKind, PreservedFields, ReadBody, Version,
+    decode_grant_section, encode_envelope, encode_grant_section, grant_section_bytes,
+    has_grant_section, seal_read_body, set_grant_section,
 };
 
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
@@ -133,13 +134,39 @@ pub fn author_scope_root_envelope(
     name: &IpnsName,
 ) -> Result<AuthoredHead, AuthorError> {
     let envelope = seal(&authoring)?;
-    let section = grant_section_bytes(&envelope)
+    check_scope_root(&envelope, name)?;
+    encode(envelope)
+}
+
+/// Author a scope root that installs a **freshly assembled** `section` — the
+/// re-seal path, where the section is not the carried one. `section` replaces
+/// whatever `carried_unknown` holds under the grant-section key, so the previous
+/// record's envelope fields can be carried in verbatim; the same two
+/// release-active checks then run on the result.
+pub fn author_scope_root_with_section(
+    authoring: EnvelopeAuthoring<'_>,
+    name: &IpnsName,
+    section: &GrantSection,
+) -> Result<AuthoredHead, AuthorError> {
+    let mut envelope = seal(&authoring)?;
+    set_grant_section(
+        &mut envelope,
+        encode_grant_section(section).map_err(AuthorError::Seal)?,
+    );
+    check_scope_root(&envelope, name)?;
+    encode(envelope)
+}
+
+/// The two checks the gate's stages 2 and 5 make on arrival, run here first so a
+/// root this build's own gate always rejects is never signed (release-active).
+fn check_scope_root(envelope: &Envelope, name: &IpnsName) -> Result<(), AuthorError> {
+    let section = grant_section_bytes(envelope)
         .and_then(|bytes| decode_grant_section(bytes).ok())
         .ok_or(AuthorError::MissingGrantSection)?;
     if section.commitment.ipns_name != name.as_str().as_bytes() {
         return Err(AuthorError::CommitmentNameMismatch);
     }
-    encode(envelope)
+    Ok(())
 }
 
 fn seal(authoring: &EnvelopeAuthoring<'_>) -> Result<Envelope, AuthorError> {
@@ -303,6 +330,7 @@ mod tests {
             scope_id: [2u8; 16],
             root_id: [1u8; 16],
             children: Vec::new(),
+            child_scope_index: Vec::new(),
             owner_write_blob_epoch: None,
         })
     }

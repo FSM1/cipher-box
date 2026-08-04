@@ -9,8 +9,8 @@ use cipherbox_core::content::{compute_cid, encode_content_cid_str};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, ChildRef, Envelope, GrantSection, GrantSetCommitment, OverrideSeedPayload,
-    OwnerWriteBlobPayload, PreservedFields, ReadBody, STRUCT_TAG_OWNER_BLOB,
+    AadContext, ChildRef, ChildScopeRef, Envelope, GrantSection, GrantSetCommitment,
+    OverrideSeedPayload, OwnerWriteBlobPayload, PreservedFields, ReadBody, STRUCT_TAG_OWNER_BLOB,
     STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedOwnerBlob, SignedOwnerWriteBlob,
     SignedSealed, StructureSigInput, WriteBody, encode_envelope, encode_grant_section,
     encode_write_body, seal, seal_owner_blob, seal_owner_write_blob, seal_read_body,
@@ -29,9 +29,11 @@ pub const OWNER_ROOT_SCOPE_SEED: [u8; 32] = [0x66; 32];
 pub const OWNER_ROOT_WRITE_SCOPE_SEED: [u8; 32] = [0x77; 32];
 /// The read epoch every structure in the fixture is authored at.
 pub const OWNER_ROOT_EPOCH: u64 = 1;
+/// The seed of the writer pseudonym the fixture detach-signs every structure
+/// with — the key a re-seal of this root must sign under to stay committed.
+pub const OWNER_ROOT_PSEUDONYM_SEED: [u8; 32] = [0x22; 32];
 
 const V: u64 = 1;
-const PSEUDONYM_SEED: [u8; 32] = [0x22; 32];
 const NONCE_READ_BODY: [u8; 24] = [11u8; 24];
 const NONCE_WRITE_BODY: [u8; 24] = [22u8; 24];
 const EPH_OWNER: [u8; 32] = [3u8; 32];
@@ -41,9 +43,10 @@ const EPH_OWNER_WRITE: [u8; 32] = [4u8; 32];
 ///
 /// Nonces and HPKE ephemerals are fixed, so the two varying plaintexts must be
 /// kept apart on independent axes: the read body's key comes from `root_id`
-/// alone, so specs with differing `children` need differing `root_id`; the
-/// owner-write-blob's HPKE key comes from `owner_enc` alone, so specs with
-/// differing `owner_write_blob_epoch` need differing `owner_enc`.
+/// alone, so specs with differing `children` or `child_scope_index` need
+/// differing `root_id`; the owner-write-blob's HPKE key comes from `owner_enc`
+/// alone, so specs with differing `owner_write_blob_epoch` need differing
+/// `owner_enc`.
 pub struct OwnerRootSpec<'a> {
     /// Signs the grant-set commitment; its verifying key is the owner identity
     /// the adoption gate checks against.
@@ -56,6 +59,9 @@ pub struct OwnerRootSpec<'a> {
     pub root_id: [u8; 16],
     /// The root folder's children.
     pub children: Vec<ChildRef>,
+    /// The write-body's direct-child-scope index — the eager-set adjacency a
+    /// rotation walk reads out of this root.
+    pub child_scope_index: Vec<ChildScopeRef>,
     /// `Some(epoch)` authors an owner-write-blob whose AAD binds that **write**
     /// epoch (its structure signature still binds the read epoch — mirrors
     /// reseal); `None` leaves the root held keyless.
@@ -84,9 +90,10 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         scope_id,
         root_id,
         children,
+        child_scope_index,
         owner_write_blob_epoch,
     } = spec;
-    let owner_pseudonym = Ed25519Signer::from_seed(PSEUDONYM_SEED);
+    let owner_pseudonym = Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED);
 
     let node_seed = kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &root_id);
     let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
@@ -129,7 +136,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         &encode_write_body(&WriteBody {
             grant_ledger: Vec::new(),
             write_history_link: Vec::new(),
-            direct_child_scope_index: Vec::new(),
+            direct_child_scope_index: child_scope_index,
             unknown: PreservedFields::new(),
         })
         .unwrap(),

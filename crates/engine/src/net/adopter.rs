@@ -137,6 +137,29 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
 
 impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
     async fn adopt(&self, name: &IpnsName, record_bytes: &[u8]) -> Result<AdoptOutcome, GateError> {
+        self.adopt_root(name, record_bytes)
+            .await
+            .map(|(_, outcome)| outcome)
+    }
+
+    async fn recover_own_scope_material(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> Result<Option<OwnScopeMaterial>, SeamError> {
+        self.recover_own(name, record_bytes).await
+    }
+}
+
+impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
+    /// The gate pass **plus** the candidate it authenticated, for the callers
+    /// that need the record's own grant section (the rotation seams' gated
+    /// scope-root read) rather than only the read-body outcome.
+    pub(crate) async fn adopt_root(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> Result<(Candidate, AdoptOutcome), GateError> {
         let candidate = self.assemble_candidate(name, record_bytes).await?;
 
         // Step 6 — owner-blob ReaderContext. The vault owner recovers its own root
@@ -188,15 +211,19 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
             None => None,
             Some(owb) => self.recover_write_scope_seed(env, owb).await?,
         };
-        Ok(AdoptOutcome {
-            adopted,
-            write_scope_seed,
-            node_id: env.id,
-            read_scope_seed: Some(read_scope_seed),
-        })
+        let node_id = env.id;
+        Ok((
+            candidate,
+            AdoptOutcome {
+                adopted,
+                write_scope_seed,
+                node_id,
+                read_scope_seed: Some(read_scope_seed),
+            },
+        ))
     }
 
-    async fn recover_own_scope_material(
+    async fn recover_own(
         &self,
         name: &IpnsName,
         record_bytes: &[u8],
@@ -489,6 +516,7 @@ mod tests {
                 scope_id,
                 root_id,
                 children: Vec::new(),
+                child_scope_index: Vec::new(),
                 owner_write_blob_epoch: owb_write_epoch,
             });
 
