@@ -181,13 +181,7 @@ where
     F: FloorStore,
     Sch: Scheduler + Clone + 'static,
 {
-    let Some((_sequence, bytes)) = fanout_get_verify(transport, request.name).await else {
-        return Ok(None);
-    };
-    let Ok(record) = IpnsRecord::unmarshal(&bytes) else {
-        return Ok(None);
-    };
-    let Ok(verified) = record.verify(request.name) else {
+    let Some((verified, _bytes)) = fanout_get_verify(transport, request.name).await else {
         return Ok(None);
     };
     if !eol::needs_renewal(scheduler.now(), &verified.validity, EOL_RENEW_THRESHOLD) {

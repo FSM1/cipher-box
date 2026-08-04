@@ -66,8 +66,6 @@ pub(crate) struct TokenResponse {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ChallengeResponse {
     pub challenge: String,
-    #[allow(dead_code)]
-    pub expires_at: String,
 }
 
 #[derive(Deserialize)]

@@ -63,15 +63,14 @@ impl FloorStore for InMemoryFloorStore {
     /// Genuinely all-or-nothing: the whole batch applies under one lock guard,
     /// so no observer sees a partial commit (the atomic contract #685 asks of a
     /// transactional backing).
-    async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<Vec<u64>> {
+    async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
         let mut inner = self.inner.lock().expect("lock");
-        let resulting = raises
-            .iter()
-            .map(|r| match r.namespace {
+        for r in raises {
+            match r.namespace {
                 FloorNamespace::Epoch => raise(&mut inner.epoch, &r.key, r.value),
                 FloorNamespace::Sequence => raise(&mut inner.sequence, &r.key, r.value),
-            })
-            .collect();
-        Ok(resulting)
+            };
+        }
+        Ok(())
     }
 }

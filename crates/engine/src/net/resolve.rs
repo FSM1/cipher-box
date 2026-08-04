@@ -15,7 +15,7 @@
 
 use core::cell::RefCell;
 
-use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+use cipherbox_core::ipns::{IpnsName, VerifiedRecord};
 use zeroize::Zeroizing;
 
 use super::fanout::fanout_get_verify;
@@ -164,8 +164,10 @@ pub(crate) struct GatedResolve {
     pub(crate) resolved: Resolved,
     /// The held-set (node id, write scope seed) from a gate-surfaced write grant.
     pub(crate) hold: Option<AdoptHold>,
-    /// The verified record bytes an alive-worthy outcome rides to the hold.
-    pub(crate) held_bytes: Option<Vec<u8>>,
+    /// The verified record an alive-worthy outcome rides to the hold, with the
+    /// bytes it verified over. Carrying the [`VerifiedRecord`] spares the hold a
+    /// second parse+verify of the same bytes.
+    pub(crate) held_record: Option<(VerifiedRecord, Vec<u8>)>,
     /// The scope read seed a gate-passing owner adopt recovered.
     pub(crate) read_scope_seed: Option<Zeroizing<[u8; 32]>>,
 }
@@ -187,10 +189,10 @@ where
     // Cache-first: last-known-good renders immediately, reconcile runs behind it.
     let last_known_good = snapshot_cache.get(cache_key).await?;
 
-    let (outcome, hold, held_bytes, read_scope_seed) =
+    let (outcome, hold, held_record, read_scope_seed) =
         match fanout_get_verify(transport, name).await {
             None => (ResolveOutcome::NoUpdate, None, None, None),
-            Some((_sequence, bytes)) => match adopter.adopt(name, &bytes).await {
+            Some((verified, bytes)) => match adopter.adopt(name, &bytes).await {
                 Ok(AdoptOutcome {
                     adopted,
                     write_scope_seed,
@@ -204,7 +206,7 @@ where
                     (
                         ResolveOutcome::Adopted(adopted),
                         hold,
-                        Some(bytes),
+                        Some((verified, bytes)),
                         read_scope_seed,
                     )
                 }
@@ -236,7 +238,7 @@ where
                                 record_bytes: bytes.clone(),
                             },
                             hold,
-                            Some(bytes),
+                            Some((verified, bytes)),
                             read_scope_seed,
                         )
                     }
@@ -252,7 +254,7 @@ where
             outcome,
         },
         hold,
-        held_bytes,
+        held_record,
         read_scope_seed,
     })
 }
@@ -316,7 +318,7 @@ where
     let GatedResolve {
         resolved,
         hold: adopt_hold,
-        held_bytes,
+        held_record,
         read_scope_seed,
     } = resolve_gated(transport, snapshot_cache, adopter, name).await?;
     let write_scope_seed = adopt_hold.clone();
@@ -328,17 +330,13 @@ where
     // A gate-passing adopt (`Adopted`) and our own current record (`Current`)
     // are both alive-worthy and ride their verified bytes back here; a
     // `TrustViolation`/`NoUpdate` holds nothing (blueprint/engine.md "Liveness").
-    if let Some(record_bytes) = held_bytes {
+    if let Some((verified, record_bytes)) = held_record {
         // Renew under the record's own adopted head CID, not a caller-supplied
-        // one: parse it from the signed `/ipfs/<cid>` value. A gate-passing
+        // one: it comes from the signed `/ipfs/<cid>` value. A gate-passing
         // record always carries a valid value; if it does not, skip the hold
         // rather than renew under `/ipfs/` — an empty head CID would clobber the
         // tip (security rule 8, fail-closed).
-        let Some(head_cid) = IpnsRecord::unmarshal(&record_bytes)
-            .and_then(|record| record.verify(name))
-            .ok()
-            .and_then(|verified| head_cid_from_value(&verified.value))
-        else {
+        let Some(head_cid) = head_cid_from_value(&verified.value) else {
             return Ok(done(resolved));
         };
         // The renewal (node id, write seed) comes from the gate for a write

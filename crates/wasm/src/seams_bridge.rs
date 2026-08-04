@@ -100,9 +100,8 @@ extern "C" {
     ) -> Result<JsValue, JsValue>;
 }
 
-/// The JS `FloorStoreSeam` exposes only per-key methods, so this adapter does
-/// not override `commit_floors`: web batches ride the seam's ordered fail-safe
-/// fallback (#682-safe; web-atomic is deferred — see the trait doc).
+/// Bridges the per-key JS `FloorStoreSeam`; web batches ride the trait's
+/// ordered fail-safe fallback ([`FloorStore::commit_floors`]).
 #[derive(Clone)]
 pub(crate) struct FloorStoreAdapter {
     pub(crate) js: JsFloorStoreSeam,

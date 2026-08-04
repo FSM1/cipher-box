@@ -75,20 +75,15 @@ where
     assert_eq!(store.epoch_floor(scope_a).await.unwrap(), Some(7));
 
     // Cross-key batch commit: a mixed-namespace batch raises every entry
-    // monotonic-max and reports the resulting floors in order.
-    let batch = store
+    // monotonic-max, in its own namespace.
+    store
         .commit_floors(&[
-            FloorRaise::epoch(scope_a.to_vec(), 6), // below stored 7 → no-op, reports 7
+            FloorRaise::epoch(scope_a.to_vec(), 6), // below stored 7 → no-op
             FloorRaise::epoch(scope_b.to_vec(), 8),
             FloorRaise::sequence(scope_a.to_vec(), 50),
         ])
         .await
         .unwrap();
-    assert_eq!(
-        batch,
-        vec![7, 8, 50],
-        "commit_floors must report each resulting floor in order, monotonic-max"
-    );
     assert_eq!(
         store.epoch_floor(scope_a).await.unwrap(),
         Some(7),
@@ -120,26 +115,49 @@ where
         "batch-committed sequence floors must survive reopen"
     );
 
-    // Retry convergence: re-committing the SAME batch (as a caller retry after
-    // an interrupted commit would) is idempotent — identical results, no floor
-    // regresses. This is the convergence property every impl's #685 contract
-    // rests on, whether it closes the hazard by all-or-nothing rollback, by
-    // roll-forward replay, or by the ordered fail-safe fallback: a partial or
-    // replayed commit always heals to the same floors on retry.
-    let retry = reopened
+    // Retry convergence: re-committing a batch (as a caller retry after an
+    // interrupted commit would) is idempotent — a re-applied entry never
+    // double-advances and never regresses. This is the convergence property
+    // every impl's #685 contract rests on, whether it closes the hazard by
+    // all-or-nothing rollback, by roll-forward replay, or by the ordered
+    // fail-safe fallback. `scope_b` advances so the retry has an observable:
+    // a `commit_floors` that silently applied nothing fails here.
+    reopened
         .commit_floors(&[
             FloorRaise::epoch(scope_a.to_vec(), 6), // still below 7 → no-op
-            FloorRaise::epoch(scope_b.to_vec(), 8),
+            FloorRaise::epoch(scope_b.to_vec(), 9),
             FloorRaise::sequence(scope_a.to_vec(), 50),
         ])
         .await
         .unwrap();
     assert_eq!(
-        retry,
-        vec![7, 8, 50],
-        "re-committing the same batch must converge to the identical floors"
+        reopened.epoch_floor(scope_b).await.unwrap(),
+        Some(9),
+        "a batch entry above its floor must advance on a retried commit"
     );
-    assert_eq!(reopened.epoch_floor(scope_a).await.unwrap(), Some(7));
-    assert_eq!(reopened.epoch_floor(scope_b).await.unwrap(), Some(8));
+    assert_eq!(
+        reopened.epoch_floor(scope_a).await.unwrap(),
+        Some(7),
+        "a re-applied at-or-below entry must neither regress nor double-advance"
+    );
     assert_eq!(reopened.sequence_floor(scope_a).await.unwrap(), Some(50));
+
+    // Two raises on one key inside a single batch: the last-wins maximum, in
+    // either order — what makes the ordered fallback and an atomic backing
+    // observationally equivalent.
+    for pair in [[3u64, 12], [12, 3]] {
+        let key = format!("batch-same-key-{}-{}", pair[0], pair[1]).into_bytes();
+        reopened
+            .commit_floors(&[
+                FloorRaise::epoch(key.clone(), pair[0]),
+                FloorRaise::epoch(key.clone(), pair[1]),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(
+            reopened.epoch_floor(&key).await.unwrap(),
+            Some(12),
+            "two raises on one key in a batch must settle at their maximum"
+        );
+    }
 }

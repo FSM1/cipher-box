@@ -9,7 +9,7 @@
 use core::future::poll_fn;
 use core::task::Poll;
 
-use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 
 use crate::seams::{EndpointId, RecordTransport};
 
@@ -80,20 +80,21 @@ pub async fn fanout_put<T: RecordTransport>(transport: &T, key: &str, bytes: &[u
 }
 
 /// Fan-out GET across the endpoint set and core-verify each returned record
-/// against `name`, returning the freshest verified `(sequence, record_bytes)`
-/// or `None` when no endpoint serves a verifiable record. A malformed or
+/// against `name`, returning the freshest `(VerifiedRecord, record_bytes)` or
+/// `None` when no endpoint serves a verifiable record. A malformed or
 /// signature-invalid copy at one endpoint is ignored (an accelerator can serve
 /// stale garbage); a per-endpoint transport error is tolerated as availability
 /// staleness — only genuine host failure is surfaced.
 ///
 /// This is the record-plane verify step (core's Ed25519-from-the-name chain);
-/// the full adoption gate runs downstream on the chosen bytes.
+/// the full adoption gate runs downstream on the chosen bytes. The
+/// [`VerifiedRecord`] rides out so no caller re-verifies the same signature.
 pub async fn fanout_get_verify<T: RecordTransport>(
     transport: &T,
     name: &IpnsName,
-) -> Option<(u64, Vec<u8>)> {
+) -> Option<(VerifiedRecord, Vec<u8>)> {
     let key = name.as_str();
-    let mut best: Option<(u64, Vec<u8>)> = None;
+    let mut best: Option<(VerifiedRecord, Vec<u8>)> = None;
     for endpoint in transport.endpoints() {
         let Ok(Some(bytes)) = transport.get_record(&endpoint, key).await else {
             continue;
@@ -106,9 +107,9 @@ pub async fn fanout_get_verify<T: RecordTransport>(
         };
         if best
             .as_ref()
-            .is_none_or(|(seq, _)| verified.sequence > *seq)
+            .is_none_or(|(current, _)| verified.sequence > current.sequence)
         {
-            best = Some((verified.sequence, bytes));
+            best = Some((verified, bytes));
         }
     }
     best
