@@ -27,7 +27,7 @@ use cipherbox_engine::facade::PendingClass;
 use cipherbox_engine::net::author::{AuthoredHead, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::{ChildAdopter, REGISTRY_BATCH_MAX, ResolveOutcome, resolve};
 use cipherbox_engine::seams::{
-    BoxedTask, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
+    BoxedTask, FloorStore, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
     StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
@@ -2749,6 +2749,7 @@ struct DeepCreate {
     /// the account's scope read seed and the network are shared with device A.
     bob: FakeDevice,
     engine_b: Engine<FakeSeamTypes>,
+    events_b: EventStream,
     tasks_b: Vec<BoxedTask>,
     photos: NodeId,
     deep: NodeId,
@@ -2780,12 +2781,13 @@ fn deep_create_seen_by_a_second_device() -> DeepCreate {
     let deep = child_id(&engine_a, photos, "2026");
 
     let bob = world.device(b"alice-second-device");
-    let (engine_b, _events_b, tasks_b) = boot(&world, &blocks, &bob, 7);
+    let (engine_b, events_b, tasks_b) = boot(&world, &blocks, &bob, 7);
     DeepCreate {
         world,
         blocks,
         bob,
         engine_b,
+        events_b,
         tasks_b,
         photos,
         deep,
@@ -2883,6 +2885,7 @@ fn a_planted_focus_record_never_renders() {
         world,
         blocks,
         mut engine_b,
+        mut events_b,
         mut tasks_b,
         photos,
         deep,
@@ -2939,13 +2942,60 @@ fn a_planted_focus_record_never_renders() {
         ),
     ] {
         plant_record(&world.record_store, &blocks, photos, planted);
+        let _ = events_so_far(&mut events_b);
         tick(&world, &engine_b, &mut tasks_b);
         assert_eq!(
             listed_names(&engine_b, photos),
             held,
             "{bent} never renders; last-known-good is pinned"
         );
+        // Fail-closed is not silent: the focus leg surfaces the rejection so a
+        // persistent forgery cannot look like an idle folder.
+        assert_eq!(
+            events_so_far(&mut events_b)
+                .into_iter()
+                .filter(|event| matches!(event, Event::AttributableAbuse { .. }))
+                .count(),
+            1,
+            "{bent} raises exactly one abuse event"
+        );
     }
+}
+
+/// Epoch lag is sweep-pending staleness, not abuse (CONTEXT.md "Epoch lag"): a
+/// focused folder the lazy wave has not swept yet rejects fail-closed, but the
+/// owner's own rotation must not read as an attack on the host's abuse channel.
+#[test]
+fn an_epoch_lagged_focus_folder_rejects_without_raising_abuse() {
+    let DeepCreate {
+        world,
+        bob,
+        mut engine_b,
+        mut events_b,
+        mut tasks_b,
+        photos,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    assert_eq!(listed_names(&engine_b, photos), ["2026"]);
+
+    // A rotation raised the scope's read-epoch floor past the epoch this folder
+    // still publishes under.
+    block_on(bob.floor_store.raise_epoch_floor(&SCOPE, EPOCH + 1)).unwrap();
+    let _ = events_so_far(&mut events_b);
+    tick(&world, &engine_b, &mut tasks_b);
+
+    assert_eq!(
+        listed_names(&engine_b, photos),
+        ["2026"],
+        "last-known-good stays pinned"
+    );
+    assert!(
+        events_so_far(&mut events_b)
+            .iter()
+            .all(|event| !matches!(event, Event::AttributableAbuse { .. })),
+        "an unswept folder is not an attacker"
+    );
 }
 
 /// An unreachable record plane is availability staleness, never data loss: the

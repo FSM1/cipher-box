@@ -25,6 +25,7 @@ use cipherbox_core::content::encode_content_cid_str;
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{ReadBody, Version, seal_content_key};
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
+use cipherbox_core::suite::x25519::X25519Secret;
 use futures_channel::mpsc;
 use futures_core::Stream;
 use zeroize::Zeroizing;
@@ -530,8 +531,9 @@ pub enum Event {
         /// (#859).
         reason: DeadLetterReason,
     },
-    /// Attributable abuse: owner-blob / ascent-link / unseal cross-check
-    /// disagreement (#39 D6) — never a silent failure.
+    /// Attributable abuse: a fail-closed adoption-gate rejection, or an
+    /// owner-blob / ascent-link / unseal cross-check disagreement (#39 D6) —
+    /// never a silent failure.
     AttributableAbuse {
         /// Human-readable classification (no key material).
         description: String,
@@ -999,6 +1001,40 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
     }
 }
 
+/// Surface a fail-closed resolve rejection as [`Event::AttributableAbuse`]: a
+/// trust violation is never mere staleness (AGENTS.md rule 6), so it must not
+/// poll silently. `routing_key` is the record's `ipnsName` and `detail` a
+/// classification; neither carries key material.
+pub(crate) fn emit_trust_violation(
+    events: &mpsc::UnboundedSender<Event>,
+    routing_key: &str,
+    detail: impl fmt::Display,
+) {
+    let _ = events.unbounded_send(Event::AttributableAbuse {
+        description: format!("{routing_key}: {detail}"),
+    });
+}
+
+/// The record bytes already held for `name` under `node`, when the scope seeds
+/// recovered alongside them are still in hand — the precondition for
+/// [`RootAdopter::holding`]'s steady-state skip.
+fn steady_state_hold(
+    held: &RefCell<HeldRecords>,
+    scope_root: [u8; 16],
+    name: &IpnsName,
+    read_seeds: &RefCell<ScopeReadSeeds>,
+    write_seeds: &RefCell<ScopeWriteSeeds>,
+) -> Option<Vec<u8>> {
+    if !read_seeds.borrow().contains_key(&scope_root)
+        || !write_seeds.borrow().contains_key(&scope_root)
+    {
+        return None;
+    }
+    let held = held.borrow();
+    let record = held.get(&scope_root)?;
+    (record.routing_key == name.as_str()).then(|| record.record_bytes.clone())
+}
+
 /// Fold one drain pass's report into the host-visible surface: retain and emit
 /// every dead letter, and emit one [`Event::SnapshotUpdated`] if the pass moved
 /// anything off the queue (the overlay the host renders just shrank). Both sends
@@ -1257,9 +1293,16 @@ pub struct Engine<T: SeamTypes> {
     /// The cold-start session identity, derived from the login secret at
     /// [`start`](Self::start). `None` until then; the single place derived key
     /// material lives once the engine is live. The resolve/publish/rotation
-    /// slices read every signer from here. Behind an [`Rc`] so the spawned
-    /// liveness loop shares it for the sub-EOL renewal's per-name signers.
-    session: Option<Rc<SessionIdentity>>,
+    /// slices read every signer from here. Owned outright, never shared, so the
+    /// retained login secret drops with the engine.
+    session: Option<SessionIdentity>,
+    /// The one piece of session secret the resolve-tick loop needs — the
+    /// encryption subkey it opens owner blobs and op records with — in a cell
+    /// the engine empties on drop. A parked task is not polled until its next
+    /// scheduler wake, so anything the loop captured outright would stay
+    /// resident for up to that wake past the engine (security rules 1/7); every
+    /// shared cell below carrying key material is cleared the same way.
+    tick_enc_subkey: Rc<RefCell<Option<X25519Secret>>>,
     /// The one shared API client, built and logged in at [`start`](Self::start)
     /// and handed to the liveness loop so the access JWT is shared across
     /// publish/renew (no redundant 401→refresh). `None` until then.
@@ -1309,6 +1352,7 @@ impl<T: SeamTypes> Engine<T> {
                 orphan_heads: Rc::new(OrphanHeads::default()),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
+                tick_enc_subkey: Rc::new(RefCell::new(None)),
                 api: None,
                 started: false,
             },
@@ -1346,7 +1390,7 @@ impl<T: SeamTypes> Engine<T> {
         }
         // Pure derivation from the injected secret — no clock, no RNG — then
         // the secret zeroizes on drop here, at its terminal owner.
-        let session = Rc::new(SessionIdentity::derive(&secret)?);
+        let session = SessionIdentity::derive(&secret)?;
         drop(secret);
 
         // The one shared client for login, publish, and renewal. Login is
@@ -1453,7 +1497,26 @@ impl<T: SeamTypes> Engine<T> {
     /// hold key material.
     #[allow(dead_code)]
     pub(crate) fn session(&self) -> Option<&SessionIdentity> {
-        self.session.as_deref()
+        self.session.as_ref()
+    }
+
+    /// Stop the spawned loops at their next wake and drop the key material they
+    /// share with the engine here and now, at the terminal owner (security rule
+    /// 7) — see [`tick_enc_subkey`](Self::tick_enc_subkey). `try_borrow_mut`
+    /// because a panic while dropping aborts the process.
+    fn shut_down(&self) {
+        self.alive.set(false);
+        if let Ok(mut enc_subkey) = self.tick_enc_subkey.try_borrow_mut() {
+            *enc_subkey = None;
+        }
+        if let Ok(mut held) = self.held_records.try_borrow_mut() {
+            held.clear();
+        }
+        for seeds in [&self.scope_read_seeds, &self.scope_write_seeds] {
+            if let Ok(mut seeds) = seeds.try_borrow_mut() {
+                seeds.clear();
+            }
+        }
     }
 
     /// Run the cold-start live-session data path — the ordered chain composed on
@@ -1615,9 +1678,13 @@ impl<T: SeamTypes> Engine<T> {
         T::SnapshotCache: Clone + 'static,
         T::StagingStore: Clone + 'static,
     {
-        let (Some(root_name), Some(session)) = (root_name, self.session.clone()) else {
+        let (Some(root_name), Some(session)) = (root_name, self.session.as_ref()) else {
             return;
         };
+        // Least privilege: the pass needs the enc subkey and the (public) owner
+        // verifier, never the login secret or the pointer seeds beside them.
+        *self.tick_enc_subkey.borrow_mut() = Some(session.enc_subkey().clone());
+        let tick_enc_subkey = self.tick_enc_subkey.clone();
         let scheduler = self.seams.scheduler.clone();
         let staging = self.seams.staging_store.clone();
         let entropy = self.entropy.clone();
@@ -1653,14 +1720,27 @@ impl<T: SeamTypes> Engine<T> {
                 if !alive.get() {
                     return LivenessControl::Stop;
                 }
+                // The pass owns a copy for exactly its own duration; the engine
+                // emptied the cell if it is already gone.
+                let enc_subkey = tick_enc_subkey.borrow().clone();
+                let Some(enc_subkey) = enc_subkey else {
+                    return LivenessControl::Stop;
+                };
                 let adopter = RootAdopter::new(
                     &gateway,
                     &http,
                     &floors,
-                    session.enc_subkey(),
+                    &enc_subkey,
                     &owner_identity,
                     root_id,
-                );
+                )
+                .holding(steady_state_hold(
+                    &held,
+                    root_id,
+                    &root_name,
+                    &scope_read_seeds,
+                    &scope_write_seeds,
+                ));
                 // Own-root material: the write-scope seed the owner cannot
                 // re-derive rides the adopt (recovered from the owner-write-blob),
                 // so the caller-side seed is `None` and the gate's authenticated
@@ -1673,7 +1753,7 @@ impl<T: SeamTypes> Engine<T> {
                 };
                 // A gate-passing `Adopted` repaints the shared base cell and emits
                 // `SnapshotUpdated`; `Current`/`NoUpdate`/`TrustViolation` leave
-                // last-known-good intact (fail-closed for data). (surfacing: #796)
+                // last-known-good intact (fail-closed for data).
                 sync_status.borrow_mut().reconcile_in_flight = true;
                 let resolved = resolve_and_hold(
                     &transport,
@@ -1697,6 +1777,9 @@ impl<T: SeamTypes> Engine<T> {
                     held_resolve.resolved
                 });
                 if let Ok(resolved) = &resolved {
+                    if let ResolveOutcome::TrustViolation(rejection) = &resolved.outcome {
+                        emit_trust_violation(&events, root_name.as_str(), rejection);
+                    }
                     if refresh_base_from_outcome(&base, NodeId(root_id), &resolved.outcome) {
                         let _ = events.unbounded_send(Event::SnapshotUpdated);
                     }
@@ -1717,6 +1800,7 @@ impl<T: SeamTypes> Engine<T> {
                         floors: &floors,
                         gateway: &gateway,
                         base: &base,
+                        events: &events,
                         scope_id: root_id,
                         scope_read_seed: read_seed,
                     }
@@ -1756,7 +1840,7 @@ impl<T: SeamTypes> Engine<T> {
                         root_name: &root_name,
                         read_scope_seed: &read_seed,
                         write_scope_seed: &write_seed,
-                        enc_secret: session.enc_subkey(),
+                        enc_secret: &enc_subkey,
                         owner_identity: &owner_identity,
                     })
                     .await;
@@ -1931,6 +2015,7 @@ impl<T: SeamTypes> Engine<T> {
             floors: &self.seams.floor_store,
             gateway: &self.gateway,
             base: &self.snapshot,
+            events: &self.events,
             scope_id,
             scope_read_seed: &scope_read_seed,
         }
@@ -2816,9 +2901,9 @@ fn open_engine_error(error: OpenError) -> EngineError {
 
 impl<T: SeamTypes> Drop for Engine<T> {
     fn drop(&mut self) {
-        // Signal the spawned liveness loop to stop; it holds only `Rc` clones,
-        // so it outlives the engine unless the latch is cleared here.
-        self.alive.set(false);
+        // The spawned loops hold only `Rc` clones, so they outlive the engine
+        // unless it tears them down here.
+        self.shut_down();
     }
 }
 
@@ -4572,6 +4657,157 @@ mod tests {
                 engine.scope_read_seeds.borrow().get(&SCOPE).map(|s| **s),
                 Some(SCOPE_SEED),
                 "the tick adopt deposited the recovered scope read seed"
+            );
+        }
+
+        /// A started engine over the full cold-start fixture, with its spawned
+        /// loops taken and parked at their first sleep. The cold-start adopt
+        /// raises the sequence floor to the record's own sequence, so every
+        /// later poll of the same record is an equal-floor `Current`.
+        fn started_and_parked(
+            world: &FakeWorld,
+            device: &FakeDevice,
+        ) -> (Engine<FakeSeamTypes>, EventStream, Vec<BoxedTask>) {
+            let (head_block, head_cid, root_name) = owner_root();
+            seed_vault_pointer(device, &root_name);
+            for endpoint in device.record_store.endpoints() {
+                seed_root_record_at(device, &endpoint, &root_name, &head_cid);
+            }
+            device.http.enqueue_response(head_response(&head_block));
+            let (mut engine, events) = engine_on(device);
+            block_on(engine.start(LoginSecret::new(CAP_SECRET.to_vec()))).unwrap();
+            let mut tasks = world.scheduler.take_spawned_tasks();
+            poll_each(&mut tasks);
+            (engine, events, tasks)
+        }
+
+        /// Advance one poll cadence and run one pass of each loop, serving the
+        /// head block the root record anchors.
+        fn tick(world: &FakeWorld, device: &FakeDevice, tasks: &mut [BoxedTask]) {
+            let (head_block, _, _) = owner_root();
+            device.http.enqueue_response(head_response(&head_block));
+            world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
+            poll_each(tasks);
+        }
+
+        /// Nothing the spawned loops share may outlive the engine: a parked task
+        /// is not polled again until its next scheduler wake, so `Drop` — not the
+        /// next pass — has to clear the key material.
+        #[test]
+        fn engine_drop_clears_the_key_material_the_spawned_loops_share() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (engine, _events, mut tasks) = started_and_parked(&world, &device);
+            tick(&world, &device, &mut tasks);
+
+            let held = engine.held_records.clone();
+            let read_seeds = engine.scope_read_seeds.clone();
+            let write_seeds = engine.scope_write_seeds.clone();
+            let enc_subkey = engine.tick_enc_subkey.clone();
+            assert!(
+                !held.borrow().is_empty(),
+                "the tick holds the root under a per-name renewal signer"
+            );
+            assert!(!read_seeds.borrow().is_empty());
+            assert!(!write_seeds.borrow().is_empty());
+            assert!(enc_subkey.borrow().is_some());
+
+            // The tasks stay parked across the drop — only `Drop` can clear this.
+            drop(engine);
+            assert!(
+                held.borrow().is_empty(),
+                "the per-name renewal signers go with the engine"
+            );
+            assert!(read_seeds.borrow().is_empty(), "and the scope read seed");
+            assert!(write_seeds.borrow().is_empty(), "and the scope write seed");
+            assert!(
+                enc_subkey.borrow().is_none(),
+                "and the session secret the tick borrowed"
+            );
+        }
+
+        /// A forged owner-root record is fail-closed either way; without an event
+        /// a persistent forgery is indistinguishable from an idle vault.
+        #[test]
+        fn a_persistently_forged_steady_state_record_raises_an_abuse_event() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (_, head_cid, root_name) = owner_root();
+            let (engine, mut events, mut tasks) = started_and_parked(&world, &device);
+            let adopted = block_on(engine.view()).unwrap().children(ROOT);
+            let _ = drain(&mut events);
+
+            // A strictly newer record whose signed head anchor the served block
+            // does not address: fail-closed at assembly, on every poll.
+            for endpoint in device.record_store.endpoints() {
+                device.record_store.seed_record(
+                    &endpoint,
+                    root_name.as_str(),
+                    root_record(&head_cid, 2),
+                );
+            }
+            for _ in 0..2 {
+                device
+                    .http
+                    .enqueue_response(head_response(b"forged head block"));
+                world.scheduler.advance(SyncTimingProfile::CI.poll_cadence);
+                poll_each(&mut tasks);
+
+                let abuse: Vec<String> = drain(&mut events)
+                    .into_iter()
+                    .filter_map(|event| match event {
+                        Event::AttributableAbuse { description } => Some(description),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(abuse.len(), 1, "every forged poll raises one abuse event");
+                assert!(
+                    abuse[0].contains(root_name.as_str())
+                        && abuse[0].contains("content-cid-mismatch"),
+                    "the event names the record and the check that rejected it: {}",
+                    abuse[0]
+                );
+            }
+            assert_eq!(
+                block_on(engine.view()).unwrap().children(ROOT),
+                adopted,
+                "and the forgery still never renders"
+            );
+        }
+
+        /// An idle vault re-fetching its own unchanged record must not re-open
+        /// the owner blobs and re-insert the hold on every poll.
+        #[test]
+        fn a_steady_state_poll_neither_re_recovers_nor_re_holds() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (engine, _events, mut tasks) = started_and_parked(&world, &device);
+
+            tick(&world, &device, &mut tasks);
+            assert_eq!(
+                engine.held_records.borrow().len(),
+                1,
+                "the first steady-state poll recovers the write seed and holds"
+            );
+            // Stamp the entry: a re-hold rebuilds it wholesale, so the stamp
+            // surviving is the observable proof that no re-hold ran.
+            engine
+                .held_records
+                .borrow_mut()
+                .get_mut(&ROOT.0)
+                .expect("held under the root node id")
+                .content_cids = vec!["bafystamp".to_owned()];
+
+            tick(&world, &device, &mut tasks);
+            assert_eq!(
+                engine.held_records.borrow()[&ROOT.0].content_cids,
+                vec!["bafystamp".to_owned()],
+                "the next poll left the hold alone"
+            );
+            assert_eq!(
+                engine.scope_write_seeds.borrow().get(&SCOPE).map(|s| **s),
+                Some(WRITE_SCOPE_SEED),
+                "and the material recovered once stays in hand"
             );
         }
 
