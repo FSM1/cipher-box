@@ -10,10 +10,10 @@
 //!
 //! [`open_repoint`]: crate::sync::pointer::open_repoint
 
-use cipherbox_core::ipns::{IpnsName, IpnsRecord};
+use cipherbox_core::ipns::IpnsName;
 
 use super::fanout::fanout_get_verify;
-use crate::seams::{RecordTransport, SeamError, SeamResult};
+use crate::seams::{RecordTransport, SeamResult};
 use crate::sync::pointer::PointerFetch;
 
 /// The record-plane [`PointerFetch`]: resolves pointer names over the borrowed
@@ -32,17 +32,10 @@ impl<'a, T> RecordPointerFetch<'a, T> {
 
 impl<T: RecordTransport> PointerFetch for RecordPointerFetch<'_, T> {
     async fn fetch(&self, name: &IpnsName) -> SeamResult<Option<Vec<u8>>> {
-        let Some((_sequence, record_bytes)) = fanout_get_verify(self.transport, name).await else {
+        let Some((verified, _bytes)) = fanout_get_verify(self.transport, name).await else {
             return Ok(None);
         };
-        // Re-extract the authenticated value from bytes fan-out already verified,
-        // so a failure here is an internal inconsistency (a seam error), never a
-        // trust reclassification.
-        let value = IpnsRecord::unmarshal(&record_bytes)
-            .and_then(|record| record.verify(name))
-            .map_err(|e| SeamError::new(format!("verified record re-extract failed: {e}")))?
-            .value;
-        Ok(Some(value))
+        Ok(Some(verified.value))
     }
 }
 
@@ -50,6 +43,7 @@ impl<T: RecordTransport> PointerFetch for RecordPointerFetch<'_, T> {
 mod tests {
     use super::*;
 
+    use cipherbox_core::ipns::IpnsRecord;
     use cipherbox_core::kdf;
     use cipherbox_core::payload::RepointObject;
     use cipherbox_core::suite::ecdsa::EcdsaSigner;

@@ -171,13 +171,11 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
 
     /// Link a SIWE wallet to the authenticated account (owner-authenticated).
     pub async fn siwe_link(&self, message: &str, signature: &str) -> Result<(), ApiError> {
-        let body = to_json(&SiweLoginRequest { message, signature });
         let response = self
-            .request_authed(
+            .json_authed(
                 HttpMethod::Post,
                 "/auth/siwe/link",
-                Some(APPLICATION_JSON),
-                Some(body),
+                &SiweLoginRequest { message, signature },
             )
             .await?;
         ok_or_err(response).map(drop)
@@ -250,7 +248,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     /// Revoke every refresh token server-side and tear down the local session.
     pub async fn logout(&self) -> Result<(), ApiError> {
         let response = self
-            .request_authed(HttpMethod::Post, "/auth/logout", None, None)
+            .request_authed(HttpMethod::Post, "/auth/logout")
             .await?;
         let result = ok_or_err(response).map(drop);
         self.clear_session().await?;
@@ -263,28 +261,16 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     /// Register-first ordering is the publish pipeline's concern, not the
     /// caller's; this is the raw endpoint.
     pub async fn register(&self, names: &[NameRegistration]) -> Result<(), ApiError> {
-        let body = to_json(names);
         let response = self
-            .request_authed(
-                HttpMethod::Post,
-                "/registry/register",
-                Some(APPLICATION_JSON),
-                Some(body),
-            )
+            .json_authed(HttpMethod::Post, "/registry/register", names)
             .await?;
         ok_or_err(response).map(drop)
     }
 
     /// Batch retire names or CIDs (`[ipnsName | cid]`).
     pub async fn retire(&self, targets: &[String]) -> Result<(), ApiError> {
-        let body = to_json(targets);
         let response = self
-            .request_authed(
-                HttpMethod::Post,
-                "/registry/retire",
-                Some(APPLICATION_JSON),
-                Some(body),
-            )
+            .json_authed(HttpMethod::Post, "/registry/retire", targets)
             .await?;
         ok_or_err(response).map(drop)
     }
@@ -292,7 +278,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     /// The per-account quota (advisory for BYO accounts).
     pub async fn quota(&self) -> Result<Quota, ApiError> {
         let response = self
-            .request_authed(HttpMethod::Get, "/account/quota", None, None)
+            .request_authed(HttpMethod::Get, "/account/quota")
             .await?;
         let response = ok_or_err(response)?;
         decode(&response)
@@ -340,17 +326,15 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             blob: String,
             idempotency_key: &'a str,
         }
-        let body = to_json(&Body {
-            recipient_public_key,
-            blob: BASE64.encode(blob),
-            idempotency_key,
-        });
         let response = self
-            .request_authed(
+            .json_authed(
                 HttpMethod::Post,
                 "/mailbox/messages",
-                Some(APPLICATION_JSON),
-                Some(body),
+                &Body {
+                    recipient_public_key,
+                    blob: BASE64.encode(blob),
+                    idempotency_key,
+                },
             )
             .await?;
         let response = ok_or_err(response)?;
@@ -361,7 +345,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     /// Poll pending mailbox items, decoding each sealed blob from base64.
     pub async fn mailbox_poll(&self) -> Result<Vec<MailboxItem>, ApiError> {
         let response = self
-            .request_authed(HttpMethod::Get, "/mailbox/messages", None, None)
+            .request_authed(HttpMethod::Get, "/mailbox/messages")
             .await?;
         let response = ok_or_err(response)?;
         let wire: MailboxPollWire = decode(&response)?;
@@ -383,12 +367,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     /// Ack (delete) a mailbox item by id.
     pub async fn mailbox_ack(&self, id: &str) -> Result<(), ApiError> {
         let response = self
-            .request_authed(
-                HttpMethod::Delete,
-                &format!("/mailbox/messages/{id}"),
-                None,
-                None,
-            )
+            .request_authed(HttpMethod::Delete, &format!("/mailbox/messages/{id}"))
             .await?;
         ok_or_err(response).map(drop)
     }
@@ -397,12 +376,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
     /// aid after a >EOL lapse. Returns the raw record bytes.
     pub async fn recovery_fetch(&self, ipns_name: &str) -> Result<Vec<u8>, ApiError> {
         let response = self
-            .request_authed(
-                HttpMethod::Get,
-                &format!("/recovery/{ipns_name}"),
-                None,
-                None,
-            )
+            .request_authed(HttpMethod::Get, &format!("/recovery/{ipns_name}"))
             .await?;
         let response = ok_or_err(response)?;
         Ok(response.body)
@@ -414,23 +388,15 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         struct Body {
             byo: bool,
         }
-        let body = to_json(&Body { byo: enabled });
         let response = self
-            .request_authed(
-                HttpMethod::Patch,
-                "/account/byo",
-                Some(APPLICATION_JSON),
-                Some(body),
-            )
+            .json_authed(HttpMethod::Patch, "/account/byo", &Body { byo: enabled })
             .await?;
         ok_or_err(response).map(drop)
     }
 
     /// Immediate account hard-delete, then tear down the local session.
     pub async fn delete_account(&self) -> Result<(), ApiError> {
-        let response = self
-            .request_authed(HttpMethod::Delete, "/account", None, None)
-            .await?;
+        let response = self.request_authed(HttpMethod::Delete, "/account").await?;
         let result = ok_or_err(response).map(drop);
         self.clear_session().await?;
         result
@@ -458,19 +424,35 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         Ok(self.http.send(request).await?)
     }
 
-    /// Send an authenticated request with one refresh-then-retry on 401.
+    /// [`Self::request_authed`] carrying a JSON body, so the serialize and the
+    /// `Content-Type` that must accompany it are never stated apart.
+    async fn json_authed<B: Serialize + ?Sized>(
+        &self,
+        method: HttpMethod,
+        path: &str,
+        body: &B,
+    ) -> Result<HttpResponse, ApiError> {
+        self.request_authed_with(
+            method,
+            path,
+            Some(APPLICATION_JSON),
+            &[],
+            Some(to_json(body)),
+        )
+        .await
+    }
+
+    /// Send a bodyless authenticated request with one refresh-then-retry on 401.
     async fn request_authed(
         &self,
         method: HttpMethod,
         path: &str,
-        content_type: Option<&str>,
-        body: Option<Vec<u8>>,
     ) -> Result<HttpResponse, ApiError> {
-        self.request_authed_with(method, path, content_type, &[], body)
+        self.request_authed_with(method, path, None, &[], None)
             .await
     }
 
-    /// [`Self::request_authed`], plus request-specific headers.
+    /// [`Self::request_authed`], plus a body and request-specific headers.
     async fn request_authed_with(
         &self,
         method: HttpMethod,

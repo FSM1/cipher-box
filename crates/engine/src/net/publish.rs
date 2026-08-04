@@ -214,16 +214,16 @@ where
         // a different record at the same sequence is a fork — a retry that
         // re-authored after an unconfirmed PUT — and adopting it would advance
         // the floor past bytes the network may never serve.
-        Some((observed_sequence, bytes)) if observed_sequence == sequence => {
+        Some((observed, bytes)) if observed.sequence == sequence => {
             if bytes == record_bytes {
                 PublishOutcome::Published { sequence }
             } else {
                 PublishOutcome::Unconfirmed { sequence }
             }
         }
-        Some((observed_sequence, _)) if observed_sequence > sequence => PublishOutcome::LostRace {
+        Some((observed, _)) if observed.sequence > sequence => PublishOutcome::LostRace {
             published_sequence: sequence,
-            observed_sequence,
+            observed_sequence: observed.sequence,
         },
         _ => PublishOutcome::Unconfirmed { sequence },
     };

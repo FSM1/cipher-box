@@ -131,7 +131,7 @@ impl FloorStore for AtomicFaultyStore {
         self.inner.raise_sequence_floor(ipns_name, sequence).await
     }
 
-    async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<Vec<u64>> {
+    async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
         if self.fail_commit.load(Ordering::Relaxed) {
             return Err(SeamError::new("injected seam I/O fault (atomic commit)"));
         }

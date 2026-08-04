@@ -35,8 +35,7 @@ pub trait FloorStore {
     /// and returns the resulting stored floor.
     async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64>;
 
-    /// Commits a batch of monotonic-max floor raises across both namespaces,
-    /// returning the resulting stored floor for each entry in order.
+    /// Commits a batch of monotonic-max floor raises across both namespaces.
     ///
     /// A single floor advance raises several distinctly-keyed floors at once
     /// (read-epoch, write-epoch, per-name sequence). An implementation closes the
@@ -52,18 +51,16 @@ pub trait FloorStore {
     /// subsumes). The web IndexedDB seam rides this fallback — its JS boundary
     /// exposes only the per-key methods — and web-atomic commit is deferred as a
     /// durability/liveness concern, not a trust hole.
-    async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<Vec<u64>> {
-        let mut resulting = Vec::with_capacity(raises.len());
+    async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
         for raise in raises {
-            let floor = match raise.namespace {
+            match raise.namespace {
                 FloorNamespace::Epoch => self.raise_epoch_floor(&raise.key, raise.value).await?,
                 FloorNamespace::Sequence => {
                     self.raise_sequence_floor(&raise.key, raise.value).await?
                 }
             };
-            resulting.push(floor);
         }
-        Ok(resulting)
+        Ok(())
     }
 }
 

@@ -317,7 +317,7 @@ where
     let Ok(durable) = floor::sequence_floor(floors, key).await else {
         return Err(DefaultsReason::FloorUnreadable);
     };
-    let Some((sequence, record_bytes)) = fanout_get_verify(transport, name).await else {
+    let Some((verified, record_bytes)) = fanout_get_verify(transport, name).await else {
         // A durable floor is proof this account has published settings, so
         // finding none now is a suppression rather than a first run.
         return Err(match durable {
@@ -325,6 +325,7 @@ where
             None => DefaultsReason::NoRecord,
         });
     };
+    let sequence = verified.sequence;
     let floor = durable.unwrap_or(0);
     if sequence < floor {
         return Err(DefaultsReason::RolledBack { floor, sequence });

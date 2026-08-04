@@ -1213,7 +1213,7 @@ where
     async fn observed_sequence(&self, name: &IpnsName) -> Result<u64, Halt> {
         fanout_get_verify(self.transport, name)
             .await
-            .map(|(sequence, _)| sequence)
+            .map(|(verified, _)| verified.sequence)
             .ok_or(Halt::Unclassified)
     }
 
@@ -2231,7 +2231,7 @@ mod tests {
                 false,
             ),
             (
-                RecordPublishError::Publish(PublishError::Register(ApiError::NotAuthenticated)),
+                RecordPublishError::Publish(PublishError::Register(ApiError::Unauthorized)),
                 true,
             ),
             (
@@ -2259,7 +2259,7 @@ mod tests {
                 }),
                 false,
             ),
-            (Upload(ApiError::NotAuthenticated), false),
+            (Upload(ApiError::Unauthorized), false),
             (
                 Upload(ApiError::Transport(crate::seams::SeamError::new("dropped"))),
                 true,
@@ -2284,7 +2284,7 @@ mod tests {
                 message: None,
                 code: None,
             }),
-            RecordPublishError::Upload(ApiError::NotAuthenticated),
+            RecordPublishError::Upload(ApiError::Unauthorized),
             RecordPublishError::HeadCidMismatch {
                 expected: "a".to_owned(),
                 returned: "b".to_owned(),

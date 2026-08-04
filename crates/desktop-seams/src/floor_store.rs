@@ -108,12 +108,12 @@ impl FileFloorStore {
         }
     }
 
-    /// Applies a batch of raises to the per-key files, returning each result.
-    fn apply_raises(&self, raises: &[FloorRaise], op: &str) -> SeamResult<Vec<u64>> {
-        raises
-            .iter()
-            .map(|r| self.raise_floor(self.dir_for(r.namespace), &r.key, r.value, op))
-            .collect()
+    /// Applies a batch of raises to the per-key files, in order.
+    fn apply_raises(&self, raises: &[FloorRaise], op: &str) -> SeamResult<()> {
+        for r in raises {
+            self.raise_floor(self.dir_for(r.namespace), &r.key, r.value, op)?;
+        }
+        Ok(())
     }
 
     /// Replays every leftover intent record left by batch commits interrupted
@@ -172,17 +172,17 @@ impl FloorStore for FileFloorStore {
     /// by [`open`](Self::open)'s replay rather than left partial (#685). The
     /// unique filename keeps overlapping commits from clobbering or removing each
     /// other's record. A commit that returns `Ok` has cleared its intent.
-    async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<Vec<u64>> {
+    async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
         if raises.is_empty() {
-            return Ok(Vec::new());
+            return Ok(());
         }
         let intent_path = self.intent_dir.join(unique_component());
         atomic_write(&intent_path, &encode_intent(raises)?)
             .map_err(|err| seam_err("floor_store write intent", &err))?;
-        let resulting = self.apply_raises(raises, "floor_store commit_floors")?;
+        self.apply_raises(raises, "floor_store commit_floors")?;
         remove_file_durable(&intent_path)
             .map_err(|err| seam_err("floor_store clear intent", &err))?;
-        Ok(resulting)
+        Ok(())
     }
 }
 

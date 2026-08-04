@@ -28,10 +28,6 @@ pub enum ApiError {
     /// (unreachable host, aborted request). Distinct from an HTTP error
     /// status, which is a well-formed response.
     Transport(SeamError),
-    /// The request needed authentication the client does not hold — no access
-    /// token in memory and no refresh token to mint one (e.g. a call before
-    /// any login).
-    NotAuthenticated,
     /// The API answered 401 and a single refresh-then-retry did not recover
     /// it: the session is dead and the caller must re-login.
     Unauthorized,
@@ -70,7 +66,6 @@ impl fmt::Display for ApiError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ApiError::Transport(error) => write!(f, "api transport error: {error}"),
-            ApiError::NotAuthenticated => f.write_str("api call requires authentication"),
             ApiError::Unauthorized => f.write_str("api rejected the request as unauthorized"),
             ApiError::Forbidden => f.write_str("api refused the request as forbidden"),
             ApiError::Status {

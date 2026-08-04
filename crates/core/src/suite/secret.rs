@@ -25,7 +25,9 @@ pub fn ct_eq(a: &[u8; SECRET_LEN], b: &[u8; SECRET_LEN]) -> bool {
 }
 
 /// Owned 32-byte secret key material. Cloneable (derivation reuses seeds), but
-/// deliberately not `Copy` (an owning type with a `Drop` that zeroizes).
+/// deliberately not `Copy` (an owning type with a `Drop` that zeroizes), and
+/// deliberately neither `Hash` nor `Ord`: hashing key bytes into a std map
+/// reintroduces the timing channel [`ct_eq`] removes.
 #[derive(Clone)]
 pub struct SecretBytes([u8; SECRET_LEN]);
 
