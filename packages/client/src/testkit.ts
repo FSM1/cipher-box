@@ -385,7 +385,9 @@ export class FakeEngineTransport implements EngineTransport {
   }
 
   pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
-    this.chunks.push({ handle, chunk });
+    // `LocalTransport` transfers the chunk into the worker; model that, so a
+    // caller reading it afterwards fails here exactly as it would in a browser.
+    this.chunks.push({ handle, chunk: structuredClone(chunk, { transfer: [chunk] }) });
     return Promise.resolve();
   }
 

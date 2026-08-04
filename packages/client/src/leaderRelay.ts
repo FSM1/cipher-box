@@ -10,9 +10,10 @@
  * - each tab's open folder → the leader's **focus-window union**, so freshness
  *   follows whichever tab is focused (the RefreshHintSource seam, cross-tab).
  *
- * Nothing value-bearing touches the `BroadcastChannel` in either direction: it
- * carries election, the port rendezvous, and key-free `EventDescriptor`s. One
- * port per follower per leadership.
+ * No plaintext, key material or user-supplied name touches the
+ * `BroadcastChannel` in either direction: it carries election, the port
+ * rendezvous, and the `EventDescriptor` stream (see `broadcast.ts` for what an
+ * event still exposes). One port per follower per leadership.
  */
 
 import type {
@@ -56,6 +57,22 @@ const DEFAULT_NAMING_TIMEOUT_MS = 5000;
 // false positive tears down a live tab's in-flight media playback.
 const DEFAULT_LIVENESS_INTERVAL_MS = 15_000;
 const DEFAULT_LIVENESS_MISSES = 4;
+
+/**
+ * Wipes an upload chunk this frame still owns. A chunk arrives transferred, so
+ * the relay is its terminal owner until a further transfer detaches it — and a
+ * detached buffer reads as empty, making this a no-op once it has moved on
+ * (AGENTS.md 7).
+ */
+function wipeChunk(chunk: ArrayBuffer): void {
+  if (chunk.byteLength > 0) new Uint8Array(chunk).fill(0);
+}
+
+/** The same, for a dropped message whose shape this relay never validated. */
+function wipeDropped(message: { type?: unknown }): void {
+  const chunk = (message as { write?: { chunk?: unknown } }).write?.chunk;
+  if (chunk instanceof ArrayBuffer) wipeChunk(chunk);
+}
 
 /** Projects a caught failure onto the wire's `error`/`code` fields. */
 function wireError(error: unknown): { error: string; code?: string } {
@@ -115,13 +132,6 @@ export class LeaderRelay {
   // Same binding for read streams: a handle is a capability, and a stream left
   // open pins a content version (and its key) in the leader's engine.
   private readonly streamOwners = new Map<StreamHandle, string>();
-  // Clients that left while one of their handles was still being minted. The
-  // mint completes after an await, so without this the release sweep runs
-  // against a map the handle has not landed in yet and the handle is stranded.
-  // An entry lives only as long as the mints it guards: one that outlived them
-  // would refuse every later handle from a tab that is in fact still running.
-  private readonly departed = new Set<string>();
-  private readonly mintsInFlight = new Map<string, number>();
   private readonly ports = new Set<PortEntry>();
   private readonly namingTimeoutMs: number;
   private readonly livenessMisses: number;
@@ -184,17 +194,11 @@ export class LeaderRelay {
     if (this.closed) return;
     switch (message.type) {
       case 'cb:hello':
-        this.departed.delete((message as Extract<FollowerMessage, { type: 'cb:hello' }>).clientId);
         this.post({ type: 'cb:leader', token: this.token });
         return;
       case 'cb:portWanted':
         void this.announceHost();
         return;
-      case 'cb:focus': {
-        const { clientId, node } = message as Extract<FollowerMessage, { type: 'cb:focus' }>;
-        if (this.focus.set(clientId, node)) this.refreshHint();
-        return;
-      }
       case 'cb:bye':
         this.reclaim((message as Extract<FollowerMessage, { type: 'cb:bye' }>).clientId);
         return;
@@ -208,21 +212,16 @@ export class LeaderRelay {
    */
   private reclaim(clientId: string): void {
     if (this.focus.remove(clientId)) this.refreshHint();
-    // Only a mint `releaseHandles` cannot see needs guarding.
-    if (this.mintsInFlight.has(clientId)) this.departed.add(clientId);
     this.releaseHandles(clientId);
     this.detachPortOf(clientId);
   }
 
   /**
    * Probes each named port and reclaims the follower behind one that has stopped
-   * answering. A tab that dies without `cb:bye` — a crash, a force-quit, a killed
-   * renderer — otherwise strands its handles, and a stranded stream holds a
-   * content version and its key resident for the rest of the leadership.
-   *
-   * The probe is answered from a message handler, not a timer, so a throttled
-   * background tab still proves itself; any port traffic at all counts, so a tab
-   * mid-playback is never a candidate.
+   * answering — the only signal a tab that died without `cb:bye` leaves behind.
+   * The probe is answered from a message handler, not a timer, and any port
+   * traffic at all resets the count, so a throttled or mid-playback tab is never
+   * a candidate.
    */
   private sweepLiveness(): void {
     for (const entry of [...this.ports]) {
@@ -268,55 +267,67 @@ export class LeaderRelay {
     this.ports.add(entry);
   }
 
-  /** A same-origin port is untrusted input: anything off-shape is dropped. */
   private onPortMessage(entry: PortEntry, data: unknown): void {
-    if (this.closed) return;
+    const message = data as PortRequest | { type?: unknown };
+    if (!this.serve(entry, message)) wipeDropped(message);
+  }
+
+  /**
+   * Serves one port message; `false` when it was dropped unserved. A same-origin
+   * port is untrusted input, so anything off-shape is dropped.
+   */
+  private serve(entry: PortEntry, message: PortRequest | { type?: unknown }): boolean {
+    if (this.closed) return false;
     // Any traffic at all proves the tab behind this port is still running.
     entry.missed = 0;
-    const message = data as PortRequest | { type?: unknown };
-    if (message.type === 'cb:portPong') return;
+    if (message.type === 'cb:portPong') return true;
     if (message.type === 'cb:portHello') {
       const { clientId } = message as Extract<PortRequest, { type: 'cb:portHello' }>;
-      if (entry.clientId !== null || typeof clientId !== 'string') return;
-      // A re-brokering follower supersedes the port it held before, and by
-      // greeting proves it outlived whatever `cb:bye` marked it departed.
+      if (entry.clientId !== null || typeof clientId !== 'string') return false;
+      // A re-brokering follower supersedes the port it held before; whatever it
+      // had in flight there is retired with that entry.
       this.detachPortOf(clientId);
-      this.departed.delete(clientId);
       clearTimeout(entry.naming);
       entry.clientId = clientId;
       this.postPort(entry.port, { type: 'cb:portReady', token: this.token });
-      return;
+      return true;
     }
     // A port serves requests only once named — that name is how a departure
     // reclaims it, and how a step is bound to the tab that owns the handle.
     const clientId = entry.clientId;
-    if (clientId === null) return;
+    if (clientId === null) return false;
+    if (message.type === 'cb:portFocus') {
+      const { node } = message as Extract<PortRequest, { type: 'cb:portFocus' }>;
+      if (this.focus.set(clientId, node)) this.refreshHint();
+      return true;
+    }
     const requestId = (message as { requestId?: unknown }).requestId;
-    if (typeof requestId !== 'number') return;
+    if (typeof requestId !== 'number') return false;
     switch (message.type) {
       case 'cb:portRead': {
         const { read } = message as Extract<PortRequest, { type: 'cb:portRead' }>;
         void this.answerPort(entry, requestId, () => this.readValue(read));
-        return;
+        return true;
       }
       case 'cb:portStream': {
         const { stream } = message as Extract<PortRequest, { type: 'cb:portStream' }>;
-        void this.answerPort(entry, requestId, () => this.streamStep(clientId, stream));
-        return;
+        void this.answerPort(entry, requestId, () => this.streamStep(entry, clientId, stream));
+        return true;
       }
       case 'cb:portCommand': {
         const { command } = message as Extract<PortRequest, { type: 'cb:portCommand' }>;
         void this.answerPort(entry, requestId, () =>
           this.transport.command(command, []).then(() => undefined)
         );
-        return;
+        return true;
       }
       case 'cb:portWrite': {
         const { write } = message as Extract<PortRequest, { type: 'cb:portWrite' }>;
         this.serveWrite(entry, requestId, clientId, write);
-        return;
+        return true;
       }
     }
+    return false;
   }
 
   /** Runs one port-borne step and posts its correlated result down that port. */
@@ -390,6 +401,7 @@ export class LeaderRelay {
       void this.answerPort(entry, requestId, () =>
         this.bind(
           'write',
+          entry,
           clientId,
           this.transport.beginWrite(write.target, write.size),
           (handle) => this.transport.abortWrite(handle)
@@ -400,15 +412,8 @@ export class LeaderRelay {
 
     const handle = write.handle;
     if (this.writeOwners.get(handle) !== clientId) {
-      // The chunk was transferred here, so this frame is its last owner
-      // (AGENTS.md 7): wipe the plaintext rather than leave it for the collector.
-      if (write.kind === 'pushChunk') new Uint8Array(write.chunk).fill(0);
-      this.postPort(entry.port, {
-        type: 'cb:portResult',
-        requestId,
-        ok: false,
-        ...wireError(unknownHandle('write')),
-      });
+      if (write.kind === 'pushChunk') wipeChunk(write.chunk);
+      void this.answerPort(entry, requestId, () => Promise.reject(unknownHandle('write')));
       return;
     }
 
@@ -418,8 +423,12 @@ export class LeaderRelay {
       this.answerPort(entry, requestId, async () => {
         switch (write.kind) {
           case 'pushChunk':
-            // Transferred in, transferred on: the plaintext is never copied.
-            await this.transport.pushChunk(handle, write.chunk);
+            try {
+              await this.transport.pushChunk(handle, write.chunk);
+            } finally {
+              // A worker torn down before the post leaves the plaintext here.
+              wipeChunk(write.chunk);
+            }
             return undefined;
           case 'commitWrite': {
             const opId = await this.transport.commitWrite(handle);
@@ -441,12 +450,14 @@ export class LeaderRelay {
 
   /** One `readStream` step, owned by the tab holding the port it arrived on. */
   private async streamStep(
+    entry: PortEntry,
     clientId: string,
     stream: WireStream
   ): Promise<StreamHandle | ArrayBuffer | undefined> {
     if (stream.kind === 'openContentStream') {
       return this.bind(
         'stream',
+        entry,
         clientId,
         this.transport.openContentStream(stream.node),
         (handle) => this.transport.closeStream(handle)
@@ -468,37 +479,28 @@ export class LeaderRelay {
 
   /**
    * Records the minted handle against the client that asked for it, releasing it
-   * instead if that client (or this relay) left while the mint was in flight.
+   * instead if the port it was minted for is gone.
+   *
+   * A mint completes after an await, so the release sweep may already have run
+   * against a table the handle had not landed in yet. The entry is the test that
+   * covers every such case at once — a departure, a step-down, and a follower
+   * that re-brokered mid-mint all retire it — and a handle its owner will never
+   * receive is a handle nothing will ever release.
    */
   private async bind(
     kind: HandleKind,
+    entry: PortEntry,
     clientId: string,
     minting: Promise<bigint>,
     close: (handle: bigint) => Promise<unknown>
   ): Promise<bigint> {
-    this.mintsInFlight.set(clientId, (this.mintsInFlight.get(clientId) ?? 0) + 1);
-    try {
-      const handle = await minting;
-      if (this.closed || this.departed.has(clientId)) {
-        void close(handle).catch(() => undefined);
-        throw unknownHandle(kind);
-      }
-      this.owners(kind).set(handle, clientId);
-      return handle;
-    } finally {
-      this.endMint(clientId);
+    const handle = await minting;
+    if (!this.ports.has(entry)) {
+      void close(handle).catch(() => undefined);
+      throw unknownHandle(kind);
     }
-  }
-
-  /** Drops the `departed` guard once the last mint it covered has settled. */
-  private endMint(clientId: string): void {
-    const left = (this.mintsInFlight.get(clientId) ?? 1) - 1;
-    if (left > 0) {
-      this.mintsInFlight.set(clientId, left);
-      return;
-    }
-    this.mintsInFlight.delete(clientId);
-    this.departed.delete(clientId);
+    this.owners(kind).set(handle, clientId);
+    return handle;
   }
 
   private owners(kind: HandleKind): Map<bigint, string> {

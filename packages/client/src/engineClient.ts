@@ -69,6 +69,41 @@ export interface EngineClientConfig {
 export type EngineClientRole = 'follower' | 'leader' | 'closed';
 
 /**
+ * One engine plane's open handles, as this client's own id → the live engine's.
+ *
+ * An engine's handle counters restart at 1, so a handle from a departed leader
+ * names a live handle on the next one: a stale stream reads a *different* node's
+ * plaintext, and a stale `pushChunk` pushes one file's bytes into another file's
+ * staging, sealing correctly under the entry it lands in. Ids that are monotonic
+ * for this client's whole life, dropped on every swap, make a stale handle
+ * unmatchable rather than ambiguous.
+ */
+class HandleTable {
+  private readonly inner = new Map<bigint, bigint>();
+  private next = 0n;
+
+  /** Adopts a freshly minted engine handle, naming it for this client. */
+  open(inner: bigint): bigint {
+    this.next += 1n;
+    this.inner.set(this.next, inner);
+    return this.next;
+  }
+
+  /** The engine handle behind `handle`, or `undefined` once its engine is gone. */
+  resolve(handle: bigint): bigint | undefined {
+    return this.inner.get(handle);
+  }
+
+  release(handle: bigint): void {
+    this.inner.delete(handle);
+  }
+
+  clear(): void {
+    this.inner.clear();
+  }
+}
+
+/**
  * The object handed to `EngineFacade`: it *is* the transport, delegating to the
  * live inner transport and re-homing the UI's event subscription across swaps.
  */
@@ -82,22 +117,8 @@ export class EngineClient implements EngineTransport {
 
   private role: EngineClientRole = 'follower';
   private current!: EngineTransport;
-  /**
-   * The open handles, as this client's own id → the live engine's, one table per
-   * plane.
-   *
-   * An engine's handle counters restart at 1, so a handle from a departed leader
-   * names a live handle on the next one: a stale stream reads a *different*
-   * node's plaintext, and a stale `pushChunk` pushes one file's bytes into
-   * another file's staging, sealing correctly under the entry it lands in.
-   * Handing out ids that are monotonic for this client's whole life and dropping
-   * the tables on every swap makes a stale handle unmatchable rather than
-   * ambiguous.
-   */
-  private readonly streams = new Map<StreamHandle, StreamHandle>();
-  private readonly writes = new Map<WriteHandle, WriteHandle>();
-  private nextStream = 0n;
-  private nextWrite = 0n;
+  private readonly streams = new HandleTable();
+  private readonly writes = new HandleTable();
   private generation = 0;
   private relay: LeaderRelay | null = null;
   private innerUnsub!: () => void;
@@ -161,33 +182,31 @@ export class EngineClient implements EngineTransport {
     const inner = await this.current.beginWrite(target, size);
     // The engine that minted this went away mid-open; its staging went with it.
     if (generation !== this.generation) throw unknownHandle('write');
-    this.nextWrite += 1n;
-    this.writes.set(this.nextWrite, inner);
-    return this.nextWrite;
+    return this.writes.open(inner);
   }
 
   pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
-    const inner = this.writes.get(handle);
+    const inner = this.writes.resolve(handle);
     if (inner === undefined) return Promise.reject(unknownHandle('write'));
     return this.current.pushChunk(inner, chunk);
   }
 
   async commitWrite(handle: WriteHandle): Promise<bigint> {
-    const inner = this.writes.get(handle);
+    const inner = this.writes.resolve(handle);
     if (inner === undefined) throw unknownHandle('write');
     const opId = await this.current.commitWrite(inner);
     // Dropped only once the commit resolves: a rejected one leaves the handle
     // open for its owner to abort.
-    this.writes.delete(handle);
+    this.writes.release(handle);
     return opId;
   }
 
   async abortWrite(handle: WriteHandle): Promise<void> {
-    const inner = this.writes.get(handle);
+    const inner = this.writes.resolve(handle);
     // An abort on a handle whose engine is gone has nothing left to release.
     if (inner === undefined) return;
     await this.current.abortWrite(inner);
-    this.writes.delete(handle);
+    this.writes.release(handle);
   }
 
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
@@ -207,21 +226,19 @@ export class EngineClient implements EngineTransport {
     const inner = await this.current.openContentStream(node);
     // The engine that minted this went away mid-open; its stream went with it.
     if (generation !== this.generation) throw unknownHandle('stream');
-    this.nextStream += 1n;
-    this.streams.set(this.nextStream, inner);
-    return this.nextStream;
+    return this.streams.open(inner);
   }
 
   readStream(handle: StreamHandle, offset: number, length: number): Promise<ArrayBuffer> {
-    const inner = this.streams.get(handle);
+    const inner = this.streams.resolve(handle);
     if (inner === undefined) return Promise.reject(unknownHandle('stream'));
     return this.current.readStream(inner, offset, length);
   }
 
   closeStream(handle: StreamHandle): Promise<void> {
-    const inner = this.streams.get(handle);
+    const inner = this.streams.resolve(handle);
     if (inner === undefined) return Promise.resolve();
-    this.streams.delete(handle);
+    this.streams.release(handle);
     return this.current.closeStream(inner);
   }
 

@@ -306,10 +306,16 @@ export class BroadcastTransport extends CorrelatedTransport {
     return this.overPort<T>((requestId) => ({ type: 'cb:portWrite', requestId, write }), transfer);
   }
 
-  /** Reports this tab's open folder to the leader's focus-window union. */
+  /**
+   * Reports this tab's open folder to the leader's focus-window union. A folder
+   * id names what the user is browsing, so it takes the port like every other
+   * argument; a dropped hint costs staleness, never correctness.
+   */
   reportFocus(node: Uint8Array | null): void {
     if (this.closed) return;
-    this.channel.postMessage({ type: 'cb:focus', clientId: this.clientId, node });
+    void this.ensurePort()
+      .then((port) => port.postMessage({ type: 'cb:portFocus', node } satisfies PortRequest))
+      .catch(() => undefined);
   }
 
   close(): void {

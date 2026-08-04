@@ -14,7 +14,8 @@ import {
 } from './testkit.js';
 import type { EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 
-const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+const after = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const tick = (): Promise<void> => after(0);
 
 function wire(): {
   bus: FakeBus;
@@ -736,33 +737,27 @@ describe('broadcast transport ↔ leader relay', () => {
  * way: the test speaks the wire itself, so it can post a malformed or forged
  * step and read exactly what the relay answered.
  */
-function portBench(options: LeaderRelayOptions = {}): {
+async function portBench(options: LeaderRelayOptions = {}): Promise<{
   bus: FakeBus;
+  ports: FakeCourierNetwork;
   engine: FakeEngineTransport;
   relay: LeaderRelay;
   /** The relay's end: `receive` injects a follower step, `posted` records replies. */
   leaderPort: FakeChannelPort;
-} {
+}> {
   const bus = new FakeBus();
+  const ports = new FakeCourierNetwork();
   const engine = new FakeEngineTransport();
-  const near = new FakeChannelPort();
-  const leaderPort = new FakeChannelPort();
-  near.peer = leaderPort;
-  leaderPort.peer = near;
+  const relay = new LeaderRelay(bus.channel(), engine, ports.courier('leader'), options);
+  return { bus, ports, engine, relay, leaderPort: await dialLeader(ports, 'f1') };
+}
 
-  let deliver: ((port: MessagePortLike) => void) | null = null;
-  const courier: PortCourier = {
-    address: () => Promise.resolve('leader'),
-    connect: () => Promise.reject(new Error('unused')),
-    onPort: (handler) => {
-      deliver = handler;
-      return () => (deliver = null);
-    },
-  };
-  const relay = new LeaderRelay(bus.channel(), engine, courier, options);
-  deliver!(leaderPort);
-  leaderPort.receive({ type: 'cb:portHello', clientId: 'f1' });
-  return { bus, engine, relay, leaderPort };
+/** Dials the relay a fresh named port, returning the relay's end of it. */
+async function dialLeader(ports: FakeCourierNetwork, clientId: string): Promise<FakeChannelPort> {
+  const dialled = (await ports.courier(clientId).connect('leader')) as FakeChannelPort;
+  const leaderPort = dialled.peer!;
+  leaderPort.receive({ type: 'cb:portHello', clientId });
+  return leaderPort;
 }
 
 /** What the relay posted down a port, by wire type. */
@@ -880,7 +875,7 @@ describe('leader relay write handles', () => {
   });
 
   it('releases rather than strands a handle minted for a client that left mid-mint', async () => {
-    const { bus, engine, leaderPort } = portBench();
+    const { bus, engine, leaderPort } = await portBench();
     let releaseMint!: (handle: bigint) => void;
     engine.beginWrite = () => new Promise((resolve) => (releaseMint = resolve));
 
@@ -902,8 +897,70 @@ describe('leader relay write handles', () => {
     expect(replies(leaderPort, 'cb:portResult')).toEqual([]);
   });
 
+  it('releases both planes of a handle minted for a follower that re-brokered mid-mint', async () => {
+    const { engine, ports, leaderPort } = await portBench();
+    let mintWrite!: (handle: bigint) => void;
+    let mintStream!: (handle: bigint) => void;
+    engine.beginWrite = () => new Promise((resolve) => (mintWrite = resolve));
+    engine.openContentStream = () => new Promise((resolve) => (mintStream = resolve));
+
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 1,
+      write: { kind: 'beginWrite', target: { node: node(1) }, size: 4 },
+    });
+    leaderPort.receive({
+      type: 'cb:portStream',
+      requestId: 2,
+      stream: { kind: 'openContentStream', node: node(2) },
+    });
+    await tick();
+
+    // The same live tab re-brokers — its port timed out, or the sweep took it —
+    // so neither handle can ever reach the entry it was asked for.
+    const rebrokered = await dialLeader(ports, 'f1');
+    await tick();
+    mintWrite(7n);
+    mintStream(8n);
+    await tick();
+
+    // The staging reservation and the pinned content version, with the key
+    // resident alongside it, are both released rather than stranded.
+    expect(engine.aborts).toEqual([7n]);
+    expect(engine.closedStreams).toEqual([8n]);
+    expect(replies(leaderPort, 'cb:portResult')).toEqual([]);
+
+    // The tab is still served on the port it now holds.
+    engine.openContentStream = () => Promise.resolve(9n);
+    rebrokered.receive({
+      type: 'cb:portStream',
+      requestId: 1,
+      stream: { kind: 'openContentStream', node: node(3) },
+    });
+    await tick();
+    expect(replies(rebrokered, 'cb:portResult')).toContainEqual(
+      expect.objectContaining({ requestId: 1, ok: true, result: 9n })
+    );
+  });
+
+  it('wipes a transferred chunk it drops for a malformed request', async () => {
+    const { engine, leaderPort } = await portBench();
+    const plaintext = Uint8Array.of(5, 6, 7, 8);
+
+    // No `requestId`, so nothing can be answered — but the chunk already crossed
+    // by transfer, leaving the relay its last owner.
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      write: { kind: 'pushChunk', handle: 1n, chunk: plaintext.buffer },
+    });
+    await tick();
+
+    expect([...plaintext]).toEqual([0, 0, 0, 0]);
+    expect(engine.chunks).toEqual([]);
+  });
+
   it('wipes an upload chunk it refuses rather than leaving the plaintext behind', async () => {
-    const { engine, leaderPort } = portBench();
+    const { engine, leaderPort } = await portBench();
     const plaintext = Uint8Array.of(9, 8, 7, 6);
 
     // A step on a handle this port never opened: the chunk was already
@@ -917,6 +974,33 @@ describe('leader relay write handles', () => {
 
     expect([...plaintext]).toEqual([0, 0, 0, 0]);
     expect(engine.chunks).toEqual([]);
+  });
+
+  it('wipes an upload chunk the worker never took, having rejected before the post', async () => {
+    const { engine, leaderPort } = await portBench();
+    engine.writeHandle = 5n;
+    // A dead worker rejects without ever transferring the buffer on, so the
+    // relay is still holding the plaintext when the step settles.
+    engine.pushChunk = () => Promise.reject(new Error('engine transport closed'));
+    const plaintext = Uint8Array.of(4, 3, 2, 1);
+
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 1,
+      write: { kind: 'beginWrite', target: { node: node(1) }, size: 4 },
+    });
+    await tick();
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 2,
+      write: { kind: 'pushChunk', handle: 5n, chunk: plaintext.buffer },
+    });
+    await tick();
+
+    expect(replies(leaderPort, 'cb:portResult')).toContainEqual(
+      expect.objectContaining({ requestId: 2, ok: false })
+    );
+    expect([...plaintext]).toEqual([0, 0, 0, 0]);
   });
 
   it('releases every open handle when the leader steps down', async () => {
@@ -933,12 +1017,11 @@ describe('leader relay write handles', () => {
 
 describe('leader relay follower liveness', () => {
   const node = (fill: number): Uint8Array => new Uint8Array(16).fill(fill);
-  const settle = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
   // Two sweeps' worth of silence at `livenessMisses: 1`.
   const REAPED = 30;
 
   it('reclaims the handles and port of a follower that died without a cb:bye', async () => {
-    const { engine, leaderPort } = portBench({ livenessIntervalMs: 5, livenessMisses: 1 });
+    const { engine, leaderPort } = await portBench({ livenessIntervalMs: 5, livenessMisses: 1 });
     engine.writeHandle = 3n;
     engine.streamHandle = 4n;
     leaderPort.receive({
@@ -954,7 +1037,7 @@ describe('leader relay follower liveness', () => {
     await tick();
 
     // The tab is gone: it answers no probe and sends no farewell.
-    await settle(REAPED);
+    await after(REAPED);
 
     // The pinned content version — and the key resident with it — is released,
     // as is the write handle's staging reservation and the port itself.
@@ -965,7 +1048,7 @@ describe('leader relay follower liveness', () => {
   });
 
   it('never reclaims a live but quiet follower that answers the probe', async () => {
-    const { engine, leaderPort } = portBench({ livenessIntervalMs: 5, livenessMisses: 1 });
+    const { engine, leaderPort } = await portBench({ livenessIntervalMs: 5, livenessMisses: 1 });
     engine.streamHandle = 4n;
     leaderPort.receive({
       type: 'cb:portStream',
@@ -981,7 +1064,7 @@ describe('leader relay follower liveness', () => {
         leaderPort.receive({ type: 'cb:portPong' });
       }
     });
-    await settle(REAPED);
+    await after(REAPED);
 
     expect(engine.closedStreams).toEqual([]);
     expect(leaderPort.closed).toBe(false);
@@ -1007,15 +1090,15 @@ describe('leader relay follower liveness', () => {
     // The naming timeout owns an unnamed port; the sweep must leave it alone
     // rather than reclaim it under a `clientId` it does not have.
     const squatter = (await ports.courier('squatter').connect('leader')) as FakeChannelPort;
-    await settle(REAPED);
+    await after(REAPED);
     expect(squatter.peer!.posted).toEqual([]);
     expect(squatter.peer!.closed).toBe(false);
   });
 
   it('stops probing once the leader steps down', async () => {
-    const { relay, leaderPort } = portBench({ livenessIntervalMs: 5, livenessMisses: 4 });
+    const { relay, leaderPort } = await portBench({ livenessIntervalMs: 5, livenessMisses: 4 });
     relay.close();
-    await settle(REAPED);
+    await after(REAPED);
 
     expect(replies(leaderPort, 'cb:portPing')).toEqual([]);
   });

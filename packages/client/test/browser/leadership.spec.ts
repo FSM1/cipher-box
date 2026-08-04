@@ -322,7 +322,6 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
       expect([
         'cb:bye',
         'cb:event',
-        'cb:focus',
         'cb:hello',
         'cb:leader',
         'cb:leaderGone',

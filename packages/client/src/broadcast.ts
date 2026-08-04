@@ -11,12 +11,14 @@
  *   secret at all (its `start` has no secret parameter); `EngineClient`, the
  *   secret's terminal owner, scrubs the buffer it chose not to use and lets the
  *   leader's already-started engine own key derivation.
- * - Leader → follower carries only key-free, plaintext-free `EventDescriptor`s
- *   (the facade's event surface exposes no key bytes by construction).
  * - A `BroadcastChannel` carries no transferables, so anything value-bearing put
  *   on it is cloned into every same-origin context that opened it. The port
  *   moves upload buffers instead, so a chunk's plaintext leaves the follower's
  *   heap rather than being copied to every bystander.
+ * - What a bystanding same-origin context still sees on the channel, stated
+ *   exactly: no key bytes, no plaintext, no user-supplied names — but per-tab
+ *   `clientId`s and the `EventDescriptor` stream, whose variants carry node ids,
+ *   IPNS names, op ids and block counts. Same origin remains the trust boundary.
  */
 
 import type {
@@ -68,6 +70,8 @@ export type PortRequest =
   | { type: 'cb:portHello'; clientId: string }
   /** Answers `cb:portPing`; the leader's proof this tab is still alive. */
   | { type: 'cb:portPong' }
+  /** This tab's currently open folder (for the leader's focus-window union). */
+  | { type: 'cb:portFocus'; node: Uint8Array | null }
   /** A correlated read; the leader answers with a matching `cb:portResult`. */
   | { type: 'cb:portRead'; requestId: number; read: WireRead }
   /** A correlated ranged-read step, run against the leader's engine stream. */
@@ -106,8 +110,6 @@ export type FollowerMessage =
   | { type: 'cb:hello'; clientId: string }
   /** Asks the leader where a private port may be opened to it. */
   | { type: 'cb:portWanted'; clientId: string }
-  /** This tab's currently open folder (for the leader's focus-window union). */
-  | { type: 'cb:focus'; clientId: string; node: Uint8Array | null }
   /** A follower is leaving (tab close / transport teardown). */
   | { type: 'cb:bye'; clientId: string };
 
