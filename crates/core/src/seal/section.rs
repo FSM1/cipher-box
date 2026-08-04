@@ -23,6 +23,7 @@
 //! here — that is the gate's crypto step. This codec only frames and enforces
 //! structure (lengths, required fields, tag uniqueness), fail-closed.
 
+use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 use crate::codec::{Map, Value, decode, encode};
 use crate::error::CodecError;
 use crate::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
@@ -274,9 +275,12 @@ const GRANT_SECTION_KNOWN: &[&str] = &[
 /// Decode a grant section (strict det-CBOR, unknown fields preserved). Fails
 /// closed on a malformed frame, a duplicate grant-blob tag (`duplicate-grant-tag`,
 /// #39 D7), or a duplicate-tag commitment (surfaced by the commitment codec).
+///
+/// The transient decoded tree copies the whole signed blob set, so it is
+/// scrubbed on drop.
 pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
-    let value = decode(bytes)?;
-    let map = value.as_map()?;
+    let value = ScrubOwned(decode(bytes)?);
+    let map = value.value().as_map()?;
 
     let commitment = decode_grant_set_commitment(req(map, "commitment")?.as_bytes()?)?;
     let commitment_sig = bytes_fixed::<ECDSA_SIG_LEN>(req(map, "commitmentSig")?, "commitmentSig")?;
@@ -363,7 +367,9 @@ pub fn encode_grant_section(section: &GrantSection) -> Result<Vec<u8>, CodecErro
     }
     m.insert("writeBody", section.write_body.to_value());
     merge_unknown(&mut m, &section.unknown);
-    encode(&Value::Map(m))
+    let mut value = Value::Map(m);
+    let guard = ScrubOnDrop(&mut value);
+    encode(guard.0)
 }
 
 #[cfg(test)]
@@ -441,6 +447,17 @@ mod tests {
             encode_grant_section(&decoded).unwrap(),
             bytes,
             "byte-stable"
+        );
+    }
+
+    /// The encode guard wipes its own transient tree, never the caller's
+    /// section — see [`super::super::write_body`]'s sibling test.
+    #[test]
+    fn encoding_one_borrowed_section_twice_is_byte_identical() {
+        let section = sample();
+        assert_eq!(
+            encode_grant_section(&section).unwrap(),
+            encode_grant_section(&section).unwrap()
         );
     }
 

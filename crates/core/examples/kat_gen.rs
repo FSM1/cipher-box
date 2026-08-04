@@ -1385,7 +1385,7 @@ fn build_accept_vectors() -> Vec<AcceptVector> {
         out.push(AcceptVector {
             name: name.to_string(),
             hex: hex::encode(&bytes),
-            diag: value.to_string(),
+            diag: value.to_diag(),
             kinds: kinds.into_iter().map(str::to_string).collect(),
         });
     }
@@ -1730,7 +1730,10 @@ fn build_reject_vectors() -> Vec<RejectVector> {
             hex::decode(&hex).unwrap_or_else(|e| panic!("reject vector {name}: bad hex: {e}"));
         let err = match decode(&bytes) {
             Err(e) => e,
-            Ok(v) => panic!("reject vector {name}: decoder accepted it as {v}"),
+            Ok(v) => panic!(
+                "reject vector {name}: decoder accepted it as {}",
+                v.to_diag()
+            ),
         };
         assert_eq!(
             err.check(),

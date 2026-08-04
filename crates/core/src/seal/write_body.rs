@@ -16,9 +16,11 @@
 //! re-sealing a write-body under shared write never strips a newer client's
 //! fields.
 
+use core::fmt;
 use core::num::NonZeroU64;
 
-use crate::codec::{Map, Value, decode, encode};
+use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
+use crate::codec::{Map, RedactedBytes, Value, decode, encode};
 use crate::error::{CodecError, Malformed};
 use crate::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use crate::suite::secret::SECRET_LEN;
@@ -144,7 +146,8 @@ impl GrantLedgerEntry {
 // ---------------------------------------------------------------------------
 
 /// One directly-descendant scope root, enumerated for the F-4 rotation cascade.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `ipns_name` is sealed-body plaintext, so it renders redacted.
+#[derive(Clone, PartialEq, Eq)]
 pub struct ChildScopeRef {
     /// The child scope root's node id (16-byte UUID) = its scope id.
     pub scope_id: [u8; 16],
@@ -155,6 +158,16 @@ pub struct ChildScopeRef {
 }
 
 const CHILD_SCOPE_KNOWN: &[&str] = &["ipnsName", "scopeId"];
+
+impl fmt::Debug for ChildScopeRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChildScopeRef")
+            .field("scope_id", &self.scope_id)
+            .field("ipns_name", &RedactedBytes::of(&self.ipns_name))
+            .field("unknown", &self.unknown)
+            .finish()
+    }
+}
 
 impl ChildScopeRef {
     /// A child-scope ref with no preserved unknown fields.
@@ -209,9 +222,12 @@ const WRITE_BODY_KNOWN: &[&str] = &["directChildScopeIndex", "grantLedger", "wri
 ///
 /// Scope-root-only by construction; this codec cannot enforce that — whether a
 /// node is a scope root is the engine's decision.
+///
+/// The transient decoded tree copies the recipient keys, blinded tags and
+/// child-scope `ipnsName`s, so it is scrubbed on drop.
 pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
-    let value = decode(bytes)?;
-    let map = value.as_map()?;
+    let value = ScrubOwned(decode(bytes)?);
+    let map = value.value().as_map()?;
 
     let mut grant_ledger = Vec::new();
     for item in req(map, "grantLedger")?.as_array()? {
@@ -271,7 +287,9 @@ pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
         Value::Bytes(body.write_history_link.clone()),
     );
     merge_unknown(&mut m, &body.unknown);
-    encode(&Value::Map(m))
+    let mut value = Value::Map(m);
+    let guard = ScrubOnDrop(&mut value);
+    encode(guard.0)
 }
 
 #[cfg(test)]
@@ -291,6 +309,30 @@ mod tests {
             )],
             unknown: PreservedFields::new(),
         }
+    }
+
+    /// The encode guard wipes its own transient tree, never the caller's body:
+    /// one borrow encodes to the same bytes twice. The round-trip test cannot
+    /// catch this — it encodes two distinct values.
+    #[test]
+    fn encoding_one_borrowed_body_twice_is_byte_identical() {
+        let body = sample();
+        assert_eq!(
+            encode_write_body(&body).unwrap(),
+            encode_write_body(&body).unwrap()
+        );
+    }
+
+    /// A child scope's `ipnsName` is sealed-body plaintext, like a child ref's.
+    #[test]
+    fn debug_redacts_child_scope_names() {
+        let rendered = format!("{:?}", sample());
+        assert!(!rendered.contains("child-scope-name"), "{rendered}");
+        assert!(rendered.contains("<16 bytes redacted>"), "{rendered}");
+        assert!(
+            rendered.contains("Read") && rendered.contains("Write"),
+            "the ledger's public fields stay legible: {rendered}"
+        );
     }
 
     #[test]

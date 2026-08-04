@@ -236,7 +236,9 @@ proptest! {
                 Ok(value) => prop_assert!(
                     false,
                     "defect {} was accepted as {} (bytes {:02x?})",
-                    expected, value, bytes
+                    expected,
+                    value.to_diag(),
+                    bytes
                 ),
                 Err(err) => prop_assert_eq!(
                     err.check(),
