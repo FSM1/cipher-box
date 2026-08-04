@@ -167,12 +167,10 @@ pub fn settings_name(login_secret: &[u8]) -> IpnsName {
     IpnsName::from_public_key(&kdf::settings_ipns_keypair(login_secret).verifying_key())
 }
 
-/// Two prefixed keys in the floor store's sequence namespace, kept apart
-/// because the writer's counter and the reader's bar answer different
-/// questions: [`revision_adopted_key`] is the highest revision this device has
-/// *adopted*, [`revision_mint_key`] the highest it has ever *minted*. An
+/// The highest body revision this device has *adopted* — the reader's bar. Kept
+/// apart from [`revision_mint_key`], the highest it has ever *minted*: an
 /// attempt that never landed advances only the latter, so it never makes this
-/// device refuse the live record it failed to replace. Both are prefixed so
+/// device refuse the live record it failed to replace. Both are prefixed, so
 /// neither can collide with the bare `ipnsName` the per-name sequence floor is
 /// keyed by — a name carries no `/`.
 fn revision_adopted_key(name: &IpnsName) -> Vec<u8> {
@@ -194,10 +192,6 @@ fn prefixed_key(prefix: &[u8], name: &IpnsName) -> Vec<u8> {
 /// confirm-gated sequence floor re-mints the same value on a retry and so
 /// cannot tell two same-sequence forks apart.
 ///
-/// Seeded from the adopted high-water as well as this device's own mint
-/// counter, so a device that has read further than it has written still mints
-/// above what its own reader will accept.
-///
 /// AGENTS.md rule 8: the reader refuses a revision below its durable high-water,
 /// so a counter that did not actually advance fails the publish here,
 /// release-active, rather than sealing bytes the reader would reject.
@@ -206,18 +200,20 @@ async fn next_revision<F: FloorStore>(
     name: &IpnsName,
 ) -> Result<u64, SettingsPublishError> {
     let mint_key = revision_mint_key(name);
-    let read = |key: Vec<u8>| async move {
-        floors
-            .sequence_floor(&key)
+    let read = |key| async move {
+        floor::sequence_floor(floors, key)
             .await
+            .map(|floor| floor.unwrap_or(0))
             .map_err(SettingsPublishError::Floor)
     };
-    let minted = read(mint_key.clone()).await?.unwrap_or(0);
-    let adopted = read(revision_adopted_key(name)).await?.unwrap_or(0);
-    let next = minted
-        .max(adopted)
+    let next = read(&mint_key)
+        .await?
+        .max(read(&revision_adopted_key(name)).await?)
         .checked_add(1)
         .ok_or(SettingsPublishError::Revision)?;
+    // A local mint counter, not a record-plane advance, so it raises the store
+    // directly. Rule 8's guard is the compare: a store that reports a floor
+    // other than the one we asked for did not take our value.
     let stored = floors
         .raise_sequence_floor(&mint_key, next)
         .await
@@ -232,10 +228,11 @@ async fn next_revision<F: FloorStore>(
 /// publish port, so the record inherits register-first, seq-CAS, and confirm
 /// like every other record.
 #[allow(clippy::too_many_arguments)]
-pub async fn publish_settings<T, H, C, F, Sch>(
+pub async fn publish_settings<T, H, C, F, Sn, Sch>(
     transport: &T,
     api: &ApiClient<H, C>,
     floors: &F,
+    snapshots: &Sn,
     scheduler: &Sch,
     profile: &SyncTimingProfile,
     entropy: &mut dyn Entropy,
@@ -248,6 +245,7 @@ where
     H: Http,
     C: CredentialStore,
     F: FloorStore,
+    Sn: SnapshotCache,
     Sch: Scheduler + Clone + 'static,
 {
     validate(settings).map_err(SettingsPublishError::Byo)?;
@@ -270,7 +268,8 @@ where
     let enc_secret = kdf::enc_subkey(login_secret);
     let block = seal_settings_record(&enc_secret, &ephemeral, &body)
         .map_err(SettingsPublishError::Codec)?;
-    let head = preflight_settings(&enc_secret, block).map_err(SettingsPublishError::Preflight)?;
+    let head =
+        preflight_settings(&enc_secret, block.clone()).map_err(SettingsPublishError::Preflight)?;
 
     let receipt = match publish_record(
         transport,
@@ -307,7 +306,16 @@ where
     let PublishOutcome::Published { sequence } = receipt.outcome else {
         return Err(SettingsPublishError::Unconfirmed);
     };
+    // The confirm re-resolve read back our own bytes, so the writer has adopted
+    // what it just published: the bar rises, and last-known-good becomes these
+    // settings rather than the generation they replaced — otherwise a record
+    // withheld right after a change pins this device to a credential the member
+    // has already rotated away from.
+    let _ = snapshots.put(&settings_cache_key(&name), &block).await;
     floor::advance_sequence_on_unseal(floors, name.as_str().as_bytes(), sequence)
+        .await
+        .map_err(SettingsPublishError::Floor)?;
+    floor::advance_sequence_on_unseal(floors, &revision_adopted_key(&name), revision)
         .await
         .map_err(SettingsPublishError::Floor)?;
     Ok(receipt)
@@ -405,17 +413,13 @@ where
 {
     let key = name.as_str().as_bytes();
     let cache_key = settings_cache_key(name);
-    let adopted_key = revision_adopted_key(name);
     // Read ahead of the resolve so a degraded outcome has last-known-good to
     // fall back on; the cache never short-circuits the fetch.
     *cached = snapshots.get(&cache_key).await.ok().flatten();
     // The settings record belongs to no scope and carries no epoch, so the
-    // per-name sequence floor is its whole floor law. A floor the host cannot
-    // read is never treated as no floor.
+    // per-name sequence floor and the adopted body revision are its whole floor
+    // law. A floor the host cannot read is never treated as no floor.
     let Ok(durable) = floor::sequence_floor(floors, key).await else {
-        return Err(DefaultsReason::FloorUnreadable);
-    };
-    let Ok(adopted) = floor::sequence_floor(floors, &adopted_key).await else {
         return Err(DefaultsReason::FloorUnreadable);
     };
     let Some((verified, record_bytes)) = fanout_get_verify(transport, name).await else {
@@ -444,8 +448,16 @@ where
         return Err(DefaultsReason::Suppressed);
     };
     let body = open_settings_head(enc_secret, &block).ok_or(DefaultsReason::Unreadable)?;
+    let adopted_key = revision_adopted_key(name);
+    let Ok(adopted) = floor::sequence_floor(floors, &adopted_key).await else {
+        return Err(DefaultsReason::FloorUnreadable);
+    };
     let adopted = adopted.unwrap_or(0);
-    if body.revision < adopted {
+    // The revision arbitrates only what the sequence cannot: a fork *at* the
+    // sequence this device already adopted. A strictly newer record won its CAS
+    // against the network, and holding it to a device-local revision counter
+    // would refuse a second device's legitimate publish forever.
+    if sequence == floor && body.revision < adopted {
         return Err(DefaultsReason::RevisionRolledBack {
             floor: adopted,
             revision: body.revision,

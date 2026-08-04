@@ -11,11 +11,8 @@
 //! **expiry** (a >EOL lapse, revive from the recovery endpoint). Determinism
 //! law: every function here takes the instant as a [`UnixMillis`] argument.
 //!
-//! [`is_expired`] carries one further verdict, outside liveness: the vault
-//! settings resolve refuses a lapsed record as non-authoritative rather than
-//! reviving it, because its reader is always its own signer
-//! (blueprint/engine.md "Vault settings load"). No other resolve path checks
-//! EOL — plane-wide a lapse is availability, not trust.
+//! [`is_expired`] carries one verdict outside liveness — the vault settings
+//! resolve's authority check (blueprint/engine.md "Vault settings load").
 
 use core::time::Duration;
 

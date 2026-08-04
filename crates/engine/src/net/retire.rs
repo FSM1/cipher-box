@@ -33,7 +33,9 @@ impl OrphanHeads {
     }
 
     /// Retire what is pending. A refused retire keeps the set rather than
-    /// losing the only record of what to retire.
+    /// losing the only record of what to retire; a successful one clears the
+    /// heads it actually sent, so a head recorded by an overlapping publisher
+    /// mid-flight stays pending instead of being dropped unsent.
     pub async fn retire_pending<H, C>(&self, api: &ApiClient<H, C>)
     where
         H: Http,
@@ -44,9 +46,7 @@ impl OrphanHeads {
             return;
         }
         if retire(api, &pending).await.is_ok() {
-            let mut orphans = self.0.borrow_mut();
-            let sent = pending.len().min(orphans.len());
-            orphans.drain(..sent);
+            self.0.borrow_mut().retain(|cid| !pending.contains(cid));
         }
     }
 

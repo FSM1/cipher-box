@@ -242,7 +242,10 @@ degraded outcome applies a different policy rather than showing stale data.
   The lapse degrades through the last-known-good path like every other
   reason. The encode side needs no matching guard: the EOL is `now + 90 days`
   off the injected clock, so a publish structurally cannot mint an
-  already-expired record.
+  already-expired record. Residual until the settings record joins the held set
+  the sub-EOL renewal loop walks: an account whose settings have not been
+  re-saved inside the window lapses on its own, and the placement decision then
+  fails closed for want of a copy it can authenticate.
 - **The sealed body carries a monotonic revision.** The outer sequence cannot
   order two records at the *same* sequence, and an unconfirmed publish
   followed by a retry mints exactly that: two owner-signed records at one
@@ -250,10 +253,16 @@ degraded outcome applies a different policy rather than showing stale data.
   revision is minted **per publish attempt, advanced before the PUT** — one
   derived from the confirm-gated sequence floor re-mints the same value on the
   retry and disambiguates nothing. A reader refuses a revision below the
-  highest it has adopted, which is a trust violation and not staleness. The
-  writer's mint counter and the reader's adopted high-water are separate
-  durable values: an attempt that never landed advances only the former, so it
-  never makes a device refuse the live record it failed to replace.
+  highest it has adopted **at that sequence**, which is a trust violation and
+  not staleness; a record at a strictly higher sequence won its own CAS and is
+  never held to a device-local counter, or a second device's legitimate publish
+  would be refused forever. The writer's mint counter and the reader's adopted
+  high-water are separate durable values: an attempt that never landed advances
+  only the former, so it never makes a device refuse the live record it failed
+  to replace. A confirmed publish raises the reader's bar and seeds
+  last-known-good with what it published, so a record withheld right after a
+  settings change cannot pin the device to the generation it replaced —
+  including a BYO credential the member has just rotated away from.
 - **The cold-device anchor is the EOL, and only the EOL.** Every durable seam
   is device-local, so a fresh install has neither a sequence floor nor an
   adopted revision to hold a record to; the revision closes the fork residual

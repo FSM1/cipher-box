@@ -81,19 +81,12 @@ use crate::sync::staging::{preserve_dead_letter, release_version_blocks, version
 pub const DRAINED_OP_MARK_KEY: &[u8] = b"cipherbox/drained-op";
 
 /// The staging key holding the published-op high-water mark: every op id at or
-/// below the stored value had its record PUT acknowledged, so its version is
-/// live at its name even if the op is still queued.
+/// below the stored value published and self-adopted its whole record set, so
+/// its version is live at its name even if the op is still queued.
 ///
-/// The queue is strict FIFO and a pass stops at the first op it cannot publish,
-/// so every id below the one being marked has already left the queue — the mark
-/// is contiguous by construction, like [`DRAINED_OP_MARK_KEY`], and shares the
-/// same durability domain as the ids it names.
-///
-/// It is raised between the record PUT and the block release, which is the
-/// window a crash leaves a published op queued. Without it that op replays,
-/// re-uploads its leaves, and a cancel landing mid-replay unpins content a live
-/// record names — the session-scoped publish-entry interlock does not survive
-/// the reboot. [`orphan_staging_keys`] treats it as referenced.
+/// Contiguous, and in the same durability domain as the ids it names, for the
+/// reasons [`DRAINED_OP_MARK_KEY`] gives; [`orphan_staging_keys`] treats it as
+/// referenced. What it is *for* is [`Drain::mark_published`].
 ///
 /// [`orphan_staging_keys`]: crate::sync::staging::orphan_staging_keys
 pub const PUBLISHED_OP_MARK_KEY: &[u8] = b"cipherbox/published-op";
@@ -616,6 +609,12 @@ where
         let raw = self.staging.queued_ops().await.map_err(seam)?;
         let all_ids = raw.iter().map(|(op_id, _)| *op_id).collect();
         let scan = decode_queue(&RecordReader::new(scope.enc_secret), &raw);
+        if scan.mine.is_empty() {
+            return Ok(Queue {
+                mine: Vec::new(),
+                all_ids,
+            });
+        }
         // `None` is "no op has ever drained here", not "id 0 drained": the seam
         // contract promises only strictly-increasing ids, so a host that starts
         // at 0 must not lose its first op.
@@ -1015,6 +1014,7 @@ where
         pass.folder_mut(parent)?.children.push(child.child_ref);
         self.publish_folder(scope, pass, parent, applied.op.authored_at.0)
             .await?;
+        self.mark_published(applied.op_id).await?;
         self.release_staged_blocks(&applied.op).await;
         // Held only once the parent names it: a record nothing references is
         // not one the liveness loop should keep alive.
@@ -1957,24 +1957,25 @@ where
         };
         // Monotonic by construction: the engine is the single writer, and the
         // mark only ever names ops that have already left the queue.
-        let raised = mark.max(self.drained_mark().await?.unwrap_or(0));
-        self.staging
-            .put_staged_bytes(DRAINED_OP_MARK_KEY, &raised.to_be_bytes())
-            .await
-            .map_err(seam)
+        self.raise_op_mark(DRAINED_OP_MARK_KEY, mark).await
     }
 
-    /// Raise the published-op mark over `op_id`, between its record PUT and the
-    /// release of its staged blocks ([`PUBLISHED_OP_MARK_KEY`]).
+    /// Raise the published-op mark over `op_id` ([`PUBLISHED_OP_MARK_KEY`]).
+    ///
+    /// Raised between the op's last record publish and the block release, which
+    /// is the window a crash leaves a published op queued. Without it that op
+    /// replays, re-uploads its leaves, and a cancel landing mid-replay unpins
+    /// content a live record names — the session-scoped publish-entry interlock
+    /// does not survive the reboot.
     async fn mark_published(&self, op_id: OpId) -> Result<(), Halt> {
-        let raised = op_id.0.max(
-            published_op_mark(self.staging)
-                .await
-                .map_err(seam)?
-                .unwrap_or(0),
-        );
+        self.raise_op_mark(PUBLISHED_OP_MARK_KEY, op_id.0).await
+    }
+
+    /// Raise the op-id high-water at `key` to `max(stored, mark)`.
+    async fn raise_op_mark(&self, key: &[u8], mark: u64) -> Result<(), Halt> {
+        let raised = mark.max(op_mark(self.staging, key).await.map_err(seam)?.unwrap_or(0));
         self.staging
-            .put_staged_bytes(PUBLISHED_OP_MARK_KEY, &raised.to_be_bytes())
+            .put_staged_bytes(key, &raised.to_be_bytes())
             .await
             .map_err(seam)
     }
@@ -1982,14 +1983,9 @@ where
     /// The stored drained-op mark; `None` when nothing has drained on this
     /// device or the stored bytes are not a mark this build wrote.
     async fn drained_mark(&self) -> Result<Option<u64>, Halt> {
-        let stored = self
-            .staging
-            .staged_bytes(DRAINED_OP_MARK_KEY)
+        op_mark(self.staging, DRAINED_OP_MARK_KEY)
             .await
-            .map_err(seam)?;
-        Ok(stored
-            .and_then(|bytes| <[u8; 8]>::try_from(bytes.as_slice()).ok())
-            .map(u64::from_be_bytes))
+            .map_err(seam)
     }
 
     /// The per-node read key (`node-seed` → `read-key`), owned by the caller of
@@ -2069,12 +2065,8 @@ fn encode_upload_mark(root_cid: &[u8], count: usize, leaves: usize) -> Option<Ve
 /// How many of `root_cid`'s `leaves` the stored mark claims. A mark naming
 /// another version has nothing to say about this one, and one claiming more
 /// leaves than the version has is proof of a torn or rotted mark — both read as
-/// no progress, so every absent leaf stays loss.
-///
-/// Clamping the corrupt case to `leaves` would be the most trusting possible
-/// reading of bytes already known to be corrupt: it could cover every absent
-/// leaf and publish a manifest naming blocks nothing holds. Zero re-uploads
-/// whatever is still staged and leaves the rest to the hole guard.
+/// no progress, so every absent leaf stays loss rather than being covered by
+/// bytes already known to be corrupt.
 fn decode_upload_mark(stored: &[u8], root_cid: &[u8], leaves: usize) -> usize {
     let Some((root, count)) = stored.split_at_checked(stored.len().saturating_sub(4)) else {
         return 0;
@@ -2086,16 +2078,21 @@ fn decode_upload_mark(stored: &[u8], root_cid: &[u8], leaves: usize) -> usize {
     if count > leaves { 0 } else { count }
 }
 
-/// The stored published-op mark ([`PUBLISHED_OP_MARK_KEY`]); `None` when
-/// nothing has published on this device or the stored bytes are not a mark this
-/// build wrote. Read by the drain and by the facade's cancel command, which owe
-/// the same answer about an op whose version is already live.
-pub(crate) async fn published_op_mark<St: StagingStore>(staging: &St) -> SeamResult<Option<u64>> {
+/// The op-id high-water stored at `key`; `None` when nothing has been marked on
+/// this device or the stored bytes are not a mark this build wrote.
+async fn op_mark<St: StagingStore>(staging: &St, key: &[u8]) -> SeamResult<Option<u64>> {
     Ok(staging
-        .staged_bytes(PUBLISHED_OP_MARK_KEY)
+        .staged_bytes(key)
         .await?
         .and_then(|bytes| <[u8; 8]>::try_from(bytes.as_slice()).ok())
         .map(u64::from_be_bytes))
+}
+
+/// The stored published-op mark ([`PUBLISHED_OP_MARK_KEY`]). Read by the drain
+/// and by the facade's cancel command, which owe the same answer about an op
+/// whose version is already live.
+pub(crate) async fn published_op_mark<St: StagingStore>(staging: &St) -> SeamResult<Option<u64>> {
+    op_mark(staging, PUBLISHED_OP_MARK_KEY).await
 }
 
 /// Classify a register-first refusal on the discriminator the registry stamps,

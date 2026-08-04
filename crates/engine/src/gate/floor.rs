@@ -28,6 +28,12 @@
 //!
 //! A grant blob's epoch field is an advisory routing hint and has **no**
 //! advancement path here — deliberately. Nothing reads it as authority.
+//!
+//! One non-floor value squats in the sequence namespace: the vault settings
+//! write plane's revision mint counter, under a `settings-revision-mint/`
+//! prefix ([`crate::settings`]). It is a local write clock, never an adoption
+//! bar, so it raises the store directly; the bar it feeds
+//! (`settings-revision/`) moves only through [`advance_sequence_on_unseal`].
 
 use cipherbox_core::payload::RepointObject;
 

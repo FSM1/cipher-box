@@ -908,7 +908,11 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
     // blocks once its record has published, leaving only the queue bookkeeping.
     assert_eq!(
         block_on(alice.staging_store.staged_keys()).unwrap(),
-        vec![DRAINED_OP_MARK_KEY.to_vec(), UPLOAD_MARK_KEY.to_vec()],
+        vec![
+            DRAINED_OP_MARK_KEY.to_vec(),
+            PUBLISHED_OP_MARK_KEY.to_vec(),
+            UPLOAD_MARK_KEY.to_vec()
+        ],
         "no staged block survives a published version, only queue bookkeeping"
     );
     assert!(
@@ -1472,7 +1476,7 @@ fn a_version_whose_content_key_will_not_open_dead_letters_and_releases_its_block
     );
     assert_eq!(
         block_on(alice.staging_store.staged_keys()).unwrap(),
-        vec![DRAINED_OP_MARK_KEY.to_vec()],
+        vec![DRAINED_OP_MARK_KEY.to_vec(), PUBLISHED_OP_MARK_KEY.to_vec()],
         "blocks no key opens are released, never held against the budget"
     );
     assert_eq!(
@@ -1806,7 +1810,11 @@ fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() 
         );
         assert_eq!(
             block_on(alice.staging_store.staged_keys()).unwrap(),
-            vec![DRAINED_OP_MARK_KEY.to_vec(), UPLOAD_MARK_KEY.to_vec()],
+            vec![
+                DRAINED_OP_MARK_KEY.to_vec(),
+                PUBLISHED_OP_MARK_KEY.to_vec(),
+                UPLOAD_MARK_KEY.to_vec()
+            ],
             "the retry re-removes it, so the residue holds no staging budget"
         );
         assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
@@ -4254,6 +4262,50 @@ fn plant_published_mark(device: &FakeDevice, op_id: OpId) {
             .put_staged_bytes(PUBLISHED_OP_MARK_KEY, &op_id.0.to_be_bytes()),
     )
     .unwrap();
+}
+
+/// The durable interlock only holds if a real publish writes it, on every plan
+/// that puts content on the network — a create with content as much as a
+/// version update.
+#[test]
+fn every_content_publish_raises_the_published_op_mark() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let created = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(published_op_mark(&alice), Some(created.0), "the create");
+
+    let file = child_id(&engine, ROOT, "photo.bin");
+    let updated = write_file(
+        &mut engine,
+        WriteTarget::Version { node: file },
+        &(0..64u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        published_op_mark(&alice),
+        Some(updated.0),
+        "the version update"
+    );
+}
+
+/// The durable published-op high-water this device stored.
+fn published_op_mark(device: &FakeDevice) -> Option<u64> {
+    let stored = block_on(device.staging_store.staged_bytes(PUBLISHED_OP_MARK_KEY)).unwrap()?;
+    Some(u64::from_be_bytes(stored.try_into().unwrap()))
 }
 
 /// An op whose record PUT was acknowledged is already live at its name. A crash

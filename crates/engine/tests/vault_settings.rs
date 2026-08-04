@@ -170,6 +170,7 @@ fn publish(
         &device.record_store,
         &api,
         &device.floor_store,
+        &device.snapshot_cache,
         &world.scheduler,
         &SyncTimingProfile::CI,
         &mut SeededEntropy::new(1),
@@ -307,6 +308,7 @@ fn consecutive_publishes_never_reuse_the_hpke_ephemeral() {
             &device.record_store,
             &api,
             &device.floor_store,
+            &device.snapshot_cache,
             &world.scheduler,
             &SyncTimingProfile::CI,
             &mut entropy,
@@ -400,6 +402,7 @@ fn an_unconfirmed_publish_is_reported_and_never_advances_the_floor() {
         &AcksNothingBack,
         &api,
         &device.floor_store,
+        &device.snapshot_cache,
         &world.scheduler,
         &SyncTimingProfile::CI,
         &mut SeededEntropy::new(3),
@@ -1143,6 +1146,7 @@ fn settings_the_reader_would_refuse_are_never_published() {
             &device.record_store,
             &api,
             &device.floor_store,
+            &device.snapshot_cache,
             &world.scheduler,
             &SyncTimingProfile::CI,
             &mut SeededEntropy::new(2),
@@ -1366,6 +1370,39 @@ fn a_body_revision_below_the_adopted_high_water_is_refused() {
     );
 }
 
+/// A confirmed publish read our own bytes back, so the writer has adopted the
+/// revision it minted. Without that the losing fork of the retry it just
+/// replaced would stay admissible until some later load raised the bar.
+#[test]
+fn a_confirmed_publish_raises_the_writers_own_adopted_revision() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    publish(&world, &device, &blocks, &SECRET, &configured());
+    let published = published_revision(&device, &blocks, &settings_name(&SECRET));
+
+    // The losing fork of that same publish, served back at the same sequence.
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body_at("https://attacker.example", published - 1),
+        1,
+    );
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Stale {
+            // The publish seeded last-known-good with what it published, so the
+            // refused fork cannot pin this device to the generation it replaced.
+            settings: configured(),
+            reason: DefaultsReason::RevisionRolledBack {
+                floor: published,
+                revision: published - 1,
+            },
+        },
+        "no load in between: the publish itself is what raised the bar",
+    );
+}
+
 /// The revision is minted per publish **attempt**, before the PUT: one derived
 /// from the confirm-gated sequence floor would re-mint the same value on the
 /// retry and tell the two forks apart from nothing.
@@ -1385,6 +1422,7 @@ fn a_retry_mints_a_revision_above_the_attempt_it_replaces() {
             &AcksNothingBack,
             &api,
             &device.floor_store,
+            &device.snapshot_cache,
             &world.scheduler,
             &SyncTimingProfile::CI,
             &mut SeededEntropy::new(6),
@@ -1402,6 +1440,187 @@ fn a_retry_mints_a_revision_above_the_attempt_it_replaces() {
         2,
         "the retry mints above the attempt that never landed",
     );
+}
+
+/// The revision arbitrates a fork at one sequence, never a record that won its
+/// own CAS. Two devices keep independent counters, so holding a strictly newer
+/// record to this device's bar would refuse a peer's legitimate publish forever.
+#[test]
+fn a_higher_sequence_record_is_admitted_whatever_revision_it_carries() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body_at("https://kubo.example", 9),
+        1,
+    );
+    assert!(matches!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Resolved(_)
+    ));
+
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body_at("https://phone.example", 2),
+        2,
+    );
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Resolved(hand_encoded_settings("https://phone.example")),
+    );
+}
+
+/// A refused record never becomes last-known-good: the cache write sits behind
+/// the bar, so a replay cannot install itself as the copy the next degraded
+/// load falls back to.
+#[test]
+fn a_revision_rolled_back_record_never_becomes_last_known_good() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body_at("https://kubo.example", 5),
+        1,
+    );
+    assert!(matches!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Resolved(_)
+    ));
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body_at("https://attacker.example", 4),
+        1,
+    );
+    assert!(matches!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Stale { .. }
+    ));
+
+    // Nothing serves a record now, so the load answers purely from the cache.
+    for endpoint in device.record_store.endpoints() {
+        device
+            .record_store
+            .seed_record(&endpoint, settings_name(&SECRET).as_str(), Vec::new());
+    }
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Stale {
+            settings: hand_encoded_settings("https://kubo.example"),
+            reason: DefaultsReason::Suppressed,
+        },
+        "the refused fork never displaced the copy this device authenticated",
+    );
+}
+
+/// An attempt that never landed advances only the writer's mint counter, so the
+/// live record it failed to replace stays admissible.
+#[test]
+fn an_unconfirmed_publish_leaves_the_live_record_still_admissible() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    publish(&world, &device, &blocks, &SECRET, &configured());
+
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    serve_http(&device, &blocks, 4);
+    assert_eq!(
+        block_on(publish_settings(
+            &AcksNothingBack,
+            &api,
+            &device.floor_store,
+            &device.snapshot_cache,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &mut SeededEntropy::new(9),
+            &OrphanHeads::default(),
+            &SECRET,
+            &VaultSettings::default(),
+        ))
+        .unwrap_err(),
+        SettingsPublishError::Unconfirmed,
+    );
+
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Resolved(configured()),
+        "the record on the network is still the member's own choice",
+    );
+}
+
+/// AGENTS.md rule 8 for the revision: the reader refuses one below its durable
+/// bar, so a counter that did not advance fails the publish in every build —
+/// `Err`, never a stripped assertion — with nothing reaching the record plane.
+#[test]
+fn a_mint_counter_that_does_not_advance_refuses_the_publish() {
+    let world = FakeWorld::new();
+    let device = world.device(b"me");
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    serve_http(&device, &Blocks::default(), 4);
+
+    assert_eq!(
+        block_on(publish_settings(
+            &device.record_store,
+            &api,
+            &StuckCounter,
+            &device.snapshot_cache,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &mut SeededEntropy::new(10),
+            &OrphanHeads::default(),
+            &SECRET,
+            &configured(),
+        ))
+        .unwrap_err(),
+        SettingsPublishError::Revision,
+    );
+    assert!(
+        device
+            .record_store
+            .record_at(
+                &device.record_store.endpoints()[0],
+                settings_name(&SECRET).as_str()
+            )
+            .is_none(),
+        "nothing reached the record plane",
+    );
+}
+
+/// A floor store that reports a floor other than the one it was asked to raise
+/// to — the shape a non-monotonic mint would take.
+struct StuckCounter;
+
+impl FloorStore for StuckCounter {
+    async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
+        Ok(None)
+    }
+
+    async fn raise_epoch_floor(&self, _scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
+        Ok(epoch)
+    }
+
+    async fn sequence_floor(&self, _ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+        Ok(None)
+    }
+
+    async fn raise_sequence_floor(&self, _ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
+        Ok(sequence.saturating_add(1))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1457,6 +1676,7 @@ fn a_register_first_refusal_retires_the_settings_head_it_uploaded() {
         &device.record_store,
         &api,
         &device.floor_store,
+        &device.snapshot_cache,
         &world.scheduler,
         &SyncTimingProfile::CI,
         &mut SeededEntropy::new(7),
@@ -1501,6 +1721,7 @@ fn a_settings_publish_whose_fan_out_acked_nothing_retires_nothing() {
         &AcksNoPut,
         &api,
         &device.floor_store,
+        &device.snapshot_cache,
         &world.scheduler,
         &SyncTimingProfile::CI,
         &mut SeededEntropy::new(8),
