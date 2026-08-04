@@ -14,6 +14,14 @@ export interface EngineHostConfig {
   apiBaseUrl: string;
   /** `/routing/v1` origins: someguy plus at least one public endpoint. */
   recordEndpoints: string[];
+  /**
+   * Base URL of the read accelerator (CONTEXT.md "Read accelerator"). Absent
+   * leaves the content gateway dormant: reads fail closed as unavailable rather
+   * than falling back to an endpoint nobody configured.
+   */
+  acceleratorBaseUrl?: string;
+  /** Public trustless-gateway fallbacks, tried in order after the accelerator. */
+  publicGateways?: string[];
   /** URL of the wasm-bindgen ES glue module the worker imports. */
   wasmModuleUrl: string;
   /** URL of the wasm binary handed to the glue's `init`. */
@@ -32,15 +40,10 @@ export function spawnEngineWorker(
   createWorker: () => Worker = spawnModuleWorker
 ): Worker {
   const worker = createWorker();
-  const bootstrap: EngineWorkerBootstrap = {
-    type: 'bootstrap',
-    recordEndpoints: config.recordEndpoints,
-    apiBaseUrl: config.apiBaseUrl,
-    dbPrefix: config.dbPrefix,
-    wasmModuleUrl: config.wasmModuleUrl,
-    wasmBinaryUrl: config.wasmBinaryUrl,
-    profile: config.profile,
-  };
+  // Spread, not a field-by-field copy: a config field added upstream reaches the
+  // worker without a second edit that nothing would typecheck. The annotation
+  // keeps the handshake checked against the contract at both ends.
+  const bootstrap: EngineWorkerBootstrap = { type: 'bootstrap', ...config };
   worker.postMessage(bootstrap);
   return worker;
 }

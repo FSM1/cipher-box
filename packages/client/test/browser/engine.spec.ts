@@ -31,10 +31,30 @@ test.describe('engine worker host', () => {
     );
   });
 
-  test('cold start, RPC round-trip, and logout teardown end to end', async ({ page }) => {
+  // The auth mock backs the cold-start assertion below, so it has to answer
+  // every request: one that throws mid-handler leaves the engine's own fetch
+  // hanging, and this suite reports a timeout instead of the real failure.
+  test('the auth mock answers a malformed body rather than hanging', async ({ request }) => {
+    for (const route of ['challenge', 'login']) {
+      const response = await request.post(`/mock-api/engine/auth/${route}`, {
+        headers: { 'content-type': 'application/json' },
+        data: 'null',
+      });
+      expect(response.status()).toBe(400);
+    }
+  });
+
+  test('cold start, RPC round-trip, and logout teardown end to end', async ({ page, request }) => {
+    const before = await (await request.get('/mock-api/engine/auth/seen')).json();
     const result: RealEngineResult = await page.evaluate(() =>
       (window as unknown as EngineHarness).runRealEngine()
     );
+
+    // Cold start exchanged a challenge for tokens: a start that skipped the
+    // login would resolve just the same, so the mock's own tally is the proof.
+    const after = await (await request.get('/mock-api/engine/auth/seen')).json();
+    expect(after.logins).toBe(before.logins + 1);
+    expect(after.challenges).toBe(before.challenges + 1);
 
     // A command before start is rejected as "not started" (start lifecycle gate).
     expect(result.beforeStart).toContain('not started');

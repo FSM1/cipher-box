@@ -13,6 +13,7 @@ import type {
   WriteTarget,
 } from './protocol.js';
 import type { EngineWasm } from './engineWasm.js';
+import type { EngineHostConfig } from '../spawnEngineWorker.js';
 import { buildCommand, readEvent, readSnapshot } from './commandCodec.js';
 
 /**
@@ -49,23 +50,33 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
     : (bytes.slice().buffer as ArrayBuffer);
 }
 
+/** What the engine instance itself is configured with, beyond its seams. */
+export type EngineHostOptions = Pick<
+  EngineHostConfig,
+  'apiBaseUrl' | 'acceleratorBaseUrl' | 'publicGateways' | 'profile'
+> & {
+  /** Origin headroom the engine splits into its staging budget. */
+  storageHeadroomBytes?: number;
+};
+
 export class EngineHost implements EngineHostLike {
   private readonly handle;
 
   constructor(
     private readonly wasm: EngineWasm,
     seams: unknown,
-    profile?: string,
-    storageHeadroomBytes?: number
+    options: EngineHostOptions
   ) {
     this.handle = new wasm.EngineHandle(
       seams,
-      profile,
+      options.profile,
+      options.apiBaseUrl,
+      options.acceleratorBaseUrl,
+      // The accelerator bearer is a session credential, never a build-time
+      // constant, so no browser config surface supplies one yet.
       undefined,
-      undefined,
-      undefined,
-      undefined,
-      storageHeadroomBytes
+      options.publicGateways,
+      options.storageHeadroomBytes
     );
   }
 

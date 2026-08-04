@@ -90,10 +90,9 @@ impl EngineHandle {
     /// `mailbox`, `refreshHints`, `scheduler`, `stagingStore`, `snapshotCache`,
     /// `credentialStore`); a missing seam fails closed. `profile` selects the
     /// sync timing policy (`"ci"` for the compressed e2e cadences, production
-    /// otherwise). The content gateway is configured from `acceleratorBaseUrl`
-    /// (+ optional `acceleratorBearer`) and `publicGateways`; all absent leaves
-    /// it dormant (reads fail closed as `Unavailable`) until E4 wires real
-    /// endpoints.
+    /// otherwise). `apiBaseUrl` is required and non-blank. The content gateway
+    /// is configured from `acceleratorBaseUrl` (+ optional `acceleratorBearer`)
+    /// and `publicGateways`.
     #[wasm_bindgen(constructor)]
     pub fn new(
         seams: JsValue,
@@ -105,6 +104,17 @@ impl EngineHandle {
         storage_headroom_bytes: Option<f64>,
     ) -> Result<EngineHandle, JsError> {
         console_error_panic_hook::set_once();
+
+        // Wrapped before the first `?`: an early return would otherwise drop the
+        // Rust-owned bearer String unzeroized (security rule 7).
+        let accelerator_bearer = accelerator_bearer.map(Zeroizing::new);
+
+        let api_base_url = api_base_url
+            .map(|url| url.trim().to_owned())
+            .filter(|url| !url.is_empty())
+            .ok_or_else(|| {
+                JsError::new("apiBaseUrl is required: the engine must authenticate to the API")
+            })?;
 
         let seam_set = SeamSet::<WebSeamTypes> {
             floor_store: FloorStoreAdapter {
@@ -157,13 +167,9 @@ impl EngineHandle {
             },
         };
 
-        // Dormant until the config slice (E4) supplies real endpoints: with no
-        // accelerator base URL and no fallbacks the gateway is empty, and reads
-        // fail closed as `Unavailable` (availability, never a trust violation).
-        // Zeroize the bearer before branching on the base URL: if no accelerator
-        // base URL is supplied the source closure never runs, so wrapping inside
-        // it would drop the Rust-owned bearer String unzeroized (security rule 7).
-        let accelerator_bearer = accelerator_bearer.map(Zeroizing::new);
+        // With no accelerator base URL and no fallbacks the gateway is empty and
+        // reads fail closed as `Unavailable` (availability, never a trust
+        // violation).
         let gateway = GatewayConfig {
             accelerator: accelerator_base_url.map(|base_url| GatewaySource {
                 base_url,
@@ -179,8 +185,6 @@ impl EngineHandle {
                 .collect(),
         };
 
-        // Empty until the auth/config slice supplies the real API base URL; the
-        // register-first renewal is inert against an empty base until then.
         let (engine, events) = Engine::new(
             seam_set,
             Box::new(GetrandomEntropy),
@@ -189,7 +193,7 @@ impl EngineHandle {
             // always writes the shipped profile — never the CI one.
             ContentProfile::PRODUCTION,
             storage_policy,
-            api_base_url.unwrap_or_default(),
+            api_base_url,
             gateway,
         );
         Ok(EngineHandle {
@@ -527,5 +531,29 @@ mod tests {
     #[wasm_bindgen_test]
     fn a_command_that_queues_nothing_crosses_as_undefined() {
         assert!(op_id_value(None).is_undefined());
+    }
+
+    #[wasm_bindgen_test]
+    fn an_engine_without_an_api_base_url_is_refused() {
+        for api_base_url in [None, Some(String::new()), Some("  ".to_owned())] {
+            let error = EngineHandle::new(
+                js_sys::Object::new().into(),
+                None,
+                api_base_url,
+                None,
+                None,
+                None,
+                None,
+            )
+            .err()
+            .expect("no API base is a construction failure");
+
+            let message = String::from(
+                JsValue::from(error)
+                    .unchecked_into::<js_sys::Error>()
+                    .message(),
+            );
+            assert!(message.contains("apiBaseUrl"), "{message}");
+        }
     }
 }

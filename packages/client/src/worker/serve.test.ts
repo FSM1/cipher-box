@@ -395,7 +395,7 @@ describe('serveEngine event pump over the real EngineHost', () => {
     } as unknown as EngineWasm;
 
     const { scope, worker, toUi } = loopback();
-    serveEngine(scope, new EngineHost(wasm, {}));
+    serveEngine(scope, new EngineHost(wasm, {}, { apiBaseUrl: 'https://api.example.test' }));
     const transport = new LocalTransport(worker);
     const received: EventDescriptor[] = [];
     transport.subscribe((event) => received.push(event));

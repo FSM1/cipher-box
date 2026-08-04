@@ -12,23 +12,16 @@
  * never import it into the UI realm.
  */
 
-import { makeBrowserSeams, type BrowserSeamsConfig } from './browserSeams.js';
+import { makeBrowserSeams } from './browserSeams.js';
 import { EngineHost } from './engineHost.js';
 import type { EngineWasm } from './engineWasm.js';
 import { serveEngine, type WorkerScopeLike } from './serve.js';
 import type { WorkerMessage } from './protocol.js';
+import type { EngineHostConfig } from '../spawnEngineWorker.js';
 import { measureStorageHeadroomBytes } from './storageHeadroom.js';
 
 /** The one-shot handshake the leader sends after spawning the worker. */
-export interface EngineWorkerBootstrap extends BrowserSeamsConfig {
-  type: 'bootstrap';
-  /** URL of the wasm-bindgen ES glue module (dynamically imported). */
-  wasmModuleUrl: string;
-  /** URL of the wasm binary handed to the glue's `init`. */
-  wasmBinaryUrl: string;
-  /** Sync timing profile. */
-  profile?: 'ci' | 'production';
-}
+export type EngineWorkerBootstrap = EngineHostConfig & { type: 'bootstrap' };
 
 interface WasmGlue extends EngineWasm {
   default: (options: { module_or_path: string }) => Promise<unknown>;
@@ -51,10 +44,19 @@ function onBootstrap(event: MessageEvent<EngineWorkerBootstrap>): void {
 
 async function bootstrap(config: EngineWorkerBootstrap): Promise<void> {
   try {
+    // The quota estimate is independent of the WASM fetch and compile, so it
+    // rides alongside them rather than extending cold start.
+    const headroom = measureStorageHeadroomBytes();
     const wasm = (await import(/* @vite-ignore */ config.wasmModuleUrl)) as WasmGlue;
     await wasm.default({ module_or_path: config.wasmBinaryUrl });
     const seams = makeBrowserSeams(config);
-    const host = new EngineHost(wasm, seams, config.profile, await measureStorageHeadroomBytes());
+    const host = new EngineHost(wasm, seams, {
+      apiBaseUrl: config.apiBaseUrl,
+      acceleratorBaseUrl: config.acceleratorBaseUrl,
+      publicGateways: config.publicGateways,
+      profile: config.profile,
+      storageHeadroomBytes: await headroom,
+    });
     serveEngine(workerScope as unknown as WorkerScopeLike, host);
   } catch (error) {
     workerScope.postMessage({
