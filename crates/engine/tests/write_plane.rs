@@ -4360,6 +4360,41 @@ fn every_content_publish_raises_the_published_op_mark() {
     );
 }
 
+/// What the mark buys: the op leaves the queue without re-uploading a byte, its
+/// staged blocks are released, and nothing a live record names is unpinned.
+fn assert_dropped_without_replay(
+    device: &FakeDevice,
+    events: &mut EventStream,
+    version: (Vec<u8>, Vec<Vec<u8>>),
+) {
+    assert!(
+        !events_so_far(events).iter().any(|event| matches!(
+            event,
+            Event::OpProgress {
+                phase: OpPhase::UploadStarted,
+                ..
+            }
+        )),
+        "nothing re-uploads behind a record that already landed"
+    );
+    assert!(
+        block_on(StagingStore::queued_ops(&device.staging_store))
+            .unwrap()
+            .is_empty(),
+        "the op leaves the queue"
+    );
+    let leftover = version
+        .1
+        .into_iter()
+        .chain(core::iter::once(version.0))
+        .collect::<Vec<_>>();
+    assert_no_blocks_staged(device, &leftover);
+    assert!(
+        retire_targets(device).is_empty(),
+        "a drop is not an abandonment: nothing published is unpinned"
+    );
+}
+
 /// The durable published-op high-water this device stored.
 fn published_op_mark(device: &FakeDevice) -> Option<u64> {
     let stored = block_on(device.staging_store.staged_bytes(&mark_key())).unwrap()?;
@@ -4391,32 +4426,7 @@ fn an_op_whose_record_already_published_is_dropped_rather_than_replayed() {
     plant_published_mark(&alice, op_id);
     tick(&world, &engine, &mut tasks);
 
-    assert!(
-        !events_so_far(&mut events).iter().any(|event| matches!(
-            event,
-            Event::OpProgress {
-                phase: OpPhase::UploadStarted,
-                ..
-            }
-        )),
-        "nothing re-uploads behind a record that already landed"
-    );
-    assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
-        "the op leaves the queue"
-    );
-    let leftover = version
-        .1
-        .into_iter()
-        .chain(core::iter::once(version.0))
-        .collect::<Vec<_>>();
-    assert_no_blocks_staged(&alice, &leftover);
-    assert!(
-        retire_targets(&alice).is_empty(),
-        "a drop is not an abandonment: nothing published is unpinned"
-    );
+    assert_dropped_without_replay(&alice, &mut events, version);
 }
 
 /// The mark's line is the **ack**, not the self-adopt. A record whose PUT
@@ -4436,7 +4446,7 @@ fn a_publish_whose_self_adopt_failed_still_marks_the_op_published() {
     // the step that fails after its record is already live.
     alice
         .floor_store
-        .fail_commits_for(root_name.as_str().as_bytes());
+        .fail_floor_raises_for(root_name.as_str().as_bytes());
     let op_id = write_file(
         &mut engine,
         WriteTarget::NewFile {
@@ -4463,35 +4473,51 @@ fn a_publish_whose_self_adopt_failed_still_marks_the_op_published() {
 
     // A restart clears the session interlock, leaving only the mark to stop the
     // replay.
-    alice.floor_store.heal_commits();
+    alice.floor_store.heal_floors();
     let _ = events_so_far(&mut events);
     let (restarted, mut events, mut tasks) = boot(&world, &blocks, &alice, 43);
     tick(&world, &restarted, &mut tasks);
-    assert!(
-        !events_so_far(&mut events).iter().any(|event| matches!(
-            event,
-            Event::OpProgress {
-                phase: OpPhase::UploadStarted,
-                ..
-            }
-        )),
-        "nothing re-uploads behind a record that already landed"
+    assert_dropped_without_replay(&alice, &mut events, version);
+}
+
+/// The other half of the rule: only the **last** record of a plan may raise the
+/// mark. A create whose child published and whose parent never did has to stay
+/// replayable — dropping it would strand a live child no parent names.
+#[test]
+fn a_create_whose_parent_publish_never_ran_leaves_the_mark_down() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    // The child's own self-adopt fails, so the plan stops before the parent
+    // record that would name it.
+    let child = child_id(&engine, ROOT, "photo.bin");
+    alice
+        .floor_store
+        .fail_floor_raises_for(write_name(child).as_str().as_bytes());
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_op_mark(&alice),
+        None,
+        "an unreferenced child is not a published op"
     );
     assert!(
-        block_on(StagingStore::queued_ops(&alice.staging_store))
+        !block_on(StagingStore::queued_ops(&alice.staging_store))
             .unwrap()
             .is_empty(),
-        "the op leaves the queue"
-    );
-    let leftover = version
-        .1
-        .into_iter()
-        .chain(core::iter::once(version.0))
-        .collect::<Vec<_>>();
-    assert_no_blocks_staged(&alice, &leftover);
-    assert!(
-        retire_targets(&alice).is_empty(),
-        "a drop is not an abandonment: nothing published is unpinned"
+        "the create stays queued for the retry that completes it"
     );
 }
 

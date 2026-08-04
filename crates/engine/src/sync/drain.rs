@@ -204,10 +204,11 @@ enum Halt {
     /// against the attempt budget, because a retry re-signs at the same
     /// sequence and a jammed name would otherwise retry forever.
     Attempt,
-    /// A refusal this pass cannot attribute, raised strictly **before** the
-    /// record PUT: an upload, a registration, or a produce-side trust refusal.
-    /// Charged like [`Halt::Attempt`], but exhausting the budget may retire what
-    /// the op uploaded, which an acked PUT's may not.
+    /// A refusal this pass cannot attribute, raised before the record it was
+    /// authoring reached the transport: an upload, a registration, or a
+    /// produce-side trust refusal. Charged like [`Halt::Attempt`], but
+    /// exhausting the budget may retire what the op uploaded — the op's target
+    /// is still unreachable, so no record a parent links names it.
     UploadAttempt,
     /// Classified-permanent: the same bytes are refused on every retry.
     Permanent(DeadLetterReason),
@@ -1290,7 +1291,16 @@ where
     ) -> Result<(), Halt> {
         let state = if folder == scope.root {
             self.refresh_scope_root_cache(scope).await?;
-            self.load_scope_root(scope).await?.0
+            let (state, epoch) = self.load_scope_root(scope).await?;
+            // A rotation landing mid-pass moves the root's epoch while this pass
+            // still seals at the one it opened on, and its grant section signs
+            // the new one — bytes this build's own authoring refuses. The next
+            // pass opens on one consistent epoch, so this stops rather than
+            // spending the op's budget on a skew that heals itself.
+            if epoch != pass.epoch {
+                return Err(Halt::Unclassified);
+            }
+            state
         } else {
             self.load_child_folder(scope, pass.epoch, folder).await?
         };
@@ -1705,16 +1715,11 @@ where
         .map_err(classify_author)?;
 
         let record_bytes = self
-            .publish_head(
-                scope,
-                name,
-                &node.0,
-                epoch,
-                &head,
-                content_cids.clone(),
-                completes,
-            )
+            .publish_head(scope, name, &node.0, epoch, &head, content_cids.clone())
             .await?;
+        if let Some(op_id) = completes {
+            self.mark_published(scope, op_id).await;
+        }
         let local = local_head(&head);
         let sequence = if is_scope_root {
             let adopter = RootAdopter::new(
@@ -1767,8 +1772,9 @@ where
         })
     }
 
-    /// Dry-run, publish, and return the signed bytes.
-    #[expect(clippy::too_many_arguments, reason = "one record's full publish")]
+    /// Dry-run, publish, and return the signed bytes. `Ok` means the record
+    /// confirmed at its name: an unconfirmed or race-losing publish is `Err`,
+    /// because its bytes may never have landed.
     async fn publish_head(
         &self,
         scope: &DrainScope<'_>,
@@ -1777,7 +1783,6 @@ where
         epoch: u64,
         head: &AuthoredHead,
         content_cids: Vec<String>,
-        completes: Option<OpId>,
     ) -> Result<Vec<u8>, Halt> {
         let binding = HeadBinding {
             node_id: *node_id,
@@ -1819,16 +1824,9 @@ where
             classify_publish(error, head.block.len() as u64)
         })?;
         match outcome {
-            PublishOutcome::Published { .. } => {
-                if let Some(op_id) = completes {
-                    self.mark_published(scope, op_id).await;
-                }
-                Ok(record_bytes)
-            }
+            PublishOutcome::Published { .. } => Ok(record_bytes),
             // Both burned a CAS sequence at this name without a record we could
-            // adopt, so both are charged against the attempt budget. Neither
-            // raises the mark: the bytes may never have landed, and dropping the
-            // op on the strength of that would be loss.
+            // adopt, so both are charged against the attempt budget.
             PublishOutcome::Unconfirmed { .. } | PublishOutcome::LostRace { .. } => {
                 Err(Halt::Attempt)
             }
@@ -1942,8 +1940,8 @@ where
     /// leave a reference outliving its referent, and the gate-passing base is
     /// the evidence — a created node reaches it only once a parent record naming
     /// it published. The content CIDs go with **any** content-bearing op that
-    /// reaches here: an abandonment only retires when no PUT for the op was
-    /// acked, so no record can link the version.
+    /// reaches here: an abandonment only retires while the op's target is
+    /// unreachable, so no record a parent links can name the version.
     ///
     /// Reads the manifest before [`Self::release_staged_blocks`] drops it: after
     /// that the leaf CIDs are recoverable from nowhere (#916).
@@ -2092,16 +2090,13 @@ fn seam(_: crate::seams::SeamError) -> Halt {
     Halt::Unclassified
 }
 
-/// Classify an authoring refusal for the valve. A produce-side trust refusal is
-/// the gate's own verdict reached before the PUT, and re-authoring the same
-/// inputs reaches it again, so it is charged against the attempt budget rather
-/// than retried free forever (#1048).
+/// Classify an authoring refusal for the valve, off
+/// [`AuthorError::is_trust_refusal`].
 ///
-/// Charged, not dead-lettered on sight: on the drain path these inputs are the
-/// cached scope root, which a later resolve replaces, so an immediate permanent
-/// verdict would abandon a user's ops over a cache another tick repairs. The
-/// budget bounds the spin either way. A codec or size refusal stays
-/// availability — it describes the body this pass built, not a trust verdict.
+/// Charged, not dead-lettered on sight: the scope root a trust refusal is
+/// authored from comes from the snapshot cache, which a later resolve replaces,
+/// so an immediate permanent verdict would abandon a user's ops over a cache
+/// another tick repairs. The budget bounds the spin either way.
 fn classify_author(error: AuthorError) -> Halt {
     if error.is_trust_refusal() {
         Halt::UploadAttempt
@@ -2471,37 +2466,28 @@ mod tests {
         }
     }
 
-    /// A produce-side trust refusal is the gate's own verdict reached before the
-    /// PUT: re-authoring the same inputs reaches it again, so it is charged and
-    /// the queue stops at the budget instead of spinning free.
+    /// A trust refusal is charged so the queue stops at the budget instead of
+    /// spinning free; a refusal of the body *this pass* built is not, or the
+    /// reclassification would turn a rebasable failure into a permanent halt.
     #[test]
-    fn a_produce_side_trust_refusal_is_charged_against_the_attempt_budget() {
-        for error in [
-            AuthorError::GrantSectionOnChild,
-            AuthorError::MissingGrantSection,
-            AuthorError::CommitmentNameMismatch,
-            AuthorError::CommitmentSignatureInvalid,
-            AuthorError::SectionSignatureInvalid,
+    fn only_a_produce_side_trust_refusal_is_charged_against_the_attempt_budget() {
+        for (error, expected) in [
+            (AuthorError::GrantSectionOnChild, Halt::UploadAttempt),
+            (AuthorError::MissingGrantSection, Halt::UploadAttempt),
+            (AuthorError::CommitmentNameMismatch, Halt::UploadAttempt),
+            (AuthorError::CommitmentSignatureInvalid, Halt::UploadAttempt),
+            (AuthorError::SectionSignatureInvalid, Halt::UploadAttempt),
+            (
+                AuthorError::Seal(cipherbox_core::error::TrustViolation::DuplicateId.into()),
+                Halt::Unclassified,
+            ),
+            (
+                AuthorError::HeadTooLarge { size: 2, limit: 1 },
+                Halt::Unclassified,
+            ),
         ] {
-            assert_eq!(
-                classify_author(error.clone()),
-                Halt::UploadAttempt,
-                "{} must be charged",
-                error.check()
-            );
-        }
-    }
-
-    /// The mirror-image bug the reclassification must not introduce: a refusal
-    /// of the body *this pass* built is not a trust verdict, and a rebase onto
-    /// other state may not build it again — so it stays free to retry.
-    #[test]
-    fn a_codec_or_size_refusal_of_this_passs_body_stays_availability() {
-        for error in [
-            AuthorError::Seal(cipherbox_core::error::TrustViolation::DuplicateId.into()),
-            AuthorError::HeadTooLarge { size: 2, limit: 1 },
-        ] {
-            assert_eq!(classify_author(error), Halt::Unclassified);
+            let check = error.check();
+            assert_eq!(classify_author(error), expected, "{check}");
         }
     }
 }
