@@ -32,10 +32,10 @@ pub use create::{
     CreateGrantError, CreateGrantOutcome, GrantRecipient, GranteeScopePlan, OwnerGrantKeys,
     ParentScopePlan, create_read_grant,
 };
-pub use invite::{EphemeralInvitee, InviteError, InviteGrant, mint_invite_grant};
+pub use invite::{EphemeralInvitee, InviteError, mint_invite_grant};
 pub use ledger::{
-    AuthorityViolation, PublishedGrantBlob, enforce_committed_ledger, entry_is_live,
-    recipient_blinded_tag, self_locate,
+    AuthorityViolation, GrantRow, PublishedGrantBlob, enforce_committed_ledger, entry_is_live,
+    mint_grant_row, recipient_blinded_tag, self_locate,
 };
 pub use owner_entry::{AbuseEvent, OwnerEntry, OwnerSeedCache, OwnerSeedEntry, cross_check};
 pub use revocation::{ResolutionClass, ResolutionFacts, classify};

@@ -20,7 +20,8 @@
 use std::collections::BTreeMap;
 
 use cipherbox_core::kdf;
-use cipherbox_core::seal::{GrantLedgerEntry, GrantSetCommitment, Permission};
+use cipherbox_core::seal::{GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission};
+use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
 use crate::seams::UnixMillis;
@@ -68,16 +69,68 @@ pub fn self_locate<'a>(
 
 /// Whether a grant-ledger row is still live at `now` — the injected
 /// [`Scheduler::now`](crate::seams::Scheduler::now) instant, never a clock this
-/// layer reads.
+/// layer reads. A row with no deadline never expires; one with a deadline dies
+/// **at** it, not a tick later.
 ///
-/// A row with no deadline never expires. One with a deadline dies **at** it, not
-/// a tick later, so an expired row is inert on the read path immediately —
-/// before the discovered-expiry trigger prunes it from the commitment.
+/// The predicate every reader of a resolved ledger applies, and the input the
+/// discovered-expiry trigger prunes from. It decides nothing on its own — see
+/// [`GrantLedgerEntry::expires_at`] for why a deadline is not a capability
+/// boundary.
 pub fn entry_is_live(entry: &GrantLedgerEntry, now: UnixMillis) -> bool {
     match entry.expires_at {
-        Some(expires_at) => now.0 < expires_at,
+        Some(expires_at) => now.0 < expires_at.get(),
         None => true,
     }
+}
+
+/// The rows one grantee contributes to a scope root: the blinded tag, the entry
+/// the owner signs into the grant-set commitment, and the authoritative ledger
+/// row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrantRow {
+    /// The grantee's blinded tag — the grant blob's public key in the envelope.
+    pub tag: [u8; 32],
+    /// The `(tag, permission, pseudonymPk)` entry for the owner-signed commitment.
+    pub commitment_entry: GrantSetEntry,
+    /// The authoritative ledger row.
+    pub ledger_entry: GrantLedgerEntry,
+}
+
+/// Derive a grantee's [`GrantRow`] from the owner–recipient pairwise ECDH — the
+/// one mint every grantee goes through, a contact's or an invite link's
+/// ephemeral identity alike, so their tags and pseudonyms cannot drift apart.
+///
+/// The blinded tag binds `scope_root_ipns_name` and the writer pseudonym binds
+/// `scope_id`, both off the same shared secret; the two MUST name the same scope
+/// root, or the grantee derives a tag it can never self-locate. Callers derive
+/// the name rather than accepting one (`create::create_read_grant` step 2).
+///
+/// A read entry's pseudonym never authorizes a structure but is derived honestly
+/// so a later write upgrade stays consistent. `None` on a non-contributory ECDH —
+/// a degenerate recipient key the caller refuses fail-closed.
+pub fn mint_grant_row(
+    owner_enc_secret: &X25519Secret,
+    recipient_identity_pk: &EcdsaVerifier,
+    recipient_enc_pub: &X25519Public,
+    scope_id: &[u8; 16],
+    scope_root_ipns_name: &[u8],
+    permission: Permission,
+) -> Option<GrantRow> {
+    let shared = owner_enc_secret.diffie_hellman(recipient_enc_pub)?;
+    let tag = kdf::blinded_tag(shared.as_bytes(), scope_root_ipns_name);
+    let pseudonym_pk = kdf::pseudonym_sign(shared.as_bytes(), scope_id)
+        .verifying_key()
+        .to_bytes();
+    Some(GrantRow {
+        tag,
+        commitment_entry: GrantSetEntry::new(tag, permission, pseudonym_pk),
+        ledger_entry: GrantLedgerEntry::new(
+            recipient_identity_pk.to_sec1(),
+            recipient_enc_pub.to_bytes(),
+            permission,
+            tag,
+        ),
+    })
 }
 
 /// An owner-only authority violation discovered on resolve: a re-sealed
@@ -113,6 +166,12 @@ fn committed_permissions(commitment: &GrantSetCommitment) -> BTreeMap<[u8; 32], 
 /// seal preserves the set verbatim, so an added tag, a dropped tag, or a changed
 /// permission is an [`AuthorityViolation`]. (Duplicate tags are already rejected
 /// fail-closed at decode in core, so each side is a well-formed set here.)
+///
+/// The commitment covers `(tag, permission)` only, so this deliberately does
+/// **not** compare a row's `recipientIdentityPk`, `recipientEncPk`, or
+/// `expiresAt`: a write-grantee may alter those undetectably. The tag↔enc_pk
+/// binding is a resolve-time check (#745); the deadline is not a capability
+/// boundary ([`GrantLedgerEntry::expires_at`]).
 pub fn enforce_committed_ledger(
     commitment: &GrantSetCommitment,
     ledger: &[GrantLedgerEntry],
@@ -142,6 +201,7 @@ mod tests {
     use super::*;
     use cipherbox_core::seal::{GrantSetEntry, PreservedFields};
     use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
+    use core::num::NonZeroU64;
 
     fn commitment(entries: Vec<GrantSetEntry>) -> GrantSetCommitment {
         GrantSetCommitment {
@@ -198,7 +258,7 @@ mod tests {
     #[test]
     fn a_deadline_row_dies_at_the_deadline_instant() {
         let mut entry = ledger_entry([0x21; 32], Permission::Read);
-        entry.expires_at = Some(1_000);
+        entry.expires_at = NonZeroU64::new(1_000);
         assert!(entry_is_live(&entry, UnixMillis(999)));
         assert!(
             !entry_is_live(&entry, UnixMillis(1_000)),

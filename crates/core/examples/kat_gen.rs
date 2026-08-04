@@ -17,6 +17,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::num::NonZeroU64;
 use std::path::Path;
 
 use cipherbox_core::codec::{
@@ -4553,7 +4554,7 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
         grant_ledger: vec![
             GrantLedgerEntry::new([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
             GrantLedgerEntry {
-                expires_at: Some(1_700_000_000_000),
+                expires_at: NonZeroU64::new(1_700_000_000_000),
                 ..GrantLedgerEntry::new([0x03; 33], [0x12; 32], Permission::Read, [0x22; 32])
             },
         ],
@@ -4659,8 +4660,8 @@ fn build_write_body_reject() -> Vec<RejectVector> {
             "malformed",
         ),
         (
-            // Absence is the only encoding of "no deadline", so a zero instant
-            // is a second spelling of it that is also permanently expired.
+            // Zero is the natural uninitialized value, and would be dead for
+            // every clock — the opposite of the absent field's "no deadline".
             "ledger-zero-expiry",
             body(
                 vec![map_of(vec![

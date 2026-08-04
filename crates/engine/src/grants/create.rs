@@ -28,8 +28,8 @@
 use cipherbox_core::error::CodecError;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, GrantSetEntry, Permission,
-    PreservedFields, SignedSealed, sign_grant_set,
+    ChildScopeRef, GrantLedgerEntry, GrantSetCommitment, Permission, PreservedFields, SignedSealed,
+    sign_grant_set,
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier, SIGNATURE_LEN as ECDSA_SIG_LEN};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -41,6 +41,7 @@ use zeroize::Zeroizing;
 use crate::entropy::{Entropy, EntropyError};
 use crate::grants::SharePointer;
 use crate::grants::child_index::{canonicalize, insert_child, remove_child};
+use crate::grants::mint_grant_row;
 use crate::mailbox::post_sealed;
 use crate::rotation::{
     CommittedSet, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure, ScopeRootIdentity,
@@ -303,38 +304,28 @@ where
     let ipns_name = derive_write_name(grantee.write_scope_seed, &grantee.scope_id);
     let name_bytes = ipns_name.as_str().as_bytes();
 
-    // 3) Build the committed set for the recipient. The blinded tag and the
-    // recipient's writer pseudonym both key off the same owner-recipient ECDH
-    // (contributory-checked by the x25519 seam); a read entry's pseudonym never
-    // authorizes a structure but is derived honestly so a later write upgrade
-    // stays consistent.
-    let shared = owner
-        .enc_secret
-        .diffie_hellman(recipient.enc_pub)
-        .ok_or(CreateGrantError::UnusableRecipientKey)?;
-    let tag = kdf::blinded_tag(shared.as_bytes(), name_bytes);
-    let recipient_pseudonym_pk = kdf::pseudonym_sign(shared.as_bytes(), &grantee.scope_id)
-        .verifying_key()
-        .to_bytes();
+    // 3) Build the committed set for the recipient — the same pairwise mint an
+    // invite link goes through, keyed off the name derived above.
+    let row = mint_grant_row(
+        owner.enc_secret,
+        &recipient.identity_pk,
+        recipient.enc_pub,
+        &grantee.scope_id,
+        name_bytes,
+        Permission::Read,
+    )
+    .ok_or(CreateGrantError::UnusableRecipientKey)?;
+    let tag = row.tag;
     let commitment = GrantSetCommitment {
         ipns_name: name_bytes.to_vec(),
         owner_pseudonym_pk: owner.pseudonym_signer.verifying_key().to_bytes(),
-        entries: vec![GrantSetEntry::new(
-            tag,
-            Permission::Read,
-            recipient_pseudonym_pk,
-        )],
+        entries: vec![row.commitment_entry],
         unknown: PreservedFields::new(),
     };
     let commitment_sig = sign_grant_set(owner.identity_signer, &commitment)
         .map_err(CreateGrantError::CommitmentEncode)?
         .to_compact();
-    let ledger = vec![GrantLedgerEntry::new(
-        recipient.identity_pk.to_sec1(),
-        recipient.enc_pub.to_bytes(),
-        Permission::Read,
-        tag,
-    )];
+    let ledger = vec![row.ledger_entry];
 
     // 4) Mint at read epoch 1 with a FRESH RANDOM override seed (never
     // KDF-derived). The new scope adopts the folder's descendant scope roots as

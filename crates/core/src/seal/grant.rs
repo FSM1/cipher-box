@@ -40,7 +40,8 @@ use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 
 use super::aad::{AadContext, build_aad};
 use super::body::{
-    PreservedFields, assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown, req,
+    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, bytes_fixed,
+    collect_unknown, merge_unknown, req,
 };
 
 /// The HPKE `info` for every grant-section seal. The structured AAD already
@@ -167,7 +168,12 @@ pub fn decode_grant_blob_payload(bytes: &[u8]) -> Result<GrantBlobPayload, Codec
 ///
 /// The buffer carries seed material verbatim, so its caller is the terminal
 /// owner and must zeroize it after use ([`seal_grant_blob`] does exactly this).
+///
+/// `writeScopeSeed` is optional, so its key is free on a read grant: fails closed
+/// if the preserved fields carry a schema key, which would otherwise seal a write
+/// seed into a read grant the typed payload says has none.
 pub fn encode_grant_blob_payload(payload: &GrantBlobPayload) -> Result<Vec<u8>, CodecError> {
+    assert_unknown_disjoint(&payload.unknown, GRANT_BLOB_KNOWN)?;
     let mut m = Map::new();
     m.insert("epoch", Value::Unsigned(payload.epoch));
     m.insert(
@@ -920,6 +926,22 @@ mod tests {
                 .unwrap_err()
                 .check(),
             "hpke-open-failed"
+        );
+    }
+
+    #[test]
+    fn encode_rejects_a_write_seed_smuggled_through_preserved_fields() {
+        // Release-active guard: `writeScopeSeed` is optional, so on a read grant
+        // its key is free and a caller-built `unknown` could otherwise seal a
+        // write seed into a payload the typed value says carries none.
+        let mut payload = GrantBlobPayload::new([0x11; 32], None, 7, [0x22; 32]);
+        payload.unknown = PreservedFields::from_iter([(
+            "writeScopeSeed".to_string(),
+            Value::Bytes(vec![0x44; 32]),
+        )]);
+        assert_eq!(
+            encode_grant_blob_payload(&payload).unwrap_err().check(),
+            "unknown-field-collision"
         );
     }
 

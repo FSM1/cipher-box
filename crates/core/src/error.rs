@@ -302,10 +302,12 @@ pub enum Malformed {
     /// unrecognized permission is foreign data in the permission slot, the same
     /// class boundary [`Self::InvalidNodeKind`] draws for the kind discriminant.
     InvalidPermission,
-    /// A grant-ledger entry carried `expiresAt: 0`. *Malformed*: absence is the
-    /// only encoding of "no deadline", so a zero instant is a second spelling of
-    /// it that would also be permanently expired — foreign data in the deadline
-    /// slot, not a tampered canonical form.
+    /// A grant-ledger entry carried `expiresAt: 0`. Zero is the natural
+    /// uninitialized value, and its meaning — expired at the Unix epoch, so dead
+    /// for every clock — is the exact opposite of the "no deadline" an absent
+    /// field means. Accepting it would make an uninitialized deadline
+    /// indistinguishable from a deliberately dead one. *Malformed*: foreign data
+    /// in the deadline slot, not a tampered canonical form.
     InvalidExpiry,
     /// A fixed-length byte field (a node `id`/`scope` at 16 bytes, a version
     /// `contentKey` at 32) carried the wrong number of bytes. *Malformed*: a

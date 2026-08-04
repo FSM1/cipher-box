@@ -3,39 +3,49 @@
 //!
 //! An invite is an ordinary grant wrapped to a throwaway identity instead of a
 //! contact's. [`EphemeralInvitee`] derives that identity from one random invite
-//! secret exactly as [`SessionIdentity`](crate::session::SessionIdentity)
-//! derives a real one from a login secret — the secp256k1 scalar adopted
-//! directly, the X25519 sealing half through the frozen `enc-subkey` edge. So
-//! the blinded tag, the commitment entry, and the grant blob
-//! [`reseal_scope_root`](crate::rotation::reseal_scope_root) wraps for the row
-//! are byte-shaped like a personal grantee's: an observer learns only blob
-//! count.
+//! secret the way [`SessionIdentity`](crate::session::SessionIdentity) derives a
+//! real one from a login secret — the secp256k1 scalar adopted directly, the
+//! X25519 sealing half through the frozen `enc-subkey` edge — and then mints
+//! through the same [`mint_grant_row`] every contact does. So on the envelope
+//! surface — blinded tag, commitment entry, and the grant blob
+//! [`reseal_scope_root`](crate::rotation::reseal_scope_root) wraps — an invite is
+//! byte-shaped like a personal grantee's and an observer learns only blob count.
+//! (The sealed write-body is longer by a row that carries a deadline; that
+//! ciphertext length is the residual observable.)
 //!
-//! The invite secret is the whole capability. It rides the link's URL fragment,
-//! so the link is honestly bearer and multi-claim: anyone holding it unseals the
-//! scope seeds. Expiry ([`GrantLedgerEntry::expires_at`]) is the deadline every
-//! honest client honours against the injected clock.
-//!
-//! This module composes existing machinery only and holds no crypto of its own.
+//! The invite secret is the whole capability — it rides the link's URL fragment,
+//! so the link is honestly bearer and multi-claim. Its deadline lives on
+//! [`GrantLedgerEntry::expires_at`], which states what a deadline does and does
+//! not guarantee.
 
-use cipherbox_core::kdf;
-use cipherbox_core::seal::{GrantLedgerEntry, GrantSetEntry, Permission};
+use cipherbox_core::seal::Permission;
 use cipherbox_core::suite::ecdsa::{EcdsaSigner, EcdsaVerifier};
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
+use cipherbox_core::{ipns::IpnsName, kdf};
 use core::fmt;
+use core::num::NonZeroU64;
 use zeroize::Zeroizing;
 
 use crate::entropy::{Entropy, EntropyError};
+use crate::grants::{GrantRow, mint_grant_row};
+use crate::rotation::derive_write_name;
 use crate::seams::UnixMillis;
 
 /// The throwaway identity an invite link's grant is wrapped to.
 ///
 /// Every half derives from `secret` — the bearer capability the URL fragment
-/// carries. Hold it only as long as the mint or the claim needs it; it is
-/// redacted from `Debug` and zeroized on drop, and must never be logged or sent
-/// to the API.
-#[derive(Clone, Debug)]
+/// carries. Deliberately not `Clone`, like its
+/// [`SessionIdentity`](crate::session::SessionIdentity) sibling: a second handle
+/// is a second copy of the capability, and [`Self::from_secret`] re-derives one
+/// losslessly when a claim genuinely needs it.
+///
+/// Being structurally a login identity is what buys the byte-shape parity, and it
+/// cuts both ways: its holder can sign a login challenge like any keypair owner,
+/// so a ledger's `recipientIdentityPk` is not a contact-anchored identity. Mint
+/// one per scope — reusing an invitee across scopes gives distinct tags but a
+/// ledger row that links the two grants to one link.
+#[derive(Debug)]
 pub struct EphemeralInvitee {
     secret: SecretBytes,
     identity: EcdsaSigner,
@@ -53,9 +63,9 @@ pub enum InviteError {
     /// The owner–invitee ECDH is non-contributory, so no blinded tag binds the
     /// grant to this link.
     UnusableInviteeKey,
-    /// The deadline was `0`, which the write-body codec rejects as a second
-    /// spelling of "no deadline" — refused here so the mint never builds a
-    /// ledger row that cannot encode (fail-closed symmetry, AGENTS.md rule 8).
+    /// The deadline was `0`. Refused rather than mapped to "no deadline", which
+    /// would silently mint a link that never expires
+    /// ([`Malformed::InvalidExpiry`](cipherbox_core::error::Malformed::InvalidExpiry)).
     InvalidExpiry,
 }
 
@@ -82,10 +92,10 @@ impl std::error::Error for InviteError {}
 impl EphemeralInvitee {
     /// Mint a fresh ephemeral identity from the injected entropy seam.
     ///
-    /// Fails closed on an entropy error, and on the vanishing chance that the
-    /// sampled bytes are not a valid secp256k1 scalar — never by re-sampling
-    /// until one lands, which would make the mint non-deterministic in its
-    /// injected entropy.
+    /// Fails closed on an entropy error, and on the ~2^-128 chance that the
+    /// sampled bytes are zero or at least the secp256k1 group order — never by
+    /// re-sampling until one lands, which would make the entropy each mint draws
+    /// variable and desynchronize every downstream draw from the same seam.
     pub fn mint<E: Entropy>(entropy: &mut E) -> Result<Self, InviteError> {
         let mut secret = Zeroizing::new([0u8; SECRET_LEN]);
         entropy
@@ -97,6 +107,9 @@ impl EphemeralInvitee {
     /// Reconstruct the ephemeral identity from a link fragment's invite secret.
     /// Fails closed ([`InviteError::InvalidSecret`]) when the bytes are not a
     /// valid secp256k1 scalar.
+    ///
+    /// Copies `secret` into its own zeroizing owner; wiping the caller's buffer
+    /// stays the caller's job (they are its terminal owner).
     pub fn from_secret(secret: &[u8; SECRET_LEN]) -> Result<Self, InviteError> {
         let identity = EcdsaSigner::from_scalar(secret).ok_or(InviteError::InvalidSecret)?;
         Ok(Self {
@@ -130,73 +143,54 @@ impl EphemeralInvitee {
     }
 }
 
-/// One invite link's contribution to a scope root: its blinded tag, the entry
-/// the owner signs into the grant-set commitment, and the ledger row carrying
-/// the deadline. Feed both entries to `reseal_scope_root`, which wraps the grant
-/// blob to the ephemeral key like any other committed grantee.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InviteGrant {
-    /// The link's blinded tag — the grant blob's public key in the envelope.
-    pub tag: [u8; SECRET_LEN],
-    /// The `(tag, permission, pseudonymPk)` entry for the owner-signed
-    /// commitment.
-    pub commitment_entry: GrantSetEntry,
-    /// The authoritative ledger row, carrying `expires_at`.
-    pub ledger_entry: GrantLedgerEntry,
-}
-
-/// Mint an invite link's grant rows over a scope root.
+/// Mint an invite link's [`GrantRow`] over the scope root at `scope_id`.
 ///
 /// Owner-only by construction: it takes the owner's encryption subkey secret for
 /// the pairwise ECDH, and only the owner's identity signature over the resulting
-/// commitment authorises the set.
-///
-/// `scope_root_ipns_name` must be the scope root's real resolvable name — the
-/// tag binds it, and a link holder re-derives the same tag from the record it
-/// resolves, so a mismatch mints a grant nobody can self-locate.
+/// commitment authorises the set. The scope root's `ipnsName` is **derived** from
+/// `write_scope_seed`, never accepted as input — the tag binds that name and the
+/// link holder re-derives it from the record it resolves, so binding anything but
+/// the real resolvable name would mint a link nobody can self-locate.
 pub fn mint_invite_grant(
     owner_enc_secret: &X25519Secret,
     invitee: &EphemeralInvitee,
     scope_id: &[u8; 16],
-    scope_root_ipns_name: &[u8],
+    write_scope_seed: &[u8; SECRET_LEN],
     permission: Permission,
     expires_at: Option<UnixMillis>,
-) -> Result<InviteGrant, InviteError> {
-    if matches!(expires_at, Some(UnixMillis(0))) {
-        return Err(InviteError::InvalidExpiry);
-    }
-    let invitee_enc_pub = invitee.enc_public();
-    let shared = owner_enc_secret
-        .diffie_hellman(&invitee_enc_pub)
-        .ok_or(InviteError::UnusableInviteeKey)?;
-    let tag = kdf::blinded_tag(shared.as_bytes(), scope_root_ipns_name);
-    let pseudonym_pk = kdf::pseudonym_sign(shared.as_bytes(), scope_id)
-        .verifying_key()
-        .to_bytes();
-
-    Ok(InviteGrant {
-        tag,
-        commitment_entry: GrantSetEntry::new(tag, permission, pseudonym_pk),
-        ledger_entry: GrantLedgerEntry {
-            expires_at: expires_at.map(|d| d.0),
-            ..GrantLedgerEntry::new(
-                invitee.identity_pk().to_sec1(),
-                invitee_enc_pub.to_bytes(),
-                permission,
-                tag,
-            )
-        },
-    })
+) -> Result<GrantRow, InviteError> {
+    let expires_at = match expires_at {
+        Some(deadline) => Some(NonZeroU64::new(deadline.0).ok_or(InviteError::InvalidExpiry)?),
+        None => None,
+    };
+    let ipns_name: IpnsName = derive_write_name(write_scope_seed, scope_id);
+    let mut row = mint_grant_row(
+        owner_enc_secret,
+        &invitee.identity_pk(),
+        &invitee.enc_public(),
+        scope_id,
+        ipns_name.as_str().as_bytes(),
+        permission,
+    )
+    .ok_or(InviteError::UnusableInviteeKey)?;
+    row.ledger_entry.expires_at = expires_at;
+    Ok(row)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grants::{entry_is_live, recipient_blinded_tag, self_locate};
-    use crate::rotation::{CommittedSet, ResealSeeds, ScopeRootIdentity, reseal_scope_root};
+    use crate::grants::{
+        PublishedGrantBlob, enforce_committed_ledger, entry_is_live, recipient_blinded_tag,
+        self_locate,
+    };
+    use crate::rotation::{
+        CommittedSet, ResealError, ResealSeeds, ScopeRootIdentity, reseal_scope_root,
+    };
     use crate::testkit::SeededEntropy;
     use cipherbox_core::seal::{
-        AadContext, GrantSetCommitment, PreservedFields, STRUCT_TAG_GRANT_BLOB, StructureSigInput,
+        AadContext, GrantLedgerEntry, GrantSection, GrantSetCommitment, PreservedFields,
+        STRUCT_TAG_GRANT_BLOB, SignedGrantBlob, StructureSigInput, encode_grant_section,
         open_grant_blob, sign_grant_set, verify_structure,
     };
     use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer};
@@ -204,7 +198,7 @@ mod tests {
 
     const V: u64 = 2;
     const SCOPE: [u8; 16] = [0x5c; 16];
-    const NAME: &[u8] = b"scope-root-name";
+    const EPOCH: u64 = 5;
     const OVERRIDE_SEED: [u8; 32] = [0x99; 32];
     const WRITE_SCOPE_SEED: [u8; 32] = [0x55; 32];
     const POINTER_READ_KEY: [u8; 32] = [0x66; 32];
@@ -218,41 +212,46 @@ mod tests {
         EcdsaSigner::from_scalar(&[0x33; 32]).expect("valid scalar")
     }
 
+    fn owner_pseudonym() -> Ed25519Signer {
+        Ed25519Signer::from_seed([0x22; 32])
+    }
+
     fn invitee() -> EphemeralInvitee {
         EphemeralInvitee::mint(&mut SeededEntropy::new(7)).expect("mints")
     }
 
-    /// A personal read grantee's rows, so an invite can be compared against a
-    /// real one in the same scope root.
-    fn personal_grant(owner: &X25519Secret, contact_enc: &X25519Secret) -> InviteGrant {
-        let shared = owner
-            .diffie_hellman(&contact_enc.public())
-            .expect("contributory");
-        let tag = kdf::blinded_tag(shared.as_bytes(), NAME);
-        let pseudonym_pk = kdf::pseudonym_sign(shared.as_bytes(), &SCOPE)
-            .verifying_key()
-            .to_bytes();
-        InviteGrant {
-            tag,
-            commitment_entry: GrantSetEntry::new(tag, Permission::Read, pseudonym_pk),
-            ledger_entry: GrantLedgerEntry::new(
-                [0x02; 33],
-                contact_enc.public().to_bytes(),
-                Permission::Read,
-                tag,
-            ),
-        }
+    fn scope_name() -> Vec<u8> {
+        derive_write_name(&WRITE_SCOPE_SEED, &SCOPE)
+            .as_str()
+            .as_bytes()
+            .to_vec()
     }
 
-    /// Re-seal a scope root committing exactly `grants`, signed by the owner.
+    fn invite(permission: Permission, expires_at: Option<UnixMillis>) -> GrantRow {
+        mint_invite_grant(
+            &owner_enc(),
+            &invitee(),
+            &SCOPE,
+            &WRITE_SCOPE_SEED,
+            permission,
+            expires_at,
+        )
+        .expect("mints")
+    }
+
+    /// Re-seal a scope root committing exactly `grants` under `committed`'s
+    /// pseudonym, signed by `signer` — the two differ only in the rogue-signer
+    /// case.
     fn scope_root(
-        grants: &[InviteGrant],
-        pseudonym: &Ed25519Signer,
-    ) -> cipherbox_core::seal::GrantSection {
+        grants: &[GrantRow],
+        committed: &Ed25519Signer,
+        signer: &Ed25519Signer,
+    ) -> Result<GrantSection, ResealError> {
         let owner_pub = owner_enc().public();
+        let name = scope_name();
         let commitment = GrantSetCommitment {
-            ipns_name: NAME.to_vec(),
-            owner_pseudonym_pk: pseudonym.verifying_key().to_bytes(),
+            ipns_name: name.clone(),
+            owner_pseudonym_pk: committed.verifying_key().to_bytes(),
             entries: grants.iter().map(|g| g.commitment_entry.clone()).collect(),
             unknown: PreservedFields::new(),
         };
@@ -265,14 +264,14 @@ mod tests {
             &ScopeRootIdentity {
                 v: V,
                 scope_id: SCOPE,
-                ipns_name: NAME,
+                ipns_name: &name,
                 owner_enc_pub: &owner_pub,
                 parent_node_seed: None,
-                pseudonym_signer: pseudonym,
+                pseudonym_signer: signer,
             },
             &ResealSeeds {
                 override_seed: &OVERRIDE_SEED,
-                read_epoch: 5,
+                read_epoch: EPOCH,
                 prev: None,
                 write_scope_seed: &WRITE_SCOPE_SEED,
                 write_epoch: 1,
@@ -287,7 +286,24 @@ mod tests {
             },
             &[],
         )
-        .expect("reseal")
+    }
+
+    fn blob_ctx(epoch: u64) -> AadContext {
+        AadContext {
+            v: V,
+            id: SCOPE,
+            scope: SCOPE,
+            epoch,
+            struct_tag: STRUCT_TAG_GRANT_BLOB,
+        }
+    }
+
+    fn blob_at<'a>(section: &'a GrantSection, tag: &[u8; 32]) -> &'a SignedGrantBlob {
+        section
+            .grant_blobs
+            .iter()
+            .find(|b| &b.tag == tag)
+            .expect("blob at tag")
     }
 
     #[test]
@@ -299,7 +315,6 @@ mod tests {
         assert_eq!(a.enc_public().to_bytes(), b.enc_public().to_bytes());
         assert!(ct_eq(a.secret().as_bytes(), &secret));
 
-        // A different secret is a different link.
         let other = EphemeralInvitee::from_secret(&[0x4f; 32]).expect("valid");
         assert_ne!(a.enc_public().to_bytes(), other.enc_public().to_bytes());
         assert_ne!(a.identity_pk().to_sec1(), other.identity_pk().to_sec1());
@@ -341,81 +356,68 @@ mod tests {
 
     #[test]
     fn the_invite_blob_is_byte_shaped_like_a_personal_grant_blob() {
-        let owner = owner_enc();
+        // The contact goes through the same `mint_grant_row` the invite does, so
+        // this compares two mints rather than a mint against a re-implementation.
         let contact = X25519Secret::from_scalar([0x77; 32]);
-        let personal = personal_grant(&owner, &contact);
-        let invite = mint_invite_grant(
-            &owner,
-            &invitee(),
+        let contact_identity = EcdsaSigner::from_scalar(&[0x78; 32]).expect("valid scalar");
+        let personal = mint_grant_row(
+            &owner_enc(),
+            &contact_identity.verifying_key(),
+            &contact.public(),
             &SCOPE,
-            NAME,
+            &scope_name(),
             Permission::Read,
-            Some(EXPIRES_AT),
         )
-        .expect("mints");
+        .expect("contributory");
+        let invite = invite(Permission::Read, Some(EXPIRES_AT));
 
-        let pseudonym = Ed25519Signer::from_seed([0x22; 32]);
-        let section = scope_root(&[personal.clone(), invite.clone()], &pseudonym);
+        let section = scope_root(
+            &[personal.clone(), invite.clone()],
+            &owner_pseudonym(),
+            &owner_pseudonym(),
+        )
+        .expect("reseal");
 
         assert_eq!(section.grant_blobs.len(), 2, "observer sees two blobs");
-        let personal_blob = self_locate_signed(&section, &personal.tag);
-        let invite_blob = self_locate_signed(&section, &invite.tag);
         assert_eq!(
-            personal_blob.ciphertext.len(),
-            invite_blob.ciphertext.len(),
+            blob_at(&section, &personal.tag).ciphertext.len(),
+            blob_at(&section, &invite.tag).ciphertext.len(),
             "an invite blob must not be distinguishable by length",
         );
-        assert_eq!(personal_blob.enc.len(), invite_blob.enc.len());
-        assert_eq!(
-            personal_blob.signature.len(),
-            invite_blob.signature.len(),
-            "both are signed by the same owner pseudonym",
-        );
-        // The expiry lives in the sealed write-body, never in the envelope.
-        let envelope = cipherbox_core::seal::encode_grant_section(&section).expect("encodes");
+        // The deadline is sealed in the write-body; the envelope must not carry it.
+        let envelope = encode_grant_section(&section).expect("encodes");
         assert!(
             !envelope.windows(8).any(|w| w == EXPIRES_AT.0.to_be_bytes()),
             "the deadline must not ride the envelope in the clear",
         );
     }
 
-    fn self_locate_signed<'a>(
-        section: &'a cipherbox_core::seal::GrantSection,
-        tag: &[u8; 32],
-    ) -> &'a cipherbox_core::seal::SignedGrantBlob {
-        section
-            .grant_blobs
-            .iter()
-            .find(|b| &b.tag == tag)
-            .expect("blob at tag")
-    }
-
     #[test]
     fn the_fragment_secret_unseals_the_scope_seeds_and_verifies_the_structure_signature() {
-        let owner = owner_enc();
         let minted = invitee();
         let invite = mint_invite_grant(
-            &owner,
+            &owner_enc(),
             &minted,
             &SCOPE,
-            NAME,
+            &WRITE_SCOPE_SEED,
             Permission::Read,
             Some(EXPIRES_AT),
         )
         .expect("mints");
-        let pseudonym = Ed25519Signer::from_seed([0x22; 32]);
-        let section = scope_root(&[invite.clone()], &pseudonym);
+        let section =
+            scope_root(&[invite.clone()], &owner_pseudonym(), &owner_pseudonym()).expect("reseal");
 
         // The link holder reconstructs from the fragment alone and self-locates
         // by re-deriving the same blinded tag from the owner's published enc key.
         let holder = EphemeralInvitee::from_secret(minted.secret().as_bytes()).expect("valid");
-        let tag = recipient_blinded_tag(holder.enc_secret(), &owner.public(), NAME).expect("tag");
+        let tag = recipient_blinded_tag(holder.enc_secret(), &owner_enc().public(), &scope_name())
+            .expect("tag");
         assert_eq!(tag, invite.tag);
 
-        let blobs: Vec<crate::grants::PublishedGrantBlob> = section
+        let blobs: Vec<PublishedGrantBlob> = section
             .grant_blobs
             .iter()
-            .map(|b| crate::grants::PublishedGrantBlob {
+            .map(|b| PublishedGrantBlob {
                 tag: b.tag,
                 enc: b.enc,
                 ciphertext: b.ciphertext.clone(),
@@ -423,12 +425,12 @@ mod tests {
             .collect();
         let located = self_locate(&blobs, &tag).expect("locates its own blob");
 
-        let signed = self_locate_signed(&section, &tag);
+        let signed = blob_at(&section, &tag);
         verify_structure(
-            &pseudonym.verifying_key(),
+            &owner_pseudonym().verifying_key(),
             &StructureSigInput::over_ciphertext(
                 SCOPE,
-                5,
+                EPOCH,
                 STRUCT_TAG_GRANT_BLOB,
                 Some(tag),
                 &signed.ciphertext,
@@ -444,7 +446,7 @@ mod tests {
                 v: V,
                 id: SCOPE,
                 scope: SCOPE,
-                epoch: 5,
+                epoch: EPOCH,
                 struct_tag: STRUCT_TAG_GRANT_BLOB,
             },
             &located.ciphertext,
@@ -460,53 +462,11 @@ mod tests {
 
     #[test]
     fn an_invite_committed_under_a_non_owner_pseudonym_is_refused() {
-        let invite = mint_invite_grant(
-            &owner_enc(),
-            &invitee(),
-            &SCOPE,
-            NAME,
-            Permission::Read,
-            Some(EXPIRES_AT),
-        )
-        .expect("mints");
-        let owner_pseudonym = Ed25519Signer::from_seed([0x22; 32]);
         let rogue = Ed25519Signer::from_seed([0x23; 32]);
-        let owner_pub = owner_enc().public();
-        let commitment = GrantSetCommitment {
-            ipns_name: NAME.to_vec(),
-            owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
-            entries: vec![invite.commitment_entry.clone()],
-            unknown: PreservedFields::new(),
-        };
-        let sig = sign_grant_set(&owner_identity(), &commitment)
-            .expect("signs")
-            .to_compact();
-        let err = reseal_scope_root(
-            &mut SeededEntropy::new(1),
-            &ScopeRootIdentity {
-                v: V,
-                scope_id: SCOPE,
-                ipns_name: NAME,
-                owner_enc_pub: &owner_pub,
-                parent_node_seed: None,
-                pseudonym_signer: &rogue,
-            },
-            &ResealSeeds {
-                override_seed: &OVERRIDE_SEED,
-                read_epoch: 5,
-                prev: None,
-                write_scope_seed: &WRITE_SCOPE_SEED,
-                write_epoch: 1,
-                pointer_read_key: &POINTER_READ_KEY,
-            },
-            &CommittedSet {
-                commitment: &commitment,
-                commitment_sig: &sig,
-                grant_ledger: &[invite.ledger_entry.clone()],
-                write_history_link: b"",
-                direct_child_scope_index: &[],
-            },
-            &[],
+        let err = scope_root(
+            &[invite(Permission::Read, Some(EXPIRES_AT))],
+            &owner_pseudonym(),
+            &rogue,
         )
         .unwrap_err();
         assert_eq!(err.check(), "signer-not-committed");
@@ -519,46 +479,140 @@ mod tests {
                 &owner_enc(),
                 &invitee(),
                 &SCOPE,
-                NAME,
+                &WRITE_SCOPE_SEED,
                 Permission::Read,
                 Some(UnixMillis(0)),
             )
             .unwrap_err(),
             InviteError::InvalidExpiry,
+            "zero must not silently become a link that never expires",
         );
     }
 
     #[test]
-    fn the_minted_row_carries_the_deadline_and_expires_against_the_injected_clock() {
-        let invite = mint_invite_grant(
-            &owner_enc(),
-            &invitee(),
-            &SCOPE,
-            NAME,
-            Permission::Write,
-            Some(EXPIRES_AT),
-        )
-        .expect("mints");
-        assert_eq!(invite.ledger_entry.expires_at, Some(EXPIRES_AT.0));
-        assert_eq!(invite.ledger_entry.permission, Permission::Write);
-        assert!(entry_is_live(
-            &invite.ledger_entry,
-            UnixMillis(EXPIRES_AT.0 - 1)
-        ));
-        assert!(!entry_is_live(&invite.ledger_entry, EXPIRES_AT));
+    fn the_minted_row_carries_the_deadline_the_caller_asked_for() {
+        let expiring = invite(Permission::Write, Some(EXPIRES_AT));
+        assert_eq!(
+            expiring.ledger_entry.expires_at,
+            NonZeroU64::new(EXPIRES_AT.0)
+        );
+        assert_eq!(expiring.ledger_entry.permission, Permission::Write);
+        assert!(!entry_is_live(&expiring.ledger_entry, EXPIRES_AT));
 
-        // A link with no deadline expires only by revocation.
-        let perpetual = mint_invite_grant(
+        let perpetual = invite(Permission::Read, None);
+        assert_eq!(perpetual.ledger_entry.expires_at, None);
+    }
+
+    #[test]
+    fn the_blinded_tag_binds_the_derived_scope_root_name() {
+        // The name is derived, never passed, so a different write scope is a
+        // different name and therefore a different tag.
+        let minted = invitee();
+        let here = mint_invite_grant(
             &owner_enc(),
-            &invitee(),
+            &minted,
             &SCOPE,
-            NAME,
+            &WRITE_SCOPE_SEED,
             Permission::Read,
             None,
         )
         .expect("mints");
-        assert_eq!(perpetual.ledger_entry.expires_at, None);
-        assert!(entry_is_live(&perpetual.ledger_entry, UnixMillis(u64::MAX)));
+        let elsewhere = mint_invite_grant(
+            &owner_enc(),
+            &minted,
+            &SCOPE,
+            &[0x56; 32],
+            Permission::Read,
+            None,
+        )
+        .expect("mints");
+        assert_ne!(here.tag, elsewhere.tag);
+        // The pseudonym binds the scope id, not the name, so it is shared.
+        assert_eq!(
+            here.commitment_entry.pseudonym_pk,
+            elsewhere.commitment_entry.pseudonym_pk
+        );
+    }
+
+    #[test]
+    fn a_write_invite_conveys_the_write_scope_seed_to_the_fragment_holder() {
+        let minted = invitee();
+        let row = mint_invite_grant(
+            &owner_enc(),
+            &minted,
+            &SCOPE,
+            &WRITE_SCOPE_SEED,
+            Permission::Write,
+            None,
+        )
+        .expect("mints");
+        let section =
+            scope_root(&[row.clone()], &owner_pseudonym(), &owner_pseudonym()).expect("reseal");
+        let blob = blob_at(&section, &row.tag);
+        let opened = open_grant_blob(
+            minted.enc_secret(),
+            &blob.enc,
+            &blob_ctx(EPOCH),
+            &blob.ciphertext,
+        )
+        .expect("opens");
+        assert_eq!(
+            opened.write_scope_seed(),
+            Some(&WRITE_SCOPE_SEED),
+            "a write link hands out an extractable subtree signing capability",
+        );
+    }
+
+    #[test]
+    fn an_invite_blob_transplanted_across_epoch_or_structure_fails_to_open() {
+        let minted = invitee();
+        let row = invite(Permission::Read, None);
+        let section =
+            scope_root(&[row.clone()], &owner_pseudonym(), &owner_pseudonym()).expect("reseal");
+        let blob = blob_at(&section, &row.tag);
+        // Same key, same ciphertext, a different AAD epoch: the tag must fail.
+        assert_eq!(
+            open_grant_blob(
+                minted.enc_secret(),
+                &blob.enc,
+                &blob_ctx(EPOCH + 1),
+                &blob.ciphertext
+            )
+            .unwrap_err()
+            .check(),
+            "hpke-open-failed",
+        );
+        // A different link's secret opens nothing.
+        let stranger = EphemeralInvitee::from_secret(&[0x4f; 32]).expect("valid");
+        assert_eq!(
+            open_grant_blob(
+                stranger.enc_secret(),
+                &blob.enc,
+                &blob_ctx(EPOCH),
+                &blob.ciphertext
+            )
+            .unwrap_err()
+            .check(),
+            "hpke-open-failed",
+        );
+    }
+
+    #[test]
+    fn a_write_grantee_may_strip_a_deadline_without_failing_owner_authority() {
+        // The honest bound on `expires_at`: it sits outside the owner-signed
+        // commitment, so a write-grantee re-authoring the write-body can drop or
+        // forge one and `enforce_committed_ledger` still passes. Pins the residual
+        // this slice ships with, so tightening it has to update this test.
+        let row = invite(Permission::Read, Some(EXPIRES_AT));
+        let commitment = GrantSetCommitment {
+            ipns_name: scope_name(),
+            owner_pseudonym_pk: owner_pseudonym().verifying_key().to_bytes(),
+            entries: vec![row.commitment_entry.clone()],
+            unknown: PreservedFields::new(),
+        };
+        let mut stripped = row.ledger_entry.clone();
+        stripped.expires_at = None;
+        assert!(enforce_committed_ledger(&commitment, &[stripped]).is_ok());
     }
 
     #[test]
