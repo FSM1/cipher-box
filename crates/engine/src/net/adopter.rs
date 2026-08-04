@@ -251,7 +251,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
             owner_identity: self.owner_identity,
             scope_id: self.root_scope_id,
             read_key: &read_key,
-            parent_node_seed: self.parent_node_seed.as_deref().copied(),
+            parent_node_seed: self.parent_node_seed.as_deref(),
             seed_blob: Some(SeedBlob::Owner {
                 enc_secret: self.owner_enc_secret,
                 enc: owner_blob.enc,

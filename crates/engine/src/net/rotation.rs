@@ -95,6 +95,9 @@ pub struct RotationAncestry {
 
 #[derive(Default)]
 struct Ancestry {
+    /// The rotating root's own ancestor node seed, when it is itself an interior
+    /// scope root ([`RotationAncestry::under_parent_node_seed`]).
+    root: Option<([u8; 16], Zeroizing<[u8; SECRET_LEN]>)>,
     parents: BTreeMap<[u8; 16], [u8; 16]>,
     override_seeds: BTreeMap<[u8; 16], Zeroizing<[u8; SECRET_LEN]>>,
 }
@@ -112,6 +115,20 @@ impl RotationAncestry {
         ancestry
     }
 
+    /// Supply the **rotating root's own** ancestor node seed. Required whenever
+    /// the rotation is anchored at an interior scope root — a revoke or
+    /// scope-exit on a shared folder — whose record carries an ascent link the
+    /// gate verifies against a reader-derived keypair. A vault root carries no
+    /// ascent link and needs none.
+    pub fn under_parent_node_seed(
+        self,
+        scope_id: [u8; 16],
+        parent_node_seed: &[u8; SECRET_LEN],
+    ) -> Self {
+        self.inner.borrow_mut().root = Some((scope_id, Zeroizing::new(*parent_node_seed)));
+        self
+    }
+
     fn record(
         &self,
         scope_id: [u8; 16],
@@ -123,14 +140,22 @@ impl RotationAncestry {
             .override_seeds
             .insert(scope_id, Zeroizing::new(*override_seed));
         for child in child_index {
-            inner.parents.insert(child.scope_id, scope_id);
+            // First-seen wins, matching the walk's own dedup: a scope listed by
+            // two parents must gate under the same one whichever order the walk
+            // reaches it in.
+            inner.parents.entry(child.scope_id).or_insert(scope_id);
         }
     }
 
-    /// `nodeSeed(parentOverrideSeed, scope_id)`, or `None` at the rotating root
-    /// (which has no parent edge here and carries no ascent link).
+    /// `nodeSeed(parentOverrideSeed, scope_id)` — the caller-supplied seed at the
+    /// rotating root, otherwise derived from the parent this walk already gated.
     fn parent_node_seed(&self, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; SECRET_LEN]>> {
         let inner = self.inner.borrow();
+        if let Some((root, seed)) = &inner.root
+            && root == scope_id
+        {
+            return Some(seed.clone());
+        }
         let parent = inner.parents.get(scope_id)?;
         let parent_seed = inner.override_seeds.get(parent)?;
         Some(Zeroizing::new(
@@ -171,7 +196,8 @@ fn scope_name(ipns_name: &[u8]) -> Result<IpnsName, ResolveFailure> {
 /// the publisher none, so this is the only source of the seed the record must
 /// seal under — and a section that will not reopen under the owner key the
 /// adoption gate re-derives can therefore never be signed (release-active,
-/// security rule 8).
+/// security rule 8). That failure is permanent for these bytes, so it is a
+/// rejection rather than a retryable stall — the sweep must not re-run it.
 fn new_override_seed(
     enc_secret: &X25519Secret,
     record: &ResealedScopeRoot,
@@ -185,7 +211,7 @@ fn new_override_seed(
         struct_tag: STRUCT_TAG_OWNER_BLOB,
     };
     let payload = open_owner_blob(enc_secret, &owner_blob.enc, &aad, &owner_blob.ciphertext)
-        .map_err(|_| ScopeRootPublishError::NotPublished)?;
+        .map_err(|_| ScopeRootPublishError::Rejected)?;
     Ok(Zeroizing::new(*payload.override_seed()))
 }
 
@@ -301,6 +327,10 @@ where
     /// - the write epoch must not sit below the durable write floor, which the
     ///   owner-write-blob's AAD binds — below it the root publishes write-plane
     ///   dead, and floors are monotonic, so it can never be rotated back.
+    ///
+    /// Runs **after** the publish's own gated read, whose adoption advances the
+    /// read-epoch floor: measured before it, the floor comparison would miss a
+    /// cut minted below the epoch that very read just adopted.
     async fn check_publishable(
         &self,
         record: &ResealedScopeRoot,
@@ -366,7 +396,6 @@ where
     ) -> Result<(), ScopeRootPublishError> {
         let name = scope_name(&record.ipns_name).map_err(publish_verdict)?;
         let override_seed = new_override_seed(self.keys.enc_secret, record)?;
-        self.check_publishable(record).await?;
 
         // The read body and the envelope fields a republish preserves come from
         // the node's own current record, gated — the rotation carries neither.
@@ -374,6 +403,7 @@ where
             .gated_root(record.scope_id, &name)
             .await
             .map_err(publish_verdict)?;
+        self.check_publishable(record).await?;
         let write_scope_seed = current
             .write_scope_seed
             .as_deref()
@@ -1001,9 +1031,11 @@ mod tests {
         let last = cut.section.owner_blob.ciphertext.len() - 1;
         cut.section.owner_blob.ciphertext[last] ^= 0xff;
 
-        assert_eq!(
-            block_on(harness.net(&[]).publish_scope_root(&cut)),
-            Err(ScopeRootPublishError::NotPublished),
+        let outcome = block_on(harness.net(&[]).publish_scope_root(&cut));
+        assert_eq!(outcome, Err(ScopeRootPublishError::Rejected));
+        assert!(
+            !outcome.unwrap_err().is_retryable(),
+            "these bytes will never open — re-running the sweep cannot help",
         );
         let endpoint = &harness.store.endpoints()[0];
         assert_eq!(
@@ -1020,8 +1052,39 @@ mod tests {
 
         assert_eq!(
             block_on(harness.net(&[]).publish_scope_root(&cut)),
-            Err(ScopeRootPublishError::NotPublished),
+            Err(ScopeRootPublishError::Rejected),
         );
+    }
+
+    /// A revoke or scope-exit rotates an **interior** scope root, whose record
+    /// carries an ascent link — the caller supplies that root's own ancestor
+    /// node seed, and without it the gate cannot read the record to republish.
+    #[test]
+    fn an_interior_scope_root_rotates_under_its_supplied_ancestor_seed() {
+        let root = interior(CHILD_SCOPE, &OWNER_ROOT_SCOPE_SEED, Vec::new());
+        let harness = Harness::plain();
+        harness.stage(CHILD_SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        let cut = cut(&root, CHILD_SCOPE, OWNER_ROOT_EPOCH + 1);
+        let parent_node_seed = *kdf::node_seed(&OWNER_ROOT_SCOPE_SEED, &CHILD_SCOPE).as_bytes();
+
+        assert_eq!(
+            block_on(
+                harness
+                    .net_rooted(RotationAncestry::default())
+                    .publish_scope_root(&cut)
+            ),
+            Err(ScopeRootPublishError::Rejected),
+            "no ancestor seed means the gate cannot verify the ascent link",
+        );
+        block_on(
+            harness
+                .net_rooted(
+                    RotationAncestry::default()
+                        .under_parent_node_seed(CHILD_SCOPE, &parent_node_seed),
+                )
+                .publish_scope_root(&cut),
+        )
+        .expect("the interior root's cut lands under its supplied ancestor seed");
     }
 
     /// Gate stage 2's encode-side mirror: a commitment that will not verify
@@ -1055,6 +1118,32 @@ mod tests {
         assert_eq!(
             block_on(harness.net(&[]).publish_scope_root(&cut)),
             Err(ScopeRootPublishError::Rejected),
+        );
+    }
+
+    /// The gated read the publish runs first advances the durable read-epoch
+    /// floor to the record it adopts, so the stage-5 mirror must be measured
+    /// against the floor as it stands *after* that read: a cut minted from a
+    /// snapshot older than the published root would otherwise be signed below
+    /// the floor its own gate then enforces, leaving the root unadoptable.
+    #[test]
+    fn a_cut_below_the_epoch_the_gated_read_adopts_is_never_signed() {
+        let root = vault_root(SCOPE, Vec::new());
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        // Nothing has raised the read-epoch floor yet; the staged root sits at
+        // OWNER_ROOT_EPOCH and this cut was minted from a snapshot below it.
+        let stale = cut(&root, SCOPE, OWNER_ROOT_EPOCH - 1);
+
+        assert_eq!(
+            block_on(harness.net(&[]).publish_scope_root(&stale)),
+            Err(ScopeRootPublishError::Rejected),
+        );
+        let endpoint = &harness.store.endpoints()[0];
+        assert_eq!(
+            harness.store.record_at(endpoint, root.name.as_str()),
+            Some(record_for(&SCOPE, &root.head_cid_str, 1)),
+            "the pre-rotation record still stands — nothing was published",
         );
     }
 

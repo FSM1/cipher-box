@@ -43,12 +43,12 @@ const EPH_ASCENT: [u8; 32] = [5u8; 32];
 
 /// The inputs that diverge between owner-root fixtures.
 ///
-/// Nonces and HPKE ephemerals are fixed, so the two varying plaintexts must be
-/// kept apart on independent axes: the read body's key comes from `root_id`
-/// alone, so specs with differing `children` or `child_scope_index` need
-/// differing `root_id`; the owner-write-blob's HPKE key comes from `owner_enc`
-/// alone, so specs with differing `owner_write_blob_epoch` need differing
-/// `owner_enc`.
+/// Nonces and HPKE ephemerals are fixed, so every varying plaintext must sit on
+/// its own key axis: the read body's key and the write body's key both come
+/// from `root_id` alone, so specs with differing `children` or
+/// `child_scope_index` need differing `root_id`; the owner-write-blob's HPKE key
+/// comes from `owner_enc` alone, so specs with differing `owner_write_blob_epoch`
+/// need differing `owner_enc`.
 pub struct OwnerRootSpec<'a> {
     /// Signs the grant-set commitment; its verifying key is the owner identity
     /// the adoption gate checks against.
