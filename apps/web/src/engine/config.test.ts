@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { engineHostConfig, environment, missingDeployEnv } from './config';
+import { engineHostConfig, environment, loginEnv, missingDeployEnv } from './config';
 
 const artifact = {
   wasmModuleUrl: '/assets/cipherbox_wasm-deadbeef.js',
@@ -59,46 +59,62 @@ describe('engineHostConfig', () => {
   });
 
   it('leaves the content gateway unset rather than defaulting it', () => {
-    // No endpoint nobody chose: an unconfigured build reads nothing, which the
-    // engine surfaces as unavailable rather than trusting a stand-in.
     const config = engineHostConfig({}, artifact);
     expect(config.acceleratorBaseUrl).toBeUndefined();
-    expect(config.publicGateways).toBeUndefined();
+    expect(config.publicGateways).toEqual([]);
+    expect(engineHostConfig({ VITE_PUBLIC_GATEWAYS: ' , ' }, artifact).publicGateways).toEqual([]);
     expect(
-      engineHostConfig({ VITE_PUBLIC_GATEWAYS: ' , ' }, artifact).publicGateways
+      engineHostConfig({ VITE_READ_ACCELERATOR_URL: '' }, artifact).acceleratorBaseUrl
     ).toBeUndefined();
   });
 });
 
 describe('missingDeployEnv', () => {
-  it('names the login variables a deployed build is missing', () => {
+  const deployed = {
+    VITE_ENVIRONMENT: 'staging',
+    VITE_WEB3AUTH_CLIENT_ID: 'client',
+    VITE_WEB3AUTH_VERIFIER: 'verifier',
+    VITE_API_URL: 'https://api.example.test',
+  };
+
+  it('names the variables a deployed build is missing', () => {
     expect(missingDeployEnv({ VITE_ENVIRONMENT: 'staging' })).toEqual([
       'VITE_WEB3AUTH_CLIENT_ID',
       'VITE_WEB3AUTH_VERIFIER',
+      'VITE_API_URL',
     ]);
     // A variable substituted as blank is as unusable as an absent one.
-    expect(
-      missingDeployEnv({
-        VITE_ENVIRONMENT: 'production',
-        VITE_WEB3AUTH_CLIENT_ID: 'client',
-        VITE_WEB3AUTH_VERIFIER: '',
-      })
-    ).toEqual(['VITE_WEB3AUTH_VERIFIER']);
+    expect(missingDeployEnv({ ...deployed, VITE_WEB3AUTH_VERIFIER: '' })).toEqual([
+      'VITE_WEB3AUTH_VERIFIER',
+    ]);
+  });
+
+  it('refuses a deployed build with no API origin, which would default to localhost', () => {
+    expect(missingDeployEnv({ ...deployed, VITE_API_URL: '' })).toEqual(['VITE_API_URL']);
   });
 
   it('passes a fully configured deployment', () => {
-    expect(
-      missingDeployEnv({
-        VITE_ENVIRONMENT: 'staging',
-        VITE_WEB3AUTH_CLIENT_ID: 'client',
-        VITE_WEB3AUTH_VERIFIER: 'verifier',
-      })
-    ).toEqual([]);
+    expect(missingDeployEnv(deployed)).toEqual([]);
   });
 
   it('exempts builds that name no deployment', () => {
     expect(missingDeployEnv({})).toEqual([]);
     expect(missingDeployEnv({ VITE_ENVIRONMENT: 'ci' })).toEqual([]);
+  });
+});
+
+describe('loginEnv', () => {
+  it('reads the Web3Auth identifiers a session is built from', () => {
+    expect(loginEnv({ VITE_WEB3AUTH_CLIENT_ID: 'client', VITE_WEB3AUTH_VERIFIER: 'v' })).toEqual({
+      clientId: 'client',
+      verifier: 'v',
+    });
+  });
+
+  it('refuses a build missing one, naming it', () => {
+    expect(() => loginEnv({ VITE_WEB3AUTH_CLIENT_ID: 'client' })).toThrow(
+      /^VITE_WEB3AUTH_VERIFIER must be configured$/
+    );
   });
 });
 

@@ -13,6 +13,7 @@ import type {
   WriteTarget,
 } from './protocol.js';
 import type { EngineWasm } from './engineWasm.js';
+import type { EngineHostConfig } from '../spawnEngineWorker.js';
 import { buildCommand, readEvent, readSnapshot } from './commandCodec.js';
 
 /**
@@ -50,18 +51,13 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
 }
 
 /** What the engine instance itself is configured with, beyond its seams. */
-export interface EngineHostOptions {
-  /** Absolute base URL of the API the engine authenticates and publishes against. */
-  apiBaseUrl: string;
-  /** Read accelerator base URL; absent leaves the content gateway dormant. */
-  acceleratorBaseUrl?: string;
-  /** Public trustless-gateway fallbacks, tried in order after the accelerator. */
-  publicGateways?: string[];
-  /** Sync timing profile. */
-  profile?: string;
+export type EngineHostOptions = Pick<
+  EngineHostConfig,
+  'apiBaseUrl' | 'acceleratorBaseUrl' | 'publicGateways' | 'profile'
+> & {
   /** Origin headroom the engine splits into its staging budget. */
   storageHeadroomBytes?: number;
-}
+};
 
 export class EngineHost implements EngineHostLike {
   private readonly handle;

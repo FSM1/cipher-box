@@ -1,3 +1,6 @@
+// `vite.config.ts` imports the deploy gate from here while resolving config, so
+// this module must keep to type-only imports — a value import of the client
+// package would pull the WASM engine into the bundler.
 import type { EngineHostConfig } from '@cipherbox/client';
 
 const DEFAULT_API_URL = 'http://localhost:3000';
@@ -16,6 +19,16 @@ const ENVIRONMENTS: readonly Environment[] = ['local', 'ci', 'staging', 'product
 
 /** Deployments whose bundle is shipped to users, and so must be able to log in. */
 const DEPLOYED: readonly Environment[] = ['staging', 'production'];
+
+/** The one list of what a Core Kit session needs, shared with the build gate. */
+const LOGIN_ENV = ['VITE_WEB3AUTH_CLIENT_ID', 'VITE_WEB3AUTH_VERIFIER'] as const;
+
+/**
+ * What a deployed bundle cannot work without. `VITE_API_URL` is here because an
+ * unset one falls back to `localhost`, which the engine would then authenticate
+ * against — a working build pointed at whatever answers on the user's machine.
+ */
+const DEPLOY_ENV = [...LOGIN_ENV, 'VITE_API_URL'] as const;
 
 /** Reads a comma-separated variable as a trimmed, blank-free list. */
 function list(value: string | undefined): string[] {
@@ -53,30 +66,38 @@ export function engineHostConfig(
     throw new Error('VITE_ROUTING_ENDPOINTS must list at least one routing endpoint');
   }
 
-  // The content gateway has no default: an unconfigured build reads nothing
-  // rather than reaching for an endpoint nobody chose. The network is canonical
-  // and every block is CID-verified, so these are accelerator hints, not trust
-  // anchors (CONTEXT.md "Read accelerator").
-  const publicGateways = list(env.VITE_PUBLIC_GATEWAYS);
-
   return {
     apiBaseUrl: apiBaseUrl(env),
     recordEndpoints,
+    // The content gateway has no default: unset reads nothing rather than
+    // reaching for an endpoint nobody chose. A blank accelerator would build a
+    // gateway source with no base URL, so it reads as unset.
     acceleratorBaseUrl: env.VITE_READ_ACCELERATOR_URL || undefined,
-    publicGateways: publicGateways.length > 0 ? publicGateways : undefined,
+    publicGateways: list(env.VITE_PUBLIC_GATEWAYS),
     ...artifact,
   };
 }
 
+/** Of the variables Core Kit login needs, those `env` does not supply. */
+export function missingLoginEnv(env: Partial<ImportMetaEnv>): string[] {
+  return LOGIN_ENV.filter((name) => !env[name]);
+}
+
+/** The Web3Auth identifiers a Core Kit session is built from; refuses a build missing any. */
+export function loginEnv(env: Partial<ImportMetaEnv>): { clientId: string; verifier: string } {
+  const { VITE_WEB3AUTH_CLIENT_ID: clientId, VITE_WEB3AUTH_VERIFIER: verifier } = env;
+  if (!clientId || !verifier) {
+    throw new Error(`${missingLoginEnv(env).join(' and ')} must be configured`);
+  }
+  return { clientId, verifier };
+}
+
 /**
- * The build-time variables a deployed bundle cannot log in without, of those
- * `env` does not supply. Checked by the bundler so a missing one is a red build
- * rather than a throw in the browser at first login; a working-copy or CI build
- * names no deployment and is exempt.
+ * The variables a deployed bundle is missing. The bundler checks this so an
+ * unset one is a red build rather than a broken deploy nobody notices until a
+ * user tries to log in; a working-copy or CI build names no deployment and is
+ * exempt.
  */
 export function missingDeployEnv(env: Partial<ImportMetaEnv>): string[] {
-  if (!DEPLOYED.includes(environment(env))) return [];
-  return (['VITE_WEB3AUTH_CLIENT_ID', 'VITE_WEB3AUTH_VERIFIER'] as const).filter(
-    (name) => !env[name]
-  );
+  return DEPLOYED.includes(environment(env)) ? DEPLOY_ENV.filter((name) => !env[name]) : [];
 }

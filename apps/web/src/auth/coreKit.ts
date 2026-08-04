@@ -7,7 +7,7 @@
 
 import { COREKIT_STATUS, WEB3AUTH_NETWORK, Web3AuthMPCCoreKit } from '@web3auth/mpc-core-kit';
 import { tssLib } from '@toruslabs/tss-dkls-lib';
-import { environment } from '../engine/config';
+import { environment, loginEnv } from '../engine/config';
 import type { LoginSecretExporter } from '../engine/loginHandoff';
 
 /** How a session was established; also the `authStore` login method. */
@@ -84,11 +84,7 @@ class Web3AuthSession implements CoreKitSession {
 
 /** Builds this tab's Core Kit session from the build-time environment. */
 export function createCoreKitSession(env: Partial<ImportMetaEnv>): CoreKitSession {
-  const clientId = env.VITE_WEB3AUTH_CLIENT_ID;
-  const verifier = env.VITE_WEB3AUTH_VERIFIER;
-  if (!clientId || !verifier) {
-    throw new Error('VITE_WEB3AUTH_CLIENT_ID and VITE_WEB3AUTH_VERIFIER must both be configured');
-  }
+  const { clientId, verifier } = loginEnv(env);
 
   const coreKit = new Web3AuthMPCCoreKit({
     web3AuthClientId: clientId,

@@ -40,17 +40,10 @@ export function spawnEngineWorker(
   createWorker: () => Worker = spawnModuleWorker
 ): Worker {
   const worker = createWorker();
-  const bootstrap: EngineWorkerBootstrap = {
-    type: 'bootstrap',
-    recordEndpoints: config.recordEndpoints,
-    apiBaseUrl: config.apiBaseUrl,
-    acceleratorBaseUrl: config.acceleratorBaseUrl,
-    publicGateways: config.publicGateways,
-    dbPrefix: config.dbPrefix,
-    wasmModuleUrl: config.wasmModuleUrl,
-    wasmBinaryUrl: config.wasmBinaryUrl,
-    profile: config.profile,
-  };
+  // Spread, not a field-by-field copy: a config field added upstream reaches the
+  // worker without a second edit that nothing would typecheck. The annotation
+  // keeps the handshake checked against the contract at both ends.
+  const bootstrap: EngineWorkerBootstrap = { type: 'bootstrap', ...config };
   worker.postMessage(bootstrap);
   return worker;
 }

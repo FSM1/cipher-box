@@ -90,12 +90,9 @@ impl EngineHandle {
     /// `mailbox`, `refreshHints`, `scheduler`, `stagingStore`, `snapshotCache`,
     /// `credentialStore`); a missing seam fails closed. `profile` selects the
     /// sync timing policy (`"ci"` for the compressed e2e cadences, production
-    /// otherwise). `apiBaseUrl` is required and non-empty: an absent one would
-    /// leave the engine unauthenticated rather than erroring, so it is rejected
-    /// here rather than silently skipping login. The content gateway is
-    /// configured from `acceleratorBaseUrl` (+ optional `acceleratorBearer`)
-    /// and `publicGateways`; all absent leaves it dormant, and reads then fail
-    /// closed as `Unavailable`.
+    /// otherwise). `apiBaseUrl` is required and non-blank. The content gateway
+    /// is configured from `acceleratorBaseUrl` (+ optional `acceleratorBearer`)
+    /// and `publicGateways`.
     #[wasm_bindgen(constructor)]
     pub fn new(
         seams: JsValue,
@@ -108,9 +105,16 @@ impl EngineHandle {
     ) -> Result<EngineHandle, JsError> {
         console_error_panic_hook::set_once();
 
-        let api_base_url = api_base_url.filter(|url| !url.is_empty()).ok_or_else(|| {
-            JsError::new("apiBaseUrl is required: the engine must authenticate to the API")
-        })?;
+        // Wrapped before the first `?`: an early return would otherwise drop the
+        // Rust-owned bearer String unzeroized (security rule 7).
+        let accelerator_bearer = accelerator_bearer.map(Zeroizing::new);
+
+        let api_base_url = api_base_url
+            .map(|url| url.trim().to_owned())
+            .filter(|url| !url.is_empty())
+            .ok_or_else(|| {
+                JsError::new("apiBaseUrl is required: the engine must authenticate to the API")
+            })?;
 
         let seam_set = SeamSet::<WebSeamTypes> {
             floor_store: FloorStoreAdapter {
@@ -165,12 +169,7 @@ impl EngineHandle {
 
         // With no accelerator base URL and no fallbacks the gateway is empty and
         // reads fail closed as `Unavailable` (availability, never a trust
-        // violation) — an unconfigured host reads nothing rather than reaching
-        // for an untrusted default.
-        // Zeroize the bearer before branching on the base URL: if no accelerator
-        // base URL is supplied the source closure never runs, so wrapping inside
-        // it would drop the Rust-owned bearer String unzeroized (security rule 7).
-        let accelerator_bearer = accelerator_bearer.map(Zeroizing::new);
+        // violation).
         let gateway = GatewayConfig {
             accelerator: accelerator_base_url.map(|base_url| GatewaySource {
                 base_url,
@@ -534,11 +533,9 @@ mod tests {
         assert!(op_id_value(None).is_undefined());
     }
 
-    /// An absent or blank API base is refused at construction: building the
-    /// engine over one would leave `start` with nothing to authenticate against.
     #[wasm_bindgen_test]
     fn an_engine_without_an_api_base_url_is_refused() {
-        for api_base_url in [None, Some(String::new())] {
+        for api_base_url in [None, Some(String::new()), Some("  ".to_owned())] {
             let error = EngineHandle::new(
                 js_sys::Object::new().into(),
                 None,

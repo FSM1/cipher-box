@@ -20,18 +20,7 @@ describe('spawnEngineWorker', () => {
     const worker = recordingWorker(posted);
 
     expect(spawnEngineWorker(config, () => worker)).toBe(worker);
-    expect(posted).toEqual([
-      {
-        type: 'bootstrap',
-        recordEndpoints: ['https://routing.example.test'],
-        apiBaseUrl: 'https://api.example.test/',
-        acceleratorBaseUrl: 'https://accelerator.example.test',
-        publicGateways: ['https://gateway.example.test'],
-        dbPrefix: undefined,
-        wasmModuleUrl: '/wasm/cipherbox_wasm.js',
-        wasmBinaryUrl: '/wasm/cipherbox_wasm_bg.wasm',
-        profile: undefined,
-      },
-    ]);
+    // Every config field reaches the worker, not just the ones spelled out here.
+    expect(posted).toEqual([{ type: 'bootstrap', ...config }]);
   });
 });

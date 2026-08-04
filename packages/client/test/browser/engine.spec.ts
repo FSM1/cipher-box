@@ -31,10 +31,17 @@ test.describe('engine worker host', () => {
     );
   });
 
-  test('cold start, RPC round-trip, and logout teardown end to end', async ({ page }) => {
+  test('cold start, RPC round-trip, and logout teardown end to end', async ({ page, request }) => {
+    const before = await (await request.get('/mock-api/engine/auth/seen')).json();
     const result: RealEngineResult = await page.evaluate(() =>
       (window as unknown as EngineHarness).runRealEngine()
     );
+
+    // Cold start exchanged a challenge for tokens: a start that skipped the
+    // login would resolve just the same, so the mock's own tally is the proof.
+    const after = await (await request.get('/mock-api/engine/auth/seen')).json();
+    expect(after.logins).toBe(before.logins + 1);
+    expect(after.challenges).toBe(before.challenges + 1);
 
     // A command before start is rejected as "not started" (start lifecycle gate).
     expect(result.beforeStart).toContain('not started');

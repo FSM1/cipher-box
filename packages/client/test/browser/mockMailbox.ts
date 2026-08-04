@@ -122,7 +122,7 @@ export function readBody(req: IncomingMessage): Promise<Buffer> {
   });
 }
 
-function send(res: ServerResponse, status: number, body: unknown): void {
+export function send(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
   res.setHeader('content-type', 'application/json');
   res.end(JSON.stringify(body));

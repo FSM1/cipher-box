@@ -1228,10 +1228,8 @@ pub struct Engine<T: SeamTypes> {
     live_blocks: Rc<RefCell<LiveBlocks>>,
     /// The upload-cancel interlock, shared with the drain the tick loop runs.
     cancels: Rc<RefCell<UploadCancels>>,
-    /// The API base URL the liveness loop's [`ApiClient`] registers renewals
-    /// against. Hosts reject an empty base at construction, so only harnesses
-    /// that never reach the API run against one; the register-first renewal and
-    /// the cold-start login are both inert there.
+    /// The API base URL cold start logs in against and the liveness loop
+    /// registers renewals against. Empty is the harness's no-API mode.
     api_base_url: String,
     /// The resolved content read-source set, built once from the injected
     /// [`GatewayConfig`] at construction. Empty (dormant) until the host supplies
@@ -1397,8 +1395,6 @@ impl<T: SeamTypes> Engine<T> {
         // The one shared client for login, publish, and renewal. Login is
         // fail-closed: a rejected login returns before the session is committed
         // or any loop spawns, so the loop never runs unauthenticated (rules 3/6).
-        // An empty base is a harness with no API to authenticate against (field
-        // doc); hosts refuse one, so production never takes that branch.
         let api = Rc::new(ApiClient::new(
             self.seams.http.clone(),
             self.seams.credential_store.clone(),

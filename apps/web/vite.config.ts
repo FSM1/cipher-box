@@ -81,10 +81,7 @@ function appShell(): Plugin[] {
   ];
 }
 
-/**
- * Fails a deployment build whose login-critical environment is unset, so the
- * gap surfaces here instead of as a throw in the browser at first login.
- */
+/** Fails a deployment build whose login-critical environment is unset. */
 function deployEnvGate(): Plugin {
   return {
     name: 'cipherbox:deploy-env-gate',
