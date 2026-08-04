@@ -180,13 +180,14 @@ pub enum SweepError {
         /// The underlying re-seal rejection.
         error: ResealError,
     },
-    /// A re-sealed record could not be published (register-first / PUT failed);
-    /// nothing landed for that node. Availability, retryable.
+    /// A re-sealed record could not be published; nothing landed for that node.
+    /// Retryable only when the publish failure is (see
+    /// [`ScopeRootPublishError::is_retryable`]).
     Publish {
         /// The scope whose record did not land.
         scope_id: [u8; 16],
-        /// The publish failure (always [`ScopeRootPublishError::NotPublished`]; a
-        /// lost race is not an error — it drops and re-resolves).
+        /// The publish failure (never [`ScopeRootPublishError::LostRace`] — a
+        /// lost race is not an error, it drops and re-resolves).
         error: ScopeRootPublishError,
     },
 }
@@ -235,7 +236,7 @@ impl SweepError {
                 ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel
             ),
             SweepError::Floor(_) => true,
-            SweepError::Publish { .. } => true,
+            SweepError::Publish { error, .. } => error.is_retryable(),
             SweepError::Reseal { .. } => false,
         }
     }
@@ -398,9 +399,9 @@ where
             // write, so the node is not proven converged; `run_sweep` re-resolves
             // it until a pass drops nothing.
             Err(ScopeRootPublishError::LostRace) => outcome.dropped_lost_race.push(scope_id),
-            // Nothing landed: fail-closed rather than mark the node converged. The
-            // idle-cadence driver re-runs the idempotent pass to retry.
-            Err(error @ ScopeRootPublishError::NotPublished) => {
+            // Nothing landed: fail-closed rather than mark the node converged.
+            // Whether the idle-cadence driver re-runs is `is_retryable`'s call.
+            Err(error) => {
                 return Err(SweepError::Publish { scope_id, error });
             }
         }
@@ -744,7 +745,7 @@ mod tests {
                 s.lost_race_next -= 1;
                 return Err(ScopeRootPublishError::LostRace);
             }
-            match s.fault {
+            match &s.fault {
                 None => {
                     s.current_epoch = s.current_epoch.max(record.read_epoch);
                     Ok(())
@@ -756,10 +757,8 @@ mod tests {
                     s.current_epoch = s.current_epoch.max(record.read_epoch);
                     Err(ScopeRootPublishError::LostRace)
                 }
-                // Not published: nothing landed, epoch unchanged.
-                Some(ScopeRootPublishError::NotPublished) => {
-                    Err(ScopeRootPublishError::NotPublished)
-                }
+                // Nothing landed, epoch unchanged.
+                Some(error) => Err(error.clone()),
             }
         }
     }

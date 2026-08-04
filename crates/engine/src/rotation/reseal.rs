@@ -357,7 +357,9 @@ pub fn reseal_scope_root<E: Entropy>(
         });
     }
 
-    // --- Write-body: sealed under the write key at the write epoch. ---
+    // --- Write-body: sealed under the write key at the write epoch; its
+    // structure signature binds the read epoch, per the owner-write-blob's
+    // dual-epoch rationale above. ---
     let write_body = {
         let wb = WriteBody {
             grant_ledger: committed.grant_ledger.to_vec(),
@@ -377,7 +379,7 @@ pub fn reseal_scope_root<E: Entropy>(
         );
         let sealed = seal(write_key.as_bytes(), &nonce, &ctx, &plaintext);
         plaintext.zeroize();
-        let signature = sign_over(STRUCT_TAG_WRITE_BODY, None, &sealed, seeds.write_epoch);
+        let signature = sign_over(STRUCT_TAG_WRITE_BODY, None, &sealed, read_epoch);
         SignedSealed {
             sealed,
             signature,

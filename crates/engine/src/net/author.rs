@@ -331,6 +331,7 @@ mod tests {
             root_id: [1u8; 16],
             children: Vec::new(),
             child_scope_index: Vec::new(),
+            parent_node_seed: None,
             owner_write_blob_epoch: None,
         })
     }

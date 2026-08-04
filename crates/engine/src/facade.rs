@@ -4312,6 +4312,7 @@ mod tests {
                     unknown: PreservedFields::new(),
                 }],
                 child_scope_index: Vec::new(),
+                parent_node_seed: None,
                 // At the read epoch (write plane == read plane here), so the
                 // cold-seeded write floor opens it and the owner recovers its
                 // write-scope seed for the held-set renewal signer.

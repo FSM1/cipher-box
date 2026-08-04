@@ -64,8 +64,8 @@ pub struct ResealedScopeRoot {
     pub section: GrantSection,
 }
 
-/// Why a scope-root publish did not durably land as the freshest record. Both
-/// variants mean the rotation must not advance its floor — nothing was cut.
+/// Why a scope-root publish did not durably land as the freshest record. Every
+/// variant means the rotation must not advance its floor — nothing was cut.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScopeRootPublishError {
     /// Register-first or the record PUT failed; nothing durable landed. Retryable.
@@ -73,6 +73,19 @@ pub enum ScopeRootPublishError {
     /// A concurrent writer's record at a higher sequence won the CAS race; the
     /// caller re-resolves and rebases before retrying.
     LostRace,
+    /// The scope root the publish had to read first failed the adoption gate — a
+    /// fail-closed trust violation, never staleness (AGENTS.md rule 6). Kept
+    /// distinct from [`Self::NotPublished`] so a forged or transplanted record
+    /// is never retried as if it were a flaky endpoint.
+    Rejected,
+}
+
+impl ScopeRootPublishError {
+    /// Whether re-running the publish could clear this: an availability stall or
+    /// a lost race, but never a trust rejection.
+    pub fn is_retryable(&self) -> bool {
+        matches!(self, Self::NotPublished | Self::LostRace)
+    }
 }
 
 impl core::fmt::Display for ScopeRootPublishError {
@@ -80,6 +93,9 @@ impl core::fmt::Display for ScopeRootPublishError {
         match self {
             ScopeRootPublishError::NotPublished => f.write_str("scope-root record not published"),
             ScopeRootPublishError::LostRace => f.write_str("scope-root publish lost the CAS race"),
+            ScopeRootPublishError::Rejected => {
+                f.write_str("scope-root record rejected by adoption gate")
+            }
         }
     }
 }

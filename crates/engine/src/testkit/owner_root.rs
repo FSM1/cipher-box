@@ -10,11 +10,12 @@ use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, ChildRef, ChildScopeRef, Envelope, GrantSection, GrantSetCommitment,
-    OverrideSeedPayload, OwnerWriteBlobPayload, PreservedFields, ReadBody, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedOwnerBlob, SignedOwnerWriteBlob,
-    SignedSealed, StructureSigInput, WriteBody, encode_envelope, encode_grant_section,
-    encode_write_body, seal, seal_owner_blob, seal_owner_write_blob, seal_read_body,
-    set_grant_section, sign_grant_set, sign_structure,
+    OverrideSeedPayload, OwnerWriteBlobPayload, PreservedFields, ReadBody, STRUCT_TAG_ASCENT_LINK,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedAscentLink,
+    SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody,
+    encode_envelope, encode_grant_section, encode_write_body, seal, seal_ascent_link,
+    seal_owner_blob, seal_owner_write_blob, seal_read_body, set_grant_section, sign_grant_set,
+    sign_structure,
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
@@ -38,6 +39,7 @@ const NONCE_READ_BODY: [u8; 24] = [11u8; 24];
 const NONCE_WRITE_BODY: [u8; 24] = [22u8; 24];
 const EPH_OWNER: [u8; 32] = [3u8; 32];
 const EPH_OWNER_WRITE: [u8; 32] = [4u8; 32];
+const EPH_ASCENT: [u8; 32] = [5u8; 32];
 
 /// The inputs that diverge between owner-root fixtures.
 ///
@@ -62,6 +64,9 @@ pub struct OwnerRootSpec<'a> {
     /// The write-body's direct-child-scope index — the eager-set adjacency a
     /// rotation walk reads out of this root.
     pub child_scope_index: Vec<ChildScopeRef>,
+    /// `Some(nodeSeed(parentOverrideSeed, scope_id))` authors the ascent link
+    /// every interior scope root carries; `None` is a vault root.
+    pub parent_node_seed: Option<[u8; 32]>,
     /// `Some(epoch)` authors an owner-write-blob whose AAD binds that **write**
     /// epoch (its structure signature still binds the read epoch — mirrors
     /// reseal); `None` leaves the root held keyless.
@@ -91,6 +96,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         root_id,
         children,
         child_scope_index,
+        parent_node_seed,
         owner_write_blob_epoch,
     } = spec;
     let owner_pseudonym = Ed25519Signer::from_seed(OWNER_ROOT_PSEUDONYM_SEED);
@@ -163,6 +169,25 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         }
     });
 
+    // Ascent link — the marker of an interior scope root: the override seed
+    // sealed to the keypair its parent's node seed derives.
+    let ascent_link = parent_node_seed.map(|parent_node_seed| {
+        let link = seal_ascent_link(
+            &parent_node_seed,
+            &EPH_ASCENT,
+            &aad(OWNER_ROOT_EPOCH, STRUCT_TAG_ASCENT_LINK),
+            &OverrideSeedPayload::new(OWNER_ROOT_SCOPE_SEED, OWNER_ROOT_EPOCH),
+        )
+        .unwrap();
+        SignedAscentLink {
+            signature: sign(STRUCT_TAG_ASCENT_LINK, &link.ciphertext),
+            ascent_public: link.ascent_public,
+            enc: link.enc,
+            ciphertext: link.ciphertext,
+            unknown: PreservedFields::new(),
+        }
+    });
+
     let commitment = GrantSetCommitment {
         ipns_name: name.as_str().as_bytes().to_vec(),
         owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
@@ -178,7 +203,7 @@ pub fn owner_root_fixture(spec: OwnerRootSpec<'_>) -> OwnerRootFixture {
         grant_blobs: Vec::new(),
         owner_blob,
         owner_write_blob,
-        ascent_link: None,
+        ascent_link,
         history_links: Vec::new(),
         write_body,
         unknown: PreservedFields::new(),
