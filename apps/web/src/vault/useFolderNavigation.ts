@@ -7,7 +7,6 @@
 
 import { useCallback, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { isRecoverableEngineError } from '@cipherbox/client';
 import type { BreadcrumbDescriptor } from '@cipherbox/client';
 import type { SnapshotError } from '../engine/snapshotStore';
 import { useSnapshot } from '../engine/useSnapshot';
@@ -25,11 +24,7 @@ export interface FolderNavigation {
   /** True until the engine reports a snapshot *of the routed folder*. */
   isLoading: boolean;
   isRoot: boolean;
-  /** True once a snapshot of *this* folder has landed, error or not. */
-  hasListing: boolean;
   error: SnapshotError | null;
-  /** Re-pulls the folder; `null` unless `error` is one a retry can clear. */
-  retry: (() => void) | null;
   navigateTo(node: Uint8Array): void;
   /** Steps to the nearest ancestor; a no-op at the root. */
   navigateUp(): void;
@@ -78,18 +73,12 @@ export function useFolderNavigation(): FolderNavigation {
 
   const rows = useMemo(() => (listed === null ? [] : listingRows(listed.children)), [listed]);
 
-  const rePull = useCallback(() => store.retry(), [store]);
-
-  const shown = route.kind === 'invalid' ? NOT_A_FOLDER : error;
-
   return {
     rows,
     breadcrumbs,
     isLoading: route.kind !== 'invalid' && listed === null && error === null,
     isRoot: listed !== null && sameNode(listed.folder, listed.root),
-    hasListing: listed !== null,
-    error: shown,
-    retry: shown !== null && isRecoverableEngineError(shown.code) ? rePull : null,
+    error: route.kind === 'invalid' ? NOT_A_FOLDER : error,
     navigateTo,
     navigateUp,
   };

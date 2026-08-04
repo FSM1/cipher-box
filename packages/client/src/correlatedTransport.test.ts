@@ -20,9 +20,8 @@ describe('isRecoverableEngineError', () => {
     expect(isRecoverableEngineError('tooManyStreams')).toBe(true);
   });
 
-  // This predicate gates both a retry loop in the media broker and whether the
-  // vault browser keeps a stale listing on screen, so a fail-closed verdict
-  // must never widen into it.
+  // This predicate gates the media broker's reclaim-and-retry, so a fail-closed
+  // verdict widening into it would turn a trust refusal into a retry loop.
   it.each([
     'trustViolation',
     'coldStart',

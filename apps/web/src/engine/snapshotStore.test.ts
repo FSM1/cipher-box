@@ -186,23 +186,6 @@ describe('snapshotStore', () => {
     });
   });
 
-  it('re-pulls the focused folder on retry and clears the failure it recovers from', async () => {
-    const engine = fakeEngine();
-    const store = createSnapshotStore(engine.client);
-
-    engine.emit({ kind: 'snapshotUpdated' });
-    engine.pulls[0].reject(new EngineRequestError('too many read streams', 'tooManyStreams'));
-    await flush();
-    expect(store.getSnapshot().error?.code).toBe('tooManyStreams');
-
-    store.retry();
-    const recovered = view();
-    engine.pulls[1].resolve(recovered);
-    await flush();
-
-    expect(store.getSnapshot()).toEqual({ view: recovered, error: null });
-  });
-
   it('tracks the staleness ladder from the event stream', async () => {
     const engine = fakeEngine();
     const store = createSnapshotStore(engine.client);

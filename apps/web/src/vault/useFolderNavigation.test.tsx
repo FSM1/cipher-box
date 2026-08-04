@@ -1,4 +1,3 @@
-import { EngineRequestError } from '@cipherbox/client';
 import type { SnapshotDescriptor } from '@cipherbox/client';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -48,15 +47,6 @@ async function landSnapshot(
   await act(async () => {
     engine.emit({ kind: 'snapshotUpdated' });
     engine.pulls[engine.pulls.length - 1].resolve(view);
-    await Promise.resolve();
-  });
-}
-
-/** Settles the pull the engine's `snapshotUpdated` event triggers, as a failure. */
-async function failSnapshot(engine: ReturnType<typeof fakeEngine>, error: Error): Promise<void> {
-  await act(async () => {
-    engine.emit({ kind: 'snapshotUpdated' });
-    engine.pulls[engine.pulls.length - 1].reject(error);
     await Promise.resolve();
   });
 }
@@ -269,75 +259,6 @@ describe('the vault browser read path', () => {
 
     expect(screen.queryByTestId('file-list-item')).toBeNull();
     expect(screen.getByTestId('file-browser-loading')).toBeDefined();
-  });
-
-  it('offers a retry for the stream ceiling and keeps the listing under it', async () => {
-    const engine = fakeEngine();
-    renderBrowser(engine);
-    await landSnapshot(
-      engine,
-      folderView({
-        children: [
-          {
-            id: NOTE,
-            name: 'clip.mp4',
-            kind: 'file',
-            size: 1024n,
-            mtime: null,
-            pending: 'none',
-            deadLetter: false,
-            contentVersion: 1n,
-          },
-        ],
-      })
-    );
-
-    await failSnapshot(
-      engine,
-      new EngineRequestError('too many read streams are already open', 'tooManyStreams')
-    );
-
-    // Recoverable in kind, not just in wording: the folder is still on screen.
-    expect(screen.queryByTestId('file-browser-error')).toBeNull();
-    expect(screen.getByTestId('file-browser-notice')).toBeDefined();
-    expect(rowNames().map((name) => name.textContent)).toEqual(['clip.mp4']);
-
-    const before = engine.pulls.length;
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('file-browser-retry'));
-      await Promise.resolve();
-    });
-    expect(engine.pulls.length).toBe(before + 1);
-  });
-
-  it('renders a terminal engine failure without a retry', async () => {
-    const engine = fakeEngine();
-    renderBrowser(engine);
-
-    await failSnapshot(
-      engine,
-      new EngineRequestError('root failed the adoption gate', 'trustViolation')
-    );
-
-    expect(screen.getByTestId('file-browser-error').textContent).toBe(
-      'root failed the adoption gate'
-    );
-    expect(screen.queryByTestId('file-browser-retry')).toBeNull();
-  });
-
-  it('shows no listing at all when a retryable failure lands before the first one', async () => {
-    const engine = fakeEngine();
-    renderBrowser(engine);
-
-    await failSnapshot(
-      engine,
-      new EngineRequestError('too many read streams are already open', 'tooManyStreams')
-    );
-
-    expect(screen.getByTestId('file-browser-retry')).toBeDefined();
-    // Nothing was ever listed, so neither the rows nor "empty" is the truth.
-    expect(screen.queryByTestId('empty-state')).toBeNull();
-    expect(screen.queryByTestId('file-list-item')).toBeNull();
   });
 
   it('refuses a route param that is not a node id', () => {

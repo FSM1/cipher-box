@@ -48,9 +48,10 @@ export function engineErrorCode(error: unknown): string | undefined {
 }
 
 /**
- * Whether the same call can succeed once the host frees the resource the engine
- * refused over — `tooManyStreams` is a ceiling, not a verdict (`EngineError` in
- * `crates/engine/src/facade.rs`).
+ * Whether the same call can succeed once the caller frees the resource the
+ * engine refused over — `tooManyStreams` is a ceiling, not a verdict
+ * (`EngineError` in `crates/engine/src/facade.rs`). Every trust code is a
+ * distinct string, so none of them can widen into this.
  */
 export function isRecoverableEngineError(code: string | undefined): boolean {
   return code === 'tooManyStreams';
