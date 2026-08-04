@@ -20,12 +20,13 @@ async function boot(): Promise<void> {
   await init({ module_or_path: wasmUrl });
   const wasm = glue as unknown as EngineWasm;
   const { origin } = scope.location;
+  const apiBaseUrl = `${origin}/mock-api/engine`;
   const seams = makeBrowserSeams({
     recordEndpoints: [`${origin}/routing`],
-    apiBaseUrl: `${origin}/mock-api/engine`,
+    apiBaseUrl,
     dbPrefix: `engine-${Date.now()}`,
   });
-  const host = new EngineHost(wasm, seams, 'ci');
+  const host = new EngineHost(wasm, seams, { apiBaseUrl, profile: 'ci' });
   serveEngine(scope, host);
 }
 

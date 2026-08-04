@@ -49,23 +49,38 @@ function ownedBuffer(bytes: Uint8Array): ArrayBuffer {
     : (bytes.slice().buffer as ArrayBuffer);
 }
 
+/** What the engine instance itself is configured with, beyond its seams. */
+export interface EngineHostOptions {
+  /** Absolute base URL of the API the engine authenticates and publishes against. */
+  apiBaseUrl: string;
+  /** Read accelerator base URL; absent leaves the content gateway dormant. */
+  acceleratorBaseUrl?: string;
+  /** Public trustless-gateway fallbacks, tried in order after the accelerator. */
+  publicGateways?: string[];
+  /** Sync timing profile. */
+  profile?: string;
+  /** Origin headroom the engine splits into its staging budget. */
+  storageHeadroomBytes?: number;
+}
+
 export class EngineHost implements EngineHostLike {
   private readonly handle;
 
   constructor(
     private readonly wasm: EngineWasm,
     seams: unknown,
-    profile?: string,
-    storageHeadroomBytes?: number
+    options: EngineHostOptions
   ) {
     this.handle = new wasm.EngineHandle(
       seams,
-      profile,
+      options.profile,
+      options.apiBaseUrl,
+      options.acceleratorBaseUrl,
+      // The accelerator bearer is a session credential, never a build-time
+      // constant, so no browser config surface supplies one yet.
       undefined,
-      undefined,
-      undefined,
-      undefined,
-      storageHeadroomBytes
+      options.publicGateways,
+      options.storageHeadroomBytes
     );
   }
 

@@ -28,6 +28,10 @@ export interface EngineWorkerBootstrap extends BrowserSeamsConfig {
   wasmBinaryUrl: string;
   /** Sync timing profile. */
   profile?: 'ci' | 'production';
+  /** Read accelerator base URL; absent leaves the content gateway dormant. */
+  acceleratorBaseUrl?: string;
+  /** Public trustless-gateway fallbacks, tried in order after the accelerator. */
+  publicGateways?: string[];
 }
 
 interface WasmGlue extends EngineWasm {
@@ -54,7 +58,13 @@ async function bootstrap(config: EngineWorkerBootstrap): Promise<void> {
     const wasm = (await import(/* @vite-ignore */ config.wasmModuleUrl)) as WasmGlue;
     await wasm.default({ module_or_path: config.wasmBinaryUrl });
     const seams = makeBrowserSeams(config);
-    const host = new EngineHost(wasm, seams, config.profile, await measureStorageHeadroomBytes());
+    const host = new EngineHost(wasm, seams, {
+      apiBaseUrl: config.apiBaseUrl,
+      acceleratorBaseUrl: config.acceleratorBaseUrl,
+      publicGateways: config.publicGateways,
+      profile: config.profile,
+      storageHeadroomBytes: await measureStorageHeadroomBytes(),
+    });
     serveEngine(workerScope as unknown as WorkerScopeLike, host);
   } catch (error) {
     workerScope.postMessage({

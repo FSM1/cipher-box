@@ -14,6 +14,14 @@ export interface EngineHostConfig {
   apiBaseUrl: string;
   /** `/routing/v1` origins: someguy plus at least one public endpoint. */
   recordEndpoints: string[];
+  /**
+   * Base URL of the read accelerator (CONTEXT.md "Read accelerator"). Absent
+   * leaves the content gateway dormant: reads fail closed as unavailable rather
+   * than falling back to an endpoint nobody configured.
+   */
+  acceleratorBaseUrl?: string;
+  /** Public trustless-gateway fallbacks, tried in order after the accelerator. */
+  publicGateways?: string[];
   /** URL of the wasm-bindgen ES glue module the worker imports. */
   wasmModuleUrl: string;
   /** URL of the wasm binary handed to the glue's `init`. */
@@ -36,6 +44,8 @@ export function spawnEngineWorker(
     type: 'bootstrap',
     recordEndpoints: config.recordEndpoints,
     apiBaseUrl: config.apiBaseUrl,
+    acceleratorBaseUrl: config.acceleratorBaseUrl,
+    publicGateways: config.publicGateways,
     dbPrefix: config.dbPrefix,
     wasmModuleUrl: config.wasmModuleUrl,
     wasmBinaryUrl: config.wasmBinaryUrl,
