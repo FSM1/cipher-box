@@ -23,7 +23,9 @@ use cipherbox_core::content::verify_cid;
 use crate::content::decode_root;
 use crate::facade::WriteHandle;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
-use crate::sync::drain::{DRAINED_OP_MARK_KEY, OP_ATTEMPTS_KEY, UPLOAD_MARK_KEY};
+use crate::sync::drain::{
+    DRAINED_OP_MARK_KEY, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_KEY, UPLOAD_MARK_KEY,
+};
 use crate::sync::op::Op;
 use crate::sync::record::{RecordSeal, encode_op_record, record_content_root_cid};
 
@@ -296,6 +298,7 @@ pub async fn orphan_staging_keys<S: StagingStore>(
     let mut referenced = HashSet::from([
         DRAINED_OP_MARK_KEY.to_vec(),
         OP_ATTEMPTS_KEY.to_vec(),
+        PUBLISHED_OP_MARK_KEY.to_vec(),
         UPLOAD_MARK_KEY.to_vec(),
         PRESERVED_DEAD_LETTERS_KEY.to_vec(),
     ]);

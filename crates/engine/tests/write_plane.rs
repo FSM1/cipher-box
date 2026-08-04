@@ -31,7 +31,8 @@ use cipherbox_engine::seams::{
 };
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
-    DRAINED_OP_MARK_KEY, StagedContent, UPLOAD_MARK_KEY, record_content_root_cid,
+    DRAINED_OP_MARK_KEY, PUBLISHED_OP_MARK_KEY, StagedContent, UPLOAD_MARK_KEY,
+    record_content_root_cid,
 };
 use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
 use cipherbox_engine::testkit::{
@@ -1570,6 +1571,59 @@ fn a_hole_in_the_staged_block_suffix_is_loss_and_fails_closed() {
     assert_no_blocks_staged(&alice, &version);
 }
 
+/// The mark is host-local storage, so a torn or bit-rotted one that still
+/// parses is reachable. A count above the version's own leaf count is proof of
+/// corruption: trusting it would let every absent leaf skip the hole guard and
+/// publish a manifest naming blocks nothing holds, so it reads as no progress
+/// at all.
+#[test]
+fn a_corrupt_upload_mark_is_no_progress_rather_than_blanket_coverage() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+
+    // A mark naming this very version and claiming more leaves than it has.
+    let version = evict_leaf(&alice, |leaves| leaves / 2);
+    let (root_cid, _) = staged_version(&alice);
+    let mut corrupt = root_cid;
+    corrupt.extend_from_slice(&u32::MAX.to_be_bytes());
+    block_on(
+        alice
+            .staging_store
+            .put_staged_bytes(UPLOAD_MARK_KEY, &corrupt),
+    )
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::DeadLetter {
+                reason: DeadLetterReason::ContentUnrecoverable,
+                ..
+            }
+        )),
+        "a corrupt mark covers nothing, so the hole is still loss"
+    );
+    assert!(
+        block_on(engine.view()).unwrap().children(ROOT).is_empty(),
+        "no version publishes over a block nothing holds"
+    );
+    assert_no_blocks_staged(&alice, &version);
+}
+
 /// The version the head queued op carries: its root CID and its leaf CIDs, in
 /// file order — the order the drain uploads and releases them in.
 fn staged_version(device: &FakeDevice) -> (Vec<u8>, Vec<Vec<u8>>) {
@@ -2994,6 +3048,112 @@ fn a_source_remove_that_cannot_publish_undoes_its_own_dest_add() {
     );
 }
 
+/// Set up a relink whose source-remove leg is refused with `refusal`, and hand
+/// back the op the drain halts on. The dest-add lands and is compensated first,
+/// so what the queue sees afterwards is the classification of the source-remove
+/// alone.
+fn relink_whose_source_remove_is_refused(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    engine: &mut Engine<FakeSeamTypes>,
+    tasks: &mut Vec<BoxedTask>,
+    refusal: impl Fn() -> SeamResult<HttpResponse> + Send + 'static,
+) -> OpId {
+    let (photos, moved) = seed_folder_and_file(world, engine, tasks);
+    blocks.refuse_upload(Box::new(move |block| {
+        (head_of(block) == Some(ROOT.0)).then(&refusal)
+    }));
+    block_on(engine.command(Command::Relink {
+        node: moved,
+        new_parent: photos,
+    }))
+    .unwrap()
+    .expect("a relink journals an op")
+}
+
+/// An over-quota source-remove is a hold, not an unclassified retry: the op
+/// keeps its place and the probe is given the byte figure it must find room for.
+#[test]
+fn an_over_quota_source_remove_holds_the_op_with_its_needed_bytes() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let op_id =
+        relink_whose_source_remove_is_refused(&world, &blocks, &mut engine, &mut tasks, || {
+            upload_413(Some("QUOTA_EXCEEDED"))
+        });
+    tick(&world, &engine, &mut tasks);
+
+    let blocked = block_on(engine.snapshot(ROOT))
+        .expect("a snapshot")
+        .blocked
+        .expect("the over-quota source-remove is held");
+    assert_eq!(blocked.op_id, op_id);
+    assert!(
+        blocked.needed_bytes > 0,
+        "the figure the resume probe must find room for survives the leg"
+    );
+}
+
+/// A permanently refused source-remove dead-letters instead of retrying the
+/// same bytes forever.
+#[test]
+fn a_permanently_refused_source_remove_dead_letters() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let op_id =
+        relink_whose_source_remove_is_refused(&world, &blocks, &mut engine, &mut tasks, || {
+            upload_413(Some("UPLOAD_TOO_LARGE"))
+        });
+    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+
+    assert_eq!(passes, 1, "the server's own verdict is permanent on sight");
+    assert_eq!(
+        dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::PayloadRefused
+        }]
+    );
+}
+
+/// An unattributable refusal on the source-remove is charged against the
+/// attempt budget: `Unclassified` would retry free and forever, so the budget
+/// that exists to bound exactly this pathology would never trip.
+#[test]
+fn an_unattributable_source_remove_refusal_spends_the_attempt_budget() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    let op_id =
+        relink_whose_source_remove_is_refused(&world, &blocks, &mut engine, &mut tasks, || {
+            upload_413(None)
+        });
+    let (dead_letters, passes) = tick_until_dead_lettered(&world, &engine, &mut tasks);
+
+    assert!(
+        passes > 1,
+        "an unattributable refusal is a charged attempt, not a verdict"
+    );
+    assert_eq!(
+        dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::AttemptsExhausted
+        }]
+    );
+}
+
 /// The compensation must restore what the dest-add vacated too: a destination
 /// left holding neither the moved node nor the one it replaced has lost an
 /// entry outright (#884).
@@ -4078,6 +4238,101 @@ fn a_cancel_after_the_version_published_is_refused() {
         block_on(engine.view()).unwrap().children(ROOT).len(),
         1,
         "the published file is untouched"
+    );
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "a refused cancel unpins nothing"
+    );
+}
+
+/// Plant the durable published-op mark over `op_id`, standing in for the crash
+/// between a record PUT the network acked and the op's removal from the queue.
+fn plant_published_mark(device: &FakeDevice, op_id: OpId) {
+    block_on(
+        device
+            .staging_store
+            .put_staged_bytes(PUBLISHED_OP_MARK_KEY, &op_id.0.to_be_bytes()),
+    )
+    .unwrap();
+}
+
+/// An op whose record PUT was acknowledged is already live at its name. A crash
+/// before its removal from the queue leaves it replayable, and a replay would
+/// re-upload every leaf into a set a cancel can retire — unpinning content a
+/// published record names. It drops as already satisfied instead.
+#[test]
+fn an_op_whose_record_already_published_is_dropped_rather_than_replayed() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    let version = staged_version(&alice);
+    plant_published_mark(&alice, op_id);
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        !events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::OpProgress {
+                phase: OpPhase::UploadStarted,
+                ..
+            }
+        )),
+        "nothing re-uploads behind a record that already landed"
+    );
+    assert!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .is_empty(),
+        "the op leaves the queue"
+    );
+    let leftover = version
+        .1
+        .into_iter()
+        .chain(core::iter::once(version.0))
+        .collect::<Vec<_>>();
+    assert_no_blocks_staged(&alice, &leftover);
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "a drop is not an abandonment: nothing published is unpinned"
+    );
+}
+
+/// The publish-entry interlock is session-scoped, so a reboot clears it. The
+/// durable mark is what keeps a published version uncancellable across one.
+#[test]
+fn a_cancel_of_an_already_published_op_is_refused_across_a_restart() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    plant_published_mark(&alice, op_id);
+
+    assert_eq!(
+        block_on(engine.command(Command::CancelUpload { op_id })),
+        Err(EngineError::TooLateToCancel { op_id })
     );
     assert!(
         retire_targets(&alice).is_empty(),

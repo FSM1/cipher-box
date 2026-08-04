@@ -47,15 +47,15 @@ use crate::net::publish::{PublishError, PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{
     HeadBinding, RecordPublishError, RecordPublishRequest, preflight, publish_record,
 };
-use crate::net::retire::retire;
+use crate::net::retire::{OrphanHeads, orphaned_head, retire};
 use crate::net::{
-    Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, REGISTRY_BATCH_MAX, ResolveOutcome,
-    RootAdopter, assemble_head_envelope, fanout_get_verify, resolve,
+    Adopter, ChildAdopter, HeldRecord, HeldRecords, LocalHead, ResolveOutcome, RootAdopter,
+    assemble_head_envelope, fanout_get_verify, resolve,
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
 use crate::seams::{
-    CredentialStore, FloorStore, Http, OpId, RecordTransport, Scheduler, SnapshotCache,
+    CredentialStore, FloorStore, Http, OpId, RecordTransport, Scheduler, SeamResult, SnapshotCache,
     StagingStore,
 };
 use crate::session::SessionIdentity;
@@ -79,6 +79,24 @@ use crate::sync::staging::{preserve_dead_letter, release_version_blocks, version
 ///
 /// [`orphan_staging_keys`]: crate::sync::staging::orphan_staging_keys
 pub const DRAINED_OP_MARK_KEY: &[u8] = b"cipherbox/drained-op";
+
+/// The staging key holding the published-op high-water mark: every op id at or
+/// below the stored value had its record PUT acknowledged, so its version is
+/// live at its name even if the op is still queued.
+///
+/// The queue is strict FIFO and a pass stops at the first op it cannot publish,
+/// so every id below the one being marked has already left the queue — the mark
+/// is contiguous by construction, like [`DRAINED_OP_MARK_KEY`], and shares the
+/// same durability domain as the ids it names.
+///
+/// It is raised between the record PUT and the block release, which is the
+/// window a crash leaves a published op queued. Without it that op replays,
+/// re-uploads its leaves, and a cancel landing mid-replay unpins content a live
+/// record names — the session-scoped publish-entry interlock does not survive
+/// the reboot. [`orphan_staging_keys`] treats it as referenced.
+///
+/// [`orphan_staging_keys`]: crate::sync::staging::orphan_staging_keys
+pub const PUBLISHED_OP_MARK_KEY: &[u8] = b"cipherbox/published-op";
 
 /// What one drain pass did.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -299,9 +317,8 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     /// The over-quota hold, shared with the facade's read surface. It clears
     /// only here, on a quota probe reporting room.
     pub(crate) blocked: &'a RefCell<Option<BlockedOp>>,
-    /// Head blocks this session's publishes orphaned, pending retirement
-    /// ([`Drain::retire_orphan_heads`]).
-    pub(crate) orphan_heads: &'a RefCell<Vec<String>>,
+    /// Head blocks this session's publishes orphaned, pending retirement.
+    pub(crate) orphan_heads: &'a OrphanHeads,
     /// The upload-cancel interlock, shared with the facade's cancel command.
     pub(crate) cancels: &'a RefCell<UploadCancels>,
     /// The facade's outbound event stream, for upload progress.
@@ -427,7 +444,7 @@ where
     /// pass orphaned.
     pub(crate) async fn run(&self, scope: &DrainScope<'_>) -> DrainReport {
         let report = self.drain_queue(scope).await;
-        self.retire_orphan_heads().await;
+        self.orphan_heads.retire_pending(self.api).await;
         report
     }
 
@@ -603,11 +620,21 @@ where
         // contract promises only strictly-increasing ids, so a host that starts
         // at 0 must not lose its first op.
         let drained = self.drained_mark().await?;
+        let published = published_op_mark(self.staging).await.map_err(seam)?;
         let mut mine = Vec::with_capacity(scan.mine.len());
         for (op_id, op) in scan.mine {
             if drained.is_some_and(|mark| op_id.0 <= mark) {
                 self.dequeue_op(op_id).await?;
                 report.restore_residue.push(op_id);
+                continue;
+            }
+            // Its record PUT was acknowledged before the crash that left it
+            // queued, so its version is already live: republishing it would
+            // re-expose blocks a live record names to the cancel path.
+            if published.is_some_and(|mark| op_id.0 <= mark) {
+                self.dequeue_op(op_id).await?;
+                self.release_staged_blocks(&op).await;
+                report.dropped.push(op_id);
                 continue;
             }
             mine.push((op_id, op));
@@ -1109,11 +1136,12 @@ where
         pass.folder_mut(source)?
             .children
             .retain(|child| child.id != target.0);
-        if self
-            .publish_folder(scope, pass, source, modified_at)
-            .await
-            .is_err()
-        {
+        // The source-remove keeps its own classification through the
+        // compensation: `Unclassified` is the one verdict that retries free and
+        // forever, so a quota refusal, a permanent one, or a spent attempt must
+        // not be flattened into it. Only the undo's own failure is genuinely
+        // unclassified.
+        if let Err(halt) = self.publish_folder(scope, pass, source, modified_at).await {
             self.compensate_dest_add(
                 scope,
                 pass,
@@ -1127,7 +1155,7 @@ where
                 },
             )
             .await?;
-            return Err(Halt::Unclassified);
+            return Err(halt);
         }
         Ok(())
     }
@@ -1307,6 +1335,9 @@ where
                 loaded.epoch_tag_unknown,
             )
             .await?;
+        // Durable before the release: the blocks stop being recoverable here,
+        // so this is the last point a crash can still leave a replayable op.
+        self.mark_published(applied.op_id).await?;
         self.release_staged_blocks(&applied.op).await;
         if let Some(node) = self.base.borrow_mut().node_mut(target) {
             node.record_sequence = published.sequence;
@@ -1394,10 +1425,11 @@ where
         // below the mark (#924). An absence is only progress up to the durable
         // mark this pass keeps: past it, a missing block is loss, and the
         // version can never be assembled.
-        let uploaded = self.upload_mark(&staged.root_cid).await?;
+        let leaves = content.leaf_cids().len();
+        let uploaded = self.upload_mark(&staged.root_cid, leaves).await?;
         // The root manifest is block zero and goes up last, so the version's
         // whole block count is its leaves plus one.
-        let total = blocks(content.leaf_cids().len() + 1);
+        let total = blocks(leaves + 1);
         let emit = |phase: OpPhase, confirmed: u32| {
             self.emit_upload(
                 applied,
@@ -1418,7 +1450,8 @@ where
                     // over the leaves past it — those are released, so an
                     // uncovered one reads as loss (#924).
                     if index + 1 > uploaded {
-                        self.mark_uploaded(&staged.root_cid, index + 1).await?;
+                        self.mark_uploaded(&staged.root_cid, index + 1, leaves)
+                            .await?;
                     }
                     self.staging
                         .remove_staged_bytes(leaf_cid)
@@ -1478,35 +1511,29 @@ where
         });
     }
 
-    /// How many of this version's leaves a previous pass durably confirmed. A
-    /// mark naming another version has nothing to say about this one, so it
-    /// reads as zero and every absent leaf is loss.
-    async fn upload_mark(&self, root_cid: &[u8]) -> Result<usize, Halt> {
-        let Some(stored) = self
+    /// How many of this version's `leaves` a previous pass durably confirmed
+    /// ([`decode_upload_mark`]).
+    async fn upload_mark(&self, root_cid: &[u8], leaves: usize) -> Result<usize, Halt> {
+        Ok(self
             .staging
             .staged_bytes(UPLOAD_MARK_KEY)
             .await
             .map_err(seam)?
-        else {
-            return Ok(0);
-        };
-        let Some((root, count)) = stored.split_at_checked(stored.len().saturating_sub(4)) else {
-            return Ok(0);
-        };
-        if root != root_cid {
-            return Ok(0);
-        }
-        Ok(<[u8; 4]>::try_from(count).map_or(0, |c| u32::from_be_bytes(c) as usize))
+            .map_or(0, |stored| decode_upload_mark(&stored, root_cid, leaves)))
     }
 
-    /// Record that `count` of this version's leaves have uploaded. A high-water
-    /// mark, written *before* the leaf is released: it may over-claim a leaf
-    /// still staged, which the next pass re-uploads, but must never lag or
-    /// regress below one already released — the hole guard would read those
-    /// uploaded bytes as loss (#924).
-    async fn mark_uploaded(&self, root_cid: &[u8], count: usize) -> Result<(), Halt> {
-        let mut mark = root_cid.to_vec();
-        mark.extend_from_slice(&(count as u32).to_be_bytes());
+    /// Record that `count` of this version's `leaves` have uploaded. A
+    /// high-water mark, written *before* the leaf is released: it may
+    /// over-claim a leaf still staged, which the next pass re-uploads, but must
+    /// never lag or regress below one already released — the hole guard would
+    /// read those uploaded bytes as loss (#924).
+    async fn mark_uploaded(
+        &self,
+        root_cid: &[u8],
+        count: usize,
+        leaves: usize,
+    ) -> Result<(), Halt> {
+        let mark = encode_upload_mark(root_cid, count, leaves).ok_or(Halt::Unclassified)?;
         self.staging
             .put_staged_bytes(UPLOAD_MARK_KEY, &mark)
             .await
@@ -1783,8 +1810,7 @@ where
         self.staging.remove_op(op_id).await.map_err(seam)
     }
 
-    /// Note one head block as orphaned, capped at [`REGISTRY_BATCH_MAX`] so a
-    /// session whose retires keep failing bounds its leak, not its memory.
+    /// Note one head block as orphaned.
     ///
     /// A head the live set still names never enters the queue: its only
     /// consumer physically unpins, and unpinning a head a live record names is
@@ -1798,25 +1824,7 @@ where
         {
             return;
         }
-        let mut orphans = self.orphan_heads.borrow_mut();
-        if orphans.len() < REGISTRY_BATCH_MAX {
-            orphans.push(cid.to_owned());
-        }
-    }
-
-    /// Retire the head blocks this session's publishes orphaned
-    /// ([`orphaned_head`]). A refused retire keeps them pending for the next
-    /// pass rather than losing the only record of what to retire.
-    async fn retire_orphan_heads(&self) {
-        let pending = self.orphan_heads.borrow().clone();
-        if pending.is_empty() {
-            return;
-        }
-        if retire(self.api, &pending).await.is_ok() {
-            let mut orphans = self.orphan_heads.borrow_mut();
-            let sent = pending.len().min(orphans.len());
-            orphans.drain(..sent);
-        }
+        self.orphan_heads.record(cid);
     }
 
     /// Retire every block a cancelled op put on the network. Best-effort: a
@@ -1956,6 +1964,21 @@ where
             .map_err(seam)
     }
 
+    /// Raise the published-op mark over `op_id`, between its record PUT and the
+    /// release of its staged blocks ([`PUBLISHED_OP_MARK_KEY`]).
+    async fn mark_published(&self, op_id: OpId) -> Result<(), Halt> {
+        let raised = op_id.0.max(
+            published_op_mark(self.staging)
+                .await
+                .map_err(seam)?
+                .unwrap_or(0),
+        );
+        self.staging
+            .put_staged_bytes(PUBLISHED_OP_MARK_KEY, &raised.to_be_bytes())
+            .await
+            .map_err(seam)
+    }
+
     /// The stored drained-op mark; `None` when nothing has drained on this
     /// device or the stored bytes are not a mark this build wrote.
     async fn drained_mark(&self) -> Result<Option<u64>, Halt> {
@@ -2031,6 +2054,50 @@ fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
     }
 }
 
+/// The upload mark's wire form: the version root CID followed by a big-endian
+/// `u32` leaf count. `None` where the count is not one this version could have
+/// reached — AGENTS.md rule 8's release-active mirror of
+/// [`decode_upload_mark`]'s bound, so a mark the reader discards as corrupt can
+/// never be written.
+fn encode_upload_mark(root_cid: &[u8], count: usize, leaves: usize) -> Option<Vec<u8>> {
+    let claim = u32::try_from(count).ok().filter(|_| count <= leaves)?;
+    let mut mark = root_cid.to_vec();
+    mark.extend_from_slice(&claim.to_be_bytes());
+    Some(mark)
+}
+
+/// How many of `root_cid`'s `leaves` the stored mark claims. A mark naming
+/// another version has nothing to say about this one, and one claiming more
+/// leaves than the version has is proof of a torn or rotted mark — both read as
+/// no progress, so every absent leaf stays loss.
+///
+/// Clamping the corrupt case to `leaves` would be the most trusting possible
+/// reading of bytes already known to be corrupt: it could cover every absent
+/// leaf and publish a manifest naming blocks nothing holds. Zero re-uploads
+/// whatever is still staged and leaves the rest to the hole guard.
+fn decode_upload_mark(stored: &[u8], root_cid: &[u8], leaves: usize) -> usize {
+    let Some((root, count)) = stored.split_at_checked(stored.len().saturating_sub(4)) else {
+        return 0;
+    };
+    if root != root_cid {
+        return 0;
+    }
+    let count = <[u8; 4]>::try_from(count).map_or(0, |c| u32::from_be_bytes(c) as usize);
+    if count > leaves { 0 } else { count }
+}
+
+/// The stored published-op mark ([`PUBLISHED_OP_MARK_KEY`]); `None` when
+/// nothing has published on this device or the stored bytes are not a mark this
+/// build wrote. Read by the drain and by the facade's cancel command, which owe
+/// the same answer about an op whose version is already live.
+pub(crate) async fn published_op_mark<St: StagingStore>(staging: &St) -> SeamResult<Option<u64>> {
+    Ok(staging
+        .staged_bytes(PUBLISHED_OP_MARK_KEY)
+        .await?
+        .and_then(|bytes| <[u8; 8]>::try_from(bytes.as_slice()).ok())
+        .map(u64::from_be_bytes))
+}
+
 /// Classify a register-first refusal on the discriminator the registry stamps,
 /// never the status alone (the [`classify_upload`] discipline): the batch this
 /// op builds is refused identically on every retry, and the queue is strict
@@ -2045,34 +2112,6 @@ fn classify_register(error: ApiError) -> Halt {
     match code.as_deref() {
         Some(REGISTRY_BATCH_REFUSED) => Halt::Permanent(DeadLetterReason::PayloadRefused),
         _ => Halt::UploadAttempt,
-    }
-}
-
-/// Whether a failed publish left its head block charged and unreachable: the
-/// upload landed under its own pin row, no record naming it reached the
-/// transport, and the retry re-authors under a fresh seal nonce
-/// (blueprint/engine.md "Resolve/publish pipeline: Retirement", #921).
-fn orphaned_head(error: &RecordPublishError) -> bool {
-    match error {
-        // A status answer is the server's own refusal, so it charged no row; a
-        // dropped connection or an unreadable 2xx may have left one behind.
-        RecordPublishError::Upload(error) => {
-            matches!(error, ApiError::Transport(_) | ApiError::Decode(_))
-        }
-        RecordPublishError::HeadCidMismatch { .. } => true,
-        RecordPublishError::Publish(error) => match error {
-            // The head block is already uploaded and charged when publish
-            // refuses, and no record naming it reached the transport.
-            PublishError::Register(_)
-            | PublishError::FloorRead(_)
-            | PublishError::RecordTooLarge { .. } => true,
-            // Nothing was ever addressed, so there is no CID to retire.
-            PublishError::EmptyHeadCid => false,
-            // No ack is not proof nothing stored: unpinning a head a live
-            // record may still name is loss, where the row is only a leak
-            // (#916).
-            PublishError::AllEndpointsFailed => false,
-        },
     }
 }
 
@@ -2182,6 +2221,40 @@ mod tests {
         ] {
             assert!(Attempts::decode(stored).counts.is_empty());
         }
+    }
+
+    /// AGENTS.md rule 8 for the upload mark: one bound, both directions. The
+    /// encode guard returns `None` in every build rather than asserting, and the
+    /// reader reaches the same verdict on bytes planted past it.
+    #[test]
+    fn a_mark_claiming_more_leaves_than_the_version_has_is_refused_on_both_sides() {
+        const ROOT: &[u8] = b"root-cid";
+        let planted = |count: u32| {
+            let mut mark = ROOT.to_vec();
+            mark.extend_from_slice(&count.to_be_bytes());
+            mark
+        };
+        for count in [4usize, 5, usize::try_from(u32::MAX).expect("64-bit")] {
+            assert!(
+                encode_upload_mark(ROOT, count, 3).is_none(),
+                "{count}: the writer refuses what the reader discards",
+            );
+            assert_eq!(
+                decode_upload_mark(&planted(u32::try_from(count).unwrap_or(u32::MAX)), ROOT, 3),
+                0,
+                "{count}: a corrupt mark covers no leaf at all",
+            );
+        }
+        // The in-range case still round-trips, so the bound is the only change.
+        assert_eq!(
+            decode_upload_mark(&encode_upload_mark(ROOT, 2, 3).expect("in range"), ROOT, 3),
+            2,
+        );
+        assert_eq!(
+            decode_upload_mark(&planted(2), b"another-root", 3),
+            0,
+            "a mark naming another version has nothing to say about this one",
+        );
     }
 
     #[test]

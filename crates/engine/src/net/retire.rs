@@ -6,9 +6,85 @@
 //! scope-root name lingers serving the tombstone until the migration window
 //! closes ([`root_retire_ready`], stubbed — see below).
 
+use core::cell::RefCell;
+
 use super::REGISTRY_BATCH_MAX;
 use crate::api::{ApiClient, ApiError};
+use crate::net::publish::PublishError;
+use crate::net::record_publish::RecordPublishError;
 use crate::seams::{CredentialStore, Http};
+
+/// Head blocks a publish left charged and unreachable, pending retirement.
+///
+/// Session-lived and shared by every publisher — the drain clears it at the end
+/// of a pass, the settings publish at the point of failure — so a retire the
+/// registry refused goes out again rather than being lost.
+#[derive(Debug, Default)]
+pub struct OrphanHeads(RefCell<Vec<String>>);
+
+impl OrphanHeads {
+    /// Note one head block as orphaned, capped at [`REGISTRY_BATCH_MAX`] so a
+    /// session whose retires keep failing bounds its leak, not its memory.
+    pub fn record(&self, cid: &str) {
+        let mut pending = self.0.borrow_mut();
+        if pending.len() < REGISTRY_BATCH_MAX && !pending.iter().any(|held| held == cid) {
+            pending.push(cid.to_owned());
+        }
+    }
+
+    /// Retire what is pending. A refused retire keeps the set rather than
+    /// losing the only record of what to retire.
+    pub async fn retire_pending<H, C>(&self, api: &ApiClient<H, C>)
+    where
+        H: Http,
+        C: CredentialStore,
+    {
+        let pending = self.0.borrow().clone();
+        if pending.is_empty() {
+            return;
+        }
+        if retire(api, &pending).await.is_ok() {
+            let mut orphans = self.0.borrow_mut();
+            let sent = pending.len().min(orphans.len());
+            orphans.drain(..sent);
+        }
+    }
+
+    /// What is still pending, for tests and diagnostics.
+    #[must_use]
+    pub fn pending(&self) -> Vec<String> {
+        self.0.borrow().clone()
+    }
+}
+
+/// Whether a failed publish left its head block charged and unreachable: the
+/// upload landed under its own pin row, no record naming it reached the
+/// transport, and the retry re-authors under a fresh seal nonce
+/// (blueprint/engine.md "Resolve/publish pipeline: Retirement", #921).
+#[must_use]
+pub fn orphaned_head(error: &RecordPublishError) -> bool {
+    match error {
+        // A status answer is the server's own refusal, so it charged no row; a
+        // dropped connection or an unreadable 2xx may have left one behind.
+        RecordPublishError::Upload(error) => {
+            matches!(error, ApiError::Transport(_) | ApiError::Decode(_))
+        }
+        RecordPublishError::HeadCidMismatch { .. } => true,
+        RecordPublishError::Publish(error) => match error {
+            // The head block is already uploaded and charged when publish
+            // refuses, and no record naming it reached the transport.
+            PublishError::Register(_)
+            | PublishError::FloorRead(_)
+            | PublishError::RecordTooLarge { .. } => true,
+            // Nothing was ever addressed, so there is no CID to retire.
+            PublishError::EmptyHeadCid => false,
+            // No ack is not proof nothing stored: unpinning a head a live
+            // record may still name is loss, where the row is only a leak
+            // (#916).
+            PublishError::AllEndpointsFailed => false,
+        },
+    }
+}
 
 /// Batch-retire registry rows for `targets` (`ipnsName`s or CIDs). Idempotent
 /// server-side (blueprint/api.md), so a replayed batch — a resumed name wave, or

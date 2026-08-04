@@ -29,9 +29,9 @@ use cipherbox_engine::seams::{
 use cipherbox_engine::testkit::fakes::VirtualScheduler;
 use cipherbox_engine::testkit::{FakeDevice, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    DefaultsReason, Gateway, GatewayConfig, GatewaySource, ProviderError, RetentionPolicy,
-    SettingsLoad, SettingsPublishError, SyncTimingProfile, VaultSettings, load_settings,
-    publish_settings, settings_name,
+    DefaultsReason, Gateway, GatewayConfig, GatewaySource, OrphanHeads, ProviderError,
+    RetentionPolicy, SettingsLoad, SettingsPublishError, SyncTimingProfile, VaultSettings,
+    load_settings, publish_settings, settings_name,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -47,6 +47,11 @@ const EOL: &str = "2099-01-01T00:00:00Z";
 #[derive(Clone, Default)]
 struct Blocks {
     store: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+    /// Answer register-first with a refusal, so the publish stops with its head
+    /// block already uploaded and charged.
+    refuse_register: Arc<Mutex<bool>>,
+    /// Every retire request body, verbatim.
+    retired: Arc<Mutex<Vec<String>>>,
 }
 
 impl Blocks {
@@ -54,6 +59,21 @@ impl Blocks {
         let cid = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
         self.store.lock().expect("lock").insert(cid.clone(), block);
         cid
+    }
+
+    fn refuse_register(&self) {
+        *self.refuse_register.lock().expect("lock") = true;
+    }
+
+    fn retired(&self) -> Vec<String> {
+        self.retired.lock().expect("lock").clone()
+    }
+
+    /// The one block on the plane, for a fixture that uploaded exactly one.
+    fn only_block(&self) -> String {
+        let store = self.store.lock().expect("lock");
+        assert_eq!(store.len(), 1, "exactly one block was uploaded");
+        store.keys().next().expect("one block").clone()
     }
 
     fn reply(&self, request: &HttpRequest) -> SeamResult<HttpResponse> {
@@ -70,6 +90,20 @@ impl Blocks {
             let size = block.len();
             let cid = self.put(block);
             return ok(format!("{{\"cid\":\"{cid}\",\"size\":{size}}}").into_bytes());
+        }
+        if url.ends_with("/registry/retire") {
+            self.retired.lock().expect("lock").push(
+                String::from_utf8(request.body.clone().unwrap_or_default())
+                    .unwrap_or_else(|_| String::new()),
+            );
+            return ok(Vec::new());
+        }
+        if url.ends_with("/registry/register") && *self.refuse_register.lock().expect("lock") {
+            return Ok(HttpResponse {
+                status: 400,
+                headers: Vec::new(),
+                body: Vec::new(),
+            });
         }
         if url.contains("/registry/") {
             return ok(Vec::new());
@@ -139,6 +173,7 @@ fn publish(
         &world.scheduler,
         &SyncTimingProfile::CI,
         &mut SeededEntropy::new(1),
+        &OrphanHeads::default(),
         secret,
         settings,
     ))
@@ -150,6 +185,18 @@ fn publish(
 /// ephemeral varies with the sequence: two bodies sealed under one key must
 /// never share one, in fixtures as in production.
 fn seed_settings(device: &FakeDevice, blocks: &Blocks, body: &[u8], sequence: u64) {
+    seed_settings_until(device, blocks, body, sequence, EOL);
+}
+
+/// [`seed_settings`] with the record's client-signed EOL under the fixture's
+/// control, so a lapsed one can be hand-minted.
+fn seed_settings_until(
+    device: &FakeDevice,
+    blocks: &Blocks,
+    body: &[u8],
+    sequence: u64,
+    eol: &str,
+) {
     let mut ephemeral = [8u8; 32];
     ephemeral[0] = u8::try_from(sequence).expect("fixture sequences are small");
     let block = seal_settings_record(&kdf::enc_subkey(&SECRET), &ephemeral, body).expect("seal");
@@ -159,7 +206,7 @@ fn seed_settings(device: &FakeDevice, blocks: &Blocks, body: &[u8], sequence: u6
         format!("/ipfs/{cid}").as_bytes(),
         sequence,
         TTL_NANOS,
-        EOL,
+        eol,
     )
     .marshal();
     for endpoint in device.record_store.endpoints() {
@@ -263,6 +310,7 @@ fn consecutive_publishes_never_reuse_the_hpke_ephemeral() {
             &world.scheduler,
             &SyncTimingProfile::CI,
             &mut entropy,
+            &OrphanHeads::default(),
             &SECRET,
             &settings,
         ))
@@ -355,6 +403,7 @@ fn an_unconfirmed_publish_is_reported_and_never_advances_the_floor() {
         &world.scheduler,
         &SyncTimingProfile::CI,
         &mut SeededEntropy::new(3),
+        &OrphanHeads::default(),
         &SECRET,
         &configured(),
     ));
@@ -1097,6 +1146,7 @@ fn settings_the_reader_would_refuse_are_never_published() {
             &world.scheduler,
             &SyncTimingProfile::CI,
             &mut SeededEntropy::new(2),
+            &OrphanHeads::default(),
             &SECRET,
             &settings,
         ));
@@ -1161,6 +1211,11 @@ fn a_body_carrying_a_refused_endpoint_is_rejected_on_the_way_back_in() {
 
 /// A settings body built straight in core's codec, bypassing the encode guard.
 fn hand_encoded_body(endpoint: &str) -> Vec<u8> {
+    hand_encoded_body_at(endpoint, 1)
+}
+
+/// [`hand_encoded_body`] at a chosen body revision.
+fn hand_encoded_body_at(endpoint: &str, revision: u64) -> Vec<u8> {
     use cipherbox_core::codec::{Map, Value, encode};
 
     let mut byo = Map::new();
@@ -1171,5 +1226,292 @@ fn hand_encoded_body(endpoint: &str) -> Vec<u8> {
     m.insert("byo", Value::Map(byo));
     m.insert("keepLatest", Value::Null);
     m.insert("pinMode", Value::Text("hosted".to_owned()));
+    m.insert("revision", Value::Unsigned(revision));
     encode(&Value::Map(m)).expect("encode")
+}
+
+/// The settings [`hand_encoded_body`] describes, as a load hands them back.
+fn hand_encoded_settings(endpoint: &str) -> VaultSettings {
+    VaultSettings {
+        pin_mode: PinMode::Hosted,
+        byo: Some(ByoIpfsConfig {
+            endpoint: endpoint.to_owned(),
+            kind: ByoKind::Kubo,
+            access_token: None,
+        }),
+        retention: RetentionPolicy::KeepAll,
+    }
+}
+
+/// The `revision` the sealed body at `name` carries.
+fn published_revision(device: &FakeDevice, blocks: &Blocks, name: &IpnsName) -> u64 {
+    let block = published_block(device, blocks, name);
+    let body = open_settings_record(&kdf::enc_subkey(&SECRET), &block).expect("open");
+    cipherbox_core::codec::decode(&body)
+        .expect("decode")
+        .as_map()
+        .expect("map")
+        .get("revision")
+        .expect("the body carries a revision")
+        .as_unsigned()
+        .expect("unsigned")
+}
+
+// ---------------------------------------------------------------------------
+// Freshness: the EOL bound and the body revision
+// ---------------------------------------------------------------------------
+
+/// A 2026 instant, so a fixture EOL can sit either side of the clock.
+const NOW: UnixMillis = UnixMillis(1_772_000_000_000);
+const LAPSED_EOL: &str = "2020-01-01T00:00:00Z";
+
+/// The settings record's reader is always its signer, so a lapsed EOL is a
+/// refusal rather than the availability event a lapse is plane-wide: nothing
+/// here waits on a dormant owner to revive.
+#[test]
+fn a_lapsed_eol_is_not_authoritative_and_degrades_to_last_known_good() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    world.scheduler.advance_to(NOW);
+
+    // The control: the same shape inside its EOL resolves, so the verdict below
+    // is the lapse and nothing upstream of it.
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body("https://kubo.example"),
+        1,
+    );
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Resolved(hand_encoded_settings("https://kubo.example")),
+    );
+
+    seed_settings_until(
+        &device,
+        &blocks,
+        &hand_encoded_body_at("https://other.example", 2),
+        2,
+        LAPSED_EOL,
+    );
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Stale {
+            settings: hand_encoded_settings("https://kubo.example"),
+            reason: DefaultsReason::Expired,
+        },
+        "a lapsed record never replaces the copy this device authenticated",
+    );
+}
+
+/// A cold device has no last-known-good copy, so a lapsed record leaves it on
+/// the documented defaults with the reason named.
+#[test]
+fn a_lapsed_eol_on_a_cold_device_reports_expiry_rather_than_applying_the_record() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    world.scheduler.advance_to(NOW);
+    seed_settings_until(
+        &device,
+        &blocks,
+        &hand_encoded_body("https://kubo.example"),
+        1,
+        LAPSED_EOL,
+    );
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Defaults(DefaultsReason::Expired),
+    );
+}
+
+/// Two owner-signed records at one sequence are equally fresh to the sequence
+/// floor and equally live to the EOL. The sealed body revision is what orders
+/// them, so the fork this device already adopted past is a replay.
+#[test]
+fn a_body_revision_below_the_adopted_high_water_is_refused() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body_at("https://kubo.example", 5),
+        1,
+    );
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Resolved(hand_encoded_settings("https://kubo.example")),
+    );
+
+    // The losing fork of the same publish: same name, same sequence, same
+    // signer, a lower revision.
+    seed_settings(
+        &device,
+        &blocks,
+        &hand_encoded_body_at("https://attacker.example", 4),
+        1,
+    );
+    assert_eq!(
+        load(&world, &device, &blocks, &SECRET),
+        SettingsLoad::Stale {
+            settings: hand_encoded_settings("https://kubo.example"),
+            reason: DefaultsReason::RevisionRolledBack {
+                floor: 5,
+                revision: 4,
+            },
+        },
+    );
+}
+
+/// The revision is minted per publish **attempt**, before the PUT: one derived
+/// from the confirm-gated sequence floor would re-mint the same value on the
+/// retry and tell the two forks apart from nothing.
+#[test]
+fn a_retry_mints_a_revision_above_the_attempt_it_replaces() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    serve_http(&device, &blocks, 4);
+    assert_eq!(
+        block_on(publish_settings(
+            &AcksNothingBack,
+            &api,
+            &device.floor_store,
+            &world.scheduler,
+            &SyncTimingProfile::CI,
+            &mut SeededEntropy::new(6),
+            &OrphanHeads::default(),
+            &SECRET,
+            &configured(),
+        ))
+        .unwrap_err(),
+        SettingsPublishError::Unconfirmed,
+    );
+
+    publish(&world, &device, &blocks, &SECRET, &configured());
+    assert_eq!(
+        published_revision(&device, &blocks, &settings_name(&SECRET)),
+        2,
+        "the retry mints above the attempt that never landed",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Orphan-head retirement
+// ---------------------------------------------------------------------------
+
+/// A transport that refuses every PUT, so the fan-out acknowledges nothing.
+#[derive(Clone)]
+struct AcksNoPut;
+
+impl RecordTransport for AcksNoPut {
+    fn endpoints(&self) -> Vec<EndpointId> {
+        vec![EndpointId::new("fake:refuses-writes")]
+    }
+
+    async fn get_record(
+        &self,
+        _endpoint: &EndpointId,
+        _routing_key: &str,
+        _max_bytes: usize,
+    ) -> SeamResult<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
+    async fn put_record(
+        &self,
+        _endpoint: &EndpointId,
+        _routing_key: &str,
+        _record: &[u8],
+    ) -> SeamResult<()> {
+        Err(SeamError::new("endpoint refused the write"))
+    }
+}
+
+/// The head block goes up under its own charged pin row before register-first
+/// runs, and the retry re-seals under a fresh nonce, so a refusal there leaves
+/// a block no record will ever name.
+#[test]
+fn a_register_first_refusal_retires_the_settings_head_it_uploaded() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    blocks.refuse_register();
+    serve_http(&device, &blocks, 4);
+    let orphans = OrphanHeads::default();
+
+    let outcome = block_on(publish_settings(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(7),
+        &orphans,
+        &SECRET,
+        &configured(),
+    ));
+    assert!(matches!(
+        outcome.unwrap_err(),
+        SettingsPublishError::Publish(_),
+    ));
+
+    let head = blocks.only_block();
+    let retired = blocks.retired();
+    assert_eq!(retired.len(), 1, "exactly one retire batch went out");
+    assert!(
+        retired[0].contains(&head),
+        "the retire names the head block the refused publish charged",
+    );
+    assert!(
+        orphans.pending().is_empty(),
+        "an accepted retire clears the pending set",
+    );
+}
+
+/// No ack is not proof nothing stored: unpinning a head a live record may still
+/// name is loss, where leaving the row charged is only a leak.
+#[test]
+fn a_settings_publish_whose_fan_out_acked_nothing_retires_nothing() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let device = world.device(b"me");
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        "http://api.test",
+    );
+    serve_http(&device, &blocks, 4);
+    let orphans = OrphanHeads::default();
+
+    let outcome = block_on(publish_settings(
+        &AcksNoPut,
+        &api,
+        &device.floor_store,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(8),
+        &orphans,
+        &SECRET,
+        &configured(),
+    ));
+    assert!(matches!(
+        outcome.unwrap_err(),
+        SettingsPublishError::Publish(_),
+    ));
+    assert!(blocks.retired().is_empty(), "nothing was retired");
+    assert!(orphans.pending().is_empty(), "nothing is pending either");
 }
