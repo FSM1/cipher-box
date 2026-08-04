@@ -1,10 +1,16 @@
 //! Redacted renderings.
 //!
-//! Never log keys or seeds (AGENTS.md rule 2), and in a zero-knowledge system
-//! sealed plaintext — a filename, a child `ipnsName`, a recipient's identity key
-//! — is the very thing the server must never see, so it is redacted on the same
-//! terms. Public wire artifacts (ciphertexts, signatures, CIDs, node ids, epoch
-//! counters) render in full; only what a seal protects is withheld.
+//! What a rendering withholds is decoded **user content** — a filename, a child
+//! `ipnsName`, an application payload — which in a zero-knowledge system is
+//! exactly what the server must never see, so a log line must not carry it
+//! either (AGENTS.md rule 2). Public material renders in full: ciphertexts,
+//! signatures, CIDs, epoch counters, and public keys, which carry their own
+//! rendering policy at their type. Secret key material redacts at its type too
+//! ([`crate::suite::secret::SecretBytes`]).
+//!
+//! A node id renders while its `ipnsName` does not: the name is a live handle
+//! that resolves a record, whereas an id reaches one only through the write
+//! scope seed.
 //!
 //! Lengths are kept: a rendering with no shape at all is useless for diagnosis.
 
@@ -13,7 +19,13 @@ use core::fmt;
 use crate::error::DisplayKey;
 
 /// A byte buffer rendered as its length alone.
-pub(crate) struct RedactedBytes(pub(crate) usize);
+pub(crate) struct RedactedBytes(usize);
+
+impl RedactedBytes {
+    pub(crate) fn of(bytes: &[u8]) -> Self {
+        Self(bytes.len())
+    }
+}
 
 impl fmt::Debug for RedactedBytes {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -22,7 +34,7 @@ impl fmt::Debug for RedactedBytes {
 }
 
 /// Text rendered as its character count alone.
-pub(crate) struct RedactedText(pub(crate) usize);
+pub(crate) struct RedactedText(usize);
 
 impl RedactedText {
     pub(crate) fn of(s: &str) -> Self {

@@ -16,9 +16,12 @@
 //! sealed, owner-signed payload. `id` and `scope` both carry the scope id, so a
 //! pointer sealed for one scope can never open under another.
 
+use core::fmt;
+
 use zeroize::Zeroize;
 
-use crate::codec::{Map, Value, decode, encode, encode_fixed_depth};
+use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
+use crate::codec::{Map, RedactedText, Value, decode, encode, encode_fixed_depth};
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::ipns::IpnsName;
 use crate::seal::{AadContext, STRUCT_TAG_POINTER_PAYLOAD};
@@ -29,7 +32,11 @@ use super::{bytes_fixed, req};
 
 /// The re-point object published at a scope (or vault) pointer. Owner-signed
 /// and owner-maintained; the cold-start floor anchor (`minReadEpoch`).
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The root names render redacted: hiding the pointer-to-current-root binding
+/// is what this payload's seal is *for*, and `prev_root` exposes the migration
+/// window on top of it.
+#[derive(Clone, PartialEq, Eq)]
 pub struct RepointObject {
     /// The scope id (the scope root's 16-byte node UUID).
     pub scope_id: [u8; 16],
@@ -42,6 +49,27 @@ pub struct RepointObject {
     pub min_read_epoch: u64,
     /// The previous root name during a migration window, if any.
     pub prev_root: Option<IpnsName>,
+}
+
+impl fmt::Debug for RepointObject {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RepointObject")
+            .field("scope_id", &self.scope_id)
+            .field(
+                "current_root",
+                &RedactedText::of(self.current_root.as_str()),
+            )
+            .field("write_epoch", &self.write_epoch)
+            .field("min_read_epoch", &self.min_read_epoch)
+            .field(
+                "prev_root",
+                &self
+                    .prev_root
+                    .as_ref()
+                    .map(|n| RedactedText::of(n.as_str())),
+            )
+            .finish()
+    }
 }
 
 impl RepointObject {
@@ -110,7 +138,11 @@ pub fn seal_pointer_payload(
     let mut m = Map::new();
     m.insert("object", object_value);
     m.insert("ownerSig", Value::Bytes(owner_sig.to_compact().to_vec()));
-    let mut plaintext = encode_fixed_depth(&Value::Map(m));
+    let mut plaintext = {
+        let mut tree = Value::Map(m);
+        let guard = ScrubOnDrop(&mut tree);
+        encode_fixed_depth(guard.0)
+    };
 
     let sealed = crate::seal::seal(
         pointer_read_key,
@@ -141,12 +173,14 @@ pub fn open_pointer_payload(
     result
 }
 
+/// The transient decoded tree copies the root names, so it is scrubbed on drop;
+/// the returned object's own copies are the caller's.
 fn decode_and_verify(
     plaintext: &[u8],
     owner_identity: &EcdsaVerifier,
 ) -> Result<RepointObject, CodecError> {
-    let value = decode(plaintext)?;
-    let map = value.as_map()?;
+    let value = ScrubOwned(decode(plaintext)?);
+    let map = value.value().as_map()?;
 
     let object_value = req(map, "object")?;
     let sig_bytes = req(map, "ownerSig")?.as_bytes()?;
@@ -193,6 +227,23 @@ mod tests {
             min_read_epoch: 2,
             prev_root: Some(name(2)),
         }
+    }
+
+    /// Hiding the pointer-to-root binding is what the seal is for; no `{:?}`
+    /// may hand it back.
+    #[test]
+    fn debug_redacts_the_root_names() {
+        let obj = object();
+        let rendered = format!("{obj:?}");
+        assert!(!rendered.contains(obj.current_root.as_str()), "{rendered}");
+        assert!(
+            !rendered.contains(obj.prev_root.as_ref().unwrap().as_str()),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("min_read_epoch: 2"),
+            "the floor stays legible: {rendered}"
+        );
     }
 
     #[test]

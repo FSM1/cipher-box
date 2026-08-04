@@ -92,7 +92,7 @@ impl fmt::Debug for ChildRef {
         f.debug_struct("ChildRef")
             .field("id", &self.id)
             .field("name", &RedactedText::of(&self.name))
-            .field("ipns_name", &RedactedBytes(self.ipns_name.len()))
+            .field("ipns_name", &RedactedBytes::of(&self.ipns_name))
             .field("kind", &self.kind)
             .field("link_counter", &self.link_counter)
             .field("unknown", &self.unknown)

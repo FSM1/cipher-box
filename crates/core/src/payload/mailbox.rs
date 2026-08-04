@@ -50,7 +50,7 @@ pub struct MailboxItem {
 impl fmt::Debug for MailboxItem {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MailboxItem")
-            .field("payload", &RedactedBytes(self.payload.len()))
+            .field("payload", &RedactedBytes::of(&self.payload))
             .field("sender_identity", &self.sender_identity)
             .finish()
     }
@@ -105,12 +105,11 @@ pub fn seal_mailbox_payload(
     inner_map.insert("payload", Value::Bytes(payload.to_vec()));
     inner_map.insert("senderIdentityPk", Value::Bytes(sender_pk.to_vec()));
     inner_map.insert("senderSig", Value::Bytes(sender_sig.to_compact().to_vec()));
-    // The transient tree holds a verbatim copy of the payload; the drop guard
-    // wipes it on both return and panic-unwind.
-    let mut inner_tree = Value::Map(inner_map);
-    let guard = ScrubOnDrop(&mut inner_tree);
-    let mut inner = encode_fixed_depth(guard.0);
-    drop(guard);
+    let mut inner = {
+        let mut tree = Value::Map(inner_map);
+        let guard = ScrubOnDrop(&mut tree);
+        encode_fixed_depth(guard.0)
+    };
 
     let info = build_aad(&mailbox_ctx(v));
     let sealed = hpke_seal(recipient_enc_pub, ephemeral_scalar, &info, &[], &inner);
@@ -146,9 +145,8 @@ pub fn open_mailbox_payload(
     result
 }
 
-/// The transient decoded tree holds a verbatim copy of the payload, so it is
-/// scrubbed on drop via [`ScrubOwned`]; the returned item's own copy is the
-/// caller's.
+/// The transient decoded tree copies the payload, so it is scrubbed on drop;
+/// the item's own copy is the caller's.
 fn verify_inner(inner: &[u8], v: u64, recipient_pk: &[u8]) -> Result<MailboxItem, CodecError> {
     let value = ScrubOwned(decode(inner)?);
     let map = value.value().as_map()?;
@@ -195,29 +193,14 @@ mod tests {
         assert_eq!(item.sender_identity, sender().verifying_key());
     }
 
-    /// The seal path guards two transient trees carrying a verbatim payload copy
-    /// (the signature preimage and the inner map) and the open path guards the
-    /// decoded one, from which the sender key is read *after* the payload is
-    /// lifted out. All three wipe their own tree only: the caller's payload and
-    /// the opened item survive (terminal-owner rule).
+    /// The seal path's two guards wipe their own transient trees, never the
+    /// caller's payload: one buffer seals to the same block twice.
     #[test]
-    fn scrub_guards_spare_the_payload_the_caller_and_the_item_own() {
+    fn sealing_one_borrowed_payload_twice_is_byte_identical() {
         let payload = b"discovery ping".to_vec();
-        let block =
-            seal_mailbox_payload(&recipient().public(), &[0x51; 32], 2, &sender(), &payload);
-        assert_eq!(
-            payload, b"discovery ping",
-            "the caller's buffer is untouched"
-        );
-        assert_eq!(
-            seal_mailbox_payload(&recipient().public(), &[0x51; 32], 2, &sender(), &payload),
-            block,
-            "a re-seal of the same inputs is byte-identical"
-        );
-
-        let item = open_mailbox_payload(&recipient(), 2, &block).unwrap();
-        assert_eq!(item.payload, payload);
-        assert_eq!(item.sender_identity, sender().verifying_key());
+        let seal =
+            || seal_mailbox_payload(&recipient().public(), &[0x51; 32], 2, &sender(), &payload);
+        assert_eq!(seal(), seal());
     }
 
     /// The payload is HPKE plaintext; no `{:?}` may carry it.

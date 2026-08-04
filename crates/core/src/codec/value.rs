@@ -152,9 +152,9 @@ impl Value {
     /// CBOR diagnostic notation (RFC 8949 §8), restricted to the profile's data
     /// model. KAT accept vectors pin this rendering via their `diag` field.
     ///
-    /// Not a [`fmt::Display`] impl: the rendering carries the value verbatim, so
-    /// it has to be asked for by name rather than being reachable from a stray
-    /// `{}` in a log line (see [`super::redact`]).
+    /// Deliberately not a [`fmt::Display`] impl — a verbatim rendering has to be
+    /// asked for by name. The returned `String` carries whatever the tree does,
+    /// so a caller rendering secret-bearing input owns wiping it.
     pub fn to_diag(&self) -> String {
         Diag(self).to_string()
     }
@@ -167,10 +167,7 @@ impl fmt::Debug for Value {
         match self {
             Self::Unsigned(n) => f.debug_tuple("Unsigned").field(n).finish(),
             Self::Negative(n) => f.debug_tuple("Negative").field(n).finish(),
-            Self::Bytes(b) => f
-                .debug_tuple("Bytes")
-                .field(&RedactedBytes(b.len()))
-                .finish(),
+            Self::Bytes(b) => f.debug_tuple("Bytes").field(&RedactedBytes::of(b)).finish(),
             Self::Text(t) => f.debug_tuple("Text").field(&RedactedText::of(t)).finish(),
             Self::Array(items) => f.debug_tuple("Array").field(items).finish(),
             Self::Map(map) => f.debug_tuple("Map").field(map).finish(),

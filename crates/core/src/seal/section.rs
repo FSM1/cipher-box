@@ -276,8 +276,8 @@ const GRANT_SECTION_KNOWN: &[&str] = &[
 /// closed on a malformed frame, a duplicate grant-blob tag (`duplicate-grant-tag`,
 /// #39 D7), or a duplicate-tag commitment (surfaced by the commitment codec).
 ///
-/// The transient decoded tree carries a verbatim copy of the whole signed blob
-/// set, so it is scrubbed on drop via [`ScrubOwned`].
+/// The transient decoded tree copies the whole signed blob set, so it is
+/// scrubbed on drop.
 pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
     let value = ScrubOwned(decode(bytes)?);
     let map = value.value().as_map()?;
@@ -367,8 +367,6 @@ pub fn encode_grant_section(section: &GrantSection) -> Result<Vec<u8>, CodecErro
     }
     m.insert("writeBody", section.write_body.to_value());
     merge_unknown(&mut m, &section.unknown);
-    // The transient tree copies the whole signed blob set; the drop guard wipes
-    // it on both return and panic-unwind.
     let mut value = Value::Map(m);
     let guard = ScrubOnDrop(&mut value);
     encode(guard.0)
@@ -452,16 +450,15 @@ mod tests {
         );
     }
 
-    /// The decoder's [`ScrubOwned`] wipes only its own transient tree: the blob
-    /// set it lifted out survives (terminal-owner rule).
+    /// The encode guard wipes its own transient tree, never the caller's
+    /// section — see [`super::super::write_body`]'s sibling test.
     #[test]
-    fn decode_scrub_preserves_the_blob_set_it_lifted_out() {
-        let bytes = encode_grant_section(&sample()).expect("encodes");
-        let decoded = decode_grant_section(&bytes).expect("decodes");
-        assert_eq!(decoded.grant_blobs[0].ciphertext, vec![0x0b, 0x0c]);
-        assert_eq!(decoded.owner_blob.ciphertext, vec![0x21, 0x22]);
-        assert_eq!(decoded.write_body.sealed, vec![0x50, 0x51]);
-        assert_eq!(decoded.commitment.ipns_name, b"scope-root-name");
+    fn encoding_one_borrowed_section_twice_is_byte_identical() {
+        let section = sample();
+        assert_eq!(
+            encode_grant_section(&section).unwrap(),
+            encode_grant_section(&section).unwrap()
+        );
     }
 
     #[test]
