@@ -17,6 +17,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::num::NonZeroU64;
 use std::path::Path;
 
 use cipherbox_core::codec::{
@@ -4547,10 +4548,25 @@ fn build_write_body_accept() -> Vec<WriteBodyAcceptVector> {
         direct_child_scope_index: vec![ChildScopeRef::new([0x77; 16], b"one-child".to_vec())],
         unknown: PreservedFields::new(),
     };
+    // An invite link's ledger row: an expiry deadline beside a personal row that
+    // has none. Only the deadline distinguishes the two on the wire.
+    let expiring = WriteBody {
+        grant_ledger: vec![
+            GrantLedgerEntry::new([0x02; 33], [0x11; 32], Permission::Read, [0x21; 32]),
+            GrantLedgerEntry {
+                expires_at: NonZeroU64::new(1_700_000_000_000),
+                ..GrantLedgerEntry::new([0x03; 33], [0x12; 32], Permission::Read, [0x22; 32])
+            },
+        ],
+        write_history_link: b"h".to_vec(),
+        direct_child_scope_index: Vec::new(),
+        unknown: PreservedFields::new(),
+    };
     let cases: Vec<(&str, WriteBody)> = vec![
         ("full", full),
         ("write-epoch-1-empty", epoch_one),
         ("read-only-single-child", read_only),
+        ("invite-expiring-entry", expiring),
     ];
 
     let mut names = BTreeSet::new();
@@ -4641,6 +4657,23 @@ fn build_write_body_reject() -> Vec<RejectVector> {
             "write-history-link-wrong-type",
             body(vec![good_entry()], Value::Unsigned(0)),
             "unexpected-type",
+            "malformed",
+        ),
+        (
+            // Zero is the natural uninitialized value, and would be dead for
+            // every clock — the opposite of the absent field's "no deadline".
+            "ledger-zero-expiry",
+            body(
+                vec![map_of(vec![
+                    ("expiresAt", Value::Unsigned(0)),
+                    ("permission", Value::Text("read".to_string())),
+                    ("recipientEncPk", Value::Bytes(vec![0x11; 32])),
+                    ("recipientIdentityPk", Value::Bytes(vec![0x02; 33])),
+                    ("tag", Value::Bytes(vec![0x21; 32])),
+                ])],
+                Value::Bytes(vec![]),
+            ),
+            "invalid-expiry",
             "malformed",
         ),
         (

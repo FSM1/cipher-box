@@ -484,6 +484,29 @@ pub(super) fn merge_unknown(map: &mut Map, unknown: &PreservedFields) {
     }
 }
 
+/// Reject a caller-built `unknown` list carrying a schema key
+/// ([`Malformed::UnknownFieldCollision`]).
+///
+/// [`merge_unknown`]'s precedence guard is presence-based, so it protects only
+/// fields the encoder always inserts. Where a typed field is **optional**, its
+/// key is free whenever the field is `None` and the preserved list would fill it
+/// — sealing a value the typed struct denies, or bytes the decoder rejects
+/// outright (AGENTS.md rule 8). Every encode whose schema has an optional field
+/// calls this first.
+pub(super) fn assert_unknown_disjoint(
+    unknown: &PreservedFields,
+    known: &[&str],
+) -> Result<(), CodecError> {
+    match unknown
+        .entries()
+        .iter()
+        .find(|(k, _)| known.contains(&k.as_str()))
+    {
+        Some((key, _)) => Err(Malformed::UnknownFieldCollision { key: key.clone() }.into()),
+        None => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
