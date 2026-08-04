@@ -203,10 +203,10 @@ pub enum CascadeError {
         /// The underlying re-seal rejection.
         error: ResealError,
     },
-    /// A re-sealed record did not land (register-first/PUT failed, or a concurrent
-    /// writer won the CAS). For a revocation the fresh seed MUST install, so both
-    /// failure modes abort — a lost race is fatal to *this* attempt, not tolerated
-    /// as it is in the idempotent sweep. Availability, retryable.
+    /// A re-sealed record did not land (register-first/PUT failed, a concurrent
+    /// writer won the CAS, or the publisher refused the bytes). For a revocation
+    /// the fresh seed MUST install, so every failure mode aborts — a lost race is
+    /// fatal to *this* attempt, not tolerated as it is in the idempotent sweep.
     Publish {
         /// The scope whose record did not land.
         scope_id: [u8; 16],
