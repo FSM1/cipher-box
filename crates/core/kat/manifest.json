@@ -281,16 +281,17 @@
     "historyLinkStructTag": 6,
     "writeBodyAccept": {
       "file": "vectors/grant/write_body_accept.json",
-      "count": 3
+      "count": 4
     },
     "writeBodyReject": {
       "file": "vectors/grant/write_body_reject.json",
-      "count": 5,
+      "count": 6,
       "checks": [
         "duplicate-grant-tag",
         "unexpected-type",
         "missing-field",
         "invalid-permission",
+        "invalid-expiry",
         "invalid-field-length"
       ]
     },

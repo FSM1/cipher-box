@@ -17,7 +17,7 @@
 //! fields.
 
 use crate::codec::{Map, Value, decode, encode};
-use crate::error::CodecError;
+use crate::error::{CodecError, Malformed};
 use crate::suite::ecdsa::IDENTITY_PUBLIC_LEN;
 use crate::suite::secret::SECRET_LEN;
 
@@ -43,14 +43,38 @@ pub struct GrantLedgerEntry {
     pub permission: Permission,
     /// The recipient's blinded tag (the grant blob's key).
     pub tag: [u8; SECRET_LEN],
+    /// The deadline past which this grant is inert, in Unix milliseconds;
+    /// `None` for a grant that does not expire. Carried for invite links
+    /// (blueprint/engine.md "Invites": expiry is a ledger field, lazily pruned).
+    /// The grant-set commitment does not cover it, so it is a client-honoured
+    /// deadline and a prune trigger, never the capability boundary — cutting a
+    /// grantee off is the owner's re-signed commitment plus a rotation.
+    pub expires_at: Option<u64>,
     /// Preserved unknown fields (never any of the known keys).
     pub unknown: PreservedFields,
 }
 
-const LEDGER_ENTRY_KNOWN: &[&str] = &["permission", "recipientEncPk", "recipientIdentityPk", "tag"];
+const LEDGER_ENTRY_KNOWN: &[&str] = &[
+    "expiresAt",
+    "permission",
+    "recipientEncPk",
+    "recipientIdentityPk",
+    "tag",
+];
+
+/// Reject `expiresAt: 0` on both the decode and the encode side
+/// ([`Malformed::InvalidExpiry`]): absence is the sole encoding of "no
+/// deadline", so a zero instant is a second spelling of it that is also
+/// permanently expired.
+fn check_expiry(expires_at: Option<u64>) -> Result<(), CodecError> {
+    match expires_at {
+        Some(0) => Err(Malformed::InvalidExpiry.into()),
+        _ => Ok(()),
+    }
+}
 
 impl GrantLedgerEntry {
-    /// A ledger entry with no preserved unknown fields.
+    /// A ledger entry that never expires and preserves no unknown fields.
     pub fn new(
         recipient_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
         recipient_enc_pk: [u8; SECRET_LEN],
@@ -62,6 +86,7 @@ impl GrantLedgerEntry {
             recipient_enc_pk,
             permission,
             tag,
+            expires_at: None,
             unknown: PreservedFields::new(),
         }
     }
@@ -76,17 +101,26 @@ impl GrantLedgerEntry {
             bytes_fixed::<SECRET_LEN>(req(map, "recipientEncPk")?, "recipientEncPk")?;
         let permission = Permission::from_value(req(map, "permission")?)?;
         let tag = bytes_fixed::<SECRET_LEN>(req(map, "tag")?, "tag")?;
+        let expires_at = match map.get("expiresAt") {
+            Some(v) => Some(v.as_unsigned()?),
+            None => None,
+        };
+        check_expiry(expires_at)?;
         Ok(Self {
             recipient_identity_pk,
             recipient_enc_pk,
             permission,
             tag,
+            expires_at,
             unknown: collect_unknown(map, LEDGER_ENTRY_KNOWN),
         })
     }
 
     fn to_value(&self) -> Value {
         let mut m = Map::new();
+        if let Some(expires_at) = self.expires_at {
+            m.insert("expiresAt", Value::Unsigned(expires_at));
+        }
         m.insert(
             "permission",
             Value::Text(self.permission.as_wire().to_string()),
@@ -202,11 +236,15 @@ pub fn decode_write_body(bytes: &[u8]) -> Result<WriteBody, CodecError> {
 /// root's `writeKey` with struct tag `write-body` by the caller / seal path).
 ///
 /// The write body is sealed outside core, so this encode is its release-active
-/// fail-closed guard: a duplicate-tag ledger fails here with the same
-/// `duplicate-grant-tag` verdict [`decode_write_body`] raises, so it never hands
-/// back bytes its own decoder rejects.
+/// fail-closed guard: a duplicate-tag ledger or a zero `expiresAt` fails here
+/// with the same `duplicate-grant-tag` / `invalid-expiry` verdict
+/// [`decode_write_body`] raises, so it never hands back bytes its own decoder
+/// rejects.
 pub fn encode_write_body(body: &WriteBody) -> Result<Vec<u8>, CodecError> {
     assert_grant_tags_unique(body.grant_ledger.iter().map(|e| e.tag))?;
+    for entry in &body.grant_ledger {
+        check_expiry(entry.expires_at)?;
+    }
     let mut m = Map::new();
     m.insert(
         "directChildScopeIndex",
@@ -367,6 +405,68 @@ mod tests {
             encode_write_body(&decoded).unwrap(),
             bytes,
             "unknown preserved"
+        );
+    }
+
+    #[test]
+    fn expiring_ledger_entry_round_trips_byte_stable() {
+        let mut body = sample();
+        body.grant_ledger[0].expires_at = Some(1_700_000_000_000);
+        let bytes = encode_write_body(&body).expect("encodes");
+        let decoded = decode_write_body(&bytes).expect("decodes");
+        assert_eq!(decoded, body);
+        assert_eq!(decoded.grant_ledger[1].expires_at, None, "absence survives");
+        assert_eq!(encode_write_body(&decoded).unwrap(), bytes, "byte-stable");
+    }
+
+    #[test]
+    fn zero_expiry_rejects_at_decode() {
+        // Hand-built wire bytes, the way a hostile peer's arrive: `expiresAt: 0`
+        // is a second spelling of "no deadline" that is also permanently expired.
+        let mut entry = Map::new();
+        entry.insert("expiresAt", Value::Unsigned(0));
+        entry.insert("permission", Value::Text("read".into()));
+        entry.insert("recipientEncPk", Value::Bytes(vec![0x11; 32]));
+        entry.insert("recipientIdentityPk", Value::Bytes(vec![0x02; 33]));
+        entry.insert("tag", Value::Bytes(vec![0x21; 32]));
+        let mut m = Map::new();
+        m.insert("directChildScopeIndex", Value::Array(vec![]));
+        m.insert("grantLedger", Value::Array(vec![Value::Map(entry)]));
+        m.insert("writeHistoryLink", Value::Bytes(vec![]));
+        let bytes = encode(&Value::Map(m)).unwrap();
+        assert_eq!(
+            decode_write_body(&bytes).unwrap_err().check(),
+            "invalid-expiry"
+        );
+    }
+
+    #[test]
+    fn encode_rejects_zero_expiry() {
+        // Release-active guard, exercised without relying on a `debug_assert`.
+        let mut body = sample();
+        body.grant_ledger[0].expires_at = Some(0);
+        assert_eq!(
+            encode_write_body(&body).unwrap_err().check(),
+            "invalid-expiry"
+        );
+    }
+
+    #[test]
+    fn non_unsigned_expiry_rejects() {
+        let mut entry = Map::new();
+        entry.insert("expiresAt", Value::Text("soon".into()));
+        entry.insert("permission", Value::Text("read".into()));
+        entry.insert("recipientEncPk", Value::Bytes(vec![0x11; 32]));
+        entry.insert("recipientIdentityPk", Value::Bytes(vec![0x02; 33]));
+        entry.insert("tag", Value::Bytes(vec![0x21; 32]));
+        let mut m = Map::new();
+        m.insert("directChildScopeIndex", Value::Array(vec![]));
+        m.insert("grantLedger", Value::Array(vec![Value::Map(entry)]));
+        m.insert("writeHistoryLink", Value::Bytes(vec![]));
+        let bytes = encode(&Value::Map(m)).unwrap();
+        assert_eq!(
+            decode_write_body(&bytes).unwrap_err().check(),
+            "unexpected-type"
         );
     }
 

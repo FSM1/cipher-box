@@ -23,6 +23,8 @@ use cipherbox_core::kdf;
 use cipherbox_core::seal::{GrantLedgerEntry, GrantSetCommitment, Permission};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 
+use crate::seams::UnixMillis;
+
 /// One grant blob as published in a scope root's envelope: its blinded `tag`
 /// (the lookup key) and the HPKE `enc`/`ciphertext` the recipient opens. The
 /// gate authenticates the blob's signature separately; this is only the
@@ -62,6 +64,20 @@ pub fn self_locate<'a>(
     tag: &[u8; 32],
 ) -> Option<&'a PublishedGrantBlob> {
     blobs.iter().find(|b| &b.tag == tag)
+}
+
+/// Whether a grant-ledger row is still live at `now` — the injected
+/// [`Scheduler::now`](crate::seams::Scheduler::now) instant, never a clock this
+/// layer reads.
+///
+/// A row with no deadline never expires. One with a deadline dies **at** it, not
+/// a tick later, so an expired row is inert on the read path immediately —
+/// before the discovered-expiry trigger prunes it from the commitment.
+pub fn entry_is_live(entry: &GrantLedgerEntry, now: UnixMillis) -> bool {
+    match entry.expires_at {
+        Some(expires_at) => now.0 < expires_at,
+        None => true,
+    }
 }
 
 /// An owner-only authority violation discovered on resolve: a re-sealed
@@ -170,6 +186,25 @@ mod tests {
         ];
         assert_eq!(self_locate(&blobs, &[0x02; 32]).unwrap().ciphertext, b"b");
         assert!(self_locate(&blobs, &[0x03; 32]).is_none());
+    }
+
+    #[test]
+    fn a_row_with_no_deadline_is_live_at_every_instant() {
+        let entry = ledger_entry([0x21; 32], Permission::Read);
+        assert!(entry_is_live(&entry, UnixMillis(0)));
+        assert!(entry_is_live(&entry, UnixMillis(u64::MAX)));
+    }
+
+    #[test]
+    fn a_deadline_row_dies_at_the_deadline_instant() {
+        let mut entry = ledger_entry([0x21; 32], Permission::Read);
+        entry.expires_at = Some(1_000);
+        assert!(entry_is_live(&entry, UnixMillis(999)));
+        assert!(
+            !entry_is_live(&entry, UnixMillis(1_000)),
+            "dies at, not after"
+        );
+        assert!(!entry_is_live(&entry, UnixMillis(1_001)));
     }
 
     #[test]
