@@ -247,7 +247,7 @@ degraded outcome applies a different policy rather than showing stale data.
   re-saved inside the window lapses on its own, and the placement decision then
   fails closed for want of a copy it can authenticate.
 - **The sealed body carries a monotonic revision.** The outer sequence cannot
-  order two records at the *same* sequence, and an unconfirmed publish
+  order two records at the _same_ sequence, and an unconfirmed publish
   followed by a retry mints exactly that: two owner-signed records at one
   sequence, either of which a chosen-record adversary can serve forever. The
   revision is minted **per publish attempt, advanced before the PUT** — one
@@ -268,7 +268,7 @@ degraded outcome applies a different policy rather than showing stale data.
   adopted revision to hold a record to; the revision closes the fork residual
   on a device with state, not on one without. Chaining the settings head CID
   into the vault pointer would give a cold device an anchor, but it inverts
-  the record's whole purpose — settings resolve *before* any vault resolve
+  the record's whole purpose — settings resolve _before_ any vault resolve
   precisely so a self-hosting owner never needs CipherBox to tell them where
   their own node is, and a BYO member would have to reach the network they
   configured in settings in order to read those settings. An API-held counter
