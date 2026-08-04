@@ -300,7 +300,10 @@ impl CascadeError {
                 ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel
             ),
             CascadeError::Reseal { error, .. } => matches!(error, ResealError::Entropy(_)),
-            CascadeError::Publish { .. } => true,
+            // A publish that did not land is availability; one the publisher
+            // refused is its own fail-closed verdict on the bytes, and retrying
+            // it forever would launder a trust violation into a stall (rule 6).
+            CascadeError::Publish { error, .. } => error.is_retryable(),
             CascadeError::Floor { .. } => true,
             CascadeError::EpochExhausted { .. } => false,
         }
@@ -1255,6 +1258,21 @@ mod tests {
         assert_eq!(err.check(), "publish-failed");
         assert_eq!(err.scope_id(), sid(0x0a));
         assert!(err.is_retryable(), "not-landed is an availability stall");
+        assert_eq!(spawned, 0);
+    }
+
+    /// A publisher that refuses the bytes has made its own fail-closed verdict,
+    /// so the abort is fatal — retrying it forever would launder a trust
+    /// violation into an availability stall (AGENTS.md rule 6).
+    #[test]
+    fn a_publish_the_publisher_refused_is_fatal_not_retryable() {
+        let net = FakeNet::new()
+            .scope(0x0a, 4, &[])
+            .publish_fault(0x0a, ScopeRootPublishError::Rejected);
+        let (outcome, _net, _f, spawned) = run(net, &[0x0a]);
+        let err = outcome.expect_err("a refused publish fails closed");
+        assert_eq!(err.check(), "publish-failed");
+        assert!(!err.is_retryable());
         assert_eq!(spawned, 0);
     }
 
