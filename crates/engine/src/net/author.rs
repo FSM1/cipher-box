@@ -48,10 +48,7 @@ pub enum AuthorError {
     CommitmentNameMismatch,
     /// A structure signature in the carried grant section does not recompute at
     /// the envelope's own scope and epoch, which the gate's stage 3 rejects
-    /// whole-record. The read and write planes advance on independent clocks, so
-    /// pairing a section with an envelope authored at another epoch is the way
-    /// this build would otherwise sign a root no reader — including itself —
-    /// can ever adopt.
+    /// whole-record.
     SectionSignatureInvalid,
     /// Core refused to seal or encode the authored body (a body decode would
     /// refuse to reopen, e.g. duplicate child ids).
@@ -139,8 +136,8 @@ pub fn author_child_envelope(
 /// section is the root's marker and rides `carried_unknown` verbatim, so the
 /// seed-bearing structures and their signatures survive a metadata republish
 /// untouched — which also means a republish must not carry a section belonging
-/// to some other name, so the two checks the gate's stages 2 and 5 make on
-/// arrival run here first (release-active).
+/// to some other name, or authored at some other epoch, so the checks the gate
+/// makes on arrival run here first (release-active).
 pub fn author_scope_root_envelope(
     authoring: EnvelopeAuthoring<'_>,
     name: &IpnsName,
@@ -153,8 +150,8 @@ pub fn author_scope_root_envelope(
 /// Author a scope root that installs a **freshly assembled** `section` — the
 /// re-seal path, where the section is not the carried one. `section` replaces
 /// whatever `carried_unknown` holds under the grant-section key, so the previous
-/// record's envelope fields can be carried in verbatim; the same two
-/// release-active checks then run on the result.
+/// record's envelope fields can be carried in verbatim; the same release-active
+/// checks then run on the result.
 pub fn author_scope_root_with_section(
     authoring: EnvelopeAuthoring<'_>,
     name: &IpnsName,
@@ -178,7 +175,7 @@ fn check_scope_root(envelope: &Envelope, name: &IpnsName) -> Result<(), AuthorEr
     if section.commitment.ipns_name != name.as_str().as_bytes() {
         return Err(AuthorError::CommitmentNameMismatch);
     }
-    authenticate_section_structures(&section, envelope.scope, envelope.epoch)
+    authenticate_section_structures(&section, envelope)
         .map_err(|_| AuthorError::SectionSignatureInvalid)?;
     Ok(())
 }
@@ -360,10 +357,10 @@ mod tests {
         })
     }
 
-    fn carried_section(fixture: &OwnerRootFixture) -> PreservedFields {
+    fn carried_section(section: &GrantSection) -> PreservedFields {
         [(
             "grantSection".to_owned(),
-            Value::Bytes(encode_grant_section(&fixture.grant_section).expect("encodes")),
+            Value::Bytes(encode_grant_section(section).expect("encodes")),
         )]
         .into_iter()
         .collect()
@@ -383,7 +380,7 @@ mod tests {
     fn a_scope_root_envelope_carries_its_grant_section_through() {
         let fixture = owner_root();
         let head = author_scope_root_envelope(
-            authoring(&folder(), carried_section(&fixture)),
+            authoring(&folder(), carried_section(&fixture.grant_section)),
             &fixture.name,
         )
         .unwrap();
@@ -397,8 +394,11 @@ mod tests {
         // a record published elsewhere is one the gate's stage 2 always rejects.
         let fixture = owner_root();
         assert_eq!(
-            author_scope_root_envelope(authoring(&folder(), carried_section(&fixture)), &name())
-                .unwrap_err(),
+            author_scope_root_envelope(
+                authoring(&folder(), carried_section(&fixture.grant_section)),
+                &name()
+            )
+            .unwrap_err(),
             AuthorError::CommitmentNameMismatch,
         );
     }
@@ -406,14 +406,34 @@ mod tests {
     #[test]
     fn a_scope_root_envelope_authored_off_its_sections_epoch_is_refused() {
         // Release-active (security rule 8): a read rotation moves the read epoch
-        // while the write plane's clock stands still, so nothing but this check
-        // stops a section signed at one epoch from being sealed into an envelope
-        // authored at another — bytes the gate's stage 3 always rejects.
+        // while the write plane's clock stands still, so nothing else stops a
+        // section signed at one epoch from riding an envelope authored at
+        // another — bytes the gate's stage 3 always rejects.
         let fixture = owner_root();
         assert_eq!(
             author_scope_root_envelope(
-                authoring_at(&folder(), carried_section(&fixture), OWNER_ROOT_EPOCH + 1),
+                authoring_at(
+                    &folder(),
+                    carried_section(&fixture.grant_section),
+                    OWNER_ROOT_EPOCH + 1
+                ),
                 &fixture.name,
+            )
+            .unwrap_err(),
+            AuthorError::SectionSignatureInvalid,
+        );
+    }
+
+    #[test]
+    fn a_freshly_assembled_section_off_the_envelopes_epoch_is_refused() {
+        // The re-seal path installs its own section rather than carrying one, and
+        // gets the same release-active refusal.
+        let fixture = owner_root();
+        assert_eq!(
+            author_scope_root_with_section(
+                authoring_at(&folder(), PreservedFields::new(), OWNER_ROOT_EPOCH + 1),
+                &fixture.name,
+                &fixture.grant_section,
             )
             .unwrap_err(),
             AuthorError::SectionSignatureInvalid,
@@ -427,14 +447,12 @@ mod tests {
         let fixture = owner_root();
         let mut section = fixture.grant_section.clone();
         section.owner_blob.signature[0] ^= 0xFF;
-        let carried: PreservedFields = [(
-            "grantSection".to_owned(),
-            Value::Bytes(encode_grant_section(&section).expect("encodes")),
-        )]
-        .into_iter()
-        .collect();
         assert_eq!(
-            author_scope_root_envelope(authoring(&folder(), carried), &fixture.name).unwrap_err(),
+            author_scope_root_envelope(
+                authoring(&folder(), carried_section(&section)),
+                &fixture.name
+            )
+            .unwrap_err(),
             AuthorError::SectionSignatureInvalid,
         );
     }

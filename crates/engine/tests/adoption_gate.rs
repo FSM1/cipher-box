@@ -1202,6 +1202,23 @@ fn ascent_present_without_reader_seed_fails_closed() {
 }
 
 #[test]
+fn an_unsigned_ascent_link_is_a_signature_verdict_before_it_is_an_authority_one() {
+    // The ascent link is doubly checked, and the signature half runs first: an
+    // unsigned link is `structure-signature-invalid` even when the reader also
+    // has no ancestor seed to derive authority from.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let mut candidate = fx.candidate(1);
+    let mut link = fx.ascent_link_under(&[0xAB; 32]);
+    link.signature[0] ^= 0xFF;
+    candidate.grant_section.ascent_link = Some(link);
+    let err = block_on(adopt(&floors, &fx.reader(), &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "structure-signature-invalid");
+}
+
+#[test]
 fn ascent_adopts_when_reader_seed_matches_sealed_link() {
     // Positive: the reader's ancestor seed re-derives the sealed keypair, so the
     // link verifies and the record adopts.
@@ -1523,13 +1540,13 @@ fn seed_blob_aad_struct_tag_must_match_blob_type() {
 // standing (the write KDF takes no epoch), so a real scope root's structures
 // sit under three clocks: the envelope's read epoch, the write plane's own, and
 // each carried history link's minting epoch. The gate recomputes every
-// structure signature at the envelope epoch, so the re-seal must sign every one
-// of them there.
+// structure signature at the envelope epoch.
 // ---------------------------------------------------------------------------
 
 const RESEAL_READ_EPOCH: u64 = 5;
 const RESEAL_WRITE_EPOCH: u64 = 1;
 const RESEAL_PREV_EPOCH: u64 = 4;
+const RESEAL_OLDEST_EPOCH: u64 = 3;
 const RESEAL_WRITE_SCOPE_SEED: [u8; 32] = [0x77; 32];
 
 /// The scope root a twice-rotated scope publishes: `reseal_scope_root`'s own
@@ -1541,6 +1558,7 @@ struct ResealedFixture {
     owner_enc: X25519Secret,
     scope_id: [u8; 16],
     read_key: [u8; 32],
+    ipns_signer: Ed25519Signer,
     name: IpnsName,
     section: GrantSection,
     envelope: Envelope,
@@ -1558,7 +1576,11 @@ impl ResealedFixture {
         let epoch_four_seed = [0x64; 32];
         let epoch_five_seed = [0x65; 32];
 
-        let name = reseal_name(&scope_id);
+        // The write KDF takes no epoch — which is why the write plane's clock is
+        // free to stand still under a read rotation.
+        let write_seed = kdf::write_seed(&RESEAL_WRITE_SCOPE_SEED, &scope_id);
+        let ipns_signer = kdf::ipns_keypair(write_seed.as_bytes());
+        let name = IpnsName::from_public_key(&ipns_signer.verifying_key());
         let commitment = GrantSetCommitment {
             ipns_name: name.as_str().as_bytes().to_vec(),
             owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
@@ -1611,7 +1633,7 @@ impl ResealedFixture {
             &epoch_four_seed,
             PrevEpochSeed {
                 seed: &epoch_three_seed,
-                epoch: 3,
+                epoch: RESEAL_OLDEST_EPOCH,
             },
             &[],
         );
@@ -1650,6 +1672,7 @@ impl ResealedFixture {
             owner_enc,
             scope_id,
             read_key,
+            ipns_signer,
             name,
             section,
             envelope,
@@ -1657,11 +1680,10 @@ impl ResealedFixture {
     }
 
     fn candidate(&self) -> Candidate {
-        let write_seed = kdf::write_seed(&RESEAL_WRITE_SCOPE_SEED, &self.scope_id);
-        let signer = kdf::ipns_keypair(write_seed.as_bytes());
         Candidate {
             name: self.name.clone(),
-            record_bytes: IpnsRecord::create_v2(&signer, RECORD_VALUE, 1, TTL_NANOS, EOL).marshal(),
+            record_bytes: IpnsRecord::create_v2(&self.ipns_signer, RECORD_VALUE, 1, TTL_NANOS, EOL)
+                .marshal(),
             grant_section: self.section.clone(),
             envelope: self.envelope.clone(),
         }
@@ -1708,13 +1730,6 @@ impl ResealedFixture {
     }
 }
 
-/// The scope root's write-plane IPNS name — the write KDF takes no epoch, which
-/// is why the write plane's clock is free to stand still under a read rotation.
-fn reseal_name(scope_id: &[u8; 16]) -> IpnsName {
-    let write_seed = kdf::write_seed(&RESEAL_WRITE_SCOPE_SEED, scope_id);
-    IpnsName::from_public_key(&kdf::ipns_keypair(write_seed.as_bytes()).verifying_key())
-}
-
 #[test]
 fn a_resealed_root_adopts_with_the_read_and_write_epochs_apart() {
     let fx = ResealedFixture::new();
@@ -1734,20 +1749,9 @@ fn a_resealed_root_adopts_with_the_read_and_write_epochs_apart() {
     assert_eq!(adopted.sequence, 1);
 }
 
-#[test]
-fn a_write_body_signed_at_the_write_epoch_is_a_whole_record_rejection() {
-    // The gate recomputes the write-body preimage at the envelope's read epoch,
-    // so a producer that bound the write plane's own clock would sign a root
-    // nobody — itself included — can adopt.
-    let fx = ResealedFixture::new();
-    let mut candidate = fx.candidate();
-    let sealed = candidate.grant_section.write_body.sealed.clone();
-    candidate.grant_section.write_body.signature =
-        fx.sign_at(RESEAL_WRITE_EPOCH, STRUCT_TAG_WRITE_BODY, &sealed);
-
-    let err = fx
-        .adopt(&candidate)
-        .expect_err("the wrong clock is a trust violation");
+/// Assert `candidate` is a whole-record stage-3 trust violation.
+fn assert_structure_signature_invalid(fx: &ResealedFixture, candidate: &Candidate) {
+    let err = fx.adopt(candidate).expect_err("a wrong-clock signature");
     let rejection = err
         .rejection()
         .expect("a trust rejection, not a seam error");
@@ -1756,22 +1760,37 @@ fn a_write_body_signed_at_the_write_epoch_is_a_whole_record_rejection() {
 }
 
 #[test]
+fn a_write_body_signed_at_the_write_epoch_is_a_whole_record_rejection() {
+    let fx = ResealedFixture::new();
+    let mut candidate = fx.candidate();
+    let sealed = candidate.grant_section.write_body.sealed.clone();
+    candidate.grant_section.write_body.signature =
+        fx.sign_at(RESEAL_WRITE_EPOCH, STRUCT_TAG_WRITE_BODY, &sealed);
+    assert_structure_signature_invalid(&fx, &candidate);
+}
+
+#[test]
+fn an_owner_write_blob_signed_at_the_write_epoch_is_a_whole_record_rejection() {
+    // The other dual-clock structure: its sealed AAD binds the write epoch, its
+    // signature the read epoch.
+    let fx = ResealedFixture::new();
+    let mut candidate = fx.candidate();
+    let blob = candidate
+        .grant_section
+        .owner_write_blob
+        .as_mut()
+        .expect("the re-seal authors one");
+    let ciphertext = blob.ciphertext.clone();
+    blob.signature = fx.sign_at(RESEAL_WRITE_EPOCH, STRUCT_TAG_OWNER_WRITE_BLOB, &ciphertext);
+    assert_structure_signature_invalid(&fx, &candidate);
+}
+
+#[test]
 fn a_carried_history_link_left_at_its_minting_epoch_is_a_whole_record_rejection() {
-    // A history link's sealed bytes cross rotations verbatim, but the gate
-    // recomputes its signature at the current envelope epoch — so a re-seal that
-    // carried the prior rotator's signature over too would strand the record.
     let fx = ResealedFixture::new();
     let mut candidate = fx.candidate();
     let carried = candidate.grant_section.history_links[0].sealed.clone();
     candidate.grant_section.history_links[0].signature =
         fx.sign_at(RESEAL_PREV_EPOCH, STRUCT_TAG_HISTORY_LINK, &carried);
-
-    let err = fx
-        .adopt(&candidate)
-        .expect_err("a stale-epoch signature is rejected");
-    let rejection = err
-        .rejection()
-        .expect("a trust rejection, not a seam error");
-    assert_eq!(rejection.stage, GateStage::GrantSection);
-    assert_eq!(rejection.check(), "structure-signature-invalid");
+    assert_structure_signature_invalid(&fx, &candidate);
 }

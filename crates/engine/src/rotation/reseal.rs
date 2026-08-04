@@ -187,8 +187,11 @@ fn fill<const N: usize, E: Entropy>(entropy: &mut E) -> Result<[u8; N], ResealEr
 ///
 /// `carried_history_links` keep their sealed bytes verbatim — each stays
 /// openable under the epoch key that minted it — but are re-signed at this
-/// re-seal's read epoch; when `seeds.prev` is `Some`, one freshly-minted link
-/// (the prior seed under the new epoch's structure key) is appended.
+/// re-seal's read epoch, the one the gate recomputes every structure at. This
+/// endorses those bytes under the committed pseudonym without inspecting them,
+/// so callers MUST source them from a section that passed the adoption gate.
+/// When `seeds.prev` is `Some`, one freshly-minted link (the prior seed under
+/// the new epoch's structure key) is appended.
 ///
 /// Fails closed — see [`ResealError`] — before sealing anything on a divergent
 /// ledger or an unusable recipient key, so a partial or unopenable section is
@@ -333,8 +336,8 @@ pub fn reseal_scope_root<E: Entropy>(
         None => None,
     };
 
-    // --- History links: sealed bytes carried verbatim, signatures re-minted at
-    // this read epoch; append one fresh link on a new epoch. ---
+    // --- History links: sealed bytes carried, signatures re-minted; append one
+    // fresh link on a new epoch. ---
     let mut history_links: Vec<SignedSealed> = carried_history_links
         .iter()
         .map(|link| SignedSealed {
@@ -709,8 +712,8 @@ mod tests {
 
     #[test]
     fn sweep_seed_source_mints_no_new_history_link() {
-        // prev = None (sweep catch-up): carried links pass through unchanged, no
-        // fresh link, same epoch.
+        // prev = None (sweep catch-up): no fresh link, carried sealed bytes kept
+        // and re-signed at this read epoch.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
         let (commitment, sig, ledger) = fx.committed();

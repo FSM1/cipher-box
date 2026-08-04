@@ -17,8 +17,10 @@ pub mod floor;
 
 mod adoption;
 
+/// The stage-3 predicate the produce side mirrors; engine-internal, never a
+/// substitute for the gate.
+pub(crate) use adoption::authenticate_section_structures;
 pub use adoption::{
     Adopted, Candidate, FLOOR_VERDICTS, GateError, GateRejection, GateStage, PendingAdoption,
     ReaderContext, RejectionReason, SeedBlob, adopt, adopt_deferred,
-    authenticate_section_structures,
 };

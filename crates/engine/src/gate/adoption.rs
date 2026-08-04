@@ -352,22 +352,20 @@ fn authenticate_structure(
     Err(TrustViolation::StructureSignatureInvalid.into())
 }
 
-/// Authenticate every structure signature `section` carries, recomputed at
-/// `scope`/`epoch` under the pseudonyms `section`'s own commitment names — the
-/// gate's stage-3 predicate. Every structure is authenticated at the record's
-/// **read** epoch, whatever epoch its own sealed AAD binds (blueprint/core.md
-/// "Structure signatures"), so a plane whose clock runs independently of the
-/// read epoch — the write-body, the owner-write-blob — is still recomputable
-/// from the envelope alone.
+/// The gate's stage-3 predicate: authenticate every structure signature
+/// `section` carries against the pseudonyms its own commitment names,
+/// recomputed at `envelope`'s scope and epoch — whatever epoch a structure's own
+/// sealed AAD binds (blueprint/core.md "Structure signatures"). Taking the
+/// envelope rather than loose scalars keeps the section and the epoch it is
+/// authenticated at from being paired by hand.
 ///
-/// Also the produce-side mirror: the authoring path runs it release-active so a
-/// scope root this build's own gate would reject is never signed (AGENTS.md
-/// rule 8).
+/// Also run release-active on the produce side (`net/author.rs`), so a scope
+/// root this build's own gate would reject is never signed (AGENTS.md rule 8).
 pub fn authenticate_section_structures(
     section: &GrantSection,
-    scope: [u8; 16],
-    epoch: u64,
+    envelope: &Envelope,
 ) -> Result<(), CodecError> {
+    let (scope, epoch) = (envelope.scope, envelope.epoch);
     let committed = committed_write_pseudonyms(&section.commitment);
     let authenticate = |tag: u8, recipient: Option<[u8; 32]>, ct: &[u8], sig: &[u8; 64]| {
         authenticate_structure(&committed, scope, epoch, tag, recipient, ct, sig)
@@ -378,7 +376,6 @@ pub fn authenticate_section_structures(
         &section.owner_blob.ciphertext,
         &section.owner_blob.signature,
     )?;
-    // Recipient-tag `None` — owner-scoped, not per-grantee.
     if let Some(owner_write) = &section.owner_write_blob {
         authenticate(
             STRUCT_TAG_OWNER_WRITE_BLOB,
@@ -395,8 +392,6 @@ pub fn authenticate_section_structures(
             &blob.signature,
         )?;
     }
-    // A carried link's sealed bytes stay openable under the epoch key that minted
-    // it, but its signature is re-minted every re-seal (rotation/reseal.rs).
     for link in &section.history_links {
         authenticate(STRUCT_TAG_HISTORY_LINK, None, &link.sealed, &link.signature)?;
     }
@@ -514,9 +509,8 @@ pub async fn adopt_deferred<F: FloorStore>(
 
     // Stage 3 — grant-section authentication under `authenticate_structure`'s
     // recompute contract (#687). Any failure rejects the whole record (#39 D3).
-    let scope = candidate.envelope.scope;
     let epoch = candidate.envelope.epoch;
-    authenticate_section_structures(section, scope, epoch)
+    authenticate_section_structures(section, &candidate.envelope)
         .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
     if let Some(ascent) = &section.ascent_link {
         // The ascent link is doubly checked: its structure signature (above)
