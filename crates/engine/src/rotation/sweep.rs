@@ -43,7 +43,7 @@
 //! Time (the idle cadence) enters only through [`Scheduler`] and entropy only
 //! through [`Entropy`]; the sole impure edges are the injected [`SweepResolver`]
 //! and [`ScopeRootPublisher`] (CAS-publish), mirroring `rotate_scope`. The real
-//! network wiring is #745/#746 and tests fake both.
+//! network wiring is #1025 and tests fake both.
 
 use core::time::Duration;
 use std::cell::RefCell;
@@ -118,7 +118,7 @@ pub struct SweepTarget {
 /// The impure edge that resolves a scope root's current re-seal material — the
 /// sweep's analogue of the eager-set walk's [`ChildIndexResolver`] and
 /// `rotate_scope`'s [`ScopeRootPublisher`]. Resolve + adoption-gate + unseal live
-/// behind this trait; the real network/gate wiring is #745/#746 and tests fake
+/// behind this trait; the real network/gate wiring is #1025 and tests fake
 /// it. A resolve either yields the full [`SweepTarget`] or a fail-closed
 /// [`ResolveFailure`] — a partial or gate-failing record is never a work-list
 /// entry.
@@ -129,9 +129,9 @@ pub trait SweepResolver {
     /// One resolve returns the whole [`SweepTarget`] — enumeration/lag fields
     /// *and* the heavy re-seal material. Splitting it into a light enumeration
     /// edge plus a heavy re-seal edge fetched only for lagging nodes is a
-    /// designed-for optimization for #745/#746, not a correctness requirement.
+    /// designed-for optimization for #1025, not a correctness requirement.
     ///
-    /// # Binding contract (obligation on the real resolver, #745/#746)
+    /// # Binding contract (obligation on the real resolver, #1025)
     ///
     /// The same edge discipline [`ChildIndexResolver`] carries applies: gate
     /// `scope`'s record under the enumerated `scope.scope_id`/`scope.ipns_name`,

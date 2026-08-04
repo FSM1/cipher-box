@@ -213,7 +213,7 @@ pub fn reseal_scope_root<E: Entropy>(
     // Fail-closed BEFORE any seal (see `ResealError::LedgerDivergesFromCommitment`
     // and the module's revocation-completeness rule). Reseal trusts each entry's
     // `recipient_enc_pk` verbatim from the committed ledger; the tag<->enc_pk
-    // binding is enforced at resolve time (#745).
+    // binding is enforced at resolve time.
     enforce_committed_ledger(committed.commitment, committed.grant_ledger)
         .map_err(|_| ResealError::LedgerDivergesFromCommitment)?;
 
