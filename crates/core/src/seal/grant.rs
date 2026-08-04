@@ -93,6 +93,8 @@ impl Permission {
 /// hint and the stable pointer read key. `write_scope_seed` is present only for
 /// write grants. Seeds are secret material in zeroizing owning types with a
 /// redacted `Debug`; read them through the accessors.
+/// `PartialEq` short-circuits across fields — a round-trip comparator, not a
+/// security comparison (see [`crate::suite::secret`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantBlobPayload {
     read_scope_seed: SecretBytes,
@@ -237,6 +239,8 @@ pub fn open_grant_blob(
 /// The sealed plaintext of an owner blob and of an ascent link: the scope's
 /// current override seed plus the epoch it belongs to. The seed is secret
 /// material in a zeroizing owning type; read it through [`Self::override_seed`].
+/// `PartialEq` short-circuits across fields — a round-trip comparator, not a
+/// security comparison (see [`crate::suite::secret`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OverrideSeedPayload {
     override_seed: SecretBytes,
@@ -350,6 +354,8 @@ pub fn open_owner_blob(
 /// subkey; never shared with the ascent link (which would leak write capability
 /// to ancestor read-only readers). The seed is secret material in a zeroizing
 /// owning type; read it through [`Self::write_scope_seed`].
+/// `PartialEq` short-circuits across fields — a round-trip comparator, not a
+/// security comparison (see [`crate::suite::secret`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OwnerWriteBlobPayload {
     write_scope_seed: SecretBytes,
@@ -566,6 +572,8 @@ pub fn open_ascent_link(
 /// belongs to. Symmetrically sealed under the current epoch's structure key
 /// (struct tag `history-link`) via [`super::seal`]. The seed is secret material
 /// in a zeroizing owning type.
+/// `PartialEq` short-circuits across fields — a round-trip comparator, not a
+/// security comparison (see [`crate::suite::secret`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HistoryLinkPayload {
     prev_seed: SecretBytes,
@@ -818,43 +826,66 @@ mod tests {
         }
     }
 
-    /// Every seed-bearing payload renders each secret field as exactly the
-    /// redaction marker, so no rendering (hex, decimal, or otherwise) of the
-    /// bytes can appear (security rule 2: never log key material). Counting
-    /// markers rather than searching for byte spellings is what makes this hold
-    /// for a field added later.
+    /// Every seed-bearing payload renders as an exact redacted shape (security
+    /// rule 2: never log key material). Pinned as a whole-string golden, not a
+    /// search for a byte spelling: any added field — of any type, including a
+    /// raw `[u8; 32]` held outside [`SecretBytes`] — breaks this test and forces
+    /// a redaction decision.
     #[test]
-    fn seed_payload_debug_renders_every_secret_field_as_the_redaction_marker() {
+    fn seed_payload_debug_renders_exactly_the_redacted_shape() {
         const SEED: [u8; SECRET_LEN] = [0xab; SECRET_LEN];
-        const MARKER: &str = "SecretBytes(redacted)";
+        const KEY: [u8; SECRET_LEN] = [0xcd; SECRET_LEN];
 
-        // (rendered payload, number of `SecretBytes` fields it holds)
-        let cases = [
-            (
-                format!(
-                    "{:?}",
-                    GrantBlobPayload::new(SEED, Some(SEED), 4, [0xcd; SECRET_LEN])
-                ),
-                3,
-            ),
-            (format!("{:?}", OverrideSeedPayload::new(SEED, 4)), 1),
-            (format!("{:?}", OwnerWriteBlobPayload::new(SEED, 4)), 1),
-            (format!("{:?}", HistoryLinkPayload::new(SEED, 4)), 1),
-        ];
-        for (rendered, secret_fields) in cases {
-            assert_eq!(
-                rendered.matches(MARKER).count(),
-                secret_fields,
-                "every secret field must render as {MARKER}: {rendered}"
-            );
-            // 0xab/0xcd in the two renderings a leak would take.
-            for spelling in ["ab", "cd", "171", "205"] {
-                assert!(
-                    !rendered.contains(spelling),
-                    "seed bytes leaked into Debug as {spelling}: {rendered}"
-                );
-            }
-        }
+        assert_eq!(
+            format!("{:?}", GrantBlobPayload::new(SEED, Some(SEED), 4, KEY)),
+            "GrantBlobPayload { read_scope_seed: SecretBytes(redacted), \
+             write_scope_seed: Some(SecretBytes(redacted)), epoch: 4, \
+             pointer_read_key: SecretBytes(redacted), unknown: {} }"
+        );
+        // The read-only arm, which the `Some` case never renders.
+        assert_eq!(
+            format!("{:?}", GrantBlobPayload::new(SEED, None, 4, KEY)),
+            "GrantBlobPayload { read_scope_seed: SecretBytes(redacted), \
+             write_scope_seed: None, epoch: 4, \
+             pointer_read_key: SecretBytes(redacted), unknown: {} }"
+        );
+        assert_eq!(
+            format!("{:?}", OverrideSeedPayload::new(SEED, 4)),
+            "OverrideSeedPayload { override_seed: SecretBytes(redacted), epoch: 4, unknown: {} }"
+        );
+        assert_eq!(
+            format!("{:?}", OwnerWriteBlobPayload::new(SEED, 4)),
+            "OwnerWriteBlobPayload { write_scope_seed: SecretBytes(redacted), \
+             write_epoch: 4, unknown: {} }"
+        );
+        assert_eq!(
+            format!("{:?}", HistoryLinkPayload::new(SEED, 4)),
+            "HistoryLinkPayload { prev_seed: SecretBytes(redacted), prev_epoch: 4, unknown: {} }"
+        );
+    }
+
+    /// An unknown field on a grant payload rode inside a sealed plaintext, so it
+    /// can carry future secret material verbatim. The composed rendering must
+    /// redact its values, not just the known secret fields.
+    #[test]
+    fn grant_payload_debug_redacts_preserved_unknown_values() {
+        let mut payload = GrantBlobPayload::new([0xab; SECRET_LEN], None, 4, [0xcd; SECRET_LEN]);
+        payload.unknown = [(
+            "futureSeed".to_owned(),
+            Value::Bytes(vec![0xee; SECRET_LEN]),
+        )]
+        .into_iter()
+        .collect();
+
+        let rendered = format!("{payload:?}");
+        assert!(
+            rendered.contains(r#""futureSeed": "<redacted>""#),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("238"),
+            "unknown-field bytes leaked: {rendered}"
+        );
     }
 
     /// The derived `PartialEq` still discriminates a one-byte seed difference
