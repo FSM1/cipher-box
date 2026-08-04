@@ -1,0 +1,865 @@
+what does the frontier look like now that the entire review backlog has been cleared and all the prs merged? I want to kick off as many issues in parallel (and smaller issues can be grouped into one larger PR) to more effectively utilize the limited coderabbit quota.
+
+---
+
+<task-notification>
+<task-id>acab8b6165b8c049b</task-id>
+<tool-use-id>toolu_01FC7NfEVHPPJEABHi6iZe6i</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/acab8b6165b8c049b.output</output-file>
+<status>completed</status>
+<summary>Agent "Map engine cleanup/device-state files" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Cluster A — #719 retro-audit cleanup (997–1004)
+
+| # | Ask (one line) | Files to touch (verified) | Size |
+|---|---|---|---|
+| 997 | Return `(VerifiedRecord, bytes)` from `fanout_get_verify` instead of `(u64, bytes)` so callers stop re-verifying | `crates/engine/src/net/fanout.rs` (fn at :91); callers `crates/engine/src/net/liveness.rs` (:184 in `eol_republish`), `crates/engine/src/net/publish.rs` (:210), `crates/engine/src/net/resolve.rs` (:191), `crates/engine/src/net/pointer_fetch.rs` (:35), `crates/engine/src/settings.rs` (:320), `crates/engine/src/sync/drain.rs` (:1214); re-export `crates/engine/src/net/mod.rs` (:41). `VerifiedRecord` already public from `crates/core/src/ipns/record.rs` | M |
+| 998 | Route all floor reads through `floor::*` wrappers; move engine's constant-time compare onto core `SecretBytes` | `crates/engine/src/gate/floor.rs` (`sequence_floor` wrapper :159-163), direct-seam readers `crates/engine/src/net/publish.rs:175`, `crates/engine/src/facade.rs` (:5145/:5178/:5310), `crates/engine/src/settings.rs:317`. Ct-eq half: **delete/shrink** `crates/engine/src/secret_util.rs` (`ct_eq_32`, not `ct_eq_secret` — name drifted), add to `crates/core/src/suite/secret.rs`; ~8 engine call sites (`session.rs`, `grants/owner_entry.rs`, `grants/accept.rs`, `grants/create.rs`, `gate/adoption.rs`, `rotation/cascade.rs`, `rotation/reseal.rs`) | M |
+| 999 | Delete dead `ApiError::NotAuthenticated` + unused `ChallengeResponse.expires_at`; optional `post_json_authed` helper | `crates/engine/src/api/error.rs` (:34, :73), `crates/engine/src/api/types.rs` (:67-70), `crates/engine/src/api/client.rs` (:112, plus optional helper). Note: `NotAuthenticated` **is** referenced in tests at `crates/engine/src/sync/drain.rs:2234/2262/2287` — those must be re-pointed | S |
+| 1000 | Confirm intent, then drop `commit_floors`' unread `Vec&lt;u64&gt;` return; trim doc overlap | `crates/engine/src/seams/floor_store.rs` (:55 default impl), `crates/engine/src/gate/floor.rs` (:247 sole prod caller, discards result), `crates/desktop-seams/src/floor_store.rs` (:175), `crates/engine/src/testkit/fakes/floor_store.rs` (:66), `crates/engine/src/testkit/conformance/floor_store.rs` (:80/:90/:130 — conformance asserts the return, so this is the "confirm intent" blocker), `crates/engine/tests/floor_atomic.rs:134`, `crates/wasm/src/seams_bridge.rs:104` (doc) | S |
+| 1001 | Remove `IpnsRecord`'s pointless zeroizing `Drop` | `crates/core/src/ipns/record.rs:374-386` — **note: file is in `crates/core`, not engine**, despite the `comp:engine` label | XS |
+| 1002 | Hoist triplicated `hex_lower` Debug formatter to one helper | `crates/core/src/suite/ecdsa.rs:134`, `crates/core/src/suite/ed25519.rs:104`, `crates/core/src/suite/x25519.rs:134`; new home in `crates/core/src/suite/mod.rs` (or `hash.rs`) | XS |
+| 1003 | Add a `SecretField` newtype/macro for the hand-rolled redacted-`Debug` + non-ct-`PartialEq` pairs | `crates/core/src/seal/grant.rs` — 4 pairs: `GrantBlobPayload` (:144/:159), `OverrideSeedPayload` (:300/:310), `OwnerWriteBlobPayload` (:433/:443), `HistoryLinkPayload` (:669/:679); newtype in `crates/core/src/suite/secret.rs` or new `crates/core/src/secret_field.rs` | M |
+| 1004 | Hoist the memoized IDB `open()` block into `idb.ts`; drop two body-copy allocations | `packages/client/src/seams/idb.ts` (:35 `openDatabase`), `packages/client/src/seams/floorStore.ts:27-31`, `packages/client/src/seams/snapshotCache.ts:26-30`, `packages/client/src/seams/stagingStore.ts:54-58`; body-copy at `packages/client/src/seams/http.ts` (~:28-32, `new Uint8Array(request.body)`) and `packages/client/src/seams/recordTransport.ts` (~:49, `body: new Uint8Array(record)`) | S |
+
+## Cluster B — engine auth / bearer (933, 713)
+
+| # | Ask | Files to touch | Size |
+|---|---|---|---|
+| 933 | Give the `Authorization` header value one home across all three bearer splice sites; add the missing redirect-downgrade assertion | Guard: `crates/engine/src/seams/http.rs` (`HttpRequest` construction, doc at :28/:130) + the three splice sites `crates/engine/src/api/client.rs:31`, `crates/engine/src/content/read.rs:25`, `crates/engine/src/content/provider.rs:18/:146`. Test half: `crates/desktop-seams/src/http.rs` (:17/:37 redirect policy) needs a live-server test, plus a browser-suite assertion in `packages/client/src/seams/http.test.ts`. Context-only (no change expected): `packages/client/src/seams/http.ts`, `crates/wasm/src/host.rs`, `packages/client/src/worker/engineHost.ts`. No conformance kit exists for `Http` (`crates/engine/src/testkit/conformance/mod.rs`) | L |
+| 713 | Make the single-flight refresh leader drop-safe so a cancelled leader doesn't wedge auth forever | `crates/engine/src/api/client.rs` — `refresh()` at :211-248, `refresh_waiters` field at :50, init :77; RAII guard is a local addition. Secondary (optional zeroize note): `crates/engine/src/api/client.rs` test-login path ~:190-207 | S |
+
+## Cluster C — engine device / account state (855–860)
+
+| # | Ask | Files to touch | Size |
+|---|---|---|---|
+| 855 | Make size/mtime/version-count visible on a device that never downloaded the file | Read-plane: `crates/engine/src/sync/project.rs` (`project_child_version` :96), `crates/engine/src/facade.rs` (sole caller :2553, in `read_content`); either `crates/core/src/seal/body.rs` (`ChildRef` :69-92, mirror size — reverses the `body.rs:14` decision) or a per-child resolve path in `crates/engine/src/net/resolve.rs` + `crates/engine/src/seams/snapshot_cache.rs`. Design decision first | L |
+| 856 | Namespace epoch floors per account so account B isn't locked out by account A's floor | `crates/engine/src/gate/floor.rs` (`write_epoch_key` :133, `epoch_floor` :155, `cold_seed_checked` :308-357, `advance_on_unseal` :285-286), `crates/engine/src/seams/floor_store.rs` (key contract :25-36), `crates/engine/src/sync/pointer.rs` (`resolve_vault_pointer` ~:131-145), `crates/engine/src/facade.rs` (`root_scope_id = root.0` at :1377, uses :1388/:1394/:1476/:1530 — issue's :807/:883 have drifted). Seam backings: `crates/desktop-seams/src/floor_store.rs`, `packages/client/src/worker/browserSeams.ts`, `packages/client/src/seams/floorStore.ts`. Conformance: `crates/engine/src/testkit/conformance/floor_store.rs` | L |
+| 857 | Timeboxed investigation: should the shared `NodeId([0u8;16])` root scope id be retired before v2.0 | Read-only survey, no code change expected: `crates/engine/src/facade.rs` (:1296, :1377, :4279), `crates/engine/src/sync/pointer.rs` (:131-145), `crates/engine/src/net/adopter.rs`, `crates/engine/src/sync/rebase.rs` (`rebase_create` ~:228), `crates/core/src/kdf/mod.rs`. Output is a doc/decision, likely `blueprint/engine.md` | S (investigation) / L if acted on |
+| 858 | Decide whether "forget this device" is real for v2.0; if so, implement it end-to-end | Seams: `crates/engine/src/seams/snapshot_cache.rs` (:30 `clear`, zero prod callers), `crates/engine/src/seams/staging_store.rs` (needs `clear`; has `queued_ops` :34, `remove_op` :38, `remove_staged_bytes` :48, `staged_keys` :51), `crates/engine/src/seams/floor_store.rs` (needs `clear`). Backings: `crates/desktop-seams/src/{snapshot_cache,staging_store,floor_store}.rs`, `packages/client/src/seams/{snapshotCache,stagingStore,floorStore}.ts`. Surface: `crates/engine/src/facade.rs` (`Command` enum :340), `crates/wasm/src/host.rs`, `packages/client/src/worker/{commandCodec,serve}.ts`, `apps/web/src` (settings/account UI), `apps/desktop/src-tauri/src/main.rs`. Conformance: `crates/engine/src/testkit/conformance/`. Blueprint: `blueprint/web-client.md:194`, `blueprint/desktop.md:261` | L |
+| 860 | Stop a restored desktop data dir from replaying already-drained ops and re-minting stale sequences | `crates/engine/src/sync/drain.rs` (drain/completion record), `crates/engine/src/seams/staging_store.rs` (`remove_staged_bytes`/`queued_ops` — needs a completion/high-water surface), `crates/engine/src/net/publish.rs` (CAS sequence `max(durable_floor, min_current_sequence) + 1`, ~:150-215), `crates/engine/src/gate/floor.rs`, `crates/desktop-seams/src/{staging_store,floor_store,paths}.rs`, `crates/engine/src/sync/staging.rs` (offline-parity premise :4-9). Cheap-mitigation variant (stale-dir detection only) is M | L |
+
+## Cluster D — crates/core redaction + scrub guard (937, 956)
+
+| # | Ask | Files to touch | Size |
+|---|---|---|---|
+| 937 | Hand-write redacting `Debug` for `Value`/`Map`, move the hex renderer off `Display`, and redact `Version.unknown` + `ChildRef` plaintext | `crates/core/src/codec/value.rs` (`Value` derive :16, `Map` derive :170, `Display` :271, `zeroize_bytes` doc :132-134), `crates/core/src/seal/body.rs` (`Version` Debug :194-203, `ChildRef` derive :69, `PreservedFields` Debug :476), plus a sweep of `crates/core/src/seal/{write_body,section,op_record,settings_record,structure,envelope,content_key}.rs` for the same derive shape. KAT `diag` consumers: `crates/core/tests/kat_manifest.rs`, `crates/core/examples/kat_gen.rs`. `crates/core/src/codec/mod.rs` for `UnknownFields`/`DisplayKey` convention | M |
+| 956 | Extend the `Scrub`/`ScrubOnDrop`/`ScrubOwned` guard pair to three more codecs | `crates/core/src/seal/write_body.rs` (`decode_write_body`/`encode_write_body`), `crates/core/src/seal/section.rs` (grant-section decode/encode), `crates/core/src/payload/mailbox.rs` (`inner_map`); guards already `pub(crate)` in `crates/core/src/codec/scrub.rs`; pattern to copy from `crates/core/src/seal/grant.rs`. Blocked on #936 landing | S |
+
+## FILE PATHS SHARED BETWEEN CLUSTERS
+
+- `crates/engine/src/seams/floor_store.rs` — A (#1000) ∩ C (#856, #858)
+- `crates/engine/src/gate/floor.rs` — A (#998, #1000) ∩ C (#856, #860)
+- `crates/desktop-seams/src/floor_store.rs` — A (#1000) ∩ C (#856, #858)
+- `crates/engine/src/testkit/conformance/floor_store.rs` — A (#1000) ∩ C (#856, #858)
+- `crates/engine/src/testkit/fakes/floor_store.rs` — A (#1000) ∩ C (#856)
+- `packages/client/src/seams/floorStore.ts` — A (#1004) ∩ C (#856, #858)
+- `packages/client/src/seams/snapshotCache.ts`, `packages/client/src/seams/stagingStore.ts` — A (#1004) ∩ C (#858)
+- `crates/engine/src/api/client.rs` — A (#999) ∩ B (#933, #713)
+- `crates/engine/src/facade.rs` — A (#998) ∩ C (#855, #856, #857, #858)
+- `crates/engine/src/net/publish.rs` — A (#997, #998) ∩ C (#860)
+- `crates/engine/src/sync/drain.rs` — A (#997, #999) ∩ C (#860)
+- `crates/engine/src/settings.rs`, `crates/engine/src/net/resolve.rs` — A-internal (#997 ∩ #998 / #997 ∩ #855)
+- `crates/core/src/seal/body.rs` — C (#855) ∩ D (#937)
+- `crates/core/src/seal/grant.rs` — A (#1003) ∩ D (#956, as the pattern source)
+- `crates/core/src/seal/write_body.rs`, `crates/core/src/seal/section.rs` — D-internal (#956 ∩ #937 sweep)
+- `crates/core/src/suite/secret.rs` — A (#998 ct-eq hoist) ∩ A (#1003 `SecretField` home)
+- `crates/engine/src/seams/http.rs`, `packages/client/src/seams/http.ts` — B (#933) ∩ A (#1004, `http.ts` body-copy only)
+- `crates/engine/src/seams/staging_store.rs` — C-internal (#858 ∩ #860)
+- `crates/engine/src/sync/pointer.rs`, `crates/engine/src/net/adopter.rs` — C-internal (#856 ∩ #857)
+
+Ordering note: #998 and #1000 both rewrite `gate/floor.rs` + `seams/floor_store.rs`, which #856 then re-keys — land the two XS/S cleanups before the #856 namespacing, or they will conflict.</result>
+<usage><subagent_tokens>48881</subagent_tokens><tool_uses>19</tool_uses><duration_ms>151613</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>acf6d910b35dc2d42</task-id>
+<tool-use-id>toolu_01XSQFhXnhf9XdJstyCPLnb4</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/acf6d910b35dc2d42.output</output-file>
+<status>completed</status>
+<summary>Agent "Map engine stream/settings/opqueue files" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Cluster 1 — engine content-read stream pinning
+
+| # | Ask (one line) | Files to touch (verified) | Size |
+|---|---|---|---|
+| 981 | Bound + reclaim pinned read streams and gate the TS media window against the frozen chunk size | Part 1 (admission cap) **already landed** in #980 — `crates/engine/src/facade.rs:1148` `MAX_OPEN_STREAMS`, `EngineError::TooManyStreams` at `:672`/`:842`, test at `crates/engine/tests/write_plane.rs:997-1037`. Remaining: `packages/client/src/sw/pipe.ts` (`detachPort` at `:270`, `sinks` map — post a final `cb:media:close` per dying sink), `packages/client/src/media/broker.ts` (`drop` at `:65`, idle timer), `packages/client/src/media/protocol.ts:17` (`MEDIA_WINDOW_BYTES = 1_048_536`) vs `crates/engine/src/content/profile.rs:37`; parity gate needs a chunk-size getter on `crates/wasm/src/host.rs` (`ContentProfile::PRODUCTION` used at `:190`) asserted in `packages/client/test/browser/media.spec.ts`, or a KAT in `crates/engine/tests/kat_content.rs`. Tests: `packages/client/src/sw/pipe.test.ts`, `packages/client/src/media/broker.test.ts` | **M** |
+| 1008 | RAII capacity lease reserved before the first await and released on last `Rc` drop, not on map removal | `crates/engine/src/facade.rs` only — `open_content_stream` `:2480-2505` (both checks at `:2487`/`:2496`), `read_stream` `:2512` (`Rc::clone`), `close_stream` `:2543`, `LiveStream` `:1137`, `LiveStreams` `:1152`. Test: `crates/engine/tests/write_plane.rs` | **S** |
+| 1009 | Collapse `RootManifest.leaf_cids` from `Vec&lt;Vec&lt;u8&gt;&gt;` to one fixed-width allocation | `crates/engine/src/content/dag.rs` (`:208` field, `:167` `assemble`, `:235-256` decode, `:331` `is_raw_leaf_cid`), ripples to `crates/engine/src/content/mod.rs` (`:61`,`:68`,`:85`,`:101`,`:280-291` `SealedContent`), `crates/engine/src/content/write.rs` (`:32`,`:113-126`), `crates/engine/tests/kat_content.rs` (`:262-289`), `crates/engine/examples/kat_gen.rs` (`:241-261`), `crates/engine/tests/write_plane.rs` (`:1583`,`:3806`,`:4558`) | **S/M** |
+
+## Cluster 2 — engine vault-settings record
+
+| # | Ask (one line) | Files to touch (verified) | Size |
+|---|---|---|---|
+| 904 | Umbrella: harden settings freshness vs suppression + cold-device replay | Tracking only. Child #928 already landed (commit `b07a11da9`, PR #934 — `SettingsLoad::Stale` exists at `crates/engine/src/settings.rs:133`), so #929 is unblocked | **XS** (tracking) |
+| 929 | Check EOL on the settings resolve, refusing an expired record with a new `DefaultsReason::Expired` | `crates/engine/src/settings.rs` (`resolve_settings` `:293`, `load_settings` `:230` already holds `scheduler: &amp;Sch`, `DefaultsReason` `:100`; **no `eol`/`validity` reference in this file today**), reads `crates/engine/src/net/eol.rs` (`is_expired`), `crates/engine/tests/vault_settings.rs`, `blueprint/engine.md` (`:119-130`, `:243-244`) | **S** |
+| 930 | Decide the cold-device freshness anchor — a decision, no code | `blueprint/engine.md` only (the "Vault settings load" section, `:197-244`, already states the open question at `:243-244`) | **XS** |
+| 931 | Attempt-scoped monotonic revision in the sealed settings body (gated on #930 landing on ii/iii) | `crates/engine/src/settings.rs` (`BODY_KEYS` `:471`, `publish_settings` `:156`, floor mint), `crates/engine/tests/vault_settings.rs`; **only under the new-namespace option**: `crates/engine/src/seams/floor_store.rs`, `crates/desktop-seams/src/floor_store.rs`, `packages/client/src/seams/floorStore.ts`, `crates/wasm/src/seams_bridge.rs`, `crates/engine/src/testkit/conformance/floor_store.rs`, `crates/engine/src/testkit/fakes/floor_store.rs` | **S** (reuse `Sequence`) / **M** (new namespace) |
+| 947 | Retire the settings-record head block a failed publish orphaned | `crates/engine/src/settings.rs` (`publish_settings` `:156`), `crates/engine/src/sync/drain.rs` (`record_orphan_head` `:1792`, `retire_orphan_heads` `:1810`, `orphaned_head` `:2055`, cell at `:304`), `crates/engine/src/facade.rs` (owns `orphan_heads` at `:1250`/`:1306`, wires at `:1624`/`:1747`), `crates/engine/src/net/record_publish.rs` (`:198-218`, the head upload the leak comes from), `crates/engine/tests/vault_settings.rs`. Note: `publish_settings` has **no facade caller today** (only `lib.rs` re-export + tests), so "lift into something both callers reach" means threading the cell as a parameter | **M** |
+
+## Cluster 3 — engine op queue / sync / upload marks
+
+| # | Ask (one line) | Files to touch (verified) | Size |
+|---|---|---|---|
+| 918 | Zeroize decoded op plaintext at its terminal owner, repo-wide | `crates/engine/src/sync/op.rs` (`Op` `:24`, `OpKind` `:105` with `name: String` `:111`/`:125`/`:157`, `root_cid` `:52`, `sealed_content_key` `:61`, `decode_body` `:335`), `crates/engine/src/sync/rebase.rs` (`decode_queue` `:161`, `QueueScan` `:144`, `QueueScanMemo` `:185`), `crates/engine/src/sync/model.rs` (`:27` `pub name: String` — the longest-lived copy), `crates/engine/src/facade.rs` (`:1494` cold start, `:2691` memo), `crates/engine/src/sync/drain.rs:601`, re-copy surfaces `crates/fuse/src/adapter.rs`/`name.rs`/`ops.rs` and `crates/wasm/src/host.rs`/`lib.rs` | **L** |
+| 926 | Constant-size queue fingerprint on `StagingStore` so a memo hit skips the queue read | `crates/engine/src/seams/staging_store.rs` (55-line trait, `queued_ops` `:34`), `crates/engine/src/testkit/conformance/staging_store.rs`, `crates/engine/src/testkit/fakes/staging_store.rs`, `crates/desktop-seams/src/staging_store.rs:119`, `crates/wasm/src/seams_bridge.rs:214`/`:251`, `packages/client/src/seams/stagingStore.ts:84` (+ `stagingStore.test.ts`), `crates/engine/src/facade.rs:2691` `scan_queue`, `crates/engine/src/sync/rebase.rs:185-210` `QueueScanMemo`, `crates/desktop-seams/tests/conformance.rs`, `crates/engine/tests/conformance_fakes.rs`, `crates/engine/tests/write_plane.rs`. Requires an explicit `wasm32-unknown-unknown` build leg | **L** |
+| 966 | Stop a replayed `UpdateContent` op from letting a cancel unpin a published version's content | `crates/engine/src/sync/rebase.rs` (`rebase_update_content` `:527` — needs an `AlreadySatisfied` arm like `rebase_create` `:313-322`), `crates/engine/src/sync/drain.rs` (publish/release/dequeue window ~`:1296-1309`/`:501`, `retire_cancelled` call `:535`, upload confirms ~`:1397`), `crates/engine/src/sync/cancel.rs` (`UploadCancels` `:32`, `past_publish_entry` `:25`/`:44`/`:64`, `uploaded_by` `:85` — session-scoped, needs durability), `crates/engine/src/facade.rs` (`discard_upload` `:2304`, `uploaded_by` `:2314`, cell `:1191`/`:1290`), likely `crates/engine/src/seams/staging_store.rs` for the durable publish state, `crates/engine/src/net/retire.rs`, `crates/engine/tests/write_plane.rs` | **L** |
+| 940 | Bound / re-derive a corrupt upload-mark count instead of trusting it | `crates/engine/src/sync/drain.rs` (`upload_mark` `:1484`, unbounded parse at `:1499`, caller `:1397`, `CONTENT_LOST` `:202`), possibly `crates/engine/src/content/provider.rs` if the "ask the pin provider" option is chosen, test in `crates/engine/tests/write_plane.rs` (existing neighbour test `:1637`) | **S** (decision-heavy) |
+| 909 | Propagate the source-remove leg's real `Halt` instead of flattening to `Unclassified` | `crates/engine/src/sync/drain.rs` — `publish_ref_move` tail, actual location **`:1112-1131`** (issue cites `:1012-1031`, drifted): `.is_err()` discards the `Halt` before `compensate_dest_add` `:1148` and `return Err(Halt::Unclassified)` `:1130`; `Halt` semantics at `:167-185`. Tests in `crates/engine/tests/write_plane.rs` (413 helpers at `:79`/`:96`/`:126`) | **XS/S** |
+
+## FILE PATHS SHARED BETWEEN CLUSTERS
+
+| Path | Clusters | Issues |
+|---|---|---|
+| `crates/engine/src/facade.rs` | 1, 2, 3 | 981(landed part), 1008 / 947 / 918, 926, 966 |
+| `crates/engine/tests/write_plane.rs` | 1, 3 | 981, 1008, 1009 / 966, 940, 909 |
+| `crates/engine/src/sync/drain.rs` | 2, 3 | 947 / 966, 940, 909 |
+| `crates/wasm/src/seams_bridge.rs` | 2, 3 | 931 (new-namespace option only) / 926 |
+| `crates/engine/src/seams/staging_store.rs` | 3 only, but contended | 926 and 966 both change this trait |
+
+Near-collisions worth noting (different files, same package/dir, so likely merge-adjacent): `packages/client/src/media/*` + `src/sw/pipe.ts` (cluster 1, #981) vs `packages/client/src/seams/stagingStore.ts` (cluster 3, #926); `crates/wasm/src/host.rs` (cluster 1, #981) vs `crates/wasm/src/seams_bridge.rs` (clusters 2/3).</result>
+<usage><subagent_tokens>60233</subagent_tokens><tool_uses>36</tool_uses><duration_ms>165606</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a4da8694d7381bf45</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/a4da8694d7381bf45.output</output-file>
+<status>completed</status>
+<summary>Agent "Map client/web issue files" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## Cluster A — packages/client media pipe + stream handles
+
+| # | Ask (one line) | Files to touch (verified) | Size |
+|---|---|---|---|
+| 1005 | Fence/map write handles on `EngineClient` (or mint opaque relay handle ids) so a `WriteHandle` from an old leader can't alias onto the new leader's staging | `packages/client/src/engineClient.ts` (write pass-throughs at L155–168; `streams` map L95, `generation` L97, `swapCurrent` L236–244 are the read-side pattern to mirror); `packages/client/src/leaderRelay.ts` (handle minting / `releaseHandles`) if taking option 2; `packages/client/src/engineClient.test.ts`; `packages/client/test/browser/leadership.spec.ts` | **M** |
+| 1006 | Recognise engine code `tooManyStreams` in the web error surface and render it as retryable, not terminal; decide whether `MediaBroker` retries once | `apps/web/src/engine/snapshotStore.ts` (`code` already threaded at L16/L154 — no view branches on it); the consuming view (`apps/web/src/components/file-browser/FileBrowser.tsx`, `apps/web/src/routes/FilesPage.tsx`); `packages/client/src/media/broker.ts` (error→`cb:media:error` + `drop`); `packages/client/src/media/broker.test.ts`; `apps/web/src/engine/snapshotStore.test.ts`. Read-only refs: `crates/wasm/src/host.rs:484`, `crates/engine/src/facade.rs:2487-2497` | **S–M** |
+| 1007 | Pin one engine content stream per playback **ticket** with a refcount instead of per intercepted Range request | `packages/client/src/media/broker.ts` (`streams: Map&lt;requestId, Cursor&gt;` L33, lazy `cursor.stream ??=` L151, `drop` L65, `open` L88–121); `packages/client/src/sw/pipe.ts` (mints `nextRequestId` per request, L106); `packages/client/src/media/registry.ts` (ticket→source lookup); `packages/client/src/media/protocol.ts` if the wire needs a ticket-scoped release; `packages/client/src/media/broker.test.ts`, `sw/pipe.test.ts`, `packages/client/test/browser/media.spec.ts` | **L** |
+| 1010 | Make `MEDIA_WINDOW_BYTES` derive from / be asserted equal to `ContentProfile::PRODUCTION.chunk_size` rather than a hand-copied literal | `packages/client/src/media/protocol.ts:17` (`1_048_536`); `crates/engine/src/content/profile.rs:37` + `:55` (`chunk_size()` getter exists); `crates/wasm/src/host.rs` (export the profile chunk size if deriving); `packages/client/src/worker/engineWasm.ts` (WASM glue type); a KAT/cross-language test — `packages/client/test/browser/media.spec.ts` or `packages/client/src/media/protocol` test | **S** |
+| 988 | Detect a follower that died without `cb:bye` (liveness/heartbeat) and reclaim its write handles, stream handles, and read port on the `cb:bye` path | `packages/client/src/leaderRelay.ts` (`readPorts` L118, `cb:bye` L189–195, `releaseHandles`, `detachPortOf`, `departed`/`mintsInFlight`); `packages/client/src/leadership.ts` (heartbeat/liveness); `packages/client/src/broadcast.ts` or `broadcastTransport.ts` (heartbeat message kind); `packages/client/src/engineClient.ts` (`streams` clear on swap); `packages/client/src/leadership.test.ts`; `packages/client/test/browser/leadership.spec.ts` | **L** |
+
+## Cluster B — client seams / security / typecheck
+
+| # | Ask (one line) | Files to touch (verified) | Size |
+|---|---|---|---|
+| 983 | Route follower `pushChunk` payloads (and value-bearing command args) over the per-follower `MessagePort` instead of the origin-wide `BroadcastChannel` | `packages/client/src/broadcastTransport.ts:111` (`command`, `_transfer` currently ignored) and `:121-124` (`pushChunk` wraps a `Blob`); `packages/client/src/leaderRelay.ts` (port request handling, `ReadPortRequest`); `packages/client/src/portRelay.ts`; `packages/client/src/portCourier.ts`; `packages/client/src/transport.ts` (message types); `packages/client/src/broadcastTransport.test.ts`; `packages/client/test/browser/leadership.spec.ts` | **M–L** |
+| 939 | Carry a per-request-class deadline on `HttpRequest` and honour it via `AbortSignal` in both the browser and desktop Http seams | `packages/client/src/seams/types.ts:78` (`HttpRequestData`), `:104` (`HttpSeam`); `packages/client/src/seams/http.ts:44` (`send`), `:60` (`sendCapped`) — no `AbortSignal` today; the Rust caller side `crates/engine/src/net/` API client + `crates/wasm/src/host.rs` seam bridge; desktop `reqwest` seam under `apps/desktop`/`crates/`; `packages/client/src/seams/http.test.ts`; `packages/client/test/browser/conformance.spec.ts` + `conformance.worker.ts` | **L** |
+| 949 | Cap `RecordTransportSeam.getRecord` with `maxBytes` (reuse the `sendCapped` drain loop) and move `credentials: 'include'` onto an opt-in field defaulting to `omit` | `packages/client/src/seams/recordTransport.ts:31-40` (`await response.arrayBuffer()`, uncapped); `packages/client/src/seams/http.ts:24` (`credentials: 'include'` hardcoded on both paths); `packages/client/src/seams/types.ts` (`HttpRequestData`, `RecordTransportSeam` L71, `CappedHttpResult` L92); `crates/engine/src/net/fanout.rs` (release-active backstop); `crates/engine/src/content/read.rs` (bearer path); `crates/wasm/src/host.rs`; `packages/client/src/seams/http.test.ts` + a new recordTransport test; `packages/client/test/browser/conformance.spec.ts` | **M–L** |
+| 730 | Hoist `toHex(key)` to method entry in `floorStore` so a WASM `Memory.grow()` during `await` can't detach the key view | `packages/client/src/seams/floorStore.ts` — `floor()` L40-43 (`toHex(key)` after `await this.open()`) and `raise()` L48-57 (`hexKey` computed after `await this.open()` at L54); new browser boundary test in `packages/client/test/browser/boundary.worker.ts` + `packages/client/test/browser/engine.spec.ts` (mirror the #728 StagingStore/SnapshotCache variant) | **XS** (fix) / **S** (with test) |
+| 975 | Get `packages/client/test/browser/` into a tsconfig the CI `Typecheck` job actually runs, then fix the drift it surfaces | `packages/client/tsconfig.json` (`"include": ["src"]`, `"rootDir": "src"` — excludes `test/`) or a new `tsconfig.browser-test.json`; `packages/client/package.json:20` (`typecheck: tsc --noEmit`); `packages/client/tsconfig.build.json`; `.github/workflows/ci.yml:90-111`; then the drifted doubles in `packages/client/test/browser/*.worker.ts` (`mediaEngine.worker.ts` is the known one missing `siweChallenge`, plus `engine.worker.ts`, `fakeEngine.worker.ts`, `journalEngine.worker.ts`, `conformance.worker.ts`, `boundary.worker.ts`) | **S–M** (unknown drift tail) |
+
+## Cluster C — apps/web config plumbing
+
+| # | Ask (one line) | Files to touch (verified) | Size |
+|---|---|---|---|
+| 986 | Thread `apiBaseUrl` from the worker bootstrap config through `EngineHost` into the WASM `EngineHandle` (currently `undefined`), failing closed when absent | `packages/client/src/worker/engineHost.ts:59-68` (constructor args hardcoded `undefined`); `packages/client/src/worker/engineWorker.ts:52-57` (builds host without threading it); `packages/client/src/worker/protocol.ts` (`EngineWorkerBootstrap` — has no `apiBaseUrl` field today); `packages/client/src/worker/browserSeams.ts:23,48` (already carries it); `packages/client/src/spawnEngineWorker.ts:12-38` (`EngineHostConfig.apiBaseUrl` already present); `apps/web/src/engine/config.ts:49`; `crates/wasm/src/host.rs:98-105,192`; tests: `packages/client/src/spawnEngineWorker.test.ts`, `apps/web/src/engine/config.test.ts` | **S** |
+| 987 | Add accelerator base URL + public-gateway fallback list to the `apps/web` config surface and thread both into `EngineHandle`, keeping fail-closed | `apps/web/src/vite-env.d.ts` (add `VITE_ACCELERATOR_URL` / `VITE_PUBLIC_GATEWAYS`); `apps/web/src/engine/config.ts` (`engineHostConfig`); `apps/web/src/engine/config.test.ts`; `packages/client/src/spawnEngineWorker.ts` (`EngineHostConfig`); `packages/client/src/worker/protocol.ts`; `packages/client/src/worker/engineWorker.ts`; `packages/client/src/worker/engineHost.ts:59-68`; `crates/wasm/src/host.rs:98-105,160-172`; plus `.env.example`/deploy workflows if the vars need CI plumbing | **M** |
+
+## Cluster D — apps/web shell + folder CRUD + staleness chrome
+
+| # | Ask (one line) | Files to touch (verified) | Size |
+|---|---|---|---|
+| 642 | Epic: rebuild the web shell — login, engine-backed vault browser, upload/download via facade, staleness chrome, DEV introspection hook, ported Playwright e2e skeleton | Largely landed: `apps/web/src/App.tsx`, `routes/{LoginPage,FilesPage}.tsx`, `components/auth/*`, `components/file-browser/{FileBrowser,FileList,FileListItem,Breadcrumbs,EmptyState,ParentDirRow}.tsx`, `components/layout/*`, `engine/{snapshotStore,useSnapshot,useStaleness,createEngineClient,createMediaService,loginHandoff,config}.ts`, `vault/{listing,useFolderNavigation}.ts`, `auth/{coreKit,CoreKitProvider,useAuth}.ts`, `stores/auth.store.ts`. **Still missing:** upload/download wiring (no `beginWrite`/`pushChunk`/`download` refs anywhere in `apps/web/src`), a DEV facade introspection hook (none found), and the `@cipherbox/web-e2e` package that `.github/workflows/web-e2e.yml:101,146` invokes but which does not exist in the tree | **L** (epic; remaining slice **M–L**) |
+| 806 | Harvest v1 folder dialogs and wire create/rename/move/delete to facade commands with pending + dead-letter render | New: `apps/web/src/components/file-browser/{CreateFolderDialog,RenameDialog,MoveDialog,ConfirmDialog,ContextMenu,SelectionActionBar}.tsx`, `apps/web/src/components/ui/{Modal,Portal}.tsx`, `apps/web/src/components/file-browser/{useContextMenu,useFileBrowserActions}.ts`, `apps/web/src/styles/{dialogs,modal,context-menu}.css`. Edit: `apps/web/src/components/file-browser/{FileBrowser,FileListItem}.tsx`, `apps/web/src/engine/snapshotStore.ts` (pending flags + `deadLetter`), `apps/web/src/vault/useFolderNavigation.ts` (MoveDialog `setFocus`/`snapshot` per candidate). Facade surface confirmed: `packages/client/src/facade.ts:89,118,122,126` (`create`/`delete`/`rename`/`relink`) | **L** |
+| 808 | Bind staleness ladder / offline / notice chrome to engine events, with escalation rendered as a distinct warning class | New: `apps/web/src/components/file-browser/{SyncIndicator,OfflineBanner}.tsx`, `apps/web/src/components/NotificationToast.tsx`, `apps/web/src/stores/notification.store.ts`, `apps/web/src/hooks/{useOnlineStatus,useVisibility}.ts` (no `hooks/` dir exists yet). Edit: `apps/web/src/engine/snapshotStore.ts` (subscribes to `snapshotUpdated`/`stalenessChanged` at L116-121 only — needs `withheldUpdateEscalation`, `attributableAbuse`, `deadLetter`), `apps/web/src/engine/useStaleness.ts`, `apps/web/src/components/layout/{AppShell,StatusIndicator}.tsx`, `apps/web/src/styles/layout.css`. Event kinds confirmed in `packages/client/src/worker/protocol.ts:163-164`; `facade.manualRefresh` at `packages/client/src/facade.ts:143` | **M** |
+
+## Cluster E — CI staging env var
+
+| # | Ask (one line) | Files to touch (verified) | Size |
+|---|---|---|---|
+| 970 | Add `VITE_WEB3AUTH_VERIFIER` alongside every `VITE_WEB3AUTH_CLIENT_ID` in the three build workflows, and make a missing verifier fail the build rather than the browser | `.github/workflows/deploy-staging.yml` (L102, 179, 272, 347 — all 4 confirmed); `.github/workflows/desktop-staging-release.yml` (L76, 162, 236 — all 3 confirmed); `.github/workflows/web-e2e.yml` (L119, 125, 169 — confirmed, L125 is a `.env` heredoc not an `env:` block); optionally `apps/web/src/vite-env.d.ts:12` (drop the `?`) and `apps/web/src/auth/coreKit.ts:87-91` / `apps/web/src/engine/config.ts` for a checked accessor. Non-code half: set the repo variable (admin action) | **XS** (workflows) / **S** (with build-time assertion) |
+
+## File paths shared between clusters
+
+- `packages/client/src/engineClient.ts` — **A/1005** (write-handle fence) and **A/988** (`streams` cleared on `swapCurrent`; bounds the leak)
+- `packages/client/src/leaderRelay.ts` — **A/1005** (option 2: relay-minted opaque handle ids), **A/988** (`cb:bye` reclaim path, `readPorts`), **B/983** (per-follower port for `pushChunk`)
+- `packages/client/src/media/broker.ts` — **A/1006** (retry on `tooManyStreams`), **A/1007** (per-ticket pinning), **A/1010** (consumes `MEDIA_WINDOW_BYTES` at L6/L40)
+- `packages/client/src/media/protocol.ts` — **A/1010** (the constant) and **A/1007** (ticket-scoped release message)
+- `packages/client/src/seams/types.ts` — **B/939** (`HttpRequestData` deadline) and **B/949** (`HttpRequestData` credentials + `RecordTransportSeam` maxBytes) — **direct collision on the same interface**
+- `packages/client/src/seams/http.ts` — **B/939** (`AbortSignal`) and **B/949** (`credentials`) — both edit `send` and `sendCapped`
+- `crates/wasm/src/host.rs` — **A/1006** (error code mapping, read-only), **A/1010** (export chunk size), **B/939** + **B/949** (seam bridge), **C/986** + **C/987** (`EngineHandle::new` at L98-105) — **hottest shared file**
+- `packages/client/src/worker/engineHost.ts` (L59-68) and `packages/client/src/worker/engineWorker.ts` and `packages/client/src/worker/protocol.ts` — **C/986** and **C/987** are the same constructor call and the same bootstrap type; ship together
+- `packages/client/src/spawnEngineWorker.ts` (`EngineHostConfig`) — **C/986** and **C/987**
+- `apps/web/src/engine/config.ts` + `config.test.ts` — **C/986**, **C/987**, and **E/970** (if the verifier assertion lands in the config module)
+- `apps/web/src/engine/snapshotStore.ts` — **A/1006** (`code` classification, L16/L154), **D/806** (pending flags + `deadLetter`), **D/808** (event subscription at L116-121) — **three-cluster collision**
+- `apps/web/src/vite-env.d.ts` — **C/987** (new gateway vars) and **E/970** (drop `?` on `VITE_WEB3AUTH_VERIFIER`)
+- `packages/client/test/browser/leadership.spec.ts` — **A/1005**, **A/988**, **B/983**
+- `packages/client/test/browser/media.spec.ts` — **A/1007** and **A/1010**
+- `packages/client/test/browser/conformance.spec.ts` (+ `conformance.worker.ts`) — **B/939** and **B/949**
+- `packages/client/test/browser/*` as a whole — **B/975** gates every other test-double edit in clusters A and B; landing 975 first will surface (and then guard) the drift the others introduce
+- `apps/web/src/components/file-browser/FileBrowser.tsx` — **A/1006**, **D/806**, **D/808**
+- `apps/web/src/components/layout/AppShell.tsx` / `StatusIndicator.tsx` — **D/642** and **D/808**
+- `.github/workflows/web-e2e.yml` — **D/642** (the `@cipherbox/web-e2e` package it invokes does not exist) and **E/970**</result>
+<usage><subagent_tokens>44464</subagent_tokens><tool_uses>26</tool_uses><duration_ms>167655</duration_ms></usage>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a20f86e96a79267fb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/a20f86e96a79267fb.output</output-file>
+<status>completed</status>
+<summary>Agent "Size the keystone issues" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>## 635 — engine: rotation primitives, sweep, name wave, grants
+
+**(a) Asks for:** `rotateScope` (eager-set law), `sweep` (idempotent, epoch-converged, index self-heal, idle-cadence Scheduler job, CAS-safe), `rotateScopeWrite` (commitment re-sign, child-first name wave, three-channel re-point, register-first/batch-retire, root linger), the full trigger table, grant creation, and invites. Gate is *engine simulation*, not production e2e.
+
+**(b) Already in tree — far more than the issue text implies.** `crates/engine/src/rotation/` is a complete module (~6,300 lines) with every named primitive landed and simulation-tested inline (tests are in-module, which is why #767 exists):
+- `rotate.rs` `rotate_scope`, `cascade.rs` `cascade_rotate_scope`, `eager_set.rs` `enumerate_eager_set`, `reseal.rs` `reseal_scope_root`, `sweep.rs` `sweep_pass`/`run_sweep`, `rotate_write.rs` `rotate_scope_write` + `derive_write_name` + `build_repoint_object`, `trigger.rs` `RotationTrigger`/`revoke_read_grant`.
+- `crates/engine/src/grants/` (~2,600 lines): `create.rs` `create_read_grant` already does converge → mint at epoch 1 → parent index update → publish → `post_sealed` mailbox share pointer; `accept.rs`, `ledger.rs`, `child_index.rs`, `revocation.rs`, `owner_entry.rs`, `contact.rs` all landed.
+
+**Genuinely missing:**
+1. **Invites — 100% greenfield.** Only doc-comment mentions (`grants/create.rs:23`, `mod.rs:8`). No ephemeral-key blob path, no bearer write-link flagging, no claim→grant conversion, no ledger expiry field.
+2. **Trigger table is 3 of 5.** `RotationTrigger` enumerates only ScopeExit/ReadRevoke/Manual. **Write revoke / downgrade** and **discovered link expiry** have zero code.
+3. **Nothing is wired to production.** Every rotation/grant command in the facade falls through to the `other =&gt; EngineError::Unimplemented` arm at `crates/engine/src/facade.rs:1901`: `Share`, `Downgrade`, `CreateInviteLink`, `AcceptShare`, `RotateNow`. The module docs say so explicitly ("production resolver wiring is #745/#746", `rotation/mod.rs:22`).
+4. **Sweep has no idle-cadence Scheduler job.** `run_sweep`/`sweep_pass` have exactly one caller in the whole crate: `grants/create.rs:281` (the pre-grant convergence). Nothing schedules it.
+5. **Scope-exit detection is produced but never consumed.** `sync/rebase.rs:133` `ReplayReport::scope_exit_triggers` is populated; `grep` finds no consumer outside a doc comment in `sync/mod.rs:16`.
+6. Concrete `ScopeRootPublisher` / `ChildIndexResolver` / `SweepResolver` / `WriteWavePublisher` impls over `RecordTransport` + `ApiClient` — all only exist as fakes.
+
+**(c) File surface:** `crates/engine/src/rotation/{trigger,sweep,rotate_write,cascade}.rs`; new `grants/invite.rs`; `grants/{create,ledger}.rs`; `crates/engine/src/facade.rs` (command arms + a scheduler job); `sync/rebase.rs`+`sync/tick.rs` (scope-exit consumption); `net/{record_publish,publish,retire,register}.rs` for real publisher impls; `crates/engine/tests/grants_mailbox.rs`.
+
+**(d) Size: must split — ~5–7 PRs.** Suggested cuts: (i) production resolver/publisher impls over the real seams; (ii) sweep idle-cadence Scheduler job + `run_sweep` aggregation (#754); (iii) scope-exit trigger consumption + facade `RotateNow`; (iv) write-revoke/downgrade trigger → `rotate_scope_write`; (v) invites part 1 (ephemeral-key blob + ledger expiry field); (vi) invites part 2 (claim → mailbox → personal grant conversion, bearer write-link flagging); (vii) discovered-link-expiry trigger. Note the issue's conditional on #902 is now moot — #902 is **closed**, so the partial codec is available.
+
+## 752 — engine: facade cold-start identity derivation + live-session wiring
+
+**(a) Asks for:** challenge-sig login → key derivation, per-scope session key material, live-session wiring (resolve path, held set, liveness loop, rehydrate), determinism via seams.
+
+**(b) Mostly landed.** #789 (`5856c5bd9`) shipped the cold-start pipeline *and* the resolve-tick driver. 9 of 13 sub-issues are closed. Verified in `crates/engine/src/facade.rs`:
+- `spawn_resolve_tick_loop` exists (`:1602`) and is called from start (`:1441`); test `resolve_tick_loop_populates_the_held_set` (`:4523`).
+- `api_base_url` is a real struct field (`:1195`), threaded into `ApiClient::new` (`:1354`) and guarded (`:1359`); wasm host passes it (`crates/wasm/src/host.rs:101`).
+- Write-seed plumbing is done: `outcome.write_scope_seed.take()` (`:1427`), `held_resolve.write_scope_seed` (`:1691`), `write_scope_seed: &amp;write_seed` (`:1755`).
+- Renewal outcomes are surfaced: `emit_renewal_failures(&amp;events, &amp;renewals)` (`:1583`) — the issue's last bullet is closed.
+
+**Remaining = the 4 open sub-issues only:** #775 (shared-scope cold-seed caller with authenticated role), #793 (write-body structure-sig epoch mismatch over-rejects read-rotated records at the gate), #795 (narrow spawned-loop secret capture / drop task state on drop-logout), #796 (surface resolve-tick outcomes as trust-violation events), #800 (skip redundant owner-write-seed recovery on steady-state `Current` polls). Nothing here is greenfield.
+
+**(c) File surface:** `crates/engine/src/facade.rs` (the `spawn_resolve_tick_loop` body, `:1602-1760`), `crates/engine/src/gate/adoption.rs` (#793), `crates/engine/src/net/resolve.rs`, `crates/engine/tests/facade.rs`.
+
+**(d) Size: 1 PR per open sub-issue — 4–5 small PRs, or credibly 2 batched PRs** (one correctness: #793+#800+#775; one hygiene/observability: #795+#796). The umbrella itself needs no new architecture. **This is the cheapest of the six by a wide margin** and should be closed early to unblock its five dependents.
+
+## 871 — engine: pin-provider layer across three modes
+
+**(a) Asks for:** concrete `Http` dispatch over `PinMode` (`byo=true` ⇔ `External`; `Hosted`/`Dual` both `byo=false`), Dual runs both legs with only hosted able to fail the op, `ByoIpfsConfig` read from the settings record, and #705's fix (gate `pre_flight_quota_check` on the local byte path, demote `quota.advisory` to a display hint).
+
+**(b) Roughly 25% exists; the dispatch layer is greenfield.**
+- Types exist: `PinMode`/`ByoKind`/`ByoIpfsConfig` at `crates/engine/src/content/provider.rs:32/44/58`; re-exported at `lib.rs:52-56`. `VaultSettings.pin_mode`/`.byo` exist (`settings.rs:54-56`, defaulting to `Hosted` at `:64`) with wire codecs (`:480-482`) and 1,173 lines of tests in `crates/engine/tests/vault_settings.rs`.
+- `provider.rs` has only **probes**: `test_connection` and `validate_byo_config` (endpoint/SSRF/credential validation, already solid). **There is no pin/put path, no provider trait, no dispatch — the file has zero write-side functions.**
+- The byte path is hard-wired hosted: `sync/drain.rs` `upload_version`/`upload_blocks` → `ApiClient::upload` (`api/client.rs:309`). No `PinMode` reaches it.
+- **`VaultSettings` never reaches the facade at all** — `grep 'VaultSettings\|load_settings\|settings'` over `facade.rs` returns nothing. Settings load exists as a standalone function; wiring it into the live session is part of this slice's real cost.
+- #705's bug is exactly as described: `content/retention.rs:31-34` short-circuits `Ok(())` on `quota.advisory`. It now *does* have a production caller (`sync/drain.rs:580`, the over-quota-held-head probe), so the bypass is live.
+
+**Blockers all clear:** #868, #870, #928, #906 are **closed**.
+
+**(c) File surface:** `crates/engine/src/content/provider.rs` (new dispatch, Kubo/PSA/Pinata put paths), `crates/engine/src/content/retention.rs` (#705), `crates/engine/src/sync/drain.rs:1324-1400` (`upload_version`/`upload_blocks` + per-op partial outcome on `OpFailure`), `crates/engine/src/facade.rs` (settings → engine state), `crates/engine/src/settings.rs`, `crates/engine/src/api/client.rs` (`set_byo` reconcile), `crates/engine/tests/write_plane.rs` + `vault_settings.rs`, `crates/contract/tests/contract.rs`.
+
+**(d) Size: split into 3 PRs.** (i) #705's quota-gating fix alone — small, self-contained, closes a live bypass, no dependencies; (ii) settings record → live facade state (`pin_mode` + `ByoIpfsConfig` reaching the drain), including the last-known-good degrade path; (iii) the concrete provider dispatch + Dual both-legs semantics + partial-outcome reporting. (iii) is the big one and may itself want a Kubo-only first cut with PSA/Pinata following.
+
+## 846 — engine/desktop: measured staging budget host→engine path
+
+**(a) Asks for:** widen the wasm profile selector to accept a byte figure, have `apps/web` measure it, have desktop compute it from volume free bytes, cover the override in wasm conformance.
+
+**(b) The issue is stale — items 1 and 2 have already landed, in a better shape than the issue proposes.** The design moved off `SyncTimingProfile` onto a dedicated `StoragePolicy`:
+- `crates/engine/src/storage_policy.rs` (~210 lines) is complete: `StoragePlatform::WEB`/`DESKTOP` caps+percents, `StoragePolicy::measured()`, `UNMEASURED`, `CI`, plus `read_cache_ceiling_bytes`. The `1 &lt;&lt; 30` placeholder the issue cites is gone from `profile.rs`.
+- **wasm half done:** `crates/wasm/src/host.rs:105` takes `storage_headroom_bytes: Option&lt;f64&gt;` and builds `StoragePolicy::measured(StoragePlatform::WEB, …)` at `:150-157`, injected at `:191`.
+- **web half done:** `packages/client/src/worker/storageHeadroom.ts` + `.test.ts`, consumed by `engineWorker.ts:20` → `engineHost.ts:59-68` → `engineWasm.ts:114`.
+- Engine-side enforcement is live: `content/budget.rs:96-115` `admit()` reads `policy.staging_budget_bytes`, called from `facade.rs:1985`.
+
+**Remaining is only the desktop half, and it is genuinely greenfield:** `apps/desktop/src-tauri/src/main.rs` is **107 lines with no engine assembly at all** — no `Engine::start`, no `SeamSet`, no `StoragePolicy` (grep returns nothing). There is also no free-space helper anywhere in `crates/desktop-seams` (no `available_space`/`statvfs`/`fs2`/`sysinfo`). Plus the wasm conformance coverage of the override path (`crates/wasm/src/conformance.rs` is 129 lines; `tests/boundary.rs` 404).
+
+**(c) File surface:** `apps/desktop/src-tauri/src/main.rs`, new `crates/desktop-seams/src/` free-space helper (beside `paths.rs`/`fs_util.rs`) + a `Cargo.toml` dep, `crates/desktop-seams/tests/conformance.rs`, `crates/wasm/src/conformance.rs`.
+
+**(d) Size: 1–2 PRs.** A tight PR is: desktop volume-free-bytes helper + `StoragePolicy::measured(StoragePlatform::DESKTOP, …)` at seam assembly + conformance coverage. **Caveat on the "blocks 648→654" framing:** the real blocker for that chain is not the budget number — it is that the desktop app has no engine bootstrap whatsoever. If this issue is scoped to "stand up the desktop seam assembly and pass it a measured policy," it is a meaningful 1-PR keystone; if it is scoped to just the number, it is nearly trivial and the chain is actually blocked by #650's shell wiring.
+
+## 720 — desktop: keyring seam blocks the engine executor
+
+**(a) Asks for:** (1) move blocking keyring IPC off the single-threaded engine executor (dedicated blocking thread + channel) or document the constraint; (2) automated gate for the real `KeyringCredentialStore` on Windows/Linux. Plus three simplify nits.
+
+**(b) Everything described is exactly as-is in the tree, unchanged.** `crates/desktop-seams/src/credential_store.rs` (171 lines): `store_secret`/`load_secret`/`clear_secret` at `:44-67` are sync, and the four `async fn` impl bodies (`:86-96` plus `store_last_account_id`/`load_last_account_id`/`clear_last_account_id` at `:70-83`) contain no `.await`. Note the issue undercounts — there are **six** async-with-no-await methods, not two. `tests/conformance.rs` (482 lines) runs against the `test-support` `FileCredentialStore` double. Nits confirmed: `staging_store.rs` is 213 lines with the duplicated `.bin`/hex-stem predicate; `record_transport.rs` is 137 lines with the `new`/`with_client` duplication.
+
+**(c) File surface:** `crates/desktop-seams/src/credential_store.rs`, `cratests/desktop-seams/src/staging_store.rs`, `crates/desktop-seams/src/record_transport.rs`, `crates/desktop-seams/tests/conformance.rs`, and CI workflow files if a Windows/Linux keyring job is added.
+
+**(d) Size: 1 PR for the seam fix + nits; the CI half is separate and may not be landable.** The blocking-thread offload is a small, contained change (a `std::thread` + oneshot channel wrapper around the six methods). The Windows/Linux gate is the awkward part — headless CI has no Secret Service and Windows Credential Manager needs a logged-in session; realistically this becomes "self-hosted/interactive runner" or gets downgraded to documented manual verification. **Recommend splitting**: PR 1 = offload + the three simplify nits (safe, mergeable now); PR 2 = CI gate, or convert that half to a documentation decision. Note this is a **LOW/LOW-MED severity retro residual**, not architecture — it is the weakest "keystone" of the six and its blocking effect on the desktop chain is likely nominal.
+
+## 831 — feat(engine): sealed content-block read cache
+
+**(a) Asks for:** a durable cache of *sealed* content blocks, with five open decisions: its own budget, an eviction policy, logout survival, host-storage answer, and reuse-`SnapshotCache`-vs-new-`BlockCache` seam.
+
+**(b) One of the five decisions is already made and implemented; the cache itself is 100% greenfield.**
+- **Budget: resolved.** `StoragePolicy::read_cache_ceiling_bytes` exists (`storage_policy.rs:75`), reserved off headroom *before* the staging fraction (`:92-94`), with per-platform caps (WEB 512 MiB / 10%, DESKTOP 2 GiB / 10%) and the invariant test at `:207`. The module doc already states the rationale ("the cache is the one consumer that gets a ceiling"). Item 1 and item 4 of the issue are answered.
+- **Everything else is greenfield.** `grep BlockCache|block_cache` returns nothing outside `storage_policy.rs`. No eviction machinery exists anywhere in the engine — the record cache is the single-slot overwrite in `net/resolve.rs`.
+- Safety premises hold: `content/read.rs:224-226` verifies bodies against expected CID; source order is accelerator-first (`read.rs:75-91`, `Gateway::sources`).
+- The seam question is real: `crates/engine/src/seams/snapshot_cache.rs:5-19` explicitly scopes the contract to gate-passing *records* and states "contents survive logout by design" — reuse means widening a deliberately narrow contract, and item 3 (logout survival for blocks) is a privacy decision that has **not** been made anywhere in the tree.
+
+**(c) File surface:** new `crates/engine/src/content/cache.rs` + new `crates/engine/src/seams/block_cache.rs` (or a widened `snapshot_cache.rs`), `crates/engine/src/content/read.rs` (source order + write-through), `crates/engine/src/seams/mod.rs`, `crates/engine/src/facade.rs` (SeamSet), and then **every host must implement the new seam**: `crates/wasm/src/seams_bridge.rs` (880 lines), `packages/client/src/seams/`, `crates/desktop-seams/src/`, plus `crates/engine/src/testkit/{fakes,conformance}/`.
+
+**(d) Size: must split — 3 PRs, and a design decision must land first.** The issue is written as an open question, not a spec: items 2, 3 and 5 are undecided. Sequence: (0) a decision issue/ADR settling seam choice + eviction policy + logout semantics; (i) the `BlockCache` seam trait + conformance kit + fakes; (ii) the engine-side cache with eviction against `read_cache_ceiling_bytes`, wired into `read.rs`; (iii) host implementations (web OPFS, desktop FS). **Of the six, this is the one with the weakest claim to keystone status** — the issue itself says "not urgent, latency never correctness," and it blocks nothing listed.
+
+---
+
+**Ordering recommendation:** 752 (nearly done, unblocks 5) → 846-desktop-half (small, but confirm scope against #650) → 720 (small) → 871 (3 PRs, all blockers clear) → 635 (5–7 PRs, the real bulk) → 831 (needs a design decision before any PR).</result>
+<usage><subagent_tokens>81699</subagent_tokens><tool_uses>34</tool_uses><duration_ms>263536</duration_ms></usage>
+</task-notification>
+
+---
+
+given that #635 is 5-7 prs, are there sub-issues already defined for what is to be delivered ?
+
+---
+
+agreed with minting the 7 #635 sub-issues and marking all dependency edges.
+
+also agreed that the rebase churn is not worth it, and wave 1 should just be #1 and #6.
+
+---
+
+<task-notification>
+<task-id>aead71caa0c1b61cc</task-id>
+<tool-use-id>toolu_01FZ7oKpTZKCrC8aWw8fPC1G</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/aead71caa0c1b61cc.output</output-file>
+<status>completed</status>
+<summary>Agent "Mint 7 sub-issues under 635" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>All 7 issues created, attached, and wired. No code, no branch, no PR.
+
+## Issues created
+
+| # | Title |
+|---|---|
+| **1014** | engine: implement the concrete rotation resolvers and publishers over the real seams |
+| **1015** | engine: implement grant invites |
+| **1016** | engine: wire the rotation and grant facade command arms |
+| **1017** | engine: schedule the sweep idle-cadence job |
+| **1018** | engine: consume the scope-exit rotation triggers |
+| **1019** | engine: add the write-revoke and downgrade rotation trigger |
+| **1020** | engine: add the discovered-link-expiry rotation trigger |
+
+All 7 verified: labels `v2-build` + `comp:engine`, milestone `v2.0.0`, no parentheses in any title, and all 7 present in `gh api repos/FSM1/cipher-box/issues/635/sub_issues`.
+
+## Dependency edges — all 9 confirmed via the native API
+
+- `1016 blocked_by: 1014, 1015`
+- `1017 blocked_by: 1014`
+- `1018 blocked_by: 1014`
+- `1019 blocked_by: 1014`
+- `1020 blocked_by: 1014`
+- `754 blocked_by: 1017`
+- `772 blocked_by: 1019`
+- `785 blocked_by: 1014` (it also retains a pre-existing `blocked_by: 635` edge, left untouched)
+- `1014` and `1015` correctly have no blockers
+
+Every edge was read back from `gh api .../dependencies/blocked_by`. **No edge failed to apply.**
+
+## Notes from the recon
+
+- Each body opens with an explicit "Already landed — do not re-implement" section naming the landed primitives and their file paths, so nobody re-writes the ~6,300 lines of `rotation/` or ~2,600 lines of `grants/`.
+- The stale-pointer fix in 1014 is broader than briefed: `crates/engine/src/rotation/mod.rs:22` is not the only dangling reference to the closed #745/#746 — `rotate_write`'s doc block a few lines below (`mod.rs:29`) and `crates/engine/src/grants/create.rs:16` carry the same stale pointer. All three are called out in 1014's scope.
+- `Command::Revoke` (`facade.rs:427`) sits in the same `Unimplemented` fall-through as the five briefed commands, so 1016 names it as in-scope-where-not-already-wired; `revoke_read_grant` plus the cascade are landed and it needs only its arm.
+- 1018 flags that the full-depth requirement needs verification, not assumption: `rebase.rs:245` pushes a trigger from `OpResolution::Applied`, but whether the detection is genuinely full-depth across a moved subtree is unconfirmed from the queue site alone.
+- 1015 states the two-PR split explicitly (blob + ledger expiry, then claim conversion + bearer flagging) and 1020 notes it *consumes* the ledger expiry field that 1015 mints — a soft ordering that is not a hard blocker, so no edge was wired for it. Flagging in case you want one.</result>
+<usage><subagent_tokens>77252</subagent_tokens><tool_uses>34</tool_uses><duration_ms>268736</duration_ms></usage>
+</task-notification>
+
+---
+
+so am I correct in assuming that some of these newc#635 sub-issues is startable in parallel with the currently in-flight work or should this all wait until the 2 current prs land?
+
+---
+
+yes please launch #1014
+
+---
+
+<task-notification>
+<task-id>a81263809af55eacb</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/a81263809af55eacb.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship PR-1 719 retro-audit sweep" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>PR #1021 is open as a draft: https://github.com/FSM1/cipher-box/pull/1021
+
+## Per-issue status — all seven implemented
+
+- **#997** — `fanout_get_verify` now returns `(VerifiedRecord, Vec&lt;u8&gt;)`. Record and bytes move out as one tuple, so a mismatch isn't representable. Updated `liveness.rs`, `publish.rs`, `resolve.rs`, `pointer_fetch.rs`, `settings.rs`, `sync/drain.rs`. Three reviewers independently caught that my first pass left the *hottest* call site (`resolve.rs`) discarding the record as `_verified` while re-verifying downstream — fixed by carrying it through `GatedResolve` to the liveness hold. The two remaining re-verifies are inside the adoption gate, which re-verifies from scratch deliberately as a trust boundary; I left those.
+- **#998** — Both bypassing production readers (`net/publish.rs`, `rotation/sweep.rs`) routed through `floor::*`; every remaining direct read is a seam impl, the conformance kit, or a test. `ct_eq_32` hoisted to `core::suite::secret::ct_eq` on `subtle::ConstantTimeEq` (stronger than the `black_box` XOR loop), `secret_util.rs` deleted, ~10 sites re-pointed. `SecretBytes` gained constant-time `PartialEq`/`Eq`.
+- **#999** — `NotAuthenticated` and `ChallengeResponse.expires_at` removed; the three `drain.rs` tests re-pointed to `Unauthorized` (verified arm-by-arm that they hit the same classification paths and didn't become duplicates). Took the optional helper: `json_authed` folds five sites, which then made `request_authed`'s content-type/body params dead — dropped.
+- **#1000 — conformance decision: dropped the return, restored the coverage.** No production caller read it. Three of four invariants were already asserted independently via post-commit store reads. The fourth was *not*: the retry-convergence case used only at-or-below-floor entries, so without the return value it passed even for a `commit_floors` that did nothing. I made one entry advance, and added a same-key-twice-in-one-batch case (both orders) that nothing covered before. Net: stronger than what I removed.
+- **#1001** — `Drop` removed. Traced both constructors: values are `/ipfs/&lt;cid&gt;` paths or sealed ciphertext; nothing secret reaches a record.
+- **#1002** — Three copies collapsed into `cipherbox_core::hex::lower`. Reviewers flagged that I'd left a *fourth* copy in `crates/engine/src/hex.rs` with an identically-named test — deleted it and re-pointed its seven importers.
+- **#1003** — Rather than a new `SecretField` newtype, the four payloads derive over `SecretBytes`, which already redacts `Debug` and (after #998) compares constant-time — it *is* the newtype. Also folded in `seal::body::Version`, the fifth instance and the one the deleted comment cited.
+
+## Review gates — all three ran, no HIGH/MEDIUM
+
+Notable findings folded back: the missed resolve re-verify; the cross-crate hex copy; `Version`; the conformance observable; a `SecretBytes` doc overclaim (a derived struct `PartialEq` short-circuits *across* fields); and a redaction test that only searched for a **hex** spelling — a field added as raw `[u8; 32]` renders in decimal and would have passed, so it now counts redaction markers. Also restored `ct_eq` in two accept tests where I'd downgraded to `==` on raw arrays.
+
+**Deliberately not done:** `gate/floor.rs` claimed to be "the only place that advances" floors while `rotation::{rotate,cascade}` raise directly — already true on `main`. I corrected the doc; routing those through a wrapper is behavior-adjacent (both consume the returned floor) and belongs in its own change.
+
+## Checks run
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all --check` | FMT_OK |
+| `cargo clippy --workspace --all-targets` | clean |
+| `cargo test --workspace` | 36 suites, 0 failures |
+| `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown --all-targets` | clean |
+| `cargo test -p cipherbox-core --target wasm32-wasip1` | green |
+| `cargo tree -p cipherbox-core --target wasm32-unknown-unknown --edges normal` | 0 `getrandom` hits |
+
+Two caveats worth your attention: the second commit used `--no-verify` because this worktree has no `node_modules` (lint-staged failed to resolve) — the commit is Rust-only, nothing lint-staged covers, and signing was left intact. And one reviewer argued the crypto-touching parts deserve their own ~200-line PR rather than riding 1578 lines of mechanical cleanup; the brief mandated a single PR, so I kept it whole — worth knowing before the crypto review runs.</result>
+<usage><subagent_tokens>331059</subagent_tokens><tool_uses>296</tool_uses><duration_ms>1624114</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a81263809af55eacb</worktreePath><worktreeBranch>worktree-agent-a81263809af55eacb</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+ok lets split #1021 in to a separate PR.
+
+---
+
+ok great, let me know when i can flip the pr #1021 to ready for review to have coderabbit look at it.
+
+---
+
+ok that all seems reasonable - can i leave you in charge of handling the coderabbit review queue while i am afk? i just burned a slot reviewing  #1022 before it was ready, so next slot will open in an hour.
+
+---
+
+#1022 did get a proper review [Image #1]
+
+---
+
+nah CHILL profile has been quite ok so far. greptile is still inaccessible until quota reset in mid august, so I have merged #1022 already.
+
+---
+
+<task-notification>
+<task-id>a81263809af55eacb</task-id>
+<tool-use-id>toolu_01BQFzpEEY2FjoLWPq5zYzn9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/a81263809af55eacb.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship PR-1 719 retro-audit sweep" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Rebase done and verified.
+
+## Result
+
+**#1021** — https://github.com/FSM1/cipher-box/pull/1021 — open, **draft**, base `main`, head `206ca81df`
+**#1022** — merged as `31f06c7e` (no action needed)
+
+## Post-rebase diffstat
+
+```
+git diff --stat origin/main...HEAD  →  19 files changed, 233 insertions(+), 198 deletions(-)
+```
+
+Down from 44 files / +379/−429. Three-dot and two-dot now agree, which confirms the merge-base moved to `main`'s tip — the rebase took.
+
+**Commits on the PR (2, correct order):**
+- `c2240cd77` test: pin secret redaction as an exact shape rather than a marker count
+- `206ca81df` chore: sweep the retro-audit cleanup backlog
+
+`59888a6ac` dropped cleanly — **no conflicts at all**, its hunks fell out automatically since the squashed content was byte-identical. I never had to take main's version manually.
+
+## `76dc4465f` content survived
+
+Verified by grep on the rebased tree, not just by commit presence — `crates/core` still shows +95/−36 across the three files, with `seed_payload_debug_renders_exactly_the_redacted_shape`, `grant_payload_debug_redacts_preserved_unknown_values`, `version_debug_redacts_the_content_key`, and the no-`Hash`/no-`Ord` note all intact.
+
+## Checks — clean build, rebased branch
+
+I ran `cargo clean -p cipherbox-core -p cipherbox-engine -p cipherbox-wasm -p cipherbox-desktop-seams` first (removed 3.4 GiB / 34,816 files), so nothing below reused a pre-rebase binary.
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all --check` | FMT_OK |
+| `cargo clippy --workspace --all-targets` | clean |
+| `cargo test --workspace` | 1276 passed, 0 failed |
+| `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown --all-targets` | clean |
+| `cargo test -p cipherbox-core --target wasm32-wasip1` | 0 failed |
+
+1276 (not 1274) is the expected count — `c2240cd77` adds two tests.
+
+## PR body
+
+Rewrote it: dropped the "stacks on PR A" line, kept the four `Closes`, and added a **"Note — this PR also carries one crypto commit"** section directly under them, before the mechanical content. It names `76dc4465`, says it missed #1022's merge window by one second, and explains why the marker-count test was unsound (a later raw `[u8; 32]` field leaves the count unchanged and defaults to zeroes, matching no searched byte spelling) plus the `Version` / unknown-fields coverage and the short-circuit note.
+
+## One thing worth flagging
+
+Before your message arrived I had detected that #1022 was closed with its head branch deleted, and #1021 auto-retargeted to `main` with `mergeable_state=dirty`. I had a repair script staged to reopen #1022, re-draft it, and re-point #1021 at it. **I did not run it** — your message showed the close was a squash-merge, not an accident, so reopening would have been wrong. Worth knowing that my earlier `git push --force-with-lease` reported `* [new branch]`, meaning it recreated `refactor/998-constant-time-and-secret-redaction` after the merge deleted it; that stale branch still exists on the remote at `76dc4465f` and is now redundant, so you may want to delete it.</result>
+<usage><subagent_tokens>355672</subagent_tokens><tool_uses>389</tool_uses><duration_ms>1350989</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a81263809af55eacb</worktreePath><worktreeBranch>worktree-agent-a81263809af55eacb</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+launch it and add it to the review queue
+
+---
+
+<task-notification>
+<task-id>a31f1ad63f0ca0571</task-id>
+<tool-use-id>toolu_019jHuwrqc1piCFwWEiJoWx9</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/a31f1ad63f0ca0571.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship 1015 grant invites" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Shipped.
+
+## PR
+
+**#1024** — https://github.com/FSM1/cipher-box/pull/1024 (draft, not marked ready, no CodeRabbit review requested)
+
+## What landed vs. left for part 2
+
+**Landed:** the ephemeral-key invite blob and the ledger expiry field. `EphemeralInvitee` derives a throwaway identity from one random invite secret the way `SessionIdentity::derive` derives a real one from a login secret — secp256k1 scalar adopted directly, X25519 half through the frozen `enc-subkey` edge — then mints through the same `mint_grant_row` a contact does. **No new KDF edge; the catalog KATs are untouched.** `reseal_scope_root` needed zero invite-specific code, so the two halves separated cleanly; I did not have to land the whole issue.
+
+`expiresAt` is `Option&lt;NonZeroU64&gt;` on `GrantLedgerEntry` — zero is unrepresentable rather than checked, so no encode path can emit the `invalid-expiry` bytes the decoder rejects.
+
+**Left for part 2:** claim-to-grant conversion (the ephemeral identity is already committed in the ledger row it verifies against), bearer write-link flagging, the discovered-expiry trigger, and URL-fragment encoding. I stayed entirely out of `crates/engine/src/rotation/` and `net/` — no collision with the #1014 branch.
+
+## Seams
+
+- **Entropy** — `crate::entropy::Entropy::fill`. Test asserts the minted secret is byte-equal to the seam's output.
+- **Time** — `grants::ledger::entry_is_live(entry, now)` against injected `crate::seams::UnixMillis` (the `Scheduler::now` instant). Test asserts a row dies *at* `now == expiresAt`.
+
+Grepped the diff for `OsRng|rand::|getrandom|SystemTime|Instant|std::time` — zero hits.
+
+## Review gates — one real P1
+
+All three ran. The finding that mattered, caught by both security gates and empirically verified: **`expiresAt` is the first *optional* typed key in any seal schema**, and `merge_unknown`'s precedence guard is presence-based — so with the field `None` its key is free and a caller-built `PreservedFields` could fill it, sealing bytes the decoder rejects (rule 8). Fixed with `assert_unknown_disjoint` beside `merge_unknown`. **The same hole already existed on `main`** for the optional `writeScopeSeed` in `encode_grant_blob_payload`, where it would seal a write seed into a read grant — guarded and tested there too.
+
+Also folded in: deriving the scope-root `ipnsName` instead of trusting a passed name (matching `create_read_grant`), extracting `mint_grant_row` (the ECDH→tag→pseudonym derivation was about to exist three times), dropping `Clone` from a bearer capability, and correcting an inverted rationale — an absent deadline means always-live and `Some(0)` means always-dead, which are opposites, not two spellings of one thing.
+
+**Not fixed, deliberately:** `expiresAt` is outside the owner-signed commitment, so a write-grantee can strip it — or forge one onto a *victim's* row, which would let them induce a revocation once the prune trigger exists. Fixing it structurally means moving the deadline into `GrantSetEntry`, which contradicts `blueprint/engine.md` ("Expiry is a ledger field"). I shipped the honest bound instead — documented on the field and on `enforce_committed_ledger`, pinned by `a_write_grantee_may_strip_a_deadline_without_failing_owner_authority` — and raised the decision on #1015 for part 2 ([comment](https://github.com/FSM1/cipher-box/issues/1015#issuecomment-5173501233)).
+
+## Diffstat
+
+12 files, +961/−39. `crates/engine/src/grants/invite.rs` (+628) is the only new file.
+
+## Checks
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all --check` | clean |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 0 warnings |
+| `cargo test --workspace` | 36/36 binaries ok, 0 failed |
+| `cargo test --release -p cipherbox-core --lib seal::` | 113 ok — encode guards are release-active |
+| `cargo check -p cipherbox-core -p cipherbox-engine -p cipherbox-wasm --target wasm32-unknown-unknown` | clean |
+| `cargo run -p cipherbox-core --example kat_gen` + `git status` | only the 3 expected files move; re-run is a no-op |
+
+Nothing is red. Two things I could not run locally and am not claiming: the `wasm32-wasip1` leg (needs wasmtime) and the browser suite.</result>
+<usage><subagent_tokens>352527</subagent_tokens><tool_uses>196</tool_uses><duration_ms>2233995</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a31f1ad63f0ca0571</worktreePath><worktreeBranch>worktree-agent-a31f1ad63f0ca0571</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+<task-notification>
+<task-id>a9a2f485888e91f40</task-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/a9a2f485888e91f40.output</output-file>
+<status>completed</status>
+<summary>Agent "Ship 1014 rotation resolvers" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done.
+
+## PR
+
+**#1027** — https://github.com/FSM1/cipher-box/pull/1027 — open as a **draft**, base `main`, 4 commits, +1550/−159 across 18 files. No CodeRabbit review requested.
+
+## What landed — 2 of the 4 seams
+
+| Seam | Status | Location |
+|---|---|---|
+| `ChildIndexResolver` | **landed** | `crates/engine/src/net/rotation.rs` (`OwnerRotationNet`) |
+| `ScopeRootPublisher` | **landed** | same file |
+| `SweepResolver` | deferred → **#1025** | — |
+| `WriteWavePublisher` | deferred → **#1026** | — |
+
+Plus `RotationAncestry` (same file), `author_scope_root_with_section` in `net/author.rs`, and `RootAdopter::adopt_root` / `under_parent_node_seed` in `net/adopter.rs`. All three stale doc pointers fixed, plus the ones my own change made false; the surviving faked-seam pointers now name #1025/#1026 instead of the closed #745/#746.
+
+## The slice was too large — the cut I made
+
+Two seams are **not wiring**, and I did not fake landing them:
+
+- **`SweepResolver` (#1025)** — the sweep exists to converge records whose epoch is *below* their durable read-epoch floor, and `gate::floor::check` rejects exactly those (`epoch &lt; epoch_floor`). A production resolver cannot get its own work-list through the gate as it stands, and dropping the floor stages would let a forgery-window writer have the sweep republish a revoked grant set. Needs a design decision, not plumbing.
+- **`WriteWavePublisher` (#1026)** — `RepublishedNode` carries only routing identity; authoring at the fresh name also needs the node's read body, read key and predecessor name. That's a seam-shape change to a landed primitive. 3 of its 5 methods are trivial; `republish` is not, and a partial trait impl is worse than none.
+
+Both filed with native `blocked_by` dependency edges on #1014.
+
+## Key finding — the review gates caught three real bugs, all latent behind the fakes
+
+1. **HIGH, pre-existing in `reseal.rs`:** the write body's structure signature was signed at the **write** epoch while the gate recomputes every structure preimage at the **read** epoch. A read rotation separates the two by construction, so the first production revocation would have signed a permanently unadoptable scope root — unpublishable-back, floors monotonic. Fixed; the signing closure no longer takes an epoch, so the invariant is structural now.
+2. **HIGH:** `RootAdopter` hard-coded `parent_node_seed: None`, which the gate treats as a fail-closed ascent-link mismatch. Every interior scope root carries an ascent link, so the resolver could never have resolved a real descendant. Fixed by threading reader-derived ancestry.
+3. **HIGH:** the encode-side floor check ran *before* the gated read, but a gate pass raises the floor — so it measured against a floor the next line lifted above it.
+
+Also folded in: gate rejections no longer launder into retryable transport failures, the outgoing commitment signature is verified release-active, diamond descendants gate under their first-seen parent, and the ancestor seed reaches the gate as a borrow.
+
+## Rebase
+
+One rebase onto `origin/main` (`31f06c7ec`, hoisting `ct_eq`/redaction into core). Clean — no conflicts, nothing broke. All gates re-run after it.
+
+## Commands and results
+
+All from the worktree, all green, `CARGO_TARGET_DIR` never set or shared:
+
+- `cargo fmt --all --check` — clean (never scoped to `-p`)
+- `cargo clippy --workspace --all-targets --all-features` — 0 warnings, 0 errors
+- `cargo test --workspace --all-features` — exit 0; 36 suites ok, 0 failed. 18 tests in `net::rotation`.
+- `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown` — clean
+
+Review gates: `/simplify`, `/security-review`, `/crypto-privacy-review` all run on `git diff main...HEAD`, findings folded back in and committed.
+
+One thing I deliberately left: `crates/engine/src/grants/create.rs` has ~7 more `#745/#746` pointers, but they refer to **orphan reconciliation**, not resolver wiring. They are stale (both issues closed), but neither #1025 nor #1026 owns that concern, and inventing a wrong target is worse than leaving it — worth a separate sweep.</result>
+<usage><subagent_tokens>396640</subagent_tokens><tool_uses>249</tool_uses><duration_ms>5126520</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-a9a2f485888e91f40</worktreePath><worktreeBranch>worktree-agent-a9a2f485888e91f40</worktreeBranch></worktree>
+</task-notification>
+
+---
+
+/loop Manage the CodeRabbit review queue for FSM1/cipher-box while the user is AFK. Each iteration: (1) check open PRs and their CI status; (2) determine whether a CR slot is free — the last review ran on #1022 with its comment created 00:22:41Z and edited through 00:33:26Z, so treat ~01:33Z as the safe boundary; (3) flip the highest-priority DRAFT PR to ready-for-review ONLY if its CI is fully green and no review is in flight; (4) after flipping, verify CodeRabbit actually posted a review pass ("Actionable comments posted:" or "No actionable comments were generated", or a submitted review) rather than a walkthrough-only — CodeRabbit edits ONE status comment in place, so re-read it before concluding, and re-queue if it was walkthrough-only or rate-limited. Priority order: #1024 invites > #1023 client seams > #1027 rotation resolvers > #1021 mechanical. #1022 is MERGED and needs nothing. Never merge anything. Never mark a PR ready if CI is red or pending. Report state changes concisely.
+
+---
+
+/loop Manage the CodeRabbit review queue for FSM1/cipher-box while the user is AFK. Each iteration: (1) check open PRs and their CI status; (2) determine whether a CR slot is free — #1024 was flipped ready at 01:37Z, so the next slot is ~02:37Z; (3) flip the highest-priority DRAFT PR to ready-for-review ONLY if its CI is fully green and no review is in flight; (4) after flipping, verify CodeRabbit actually posted a review pass ("Actionable comments posted:" or "No actionable comments were generated", or a submitted review) rather than a walkthrough-only — CodeRabbit edits ONE status comment in place, so re-read it before concluding, and re-queue if it was walkthrough-only or rate-limited. Priority order: #1023 client seams > #1027 rotation resolvers > #1021 mechanical. #1022 is MERGED; #1024 is READY and under review. Never merge anything. Never mark a PR ready if CI is red or pending. Report state changes concisely.
+
+---
+
+<task-notification>
+<task-id>ad631180fa207d54f</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/ad631180fa207d54f.output</output-file>
+<status>completed</status>
+<summary>Agent "Resolve 1024 review findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. PR #1024 is still a draft, head is `577760971`.
+
+## Per-finding disposition
+
+**1. MAJOR functional correctness — `grants/ledger.rs:70-84` (expiry not enforced in the public grant flow) — SKIPPED, declined with reasoning.** Both halves of the proposed fix are unworkable:
+
+- **`accept_share` cannot see `expires_at` at all.** The deadline lives on `GrantLedgerEntry` → `WriteBody`, which `reseal_scope_root` seals under `kdf::write_key(kdf::write_seed(write_scope_seed, scope_id))` (`crates/engine/src/rotation/reseal.rs:361-386`). `accept_share` (`crates/engine/src/grants/accept.rs:396-446`) only receives `candidate.grant_section.commitment` and `grant_blobs`; `GrantSection.write_body` is an opaque `SignedSealed`. A read grantee never gets `write_scope_seed` (only a `Permission::Write` blob payload carries it), so it can never read its own deadline — before or after `open_grant_blob`. Moving the deadline somewhere accept could read it would put a per-grantee field in the public grant section and lose the "observer learns only blob count" property.
+- **Pruning expired rows at reseal is a regression.** `reseal_scope_root` re-emits blobs and ledger but cannot re-sign the commitment (that needs the owner identity signer; reseal holds only the writer pseudonym). Dropping the row from the ledger makes `enforce_committed_ledger` fail at *every* resolver — one expired invite would render the scope root unadoptable. Dropping only the blob yields `NoBlobAtTag`, which `grants::revocation` treats as the definitive revocation signal — handing a write-grantee a capability-destroying lever on the one field the owner does not sign. Reseal is exactly the write-grantee-executed path, which is why `enforce_committed_ledger` guards it. This escalates the documented residual rather than closing it.
+- Removal is owner-only by construction via `revoke_read_grant` (`crates/engine/src/rotation/trigger.rs:123`), which cuts the tag from commitment *and* ledger and owner-re-signs. That is the "discovered-expiry trigger" `entry_is_live`'s doc already names, and its wiring is explicitly part 2 of #1015 (`trigger.rs` is being edited on branch `feat/1014`). CodeRabbit is right that `entry_is_live` has no production caller yet — that is the scoped, tracked gap, not something publish or accept can close.
+
+The thread was auto-resolved on the push; I **unresolved it** so the declined MAJOR stays visible for a human.
+
+**2. MAJOR security — AAD-transplant test — FIXED, but CodeRabbit's premise was factually wrong.** `invitee()` mints from `SeededEntropy::new(7)`, a deterministic SplitMix64 stream (`crates/engine/src/testkit/entropy.rs:14-38`), so the `EphemeralInvitee` built inside `invite()` had byte-identical key material to `minted` — the assertions were *not* passing on a recipient mismatch (the added control opens on first run, confirming it). The test was leaning on that seed determinism implicitly, so I applied the fix anyway: `row` is now minted from `minted` directly, with a valid-AAD control asserting a successful open at the original epoch before the two rejects.
+
+**3. MINOR — deadline-strip test used `Permission::Read` — FIXED.** Now `Permission::Write`. Still passes: commitment entry and ledger row both come from the same `row`, so the `(tag, permission)` pair matches.
+
+**4. MINOR — `enforce_committed_ledger` doc — FIXED.** Reworded to describe the comparison scope and why it is narrower than the signature. I also corrected the same misstatement in the PR body ("compares the same triple" → compares only `(tag, permission)`, since no ledger row carries a `pseudonymPk`).
+
+## Fix commit
+
+`577760971 test: bind the AAD-transplant control and correct the ledger comparison doc`
+
+```
+ crates/engine/src/grants/invite.rs | 21 +++++++++++++++++++--
+ crates/engine/src/grants/ledger.rs | 11 ++++++-----
+ 2 files changed, 25 insertions(+), 7 deletions(-)
+```
+
+## Did finding 1 change behavior beyond tests?
+
+**No — nothing changed beyond tests and one doc comment.** The fix commit touches only test code and a doc block; there is zero production-logic delta. Expiry enforcement is unchanged: `entry_is_live` remains the only expiry surface and still has no production caller. What the codebase enforces today is what it enforced before this review round — grant removal happens solely through the owner-signed `revoke_read_grant` cut plus a rotation. I deliberately did **not** add any enforcement in the publish or accept paths, so the documented limitation ("`expiresAt` sits outside the owner-signed commitment; a write-grantee can strip or forge one") stays exactly as accurate as it was, and the test pinning it (`a_write_grantee_may_strip_a_deadline_without_failing_owner_authority`) is now strictly stronger.
+
+## Checks (all run in the branch worktree, no shared `CARGO_TARGET_DIR`)
+
+- `cargo fmt --all --check` — clean
+- `cargo clippy --workspace --all-targets -- -D warnings` — clean
+- `cargo test --workspace` — exit 0; **36 test binaries, 1295 passed, 0 failed**
+- `cargo test --release -p cipherbox-core --lib seal::` — 114 passed, 0 failed (release-active encode guards fire)
+- `cargo check -p cipherbox-core -p cipherbox-engine -p cipherbox-wasm --target wasm32-unknown-unknown` — clean
+
+Threads 2, 3, 4 replied to and resolved; thread 1 replied to and left unresolved.</result>
+<usage><subagent_tokens>109107</subagent_tokens><tool_uses>41</tool_uses><duration_ms>405968</duration_ms></usage>
+</task-notification>
+
+---
+
+/loop Manage the CodeRabbit review queue for FSM1/cipher-box while the user is AFK. Each iteration: (1) check open PRs and their CI status; (2) determine whether a CR slot is free — #1024's review landed 01:45:57Z, so the next slot is ~02:45Z; (3) flip the highest-priority DRAFT PR to ready-for-review ONLY if its CI is fully green and no review is in flight; (4) after flipping, verify CodeRabbit actually posted a review pass — check `pulls/N/reviews` for a submitted review AND the review body for "Actionable comments posted: N" or "No actionable comments were generated"; CodeRabbit edits ONE status comment in place, so re-read before concluding, and re-queue if walkthrough-only or rate-limited; (5) when a review lands with findings, re-draft that PR IMMEDIATELY so the fix-push does not burn the next slot, then delegate the fixes to a sub-agent that triages rather than blindly applying suggestions. Priority order: #1023 client seams > #1027 rotation resolvers > #1021 mechanical. #1022 is MERGED; #1024 is reviewed and awaiting the user's merge decision — do NOT re-flip it. Never merge anything. Never mark a PR ready if CI is red or pending. Report state changes concisely.
+
+---
+
+/loop Manage the CodeRabbit review queue for FSM1/cipher-box while the user is AFK. Each iteration: (1) check open PRs and their CI status; (2) determine whether a CR slot is free — #1023 was flipped ready at 02:46Z, so the next slot is ~03:46Z; (3) flip the highest-priority DRAFT PR to ready-for-review ONLY if its CI is fully green and no review is in flight; (4) after flipping, verify CodeRabbit actually posted a review pass — check `pulls/N/reviews` for a submitted review AND the review body for "Actionable comments posted: N" or "No actionable comments were generated"; CodeRabbit edits ONE status comment in place, so re-read before concluding, and re-queue if walkthrough-only or rate-limited; (5) when a review lands with findings, re-draft that PR IMMEDIATELY so the fix-push does not burn the next slot, then delegate the fixes to a sub-agent that triages rather than blindly applying suggestions. Priority order: #1027 rotation resolvers > #1021 mechanical. #1022 is MERGED; #1024 is reviewed and awaiting the user's merge decision — do NOT re-flip it; #1023 is READY and under review. Never merge anything. Never mark a PR ready if CI is red or pending. Report state changes concisely.
+
+---
+
+<task-notification>
+<task-id>a0b9ef2ec131393e6</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/a0b9ef2ec131393e6.output</output-file>
+<status>completed</status>
+<summary>Agent "Resolve 1023 review findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. PR #1023 is still a draft at `1dd8d0d`, worktree clean.
+
+## Per-finding disposition
+
+**1. `cappedBody.ts` maxBytes cap bypass — FIXED.** Confirmed real: both `Number.isFinite(declared) &amp;&amp; declared &gt; maxBytes` and `total + value.byteLength &gt; maxBytes` evaluate false for `NaN`/`Infinity`, so an untrusted body drained to EOF unbounded.
+
+**2. `provider.rs` `PROBE_TIMEOUT_MS` — DEFERRED to new issue #1028.** Note the premise correction: it **is** introduced by this PR (absent from `main`), so by the letter of the instruction I should have fixed it. I deferred anyway because triage found a case the instruction didn't anticipate — this PR introduces the `HttpRequest::timeout_ms` seam field plus **three** constants feeding it, none on `main`: `PROBE_TIMEOUT_MS`, `BLOCK_FETCH_TIMEOUT_MS` (`content/read.rs`), `CONTROL_TIMEOUT_MS` (`api/client.rs`). Injecting only the flagged one leaves two conventions for one concern; doing all three means threading a policy carrier through the content plane and API client on an already-45-file PR. Flagging this as a judgment call you may want to overturn. Issue #1028 filed with `v2-build` + `comp:engine`, milestone v2.0.0, native `blocked_by` edge on #975 (verified). Thread left UNRESOLVED.
+
+Separately, CodeRabbit's stated rationale is wrong: this is policy placement, not a determinism defect. The constants are compile-time values on a DTO, the host transport applies the deadline, engine logic reads no clock, and the fake `Http` seam ignores the field — tests stay deterministic. Said so in the reply.
+
+**3. `http.ts` timeoutMs — FIXED.** Old `typeof timeoutMs === 'number' &amp;&amp; timeoutMs &gt;= 0` was false for `NaN`/negatives, falling through to no `AbortSignal`.
+
+**4. `drain.rs` RecordTooLarge — FIXED.** Confirmed unexecuted arm; added with real field names `size`/`limit`.
+
+**5. `crates/contract` dropped deadline — FIXED, and valid.** Verified `desktop-seams/src/http.rs:84` forwards `timeout_ms` while `contract/src/lib.rs` did not — a call the engine bounded to `CONTROL_TIMEOUT_MS` ran to the 30s client budget, in a seam whose own doc says it is "the desktop `Http` seam's shape".
+
+## Finding 1: what the validation rejects and where
+
+Sits at the **top of `drainCapped`, before the `Content-Length` read** — so no downstream branch is reachable with an unusable cap:
+
+```ts
+if (!Number.isSafeInteger(maxBytes) || maxBytes &lt; 0) {
+  await response.body?.cancel();
+  throw new RangeError(`drainCapped: maxBytes must be a non-negative safe integer, got ${maxBytes}`);
+}
+```
+
+Rejects `NaN`, `±Infinity`, non-integers (`1.5`), and negatives. Body is cancelled before throwing so the refusal releases the connection like the existing `tooLarge` path. Two details worth noting: I added a `maxBytes: 0` test pinning zero as a *real* cap (empty admitted, one byte refused) so the guard can't be loosened into rejecting a legitimate zero; same for `timeoutMs: 0` in finding 3, preserving your existing zero-deadline/`reqwest` parity rationale.
+
+## Diffstat
+
+```
+ crates/contract/src/lib.rs                   |  6 ++++++
+ crates/engine/src/sync/drain.rs              |  7 +++++++
+ packages/client/src/seams/cappedBody.test.ts | 27 +++++++++++++++++++++++++++
+ packages/client/src/seams/cappedBody.ts      | 10 ++++++++++
+ packages/client/src/seams/http.test.ts       | 23 +++++++++++++++++++++++
+ packages/client/src/seams/http.ts            | 10 +++++++---
+ 6 files changed, 80 insertions(+), 3 deletions(-)
+```
+
+## Checks (all green, actually run)
+
+- `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets -- -D warnings` clean
+- `cargo test --workspace` all suites ok, 0 failed (engine 589, core 218)
+- wasm32 leg: `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown --all-targets` clean
+- `pnpm typecheck` clean (api, client, web); `pnpm lint` clean — needed one prettier line-wrap fix on the new `RangeError`
+- `pnpm --filter @cipherbox/client test` 313 passed / 26 files
+- Browser suite `test:browser` 30 passed (chromium)
+
+Threads: 4 resolved, `provider.rs` left unresolved for a human.</result>
+<usage><subagent_tokens>96966</subagent_tokens><tool_uses>56</tool_uses><duration_ms>443831</duration_ms></usage>
+</task-notification>
+
+---
+
+/loop Manage the CodeRabbit review queue for FSM1/cipher-box while the user is AFK. Each iteration: (1) check open PRs and their CI status; (2) determine whether a CR slot is free — #1023's review landed 02:52:00Z, so the next slot is ~03:52Z; (3) flip the highest-priority DRAFT PR to ready-for-review ONLY if its CI is fully green and no review is in flight; (4) after flipping, verify CodeRabbit actually posted a review pass — check `pulls/N/reviews` for a submitted review AND the review body for "Actionable comments posted: N" or "No actionable comments were generated"; CodeRabbit edits ONE status comment in place, so re-read before concluding, and re-queue if walkthrough-only or rate-limited; (5) when a review lands with findings, re-draft that PR IMMEDIATELY so the fix-push does not burn the next slot, then delegate the fixes to a sub-agent that triages rather than blindly applying suggestions. Priority order: #1027 rotation resolvers > #1021 mechanical. #1022 is MERGED; #1024 and #1023 are both reviewed with fixes applied and await the user's merge decision — do NOT re-flip either. Never merge anything. Never mark a PR ready if CI is red or pending. Report state changes concisely.
+
+---
+
+/loop Manage the CodeRabbit review queue for FSM1/cipher-box while the user is AFK. Each iteration: (1) check open PRs and their CI status; (2) determine whether a CR slot is free — #1027 was flipped ready at 03:54Z, so the next slot is ~04:54Z; (3) flip the highest-priority DRAFT PR to ready-for-review ONLY if its CI is fully green and no review is in flight; (4) after flipping, verify CodeRabbit actually posted a review pass — check `pulls/N/reviews` for a submitted review AND the review body for "Actionable comments posted: N" or "No actionable comments were generated"; CodeRabbit edits ONE status comment in place, so re-read before concluding, and re-queue if walkthrough-only or rate-limited; (5) when a review lands with findings, re-draft that PR IMMEDIATELY so the fix-push does not burn the next slot, then delegate the fixes to a sub-agent that triages rather than blindly applying suggestions. Priority order: #1021 mechanical is the only one left to flip. #1022 is MERGED; #1024 and #1023 are reviewed with fixes applied and await the user's merge decision — do NOT re-flip either; #1027 is READY and under review. Never merge anything. Never mark a PR ready if CI is red or pending. Report state changes concisely.
+
+---
+
+/loop Manage the CodeRabbit review queue for FSM1/cipher-box while the user is AFK. Each iteration: (1) check open PRs and their CI status; (2) determine whether a CR slot is free — #1027's review landed 04:03:57Z, so the next slot is ~05:04Z; (3) flip the highest-priority DRAFT PR to ready-for-review ONLY if its CI is fully green and no review is in flight; (4) after flipping, verify CodeRabbit actually posted a review pass — check `pulls/N/reviews` for a submitted review AND the review body for "Actionable comments posted: N" or "No actionable comments were generated"; CodeRabbit edits ONE status comment in place, so re-read before concluding, and re-queue if walkthrough-only or rate-limited; (5) when a review lands with findings, re-draft that PR IMMEDIATELY so the fix-push does not burn the next slot, then either fix a single small finding directly or delegate a larger set to a sub-agent that triages rather than blindly applying suggestions. #1021 mechanical is the ONLY PR left to flip. #1022 is MERGED; #1024, #1023 and #1027 are all reviewed with fixes applied and await the user's merge decision — do NOT re-flip any of them. Once #1021 has been reviewed and its findings resolved, the queue is complete: report a final summary and STOP the loop. Never merge anything. Never mark a PR ready if CI is red or pending.
+
+---
+
+/loop Manage the CodeRabbit review queue for FSM1/cipher-box while the user is AFK. #1021 was flipped ready at 05:05Z — this is the LAST PR in the queue. Check whether its review posted: look at `pulls/1021/reviews` for a submitted review AND the review body for "Actionable comments posted: N" or "No actionable comments were generated"; CodeRabbit edits ONE status comment in place, so re-read before concluding, and re-flip if it was walkthrough-only or rate-limited. If the review lands with findings, re-draft #1021 IMMEDIATELY, then either fix a single small finding directly or delegate a larger set to a sub-agent that triages rather than blindly applying suggestions. #1022 is MERGED; #1024, #1023 and #1027 are reviewed with fixes applied and await the user's merge decision — do NOT re-flip any of them. Once #1021's findings are resolved the queue is COMPLETE: report a final summary of all five PRs, the issues they close, the outstanding decisions for the user, and then STOP the loop via ScheduleWakeup stop:true after sending a PushNotification. Never merge anything.
+
+---
+
+Any particular merge order for these PRs??
+
+---
+
+i already merged #1022
+
+---
+
+i already merged #1022 and #1021
+
+---
+
+<task-notification>
+<task-id>buz00pfu1</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/buz00pfu1.output</output-file>
+<status>completed</status>
+<summary>Background command "Compile main+1027+1024 combined" completed (exit code 0)</summary>
+</task-notification>
+
+---
+
+ok #1027 and #1024 are both merged. please rebase #1023 on the fresh `main`
+
+---
+
+<task-notification>
+<task-id>a262cbf90a5d29dd8</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/a262cbf90a5d29dd8.output</output-file>
+<status>completed</status>
+<summary>Agent "Rebase 1023 onto fresh main" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Rebase complete and pushed. PR #1023 is still a draft; no review was requested.
+
+## Rebase
+
+`fix/975-client-typecheck-and-seam-hardening` now sits on `ac112364` as three commits (unchanged subjects, `1dd8d0d82` → `3e7266fa1`, force-pushed with `--force-with-lease`).
+
+`git merge-tree origin/main HEAD` exits **0 with zero CONFLICT lines** — conflict-free.
+
+## How `api/client.rs` was resolved
+
+Kept both sides. Main's `json_authed` refactor stands as-is; the deadline threading was re-applied on top of the new helper shape:
+
+| Helper | Deadline |
+|---|---|
+| `request_authed_with(method, path, content_type, headers, body, timeout_ms)` | explicit param (shared base) |
+| `request_authed(method, path)` — bodyless | `CONTROL_TIMEOUT_MS` (10s) |
+| `json_authed(method, path, &amp;B)` | `CONTROL_TIMEOUT_MS` (10s) |
+| upload path (calls `request_authed_with` directly) | `TRANSFER_TIMEOUT_MS` (120s) |
+
+`json_authed` arrived from main cleanly but *outside* the conflict hunk, so it landed without the new trailing `timeout_ms` argument and would not have compiled — it needed a second edit git never flagged. All five call sites main moved onto `json_authed` (`siwe_link`, `register`, `retire`, `mailbox_post`, `set_byo`) now carry the control deadline. All four `HttpRequest` literals in the file carry `credentials: HttpCredentials::Include` and `timeout_ms`.
+
+## The surprise — a semantic merge conflict git did not report
+
+The brief's "exactly one conflicting file" was textually right but **semantically wrong**. #1027 added a test-only `RacingTransport` decorator in `crates/engine/src/net/rotation.rs` implementing `RecordTransport`, written against the pre-fork 3-parameter `get_record`. This branch adds a required `max_bytes: usize` to that trait method. Both sides merged clean; the result failed to compile (`E0050` + `E0061`). This is exactly the shape-change class in your notes (#779/#782, #944/#946).
+
+Fixed as a pure pass-through forwarding `max_bytes` to the inner `InMemoryRecordStore`, which already enforces the cap. Folded into the commit that introduced the trait change (`--fixup` + `--autosquash`) so history stays bisectable rather than leaving a non-compiling middle commit.
+
+The nine `HttpRequest` literal sites are unchanged — `git grep` confirms the same nine files, no new construction sites.
+
+## Earlier fixes — all four survived
+
+- `drainCapped` guard — `cappedBody.ts:23`, `!Number.isSafeInteger(maxBytes) || maxBytes &lt; 0`
+- `http.ts` `timeoutMs` validation — `http.ts:34`, same guard, feeding `AbortSignal.timeout`
+- `RecordTooLarge` orphan test — `sync/drain.rs:2068` and `:2252`
+- `crates/contract` deadline forwarding — `contract/src/lib.rs:60-61` maps `request.timeout_ms` onto the reqwest builder; test sites at `:125`, `:289` (10s) and `:523` (30s)
+
+## Checks — all green
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --all --check` | clean (no reformat needed) |
+| `cargo clippy --workspace --all-targets -- -D warnings` | clean |
+| `cargo test --workspace` | **1317 passed, 0 failed, 2 ignored** (36 suites), exit 0 |
+| `cargo test -p cipherbox-wasm --target wasm32-unknown-unknown` | 15 passed, 0 failed |
+| `cargo test -p cipherbox-core --target wasm32-wasip1` | 313 passed, 0 failed |
+| core KAT/props on `wasm32-unknown-unknown` | 84 passed, 0 failed |
+| `pnpm typecheck` | clean (api, client, web) |
+| `pnpm lint` | clean |
+| `pnpm --filter @cipherbox/client test` | 313 passed (26 files) |
+| browser suite (`test:browser`) | 30 passed, incl. the harness typecheck gate |
+
+Two process notes: `pnpm install` was run in the worktree (no symlink), and the worktree uses its own local `target/` with `CARGO_TARGET_DIR` unset, so no stale-binary false pass. My first `cargo test` run was piped through `tail`, which masked cargo's exit code and truncated the log to 9 suites — I re-ran it capturing the real status, which is where the 36-suite / 1317-test number comes from.</result>
+<usage><subagent_tokens>83799</subagent_tokens><tool_uses>44</tool_uses><duration_ms>347117</duration_ms></usage>
+</task-notification>
+
+---
+
+ok #1023 is now also merged.
+
+---
+
+ok then file a separate issue for the cascade reseal resolver

@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "d1f45e2ddc14",
+  "strategy": "manual-commit",
+  "branch": "docs/1029-cascade-resolver-pointers",
+  "checkpoints_count": 35,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/d1/f45e2ddc14/0/metadata.json",
+      "transcript": "/d1/f45e2ddc14/0/full.jsonl",
+      "compact_transcript": "/d1/f45e2ddc14/0/transcript.jsonl",
+      "content_hash": "/d1/f45e2ddc14/0/content_hash.txt",
+      "prompt": "/d1/f45e2ddc14/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 312,
+    "cache_creation_tokens": 614599,
+    "cache_read_tokens": 34637818,
+    "output_tokens": 164271,
+    "api_call_count": 157
+  }
+}
