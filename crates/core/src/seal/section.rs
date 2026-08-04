@@ -23,9 +23,11 @@
 //! here — that is the gate's crypto step. This codec only frames and enforces
 //! structure (lengths, required fields, tag uniqueness), fail-closed.
 
+use std::collections::BTreeSet;
+
 use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 use crate::codec::{Map, Value, decode, encode};
-use crate::error::CodecError;
+use crate::error::{CodecError, Malformed};
 use crate::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use crate::suite::ed25519::SIGNATURE_LEN as ED_SIG_LEN;
 use crate::suite::hpke::ENC_LEN;
@@ -261,6 +263,49 @@ pub struct GrantSection {
     pub unknown: PreservedFields,
 }
 
+/// The frozen bound on a section's history links. The gate verifies one
+/// signature per structure per committed pseudonym, so an unbounded collection
+/// lets one record dictate another reader's CPU budget. Producers prune to a far
+/// smaller retained window (`rotation/reseal.rs`), leaving this a
+/// malformed-input guard an honest rotator never approaches.
+pub const MAX_HISTORY_LINKS: usize = 256;
+
+/// The frozen bound on a section's grant blobs — one per committed grantee.
+pub const MAX_GRANT_BLOBS: usize = 1024;
+
+/// Release-active bound on a repeated collection, symmetric across decode and
+/// encode (AGENTS.md rule 8).
+fn assert_within_bound(
+    collection: &'static str,
+    count: usize,
+    limit: usize,
+) -> Result<(), CodecError> {
+    if count > limit {
+        return Err(Malformed::TooManyStructures {
+            collection,
+            count,
+            limit,
+        }
+        .into());
+    }
+    Ok(())
+}
+
+/// Release-active uniqueness check over history-link sealed bytes, symmetric
+/// across decode and encode. Each epoch mints one link under a fresh nonce, so
+/// equal sealed bytes are never an honest rotator's output.
+fn assert_history_links_unique<'a>(
+    links: impl Iterator<Item = &'a [u8]>,
+) -> Result<(), CodecError> {
+    let mut seen = BTreeSet::new();
+    for sealed in links {
+        if !seen.insert(sealed) {
+            return Err(Malformed::DuplicateHistoryLink.into());
+        }
+    }
+    Ok(())
+}
+
 const GRANT_SECTION_KNOWN: &[&str] = &[
     "ascentLink",
     "commitment",
@@ -285,8 +330,10 @@ pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
     let commitment = decode_grant_set_commitment(req(map, "commitment")?.as_bytes()?)?;
     let commitment_sig = bytes_fixed::<ECDSA_SIG_LEN>(req(map, "commitmentSig")?, "commitmentSig")?;
 
-    let mut grant_blobs = Vec::new();
-    for item in req(map, "grantBlobs")?.as_array()? {
+    let raw_grant_blobs = req(map, "grantBlobs")?.as_array()?;
+    assert_within_bound("grantBlobs", raw_grant_blobs.len(), MAX_GRANT_BLOBS)?;
+    let mut grant_blobs = Vec::with_capacity(raw_grant_blobs.len());
+    for item in raw_grant_blobs {
         grant_blobs.push(SignedGrantBlob::from_value(item)?);
     }
     // A recipient tag names at most one grant blob; a duplicate is a confused
@@ -302,10 +349,13 @@ pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
         Some(v) => Some(SignedAscentLink::from_value(v)?),
         None => None,
     };
-    let mut history_links = Vec::new();
-    for item in req(map, "historyLinks")?.as_array()? {
+    let raw_history_links = req(map, "historyLinks")?.as_array()?;
+    assert_within_bound("historyLinks", raw_history_links.len(), MAX_HISTORY_LINKS)?;
+    let mut history_links = Vec::with_capacity(raw_history_links.len());
+    for item in raw_history_links {
         history_links.push(SignedSealed::from_value(item)?);
     }
+    assert_history_links_unique(history_links.iter().map(|l| l.sealed.as_slice()))?;
     let write_body = SignedSealed::from_value(req(map, "writeBody")?)?;
 
     Ok(GrantSection {
@@ -323,13 +373,20 @@ pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
 
 /// Encode a grant section to its canonical det-CBOR form.
 ///
-/// Release-active fail-closed guard, symmetric with [`decode_grant_section`]:
-/// encoding a section with a duplicate grant-blob tag (or a duplicate-tag
-/// commitment) returns `Err` with the same `duplicate-grant-tag` verdict the
-/// decoder raises, so a release build never hands back bytes its own decoder
-/// rejects (AGENTS.md encode/decode symmetry rule).
+/// Release-active fail-closed guards, symmetric with [`decode_grant_section`]:
+/// a duplicate grant-blob tag (or a duplicate-tag commitment), a collection past
+/// its frozen bound, or a repeated history link each returns `Err` with the same
+/// verdict the decoder raises, so a release build never hands back bytes its own
+/// decoder rejects (AGENTS.md encode/decode symmetry rule).
 pub fn encode_grant_section(section: &GrantSection) -> Result<Vec<u8>, CodecError> {
     assert_grant_tags_unique(section.grant_blobs.iter().map(|b| b.tag))?;
+    assert_within_bound("grantBlobs", section.grant_blobs.len(), MAX_GRANT_BLOBS)?;
+    assert_within_bound(
+        "historyLinks",
+        section.history_links.len(),
+        MAX_HISTORY_LINKS,
+    )?;
+    assert_history_links_unique(section.history_links.iter().map(|l| l.sealed.as_slice()))?;
     let commitment_bytes = encode_grant_set_commitment(&section.commitment)?;
 
     let mut m = Map::new();
@@ -521,6 +578,115 @@ mod tests {
             decode_grant_section(&bytes).unwrap_err().check(),
             "duplicate-grant-tag"
         );
+    }
+
+    /// A history link whose sealed bytes are unique to `n`.
+    fn link(n: usize) -> SignedSealed {
+        SignedSealed {
+            sealed: n.to_be_bytes().to_vec(),
+            signature: [0x42; ED_SIG_LEN],
+            unknown: PreservedFields::new(),
+        }
+    }
+
+    /// Hand-build the wire bytes a hostile peer would send, past the encode
+    /// guard, from a caller-chosen `historyLinks` / `grantBlobs` array.
+    fn wire_section(grant_blobs: Vec<Value>, history_links: Vec<Value>) -> Vec<u8> {
+        let section = sample();
+        let mut m = Map::new();
+        m.insert(
+            "commitment",
+            Value::Bytes(encode_grant_set_commitment(&section.commitment).unwrap()),
+        );
+        m.insert(
+            "commitmentSig",
+            Value::Bytes(section.commitment_sig.to_vec()),
+        );
+        m.insert("grantBlobs", Value::Array(grant_blobs));
+        m.insert("historyLinks", Value::Array(history_links));
+        m.insert("ownerBlob", section.owner_blob.to_value());
+        m.insert("writeBody", section.write_body.to_value());
+        encode(&Value::Map(m)).unwrap()
+    }
+
+    #[test]
+    fn history_links_past_the_bound_reject_at_decode_and_encode() {
+        // Release-active on both sides (AGENTS.md rule 8): the gate verifies one
+        // signature per structure, so an unbounded collection would let one
+        // record dictate every co-reader's CPU budget. Active in `--release`.
+        // All distinct, so the bound is what fires — not the duplicate guard.
+        let over: Vec<SignedSealed> = (0..=MAX_HISTORY_LINKS).map(link).collect();
+        let mut section = sample();
+        section.history_links = over.clone();
+        assert_eq!(
+            encode_grant_section(&section).unwrap_err().check(),
+            "too-many-structures"
+        );
+        assert_eq!(
+            decode_grant_section(&wire_section(
+                Vec::new(),
+                over.iter().map(SignedSealed::to_value).collect()
+            ))
+            .unwrap_err()
+            .check(),
+            "too-many-structures"
+        );
+    }
+
+    #[test]
+    fn grant_blobs_past_the_bound_reject_at_decode_and_encode() {
+        let mut section = sample();
+        section.grant_blobs = (0..=MAX_GRANT_BLOBS)
+            .map(|i| {
+                let mut b = blob(0);
+                b.tag[..8].copy_from_slice(&i.to_be_bytes());
+                b
+            })
+            .collect();
+        assert_eq!(
+            encode_grant_section(&section).unwrap_err().check(),
+            "too-many-structures"
+        );
+
+        let over = section.grant_blobs.iter().map(|b| b.to_value()).collect();
+        assert_eq!(
+            decode_grant_section(&wire_section(over, Vec::new()))
+                .unwrap_err()
+                .check(),
+            "too-many-structures"
+        );
+    }
+
+    #[test]
+    fn duplicate_history_link_rejects_at_decode_and_encode() {
+        // Each epoch mints one link under a fresh nonce, so equal sealed bytes
+        // are never an honest rotator's output — only a way to multiply the
+        // gate's signature verifications. Active in `--release`.
+        let mut section = sample();
+        section.history_links = vec![link(7), link(7)];
+        assert_eq!(
+            encode_grant_section(&section).unwrap_err().check(),
+            "duplicate-history-link"
+        );
+        assert_eq!(
+            decode_grant_section(&wire_section(
+                Vec::new(),
+                vec![link(7).to_value(), link(7).to_value()]
+            ))
+            .unwrap_err()
+            .check(),
+            "duplicate-history-link"
+        );
+    }
+
+    #[test]
+    fn distinct_history_links_at_the_bound_round_trip() {
+        // Anti-vacuity for both guards: exactly at the bound, all distinct, the
+        // section still encodes and decodes.
+        let mut section = sample();
+        section.history_links = (0..MAX_HISTORY_LINKS).map(link).collect();
+        let bytes = encode_grant_section(&section).expect("at the bound encodes");
+        assert_eq!(decode_grant_section(&bytes).unwrap(), section);
     }
 
     #[test]

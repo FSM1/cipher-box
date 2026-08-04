@@ -127,7 +127,28 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   grant-section map carries `ownerWriteBlob` as `{enc, ciphertext, sig}`
   (`GrantSection.owner_write_blob: Option<SignedOwnerWriteBlob>`, `Option` = an
   additive evolution: records predating the tag, and read-only records, decode
-  with `None`).
+  with `None`). Both repeated collections are bounded fail-closed at decode —
+  `historyLinks` at 256, `grantBlobs` at 1024 (`too-many-structures`) — and two
+  history links may not carry equal sealed bytes (`duplicate-history-link`).
+  The gate verifies one signature per structure per committed pseudonym, so an
+  unbounded collection would let one record dictate every co-reader's CPU
+  budget; each epoch mints one link under a fresh nonce, so a repeat is never an
+  honest rotator's output. Both bounds are release-active on the encode side.
+- **History-link retention**: a re-seal carries forward only the newest
+  `MAX_RETAINED_HISTORY_LINKS` (64) links, dropping the oldest, so the
+  collection is bounded by design rather than by the 4 MiB block ceiling — an
+  unpruned chain grows one link per read rotation and would eventually make the
+  scope root unpublishable. Each link is sealed under the seed of the epoch that
+  immediately precedes it, so the ratchet is a **contiguous chain**: only the
+  oldest end may be dropped, and a hole would strand every epoch beyond it. The
+  retained window is the deepest lag a backward walk can cover; convergence
+  forward never needs it, since the sweep re-seals a lagging node from the
+  scope's *current* seed, so a node past the window becomes readable again after
+  a sweep pass rather than being lost. Retention sits far below the decode
+  bound, keeping that bound a malformed-input guard an honest rotator never
+  approaches. A walk identifies links by trial open — the chain is
+  self-describing, since each payload's `prevEpoch` names the next step — so no
+  per-link epoch field rides the wire and array order is not load-bearing.
 - **Owner-write-blob** (`structTag` `owner-write-blob`): the write-plane mirror
   of the owner blob — the scope's random `writeScopeSeed` (a KDF non-edge, not
   derivable from the login secret) HPKE-sealed to the owner's **own** enc subkey,

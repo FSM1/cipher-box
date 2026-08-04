@@ -55,8 +55,9 @@ pub use op_record::{
     open_op_record, seal_op_record,
 };
 pub use section::{
-    GrantSection, SignedAscentLink, SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob,
-    SignedSealed, decode_grant_section, encode_grant_section,
+    GrantSection, MAX_GRANT_BLOBS, MAX_HISTORY_LINKS, SignedAscentLink, SignedGrantBlob,
+    SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, decode_grant_section,
+    encode_grant_section,
 };
 pub use settings_record::{
     SETTINGS_RECORD_HPKE_INFO, SETTINGS_RECORD_V, SettingsRecordHeader, open_settings_record,

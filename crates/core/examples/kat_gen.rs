@@ -4853,6 +4853,23 @@ fn build_grant_section_reject() -> Vec<RejectVector> {
         }
         map_of(entries)
     };
+    let history_link_map = |sealed: Vec<u8>| {
+        map_of(vec![
+            ("sealed", Value::Bytes(sealed)),
+            ("sig", Value::Bytes(vec![0x43; 64])),
+        ])
+    };
+    // A structurally complete section whose only variable is `historyLinks`.
+    let section_with_links = |links: Vec<Value>| {
+        map_of(vec![
+            ("commitment", Value::Bytes(commitment_bytes.clone())),
+            ("commitmentSig", Value::Bytes(vec![0x11; 64])),
+            ("grantBlobs", Value::Array(vec![])),
+            ("historyLinks", Value::Array(links)),
+            ("ownerBlob", owner_blob()),
+            ("writeBody", write_body()),
+        ])
+    };
 
     let cases: Vec<(&str, Value, &str, &str)> = vec![
         (
@@ -4896,6 +4913,29 @@ fn build_grant_section_reject() -> Vec<RejectVector> {
                 ("writeBody", write_body()),
             ]),
             "unexpected-type",
+            "malformed",
+        ),
+        (
+            // The gate verifies one signature per structure, so an unbounded
+            // collection lets one record dictate a reader's CPU budget.
+            "history-links-past-the-bound",
+            section_with_links(
+                (0..=seal::MAX_HISTORY_LINKS)
+                    .map(|i| history_link_map(i.to_be_bytes().to_vec()))
+                    .collect(),
+            ),
+            "too-many-structures",
+            "malformed",
+        ),
+        (
+            // Each epoch mints one link under a fresh nonce, so a repeat is only
+            // a way to multiply those verifications.
+            "duplicate-history-link",
+            section_with_links(vec![
+                history_link_map(vec![0x40, 0x41]),
+                history_link_map(vec![0x40, 0x41]),
+            ]),
+            "duplicate-history-link",
             "malformed",
         ),
     ];
