@@ -162,6 +162,24 @@ describe('EngineClient leadership + transport swap', () => {
     await follower.dispose();
   });
 
+  it('moves an upload chunk into the leader worker rather than copying it', async () => {
+    const { tab, workers } = origin();
+    const leader = tab();
+    await tick();
+    await leader.facade.start(new Uint8Array([1]).buffer);
+
+    const handle = await leader.beginWrite({ node: new Uint8Array(16) }, 4);
+    const chunk = Uint8Array.of(9, 9, 9, 9).buffer;
+    await leader.pushChunk(handle, chunk);
+
+    // Transferred, not cloned: the plaintext leaves this realm's heap for the
+    // worker's instead of lingering in both.
+    expect(chunk.byteLength).toBe(0);
+    expect(workers[0].posted).toContainEqual(expect.objectContaining({ type: 'pushChunk' }));
+
+    await leader.dispose();
+  });
+
   it('refuses a write handle minted by a leadership that has been replaced', async () => {
     const { tab, workers } = origin();
     const secretSource = {

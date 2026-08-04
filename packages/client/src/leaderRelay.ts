@@ -59,19 +59,39 @@ const DEFAULT_LIVENESS_INTERVAL_MS = 15_000;
 const DEFAULT_LIVENESS_MISSES = 4;
 
 /**
- * Wipes an upload chunk this frame still owns. A chunk arrives transferred, so
- * the relay is its terminal owner until a further transfer detaches it — and a
- * detached buffer reads as empty, making this a no-op once it has moved on
- * (AGENTS.md 7).
+ * Wipes the upload chunk a write payload carries. A chunk arrives transferred,
+ * so the relay is its terminal owner until a further transfer detaches it — and
+ * a detached buffer reads as empty, making this a no-op once it has moved on
+ * (AGENTS.md 7). Takes the payload unvalidated: an off-shape one carries none.
  */
-function wipeChunk(chunk: ArrayBuffer): void {
-  if (chunk.byteLength > 0) new Uint8Array(chunk).fill(0);
+function wipeCarried(payload: unknown): void {
+  const chunk = (payload as { chunk?: unknown } | null | undefined)?.chunk;
+  if (chunk instanceof ArrayBuffer && chunk.byteLength > 0) new Uint8Array(chunk).fill(0);
 }
 
-/** The same, for a dropped message whose shape this relay never validated. */
-function wipeDropped(message: { type?: unknown }): void {
-  const chunk = (message as { write?: { chunk?: unknown } }).write?.chunk;
-  if (chunk instanceof ArrayBuffer) wipeChunk(chunk);
+/**
+ * Whether an unvalidated payload carries the `kind` its handler switches on.
+ * Shape only: which kinds exist, and what their fields must be, is the engine's
+ * and the codec's to say.
+ */
+function hasKind(payload: unknown): boolean {
+  return typeof (payload as { kind?: unknown } | null | undefined)?.kind === 'string';
+}
+
+/**
+ * Exhaustiveness bound: fails the build if the union grows a variant, and gives
+ * a sender off the union a refusal rather than an unhandled fall-through.
+ */
+function unknownKind(_: never): EngineRequestError {
+  return malformed();
+}
+
+/**
+ * Refuses a request this relay cannot make sense of — a hostile sender, or a
+ * version-skewed follower build. Transport-level, so it carries no engine code.
+ */
+function malformed(): EngineRequestError {
+  return new EngineRequestError('malformed engine request');
 }
 
 /** Projects a caught failure onto the wire's `error`/`code` fields. */
@@ -190,8 +210,9 @@ export class LeaderRelay {
     this.channel.removeEventListener('message', this.onMessage);
   }
 
-  private receive(message: FollowerMessage | { type?: string }): void {
-    if (this.closed) return;
+  private receive(data: unknown): void {
+    if (this.closed || typeof data !== 'object' || data === null) return;
+    const message = data as FollowerMessage | { type?: string };
     switch (message.type) {
       case 'cb:hello':
         this.post({ type: 'cb:leader', token: this.token });
@@ -268,13 +289,16 @@ export class LeaderRelay {
   }
 
   private onPortMessage(entry: PortEntry, data: unknown): void {
+    if (typeof data !== 'object' || data === null) return;
     const message = data as PortRequest | { type?: unknown };
-    if (!this.serve(entry, message)) wipeDropped(message);
+    if (!this.serve(entry, message)) wipeCarried((message as { write?: unknown }).write);
   }
 
   /**
-   * Serves one port message; `false` when it was dropped unserved. A same-origin
-   * port is untrusted input, so anything off-shape is dropped.
+   * Serves one port message; `false` when it was dropped unserved. A port is
+   * untrusted input, so an off-shape message is refused where it names a request
+   * this relay can answer, and dropped where it does not: a drop is a silence
+   * the sender waits out.
    */
   private serve(entry: PortEntry, message: PortRequest | { type?: unknown }): boolean {
     if (this.closed) return false;
@@ -298,6 +322,8 @@ export class LeaderRelay {
     if (clientId === null) return false;
     if (message.type === 'cb:portFocus') {
       const { node } = message as Extract<PortRequest, { type: 'cb:portFocus' }>;
+      // Uncorrelated, so nothing to refuse; the registry keys on the bytes.
+      if (node !== null && !(node instanceof Uint8Array)) return false;
       if (this.focus.set(clientId, node)) this.refreshHint();
       return true;
     }
@@ -306,16 +332,19 @@ export class LeaderRelay {
     switch (message.type) {
       case 'cb:portRead': {
         const { read } = message as Extract<PortRequest, { type: 'cb:portRead' }>;
+        if (!hasKind(read)) return this.refuse(entry, requestId, message);
         void this.answerPort(entry, requestId, () => this.readValue(read));
         return true;
       }
       case 'cb:portStream': {
         const { stream } = message as Extract<PortRequest, { type: 'cb:portStream' }>;
+        if (!hasKind(stream)) return this.refuse(entry, requestId, message);
         void this.answerPort(entry, requestId, () => this.streamStep(entry, clientId, stream));
         return true;
       }
       case 'cb:portCommand': {
         const { command } = message as Extract<PortRequest, { type: 'cb:portCommand' }>;
+        if (!hasKind(command)) return this.refuse(entry, requestId, message);
         void this.answerPort(entry, requestId, () =>
           this.transport.command(command, []).then(() => undefined)
         );
@@ -323,11 +352,19 @@ export class LeaderRelay {
       }
       case 'cb:portWrite': {
         const { write } = message as Extract<PortRequest, { type: 'cb:portWrite' }>;
+        if (!hasKind(write)) return this.refuse(entry, requestId, message);
         this.serveWrite(entry, requestId, clientId, write);
         return true;
       }
     }
-    return false;
+    return this.refuse(entry, requestId, message);
+  }
+
+  /** Refuses a request this relay will not serve, wiping anything it carried. */
+  private refuse(entry: PortEntry, requestId: number, message: unknown): true {
+    wipeCarried((message as { write?: unknown } | null)?.write);
+    void this.answerPort(entry, requestId, () => Promise.reject(malformed()));
+    return true;
   }
 
   /** Runs one port-borne step and posts its correlated result down that port. */
@@ -361,7 +398,6 @@ export class LeaderRelay {
     }
   }
 
-  /** The annotated return type keeps the switch exhaustive over `WireRead`. */
   private readValue(read: WireRead): Promise<SnapshotDescriptor | ArrayBuffer | string> {
     switch (read.kind) {
       case 'snapshot':
@@ -370,6 +406,8 @@ export class LeaderRelay {
         return this.transport.siweChallenge();
       case 'download':
         return this.transport.download(read.node);
+      default:
+        return Promise.reject(unknownKind(read));
     }
   }
 
@@ -412,7 +450,7 @@ export class LeaderRelay {
 
     const handle = write.handle;
     if (this.writeOwners.get(handle) !== clientId) {
-      if (write.kind === 'pushChunk') wipeChunk(write.chunk);
+      wipeCarried(write);
       void this.answerPort(entry, requestId, () => Promise.reject(unknownHandle('write')));
       return;
     }
@@ -421,28 +459,29 @@ export class LeaderRelay {
     // steps by call order.
     void this.writes.run(handle, () =>
       this.answerPort(entry, requestId, async () => {
-        switch (write.kind) {
-          case 'pushChunk':
-            try {
+        try {
+          switch (write.kind) {
+            case 'pushChunk':
               await this.transport.pushChunk(handle, write.chunk);
-            } finally {
-              // A worker torn down before the post leaves the plaintext here.
-              wipeChunk(write.chunk);
+              return undefined;
+            case 'commitWrite': {
+              const opId = await this.transport.commitWrite(handle);
+              // Dropped only once the commit resolves: a rejected one leaves the
+              // handle open for its owner to abort.
+              this.writeOwners.delete(handle);
+              return opId;
             }
-            return undefined;
-          case 'commitWrite': {
-            const opId = await this.transport.commitWrite(handle);
-            // Dropped only once the commit resolves: a rejected one leaves the
-            // handle open for its owner to abort.
-            this.writeOwners.delete(handle);
-            return opId;
+            case 'abortWrite':
+              await this.transport.abortWrite(handle);
+              // Dropped only once the abort resolves: a rejected one leaves the
+              // handle owned so it can still be retried or released.
+              this.writeOwners.delete(handle);
+              return undefined;
+            default:
+              throw unknownKind(write);
           }
-          case 'abortWrite':
-            await this.transport.abortWrite(handle);
-            // Dropped only once the abort resolves: a rejected one leaves the
-            // handle owned so it can still be retried or released.
-            this.writeOwners.delete(handle);
-            return undefined;
+        } finally {
+          wipeCarried(write);
         }
       })
     );
@@ -474,6 +513,7 @@ export class LeaderRelay {
       this.streamOwners.delete(handle);
       return undefined;
     }
+    if (stream.kind !== 'readStream') throw unknownKind(stream);
     return this.transport.readStream(handle, stream.offset, stream.length);
   }
 

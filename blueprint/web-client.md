@@ -113,7 +113,7 @@ mechanism; the invariant — one engine writer per origin — is D4's):
   before they are acked to the UI, so failover loses no accepted work;
   commands in flight at the instant of leader death time out and surface a
   retry. A backgrounded leader keeps ticking (worker timers degrade
-  gracefully); focused followers' refresh hints ride the broadcast so
+  gracefully); focused followers report focus over their private port so
   user-visible freshness follows the focused tab, and the leader's focus
   window is the union of all tabs' open folders.
 - **The facade is transport-agnostic**: `packages/client` exposes one typed

@@ -455,8 +455,10 @@ export class FakeEngineWorker implements EngineWorkerLike {
   streamHandle: StreamHandle = 1n;
   writeHandle: WriteHandle = 1n;
 
-  postMessage(message: { id?: number; type?: string }): void {
-    this.posted.push(message);
+  postMessage(message: { id?: number; type?: string }, transfer: Transferable[] = []): void {
+    // Honors the transfer list like a real worker, so a sender that keeps reading
+    // a moved buffer fails here exactly as it would in a browser.
+    this.posted.push(structuredClone(message, { transfer }));
     if (typeof message.id !== 'number') return;
     const id = message.id;
     const result = this.mint(message.type);

@@ -217,7 +217,9 @@ export class BroadcastTransport extends CorrelatedTransport {
   private bindPort(port: MessagePortLike): () => void {
     let adopted = false;
     const listener = (event: MessageEvent): void => {
-      const message = event.data as PortResponse | { type?: unknown };
+      const data: unknown = event.data;
+      if (typeof data !== 'object' || data === null) return;
+      const message = data as PortResponse | { type?: unknown };
       if (message.type === 'cb:portReady') {
         const { token } = message as Extract<PortResponse, { type: 'cb:portReady' }>;
         if (adopted || !this.fromActiveLeader(token)) return;
@@ -343,8 +345,9 @@ export class BroadcastTransport extends CorrelatedTransport {
     this.leaderReady.catch(() => undefined);
   }
 
-  private receive(message: LeaderMessage | { type?: string }): void {
-    if (this.closed) return;
+  private receive(data: unknown): void {
+    if (this.closed || typeof data !== 'object' || data === null) return;
+    const message = data as LeaderMessage | { type?: string };
     switch (message.type) {
       case 'cb:leader':
         this.onLeader((message as Extract<LeaderMessage, { type: 'cb:leader' }>).token);

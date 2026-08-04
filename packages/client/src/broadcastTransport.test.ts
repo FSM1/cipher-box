@@ -959,7 +959,139 @@ describe('leader relay write handles', () => {
     expect(engine.chunks).toEqual([]);
   });
 
-  it('wipes an upload chunk it refuses rather than leaving the plaintext behind', async () => {
+  /**
+   * A port is untrusted input in both directions a follower can be wrong in:
+   * hostile, or merely a version-skewed build. A correlated request must always
+   * come back settled — a step that throws on the way to its handler would leave
+   * the sender waiting on a wire that already answered everything else.
+   */
+  it.each([
+    ['cb:portWrite', { requestId: 1 }],
+    ['cb:portWrite', { requestId: 1, write: null }],
+    ['cb:portWrite', { requestId: 1, write: { kind: 42 } }],
+    ['cb:portRead', { requestId: 1 }],
+    ['cb:portRead', { requestId: 1, read: { kind: 'nonsense' } }],
+    ['cb:portStream', { requestId: 1 }],
+    ['cb:portCommand', { requestId: 1 }],
+    // A type this build does not know — the cross-build skew case.
+    ['cb:portFuture', { requestId: 1 }],
+  ])('answers a malformed %s rather than leaving its sender hanging', async (type, rest) => {
+    const { leaderPort } = await portBench();
+
+    leaderPort.receive({ type, ...rest });
+    await tick();
+
+    expect(replies(leaderPort, 'cb:portResult')).toContainEqual(
+      expect.objectContaining({ requestId: 1, ok: false })
+    );
+  });
+
+  /**
+   * The owned-handle limb: past the ownership check, so only the step switch is
+   * left to reject a kind this build does not serve. Acking it would report a
+   * write step that never ran, and a streamed upload would lose those bytes.
+   */
+  it('refuses a write kind it does not serve on a handle the sender owns', async () => {
+    const { engine, leaderPort } = await portBench();
+    engine.writeHandle = 6n;
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 1,
+      write: { kind: 'beginWrite', target: { node: node(1) }, size: 4 },
+    });
+    await tick();
+
+    const plaintext = Uint8Array.of(2, 7, 1, 8);
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 2,
+      write: { kind: 'bogus', handle: 6n, chunk: plaintext.buffer },
+    });
+    await tick();
+
+    expect(replies(leaderPort, 'cb:portResult')).toContainEqual(
+      expect.objectContaining({ requestId: 2, ok: false })
+    );
+    expect(engine.chunks).toEqual([]);
+    expect([...plaintext]).toEqual([0, 0, 0, 0]);
+  });
+
+  it('wipes a chunk carried alongside a write step it does serve', async () => {
+    const { engine, leaderPort } = await portBench();
+    engine.writeHandle = 7n;
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 1,
+      write: { kind: 'beginWrite', target: { node: node(1) }, size: 4 },
+    });
+    await tick();
+
+    // A well-formed commit that merely carries a buffer too: it still crossed by
+    // transfer, so the relay owns it whatever the step it names.
+    const plaintext = Uint8Array.of(1, 6, 1, 8);
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 2,
+      write: { kind: 'commitWrite', handle: 7n, chunk: plaintext.buffer },
+    });
+    await tick();
+
+    expect(engine.commits).toEqual([7n]);
+    expect([...plaintext]).toEqual([0, 0, 0, 0]);
+  });
+
+  it('drops a stream kind it does not serve without reaching the engine', async () => {
+    const { engine, leaderPort } = await portBench();
+    engine.streamHandle = 5n;
+    leaderPort.receive({
+      type: 'cb:portStream',
+      requestId: 1,
+      stream: { kind: 'openContentStream', node: node(2) },
+    });
+    await tick();
+
+    leaderPort.receive({
+      type: 'cb:portStream',
+      requestId: 2,
+      stream: { kind: 'bogus', handle: 5n },
+    });
+    await tick();
+
+    expect(replies(leaderPort, 'cb:portResult')).toContainEqual(
+      expect.objectContaining({ requestId: 2, ok: false })
+    );
+    // A step off the union would otherwise read the stream at `undefined`.
+    expect(engine.reads).toEqual([]);
+  });
+
+  it('survives a port payload with no shape at all', async () => {
+    const { engine, leaderPort } = await portBench();
+
+    for (const junk of [null, undefined, 'a string', 42]) leaderPort.receive(junk);
+    await tick();
+
+    leaderPort.receive({ type: 'cb:portRead', requestId: 1, read: { kind: 'siweChallenge' } });
+    await tick();
+    expect(engine.siweChallenges).toBe(1);
+  });
+
+  it('drops a malformed focus report without throwing out of the listener', async () => {
+    const { engine, leaderPort } = await portBench();
+    const before = engine.commands.length;
+
+    // Uncorrelated, so there is nothing to answer — but a `node` the relay
+    // cannot key on must not escape the message handler either.
+    leaderPort.receive({ type: 'cb:portFocus', node: 'not-a-node' });
+    await tick();
+
+    expect(engine.commands.slice(before)).toEqual([]);
+    leaderPort.receive({ type: 'cb:portFocus', node: new Uint8Array([1, 2]) });
+    await tick();
+    expect(engine.commands.slice(before).map((c) => c.kind)).toEqual(['manualRefresh']);
+  });
+
+  // Kind-agnostic: a payload carrying plaintext under any name still crossed.
+  it.each(['pushChunk', 'bogus'])('wipes an upload chunk it refuses on a %s step', async (kind) => {
     const { engine, leaderPort } = await portBench();
     const plaintext = Uint8Array.of(9, 8, 7, 6);
 
@@ -968,7 +1100,7 @@ describe('leader relay write handles', () => {
     leaderPort.receive({
       type: 'cb:portWrite',
       requestId: 1,
-      write: { kind: 'pushChunk', handle: 4n, chunk: plaintext.buffer },
+      write: { kind, handle: 4n, chunk: plaintext.buffer },
     });
     await tick();
 
@@ -1081,8 +1213,10 @@ describe('leader relay follower liveness', () => {
   it('never probes a port that has not named the follower behind it', async () => {
     const bus = new FakeBus();
     const ports = new FakeCourierNetwork();
+    // Far beyond the wait, so only the sweep can act on this port: a naming
+    // timeout firing mid-assertion would close it and read as a sweep failure.
     new LeaderRelay(bus.channel(), new FakeEngineTransport(), ports.courier('leader'), {
-      namingTimeoutMs: 40,
+      namingTimeoutMs: 10_000,
       livenessIntervalMs: 5,
       livenessMisses: 1,
     });
