@@ -13,6 +13,12 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 
 use crate::seams::{EndpointId, RecordTransport};
 
+/// Hard ceiling on one signed IPNS record fetched from a `/routing/v1`
+/// endpoint. The IPNS spec caps a record at 10 KiB, and the endpoint set
+/// includes at least one untrusted public endpoint — anything larger is a
+/// hostile or broken endpoint whose bytes are never adoptable (#949).
+pub const MAX_RECORD_BYTES: usize = 10 * 1024;
+
 /// The outcome of a parallel PUT across the endpoint set.
 pub struct Fanout {
     /// Endpoints that acknowledged the PUT.
@@ -96,9 +102,14 @@ pub async fn fanout_get_verify<T: RecordTransport>(
     let key = name.as_str();
     let mut best: Option<(VerifiedRecord, Vec<u8>)> = None;
     for endpoint in transport.endpoints() {
-        let Ok(Some(bytes)) = transport.get_record(&endpoint, key).await else {
+        let Ok(Some(bytes)) = transport.get_record(&endpoint, key, MAX_RECORD_BYTES).await else {
             continue;
         };
+        // Release-active backstop: a transport that ignores its cap must not
+        // talk the engine past it (mirrors the WASM bridge's `send_capped`).
+        if bytes.len() > MAX_RECORD_BYTES {
+            continue;
+        }
         let Ok(record) = IpnsRecord::unmarshal(&bytes) else {
             continue;
         };
@@ -113,4 +124,63 @@ pub async fn fanout_get_verify<T: RecordTransport>(
         }
     }
     best
+}
+
+#[cfg(test)]
+mod tests {
+    use core::cell::Cell;
+
+    use cipherbox_core::suite::ed25519::Ed25519Signer;
+
+    use super::*;
+    use crate::seams::{SeamError, SeamResult};
+    use crate::testkit::block_on;
+
+    /// A transport that ignores `max_bytes` and serves whatever it was seeded,
+    /// recording the cap the engine handed it.
+    struct IgnoresTheCap {
+        bytes: Vec<u8>,
+        seen_cap: Cell<Option<usize>>,
+    }
+
+    impl RecordTransport for IgnoresTheCap {
+        fn endpoints(&self) -> Vec<EndpointId> {
+            vec![EndpointId::new("ignores-cap")]
+        }
+
+        async fn get_record(
+            &self,
+            _endpoint: &EndpointId,
+            _routing_key: &str,
+            max_bytes: usize,
+        ) -> SeamResult<Option<Vec<u8>>> {
+            self.seen_cap.set(Some(max_bytes));
+            Ok(Some(self.bytes.clone()))
+        }
+
+        async fn put_record(
+            &self,
+            _endpoint: &EndpointId,
+            _routing_key: &str,
+            _record: &[u8],
+        ) -> SeamResult<()> {
+            Err(SeamError::new("put unused by this fake"))
+        }
+    }
+
+    #[test]
+    fn get_verify_caps_the_read_and_skips_a_transport_that_ignores_it() {
+        let name = IpnsName::from_public_key(&Ed25519Signer::from_seed([7u8; 32]).verifying_key());
+        let transport = IgnoresTheCap {
+            bytes: vec![0u8; MAX_RECORD_BYTES + 1],
+            seen_cap: Cell::new(None),
+        };
+
+        assert!(block_on(fanout_get_verify(&transport, &name)).is_none());
+        assert_eq!(
+            transport.seen_cap.get(),
+            Some(MAX_RECORD_BYTES),
+            "the engine, not the transport, chooses the record cap"
+        );
+    }
 }

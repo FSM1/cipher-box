@@ -130,6 +130,14 @@ test.describe('engine worker host', () => {
     expect(outcome.error ?? '', 'snapshot key detachment failure (#717)').toBe('');
     expect(outcome.ok).toBe(true);
   });
+
+  test('a WASM-backed floor key is encoded before await, surviving detachment', async ({
+    page,
+  }) => {
+    const outcome = await runBoundary(page, 'floorKeyDetachment');
+    expect(outcome.error ?? '', 'floor key detachment failure (#730)').toBe('');
+    expect(outcome.ok).toBe(true);
+  });
 });
 
 function runBoundary(page: Page, name: string): Promise<BoundaryOutcome> {

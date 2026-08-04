@@ -39,6 +39,7 @@ pub use adopter::{LocalHead, RootAdopter};
 pub(crate) use adopter::{assemble_head_envelope, fetch_head_block};
 pub use child::ChildAdopter;
 pub(crate) use child::{ChildResolveError, resolve_child};
+pub use fanout::MAX_RECORD_BYTES;
 pub(crate) use fanout::fanout_get_verify;
 pub(crate) use focus::FolderRefresh;
 pub(crate) use liveness::eol_renew_pass;

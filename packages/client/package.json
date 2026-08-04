@@ -18,9 +18,10 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
+    "typecheck:browser-test": "tsc --noEmit -p tsconfig.browser-test.json",
     "test": "vitest run",
     "build:wasm-conformance": "node test/browser/build-wasm.mjs",
-    "test:browser": "node test/browser/build-wasm.mjs && playwright test"
+    "test:browser": "node test/browser/build-wasm.mjs && pnpm typecheck:browser-test && playwright test"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.0",

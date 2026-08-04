@@ -54,6 +54,12 @@ impl Http for ReqwestHttp {
         if let Some(body) = request.body {
             builder = builder.body(body);
         }
+        // The per-request deadline the engine asked for, narrower than the
+        // client-wide ceiling `new` sets; dropping it would leave a call the
+        // engine bounded running to the 30s budget.
+        if let Some(timeout_ms) = request.timeout_ms {
+            builder = builder.timeout(Duration::from_millis(timeout_ms));
+        }
         let response = builder
             .send()
             .await

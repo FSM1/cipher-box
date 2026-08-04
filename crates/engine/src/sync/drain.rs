@@ -2061,7 +2061,11 @@ fn orphaned_head(error: &RecordPublishError) -> bool {
         }
         RecordPublishError::HeadCidMismatch { .. } => true,
         RecordPublishError::Publish(error) => match error {
-            PublishError::Register(_) | PublishError::FloorRead(_) => true,
+            // The head block is already uploaded and charged when publish
+            // refuses, and no record naming it reached the transport.
+            PublishError::Register(_)
+            | PublishError::FloorRead(_)
+            | PublishError::RecordTooLarge { .. } => true,
             // Nothing was ever addressed, so there is no CID to retire.
             PublishError::EmptyHeadCid => false,
             // No ack is not proof nothing stored: unpinning a head a live
@@ -2242,6 +2246,13 @@ mod tests {
                 RecordPublishError::Publish(PublishError::FloorRead(crate::seams::SeamError::new(
                     "floor",
                 ))),
+                true,
+            ),
+            (
+                RecordPublishError::Publish(PublishError::RecordTooLarge {
+                    size: 10_241,
+                    limit: 10_240,
+                }),
                 true,
             ),
             (

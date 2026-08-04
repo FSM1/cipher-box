@@ -51,6 +51,26 @@ export function openDatabase(
   });
 }
 
+/**
+ * Wraps {@link openDatabase} in a lazy memo shared by the durable seams.
+ *
+ * Memoizes the in-flight open, not just the resolved handle: concurrent callers
+ * arriving before the first open resolves must share one connection. A failed
+ * open clears the memo so the next call can re-open.
+ */
+export function memoizedDatabase(
+  name: string,
+  version: number,
+  onUpgrade: (db: IDBDatabase) => void
+): () => Promise<IDBDatabase> {
+  let opening: Promise<IDBDatabase> | null = null;
+  return () =>
+    (opening ??= openDatabase(name, version, onUpgrade).catch((error: unknown) => {
+      opening = null;
+      throw error;
+    }));
+}
+
 /** Deletes an entire database — used by the browser suite to start each kit's backing empty. */
 export function deleteDatabase(name: string): Promise<void> {
   if (typeof indexedDB === 'undefined') {

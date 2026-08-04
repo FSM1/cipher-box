@@ -77,7 +77,7 @@ impl Http for ScriptedHttp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::seams::HttpMethod;
+    use crate::seams::{HttpCredentials, HttpMethod};
     use crate::testkit::block_on;
 
     fn request(url: &str) -> HttpRequest {
@@ -86,6 +86,8 @@ mod tests {
             url: url.to_owned(),
             headers: Vec::new(),
             body: None,
+            credentials: HttpCredentials::Omit,
+            timeout_ms: None,
         }
     }
 

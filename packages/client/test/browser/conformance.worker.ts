@@ -31,13 +31,14 @@ import {
   toHex,
 } from '../../src/seams/index.js';
 import { deleteDatabase } from '../../src/seams/idb.js';
+import type { HarnessWorkerScope } from './workerScope.js';
 
 interface SeamOutcome {
   ok: boolean;
   error?: string;
 }
 
-const scope = self as unknown as DedicatedWorkerGlobalScope;
+const scope = self as unknown as HarnessWorkerScope;
 
 let settled = false;
 function post(outcome: SeamOutcome): void {

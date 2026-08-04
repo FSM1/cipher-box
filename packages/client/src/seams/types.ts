@@ -67,10 +67,28 @@ export interface SchedulerSeam {
   sleep(durationMs: number): Promise<void>;
 }
 
-/** Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes. */
+/**
+ * A body refused for exceeding its inclusive byte cap. Fail-closed: no bytes
+ * cross, and the counts are diagnostic only (see `cappedBody.ts`).
+ */
+export interface TooLargeResult {
+  kind: 'tooLarge';
+  observed: number;
+  limit: number;
+}
+
+/** A capped record GET: the stored bytes, `null` for absence, or over-cap. */
+export type CappedRecordResult = { kind: 'record'; record: Uint8Array | null } | TooLargeResult;
+
+/**
+ * Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes.
+ *
+ * The endpoint set includes untrusted public endpoints, so `getRecord` bounds
+ * the read at `maxBytes` as the body arrives (see `cappedBody.ts`).
+ */
 export interface RecordTransportSeam {
   endpoints(): string[];
-  getRecord(endpoint: string, routingKey: string): Promise<Uint8Array | null>;
+  getRecord(endpoint: string, routingKey: string, maxBytes: number): Promise<CappedRecordResult>;
   putRecord(endpoint: string, routingKey: string, record: Uint8Array): Promise<void>;
 }
 
@@ -80,6 +98,14 @@ export interface HttpRequestData {
   url: string;
   headers: Array<[string, string]>;
   body: Uint8Array | null;
+  /**
+   * Ambient-credential scope. Absent means `'omit'`: only the API origin is
+   * asked for the HTTP-only refresh cookie, so a gateway gets no authority it
+   * could use to correlate the per-leaf fetches (#949).
+   */
+  credentials?: 'include' | 'omit';
+  /** Whole-request deadline in ms, per request class; absent leaves it unbounded (#939). */
+  timeoutMs?: number | null;
 }
 
 /** One HTTP response, returned verbatim to the engine. */
@@ -89,9 +115,7 @@ export interface HttpResponseData {
   body: Uint8Array;
 }
 
-export type CappedHttpResult =
-  | ({ kind: 'response' } & HttpResponseData)
-  | { kind: 'tooLarge'; observed: number; limit: number };
+export type CappedHttpResult = ({ kind: 'response' } & HttpResponseData) | TooLargeResult;
 
 /**
  * Plain HTTP for the API client, trustless gateway, and BYO providers. A pure

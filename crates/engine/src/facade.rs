@@ -985,6 +985,9 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
             Err(PublishError::AllEndpointsFailed) => "all record endpoints failed".to_owned(),
             Err(PublishError::FloorRead(_)) => "sequence floor read failed".to_owned(),
             Err(PublishError::EmptyHeadCid) => "empty head CID (never published)".to_owned(),
+            Err(PublishError::RecordTooLarge { size, limit }) => {
+                format!("record of {size} bytes over the {limit}-byte cap (never published)")
+            }
             // A no-renewal (comfortably ahead) or a clean republish is not a
             // failure — nothing to surface.
             Ok(Some(PublishOutcome::Published { .. })) | Ok(None) => continue,

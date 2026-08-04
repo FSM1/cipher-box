@@ -276,6 +276,7 @@ mod tests {
     use cipherbox_core::suite::ed25519::Ed25519Signer;
 
     use super::super::eol;
+    use super::super::fanout::MAX_RECORD_BYTES;
     use super::super::publish::{PublishError, PublishOutcome, PublishRequest, publish};
     use crate::api::ApiClient;
     use crate::profile::SyncTimingProfile;
@@ -372,6 +373,52 @@ mod tests {
         assert!(
             device.http.requests().is_empty(),
             "an empty head CID never reaches the API",
+        );
+    }
+
+    /// Release-active, so this assertion fires in a release build too.
+    #[test]
+    fn publish_fails_closed_on_a_record_over_the_resolve_cap() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let scheduler = world.scheduler.clone();
+        let api = ApiClient::new(
+            device.http.clone(),
+            device.credential_store.clone(),
+            "http://api.test",
+        );
+        device.http.enqueue_response(ok_200()); // register
+        let signer = Ed25519Signer::from_seed([11u8; 32]);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let request = PublishRequest {
+            name: &name,
+            signer: &signer,
+            head_cid: "b".repeat(MAX_RECORD_BYTES),
+            content_cids: Vec::new(),
+            min_current_sequence: None,
+        };
+        // Encode/decode fail-closed symmetry (security rule 8): fanout_get_verify
+        // skips an over-cap record, so publishing one would mint bytes this
+        // client can never re-resolve.
+        let out = block_on(publish(
+            &device.record_store,
+            &api,
+            &device.floor_store,
+            &scheduler,
+            &SyncTimingProfile::CI,
+            &request,
+        ));
+        assert!(
+            matches!(out, Err(PublishError::RecordTooLarge { limit, .. }) if limit == MAX_RECORD_BYTES),
+            "expected RecordTooLarge, got {out:?}"
+        );
+        let endpoint = device.record_store.endpoints()[0].clone();
+        assert!(
+            device
+                .record_store
+                .record_at(&endpoint, name.as_str())
+                .is_none(),
+            "an over-cap record never reaches the transport",
         );
     }
 

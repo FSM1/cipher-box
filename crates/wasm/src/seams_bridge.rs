@@ -19,9 +19,10 @@
 //! crosses as `bigint` and lives in `lib.rs`, not here.
 
 use cipherbox_engine::seams::{
-    BoxedTask, CappedFetchError, CredentialStore, EndpointId, FloorStore, Http, HttpMethod,
-    HttpRequest, HttpResponse, Mailbox, MailboxItem, OpId, RecordTransport, RefreshHint,
-    RefreshHintSource, Scheduler, SeamError, SeamResult, SnapshotCache, StagingStore, UnixMillis,
+    BoxedTask, CappedFetchError, CredentialStore, EndpointId, FloorStore, Http, HttpCredentials,
+    HttpMethod, HttpRequest, HttpResponse, Mailbox, MailboxItem, OpId, RecordTransport,
+    RefreshHint, RefreshHintSource, Scheduler, SeamError, SeamResult, SnapshotCache, StagingStore,
+    UnixMillis,
 };
 use core::time::Duration;
 use js_sys::{Array, Object, Reflect, Uint8Array};
@@ -418,6 +419,7 @@ extern "C" {
         this: &JsRecordTransportSeam,
         endpoint: &str,
         routing_key: &str,
+        max_bytes: f64,
     ) -> Result<JsValue, JsValue>;
     #[wasm_bindgen(method, catch, js_name = putRecord)]
     async fn put_record(
@@ -442,13 +444,32 @@ impl RecordTransport for RecordTransportAdapter {
         &self,
         endpoint: &EndpointId,
         routing_key: &str,
+        max_bytes: usize,
     ) -> SeamResult<Option<Vec<u8>>> {
-        Ok(optional_bytes(
-            self.js
-                .get_record(&endpoint.0, routing_key)
-                .await
-                .map_err(seam_error)?,
-        ))
+        let result = self
+            .js
+            .get_record(&endpoint.0, routing_key, max_bytes as f64)
+            .await
+            .map_err(seam_error)?;
+        match Reflect::get(&result, &JsValue::from_str("kind"))
+            .ok()
+            .and_then(|kind| kind.as_string())
+            .as_deref()
+        {
+            // An over-cap body the seam admitted anyway is caught by the
+            // engine-side backstop in `net::fanout`, which covers every host.
+            Some("record") => Ok(optional_bytes(
+                Reflect::get(&result, &JsValue::from_str("record")).unwrap_or(JsValue::UNDEFINED),
+            )),
+            Some("tooLarge") => Err(SeamError::new(format!(
+                "getRecord: {} bytes exceeds the {}-byte cap",
+                capped_count(&result, "observed"),
+                capped_count(&result, "limit"),
+            ))),
+            // Fail closed: an unrecognized result carries no record the engine
+            // may treat as within the cap.
+            _ => Err(SeamError::new("getRecord returned an unknown result kind")),
+        }
     }
 
     async fn put_record(
@@ -525,6 +546,20 @@ fn http_request_to_js(request: &HttpRequest) -> JsValue {
         None => JsValue::NULL,
     };
     let _ = Reflect::set(&object, &JsValue::from_str("body"), &body);
+    let credentials = match request.credentials {
+        HttpCredentials::Include => "include",
+        HttpCredentials::Omit => "omit",
+    };
+    let _ = Reflect::set(
+        &object,
+        &JsValue::from_str("credentials"),
+        &JsValue::from_str(credentials),
+    );
+    let timeout = match request.timeout_ms {
+        Some(ms) => JsValue::from_f64(ms as f64),
+        None => JsValue::NULL,
+    };
+    let _ = Reflect::set(&object, &JsValue::from_str("timeoutMs"), &timeout);
     object.into()
 }
 
@@ -771,6 +806,8 @@ mod tests {
             url: "https://gw.test/ipfs/bafy?format=raw".to_owned(),
             headers: Vec::new(),
             body: None,
+            credentials: HttpCredentials::Omit,
+            timeout_ms: Some(30_000),
         }
     }
 

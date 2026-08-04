@@ -13,6 +13,12 @@ import type { HttpSeam, MailboxItemData, MailboxSeam } from './types.js';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+/**
+ * Mailbox routes are API-origin control-plane calls: they ride the HTTP-only
+ * refresh cookie (#949) and carry the control-plane deadline (#939).
+ */
+const API_REQUEST = { credentials: 'include', timeoutMs: 10_000 } as const;
+
 export class ApiMailbox implements MailboxSeam {
   private readonly messagesUrl: string;
 
@@ -38,6 +44,7 @@ export class ApiMailbox implements MailboxSeam {
       url: this.messagesUrl,
       headers: [['content-type', 'application/json']],
       body: encoder.encode(body),
+      ...API_REQUEST,
     });
     if (response.status >= 300) {
       throw new Error(`mailbox post failed: ${response.status}`);
@@ -50,6 +57,7 @@ export class ApiMailbox implements MailboxSeam {
       url: this.messagesUrl,
       headers: [],
       body: null,
+      ...API_REQUEST,
     });
     if (response.status >= 300) {
       throw new Error(`mailbox poll failed: ${response.status}`);
@@ -74,6 +82,7 @@ export class ApiMailbox implements MailboxSeam {
       url: `${this.messagesUrl}/${encodeURIComponent(itemId)}`,
       headers: [],
       body: null,
+      ...API_REQUEST,
     });
     // The API's ack is idempotent — an unknown id answers 200 — so a 404 here
     // means the route is wrong, not that the item was already acked.

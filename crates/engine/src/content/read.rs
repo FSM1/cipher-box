@@ -20,10 +20,13 @@ use zeroize::Zeroizing;
 
 use super::dag::DAG_ROOT_CODEC;
 use super::limits::MAX_RESOLVED_RECORD_BYTES;
-use crate::seams::{CappedFetchError, Http, HttpMethod, HttpRequest};
+use crate::seams::{CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest};
 
 const AUTHORIZATION: &str = "Authorization";
 const ACCEPT: &str = "Accept";
+/// Deadline for one leaf-block GET: a seek issues one per leaf against sources
+/// of unknown quality, so a stalled gateway must fail over (#939).
+const BLOCK_FETCH_TIMEOUT_MS: u64 = 30_000;
 /// The trustless-gateway raw-block content type (IPIP-0402).
 const RAW_BLOCK: &str = "application/vnd.ipld.raw";
 /// Byte offset of the multicodec in the fixed CIDv1 framing (version at 0).
@@ -277,6 +280,9 @@ async fn fetch(
         url: format!("{base}/ipfs/{cid_str}?format=raw"),
         headers,
         body: None,
+        // The bearer above is the only credential a gateway source gets (#949).
+        credentials: HttpCredentials::Omit,
+        timeout_ms: Some(BLOCK_FETCH_TIMEOUT_MS),
     };
     http.send_capped(request, MAX_RESOLVED_RECORD_BYTES).await
 }

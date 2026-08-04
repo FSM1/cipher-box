@@ -22,6 +22,8 @@ export type {
   CredentialStoreSeam,
   SchedulerSeam,
   RecordTransportSeam,
+  CappedRecordResult,
+  TooLargeResult,
   HttpSeam,
   HttpRequestData,
   HttpResponseData,

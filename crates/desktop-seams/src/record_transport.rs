@@ -7,6 +7,12 @@ use cipherbox_engine::seams::{EndpointId, RecordTransport, SeamError, SeamResult
 /// IPFS delegated-routing content type for a signed IPNS record.
 const IPNS_RECORD_CONTENT_TYPE: &str = "application/vnd.ipfs.ipns-record";
 
+fn over_cap(observed: usize, limit: usize) -> SeamError {
+    SeamError::new(format!(
+        "record_transport get body: {observed} bytes exceeds the {limit}-byte cap"
+    ))
+}
+
 /// Dumb `/routing/v1` byte mover over `reqwest` (blueprint/engine.md
 /// "RecordTransport", desktop column).
 ///
@@ -84,8 +90,9 @@ impl RecordTransport for ReqwestRecordTransport {
         &self,
         endpoint: &EndpointId,
         routing_key: &str,
+        max_bytes: usize,
     ) -> SeamResult<Option<Vec<u8>>> {
-        let response = self
+        let mut response = self
             .client
             .get(Self::record_url(endpoint, routing_key))
             .header(reqwest::header::ACCEPT, IPNS_RECORD_CONTENT_TYPE)
@@ -103,11 +110,31 @@ impl RecordTransport for ReqwestRecordTransport {
                 status.as_u16()
             )));
         }
-        let bytes = response
-            .bytes()
+
+        // Reject a body that declares itself over the cap before reading a byte;
+        // a missing or lying Content-Length is still bounded by the drain below.
+        let declared = response.content_length();
+        if let Some(declared) = declared {
+            if declared > max_bytes as u64 {
+                return Err(over_cap(
+                    usize::try_from(declared).unwrap_or(usize::MAX),
+                    max_bytes,
+                ));
+            }
+        }
+        // Any declared length reaching here is within the cap, so it is a safe hint.
+        let mut record = Vec::with_capacity(usize::try_from(declared.unwrap_or(0)).unwrap_or(0));
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(|err| SeamError::new(format!("record_transport get body: {err}")))?;
-        Ok(Some(bytes.to_vec()))
+            .map_err(|err| SeamError::new(format!("record_transport get body: {err}")))?
+        {
+            if record.len() + chunk.len() > max_bytes {
+                return Err(over_cap(record.len() + chunk.len(), max_bytes));
+            }
+            record.extend_from_slice(&chunk);
+        }
+        Ok(Some(record))
     }
 
     async fn put_record(

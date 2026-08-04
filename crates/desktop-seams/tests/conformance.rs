@@ -16,7 +16,7 @@ use cipherbox_desktop_seams::{
     ReqwestRecordTransport, TokioScheduler,
 };
 use cipherbox_engine::seams::{
-    CappedFetchError, CredentialStore, Http, HttpMethod, HttpRequest, StagingStore,
+    CappedFetchError, CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, StagingStore,
 };
 use cipherbox_engine::testkit::{block_on, conformance};
 
@@ -289,6 +289,8 @@ async fn reqwest_http_round_trips_request_and_response() {
             url: format!("{}/echo", server.base_url()),
             headers: vec![("x-cipherbox".into(), "seam".into())],
             body: Some(b"request-payload".to_vec()),
+            credentials: HttpCredentials::Omit,
+            timeout_ms: None,
         })
         .await
         .expect("transport-level success");
@@ -326,6 +328,8 @@ async fn reqwest_http_returns_non_2xx_as_a_response_not_an_error() {
             url: format!("{}/teapot", server.base_url()),
             headers: Vec::new(),
             body: None,
+            credentials: HttpCredentials::Omit,
+            timeout_ms: None,
         })
         .await
         .expect("a non-2xx status is a response, never a seam Err");
@@ -378,6 +382,8 @@ fn stream_request(server: &MockServer, bytes: usize) -> HttpRequest {
         url: format!("{}/stream/{bytes}", server.base_url()),
         headers: Vec::new(),
         body: None,
+        credentials: HttpCredentials::Omit,
+        timeout_ms: None,
     }
 }
 

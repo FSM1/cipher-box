@@ -63,6 +63,24 @@ pub enum HttpMethod {
     Head,
 }
 
+/// Whether the transport may attach the host's *ambient* credentials — the
+/// browser's HTTP-only refresh cookie — to a request.
+///
+/// Defaults to [`Omit`](Self::Omit): ambient authority is scoped to the API
+/// origin, so the per-leaf gateway and BYO-provider fetches carry none. Those
+/// reads need no authority (`content::read` attaches an explicit
+/// `Authorization` bearer where one is configured), and sending credentials to
+/// an arbitrary gateway lets it set a `SameSite=None` cookie and correlate
+/// every subsequent leaf fetch (#949; blueprint/web-client.md seam table).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HttpCredentials {
+    /// Send no ambient credentials.
+    #[default]
+    Omit,
+    /// Send the host's ambient credentials — the API origin only.
+    Include,
+}
+
 /// One HTTP request, fully described by the engine.
 ///
 /// `Debug` is hand-written: header values and bodies carry credentials and
@@ -78,6 +96,14 @@ pub struct HttpRequest {
     pub headers: Vec<(String, String)>,
     /// Request body bytes, if any.
     pub body: Option<Vec<u8>>,
+    /// Ambient-credential scope for this request.
+    pub credentials: HttpCredentials,
+    /// Wall-clock ceiling for the whole request, in milliseconds.
+    ///
+    /// Per request class, not global: a nonce fetch and a 1 MiB block read do
+    /// not share a deadline. `None` leaves the bound to the host transport's
+    /// own policy — a request that must never hang a UI flow sets one (#939).
+    pub timeout_ms: Option<u64>,
 }
 
 impl fmt::Debug for HttpRequest {
@@ -87,6 +113,8 @@ impl fmt::Debug for HttpRequest {
             .field("url", &self.url)
             .field("headers", &HeaderNames(&self.headers))
             .field("body", &self.body.as_ref().map(|body| BodyLen(body.len())))
+            .field("credentials", &self.credentials)
+            .field("timeout_ms", &self.timeout_ms)
             .finish()
     }
 }
@@ -119,11 +147,12 @@ impl fmt::Debug for HttpResponse {
 /// path, and BYO pin providers.
 ///
 /// A pure byte mover: the transport adds no headers the engine did not ask
-/// for, follows the host's cookie policy (web rides the HTTP-only refresh
-/// cookie here via `credentials: 'include'`, which is why web's
-/// [`super::CredentialStore`] is a no-op), and never interprets bodies.
-/// Non-2xx statuses are responses, not errors — a seam `Err` is reserved
-/// for transport-level failure (unreachable, aborted).
+/// for, attaches ambient credentials only where the request asks for them via
+/// [`HttpCredentials`] (web rides the HTTP-only refresh cookie on the API
+/// origin, which is why web's [`super::CredentialStore`] is a no-op), honours
+/// [`HttpRequest::timeout_ms`], and never interprets bodies. Non-2xx statuses
+/// are responses, not errors — a seam `Err` is reserved for transport-level
+/// failure (unreachable, aborted, deadline elapsed).
 ///
 /// One obligation the transport owns: a request the engine sent over `https`
 /// must not be replayed over `http` by following a redirect, or an
@@ -181,6 +210,8 @@ mod tests {
             url: "https://api.example/auth/refresh".into(),
             headers: vec![("Authorization".into(), "Bearer secret-jwt".into())],
             body: Some(b"refresh-token-bytes".to_vec()),
+            credentials: HttpCredentials::Include,
+            timeout_ms: Some(10_000),
         };
         let debug = format!("{request:?}");
         assert!(!debug.contains("secret-jwt"), "header values must not leak");

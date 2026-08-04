@@ -3,46 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FetchHttp } from './http.js';
 import type { HttpRequestData } from './types.js';
 
+/** The cap itself is covered in `cappedBody.test.ts`; this is the seam wiring. */
+
 const GET: HttpRequestData = {
   method: 'GET',
   url: 'https://gateway.example/ipfs/bafy',
   headers: [],
   body: null,
 };
-
-interface ProducedBody {
-  stream: ReadableStream<Uint8Array>;
-  /** Bytes the source actually generated — the real peak-memory witness. */
-  produced: () => number;
-  cancelled: () => boolean;
-}
-
-/** A lazily generated body of `chunkCount` chunks that tracks what was pulled. */
-function producedBody(chunkSize: number, chunkCount: number): ProducedBody {
-  let produced = 0;
-  let cancelled = false;
-  let emitted = 0;
-  // `highWaterMark: 0` keeps the source strictly demand-driven, so `produced`
-  // counts exactly what the seam pulled and nothing the stream buffered ahead.
-  const stream = new ReadableStream<Uint8Array>(
-    {
-      pull(controller) {
-        if (emitted === chunkCount) {
-          controller.close();
-          return;
-        }
-        emitted += 1;
-        produced += chunkSize;
-        controller.enqueue(new Uint8Array(chunkSize).fill(emitted));
-      },
-      cancel() {
-        cancelled = true;
-      },
-    },
-    { highWaterMark: 0 }
-  );
-  return { stream, produced: () => produced, cancelled: () => cancelled };
-}
 
 function stubFetch(response: Response): void {
   vi.stubGlobal(
@@ -51,135 +19,48 @@ function stubFetch(response: Response): void {
   );
 }
 
+/** Stubs `fetch` and hands back the `RequestInit` each call was given. */
+function recordingFetch(): { inits: RequestInit[] } {
+  const inits: RequestInit[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((_url: string, init: RequestInit) => {
+      inits.push(init);
+      return Promise.resolve(new Response(new Uint8Array([1]), { status: 200 }));
+    })
+  );
+  return { inits };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
 describe('FetchHttp.sendCapped', () => {
-  it('rejects an honestly-declared oversized body before reading a byte', async () => {
-    const body = producedBody(100, 100);
-    stubFetch(new Response(body.stream, { status: 200, headers: { 'content-length': '10000' } }));
+  it('surfaces an over-cap body as tooLarge rather than a response', async () => {
+    stubFetch(new Response(new Uint8Array(2000), { status: 200 }));
 
-    const result = await new FetchHttp().sendCapped(GET, 1000);
-
-    expect(result).toEqual({ kind: 'tooLarge', observed: 10000, limit: 1000 });
-    expect(body.produced()).toBe(0);
-    expect(body.cancelled()).toBe(true);
-  });
-
-  it('aborts at the cap when Content-Length is absent', async () => {
-    const body = producedBody(100, 100);
-    stubFetch(new Response(body.stream, { status: 200 }));
-
-    const result = await new FetchHttp().sendCapped(GET, 1000);
-
-    expect(result).toEqual({ kind: 'tooLarge', observed: 1100, limit: 1000 });
-    // Never the whole 10 KB body: the cap plus at most the chunk that tripped it.
-    expect(body.produced()).toBeLessThanOrEqual(1100);
-    expect(body.cancelled()).toBe(true);
-  });
-
-  it('aborts at the cap when Content-Length lies small', async () => {
-    const body = producedBody(100, 100);
-    stubFetch(new Response(body.stream, { status: 200, headers: { 'content-length': '10' } }));
-
-    const result = await new FetchHttp().sendCapped(GET, 1000);
-
-    expect(result).toEqual({ kind: 'tooLarge', observed: 1100, limit: 1000 });
-    expect(body.produced()).toBeLessThanOrEqual(1100);
-    expect(body.cancelled()).toBe(true);
-  });
-
-  // `abc` converts to NaN and `-1` to a finite value under the cap, so neither
-  // trips the declared-size check; the streaming cap is the only gate left.
-  it.each(['abc', '-1'])(
-    'falls through to the streaming cap on Content-Length %s',
-    async (declared) => {
-      const body = producedBody(100, 100);
-      stubFetch(
-        new Response(body.stream, { status: 200, headers: { 'content-length': declared } })
-      );
-
-      const result = await new FetchHttp().sendCapped(GET, 1000);
-
-      expect(result).toEqual({ kind: 'tooLarge', observed: 1100, limit: 1000 });
-      expect(body.produced()).toBeLessThanOrEqual(1100);
-      expect(body.cancelled()).toBe(true);
-    }
-  );
-
-  it('rejects a single chunk larger than the whole cap', async () => {
-    const body = producedBody(4096, 4);
-    stubFetch(new Response(body.stream, { status: 200 }));
-
-    const result = await new FetchHttp().sendCapped(GET, 1000);
-
-    // Nothing is accumulated before the first chunk, so the whole overshoot is
-    // that one chunk — the peak the seam's bound admits.
-    expect(result).toEqual({ kind: 'tooLarge', observed: 4096, limit: 1000 });
-    expect(body.produced()).toBe(4096);
-    expect(body.cancelled()).toBe(true);
-  });
-
-  it('admits a body exactly at the cap with its bytes intact', async () => {
-    const body = producedBody(100, 10);
-    stubFetch(new Response(body.stream, { status: 200 }));
-
-    const result = await new FetchHttp().sendCapped(GET, 1000);
-
-    expect(result.kind).toBe('response');
-    if (result.kind !== 'response') return;
-    expect(result.body.length).toBe(1000);
-    expect(result.body[0]).toBe(1);
-    expect(result.body[999]).toBe(10);
-    expect(body.cancelled()).toBe(false);
-  });
-
-  it('reassembles a small body arriving over multiple reads', async () => {
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array([1, 2]));
-        controller.enqueue(new Uint8Array([3]));
-        controller.enqueue(new Uint8Array([4, 5, 6]));
-        controller.close();
-      },
-    });
-    stubFetch(new Response(stream, { status: 200 }));
-
-    const result = await new FetchHttp().sendCapped(GET, 1000);
-
-    expect(result).toMatchObject({ kind: 'response', body: new Uint8Array([1, 2, 3, 4, 5, 6]) });
-  });
-
-  it('drops empty chunks instead of retaining them against the cap', async () => {
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        for (let i = 0; i < 5; i += 1) controller.enqueue(new Uint8Array(0));
-        controller.enqueue(new Uint8Array([1, 2, 3]));
-        controller.close();
-      },
-    });
-    stubFetch(new Response(stream, { status: 200 }));
-
-    const result = await new FetchHttp().sendCapped(GET, 1000);
-
-    expect(result).toMatchObject({ kind: 'response', body: new Uint8Array([1, 2, 3]) });
-  });
-
-  it('treats a null body as an empty body', async () => {
-    stubFetch(new Response(null, { status: 204 }));
-
-    const result = await new FetchHttp().sendCapped(GET, 1000);
-
-    expect(result).toMatchObject({ kind: 'response', status: 204, body: new Uint8Array() });
+    expect(await new FetchHttp().sendCapped(GET, 1000)).toMatchObject({ kind: 'tooLarge' });
   });
 
   it('returns a non-2xx status as a response, not an error', async () => {
     stubFetch(new Response(new Uint8Array([7]), { status: 418 }));
 
+    expect(await new FetchHttp().sendCapped(GET, 1000)).toMatchObject({
+      kind: 'response',
+      status: 418,
+      body: new Uint8Array([7]),
+    });
+  });
+
+  it('carries the response headers through on the admitted path', async () => {
+    stubFetch(new Response(new Uint8Array([1]), { status: 200, headers: { 'x-seam': 'value' } }));
+
     const result = await new FetchHttp().sendCapped(GET, 1000);
 
-    expect(result).toMatchObject({ kind: 'response', status: 418, body: new Uint8Array([7]) });
+    expect(result.kind).toBe('response');
+    if (result.kind !== 'response') return;
+    expect(result.headers).toContainEqual(['x-seam', 'value']);
   });
 
   it('rejects on transport failure', async () => {
@@ -189,5 +70,103 @@ describe('FetchHttp.sendCapped', () => {
     );
 
     await expect(new FetchHttp().sendCapped(GET, 1000)).rejects.toThrow('network down');
+  });
+});
+
+describe('FetchHttp credential scoping', () => {
+  it('omits ambient credentials when the request does not ask for them', async () => {
+    const fetches = recordingFetch();
+    const http = new FetchHttp();
+
+    await http.send(GET);
+    await http.sendCapped(GET, 1000);
+
+    expect(fetches.inits.map((init) => init.credentials)).toEqual(['omit', 'omit']);
+  });
+
+  it('includes them only where the engine opted in', async () => {
+    const fetches = recordingFetch();
+    const apiRequest: HttpRequestData = { ...GET, credentials: 'include' };
+
+    await new FetchHttp().send(apiRequest);
+    await new FetchHttp().sendCapped(apiRequest, 1000);
+
+    expect(fetches.inits.map((init) => init.credentials)).toEqual(['include', 'include']);
+  });
+});
+
+describe('FetchHttp deadlines', () => {
+  it('carries no abort signal when the request sets no deadline', async () => {
+    const fetches = recordingFetch();
+
+    await new FetchHttp().send(GET);
+    await new FetchHttp().sendCapped({ ...GET, timeoutMs: null }, 1000);
+
+    expect(fetches.inits.map((init) => init.signal)).toEqual([undefined, undefined]);
+  });
+
+  it('aborts a request that outlives its deadline', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(init.signal?.reason as Error));
+          })
+      )
+    );
+
+    await expect(new FetchHttp().send({ ...GET, timeoutMs: 5 })).rejects.toMatchObject({
+      name: 'TimeoutError',
+    });
+  });
+
+  it('bounds a body that stalls mid-stream, not just the headers', async () => {
+    // One chunk, then nothing: a body under the cap that never completes, so
+    // only the deadline can end the drain.
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        start(controller) {
+          source = controller;
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+        },
+      },
+      { highWaterMark: 0 }
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init: RequestInit) => {
+        init.signal?.addEventListener('abort', () => source.error(init.signal?.reason));
+        return Promise.resolve(new Response(stream, { status: 200 }));
+      })
+    );
+
+    await expect(
+      new FetchHttp().sendCapped({ ...GET, timeoutMs: 5 }, 1_000_000)
+    ).rejects.toMatchObject({ name: 'TimeoutError' });
+  });
+
+  // A deadline that cannot bound must refuse: these values build no signal, so
+  // an unguarded seam would send them as unbounded requests.
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1, 1.5])(
+    'refuses a %s deadline instead of sending unbounded',
+    async (timeoutMs) => {
+      const fetches = recordingFetch();
+
+      await expect(new FetchHttp().send({ ...GET, timeoutMs })).rejects.toThrow(RangeError);
+      await expect(new FetchHttp().sendCapped({ ...GET, timeoutMs }, 1000)).rejects.toThrow(
+        RangeError
+      );
+      expect(fetches.inits).toEqual([]);
+    }
+  );
+
+  it('treats a zero deadline as a real deadline, not as unbounded', async () => {
+    const fetches = recordingFetch();
+
+    await new FetchHttp().send({ ...GET, timeoutMs: 0 });
+
+    expect(fetches.inits[0]?.signal).toBeInstanceOf(AbortSignal);
   });
 });

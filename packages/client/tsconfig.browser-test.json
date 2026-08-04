@@ -1,0 +1,15 @@
+{
+  // A separate project so `tsconfig.json` keeps `rootDir: src`, but typechecked
+  // all the same: an unchecked test double drifts from the interface it claims
+  // to implement and the browser suite reports green anyway (#975).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    // `?url` and `import.meta.env` come from Vite, which serves this harness.
+    "types": ["vite/client"]
+  },
+  // `opfs.d.ts` is ambient: without it the seams the harness imports lose
+  // `createSyncAccessHandle`.
+  "include": ["test/browser", "src/seams/opfs.d.ts"]
+}
