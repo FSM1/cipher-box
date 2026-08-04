@@ -26,6 +26,7 @@ interface LeadershipHarness {
   cbRole(): string;
   cbStart(): Promise<string>;
   cbCreateFile(name: string): Promise<string>;
+  cbUpload(name: string, bytesHex: string): Promise<string>;
   cbCreateNode(name: string, kind: 'file' | 'folder'): Promise<string>;
   cbSnapshot(folderHex: string): Promise<SnapshotResult>;
   cbDownload(nodeHex: string): Promise<DownloadResult>;
@@ -60,6 +61,7 @@ function harness(page: Page): {
   role(): Promise<string>;
   start(): Promise<string>;
   createFile(name: string): Promise<string>;
+  upload(name: string, bytesHex: string): Promise<string>;
   createNode(name: string, kind: 'file' | 'folder'): Promise<string>;
   snapshot(folderHex: string): Promise<SnapshotResult>;
   download(nodeHex: string): Promise<DownloadResult>;
@@ -92,6 +94,11 @@ function harness(page: Page): {
     start: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbStart()),
     createFile: (name) =>
       page.evaluate((n) => (window as unknown as LeadershipHarness).cbCreateFile(n), name),
+    upload: (name, bytesHex) =>
+      page.evaluate(
+        (args) => (window as unknown as LeadershipHarness).cbUpload(args.name, args.bytesHex),
+        { name, bytesHex }
+      ),
     createNode: (name, kind) =>
       page.evaluate(
         (args) => (window as unknown as LeadershipHarness).cbCreateNode(args.name, args.kind),
@@ -278,6 +285,56 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     // ...and not one byte of the plaintext the follower streamed.
     const seen = observed.map((message) => message.bytesHex).join('');
     expect(seen).not.toContain(hex(fixtureSlice(0, 32, LEADER_SEED)));
+
+    await a.dispose();
+    await b.dispose();
+  });
+
+  test('a follower uploads while a second same-origin context sees no plaintext and no arguments', async ({
+    context,
+  }) => {
+    const { lockName, channelName } = names();
+    const a = harness(await openTab(context));
+    const b = harness(await openTab(context));
+    const eavesdropper = harness(await openTab(context));
+    await eavesdropper.observe(channelName);
+    await a.resetJournal();
+
+    await a.create(lockName, channelName);
+    await b.create(lockName, channelName);
+    const leader = (await a.role()) === 'leader' ? a : b;
+    const follower = leader === a ? b : a;
+    await leader.start();
+    await follower.start();
+
+    // A distinctive filename and a distinctive byte run: both are arguments the
+    // follower→leader direction used to broadcast to every same-origin context.
+    const plaintext = Uint8Array.from({ length: 64 }, (_, i) => (i * 31 + 17) & 0xff);
+    const filename = 'payslip-2026-Q3.pdf';
+    expect(await follower.upload(filename, hex(plaintext))).toBe('ok');
+    expect(await follower.createNode('rothko-appraisal', 'folder')).toBe('ok');
+
+    const observed = await eavesdropper.observed();
+    expect(observed.length).toBeGreaterThan(0);
+    // The channel carries election, the port rendezvous, and key-free events —
+    // no write step and no command, so no argument can ride one.
+    for (const type of new Set(observed.map((message) => message.type))) {
+      expect([
+        'cb:bye',
+        'cb:event',
+        'cb:focus',
+        'cb:hello',
+        'cb:leader',
+        'cb:leaderGone',
+        'cb:portHost',
+        'cb:portWanted',
+      ]).toContain(type);
+    }
+    const seenBytes = observed.map((message) => message.bytesHex).join('');
+    expect(seenBytes).not.toContain(hex(plaintext.slice(0, 16)));
+    const seenText = observed.map((message) => message.text).join(' ');
+    expect(seenText).not.toContain(filename);
+    expect(seenText).not.toContain('rothko-appraisal');
 
     await a.dispose();
     await b.dispose();

@@ -190,12 +190,15 @@ export class FakeChannel implements BroadcastChannelLike {
 export class FakeChannelPort implements MessagePortLike {
   peer: FakeChannelPort | null = null;
   readonly transferred: unknown[][] = [];
+  /** Every message posted from this end, so a test can scan what the wire saw. */
+  readonly posted: unknown[] = [];
   started = false;
   closed = false;
   private listeners: Array<(event: MessageEvent) => void> = [];
 
   postMessage(message: unknown, transfer?: Transferable[]): void {
     if (this.closed) return;
+    this.posted.push(message);
     this.transferred.push(transfer ? [...transfer] : []);
     // Honors the transfer list, so a sender that reads a moved buffer afterwards
     // fails here exactly as it would against a real port.
@@ -236,6 +239,11 @@ export class FakeCourierNetwork {
   /** Every non-empty transfer list posted on this network's ports, in order. */
   get transfers(): unknown[][] {
     return this.opened.flatMap((port) => port.transferred.filter((list) => list.length > 0));
+  }
+
+  /** Every message posted on this network's ports, in order. */
+  get messages(): unknown[] {
+    return this.opened.flatMap((port) => port.posted);
   }
 
   courier(address: string): PortCourier {
@@ -441,15 +449,22 @@ export class FakeEngineWorker implements EngineWorkerLike {
   terminated = false;
   private messageListeners: Array<(event: MessageEvent<WorkerMessage>) => void> = [];
 
-  /** What `openContentStream` answers with — every engine's counter starts at 1. */
+  /** What the handle-minting requests answer with — every engine's counters start at 1. */
   streamHandle: StreamHandle = 1n;
+  writeHandle: WriteHandle = 1n;
 
   postMessage(message: { id?: number; type?: string }): void {
     this.posted.push(message);
     if (typeof message.id !== 'number') return;
     const id = message.id;
-    const result = message.type === 'openContentStream' ? this.streamHandle : undefined;
+    const result = this.mint(message.type);
     queueMicrotask(() => this.emit({ type: 'response', id, ok: true, result }));
+  }
+
+  private mint(type: string | undefined): bigint | undefined {
+    if (type === 'openContentStream') return this.streamHandle;
+    if (type === 'beginWrite') return this.writeHandle;
+    return undefined;
   }
 
   addEventListener(type: 'message' | 'error', listener: unknown): void {

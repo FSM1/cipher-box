@@ -92,19 +92,19 @@ mechanism; the invariant — one engine writer per origin — is D4's):
   exactly the failover primitive needed.
 - **Followers are thin mirrors, not engines**: a non-leader tab spawns no
   worker and holds no keys. It renders view projections served by the leader
-  and sends commands as data. Commands, events, and election ride a
-  `BroadcastChannel`: events are plain structured-clone data and commands carry
-  at most `Blob`/`File` handles (structured clone shares the immutable backing
-  store — no byte copies for uploads), so an upload's plaintext still reaches
-  every context holding the channel. Read **results** — snapshot projections
-  and file plaintext — do not: each follower dials the leader a private
+  and sends commands as data. Election, the port rendezvous, and the one-way
+  event stream ride a `BroadcastChannel` as plain structured-clone data — every
+  context on the origin holds that channel, so nothing value-bearing may touch
+  it. Everything else does not: each follower dials the leader a private
   `MessagePort` through the Service Worker (the only cross-tab route for a
-  transferable) and reads over that, buffers transferred rather than cloned.
-  The leadership token gating the port is itself broadcast, so it bounds
-  accidental and passive delivery, never a same-origin context that read the
-  beacon — same origin remains the trust boundary. A tab with no Service Worker
-  mirrors nothing: reads fail closed rather than fall back to the shared
-  channel.
+  transferable) and drives commands, uploads and reads over that, buffers
+  transferred rather than cloned. The leadership token gating the port is itself
+  broadcast, so it bounds accidental and passive delivery, never a same-origin
+  context that read the beacon — same origin remains the trust boundary. A tab
+  with no Service Worker mirrors nothing: it fails closed rather than fall back
+  to the shared channel. The leader probes each port for the tab behind it and
+  reclaims the handles of one that stops answering, so a crashed follower does
+  not pin a content version — and its key — for the rest of the leadership.
 - **Failover**: the lock releases → some follower acquires it, spawns a fresh
   engine worker, and rehydrates from the durable seams (floors, op queue,
   staged bytes, snapshot cache — all origin-shared). Ops journal durably

@@ -162,6 +162,48 @@ describe('EngineClient leadership + transport swap', () => {
     await follower.dispose();
   });
 
+  it('refuses a write handle minted by a leadership that has been replaced', async () => {
+    const { tab, workers } = origin();
+    const secretSource = {
+      provideSecret: (): Promise<ArrayBuffer> => Promise.resolve(new Uint8Array([1]).buffer),
+    };
+    const leader = tab();
+    const follower = tab({ secretSource });
+    await tick();
+    await follower.facade.start(new Uint8Array([9]).buffer);
+
+    const stale = await follower.beginWrite({ node: new Uint8Array(16).fill(1) }, 4);
+
+    await leader.dispose();
+    await tick();
+    await tick();
+    expect(follower.currentRole()).toBe('leader');
+
+    // The promoted tab's engine mints from 1 too, so a carried-over handle would
+    // alias the next write it opens — pushing one file's bytes into another
+    // file's staging, where they seal correctly and nothing downstream notices.
+    const reopened = await follower.beginWrite({ parent: new Uint8Array(16), name: 'b.txt' }, 4);
+    expect(reopened).not.toBe(stale);
+    await follower.pushChunk(reopened, Uint8Array.of(1, 2, 3, 4).buffer);
+    const promoted = workers[workers.length - 1];
+    expect(promoted.posted).toContainEqual(
+      expect.objectContaining({ type: 'pushChunk', handle: 1n })
+    );
+
+    await expect(follower.pushChunk(stale, Uint8Array.of(9).buffer)).rejects.toMatchObject({
+      code: 'unknownWriteHandle',
+    });
+    await expect(follower.commitWrite(stale)).rejects.toMatchObject({
+      code: 'unknownWriteHandle',
+    });
+    // Only the live handle's chunk ever reached the promoted worker.
+    expect(
+      promoted.posted.filter((m) => (m as { type?: string }).type === 'pushChunk')
+    ).toHaveLength(1);
+
+    await follower.dispose();
+  });
+
   it('keeps the UI event subscription alive across a leadership swap', async () => {
     const { tab, workers } = origin();
     const secretSource = {

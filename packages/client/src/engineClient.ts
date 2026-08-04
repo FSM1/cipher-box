@@ -83,17 +83,21 @@ export class EngineClient implements EngineTransport {
   private role: EngineClientRole = 'follower';
   private current!: EngineTransport;
   /**
-   * The open read streams, as this client's own handle → the live engine's.
+   * The open handles, as this client's own id → the live engine's, one table per
+   * plane.
    *
-   * The engine's `StreamHandle` is a per-engine counter that restarts at 1, so a
-   * handle from a departed leader names a live stream over a *different* node on
-   * the next one — the two-version splice #948 closes inside one engine, leaking
-   * straight back in across engines. Handing out an id that is monotonic for
-   * this client's whole life and dropping the table on every swap makes a stale
-   * handle unmatchable rather than ambiguous.
+   * An engine's handle counters restart at 1, so a handle from a departed leader
+   * names a live handle on the next one: a stale stream reads a *different*
+   * node's plaintext, and a stale `pushChunk` pushes one file's bytes into
+   * another file's staging, sealing correctly under the entry it lands in.
+   * Handing out ids that are monotonic for this client's whole life and dropping
+   * the tables on every swap makes a stale handle unmatchable rather than
+   * ambiguous.
    */
   private readonly streams = new Map<StreamHandle, StreamHandle>();
+  private readonly writes = new Map<WriteHandle, WriteHandle>();
   private nextStream = 0n;
+  private nextWrite = 0n;
   private generation = 0;
   private relay: LeaderRelay | null = null;
   private innerUnsub!: () => void;
@@ -152,20 +156,38 @@ export class EngineClient implements EngineTransport {
     return this.current.command(command, transfer);
   }
 
-  beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
-    return this.current.beginWrite(target, size);
+  async beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
+    const generation = this.generation;
+    const inner = await this.current.beginWrite(target, size);
+    // The engine that minted this went away mid-open; its staging went with it.
+    if (generation !== this.generation) throw unknownHandle('write');
+    this.nextWrite += 1n;
+    this.writes.set(this.nextWrite, inner);
+    return this.nextWrite;
   }
 
   pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
-    return this.current.pushChunk(handle, chunk);
+    const inner = this.writes.get(handle);
+    if (inner === undefined) return Promise.reject(unknownHandle('write'));
+    return this.current.pushChunk(inner, chunk);
   }
 
-  commitWrite(handle: WriteHandle): Promise<bigint> {
-    return this.current.commitWrite(handle);
+  async commitWrite(handle: WriteHandle): Promise<bigint> {
+    const inner = this.writes.get(handle);
+    if (inner === undefined) throw unknownHandle('write');
+    const opId = await this.current.commitWrite(inner);
+    // Dropped only once the commit resolves: a rejected one leaves the handle
+    // open for its owner to abort.
+    this.writes.delete(handle);
+    return opId;
   }
 
-  abortWrite(handle: WriteHandle): Promise<void> {
-    return this.current.abortWrite(handle);
+  async abortWrite(handle: WriteHandle): Promise<void> {
+    const inner = this.writes.get(handle);
+    // An abort on a handle whose engine is gone has nothing left to release.
+    if (inner === undefined) return;
+    await this.current.abortWrite(inner);
+    this.writes.delete(handle);
   }
 
   snapshot(folder: Uint8Array | null): Promise<SnapshotDescriptor> {
@@ -232,24 +254,25 @@ export class EngineClient implements EngineTransport {
     this.channel.close();
   }
 
-  /** Installs the live transport, retiring the streams the previous one held. */
+  /** Installs the live transport, retiring the handles the previous one held. */
   private swapCurrent(transport: EngineTransport): void {
     this.current = transport;
-    this.retireStreams();
+    this.retireHandles();
   }
 
-  /** Retires every open stream: the engine that minted them is gone. */
-  private retireStreams(): void {
+  /** Retires every open handle: the engine that minted them is gone. */
+  private retireHandles(): void {
     this.generation += 1;
     this.streams.clear();
+    this.writes.clear();
   }
 
   private installFollower(): BroadcastTransport {
     // Leadership moving between two *other* tabs replaces the engine without
-    // replacing this transport, so the stream fence rides the same signal as the
+    // replacing this transport, so the handle fence rides the same signal as the
     // transport's own port fence.
     const follower = new BroadcastTransport(this.channel, this.clientId, this.courier, {
-      onLeadershipChange: () => this.retireStreams(),
+      onLeadershipChange: () => this.retireHandles(),
     });
     this.swapCurrent(follower);
     this.innerUnsub = follower.subscribe((event) => this.fanOut(event));
