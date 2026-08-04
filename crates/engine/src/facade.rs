@@ -1112,15 +1112,15 @@ fn surface_drain_report(
 /// drain mint every new node's `ipnsName` and signer from a key that party also
 /// holds. A seed that cannot name our own root is not our scope's — held
 /// keyless, never a trust verdict.
-async fn deposit_write_seed<F: FloorStore>(
-    floors: &F,
+fn deposit_write_seed(
     cell: &RefCell<ScopeSeeds>,
     scope_id: [u8; 16],
     seed: Zeroizing<[u8; 32]>,
     root_name: Option<&IpnsName>,
+    floor: Option<u64>,
 ) {
     if root_name.is_some_and(|name| derive_write_name(&seed, &scope_id) == *name) {
-        deposit_seed(floors, cell, scope_id, seed, SeedFloor::Write).await;
+        deposit_seed(cell, scope_id, seed, floor);
     }
 }
 
@@ -1152,10 +1152,13 @@ struct SyncStatus {
 
 /// A recovered scope seed and the durable epoch floor it was recovered under.
 ///
-/// The floor is the seed's expiry: a rotation that raises the scope's floor past
-/// it revokes that epoch, so the seed is evicted rather than left resident for
-/// the rest of the session. Least privilege is a retention rule, not only an
-/// install rule (#795, #1040).
+/// A recovered scope seed and a lower bound on the epoch it belongs to (see
+/// [`deposit_seed`]).
+///
+/// The bound is the seed's expiry: a rotation that raises the scope's durable
+/// floor past it revokes that epoch, so the seed is evicted rather than left
+/// resident for the rest of the session. Least privilege is a retention rule,
+/// not only an install rule (#795, #1040).
 struct CachedSeed {
     seed: Zeroizing<[u8; 32]>,
     floor: u64,
@@ -1187,48 +1190,74 @@ impl SeedFloor {
     }
 }
 
-/// Drop `scope_id`'s cached seed once its durable floor has risen past the one
-/// the seed was recovered under. A floor read that fails evicts too: an
-/// unprovable seed is not held.
-async fn evict_seed_past_floor<F: FloorStore>(
+/// Read `scope_id`'s durable floor for `which`, evicting a cached seed stamped
+/// below it, and hand the floor back for the pass's own deposits.
+///
+/// `None` on a floor-store failure, which also evicts: a seed whose currency
+/// cannot be established is not held, and nothing may be stamped against a floor
+/// that was never read.
+async fn refresh_seed_floor<F: FloorStore>(
     floors: &F,
     cell: &RefCell<ScopeSeeds>,
     scope_id: &[u8; 16],
     which: SeedFloor,
-) {
-    if !cell.borrow().contains_key(scope_id) {
-        return;
-    }
-    let durable = which.durable(floors, scope_id).await;
+) -> Option<u64> {
+    let durable = which
+        .durable(floors, scope_id)
+        .await
+        .ok()
+        .map(|floor| floor.unwrap_or(0));
     let mut seeds = cell.borrow_mut();
-    let stale = durable.map_or(true, |floor| {
-        seeds
-            .get(scope_id)
-            .is_some_and(|cached| cached.floor < floor.unwrap_or(0))
-    });
-    if stale {
+    if durable.is_none_or(|floor| seeds.get(scope_id).is_some_and(|c| c.floor < floor)) {
         seeds.remove(scope_id);
     }
+    durable
 }
 
-/// Deposit a recovered scope seed, stamped with the durable floor the adopt that
-/// surfaced it left behind. A floor read that fails skips the deposit: an
-/// unstamped seed would be evicted on sight.
-async fn deposit_seed<F: FloorStore>(
-    floors: &F,
+/// Deposit a recovered scope seed under `stamp`, which must be **at or below the
+/// epoch the seed belongs to** — the seed's own epoch where the recovery names it
+/// (an adopted record's `epoch`, a re-point's vouched floors), else the durable
+/// floor read *before* the resolve.
+///
+/// A pre-resolve floor is a valid stamp because floors are monotonic and every
+/// recovery arm refuses an envelope below the floor it read (`gate::adoption`
+/// stage 5, `RootAdopter::recover_own_scope_material`). What is *not* valid is a
+/// floor re-read after the resolve: a rise that landed mid-pass would be absorbed
+/// into the stamp and keep a revoked-epoch seed resident (#1040).
+///
+/// `None` skips the deposit — the floor could not be read, so nothing can be
+/// stamped and the eviction pass has already cleared the cell.
+fn deposit_seed(
     cell: &RefCell<ScopeSeeds>,
     scope_id: [u8; 16],
     seed: Zeroizing<[u8; 32]>,
-    which: SeedFloor,
+    stamp: Option<u64>,
 ) {
-    if let Ok(floor) = which.durable(floors, &scope_id).await {
-        cell.borrow_mut().insert(
-            scope_id,
-            CachedSeed {
-                seed,
-                floor: floor.unwrap_or(0),
-            },
-        );
+    if let Some(floor) = stamp {
+        cell.borrow_mut()
+            .insert(scope_id, CachedSeed { seed, floor });
+    }
+}
+
+/// A scope's two durable epoch floors as one resolve pass observed them, before
+/// the resolve moved either. `None` on a floor-store failure (see
+/// [`refresh_seed_floor`]).
+struct SeedFloors {
+    read: Option<u64>,
+    write: Option<u64>,
+}
+
+/// Evict both of `scope_id`'s cached seeds against their durable floors and
+/// report those floors, the stamps this pass's deposits carry.
+async fn refresh_seed_floors<F: FloorStore>(
+    floors: &F,
+    scope_id: &[u8; 16],
+    read_seeds: &RefCell<ScopeSeeds>,
+    write_seeds: &RefCell<ScopeSeeds>,
+) -> SeedFloors {
+    SeedFloors {
+        read: refresh_seed_floor(floors, read_seeds, scope_id, SeedFloor::Read).await,
+        write: refresh_seed_floor(floors, write_seeds, scope_id, SeedFloor::Write).await,
     }
 }
 
@@ -1619,17 +1648,20 @@ impl<T: SeamTypes> Engine<T> {
                 return Err(EngineError::from_cold_start(err));
             }
         };
+        // Both seeds are stamped from the owner-vouched re-point the cold-seed
+        // installed the floors from, and which the adopt and the owner-write-blob
+        // AAD then bound to — the epochs they belong to, not a later floor read
+        // (see `deposit_seed`).
+        let vouched = outcome.vault_pointer.as_ref().map(|vp| &vp.repoint);
         // A gate-passing root adopt surfaced the scope read seed: deposit it in
         // the in-memory per-scope cell the child read pipeline derives from.
         if let Some(seed) = outcome.read_scope_seed.take() {
             deposit_seed(
-                &self.seams.floor_store,
                 &self.scope_read_seeds,
                 root_scope_id,
                 seed,
-                SeedFloor::Read,
-            )
-            .await;
+                vouched.map(|repoint| repoint.min_read_epoch),
+            );
         }
         // The gate-passing base becomes the state law's left operand (reads render
         // this ⊕ the pending-op overlay). The resolved root name — the vault
@@ -1643,13 +1675,12 @@ impl<T: SeamTypes> Engine<T> {
         // new node's `ipnsName` and its narrow per-name signer from it.
         if let Some((scope_id, seed)) = outcome.write_scope_seed.take() {
             deposit_write_seed(
-                &self.seams.floor_store,
                 &self.scope_write_seeds,
                 scope_id,
                 seed,
                 root_name.as_ref(),
-            )
-            .await;
+                vouched.map(|repoint| repoint.write_epoch),
+            );
         }
         *self.snapshot.borrow_mut() = outcome.base;
         // A successful cold start is a successful reconcile: stamp it so the
@@ -1688,6 +1719,11 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut held) = self.held_records.try_borrow_mut() {
             held.clear();
+        }
+        // Each open stream pins a version's content key; releasing the table's
+        // `Rc`s here is what makes this the terminal owner (security rule 7).
+        if let Ok(mut streams) = self.streams.try_borrow_mut() {
+            streams.open.clear();
         }
         for seeds in [&self.scope_read_seeds, &self.scope_write_seeds] {
             if let Ok(mut seeds) = seeds.try_borrow_mut() {
@@ -1905,10 +1941,11 @@ impl<T: SeamTypes> Engine<T> {
                 };
                 // Before the steady-state hold consults them: a floor raised
                 // since the last pass revokes the seeds this pass would
-                // otherwise read and seal under (#1040).
-                evict_seed_past_floor(&floors, &scope_read_seeds, &root_id, SeedFloor::Read).await;
-                evict_seed_past_floor(&floors, &scope_write_seeds, &root_id, SeedFloor::Write)
-                    .await;
+                // otherwise read and seal under (#1040). The floors it reports
+                // stamp whatever this pass's own resolve recovers.
+                let floors_before =
+                    refresh_seed_floors(&floors, &root_id, &scope_read_seeds, &scope_write_seeds)
+                        .await;
                 let adopter = RootAdopter::new(
                     &gateway,
                     &http,
@@ -1951,18 +1988,23 @@ impl<T: SeamTypes> Engine<T> {
                 // drain derive from.
                 if let Ok(surfaced) = &mut held_resolve {
                     if let Some(seed) = surfaced.read_scope_seed.take() {
-                        deposit_seed(&floors, &scope_read_seeds, root_id, seed, SeedFloor::Read)
-                            .await;
+                        // An adopt names the epoch its own owner blob's seed
+                        // belongs to; an equal-floor `Current` recovery does not,
+                        // and takes the pre-resolve floor (see `deposit_seed`).
+                        let stamp = match &surfaced.resolved.outcome {
+                            ResolveOutcome::Adopted(adopted) => Some(adopted.epoch),
+                            _ => floors_before.read,
+                        };
+                        deposit_seed(&scope_read_seeds, root_id, seed, stamp);
                     }
                     if let Some((node_id, seed)) = surfaced.write_scope_seed.take() {
                         deposit_write_seed(
-                            &floors,
                             &scope_write_seeds,
                             node_id,
                             seed,
                             Some(&root_name),
-                        )
-                        .await;
+                            floors_before.write,
+                        );
                     }
                 }
                 let resolved = held_resolve.map(|surfaced| surfaced.resolved);
@@ -2185,7 +2227,7 @@ impl<T: SeamTypes> Engine<T> {
     /// floor has risen past the one it was recovered under (#1040). Every
     /// on-demand read goes through here; the resolve tick evicts once per pass.
     async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; 32]>> {
-        evict_seed_past_floor(
+        refresh_seed_floor(
             &self.seams.floor_store,
             &self.scope_read_seeds,
             scope_id,
@@ -3833,6 +3875,42 @@ mod tests {
         );
         drop(in_flight);
         assert_eq!(streams.live.get(), 0, "the last holder released the slot");
+    }
+
+    /// The cache's retention rule, at the mechanism: a seed lives exactly as
+    /// long as the durable floor stays at or below its stamp, and an unreadable
+    /// floor holds nothing (#1040).
+    #[test]
+    fn a_cached_seed_lives_only_while_the_floor_stays_at_its_stamp() {
+        use crate::testkit::fakes::InMemoryFloorStore;
+
+        const SCOPE: [u8; 16] = [4u8; 16];
+        let floors = InMemoryFloorStore::default();
+        let cell = RefCell::new(ScopeSeeds::new());
+        block_on(async {
+            floors.raise_epoch_floor(&SCOPE, 5).await.unwrap();
+            let stamp = refresh_seed_floor(&floors, &cell, &SCOPE, SeedFloor::Read).await;
+            assert_eq!(stamp, Some(5));
+            deposit_seed(&cell, SCOPE, Zeroizing::new([3u8; 32]), stamp);
+
+            refresh_seed_floor(&floors, &cell, &SCOPE, SeedFloor::Read).await;
+            assert!(
+                cell.borrow().contains_key(&SCOPE),
+                "an unmoved floor keeps the seed"
+            );
+
+            floors.raise_epoch_floor(&SCOPE, 6).await.unwrap();
+            refresh_seed_floor(&floors, &cell, &SCOPE, SeedFloor::Read).await;
+            assert!(
+                !cell.borrow().contains_key(&SCOPE),
+                "the rise past the stamp revokes it"
+            );
+
+            // A stamp the caller could not read holds nothing, so a floor-store
+            // failure never leaves an unprovable seed resident.
+            deposit_seed(&cell, SCOPE, Zeroizing::new([3u8; 32]), None);
+            assert!(!cell.borrow().contains_key(&SCOPE));
+        });
     }
 
     #[test]

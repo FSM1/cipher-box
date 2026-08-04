@@ -592,13 +592,20 @@ mod tests {
 
     #[test]
     fn assemble_rejects_a_malformed_leaf_cid_in_every_build() {
-        // The encode-side half of `decode_root`'s leaf-CID reject (rule 8).
+        // The encode-side half of `decode_root`'s leaf-CID reject (rule 8) —
+        // including both widths the fixed-width manifest links cannot hold.
         let profile = ContentProfile::CI;
-        let leaves = vec![b"not-a-content-cid".to_vec()];
-        assert_eq!(
-            assemble(&leaves, profile.chunk_size() as u64, &profile),
-            Err(DagError::MalformedLeafCid)
-        );
+        let (framed, _) = framed(b"abc", 5);
+        let mut narrow = framed[0].clone();
+        narrow.pop();
+        let mut wide = framed[0].clone();
+        wide.push(0);
+        for bad in [b"not-a-content-cid".to_vec(), narrow, wide] {
+            assert_eq!(
+                assemble(&[bad], profile.chunk_size() as u64, &profile),
+                Err(DagError::MalformedLeafCid)
+            );
+        }
     }
 
     /// The arithmetic sizing and the real encoder must never drift: the staging
