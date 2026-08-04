@@ -167,11 +167,12 @@ fn committed_permissions(commitment: &GrantSetCommitment) -> BTreeMap<[u8; 32], 
 /// permission is an [`AuthorityViolation`]. (Duplicate tags are already rejected
 /// fail-closed at decode in core, so each side is a well-formed set here.)
 ///
-/// The commitment covers `(tag, permission)` only, so this deliberately does
-/// **not** compare a row's `recipientIdentityPk`, `recipientEncPk`, or
-/// `expiresAt`: a write-grantee may alter those undetectably. The tag↔enc_pk
-/// binding is a resolve-time check (#745); the deadline is not a capability
-/// boundary ([`GrantLedgerEntry::expires_at`]).
+/// `(tag, permission)` is the whole comparison because it is all a ledger row and
+/// a committed entry share — the owner also signs each entry's `pseudonymPk`, but
+/// no ledger row carries one. So a row's `recipientIdentityPk`, `recipientEncPk`,
+/// and `expiresAt` go unchecked here and a write-grantee may alter them
+/// undetectably. The tag↔enc_pk binding is a resolve-time check (#745); the
+/// deadline is not a capability boundary ([`GrantLedgerEntry::expires_at`]).
 pub fn enforce_committed_ledger(
     commitment: &GrantSetCommitment,
     ledger: &[GrantLedgerEntry],

@@ -566,10 +566,27 @@ mod tests {
     #[test]
     fn an_invite_blob_transplanted_across_epoch_or_structure_fails_to_open() {
         let minted = invitee();
-        let row = invite(Permission::Read, None);
+        let row = mint_invite_grant(
+            &owner_enc(),
+            &minted,
+            &SCOPE,
+            &WRITE_SCOPE_SEED,
+            Permission::Read,
+            None,
+        )
+        .expect("mints");
         let section =
             scope_root(&[row.clone()], &owner_pseudonym(), &owner_pseudonym()).expect("reseal");
         let blob = blob_at(&section, &row.tag);
+        // Control: `minted` is the row's own recipient, so the two rejects below
+        // isolate the AAD and the key rather than a recipient mismatch.
+        open_grant_blob(
+            minted.enc_secret(),
+            &blob.enc,
+            &blob_ctx(EPOCH),
+            &blob.ciphertext,
+        )
+        .expect("the row's own recipient opens at the sealed epoch");
         // Same key, same ciphertext, a different AAD epoch: the tag must fail.
         assert_eq!(
             open_grant_blob(
@@ -603,7 +620,7 @@ mod tests {
         // commitment, so a write-grantee re-authoring the write-body can drop or
         // forge one and `enforce_committed_ledger` still passes. Pins the residual
         // this slice ships with, so tightening it has to update this test.
-        let row = invite(Permission::Read, Some(EXPIRES_AT));
+        let row = invite(Permission::Write, Some(EXPIRES_AT));
         let commitment = GrantSetCommitment {
             ipns_name: scope_name(),
             owner_pseudonym_pk: owner_pseudonym().verifying_key().to_bytes(),
