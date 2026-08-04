@@ -1,9 +1,9 @@
 //! In-memory [`FloorStore`] fake.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use crate::seams::{FloorNamespace, FloorRaise, FloorStore, SeamResult};
+use crate::seams::{FloorNamespace, FloorRaise, FloorStore, SeamError, SeamResult};
 
 #[derive(Default)]
 struct Inner {
@@ -15,6 +15,27 @@ struct Inner {
 #[derive(Clone, Default)]
 pub struct InMemoryFloorStore {
     inner: Arc<Mutex<Inner>>,
+    /// Floor keys whose commit is injected to fail. Empty by default, so a
+    /// store's behavior is unchanged until a test injects a fault.
+    failing_commits: Arc<Mutex<HashSet<Vec<u8>>>>,
+}
+
+impl InMemoryFloorStore {
+    /// Make [`commit_floors`](FloorStore::commit_floors) fail for any batch that
+    /// raises `key`, until [`heal_commits`](Self::heal_commits) clears it. The
+    /// commit is an adoption's durable last step, so this drives a self-adopt
+    /// that fails after its record is already live at its name.
+    pub fn fail_commits_for(&self, key: &[u8]) {
+        self.failing_commits
+            .lock()
+            .expect("lock")
+            .insert(key.to_vec());
+    }
+
+    /// Restore every injected commit fault.
+    pub fn heal_commits(&self) {
+        self.failing_commits.lock().expect("lock").clear();
+    }
 }
 
 fn raise(map: &mut HashMap<Vec<u8>, u64>, key: &[u8], value: u64) -> u64 {
@@ -64,6 +85,15 @@ impl FloorStore for InMemoryFloorStore {
     /// so no observer sees a partial commit (the atomic contract #685 asks of a
     /// transactional backing).
     async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
+        {
+            let failing = self.failing_commits.lock().expect("lock");
+            if let Some(r) = raises.iter().find(|r| failing.contains(&r.key)) {
+                return Err(SeamError::new(format!(
+                    "floor commit injected to fail for key {:?}",
+                    r.key
+                )));
+            }
+        }
         let mut inner = self.inner.lock().expect("lock");
         for r in raises {
             match r.namespace {

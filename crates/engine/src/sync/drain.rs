@@ -40,7 +40,7 @@ use crate::facade::{BlockProgress, Event, NodeId, OpPhase};
 use crate::gate::floor;
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
-    AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
+    AuthorError, AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
     author_scope_root_envelope, new_child,
 };
 use crate::net::publish::{PublishError, PublishOutcome, PublishReceipt};
@@ -78,8 +78,8 @@ use crate::sync::staging::{preserve_dead_letter, release_version_blocks, version
 pub const DRAINED_OP_MARK_PREFIX: &[u8] = b"cipherbox/drained-op/";
 
 /// The staging-key prefix for the published-op high-water mark: every op id at
-/// or below the stored value published and self-adopted its whole record set,
-/// so its version is live at its name even if the op is still queued. What it
+/// or below the stored value had the last record of its plan confirmed at its
+/// name, so its version is live there even if the op is still queued. What it
 /// is *for* is [`Drain::mark_published`].
 pub const PUBLISHED_OP_MARK_PREFIX: &[u8] = b"cipherbox/published-op/";
 
@@ -204,10 +204,10 @@ enum Halt {
     /// against the attempt budget, because a retry re-signs at the same
     /// sequence and a jammed name would otherwise retry forever.
     Attempt,
-    /// An upload or registration refusal this pass cannot attribute. Charged
-    /// like [`Halt::Attempt`], but raised strictly **before** the record PUT —
-    /// so exhausting the budget may retire what the op uploaded, which an acked
-    /// PUT's may not.
+    /// A refusal this pass cannot attribute, raised strictly **before** the
+    /// record PUT: an upload, a registration, or a produce-side trust refusal.
+    /// Charged like [`Halt::Attempt`], but exhausting the budget may retire what
+    /// the op uploaded, which an acked PUT's may not.
     UploadAttempt,
     /// Classified-permanent: the same bytes are refused on every retry.
     Permanent(DeadLetterReason),
@@ -1024,14 +1024,22 @@ where
                 content_cids,
                 PreservedFields::new(),
                 PreservedFields::new(),
+                // The parent's record below is this plan's last: a mark raised
+                // here would drop an op on restart whose child no parent names.
+                None,
             )
             .await?;
 
         // Referent published: only now does the parent gain the ref to it.
         pass.folder_mut(parent)?.children.push(child.child_ref);
-        self.publish_folder(scope, pass, parent, applied.op.authored_at.0)
-            .await?;
-        self.mark_published(scope, applied.op_id).await;
+        self.publish_folder(
+            scope,
+            pass,
+            parent,
+            applied.op.authored_at.0,
+            Some(applied.op_id),
+        )
+        .await?;
         self.release_staged_blocks(&applied.op).await;
         // Held only once the parent names it: a record nothing references is
         // not one the liveness loop should keep alive.
@@ -1058,7 +1066,7 @@ where
         if children.len() == before {
             return Ok(());
         }
-        self.publish_folder(scope, pass, parent, applied.op.authored_at.0)
+        self.publish_folder(scope, pass, parent, applied.op.authored_at.0, None)
             .await?;
         Ok(())
     }
@@ -1145,7 +1153,9 @@ where
             Some(existing) => *existing = moved,
             None => dest_children.push(moved),
         }
-        let cas_base = self.publish_folder(scope, pass, dest, modified_at).await?;
+        let cas_base = self
+            .publish_folder(scope, pass, dest, modified_at, None)
+            .await?;
         if source == dest {
             return Ok(());
         }
@@ -1158,7 +1168,10 @@ where
         // forever, so a quota refusal, a permanent one, or a spent attempt must
         // not be flattened into it. Only the undo's own failure is genuinely
         // unclassified.
-        if let Err(halt) = self.publish_folder(scope, pass, source, modified_at).await {
+        if let Err(halt) = self
+            .publish_folder(scope, pass, source, modified_at, None)
+            .await
+        {
             self.compensate_dest_add(
                 scope,
                 pass,
@@ -1247,7 +1260,8 @@ where
             }
         };
         pass.folder_mut(dest)?.children = children;
-        self.publish_folder(scope, pass, dest, modified_at).await?;
+        self.publish_folder(scope, pass, dest, modified_at, None)
+            .await?;
         Ok(())
     }
 
@@ -1350,11 +1364,9 @@ where
                 content_cids,
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
+                Some(applied.op_id),
             )
             .await?;
-        // Durable before the release: the blocks stop being recoverable here,
-        // so this is the last point a crash can still leave a replayable op.
-        self.mark_published(scope, applied.op_id).await;
         self.release_staged_blocks(&applied.op).await;
         if let Some(node) = self.base.borrow_mut().node_mut(target) {
             node.record_sequence = published.sequence;
@@ -1611,6 +1623,7 @@ where
         pass: &mut Pass,
         folder: NodeId,
         modified_at: u64,
+        completes: Option<OpId>,
     ) -> Result<u64, Halt> {
         let (name, is_scope_root, body, envelope_unknown, epoch_tag_unknown) = {
             let state = pass.folder(folder)?;
@@ -1638,6 +1651,7 @@ where
                 Vec::new(),
                 envelope_unknown,
                 epoch_tag_unknown,
+                completes,
             )
             .await?;
 
@@ -1653,6 +1667,10 @@ where
     /// Author, publish and self-adopt one node's record. Only a confirmed
     /// publish reaches the gate: adopting an unconfirmed one would advance the
     /// sequence floor and destroy the idempotent-in-sequence retry (#821).
+    ///
+    /// `completes` names the op this record is the **last** publish of, if any;
+    /// see [`Drain::mark_published`] for why the ack rather than the adopt is
+    /// where that op stops being replayable.
     #[expect(clippy::too_many_arguments, reason = "one record's full authoring")]
     async fn publish_node(
         &self,
@@ -1665,6 +1683,7 @@ where
         content_cids: Vec<String>,
         carried_unknown: PreservedFields,
         carried_epoch_tag_unknown: PreservedFields,
+        completes: Option<OpId>,
     ) -> Result<Published, Halt> {
         let read_key = self.node_read_key(scope, &node.0);
         let nonce = self.nonce()?;
@@ -1679,14 +1698,22 @@ where
             carried_epoch_tag_unknown,
         };
         let head = if is_scope_root {
-            author_scope_root_envelope(authoring, name)
+            author_scope_root_envelope(authoring, name, scope.owner_identity)
         } else {
             author_child_envelope(authoring)
         }
-        .map_err(|_| Halt::Unclassified)?;
+        .map_err(classify_author)?;
 
         let record_bytes = self
-            .publish_head(scope, name, &node.0, epoch, &head, content_cids.clone())
+            .publish_head(
+                scope,
+                name,
+                &node.0,
+                epoch,
+                &head,
+                content_cids.clone(),
+                completes,
+            )
             .await?;
         let local = local_head(&head);
         let sequence = if is_scope_root {
@@ -1741,6 +1768,7 @@ where
     }
 
     /// Dry-run, publish, and return the signed bytes.
+    #[expect(clippy::too_many_arguments, reason = "one record's full publish")]
     async fn publish_head(
         &self,
         scope: &DrainScope<'_>,
@@ -1749,6 +1777,7 @@ where
         epoch: u64,
         head: &AuthoredHead,
         content_cids: Vec<String>,
+        completes: Option<OpId>,
     ) -> Result<Vec<u8>, Halt> {
         let binding = HeadBinding {
             node_id: *node_id,
@@ -1790,9 +1819,16 @@ where
             classify_publish(error, head.block.len() as u64)
         })?;
         match outcome {
-            PublishOutcome::Published { .. } => Ok(record_bytes),
+            PublishOutcome::Published { .. } => {
+                if let Some(op_id) = completes {
+                    self.mark_published(scope, op_id).await;
+                }
+                Ok(record_bytes)
+            }
             // Both burned a CAS sequence at this name without a record we could
-            // adopt, so both are charged against the attempt budget.
+            // adopt, so both are charged against the attempt budget. Neither
+            // raises the mark: the bytes may never have landed, and dropping the
+            // op on the strength of that would be loss.
             PublishOutcome::Unconfirmed { .. } | PublishOutcome::LostRace { .. } => {
                 Err(Halt::Attempt)
             }
@@ -1986,11 +2022,12 @@ where
     /// Raise this identity's published-op mark over `op_id`
     /// ([`PUBLISHED_OP_MARK_PREFIX`]).
     ///
-    /// Raised between the op's last record publish and the block release, which
-    /// is the window a crash leaves a published op queued. Without it that op
-    /// replays, re-uploads its leaves, and a cancel landing mid-replay unpins
-    /// content a live record names — the session-scoped publish-entry interlock
-    /// does not survive the reboot.
+    /// Raised the instant the op's **last** record publish confirms — before its
+    /// self-adopt, and so before the block release — because everything from the
+    /// ack onwards is a window a crash leaves a published op queued. Without it
+    /// that op replays, re-uploads its leaves, and a cancel landing mid-replay
+    /// unpins content a live record names; the session-scoped publish-entry
+    /// interlock does not survive the reboot.
     ///
     /// Best-effort, unlike every other step of the publish: the record is
     /// already live by the time this runs, so failing the op over the mark would
@@ -2053,6 +2090,24 @@ fn local_head(head: &AuthoredHead) -> LocalHead {
 
 fn seam(_: crate::seams::SeamError) -> Halt {
     Halt::Unclassified
+}
+
+/// Classify an authoring refusal for the valve. A produce-side trust refusal is
+/// the gate's own verdict reached before the PUT, and re-authoring the same
+/// inputs reaches it again, so it is charged against the attempt budget rather
+/// than retried free forever (#1048).
+///
+/// Charged, not dead-lettered on sight: on the drain path these inputs are the
+/// cached scope root, which a later resolve replaces, so an immediate permanent
+/// verdict would abandon a user's ops over a cache another tick repairs. The
+/// budget bounds the spin either way. A codec or size refusal stays
+/// availability — it describes the body this pass built, not a trust verdict.
+fn classify_author(error: AuthorError) -> Halt {
+    if error.is_trust_refusal() {
+        Halt::UploadAttempt
+    } else {
+        Halt::Unclassified
+    }
 }
 
 /// Hand control back to the host's executor once, so a facade command queued
@@ -2413,6 +2468,40 @@ mod tests {
             RecordPublishError::Publish(crate::net::PublishError::AllEndpointsFailed),
         ] {
             assert_eq!(classify_publish(error, 4096), Halt::Unclassified);
+        }
+    }
+
+    /// A produce-side trust refusal is the gate's own verdict reached before the
+    /// PUT: re-authoring the same inputs reaches it again, so it is charged and
+    /// the queue stops at the budget instead of spinning free.
+    #[test]
+    fn a_produce_side_trust_refusal_is_charged_against_the_attempt_budget() {
+        for error in [
+            AuthorError::GrantSectionOnChild,
+            AuthorError::MissingGrantSection,
+            AuthorError::CommitmentNameMismatch,
+            AuthorError::CommitmentSignatureInvalid,
+            AuthorError::SectionSignatureInvalid,
+        ] {
+            assert_eq!(
+                classify_author(error.clone()),
+                Halt::UploadAttempt,
+                "{} must be charged",
+                error.check()
+            );
+        }
+    }
+
+    /// The mirror-image bug the reclassification must not introduce: a refusal
+    /// of the body *this pass* built is not a trust verdict, and a rebase onto
+    /// other state may not build it again — so it stays free to retry.
+    #[test]
+    fn a_codec_or_size_refusal_of_this_passs_body_stays_availability() {
+        for error in [
+            AuthorError::Seal(cipherbox_core::error::TrustViolation::DuplicateId.into()),
+            AuthorError::HeadTooLarge { size: 2, limit: 1 },
+        ] {
+            assert_eq!(classify_author(error), Halt::Unclassified);
         }
     }
 }

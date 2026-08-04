@@ -4419,6 +4419,82 @@ fn an_op_whose_record_already_published_is_dropped_rather_than_replayed() {
     );
 }
 
+/// The mark's line is the **ack**, not the self-adopt. A record whose PUT
+/// confirmed is live at its name whether or not this device managed to adopt its
+/// own bytes, so an op left queued by a failed adopt must not replay: the replay
+/// re-uploads every leaf into a set a cancel can retire, unpinning content that
+/// live record names.
+#[test]
+fn a_publish_whose_self_adopt_failed_still_marks_the_op_published() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    // The create's last record is the parent's, so the root's own self-adopt is
+    // the step that fails after its record is already live.
+    alice
+        .floor_store
+        .fail_commits_for(root_name.as_str().as_bytes());
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    let version = staged_version(&alice);
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_op_mark(&alice),
+        Some(op_id.0),
+        "the ack raised the mark, not the adopt"
+    );
+    assert!(
+        !block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .is_empty(),
+        "the failed adopt left the op queued — that is the window"
+    );
+
+    // A restart clears the session interlock, leaving only the mark to stop the
+    // replay.
+    alice.floor_store.heal_commits();
+    let _ = events_so_far(&mut events);
+    let (restarted, mut events, mut tasks) = boot(&world, &blocks, &alice, 43);
+    tick(&world, &restarted, &mut tasks);
+    assert!(
+        !events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::OpProgress {
+                phase: OpPhase::UploadStarted,
+                ..
+            }
+        )),
+        "nothing re-uploads behind a record that already landed"
+    );
+    assert!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .is_empty(),
+        "the op leaves the queue"
+    );
+    let leftover = version
+        .1
+        .into_iter()
+        .chain(core::iter::once(version.0))
+        .collect::<Vec<_>>();
+    assert_no_blocks_staged(&alice, &leftover);
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "a drop is not an abandonment: nothing published is unpinned"
+    );
+}
+
 /// The publish-entry interlock is session-scoped, so a reboot clears it. The
 /// durable mark is what keeps a published version uncancellable across one.
 #[test]

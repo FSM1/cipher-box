@@ -425,6 +425,7 @@ where
             },
             &name,
             &record.section,
+            self.keys.identity,
         )
         .map_err(|_| ScopeRootPublishError::NotPublished)?;
 
