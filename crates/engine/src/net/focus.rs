@@ -16,7 +16,7 @@ use zeroize::Zeroizing;
 use super::child::{ChildAdopter, ChildResolveError, resolve_child};
 use crate::content::Gateway;
 use crate::facade::{Event, NodeId, NodeKind, emit_trust_violation};
-use crate::gate::GateError;
+use crate::gate::{GateError, RejectionReason};
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 use crate::sync::model::Snapshot;
 use crate::sync::project::project_folder;
@@ -52,9 +52,9 @@ where
     /// dropped a child unlinks it before the pass would project into it.
     ///
     /// Every failure is per-folder and non-fatal: an unresolvable record is
-    /// availability staleness, a gate rejection is fail-closed and surfaced as
-    /// [`Event::AttributableAbuse`], and both leave last-known-good rendering
-    /// without stopping the pass.
+    /// availability staleness, an attributable gate rejection is fail-closed and
+    /// surfaced as [`Event::AttributableAbuse`], and both leave last-known-good
+    /// rendering without stopping the pass.
     pub(crate) async fn run(&self, folders: &[NodeId]) -> bool {
         let mut changed = false;
         for folder in folders.iter().rev() {
@@ -69,17 +69,24 @@ where
                 self.scope_read_seed.clone(),
                 folder.0,
             );
-            let adopted =
-                match resolve_child(self.transport, self.snapshot_cache, &adopter, &name).await {
-                    Ok(adopted) => adopted,
-                    // Availability: the base keeps rendering last-known-good.
-                    Err(ChildResolveError::Unavailable(_))
-                    | Err(ChildResolveError::Gate(GateError::Seam(_))) => continue,
-                    Err(ChildResolveError::Gate(GateError::Rejected(rejection))) => {
-                        emit_trust_violation(self.events, name.as_str(), &rejection.to_string());
-                        continue;
+            let adopted = match resolve_child(self.transport, self.snapshot_cache, &adopter, &name)
+                .await
+            {
+                Ok(adopted) => adopted,
+                // Availability: the base keeps rendering last-known-good.
+                Err(
+                    ChildResolveError::Unavailable(_) | ChildResolveError::Gate(GateError::Seam(_)),
+                ) => continue,
+                Err(ChildResolveError::Gate(GateError::Rejected(rejection))) => {
+                    // A folder the lazy wave has not swept yet is epoch-lagged
+                    // (CONTEXT.md): sweep-pending staleness, not abuse. Every
+                    // other rejection here is an attributable one.
+                    if !matches!(rejection.reason, RejectionReason::EpochBelowFloor { .. }) {
+                        emit_trust_violation(self.events, name.as_str(), rejection);
                     }
-                };
+                    continue;
+                }
+            };
             let ReadBody::Folder {
                 modified_at,
                 children,

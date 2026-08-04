@@ -101,9 +101,9 @@ impl<'a, H, F> RootAdopter<'a, H, F> {
 
     /// Declare the record bytes the caller already holds for this name, with the
     /// scope material it recovered from them still in hand. An equal-floor
-    /// `Current` re-resolve of exactly those bytes then recovers nothing: the
+    /// `Current` re-resolve of exactly those bytes then recovers nothing — the
     /// record signs its head CID, so identical bytes address the identical head
-    /// block and would only reproduce the seeds already held — at the cost of two
+    /// block and can only reproduce the seeds already held, at the cost of two
     /// HPKE opens every poll on an idle vault. `None` disables the skip.
     #[must_use]
     pub(crate) fn holding(mut self, record_bytes: Option<Vec<u8>>) -> Self {
@@ -177,8 +177,7 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<Option<OwnScopeMaterial>, SeamError> {
-        // Steady state ([`Self::holding`]): these exact bytes are already held
-        // with their material recovered, so there is nothing left to open.
+        // Steady state — see [`Self::holding`].
         if self.held_current.as_deref() == Some(record_bytes) {
             return Ok(None);
         }

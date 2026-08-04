@@ -26,7 +26,7 @@ use cipherbox_engine::facade::PendingClass;
 use cipherbox_engine::net::author::{AuthoredHead, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::{ChildAdopter, REGISTRY_BATCH_MAX, ResolveOutcome, resolve};
 use cipherbox_engine::seams::{
-    BoxedTask, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
+    BoxedTask, FloorStore, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
     StagingStore, UnixMillis,
 };
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
@@ -2905,6 +2905,42 @@ fn a_planted_focus_record_never_renders() {
             "{bent} raises exactly one abuse event"
         );
     }
+}
+
+/// Epoch lag is sweep-pending staleness, not abuse (CONTEXT.md "Epoch lag"): a
+/// focused folder the lazy wave has not swept yet rejects fail-closed, but the
+/// owner's own rotation must not read as an attack on the host's abuse channel.
+#[test]
+fn an_epoch_lagged_focus_folder_rejects_without_raising_abuse() {
+    let DeepCreate {
+        world,
+        bob,
+        mut engine_b,
+        mut events_b,
+        mut tasks_b,
+        photos,
+        ..
+    } = deep_create_seen_by_a_second_device();
+    block_on(engine_b.command(Command::SetFocus { node: Some(photos) })).unwrap();
+    assert_eq!(listed_names(&engine_b, photos), ["2026"]);
+
+    // A rotation raised the scope's read-epoch floor past the epoch this folder
+    // still publishes under.
+    block_on(bob.floor_store.raise_epoch_floor(&SCOPE, EPOCH + 1)).unwrap();
+    let _ = events_so_far(&mut events_b);
+    tick(&world, &engine_b, &mut tasks_b);
+
+    assert_eq!(
+        listed_names(&engine_b, photos),
+        ["2026"],
+        "last-known-good stays pinned"
+    );
+    assert!(
+        events_so_far(&mut events_b)
+            .iter()
+            .all(|event| !matches!(event, Event::AttributableAbuse { .. })),
+        "an unswept folder is not an attacker"
+    );
 }
 
 /// An unreachable record plane is availability staleness, never data loss: the

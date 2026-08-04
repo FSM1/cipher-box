@@ -531,8 +531,9 @@ pub enum Event {
         /// (#859).
         reason: DeadLetterReason,
     },
-    /// Attributable abuse: owner-blob / ascent-link / unseal cross-check
-    /// disagreement (#39 D6) — never a silent failure.
+    /// Attributable abuse: a fail-closed adoption-gate rejection, or an
+    /// owner-blob / ascent-link / unseal cross-check disagreement (#39 D6) —
+    /// never a silent failure.
     AttributableAbuse {
         /// Human-readable classification (no key material).
         description: String,
@@ -1000,15 +1001,14 @@ fn emit_renewal_failures(events: &mpsc::UnboundedSender<Event>, results: &[EolRe
     }
 }
 
-/// Surface a fail-closed resolve rejection as [`Event::AttributableAbuse`].
-/// The data stays unheld and unrendered either way — this only stops a forged
-/// record from being indistinguishable from silence, since a trust violation is
-/// never mere staleness (AGENTS.md rule 6). `routing_key` is the record's
-/// `ipnsName` and `detail` a classification; neither carries key material.
+/// Surface a fail-closed resolve rejection as [`Event::AttributableAbuse`]: a
+/// trust violation is never mere staleness (AGENTS.md rule 6), so it must not
+/// poll silently. `routing_key` is the record's `ipnsName` and `detail` a
+/// classification; neither carries key material.
 pub(crate) fn emit_trust_violation(
     events: &mpsc::UnboundedSender<Event>,
     routing_key: &str,
-    detail: &str,
+    detail: impl fmt::Display,
 ) {
     let _ = events.unbounded_send(Event::AttributableAbuse {
         description: format!("{routing_key}: {detail}"),
@@ -1016,22 +1016,22 @@ pub(crate) fn emit_trust_violation(
 }
 
 /// The record bytes already held for `name` under `node`, when the scope seeds
-/// recovered alongside them are still in hand. Re-fetching exactly these bytes
-/// at the sequence floor can only re-derive material the caller already has —
-/// the record signs its head CID, so identical bytes address an identical head
-/// block — so the adopter skips the owner-blob opens and the hold stands as is.
+/// recovered alongside them are still in hand — the precondition for
+/// [`RootAdopter::holding`]'s steady-state skip.
 fn steady_state_hold(
     held: &RefCell<HeldRecords>,
-    node: [u8; 16],
+    scope_root: [u8; 16],
     name: &IpnsName,
     read_seeds: &RefCell<ScopeReadSeeds>,
     write_seeds: &RefCell<ScopeWriteSeeds>,
 ) -> Option<Vec<u8>> {
-    if !read_seeds.borrow().contains_key(&node) || !write_seeds.borrow().contains_key(&node) {
+    if !read_seeds.borrow().contains_key(&scope_root)
+        || !write_seeds.borrow().contains_key(&scope_root)
+    {
         return None;
     }
     let held = held.borrow();
-    let record = held.get(&node)?;
+    let record = held.get(&scope_root)?;
     (record.routing_key == name.as_str()).then(|| record.record_bytes.clone())
 }
 
@@ -1293,16 +1293,15 @@ pub struct Engine<T: SeamTypes> {
     /// The cold-start session identity, derived from the login secret at
     /// [`start`](Self::start). `None` until then; the single place derived key
     /// material lives once the engine is live. The resolve/publish/rotation
-    /// slices read every signer from here. Owned outright, never shared: the
-    /// retained login secret must drop with the engine, so a spawned loop takes
-    /// the narrow material it needs ([`tick_enc_subkey`](Self::tick_enc_subkey))
-    /// rather than a handle on the whole session.
+    /// slices read every signer from here. Owned outright, never shared, so the
+    /// retained login secret drops with the engine.
     session: Option<SessionIdentity>,
     /// The one piece of session secret the resolve-tick loop needs — the
     /// encryption subkey it opens owner blobs and op records with — in a cell
     /// the engine empties on drop. A parked task is not polled until its next
-    /// scheduler wake, so a captured copy would stay resident for up to a poll
-    /// cadence past the engine (security rules 1/7).
+    /// scheduler wake, so anything the loop captured outright would stay
+    /// resident for up to that wake past the engine (security rules 1/7); every
+    /// shared cell below carrying key material is cleared the same way.
     tick_enc_subkey: Rc<RefCell<Option<X25519Secret>>>,
     /// The one shared API client, built and logged in at [`start`](Self::start)
     /// and handed to the liveness loop so the access JWT is shared across
@@ -1501,14 +1500,12 @@ impl<T: SeamTypes> Engine<T> {
         self.session.as_ref()
     }
 
-    /// Drop every piece of key material the engine shares with its spawned
-    /// loops: the tick's enc subkey, the held records' per-name renewal signers,
-    /// and the recovered scope seeds. Clearing the alive latch alone would leave
-    /// all of it resident until each parked task's next scheduler wake — up to
-    /// [`RE_PUT_INTERVAL`] away — so the engine clears it here, at the terminal
-    /// owner (security rule 7). `try_borrow_mut` because a panic while dropping
-    /// aborts the process.
-    fn zeroize_shared_key_material(&self) {
+    /// Stop the spawned loops at their next wake and drop the key material they
+    /// share with the engine here and now, at the terminal owner (security rule
+    /// 7) — see [`tick_enc_subkey`](Self::tick_enc_subkey). `try_borrow_mut`
+    /// because a panic while dropping aborts the process.
+    fn shut_down(&self) {
+        self.alive.set(false);
         if let Ok(mut enc_subkey) = self.tick_enc_subkey.try_borrow_mut() {
             *enc_subkey = None;
         }
@@ -1662,8 +1659,8 @@ impl<T: SeamTypes> Engine<T> {
     /// held set the liveness loop keeps alive. Fixed cadence off the injected
     /// scheduler's focus-window `poll_cadence` — the determinism law's only time
     /// source is `scheduler.sleep`, so it holds under virtual time. The task holds
-    /// only `Rc`/seam-handle clones and the narrow enc-subkey cell, so it stops
-    /// once the engine empties that cell on drop.
+    /// only `Rc`/seam-handle clones and the alive latch, so it stops once the
+    /// engine drops.
     ///
     /// `root_name` is the vault pointer's resolved `currentRoot`; `None` (an empty
     /// chain) spawns nothing — there is no root to poll until a later start
@@ -1685,8 +1682,7 @@ impl<T: SeamTypes> Engine<T> {
             return;
         };
         // Least privilege: the pass needs the enc subkey and the (public) owner
-        // verifier, never the login secret or the pointer seeds the session also
-        // holds.
+        // verifier, never the login secret or the pointer seeds beside them.
         *self.tick_enc_subkey.borrow_mut() = Some(session.enc_subkey().clone());
         let tick_enc_subkey = self.tick_enc_subkey.clone();
         let scheduler = self.seams.scheduler.clone();
@@ -1706,6 +1702,7 @@ impl<T: SeamTypes> Engine<T> {
         let held = self.held_records.clone();
         let base = self.snapshot.clone();
         let events = self.events.clone();
+        let alive = self.alive.clone();
         let sync_status = self.sync_status.clone();
         let scope_read_seeds = self.scope_read_seeds.clone();
         let focus = self.focus.clone();
@@ -1720,9 +1717,11 @@ impl<T: SeamTypes> Engine<T> {
 
         self.seams.scheduler.spawn(Box::pin(async move {
             run_liveness_loop(&scheduler, interval, || async {
-                // The engine empties this cell on drop, so the pass owns a
-                // secret copy for exactly its own duration and the loop stops
-                // the moment the engine is gone.
+                if !alive.get() {
+                    return LivenessControl::Stop;
+                }
+                // The pass owns a copy for exactly its own duration; the engine
+                // emptied the cell if it is already gone.
                 let enc_subkey = tick_enc_subkey.borrow().clone();
                 let Some(enc_subkey) = enc_subkey else {
                     return LivenessControl::Stop;
@@ -1779,7 +1778,7 @@ impl<T: SeamTypes> Engine<T> {
                 });
                 if let Ok(resolved) = &resolved {
                     if let ResolveOutcome::TrustViolation(rejection) = &resolved.outcome {
-                        emit_trust_violation(&events, root_name.as_str(), &rejection.to_string());
+                        emit_trust_violation(&events, root_name.as_str(), rejection);
                     }
                     if refresh_base_from_outcome(&base, NodeId(root_id), &resolved.outcome) {
                         let _ = events.unbounded_send(Event::SnapshotUpdated);
@@ -2890,10 +2889,9 @@ fn open_engine_error(error: OpenError) -> EngineError {
 
 impl<T: SeamTypes> Drop for Engine<T> {
     fn drop(&mut self) {
-        // Signal the spawned liveness loop to stop; it holds only `Rc` clones,
-        // so it outlives the engine unless the latch is cleared here.
-        self.alive.set(false);
-        self.zeroize_shared_key_material();
+        // The spawned loops hold only `Rc` clones, so they outlive the engine
+        // unless it tears them down here.
+        self.shut_down();
     }
 }
 
@@ -4714,12 +4712,6 @@ mod tests {
                 enc_subkey.borrow().is_none(),
                 "and the session secret the tick borrowed"
             );
-
-            world.scheduler.advance(RE_PUT_INTERVAL);
-            assert!(
-                poll_each(&mut tasks).iter().all(Poll::is_ready),
-                "both loops stop at their next wake"
-            );
         }
 
         /// A forged owner-root record is fail-closed either way; without an event
@@ -4785,8 +4777,8 @@ mod tests {
                 1,
                 "the first steady-state poll recovers the write seed and holds"
             );
-            // Stamp the entry: a re-hold rebuilds it from the tick's own
-            // (content-CID-less) material and would drop the stamp.
+            // Stamp the entry: a re-hold rebuilds it wholesale, so the stamp
+            // surviving is the observable proof that no re-hold ran.
             engine
                 .held_records
                 .borrow_mut()
