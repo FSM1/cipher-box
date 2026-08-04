@@ -15,9 +15,8 @@ use zeroize::Zeroizing;
 
 use crate::seams::{Http, HttpCredentials, HttpMethod, HttpRequest};
 
-/// Deadline for a BYO-provider reachability probe: the user is waiting on the
-/// answer in a settings flow, so an unresponsive endpoint must read as
-/// unreachable rather than hang the form (#939).
+/// Deadline for a BYO-provider reachability probe: an unresponsive endpoint
+/// must read as unreachable rather than hang the settings flow (#939).
 const PROBE_TIMEOUT_MS: u64 = 10_000;
 
 const AUTHORIZATION: &str = "Authorization";
@@ -295,8 +294,8 @@ fn probe_request(config: &ByoIpfsConfig) -> HttpRequest {
         url: format!("{base}{path}"),
         headers,
         body: None,
-        // A BYO endpoint is not the API origin: the configured access token
-        // above is the only credential it gets (#949).
+        // The configured access token above is the only credential a BYO
+        // endpoint gets (#949).
         credentials: HttpCredentials::Omit,
         timeout_ms: Some(PROBE_TIMEOUT_MS),
     }

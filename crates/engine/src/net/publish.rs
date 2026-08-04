@@ -17,7 +17,7 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 
 use super::eol;
-use super::fanout::{fanout_get_verify, fanout_put};
+use super::fanout::{MAX_RECORD_BYTES, fanout_get_verify, fanout_put};
 use super::register::register;
 use crate::api::{ApiClient, ApiError, NameRegistration};
 use crate::gate::floor;
@@ -134,6 +134,17 @@ pub enum PublishError {
     /// release-active so no path can ever PUT an unopenable pointer (security
     /// rule 8; encode/decode fail-closed symmetry).
     EmptyHeadCid,
+    /// The marshalled record exceeded [`MAX_RECORD_BYTES`], which
+    /// [`fanout_get_verify`](super::fanout_get_verify) skips. Publishing it
+    /// would mint bytes this client can never re-resolve — the sequence floor
+    /// would never advance and the name would lapse at EOL. Refused
+    /// release-active (security rule 8; encode/decode fail-closed symmetry).
+    RecordTooLarge {
+        /// The marshalled record size.
+        size: usize,
+        /// The enforced ceiling ([`MAX_RECORD_BYTES`]).
+        limit: usize,
+    },
 }
 
 /// Run the publish pipeline for `request`. Register-first and fail-closed:
@@ -185,6 +196,12 @@ where
     let record_bytes =
         IpnsRecord::create_v2(request.signer, &request.value(), sequence, ttl_nanos, &eol)
             .marshal();
+    if record_bytes.len() > MAX_RECORD_BYTES {
+        return Err(PublishError::RecordTooLarge {
+            size: record_bytes.len(),
+            limit: MAX_RECORD_BYTES,
+        });
+    }
 
     // Parallel PUT: success is the first ack; the rest retry in the background.
     let key = request.name.as_str();

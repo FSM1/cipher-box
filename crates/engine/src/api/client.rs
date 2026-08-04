@@ -27,12 +27,10 @@ use super::types::{
 use crate::content::DAG_ROOT_CODEC;
 use crate::seams::{CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse};
 
-/// Deadline for the control plane — auth, metadata, mailbox: small JSON round
-/// trips that must never park a UI flow. Restores at the seam layer the bound
-/// #910 removed with the hand-rolled SIWE nonce fetch (#939).
+/// Control-plane deadline: small JSON round trips must not park a UI flow (#939).
 const CONTROL_TIMEOUT_MS: u64 = 10_000;
-/// Deadline for a content-block upload, which legitimately moves megabytes on
-/// a slow uplink and cannot share the control-plane bound.
+/// Upload deadline: a content block legitimately moves megabytes on a slow
+/// uplink, so it cannot share the control-plane bound.
 const TRANSFER_TIMEOUT_MS: u64 = 120_000;
 
 const CONTENT_TYPE: &str = "Content-Type";

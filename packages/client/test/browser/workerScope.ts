@@ -5,10 +5,10 @@
  * collide with the `DOM` lib the seams compile against — the same shape
  * `WorkerScopeLike` takes in `src/worker/serve.ts`.
  */
-export interface HarnessWorkerScope<TRequest> {
+export interface HarnessWorkerScope {
   readonly location: { readonly origin: string };
   postMessage(message: unknown): void;
-  addEventListener(type: 'message', listener: (event: MessageEvent<TRequest>) => void): void;
+  addEventListener(type: 'message', listener: (event: MessageEvent) => void): void;
   addEventListener(type: 'error', listener: (event: { message: string }) => void): void;
   addEventListener(
     type: 'unhandledrejection',

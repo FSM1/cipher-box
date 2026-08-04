@@ -15,8 +15,9 @@ use cipherbox_engine::seams::{
 /// errors; a seam `Err` is reserved for transport-level failure (unreachable,
 /// aborted). The rotating refresh token is injected by the engine as an
 /// `Authorization`/cookie header here; this seam never persists it. The client
-/// keeps no cookie jar, so desktop has no ambient credentials for
-/// [`cipherbox_engine::seams::HttpCredentials`] to scope.
+/// [`new`](Self::new) builds keeps no cookie jar, so desktop has no ambient
+/// credentials for [`cipherbox_engine::seams::HttpCredentials`] to scope;
+/// a [`with_client`](Self::with_client) caller owns that policy.
 #[derive(Debug, Clone)]
 pub struct ReqwestHttp {
     client: reqwest::Client,

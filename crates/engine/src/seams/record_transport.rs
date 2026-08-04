@@ -39,10 +39,8 @@ pub trait RecordTransport {
     /// IPNS name); the transport must not interpret it beyond addressing.
     ///
     /// The endpoint set includes untrusted public endpoints, so the transport
-    /// bounds the read at `max_bytes` the way [`super::Http::send_capped`]
-    /// does — a `Content-Length` pre-check plus a streaming drain that aborts
-    /// on the chunk that would pass the cap, so a lying or huge endpoint
-    /// cannot force an unbounded buffer. An over-cap body is an `Err`: no
+    /// bounds the read at `max_bytes` while the body arrives, exactly as
+    /// [`super::Http::send_capped`] does. An over-cap body is an `Err`: no
     /// record above the cap is adoptable, and fan-out treats the endpoint as
     /// having served nothing (#949).
     async fn get_record(

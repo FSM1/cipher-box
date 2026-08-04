@@ -38,7 +38,7 @@ interface SeamOutcome {
   error?: string;
 }
 
-const scope = self as unknown as HarnessWorkerScope<{ seam: string }>;
+const scope = self as unknown as HarnessWorkerScope;
 
 let settled = false;
 function post(outcome: SeamOutcome): void {

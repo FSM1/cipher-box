@@ -113,12 +113,17 @@ impl RecordTransport for ReqwestRecordTransport {
 
         // Reject a body that declares itself over the cap before reading a byte;
         // a missing or lying Content-Length is still bounded by the drain below.
-        if let Some(declared) = response.content_length() {
+        let declared = response.content_length();
+        if let Some(declared) = declared {
             if declared > max_bytes as u64 {
-                return Err(over_cap(declared as usize, max_bytes));
+                return Err(over_cap(
+                    usize::try_from(declared).unwrap_or(usize::MAX),
+                    max_bytes,
+                ));
             }
         }
-        let mut record = Vec::new();
+        // Any declared length reaching here is within the cap, so it is a safe hint.
+        let mut record = Vec::with_capacity(usize::try_from(declared.unwrap_or(0)).unwrap_or(0));
         while let Some(chunk) = response
             .chunk()
             .await

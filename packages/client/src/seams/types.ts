@@ -68,20 +68,23 @@ export interface SchedulerSeam {
 }
 
 /**
- * A capped record GET: the stored bytes (`null` when the endpoint holds no
- * record), or a fail-closed rejection of a body over `maxBytes`. Mirrors
- * {@link CappedHttpResult}; `maxBytes` is inclusive.
+ * A body refused for exceeding its inclusive byte cap. Fail-closed: no bytes
+ * cross, and the counts are diagnostic only (see `cappedBody.ts`).
  */
-export type CappedRecordResult =
-  | { kind: 'record'; record: Uint8Array | null }
-  | { kind: 'tooLarge'; observed: number; limit: number };
+export interface TooLargeResult {
+  kind: 'tooLarge';
+  observed: number;
+  limit: number;
+}
+
+/** A capped record GET: the stored bytes, `null` for absence, or over-cap. */
+export type CappedRecordResult = { kind: 'record'; record: Uint8Array | null } | TooLargeResult;
 
 /**
  * Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes.
  *
  * The endpoint set includes untrusted public endpoints, so `getRecord` bounds
- * the read at `maxBytes` while the body is still arriving — a gateway that
- * omits or lies about `Content-Length` cannot force an unbounded buffer.
+ * the read at `maxBytes` as the body arrives (see `cappedBody.ts`).
  */
 export interface RecordTransportSeam {
   endpoints(): string[];
@@ -97,16 +100,11 @@ export interface HttpRequestData {
   body: Uint8Array | null;
   /**
    * Ambient-credential scope. Absent means `'omit'`: only the API origin is
-   * asked for the HTTP-only refresh cookie, so a public gateway can neither
-   * read one nor set a `SameSite=None` cookie that correlates every subsequent
-   * leaf fetch.
+   * asked for the HTTP-only refresh cookie, so a gateway gets no authority it
+   * could use to correlate the per-leaf fetches (#949).
    */
   credentials?: 'include' | 'omit';
-  /**
-   * Whole-request deadline in milliseconds, per request class — a nonce fetch
-   * and a block upload do not share one. Absent or `null` leaves the request
-   * unbounded by the seam.
-   */
+  /** Whole-request deadline in ms, per request class; absent leaves it unbounded (#939). */
   timeoutMs?: number | null;
 }
 
@@ -117,9 +115,7 @@ export interface HttpResponseData {
   body: Uint8Array;
 }
 
-export type CappedHttpResult =
-  | ({ kind: 'response' } & HttpResponseData)
-  | { kind: 'tooLarge'; observed: number; limit: number };
+export type CappedHttpResult = ({ kind: 'response' } & HttpResponseData) | TooLargeResult;
 
 /**
  * Plain HTTP for the API client, trustless gateway, and BYO providers. A pure

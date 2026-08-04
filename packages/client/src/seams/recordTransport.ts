@@ -16,11 +16,25 @@ import type { CappedRecordResult, RecordTransportSeam } from './types.js';
 const IPNS_RECORD_MEDIA_TYPE = 'application/vnd.ipfs.ipns-record';
 
 /**
- * Whole-request deadline for one record GET/PUT. Records are small and directly
- * addressed, so a stalled public endpoint must fail over rather than park
- * fan-out — the bound desktop's `reqwest` transport already carries (#939).
+ * Whole-request deadline for one record GET/PUT, so a stalled public endpoint
+ * cannot park fan-out. Host policy, not a seam term — keep it in step with
+ * desktop's `ReqwestRecordTransport` client timeout.
  */
 const RECORD_TIMEOUT_MS = 30_000;
+
+/**
+ * Per-request policy for an endpoint set that includes untrusted public
+ * endpoints: no ambient authority, and no redirects — records are directly
+ * addressed, so following one only opens an SSRF-shaped vector. Mirrors
+ * desktop's `ReqwestRecordTransport` client policy. A fresh signal per call.
+ */
+function endpointPolicy(): RequestInit {
+  return {
+    credentials: 'omit',
+    redirect: 'error',
+    signal: AbortSignal.timeout(RECORD_TIMEOUT_MS),
+  };
+}
 
 export class FetchRecordTransport implements RecordTransportSeam {
   private readonly endpointList: readonly string[];
@@ -44,7 +58,7 @@ export class FetchRecordTransport implements RecordTransportSeam {
     const response = await fetch(this.recordUrl(endpoint, routingKey), {
       method: 'GET',
       headers: { Accept: IPNS_RECORD_MEDIA_TYPE },
-      signal: AbortSignal.timeout(RECORD_TIMEOUT_MS),
+      ...endpointPolicy(),
     });
     if (response.status === 404) {
       await response.body?.cancel();
@@ -62,11 +76,11 @@ export class FetchRecordTransport implements RecordTransportSeam {
     const response = await fetch(this.recordUrl(endpoint, routingKey), {
       method: 'PUT',
       headers: { 'Content-Type': IPNS_RECORD_MEDIA_TYPE },
-      // `fetch` copies a BufferSource body synchronously, so the engine-owned
-      // view needs no defensive clone; the cast only satisfies the
-      // `ArrayBufferLike` type.
-      body: record as BufferSource,
-      signal: AbortSignal.timeout(RECORD_TIMEOUT_MS),
+      // `record` is a live view into WASM linear memory, unlike the JS-owned
+      // body `Http` receives. Copy rather than rely on `fetch` reading it
+      // before any `Memory.grow()` can detach it (#717).
+      body: record.slice(),
+      ...endpointPolicy(),
     });
     if (!response.ok) {
       throw new Error(`RecordTransport PUT ${response.status} at ${endpoint}`);

@@ -23,6 +23,7 @@ export type {
   SchedulerSeam,
   RecordTransportSeam,
   CappedRecordResult,
+  TooLargeResult,
   HttpSeam,
   HttpRequestData,
   HttpResponseData,

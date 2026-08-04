@@ -11,10 +11,10 @@
  * `maxBytes` is inclusive: a body of exactly `maxBytes` is admitted.
  */
 
+import type { TooLargeResult } from './types.js';
+
 /** A drained body, or a fail-closed rejection of one over the cap. */
-export type CappedBody =
-  | { kind: 'body'; body: Uint8Array }
-  | { kind: 'tooLarge'; observed: number; limit: number };
+export type CappedBody = { kind: 'body'; body: Uint8Array } | TooLargeResult;
 
 export async function drainCapped(response: Response, maxBytes: number): Promise<CappedBody> {
   const contentLength = response.headers.get('content-length');

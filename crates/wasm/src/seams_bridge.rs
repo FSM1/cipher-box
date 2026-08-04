@@ -456,20 +456,11 @@ impl RecordTransport for RecordTransportAdapter {
             .and_then(|kind| kind.as_string())
             .as_deref()
         {
-            Some("record") => {
-                let record = optional_bytes(
-                    Reflect::get(&result, &JsValue::from_str("record"))
-                        .unwrap_or(JsValue::UNDEFINED),
-                );
-                // The JS seam is the streaming bound; this is the backstop a
-                // buggy seam cannot talk the engine past.
-                match record {
-                    Some(bytes) if bytes.len() > max_bytes => Err(SeamError::new(
-                        "getRecord returned a record over the requested cap",
-                    )),
-                    other => Ok(other),
-                }
-            }
+            // An over-cap body the seam admitted anyway is caught by the
+            // engine-side backstop in `net::fanout`, which covers every host.
+            Some("record") => Ok(optional_bytes(
+                Reflect::get(&result, &JsValue::from_str("record")).unwrap_or(JsValue::UNDEFINED),
+            )),
             Some("tooLarge") => Err(SeamError::new(format!(
                 "getRecord: {} bytes exceeds the {}-byte cap",
                 capped_count(&result, "observed"),

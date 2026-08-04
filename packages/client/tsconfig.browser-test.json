@@ -1,15 +1,11 @@
 {
-  // The Playwright browser-suite harness: test doubles for the engine host,
-  // seam conformance workers, and the leadership/media fixtures. Kept out of
-  // tsconfig.json so `src` still builds with `rootDir: src`, but typechecked
-  // in its own right — an unchecked test double drifts from the interface it
-  // claims to implement and the suite reports green anyway (#975).
+  // A separate project so `tsconfig.json` keeps `rootDir: src`, but typechecked
+  // all the same: an unchecked test double drifts from the interface it claims
+  // to implement and the browser suite reports green anyway (#975).
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "rootDir": ".",
     "noEmit": true,
-    "declaration": false,
-    "declarationMap": false,
     // `?url` and `import.meta.env` come from Vite, which serves this harness.
     "types": ["vite/client"]
   },

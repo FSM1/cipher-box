@@ -28,7 +28,7 @@ interface Outcome {
   error?: string;
 }
 
-const scope = self as unknown as HarnessWorkerScope<{ name: string }>;
+const scope = self as unknown as HarnessWorkerScope;
 
 async function clearOpfsDir(name: string): Promise<void> {
   const root = await navigator.storage.getDirectory();
