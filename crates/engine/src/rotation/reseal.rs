@@ -27,7 +27,7 @@
 //! blobs — that absence is the revocation; a divergent ledger is rejected here,
 //! never sealed.
 
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
@@ -36,8 +36,8 @@ use cipherbox_core::seal::{
     PreservedFields, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
     STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedAscentLink,
     SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput,
-    WriteBody, encode_write_body, seal, seal_ascent_link, seal_grant_blob, seal_history_link,
-    seal_owner_blob, seal_owner_write_blob, sign_structure,
+    WriteBody, encode_write_body, open_history_link, seal, seal_ascent_link, seal_grant_blob,
+    seal_history_link, seal_owner_blob, seal_owner_write_blob, sign_structure,
 };
 use cipherbox_core::suite::aead;
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
@@ -146,6 +146,11 @@ pub enum ResealError {
     UnusableRecipientKey,
     /// Entropy acquisition failed; no seal proceeds without fresh randomness.
     Entropy(EntropyError),
+    /// The carried history links are not this scope's chain in oldest-first
+    /// order — a link that does not open under the seed the walk reached, or an
+    /// order the ratchet cannot be traversed in. Re-signing them would endorse a
+    /// chain no reader can walk, and the prune would drop the wrong end.
+    HistoryChainBroken,
     /// A re-sealed structure could not be encoded — a duplicate ledger tag, or
     /// nesting past the codec's `MAX_DEPTH`.
     Encode(cipherbox_core::error::CodecError),
@@ -164,6 +169,9 @@ impl core::fmt::Display for ResealError {
                 f.write_str("grant-ledger recipient encryption key is unusable")
             }
             ResealError::Entropy(e) => write!(f, "entropy error: {e}"),
+            ResealError::HistoryChainBroken => {
+                f.write_str("carried history links are not this scope's ordered chain")
+            }
             ResealError::Encode(e) => write!(f, "structure encode failed: {}", e.check()),
         }
     }
@@ -179,9 +187,38 @@ impl ResealError {
             ResealError::SignerNotCommitted => "signer-not-committed",
             ResealError::UnusableRecipientKey => "unusable-recipient-key",
             ResealError::Entropy(_) => "entropy-error",
+            ResealError::HistoryChainBroken => "history-chain-broken",
             ResealError::Encode(_) => "structure-encode-failed",
         }
     }
+}
+
+/// Walk `carried` as this scope's history chain, newest first, proving it is the
+/// contiguous ratchet in **oldest-first** wire order.
+///
+/// Ordering is not checkable by the codec: a link's epoch lives in its
+/// untransmitted AAD and inside its ciphertext, so `crates/core` sees only an
+/// opaque sealed blob. It is checkable here, and only on a rotation, because
+/// `head` is the one epoch key the re-sealer holds — walking a link yields the
+/// key for the link before it. A wrong order, a gap, or a foreign link all
+/// surface as an open that fails.
+fn verify_history_chain(
+    v: u64,
+    scope_id: [u8; 16],
+    head: &PrevEpochSeed<'_>,
+    carried: &[SignedSealed],
+) -> Result<(), ResealError> {
+    let mut seed = Zeroizing::new(*head.seed);
+    let mut epoch = head.epoch;
+    for link in carried.iter().rev() {
+        let key = kdf::structure_key(&seed, STRUCT_TAG_HISTORY_LINK);
+        let ctx = ctx_for(v, scope_id, epoch, STRUCT_TAG_HISTORY_LINK);
+        let payload = open_history_link(key.as_bytes(), &ctx, &link.sealed)
+            .map_err(|_| ResealError::HistoryChainBroken)?;
+        seed = Zeroizing::new(*payload.prev_seed());
+        epoch = payload.prev_epoch;
+    }
+    Ok(())
 }
 
 /// Fill an `N`-byte array from the entropy seam, fail-closed.
@@ -198,17 +235,17 @@ fn fill<const N: usize, E: Entropy>(entropy: &mut E) -> Result<[u8; N], ResealEr
 ///
 /// `carried_history_links` keep their sealed bytes verbatim — each stays
 /// openable under the epoch key that minted it — but are re-signed at this
-/// re-seal's read epoch, the one the gate recomputes every structure at. This
-/// endorses those bytes under the committed pseudonym without inspecting them,
-/// so callers MUST source them from a section that passed the adoption gate, and
-/// MUST keep the wire order this function produces: **oldest epoch first**, the
-/// ordering the prune below drops from. When `seeds.prev` is `Some`, one
-/// freshly-minted link (the prior seed under the new epoch's structure key) is
-/// appended.
+/// re-seal's read epoch, the one the gate recomputes every structure at. When
+/// `seeds.prev` is `Some`, one freshly-minted link (the prior seed under the new
+/// epoch's structure key) is appended, and the wire order is **oldest epoch
+/// first**.
 ///
-/// The carried set is pruned to the newest [`MAX_RETAINED_HISTORY_LINKS`]
-/// **before** re-signing; only the oldest end is ever dropped, since the ratchet
-/// is a contiguous chain and a hole would strand every epoch beyond it.
+/// A rotation walks the carried chain first ([`verify_history_chain`]) and
+/// refuses one that is out of order, gapped, or foreign, so the prune to the
+/// newest [`MAX_RETAINED_HISTORY_LINKS`] provably drops the oldest end rather
+/// than an assumed one. A sweep holds no key into the chain, so it neither
+/// verifies nor prunes — it appends nothing either, so the set cannot grow
+/// there. Callers MUST still source the set from a gate-passed section.
 ///
 /// Fails closed — see [`ResealError`] — before sealing anything on a divergent
 /// ledger or an unusable recipient key, so a partial or unopenable section is
@@ -353,10 +390,17 @@ pub fn reseal_scope_root<E: Entropy>(
         None => None,
     };
 
-    // --- History links: newest window kept and re-signed, oldest dropped;
-    // append one fresh link on a new epoch. ---
-    let keep = MAX_RETAINED_HISTORY_LINKS - usize::from(seeds.prev.is_some());
-    let oldest_kept = carried_history_links.len().saturating_sub(keep);
+    // --- History links: on a rotation the chain is walked, then pruned to the
+    // retained window and re-signed, and one fresh link appended. A sweep holds
+    // no key into the chain, so it can neither verify nor safely prune it. ---
+    let oldest_kept = match &seeds.prev {
+        Some(prev) => {
+            verify_history_chain(identity.v, scope_id, prev, carried_history_links)?;
+            let keep = MAX_RETAINED_HISTORY_LINKS - 1;
+            carried_history_links.len().saturating_sub(keep)
+        }
+        None => 0,
+    };
     let mut history_links: Vec<SignedSealed> = carried_history_links[oldest_kept..]
         .iter()
         .map(|link| SignedSealed {
@@ -767,15 +811,54 @@ mod tests {
         .expect("the carried link is re-signed at the epoch the gate recomputes at");
     }
 
-    /// `n` carried links, oldest first — the order a re-seal appends in.
-    fn carried_links(n: usize) -> Vec<SignedSealed> {
-        (0..n)
-            .map(|i| SignedSealed {
-                sealed: i.to_be_bytes().to_vec(),
-                signature: [0x01; 64],
-                unknown: PreservedFields::new(),
+    /// The override seed epoch `e` of the synthetic chain below runs under.
+    fn chain_seed(e: u64) -> [u8; 32] {
+        let mut seed = [0x40; 32];
+        seed[..8].copy_from_slice(&e.to_be_bytes());
+        seed
+    }
+
+    /// A real ratchet: links for epochs `2..=newest`, oldest first, each sealed
+    /// under its own epoch's structure key and naming the epoch before it —
+    /// exactly what `reseal_scope_root` mints, so the walk accepts it.
+    fn real_chain(newest: u64) -> Vec<SignedSealed> {
+        (2..=newest)
+            .map(|e| {
+                let key = kdf::structure_key(&chain_seed(e), STRUCT_TAG_HISTORY_LINK);
+                let ctx = ctx_for(V, SCOPE, e, STRUCT_TAG_HISTORY_LINK);
+                let payload = HistoryLinkPayload::new(chain_seed(e - 1), e - 1);
+                SignedSealed {
+                    sealed: seal_history_link(key.as_bytes(), &[0x5a; 24], &ctx, &payload).unwrap(),
+                    signature: [0x01; 64],
+                    unknown: PreservedFields::new(),
+                }
             })
             .collect()
+    }
+
+    /// Re-seal at `newest + 1`, carrying `carried`.
+    fn reseal_over_chain(
+        fx: &Fixture,
+        newest: u64,
+        carried: &[SignedSealed],
+    ) -> Result<GrantSection, ResealError> {
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let id = identity(fx, &owner_pub, b"n", None);
+        let head = chain_seed(newest);
+        let fresh = chain_seed(newest + 1);
+        let s = seeds(
+            &fresh,
+            newest + 1,
+            Some(PrevEpochSeed {
+                seed: &head,
+                epoch: newest,
+            }),
+            &fx.write_scope_seed,
+            &fx.pointer_read_key,
+        );
+        let cs = committed_set(&commitment, &sig, &ledger);
+        reseal_scope_root(&mut SeededEntropy::new(11), &id, &s, &cs, carried)
     }
 
     #[test]
@@ -783,25 +866,9 @@ mod tests {
         // The ratchet is a contiguous chain, so only the oldest end may be
         // dropped — a hole would strand every epoch beyond it.
         let fx = Fixture::new();
-        let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
-        let id = identity(&fx, &owner_pub, b"n", None);
-        let seed = [0x0e; 32];
-        let prev_seed = [0x0d; 32];
-        let s = seeds(
-            &seed,
-            9,
-            Some(PrevEpochSeed {
-                seed: &prev_seed,
-                epoch: 8,
-            }),
-            &fx.write_scope_seed,
-            &fx.pointer_read_key,
-        );
-        let cs = committed_set(&commitment, &sig, &ledger);
-        let carried = carried_links(MAX_HISTORY_LINKS * 2);
-        let mut e = SeededEntropy::new(11);
-        let section = reseal_scope_root(&mut e, &id, &s, &cs, &carried).expect("reseal");
+        let newest = MAX_HISTORY_LINKS as u64 * 2;
+        let carried = real_chain(newest);
+        let section = reseal_over_chain(&fx, newest, &carried).expect("reseal");
 
         assert_eq!(
             section.history_links.len(),
@@ -825,6 +892,64 @@ mod tests {
         );
         // Retention is what holds a re-seal inside the codec's frozen bound.
         encode_grant_section(&section).expect("a retained section always encodes");
+    }
+
+    #[test]
+    fn a_reversed_history_chain_fails_closed() {
+        // Newest-first: the walk starts at the head key and the last element is
+        // the oldest link, which that key cannot open. Rejecting matters because
+        // the prune takes a prefix — on a reversed chain it would drop the
+        // newest links and strand the ratchet at its top.
+        let fx = Fixture::new();
+        let mut carried = real_chain(12);
+        carried.reverse();
+        let err = reseal_over_chain(&fx, 12, &carried).expect_err("reversed chain");
+        assert_eq!(err.check(), "history-chain-broken");
+    }
+
+    #[test]
+    fn a_discontinuous_history_chain_fails_closed() {
+        // A hole: the walk reaches the epoch below the gap holding a seed that
+        // opens nothing, so every link past it is unreachable.
+        let fx = Fixture::new();
+        let mut carried = real_chain(12);
+        carried.remove(carried.len() - 3);
+        let err = reseal_over_chain(&fx, 12, &carried).expect_err("gapped chain");
+        assert_eq!(err.check(), "history-chain-broken");
+    }
+
+    #[test]
+    fn a_foreign_history_link_fails_closed() {
+        // A link this scope never minted cannot open under any seed the walk
+        // reaches, so it can never be laundered into a re-signed section.
+        let fx = Fixture::new();
+        let mut carried = real_chain(12);
+        carried.last_mut().unwrap().sealed[30] ^= 0xFF;
+        let err = reseal_over_chain(&fx, 12, &carried).expect_err("foreign link");
+        assert_eq!(err.check(), "history-chain-broken");
+    }
+
+    #[test]
+    fn a_sweep_carries_an_unverifiable_chain_through_unpruned() {
+        // A sweep holds only the scope's current seed, never a key into the
+        // carried chain, so it neither walks nor prunes it. It appends nothing,
+        // so the set cannot grow here.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let id = identity(&fx, &owner_pub, b"n", None);
+        let seed = chain_seed(9);
+        let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
+        let cs = committed_set(&commitment, &sig, &ledger);
+        let carried = real_chain(5);
+        let section = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &carried)
+            .expect("a sweep re-seals whatever it carries");
+        let sealed: Vec<&Vec<u8>> = section.history_links.iter().map(|l| &l.sealed).collect();
+        let carried_sealed: Vec<&Vec<u8>> = carried.iter().map(|l| &l.sealed).collect();
+        assert_eq!(
+            sealed, carried_sealed,
+            "carried through, in order, unpruned"
+        );
     }
 
     #[test]

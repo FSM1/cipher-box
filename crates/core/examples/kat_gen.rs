@@ -4918,7 +4918,7 @@ fn build_grant_section_reject() -> Vec<RejectVector> {
         (
             "history-links-past-the-bound",
             section_with_links(
-                (0..=seal::MAX_HISTORY_LINKS)
+                (0..=seal::MAX_HISTORY_LINKS as u64)
                     .map(|i| history_link_map(i.to_be_bytes().to_vec()))
                     .collect(),
             ),
