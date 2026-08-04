@@ -46,9 +46,8 @@
 //!
 //! Entropy enters only through [`Entropy`] and time only through [`Scheduler`];
 //! the sole impure edges are the injected [`CascadeResealResolver`] and
-//! [`ScopeRootPublisher`] (as `rotate_scope` and the sweep also carry). Real
-//! resolver wiring is not landed; this slice fakes it and proves the cascade in
-//! simulation.
+//! [`ScopeRootPublisher`] (as `rotate_scope` and the sweep also carry), whose
+//! owner arm is `crate::net::rotation::OwnerRotationNet`.
 //!
 //! [`enumerate_eager_set`]: super::eager_set::enumerate_eager_set
 
@@ -132,8 +131,8 @@ pub struct CascadeTarget {
 /// The impure edge that resolves a descendant scope root's current re-seal
 /// material — the cascade's analogue of the eager-set walk's `ChildIndexResolver`
 /// and the sweep's [`SweepResolver`](super::sweep::SweepResolver). Resolve +
-/// adoption-gate + unseal live behind this trait; the real network/gate wiring is
-/// not landed and tests fake it. A resolve either yields the full
+/// adoption-gate + unseal live behind this trait; the owner arm is
+/// `crate::net::rotation::OwnerRotationNet`. A resolve either yields the full
 /// [`CascadeTarget`] or a fail-closed [`ResolveFailure`] — a partial or
 /// gate-failing record is never a work-list entry.
 pub trait CascadeResealResolver {
