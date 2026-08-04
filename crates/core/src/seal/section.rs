@@ -586,7 +586,7 @@ mod tests {
     /// A history link whose sealed bytes are unique to `n`.
     fn link(n: usize) -> SignedSealed {
         SignedSealed {
-            sealed: n.to_be_bytes().to_vec(),
+            sealed: (n as u64).to_be_bytes().to_vec(),
             signature: [0x42; ED_SIG_LEN],
             unknown: PreservedFields::new(),
         }
@@ -655,7 +655,7 @@ mod tests {
         section.grant_blobs = (0..=MAX_GRANT_BLOBS)
             .map(|i| {
                 let mut b = blob(0);
-                b.tag[..8].copy_from_slice(&i.to_be_bytes());
+                b.tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
                 b
             })
             .collect();
