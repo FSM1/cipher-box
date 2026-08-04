@@ -275,10 +275,6 @@ pub(crate) struct HeldMaterial {
     /// instead (a write grantee). An insert-time derivation input, never
     /// persisted in the held set.
     pub write_scope_seed: Option<Zeroizing<[u8; 32]>>,
-    /// The content CIDs to re-register/pin at renewal. Empty from a caller that
-    /// has none of its own — a re-hold then keeps the set already held for this
-    /// head rather than clobbering it (see [`resolve_and_hold`]).
-    pub content_cids: Vec<String>,
 }
 
 /// What [`resolve_and_hold`] produced: the public resolve result plus the
@@ -363,19 +359,16 @@ where
             return Ok(done(resolved));
         }
         let mut held = held.borrow_mut();
-        // The drain is the only source of a head's content CIDs; the resolve
-        // tick re-holds the same head with none, so carry the held set forward
-        // rather than wipe what a publish registered (#1041). Bound to the head
-        // CID: a head this device did not author has a different block set, and
-        // re-pinning the superseded one would keep dead content alive.
-        let content_cids = if material.content_cids.is_empty() {
-            held.get(&node_id)
-                .filter(|prior| prior.head_cid == head_cid)
-                .map(|prior| prior.content_cids.clone())
-                .unwrap_or_default()
-        } else {
-            material.content_cids.clone()
-        };
+        // The drain registers a head's content CIDs when it publishes and is
+        // their only source, so a re-hold carries the held set forward rather
+        // than wiping it (#1041). Bound to the head CID: a head this device did
+        // not author lists a different block set, and re-pinning the superseded
+        // one would keep dead content alive.
+        let content_cids = held
+            .remove(&node_id)
+            .filter(|prior| prior.head_cid == head_cid)
+            .map(|prior| prior.content_cids)
+            .unwrap_or_default();
         held.insert(
             node_id,
             HeldRecord {
@@ -423,7 +416,7 @@ mod tests {
 
     use super::super::eol;
     use crate::gate::{Adopted, GateError, GateRejection, GateStage, RejectionReason};
-    use crate::net::HeldRecords;
+    use crate::net::{HeldRecord, HeldRecords};
     use crate::seams::{RecordTransport, UnixMillis};
     use crate::session::SessionIdentity;
     use crate::testkit::{FakeWorld, block_on};
@@ -554,7 +547,6 @@ mod tests {
         let material = HeldMaterial {
             node_id,
             write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
-            content_cids: vec!["bafycontent".into()],
         };
         let resolved = block_on(resolve_and_hold(
             &device.record_store,
@@ -572,11 +564,71 @@ mod tests {
         assert_eq!(map.len(), 1, "the adopted record is held, keyed by node id");
         let record = map.get(&node_id).expect("held under its node id");
         assert_eq!(record.routing_key, name.as_str());
-        assert_eq!(record.content_cids, vec!["bafycontent".to_owned()]);
+        assert!(
+            record.content_cids.is_empty(),
+            "a first hold registers nothing; the drain supplies the CIDs"
+        );
         // The held signer signs for the routing key (the insert-time bind).
         assert_eq!(
             IpnsName::from_public_key(&record.signer.verifying_key()),
             name
+        );
+    }
+
+    /// The drain registers a head's content CIDs; a re-hold of that same head
+    /// must carry them, and a re-hold under a different head must not (#1041).
+    #[test]
+    fn a_re_hold_carries_the_content_cids_held_for_the_same_head() {
+        let world = FakeWorld::new();
+        let device = world.device(b"me");
+        let write_scope_seed = [9u8; 32];
+        let node_id = [7u8; 16];
+        let signer = SessionIdentity::write_name_signer(&write_scope_seed, &node_id);
+        let name = IpnsName::from_public_key(&signer.verifying_key());
+        let endpoints = world.record_store.endpoints();
+        world
+            .record_store
+            .seed_record(&endpoints[0], name.as_str(), record(&signer, 1));
+        let material = HeldMaterial {
+            node_id,
+            write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
+        };
+
+        let registered = vec!["bafyleaf".to_owned()];
+        let re_hold = |head_cid: &str| {
+            let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
+            held.borrow_mut().insert(
+                node_id,
+                HeldRecord {
+                    routing_key: name.as_str().to_owned(),
+                    record_bytes: Vec::new(),
+                    signer: SessionIdentity::write_name_signer(&write_scope_seed, &node_id),
+                    head_cid: head_cid.to_owned(),
+                    content_cids: registered.clone(),
+                },
+            );
+            block_on(resolve_and_hold(
+                &device.record_store,
+                &device.snapshot_cache,
+                &StubAdopter::new(Verdict::Accept),
+                &name,
+                &held,
+                &material,
+            ))
+            .expect("resolve_and_hold");
+            held.borrow()[&node_id].content_cids.clone()
+        };
+
+        // `VALUE` is `/ipfs/<head>`, so this is the head the re-hold adopts.
+        let same_head = core::str::from_utf8(&VALUE[b"/ipfs/".len()..]).unwrap();
+        assert_eq!(
+            re_hold(same_head),
+            registered,
+            "the publish's CIDs survive a re-hold of the same head"
+        );
+        assert!(
+            re_hold("bafyotherhead").is_empty(),
+            "CIDs registered for another head name a superseded block set"
         );
     }
 
@@ -593,7 +645,6 @@ mod tests {
         let material = HeldMaterial {
             node_id: [1u8; 16],
             write_scope_seed: Some(Zeroizing::new([0u8; 32])),
-            content_cids: Vec::new(),
         };
 
         // A fail-closed trust violation is never held.
@@ -632,7 +683,6 @@ mod tests {
         let material = HeldMaterial {
             node_id,
             write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
-            content_cids: Vec::new(),
         };
         let resolved = block_on(resolve_and_hold(
             &device.record_store,
@@ -696,7 +746,6 @@ mod tests {
         let material = HeldMaterial {
             node_id: [0u8; 16],
             write_scope_seed: None,
-            content_cids: Vec::new(),
         };
         let resolved = block_on(resolve_and_hold(
             &device.record_store,
@@ -778,7 +827,6 @@ mod tests {
         let material = HeldMaterial {
             node_id: [0u8; 16],
             write_scope_seed: None,
-            content_cids: Vec::new(),
         };
         let resolved = block_on(resolve_and_hold(
             &device.record_store,
@@ -829,7 +877,6 @@ mod tests {
         let material = HeldMaterial {
             node_id: [0u8; 16],
             write_scope_seed: None,
-            content_cids: Vec::new(),
         };
         block_on(resolve_and_hold(
             &device.record_store,
@@ -908,7 +955,6 @@ mod tests {
         let material = HeldMaterial {
             node_id,
             write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
-            content_cids: Vec::new(),
         };
         block_on(resolve_and_hold(
             &device.record_store,
@@ -958,7 +1004,6 @@ mod tests {
         let material = HeldMaterial {
             node_id,
             write_scope_seed: Some(Zeroizing::new(write_scope_seed)),
-            content_cids: Vec::new(),
         };
         block_on(resolve_and_hold(
             &device.record_store,

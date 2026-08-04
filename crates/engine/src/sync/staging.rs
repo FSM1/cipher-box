@@ -104,7 +104,7 @@ pub(crate) async fn version_leaf_cids<S: StagingStore>(store: &S, root_cid: &[u8
         return Vec::new();
     }
     decode_root(&block)
-        .map(|m| m.leaf_cids.iter().map(|cid| cid.to_vec()).collect())
+        .map(|m| m.leaf_cid_vecs())
         .unwrap_or_default()
 }
 
@@ -345,7 +345,7 @@ pub async fn orphan_staging_keys<S: StagingStore>(
             let Ok(manifest) = decode_root(&block) else {
                 return Ok(Vec::new());
             };
-            referenced.extend(manifest.leaf_cids.iter().map(|cid| cid.to_vec()));
+            referenced.extend(manifest.leaf_cid_vecs());
         }
         referenced.insert(root);
     }
