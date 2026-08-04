@@ -135,23 +135,25 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   each epoch mints one link under a fresh nonce, so a repeat is an authored
   anomaly. `historyLinks` is ordered **oldest epoch first** — an invariant the
   codec cannot check, since a link's epoch lives in its untransmitted AAD and
-  inside its ciphertext, leaving `crates/core` an opaque sealed blob. It is
-  enforced where a key into the chain exists: a rotation walks the carried links
-  before re-signing them and refuses an order that cannot be traversed
-  (`rotation/reseal.rs`).
-- **History-link retention**: a **rotation** carries forward only the newest 64
-  links (`MAX_RETAINED_HISTORY_LINKS`), dropping the oldest, so the chain is
-  bounded by design rather than by the 4 MiB block ceiling — documented here
-  because the two constants are coupled: retention must stay under the decode
-  bound, which is what keeps that bound a malformed-input guard an honest rotator
-  never approaches. Each link is sealed under the seed of the epoch immediately
-  preceding it, so the ratchet is a **contiguous chain** and only the oldest end
-  may be dropped; the rotation proves that order by walking the chain first. A
-  **sweep** holds only the scope's current seed, never a key into the carried
-  chain, so it neither walks nor prunes it — it appends nothing either, so the
-  set cannot grow there. The window is the deepest epoch lag a backward walk can
-  cover; a node past it is not lost, since the sweep re-seals it forward from the
-  scope's _current_ seed.
+  inside its ciphertext, leaving `crates/core` an opaque sealed blob.
+- **History-link retention**: a link minted at epoch `e` is sealed under **its
+  own** epoch's structure key and carries the _preceding_ epoch's seed, so the
+  ratchet is a **contiguous chain** walkable only backward, one epoch per step.
+  A **rotation** holds the one key that starts that walk — the previous epoch's
+  seed — so it keeps the newest 64 links (`MAX_RETAINED_HISTORY_LINKS`) that
+  actually walk and drops the rest. Order is therefore proven, not assumed, and
+  the chain is bounded by design rather than by the 4 MiB block ceiling; the two
+  constants are coupled, retention staying under the decode bound so that bound
+  remains a malformed-input guard an honest rotator never approaches. An
+  unwalkable remainder is **truncated, never refused**: the carried set is
+  attacker-influenced, so failing the cut would let a committed write-grantee
+  block the rotation that revokes them. A **sweep** publishes at the floor epoch
+  without minting a link, so the record's epoch label can outrun the newest
+  link's minting epoch — the AAD a walk needs — leaving it unable to walk or
+  prune; it appends nothing, so the set cannot grow there, but it no longer
+  trims an oversized one either. The window is the deepest epoch lag a backward
+  walk can cover; a node past it is not lost, since the sweep re-seals it
+  forward from the scope's _current_ seed.
 - **Owner-write-blob** (`structTag` `owner-write-blob`): the write-plane mirror
   of the owner blob — the scope's random `writeScopeSeed` (a KDF non-edge, not
   derivable from the login secret) HPKE-sealed to the owner's **own** enc subkey,
