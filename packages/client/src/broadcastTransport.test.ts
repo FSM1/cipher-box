@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { BroadcastTransport } from './broadcastTransport.js';
 import { EngineRequestError } from './correlatedTransport.js';
-import { LeaderRelay } from './leaderRelay.js';
+import { LeaderRelay, type LeaderRelayOptions } from './leaderRelay.js';
 import { unavailableCourier } from './portCourier.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import {
@@ -14,7 +14,8 @@ import {
 } from './testkit.js';
 import type { EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 
-const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+const after = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const tick = (): Promise<void> => after(0);
 
 function wire(): {
   bus: FakeBus;
@@ -66,14 +67,14 @@ describe('broadcast transport ↔ leader relay', () => {
 
     // The sentinel *is* the leader's key material: 32 distinctive secret bytes
     // actually handed to the leader engine. It must never ride the keyless
-    // leader→follower wire — not on an event, not in a response error string.
+    // leader→follower wire — not on an event, not in a result error string.
     const sentinel = Uint8Array.from({ length: 32 }, (_, i) => (i * 7 + 3) & 0xff);
     await engine.start(sentinel.buffer.slice(0));
 
     const ports = new FakeCourierNetwork();
     new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
 
-    // Capture everything the leader broadcasts to followers (events + responses).
+    // Capture both leader→follower wires: the channel (events) and the port.
     const leaderPosts: unknown[] = [];
     const spy = bus.channel();
     spy.addEventListener('message', (event) => leaderPosts.push(event.data));
@@ -82,8 +83,8 @@ describe('broadcast transport ↔ leader relay', () => {
     await follower.start();
 
     // A command whose engine handling rejects: the relay forwards the failure as
-    // a `cb:response` error string — a real leak vector for secret bytes bleeding
-    // into an error message. A hygienic engine rejects with a generic message.
+    // a `cb:portResult` error string — a real leak vector for secret bytes
+    // bleeding into an error message. A hygienic engine rejects generically.
     engine.respond = () => Promise.reject(new Error('command failed'));
     await follower.command({ kind: 'manualRefresh' }, []).catch(() => undefined);
 
@@ -105,20 +106,21 @@ describe('broadcast transport ↔ leader relay', () => {
         v instanceof Uint8Array ? [...v].join(',') : typeof v === 'bigint' ? v.toString() : v
       );
     const sentinelCsv = [...sentinel].join(',');
-    const leaked = leaderPosts.some((message) => serialize(message).includes(sentinelCsv));
-    expect(leaked).toBe(false);
-    // Sanity: the leader actually broadcast the failure response + events we drove
-    // — the error-string wire field the sentinel could have leaked through is live.
-    const errorResponses = leaderPosts.filter(
+    const sent = [...leaderPosts, ...ports.messages];
+    expect(sent.some((message) => serialize(message).includes(sentinelCsv))).toBe(false);
+    // Sanity: the failing command's error string actually crossed a wire, so the
+    // field the sentinel could have leaked through is live.
+    const errorResults = ports.messages.filter(
       (m) =>
-        (m as { type?: string; ok?: boolean }).type === 'cb:response' && !(m as { ok?: boolean }).ok
+        (m as { type?: string; ok?: boolean }).type === 'cb:portResult' &&
+        !(m as { ok?: boolean }).ok
     );
-    expect(errorResponses.length).toBe(1);
-    expect(leaderPosts.length).toBeGreaterThanOrEqual(6);
+    expect(errorResults.length).toBe(1);
+    expect(leaderPosts.length).toBeGreaterThanOrEqual(5);
   });
 
-  it('shares an upload chunk as a Blob and rebuilds identical bytes on the leader', async () => {
-    const { engine, follower } = wire();
+  it('moves an upload chunk over the private port and rebuilds identical bytes on the leader', async () => {
+    const { engine, follower, ports } = wire();
     const bytes = Uint8Array.from({ length: 512 }, (_, i) => (i * 13 + 7) & 0xff);
 
     const node = new Uint8Array(16).fill(3);
@@ -126,13 +128,58 @@ describe('broadcast transport ↔ leader relay', () => {
     expect(handle).toBe(engine.writeHandle);
     expect(engine.beginWrites).toEqual([{ target: { node }, size: 512 }]);
 
-    await follower.pushChunk(handle, bytes.buffer.slice(0));
+    const chunk = bytes.buffer.slice(0);
+    await follower.pushChunk(handle, chunk);
     expect(engine.chunks).toHaveLength(1);
     expect([...new Uint8Array(engine.chunks[0].chunk)]).toEqual([...bytes]);
     expect(engine.chunks[0].handle).toBe(handle);
+    // Transferred, not cloned: the plaintext leaves the follower's heap rather
+    // than being copied into every same-origin context.
+    expect(chunk.byteLength).toBe(0);
+    expect(ports.transfers.some((list) => list[0] === chunk)).toBe(true);
 
     await expect(follower.commitWrite(handle)).resolves.toBe(engine.commitOpId);
     expect(engine.commits).toEqual([handle]);
+  });
+
+  it('keeps upload plaintext and command arguments off the channel', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    new LeaderRelay(bus.channel(), engine, ports.courier('leader'));
+
+    // A same-origin context that opened the engine channel and does nothing else.
+    const observed: unknown[] = [];
+    const eavesdropper = bus.channel();
+    eavesdropper.addEventListener('message', (event) => observed.push(event.data));
+
+    const follower = new BroadcastTransport(bus.channel(), 'f', ports.courier('f'));
+    const plaintext = Uint8Array.from({ length: 64 }, (_, i) => (i * 29 + 13) & 0xff);
+    const handle = await follower.beginWrite(
+      { parent: new Uint8Array(16), name: 'payslip.pdf' },
+      64
+    );
+    await follower.pushChunk(handle, plaintext.buffer.slice(0));
+    await follower.commitWrite(handle);
+    await follower.command(
+      { kind: 'rename', node: new Uint8Array(16), newName: 'tax-return.pdf' },
+      []
+    );
+    await tick();
+
+    // Election and rendezvous only: no write step, no command, no arguments.
+    expect([...new Set(observed.map((m) => (m as { type: string }).type))].sort()).toEqual([
+      'cb:hello',
+      'cb:leader',
+      'cb:portHost',
+      'cb:portWanted',
+    ]);
+    const serialized = JSON.stringify(observed, (_key, value: unknown) =>
+      value instanceof Uint8Array ? [...value] : value
+    );
+    expect(serialized).not.toContain('payslip.pdf');
+    expect(serialized).not.toContain('tax-return.pdf');
+    for (const byte of plaintext.slice(0, 8)) expect(serialized).not.toContain(`,${byte},`);
   });
 
   it('propagates a write rejection to the follower with the stable code', async () => {
@@ -536,7 +583,7 @@ describe('broadcast transport ↔ leader relay', () => {
     });
     await follower.start();
 
-    await expect(follower.snapshot(new Uint8Array(16))).rejects.toThrow(/read port/);
+    await expect(follower.snapshot(new Uint8Array(16))).rejects.toThrow(/no port host/);
     expect(engine.snapshots).toEqual([]);
   });
 
@@ -685,6 +732,39 @@ describe('broadcast transport ↔ leader relay', () => {
   });
 });
 
+/**
+ * Drives a relay over a raw named port, without a `BroadcastTransport` in the
+ * way: the test speaks the wire itself, so it can post a malformed or forged
+ * step and read exactly what the relay answered.
+ */
+async function portBench(options: LeaderRelayOptions = {}): Promise<{
+  bus: FakeBus;
+  ports: FakeCourierNetwork;
+  engine: FakeEngineTransport;
+  relay: LeaderRelay;
+  /** The relay's end: `receive` injects a follower step, `posted` records replies. */
+  leaderPort: FakeChannelPort;
+}> {
+  const bus = new FakeBus();
+  const ports = new FakeCourierNetwork();
+  const engine = new FakeEngineTransport();
+  const relay = new LeaderRelay(bus.channel(), engine, ports.courier('leader'), options);
+  return { bus, ports, engine, relay, leaderPort: await dialLeader(ports, 'f1') };
+}
+
+/** Dials the relay a fresh named port, returning the relay's end of it. */
+async function dialLeader(ports: FakeCourierNetwork, clientId: string): Promise<FakeChannelPort> {
+  const dialled = (await ports.courier(clientId).connect('leader')) as FakeChannelPort;
+  const leaderPort = dialled.peer!;
+  leaderPort.receive({ type: 'cb:portHello', clientId });
+  return leaderPort;
+}
+
+/** What the relay posted down a port, by wire type. */
+function replies(port: FakeChannelPort, type: string): Array<Record<string, unknown>> {
+  return (port.posted as Array<Record<string, unknown>>).filter((m) => m.type === type);
+}
+
 describe('leader relay write handles', () => {
   function bench(): {
     bus: FakeBus;
@@ -794,26 +874,265 @@ describe('leader relay write handles', () => {
     await expect(follower.beginWrite({ node: node(2) }, 4)).resolves.toBe(2n);
   });
 
-  it('refuses a handle minted for a client that left mid-mint, spelled as the engine spells it', async () => {
-    const { bus, engine } = bench();
-    // No courier: the forged `cb:bye` then has no read port to detach, so the
-    // refusal below is the relay's own and not a dropped-port retry.
-    const follower = new BroadcastTransport(bus.channel(), 'f1', unavailableCourier, {
-      portTimeoutMs: 5,
-    });
+  it('releases rather than strands a handle minted for a client that left mid-mint', async () => {
+    const { bus, engine, leaderPort } = await portBench();
     let releaseMint!: (handle: bigint) => void;
     engine.beginWrite = () => new Promise((resolve) => (releaseMint = resolve));
 
-    const pending = follower.beginWrite({ node: node(1) }, 4);
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 1,
+      write: { kind: 'beginWrite', target: { node: node(1) }, size: 4 },
+    });
     await tick();
+    // Any same-origin context can post this; the mint is still in flight, so the
+    // release sweep runs against a table the handle has not landed in yet.
     bus.channel().postMessage({ type: 'cb:bye', clientId: 'f1' });
     await tick();
     releaseMint(7n);
-
-    await expect(pending).rejects.toMatchObject({ code: 'unknownWriteHandle' });
-    // The handle the sweep could not see is released, not stranded.
     await tick();
+
     expect(engine.aborts).toEqual([7n]);
+    // The departed client's port went with it, so nothing was answered down it.
+    expect(replies(leaderPort, 'cb:portResult')).toEqual([]);
+  });
+
+  it('releases both planes of a handle minted for a follower that re-brokered mid-mint', async () => {
+    const { engine, ports, leaderPort } = await portBench();
+    let mintWrite!: (handle: bigint) => void;
+    let mintStream!: (handle: bigint) => void;
+    engine.beginWrite = () => new Promise((resolve) => (mintWrite = resolve));
+    engine.openContentStream = () => new Promise((resolve) => (mintStream = resolve));
+
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 1,
+      write: { kind: 'beginWrite', target: { node: node(1) }, size: 4 },
+    });
+    leaderPort.receive({
+      type: 'cb:portStream',
+      requestId: 2,
+      stream: { kind: 'openContentStream', node: node(2) },
+    });
+    await tick();
+
+    // The same live tab re-brokers — its port timed out, or the sweep took it —
+    // so neither handle can ever reach the entry it was asked for.
+    const rebrokered = await dialLeader(ports, 'f1');
+    await tick();
+    mintWrite(7n);
+    mintStream(8n);
+    await tick();
+
+    // The staging reservation and the pinned content version, with the key
+    // resident alongside it, are both released rather than stranded.
+    expect(engine.aborts).toEqual([7n]);
+    expect(engine.closedStreams).toEqual([8n]);
+    expect(replies(leaderPort, 'cb:portResult')).toEqual([]);
+
+    // The tab is still served on the port it now holds.
+    engine.openContentStream = () => Promise.resolve(9n);
+    rebrokered.receive({
+      type: 'cb:portStream',
+      requestId: 1,
+      stream: { kind: 'openContentStream', node: node(3) },
+    });
+    await tick();
+    expect(replies(rebrokered, 'cb:portResult')).toContainEqual(
+      expect.objectContaining({ requestId: 1, ok: true, result: 9n })
+    );
+  });
+
+  it('wipes a transferred chunk it drops for a malformed request', async () => {
+    const { engine, leaderPort } = await portBench();
+    const plaintext = Uint8Array.of(5, 6, 7, 8);
+
+    // No `requestId`, so nothing can be answered — but the chunk already crossed
+    // by transfer, leaving the relay its last owner.
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      write: { kind: 'pushChunk', handle: 1n, chunk: plaintext.buffer },
+    });
+    await tick();
+
+    expect([...plaintext]).toEqual([0, 0, 0, 0]);
+    expect(engine.chunks).toEqual([]);
+  });
+
+  /**
+   * A port is untrusted input in both directions a follower can be wrong in:
+   * hostile, or merely a version-skewed build. A correlated request must always
+   * come back settled — a step that throws on the way to its handler would leave
+   * the sender waiting on a wire that already answered everything else.
+   */
+  it.each([
+    ['cb:portWrite', { requestId: 1 }],
+    ['cb:portWrite', { requestId: 1, write: null }],
+    ['cb:portWrite', { requestId: 1, write: { kind: 42 } }],
+    ['cb:portRead', { requestId: 1 }],
+    ['cb:portRead', { requestId: 1, read: { kind: 'nonsense' } }],
+    ['cb:portStream', { requestId: 1 }],
+    ['cb:portCommand', { requestId: 1 }],
+    // A type this build does not know — the cross-build skew case.
+    ['cb:portFuture', { requestId: 1 }],
+  ])('answers a malformed %s rather than leaving its sender hanging', async (type, rest) => {
+    const { leaderPort } = await portBench();
+
+    leaderPort.receive({ type, ...rest });
+    await tick();
+
+    expect(replies(leaderPort, 'cb:portResult')).toContainEqual(
+      expect.objectContaining({ requestId: 1, ok: false })
+    );
+  });
+
+  /**
+   * The owned-handle limb: past the ownership check, so only the step switch is
+   * left to reject a kind this build does not serve. Acking it would report a
+   * write step that never ran, and a streamed upload would lose those bytes.
+   */
+  it('refuses a write kind it does not serve on a handle the sender owns', async () => {
+    const { engine, leaderPort } = await portBench();
+    engine.writeHandle = 6n;
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 1,
+      write: { kind: 'beginWrite', target: { node: node(1) }, size: 4 },
+    });
+    await tick();
+
+    const plaintext = Uint8Array.of(2, 7, 1, 8);
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 2,
+      write: { kind: 'bogus', handle: 6n, chunk: plaintext.buffer },
+    });
+    await tick();
+
+    expect(replies(leaderPort, 'cb:portResult')).toContainEqual(
+      expect.objectContaining({ requestId: 2, ok: false })
+    );
+    expect(engine.chunks).toEqual([]);
+    expect([...plaintext]).toEqual([0, 0, 0, 0]);
+  });
+
+  it('wipes a chunk carried alongside a write step it does serve', async () => {
+    const { engine, leaderPort } = await portBench();
+    engine.writeHandle = 7n;
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 1,
+      write: { kind: 'beginWrite', target: { node: node(1) }, size: 4 },
+    });
+    await tick();
+
+    // A well-formed commit that merely carries a buffer too: it still crossed by
+    // transfer, so the relay owns it whatever the step it names.
+    const plaintext = Uint8Array.of(1, 6, 1, 8);
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 2,
+      write: { kind: 'commitWrite', handle: 7n, chunk: plaintext.buffer },
+    });
+    await tick();
+
+    expect(engine.commits).toEqual([7n]);
+    expect([...plaintext]).toEqual([0, 0, 0, 0]);
+  });
+
+  it('drops a stream kind it does not serve without reaching the engine', async () => {
+    const { engine, leaderPort } = await portBench();
+    engine.streamHandle = 5n;
+    leaderPort.receive({
+      type: 'cb:portStream',
+      requestId: 1,
+      stream: { kind: 'openContentStream', node: node(2) },
+    });
+    await tick();
+
+    leaderPort.receive({
+      type: 'cb:portStream',
+      requestId: 2,
+      stream: { kind: 'bogus', handle: 5n },
+    });
+    await tick();
+
+    expect(replies(leaderPort, 'cb:portResult')).toContainEqual(
+      expect.objectContaining({ requestId: 2, ok: false })
+    );
+    // A step off the union would otherwise read the stream at `undefined`.
+    expect(engine.reads).toEqual([]);
+  });
+
+  it('survives a port payload with no shape at all', async () => {
+    const { engine, leaderPort } = await portBench();
+
+    for (const junk of [null, undefined, 'a string', 42]) leaderPort.receive(junk);
+    await tick();
+
+    leaderPort.receive({ type: 'cb:portRead', requestId: 1, read: { kind: 'siweChallenge' } });
+    await tick();
+    expect(engine.siweChallenges).toBe(1);
+  });
+
+  it('drops a malformed focus report without throwing out of the listener', async () => {
+    const { engine, leaderPort } = await portBench();
+    const before = engine.commands.length;
+
+    // Uncorrelated, so there is nothing to answer — but a `node` the relay
+    // cannot key on must not escape the message handler either.
+    leaderPort.receive({ type: 'cb:portFocus', node: 'not-a-node' });
+    await tick();
+
+    expect(engine.commands.slice(before)).toEqual([]);
+    leaderPort.receive({ type: 'cb:portFocus', node: new Uint8Array([1, 2]) });
+    await tick();
+    expect(engine.commands.slice(before).map((c) => c.kind)).toEqual(['manualRefresh']);
+  });
+
+  // Kind-agnostic: a payload carrying plaintext under any name still crossed.
+  it.each(['pushChunk', 'bogus'])('wipes an upload chunk it refuses on a %s step', async (kind) => {
+    const { engine, leaderPort } = await portBench();
+    const plaintext = Uint8Array.of(9, 8, 7, 6);
+
+    // A step on a handle this port never opened: the chunk was already
+    // transferred into the leader, so the relay is its last owner.
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 1,
+      write: { kind, handle: 4n, chunk: plaintext.buffer },
+    });
+    await tick();
+
+    expect([...plaintext]).toEqual([0, 0, 0, 0]);
+    expect(engine.chunks).toEqual([]);
+  });
+
+  it('wipes an upload chunk the worker never took, having rejected before the post', async () => {
+    const { engine, leaderPort } = await portBench();
+    engine.writeHandle = 5n;
+    // A dead worker rejects without ever transferring the buffer on, so the
+    // relay is still holding the plaintext when the step settles.
+    engine.pushChunk = () => Promise.reject(new Error('engine transport closed'));
+    const plaintext = Uint8Array.of(4, 3, 2, 1);
+
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 1,
+      write: { kind: 'beginWrite', target: { node: node(1) }, size: 4 },
+    });
+    await tick();
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 2,
+      write: { kind: 'pushChunk', handle: 5n, chunk: plaintext.buffer },
+    });
+    await tick();
+
+    expect(replies(leaderPort, 'cb:portResult')).toContainEqual(
+      expect.objectContaining({ requestId: 2, ok: false })
+    );
+    expect([...plaintext]).toEqual([0, 0, 0, 0]);
   });
 
   it('releases every open handle when the leader steps down', async () => {
@@ -825,5 +1144,96 @@ describe('leader relay write handles', () => {
     await tick();
 
     expect(engine.aborts).toEqual([handle]);
+  });
+});
+
+describe('leader relay follower liveness', () => {
+  const node = (fill: number): Uint8Array => new Uint8Array(16).fill(fill);
+  // Two sweeps' worth of silence at `livenessMisses: 1`.
+  const REAPED = 30;
+
+  it('reclaims the handles and port of a follower that died without a cb:bye', async () => {
+    const { engine, leaderPort } = await portBench({ livenessIntervalMs: 5, livenessMisses: 1 });
+    engine.writeHandle = 3n;
+    engine.streamHandle = 4n;
+    leaderPort.receive({
+      type: 'cb:portWrite',
+      requestId: 1,
+      write: { kind: 'beginWrite', target: { node: node(1) }, size: 4 },
+    });
+    leaderPort.receive({
+      type: 'cb:portStream',
+      requestId: 2,
+      stream: { kind: 'openContentStream', node: node(2) },
+    });
+    await tick();
+
+    // The tab is gone: it answers no probe and sends no farewell.
+    await after(REAPED);
+
+    // The pinned content version — and the key resident with it — is released,
+    // as is the write handle's staging reservation and the port itself.
+    expect(engine.closedStreams).toEqual([4n]);
+    expect(engine.aborts).toEqual([3n]);
+    expect(replies(leaderPort, 'cb:portClosed')).toHaveLength(1);
+    expect(leaderPort.closed).toBe(true);
+  });
+
+  it('never reclaims a live but quiet follower that answers the probe', async () => {
+    const { engine, leaderPort } = await portBench({ livenessIntervalMs: 5, livenessMisses: 1 });
+    engine.streamHandle = 4n;
+    leaderPort.receive({
+      type: 'cb:portStream',
+      requestId: 1,
+      stream: { kind: 'openContentStream', node: node(2) },
+    });
+    await tick();
+
+    // A tab mid-playback issues no new request for a while, but answers every
+    // probe from its message handler — tearing it down would drop the playback.
+    leaderPort.peer!.addEventListener('message', (event) => {
+      if ((event.data as { type?: string }).type === 'cb:portPing') {
+        leaderPort.receive({ type: 'cb:portPong' });
+      }
+    });
+    await after(REAPED);
+
+    expect(engine.closedStreams).toEqual([]);
+    expect(leaderPort.closed).toBe(false);
+    // The stream it opened still serves it.
+    leaderPort.receive({
+      type: 'cb:portStream',
+      requestId: 2,
+      stream: { kind: 'readStream', handle: 4n, offset: 0, length: 8 },
+    });
+    await tick();
+    expect(engine.reads).toEqual([{ handle: 4n, offset: 0, length: 8 }]);
+  });
+
+  it('never probes a port that has not named the follower behind it', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    // Far beyond the wait, so only the sweep can act on this port: a naming
+    // timeout firing mid-assertion would close it and read as a sweep failure.
+    new LeaderRelay(bus.channel(), new FakeEngineTransport(), ports.courier('leader'), {
+      namingTimeoutMs: 10_000,
+      livenessIntervalMs: 5,
+      livenessMisses: 1,
+    });
+
+    // The naming timeout owns an unnamed port; the sweep must leave it alone
+    // rather than reclaim it under a `clientId` it does not have.
+    const squatter = (await ports.courier('squatter').connect('leader')) as FakeChannelPort;
+    await after(REAPED);
+    expect(squatter.peer!.posted).toEqual([]);
+    expect(squatter.peer!.closed).toBe(false);
+  });
+
+  it('stops probing once the leader steps down', async () => {
+    const { relay, leaderPort } = await portBench({ livenessIntervalMs: 5, livenessMisses: 4 });
+    relay.close();
+    await after(REAPED);
+
+    expect(replies(leaderPort, 'cb:portPing')).toEqual([]);
   });
 });

@@ -1,22 +1,24 @@
 /**
  * The cross-tab broadcast wire (blueprint/web-client.md "Followers are thin
- * mirrors"). Followers send commands to the leader and receive the one-way event
- * stream back over a single `BroadcastChannel`; every read **result** — snapshot
- * projections and file plaintext — travels instead over the follower's private
- * port ([`ReadPortRequest`](ReadPortRequest)), which the channel exists only to
- * rendezvous.
+ * mirrors"). The `BroadcastChannel` carries election, the port rendezvous, and
+ * the one-way event stream — nothing else. Every value-bearing exchange, in both
+ * directions, rides the follower's private port ([`PortRequest`](PortRequest)):
+ * command arguments and upload chunks up, snapshot projections and file
+ * plaintext down. The channel exists to rendezvous that port.
  *
  * Security shape, structural not by discipline:
  * - The login **secret never crosses** — the keyless follower transport takes no
  *   secret at all (its `start` has no secret parameter); `EngineClient`, the
  *   secret's terminal owner, scrubs the buffer it chose not to use and lets the
  *   leader's already-started engine own key derivation.
- * - Leader → follower carries only key-free, plaintext-free `EventDescriptor`s
- *   (the facade's event surface exposes no key bytes by construction).
- * - Follower → leader upload chunks ride as a `Blob` handle: structured clone
- *   shares the immutable backing store, so the cross-tab hop copies no bytes
- *   (blueprint "no byte copies for uploads"). Transferables do not cross a
- *   `BroadcastChannel`, so a raw `ArrayBuffer` would be a full copy instead.
+ * - A `BroadcastChannel` carries no transferables, so anything value-bearing put
+ *   on it is cloned into every same-origin context that opened it. The port
+ *   moves upload buffers instead, so a chunk's plaintext leaves the follower's
+ *   heap rather than being copied to every bystander.
+ * - What a bystanding same-origin context still sees on the channel, stated
+ *   exactly: no key bytes, no plaintext, no user-supplied names — but per-tab
+ *   `clientId`s and the `EventDescriptor` stream, whose variants carry node ids,
+ *   IPNS names, op ids and block counts. Same origin remains the trust boundary.
  */
 
 import type {
@@ -48,103 +50,84 @@ export type WireStream =
   | { kind: 'readStream'; handle: StreamHandle; offset: number; length: number }
   | { kind: 'closeStream'; handle: StreamHandle };
 
+/** A follower streaming-write step, driven against the leader's engine. */
+export type WireWrite =
+  | { kind: 'beginWrite'; target: WriteTarget; size: number }
+  | { kind: 'pushChunk'; handle: WriteHandle; chunk: ArrayBuffer }
+  | { kind: 'commitWrite'; handle: WriteHandle }
+  | { kind: 'abortWrite'; handle: WriteHandle };
+
 /**
- * Follower → leader, over that follower's private read port. Streams ride here
- * rather than on the channel because a `readStream` window *is* plaintext. Port
- * ownership is self-asserted, so binding a handle to a client is lifecycle
- * bookkeeping, not authorization — same origin remains the trust boundary.
+ * Follower → leader, over that follower's private port. Everything carrying a
+ * value rides here rather than on the channel: a `readStream` window *is*
+ * plaintext, an upload chunk is plaintext, and a command's arguments name files
+ * and contacts. Port ownership is self-asserted, so binding a handle to a client
+ * is lifecycle bookkeeping, not authorization — same origin remains the trust
+ * boundary.
  */
-export type ReadPortRequest =
+export type PortRequest =
   /** Names the sender, binding the port to a client the leader can reclaim it for. */
   | { type: 'cb:portHello'; clientId: string }
+  /** Answers `cb:portPing`; the leader's proof this tab is still alive. */
+  | { type: 'cb:portPong' }
+  /** This tab's currently open folder (for the leader's focus-window union). */
+  | { type: 'cb:portFocus'; node: Uint8Array | null }
   /** A correlated read; the leader answers with a matching `cb:portResult`. */
   | { type: 'cb:portRead'; requestId: number; read: WireRead }
   /** A correlated ranged-read step, run against the leader's engine stream. */
-  | { type: 'cb:portStream'; requestId: number; stream: WireStream };
+  | { type: 'cb:portStream'; requestId: number; stream: WireStream }
+  /** A correlated command, run against the leader's engine. */
+  | { type: 'cb:portCommand'; requestId: number; command: CommandDescriptor }
+  /** A correlated write step, run against the leader's engine write handle. */
+  | { type: 'cb:portWrite'; requestId: number; write: WireWrite };
 
 /**
- * Leader → follower, over that follower's private read port. A `download` or
+ * Leader → follower, over that follower's private port. A `download` or
  * `readStream` result is the plaintext buffer itself, transferred rather than
  * cloned; a snapshot carries the descriptor; a SIWE challenge the nonce string;
- * an `openContentStream` the handle naming the pinned content version.
+ * `openContentStream` and `beginWrite` the handle they minted; `commitWrite` the
+ * durable op id.
  */
-export type ReadPortResponse =
+export type PortResponse =
   /** The leader adopted this port, naming the leadership that answers on it. */
   | { type: 'cb:portReady'; token: string }
   /** The leader is dropping this port. A closed `MessagePort` fires no event on
    * the far side, so without this a read would wait on a wire that is gone. */
   | { type: 'cb:portClosed' }
+  /** Liveness probe: a port that stops answering has lost the tab behind it. */
+  | { type: 'cb:portPing' }
   | {
       type: 'cb:portResult';
       requestId: number;
       ok: true;
-      result?: SnapshotDescriptor | ArrayBuffer | string | StreamHandle;
+      result?: SnapshotDescriptor | ArrayBuffer | string | StreamHandle | WriteHandle;
     }
   | { type: 'cb:portResult'; requestId: number; ok: false; error: string; code?: string };
-
-/** A follower streaming-write step, driven against the leader's engine. */
-export type WireWrite =
-  | { kind: 'beginWrite'; target: WriteTarget; size: number }
-  | { kind: 'pushChunk'; handle: WriteHandle; chunk: Blob }
-  | { kind: 'commitWrite'; handle: WriteHandle }
-  | { kind: 'abortWrite'; handle: WriteHandle };
 
 /** Follower → leader messages. */
 export type FollowerMessage =
   /** A follower announces itself so the leader replies with a `leader` beacon. */
   | { type: 'cb:hello'; clientId: string }
-  /** A correlated command; the leader answers with a matching `response`. */
-  | { type: 'cb:command'; clientId: string; requestId: number; command: CommandDescriptor }
-  /** Asks the leader where a read port may be opened to it. */
+  /** Asks the leader where a private port may be opened to it. */
   | { type: 'cb:portWanted'; clientId: string }
-  /** A correlated write step, run against the leader's engine write handle. */
-  | { type: 'cb:write'; clientId: string; requestId: number; write: WireWrite }
-  /** This tab's currently open folder (for the leader's focus-window union). */
-  | { type: 'cb:focus'; clientId: string; node: Uint8Array | null }
   /** A follower is leaving (tab close / transport teardown). */
   | { type: 'cb:bye'; clientId: string };
 
 /**
  * Leader → follower messages. Every one carries the current leadership's
  * `token` — an unguessable per-leadership capability minted at election. Same
- * origin is the trust boundary, but any same-origin context can observe a
- * follower's `clientId`/`requestId` and post a forged `cb:response`/`cb:event`;
- * followers reject any leader message whose token isn't the active leader's, so
- * a non-leader cannot forge an ack or inject an event.
+ * origin is the trust boundary, but any same-origin context can post a forged
+ * `cb:event` or `cb:portHost`; followers reject any leader message whose token
+ * isn't the active leader's, so a non-leader cannot inject an event or divert
+ * the port rendezvous.
  */
 export type LeaderMessage =
   /** The current leader announces itself (on election and on demand). */
   | { type: 'cb:leader'; token: string }
   /** The current leader is stepping down (graceful teardown); re-arm the gate. */
   | { type: 'cb:leaderGone'; token: string }
-  /** Where a follower may open its private read port to this leadership. */
+  /** Where a follower may open its private port to this leadership. */
   | { type: 'cb:portHost'; token: string; address: string }
-  /**
-   * The correlated result of a follower's command or write step;
-   * `beginWrite`/`commitWrite` carry the handle / durable op id in `result`.
-   */
-  | {
-      type: 'cb:response';
-      token: string;
-      clientId: string;
-      requestId: number;
-      ok: true;
-      result?: WriteHandle;
-    }
-  /**
-   * A failed command/write. `error` is the human-readable diagnostic; `code` is
-   * the engine's stable machine-readable error code when the failure came from
-   * the engine.
-   */
-  | {
-      type: 'cb:response';
-      token: string;
-      clientId: string;
-      requestId: number;
-      ok: false;
-      error: string;
-      code?: string;
-    }
   /** One engine event, fanned out to every follower in emission order. */
   | { type: 'cb:event'; token: string; event: EventDescriptor };
 

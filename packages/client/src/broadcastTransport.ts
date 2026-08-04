@@ -1,8 +1,8 @@
 /**
  * The follower-side `EngineTransport` (blueprint/web-client.md "Followers are
  * thin mirrors"). A non-leader tab holds no worker and no keys: it sends
- * commands as data to the leader over the `BroadcastChannel` and renders the
- * projections and events the leader broadcasts back.
+ * commands as data to the leader and renders the projections it serves and the
+ * events it broadcasts back.
  *
  * It honors the same teardown contract as `LocalTransport`: a torn-down or
  * leader-dead transport **rejects** every pending request, never hangs — so a
@@ -10,22 +10,23 @@
  * rather than silently disappearing.
  *
  * A follower authenticates the leader by an unguessable per-leadership `token`
- * carried on the `cb:leader` beacon: it stamps every accepted response/event and
- * lets the follower reject forged acks/events from a non-leader same-origin
- * context.
+ * carried on the `cb:leader` beacon: it stamps every accepted event and the port
+ * rendezvous, and lets the follower reject forgeries from a non-leader
+ * same-origin context.
  *
- * Reads take a different wire: the channel only rendezvouses a private
- * `MessagePort` this tab dials to the leader, and every snapshot and plaintext
- * window comes back over that port — so a same-origin context that merely opened
- * the channel is no longer a receiver. The rendezvous is as authenticated as the
- * `cb:leader` beacon and no more: same origin remains the trust boundary.
+ * Every value-bearing exchange takes a different wire: the channel only
+ * rendezvouses a private `MessagePort` this tab dials to the leader, and command
+ * arguments, upload chunks, snapshots and plaintext windows all cross it — so a
+ * same-origin context that merely opened the channel is no longer a receiver.
+ * The rendezvous is as authenticated as the `cb:leader` beacon and no more: same
+ * origin remains the trust boundary.
  */
 
 import {
   type BroadcastChannelLike,
   type LeaderMessage,
-  type ReadPortRequest,
-  type ReadPortResponse,
+  type PortRequest,
+  type PortResponse,
   type WireRead,
   type WireStream,
   type WireWrite,
@@ -40,7 +41,7 @@ import type {
   WriteTarget,
 } from './worker/protocol.js';
 
-/** How long a follower waits on each step of brokering its read port. */
+/** How long a follower waits on each step of brokering its private port. */
 const DEFAULT_PORT_TIMEOUT_MS = 5000;
 
 export interface BroadcastTransportOptions {
@@ -66,7 +67,7 @@ export class BroadcastTransport extends CorrelatedTransport {
   private resolveLeaderReady!: () => void;
   private rejectLeaderReady!: (error: Error) => void;
 
-  // The read port to the current leadership, re-brokered from scratch whenever
+  // The private port to the current leadership, re-brokered from scratch whenever
   // leadership moves. `portGeneration` fences a broker still in flight across
   // that move, so a read never lands on a port the departed leader served.
   private portPromise: Promise<MessagePortLike> | null = null;
@@ -109,9 +110,9 @@ export class BroadcastTransport extends CorrelatedTransport {
   }
 
   command(command: CommandDescriptor, _transfer: Transferable[]): Promise<void> {
-    return this.dispatch(this.leaderReady, (requestId) =>
-      this.channel.postMessage({ type: 'cb:command', clientId: this.clientId, requestId, command })
-    );
+    // Command arguments name files and contacts, so they take the private port
+    // rather than the origin-wide channel.
+    return this.overPort<void>((requestId) => ({ type: 'cb:portCommand', requestId, command }));
   }
 
   beginWrite(target: WriteTarget, size: number): Promise<WriteHandle> {
@@ -119,9 +120,9 @@ export class BroadcastTransport extends CorrelatedTransport {
   }
 
   pushChunk(handle: WriteHandle, chunk: ArrayBuffer): Promise<void> {
-    // A `Blob` handle, not the buffer: structured clone shares its backing store
-    // while an `ArrayBuffer` would be copied into every receiver.
-    return this.write<void>({ kind: 'pushChunk', handle, chunk: new Blob([chunk]) });
+    // Moved, not cloned: the upload plaintext leaves this tab's heap for the
+    // leader's rather than being copied into every same-origin context.
+    return this.write<void>({ kind: 'pushChunk', handle, chunk }, [chunk]);
   }
 
   commitWrite(handle: WriteHandle): Promise<bigint> {
@@ -164,9 +165,12 @@ export class BroadcastTransport extends CorrelatedTransport {
     return this.overPort<T>((requestId) => ({ type: 'cb:portStream', requestId, stream }));
   }
 
-  private overPort<T>(build: (requestId: number) => ReadPortRequest): Promise<T> {
+  private overPort<T>(
+    build: (requestId: number) => PortRequest,
+    transfer?: Transferable[]
+  ): Promise<T> {
     return this.request<T, MessagePortLike>(this.ensurePort(), (requestId, port) => {
-      port.postMessage(build(requestId));
+      port.postMessage(build(requestId), transfer);
     });
   }
 
@@ -195,7 +199,7 @@ export class BroadcastTransport extends CorrelatedTransport {
     const port = await this.courier.connect(await this.awaitHost());
     const release = this.bindPort(port);
     try {
-      port.postMessage({ type: 'cb:portHello', clientId: this.clientId } satisfies ReadPortRequest);
+      port.postMessage({ type: 'cb:portHello', clientId: this.clientId } satisfies PortRequest);
       await this.awaitAdoption();
       if (this.closed || generation !== this.portGeneration) throw retryError();
     } catch (error) {
@@ -207,28 +211,36 @@ export class BroadcastTransport extends CorrelatedTransport {
   }
 
   /**
-   * Binds the read listener, which answers only once the leader has greeted:
+   * Binds the port listener, which answers only once the leader has greeted:
    * until then this port has proved nothing and settles no request.
    */
   private bindPort(port: MessagePortLike): () => void {
     let adopted = false;
     const listener = (event: MessageEvent): void => {
-      const message = event.data as ReadPortResponse | { type?: unknown };
+      const data: unknown = event.data;
+      if (typeof data !== 'object' || data === null) return;
+      const message = data as PortResponse | { type?: unknown };
       if (message.type === 'cb:portReady') {
-        const { token } = message as Extract<ReadPortResponse, { type: 'cb:portReady' }>;
+        const { token } = message as Extract<PortResponse, { type: 'cb:portReady' }>;
         if (adopted || !this.fromActiveLeader(token)) return;
         adopted = true;
         this.settleBrokerage?.();
         return;
       }
       if (!adopted) return;
+      if (message.type === 'cb:portPing') {
+        // Answered from the message handler, not a timer, so a throttled
+        // background tab still proves it is alive to the leader's sweep.
+        port.postMessage({ type: 'cb:portPong' } satisfies PortRequest);
+        return;
+      }
       if (message.type === 'cb:portClosed') {
         this.dropPort(retryError());
         this.rejectPending(retryError());
         return;
       }
       if (message.type !== 'cb:portResult') return;
-      const result = message as Extract<ReadPortResponse, { type: 'cb:portResult' }>;
+      const result = message as Extract<PortResponse, { type: 'cb:portResult' }>;
       if (result.ok) this.settle(result.requestId, true, undefined, result.result);
       else this.settle(result.requestId, false, result.error, undefined, result.code);
     };
@@ -240,9 +252,9 @@ export class BroadcastTransport extends CorrelatedTransport {
     };
   }
 
-  /** Asks where this leadership takes read ports, for this leadership only. */
+  /** Asks where this leadership takes follower ports, for this leadership only. */
   private awaitHost(): Promise<string> {
-    return this.awaitBrokerage<string>('the leader published no read port host', (settle) => {
+    return this.awaitBrokerage<string>('the leader published no port host', (settle) => {
       this.settleHost = settle;
       this.channel.postMessage({ type: 'cb:portWanted', clientId: this.clientId });
     });
@@ -250,7 +262,7 @@ export class BroadcastTransport extends CorrelatedTransport {
 
   /** The leader's proof it holds the far end, stamped with its leadership token. */
   private awaitAdoption(): Promise<void> {
-    return this.awaitBrokerage<void>('the leader did not adopt the read port', (settle) => {
+    return this.awaitBrokerage<void>('the leader did not adopt the port', (settle) => {
       this.settleBrokerage = settle;
     });
   }
@@ -292,16 +304,20 @@ export class BroadcastTransport extends CorrelatedTransport {
     release?.();
   }
 
-  private write<T>(write: WireWrite): Promise<T> {
-    return this.request<T>(this.leaderReady, (requestId) =>
-      this.channel.postMessage({ type: 'cb:write', clientId: this.clientId, requestId, write })
-    );
+  private write<T>(write: WireWrite, transfer?: Transferable[]): Promise<T> {
+    return this.overPort<T>((requestId) => ({ type: 'cb:portWrite', requestId, write }), transfer);
   }
 
-  /** Reports this tab's open folder to the leader's focus-window union. */
+  /**
+   * Reports this tab's open folder to the leader's focus-window union. A folder
+   * id names what the user is browsing, so it takes the port like every other
+   * argument; a dropped hint costs staleness, never correctness.
+   */
   reportFocus(node: Uint8Array | null): void {
     if (this.closed) return;
-    this.channel.postMessage({ type: 'cb:focus', clientId: this.clientId, node });
+    void this.ensurePort()
+      .then((port) => port.postMessage({ type: 'cb:portFocus', node } satisfies PortRequest))
+      .catch(() => undefined);
   }
 
   close(): void {
@@ -329,8 +345,9 @@ export class BroadcastTransport extends CorrelatedTransport {
     this.leaderReady.catch(() => undefined);
   }
 
-  private receive(message: LeaderMessage | { type?: string }): void {
-    if (this.closed) return;
+  private receive(data: unknown): void {
+    if (this.closed || typeof data !== 'object' || data === null) return;
+    const message = data as LeaderMessage | { type?: string };
     switch (message.type) {
       case 'cb:leader':
         this.onLeader((message as Extract<LeaderMessage, { type: 'cb:leader' }>).token);
@@ -342,17 +359,6 @@ export class BroadcastTransport extends CorrelatedTransport {
         const host = message as Extract<LeaderMessage, { type: 'cb:portHost' }>;
         if (!this.fromActiveLeader(host.token) || typeof host.address !== 'string') return;
         this.settleHost?.(host.address);
-        return;
-      }
-      case 'cb:response': {
-        const response = message as Extract<LeaderMessage, { type: 'cb:response' }>;
-        if (response.clientId !== this.clientId) return;
-        if (!this.fromActiveLeader(response.token)) return; // forged / stale ack
-        if (response.ok) {
-          this.settle(response.requestId, true, undefined, response.result);
-        } else {
-          this.settle(response.requestId, false, response.error, undefined, response.code);
-        }
         return;
       }
       case 'cb:event': {

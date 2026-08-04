@@ -37,6 +37,8 @@ export interface ObservedMessage {
   type: string;
   /** Every byte the message carries anywhere in its shape, as one hex run. */
   bytesHex: string;
+  /** Every string the message carries anywhere in its shape, joined. */
+  text: string;
 }
 
 /** A page.evaluate-safe download projection; `code` is the engine's stable error code. */
@@ -71,6 +73,7 @@ declare global {
     cbRole(): string;
     cbStart(): Promise<string>;
     cbCreateFile(name: string): Promise<string>;
+    cbUpload(name: string, bytesHex: string): Promise<string>;
     cbCreateNode(name: string, kind: 'file' | 'folder'): Promise<string>;
     cbSnapshot(folderHex: string): Promise<SnapshotResult>;
     cbDownload(nodeHex: string): Promise<DownloadResult>;
@@ -87,19 +90,25 @@ const observed: ObservedMessage[] = [];
 
 const rootNode = new Uint8Array(16);
 
-/** Every byte anywhere in a message, as one hex run a plaintext search can scan. */
-function collectBytes(value: unknown): string {
+/**
+ * Every byte and every string anywhere in a message, flattened so a plaintext or
+ * argument search can scan them: `bytesHex` catches upload and read payloads,
+ * `text` catches names, contact codes and signatures.
+ */
+function collect(value: unknown): { bytesHex: string; text: string } {
   const found: number[] = [];
+  const strings: string[] = [];
   const walk = (node: unknown): void => {
     if (node instanceof ArrayBuffer) for (const byte of new Uint8Array(node)) found.push(byte);
     else if (ArrayBuffer.isView(node)) {
       const view = new Uint8Array(node.buffer, node.byteOffset, node.byteLength);
       for (const byte of view) found.push(byte);
-    } else if (Array.isArray(node)) for (const entry of node) walk(entry);
+    } else if (typeof node === 'string') strings.push(node);
+    else if (Array.isArray(node)) for (const entry of node) walk(entry);
     else if (node && typeof node === 'object') for (const entry of Object.values(node)) walk(entry);
   };
   walk(value);
-  return hex(Uint8Array.from(found));
+  return { bytesHex: hex(Uint8Array.from(found)), text: strings.join(' ') };
 }
 
 function settle(error: unknown): string {
@@ -145,12 +154,12 @@ window.cbStart = async (): Promise<string> => {
   }
 };
 
-window.cbCreateFile = async (name: string): Promise<string> => {
-  const content = new Uint8Array([1, 2, 3]);
+window.cbUpload = async (name: string, bytesHex: string): Promise<string> => {
+  const content = unhex(bytesHex);
   try {
     const handle = await client!.facade.beginWrite({ parent: rootNode, name }, content.byteLength);
     try {
-      await client!.facade.pushChunk(handle, content.buffer);
+      await client!.facade.pushChunk(handle, content.buffer as ArrayBuffer);
       await client!.facade.commitWrite(handle);
     } catch (error) {
       // A failed abort must not mask the write failure that triggered it.
@@ -162,6 +171,8 @@ window.cbCreateFile = async (name: string): Promise<string> => {
     return settle(error);
   }
 };
+
+window.cbCreateFile = (name: string): Promise<string> => window.cbUpload(name, '010203');
 
 window.cbCreateNode = async (name: string, kind: 'file' | 'folder'): Promise<string> => {
   try {
@@ -219,7 +230,7 @@ window.cbObserve = (channelName: string): void => {
     const message = event.data as { type?: unknown };
     observed.push({
       type: typeof message?.type === 'string' ? message.type : '(untyped)',
-      bytesHex: collectBytes(message),
+      ...collect(message),
     });
   });
 };

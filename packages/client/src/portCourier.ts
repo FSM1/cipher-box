@@ -133,9 +133,9 @@ export class ServiceWorkerCourier implements PortCourier {
 }
 
 /**
- * The courier a context with no Service Worker gets. Follower reads travel over
- * a brokered port and never fall back onto the shared channel, so such a tab
- * mirrors nothing.
+ * The courier a context with no Service Worker gets. Every follower exchange
+ * travels over a brokered port and never falls back onto the shared channel, so
+ * such a tab mirrors nothing. It can still take the lock and run its own engine.
  */
 export const unavailableCourier: PortCourier = {
   address: () => Promise.reject(new Error(NO_WORKER)),
