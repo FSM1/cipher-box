@@ -35,6 +35,7 @@ use cipherbox_engine::grants::{
     accept_share, import_contact, self_locate,
 };
 use cipherbox_engine::mailbox::{VerifiedMailboxItem, poll_verified, post_sealed};
+use cipherbox_engine::net::MAX_RECORD_BYTES;
 use cipherbox_engine::seams::{FloorStore, HttpMethod, HttpResponse, Mailbox, RecordTransport};
 use cipherbox_engine::testkit::fakes::InMemoryCredentialStore;
 use cipherbox_engine::testkit::fakes::ScriptedHttp;
@@ -408,11 +409,11 @@ fn two_instance_share_accept_end_to_end() {
     );
     assert_eq!(items[0].sender_identity, fx.owner_identity_pub);
 
-    let bytes = block_on(
-        recipient_device
-            .record_store
-            .get_record(&endpoint, fx.name.as_str()),
-    )
+    let bytes = block_on(recipient_device.record_store.get_record(
+        &endpoint,
+        fx.name.as_str(),
+        MAX_RECORD_BYTES,
+    ))
     .unwrap()
     .expect("record present");
     let candidate = fx.candidate_with_record(bytes);
@@ -1361,11 +1362,11 @@ fn revocation_classification_triple() {
     // (b) Unresolvable: the name is not in the store, so no owner-signed record.
     let recipient_device = world.device(b"reader");
     let endpoint = world.record_store.endpoints()[0].clone();
-    let resolved = block_on(
-        recipient_device
-            .record_store
-            .get_record(&endpoint, fx.name.as_str()),
-    )
+    let resolved = block_on(recipient_device.record_store.get_record(
+        &endpoint,
+        fx.name.as_str(),
+        MAX_RECORD_BYTES,
+    ))
     .unwrap();
     let unresolvable = classify(&ResolutionFacts {
         owner_signed_record: resolved.is_some(),

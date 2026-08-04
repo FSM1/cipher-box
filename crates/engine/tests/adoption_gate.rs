@@ -35,6 +35,7 @@ use cipherbox_engine::gate::floor::{
 use cipherbox_engine::gate::{
     Adopted, Candidate, FLOOR_VERDICTS, GateError, GateStage, ReaderContext, SeedBlob, adopt,
 };
+use cipherbox_engine::net::MAX_RECORD_BYTES;
 use cipherbox_engine::seams::{FloorStore, RecordTransport, Scheduler};
 use cipherbox_engine::testkit::fakes::InMemoryFloorStore;
 use cipherbox_engine::testkit::{FakeWorld, block_on};
@@ -966,9 +967,13 @@ fn simulation_n_engines_one_record_store_adversarial() {
         .record_store
         .seed_record(&endpoint, &routing_key, fx.record_bytes(1));
     for device in [&owner_device, &reader_device] {
-        let bytes = block_on(device.record_store.get_record(&endpoint, &routing_key))
-            .unwrap()
-            .expect("record present on the shared store");
+        let bytes = block_on(device.record_store.get_record(
+            &endpoint,
+            &routing_key,
+            MAX_RECORD_BYTES,
+        ))
+        .unwrap()
+        .expect("record present on the shared store");
         let candidate = fx.candidate_with_record(bytes);
         let (adopted, _) = block_on(adopt(&device.floor_store, &fx.reader(), &candidate))
             .expect("a shared valid record adopts on every device");
@@ -983,11 +988,11 @@ fn simulation_n_engines_one_record_store_adversarial() {
     world
         .record_store
         .seed_record(&endpoint, &routing_key, fx.record_bytes(2));
-    let newer = block_on(
-        owner_device
-            .record_store
-            .get_record(&endpoint, &routing_key),
-    )
+    let newer = block_on(owner_device.record_store.get_record(
+        &endpoint,
+        &routing_key,
+        MAX_RECORD_BYTES,
+    ))
     .unwrap()
     .unwrap();
     block_on(adopt(
@@ -1000,11 +1005,11 @@ fn simulation_n_engines_one_record_store_adversarial() {
     world
         .record_store
         .seed_record(&endpoint, &routing_key, fx.record_bytes(1));
-    let replayed = block_on(
-        owner_device
-            .record_store
-            .get_record(&endpoint, &routing_key),
-    )
+    let replayed = block_on(owner_device.record_store.get_record(
+        &endpoint,
+        &routing_key,
+        MAX_RECORD_BYTES,
+    ))
     .unwrap()
     .unwrap();
     let err = block_on(adopt(

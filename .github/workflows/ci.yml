@@ -618,7 +618,11 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm --filter @cipherbox/client exec playwright install --with-deps chromium
 
-      - name: Browser seam conformance suite (real IndexedDB + OPFS)
+      # `test:browser` builds the conformance WASM, typechecks the harness
+      # against the freshly generated wasm-bindgen glue, then runs Playwright.
+      # The harness typecheck lives here rather than in the Typecheck job
+      # because that glue only exists after the Rust build (#975).
+      - name: Typecheck harness + browser seam conformance suite
         run: pnpm --filter @cipherbox/client test:browser
 
   cargo-macos:

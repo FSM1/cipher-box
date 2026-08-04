@@ -40,8 +40,8 @@ use cipherbox_engine::rotation::{
     ScopeRootPublishError, ScopeRootPublisher, SweepResolver, SweepTarget,
 };
 use cipherbox_engine::seams::{
-    CredentialStore, Http, HttpMethod, HttpRequest, Mailbox, MailboxItem as SealedMailboxItem,
-    SeamError, SeamResult,
+    CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, Mailbox,
+    MailboxItem as SealedMailboxItem, SeamError, SeamResult,
 };
 use cipherbox_engine::testkit::SeededEntropy;
 use cipherbox_engine::testkit::fakes::InMemoryFloorStore;
@@ -121,6 +121,8 @@ async fn api_health_round_trips() {
             url: format!("{base}/health"),
             headers: Vec::new(),
             body: None,
+            credentials: HttpCredentials::Include,
+            timeout_ms: Some(10_000),
         })
         .await
         .expect("health request");
@@ -283,6 +285,8 @@ async fn production_ignores_the_test_profile_auth_limit_override() {
                 url: format!("{prod}/auth/challenge"),
                 headers: vec![("content-type".to_owned(), "application/json".to_owned())],
                 body: Some(b"{}".to_vec()),
+                credentials: HttpCredentials::Include,
+                timeout_ms: Some(10_000),
             })
             .await
             .expect("challenge request");
@@ -515,6 +519,8 @@ async fn fetch_block(cid: &str) -> Vec<u8> {
             url: format!("{gateway}/ipfs/{cid}?format=raw"),
             headers: vec![("Accept".to_owned(), "application/vnd.ipld.raw".to_owned())],
             body: None,
+            credentials: HttpCredentials::Omit,
+            timeout_ms: Some(30_000),
         })
         .await
         .expect("gateway request");

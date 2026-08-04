@@ -14,7 +14,9 @@ use cipherbox_engine::seams::{
 /// and returns the response verbatim. Non-2xx statuses are responses, not
 /// errors; a seam `Err` is reserved for transport-level failure (unreachable,
 /// aborted). The rotating refresh token is injected by the engine as an
-/// `Authorization`/cookie header here; this seam never persists it.
+/// `Authorization`/cookie header here; this seam never persists it. The client
+/// keeps no cookie jar, so desktop has no ambient credentials for
+/// [`cipherbox_engine::seams::HttpCredentials`] to scope.
 #[derive(Debug, Clone)]
 pub struct ReqwestHttp {
     client: reqwest::Client,
@@ -24,11 +26,10 @@ impl ReqwestHttp {
     /// Builds an HTTP seam over a fresh `reqwest` client.
     ///
     /// A connect timeout bounds the handshake, so a dead or black-hole host
-    /// fails fast instead of hanging the engine task forever. No total
-    /// request timeout is imposed here: the Http seam also carries
-    /// content-chunk bodies that can legitimately be large and slow, so a
-    /// host that needs a bounded whole-request timeout supplies its own
-    /// client via [`with_client`](Self::with_client).
+    /// fails fast instead of hanging the engine task forever. The whole-request
+    /// bound is per request class and rides [`HttpRequest::timeout_ms`], so a
+    /// nonce fetch and a content-chunk upload do not share one client-wide
+    /// deadline (#939).
     pub fn new() -> SeamResult<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -78,6 +79,9 @@ impl ReqwestHttp {
         }
         if let Some(body) = request.body {
             builder = builder.body(body);
+        }
+        if let Some(timeout_ms) = request.timeout_ms {
+            builder = builder.timeout(Duration::from_millis(timeout_ms));
         }
 
         let response = builder

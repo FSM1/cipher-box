@@ -10,22 +10,25 @@
  *   `WebAssembly.Memory` (detaching the view) right after the call, before its
  *   awaits resolve; a copy-after-await implementation would write a detached
  *   view and fail.
- * - `stagingKeyDetachment` / `snapshotKeyDetachment` (#717): the *key* view is
- *   likewise encoded synchronously at entry. A key hexed after the await would
- *   read a detached view as '' and store the entry under the wrong name, so the
- *   read-back under the real key here would miss — the fix stores it correctly.
+ * - `stagingKeyDetachment` / `snapshotKeyDetachment` / `floorKeyDetachment`
+ *   (#717, #730): the *key* view is likewise encoded synchronously at entry. A
+ *   key hexed after the await would read a detached view as '' and store the
+ *   entry under the wrong name, so the read-back under the real key here would
+ *   miss — the fix stores it correctly.
  */
 import init, { deadLetterEvent } from './pkg/cipherbox_wasm.js';
 import wasmUrl from './pkg/cipherbox_wasm_bg.wasm?url';
 
-import { IdbSnapshotCache, OpfsStagingStore } from '../../src/seams/index.js';
+import { IdbFloorStore, IdbSnapshotCache, OpfsStagingStore } from '../../src/seams/index.js';
+import { deleteDatabase } from '../../src/seams/idb.js';
+import type { HarnessWorkerScope } from './workerScope.js';
 
 interface Outcome {
   ok: boolean;
   error?: string;
 }
 
-const scope = self as unknown as DedicatedWorkerGlobalScope;
+const scope = self as unknown as HarnessWorkerScope<{ name: string }>;
 
 async function clearOpfsDir(name: string): Promise<void> {
   const root = await navigator.storage.getDirectory();
@@ -137,6 +140,43 @@ async function runSnapshotKeyDetachment(): Promise<void> {
   }
 }
 
+async function runFloorKeyDetachment(): Promise<void> {
+  const dbName = `boundary-floors-${Date.now()}-${crypto.randomUUID()}`;
+  // Start from an empty backing; the per-run name keeps runs independent, and
+  // the store holds its connection open for the life of the worker.
+  await deleteDatabase(dbName);
+  const store = new IdbFloorStore(dbName);
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const keyView = new Uint8Array(memory.buffer, 0, 8);
+  for (let i = 0; i < keyView.length; i += 1) keyView[i] = (i * 11 + 5) & 0xff;
+  const expectedKey = keyView.slice();
+
+  // Start the raise, then detach the KEY view before its awaits resolve.
+  const raising = store.raiseEpochFloor(keyView, 7);
+  memory.grow(1); // detaches memory.buffer → `keyView` is now zero-length
+  if (keyView.byteLength !== 0) {
+    throw new Error('precondition: key view was not detached by grow');
+  }
+  if ((await raising) !== 7) throw new Error('raiseEpochFloor did not return the raised floor');
+
+  // Read back under the real key. A key hexed after the await would be '',
+  // raising the floor under the wrong scope and missing here.
+  const stored = await store.epochFloor(expectedKey);
+  if (stored !== 7) throw new Error(`epochFloor ${stored} != 7`);
+
+  // The read path hexes at entry too: detaching across its await must not turn
+  // a real floor into a "no floor" answer.
+  const readKey = new Uint8Array(memory.buffer, 0, 8);
+  readKey.set(expectedKey);
+  const reading = store.epochFloor(readKey);
+  memory.grow(1);
+  if (readKey.byteLength !== 0) {
+    throw new Error('precondition: read key view was not detached by grow');
+  }
+  const reread = await reading;
+  if (reread !== 7) throw new Error(`epochFloor across a detached read key ${reread} != 7`);
+}
+
 async function run(name: string): Promise<void> {
   switch (name) {
     case 'bigint':
@@ -147,6 +187,8 @@ async function run(name: string): Promise<void> {
       return runStagingKeyDetachment();
     case 'snapshotKeyDetachment':
       return runSnapshotKeyDetachment();
+    case 'floorKeyDetachment':
+      return runFloorKeyDetachment();
     default:
       throw new Error(`unknown boundary check: ${name}`);
   }

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 use cipherbox_desktop_seams::ReqwestHttp;
 use cipherbox_engine::api::{ApiClient, ApiError};
-use cipherbox_engine::seams::{Http, HttpMethod, HttpRequest};
+use cipherbox_engine::seams::{Http, HttpCredentials, HttpMethod, HttpRequest};
 
 use crate::metrics::{Collector, Outcome, Sample};
 use crate::plan::{MAX_BLOCK_BYTES, RunPlan};
@@ -95,6 +95,8 @@ pub(crate) async fn gateway_get(
         url: url.to_owned(),
         headers,
         body: None,
+        credentials: HttpCredentials::Omit,
+        timeout_ms: Some(30_000),
     };
     // A block is bounded by the API's own ceiling, so a gateway that answers
     // with something larger is refused rather than buffered.

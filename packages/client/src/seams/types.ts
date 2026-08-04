@@ -67,10 +67,25 @@ export interface SchedulerSeam {
   sleep(durationMs: number): Promise<void>;
 }
 
-/** Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes. */
+/**
+ * A capped record GET: the stored bytes (`null` when the endpoint holds no
+ * record), or a fail-closed rejection of a body over `maxBytes`. Mirrors
+ * {@link CappedHttpResult}; `maxBytes` is inclusive.
+ */
+export type CappedRecordResult =
+  | { kind: 'record'; record: Uint8Array | null }
+  | { kind: 'tooLarge'; observed: number; limit: number };
+
+/**
+ * Dumb `/routing/v1` byte mover: GET/PUT of opaque signed record bytes.
+ *
+ * The endpoint set includes untrusted public endpoints, so `getRecord` bounds
+ * the read at `maxBytes` while the body is still arriving — a gateway that
+ * omits or lies about `Content-Length` cannot force an unbounded buffer.
+ */
 export interface RecordTransportSeam {
   endpoints(): string[];
-  getRecord(endpoint: string, routingKey: string): Promise<Uint8Array | null>;
+  getRecord(endpoint: string, routingKey: string, maxBytes: number): Promise<CappedRecordResult>;
   putRecord(endpoint: string, routingKey: string, record: Uint8Array): Promise<void>;
 }
 
@@ -80,6 +95,19 @@ export interface HttpRequestData {
   url: string;
   headers: Array<[string, string]>;
   body: Uint8Array | null;
+  /**
+   * Ambient-credential scope. Absent means `'omit'`: only the API origin is
+   * asked for the HTTP-only refresh cookie, so a public gateway can neither
+   * read one nor set a `SameSite=None` cookie that correlates every subsequent
+   * leaf fetch.
+   */
+  credentials?: 'include' | 'omit';
+  /**
+   * Whole-request deadline in milliseconds, per request class — a nonce fetch
+   * and a block upload do not share one. Absent or `null` leaves the request
+   * unbounded by the seam.
+   */
+  timeoutMs?: number | null;
 }
 
 /** One HTTP response, returned verbatim to the engine. */

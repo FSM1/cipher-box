@@ -10,29 +10,18 @@
  */
 
 import { toHex } from './bytes.js';
-import { openDatabase, requestResult, transactionDone } from './idb.js';
+import { memoizedDatabase, requestResult, transactionDone } from './idb.js';
 import type { SnapshotCacheSeam } from './types.js';
 
 const STORE = 'entries';
 
 export class IdbSnapshotCache implements SnapshotCacheSeam {
-  private readonly dbName: string;
-  private dbPromise: Promise<IDBDatabase> | null = null;
+  private readonly open: () => Promise<IDBDatabase>;
 
   constructor(dbName = 'cipherbox-snapshot-cache') {
-    this.dbName = dbName;
-  }
-
-  private open(): Promise<IDBDatabase> {
-    // Memoize the in-flight open, not just the resolved handle: concurrent
-    // callers before the first open resolves must share one connection. A
-    // failed open clears the memo so the next call can re-open.
-    return (this.dbPromise ??= openDatabase(this.dbName, 1, (db) => {
+    this.open = memoizedDatabase(dbName, 1, (db) => {
       db.createObjectStore(STORE);
-    }).catch((error: unknown) => {
-      this.dbPromise = null;
-      throw error;
-    }));
+    });
   }
 
   async put(cacheKey: Uint8Array, ciphertext: Uint8Array): Promise<void> {

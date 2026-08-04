@@ -10,37 +10,30 @@
  */
 
 import { toHex } from './bytes.js';
-import { openDatabase, requestResult, transactionDone } from './idb.js';
+import { memoizedDatabase, requestResult, transactionDone } from './idb.js';
 import type { FloorStoreSeam } from './types.js';
 
 const EPOCH_STORE = 'epoch';
 const SEQUENCE_STORE = 'sequence';
 
 export class IdbFloorStore implements FloorStoreSeam {
-  private readonly dbName: string;
-  private dbPromise: Promise<IDBDatabase> | null = null;
+  private readonly open: () => Promise<IDBDatabase>;
 
   constructor(dbName = 'cipherbox-floors') {
-    this.dbName = dbName;
-  }
-
-  private open(): Promise<IDBDatabase> {
-    // Memoize the in-flight open, not just the resolved handle: concurrent
-    // callers before the first open resolves must share one connection. A
-    // failed open clears the memo so the next call can re-open.
-    return (this.dbPromise ??= openDatabase(this.dbName, 1, (db) => {
+    this.open = memoizedDatabase(dbName, 1, (db) => {
       db.createObjectStore(EPOCH_STORE);
       db.createObjectStore(SEQUENCE_STORE);
-    }).catch((error: unknown) => {
-      this.dbPromise = null;
-      throw error;
-    }));
+    });
   }
 
   private async floor(store: string, key: Uint8Array): Promise<number | null> {
+    // Hex the key before the first await: `key` may be a view into WASM linear
+    // memory that a concurrent `Memory.grow()` detaches across the await, and a
+    // floor read under the wrong key answers "no floor" (#717, #730).
+    const floorKey = toHex(key);
     const db = await this.open();
     const tx = db.transaction(store, 'readonly');
-    const value = await requestResult<number | undefined>(tx.objectStore(store).get(toHex(key)));
+    const value = await requestResult<number | undefined>(tx.objectStore(store).get(floorKey));
     await transactionDone(tx);
     return value ?? null;
   }
@@ -51,10 +44,11 @@ export class IdbFloorStore implements FloorStoreSeam {
         `FloorStore: floor value must be a non-negative safe integer, got ${value}`
       );
     }
+    // Hex the key before the first await, as in `floor` (#717, #730).
+    const hexKey = toHex(key);
     const db = await this.open();
     const tx = db.transaction(store, 'readwrite');
     const objectStore = tx.objectStore(store);
-    const hexKey = toHex(key);
     const current = await requestResult<number | undefined>(objectStore.get(hexKey));
     const raised = current === undefined ? value : Math.max(current, value);
     objectStore.put(raised, hexKey);

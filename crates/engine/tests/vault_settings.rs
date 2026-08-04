@@ -319,6 +319,7 @@ impl RecordTransport for AcksNothingBack {
         &self,
         _endpoint: &EndpointId,
         _routing_key: &str,
+        _max_bytes: usize,
     ) -> SeamResult<Option<Vec<u8>>> {
         Ok(None)
     }
@@ -473,6 +474,7 @@ impl RecordTransport for NeverAnswers {
         &self,
         _endpoint: &EndpointId,
         _routing_key: &str,
+        _max_bytes: usize,
     ) -> SeamResult<Option<Vec<u8>>> {
         poll_fn(|_| Poll::<SeamResult<Option<Vec<u8>>>>::Pending).await
     }

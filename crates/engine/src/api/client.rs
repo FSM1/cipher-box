@@ -25,7 +25,15 @@ use super::types::{
     TestLoginResponse, TokenResponse, UploadResult,
 };
 use crate::content::DAG_ROOT_CODEC;
-use crate::seams::{CredentialStore, Http, HttpMethod, HttpRequest, HttpResponse};
+use crate::seams::{CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse};
+
+/// Deadline for the control plane — auth, metadata, mailbox: small JSON round
+/// trips that must never park a UI flow. Restores at the seam layer the bound
+/// #910 removed with the hand-rolled SIWE nonce fetch (#939).
+const CONTROL_TIMEOUT_MS: u64 = 10_000;
+/// Deadline for a content-block upload, which legitimately moves megabytes on
+/// a slow uplink and cannot share the control-plane bound.
+const TRANSFER_TIMEOUT_MS: u64 = 120_000;
 
 const CONTENT_TYPE: &str = "Content-Type";
 const AUTHORIZATION: &str = "Authorization";
@@ -138,6 +146,8 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             url: self.url("/auth/siwe/challenge"),
             headers: Vec::new(),
             body: None,
+            credentials: HttpCredentials::Include,
+            timeout_ms: Some(CONTROL_TIMEOUT_MS),
         };
         let response = ok_or_err(self.http.send(request).await?)?;
         let body: SiweChallengeResponse = decode(&response)?;
@@ -304,6 +314,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
                 Some(APPLICATION_OCTET_STREAM),
                 &[(CONTENT_CID, cid)],
                 Some(content.to_vec()),
+                TRANSFER_TIMEOUT_MS,
             )
             .await?;
         let response = ok_or_err(response)?;
@@ -420,6 +431,8 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             url: self.url(path),
             headers: vec![(CONTENT_TYPE.to_owned(), APPLICATION_JSON.to_owned())],
             body: Some(to_json(body)),
+            credentials: HttpCredentials::Include,
+            timeout_ms: Some(CONTROL_TIMEOUT_MS),
         };
         Ok(self.http.send(request).await?)
     }
@@ -438,6 +451,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             Some(APPLICATION_JSON),
             &[],
             Some(to_json(body)),
+            CONTROL_TIMEOUT_MS,
         )
         .await
     }
@@ -448,11 +462,12 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         method: HttpMethod,
         path: &str,
     ) -> Result<HttpResponse, ApiError> {
-        self.request_authed_with(method, path, None, &[], None)
+        self.request_authed_with(method, path, None, &[], None, CONTROL_TIMEOUT_MS)
             .await
     }
 
-    /// [`Self::request_authed`], plus a body and request-specific headers.
+    /// [`Self::request_authed`], plus a body, request-specific headers, and an
+    /// explicit per-request-class deadline.
     async fn request_authed_with(
         &self,
         method: HttpMethod,
@@ -460,9 +475,17 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         content_type: Option<&str>,
         extra_headers: &[(&str, &str)],
         body: Option<Vec<u8>>,
+        timeout_ms: u64,
     ) -> Result<HttpResponse, ApiError> {
         let first = self
-            .send_with_token(method, path, content_type, extra_headers, body.clone())
+            .send_with_token(
+                method,
+                path,
+                content_type,
+                extra_headers,
+                body.clone(),
+                timeout_ms,
+            )
             .await?;
         if first.status != 401 {
             return Ok(first);
@@ -470,7 +493,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         // One refresh, then one retry; a second 401 is terminal (the caller
         // maps it via `ok_or_err`).
         self.refresh().await?;
-        self.send_with_token(method, path, content_type, extra_headers, body)
+        self.send_with_token(method, path, content_type, extra_headers, body, timeout_ms)
             .await
     }
 
@@ -485,6 +508,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         content_type: Option<&str>,
         extra_headers: &[(&str, &str)],
         body: Option<Vec<u8>>,
+        timeout_ms: u64,
     ) -> Result<HttpResponse, ApiError> {
         let mut headers = Vec::new();
         if let Some(content_type) = content_type {
@@ -505,6 +529,8 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             url: self.url(path),
             headers,
             body,
+            credentials: HttpCredentials::Include,
+            timeout_ms: Some(timeout_ms),
         };
         Ok(self.http.send(request).await?)
     }
@@ -539,6 +565,8 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             url: self.url("/auth/refresh"),
             headers: vec![(CONTENT_TYPE.to_owned(), APPLICATION_JSON.to_owned())],
             body: Some(body.to_vec()),
+            credentials: HttpCredentials::Include,
+            timeout_ms: Some(CONTROL_TIMEOUT_MS),
         };
         let response = self.http.send(request).await?;
         if !is_success(response.status) {

@@ -51,6 +51,19 @@ function stubFetch(response: Response): void {
   );
 }
 
+/** Stubs `fetch` and hands back the `RequestInit` each call was given. */
+function recordingFetch(): { inits: RequestInit[] } {
+  const inits: RequestInit[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((_url: string, init: RequestInit) => {
+      inits.push(init);
+      return Promise.resolve(new Response(new Uint8Array([1]), { status: 200 }));
+    })
+  );
+  return { inits };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -189,5 +202,80 @@ describe('FetchHttp.sendCapped', () => {
     );
 
     await expect(new FetchHttp().sendCapped(GET, 1000)).rejects.toThrow('network down');
+  });
+});
+
+describe('FetchHttp credential scoping', () => {
+  it('omits ambient credentials when the request does not ask for them', async () => {
+    const fetches = recordingFetch();
+    const http = new FetchHttp();
+
+    await http.send(GET);
+    await http.sendCapped(GET, 1000);
+
+    expect(fetches.inits.map((init) => init.credentials)).toEqual(['omit', 'omit']);
+  });
+
+  it('includes them only where the engine opted in', async () => {
+    const fetches = recordingFetch();
+    const apiRequest: HttpRequestData = { ...GET, credentials: 'include' };
+
+    await new FetchHttp().send(apiRequest);
+    await new FetchHttp().sendCapped(apiRequest, 1000);
+
+    expect(fetches.inits.map((init) => init.credentials)).toEqual(['include', 'include']);
+  });
+});
+
+describe('FetchHttp deadlines', () => {
+  it('carries no abort signal when the request sets no deadline', async () => {
+    const fetches = recordingFetch();
+
+    await new FetchHttp().send(GET);
+    await new FetchHttp().sendCapped({ ...GET, timeoutMs: null }, 1000);
+
+    expect(fetches.inits.map((init) => init.signal)).toEqual([undefined, undefined]);
+  });
+
+  it('aborts a request that outlives its deadline', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        (_url: string, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(init.signal?.reason as Error));
+          })
+      )
+    );
+
+    await expect(new FetchHttp().send({ ...GET, timeoutMs: 5 })).rejects.toMatchObject({
+      name: 'TimeoutError',
+    });
+  });
+
+  it('bounds a body that stalls mid-stream, not just the headers', async () => {
+    // One chunk, then nothing: a body under the cap that never completes, so
+    // only the deadline can end the drain.
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        start(controller) {
+          source = controller;
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+        },
+      },
+      { highWaterMark: 0 }
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init: RequestInit) => {
+        init.signal?.addEventListener('abort', () => source.error(init.signal?.reason));
+        return Promise.resolve(new Response(stream, { status: 200 }));
+      })
+    );
+
+    await expect(
+      new FetchHttp().sendCapped({ ...GET, timeoutMs: 5 }, 1_000_000)
+    ).rejects.toMatchObject({ name: 'TimeoutError' });
   });
 });

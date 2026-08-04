@@ -765,8 +765,11 @@ mod tests {
             &self,
             endpoint: &EndpointId,
             routing_key: &str,
+            max_bytes: usize,
         ) -> SeamResult<Option<Vec<u8>>> {
-            self.inner.get_record(endpoint, routing_key).await
+            self.inner
+                .get_record(endpoint, routing_key, max_bytes)
+                .await
         }
 
         async fn put_record(

@@ -13,6 +13,12 @@ use cipherbox_core::ipns::{IpnsName, IpnsRecord, VerifiedRecord};
 
 use crate::seams::{EndpointId, RecordTransport};
 
+/// Hard ceiling on one signed IPNS record fetched from a `/routing/v1`
+/// endpoint. The IPNS spec caps a record at 10 KiB, and the endpoint set
+/// includes at least one untrusted public endpoint — anything larger is a
+/// hostile or broken endpoint whose bytes are never adoptable (#949).
+pub const MAX_RECORD_BYTES: usize = 10 * 1024;
+
 /// The outcome of a parallel PUT across the endpoint set.
 pub struct Fanout {
     /// Endpoints that acknowledged the PUT.
@@ -96,9 +102,14 @@ pub async fn fanout_get_verify<T: RecordTransport>(
     let key = name.as_str();
     let mut best: Option<(VerifiedRecord, Vec<u8>)> = None;
     for endpoint in transport.endpoints() {
-        let Ok(Some(bytes)) = transport.get_record(&endpoint, key).await else {
+        let Ok(Some(bytes)) = transport.get_record(&endpoint, key, MAX_RECORD_BYTES).await else {
             continue;
         };
+        // Release-active backstop: a transport that ignores its cap must not
+        // talk the engine past it (mirrors the WASM bridge's `send_capped`).
+        if bytes.len() > MAX_RECORD_BYTES {
+            continue;
+        }
         let Ok(record) = IpnsRecord::unmarshal(&bytes) else {
             continue;
         };

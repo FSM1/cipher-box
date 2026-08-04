@@ -13,7 +13,7 @@
  */
 
 import { fromHex, toHex } from './bytes.js';
-import { openDatabase, requestResult, transactionDone } from './idb.js';
+import { memoizedDatabase, requestResult, transactionDone } from './idb.js';
 import type { StagingStoreSeam } from './types.js';
 
 const OPS_STORE = 'ops';
@@ -42,27 +42,16 @@ async function removeIfPresent(dir: FileSystemDirectoryHandle, name: string): Pr
 }
 
 export class OpfsStagingStore implements StagingStoreSeam {
-  private readonly dbName: string;
   private readonly dirName: string;
-  private dbPromise: Promise<IDBDatabase> | null = null;
+  private readonly open: () => Promise<IDBDatabase>;
 
   constructor(name = 'cipherbox-staging') {
-    this.dbName = name;
     this.dirName = `${name}-staged`;
-  }
-
-  private open(): Promise<IDBDatabase> {
-    // Memoize the in-flight open, not just the resolved handle: concurrent
-    // callers before the first open resolves must share one connection. A
-    // failed open clears the memo so the next call can re-open.
-    return (this.dbPromise ??= openDatabase(this.dbName, 1, (db) => {
+    this.open = memoizedDatabase(name, 1, (db) => {
       // Out-of-line auto-incrementing keys are the OpId source: strictly
       // increasing, never reused, durable across reopen.
       db.createObjectStore(OPS_STORE, { autoIncrement: true });
-    }).catch((error: unknown) => {
-      this.dbPromise = null;
-      throw error;
-    }));
+    });
   }
 
   private async stagedDir(): Promise<FileSystemDirectoryHandle> {

@@ -122,6 +122,7 @@ impl RecordTransport for InMemoryRecordStore {
         &self,
         endpoint: &EndpointId,
         routing_key: &str,
+        max_bytes: usize,
     ) -> SeamResult<Option<Vec<u8>>> {
         if self.get_failing(endpoint) {
             return Err(SeamError::new(format!(
@@ -129,12 +130,20 @@ impl RecordTransport for InMemoryRecordStore {
                 endpoint.0
             )));
         }
-        self.inner
+        let record = self
+            .inner
             .lock()
             .expect("lock")
             .get(endpoint)
             .map(|records| records.get(routing_key).cloned())
-            .ok_or_else(|| SeamError::new(format!("unknown endpoint: {}", endpoint.0)))
+            .ok_or_else(|| SeamError::new(format!("unknown endpoint: {}", endpoint.0)))?;
+        match record {
+            Some(bytes) if bytes.len() > max_bytes => Err(SeamError::new(format!(
+                "record over cap: {} > {max_bytes}",
+                bytes.len()
+            ))),
+            other => Ok(other),
+        }
     }
 
     async fn put_record(
@@ -169,7 +178,7 @@ mod tests {
     fn unknown_endpoint_is_a_seam_error() {
         let store = InMemoryRecordStore::new(vec![EndpointId::new("a")]);
         let missing = EndpointId::new("nope");
-        assert!(block_on(store.get_record(&missing, "k")).is_err());
+        assert!(block_on(store.get_record(&missing, "k", 1024)).is_err());
         assert!(block_on(store.put_record(&missing, "k", b"r")).is_err());
     }
 
@@ -179,7 +188,7 @@ mod tests {
         let store = InMemoryRecordStore::new(vec![endpoint.clone()]);
         store.seed_record(&endpoint, "name", b"forged".to_vec());
         assert_eq!(
-            block_on(store.get_record(&endpoint, "name")).unwrap(),
+            block_on(store.get_record(&endpoint, "name", 1024)).unwrap(),
             Some(b"forged".to_vec())
         );
         block_on(store.put_record(&endpoint, "name", b"published")).unwrap();
