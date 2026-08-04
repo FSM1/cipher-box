@@ -49,22 +49,15 @@ use crate::entropy::{Entropy, EntropyError};
 use crate::grants::enforce_committed_ledger;
 
 /// How many history links a re-seal carries forward — the ratchet's retained
-/// window, in rotations.
-///
-/// A reader walks the chain backward one epoch at a time to read a node the
-/// lazy wave has not re-sealed yet (CONTEXT.md "History link", "Epoch lag"), so
-/// the window is the deepest lag that walk can ever cover. Convergence forward
-/// never needs it: the sweep re-seals a lagging node from the scope's *current*
-/// seed, so a node past the window is readable again after a sweep pass rather
-/// than lost. Sized well above any lag a scope accumulates in practice — a
-/// sweep pass returns the whole eager set to the floor epoch at once — and far
-/// enough below [`MAX_HISTORY_LINKS`] that the decode bound stays a
-/// malformed-input guard an honest rotator never approaches.
-pub const MAX_RETAINED_HISTORY_LINKS: usize = 64;
+/// window, in rotations (blueprint/core.md "History-link retention"). The window
+/// is the deepest epoch lag a backward walk can cover; a node past it is
+/// re-sealed forward by the next sweep rather than lost.
+const MAX_RETAINED_HISTORY_LINKS: usize = 64;
 
-// Retention must stay under the decode bound, or a re-seal would mint sections
-// the decoder refuses.
-const _: () = assert!(MAX_RETAINED_HISTORY_LINKS < MAX_HISTORY_LINKS);
+// Under the decode bound, or a re-seal mints sections the decoder refuses; at
+// least one, or `keep` below underflows and disables the prune in release.
+const _: () = assert!(MAX_RETAINED_HISTORY_LINKS >= 1);
+const _: () = assert!(MAX_RETAINED_HISTORY_LINKS <= MAX_HISTORY_LINKS);
 
 /// The identity, recipients, and signing capability of one scope root — the
 /// context-that-does-not-change-across-epochs half of a re-seal.
@@ -207,15 +200,15 @@ fn fill<const N: usize, E: Entropy>(entropy: &mut E) -> Result<[u8; N], ResealEr
 /// openable under the epoch key that minted it — but are re-signed at this
 /// re-seal's read epoch, the one the gate recomputes every structure at. This
 /// endorses those bytes under the committed pseudonym without inspecting them,
-/// so callers MUST source them from a section that passed the adoption gate.
-/// When `seeds.prev` is `Some`, one freshly-minted link (the prior seed under
-/// the new epoch's structure key) is appended.
+/// so callers MUST source them from a section that passed the adoption gate, and
+/// MUST keep the wire order this function produces: **oldest epoch first**, the
+/// ordering the prune below drops from. When `seeds.prev` is `Some`, one
+/// freshly-minted link (the prior seed under the new epoch's structure key) is
+/// appended.
 ///
 /// The carried set is pruned to the newest [`MAX_RETAINED_HISTORY_LINKS`]
-/// **before** re-signing, so the collection is bounded by design rather than by
-/// the block ceiling. Each link is sealed under the seed of the epoch that
-/// immediately precedes it, so the ratchet is a contiguous chain and only the
-/// oldest end may be dropped — a hole would strand every epoch beyond it.
+/// **before** re-signing; only the oldest end is ever dropped, since the ratchet
+/// is a contiguous chain and a hole would strand every epoch beyond it.
 ///
 /// Fails closed — see [`ResealError`] — before sealing anything on a divergent
 /// ledger or an unusable recipient key, so a partial or unopenable section is
@@ -362,10 +355,9 @@ pub fn reseal_scope_root<E: Entropy>(
 
     // --- History links: newest window kept and re-signed, oldest dropped;
     // append one fresh link on a new epoch. ---
-    let minting_fresh = seeds.prev.is_some();
-    let keep = MAX_RETAINED_HISTORY_LINKS - usize::from(minting_fresh);
-    let dropped = carried_history_links.len().saturating_sub(keep);
-    let mut history_links: Vec<SignedSealed> = carried_history_links[dropped..]
+    let keep = MAX_RETAINED_HISTORY_LINKS - usize::from(seeds.prev.is_some());
+    let oldest_kept = carried_history_links.len().saturating_sub(keep);
+    let mut history_links: Vec<SignedSealed> = carried_history_links[oldest_kept..]
         .iter()
         .map(|link| SignedSealed {
             signature: sign_over(STRUCT_TAG_HISTORY_LINK, None, &link.sealed),
@@ -807,7 +799,7 @@ mod tests {
             &fx.pointer_read_key,
         );
         let cs = committed_set(&commitment, &sig, &ledger);
-        let carried = carried_links(MAX_RETAINED_HISTORY_LINKS * 2);
+        let carried = carried_links(MAX_HISTORY_LINKS * 2);
         let mut e = SeededEntropy::new(11);
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &carried).expect("reseal");
 
@@ -826,23 +818,12 @@ mod tests {
             .map(|l| &l.sealed)
             .collect();
         assert_eq!(kept, newest_carried, "newest carried links kept, in order");
-    }
-
-    #[test]
-    fn a_retained_section_always_encodes_within_the_decode_bound() {
-        // Retention is what keeps the section under the codec's frozen bound, so
-        // a re-seal can never mint a section the decoder refuses.
-        let fx = Fixture::new();
-        let owner_pub = fx.owner_enc.public();
-        let (commitment, sig, ledger) = fx.committed();
-        let id = identity(&fx, &owner_pub, b"n", None);
-        let seed = [0x0e; 32];
-        let s = seeds(&seed, 3, None, &fx.write_scope_seed, &fx.pointer_read_key);
-        let cs = committed_set(&commitment, &sig, &ledger);
-        let carried = carried_links(MAX_HISTORY_LINKS * 2);
-        let mut e = SeededEntropy::new(12);
-        let section = reseal_scope_root(&mut e, &id, &s, &cs, &carried).expect("reseal");
-        assert_eq!(section.history_links.len(), MAX_RETAINED_HISTORY_LINKS);
+        let newest = &section.history_links[MAX_RETAINED_HISTORY_LINKS - 1].sealed;
+        assert!(
+            !carried.iter().any(|l| &l.sealed == newest),
+            "the freshly minted link is appended last, keeping the wire order oldest-first"
+        );
+        // Retention is what holds a re-seal inside the codec's frozen bound.
         encode_grant_section(&section).expect("a retained section always encodes");
     }
 

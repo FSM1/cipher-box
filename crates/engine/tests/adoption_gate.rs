@@ -1534,13 +1534,9 @@ fn seed_blob_aad_struct_tag_must_match_blob_type() {
 }
 
 // ---------------------------------------------------------------------------
-// reseal → adopt, with the two planes' clocks apart.
-//
-// A read-only rotation advances the read epoch and leaves the write epoch
-// standing (the write KDF takes no epoch), so a real scope root's structures
-// sit under three clocks: the envelope's read epoch, the write plane's own, and
-// each carried history link's minting epoch. The gate recomputes every
-// structure signature at the envelope epoch.
+// reseal → adopt, with the two planes' clocks apart: a read-only rotation
+// advances the read epoch and leaves the write epoch standing, and the gate
+// recomputes every structure signature at the envelope's read epoch.
 // ---------------------------------------------------------------------------
 
 const RESEAL_READ_EPOCH: u64 = 5;

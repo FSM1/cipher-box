@@ -168,14 +168,11 @@ pub fn author_scope_root_with_section(
 
 /// The checks the gate makes on arrival, run here first so a root this build's
 /// own gate always rejects is never signed (release-active).
-///
-/// The signature work is self-bounding: `decode_grant_section` caps every
-/// repeated collection, so the section reaching the stage-3 predicate carries at
-/// most `MAX_GRANT_BLOBS + MAX_HISTORY_LINKS` signable structures.
 fn check_scope_root(envelope: &Envelope, name: &IpnsName) -> Result<(), AuthorError> {
-    let section = grant_section_bytes(envelope)
-        .and_then(|bytes| decode_grant_section(bytes).ok())
-        .ok_or(AuthorError::MissingGrantSection)?;
+    let section = decode_grant_section(
+        grant_section_bytes(envelope).ok_or(AuthorError::MissingGrantSection)?,
+    )
+    .map_err(AuthorError::Seal)?;
     if section.commitment.ipns_name != name.as_str().as_bytes() {
         return Err(AuthorError::CommitmentNameMismatch);
     }

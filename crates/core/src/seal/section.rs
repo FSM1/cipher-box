@@ -34,7 +34,8 @@ use crate::suite::hpke::ENC_LEN;
 use crate::suite::secret::SECRET_LEN;
 
 use super::body::{
-    PreservedFields, assert_grant_tags_unique, bytes_fixed, collect_unknown, merge_unknown, req,
+    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, bytes_fixed,
+    collect_unknown, merge_unknown, req,
 };
 use super::grant::{GrantSetCommitment, decode_grant_set_commitment, encode_grant_set_commitment};
 
@@ -292,14 +293,13 @@ fn assert_within_bound(
 }
 
 /// Release-active uniqueness check over history-link sealed bytes, symmetric
-/// across decode and encode. Each epoch mints one link under a fresh nonce, so
-/// equal sealed bytes are never an honest rotator's output.
-fn assert_history_links_unique<'a>(
-    links: impl Iterator<Item = &'a [u8]>,
-) -> Result<(), CodecError> {
+/// across decode and encode. Each epoch mints one link under a fresh nonce over
+/// a distinct payload, so equal sealed bytes are never an honest rotator's
+/// output — a repeat is an authored anomaly, rejected before any signature work.
+fn assert_history_links_unique(links: &[SignedSealed]) -> Result<(), CodecError> {
     let mut seen = BTreeSet::new();
-    for sealed in links {
-        if !seen.insert(sealed) {
+    for link in links {
+        if !seen.insert(link.sealed.as_slice()) {
             return Err(Malformed::DuplicateHistoryLink.into());
         }
     }
@@ -355,7 +355,7 @@ pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
     for item in raw_history_links {
         history_links.push(SignedSealed::from_value(item)?);
     }
-    assert_history_links_unique(history_links.iter().map(|l| l.sealed.as_slice()))?;
+    assert_history_links_unique(&history_links)?;
     let write_body = SignedSealed::from_value(req(map, "writeBody")?)?;
 
     Ok(GrantSection {
@@ -379,6 +379,9 @@ pub fn decode_grant_section(bytes: &[u8]) -> Result<GrantSection, CodecError> {
 /// verdict the decoder raises, so a release build never hands back bytes its own
 /// decoder rejects (AGENTS.md encode/decode symmetry rule).
 pub fn encode_grant_section(section: &GrantSection) -> Result<Vec<u8>, CodecError> {
+    // `ascentLink`/`ownerWriteBlob` are optional, so `merge_unknown`'s
+    // presence-based precedence does not cover them.
+    assert_unknown_disjoint(&section.unknown, GRANT_SECTION_KNOWN)?;
     assert_grant_tags_unique(section.grant_blobs.iter().map(|b| b.tag))?;
     assert_within_bound("grantBlobs", section.grant_blobs.len(), MAX_GRANT_BLOBS)?;
     assert_within_bound(
@@ -386,7 +389,7 @@ pub fn encode_grant_section(section: &GrantSection) -> Result<Vec<u8>, CodecErro
         section.history_links.len(),
         MAX_HISTORY_LINKS,
     )?;
-    assert_history_links_unique(section.history_links.iter().map(|l| l.sealed.as_slice()))?;
+    assert_history_links_unique(&section.history_links)?;
     let commitment_bytes = encode_grant_set_commitment(&section.commitment)?;
 
     let mut m = Map::new();
@@ -610,10 +613,23 @@ mod tests {
     }
 
     #[test]
+    fn an_optional_field_key_in_the_preserved_unknowns_is_refused_at_encode() {
+        // `merge_unknown`'s precedence is presence-based, so it does not cover an
+        // absent optional field: without this guard a section with
+        // `ascent_link: None` would encode bytes that decode back carrying one.
+        let mut section = sample();
+        section.ascent_link = None;
+        section.unknown = [("ascentLink".to_owned(), Value::Unsigned(0))]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            encode_grant_section(&section).unwrap_err().check(),
+            "unknown-field-collision"
+        );
+    }
+
+    #[test]
     fn history_links_past_the_bound_reject_at_decode_and_encode() {
-        // Release-active on both sides (AGENTS.md rule 8): the gate verifies one
-        // signature per structure, so an unbounded collection would let one
-        // record dictate every co-reader's CPU budget. Active in `--release`.
         // All distinct, so the bound is what fires — not the duplicate guard.
         let over: Vec<SignedSealed> = (0..=MAX_HISTORY_LINKS).map(link).collect();
         let mut section = sample();
@@ -659,9 +675,6 @@ mod tests {
 
     #[test]
     fn duplicate_history_link_rejects_at_decode_and_encode() {
-        // Each epoch mints one link under a fresh nonce, so equal sealed bytes
-        // are never an honest rotator's output — only a way to multiply the
-        // gate's signature verifications. Active in `--release`.
         let mut section = sample();
         section.history_links = vec![link(7), link(7)];
         assert_eq!(

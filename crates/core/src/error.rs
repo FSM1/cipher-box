@@ -271,8 +271,8 @@ pub enum Malformed {
         limit: usize,
     },
     /// Two history links carried identical sealed bytes. Each epoch mints one
-    /// link under a fresh nonce, so a repeat is never an honest rotator's
-    /// output — only a way to multiply signature verifications.
+    /// link under a fresh nonce over a distinct payload, so a repeat is never an
+    /// honest rotator's output.
     DuplicateHistoryLink,
     /// A decoded value had a different type than the caller required
     /// (schema-layer accessor failure).

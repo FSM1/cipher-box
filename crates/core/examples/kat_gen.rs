@@ -4916,8 +4916,6 @@ fn build_grant_section_reject() -> Vec<RejectVector> {
             "malformed",
         ),
         (
-            // The gate verifies one signature per structure, so an unbounded
-            // collection lets one record dictate a reader's CPU budget.
             "history-links-past-the-bound",
             section_with_links(
                 (0..=seal::MAX_HISTORY_LINKS)
@@ -4928,8 +4926,6 @@ fn build_grant_section_reject() -> Vec<RejectVector> {
             "malformed",
         ),
         (
-            // Each epoch mints one link under a fresh nonce, so a repeat is only
-            // a way to multiply those verifications.
             "duplicate-history-link",
             section_with_links(vec![
                 history_link_map(vec![0x40, 0x41]),

@@ -355,9 +355,7 @@ fn authenticate_structure(
 /// The gate's stage-3 predicate: authenticate every structure signature
 /// `section` carries against the pseudonyms its own commitment names,
 /// recomputed at `envelope`'s scope and epoch — whatever epoch a structure's own
-/// sealed AAD binds (blueprint/core.md "Structure signatures"). Taking the
-/// envelope rather than loose scalars keeps the section and the epoch it is
-/// authenticated at from being paired by hand.
+/// sealed AAD binds (blueprint/core.md "Structure signatures").
 ///
 /// Also run release-active on the produce side (`net/author.rs`), so a scope
 /// root this build's own gate would reject is never signed (AGENTS.md rule 8).
