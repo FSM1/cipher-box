@@ -391,9 +391,11 @@
     },
     "sectionReject": {
       "file": "vectors/grant/section_reject.json",
-      "count": 4,
+      "count": 6,
       "checks": [
         "duplicate-grant-tag",
+        "too-many-structures",
+        "duplicate-history-link",
         "unexpected-type",
         "missing-field",
         "invalid-field-length"

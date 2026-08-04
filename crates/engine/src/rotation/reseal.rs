@@ -27,17 +27,17 @@
 //! blobs — that absence is the revocation; a divergent ledger is rejected here,
 //! never sealed.
 
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, GrantBlobPayload, GrantLedgerEntry, GrantSection, GrantSetCommitment,
-    HistoryLinkPayload, OverrideSeedPayload, OwnerWriteBlobPayload, Permission, PreservedFields,
-    STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
-    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedAscentLink, SignedGrantBlob,
-    SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody,
-    encode_write_body, seal, seal_ascent_link, seal_grant_blob, seal_history_link, seal_owner_blob,
-    seal_owner_write_blob, sign_structure,
+    HistoryLinkPayload, MAX_HISTORY_LINKS, OverrideSeedPayload, OwnerWriteBlobPayload, Permission,
+    PreservedFields, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
+    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedAscentLink,
+    SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput,
+    WriteBody, encode_write_body, open_history_link, seal, seal_ascent_link, seal_grant_blob,
+    seal_history_link, seal_owner_blob, seal_owner_write_blob, sign_structure,
 };
 use cipherbox_core::suite::aead;
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
@@ -47,6 +47,17 @@ use cipherbox_core::suite::x25519::X25519Public;
 
 use crate::entropy::{Entropy, EntropyError};
 use crate::grants::enforce_committed_ledger;
+
+/// How many history links a re-seal carries forward — the ratchet's retained
+/// window, in rotations (blueprint/core.md "History-link retention"). The window
+/// is the deepest epoch lag a backward walk can cover; a node past it is
+/// re-sealed forward by the next sweep rather than lost.
+const MAX_RETAINED_HISTORY_LINKS: usize = 64;
+
+// Under the decode bound, or a re-seal mints sections the decoder refuses; at
+// least one, or `keep` below underflows and disables the prune in release.
+const _: () = assert!(MAX_RETAINED_HISTORY_LINKS >= 1);
+const _: () = assert!(MAX_RETAINED_HISTORY_LINKS <= MAX_HISTORY_LINKS);
 
 /// The identity, recipients, and signing capability of one scope root — the
 /// context-that-does-not-change-across-epochs half of a re-seal.
@@ -135,6 +146,9 @@ pub enum ResealError {
     UnusableRecipientKey,
     /// Entropy acquisition failed; no seal proceeds without fresh randomness.
     Entropy(EntropyError),
+    /// More carried history links than the codec's frozen bound admits — a set
+    /// that could only ever produce a section this build's own encoder rejects.
+    TooManyHistoryLinks,
     /// A re-sealed structure could not be encoded — a duplicate ledger tag, or
     /// nesting past the codec's `MAX_DEPTH`.
     Encode(cipherbox_core::error::CodecError),
@@ -153,6 +167,9 @@ impl core::fmt::Display for ResealError {
                 f.write_str("grant-ledger recipient encryption key is unusable")
             }
             ResealError::Entropy(e) => write!(f, "entropy error: {e}"),
+            ResealError::TooManyHistoryLinks => {
+                f.write_str("carried history links exceed the codec's frozen bound")
+            }
             ResealError::Encode(e) => write!(f, "structure encode failed: {}", e.check()),
         }
     }
@@ -168,9 +185,44 @@ impl ResealError {
             ResealError::SignerNotCommitted => "signer-not-committed",
             ResealError::UnusableRecipientKey => "unusable-recipient-key",
             ResealError::Entropy(_) => "entropy-error",
+            ResealError::TooManyHistoryLinks => "too-many-history-links",
             ResealError::Encode(_) => "structure-encode-failed",
         }
     }
+}
+
+/// The index of the oldest link in `carried` that still walks as this scope's
+/// ratchet from `head`, newest first — everything older than the first link that
+/// fails to open is dropped rather than published, since no reader could walk
+/// past that break either (blueprint/core.md "History-link retention").
+///
+/// Truncating rather than refusing is deliberate: the carried set is
+/// attacker-influenced — the adoption gate authenticates each link's signature
+/// but nothing about their order — so failing the re-seal would let a committed
+/// write-grantee permanently block the very rotation that revokes them.
+fn walkable_chain_start(
+    v: u64,
+    scope_id: [u8; 16],
+    head: &PrevEpochSeed<'_>,
+    carried: &[SignedSealed],
+) -> usize {
+    let mut seed = Zeroizing::new(*head.seed);
+    let mut epoch = head.epoch;
+    for (i, link) in carried.iter().enumerate().rev() {
+        let key = kdf::structure_key(&seed, STRUCT_TAG_HISTORY_LINK);
+        let ctx = ctx_for(v, scope_id, epoch, STRUCT_TAG_HISTORY_LINK);
+        let Ok(payload) = open_history_link(key.as_bytes(), &ctx, &link.sealed) else {
+            return i + 1;
+        };
+        // The ratchet only ever steps backward; a flat or rising epoch is a
+        // chain that cannot terminate.
+        if payload.prev_epoch >= epoch {
+            return i + 1;
+        }
+        seed = Zeroizing::new(*payload.prev_seed());
+        epoch = payload.prev_epoch;
+    }
+    0
 }
 
 /// Fill an `N`-byte array from the entropy seam, fail-closed.
@@ -185,10 +237,21 @@ fn fill<const N: usize, E: Entropy>(entropy: &mut E) -> Result<[u8; N], ResealEr
 /// set. Pure composition of core seal primitives; the injected `entropy`
 /// supplies every HPKE ephemeral scalar and seal nonce.
 ///
-/// `carried_history_links` are the scope's existing per-epoch history links,
-/// preserved verbatim (their prior-rotator signatures stay valid); when
+/// `carried_history_links` keep their sealed bytes verbatim — each stays
+/// openable under the epoch key that minted it — but are re-signed at this
+/// re-seal's read epoch, the one the gate recomputes every structure at. When
 /// `seeds.prev` is `Some`, one freshly-minted link (the prior seed under the new
-/// epoch's structure key) is appended.
+/// epoch's structure key) is appended, and the wire order is **oldest epoch
+/// first**.
+///
+/// A rotation keeps the retained window's walkable suffix
+/// ([`walkable_chain_start`]), so the prune to the newest
+/// [`MAX_RETAINED_HISTORY_LINKS`] provably drops the oldest end rather than an
+/// assumed one. A sweep publishes at the floor epoch without minting a link, so
+/// the record's epoch label can outrun the newest link's minting epoch — the
+/// AAD a walk needs, which [`ResealSeeds`] does not carry — leaving it unable to
+/// walk or safely prune; it appends nothing, so the set cannot grow there.
+/// Callers MUST still source the set from a gate-passed section.
 ///
 /// Fails closed — see [`ResealError`] — before sealing anything on a divergent
 /// ledger or an unusable recipient key, so a partial or unopenable section is
@@ -216,6 +279,13 @@ pub fn reseal_scope_root<E: Entropy>(
     // binding is enforced at resolve time.
     enforce_committed_ledger(committed.commitment, committed.grant_ledger)
         .map_err(|_| ResealError::LedgerDivergesFromCommitment)?;
+
+    // Fail-closed BEFORE any seal: the produce-side mirror of the codec's own
+    // bound (AGENTS.md rule 8), so a sweep — which prunes nothing — can never
+    // spend a section's worth of signatures on a set the encoder then refuses.
+    if carried_history_links.len() > MAX_HISTORY_LINKS {
+        return Err(ResealError::TooManyHistoryLinks);
+    }
 
     let scope_id = identity.scope_id;
     let read_epoch = seeds.read_epoch;
@@ -333,8 +403,26 @@ pub fn reseal_scope_root<E: Entropy>(
         None => None,
     };
 
-    // --- History links: carried verbatim; append one fresh link on a new epoch. ---
-    let mut history_links = carried_history_links.to_vec();
+    // --- History links: a rotation keeps the retained window's walkable suffix
+    // and appends one fresh link; a sweep carries what it has. ---
+    let oldest_kept = match &seeds.prev {
+        Some(prev) => {
+            let window = carried_history_links
+                .len()
+                .saturating_sub(MAX_RETAINED_HISTORY_LINKS - 1);
+            window
+                + walkable_chain_start(identity.v, scope_id, prev, &carried_history_links[window..])
+        }
+        None => 0,
+    };
+    let mut history_links: Vec<SignedSealed> = carried_history_links[oldest_kept..]
+        .iter()
+        .map(|link| SignedSealed {
+            signature: sign_over(STRUCT_TAG_HISTORY_LINK, None, &link.sealed),
+            sealed: link.sealed.clone(),
+            unknown: link.unknown.clone(),
+        })
+        .collect();
     if let Some(prev) = &seeds.prev {
         let structure_key = kdf::structure_key(seeds.override_seed, STRUCT_TAG_HISTORY_LINK);
         let nonce = fill::<{ aead::NONCE_LEN }, E>(entropy)?;
@@ -701,8 +789,8 @@ mod tests {
 
     #[test]
     fn sweep_seed_source_mints_no_new_history_link() {
-        // prev = None (sweep catch-up): carried links pass through unchanged, no
-        // fresh link, same epoch.
+        // prev = None (sweep catch-up): no fresh link, carried sealed bytes kept
+        // and re-signed at this read epoch.
         let fx = Fixture::new();
         let owner_pub = fx.owner_enc.public();
         let (commitment, sig, ledger) = fx.committed();
@@ -717,9 +805,202 @@ mod tests {
         }];
         let mut e = SeededEntropy::new(3);
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &carried).expect("reseal");
+        assert_eq!(section.history_links.len(), 1, "no fresh link minted");
         assert_eq!(
-            section.history_links, carried,
-            "carried links unchanged, none added"
+            section.history_links[0].sealed, carried[0].sealed,
+            "the sealed link stays openable under the epoch key that minted it"
+        );
+        let input = StructureSigInput::over_ciphertext(
+            SCOPE,
+            7,
+            STRUCT_TAG_HISTORY_LINK,
+            None,
+            &carried[0].sealed,
+        );
+        verify_structure(
+            &verifier(&fx),
+            &input,
+            &blob_sig(&section.history_links[0].signature),
+        )
+        .expect("the carried link is re-signed at the epoch the gate recomputes at");
+    }
+
+    /// The synthetic chain's override seed for epoch `e`.
+    fn chain_seed(e: u64) -> [u8; 32] {
+        let mut seed = [0x40; 32];
+        seed[..8].copy_from_slice(&e.to_be_bytes());
+        seed
+    }
+
+    /// A real ratchet: links for epochs `2..=newest`, oldest first, each sealed
+    /// under its own epoch's structure key and naming the epoch before it —
+    /// exactly what `reseal_scope_root` mints, so the walk accepts it.
+    fn real_chain(newest: u64) -> Vec<SignedSealed> {
+        (2..=newest)
+            .map(|e| {
+                let key = kdf::structure_key(&chain_seed(e), STRUCT_TAG_HISTORY_LINK);
+                let ctx = ctx_for(V, SCOPE, e, STRUCT_TAG_HISTORY_LINK);
+                let payload = HistoryLinkPayload::new(chain_seed(e - 1), e - 1);
+                SignedSealed {
+                    sealed: seal_history_link(key.as_bytes(), &[0x5a; 24], &ctx, &payload).unwrap(),
+                    signature: [0x01; 64],
+                    unknown: PreservedFields::new(),
+                }
+            })
+            .collect()
+    }
+
+    /// Re-seal at `newest + 1`, carrying `carried`.
+    fn reseal_over_chain(
+        fx: &Fixture,
+        newest: u64,
+        carried: &[SignedSealed],
+    ) -> Result<GrantSection, ResealError> {
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let id = identity(fx, &owner_pub, b"n", None);
+        let head = chain_seed(newest);
+        let fresh = chain_seed(newest + 1);
+        let s = seeds(
+            &fresh,
+            newest + 1,
+            Some(PrevEpochSeed {
+                seed: &head,
+                epoch: newest,
+            }),
+            &fx.write_scope_seed,
+            &fx.pointer_read_key,
+        );
+        let cs = committed_set(&commitment, &sig, &ledger);
+        reseal_scope_root(&mut SeededEntropy::new(11), &id, &s, &cs, carried)
+    }
+
+    #[test]
+    fn retention_keeps_the_newest_window_and_drops_the_oldest() {
+        // The ratchet is a contiguous chain, so only the oldest end may be
+        // dropped — a hole would strand every epoch beyond it.
+        let fx = Fixture::new();
+        let newest = MAX_RETAINED_HISTORY_LINKS as u64 + 8;
+        let carried = real_chain(newest);
+        let section = reseal_over_chain(&fx, newest, &carried).expect("reseal");
+
+        assert_eq!(
+            section.history_links.len(),
+            MAX_RETAINED_HISTORY_LINKS,
+            "the fresh link rides inside the retained window, never past it"
+        );
+        let kept: Vec<&Vec<u8>> = section.history_links[..MAX_RETAINED_HISTORY_LINKS - 1]
+            .iter()
+            .map(|l| &l.sealed)
+            .collect();
+        let newest_carried: Vec<&Vec<u8>> = carried
+            [carried.len() - (MAX_RETAINED_HISTORY_LINKS - 1)..]
+            .iter()
+            .map(|l| &l.sealed)
+            .collect();
+        assert_eq!(kept, newest_carried, "newest carried links kept, in order");
+        let fresh = &section.history_links[MAX_RETAINED_HISTORY_LINKS - 1].sealed;
+        assert!(
+            !carried.iter().any(|l| &l.sealed == fresh),
+            "the freshly minted link is appended last, keeping the wire order oldest-first"
+        );
+        // Retention is what holds a re-seal inside the codec's frozen bound.
+        encode_grant_section(&section).expect("a retained section always encodes");
+    }
+
+    /// A mutation that breaks the carried chain inside the retained window, so
+    /// the damage is not merely pruned away.
+    type ChainBreak = fn(&mut Vec<SignedSealed>);
+
+    #[test]
+    fn a_chain_that_does_not_walk_is_truncated_never_refused() {
+        // The carried set is attacker-influenced: the gate authenticates each
+        // link's signature and nothing about their order. Refusing would let a
+        // committed write-grantee block the rotation that revokes them, so the
+        // unwalkable remainder is dropped and the cut still lands.
+        let cases: [(&str, ChainBreak); 4] = [
+            ("reversed", |c| c.reverse()),
+            ("gapped", |c| {
+                c.remove(c.len() - 3);
+            }),
+            ("tampered", |c| c.last_mut().unwrap().sealed[30] ^= 0xFF),
+            ("interior swap", |c| {
+                let n = c.len();
+                c.swap(n - 2, n - 3);
+            }),
+        ];
+        let fx = Fixture::new();
+        for (name, break_chain) in cases {
+            let mut carried = real_chain(12);
+            break_chain(&mut carried);
+            let section = reseal_over_chain(&fx, 12, &carried)
+                .unwrap_or_else(|e| panic!("{name}: a broken chain must not block the cut: {e}"));
+            assert!(
+                section.history_links.len() < carried.len() + 1,
+                "{name}: the unwalkable remainder must be dropped, not carried"
+            );
+            encode_grant_section(&section).unwrap_or_else(|e| panic!("{name}: encodes: {e}"));
+        }
+    }
+
+    #[test]
+    fn a_link_minted_for_another_scope_is_never_re_signed() {
+        // The AAD binds the scope, so a genuine link lifted from another scope
+        // opens under no seed this walk reaches — transplant, not tamper.
+        let fx = Fixture::new();
+        let mut carried = real_chain(12);
+        let key = kdf::structure_key(&chain_seed(12), STRUCT_TAG_HISTORY_LINK);
+        let ctx = ctx_for(V, [0xee; 16], 12, STRUCT_TAG_HISTORY_LINK);
+        let payload = HistoryLinkPayload::new(chain_seed(11), 11);
+        carried.last_mut().unwrap().sealed =
+            seal_history_link(key.as_bytes(), &[0x5a; 24], &ctx, &payload).unwrap();
+
+        let section = reseal_over_chain(&fx, 12, &carried).expect("the cut still lands");
+        assert_eq!(
+            section.history_links.len(),
+            1,
+            "nothing older than the transplant survives; only the fresh link remains"
+        );
+    }
+
+    #[test]
+    fn a_carried_set_past_the_codec_bound_fails_closed_before_any_seal() {
+        // Release-active mirror of the codec's own bound: a set this big could
+        // only ever produce a section this build's own encoder rejects.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let id = identity(&fx, &owner_pub, b"n", None);
+        let seed = chain_seed(9);
+        let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
+        let cs = committed_set(&commitment, &sig, &ledger);
+        let carried = real_chain(MAX_HISTORY_LINKS as u64 + 3);
+        let err = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &carried)
+            .expect_err("past the bound");
+        assert_eq!(err.check(), "too-many-history-links");
+    }
+
+    #[test]
+    fn a_sweep_carries_its_chain_through_unpruned() {
+        // A sweep mints no link, so the record's epoch label can outrun the
+        // newest link's minting epoch — the AAD a walk needs. It neither walks
+        // nor prunes; appending nothing, it cannot grow the set either.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let id = identity(&fx, &owner_pub, b"n", None);
+        let seed = chain_seed(9);
+        let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
+        let cs = committed_set(&commitment, &sig, &ledger);
+        // Past the retained window, so a reinstated sweep prune would show up.
+        let carried = real_chain(MAX_RETAINED_HISTORY_LINKS as u64 + 8);
+        let section = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &carried)
+            .expect("a sweep re-seals whatever it carries");
+        let sealed: Vec<&Vec<u8>> = section.history_links.iter().map(|l| &l.sealed).collect();
+        let carried_sealed: Vec<&Vec<u8>> = carried.iter().map(|l| &l.sealed).collect();
+        assert_eq!(
+            sealed, carried_sealed,
+            "carried through, in order, unpruned"
         );
     }
 

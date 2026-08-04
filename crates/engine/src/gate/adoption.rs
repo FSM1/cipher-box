@@ -352,6 +352,64 @@ fn authenticate_structure(
     Err(TrustViolation::StructureSignatureInvalid.into())
 }
 
+/// The gate's stage-3 predicate: authenticate every structure signature
+/// `section` carries against the pseudonyms its own commitment names,
+/// recomputed at `envelope`'s scope and epoch — whatever epoch a structure's own
+/// sealed AAD binds (blueprint/core.md "Structure signatures").
+///
+/// Also run release-active on the produce side (`net/author.rs`), so a scope
+/// root this build's own gate would reject is never signed (AGENTS.md rule 8).
+pub fn authenticate_section_structures(
+    section: &GrantSection,
+    envelope: &Envelope,
+) -> Result<(), CodecError> {
+    let (scope, epoch) = (envelope.scope, envelope.epoch);
+    let committed = committed_write_pseudonyms(&section.commitment);
+    let authenticate = |tag: u8, recipient: Option<[u8; 32]>, ct: &[u8], sig: &[u8; 64]| {
+        authenticate_structure(&committed, scope, epoch, tag, recipient, ct, sig)
+    };
+    authenticate(
+        STRUCT_TAG_OWNER_BLOB,
+        None,
+        &section.owner_blob.ciphertext,
+        &section.owner_blob.signature,
+    )?;
+    if let Some(owner_write) = &section.owner_write_blob {
+        authenticate(
+            STRUCT_TAG_OWNER_WRITE_BLOB,
+            None,
+            &owner_write.ciphertext,
+            &owner_write.signature,
+        )?;
+    }
+    for blob in &section.grant_blobs {
+        authenticate(
+            STRUCT_TAG_GRANT_BLOB,
+            Some(blob.tag),
+            &blob.ciphertext,
+            &blob.signature,
+        )?;
+    }
+    for link in &section.history_links {
+        authenticate(STRUCT_TAG_HISTORY_LINK, None, &link.sealed, &link.signature)?;
+    }
+    authenticate(
+        STRUCT_TAG_WRITE_BODY,
+        None,
+        &section.write_body.sealed,
+        &section.write_body.signature,
+    )?;
+    if let Some(ascent) = &section.ascent_link {
+        authenticate(
+            STRUCT_TAG_ASCENT_LINK,
+            None,
+            &ascent.ciphertext,
+            &ascent.signature,
+        )?;
+    }
+    Ok(())
+}
+
 impl SeedBlob<'_> {
     /// The structured AAD the blob claims to be sealed under — cross-checked
     /// against the envelope before it is trusted.
@@ -449,58 +507,14 @@ pub async fn adopt_deferred<F: FloorStore>(
 
     // Stage 3 — grant-section authentication under `authenticate_structure`'s
     // recompute contract (#687). Any failure rejects the whole record (#39 D3).
-    let committed = committed_write_pseudonyms(&section.commitment);
-    let scope = candidate.envelope.scope;
     let epoch = candidate.envelope.epoch;
-    let authenticate = |tag: u8, recipient: Option<[u8; 32]>, ct: &[u8], sig: &[u8; 64]| {
-        authenticate_structure(&committed, scope, epoch, tag, recipient, ct, sig)
-            .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))
-    };
-    authenticate(
-        STRUCT_TAG_OWNER_BLOB,
-        None,
-        &section.owner_blob.ciphertext,
-        &section.owner_blob.signature,
-    )?;
-    // Recipient-tag `None` — owner-scoped, not per-grantee. Its sealed AAD binds
-    // the write epoch, yet its structure signature is recomputed at the read
-    // epoch off the authenticated envelope (produce side: `sign_over` in
-    // rotation/reseal.rs).
-    if let Some(owner_write) = &section.owner_write_blob {
-        authenticate(
-            STRUCT_TAG_OWNER_WRITE_BLOB,
-            None,
-            &owner_write.ciphertext,
-            &owner_write.signature,
-        )?;
-    }
-    for blob in &section.grant_blobs {
-        authenticate(
-            STRUCT_TAG_GRANT_BLOB,
-            Some(blob.tag),
-            &blob.ciphertext,
-            &blob.signature,
-        )?;
-    }
-    for link in &section.history_links {
-        authenticate(STRUCT_TAG_HISTORY_LINK, None, &link.sealed, &link.signature)?;
-    }
-    authenticate(
-        STRUCT_TAG_WRITE_BODY,
-        None,
-        &section.write_body.sealed,
-        &section.write_body.signature,
-    )?;
+    authenticate_section_structures(section, &candidate.envelope)
+        .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;
     if let Some(ascent) = &section.ascent_link {
-        // The ascent link is doubly checked: its structure signature proves the
-        // committed writer authored it (recomputed above's convention), and the
-        // derive-and-verify proves the sealed seed is *this* scope root's.
-        authenticate(
-            STRUCT_TAG_ASCENT_LINK,
-            None,
-            &ascent.ciphertext,
-            &ascent.signature,
-        )?;
+        // The ascent link is doubly checked: its structure signature (above)
+        // proves the committed writer authored it, and this derive-and-verify
+        // proves the sealed seed is *this* scope root's.
+        //
         // Ascent authority is reader-derived: the expected keypair comes from the
         // reader's cached ancestor node seed, never the network-supplied record
         // (blueprint/engine.md: "Ancestor readers derive the expected ascent

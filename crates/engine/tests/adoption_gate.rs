@@ -36,9 +36,12 @@ use cipherbox_engine::gate::{
     Adopted, Candidate, FLOOR_VERDICTS, GateError, GateStage, ReaderContext, SeedBlob, adopt,
 };
 use cipherbox_engine::net::MAX_RECORD_BYTES;
+use cipherbox_engine::rotation::{
+    CommittedSet, PrevEpochSeed, ResealSeeds, ScopeRootIdentity, reseal_scope_root,
+};
 use cipherbox_engine::seams::{FloorStore, RecordTransport, Scheduler};
 use cipherbox_engine::testkit::fakes::InMemoryFloorStore;
-use cipherbox_engine::testkit::{FakeWorld, block_on};
+use cipherbox_engine::testkit::{FakeWorld, SeededEntropy, block_on};
 
 // Format version, injected TTL/EOL, and the fixed nonces/ephemeral scalars the
 // fixture seals under (test crypto: deterministic, KAT-style injected entropy).
@@ -1199,6 +1202,23 @@ fn ascent_present_without_reader_seed_fails_closed() {
 }
 
 #[test]
+fn an_unsigned_ascent_link_is_a_signature_verdict_before_it_is_an_authority_one() {
+    // The ascent link is doubly checked, and the signature half runs first: an
+    // unsigned link is `structure-signature-invalid` even when the reader also
+    // has no ancestor seed to derive authority from.
+    let fx = Fixture::new();
+    let floors = InMemoryFloorStore::default();
+    let mut candidate = fx.candidate(1);
+    let mut link = fx.ascent_link_under(&[0xAB; 32]);
+    link.signature[0] ^= 0xFF;
+    candidate.grant_section.ascent_link = Some(link);
+    let err = block_on(adopt(&floors, &fx.reader(), &candidate)).unwrap_err();
+    let rej = err.rejection().unwrap();
+    assert_eq!(rej.stage, GateStage::GrantSection);
+    assert_eq!(rej.check(), "structure-signature-invalid");
+}
+
+#[test]
 fn ascent_adopts_when_reader_seed_matches_sealed_link() {
     // Positive: the reader's ancestor seed re-derives the sealed keypair, so the
     // link verifies and the record adopts.
@@ -1511,4 +1531,262 @@ fn seed_blob_aad_struct_tag_must_match_blob_type() {
     let rej = err.rejection().unwrap();
     assert_eq!(rej.stage, GateStage::Unseal);
     assert_eq!(rej.check(), "hpke-open-failed");
+}
+
+// ---------------------------------------------------------------------------
+// reseal → adopt, with the two planes' clocks apart: a read-only rotation
+// advances the read epoch and leaves the write epoch standing, and the gate
+// recomputes every structure signature at the envelope's read epoch.
+// ---------------------------------------------------------------------------
+
+const RESEAL_READ_EPOCH: u64 = 5;
+const RESEAL_WRITE_EPOCH: u64 = 1;
+const RESEAL_PREV_EPOCH: u64 = 4;
+const RESEAL_OLDEST_EPOCH: u64 = 3;
+const RESEAL_WRITE_SCOPE_SEED: [u8; 32] = [0x77; 32];
+
+/// The scope root a twice-rotated scope publishes: `reseal_scope_root`'s own
+/// output at read epoch 5 over a write plane still at epoch 1, carrying the
+/// history link the previous cut minted at read epoch 4.
+struct ResealedFixture {
+    owner_identity: EcdsaSigner,
+    owner_pseudonym: Ed25519Signer,
+    owner_enc: X25519Secret,
+    scope_id: [u8; 16],
+    read_key: [u8; 32],
+    ipns_signer: Ed25519Signer,
+    name: IpnsName,
+    section: GrantSection,
+    envelope: Envelope,
+}
+
+impl ResealedFixture {
+    fn new() -> Self {
+        let owner_identity = EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid scalar");
+        let owner_pseudonym = Ed25519Signer::from_seed([0x22; 32]);
+        let owner_enc = X25519Secret::from_scalar([0x33; 32]);
+        // A scope root's node id IS its scope id — what every AAD here binds.
+        let scope_id = [0x44; 16];
+        let pointer_read_key = [0x88; 32];
+        let epoch_three_seed = [0x63; 32];
+        let epoch_four_seed = [0x64; 32];
+        let epoch_five_seed = [0x65; 32];
+
+        // The write KDF takes no epoch — which is why the write plane's clock is
+        // free to stand still under a read rotation.
+        let write_seed = kdf::write_seed(&RESEAL_WRITE_SCOPE_SEED, &scope_id);
+        let ipns_signer = kdf::ipns_keypair(write_seed.as_bytes());
+        let name = IpnsName::from_public_key(&ipns_signer.verifying_key());
+        let commitment = GrantSetCommitment {
+            ipns_name: name.as_str().as_bytes().to_vec(),
+            owner_pseudonym_pk: owner_pseudonym.verifying_key().to_bytes(),
+            entries: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        let commitment_sig = sign_grant_set(&owner_identity, &commitment)
+            .expect("signs")
+            .to_compact();
+
+        let owner_enc_pub = owner_enc.public();
+        let identity = ScopeRootIdentity {
+            v: V,
+            scope_id,
+            ipns_name: name.as_str().as_bytes(),
+            owner_enc_pub: &owner_enc_pub,
+            parent_node_seed: None,
+            pseudonym_signer: &owner_pseudonym,
+        };
+        let committed = CommittedSet {
+            commitment: &commitment,
+            commitment_sig: &commitment_sig,
+            grant_ledger: &[],
+            write_history_link: b"",
+            direct_child_scope_index: &[],
+        };
+        let reseal = |read_epoch: u64,
+                      override_seed: &[u8; 32],
+                      prev: PrevEpochSeed<'_>,
+                      carried: &[SignedSealed]| {
+            reseal_scope_root(
+                &mut SeededEntropy::new(read_epoch),
+                &identity,
+                &ResealSeeds {
+                    override_seed,
+                    read_epoch,
+                    prev: Some(prev),
+                    write_scope_seed: &RESEAL_WRITE_SCOPE_SEED,
+                    write_epoch: RESEAL_WRITE_EPOCH,
+                    pointer_read_key: &pointer_read_key,
+                },
+                &committed,
+                carried,
+            )
+            .expect("re-seals")
+        };
+
+        let prior = reseal(
+            RESEAL_PREV_EPOCH,
+            &epoch_four_seed,
+            PrevEpochSeed {
+                seed: &epoch_three_seed,
+                epoch: RESEAL_OLDEST_EPOCH,
+            },
+            &[],
+        );
+        let section = reseal(
+            RESEAL_READ_EPOCH,
+            &epoch_five_seed,
+            PrevEpochSeed {
+                seed: &epoch_four_seed,
+                epoch: RESEAL_PREV_EPOCH,
+            },
+            &prior.history_links,
+        );
+
+        let node_seed = kdf::node_seed(&epoch_five_seed, &scope_id);
+        let read_key = *kdf::read_key(node_seed.as_bytes()).as_bytes();
+        let folder = ReadBody::Folder {
+            created_at: 0,
+            modified_at: 0,
+            children: Vec::new(),
+            unknown: PreservedFields::new(),
+        };
+        let envelope = seal_read_body(
+            &read_key,
+            &NONCE_READ_BODY,
+            V,
+            scope_id,
+            scope_id,
+            RESEAL_READ_EPOCH,
+            &folder,
+        )
+        .expect("the root body seals");
+
+        Self {
+            owner_identity,
+            owner_pseudonym,
+            owner_enc,
+            scope_id,
+            read_key,
+            ipns_signer,
+            name,
+            section,
+            envelope,
+        }
+    }
+
+    fn candidate(&self) -> Candidate {
+        Candidate {
+            name: self.name.clone(),
+            record_bytes: IpnsRecord::create_v2(&self.ipns_signer, RECORD_VALUE, 1, TTL_NANOS, EOL)
+                .marshal(),
+            grant_section: self.section.clone(),
+            envelope: self.envelope.clone(),
+        }
+    }
+
+    /// The owner's seed source, taken from the re-sealed section's own owner
+    /// blob under the AAD the re-seal bound it at.
+    fn seed_blob(&self) -> SeedBlob<'_> {
+        SeedBlob::Owner {
+            enc_secret: &self.owner_enc,
+            enc: self.section.owner_blob.enc,
+            ciphertext: self.section.owner_blob.ciphertext.clone(),
+            aad: AadContext {
+                v: V,
+                id: self.scope_id,
+                scope: self.scope_id,
+                epoch: RESEAL_READ_EPOCH,
+                struct_tag: STRUCT_TAG_OWNER_BLOB,
+            },
+        }
+    }
+
+    /// A detached structure signature over `ct` at `epoch` — the preimage a
+    /// producer that bound the wrong clock would have signed.
+    fn sign_at(&self, epoch: u64, tag: u8, ct: &[u8]) -> [u8; 64] {
+        sign_structure(
+            &self.owner_pseudonym,
+            &StructureSigInput::over_ciphertext(self.scope_id, epoch, tag, None, ct),
+        )
+        .to_bytes()
+    }
+
+    fn adopt(&self, candidate: &Candidate) -> Result<Adopted, GateError> {
+        let floors = InMemoryFloorStore::default();
+        let owner = self.owner_identity.verifying_key();
+        let reader = ReaderContext {
+            owner_identity: &owner,
+            scope_id: self.scope_id,
+            read_key: &self.read_key,
+            parent_node_seed: None,
+            seed_blob: Some(self.seed_blob()),
+        };
+        block_on(adopt(&floors, &reader, candidate)).map(|(adopted, _)| adopted)
+    }
+}
+
+#[test]
+fn a_resealed_root_adopts_with_the_read_and_write_epochs_apart() {
+    let fx = ResealedFixture::new();
+    assert_ne!(
+        RESEAL_READ_EPOCH, RESEAL_WRITE_EPOCH,
+        "a read-only rotation is exactly where the two planes' clocks diverge"
+    );
+    assert_eq!(
+        fx.section.history_links.len(),
+        2,
+        "a twice-rotated scope carries a link minted at an earlier epoch"
+    );
+    let adopted = fx
+        .adopt(&fx.candidate())
+        .expect("the re-sealed root adopts");
+    assert_eq!(adopted.epoch, RESEAL_READ_EPOCH);
+    assert_eq!(adopted.sequence, 1);
+}
+
+/// Assert `candidate` is a whole-record stage-3 trust violation.
+fn assert_structure_signature_invalid(fx: &ResealedFixture, candidate: &Candidate) {
+    let err = fx.adopt(candidate).expect_err("a wrong-clock signature");
+    let rejection = err
+        .rejection()
+        .expect("a trust rejection, not a seam error");
+    assert_eq!(rejection.stage, GateStage::GrantSection);
+    assert_eq!(rejection.check(), "structure-signature-invalid");
+}
+
+#[test]
+fn a_write_body_signed_at_the_write_epoch_is_a_whole_record_rejection() {
+    let fx = ResealedFixture::new();
+    let mut candidate = fx.candidate();
+    let sealed = candidate.grant_section.write_body.sealed.clone();
+    candidate.grant_section.write_body.signature =
+        fx.sign_at(RESEAL_WRITE_EPOCH, STRUCT_TAG_WRITE_BODY, &sealed);
+    assert_structure_signature_invalid(&fx, &candidate);
+}
+
+#[test]
+fn an_owner_write_blob_signed_at_the_write_epoch_is_a_whole_record_rejection() {
+    // The other dual-clock structure: its sealed AAD binds the write epoch, its
+    // signature the read epoch.
+    let fx = ResealedFixture::new();
+    let mut candidate = fx.candidate();
+    let blob = candidate
+        .grant_section
+        .owner_write_blob
+        .as_mut()
+        .expect("the re-seal authors one");
+    let ciphertext = blob.ciphertext.clone();
+    blob.signature = fx.sign_at(RESEAL_WRITE_EPOCH, STRUCT_TAG_OWNER_WRITE_BLOB, &ciphertext);
+    assert_structure_signature_invalid(&fx, &candidate);
+}
+
+#[test]
+fn a_carried_history_link_left_at_its_minting_epoch_is_a_whole_record_rejection() {
+    let fx = ResealedFixture::new();
+    let mut candidate = fx.candidate();
+    let carried = candidate.grant_section.history_links[0].sealed.clone();
+    candidate.grant_section.history_links[0].signature =
+        fx.sign_at(RESEAL_PREV_EPOCH, STRUCT_TAG_HISTORY_LINK, &carried);
+    assert_structure_signature_invalid(&fx, &candidate);
 }

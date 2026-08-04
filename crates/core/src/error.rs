@@ -259,6 +259,21 @@ pub enum Malformed {
     UnexpectedBreak { offset: usize },
     /// Nesting beyond [`crate::codec::MAX_DEPTH`].
     DepthExceeded { offset: usize },
+    /// A repeated collection carried more members than its frozen bound admits.
+    /// A framing bound like [`Self::DepthExceeded`], not a cryptographic
+    /// verdict: it caps the verification work one record can demand.
+    TooManyStructures {
+        /// The wire key of the collection that overflowed.
+        collection: &'static str,
+        /// The members the input carried.
+        count: usize,
+        /// The frozen bound.
+        limit: usize,
+    },
+    /// Two history links carried identical sealed bytes. Each epoch mints one
+    /// link under a fresh nonce over a distinct payload, so a repeat is never an
+    /// honest rotator's output.
+    DuplicateHistoryLink,
     /// A decoded value had a different type than the caller required
     /// (schema-layer accessor failure).
     UnexpectedType {
@@ -370,6 +385,8 @@ impl Malformed {
         "reserved-additional-info",
         "unexpected-break",
         "depth-exceeded",
+        "too-many-structures",
+        "duplicate-history-link",
         "unexpected-type",
         "unknown-field-collision",
         "wiped-map",
@@ -401,6 +418,8 @@ impl Malformed {
             Self::ReservedAdditionalInfo { .. } => "reserved-additional-info",
             Self::UnexpectedBreak { .. } => "unexpected-break",
             Self::DepthExceeded { .. } => "depth-exceeded",
+            Self::TooManyStructures { .. } => "too-many-structures",
+            Self::DuplicateHistoryLink => "duplicate-history-link",
             Self::UnexpectedType { .. } => "unexpected-type",
             Self::UnknownFieldCollision { .. } => "unknown-field-collision",
             Self::WipedMap => "wiped-map",
@@ -435,6 +454,11 @@ impl fmt::Display for Malformed {
             | Self::ReservedAdditionalInfo { offset }
             | Self::UnexpectedBreak { offset }
             | Self::DepthExceeded { offset } => write!(f, " at byte {offset}"),
+            Self::TooManyStructures {
+                collection,
+                count,
+                limit,
+            } => write!(f, " ({collection}: {count} exceeds the {limit} bound)"),
             Self::UnexpectedType { expected, found } => {
                 write!(f, " (expected {expected}, found {found})")
             }
@@ -449,7 +473,8 @@ impl fmt::Display for Malformed {
             } => write!(f, " (field {field}: expected {expected}, found {found})"),
             Self::UnknownRecordField { key } => write!(f, " (key {:?})", DisplayKey(key)),
             Self::UnsupportedRecordVersion { version } => write!(f, " (version {version})"),
-            Self::WipedMap
+            Self::DuplicateHistoryLink
+            | Self::WipedMap
             | Self::InvalidIdentityKey
             | Self::InvalidEncSubkey
             | Self::InvalidBindingSigEncoding

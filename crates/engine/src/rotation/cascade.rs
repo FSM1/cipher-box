@@ -122,8 +122,10 @@ pub struct CascadeTarget {
     /// This scope root's own direct-child-scope index — the next-level
     /// enumeration adjacency the walk descends into.
     pub direct_child_scope_index: Vec<ChildScopeRef>,
-    /// The scope's existing per-epoch history links, carried verbatim (the
-    /// cascade appends one fresh link on the epoch bump).
+    /// The scope's existing per-epoch history links, oldest first (the cascade
+    /// appends one fresh link on the epoch bump). Re-signed and pruned to the
+    /// retained window by the re-seal — see
+    /// [`reseal_scope_root`](super::reseal::reseal_scope_root).
     pub carried_history_links: Vec<SignedSealed>,
 }
 

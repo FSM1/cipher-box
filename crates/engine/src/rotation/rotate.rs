@@ -142,7 +142,9 @@ pub struct RotateScopePlan<'a> {
     pub write_epoch: u64,
     /// The stable per-scope pointer read key carried in every grant blob.
     pub pointer_read_key: &'a [u8; SECRET_LEN],
-    /// The scope's existing per-epoch history links, carried verbatim.
+    /// The scope's existing per-epoch history links, oldest first. Re-signed and
+    /// pruned to the retained window by the re-seal — see
+    /// [`reseal_scope_root`](super::reseal::reseal_scope_root).
     pub carried_history_links: &'a [SignedSealed],
 }
 

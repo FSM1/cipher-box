@@ -111,8 +111,9 @@ pub struct SweepTarget {
     /// This scope root's own direct-child-scope index — both the next-level
     /// enumeration adjacency and the index the sweep self-heals on re-seal.
     pub direct_child_scope_index: Vec<ChildScopeRef>,
-    /// The scope's existing per-epoch history links, carried verbatim (a sweep
-    /// appends none).
+    /// The scope's existing per-epoch history links, oldest first. A sweep
+    /// appends none and prunes none — it re-signs them as they stand (see
+    /// [`reseal_scope_root`](super::reseal::reseal_scope_root)).
     pub carried_history_links: Vec<SignedSealed>,
 }
 
