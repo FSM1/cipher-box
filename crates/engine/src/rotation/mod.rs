@@ -28,9 +28,9 @@
 //!
 //! [`ChildIndexResolver`] and [`ScopeRootPublisher`] have production
 //! implementations over the real transport in [`crate::net::rotation`].
-//! [`CascadeResealResolver`] and [`SweepResolver`] are still faked in tests
-//! (#1025), as are the write-plane [`WriteSubtreeResolver`] and
-//! [`WriteWavePublisher`] (#1026).
+//! [`CascadeResealResolver`], [`SweepResolver`] and the write-plane
+//! [`WriteSubtreeResolver`] and [`WriteWavePublisher`] have no production
+//! implementation yet; tests fake them.
 
 pub mod cascade;
 pub mod eager_set;
