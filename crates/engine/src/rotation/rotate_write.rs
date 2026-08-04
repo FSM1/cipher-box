@@ -36,7 +36,7 @@
 //! name and skips already-republished nodes via
 //! [`WriteWavePublisher::is_republished`]; every effect is idempotent, so it
 //! converges to the same terminal state. The fresh write scope seed is recovered
-//! from the published root — deferred #1026 wiring, faked here via
+//! from the published root — that wiring is not landed, faked here via
 //! [`RotateScopeWritePlan::resume_write_scope_seed`]. Accepted limitation: a crash
 //! after the pointer flip but before interior retirement orphans the prior run's
 //! interior old names — the fail-safe direction (leaking a registration beats
@@ -50,7 +50,7 @@
 //! [`build_repoint_object`]'s two encode-side invariants are release-active, never
 //! a `debug_assert!` (AGENTS.md rule 8). Entropy enters only through the
 //! [`Entropy`] seam; the impure edges are the injected [`WriteSubtreeResolver`] and
-//! [`WriteWavePublisher`] (network wiring is #1026, faked in this slice).
+//! [`WriteWavePublisher`] (network wiring not landed, faked in this slice).
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -108,7 +108,7 @@ const REPOINT_CHANNELS: [RepointChannel; 3] = [
 /// One node re-published at its freshly derived name — the record the publisher
 /// CAS-installs. Assembling the record bytes (read-body carried verbatim, write-
 /// body re-sealed at the new write epoch for the root) and IPNS-signing them under
-/// the node's fresh write keypair is the deferred #1026 wiring; this slice
+/// the node's fresh write keypair is not landed; this slice
 /// fakes the publish and carries only the routing identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepublishedNode {
@@ -124,7 +124,7 @@ pub struct RepublishedNode {
 
 /// Resolve the write scope's subtree from published records — the read edge, the
 /// analogue of the cascade's `CascadeResealResolver`. Resolve + adoption-gate +
-/// unseal live behind this trait; the real network/gate wiring is #1026 and
+/// unseal live behind this trait; the real network/gate wiring is not landed and
 /// tests fake it. A resolve either yields the node or a fail-closed
 /// [`ResolveFailure`].
 pub trait WriteSubtreeResolver {
@@ -137,7 +137,7 @@ pub trait WriteSubtreeResolver {
 /// The write edge of the name wave: register-first name enrollment, CAS republish,
 /// batch retire, and the three-channel re-point — the analogue of the cascade's
 /// `ScopeRootPublisher`, mapping to the API pin/name registry and `/routing/v1`
-/// transport. Real wiring is #1026; tests fake it.
+/// transport. That wiring is not landed; tests fake it.
 ///
 /// Contract the orchestrator relies on and the fake honours:
 ///
@@ -219,8 +219,8 @@ pub struct RotateScopeWritePlan<'a> {
     pub current_root_name: &'a IpnsName,
     /// On a **resumed** wave, the fresh write scope seed recovered from the
     /// published root (the write-plane history link); `None` on a fresh rotation,
-    /// which mints one via the entropy seam. Recovery wiring is deferred to
-    /// #1026 (faked in tests); the seam boundary is
+    /// which mints one via the entropy seam. Recovery wiring is not landed
+    /// (faked in tests); the seam boundary is
     /// [`Entropy`]-vs-published-record, never in-memory carry.
     pub resume_write_scope_seed: Option<&'a [u8; SECRET_LEN]>,
 }
@@ -1050,7 +1050,7 @@ mod tests {
         let current_root = old_name_of(&SCOPE);
 
         // The seed a fresh wave WOULD mint — captured so the resume threads it back
-        // in, standing in for recovery from the published root (#1026).
+        // in, standing in for recovery from the published root.
         let recovered_seed = {
             let mut e = SeededEntropy::new(9);
             let mut seed = [0u8; 32];

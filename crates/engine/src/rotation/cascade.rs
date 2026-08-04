@@ -47,7 +47,7 @@
 //! Entropy enters only through [`Entropy`] and time only through [`Scheduler`];
 //! the sole impure edges are the injected [`CascadeResealResolver`] and
 //! [`ScopeRootPublisher`] (as `rotate_scope` and the sweep also carry). Real
-//! resolver wiring is #1025; this slice fakes it and proves the cascade in
+//! resolver wiring is not landed; this slice fakes it and proves the cascade in
 //! simulation.
 //!
 //! [`enumerate_eager_set`]: super::eager_set::enumerate_eager_set
@@ -131,14 +131,14 @@ pub struct CascadeTarget {
 /// material — the cascade's analogue of the eager-set walk's `ChildIndexResolver`
 /// and the sweep's [`SweepResolver`](super::sweep::SweepResolver). Resolve +
 /// adoption-gate + unseal live behind this trait; the real network/gate wiring is
-/// #1025 and tests fake it. A resolve either yields the full
+/// not landed and tests fake it. A resolve either yields the full
 /// [`CascadeTarget`] or a fail-closed [`ResolveFailure`] — a partial or
 /// gate-failing record is never a work-list entry.
 pub trait CascadeResealResolver {
     /// Resolve `scope`'s current re-seal material, or a fail-closed
     /// [`ResolveFailure`] if its record cannot be authoritatively obtained.
     ///
-    /// # Binding contract (obligation on the real resolver, #1025)
+    /// # Binding contract (obligation on the real resolver)
     ///
     /// The resolver MUST gate `scope`'s record under the enumerated
     /// `scope.scope_id` and `scope.ipns_name`, and the gated record's
