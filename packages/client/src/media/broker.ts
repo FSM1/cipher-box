@@ -192,7 +192,7 @@ export class MediaBroker {
     void this.release(stream);
   }
 
-  private async pinnedStream(cursor: Cursor): Promise<Pinned> {
+  private async openOnto(cursor: Cursor): Promise<Pinned> {
     const pin = cursor.pin;
     const stream = (pin.stream ??= this.reader.openContentStream(cursor.node));
     try {
@@ -201,14 +201,22 @@ export class MediaBroker {
       // A rejected open must not be remembered, or every cursor on the ticket
       // replays it.
       this.forget(pin, stream);
+      throw error;
+    }
+  }
+
+  private async pinnedStream(cursor: Cursor): Promise<Pinned> {
+    try {
+      return await this.openOnto(cursor);
+    } catch (error) {
       if (!isRecoverableEngineError(engineErrorCode(error))) throw error;
       if (!(await this.reclaimIdle())) throw error;
-      // A close, an eviction, or the reclaim itself can drop the pin across the
-      // await. Every release path reaches a stream through `pins`, so opening
-      // onto a pin no longer in it would strand the handle and its content key.
-      if (this.pins.get(cursor.ticket) !== pin) throw error;
-      const retried = (pin.stream ??= this.reader.openContentStream(cursor.node));
-      return { handle: await retried, stream: retried };
+      // A close, a revoke, an eviction, or the reclaim itself can drop the pin
+      // across the await. Every release path reaches a stream through `pins`, so
+      // opening onto a pin no longer in it strands the handle and its content
+      // key for the life of the worker.
+      if (this.pins.get(cursor.ticket) !== cursor.pin) throw error;
+      return this.openOnto(cursor);
     }
   }
 
@@ -334,7 +342,9 @@ export class MediaBroker {
     try {
       port.postMessage(response, [chunk]);
     } catch (error) {
-      new Uint8Array(chunk).fill(0);
+      // A transfer that threw before detaching still leaves the window here;
+      // one that detached reports zero bytes and needs no wipe.
+      if (chunk.byteLength > 0) new Uint8Array(chunk).fill(0);
       this.fail(port, requestId, cursor, error);
       return;
     }

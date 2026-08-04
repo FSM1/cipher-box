@@ -240,6 +240,24 @@ describe('MediaPipe.respond', () => {
     expect(stalled.closed).toBe(true);
   });
 
+  it('closes the cursor of an open it gave up waiting for', async () => {
+    vi.useFakeTimers();
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    // The tab answers the open after the pipe stopped listening, so it is left
+    // holding a cursor and the engine stream that cursor pins.
+    const silent = new FakePort();
+    pipe.adoptPort(silent);
+
+    const pending = pipe.respond(streamRequest());
+    await vi.advanceTimersByTimeAsync(TIMEOUTS.responseTimeoutMs);
+
+    const open = silent.sent.find((message) => message.type === 'cb:media:open');
+    expect(silent.sent).toContainEqual({ type: 'cb:media:close', requestId: open!.requestId });
+
+    await vi.advanceTimersByTimeAsync(TIMEOUTS.brokerTimeoutMs);
+    expect((await pending).status).toBe(503);
+  });
+
   it('answers 404 for a stream path carrying no ticket', async () => {
     const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
     const port = streamingPort([]);

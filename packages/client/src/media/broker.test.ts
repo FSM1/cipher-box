@@ -31,10 +31,17 @@ class FakeReader implements MediaReader {
   liveSize: number | null = null;
   /** The engine's open-stream ceiling; opening past it refuses like the real one. */
   ceiling = Number.POSITIVE_INFINITY;
+  /** Fires inside `closeStream`, to land a broker call mid-reclaim. */
+  onClose: (() => void) | null = null;
   private nextHandle = 1n;
   private readonly live = new Set<StreamHandle>();
 
   constructor(private readonly bytes: Uint8Array) {}
+
+  /** Handles the engine still holds — a stranded one never reaches zero. */
+  get liveCount(): number {
+    return this.live.size;
+  }
 
   async openContentStream(node: Uint8Array): Promise<StreamHandle> {
     this.opens.push(node);
@@ -67,6 +74,9 @@ class FakeReader implements MediaReader {
   closeStream(handle: StreamHandle): Promise<void> {
     this.closes.push(handle);
     this.live.delete(handle);
+    const hook = this.onClose;
+    this.onClose = null;
+    hook?.();
     return Promise.resolve();
   }
 }
@@ -369,6 +379,29 @@ describe('MediaBroker', () => {
     // The idle pin was given back and the refused open retried into its slot.
     expect(h.reader.closes).toEqual([1n]);
     expect(h.reader.opens).toEqual([NODE, OTHER_NODE, OTHER_NODE]);
+  });
+
+  it('strands no engine stream when its ticket is revoked during the reclaim', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => h.received.length === 2, 'first chunk');
+    h.send({ type: 'cb:media:close', requestId: 1 });
+    await flush();
+
+    h.registry.register({ node: OTHER_NODE, size: 20, mimeType: 'video/mp4' });
+    h.reader.ceiling = 1;
+    // The revoke lands between giving the idle stream back and retrying the open.
+    h.reader.onClose = () => h.broker.revoke('ticket-2');
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: 'ticket-2', range: null });
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(() => h.reader.closes.length === 1, 'the idle stream was reclaimed');
+    await flush();
+
+    // The retry was refused rather than opening onto a pin nothing can release.
+    expect(h.reader.opens).toEqual([NODE, OTHER_NODE]);
+    expect(h.reader.liveCount).toBe(0);
   });
 
   it('answers an unknown ticket with a 404 head and reads nothing', async () => {
