@@ -20,4 +20,5 @@ mod adoption;
 pub use adoption::{
     Adopted, Candidate, FLOOR_VERDICTS, GateError, GateRejection, GateStage, PendingAdoption,
     ReaderContext, RejectionReason, SeedBlob, adopt, adopt_deferred,
+    authenticate_section_structures,
 };

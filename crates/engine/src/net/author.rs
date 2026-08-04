@@ -8,9 +8,10 @@
 //!
 //! - a child envelope carrying a grant section returns `Err`, off core's own
 //!   `has_grant_section` — the produce guard and the decode reject cannot drift;
-//! - a scope root missing its grant section, or carrying one whose commitment
-//!   names another `ipnsName`, returns `Err` off the same decoder the gate's
-//!   stages 2 and 5 run;
+//! - a scope root missing its grant section, carrying one whose commitment
+//!   names another `ipnsName`, or carrying one whose structure signatures do not
+//!   recompute at the envelope's own scope/epoch, returns `Err` off the same
+//!   decoder and the same stage-3 predicate the gate runs;
 //! - a kind transplant and a non-canonical child-ref `ipnsName` are
 //!   unrepresentable: [`new_child`] feeds one [`NodeKind`] and one typed
 //!   [`IpnsName`] to both the body and the parent's ref.
@@ -25,6 +26,7 @@ use cipherbox_core::seal::{
 
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
 use crate::content::root_block_cid;
+use crate::gate::authenticate_section_structures;
 
 /// The envelope format+suite version this build authors (blueprint/core.md).
 pub const ENVELOPE_V: u64 = 1;
@@ -44,6 +46,13 @@ pub enum AuthorError {
     /// The carried grant-set commitment names a different `ipnsName` than the
     /// record is published under, which the gate's stage 2 rejects.
     CommitmentNameMismatch,
+    /// A structure signature in the carried grant section does not recompute at
+    /// the envelope's own scope and epoch, which the gate's stage 3 rejects
+    /// whole-record. The read and write planes advance on independent clocks, so
+    /// pairing a section with an envelope authored at another epoch is the way
+    /// this build would otherwise sign a root no reader — including itself —
+    /// can ever adopt.
+    SectionSignatureInvalid,
     /// Core refused to seal or encode the authored body (a body decode would
     /// refuse to reopen, e.g. duplicate child ids).
     Seal(CodecError),
@@ -66,6 +75,9 @@ impl core::fmt::Display for AuthorError {
             Self::MissingGrantSection => f.write_str("scope root carries no grantSection"),
             Self::CommitmentNameMismatch => {
                 f.write_str("carried commitment names another ipnsName")
+            }
+            Self::SectionSignatureInvalid => {
+                f.write_str("carried grant section does not authenticate at this envelope's epoch")
             }
             Self::Seal(e) => write!(f, "seal failed: {}", e.check()),
             Self::HeadTooLarge { size, limit } => {
@@ -157,8 +169,8 @@ pub fn author_scope_root_with_section(
     encode(envelope)
 }
 
-/// The two checks the gate's stages 2 and 5 make on arrival, run here first so a
-/// root this build's own gate always rejects is never signed (release-active).
+/// The checks the gate makes on arrival, run here first so a root this build's
+/// own gate always rejects is never signed (release-active).
 fn check_scope_root(envelope: &Envelope, name: &IpnsName) -> Result<(), AuthorError> {
     let section = grant_section_bytes(envelope)
         .and_then(|bytes| decode_grant_section(bytes).ok())
@@ -166,6 +178,8 @@ fn check_scope_root(envelope: &Envelope, name: &IpnsName) -> Result<(), AuthorEr
     if section.commitment.ipns_name != name.as_str().as_bytes() {
         return Err(AuthorError::CommitmentNameMismatch);
     }
+    authenticate_section_structures(&section, envelope.scope, envelope.epoch)
+        .map_err(|_| AuthorError::SectionSignatureInvalid)?;
     Ok(())
 }
 
@@ -284,7 +298,7 @@ mod tests {
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
 
     use crate::content::DAG_ROOT_CODEC;
-    use crate::testkit::{OwnerRootFixture, OwnerRootSpec, owner_root_fixture};
+    use crate::testkit::{OWNER_ROOT_EPOCH, OwnerRootFixture, OwnerRootSpec, owner_root_fixture};
 
     const READ_KEY: [u8; 32] = [9u8; 32];
     const NONCE: [u8; 24] = [5u8; 24];
@@ -303,10 +317,20 @@ mod tests {
     }
 
     fn authoring(body: &ReadBody, carried: PreservedFields) -> EnvelopeAuthoring<'_> {
+        authoring_at(body, carried, OWNER_ROOT_EPOCH)
+    }
+
+    /// `authoring` at a caller-chosen read epoch — the axis a scope root's
+    /// carried section must agree with.
+    fn authoring_at(
+        body: &ReadBody,
+        carried: PreservedFields,
+        epoch: u64,
+    ) -> EnvelopeAuthoring<'_> {
         EnvelopeAuthoring {
             node_id: [1u8; 16],
             scope_id: [2u8; 16],
-            epoch: 3,
+            epoch,
             read_key: &READ_KEY,
             nonce: &NONCE,
             body,
@@ -376,6 +400,42 @@ mod tests {
             author_scope_root_envelope(authoring(&folder(), carried_section(&fixture)), &name())
                 .unwrap_err(),
             AuthorError::CommitmentNameMismatch,
+        );
+    }
+
+    #[test]
+    fn a_scope_root_envelope_authored_off_its_sections_epoch_is_refused() {
+        // Release-active (security rule 8): a read rotation moves the read epoch
+        // while the write plane's clock stands still, so nothing but this check
+        // stops a section signed at one epoch from being sealed into an envelope
+        // authored at another — bytes the gate's stage 3 always rejects.
+        let fixture = owner_root();
+        assert_eq!(
+            author_scope_root_envelope(
+                authoring_at(&folder(), carried_section(&fixture), OWNER_ROOT_EPOCH + 1),
+                &fixture.name,
+            )
+            .unwrap_err(),
+            AuthorError::SectionSignatureInvalid,
+        );
+    }
+
+    #[test]
+    fn a_scope_root_envelope_whose_section_was_tampered_is_refused() {
+        // Release-active: the produce side runs the gate's own stage-3 predicate,
+        // so a section that lost a valid structure signature is never signed.
+        let fixture = owner_root();
+        let mut section = fixture.grant_section.clone();
+        section.owner_blob.signature[0] ^= 0xFF;
+        let carried: PreservedFields = [(
+            "grantSection".to_owned(),
+            Value::Bytes(encode_grant_section(&section).expect("encodes")),
+        )]
+        .into_iter()
+        .collect();
+        assert_eq!(
+            author_scope_root_envelope(authoring(&folder(), carried), &fixture.name).unwrap_err(),
+            AuthorError::SectionSignatureInvalid,
         );
     }
 

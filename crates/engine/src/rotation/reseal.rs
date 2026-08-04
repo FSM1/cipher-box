@@ -185,10 +185,10 @@ fn fill<const N: usize, E: Entropy>(entropy: &mut E) -> Result<[u8; N], ResealEr
 /// set. Pure composition of core seal primitives; the injected `entropy`
 /// supplies every HPKE ephemeral scalar and seal nonce.
 ///
-/// `carried_history_links` are the scope's existing per-epoch history links,
-/// preserved verbatim (their prior-rotator signatures stay valid); when
-/// `seeds.prev` is `Some`, one freshly-minted link (the prior seed under the new
-/// epoch's structure key) is appended.
+/// `carried_history_links` keep their sealed bytes verbatim — each stays
+/// openable under the epoch key that minted it — but are re-signed at this
+/// re-seal's read epoch; when `seeds.prev` is `Some`, one freshly-minted link
+/// (the prior seed under the new epoch's structure key) is appended.
 ///
 /// Fails closed — see [`ResealError`] — before sealing anything on a divergent
 /// ledger or an unusable recipient key, so a partial or unopenable section is
@@ -333,8 +333,16 @@ pub fn reseal_scope_root<E: Entropy>(
         None => None,
     };
 
-    // --- History links: carried verbatim; append one fresh link on a new epoch. ---
-    let mut history_links = carried_history_links.to_vec();
+    // --- History links: sealed bytes carried verbatim, signatures re-minted at
+    // this read epoch; append one fresh link on a new epoch. ---
+    let mut history_links: Vec<SignedSealed> = carried_history_links
+        .iter()
+        .map(|link| SignedSealed {
+            signature: sign_over(STRUCT_TAG_HISTORY_LINK, None, &link.sealed),
+            sealed: link.sealed.clone(),
+            unknown: link.unknown.clone(),
+        })
+        .collect();
     if let Some(prev) = &seeds.prev {
         let structure_key = kdf::structure_key(seeds.override_seed, STRUCT_TAG_HISTORY_LINK);
         let nonce = fill::<{ aead::NONCE_LEN }, E>(entropy)?;
@@ -717,10 +725,24 @@ mod tests {
         }];
         let mut e = SeededEntropy::new(3);
         let section = reseal_scope_root(&mut e, &id, &s, &cs, &carried).expect("reseal");
+        assert_eq!(section.history_links.len(), 1, "no fresh link minted");
         assert_eq!(
-            section.history_links, carried,
-            "carried links unchanged, none added"
+            section.history_links[0].sealed, carried[0].sealed,
+            "the sealed link stays openable under the epoch key that minted it"
         );
+        let input = StructureSigInput::over_ciphertext(
+            SCOPE,
+            7,
+            STRUCT_TAG_HISTORY_LINK,
+            None,
+            &carried[0].sealed,
+        );
+        verify_structure(
+            &verifier(&fx),
+            &input,
+            &blob_sig(&section.history_links[0].signature),
+        )
+        .expect("the carried link is re-signed at the epoch the gate recomputes at");
     }
 
     #[test]
