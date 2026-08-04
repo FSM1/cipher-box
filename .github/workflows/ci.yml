@@ -33,6 +33,9 @@ jobs:
             ts:
               - 'apps/**'
               - 'packages/**'
+              # The TS suite pins MEDIA_WINDOW_BYTES against this manifest, so a
+              # Rust-side chunk-size change must run it.
+              - 'crates/engine/kat/**'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - 'package.json'

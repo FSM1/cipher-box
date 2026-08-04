@@ -25,14 +25,14 @@ export interface FolderNavigation {
   /** True until the engine reports a snapshot *of the routed folder*. */
   isLoading: boolean;
   isRoot: boolean;
+  /** True once a snapshot of *this* folder has landed, error or not. */
+  hasListing: boolean;
   error: SnapshotError | null;
-  /** True when `error` clears on a retry, so the UI offers one instead of a dead end. */
-  isRecoverable: boolean;
+  /** Re-pulls the folder; `null` unless `error` is one a retry can clear. */
+  retry: (() => void) | null;
   navigateTo(node: Uint8Array): void;
   /** Steps to the nearest ancestor; a no-op at the root. */
   navigateUp(): void;
-  /** Re-pulls the folder after a recoverable failure. */
-  retry(): void;
 }
 
 export function useFolderNavigation(): FolderNavigation {
@@ -78,7 +78,7 @@ export function useFolderNavigation(): FolderNavigation {
 
   const rows = useMemo(() => (listed === null ? [] : listingRows(listed.children)), [listed]);
 
-  const retry = useCallback(() => store.retry(), [store]);
+  const rePull = useCallback(() => store.retry(), [store]);
 
   const shown = route.kind === 'invalid' ? NOT_A_FOLDER : error;
 
@@ -87,10 +87,10 @@ export function useFolderNavigation(): FolderNavigation {
     breadcrumbs,
     isLoading: route.kind !== 'invalid' && listed === null && error === null,
     isRoot: listed !== null && sameNode(listed.folder, listed.root),
+    hasListing: listed !== null,
     error: shown,
-    isRecoverable: shown !== null && isRecoverableEngineError(shown.code),
+    retry: shown !== null && isRecoverableEngineError(shown.code) ? rePull : null,
     navigateTo,
     navigateUp,
-    retry,
   };
 }

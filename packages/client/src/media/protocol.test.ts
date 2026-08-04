@@ -22,8 +22,6 @@ function productionChunkSize(): number {
 
 describe('MEDIA_WINDOW_BYTES', () => {
   it('is exactly one engine content chunk', () => {
-    // A window wider or narrower than a chunk makes every chunk-aligned read
-    // straddle two leaves — silent 2x fetch amplification, not a wrong answer.
     expect(MEDIA_WINDOW_BYTES).toBe(productionChunkSize());
   });
 

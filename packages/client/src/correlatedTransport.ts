@@ -42,12 +42,15 @@ export class EngineRequestError extends Error {
   }
 }
 
+/** The engine's stable code for a failure, or `undefined` for a transport fault. */
+export function engineErrorCode(error: unknown): string | undefined {
+  return error instanceof EngineRequestError ? error.code : undefined;
+}
+
 /**
- * Whether a failed engine request can succeed on a retry once the host frees the
- * resource it refused over. `tooManyStreams` is the ceiling on open read streams
- * — closing one makes the same call succeed — so a caller must offer a retry
- * rather than present a dead end. Neighbouring codes like `unknownStreamHandle`
- * are terminal for the request that raised them.
+ * Whether the same call can succeed once the host frees the resource the engine
+ * refused over — `tooManyStreams` is a ceiling, not a verdict (`EngineError` in
+ * `crates/engine/src/facade.rs`).
  */
 export function isRecoverableEngineError(code: string | undefined): boolean {
   return code === 'tooManyStreams';

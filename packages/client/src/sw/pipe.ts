@@ -59,9 +59,8 @@ export class MediaPipe {
   private readonly portWaiters = new Set<(adopted: string) => void>();
   private readonly sinks = new Map<number, ResponseSink>();
   /**
-   * Every response body still streaming and the port it reads from. A sink only
-   * exists while a pull is in flight, so this is the only record that can tell a
-   * dying port which of the tab's cursors it must release.
+   * Every response body still streaming and the port it reads from; a sink
+   * exists only between a pull and its answer.
    */
   private readonly bodies = new Map<number, MessagePortLike>();
   /** The armed pull deadline per request, so a cancel can disarm its own. */
@@ -116,7 +115,10 @@ export class MediaPipe {
         this.discardPort(port);
         continue;
       }
-      if (head.status >= 300) return sealed(head.status, head.headers);
+      // Only these two carry a body. An off-shape status from the port would
+      // otherwise reach `Response`, which throws on a body under a null-body
+      // status and would strand the cursor the head just opened.
+      if (head.status !== 200 && head.status !== 206) return sealed(head.status, head.headers);
       return sealed(head.status, head.headers, this.body(port, requestId));
     }
     return sealed(503);
@@ -287,8 +289,7 @@ export class MediaPipe {
     if (!entry) return;
     this.ports.delete(clientId);
     // `MessagePort` has no close event, so this is the tab's only notice that
-    // the bodies reading over this port are gone; without it their cursors and
-    // the engine streams they pin survive until the tab re-brokers or disposes.
+    // the bodies reading over this port are gone and their pins are free.
     // Posted before the port is disentangled, or it never leaves.
     for (const [requestId, bound] of [...this.bodies]) {
       if (bound === entry.port) this.closeBody(entry.port, requestId);

@@ -52,6 +52,15 @@ async function landSnapshot(
   });
 }
 
+/** Settles the pull the engine's `snapshotUpdated` event triggers, as a failure. */
+async function failSnapshot(engine: ReturnType<typeof fakeEngine>, error: Error): Promise<void> {
+  await act(async () => {
+    engine.emit({ kind: 'snapshotUpdated' });
+    engine.pulls[engine.pulls.length - 1].reject(error);
+    await Promise.resolve();
+  });
+}
+
 const rowNames = () =>
   screen.getAllByTestId('file-list-item').map((row) => row.querySelector('.file-list-item-name')!);
 
@@ -283,13 +292,10 @@ describe('the vault browser read path', () => {
       })
     );
 
-    await act(async () => {
-      engine.emit({ kind: 'snapshotUpdated' });
-      engine.pulls[engine.pulls.length - 1].reject(
-        new EngineRequestError('too many read streams are already open', 'tooManyStreams')
-      );
-      await Promise.resolve();
-    });
+    await failSnapshot(
+      engine,
+      new EngineRequestError('too many read streams are already open', 'tooManyStreams')
+    );
 
     // Recoverable in kind, not just in wording: the folder is still on screen.
     expect(screen.queryByTestId('file-browser-error')).toBeNull();
@@ -308,18 +314,30 @@ describe('the vault browser read path', () => {
     const engine = fakeEngine();
     renderBrowser(engine);
 
-    await act(async () => {
-      engine.emit({ kind: 'snapshotUpdated' });
-      engine.pulls[engine.pulls.length - 1].reject(
-        new EngineRequestError('root failed the adoption gate', 'trustViolation')
-      );
-      await Promise.resolve();
-    });
+    await failSnapshot(
+      engine,
+      new EngineRequestError('root failed the adoption gate', 'trustViolation')
+    );
 
     expect(screen.getByTestId('file-browser-error').textContent).toBe(
       'root failed the adoption gate'
     );
     expect(screen.queryByTestId('file-browser-retry')).toBeNull();
+  });
+
+  it('shows no listing at all when a retryable failure lands before the first one', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+
+    await failSnapshot(
+      engine,
+      new EngineRequestError('too many read streams are already open', 'tooManyStreams')
+    );
+
+    expect(screen.getByTestId('file-browser-retry')).toBeDefined();
+    // Nothing was ever listed, so neither the rows nor "empty" is the truth.
+    expect(screen.queryByTestId('empty-state')).toBeNull();
+    expect(screen.queryByTestId('file-list-item')).toBeNull();
   });
 
   it('refuses a route param that is not a node id', () => {

@@ -37,13 +37,10 @@
   border: var(--border-thickness) solid var(--color-warning);
 }
 
-.file-browser-notice button {
-  font-family: inherit;
-  font-size: inherit;
-  color: inherit;
-  background: none;
-  border: var(--border-thickness) solid currentcolor;
-  cursor: pointer;
+/* The app's one button shape, sized down to sit inline in the notice. */
+.file-browser-notice .terminal-btn {
+  padding: 0 var(--spacing-sm);
+  border-color: currentcolor;
 }
 
 .file-browser-loading {
