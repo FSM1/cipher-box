@@ -111,14 +111,19 @@ export class MediaPipe {
       const requestId = this.nextRequestId;
       this.nextRequestId += 1;
       const head = await this.open(port, requestId, ticket, range);
+      // An open the tab answered late, or answered with a head that carries no
+      // body, still left it holding a cursor and the stream that cursor pins.
       if (!head) {
+        this.post(port, { type: 'cb:media:close', requestId });
         this.discardPort(port);
         continue;
       }
-      // Only these two carry a body. An off-shape status from the port would
-      // otherwise reach `Response`, which throws on a body under a null-body
-      // status and would strand the cursor the head just opened.
-      if (head.status !== 200 && head.status !== 206) return sealed(head.status, head.headers);
+      // Only these two carry a body; `Response` throws on a body under a
+      // null-body status, and the port that named the status is untrusted.
+      if (head.status !== 200 && head.status !== 206) {
+        this.post(port, { type: 'cb:media:close', requestId });
+        return sealed(head.status, head.headers);
+      }
       return sealed(head.status, head.headers, this.body(port, requestId));
     }
     return sealed(503);

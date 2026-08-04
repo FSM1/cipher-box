@@ -51,6 +51,12 @@ interface Cursor {
   readonly ticket: string;
   readonly node: Uint8Array;
   readonly pin: Pin;
+  /**
+   * The stream this body's first window came from. One response never spans two
+   * of them: concatenating windows of two content versions under one
+   * `Content-Range` is a tear the reader cannot detect (#948).
+   */
+  bound: Promise<StreamHandle> | null;
   /** The mint-time window end, pulled in when a read proves the version is shorter. */
   end: number;
   offset: number;
@@ -96,6 +102,25 @@ export class MediaBroker {
     this.cursors.clear();
     for (const pin of this.pins.values()) void this.discard(pin);
     this.pins.clear();
+  }
+
+  /**
+   * Ends every body reading a revoked ticket and releases its engine stream. A
+   * ticket is a bearer capability to plaintext, so withdrawing it must stop the
+   * bytes already in flight, not merely the next request.
+   */
+  revoke(ticket: string): void {
+    for (const [requestId, cursor] of [...this.cursors]) {
+      if (cursor.ticket !== ticket) continue;
+      this.cursors.delete(requestId);
+      if (this.port !== null) {
+        post(this.port, { type: 'cb:media:error', requestId, message: 'the stream was revoked' });
+      }
+    }
+    const pin = this.pins.get(ticket);
+    if (pin === undefined) return;
+    this.pins.delete(ticket);
+    void this.discard(pin);
   }
 
   /** Forgets a cursor and gives up its share of the ticket's engine stream. */
@@ -178,6 +203,10 @@ export class MediaBroker {
       this.forget(pin, stream);
       if (!isRecoverableEngineError(engineErrorCode(error))) throw error;
       if (!(await this.reclaimIdle())) throw error;
+      // A close, an eviction, or the reclaim itself can drop the pin across the
+      // await. Every release path reaches a stream through `pins`, so opening
+      // onto a pin no longer in it would strand the handle and its content key.
+      if (this.pins.get(cursor.ticket) !== pin) throw error;
       const retried = (pin.stream ??= this.reader.openContentStream(cursor.node));
       return { handle: await retried, stream: retried };
     }
@@ -228,6 +257,7 @@ export class MediaBroker {
       ticket,
       node: source.node,
       pin: this.acquire(ticket),
+      bound: null,
       offset: head.window.offset,
       end: head.window.offset + head.window.length,
       pump: Promise.resolve(),
@@ -238,7 +268,9 @@ export class MediaBroker {
   private pull(port: MessagePortLike, requestId: number): void {
     const cursor = this.cursors.get(requestId);
     if (cursor === undefined) return;
-    cursor.pump = cursor.pump.then(() => this.pump(port, requestId, cursor));
+    // A post onto a port that died mid-pump must not poison the chain: every
+    // later pull would chain off a rejection and silently never run.
+    cursor.pump = cursor.pump.then(() => this.pump(port, requestId, cursor)).catch(() => undefined);
   }
 
   /**
@@ -272,32 +304,45 @@ export class MediaBroker {
     }
     if (!this.isCurrent(requestId, cursor)) return;
 
+    cursor.bound ??= pinned.stream;
+    if (cursor.bound !== pinned.stream) {
+      this.fail(port, requestId, cursor, new Error('the content version changed mid-response'));
+      return;
+    }
+
     let chunk: ArrayBuffer;
     try {
       chunk = await this.reader.readStream(pinned.handle, offset, length);
     } catch (error) {
       // A handle the engine no longer knows is dead for every cursor sharing it,
       // so the ticket re-opens. Any other read failure leaves the pinned version
-      // alone: re-opening under a concurrent body would tear its response across
-      // two versions.
+      // alone.
       if (engineErrorCode(error) === 'unknownStreamHandle') this.forget(cursor.pin, pinned.stream);
       this.fail(port, requestId, cursor, error);
       return;
     }
 
+    // Past here the window is plaintext this broker owns outright, so every exit
+    // either transfers it or wipes it (AGENTS.md 7).
     if (!this.isCurrent(requestId, cursor)) {
-      // Nobody will receive this window; wipe it rather than leave plaintext
-      // for the collector (AGENTS.md 7 — this is its terminal owner).
       new Uint8Array(chunk).fill(0);
       return;
     }
-    cursor.offset = offset + chunk.byteLength;
+    // Read before the transfer detaches the buffer and zeroes its length.
+    const delivered = chunk.byteLength;
+    const response: MediaResponse = { type: 'cb:media:chunk', requestId, chunk };
+    try {
+      port.postMessage(response, [chunk]);
+    } catch (error) {
+      new Uint8Array(chunk).fill(0);
+      this.fail(port, requestId, cursor, error);
+      return;
+    }
+    cursor.offset = offset + delivered;
     // A short read means the live version is smaller than the head promised;
     // ending here is a clean EOF, where under-delivering content-length is a
     // network error to the media element.
-    if (chunk.byteLength < length) cursor.end = cursor.offset;
-    const response: MediaResponse = { type: 'cb:media:chunk', requestId, chunk };
-    port.postMessage(response, [chunk]);
+    if (delivered < length) cursor.end = cursor.offset;
   }
 
   private fail(port: MessagePortLike, requestId: number, cursor: Cursor, error: unknown): void {

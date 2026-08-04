@@ -299,6 +299,54 @@ describe('MediaBroker', () => {
     expect(h.reader.closes).toEqual([]);
   });
 
+  it('refuses to finish a body whose stream was replaced under it', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(
+      () => h.received.filter((message) => message.type === 'cb:media:chunk').length === 1,
+      'the second body reads its first window'
+    );
+
+    // A leadership swap retires the handle; the cursor that notices re-opens
+    // the ticket, which must not silently continue the body already in flight.
+    h.reader.failure = new EngineRequestError('unknown stream handle', 'unknownStreamHandle');
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => kinds(h.received).includes('cb:media:error'), 'the first body errors');
+
+    h.reader.failure = null;
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(
+      () => h.received.filter((message) => message.type === 'cb:media:error').length === 2,
+      'the second body errors rather than splicing two versions'
+    );
+    // The ticket re-opened, but no window of the new stream reached the body
+    // that had already delivered one from the old.
+    expect(h.reader.opens).toEqual([NODE, NODE]);
+    expect(h.reader.calls).toEqual([
+      { offset: 0, length: 4 },
+      { offset: 0, length: 4 },
+    ]);
+  });
+
+  it('ends every body of a revoked ticket and releases its stream', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => h.received.length === 2, 'first chunk');
+
+    h.broker.revoke(h.ticket);
+    await waitFor(() => h.reader.closes.length === 1, 'stream released');
+
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await flush();
+    expect(kinds(h.received)).toEqual(['cb:media:head', 'cb:media:chunk', 'cb:media:error']);
+    expect(h.reader.calls).toHaveLength(1);
+  });
+
   it('reclaims the streams only the linger holds when the engine refuses at its ceiling', async () => {
     const h = harness(20, { lingerMs: 10_000 });
 
