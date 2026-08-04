@@ -13,8 +13,8 @@ use std::task::{Context, Poll, Waker};
 use cipherbox_engine::testkit::fakes::InMemoryStagingStore;
 use cipherbox_engine::testkit::{FakeSeamTypes, FakeWorld, SeededEntropy, block_on};
 use cipherbox_engine::{
-    Command, ContentProfile, Engine, GatewayConfig, LoginSecret, NodeId, NodeKind, StoragePolicy,
-    SyncTimingProfile,
+    ApiBaseUrl, Command, ContentProfile, Engine, GatewayConfig, LoginSecret, NodeId, NodeKind,
+    StoragePolicy, SyncTimingProfile,
 };
 use cipherbox_fuse::{
     Access, HostAdapter, HostCapabilities, Invalidation, MAX_NAME_BYTES, NameError, OperationCore,
@@ -82,7 +82,7 @@ fn started_engine_with_staging() -> (Engine<FakeSeamTypes>, NodeId, InMemoryStag
         SyncTimingProfile::CI,
         ContentProfile::CI,
         StoragePolicy::CI,
-        String::new(),
+        ApiBaseUrl::offline(),
         GatewayConfig::disabled(),
     );
     block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).expect("engine starts");

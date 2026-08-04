@@ -275,7 +275,9 @@ pub(crate) struct HeldMaterial {
     /// instead (a write grantee). An insert-time derivation input, never
     /// persisted in the held set.
     pub write_scope_seed: Option<Zeroizing<[u8; 32]>>,
-    /// The content CIDs to re-register/pin at renewal.
+    /// The content CIDs to re-register/pin at renewal. Empty from a caller that
+    /// has none of its own — a re-hold then keeps the set already held for this
+    /// head rather than clobbering it (see [`resolve_and_hold`]).
     pub content_cids: Vec<String>,
 }
 
@@ -360,16 +362,28 @@ where
         if IpnsName::from_public_key(&signer.verifying_key()) != *name {
             return Ok(done(resolved));
         }
-        // Content re-pin on renewal is a deferred slice; the record still
-        // republishes validly under its head CID (only re-pinning is deferred).
-        held.borrow_mut().insert(
+        let mut held = held.borrow_mut();
+        // The drain is the only source of a head's content CIDs; the resolve
+        // tick re-holds the same head with none, so carry the held set forward
+        // rather than wipe what a publish registered (#1041). Bound to the head
+        // CID: a head this device did not author has a different block set, and
+        // re-pinning the superseded one would keep dead content alive.
+        let content_cids = if material.content_cids.is_empty() {
+            held.get(&node_id)
+                .filter(|prior| prior.head_cid == head_cid)
+                .map(|prior| prior.content_cids.clone())
+                .unwrap_or_default()
+        } else {
+            material.content_cids.clone()
+        };
+        held.insert(
             node_id,
             HeldRecord {
                 routing_key: name.as_str().to_owned(),
                 record_bytes,
                 signer,
                 head_cid,
-                content_cids: material.content_cids.clone(),
+                content_cids,
             },
         );
     }
