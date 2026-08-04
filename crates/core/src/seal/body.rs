@@ -125,6 +125,8 @@ impl ChildRef {
 /// The private `content_key` is random per-version symmetric key material, held
 /// in a zeroizing owner ([`SecretBytes`]) with a redacted `Debug` (never-log-keys
 /// rule); read it through [`Version::content_key`].
+/// `PartialEq` short-circuits across fields — a round-trip comparator, not a
+/// security comparison (see [`crate::suite::secret`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Version {
     /// The content CID bytes.
@@ -618,6 +620,30 @@ mod tests {
             r#"{"futureKey": "<redacted>"}"#,
             "a preserved value must never reach a log line"
         );
+    }
+
+    /// A version's per-version content key never reaches a log line, through
+    /// the type itself or the [`ReadBody`] that carries it. Pinned as an exact
+    /// shape so an added field forces a redaction decision (security rule 2).
+    #[test]
+    fn version_debug_redacts_the_content_key() {
+        let version = Version::new(vec![0x01, 0x02], [0xab; SECRET_LEN], 7, 99);
+        assert_eq!(
+            format!("{version:?}"),
+            "Version { content_cid: [1, 2], content_key: SecretBytes(redacted), \
+             size: 7, modified_at: 99, unknown: {} }"
+        );
+
+        // And through the composing body, which is what a diagnostic renders.
+        let body = ReadBody::File {
+            versions: vec![version],
+            created_at: 1,
+            modified_at: 2,
+            unknown: PreservedFields::new(),
+        };
+        let rendered = format!("{body:?}");
+        assert!(rendered.contains("SecretBytes(redacted)"), "{rendered}");
+        assert!(!rendered.contains("171"), "content key leaked: {rendered}");
     }
 
     #[test]
