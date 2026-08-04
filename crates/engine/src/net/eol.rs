@@ -10,6 +10,9 @@
 //! decisions: **renewal** (below the threshold, republish at seq+1) and
 //! **expiry** (a >EOL lapse, revive from the recovery endpoint). Determinism
 //! law: every function here takes the instant as a [`UnixMillis`] argument.
+//!
+//! [`is_expired`] carries one verdict outside liveness — the vault settings
+//! resolve's authority check (blueprint/engine.md "Vault settings load").
 
 use core::time::Duration;
 

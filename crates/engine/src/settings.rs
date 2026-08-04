@@ -36,15 +36,18 @@ use crate::content::validate_byo_config;
 use crate::content::{ByoIpfsConfig, ByoKind, Gateway, PinMode, ProviderError, RetentionPolicy};
 use crate::entropy::{Entropy, EntropyError};
 use crate::gate::floor;
+use crate::net::eol::is_expired;
 use crate::net::fanout_get_verify;
 use crate::net::fetch_head_block;
 use crate::net::publish::{PublishOutcome, PublishReceipt};
 use crate::net::record_publish::{
     PreflightError, RecordPublishError, RecordPublishRequest, preflight_settings, publish_record,
 };
+use crate::net::retire::{OrphanHeads, orphaned_head};
 use crate::profile::SyncTimingProfile;
 use crate::seams::{
     CredentialStore, FloorStore, Http, RecordTransport, Scheduler, SeamError, SnapshotCache,
+    UnixMillis,
 };
 
 /// The owner's client configuration, sealed into the vault settings record.
@@ -88,6 +91,9 @@ pub enum SettingsPublishError {
     Unconfirmed,
     /// The confirmed publish could not be recorded durably.
     Floor(SeamError),
+    /// The durable revision counter did not advance, so this publish would mint
+    /// a body revision the reader refuses (AGENTS.md rule 8).
+    Revision,
 }
 
 /// Why a load did not use the published record, carried by both degraded
@@ -113,6 +119,18 @@ pub enum DefaultsReason {
         /// The sequence the replayed record carried.
         sequence: u64,
     },
+    /// A record whose sealed body revision is below this device's durable
+    /// revision high-water: a same-sequence fork or a replay the outer sequence
+    /// cannot tell apart, never staleness.
+    RevisionRolledBack {
+        /// The durable revision high-water the record failed.
+        floor: u64,
+        /// The revision the refused body carried.
+        revision: u64,
+    },
+    /// The record's client-signed EOL has lapsed, so it is no longer
+    /// authoritative about the member's current configuration.
+    Expired,
     /// The load did not finish inside the profile's budget.
     TimedOut,
     /// A record was found but yielded no usable settings: it will not open
@@ -149,17 +167,76 @@ pub fn settings_name(login_secret: &[u8]) -> IpnsName {
     IpnsName::from_public_key(&kdf::settings_ipns_keypair(login_secret).verifying_key())
 }
 
+/// The highest body revision this device has *adopted* — the reader's bar. Kept
+/// apart from [`revision_mint_key`], the highest it has ever *minted*: an
+/// attempt that never landed advances only the latter, so it never makes this
+/// device refuse the live record it failed to replace. Both are prefixed, so
+/// neither can collide with the bare `ipnsName` the per-name sequence floor is
+/// keyed by — a name carries no `/`.
+fn revision_adopted_key(name: &IpnsName) -> Vec<u8> {
+    prefixed_key(b"settings-revision/", name)
+}
+
+fn revision_mint_key(name: &IpnsName) -> Vec<u8> {
+    prefixed_key(b"settings-revision-mint/", name)
+}
+
+fn prefixed_key(prefix: &[u8], name: &IpnsName) -> Vec<u8> {
+    let mut key = prefix.to_vec();
+    key.extend_from_slice(name.as_str().as_bytes());
+    key
+}
+
+/// Mint the next body revision, advancing the durable counter **before** the
+/// PUT. Attempt-scoped, which is the whole point: a revision derived from the
+/// confirm-gated sequence floor re-mints the same value on a retry and so
+/// cannot tell two same-sequence forks apart.
+///
+/// AGENTS.md rule 8: the reader refuses a revision below its durable high-water,
+/// so a counter that did not actually advance fails the publish here,
+/// release-active, rather than sealing bytes the reader would reject.
+async fn next_revision<F: FloorStore>(
+    floors: &F,
+    name: &IpnsName,
+) -> Result<u64, SettingsPublishError> {
+    let mint_key = revision_mint_key(name);
+    let read = |key| async move {
+        floor::sequence_floor(floors, key)
+            .await
+            .map(|floor| floor.unwrap_or(0))
+            .map_err(SettingsPublishError::Floor)
+    };
+    let next = read(&mint_key)
+        .await?
+        .max(read(&revision_adopted_key(name)).await?)
+        .checked_add(1)
+        .ok_or(SettingsPublishError::Revision)?;
+    // A local mint counter, not a record-plane advance, so it raises the store
+    // directly. Rule 8's guard is the compare: a store that reports a floor
+    // other than the one we asked for did not take our value.
+    let stored = floors
+        .raise_sequence_floor(&mint_key, next)
+        .await
+        .map_err(SettingsPublishError::Floor)?;
+    if stored != next {
+        return Err(SettingsPublishError::Revision);
+    }
+    Ok(next)
+}
+
 /// Seal `settings` and publish them at [`settings_name`] through the shared
 /// publish port, so the record inherits register-first, seq-CAS, and confirm
 /// like every other record.
 #[allow(clippy::too_many_arguments)]
-pub async fn publish_settings<T, H, C, F, Sch>(
+pub async fn publish_settings<T, H, C, F, Sn, Sch>(
     transport: &T,
     api: &ApiClient<H, C>,
     floors: &F,
+    snapshots: &Sn,
     scheduler: &Sch,
     profile: &SyncTimingProfile,
     entropy: &mut dyn Entropy,
+    orphans: &OrphanHeads,
     login_secret: &[u8],
     settings: &VaultSettings,
 ) -> Result<PublishReceipt, SettingsPublishError>
@@ -168,10 +245,14 @@ where
     H: Http,
     C: CredentialStore,
     F: FloorStore,
+    Sn: SnapshotCache,
     Sch: Scheduler + Clone + 'static,
 {
     validate(settings).map_err(SettingsPublishError::Byo)?;
-    let body = encode_settings_body(settings).map_err(SettingsPublishError::Codec)?;
+    let signer = kdf::settings_ipns_keypair(login_secret);
+    let name = IpnsName::from_public_key(&signer.verifying_key());
+    let revision = next_revision(floors, &name).await?;
+    let body = encode_settings_body(settings, revision).map_err(SettingsPublishError::Codec)?;
     let mut ephemeral = Zeroizing::new([0u8; 32]);
     entropy
         .fill(ephemeral.as_mut_slice())
@@ -187,11 +268,10 @@ where
     let enc_secret = kdf::enc_subkey(login_secret);
     let block = seal_settings_record(&enc_secret, &ephemeral, &body)
         .map_err(SettingsPublishError::Codec)?;
-    let head = preflight_settings(&enc_secret, block).map_err(SettingsPublishError::Preflight)?;
+    let head =
+        preflight_settings(&enc_secret, block.clone()).map_err(SettingsPublishError::Preflight)?;
 
-    let signer = kdf::settings_ipns_keypair(login_secret);
-    let name = IpnsName::from_public_key(&signer.verifying_key());
-    let receipt = publish_record(
+    let receipt = match publish_record(
         transport,
         api,
         floors,
@@ -206,7 +286,18 @@ where
         },
     )
     .await
-    .map_err(SettingsPublishError::Publish)?;
+    {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            // This publish runs outside a drain pass, so it clears its own
+            // orphan set rather than deferring to a pass boundary.
+            if orphaned_head(&error) {
+                orphans.record(head.cid());
+                orphans.retire_pending(api).await;
+            }
+            return Err(SettingsPublishError::Publish(error));
+        }
+    };
 
     // Only a confirmed publish advances the floor. Returning `Ok` on an
     // unconfirmed one would leave the writer's floor behind the network's
@@ -215,7 +306,16 @@ where
     let PublishOutcome::Published { sequence } = receipt.outcome else {
         return Err(SettingsPublishError::Unconfirmed);
     };
+    // The confirm re-resolve read back our own bytes, so the writer has adopted
+    // what it just published: the bar rises, and last-known-good becomes these
+    // settings rather than the generation they replaced — otherwise a record
+    // withheld right after a change pins this device to a credential the member
+    // has already rotated away from.
+    let _ = snapshots.put(&settings_cache_key(&name), &block).await;
     floor::advance_sequence_on_unseal(floors, name.as_str().as_bytes(), sequence)
+        .await
+        .map_err(SettingsPublishError::Floor)?;
+    floor::advance_sequence_on_unseal(floors, &revision_adopted_key(&name), revision)
         .await
         .map_err(SettingsPublishError::Floor)?;
     Ok(receipt)
@@ -258,6 +358,7 @@ where
         &mut cached,
         &enc_secret,
         &name,
+        scheduler.now(),
     );
     let reason = match within(scheduler, profile.settings_load_budget, load).await {
         Some(Ok(settings)) => return SettingsLoad::Resolved(settings),
@@ -267,7 +368,10 @@ where
     // A rollback takes this arm like every other reason: pinning last-known-good
     // is what the record plane already owes a gate failure (blueprint/engine.md).
     match cached.and_then(|block| open_settings_head(&enc_secret, &block)) {
-        Some(settings) => SettingsLoad::Stale { settings, reason },
+        Some(body) => SettingsLoad::Stale {
+            settings: body.settings,
+            reason,
+        },
         None => SettingsLoad::Defaults(reason),
     }
 }
@@ -285,7 +389,7 @@ fn settings_cache_key(name: &IpnsName) -> Vec<u8> {
 /// the fetched copy reach their verdict here, through one seal open and one
 /// body grammar — so a copy this build cannot authenticate is discarded rather
 /// than applied.
-fn open_settings_head(enc_secret: &X25519Secret, block: &[u8]) -> Option<VaultSettings> {
+fn open_settings_head(enc_secret: &X25519Secret, block: &[u8]) -> Option<SettingsBody> {
     decode_settings_body(&open_settings_record(enc_secret, block).ok()?).ok()
 }
 
@@ -299,6 +403,7 @@ async fn resolve_settings<T, H, F, Sn>(
     cached: &mut Option<Vec<u8>>,
     enc_secret: &X25519Secret,
     name: &IpnsName,
+    now: UnixMillis,
 ) -> Result<VaultSettings, DefaultsReason>
 where
     T: RecordTransport,
@@ -312,8 +417,8 @@ where
     // fall back on; the cache never short-circuits the fetch.
     *cached = snapshots.get(&cache_key).await.ok().flatten();
     // The settings record belongs to no scope and carries no epoch, so the
-    // per-name sequence floor is its whole floor law. A floor the host cannot
-    // read is never treated as no floor.
+    // per-name sequence floor and the adopted body revision are its whole floor
+    // law. A floor the host cannot read is never treated as no floor.
     let Ok(durable) = floor::sequence_floor(floors, key).await else {
         return Err(DefaultsReason::FloorUnreadable);
     };
@@ -325,6 +430,12 @@ where
             None => DefaultsReason::NoRecord,
         });
     };
+    // The reader of this record is always its signer, so a lapsed EOL is a
+    // refusal here rather than the availability event it is plane-wide
+    // (blueprint/engine.md "Vault settings load").
+    if is_expired(now, &verified.validity) {
+        return Err(DefaultsReason::Expired);
+    }
     let sequence = verified.sequence;
     let floor = durable.unwrap_or(0);
     if sequence < floor {
@@ -336,7 +447,22 @@ where
     let Ok((_, block)) = fetch_head_block(gateway, http, name, &record_bytes, None).await else {
         return Err(DefaultsReason::Suppressed);
     };
-    let settings = open_settings_head(enc_secret, &block).ok_or(DefaultsReason::Unreadable)?;
+    let body = open_settings_head(enc_secret, &block).ok_or(DefaultsReason::Unreadable)?;
+    let adopted_key = revision_adopted_key(name);
+    let Ok(adopted) = floor::sequence_floor(floors, &adopted_key).await else {
+        return Err(DefaultsReason::FloorUnreadable);
+    };
+    let adopted = adopted.unwrap_or(0);
+    // The revision arbitrates only what the sequence cannot: a fork *at* the
+    // sequence this device already adopted. A strictly newer record won its CAS
+    // against the network, and holding it to a device-local revision counter
+    // would refuse a second device's legitimate publish forever.
+    if sequence == floor && body.revision < adopted {
+        return Err(DefaultsReason::RevisionRolledBack {
+            floor: adopted,
+            revision: body.revision,
+        });
+    }
     // Only a record that cleared its floor and opened becomes last-known-good,
     // and what is stored is the sealed block, so ciphertext-only-at-rest holds.
     let _ = snapshots.put(&cache_key, &block).await;
@@ -344,7 +470,8 @@ where
     // that will not open must not raise the bar the next resolve is held to.
     // Neither store failing is a verdict on settings we just authenticated.
     let _ = floor::advance_sequence_on_unseal(floors, key, sequence).await;
-    Ok(settings)
+    let _ = floor::advance_sequence_on_unseal(floors, &adopted_key, body.revision).await;
+    Ok(body.settings)
 }
 
 /// Run `work`, giving up once `budget` has elapsed on the injected scheduler.
@@ -417,10 +544,21 @@ fn validate(settings: &VaultSettings) -> Result<(), ProviderError> {
     }
 }
 
+/// The sealed body: the member's settings plus the attempt-scoped monotonic
+/// revision that orders two records the outer sequence cannot tell apart.
+#[derive(Debug)]
+struct SettingsBody {
+    settings: VaultSettings,
+    revision: u64,
+}
+
 /// Encode a settings body. Both the returned buffer and the transient `Value`
 /// tree carry the BYO access token verbatim, so this is the tree's terminal
 /// owner and the buffer is handed back in a zeroizing one.
-fn encode_settings_body(settings: &VaultSettings) -> Result<Zeroizing<Vec<u8>>, CodecError> {
+fn encode_settings_body(
+    settings: &VaultSettings,
+    revision: u64,
+) -> Result<Zeroizing<Vec<u8>>, CodecError> {
     let mut m = Map::new();
     m.insert(
         "byo",
@@ -449,6 +587,7 @@ fn encode_settings_body(settings: &VaultSettings) -> Result<Zeroizing<Vec<u8>>, 
         "pinMode",
         Value::Text(pin_mode_str(settings.pin_mode).to_string()),
     );
+    m.insert("revision", Value::Unsigned(revision));
 
     let mut tree = Value::Map(m);
     let encoded = encode(&tree).map(Zeroizing::new);
@@ -456,23 +595,23 @@ fn encode_settings_body(settings: &VaultSettings) -> Result<Zeroizing<Vec<u8>>, 
     encoded
 }
 
-fn decode_settings_body(bytes: &[u8]) -> Result<VaultSettings, BodyError> {
+fn decode_settings_body(bytes: &[u8]) -> Result<SettingsBody, BodyError> {
     let mut tree = decode(bytes)?;
     let decoded = read_settings_map(&mut tree);
     // Terminal owner of the decoded tree: the credential inside is wiped on
     // every exit, including the early returns a malformed body takes.
     tree.zeroize_bytes();
-    let settings = decoded?;
-    validate(&settings).map_err(BodyError::Byo)?;
-    Ok(settings)
+    let body = decoded?;
+    validate(&body.settings).map_err(BodyError::Byo)?;
+    Ok(body)
 }
 
 /// The body's keys, exhaustive at this version — a body carrying any other key
 /// was written by a build this one does not share a schema with.
-const BODY_KEYS: [&str; 3] = ["byo", "keepLatest", "pinMode"];
+const BODY_KEYS: [&str; 4] = ["byo", "keepLatest", "pinMode", "revision"];
 const BYO_KEYS: [&str; 3] = ["accessToken", "endpoint", "kind"];
 
-fn read_settings_map(tree: &mut Value) -> Result<VaultSettings, BodyError> {
+fn read_settings_map(tree: &mut Value) -> Result<SettingsBody, BodyError> {
     let Value::Map(map) = tree else {
         return Err(tree.as_map().unwrap_err().into());
     };
@@ -489,11 +628,15 @@ fn read_settings_map(tree: &mut Value) -> Result<VaultSettings, BodyError> {
             NonZeroU64::new(other.as_unsigned()?).ok_or(BodyError::RetainsNoVersions)?,
         ),
     };
+    let revision = req(map, "revision")?.as_unsigned()?;
     let byo = read_byo(map.get_mut("byo"))?;
-    Ok(VaultSettings {
-        pin_mode,
-        byo,
-        retention,
+    Ok(SettingsBody {
+        settings: VaultSettings {
+            pin_mode,
+            byo,
+            retention,
+        },
+        revision,
     })
 }
 
@@ -582,8 +725,15 @@ mod tests {
         }
     }
 
+    /// The revision the round-trip fixtures mint; any value works, so long as
+    /// the reader hands back the one the writer sealed.
+    const REVISION: u64 = 42;
+
     fn round_trip(settings: &VaultSettings) -> VaultSettings {
-        decode_settings_body(&encode_settings_body(settings).expect("encode")).expect("decode")
+        let body = decode_settings_body(&encode_settings_body(settings, REVISION).expect("encode"))
+            .expect("decode");
+        assert_eq!(body.revision, REVISION, "the revision round-trips");
+        body.settings
     }
 
     #[test]
@@ -616,15 +766,16 @@ mod tests {
             ..VaultSettings::default()
         };
         assert_eq!(
-            encode_settings_body(&settings).expect("encode"),
-            encode_settings_body(&settings).expect("encode"),
+            encode_settings_body(&settings, REVISION).expect("encode"),
+            encode_settings_body(&settings, REVISION).expect("encode"),
         );
     }
 
     #[test]
     fn a_body_this_version_does_not_share_a_schema_with_is_refused() {
         let settings = VaultSettings::default();
-        let mut tree = decode(&encode_settings_body(&settings).expect("encode")).expect("decode");
+        let mut tree =
+            decode(&encode_settings_body(&settings, REVISION).expect("encode")).expect("decode");
         let Value::Map(map) = &mut tree else {
             unreachable!("the body is a map")
         };
@@ -643,6 +794,7 @@ mod tests {
         m.insert("byo", Value::Null);
         m.insert("keepLatest", Value::Null);
         m.insert("pinMode", Value::Text("everywhere".to_owned()));
+        m.insert("revision", Value::Unsigned(1));
         assert_eq!(
             decode_settings_body(&encode(&Value::Map(m)).expect("encode")).unwrap_err(),
             BodyError::UnknownVariant { field: "pinMode" },
@@ -658,9 +810,24 @@ mod tests {
         m.insert("byo", Value::Null);
         m.insert("keepLatest", Value::Unsigned(0));
         m.insert("pinMode", Value::Text("hosted".to_owned()));
+        m.insert("revision", Value::Unsigned(1));
         assert_eq!(
             decode_settings_body(&encode(&Value::Map(m)).expect("encode")).unwrap_err(),
             BodyError::RetainsNoVersions,
+        );
+    }
+
+    /// A body from a build that predates the revision is not a body this one
+    /// can hold to a monotonic bar, so it is refused rather than read as zero.
+    #[test]
+    fn a_body_without_a_revision_is_refused() {
+        let mut m = Map::new();
+        m.insert("byo", Value::Null);
+        m.insert("keepLatest", Value::Null);
+        m.insert("pinMode", Value::Text("hosted".to_owned()));
+        assert_eq!(
+            decode_settings_body(&encode(&Value::Map(m)).expect("encode")).unwrap_err(),
+            BodyError::Codec(Malformed::MissingField { field: "revision" }.into()),
         );
     }
 
@@ -683,7 +850,7 @@ mod tests {
             };
             let refused = validate(&settings).unwrap_err();
             assert_eq!(
-                decode_settings_body(&encode_settings_body(&settings).expect("encode"))
+                decode_settings_body(&encode_settings_body(&settings, REVISION).expect("encode"))
                     .unwrap_err(),
                 BodyError::Byo(refused),
                 "{endpoint}: the reader must refuse what the writer refuses",

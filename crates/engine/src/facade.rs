@@ -38,7 +38,7 @@ use crate::content::{
 };
 use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
-use crate::net::retire::retire;
+use crate::net::retire::{OrphanHeads, retire};
 use crate::net::{
     Adopter, ChildAdopter, ChildResolveError, EolRenewResult, FolderRefresh, HeldMaterial,
     HeldRecord, HeldRecords, LivenessControl, PublishError, PublishOutcome, RE_PUT_INTERVAL,
@@ -52,7 +52,7 @@ use crate::session::SessionIdentity;
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::cancel::UploadCancels;
-use crate::sync::drain::{Drain, DrainReport, DrainScope};
+use crate::sync::drain::{Drain, DrainReport, DrainScope, published_op_mark};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, Replaced, StagedContent};
 use crate::sync::overlay::apply_overlay;
@@ -1250,7 +1250,7 @@ pub struct Engine<T: SeamTypes> {
     /// Head blocks the drain uploaded for a publish that never reached the
     /// record transport, pending retirement. Session-lived so a retire the
     /// registry refused goes out again on a later pass (#921).
-    orphan_heads: Rc<RefCell<Vec<String>>>,
+    orphan_heads: Rc<OrphanHeads>,
     /// Session-alive latch: cleared on drop so the spawned liveness loop
     /// stops at its next wake instead of re-PUTting after the engine is gone.
     alive: Rc<Cell<bool>>,
@@ -1306,7 +1306,7 @@ impl<T: SeamTypes> Engine<T> {
                 dead_letters: Rc::new(RefCell::new(BTreeMap::new())),
                 queue_scan: RefCell::new(QueueScanMemo::default()),
                 blocked: Rc::new(RefCell::new(None)),
-                orphan_heads: Rc::new(RefCell::new(Vec::new())),
+                orphan_heads: Rc::new(OrphanHeads::default()),
                 alive: Rc::new(Cell::new(true)),
                 session: None,
                 api: None,
@@ -2250,6 +2250,7 @@ impl<T: SeamTypes> Engine<T> {
     /// Staged bytes are **released**, not preserved: the rule that splits the
     /// two is whether the engine gave up on the op or the user did (#824).
     async fn cancel_upload(&self, op_id: OpId) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let queued = self.scan_queue().await?.mine;
         let Some((_, op)) = queued.iter().find(|(id, _)| *id == op_id) else {
             return Err(EngineError::TooLateToCancel { op_id });
@@ -2257,6 +2258,17 @@ impl<T: SeamTypes> Engine<T> {
         let Some(root_cid) = op.content_root_cid().map(<[u8]>::to_vec) else {
             return Err(EngineError::NotAnUpload { op_id });
         };
+        // The durable half of the publish-entry interlock: a reboot clears the
+        // session-scoped one, and a version whose record publish was confirmed
+        // must stay uncancellable across it. Read under this session's own
+        // identity, the same one the mark was written under.
+        if published_op_mark(&self.seams.staging_store, session.enc_subkey())
+            .await
+            .map_err(EngineError::from_seam)?
+            .is_some_and(|mark| op_id.0 <= mark)
+        {
+            return Err(EngineError::TooLateToCancel { op_id });
+        }
         // Claimed before anything is undone, and refused once the drain holds
         // the op for publish — cancel never mutates published state.
         if !self.cancels.borrow_mut().request(op_id) {

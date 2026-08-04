@@ -23,9 +23,17 @@ use cipherbox_core::content::verify_cid;
 use crate::content::decode_root;
 use crate::facade::WriteHandle;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
-use crate::sync::drain::{DRAINED_OP_MARK_KEY, OP_ATTEMPTS_KEY, UPLOAD_MARK_KEY};
+use crate::sync::drain::{
+    DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, UPLOAD_MARK_KEY,
+};
 use crate::sync::op::Op;
 use crate::sync::record::{RecordSeal, encode_op_record, record_content_root_cid};
+
+/// Whether `key` is one of the per-identity op-id high-water marks
+/// ([`op_mark_key`](crate::sync::drain::op_mark_key)).
+fn is_op_mark(key: &[u8]) -> bool {
+    key.starts_with(DRAINED_OP_MARK_PREFIX) || key.starts_with(PUBLISHED_OP_MARK_PREFIX)
+}
 
 /// Journal one op onto the durable queue, returning its id.
 ///
@@ -294,7 +302,6 @@ pub async fn orphan_staging_keys<S: StagingStore>(
 ) -> SeamResult<Vec<Vec<u8>>> {
     // The drain's own queue bookkeeping is not upload residue.
     let mut referenced = HashSet::from([
-        DRAINED_OP_MARK_KEY.to_vec(),
         OP_ATTEMPTS_KEY.to_vec(),
         UPLOAD_MARK_KEY.to_vec(),
         PRESERVED_DEAD_LETTERS_KEY.to_vec(),
@@ -302,12 +309,14 @@ pub async fn orphan_staging_keys<S: StagingStore>(
     referenced.extend(live.iter().cloned());
     // Enumerated first, so an idle store answers without reading the queue at
     // all, and a version journaled mid-pass is decided by a queue read that
-    // already covers it.
+    // already covers it. The op-id marks are per-identity, so their whole
+    // prefixes are referenced — a mark this session cannot read belongs to the
+    // identity that still needs it.
     let candidates: Vec<Vec<u8>> = store
         .staged_keys()
         .await?
         .into_iter()
-        .filter(|key| !referenced.contains(key))
+        .filter(|key| !referenced.contains(key) && !is_op_mark(key))
         .collect();
     if candidates.is_empty() {
         return Ok(candidates);
@@ -522,20 +531,36 @@ mod tests {
 
     /// Collecting the drain's completion mark would let a restored queue replay
     /// ops that already published (#860), so it is never orphan residue.
+    ///
+    /// The op-id marks are per-identity, so this holds for a mark **this**
+    /// session cannot read too: its owner is the identity that still needs it,
+    /// and collecting it would discard their completion record.
     #[test]
     fn the_drains_own_bookkeeping_is_never_classed_an_orphan() {
         let store = InMemoryStagingStore::default();
         block_on(async {
-            store
-                .put_staged_bytes(DRAINED_OP_MARK_KEY, &7u64.to_be_bytes())
-                .await
-                .unwrap();
+            let foreign = |prefix: &[u8]| {
+                let mut key = prefix.to_vec();
+                key.extend_from_slice(&[7u8; 32]);
+                key
+            };
+            for prefix in [DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX] {
+                store
+                    .put_staged_bytes(&foreign(prefix), &7u64.to_be_bytes())
+                    .await
+                    .unwrap();
+            }
             store
                 .put_staged_bytes(OP_ATTEMPTS_KEY, &[0u8; 12])
                 .await
                 .unwrap();
+            store.put_staged_bytes(b"orphan", b"stale").await.unwrap();
 
-            assert!(orphan_staging_keys(&store, &[]).await.unwrap().is_empty());
+            assert_eq!(
+                orphan_staging_keys(&store, &[]).await.unwrap(),
+                vec![b"orphan".to_vec()],
+                "only the residue is collected, never anyone's mark"
+            );
         });
     }
 

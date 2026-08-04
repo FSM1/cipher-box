@@ -131,7 +131,9 @@ bytes (#28 D2).
   from the authenticated recovery endpoint and extracts the last-known CID —
   or recovers it from the pin set's name→CID mapping — then mints a fresh
   record with a fresh signature; lapse is an availability event, never loss
-  (#24 lapse semantics).
+  (#24 lapse semantics). The adoption gate therefore does **not** reject on
+  EOL; the one carve-out is the vault settings resolve, whose reader is always
+  its own signer (see "Vault settings load").
 - **Retirement**: retire = remove my registry rows; timing is engine policy
   (#34 D4). Interior old names batch-retire at name-wave completion; the old
   scope-root name lingers serving the tombstone until the migration window
@@ -227,21 +229,66 @@ degraded outcome applies a different policy rather than showing stale data.
   consumer that branches only on the resolved case, letting the degraded ones
   fall through to the defaults, reintroduces exactly the widening this policy
   exists to prevent.
+- **A lapsed EOL is refused here, and only here.** Plane-wide an EOL lapse is
+  an availability event recovered by revival (above), because a gate-level
+  rejection would lock every grantee out of a dormant owner's vault — a read
+  regression, not a hardening. The settings record is the one record whose
+  reader is always its signer, so refusing a lapsed one strands nobody: the
+  session holding the login secret can republish on the spot. That is the
+  principled carve-out, and it is what bounds replay on a device with no floor
+  to compare against — a fresh install otherwise admits any owner-signed
+  record the network serves, including one captured before the member rotated
+  a BYO `access_token` the engine would then present as a bearer credential.
+  The lapse degrades through the last-known-good path like every other
+  reason. The encode side needs no matching guard: the EOL is `now + 90 days`
+  off the injected clock, so a publish structurally cannot mint an
+  already-expired record. Residual until the settings record joins the held set
+  the sub-EOL renewal loop walks: an account whose settings have not been
+  re-saved inside the window lapses on its own, and the placement decision then
+  fails closed for want of a copy it can authenticate.
+- **The sealed body carries a monotonic revision.** The outer sequence cannot
+  order two records at the _same_ sequence, and an unconfirmed publish
+  followed by a retry mints exactly that: two owner-signed records at one
+  sequence, either of which a chosen-record adversary can serve forever. The
+  revision is minted **per publish attempt, advanced before the PUT** — one
+  derived from the confirm-gated sequence floor re-mints the same value on the
+  retry and disambiguates nothing. A reader refuses a revision below the
+  highest it has adopted **at that sequence**, which is a trust violation and
+  not staleness; a record at a strictly higher sequence won its own CAS and is
+  never held to a device-local counter, or a second device's legitimate publish
+  would be refused forever. The writer's mint counter and the reader's adopted
+  high-water are separate durable values: an attempt that never landed advances
+  only the former, so it never makes a device refuse the live record it failed
+  to replace. A confirmed publish raises the reader's bar and seeds
+  last-known-good with what it published, so a record withheld right after a
+  settings change cannot pin the device to the generation it replaced —
+  including a BYO credential the member has just rotated away from.
+- **The cold-device anchor is the EOL, and only the EOL.** Every durable seam
+  is device-local, so a fresh install has neither a sequence floor nor an
+  adopted revision to hold a record to; the revision closes the fork residual
+  on a device with state, not on one without. Chaining the settings head CID
+  into the vault pointer would give a cold device an anchor, but it inverts
+  the record's whole purpose — settings resolve _before_ any vault resolve
+  precisely so a self-hosting owner never needs CipherBox to tell them where
+  their own node is, and a BYO member would have to reach the network they
+  configured in settings in order to read those settings. An API-held counter
+  is refused outright: no client resolve path touches the API's record cache.
+  So a cold device's bound is the 90-day EOL window, stated rather than
+  closed.
 - **Residual: the cached copy has no freshness bound.** It is bound to the
   account by its seal alone — no sequence, no name, no time — so a party who
   can write this device's durable store can pin it to any settings generation
   the account ever published; every historical head block is a public,
   content-addressed object, so only the store write is privileged. The
-  per-name sequence floor is no defence here: it is device-local and lives
-  beside the cache, so the same party moves both. That party can equally
-  _delete_ the entry and force the defaults path, which is the pre-cache
-  behaviour — so the anti-downgrade property holds against a record-plane
-  adversary, not against one already inside the device's storage. The same
-  staleness arrives with no adversary at all: a device stuck degraded keeps
-  its copy indefinitely, including a BYO credential the member has since
-  rotated, which is why the reason is reported rather than swallowed. A real
-  bound needs a per-account anchor — an EOL check or a monotonic revision in
-  the sealed body — neither of which the settings record carries today.
+  per-name sequence floor and the adopted revision are no defence here: both
+  are device-local and live beside the cache, so the same party moves all
+  three. That party can equally _delete_ the entry and force the defaults
+  path, which is the pre-cache behaviour — so the anti-downgrade property
+  holds against a record-plane adversary, not against one already inside the
+  device's storage. The same staleness arrives with no adversary at all: a
+  device stuck degraded keeps its copy indefinitely, including a BYO
+  credential the member has since rotated, which is why the reason is reported
+  rather than swallowed.
 
 ## Sync core
 
