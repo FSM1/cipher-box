@@ -69,6 +69,9 @@ pub struct RootAdopter<'a, H, F> {
     /// whenever the resolved record carries an ascent link — every interior
     /// scope root does ([`Self::under_parent_node_seed`]).
     parent_node_seed: Option<Zeroizing<[u8; 32]>>,
+    /// Record bytes the caller already holds with the scope material recovered
+    /// from them ([`Self::holding`]).
+    held_current: Option<Vec<u8>>,
 }
 
 impl<'a, H, F> RootAdopter<'a, H, F> {
@@ -92,7 +95,20 @@ impl<'a, H, F> RootAdopter<'a, H, F> {
             assembled: RefCell::new(None),
             local_head: RefCell::new(None),
             parent_node_seed: None,
+            held_current: None,
         }
+    }
+
+    /// Declare the record bytes the caller already holds for this name, with the
+    /// scope material it recovered from them still in hand. An equal-floor
+    /// `Current` re-resolve of exactly those bytes then recovers nothing: the
+    /// record signs its head CID, so identical bytes address the identical head
+    /// block and would only reproduce the seeds already held — at the cost of two
+    /// HPKE opens every poll on an idle vault. `None` disables the skip.
+    #[must_use]
+    pub(crate) fn holding(mut self, record_bytes: Option<Vec<u8>>) -> Self {
+        self.held_current = record_bytes;
+        self
     }
 
     /// Supply the reader's ancestor node seed, `nodeSeed(parentOverrideSeed,
@@ -161,6 +177,11 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<Option<OwnScopeMaterial>, SeamError> {
+        // Steady state ([`Self::holding`]): these exact bytes are already held
+        // with their material recovered, so there is nothing left to open.
+        if self.held_current.as_deref() == Some(record_bytes) {
+            return Ok(None);
+        }
         // Recovery is fail-open, never a trust verdict: anything unproved yields
         // `Ok(None)`, held keyless (#752 F3: a Current never hardens).
         //
@@ -913,6 +934,49 @@ mod tests {
             http.requests().len(),
             1,
             "the head block is fetched once; recovery reuses adopt's candidate"
+        );
+    }
+
+    #[test]
+    fn bytes_already_held_short_circuit_the_equal_floor_recovery() {
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        let gw = gateway();
+        let adopter = fx
+            .adopter(&http, &floors, &fx.owner_identity_verifier, &gw)
+            .holding(Some(fx.record(1)));
+
+        assert!(
+            block_on(recover_at_floor(&adopter, &floors, &fx))
+                .expect("recovery is fail-open, never an error")
+                .is_none(),
+            "the caller already holds these bytes and the material behind them",
+        );
+    }
+
+    #[test]
+    fn a_hold_of_other_bytes_never_short_circuits_the_recovery() {
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        let gw = gateway();
+        // A hold on a different record of the same name: the fetched bytes are
+        // not the held ones, so the skip must not fire.
+        let adopter = fx
+            .adopter(&http, &floors, &fx.owner_identity_verifier, &gw)
+            .holding(Some(fx.record(2)));
+
+        assert_eq!(
+            block_on(recover_at_floor(&adopter, &floors, &fx))
+                .expect("fail-open")
+                .and_then(|material| material.write_scope_seed)
+                .as_deref(),
+            Some(&OWNER_ROOT_WRITE_SCOPE_SEED),
         );
     }
 

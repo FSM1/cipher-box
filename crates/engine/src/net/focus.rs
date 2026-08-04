@@ -10,11 +10,13 @@ use core::cell::RefCell;
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::ReadBody;
+use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
-use super::child::{ChildAdopter, resolve_child};
+use super::child::{ChildAdopter, ChildResolveError, resolve_child};
 use crate::content::Gateway;
-use crate::facade::{NodeId, NodeKind};
+use crate::facade::{Event, NodeId, NodeKind, emit_trust_violation};
+use crate::gate::GateError;
 use crate::seams::{FloorStore, Http, RecordTransport, SnapshotCache};
 use crate::sync::model::Snapshot;
 use crate::sync::project::project_folder;
@@ -30,6 +32,8 @@ pub(crate) struct FolderRefresh<'a, T, S, H, F> {
     pub(crate) gateway: &'a Gateway,
     /// The gate-passing base snapshot, merged into in place.
     pub(crate) base: &'a RefCell<Snapshot>,
+    /// Where a fail-closed rejection on a focused folder is surfaced.
+    pub(crate) events: &'a mpsc::UnboundedSender<Event>,
     /// The scope every focus folder is sealed under — the vault root scope;
     /// granted-subscope focus is a later slice.
     pub(crate) scope_id: [u8; 16],
@@ -48,8 +52,9 @@ where
     /// dropped a child unlinks it before the pass would project into it.
     ///
     /// Every failure is per-folder and non-fatal: an unresolvable record is
-    /// availability staleness, a gate rejection is fail-closed, and both leave
-    /// last-known-good rendering without stopping the pass.
+    /// availability staleness, a gate rejection is fail-closed and surfaced as
+    /// [`Event::AttributableAbuse`], and both leave last-known-good rendering
+    /// without stopping the pass.
     pub(crate) async fn run(&self, folders: &[NodeId]) -> bool {
         let mut changed = false;
         for folder in folders.iter().rev() {
@@ -64,13 +69,17 @@ where
                 self.scope_read_seed.clone(),
                 folder.0,
             );
-            // Staleness and gate rejection alike leave the base untouched; the
-            // host is told apart from neither today (surfacing: #796).
-            let Ok(adopted) =
-                resolve_child(self.transport, self.snapshot_cache, &adopter, &name).await
-            else {
-                continue;
-            };
+            let adopted =
+                match resolve_child(self.transport, self.snapshot_cache, &adopter, &name).await {
+                    Ok(adopted) => adopted,
+                    // Availability: the base keeps rendering last-known-good.
+                    Err(ChildResolveError::Unavailable(_))
+                    | Err(ChildResolveError::Gate(GateError::Seam(_))) => continue,
+                    Err(ChildResolveError::Gate(GateError::Rejected(rejection))) => {
+                        emit_trust_violation(self.events, name.as_str(), &rejection.to_string());
+                        continue;
+                    }
+                };
             let ReadBody::Folder {
                 modified_at,
                 children,
@@ -79,6 +88,11 @@ where
             else {
                 // The parent's child ref said folder: a sealed file body is a
                 // kind transplant, fail-closed.
+                emit_trust_violation(
+                    self.events,
+                    name.as_str(),
+                    "sealed file body behind a folder child ref",
+                );
                 continue;
             };
             changed |= project_folder(
