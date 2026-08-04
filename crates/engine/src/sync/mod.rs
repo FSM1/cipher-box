@@ -32,7 +32,8 @@ pub mod tick;
 
 pub use boot::{ColdStartError, ColdStartOutcome, ColdStartParams, RootResolve, cold_start};
 pub use drain::{
-    BlockedOp, DRAINED_OP_MARK_KEY, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_KEY, UPLOAD_MARK_KEY,
+    BlockedOp, DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, UPLOAD_MARK_KEY,
+    op_mark_key,
 };
 pub use model::{Link, NodeMeta, Snapshot, collation_key, suffix_name};
 pub use op::{NewNode, Op, OpDecodeError, OpKind, Replaced, StagedContent};

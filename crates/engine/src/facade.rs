@@ -2250,6 +2250,7 @@ impl<T: SeamTypes> Engine<T> {
     /// Staged bytes are **released**, not preserved: the rule that splits the
     /// two is whether the engine gave up on the op or the user did (#824).
     async fn cancel_upload(&self, op_id: OpId) -> Result<(), EngineError> {
+        let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let queued = self.scan_queue().await?.mine;
         let Some((_, op)) = queued.iter().find(|(id, _)| *id == op_id) else {
             return Err(EngineError::TooLateToCancel { op_id });
@@ -2258,9 +2259,10 @@ impl<T: SeamTypes> Engine<T> {
             return Err(EngineError::NotAnUpload { op_id });
         };
         // The durable half of the publish-entry interlock: a reboot clears the
-        // session-scoped one, and a version whose record PUT was acknowledged
-        // must stay uncancellable across it.
-        if published_op_mark(&self.seams.staging_store)
+        // session-scoped one, and a version whose record publish was confirmed
+        // must stay uncancellable across it. Read under this session's own
+        // identity, the same one the mark was written under.
+        if published_op_mark(&self.seams.staging_store, session.enc_subkey())
             .await
             .map_err(EngineError::from_seam)?
             .is_some_and(|mark| op_id.0 <= mark)

@@ -18,6 +18,7 @@ use cipherbox_core::seal::{
 };
 use cipherbox_core::suite::ecdsa::EcdsaSigner;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
+use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use cipherbox_engine::api::REGISTRY_BATCH_REFUSED;
@@ -31,7 +32,7 @@ use cipherbox_engine::seams::{
 };
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
-    DRAINED_OP_MARK_KEY, PUBLISHED_OP_MARK_KEY, StagedContent, UPLOAD_MARK_KEY,
+    DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, StagedContent, UPLOAD_MARK_KEY, op_mark_key,
     record_content_root_cid,
 };
 use cipherbox_engine::testkit::fakes::InMemoryRecordStore;
@@ -908,11 +909,7 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
     // blocks once its record has published, leaving only the queue bookkeeping.
     assert_eq!(
         block_on(alice.staging_store.staged_keys()).unwrap(),
-        vec![
-            DRAINED_OP_MARK_KEY.to_vec(),
-            PUBLISHED_OP_MARK_KEY.to_vec(),
-            UPLOAD_MARK_KEY.to_vec()
-        ],
+        vec![drained_key(), mark_key(), UPLOAD_MARK_KEY.to_vec()],
         "no staged block survives a published version, only queue bookkeeping"
     );
     assert!(
@@ -1476,7 +1473,7 @@ fn a_version_whose_content_key_will_not_open_dead_letters_and_releases_its_block
     );
     assert_eq!(
         block_on(alice.staging_store.staged_keys()).unwrap(),
-        vec![DRAINED_OP_MARK_KEY.to_vec(), PUBLISHED_OP_MARK_KEY.to_vec()],
+        vec![drained_key(), mark_key()],
         "blocks no key opens are released, never held against the budget"
     );
     assert_eq!(
@@ -1810,11 +1807,7 @@ fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() 
         );
         assert_eq!(
             block_on(alice.staging_store.staged_keys()).unwrap(),
-            vec![
-                DRAINED_OP_MARK_KEY.to_vec(),
-                PUBLISHED_OP_MARK_KEY.to_vec(),
-                UPLOAD_MARK_KEY.to_vec()
-            ],
+            vec![drained_key(), mark_key(), UPLOAD_MARK_KEY.to_vec()],
             "the retry re-removes it, so the residue holds no staging budget"
         );
         assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
@@ -2220,7 +2213,7 @@ fn an_op_the_completion_record_already_covers_never_republishes() {
     // below reclaims from the stale queue.
     block_on(StagingStore::put_staged_bytes(
         &alice.staging_store,
-        DRAINED_OP_MARK_KEY,
+        &drained_key(),
         &1u64.to_be_bytes(),
     ))
     .unwrap();
@@ -2261,7 +2254,7 @@ fn an_op_the_completion_record_already_covers_never_republishes() {
 /// The device's durable drained-op completion mark. It lives beside the op
 /// queue it names, so a store that loses one loses the other.
 async fn drained_mark(device: &FakeDevice) -> Option<u64> {
-    StagingStore::staged_bytes(&device.staging_store, DRAINED_OP_MARK_KEY)
+    StagingStore::staged_bytes(&device.staging_store, &drained_key())
         .await
         .expect("the staging store answers")
         .map(|bytes| u64::from_be_bytes(bytes.try_into().expect("an 8-byte mark")))
@@ -4097,7 +4090,7 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
         block_on(alice.staging_store.staged_keys())
             .unwrap()
             .iter()
-            .all(|key| key.as_slice() == DRAINED_OP_MARK_KEY || key.as_slice() == UPLOAD_MARK_KEY),
+            .all(|key| *key == drained_key() || key.as_slice() == UPLOAD_MARK_KEY),
         "the staging budget holds nothing but queue bookkeeping"
     );
     assert!(
@@ -4253,15 +4246,30 @@ fn a_cancel_after_the_version_published_is_refused() {
     );
 }
 
-/// Plant the durable published-op mark over `op_id`, standing in for the crash
-/// between a record PUT the network acked and the op's removal from the queue.
-fn plant_published_mark(device: &FakeDevice, op_id: OpId) {
-    block_on(
-        device
-            .staging_store
-            .put_staged_bytes(PUBLISHED_OP_MARK_KEY, &op_id.0.to_be_bytes()),
-    )
+/// This account's published-op mark key. The mark is per-identity, so a store
+/// shared with another account keeps one mark each.
+fn mark_key() -> Vec<u8> {
+    op_mark_key(PUBLISHED_OP_MARK_PREFIX, &kdf::enc_subkey(&SECRET))
+}
+
+/// This account's drained-op mark key.
+fn drained_key() -> Vec<u8> {
+    op_mark_key(DRAINED_OP_MARK_PREFIX, &kdf::enc_subkey(&SECRET))
+}
+
+/// Plant a published-op mark over `op_id` under `enc_secret`'s identity,
+/// standing in for the crash between a confirmed record publish and the op's
+/// removal from the queue.
+fn plant_published_mark_for(device: &FakeDevice, enc_secret: &X25519Secret, op_id: OpId) {
+    block_on(device.staging_store.put_staged_bytes(
+        &op_mark_key(PUBLISHED_OP_MARK_PREFIX, enc_secret),
+        &op_id.0.to_be_bytes(),
+    ))
     .unwrap();
+}
+
+fn plant_published_mark(device: &FakeDevice, op_id: OpId) {
+    plant_published_mark_for(device, &kdf::enc_subkey(&SECRET), op_id);
 }
 
 /// The durable interlock only holds if a real publish writes it, on every plan
@@ -4304,7 +4312,7 @@ fn every_content_publish_raises_the_published_op_mark() {
 
 /// The durable published-op high-water this device stored.
 fn published_op_mark(device: &FakeDevice) -> Option<u64> {
-    let stored = block_on(device.staging_store.staged_bytes(PUBLISHED_OP_MARK_KEY)).unwrap()?;
+    let stored = block_on(device.staging_store.staged_bytes(&mark_key())).unwrap()?;
     Some(u64::from_be_bytes(stored.try_into().unwrap()))
 }
 
@@ -4370,7 +4378,81 @@ fn a_cancel_of_an_already_published_op_is_refused_across_a_restart() {
     seed_account(&world, &blocks);
 
     let alice = world.device(b"alice");
-    let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = {
+        let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
+        let op_id = write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "photo.bin".into(),
+            },
+            &(0..200u8).collect::<Vec<u8>>(),
+        )
+        .unwrap();
+        // The record published and the crash landed before the dequeue, so the
+        // op is still queued when this session ends.
+        plant_published_mark(&alice, op_id);
+        op_id
+    };
+
+    // A second session over the same device: fresh `UploadCancels`, so nothing
+    // but the durable mark stands between the cancel and the published version.
+    let (mut restarted, _events, _tasks) = boot(&world, &blocks, &alice, 43);
+    assert_eq!(
+        block_on(restarted.command(Command::CancelUpload { op_id })),
+        Err(EngineError::TooLateToCancel { op_id })
+    );
+    assert!(
+        retire_targets(&alice).is_empty(),
+        "a refused cancel unpins nothing"
+    );
+}
+
+/// The drained mark has the same shape and a worse outcome: an op discarded as
+/// restore residue never published, and nothing releases or retires it — the
+/// mutation is simply gone.
+#[test]
+fn another_identitys_drained_mark_never_discards_this_ones_queued_op() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let op_id = block_on(engine.command(Command::Create {
+        parent: ROOT,
+        name: "notes".into(),
+        kind: NodeKind::Folder,
+    }))
+    .unwrap()
+    .expect("the create queues");
+
+    let stranger = kdf::enc_subkey(&[9u8; 32]);
+    block_on(alice.staging_store.put_staged_bytes(
+        &op_mark_key(DRAINED_OP_MARK_PREFIX, &stranger),
+        &(op_id.0 + 100).to_be_bytes(),
+    ))
+    .unwrap();
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["notes"],
+        "the stranger's completion record says nothing about this identity's op"
+    );
+}
+
+/// The queue is shared with other identities, and op ids are per-store. A
+/// device-wide mark would let one account's published op dequeue another's
+/// unpublished one and release its blocks.
+#[test]
+fn another_identitys_published_mark_never_retires_this_ones_queued_op() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
     let op_id = write_file(
         &mut engine,
         WriteTarget::NewFile {
@@ -4380,15 +4462,43 @@ fn a_cancel_of_an_already_published_op_is_refused_across_a_restart() {
         &(0..200u8).collect::<Vec<u8>>(),
     )
     .unwrap();
-    plant_published_mark(&alice, op_id);
+    // A second account sharing this staging store published far past alice's id.
+    let stranger = kdf::enc_subkey(&[9u8; 32]);
+    plant_published_mark_for(&alice, &stranger, OpId(op_id.0 + 100));
 
     assert_eq!(
         block_on(engine.command(Command::CancelUpload { op_id })),
-        Err(EngineError::TooLateToCancel { op_id })
+        Ok(None),
+        "the stranger's mark says nothing about this identity's op"
     );
+
+    // And the same op, re-queued, still publishes rather than being dropped.
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<u8>>(),
+    )
+    .unwrap();
+    plant_published_mark_for(&alice, &stranger, OpId(op_id.0 + 100));
+    tick(&world, &engine, &mut tasks);
+
     assert!(
-        retire_targets(&alice).is_empty(),
-        "a refused cancel unpins nothing"
+        events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::OpProgress {
+                phase: OpPhase::UploadStarted,
+                ..
+            }
+        )),
+        "the op uploaded instead of being dropped as already published"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        ["photo.bin"],
+        "the version published"
     );
 }
 
