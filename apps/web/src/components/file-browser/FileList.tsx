@@ -8,7 +8,7 @@ interface FileListProps {
   showParentRow: boolean;
   onOpen: (node: Uint8Array) => void;
   onNavigateUp: () => void;
-  onRowMenu: (event: React.MouseEvent, row: ListingRow) => void;
+  onRowMenu: (event: React.MouseEvent<HTMLElement>, row: ListingRow) => void;
 }
 
 /** The routed folder's direct children, in columns. */

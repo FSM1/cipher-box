@@ -26,10 +26,11 @@ export function ContextMenu({ x, y, label, items, onClose }: ContextMenuProps) {
     const menu = menuRef.current;
     if (menu === null) return;
     const { width, height } = menu.getBoundingClientRect();
-    setPosition({
-      left: Math.max(EDGE_GAP, Math.min(x, window.innerWidth - width - EDGE_GAP)),
-      top: Math.max(EDGE_GAP, Math.min(y, window.innerHeight - height - EDGE_GAP)),
-    });
+    const left = Math.max(EDGE_GAP, Math.min(x, window.innerWidth - width - EDGE_GAP));
+    const top = Math.max(EDGE_GAP, Math.min(y, window.innerHeight - height - EDGE_GAP));
+    setPosition((current) =>
+      current.left === left && current.top === top ? current : { left, top }
+    );
   }, [x, y]);
 
   useEffect(() => {

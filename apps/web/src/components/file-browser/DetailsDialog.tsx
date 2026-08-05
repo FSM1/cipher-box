@@ -19,7 +19,7 @@ export function DetailsDialog({ row, onClose }: DetailsDialogProps) {
   if (row.deadLetter) fields.push(['dead letter', 'this change will not publish']);
 
   return (
-    <Modal open onClose={onClose} title={row.name}>
+    <Modal onClose={onClose} title={row.name}>
       <dl className="details-list" data-testid="details-dialog">
         {fields.map(([label, value]) => (
           <div className="details-row" key={label}>

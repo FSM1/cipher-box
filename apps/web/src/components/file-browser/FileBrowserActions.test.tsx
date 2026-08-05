@@ -140,7 +140,7 @@ describe('the vault browser write path', () => {
     await waitFor(() => expect(screen.queryByTestId('create-folder-dialog')).toBeNull());
   });
 
-  it('keeps the dialog up and reports the failure when the engine rejects', async () => {
+  it('keeps the dialog up and reports the failure inside it when the engine rejects', async () => {
     const engine = fakeEngine();
     engine.facade.create.mockRejectedValueOnce(new Error('name already taken'));
     renderBrowser(engine);
@@ -150,10 +150,15 @@ describe('the vault browser write path', () => {
     fireEvent.change(screen.getByLabelText('folder name'), { target: { value: 'plans' } });
     fireEvent.click(screen.getByTestId('create-folder-confirm'));
 
+    // Behind the backdrop the browser's own banner is unreadable, so the
+    // failure has to reach the dialog that refused to close.
     await waitFor(() =>
-      expect(screen.getByTestId('vault-action-error').textContent).toBe('name already taken')
+      expect(screen.getByTestId('dialog-error').textContent).toBe('name already taken')
     );
-    expect(screen.getByTestId('create-folder-dialog')).toBeDefined();
+    const dialog = screen.getByTestId('create-folder-dialog');
+    expect(dialog.closest('.modal-container')?.contains(screen.getByTestId('dialog-error'))).toBe(
+      true
+    );
   });
 
   it('dispatches rename for the row the menu was raised on', async () => {
@@ -342,6 +347,25 @@ describe('the vault browser read path over the facade', () => {
     expect(screen.getByRole('menuitem', { name: 'download' })).toBeDefined();
   });
 
+  it('refuses to decrypt a file the engine already reports as too large', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(
+      engine,
+      folderView({ children: [file(NOTE, 'huge.txt', { size: 64n * 1024n * 1024n })] })
+    );
+
+    openRowMenu('huge.txt');
+    chooseMenuItem('preview');
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toBe(
+        'too large to preview - download it instead'
+      )
+    );
+    expect(engine.facade.download).not.toHaveBeenCalled();
+  });
+
   it('reports a failed read instead of rendering it', async () => {
     const engine = fakeEngine(() => Promise.reject(new Error('adoption gate refused the record')));
     renderBrowser(engine);
@@ -353,6 +377,35 @@ describe('the vault browser read path over the facade', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert').textContent).toBe('adoption gate refused the record')
     );
+  });
+});
+
+describe('the row action menu', () => {
+  it('anchors to the control when opened without a pointer position', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    const control = screen.getByLabelText('actions for notes.txt');
+    control.getBoundingClientRect = () => ({ left: 120, bottom: 48 }) as DOMRect;
+    fireEvent.click(control, { detail: 0, clientX: 0, clientY: 0 });
+
+    const menu = screen.getByTestId('context-menu');
+    expect(menu.style.left).toBe('120px');
+    expect(menu.style.top).toBe('48px');
+  });
+
+  it('anchors to the pointer on a right-click', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    const row = screen.getAllByTestId('file-list-item')[1];
+    fireEvent.contextMenu(row, { detail: 1, clientX: 200, clientY: 90 });
+
+    const menu = screen.getByTestId('context-menu');
+    expect(menu.style.left).toBe('200px');
+    expect(menu.style.top).toBe('90px');
   });
 });
 

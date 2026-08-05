@@ -30,7 +30,6 @@ const PREVIEWABLE: Record<string, { kind: PreviewKind; mime: string }> = {
   yml: { kind: 'text', mime: 'text/plain' },
 };
 
-/** SVG is an image the browser will run scripts in, so it stays a download. */
 export function previewKind(name: string): PreviewKind {
   return PREVIEWABLE[extension(name)]?.kind ?? 'none';
 }

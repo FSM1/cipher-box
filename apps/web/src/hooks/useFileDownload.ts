@@ -12,14 +12,12 @@ import { useEngine } from '../providers/EngineProvider';
 const OPAQUE = 'application/octet-stream';
 
 export interface FileDownload {
-  saving: boolean;
   error: string | null;
   save(node: Uint8Array, name: string): Promise<void>;
 }
 
 export function useFileDownload(): FileDownload {
   const client = useEngine();
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const save = useCallback(
@@ -28,21 +26,18 @@ export function useFileDownload(): FileDownload {
         setError('the engine is not ready yet');
         return;
       }
-      setSaving(true);
       setError(null);
       try {
         const bytes = await client.facade.download(node);
         saveToDisk(new Blob([bytes], { type: OPAQUE }), name);
       } catch (failure: unknown) {
         setError(errorMessage(failure));
-      } finally {
-        setSaving(false);
       }
     },
     [client]
   );
 
-  return { saving, error, save };
+  return { error, save };
 }
 
 function saveToDisk(blob: Blob, name: string): void {

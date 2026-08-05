@@ -8,7 +8,8 @@
   gap: var(--spacing-sm);
 }
 
-.dialog-label {
+.dialog-label,
+.details-label {
   margin: 0;
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
@@ -24,6 +25,16 @@
   font-size: var(--font-size-sm);
   line-height: 1.6;
   color: var(--color-text-primary);
+}
+
+.dialog-error {
+  margin-bottom: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-error);
+  background-color: rgb(239 68 68 / 8%);
+  border: var(--border-thickness) solid rgb(239 68 68 / 20%);
 }
 
 .dialog-input {
@@ -48,11 +59,6 @@
 
 .dialog-input::placeholder {
   color: var(--color-text-dim);
-}
-
-.dialog-input:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 /* ==========================================================================
@@ -85,6 +91,7 @@
   border-color: var(--color-green-primary);
 }
 
+.dialog-input:disabled,
 .dialog-button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -183,15 +190,6 @@
 
 .details-row:last-child {
   border-bottom: none;
-}
-
-.details-label {
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  color: var(--color-text-secondary);
 }
 
 .details-value {

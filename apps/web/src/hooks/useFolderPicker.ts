@@ -1,31 +1,24 @@
 /**
  * Browsing for a destination folder: one lazy `setFocus` + `snapshot` per
  * candidate parent, so the walk sees each folder as the engine has it and no
- * client-side tree is ever built (blueprint/web-client.md "UI state law"). The
- * reads are the picker's own — the listing behind it keeps rendering — and the
- * focus window goes back to the folder the picker opened from when it closes.
+ * client-side tree is ever built (blueprint/web-client.md "UI state law").
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { toHex, type BreadcrumbDescriptor, type SnapshotDescriptor } from '@cipherbox/client';
+import type { SnapshotDescriptor } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
 import { sameNode } from '../lib/nodeId';
 import { useEngine } from '../providers/EngineProvider';
-
-export interface PickerFolder {
-  id: Uint8Array;
-  key: string;
-  name: string;
-}
+import { listingRows, type ListingRow } from '../vault/listing';
 
 export interface FolderPicker {
   /** True while the picker still sits on the folder it opened from. */
   atHome: boolean;
-  /** Root-first trail, ending at the folder the picker lists. */
-  trail: BreadcrumbDescriptor[];
-  folders: PickerFolder[];
+  folders: ListingRow[];
   /** The folder a command would target, or `null` until the listing lands. */
   destination: Uint8Array | null;
+  /** Name of that folder, or `null` until the listing lands. */
+  destinationName: string | null;
   isLoading: boolean;
   error: string | null;
   isRoot: boolean;
@@ -72,27 +65,17 @@ export function useFolderPicker(openOn: Uint8Array | null, excludedKey: string):
 
   const folders = useMemo(
     () =>
-      (listing?.children ?? [])
-        .filter((child) => child.kind === 'folder')
-        .map((child) => ({ id: child.id, key: toHex(child.id), name: child.name }))
-        .filter((folder) => folder.key !== excludedKey)
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })),
+      listingRows(listing?.children ?? []).filter(
+        (row) => row.kind === 'folder' && row.key !== excludedKey
+      ),
     [listing, excludedKey]
-  );
-
-  const trail = useMemo(
-    () =>
-      listing === null
-        ? []
-        : [...listing.ancestors].reverse().concat({ id: listing.folder, name: listing.folderName }),
-    [listing]
   );
 
   return {
     atHome: sameNode(cursor, home),
-    trail,
     folders,
     destination: listing?.folder ?? null,
+    destinationName: listing?.folderName ?? null,
     isLoading: listing === null && error === null,
     error,
     isRoot: listing !== null && sameNode(listing.folder, listing.root),

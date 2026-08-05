@@ -5,12 +5,14 @@
 
 import { useEffect, useState } from 'react';
 import { fromHex } from '@cipherbox/client';
-import { previewKind, previewMime, type PreviewKind } from '../components/file-browser/previewKind';
 import { errorMessage } from '../lib/errorMessage';
 import { useEngine } from '../providers/EngineProvider';
+import { previewKind, previewMime, type PreviewKind } from '../vault/previewKind';
 
 /** Past this a preview is a memory hazard, not a convenience. */
-const MAX_PREVIEW_BYTES = 32 * 1024 * 1024;
+const MAX_PREVIEW_BYTES = 32n * 1024n * 1024n;
+
+const TOO_LARGE = 'too large to preview - download it instead';
 
 export type FilePreview =
   | { status: 'loading' }
@@ -19,27 +21,24 @@ export type FilePreview =
   | { status: 'pdf'; url: string }
   | { status: 'text'; text: string };
 
-export interface PreviewTarget {
-  /** The file's node id as lowercase hex, so the read keys on a value. */
-  key: string;
-  name: string;
-}
-
-/** `null` while nothing is being previewed. */
-export function useFilePreview(target: PreviewTarget | null): FilePreview | null {
+/**
+ * @param key the file's node id as lowercase hex, so the read keys on a value
+ * @param size the engine's byte count, which caps the read before it decrypts
+ * a file too large to show
+ */
+export function useFilePreview(key: string, name: string, size: bigint | null): FilePreview {
   const client = useEngine();
-  const [preview, setPreview] = useState<FilePreview | null>(null);
-  const key = target?.key ?? null;
-  const name = target?.name ?? null;
+  const [preview, setPreview] = useState<FilePreview>({ status: 'loading' });
 
   useEffect(() => {
-    if (key === null || name === null || client === null) {
-      setPreview(null);
-      return;
-    }
+    if (client === null) return;
     const kind = previewKind(name);
     if (kind === 'none') {
       setPreview({ status: 'error', message: 'no preview for this file type' });
+      return;
+    }
+    if (size !== null && size > MAX_PREVIEW_BYTES) {
+      setPreview({ status: 'error', message: TOO_LARGE });
       return;
     }
 
@@ -50,8 +49,9 @@ export function useFilePreview(target: PreviewTarget | null): FilePreview | null
     client.facade.download(fromHex(key)).then(
       (bytes) => {
         if (!live) return;
-        if (bytes.byteLength > MAX_PREVIEW_BYTES) {
-          setPreview({ status: 'error', message: 'too large to preview - download it instead' });
+        // The projection can lag the file, so the bytes get the last word.
+        if (BigInt(bytes.byteLength) > MAX_PREVIEW_BYTES) {
+          setPreview({ status: 'error', message: TOO_LARGE });
           return;
         }
         const rendered = render(kind, bytes, name);
@@ -67,7 +67,7 @@ export function useFilePreview(target: PreviewTarget | null): FilePreview | null
       live = false;
       if (url !== null) URL.revokeObjectURL(url);
     };
-  }, [key, name, client]);
+  }, [key, name, size, client]);
 
   return preview;
 }

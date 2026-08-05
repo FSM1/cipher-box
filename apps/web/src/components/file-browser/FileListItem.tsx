@@ -5,7 +5,7 @@ interface FileListItemProps {
   /** Opens a folder. */
   onOpen: (node: Uint8Array) => void;
   /** Raises the row's action menu, from a right-click or the menu key. */
-  onRowMenu: (event: React.MouseEvent, row: ListingRow) => void;
+  onRowMenu: (event: React.MouseEvent<HTMLElement>, row: ListingRow) => void;
 }
 
 /** One direct child: kind marker, name, size, mtime, and its queue status. */

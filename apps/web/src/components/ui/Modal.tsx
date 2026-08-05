@@ -4,22 +4,28 @@ import { Portal } from './Portal';
 const FOCUSABLE = 'button:not(:disabled), [href], input:not(:disabled), textarea, [tabindex="0"]';
 
 interface ModalProps {
-  open: boolean;
   onClose: () => void;
   title: string;
   /** Variant class on the backdrop, for wide dialogs like the previews. */
   className?: string;
+  /** A failure to report where the backdrop cannot hide it. */
+  error?: string | null;
   children: ReactNode;
 }
 
 /**
  * The one modal shell: a portalled backdrop, an Escape/backdrop close, and a
- * Tab cycle that cannot leave the dialog while it is open.
+ * Tab cycle that cannot leave the dialog. Callers mount it to open it, so
+ * unmounting is what resets a dialog's own state.
  */
-export function Modal({ open, onClose, title, className, children }: ModalProps) {
+export function Modal({ onClose, title, className, error, children }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const opener = useRef<Element | null>(null);
   const titleId = useId();
+  // Callers pass a fresh closure per render; re-running the effect on it would
+  // pull focus out of the field being typed in every time a pull lands.
+  const close = useRef(onClose);
+  close.current = onClose;
 
   const focusable = useCallback(
     () => [...(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])],
@@ -27,14 +33,13 @@ export function Modal({ open, onClose, title, className, children }: ModalProps)
   );
 
   useEffect(() => {
-    if (!open) return;
     opener.current = document.activeElement;
     // A field the dialog autofocused keeps it; otherwise focus enters at the top.
     if (!dialogRef.current?.contains(document.activeElement)) focusable()[0]?.focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        onClose();
+        close.current();
         return;
       }
       if (event.key !== 'Tab') return;
@@ -51,9 +56,7 @@ export function Modal({ open, onClose, title, className, children }: ModalProps)
       document.removeEventListener('keydown', onKeyDown);
       if (opener.current instanceof HTMLElement) opener.current.focus();
     };
-  }, [open, onClose, focusable]);
-
-  if (!open) return null;
+  }, [focusable]);
 
   return (
     <Portal>
@@ -79,7 +82,14 @@ export function Modal({ open, onClose, title, className, children }: ModalProps)
               &times;
             </button>
           </div>
-          <div className="modal-body">{children}</div>
+          <div className="modal-body">
+            {error != null && (
+              <p className="dialog-error" role="alert" data-testid="dialog-error">
+                {error}
+              </p>
+            )}
+            {children}
+          </div>
         </div>
       </div>
     </Portal>

@@ -9,22 +9,23 @@ interface MoveDialogProps {
   onClose: () => void;
   onConfirm: (newParent: Uint8Array) => void;
   busy: boolean;
+  /** The last dispatch's failure, which is why the dialog is still up. */
+  error: string | null;
 }
 
 /** Picks a destination by walking the vault one folder at a time. */
-export function MoveDialog({ row, parent, onClose, onConfirm, busy }: MoveDialogProps) {
+export function MoveDialog({ row, parent, onClose, onConfirm, busy, error }: MoveDialogProps) {
   const picker = useFolderPicker(parent, row.key);
-  const here = picker.trail[picker.trail.length - 1];
   const destination = picker.destination;
   const canMove = !busy && destination !== null && !picker.atHome;
 
   return (
-    <Modal open onClose={onClose} title={`move ${row.name}`}>
+    <Modal onClose={onClose} title={`move ${row.name}`} error={error}>
       <div className="dialog-content" data-testid="move-dialog">
         <p className="dialog-label">
           {'destination: '}
           <span className="move-dialog-destination" data-testid="move-dialog-destination">
-            {here === undefined ? '...' : here.name || '/'}
+            {picker.destinationName === null ? '...' : picker.destinationName || '/'}
           </span>
         </p>
         <div className="move-dialog-list" role="listbox" aria-label="destination folder">

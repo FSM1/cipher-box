@@ -6,12 +6,19 @@ interface ConfirmDeleteDialogProps {
   onClose: () => void;
   onConfirm: () => void;
   busy: boolean;
+  /** The last dispatch's failure, which is why the dialog is still up. */
+  error: string | null;
 }
 
-/** Deleting a folder takes everything under it, so the prompt says so. */
-export function ConfirmDeleteDialog({ row, onClose, onConfirm, busy }: ConfirmDeleteDialogProps) {
+export function ConfirmDeleteDialog({
+  row,
+  onClose,
+  onConfirm,
+  busy,
+  error,
+}: ConfirmDeleteDialogProps) {
   return (
-    <Modal open onClose={onClose} title={`delete ${row.name}`}>
+    <Modal onClose={onClose} title={`delete ${row.name}`} error={error}>
       <div className="dialog-content" data-testid="delete-dialog">
         <p className="dialog-message">
           {row.kind === 'folder'

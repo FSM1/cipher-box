@@ -9,15 +9,14 @@ import { useContextMenu } from '../../hooks/useContextMenu';
 import { useFileDownload } from '../../hooks/useFileDownload';
 import { useVaultActions } from '../../hooks/useVaultActions';
 import type { ListingRow } from '../../vault/listing';
+import { previewKind } from '../../vault/previewKind';
 import { ConfirmDeleteDialog } from './ConfirmDeleteDialog';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
-import { CreateFolderDialog } from './CreateFolderDialog';
 import { DetailsDialog } from './DetailsDialog';
 import { FileList } from './FileList';
 import { FilePreviewDialog } from './FilePreviewDialog';
 import { MoveDialog } from './MoveDialog';
-import { previewKind } from './previewKind';
-import { RenameDialog } from './RenameDialog';
+import { NamePromptDialog } from './NamePromptDialog';
 
 type Dialog =
   | { kind: 'create' }
@@ -114,17 +113,30 @@ export function FileBrowserActions({
       )}
 
       {dialog?.kind === 'create' && folder !== null && (
-        <CreateFolderDialog
+        <NamePromptDialog
+          title="new folder"
+          fieldLabel="folder name"
+          initialName=""
+          confirmLabel="create"
+          busyLabel="creating..."
+          testId="create-folder"
           onClose={close}
           busy={actions.busy === 'create'}
+          error={actions.error}
           onConfirm={(name) => closeOnSuccess(actions.createFolder(folder, name))}
         />
       )}
       {dialog?.kind === 'rename' && (
-        <RenameDialog
-          row={dialog.row}
+        <NamePromptDialog
+          title={`rename ${dialog.row.name}`}
+          fieldLabel="new name"
+          initialName={dialog.row.name}
+          confirmLabel="rename"
+          busyLabel="renaming..."
+          testId="rename"
           onClose={close}
           busy={actions.busy === 'rename'}
+          error={actions.error}
           onConfirm={(name) => closeOnSuccess(actions.rename(dialog.row.id, name))}
         />
       )}
@@ -134,6 +146,7 @@ export function FileBrowserActions({
           parent={folder}
           onClose={close}
           busy={actions.busy === 'relink'}
+          error={actions.error}
           onConfirm={(newParent) => closeOnSuccess(actions.move(dialog.row.id, newParent))}
         />
       )}
@@ -142,6 +155,7 @@ export function FileBrowserActions({
           row={dialog.row}
           onClose={close}
           busy={actions.busy === 'delete'}
+          error={actions.error}
           onConfirm={() => closeOnSuccess(actions.remove(dialog.row.id))}
         />
       )}

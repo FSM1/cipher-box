@@ -1,4 +1,4 @@
-import { useFilePreview } from '../../hooks/useFilePreview';
+import { useFilePreview, type FilePreview } from '../../hooks/useFilePreview';
 import type { ListingRow } from '../../vault/listing';
 import { Modal } from '../ui/Modal';
 
@@ -10,10 +10,10 @@ interface FilePreviewDialogProps {
 
 /** Shows one file's plaintext in the shapes the browser can render safely. */
 export function FilePreviewDialog({ row, onClose, onDownload }: FilePreviewDialogProps) {
-  const preview = useFilePreview({ key: row.key, name: row.name });
+  const preview = useFilePreview(row.key, row.name, row.bytes);
 
   return (
-    <Modal open onClose={onClose} title={row.name} className="modal-backdrop--wide">
+    <Modal onClose={onClose} title={row.name} className="modal-backdrop--wide">
       <div className="preview-body" data-testid="file-preview-dialog">
         <PreviewContent preview={preview} name={row.name} />
       </div>
@@ -34,14 +34,8 @@ export function FilePreviewDialog({ row, onClose, onDownload }: FilePreviewDialo
   );
 }
 
-function PreviewContent({
-  preview,
-  name,
-}: {
-  preview: ReturnType<typeof useFilePreview>;
-  name: string;
-}) {
-  if (preview === null || preview.status === 'loading') {
+function PreviewContent({ preview, name }: { preview: FilePreview; name: string }) {
+  if (preview.status === 'loading') {
     return <p className="preview-status">{'// decrypting...'}</p>;
   }
   if (preview.status === 'error') {
