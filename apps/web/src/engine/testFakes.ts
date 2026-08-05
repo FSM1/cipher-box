@@ -55,6 +55,7 @@ export function fakeEngine() {
   let settleFocus: (() => void) | null = null;
   let failFocus: ((error: Error) => void) | null = null;
   let refreshes = 0;
+  let refuseRefresh: Error | null = null;
 
   const client = {
     facade: {
@@ -76,7 +77,7 @@ export function fakeEngine() {
       },
       manualRefresh() {
         refreshes += 1;
-        return Promise.resolve();
+        return refuseRefresh === null ? Promise.resolve() : Promise.reject(refuseRefresh);
       },
     },
     reportFocus(node: Uint8Array | null) {
@@ -96,6 +97,7 @@ export function fakeEngine() {
     ackFocus: () => settleFocus?.(),
     rejectFocus: (error: Error) => failFocus?.(error),
     refreshes: () => refreshes,
+    refuseRefresh: (error: Error) => (refuseRefresh = error),
     subscriberCount: () => listeners.size,
   };
 }

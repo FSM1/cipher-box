@@ -307,6 +307,24 @@ describe('a manual refresh', () => {
     expect(store.getSnapshot().view).toBe(refreshed);
   });
 
+  it('still pulls, and keeps the listing, when the engine refuses the refresh', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+    engine.emit({ kind: 'snapshotUpdated' });
+    const listed = view(ROOT_ID, 'fresh', 2);
+    engine.pulls[0].resolve(listed);
+    await flush();
+
+    // The engine does not implement `manualRefresh` yet, and answers
+    // `unimplemented` — a verdict on the hint, never on the listing.
+    engine.refuseRefresh(new EngineRequestError('not implemented yet', 'unimplemented'));
+    store.refresh();
+    await flush();
+
+    expect(engine.pulls).toHaveLength(2);
+    expect(store.getSnapshot()).toEqual({ view: listed, error: null });
+  });
+
   it('clears a failure the retry cleared', async () => {
     const engine = fakeEngine();
     const store = createSnapshotStore(engine.client);

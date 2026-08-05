@@ -372,7 +372,8 @@
 .notification-toast {
   position: fixed;
   right: var(--spacing-md);
-  bottom: var(--spacing-md);
+  /* Clears the footer rather than sitting over the staleness rung. */
+  bottom: var(--spacing-xl);
   z-index: 40;
   display: flex;
   flex-direction: column;

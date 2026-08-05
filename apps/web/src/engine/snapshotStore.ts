@@ -51,7 +51,7 @@ export interface SnapshotStore {
    * engine stays on the borrower's folder for the rest of the session.
    */
   refocus(): void;
-  /** Resolves with nocache semantics, then re-pulls the focused folder. */
+  /** Re-pulls the focused folder, behind a best-effort nocache resolve. */
   refresh(): void;
   /** Releases the event subscription. */
   dispose(): void;
@@ -173,14 +173,13 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     refocus: assertFocus,
     refresh() {
       const id = generation;
-      client.facade.manualRefresh().then(
-        () => {
-          if (id === generation) pull();
-        },
-        (error: unknown) => {
-          if (id === generation) commit({ error: describe(error) });
-        }
-      );
+      const again = (): void => {
+        if (id === generation) pull();
+      };
+      // The nocache hint is best-effort; the pull it precedes is the answer.
+      // A refused refresh command must not replace a listing that is still the
+      // best the engine has, so only the pull's own outcome sets `error`.
+      client.facade.manualRefresh().then(again, again);
     },
     dispose() {
       unsubscribe();
