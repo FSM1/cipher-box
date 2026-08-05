@@ -1,0 +1,255 @@
+/* ==========================================================================
+   Dialog Bodies - Terminal Aesthetic
+   ========================================================================== */
+
+.dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.dialog-label,
+.details-label {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-text-secondary);
+}
+
+.dialog-message {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: var(--color-text-primary);
+}
+
+.dialog-error {
+  margin-bottom: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-error);
+  background-color: rgb(239 68 68 / 8%);
+  border: var(--border-thickness) solid rgb(239 68 68 / 20%);
+}
+
+.dialog-input {
+  width: 100%;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  background-color: var(--color-background);
+  border: var(--border-thickness) solid var(--color-green-primary);
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.dialog-input:focus {
+  box-shadow: var(--glow-green);
+  outline: none;
+}
+
+.dialog-input::placeholder {
+  color: var(--color-text-dim);
+}
+
+/* ==========================================================================
+   Actions
+   ========================================================================== */
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-xs);
+}
+
+.dialog-button {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  text-transform: lowercase;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  background-color: transparent;
+  border: var(--border-thickness) solid var(--color-border-dim);
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.dialog-button:hover:not(:disabled) {
+  background-color: var(--color-green-darker);
+  border-color: var(--color-green-primary);
+}
+
+.dialog-input:disabled,
+.dialog-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dialog-button--primary {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  border-color: var(--color-green-primary);
+}
+
+.dialog-button--primary:hover:not(:disabled) {
+  box-shadow: var(--glow-green);
+}
+
+.dialog-button--danger {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-error);
+  border-color: rgb(239 68 68 / 60%);
+}
+
+.dialog-button--danger:hover:not(:disabled) {
+  background-color: rgb(239 68 68 / 12%);
+  border-color: var(--color-error);
+}
+
+/* ==========================================================================
+   Move Picker
+   ========================================================================== */
+
+.move-dialog-destination {
+  font-weight: var(--font-weight-semibold);
+  text-transform: none;
+  color: var(--color-text-primary);
+}
+
+.move-dialog-list {
+  display: flex;
+  flex-direction: column;
+  max-height: 240px;
+  overflow-y: auto;
+  background-color: var(--color-background);
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.move-dialog-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  text-align: left;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  background: none;
+  border: none;
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+  transition: background-color 0.15s ease;
+}
+
+.move-dialog-entry:last-child {
+  border-bottom: none;
+}
+
+.move-dialog-entry:hover,
+.move-dialog-entry:focus-visible {
+  background-color: var(--color-green-darker);
+}
+
+.move-dialog-empty {
+  margin: 0;
+  padding: var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+/* ==========================================================================
+   Details
+   ========================================================================== */
+
+.details-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.details-row {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-xs) 0;
+  border-bottom: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.details-row:last-child {
+  border-bottom: none;
+}
+
+.details-value {
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+}
+
+/* ==========================================================================
+   Preview
+   ========================================================================== */
+
+.preview-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 200px;
+}
+
+.preview-status {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.preview-status--error {
+  color: var(--color-error);
+}
+
+.preview-image {
+  max-width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+}
+
+.preview-pdf {
+  width: 100%;
+  height: 60vh;
+  background-color: var(--color-background);
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.preview-text {
+  width: 100%;
+  max-height: 60vh;
+  margin: 0;
+  padding: var(--spacing-xs);
+  overflow: auto;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+  border: var(--border-thickness) solid var(--color-border-dim);
+}

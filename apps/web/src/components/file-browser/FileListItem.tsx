@@ -4,10 +4,12 @@ interface FileListItemProps {
   row: ListingRow;
   /** Opens a folder. */
   onOpen: (node: Uint8Array) => void;
+  /** Raises the row's action menu, anchored on the event that asked for it. */
+  onRowMenu: (event: React.MouseEvent<HTMLElement>, row: ListingRow) => void;
 }
 
 /** One direct child: kind marker, name, size, mtime, and its queue status. */
-export function FileListItem({ row, onOpen }: FileListItemProps) {
+export function FileListItem({ row, onOpen, onRowMenu }: FileListItemProps) {
   const isFolder = row.kind === 'folder';
   const open = () => {
     if (isFolder) onOpen(row.id);
@@ -21,7 +23,11 @@ export function FileListItem({ row, onOpen }: FileListItemProps) {
       role="row"
       tabIndex={0}
       onDoubleClick={open}
+      onContextMenu={(event) => onRowMenu(event, row)}
       onKeyDown={(event) => {
+        // The action button's own Enter/Space bubbles here; swallowing it would
+        // navigate away instead of raising that button's menu.
+        if (event.target !== event.currentTarget) return;
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
         open();
@@ -33,6 +39,18 @@ export function FileListItem({ row, onOpen }: FileListItemProps) {
         </span>
         <span className="file-list-item-name">{row.name}</span>
         <ItemStatus row={row} />
+        <button
+          type="button"
+          className="file-list-item-menu"
+          aria-label={`actions for ${row.name}`}
+          data-testid="file-list-item-menu"
+          onClick={(event) => {
+            event.stopPropagation();
+            onRowMenu(event, row);
+          }}
+        >
+          [...]
+        </button>
       </div>
       <div className="file-list-item-row-bottom">
         <span className="file-list-item-size" role="gridcell">

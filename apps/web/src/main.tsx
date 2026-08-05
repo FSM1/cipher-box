@@ -6,6 +6,10 @@ import './styles/layout.css';
 import './styles/file-browser.css';
 import './styles/upload.css';
 import './styles/breadcrumbs.css';
+import './styles/vault-actions.css';
+import './styles/modal.css';
+import './styles/dialogs.css';
+import './styles/context-menu.css';
 import './styles/responsive.css';
 
 import { StrictMode } from 'react';

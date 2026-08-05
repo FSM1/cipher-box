@@ -1,0 +1,89 @@
+/* ==========================================================================
+   Vault Actions - Terminal Aesthetic
+   ========================================================================== */
+
+.file-browser-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin-bottom: var(--spacing-sm);
+}
+
+.file-browser-toolbar-button {
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.05em;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  background-color: transparent;
+  border: var(--border-thickness) solid var(--color-green-primary);
+  transition:
+    background-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.file-browser-toolbar-button:hover:not(:disabled) {
+  background-color: var(--color-green-darker);
+  box-shadow: var(--glow-green);
+}
+
+.file-browser-toolbar-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* ==========================================================================
+   Row Menu Trigger
+   ========================================================================== */
+
+.file-list-item-menu {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 4px;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1;
+  color: var(--color-text-dim);
+  cursor: pointer;
+  background: none;
+  border: none;
+  transition: color 0.15s ease;
+}
+
+.file-list-item:hover .file-list-item-menu,
+.file-list-item:focus-within .file-list-item-menu,
+.file-list-item-menu:hover {
+  color: var(--color-text-primary);
+}
+
+/* ==========================================================================
+   Dead Letter Notice
+   ========================================================================== */
+
+.dead-letter-notice {
+  margin-bottom: var(--spacing-sm);
+  padding: var(--spacing-xs) var(--spacing-sm);
+  background-color: var(--color-warning-bg);
+  border: var(--border-thickness) solid var(--color-warning-dim);
+}
+
+.dead-letter-notice-title {
+  margin: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-warning);
+}
+
+.dead-letter-notice-list {
+  margin: var(--spacing-xs) 0 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+  color: var(--color-warning);
+  opacity: 0.75;
+}

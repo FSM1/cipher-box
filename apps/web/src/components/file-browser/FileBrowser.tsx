@@ -1,18 +1,22 @@
+import { useSnapshot } from '../../engine/useSnapshot';
 import { useFolderNavigation } from '../../vault/useFolderNavigation';
 import { Breadcrumbs } from './Breadcrumbs';
+import { DeadLetterNotice } from './DeadLetterNotice';
 import { EmptyState } from './EmptyState';
-import { FileList } from './FileList';
+import { FileBrowserActions } from './FileBrowserActions';
 import { UploadPanel } from './UploadPanel';
 
 /** The vault browser: where you are, what is in it, and how to move. */
 export function FileBrowser() {
   const { rows, folder, breadcrumbs, isLoading, isRoot, error, navigateTo, navigateUp } =
     useFolderNavigation();
+  const { view } = useSnapshot();
   const settled = !isLoading && error === null;
 
   return (
     <div className="file-browser" data-testid="file-browser">
       <Breadcrumbs crumbs={breadcrumbs} onNavigate={navigateTo} />
+      <DeadLetterNotice deadLetters={view?.deadLetters ?? []} />
       {error && (
         <p className="file-browser-error" role="alert" data-testid="file-browser-error">
           {error.message}
@@ -26,10 +30,10 @@ export function FileBrowser() {
       {/* Mounted whatever the route says, so a running upload survives a folder
           change; only its drop target waits for a folder that can take one. */}
       <UploadPanel folder={settled ? folder : null} />
-      {/* An empty non-root folder still lists, so `[..]` remains reachable. */}
-      {settled && (rows.length > 0 || !isRoot) && (
-        <FileList
+      {settled && (
+        <FileBrowserActions
           rows={rows}
+          folder={folder}
           showParentRow={!isRoot}
           onOpen={navigateTo}
           onNavigateUp={navigateUp}
