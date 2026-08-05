@@ -14,7 +14,8 @@
 //!   envelope's own scope/epoch, returns `Err` off the same decoder and the same
 //!   stage-2/stage-3 predicates the gate runs. The mirror stops where the gate
 //!   needs a reader's secrets: stage 3's ascent-link seed cross-check takes an
-//!   ancestor node seed [`EnvelopeAuthoring`] does not carry;
+//!   ancestor node seed [`EnvelopeAuthoring`] does not carry, so it is enforced
+//!   where that seed lives, in `rotation/reseal.rs`;
 //! - a kind transplant and a non-canonical child-ref `ipnsName` are
 //!   unrepresentable: [`new_child`] feeds one [`NodeKind`] and one typed
 //!   [`IpnsName`] to both the body and the parent's ref.

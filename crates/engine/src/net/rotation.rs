@@ -20,9 +20,9 @@ use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, ChildScopeRef, Envelope, GrantSection, PreservedFields, ReadBody,
     STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_WRITE_BODY, WriteBody, decode_write_body, open_owner_blob,
-    unseal, verify_grant_set,
+    unseal,
 };
-use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
+use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -435,15 +435,17 @@ where
         })
     }
 
-    /// The three encode-side mirrors of gate rejects this build would itself
-    /// make on the record about to be signed — all release-active, because a
-    /// signed record cannot be unpublished (security rule 8):
+    /// The two durable-floor mirrors of gate rejects this build would itself make
+    /// on the record about to be signed — release-active, because a signed record
+    /// cannot be unpublished (security rule 8):
     ///
-    /// - the commitment must verify under the owner identity (gate stage 2);
     /// - the read epoch must not sit below the durable revocation floor (stage 5);
     /// - the write epoch must not sit below the durable write floor, which the
     ///   owner-write-blob's AAD binds — below it the root publishes write-plane
     ///   dead, and floors are monotonic, so it can never be rotated back.
+    ///
+    /// The stage-2/stage-3 mirrors on the record's own bytes run inside the
+    /// authoring call itself (`net/author.rs`).
     ///
     /// Runs **after** this pass's gated read of the scope root, whose adoption
     /// advances the read-epoch floor: measured before it, the floor comparison
@@ -452,12 +454,6 @@ where
         &self,
         record: &ResealedScopeRoot,
     ) -> Result<(), ScopeRootPublishError> {
-        let section = &record.section;
-        let signature = EcdsaSignature::from_compact(&section.commitment_sig)
-            .ok_or(ScopeRootPublishError::Rejected)?;
-        verify_grant_set(self.keys.identity, &section.commitment, &signature)
-            .map_err(|_| ScopeRootPublishError::Rejected)?;
-
         let floors = self.floors;
         let scope_id = &record.scope_id;
         let read_floor = floor::read_epoch_floor(floors, scope_id)
@@ -577,10 +573,6 @@ where
             ),
         };
         self.check_publishable(record).await?;
-        let write_scope_seed = current
-            .write_scope_seed
-            .as_deref()
-            .ok_or(ScopeRootPublishError::NotPublished)?;
 
         let node_seed = kdf::node_seed(&override_seed, &record.scope_id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
@@ -600,7 +592,21 @@ where
             &record.section,
             self.keys.identity,
         )
-        .map_err(|_| ScopeRootPublishError::NotPublished)?;
+        // A produce-side trust refusal is this build's own gate verdict on the
+        // bytes, reached before the PUT: re-authoring the same section reaches it
+        // again, so it must not be retried like a stalled endpoint (rule 6).
+        .map_err(|e| {
+            if e.is_trust_refusal() {
+                ScopeRootPublishError::Rejected
+            } else {
+                ScopeRootPublishError::NotPublished
+            }
+        })?;
+
+        let write_scope_seed = current
+            .write_scope_seed
+            .as_deref()
+            .ok_or(ScopeRootPublishError::NotPublished)?;
 
         let binding = HeadBinding {
             node_id: record.scope_id,
@@ -1267,6 +1273,27 @@ mod tests {
                 .publish_scope_root(&cut),
         )
         .expect("the interior root's cut lands under its supplied ancestor seed");
+    }
+
+    /// Gate stage 3's encode-side mirror, and the verdict it carries: a section
+    /// whose structure signatures do not recompute is this build's own gate
+    /// verdict on bytes it is about to sign, so it is fatal — re-authoring the
+    /// same section reaches the same refusal, and retrying it forever would
+    /// launder a trust violation into an availability stall (rule 6).
+    #[test]
+    fn a_section_the_gate_would_reject_is_a_verdict_not_a_stall() {
+        let (harness, root, mut cut) = staged_cut();
+        cut.section.owner_blob.signature[0] ^= 0xff;
+
+        let outcome = block_on(harness.net(&[]).publish_scope_root(&cut));
+        assert_eq!(outcome, Err(ScopeRootPublishError::Rejected));
+        assert!(!outcome.unwrap_err().is_retryable());
+        let endpoint = &harness.store.endpoints()[0];
+        assert_eq!(
+            harness.store.record_at(endpoint, root.name.as_str()),
+            Some(record_for(&SCOPE, &root.head_cid_str, 1)),
+            "the pre-rotation record still stands — nothing was published",
+        );
     }
 
     /// Gate stage 2's encode-side mirror: a commitment that will not verify
