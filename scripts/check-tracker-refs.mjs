@@ -10,9 +10,12 @@ const EXTENSIONS = /\.(rs|ts|tsx|mts|cts|js|jsx|mjs|cjs|toml|json|ya?ml|sh)$/;
 // Generated or vendored trees whose comments are not ours to write.
 const SKIP = [/^apps\/web\/src\/wasm\//, /\/test\/browser\/pkg\//, /\/vendor\//];
 
-// The `{3,5}` upper bound is load-bearing, not a guess at issue numbers: it is
-// what rejects six- and eight-digit CSS hex colours, whose next character is
-// itself a hex digit. Widening it to `{3,}` would flag every `#006644`.
+// Both bounds are load-bearing. The upper one rejects six- and eight-digit CSS
+// hex colours, whose next character is itself a hex digit — `{3,}` would flag
+// every `#006644`. The lower one exempts the `#NN Dn` wayfinder citations: issue
+// numbers here share one ever-increasing counter with PRs, which passed 1000
+// long ago, so this repo can never mint another two-digit number and a bare
+// `#33` can only be FSM1/cipher-box-next. Do not lower it to `{1,`.
 const NUMBER = /#\d{3,5}(?![\da-fA-F])/g;
 
 // An `owner/repo`-qualified number names a durable decision record in another
