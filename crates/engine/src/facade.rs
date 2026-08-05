@@ -3913,6 +3913,55 @@ mod tests {
         });
     }
 
+    /// A floor store whose reads fail — the seam-outage arm of
+    /// [`refresh_seed_floor`], which no in-memory fake exercises.
+    struct UnreadableFloors;
+
+    impl FloorStore for UnreadableFloors {
+        async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
+            Err(SeamError::new("floor store unavailable"))
+        }
+
+        async fn raise_epoch_floor(&self, _scope_id: &[u8], _epoch: u64) -> SeamResult<u64> {
+            Err(SeamError::new("floor store unavailable"))
+        }
+
+        async fn sequence_floor(&self, _ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+            Err(SeamError::new("floor store unavailable"))
+        }
+
+        async fn raise_sequence_floor(&self, _ipns_name: &[u8], _sequence: u64) -> SeamResult<u64> {
+            Err(SeamError::new("floor store unavailable"))
+        }
+    }
+
+    /// A floor that cannot be read evicts: a seed whose currency cannot be
+    /// established is dropped, not trusted for the rest of the session (#1040).
+    /// Stamped far above any floor either arm could return, so only the read
+    /// failure can account for the eviction.
+    #[test]
+    fn an_unreadable_floor_evicts_the_cached_seed() {
+        const SCOPE: [u8; 16] = [5u8; 16];
+        let cell = RefCell::new(ScopeSeeds::new());
+        block_on(async {
+            for which in [SeedFloor::Read, SeedFloor::Write] {
+                cell.borrow_mut().insert(
+                    SCOPE,
+                    CachedSeed {
+                        seed: Zeroizing::new([3u8; 32]),
+                        floor: u64::MAX,
+                    },
+                );
+                let stamp = refresh_seed_floor(&UnreadableFloors, &cell, &SCOPE, which).await;
+                assert_eq!(stamp, None, "an unread floor stamps nothing");
+                assert!(
+                    !cell.borrow().contains_key(&SCOPE),
+                    "the seed goes with the floor that could not vouch for it"
+                );
+            }
+        });
+    }
+
     #[test]
     fn stream_slots_are_bounded_and_reusable() {
         let live = Rc::new(Cell::new(0usize));
