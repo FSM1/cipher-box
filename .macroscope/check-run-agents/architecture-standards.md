@@ -3,7 +3,7 @@ title: "Architecture & standards"
 model: claude-opus-5
 reasoning: high
 effort: medium
-input: code_object
+input: full_diff
 conclusion: failure
 tools:
   - browse_code
