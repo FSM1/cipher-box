@@ -40,7 +40,7 @@ use crate::facade::{BlockProgress, Event, NodeId, OpPhase};
 use crate::gate::floor;
 use crate::grants::{UndoDestAdd, undo_dest_add_versioned};
 use crate::net::author::{
-    AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
+    AuthorError, AuthoredHead, ENVELOPE_V, EnvelopeAuthoring, NewNodeBody, author_child_envelope,
     author_scope_root_envelope, new_child,
 };
 use crate::net::publish::{PublishError, PublishOutcome, PublishReceipt};
@@ -78,8 +78,8 @@ use crate::sync::staging::{preserve_dead_letter, release_version_blocks, version
 pub const DRAINED_OP_MARK_PREFIX: &[u8] = b"cipherbox/drained-op/";
 
 /// The staging-key prefix for the published-op high-water mark: every op id at
-/// or below the stored value published and self-adopted its whole record set,
-/// so its version is live at its name even if the op is still queued. What it
+/// or below the stored value had the last record of its plan confirmed at its
+/// name, so its version is live there even if the op is still queued. What it
 /// is *for* is [`Drain::mark_published`].
 pub const PUBLISHED_OP_MARK_PREFIX: &[u8] = b"cipherbox/published-op/";
 
@@ -204,10 +204,11 @@ enum Halt {
     /// against the attempt budget, because a retry re-signs at the same
     /// sequence and a jammed name would otherwise retry forever.
     Attempt,
-    /// An upload or registration refusal this pass cannot attribute. Charged
-    /// like [`Halt::Attempt`], but raised strictly **before** the record PUT —
-    /// so exhausting the budget may retire what the op uploaded, which an acked
-    /// PUT's may not.
+    /// A refusal this pass cannot attribute, raised before the record it was
+    /// authoring reached the transport: an upload, a registration, or a
+    /// produce-side trust refusal. Charged like [`Halt::Attempt`], but
+    /// exhausting the budget may retire what the op uploaded — the op's target
+    /// is still unreachable, so no record a parent links names it.
     UploadAttempt,
     /// Classified-permanent: the same bytes are refused on every retry.
     Permanent(DeadLetterReason),
@@ -221,6 +222,40 @@ enum Halt {
     /// The user cancelled the upload. The facade has already undone it, so the
     /// valve does nothing but stop the pass (#824).
     Cancelled,
+}
+
+/// A failed publish, and whether its record nonetheless confirmed at its name.
+/// The two are independent: the self-adopt and the snapshot-cache write both
+/// run with the record already live, so a caller that compensates must branch on
+/// the fact rather than re-read a name its own publish left stale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PublishHalt {
+    halt: Halt,
+    confirmed: bool,
+}
+
+impl PublishHalt {
+    /// A failure raised before the record reached the transport.
+    fn before_the_put(halt: Halt) -> Self {
+        Self {
+            halt,
+            confirmed: false,
+        }
+    }
+
+    /// A failure raised once the publish confirmed at its name.
+    fn past_the_put(halt: Halt) -> Self {
+        Self {
+            halt,
+            confirmed: true,
+        }
+    }
+}
+
+impl From<PublishHalt> for Halt {
+    fn from(failure: PublishHalt) -> Self {
+        failure.halt
+    }
 }
 
 /// The one verdict every unrecoverable-content path returns: the version's key,
@@ -1024,14 +1059,24 @@ where
                 content_cids,
                 PreservedFields::new(),
                 PreservedFields::new(),
+                // The parent's record below is this plan's last: a mark raised
+                // here would drop an op on restart whose child no parent names.
+                None,
             )
-            .await?;
+            .await
+            .map_err(Halt::from)?;
 
         // Referent published: only now does the parent gain the ref to it.
         pass.folder_mut(parent)?.children.push(child.child_ref);
-        self.publish_folder(scope, pass, parent, applied.op.authored_at.0)
-            .await?;
-        self.mark_published(scope, applied.op_id).await;
+        self.publish_folder(
+            scope,
+            pass,
+            parent,
+            applied.op.authored_at.0,
+            Some(applied.op_id),
+        )
+        .await
+        .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
         // Held only once the parent names it: a record nothing references is
         // not one the liveness loop should keep alive.
@@ -1058,8 +1103,15 @@ where
         if children.len() == before {
             return Ok(());
         }
-        self.publish_folder(scope, pass, parent, applied.op.authored_at.0)
-            .await?;
+        self.publish_folder(
+            scope,
+            pass,
+            parent,
+            applied.op.authored_at.0,
+            Some(applied.op_id),
+        )
+        .await
+        .map_err(Halt::from)?;
         Ok(())
     }
 
@@ -1145,8 +1197,20 @@ where
             Some(existing) => *existing = moved,
             None => dest_children.push(moved),
         }
-        let cas_base = self.publish_folder(scope, pass, dest, modified_at).await?;
-        if source == dest {
+        // Only when one folder collapses the plan is the dest-add also its last
+        // record; otherwise the source-remove below is.
+        let single_record = source == dest;
+        let cas_base = self
+            .publish_folder(
+                scope,
+                pass,
+                dest,
+                modified_at,
+                single_record.then_some(applied.op_id),
+            )
+            .await
+            .map_err(Halt::from)?;
+        if single_record {
             return Ok(());
         }
 
@@ -1158,21 +1222,31 @@ where
         // forever, so a quota refusal, a permanent one, or a spent attempt must
         // not be flattened into it. Only the undo's own failure is genuinely
         // unclassified.
-        if let Err(halt) = self.publish_folder(scope, pass, source, modified_at).await {
-            self.compensate_dest_add(
-                scope,
-                pass,
-                DestAdd {
-                    dest,
-                    source,
-                    target,
-                    replaced,
-                    cas_base,
-                    modified_at,
-                },
-            )
-            .await?;
-            return Err(halt);
+        if let Err(failure) = self
+            .publish_folder(scope, pass, source, modified_at, Some(applied.op_id))
+            .await
+        {
+            // A confirmed source-remove is the move complete on the network, so
+            // undoing the dest-add would strip the child from the only parent
+            // that still names it. The compensation decides that by re-reading
+            // the source, which this very publish left stale in the cache; the
+            // publish itself already knows.
+            if !failure.confirmed {
+                self.compensate_dest_add(
+                    scope,
+                    pass,
+                    DestAdd {
+                        dest,
+                        source,
+                        target,
+                        replaced,
+                        cas_base,
+                        modified_at,
+                    },
+                )
+                .await?;
+            }
+            return Err(failure.halt);
         }
         Ok(())
     }
@@ -1247,7 +1321,9 @@ where
             }
         };
         pass.folder_mut(dest)?.children = children;
-        self.publish_folder(scope, pass, dest, modified_at).await?;
+        self.publish_folder(scope, pass, dest, modified_at, None)
+            .await
+            .map_err(Halt::from)?;
         Ok(())
     }
 
@@ -1276,7 +1352,16 @@ where
     ) -> Result<(), Halt> {
         let state = if folder == scope.root {
             self.refresh_scope_root_cache(scope).await?;
-            self.load_scope_root(scope).await?.0
+            let (state, epoch) = self.load_scope_root(scope).await?;
+            // A rotation landing mid-pass moves the root's epoch while this pass
+            // still seals at the one it opened on, and its grant section signs
+            // the new one — bytes this build's own authoring refuses. The next
+            // pass opens on one consistent epoch, so this stops rather than
+            // spending the op's budget on a skew that heals itself.
+            if epoch != pass.epoch {
+                return Err(Halt::Unclassified);
+            }
+            state
         } else {
             self.load_child_folder(scope, pass.epoch, folder).await?
         };
@@ -1350,11 +1435,10 @@ where
                 content_cids,
                 loaded.envelope_unknown,
                 loaded.epoch_tag_unknown,
+                Some(applied.op_id),
             )
-            .await?;
-        // Durable before the release: the blocks stop being recoverable here,
-        // so this is the last point a crash can still leave a replayable op.
-        self.mark_published(scope, applied.op_id).await;
+            .await
+            .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
         if let Some(node) = self.base.borrow_mut().node_mut(target) {
             node.record_sequence = published.sequence;
@@ -1611,9 +1695,10 @@ where
         pass: &mut Pass,
         folder: NodeId,
         modified_at: u64,
-    ) -> Result<u64, Halt> {
+        completes: Option<OpId>,
+    ) -> Result<u64, PublishHalt> {
         let (name, is_scope_root, body, envelope_unknown, epoch_tag_unknown) = {
-            let state = pass.folder(folder)?;
+            let state = pass.folder(folder).map_err(PublishHalt::before_the_put)?;
             (
                 state.name.clone(),
                 state.is_scope_root,
@@ -1638,10 +1723,11 @@ where
                 Vec::new(),
                 envelope_unknown,
                 epoch_tag_unknown,
+                completes,
             )
             .await?;
 
-        let state = pass.folder_mut(folder)?;
+        let state = pass.folder_mut(folder).map_err(PublishHalt::past_the_put)?;
         state.sequence = published.sequence;
         state.modified_at = modified_at;
         let children = state.children.clone();
@@ -1653,6 +1739,10 @@ where
     /// Author, publish and self-adopt one node's record. Only a confirmed
     /// publish reaches the gate: adopting an unconfirmed one would advance the
     /// sequence floor and destroy the idempotent-in-sequence retry (#821).
+    ///
+    /// `completes` names the op this record is the **last** publish of, if any;
+    /// see [`Drain::mark_published`] for why the ack rather than the adopt is
+    /// where that op stops being replayable.
     #[expect(clippy::too_many_arguments, reason = "one record's full authoring")]
     async fn publish_node(
         &self,
@@ -1665,9 +1755,10 @@ where
         content_cids: Vec<String>,
         carried_unknown: PreservedFields,
         carried_epoch_tag_unknown: PreservedFields,
-    ) -> Result<Published, Halt> {
+        completes: Option<OpId>,
+    ) -> Result<Published, PublishHalt> {
         let read_key = self.node_read_key(scope, &node.0);
-        let nonce = self.nonce()?;
+        let nonce = self.nonce().map_err(PublishHalt::before_the_put)?;
         let authoring = EnvelopeAuthoring {
             node_id: node.0,
             scope_id: scope.root.0,
@@ -1679,15 +1770,20 @@ where
             carried_epoch_tag_unknown,
         };
         let head = if is_scope_root {
-            author_scope_root_envelope(authoring, name)
+            author_scope_root_envelope(authoring, name, scope.owner_identity)
         } else {
             author_child_envelope(authoring)
         }
-        .map_err(|_| Halt::Unclassified)?;
+        .map_err(|error| PublishHalt::before_the_put(classify_author(error)))?;
 
         let record_bytes = self
             .publish_head(scope, name, &node.0, epoch, &head, content_cids.clone())
-            .await?;
+            .await
+            .map_err(PublishHalt::before_the_put)?;
+        if let Some(op_id) = completes {
+            self.mark_published(scope, op_id).await;
+        }
+        // The record is live from here: everything below is a local step.
         let local = local_head(&head);
         let sequence = if is_scope_root {
             let adopter = RootAdopter::new(
@@ -1702,7 +1798,7 @@ where
             adopter
                 .adopt(name, &record_bytes)
                 .await
-                .map_err(|_| Halt::Unclassified)?
+                .map_err(|_| PublishHalt::past_the_put(Halt::Unclassified))?
         } else {
             let adopter = ChildAdopter::new(
                 self.gateway,
@@ -1716,7 +1812,7 @@ where
             adopter
                 .adopt(name, &record_bytes)
                 .await
-                .map_err(|_| Halt::Unclassified)?
+                .map_err(|_| PublishHalt::past_the_put(Halt::Unclassified))?
         }
         .adopted
         .sequence;
@@ -1725,7 +1821,7 @@ where
         self.snapshot_cache
             .put(name.as_str().as_bytes(), &record_bytes)
             .await
-            .map_err(seam)?;
+            .map_err(|e| PublishHalt::past_the_put(seam(e)))?;
         Ok(Published {
             sequence,
             held: HeldRecord {
@@ -1740,7 +1836,9 @@ where
         })
     }
 
-    /// Dry-run, publish, and return the signed bytes.
+    /// Dry-run, publish, and return the signed bytes. `Ok` means the record
+    /// confirmed at its name: an unconfirmed or race-losing publish is `Err`,
+    /// because its bytes may never have landed.
     async fn publish_head(
         &self,
         scope: &DrainScope<'_>,
@@ -1906,8 +2004,8 @@ where
     /// leave a reference outliving its referent, and the gate-passing base is
     /// the evidence — a created node reaches it only once a parent record naming
     /// it published. The content CIDs go with **any** content-bearing op that
-    /// reaches here: an abandonment only retires when no PUT for the op was
-    /// acked, so no record can link the version.
+    /// reaches here: an abandonment only retires while the op's target is
+    /// unreachable, so no record a parent links can name the version.
     ///
     /// Reads the manifest before [`Self::release_staged_blocks`] drops it: after
     /// that the leaf CIDs are recoverable from nowhere (#916).
@@ -1986,11 +2084,12 @@ where
     /// Raise this identity's published-op mark over `op_id`
     /// ([`PUBLISHED_OP_MARK_PREFIX`]).
     ///
-    /// Raised between the op's last record publish and the block release, which
-    /// is the window a crash leaves a published op queued. Without it that op
-    /// replays, re-uploads its leaves, and a cancel landing mid-replay unpins
-    /// content a live record names — the session-scoped publish-entry interlock
-    /// does not survive the reboot.
+    /// Raised the instant the op's **last** record publish confirms — before its
+    /// self-adopt, and so before the block release — because everything from the
+    /// ack onwards is a window a crash leaves a published op queued. Without it
+    /// that op replays, re-uploads its leaves, and a cancel landing mid-replay
+    /// unpins content a live record names; the session-scoped publish-entry
+    /// interlock does not survive the reboot.
     ///
     /// Best-effort, unlike every other step of the publish: the record is
     /// already live by the time this runs, so failing the op over the mark would
@@ -2053,6 +2152,21 @@ fn local_head(head: &AuthoredHead) -> LocalHead {
 
 fn seam(_: crate::seams::SeamError) -> Halt {
     Halt::Unclassified
+}
+
+/// Classify an authoring refusal for the valve, off
+/// [`AuthorError::is_trust_refusal`].
+///
+/// Charged, not dead-lettered on sight: the scope root a trust refusal is
+/// authored from comes from the snapshot cache, which a later resolve replaces,
+/// so an immediate permanent verdict would abandon a user's ops over a cache
+/// another tick repairs. The budget bounds the spin either way.
+fn classify_author(error: AuthorError) -> Halt {
+    if error.is_trust_refusal() {
+        Halt::UploadAttempt
+    } else {
+        Halt::Unclassified
+    }
 }
 
 /// Hand control back to the host's executor once, so a facade command queued
@@ -2395,6 +2509,30 @@ mod tests {
         }
     }
 
+    /// The compensation branches on this and nothing else: a failure carries
+    /// its classification and, separately, whether the record it was publishing
+    /// is live. Collapsing the two would undo a move that landed.
+    #[test]
+    fn a_publish_failure_keeps_its_verdict_and_its_confirmation_apart() {
+        for halt in [Halt::Unclassified, Halt::Attempt] {
+            assert_eq!(
+                PublishHalt::before_the_put(halt),
+                PublishHalt {
+                    halt,
+                    confirmed: false
+                }
+            );
+            assert_eq!(
+                PublishHalt::past_the_put(halt),
+                PublishHalt {
+                    halt,
+                    confirmed: true
+                }
+            );
+            assert_eq!(Halt::from(PublishHalt::past_the_put(halt)), halt);
+        }
+    }
+
     /// Every other publish failure is availability: retried indefinitely and
     /// charged nothing, so an unreachable network never abandons an op.
     #[test]
@@ -2413,6 +2551,32 @@ mod tests {
             RecordPublishError::Publish(crate::net::PublishError::AllEndpointsFailed),
         ] {
             assert_eq!(classify_publish(error, 4096), Halt::Unclassified);
+        }
+    }
+
+    /// A trust refusal is charged so the queue stops at the budget instead of
+    /// spinning free; a refusal of the body *this pass* built is not, or the
+    /// reclassification would turn a rebasable failure into a permanent halt.
+    #[test]
+    fn only_a_produce_side_trust_refusal_is_charged_against_the_attempt_budget() {
+        for (error, expected) in [
+            (AuthorError::GrantSectionOnChild, Halt::UploadAttempt),
+            (AuthorError::MissingGrantSection, Halt::UploadAttempt),
+            (AuthorError::InvalidGrantSection, Halt::UploadAttempt),
+            (AuthorError::CommitmentNameMismatch, Halt::UploadAttempt),
+            (AuthorError::CommitmentSignatureInvalid, Halt::UploadAttempt),
+            (AuthorError::SectionSignatureInvalid, Halt::UploadAttempt),
+            (
+                AuthorError::Seal(cipherbox_core::error::TrustViolation::DuplicateId.into()),
+                Halt::Unclassified,
+            ),
+            (
+                AuthorError::HeadTooLarge { size: 2, limit: 1 },
+                Halt::Unclassified,
+            ),
+        ] {
+            let check = error.check();
+            assert_eq!(classify_author(error), expected, "{check}");
         }
     }
 }

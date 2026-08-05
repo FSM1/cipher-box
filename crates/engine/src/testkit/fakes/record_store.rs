@@ -34,6 +34,9 @@ pub struct InMemoryRecordStore {
     /// ignores our stale write while still serving the winner. Lets the harness
     /// drive a lost CAS race.
     put_failing: Arc<Mutex<HashSet<EndpointId>>>,
+    /// Routing keys whose PUT is refused at every endpoint, so one record of a
+    /// multi-record plan can fail while the rest of the plan publishes.
+    put_failing_keys: Arc<Mutex<HashSet<String>>>,
 }
 
 impl InMemoryRecordStore {
@@ -54,6 +57,7 @@ impl InMemoryRecordStore {
             inner: Arc::new(Mutex::new(inner)),
             failing: Arc::new(Mutex::new(HashSet::new())),
             put_failing: Arc::new(Mutex::new(HashSet::new())),
+            put_failing_keys: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -101,6 +105,23 @@ impl InMemoryRecordStore {
         self.put_failing.lock().expect("lock").remove(endpoint);
     }
 
+    /// Refuse every PUT under `routing_key` while the rest of the name space
+    /// publishes normally, until [`heal_put_for`](Self::heal_put_for) clears it.
+    pub fn fail_put_for(&self, routing_key: &str) {
+        self.put_failing_keys
+            .lock()
+            .expect("lock")
+            .insert(routing_key.to_owned());
+    }
+
+    /// Restore `routing_key`'s PUT path.
+    pub fn heal_put_for(&self, routing_key: &str) {
+        self.put_failing_keys
+            .lock()
+            .expect("lock")
+            .remove(routing_key);
+    }
+
     /// Whether `endpoint`'s GET path is currently injected to fail.
     fn get_failing(&self, endpoint: &EndpointId) -> bool {
         self.failing.lock().expect("lock").contains(endpoint)
@@ -110,6 +131,14 @@ impl InMemoryRecordStore {
     /// fails PUT too).
     fn put_failing(&self, endpoint: &EndpointId) -> bool {
         self.get_failing(endpoint) || self.put_failing.lock().expect("lock").contains(endpoint)
+    }
+
+    /// Whether `routing_key`'s PUT is currently injected to fail everywhere.
+    fn put_failing_key(&self, routing_key: &str) -> bool {
+        self.put_failing_keys
+            .lock()
+            .expect("lock")
+            .contains(routing_key)
     }
 }
 
@@ -157,6 +186,9 @@ impl RecordTransport for InMemoryRecordStore {
                 "endpoint unreachable: {}",
                 endpoint.0
             )));
+        }
+        if self.put_failing_key(routing_key) {
+            return Err(SeamError::new(format!("put refused for {routing_key}")));
         }
         self.inner
             .lock()

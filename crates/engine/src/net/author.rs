@@ -9,9 +9,12 @@
 //! - a child envelope carrying a grant section returns `Err`, off core's own
 //!   `has_grant_section` — the produce guard and the decode reject cannot drift;
 //! - a scope root missing its grant section, carrying one whose commitment
-//!   names another `ipnsName`, or carrying one whose structure signatures do not
-//!   recompute at the envelope's own scope/epoch, returns `Err` off the same
-//!   decoder and the same stage-3 predicate the gate runs;
+//!   names another `ipnsName` or is not signed by the anchored owner identity,
+//!   or carrying one whose structure signatures do not recompute at the
+//!   envelope's own scope/epoch, returns `Err` off the same decoder and the same
+//!   stage-2/stage-3 predicates the gate runs. The mirror stops where the gate
+//!   needs a reader's secrets: stage 3's ascent-link seed cross-check takes an
+//!   ancestor node seed [`EnvelopeAuthoring`] does not carry;
 //! - a kind transplant and a non-canonical child-ref `ipnsName` are
 //!   unrepresentable: [`new_child`] feeds one [`NodeKind`] and one typed
 //!   [`IpnsName`] to both the body and the parent's ref.
@@ -21,8 +24,9 @@ use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::seal::{
     ChildRef, Envelope, GrantSection, NodeKind, PreservedFields, ReadBody, Version,
     decode_grant_section, encode_envelope, encode_grant_section, grant_section_bytes,
-    has_grant_section, seal_read_body, set_grant_section,
+    has_grant_section, seal_read_body, set_grant_section, verify_grant_set,
 };
+use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
 
 use crate::content::limits::MAX_RESOLVED_RECORD_BYTES;
 use crate::content::root_block_cid;
@@ -40,12 +44,19 @@ pub enum AuthorError {
     /// child adoption always rejects (`net/child.rs`). Refusing here keeps the
     /// produce side and the decode side on the same predicate.
     GrantSectionOnChild,
-    /// A scope root carried no decodable `grantSection` — the marker every root
-    /// adoption requires (`net/adopter.rs` step 5).
+    /// A scope root carried no `grantSection` — the marker every root adoption
+    /// requires (`net/adopter.rs` step 5).
     MissingGrantSection,
+    /// A scope root's carried `grantSection` did not decode. The same bytes are
+    /// a whole-record reject on arrival (`net/adopter.rs` step 5), so they are a
+    /// trust refusal here rather than a codec failure of this pass's own body.
+    InvalidGrantSection,
     /// The carried grant-set commitment names a different `ipnsName` than the
     /// record is published under, which the gate's stage 2 rejects.
     CommitmentNameMismatch,
+    /// The carried grant-set commitment is unsigned, malformed, or not signed by
+    /// the contact-anchored owner identity, which the gate's stage 2 rejects.
+    CommitmentSignatureInvalid,
     /// A structure signature in the carried grant section does not recompute at
     /// the envelope's own scope and epoch, which the gate's stage 3 rejects
     /// whole-record.
@@ -65,22 +76,57 @@ pub enum AuthorError {
     },
 }
 
+impl AuthorError {
+    /// The stable kebab-case name of this refusal — the produce-side counterpart
+    /// of [`GateRejection::check`], and what [`Display`] renders, so a
+    /// regression in the epoch or commitment pairing is legible in the field
+    /// rather than a silent retry.
+    ///
+    /// [`GateRejection::check`]: crate::gate::GateRejection::check
+    /// [`Display`]: core::fmt::Display
+    pub fn check(&self) -> &'static str {
+        match self {
+            Self::GrantSectionOnChild => "grant-section-on-child",
+            Self::MissingGrantSection => "missing-grant-section",
+            Self::InvalidGrantSection => "invalid-grant-section",
+            // Stage 2's single `commitment-invalid` verdict, split by cause: the
+            // producer knows which half of its own bytes is wrong, where a
+            // reader deliberately tells an attacker nothing.
+            Self::CommitmentNameMismatch => "commitment-name-mismatch",
+            Self::CommitmentSignatureInvalid => "commitment-signature-invalid",
+            // The gate's own verdict name: this is the same predicate.
+            Self::SectionSignatureInvalid => "structure-signature-invalid",
+            Self::Seal(e) => e.check(),
+            Self::HeadTooLarge { .. } => "head-too-large",
+        }
+    }
+
+    /// Whether this is a **trust** refusal on the record's own bytes — the
+    /// produce-side mirror of an adoption-gate rejection — rather than a codec
+    /// or size refusal of the body this pass happened to build, which a rebase
+    /// onto other state may not reproduce. Re-authoring the same inputs repeats
+    /// a trust refusal verbatim, so a retry loop must charge it
+    /// (`sync/drain.rs::classify_author`).
+    pub fn is_trust_refusal(&self) -> bool {
+        match self {
+            Self::GrantSectionOnChild
+            | Self::MissingGrantSection
+            | Self::InvalidGrantSection
+            | Self::CommitmentNameMismatch
+            | Self::CommitmentSignatureInvalid
+            | Self::SectionSignatureInvalid => true,
+            Self::Seal(_) | Self::HeadTooLarge { .. } => false,
+        }
+    }
+}
+
 impl core::fmt::Display for AuthorError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::GrantSectionOnChild => f.write_str("child envelope carries a grantSection"),
-            Self::MissingGrantSection => f.write_str("scope root carries no grantSection"),
-            Self::CommitmentNameMismatch => {
-                f.write_str("carried commitment names another ipnsName")
-            }
-            Self::SectionSignatureInvalid => {
-                f.write_str("carried grant section does not authenticate at this envelope's epoch")
-            }
-            Self::Seal(e) => write!(f, "seal failed: {}", e.check()),
-            Self::HeadTooLarge { size, limit } => {
-                write!(f, "head block exceeds the content cap ({size} > {limit})")
-            }
+        write!(f, "record authoring refused [{}]", self.check())?;
+        if let Self::HeadTooLarge { size, limit } = self {
+            write!(f, ": {size} > {limit}")?;
         }
+        Ok(())
     }
 }
 
@@ -136,14 +182,16 @@ pub fn author_child_envelope(
 /// section is the root's marker and rides `carried_unknown` verbatim, so the
 /// seed-bearing structures and their signatures survive a metadata republish
 /// untouched — which also means a republish must not carry a section belonging
-/// to some other name, or authored at some other epoch, so the checks the gate
-/// makes on arrival run here first (release-active).
+/// to some other name, authored at some other epoch, or authored by anyone but
+/// `owner_identity`, so the checks the gate makes on arrival run here first
+/// (release-active).
 pub fn author_scope_root_envelope(
     authoring: EnvelopeAuthoring<'_>,
     name: &IpnsName,
+    owner_identity: &EcdsaVerifier,
 ) -> Result<AuthoredHead, AuthorError> {
     let envelope = seal(&authoring)?;
-    check_scope_root(&envelope, name)?;
+    check_scope_root(&envelope, name, owner_identity)?;
     encode(envelope)
 }
 
@@ -156,23 +204,36 @@ pub fn author_scope_root_with_section(
     authoring: EnvelopeAuthoring<'_>,
     name: &IpnsName,
     section: &GrantSection,
+    owner_identity: &EcdsaVerifier,
 ) -> Result<AuthoredHead, AuthorError> {
     let mut envelope = seal(&authoring)?;
     set_grant_section(
         &mut envelope,
         encode_grant_section(section).map_err(AuthorError::Seal)?,
     );
-    check_scope_root(&envelope, name)?;
+    check_scope_root(&envelope, name, owner_identity)?;
     encode(envelope)
 }
 
 /// The checks the gate makes on arrival, run here first so a root this build's
-/// own gate always rejects is never signed (release-active).
-fn check_scope_root(envelope: &Envelope, name: &IpnsName) -> Result<(), AuthorError> {
+/// own gate always rejects is never signed (release-active). Stages 2 and 3 in
+/// the gate's own order: without the commitment signature the stage-3 pass is
+/// self-referential — it authenticates structures against the pseudonyms the
+/// section's own commitment names, so a wholly attacker-authored section is
+/// internally consistent.
+fn check_scope_root(
+    envelope: &Envelope,
+    name: &IpnsName,
+    owner_identity: &EcdsaVerifier,
+) -> Result<(), AuthorError> {
     let section = decode_grant_section(
         grant_section_bytes(envelope).ok_or(AuthorError::MissingGrantSection)?,
     )
-    .map_err(AuthorError::Seal)?;
+    .map_err(|_| AuthorError::InvalidGrantSection)?;
+    let commitment_sig = EcdsaSignature::from_compact(&section.commitment_sig)
+        .ok_or(AuthorError::CommitmentSignatureInvalid)?;
+    verify_grant_set(owner_identity, &section.commitment, &commitment_sig)
+        .map_err(|_| AuthorError::CommitmentSignatureInvalid)?;
     if section.commitment.ipns_name != name.as_str().as_bytes() {
         return Err(AuthorError::CommitmentNameMismatch);
     }
@@ -343,11 +404,19 @@ mod tests {
             .collect()
     }
 
+    /// The identity this suite's roots are anchored to.
+    fn owner() -> EcdsaVerifier {
+        EcdsaSigner::from_scalar(&[0x11; 32])
+            .expect("valid scalar")
+            .verifying_key()
+    }
+
     /// A real scope root's grant section and the name its commitment binds.
-    fn owner_root() -> OwnerRootFixture {
-        let owner_identity = EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid scalar");
+    /// Only the signer varies between fixtures: the name comes off the fixed
+    /// write seed, so a section signed by anyone else still binds this name.
+    fn root_signed_by(scalar: &[u8; 32]) -> OwnerRootFixture {
         owner_root_fixture(OwnerRootSpec {
-            owner_identity: &owner_identity,
+            owner_identity: &EcdsaSigner::from_scalar(scalar).expect("valid scalar"),
             owner_enc: &kdf::enc_subkey(&[0x33; 32]).public(),
             scope_id: [2u8; 16],
             root_id: [1u8; 16],
@@ -356,6 +425,10 @@ mod tests {
             parent_node_seed: None,
             owner_write_blob_epoch: None,
         })
+    }
+
+    fn owner_root() -> OwnerRootFixture {
+        root_signed_by(&[0x11; 32])
     }
 
     fn carried_section(section: &GrantSection) -> PreservedFields {
@@ -383,6 +456,7 @@ mod tests {
         let head = author_scope_root_envelope(
             authoring(&folder(), carried_section(&fixture.grant_section)),
             &fixture.name,
+            &owner(),
         )
         .unwrap();
         assert!(has_grant_section(&head.envelope));
@@ -397,7 +471,8 @@ mod tests {
         assert_eq!(
             author_scope_root_envelope(
                 authoring(&folder(), carried_section(&fixture.grant_section)),
-                &name()
+                &name(),
+                &owner(),
             )
             .unwrap_err(),
             AuthorError::CommitmentNameMismatch,
@@ -419,6 +494,7 @@ mod tests {
                     OWNER_ROOT_EPOCH + 1
                 ),
                 &fixture.name,
+                &owner(),
             )
             .unwrap_err(),
             AuthorError::SectionSignatureInvalid,
@@ -435,6 +511,7 @@ mod tests {
                 authoring_at(&folder(), PreservedFields::new(), OWNER_ROOT_EPOCH + 1),
                 &fixture.name,
                 &fixture.grant_section,
+                &owner(),
             )
             .unwrap_err(),
             AuthorError::SectionSignatureInvalid,
@@ -451,10 +528,101 @@ mod tests {
         assert_eq!(
             author_scope_root_envelope(
                 authoring(&folder(), carried_section(&section)),
-                &fixture.name
+                &fixture.name,
+                &owner(),
             )
             .unwrap_err(),
             AuthorError::SectionSignatureInvalid,
+        );
+    }
+
+    #[test]
+    fn a_scope_root_envelope_whose_commitment_another_identity_signed_is_refused() {
+        // Release-active (security rule 8): stage 3 authenticates structures
+        // against the pseudonyms the section's *own* commitment names, so
+        // without stage 2's signature half a wholly attacker-authored section —
+        // own commitment, own pseudonym, own signatures, correct ipnsName —
+        // authors cleanly and is only caught by a reader.
+        let fixture = root_signed_by(&[0x44; 32]);
+        assert_eq!(
+            author_scope_root_envelope(
+                authoring(&folder(), carried_section(&fixture.grant_section)),
+                &fixture.name,
+                &owner(),
+            )
+            .unwrap_err(),
+            AuthorError::CommitmentSignatureInvalid,
+        );
+    }
+
+    #[test]
+    fn a_scope_root_envelope_whose_commitment_signature_is_unusable_is_refused() {
+        // The other half of the gate's stage-2 reject: bytes that are not a
+        // compact ECDSA signature at all, which parse before they verify.
+        let fixture = owner_root();
+        let mut section = fixture.grant_section.clone();
+        section.commitment_sig = [0u8; 64];
+        assert_eq!(
+            author_scope_root_envelope(
+                authoring(&folder(), carried_section(&section)),
+                &fixture.name,
+                &owner(),
+            )
+            .unwrap_err(),
+            AuthorError::CommitmentSignatureInvalid,
+        );
+    }
+
+    #[test]
+    fn a_freshly_assembled_section_another_identity_signed_is_refused() {
+        // The re-seal path installs its own section and gets the same stage-2
+        // refusal, so neither scope-root authoring path can drift from the gate.
+        let fixture = root_signed_by(&[0x44; 32]);
+        assert_eq!(
+            author_scope_root_with_section(
+                authoring(&folder(), PreservedFields::new()),
+                &fixture.name,
+                &fixture.grant_section,
+                &owner(),
+            )
+            .unwrap_err(),
+            AuthorError::CommitmentSignatureInvalid,
+        );
+    }
+
+    /// Every trust refusal carries a distinct stable name, and only the trust
+    /// class is charged by the write plane — a codec or size refusal is a
+    /// property of the body this pass built, which a rebase may not reproduce.
+    #[test]
+    fn every_authoring_refusal_has_its_own_stable_check_name() {
+        let refusals = [
+            (AuthorError::GrantSectionOnChild, true),
+            (AuthorError::MissingGrantSection, true),
+            (AuthorError::InvalidGrantSection, true),
+            (AuthorError::CommitmentNameMismatch, true),
+            (AuthorError::CommitmentSignatureInvalid, true),
+            (AuthorError::SectionSignatureInvalid, true),
+            (AuthorError::HeadTooLarge { size: 1, limit: 0 }, false),
+        ];
+        let mut names = std::collections::BTreeSet::new();
+        for (error, trust) in &refusals {
+            assert_eq!(error.is_trust_refusal(), *trust, "{error}");
+            assert!(names.insert(error.check()), "{error} reuses a check name");
+            assert!(format!("{error}").contains(error.check()), "{error:?}");
+        }
+    }
+
+    #[test]
+    fn a_scope_root_envelope_whose_grant_section_does_not_decode_is_refused() {
+        // Release-active (security rule 8).
+        assert_eq!(
+            author_scope_root_envelope(
+                authoring(&folder(), grant_section_field()),
+                &name(),
+                &owner(),
+            )
+            .unwrap_err(),
+            AuthorError::InvalidGrantSection,
         );
     }
 
@@ -463,8 +631,12 @@ mod tests {
         // A root that lost its section is a root no reader can open: child
         // adoption refuses the missing marker and the gate has no commitment.
         assert_eq!(
-            author_scope_root_envelope(authoring(&folder(), PreservedFields::new()), &name())
-                .unwrap_err(),
+            author_scope_root_envelope(
+                authoring(&folder(), PreservedFields::new()),
+                &name(),
+                &owner(),
+            )
+            .unwrap_err(),
             AuthorError::MissingGrantSection,
         );
     }

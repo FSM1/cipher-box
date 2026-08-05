@@ -1,20 +1,49 @@
 //! In-memory [`FloorStore`] fake.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use crate::seams::{FloorNamespace, FloorRaise, FloorStore, SeamResult};
+use crate::seams::{FloorNamespace, FloorRaise, FloorStore, SeamError, SeamResult};
 
 #[derive(Default)]
 struct Inner {
     epoch: HashMap<Vec<u8>, u64>,
     sequence: HashMap<Vec<u8>, u64>,
+    /// Floor keys whose raise is injected to fail.
+    failing: HashSet<Vec<u8>>,
+}
+
+impl Inner {
+    fn refuse(&self, key: &[u8]) -> Option<SeamError> {
+        self.failing
+            .contains(key)
+            .then(|| SeamError::new(format!("floor raise injected to fail for key {key:?}")))
+    }
 }
 
 /// In-memory monotonic-max floor store. Clones share state ("reopen").
 #[derive(Clone, Default)]
 pub struct InMemoryFloorStore {
     inner: Arc<Mutex<Inner>>,
+}
+
+impl InMemoryFloorStore {
+    /// Make every floor raise naming `key` fail until
+    /// [`heal_floors`](Self::heal_floors) clears it. The raise is an adoption's
+    /// durable last step, so this drives a self-adopt that fails after its
+    /// record is already live at its name.
+    pub fn fail_floor_raises_for(&self, key: &[u8]) {
+        self.inner
+            .lock()
+            .expect("lock")
+            .failing
+            .insert(key.to_vec());
+    }
+
+    /// Restore every injected floor fault.
+    pub fn heal_floors(&self) {
+        self.inner.lock().expect("lock").failing.clear();
+    }
 }
 
 fn raise(map: &mut HashMap<Vec<u8>, u64>, key: &[u8], value: u64) -> u64 {
@@ -35,11 +64,11 @@ impl FloorStore for InMemoryFloorStore {
     }
 
     async fn raise_epoch_floor(&self, scope_id: &[u8], epoch: u64) -> SeamResult<u64> {
-        Ok(raise(
-            &mut self.inner.lock().expect("lock").epoch,
-            scope_id,
-            epoch,
-        ))
+        let mut inner = self.inner.lock().expect("lock");
+        match inner.refuse(scope_id) {
+            Some(error) => Err(error),
+            None => Ok(raise(&mut inner.epoch, scope_id, epoch)),
+        }
     }
 
     async fn sequence_floor(&self, ipns_name: &[u8]) -> SeamResult<Option<u64>> {
@@ -53,11 +82,11 @@ impl FloorStore for InMemoryFloorStore {
     }
 
     async fn raise_sequence_floor(&self, ipns_name: &[u8], sequence: u64) -> SeamResult<u64> {
-        Ok(raise(
-            &mut self.inner.lock().expect("lock").sequence,
-            ipns_name,
-            sequence,
-        ))
+        let mut inner = self.inner.lock().expect("lock");
+        match inner.refuse(ipns_name) {
+            Some(error) => Err(error),
+            None => Ok(raise(&mut inner.sequence, ipns_name, sequence)),
+        }
     }
 
     /// Genuinely all-or-nothing: the whole batch applies under one lock guard,
@@ -65,6 +94,9 @@ impl FloorStore for InMemoryFloorStore {
     /// transactional backing).
     async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
         let mut inner = self.inner.lock().expect("lock");
+        if let Some(error) = raises.iter().find_map(|r| inner.refuse(&r.key)) {
+            return Err(error);
+        }
         for r in raises {
             match r.namespace {
                 FloorNamespace::Epoch => raise(&mut inner.epoch, &r.key, r.value),
