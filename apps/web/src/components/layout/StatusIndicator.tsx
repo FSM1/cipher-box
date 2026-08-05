@@ -21,7 +21,7 @@ export function StatusIndicator() {
       className={`status-indicator ${rung.className}`}
       data-testid="status-indicator"
       data-staleness={staleness}
-      aria-label={`${rung.label} - refresh now`}
+      title="Refresh now"
       onClick={() => store.refresh()}
     >
       <span className="status-indicator-dot" aria-hidden="true" />

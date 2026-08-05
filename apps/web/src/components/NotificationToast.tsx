@@ -18,7 +18,6 @@ export function NotificationToast() {
           className="notification-toast-item"
           role="alert"
           data-testid="notification-notice"
-          data-notice-class="warning"
         >
           <span className="notification-toast-label" aria-hidden="true">
             [WARN]

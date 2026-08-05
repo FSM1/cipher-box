@@ -315,8 +315,7 @@ describe('a manual refresh', () => {
     engine.pulls[0].resolve(listed);
     await flush();
 
-    // The engine does not implement `manualRefresh` yet, and answers
-    // `unimplemented` — a verdict on the hint, never on the listing.
+    // A refused hint is a verdict on the hint, never on the listing.
     engine.refuseRefresh(new EngineRequestError('not implemented yet', 'unimplemented'));
     store.refresh();
     await flush();
@@ -346,9 +345,8 @@ describe('a manual refresh', () => {
 });
 
 describe('failure classification', () => {
-  it('treats a resource ceiling as recoverable', () => {
+  it('treats the stream ceiling as recoverable', () => {
     expect(isRecoverable({ message: 'ceiling', code: 'tooManyStreams' })).toBe(true);
-    expect(isRecoverable({ message: 'no room', code: 'overBudget' })).toBe(true);
   });
 
   it('fails closed on anything it does not name', () => {
@@ -357,6 +355,7 @@ describe('failure classification', () => {
     expect(isRecoverable({ message: 'refused', code: 'trustViolation' })).toBe(false);
     expect(isRecoverable({ message: 'gone', code: 'unknownNode' })).toBe(false);
     expect(isRecoverable({ message: 'new', code: 'someFutureCeiling' })).toBe(false);
+    expect(isRecoverable({ message: 'no room', code: 'overBudget' })).toBe(false);
     expect(isRecoverable({ message: 'worker died' })).toBe(false);
   });
 });

@@ -65,9 +65,7 @@ export function useFolderPicker(openOn: Uint8Array | null, excludedKey: string):
     };
   }, [client, cursor]);
 
-  // The walk borrows the focus window; only the store knows where it belongs by
-  // the time the picker closes, so the store takes it back rather than the
-  // picker restoring the folder it opened on.
+  // The walk borrows the focus window; the store owns it and takes it back.
   useEffect(() => () => store.refocus(), [store]);
 
   // The read effect retires the listing a render later than the cursor moves,

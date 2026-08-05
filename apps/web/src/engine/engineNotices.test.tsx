@@ -5,25 +5,15 @@ import { StatusIndicator } from '../components/layout/StatusIndicator';
 import { EngineProvider } from '../providers/EngineProvider';
 import { notificationStore } from '../stores/notification.store';
 import { fakeEngine } from './testFakes';
-import { useEngineNotices } from './useEngineNotices';
 
 afterEach(() => notificationStore.clear());
 
 /** The two surfaces side by side, so one event cannot land on both. */
-function Chrome() {
-  useEngineNotices();
-  return (
-    <>
-      <StatusIndicator />
-      <NotificationToast />
-    </>
-  );
-}
-
 function draw(client: ReturnType<typeof fakeEngine>['client']) {
   return render(
     <EngineProvider createClient={() => client}>
-      <Chrome />
+      <StatusIndicator />
+      <NotificationToast />
     </EngineProvider>
   );
 }
@@ -40,7 +30,6 @@ describe('engine warnings', () => {
     });
 
     const notice = await screen.findByTestId('notification-notice');
-    expect(notice.dataset.noticeClass).toBe('warning');
     expect(notice.getAttribute('role')).toBe('alert');
     // The pinned name identifies the scope for de-duplication only.
     expect(notice.textContent).not.toContain('abcd');

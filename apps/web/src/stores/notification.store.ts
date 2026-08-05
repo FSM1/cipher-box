@@ -13,21 +13,15 @@ export interface Notice {
   readonly message: string;
 }
 
-/**
- * The engine emits per resolve attempt, so an unreachable scope raises the same
- * warning on every tick; the cap bounds what an event storm can accumulate.
- */
+/** Distinct keys accumulate unbounded otherwise; the newest warning wins. */
 const MAX_NOTICES = 5;
 
-const EMPTY: readonly Notice[] = Object.freeze([]);
-
-let notices: readonly Notice[] = EMPTY;
+let notices: readonly Notice[] = Object.freeze([]);
 const listeners = new Set<() => void>();
 
 function publish(next: readonly Notice[]): void {
-  // Frozen and identity-compared: `useSyncExternalStore` bails out on identity,
-  // and a consumer must not be able to mutate what the UI is rendering.
-  notices = next.length === 0 ? EMPTY : Object.freeze(next);
+  // Frozen: a consumer must not mutate what the UI is already rendering.
+  notices = Object.freeze(next);
   for (const listener of listeners) listener();
 }
 
@@ -47,6 +41,6 @@ export const notificationStore = {
     if (next.length !== notices.length) publish(next);
   },
   clear(): void {
-    if (notices.length > 0) publish(EMPTY);
+    if (notices.length > 0) publish([]);
   },
 };

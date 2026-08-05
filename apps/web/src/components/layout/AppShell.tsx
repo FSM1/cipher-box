@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import { useEngineNotices } from '../../engine/useEngineNotices';
 import { useRefreshHints } from '../../engine/useRefreshHints';
 import { NotificationToast } from '../NotificationToast';
 import { StagingBanner } from '../StagingBanner';
@@ -18,7 +17,6 @@ interface AppShellProps {
  * (blueprint/web-client.md "Composition").
  */
 export function AppShell({ children }: AppShellProps) {
-  useEngineNotices();
   useRefreshHints();
 
   return (

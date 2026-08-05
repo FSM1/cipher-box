@@ -3,11 +3,17 @@
  * law"): a `useSyncExternalStore` adapter over the engine event stream with no
  * independent writers. It caches the descriptor the engine handed it and never
  * derives, merges, or patches one.
+ *
+ * It is also the stream's only listener, so the trust warnings that must never
+ * read as staleness are projected from here onto their own surface — a second
+ * subscription would open a render later than the engine starts, and drop the
+ * cold-start escalations that land in the gap.
  */
 
-import { EngineRequestError } from '@cipherbox/client';
+import { EngineRequestError, toHex } from '@cipherbox/client';
 import type { EngineClient, SnapshotDescriptor, Staleness } from '@cipherbox/client';
 import { sameNode } from '../lib/nodeId';
+import { notificationStore } from '../stores/notification.store';
 
 /** A failed pull, carrying the engine's stable code so the UI can classify it. */
 export interface SnapshotError {
@@ -24,16 +30,12 @@ export interface SnapshotState {
 }
 
 /**
- * Engine codes a later pull clears on its own: resource ceilings, not verdicts.
- * Everything else — including a codeless transport fault and any code this list
- * does not name — is fatal, so a new engine variant can never render as
- * recoverable without someone adding it here.
+ * Whether a later pull clears this on its own: `tooManyStreams` is a ceiling,
+ * not a verdict. Named codes only, so a codeless transport fault and every code
+ * this does not name — trust verdicts among them — stay fatal.
  */
-const RECOVERABLE_CODES: ReadonlySet<string> = new Set(['tooManyStreams', 'overBudget']);
-
-/** Whether a later pull can clear this failure without anything else changing. */
 export function isRecoverable(error: SnapshotError): boolean {
-  return error.code !== undefined && RECOVERABLE_CODES.has(error.code);
+  return error.code === 'tooManyStreams';
 }
 
 export interface SnapshotStore {
@@ -45,17 +47,17 @@ export interface SnapshotStore {
   getStaleness(): Staleness;
   /** Points the adapter (and the engine's focus window) at a folder. */
   setFocus(node: Uint8Array | null): void;
-  /**
-   * Re-asserts the cached focus after a consumer drove `facade.setFocus` itself.
-   * The `setFocus` short-circuit cannot see such a borrow, so without this the
-   * engine stays on the borrower's folder for the rest of the session.
-   */
+  /** Re-asserts the cached focus after a consumer drove `facade.setFocus` itself. */
   refocus(): void;
   /** Re-pulls the focused folder, behind a best-effort nocache resolve. */
   refresh(): void;
   /** Releases the event subscription. */
   dispose(): void;
 }
+
+/** The pinned name identifies the scope for de-duplication, never for reading. */
+const WITHHELD =
+  'a shared folder stopped serving updates you are entitled to see - what it shows may be behind';
 
 const IDLE: SnapshotState = { view: null, error: null };
 
@@ -155,6 +157,13 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     } else if (event.kind === 'stalenessChanged') {
       stalenessSeq += 1;
       commit({ staleness: event.staleness });
+    } else if (event.kind === 'withheldUpdateEscalation') {
+      notificationStore.warn(`withheld:${toHex(event.ipnsName)}`, WITHHELD);
+    } else if (event.kind === 'attributableAbuse') {
+      notificationStore.warn(
+        `abuse:${event.description}`,
+        `verification refused an update: ${event.description}`
+      );
     }
   });
 
@@ -176,14 +185,14 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       const again = (): void => {
         if (id === generation) pull();
       };
-      // The nocache hint is best-effort; the pull it precedes is the answer.
-      // A refused refresh command must not replace a listing that is still the
-      // best the engine has, so only the pull's own outcome sets `error`.
-      client.facade.manualRefresh().then(again, again);
+      // The nocache hint is best-effort: only the pull it precedes sets `error`.
+      void client.facade.manualRefresh().then(again, again);
     },
     dispose() {
       unsubscribe();
       listeners.clear();
+      // A warning names the scope it came from; it must not outlive its engine.
+      notificationStore.clear();
     },
   };
 }

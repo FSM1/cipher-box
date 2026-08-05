@@ -1,21 +1,8 @@
 import { act, render, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { EngineProvider } from '../providers/EngineProvider';
-import { fakeEngine } from './testFakes';
+import { fakeEngine, setOnline, setVisible } from './testFakes';
 import { useRefreshHints } from './useRefreshHints';
-
-function setOnline(online: boolean): void {
-  Object.defineProperty(navigator, 'onLine', { configurable: true, value: online });
-  window.dispatchEvent(new Event(online ? 'online' : 'offline'));
-}
-
-function setVisible(visible: boolean): void {
-  Object.defineProperty(document, 'visibilityState', {
-    configurable: true,
-    get: () => (visible ? 'visible' : 'hidden'),
-  });
-  document.dispatchEvent(new Event('visibilitychange'));
-}
 
 afterEach(() => {
   setOnline(true);
