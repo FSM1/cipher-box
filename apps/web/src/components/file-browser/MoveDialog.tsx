@@ -20,7 +20,7 @@ export function MoveDialog({ row, parent, onClose, onConfirm, busy, error }: Mov
   const canMove = !busy && destination !== null && !picker.atHome;
 
   return (
-    <Modal onClose={onClose} title={`move ${row.name}`} error={error}>
+    <Modal onClose={onClose} title={`move ${row.name}`} error={error} busy={busy}>
       <div className="dialog-content" data-testid="move-dialog">
         <p className="dialog-label">
           {'destination: '}
@@ -28,8 +28,8 @@ export function MoveDialog({ row, parent, onClose, onConfirm, busy, error }: Mov
             {picker.destinationName === null ? '...' : picker.destinationName || '/'}
           </span>
         </p>
-        <div className="move-dialog-list" role="listbox" aria-label="destination folder">
-          {!picker.isRoot && (
+        <div className="move-dialog-list" role="group" aria-label="destination folder">
+          {picker.canLeave && (
             <button
               type="button"
               className="move-dialog-entry"

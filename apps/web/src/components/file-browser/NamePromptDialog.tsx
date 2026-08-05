@@ -40,7 +40,7 @@ export function NamePromptDialog({
   };
 
   return (
-    <Modal onClose={onClose} title={title} error={error}>
+    <Modal onClose={onClose} title={title} error={error} busy={busy}>
       <form className="dialog-content" onSubmit={submit} data-testid={`${testId}-dialog`}>
         <label className="dialog-label" htmlFor={`${testId}-name`}>
           {fieldLabel}

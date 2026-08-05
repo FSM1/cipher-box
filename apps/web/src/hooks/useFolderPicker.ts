@@ -21,7 +21,8 @@ export interface FolderPicker {
   destinationName: string | null;
   isLoading: boolean;
   error: string | null;
-  isRoot: boolean;
+  /** True only when the picker knows which folder `leave` would land on. */
+  canLeave: boolean;
   enter(node: Uint8Array): void;
   leave(): void;
 }
@@ -39,6 +40,9 @@ export function useFolderPicker(openOn: Uint8Array | null, excludedKey: string):
   const [cursor, setCursor] = useState<Uint8Array | null>(home);
   const [listing, setListing] = useState<SnapshotDescriptor | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Every cursor change drops the listing, so the ancestors it carries cannot
+  // be what walks the picker back out of a folder it descended into.
+  const [descended, setDescended] = useState<(Uint8Array | null)[]>([]);
 
   useEffect(() => {
     if (client === null) return;
@@ -61,7 +65,9 @@ export function useFolderPicker(openOn: Uint8Array | null, excludedKey: string):
     };
   }, [client, cursor]);
 
-  useEffect(() => () => void client?.facade.setFocus(home), [client, home]);
+  // Handing the focus window back is best-effort: the picker is gone, and the
+  // route's own focus effect reasserts it either way.
+  useEffect(() => () => void client?.facade.setFocus(home).catch(() => undefined), [client, home]);
 
   const folders = useMemo(
     () =>
@@ -78,8 +84,23 @@ export function useFolderPicker(openOn: Uint8Array | null, excludedKey: string):
     destinationName: listing?.folderName ?? null,
     isLoading: listing === null && error === null,
     error,
-    isRoot: listing !== null && sameNode(listing.folder, listing.root),
-    enter: useCallback((node: Uint8Array) => setCursor(node), []),
-    leave: useCallback(() => setCursor(listing?.ancestors[0]?.id ?? null), [listing]),
+    canLeave: descended.length > 0 || (listing !== null && !sameNode(listing.folder, listing.root)),
+    enter: useCallback(
+      (node: Uint8Array) => {
+        setDescended((trail) => [...trail, cursor]);
+        setCursor(node);
+      },
+      [cursor]
+    ),
+    leave: useCallback(() => {
+      if (descended.length > 0) {
+        setCursor(descended[descended.length - 1]);
+        setDescended((trail) => trail.slice(0, -1));
+        return;
+      }
+      // Climbing above where the picker opened needs the listing's own
+      // ancestry; without it there is no parent to name, so it stays put.
+      if (listing !== null) setCursor(listing.ancestors[0]?.id ?? null);
+    }, [descended, listing]),
   };
 }

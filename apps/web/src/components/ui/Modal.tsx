@@ -10,6 +10,12 @@ interface ModalProps {
   className?: string;
   /** A failure to report where the backdrop cannot hide it. */
   error?: string | null;
+  /**
+   * A command is in flight. Dismissal is refused for as long as it is: the
+   * dialog owns that command's outcome, and a dismissed one would report its
+   * rejection into whatever dialog had replaced it.
+   */
+  busy?: boolean;
   children: ReactNode;
 }
 
@@ -18,7 +24,7 @@ interface ModalProps {
  * Tab cycle that cannot leave the dialog. Callers mount it to open it, so
  * unmounting is what resets a dialog's own state.
  */
-export function Modal({ onClose, title, className, error, children }: ModalProps) {
+export function Modal({ onClose, title, className, error, busy = false, children }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const opener = useRef<Element | null>(null);
   const titleId = useId();
@@ -26,6 +32,8 @@ export function Modal({ onClose, title, className, error, children }: ModalProps
   // pull focus out of the field being typed in every time a pull lands.
   const close = useRef(onClose);
   close.current = onClose;
+  const locked = useRef(busy);
+  locked.current = busy;
 
   const focusable = useCallback(
     () => [...(dialogRef.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? [])],
@@ -39,7 +47,7 @@ export function Modal({ onClose, title, className, error, children }: ModalProps
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        close.current();
+        if (!locked.current) close.current();
         return;
       }
       if (event.key !== 'Tab') return;
@@ -64,7 +72,7 @@ export function Modal({ onClose, title, className, error, children }: ModalProps
         className={`modal-backdrop${className ? ` ${className}` : ''}`}
         data-testid="modal-backdrop"
         onMouseDown={(event) => {
-          if (event.target === event.currentTarget) onClose();
+          if (!busy && event.target === event.currentTarget) onClose();
         }}
       >
         <div
@@ -78,7 +86,13 @@ export function Modal({ onClose, title, className, error, children }: ModalProps
             <h2 id={titleId} className="modal-title">
               {title}
             </h2>
-            <button type="button" className="modal-close" onClick={onClose} aria-label="close">
+            <button
+              type="button"
+              className="modal-close"
+              onClick={onClose}
+              disabled={busy}
+              aria-label="close"
+            >
               &times;
             </button>
           </div>

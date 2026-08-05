@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Portal } from '../ui/Portal';
 
 /** Keeps the menu off the viewport edges when it opens near one. */
@@ -20,7 +20,23 @@ interface ContextMenuProps {
 
 export function ContextMenu({ x, y, label, items, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
+  const opener = useRef<Element | null>(null);
   const [position, setPosition] = useState({ left: x, top: y });
+
+  const stops = useCallback(
+    () => [...(menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ?? [])],
+    []
+  );
+
+  // The menu is portalled out of the row, so Tab order never reaches it; it has
+  // to take focus on open and give it back when it closes.
+  useEffect(() => {
+    opener.current = document.activeElement;
+    stops()[0]?.focus();
+    return () => {
+      if (opener.current instanceof HTMLElement) opener.current.focus();
+    };
+  }, [stops]);
 
   useLayoutEffect(() => {
     const menu = menuRef.current;
@@ -59,6 +75,19 @@ export function ContextMenu({ x, y, label, items, onClose }: ContextMenuProps) {
         role="menu"
         aria-label={label}
         data-testid="context-menu"
+        onKeyDown={(event) => {
+          if (event.key === 'Tab') {
+            event.preventDefault();
+            onClose();
+            return;
+          }
+          const focusable = stops();
+          const at = focusable.indexOf(document.activeElement as HTMLElement);
+          const next = step(event.key, at, focusable.length);
+          if (next === null) return;
+          event.preventDefault();
+          focusable[next]?.focus();
+        }}
       >
         {items.map((item) => (
           <button
@@ -77,4 +106,14 @@ export function ContextMenu({ x, y, label, items, onClose }: ContextMenuProps) {
       </div>
     </Portal>
   );
+}
+
+/** The menu roving-focus model: where a key moves focus, or `null` to ignore it. */
+function step(key: string, at: number, count: number): number | null {
+  if (count === 0) return null;
+  if (key === 'ArrowDown') return (at + 1) % count;
+  if (key === 'ArrowUp') return (at <= 0 ? count : at) - 1;
+  if (key === 'Home') return 0;
+  if (key === 'End') return count - 1;
+  return null;
 }

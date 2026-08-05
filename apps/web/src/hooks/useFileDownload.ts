@@ -11,9 +11,17 @@ import { useEngine } from '../providers/EngineProvider';
 /** Never a renderable type: a blob URL is same-origin with the app. */
 const OPAQUE = 'application/octet-stream';
 
+/**
+ * The save commits a task or two after the click; Firefox and Safari cancel it
+ * silently if the URL is gone by then. Short, because the bytes are plaintext.
+ */
+const REVOKE_AFTER_MS = 1_000;
+
 export interface FileDownload {
   error: string | null;
   save(node: Uint8Array, name: string): Promise<void>;
+  /** Drops a failure the user has moved on from. */
+  clearError(): void;
 }
 
 export function useFileDownload(): FileDownload {
@@ -37,7 +45,7 @@ export function useFileDownload(): FileDownload {
     [client]
   );
 
-  return { error, save };
+  return { error, save, clearError: useCallback(() => setError(null), []) };
 }
 
 function saveToDisk(blob: Blob, name: string): void {
@@ -49,5 +57,5 @@ function saveToDisk(blob: Blob, name: string): void {
   document.body.append(link);
   link.click();
   link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  setTimeout(() => URL.revokeObjectURL(url), REVOKE_AFTER_MS);
 }

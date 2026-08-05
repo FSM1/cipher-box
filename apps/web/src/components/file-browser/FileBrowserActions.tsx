@@ -45,11 +45,16 @@ export function FileBrowserActions({
   const failure = actions.error ?? downloads.error;
 
   const close = () => setDialog(null);
-  /** A dispatch the engine accepted closes its dialog; a rejected one stays up. */
-  const closeOnSuccess = (dispatched: Promise<boolean>) =>
+  /**
+   * A dispatch the engine accepted closes its dialog; a rejected one stays up.
+   * The banner reports one failure, so a dispatch also retires the last read's.
+   */
+  const closeOnSuccess = (dispatched: Promise<boolean>) => {
+    downloads.clearError();
     void dispatched.then((accepted) => {
       if (accepted) close();
     });
+  };
 
   const menuItems = (row: ListingRow): ContextMenuItem[] => {
     const items: ContextMenuItem[] = [];

@@ -4,7 +4,7 @@ interface FileListItemProps {
   row: ListingRow;
   /** Opens a folder. */
   onOpen: (node: Uint8Array) => void;
-  /** Raises the row's action menu, from a right-click or the menu key. */
+  /** Raises the row's action menu, anchored on the event that asked for it. */
   onRowMenu: (event: React.MouseEvent<HTMLElement>, row: ListingRow) => void;
 }
 
@@ -25,6 +25,9 @@ export function FileListItem({ row, onOpen, onRowMenu }: FileListItemProps) {
       onDoubleClick={open}
       onContextMenu={(event) => onRowMenu(event, row)}
       onKeyDown={(event) => {
+        // The action button's own Enter/Space bubbles here; swallowing it would
+        // navigate away instead of raising that button's menu.
+        if (event.target !== event.currentTarget) return;
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
         open();

@@ -242,6 +242,10 @@ describe('the vault browser write path', () => {
 
     openRowMenu('notes.txt');
     chooseMenuItem('move to...');
+    await settlePickerRead(
+      engine,
+      folderView({ folder: DOCS, folderName: 'documents', ancestors: [{ id: ROOT, name: '' }] })
+    );
     fireEvent.click(screen.getByTestId('move-dialog-up'));
     await act(async () => {
       await Promise.resolve();
@@ -249,6 +253,58 @@ describe('the vault browser write path', () => {
     fireEvent.click(screen.getByRole('button', { name: 'cancel' }));
 
     await waitFor(() => expect(engine.facade.setFocus).toHaveBeenLastCalledWith(DOCS));
+  });
+
+  it('walks [..] back to the folder it descended from, not the vault root', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('move to...');
+    await settlePickerRead(engine, listing());
+    engine.facade.snapshot.mockClear();
+
+    // Leaving before the child's listing lands has no ancestry to read, and
+    // reading none as "the vault root" would strand the walk at the top.
+    fireEvent.click(screen.getByTestId('move-dialog-folder'));
+    fireEvent.click(screen.getByTestId('move-dialog-up'));
+    await act(async () => {
+      for (let hop = 0; hop < 5; hop += 1) await Promise.resolve();
+    });
+
+    expect(engine.facade.snapshot).toHaveBeenLastCalledWith(ROOT);
+    expect(engine.facade.snapshot).not.toHaveBeenCalledWith(null);
+  });
+
+  it('refuses to dismiss a dialog while its command is in flight', async () => {
+    const engine = fakeEngine();
+    let release: () => void = () => undefined;
+    engine.facade.create.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+    );
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    fireEvent.click(screen.getByTestId('new-folder-button'));
+    fireEvent.change(screen.getByLabelText('folder name'), { target: { value: 'plans' } });
+    fireEvent.click(screen.getByTestId('create-folder-confirm'));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.mouseDown(screen.getByTestId('modal-backdrop'));
+    expect(screen.getByTestId('create-folder-dialog')).toBeDefined();
+
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByTestId('create-folder-dialog')).toBeNull());
   });
 });
 
@@ -275,19 +331,67 @@ describe('the vault browser read path over the facade', () => {
 
   const bytes = (text: string) => new TextEncoder().encode(text).buffer as ArrayBuffer;
 
-  it('object-URLs a blob of the downloaded plaintext and revokes it', async () => {
+  it('object-URLs a blob of the downloaded plaintext and revokes it once saved', async () => {
     const engine = fakeEngine(() => Promise.resolve(bytes('hello')));
     renderBrowser(engine);
     await landSnapshot(engine, listing());
 
     openRowMenu('notes.txt');
-    chooseMenuItem('download');
+    vi.useFakeTimers();
+    try {
+      chooseMenuItem('download');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
 
-    await waitFor(() => expect(engine.facade.download).toHaveBeenCalledWith(NOTE));
-    await waitFor(() => expect(created).toHaveLength(1));
-    expect(created[0].type).toBe('application/octet-stream');
-    expect(created[0].size).toBe(5);
-    await waitFor(() => expect(revoked).toEqual(['blob:fake/1']));
+      expect(engine.facade.download).toHaveBeenCalledWith(NOTE);
+      expect(created).toHaveLength(1);
+      expect(created[0].type).toBe('application/octet-stream');
+      expect(created[0].size).toBe(5);
+      // Revoking inside the click's own task cancels the save in some browsers.
+      expect(revoked).toEqual([]);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(revoked).toEqual(['blob:fake/1']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('refuses to decrypt a file whose size the engine has not projected', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, folderView({ children: [file(NOTE, 'notes.txt', { size: null })] }));
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('preview');
+
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toBe(
+        'size not known yet - preview it again in a moment'
+      )
+    );
+    expect(engine.facade.download).not.toHaveBeenCalled();
+  });
+
+  it('retires a failed download from the banner once an action dispatches', async () => {
+    const engine = fakeEngine(() => Promise.reject(new Error('the record is gone')));
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('download');
+    await waitFor(() =>
+      expect(screen.getByTestId('vault-action-error').textContent).toBe('the record is gone')
+    );
+
+    fireEvent.click(screen.getByTestId('new-folder-button'));
+    fireEvent.change(screen.getByLabelText('folder name'), { target: { value: 'plans' } });
+    fireEvent.click(screen.getByTestId('create-folder-confirm'));
+
+    await waitFor(() => expect(screen.queryByTestId('vault-action-error')).toBeNull());
   });
 
   it('renders a text file as text, without an object URL', async () => {
@@ -406,6 +510,52 @@ describe('the row action menu', () => {
     const menu = screen.getByTestId('context-menu');
     expect(menu.style.left).toBe('200px');
     expect(menu.style.top).toBe('90px');
+  });
+
+  it('leaves the action button its own keyboard activation', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+    engine.facade.snapshot.mockClear();
+
+    const control = screen.getByLabelText('actions for documents');
+    control.focus();
+    fireEvent.keyDown(control, { key: 'Enter' });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(engine.facade.snapshot).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(screen.getAllByTestId('file-list-item')[0], { key: 'Enter' });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(engine.facade.snapshot).toHaveBeenLastCalledWith(DOCS);
+  });
+
+  it('takes focus into the menu and hands it back to the trigger', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    const control = screen.getByLabelText('actions for notes.txt');
+    control.focus();
+    fireEvent.click(control, { detail: 0, clientX: 0, clientY: 0 });
+
+    const items = screen.getAllByRole('menuitem');
+    expect(document.activeElement).toBe(items[0]);
+
+    const menu = screen.getByTestId('context-menu');
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(items[1]);
+    fireEvent.keyDown(menu, { key: 'End' });
+    expect(document.activeElement).toBe(items[items.length - 1]);
+    fireEvent.keyDown(menu, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(items[0]);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('context-menu')).toBeNull());
+    expect(document.activeElement).toBe(control);
   });
 });
 

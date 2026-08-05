@@ -24,20 +24,29 @@ export type FilePreview =
 /**
  * @param key the file's node id as lowercase hex, so the read keys on a value
  * @param size the engine's byte count, which caps the read before it decrypts
- * a file too large to show
+ * a file too large to show; `null` while the projection is still resolving
  */
 export function useFilePreview(key: string, name: string, size: bigint | null): FilePreview {
   const client = useEngine();
   const [preview, setPreview] = useState<FilePreview>({ status: 'loading' });
 
   useEffect(() => {
-    if (client === null) return;
+    if (client === null) {
+      setPreview({ status: 'error', message: 'the engine is not ready yet' });
+      return;
+    }
     const kind = previewKind(name);
     if (kind === 'none') {
       setPreview({ status: 'error', message: 'no preview for this file type' });
       return;
     }
-    if (size !== null && size > MAX_PREVIEW_BYTES) {
+    // Reading first and measuring after would decrypt the whole file into the
+    // tab before the cap could refuse it, so an unprojected size refuses now.
+    if (size === null) {
+      setPreview({ status: 'error', message: 'size not known yet - preview it again in a moment' });
+      return;
+    }
+    if (size > MAX_PREVIEW_BYTES) {
       setPreview({ status: 'error', message: TOO_LARGE });
       return;
     }

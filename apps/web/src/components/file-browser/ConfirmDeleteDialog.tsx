@@ -18,7 +18,7 @@ export function ConfirmDeleteDialog({
   error,
 }: ConfirmDeleteDialogProps) {
   return (
-    <Modal onClose={onClose} title={`delete ${row.name}`} error={error}>
+    <Modal onClose={onClose} title={`delete ${row.name}`} error={error} busy={busy}>
       <div className="dialog-content" data-testid="delete-dialog">
         <p className="dialog-message">
           {row.kind === 'folder'
