@@ -204,9 +204,24 @@ pub struct RootManifest {
     pub chunk_size: u64,
     /// The total plaintext byte length across all leaves.
     pub size: u64,
-    /// The leaf content CIDs, in file order.
-    pub leaf_cids: Vec<Vec<u8>>,
+    /// The leaf content CIDs, in file order. One allocation for the whole list,
+    /// not one per leaf: a stream pins its manifest for the handle's whole life
+    /// and a leaf is a fixed [`CONTENT_CID_LEN`] bytes (#1009).
+    pub leaf_cids: Box<[LeafCid]>,
 }
+
+impl RootManifest {
+    /// The links as owned byte vectors, for the consumers still keyed on
+    /// `Vec<u8>`.
+    #[must_use]
+    pub fn leaf_cid_vecs(&self) -> Vec<Vec<u8>> {
+        self.leaf_cids.iter().map(|cid| cid.to_vec()).collect()
+    }
+}
+
+/// A leaf's content CID: fixed-width by construction, so a manifest cannot hold
+/// a wrong-width link.
+pub type LeafCid = [u8; CONTENT_CID_LEN];
 
 /// Decode a root block (already verified against its `contentCid` by the
 /// caller) into its manifest, fail-closed — a `contentCid`-valid-but-internally
@@ -232,19 +247,21 @@ pub fn decode_root(root_block: &[u8]) -> Result<RootManifest, DagError> {
         .get(SIZE_KEY)
         .ok_or(Malformed::MissingField { field: "size" })?
         .as_unsigned()?;
-    let leaf_cids = map
+    let links = map
         .get(LINKS_KEY)
         .ok_or(Malformed::MissingField { field: "links" })?
-        .as_array()?
-        .iter()
-        .map(|link| link.as_bytes().map(<[u8]>::to_vec))
-        .collect::<Result<Vec<_>, Malformed>>()?;
+        .as_array()?;
 
     if chunk_size == 0 {
         return Err(DagError::ZeroChunkSize);
     }
-    if !leaf_cids.iter().all(|cid| is_raw_leaf_cid(cid)) {
-        return Err(DagError::MalformedLeafCid);
+    let mut leaf_cids: Vec<LeafCid> = Vec::with_capacity(links.len());
+    for link in links {
+        let cid = LeafCid::try_from(link.as_bytes()?).map_err(|_| DagError::MalformedLeafCid)?;
+        if !is_raw_leaf_cid(&cid) {
+            return Err(DagError::MalformedLeafCid);
+        }
+        leaf_cids.push(cid);
     }
     if leaf_cids.len() as u64 != expected_leaf_count(size, chunk_size) {
         return Err(DagError::LinkCountMismatch);
@@ -253,7 +270,7 @@ pub fn decode_root(root_block: &[u8]) -> Result<RootManifest, DagError> {
     Ok(RootManifest {
         chunk_size,
         size,
-        leaf_cids,
+        leaf_cids: leaf_cids.into_boxed_slice(),
     })
 }
 
@@ -402,7 +419,11 @@ mod tests {
         let manifest = decode_root(&dag.root_block).unwrap();
         assert_eq!(manifest.chunk_size, profile.chunk_size() as u64);
         assert_eq!(manifest.size, plaintext.len() as u64);
-        assert_eq!(manifest.leaf_cids, leaves, "links preserve file order");
+        assert_eq!(
+            manifest.leaf_cid_vecs(),
+            leaves,
+            "links preserve file order"
+        );
     }
 
     #[test]
@@ -437,6 +458,17 @@ mod tests {
             16,
             &[b"not-a-content-cid".to_vec()],
         );
+        assert_eq!(reject_check(&block), "dag-malformed-leaf-cid");
+    }
+
+    #[test]
+    fn decode_root_rejects_an_over_wide_leaf_cid() {
+        // Correct framing prefix, one byte too long: the fixed-width manifest
+        // links must reject it rather than truncate to `CONTENT_CID_LEN`.
+        let (leaves, _) = framed(b"abc", 5);
+        let mut wide = leaves[0].clone();
+        wide.push(0);
+        let block = root_bytes(ROOT_FORMAT_VERSION, 16, 3, &[wide]);
         assert_eq!(reject_check(&block), "dag-malformed-leaf-cid");
     }
 
@@ -560,13 +592,20 @@ mod tests {
 
     #[test]
     fn assemble_rejects_a_malformed_leaf_cid_in_every_build() {
-        // The encode-side half of `decode_root`'s leaf-CID reject (rule 8).
+        // The encode-side half of `decode_root`'s leaf-CID reject (rule 8) —
+        // including both widths the fixed-width manifest links cannot hold.
         let profile = ContentProfile::CI;
-        let leaves = vec![b"not-a-content-cid".to_vec()];
-        assert_eq!(
-            assemble(&leaves, profile.chunk_size() as u64, &profile),
-            Err(DagError::MalformedLeafCid)
-        );
+        let (framed, _) = framed(b"abc", 5);
+        let mut narrow = framed[0].clone();
+        narrow.pop();
+        let mut wide = framed[0].clone();
+        wide.push(0);
+        for bad in [b"not-a-content-cid".to_vec(), narrow, wide] {
+            assert_eq!(
+                assemble(&[bad], profile.chunk_size() as u64, &profile),
+                Err(DagError::MalformedLeafCid)
+            );
+        }
     }
 
     /// The arithmetic sizing and the real encoder must never drift: the staging

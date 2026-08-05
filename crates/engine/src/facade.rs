@@ -48,7 +48,10 @@ use crate::net::{
 };
 use crate::profile::SyncTimingProfile;
 use crate::rotation::derive_write_name;
-use crate::seams::{OpId, Scheduler, SeamError, SeamSet, SeamTypes, StagingStore, UnixMillis};
+use crate::seams::{
+    FloorStore, OpId, Scheduler, SeamError, SeamResult, SeamSet, SeamTypes, StagingStore,
+    UnixMillis,
+};
 use crate::session::SessionIdentity;
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
@@ -327,6 +330,51 @@ impl fmt::Debug for LoginSecret {
         f.write_str("LoginSecret(redacted)")
     }
 }
+
+/// Where [`Engine::start`] authenticates and the liveness loop registers
+/// renewals — a non-blank API origin, or the named harness mode that has no API.
+///
+/// [`parse`](Self::parse) is the only way to build a configured base and
+/// [`offline`](Self::offline) exists only under `test-kit`, so a shipped host
+/// cannot bring up an engine that never authenticates (#1032).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApiBaseUrl(Option<String>);
+
+impl ApiBaseUrl {
+    /// The API origin, trimmed of surrounding whitespace. Blank or
+    /// whitespace-only is refused.
+    pub fn parse(base_url: &str) -> Result<Self, BlankApiBaseUrl> {
+        let trimmed = base_url.trim();
+        if trimmed.is_empty() {
+            return Err(BlankApiBaseUrl);
+        }
+        Ok(Self(Some(trimmed.to_owned())))
+    }
+
+    /// The harness's no-API mode: [`Engine::start`] skips login and the engine
+    /// never authenticates.
+    #[cfg(feature = "test-kit")]
+    pub fn offline() -> Self {
+        Self(None)
+    }
+
+    /// The configured origin, or `None` in offline mode.
+    fn configured(&self) -> Option<&str> {
+        self.0.as_deref()
+    }
+}
+
+/// [`ApiBaseUrl::parse`] refused a blank or whitespace-only base URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlankApiBaseUrl;
+
+impl fmt::Display for BlankApiBaseUrl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("apiBaseUrl is required: the engine must authenticate to the API")
+    }
+}
+
+impl std::error::Error for BlankApiBaseUrl {}
 
 /// Every command a host can issue — the intent ops, grant/rotation/share
 /// actions, auth, and manual refresh (blueprint/engine.md "Facade").
@@ -1022,8 +1070,8 @@ fn steady_state_hold(
     held: &RefCell<HeldRecords>,
     scope_root: [u8; 16],
     name: &IpnsName,
-    read_seeds: &RefCell<ScopeReadSeeds>,
-    write_seeds: &RefCell<ScopeWriteSeeds>,
+    read_seeds: &RefCell<ScopeSeeds>,
+    write_seeds: &RefCell<ScopeSeeds>,
 ) -> Option<Vec<u8>> {
     if !read_seeds.borrow().contains_key(&scope_root)
         || !write_seeds.borrow().contains_key(&scope_root)
@@ -1065,13 +1113,14 @@ fn surface_drain_report(
 /// holds. A seed that cannot name our own root is not our scope's — held
 /// keyless, never a trust verdict.
 fn deposit_write_seed(
-    cell: &RefCell<ScopeWriteSeeds>,
+    cell: &RefCell<ScopeSeeds>,
     scope_id: [u8; 16],
     seed: Zeroizing<[u8; 32]>,
     root_name: Option<&IpnsName>,
+    floor: Option<u64>,
 ) {
     if root_name.is_some_and(|name| derive_write_name(&seed, &scope_id) == *name) {
-        cell.borrow_mut().insert(scope_id, seed);
+        deposit_seed(cell, scope_id, seed, floor);
     }
 }
 
@@ -1101,13 +1150,121 @@ struct SyncStatus {
     reported: Option<Staleness>,
 }
 
-/// The engine's in-memory per-scope read-seed cell: scope id → the recovered
-/// scope read seed (zeroized on removal/drop).
-type ScopeReadSeeds = BTreeMap<[u8; 16], Zeroizing<[u8; 32]>>;
+/// A recovered scope seed and a lower bound on the epoch it belongs to (see
+/// [`deposit_seed`]).
+///
+/// The bound is the seed's expiry: a rotation that raises the scope's durable
+/// floor past it revokes that epoch, so the seed is evicted rather than left
+/// resident for the rest of the session. Least privilege is a retention rule,
+/// not only an install rule (#795, #1040).
+struct CachedSeed {
+    seed: Zeroizing<[u8; 32]>,
+    floor: u64,
+}
 
-/// The engine's in-memory per-scope write-seed cell: scope id → the recovered
-/// scope write seed (zeroized on removal/drop).
-type ScopeWriteSeeds = BTreeMap<[u8; 16], Zeroizing<[u8; 32]>>;
+/// One of the engine's in-memory per-scope seed cells: scope id → the recovered
+/// seed (zeroized on removal/drop).
+type ScopeSeeds = BTreeMap<[u8; 16], CachedSeed>;
+
+/// Which of a scope's two independent durable floors bounds a cached seed
+/// (`gate::floor`: the read-epoch floor is the revocation boundary, the
+/// write-epoch floor an owner-only clock).
+#[derive(Clone, Copy)]
+enum SeedFloor {
+    Read,
+    Write,
+}
+
+impl SeedFloor {
+    async fn durable<F: FloorStore>(
+        self,
+        floors: &F,
+        scope_id: &[u8; 16],
+    ) -> SeamResult<Option<u64>> {
+        match self {
+            Self::Read => floor::read_epoch_floor(floors, scope_id).await,
+            Self::Write => floor::write_epoch_floor(floors, scope_id).await,
+        }
+    }
+}
+
+/// Read `scope_id`'s durable floor for `which`, evicting a cached seed stamped
+/// below it, and hand the floor back for the pass's own deposits.
+///
+/// `None` on a floor-store failure, which also evicts: a seed whose currency
+/// cannot be established is not held, and nothing may be stamped against a floor
+/// that was never read.
+async fn refresh_seed_floor<F: FloorStore>(
+    floors: &F,
+    cell: &RefCell<ScopeSeeds>,
+    scope_id: &[u8; 16],
+    which: SeedFloor,
+) -> Option<u64> {
+    let durable = which
+        .durable(floors, scope_id)
+        .await
+        .ok()
+        .map(|floor| floor.unwrap_or(0));
+    let mut seeds = cell.borrow_mut();
+    if durable.is_none_or(|floor| seeds.get(scope_id).is_some_and(|c| c.floor < floor)) {
+        seeds.remove(scope_id);
+    }
+    durable
+}
+
+/// Deposit a recovered scope seed under `stamp`, which must be **at or below the
+/// epoch the seed belongs to** — the seed's own epoch where the recovery names it
+/// (an adopted record's `epoch`, a re-point's vouched floors), else the durable
+/// floor read *before* the resolve.
+///
+/// A pre-resolve floor is a valid stamp because floors are monotonic and every
+/// recovery arm refuses an envelope below the floor it read (`gate::adoption`
+/// stage 5, `RootAdopter::recover_own_scope_material`). What is *not* valid is a
+/// floor re-read after the resolve: a rise that landed mid-pass would be absorbed
+/// into the stamp and keep a revoked-epoch seed resident (#1040).
+///
+/// `None` skips the deposit — the floor could not be read, so nothing can be
+/// stamped and the eviction pass has already cleared the cell.
+fn deposit_seed(
+    cell: &RefCell<ScopeSeeds>,
+    scope_id: [u8; 16],
+    seed: Zeroizing<[u8; 32]>,
+    stamp: Option<u64>,
+) {
+    if let Some(floor) = stamp {
+        cell.borrow_mut()
+            .insert(scope_id, CachedSeed { seed, floor });
+    }
+}
+
+/// A scope's two durable epoch floors as one resolve pass observed them, before
+/// the resolve moved either. `None` on a floor-store failure (see
+/// [`refresh_seed_floor`]).
+struct SeedFloors {
+    read: Option<u64>,
+    write: Option<u64>,
+}
+
+/// Evict both of `scope_id`'s cached seeds against their durable floors and
+/// report those floors, the stamps this pass's deposits carry.
+async fn refresh_seed_floors<F: FloorStore>(
+    floors: &F,
+    scope_id: &[u8; 16],
+    read_seeds: &RefCell<ScopeSeeds>,
+    write_seeds: &RefCell<ScopeSeeds>,
+) -> SeedFloors {
+    SeedFloors {
+        read: refresh_seed_floor(floors, read_seeds, scope_id, SeedFloor::Read).await,
+        write: refresh_seed_floor(floors, write_seeds, scope_id, SeedFloor::Write).await,
+    }
+}
+
+/// The scope's cached seed, without an eviction pass.
+fn cached_seed(cell: &RefCell<ScopeSeeds>, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; 32]>> {
+    cell.borrow()
+        .get(scope_id)
+        .map(|cached| cached.seed.clone())
+}
 
 /// Retained dead letters: op id → its target node when known (`None` for an
 /// undecodable queue entry, which never decoded far enough to name one) and why
@@ -1176,6 +1333,40 @@ struct LiveWrites {
 struct LiveStream {
     version: Version,
     manifest: RootManifest,
+    /// Released when the last [`Rc`] drops, which an in-flight
+    /// [`read_stream`](Engine::read_stream) can outlive the map entry by.
+    _slot: StreamSlot,
+}
+
+/// One of the [`MAX_OPEN_STREAMS`] slots, reserved before
+/// [`open_content_stream`](Engine::open_content_stream) spends any network and
+/// released when the [`LiveStream`] it lives in drops.
+///
+/// The ceiling bounds *live pinned versions*, not map entries: reserving across
+/// the open's awaits means a doomed open pays no resolve, and releasing on the
+/// last `Rc` means an in-flight read that outlives `close_stream` still counts.
+struct StreamSlot {
+    live: Rc<Cell<usize>>,
+}
+
+impl StreamSlot {
+    /// `None` once the ceiling is met.
+    fn acquire(live: &Rc<Cell<usize>>) -> Option<Self> {
+        let count = live.get();
+        if count >= MAX_OPEN_STREAMS {
+            return None;
+        }
+        live.set(count + 1);
+        Some(Self {
+            live: Rc::clone(live),
+        })
+    }
+}
+
+impl Drop for StreamSlot {
+    fn drop(&mut self) {
+        self.live.set(self.live.get() - 1);
+    }
 }
 
 /// How many read streams may be open at once.
@@ -1190,6 +1381,9 @@ pub const MAX_OPEN_STREAMS: usize = 256;
 #[derive(Default)]
 struct LiveStreams {
     open: BTreeMap<StreamHandle, Rc<LiveStream>>,
+    /// Slots reserved, counted outside `open` so a [`StreamSlot`] can release
+    /// itself without re-entering the [`RefCell`] this lives behind.
+    live: Rc<Cell<usize>>,
     next: u64,
 }
 
@@ -1229,8 +1423,8 @@ pub struct Engine<T: SeamTypes> {
     /// The upload-cancel interlock, shared with the drain the tick loop runs.
     cancels: Rc<RefCell<UploadCancels>>,
     /// The API base URL cold start logs in against and the liveness loop
-    /// registers renewals against. Empty is the harness's no-API mode.
-    api_base_url: String,
+    /// registers renewals against.
+    api_base_url: ApiBaseUrl,
     /// The resolved content read-source set, built once from the injected
     /// [`GatewayConfig`] at construction. Empty (dormant) until the host supplies
     /// endpoints; reads then fail closed as [`ReadError`](crate::ReadError)`::Unavailable`.
@@ -1258,12 +1452,12 @@ pub struct Engine<T: SeamTypes> {
     /// override seed), keyed by scope id. In-memory only — never persisted,
     /// never crossing the facade (security rules 1/3); the child read pipeline
     /// derives per-node read keys from them (`node-seed` → `read-key`).
-    scope_read_seeds: Rc<RefCell<ScopeReadSeeds>>,
+    scope_read_seeds: Rc<RefCell<ScopeSeeds>>,
     /// Per-scope write seeds recovered by gate-passing adopts (the
     /// owner-write-blob seed), keyed by scope id. In-memory only, exactly like
     /// [`scope_read_seeds`](Self::scope_read_seeds); the drain derives each new
     /// node's `ipnsName` and its narrow per-name signer from them.
-    scope_write_seeds: Rc<RefCell<ScopeWriteSeeds>>,
+    scope_write_seeds: Rc<RefCell<ScopeSeeds>>,
     /// The open focus window ([`Command::SetFocus`]): the folder the host has
     /// open, whose record and whole ancestor chain every resolve tick refreshes.
     /// Shared with the tick loop, which reads it on each pass.
@@ -1318,7 +1512,7 @@ impl<T: SeamTypes> Engine<T> {
         profile: SyncTimingProfile,
         content_profile: ContentProfile,
         storage_policy: StoragePolicy,
-        api_base_url: String,
+        api_base_url: ApiBaseUrl,
         gateway: GatewayConfig,
     ) -> (Self, EventStream) {
         let (events, receiver) = mpsc::unbounded();
@@ -1395,12 +1589,13 @@ impl<T: SeamTypes> Engine<T> {
         // The one shared client for login, publish, and renewal. Login is
         // fail-closed: a rejected login returns before the session is committed
         // or any loop spawns, so the loop never runs unauthenticated (rules 3/6).
+        let base_url = self.api_base_url.configured();
         let api = Rc::new(ApiClient::new(
             self.seams.http.clone(),
             self.seams.credential_store.clone(),
-            self.api_base_url.clone(),
+            base_url.unwrap_or_default().to_owned(),
         ));
-        if !self.api_base_url.is_empty() {
+        if base_url.is_some() {
             let signer = IdentityChallengeSigner::from_signer(session.identity().clone());
             api.login_identity(&signer)
                 .await
@@ -1451,12 +1646,20 @@ impl<T: SeamTypes> Engine<T> {
                 return Err(EngineError::from_cold_start(err));
             }
         };
+        // Both seeds are stamped from the owner-vouched re-point the cold-seed
+        // installed the floors from, and which the adopt and the owner-write-blob
+        // AAD then bound to — the epochs they belong to, not a later floor read
+        // (see `deposit_seed`).
+        let vouched = outcome.vault_pointer.as_ref().map(|vp| &vp.repoint);
         // A gate-passing root adopt surfaced the scope read seed: deposit it in
         // the in-memory per-scope cell the child read pipeline derives from.
         if let Some(seed) = outcome.read_scope_seed.take() {
-            self.scope_read_seeds
-                .borrow_mut()
-                .insert(root_scope_id, seed);
+            deposit_seed(
+                &self.scope_read_seeds,
+                root_scope_id,
+                seed,
+                vouched.map(|repoint| repoint.min_read_epoch),
+            );
         }
         // The gate-passing base becomes the state law's left operand (reads render
         // this ⊕ the pending-op overlay). The resolved root name — the vault
@@ -1469,7 +1672,13 @@ impl<T: SeamTypes> Engine<T> {
         // The same adopt recovered the scope write seed: the drain derives every
         // new node's `ipnsName` and its narrow per-name signer from it.
         if let Some((scope_id, seed)) = outcome.write_scope_seed.take() {
-            deposit_write_seed(&self.scope_write_seeds, scope_id, seed, root_name.as_ref());
+            deposit_write_seed(
+                &self.scope_write_seeds,
+                scope_id,
+                seed,
+                root_name.as_ref(),
+                vouched.map(|repoint| repoint.write_epoch),
+            );
         }
         *self.snapshot.borrow_mut() = outcome.base;
         // A successful cold start is a successful reconcile: stamp it so the
@@ -1508,6 +1717,11 @@ impl<T: SeamTypes> Engine<T> {
         }
         if let Ok(mut held) = self.held_records.try_borrow_mut() {
             held.clear();
+        }
+        // Each open stream pins a version's content key; releasing the table's
+        // `Rc`s here is what makes this the terminal owner (security rule 7).
+        if let Ok(mut streams) = self.streams.try_borrow_mut() {
+            streams.open.clear();
         }
         for seeds in [&self.scope_read_seeds, &self.scope_write_seeds] {
             if let Ok(mut seeds) = seeds.try_borrow_mut() {
@@ -1723,6 +1937,13 @@ impl<T: SeamTypes> Engine<T> {
                 let Some(enc_subkey) = enc_subkey else {
                     return LivenessControl::Stop;
                 };
+                // Before the steady-state hold consults them: a floor raised
+                // since the last pass revokes the seeds this pass would
+                // otherwise read and seal under (#1040). The floors it reports
+                // stamp whatever this pass's own resolve recovers.
+                let floors_before =
+                    refresh_seed_floors(&floors, &root_id, &scope_read_seeds, &scope_write_seeds)
+                        .await;
                 let adopter = RootAdopter::new(
                     &gateway,
                     &http,
@@ -1746,13 +1967,12 @@ impl<T: SeamTypes> Engine<T> {
                 let material = HeldMaterial {
                     node_id: root_id,
                     write_scope_seed: None,
-                    content_cids: Vec::new(),
                 };
                 // A gate-passing `Adopted` repaints the shared base cell and emits
                 // `SnapshotUpdated`; `Current`/`NoUpdate`/`TrustViolation` leave
                 // last-known-good intact (fail-closed for data).
                 sync_status.borrow_mut().reconcile_in_flight = true;
-                let resolved = resolve_and_hold(
+                let mut held_resolve = resolve_and_hold(
                     &transport,
                     &snapshot_cache,
                     &adopter,
@@ -1760,19 +1980,32 @@ impl<T: SeamTypes> Engine<T> {
                     &held,
                     &material,
                 )
-                .await
-                .map(|held_resolve| {
-                    // A gate-passing adopt re-surfaces the scope seeds: refresh
-                    // the in-memory per-scope cells the child read pipeline and
-                    // the drain derive from.
-                    if let Some(seed) = held_resolve.read_scope_seed {
-                        scope_read_seeds.borrow_mut().insert(root_id, seed);
+                .await;
+                // A gate-passing adopt re-surfaces the scope seeds: refresh the
+                // in-memory per-scope cells the child read pipeline and the
+                // drain derive from.
+                if let Ok(surfaced) = &mut held_resolve {
+                    if let Some(seed) = surfaced.read_scope_seed.take() {
+                        // An adopt names the epoch its own owner blob's seed
+                        // belongs to; an equal-floor `Current` recovery does not,
+                        // and takes the pre-resolve floor (see `deposit_seed`).
+                        let stamp = match &surfaced.resolved.outcome {
+                            ResolveOutcome::Adopted(adopted) => Some(adopted.epoch),
+                            _ => floors_before.read,
+                        };
+                        deposit_seed(&scope_read_seeds, root_id, seed, stamp);
                     }
-                    if let Some((node_id, seed)) = held_resolve.write_scope_seed {
-                        deposit_write_seed(&scope_write_seeds, node_id, seed, Some(&root_name));
+                    if let Some((node_id, seed)) = surfaced.write_scope_seed.take() {
+                        deposit_write_seed(
+                            &scope_write_seeds,
+                            node_id,
+                            seed,
+                            Some(&root_name),
+                            floors_before.write,
+                        );
                     }
-                    held_resolve.resolved
-                });
+                }
+                let resolved = held_resolve.map(|surfaced| surfaced.resolved);
                 if let Ok(resolved) = &resolved {
                     if let ResolveOutcome::TrustViolation(rejection) = &resolved.outcome {
                         emit_trust_violation(&events, root_name.as_str(), rejection);
@@ -1781,7 +2014,7 @@ impl<T: SeamTypes> Engine<T> {
                         let _ = events.unbounded_send(Event::SnapshotUpdated);
                     }
                 }
-                let read_seed = scope_read_seeds.borrow().get(&root_id).cloned();
+                let read_seed = cached_seed(&scope_read_seeds, &root_id);
                 // The focus window's folders below the root — the read leg for a
                 // subtree this device did not author. It runs before the drain,
                 // so the queue rebases onto the deepest state this pass
@@ -1812,7 +2045,7 @@ impl<T: SeamTypes> Engine<T> {
                 // gate-passing state this pass just reconciled. Both scope seeds
                 // are required — without them there is no name to publish under
                 // and no key to seal with, so the queue simply waits.
-                let write_seed = scope_write_seeds.borrow().get(&root_id).cloned();
+                let write_seed = cached_seed(&scope_write_seeds, &root_id);
                 if let (Some(read_seed), Some(write_seed)) = (read_seed, write_seed) {
                     let report = Drain {
                         transport: &transport,
@@ -1988,6 +2221,20 @@ impl<T: SeamTypes> Engine<T> {
         }
     }
 
+    /// The scope's cached read seed, evicted first if the durable read-epoch
+    /// floor has risen past the one it was recovered under (#1040). Every
+    /// on-demand read goes through here; the resolve tick evicts once per pass.
+    async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; 32]>> {
+        refresh_seed_floor(
+            &self.seams.floor_store,
+            &self.scope_read_seeds,
+            scope_id,
+            SeedFloor::Read,
+        )
+        .await;
+        cached_seed(&self.scope_read_seeds, scope_id)
+    }
+
     /// Refresh the focus window's folders that are past the on-access staleness
     /// threshold, returning whether the base changed.
     async fn refresh_focus_on_access(&self, now: UnixMillis) -> bool {
@@ -2002,7 +2249,7 @@ impl<T: SeamTypes> Engine<T> {
             return false;
         }
         let scope_id = self.snapshot.borrow().root.0;
-        let Some(scope_read_seed) = self.scope_read_seeds.borrow().get(&scope_id).cloned() else {
+        let Some(scope_read_seed) = self.scope_read_seed(&scope_id).await else {
             return false;
         };
         let changed = FolderRefresh {
@@ -2578,26 +2825,26 @@ impl<T: SeamTypes> Engine<T> {
         if !self.started {
             return Err(EngineError::NotStarted);
         }
-        // Refused before the resolve so a caller past the ceiling spends no
-        // network on it; re-checked at the insert, the only borrow that is
-        // atomic against opens which interleaved on the awaits between.
-        if self.streams.borrow().open.len() >= MAX_OPEN_STREAMS {
-            return Err(EngineError::TooManyStreams);
-        }
+        // Reserved before the resolve, so an open past the ceiling spends no
+        // network and no open that reaches the insert can be refused there.
+        let slot =
+            StreamSlot::acquire(&self.streams.borrow().live).ok_or(EngineError::TooManyStreams)?;
         let (version, version_count) = self.head_version(node).await?;
         let manifest = open_content_root(&self.gateway, &self.seams.http, &version)
             .await
             .map_err(open_engine_error)?;
         self.project_head(node, &version, version_count);
         let mut streams = self.streams.borrow_mut();
-        if streams.open.len() >= MAX_OPEN_STREAMS {
-            return Err(EngineError::TooManyStreams);
-        }
         streams.next += 1;
         let handle = StreamHandle(streams.next);
-        streams
-            .open
-            .insert(handle, Rc::new(LiveStream { version, manifest }));
+        streams.open.insert(
+            handle,
+            Rc::new(LiveStream {
+                version,
+                manifest,
+                _slot: slot,
+            }),
+        );
         Ok(handle)
     }
 
@@ -2705,14 +2952,11 @@ impl<T: SeamTypes> Engine<T> {
         let scope_id = self.snapshot.borrow().root.0;
         // No untrusted input was judged here — a missing seed is missing held
         // material (availability), never a trust verdict.
-        let scope_read_seed = self
-            .scope_read_seeds
-            .borrow()
-            .get(&scope_id)
-            .cloned()
-            .ok_or_else(|| EngineError::ContentUnavailable {
+        let scope_read_seed = self.scope_read_seed(&scope_id).await.ok_or_else(|| {
+            EngineError::ContentUnavailable {
                 message: "no read seed held for the node's scope".to_owned(),
-            })?;
+            }
+        })?;
         let adopter = ChildAdopter::new(
             &self.gateway,
             &self.seams.http,
@@ -2924,7 +3168,7 @@ mod tests {
 
     /// An engine over a retained device (so the test scripts HTTP and inspects
     /// the credential store), against `base_url`.
-    fn engine_over(base_url: &str) -> (Engine<FakeSeamTypes>, EventStream, FakeDevice) {
+    fn engine_over(base_url: ApiBaseUrl) -> (Engine<FakeSeamTypes>, EventStream, FakeDevice) {
         let device = FakeWorld::new().device(b"alice-pk");
         let (engine, events) = Engine::new(
             device.seam_set(),
@@ -2932,7 +3176,7 @@ mod tests {
             SyncTimingProfile::CI,
             ContentProfile::CI,
             StoragePolicy::CI,
-            base_url.to_owned(),
+            base_url,
             GatewayConfig::disabled(),
         );
         (engine, events, device)
@@ -2946,7 +3190,7 @@ mod tests {
             SyncTimingProfile::CI,
             ContentProfile::CI,
             StoragePolicy::CI,
-            String::new(),
+            ApiBaseUrl::offline(),
             GatewayConfig::disabled(),
         )
     }
@@ -2963,7 +3207,7 @@ mod tests {
             SyncTimingProfile::CI,
             ContentProfile::CI,
             StoragePolicy::CI,
-            String::new(),
+            ApiBaseUrl::offline(),
             GatewayConfig::disabled(),
         );
         block_on(engine.start(LoginSecret::new(vec![secret_byte; 32]))).unwrap();
@@ -3017,7 +3261,8 @@ mod tests {
 
     #[test]
     fn start_performs_identity_login_and_persists_a_refresh_token() {
-        let (mut engine, _events, device) = engine_over("http://api.test");
+        let (mut engine, _events, device) =
+            engine_over(ApiBaseUrl::parse("http://api.test").expect("a configured base"));
         device.http.enqueue_response(json_response(
             200,
             json!({ "challenge": "cipherbox-login:v2:abc", "expiresAt": "2099-01-01T00:00:00Z" }),
@@ -3051,7 +3296,8 @@ mod tests {
 
     #[test]
     fn start_login_failure_is_fail_closed() {
-        let (mut engine, _events, device) = engine_over("http://api.test");
+        let (mut engine, _events, device) =
+            engine_over(ApiBaseUrl::parse("http://api.test").expect("a configured base"));
         device.http.enqueue_response(json_response(
             200,
             json!({ "challenge": "c", "expiresAt": "2099-01-01T00:00:00Z" }),
@@ -3086,9 +3332,9 @@ mod tests {
 
     #[test]
     fn siwe_login_command_forwards_message_and_hex_signature() {
-        // Empty base: `start` skips cold-start login, so only the SIWE exchange
-        // is scripted here.
-        let (mut engine, _events, device) = engine_over("");
+        // Offline: `start` skips cold-start login, so only the SIWE exchange is
+        // scripted here.
+        let (mut engine, _events, device) = engine_over(ApiBaseUrl::offline());
         block_on(engine.start(LoginSecret::new(vec![7u8; 32]))).unwrap();
         device.http.enqueue_response(json_response(
             200,
@@ -3580,6 +3826,154 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_blank_api_base_url_is_unrepresentable() {
+        for blank in ["", "   ", "\t\n"] {
+            assert_eq!(
+                ApiBaseUrl::parse(blank),
+                Err(BlankApiBaseUrl),
+                "a blank base is refused: {blank:?}"
+            );
+        }
+        assert_eq!(
+            ApiBaseUrl::parse("  http://api.test  ")
+                .expect("a configured base")
+                .configured(),
+            Some("http://api.test"),
+            "surrounding whitespace is trimmed, not carried into request URLs"
+        );
+    }
+
+    /// The stream ceiling bounds live pinned versions, and an in-flight
+    /// `read_stream` holds its `Rc` past the map removal `close_stream` does —
+    /// so the slot must ride the pin, not the table entry (#1008).
+    #[test]
+    fn a_pinned_stream_holds_its_slot_past_the_map_removal() {
+        let mut streams = LiveStreams::default();
+        let handle = StreamHandle(1);
+        streams.open.insert(
+            handle,
+            Rc::new(LiveStream {
+                version: Version::new(vec![0u8; 36], [0u8; 32], 0, 0),
+                manifest: RootManifest {
+                    chunk_size: 16,
+                    size: 0,
+                    leaf_cids: Vec::new().into_boxed_slice(),
+                },
+                _slot: StreamSlot::acquire(&streams.live).expect("a free slot"),
+            }),
+        );
+
+        let in_flight = streams.open.get(&handle).map(Rc::clone).expect("open");
+        streams.open.remove(&handle);
+        assert_eq!(
+            streams.live.get(),
+            1,
+            "the in-flight read still pins a version and its content key"
+        );
+        drop(in_flight);
+        assert_eq!(streams.live.get(), 0, "the last holder released the slot");
+    }
+
+    /// The cache's retention rule, at the mechanism: a seed lives exactly as
+    /// long as the durable floor stays at or below its stamp, and an unreadable
+    /// floor holds nothing (#1040).
+    #[test]
+    fn a_cached_seed_lives_only_while_the_floor_stays_at_its_stamp() {
+        use crate::testkit::fakes::InMemoryFloorStore;
+
+        const SCOPE: [u8; 16] = [4u8; 16];
+        let floors = InMemoryFloorStore::default();
+        let cell = RefCell::new(ScopeSeeds::new());
+        block_on(async {
+            floors.raise_epoch_floor(&SCOPE, 5).await.unwrap();
+            let stamp = refresh_seed_floor(&floors, &cell, &SCOPE, SeedFloor::Read).await;
+            assert_eq!(stamp, Some(5));
+            deposit_seed(&cell, SCOPE, Zeroizing::new([3u8; 32]), stamp);
+
+            refresh_seed_floor(&floors, &cell, &SCOPE, SeedFloor::Read).await;
+            assert!(
+                cell.borrow().contains_key(&SCOPE),
+                "an unmoved floor keeps the seed"
+            );
+
+            floors.raise_epoch_floor(&SCOPE, 6).await.unwrap();
+            refresh_seed_floor(&floors, &cell, &SCOPE, SeedFloor::Read).await;
+            assert!(
+                !cell.borrow().contains_key(&SCOPE),
+                "the rise past the stamp revokes it"
+            );
+
+            // A stamp the caller could not read holds nothing, so a floor-store
+            // failure never leaves an unprovable seed resident.
+            deposit_seed(&cell, SCOPE, Zeroizing::new([3u8; 32]), None);
+            assert!(!cell.borrow().contains_key(&SCOPE));
+        });
+    }
+
+    /// A floor store whose reads fail — the seam-outage arm of
+    /// [`refresh_seed_floor`], which no in-memory fake exercises.
+    struct UnreadableFloors;
+
+    impl FloorStore for UnreadableFloors {
+        async fn epoch_floor(&self, _scope_id: &[u8]) -> SeamResult<Option<u64>> {
+            Err(SeamError::new("floor store unavailable"))
+        }
+
+        async fn raise_epoch_floor(&self, _scope_id: &[u8], _epoch: u64) -> SeamResult<u64> {
+            Err(SeamError::new("floor store unavailable"))
+        }
+
+        async fn sequence_floor(&self, _ipns_name: &[u8]) -> SeamResult<Option<u64>> {
+            Err(SeamError::new("floor store unavailable"))
+        }
+
+        async fn raise_sequence_floor(&self, _ipns_name: &[u8], _sequence: u64) -> SeamResult<u64> {
+            Err(SeamError::new("floor store unavailable"))
+        }
+    }
+
+    /// A floor that cannot be read evicts: a seed whose currency cannot be
+    /// established is dropped, not trusted for the rest of the session (#1040).
+    /// Stamped far above any floor either arm could return, so only the read
+    /// failure can account for the eviction.
+    #[test]
+    fn an_unreadable_floor_evicts_the_cached_seed() {
+        const SCOPE: [u8; 16] = [5u8; 16];
+        let cell = RefCell::new(ScopeSeeds::new());
+        block_on(async {
+            for which in [SeedFloor::Read, SeedFloor::Write] {
+                cell.borrow_mut().insert(
+                    SCOPE,
+                    CachedSeed {
+                        seed: Zeroizing::new([3u8; 32]),
+                        floor: u64::MAX,
+                    },
+                );
+                let stamp = refresh_seed_floor(&UnreadableFloors, &cell, &SCOPE, which).await;
+                assert_eq!(stamp, None, "an unread floor stamps nothing");
+                assert!(
+                    !cell.borrow().contains_key(&SCOPE),
+                    "the seed goes with the floor that could not vouch for it"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn stream_slots_are_bounded_and_reusable() {
+        let live = Rc::new(Cell::new(0usize));
+        let held: Vec<StreamSlot> = (0..MAX_OPEN_STREAMS)
+            .map(|open| StreamSlot::acquire(&live).unwrap_or_else(|| panic!("slot {open}")))
+            .collect();
+        assert!(StreamSlot::acquire(&live).is_none(), "the ceiling is met");
+        drop(held);
+        assert!(
+            StreamSlot::acquire(&live).is_some(),
+            "released slots are reusable"
+        );
+    }
+
     // --- snapshot read surface ---
 
     mod snapshot_read {
@@ -3976,7 +4370,7 @@ mod tests {
                 SyncTimingProfile::CI,
                 ContentProfile::CI,
                 StoragePolicy::CI,
-                String::new(),
+                ApiBaseUrl::offline(),
                 GatewayConfig::disabled(),
             );
             block_on(engine.start(LoginSecret::new(SECRET.to_vec()))).unwrap();
@@ -4145,7 +4539,7 @@ mod tests {
                 SyncTimingProfile::CI,
                 ContentProfile::CI,
                 StoragePolicy::CI,
-                String::new(),
+                ApiBaseUrl::offline(),
                 GatewayConfig::disabled(),
             );
             assert!(engine.session().is_none(), "no identity before start");
@@ -4498,7 +4892,7 @@ mod tests {
                 SyncTimingProfile::CI,
                 ContentProfile::CI,
                 StoragePolicy::CI,
-                String::new(),
+                ApiBaseUrl::offline(),
                 gateway_config(),
             )
         }
@@ -4651,7 +5045,11 @@ mod tests {
             let record = held.get(&ROOT.0).expect("held under the root node id");
             assert_eq!(record.routing_key, root_name.as_str());
             assert_eq!(
-                engine.scope_read_seeds.borrow().get(&SCOPE).map(|s| **s),
+                engine
+                    .scope_read_seeds
+                    .borrow()
+                    .get(&SCOPE)
+                    .map(|s| *s.seed),
                 Some(SCOPE_SEED),
                 "the tick adopt deposited the recovered scope read seed"
             );
@@ -4802,9 +5200,125 @@ mod tests {
                 "the next poll left the hold alone"
             );
             assert_eq!(
-                engine.scope_write_seeds.borrow().get(&SCOPE).map(|s| **s),
+                engine
+                    .scope_write_seeds
+                    .borrow()
+                    .get(&SCOPE)
+                    .map(|s| *s.seed),
                 Some(WRITE_SCOPE_SEED),
                 "and the material recovered once stays in hand"
+            );
+        }
+
+        /// The drain is the only source of a head's content CIDs, so a re-hold
+        /// that carries none must keep the set the publish registered (#1041).
+        #[test]
+        fn a_re_hold_keeps_the_content_cids_the_publish_registered() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (_, head_cid, root_name) = owner_root();
+            let (engine, _events, mut tasks) = started_and_parked(&world, &device);
+            tick(&world, &device, &mut tasks);
+
+            let published = vec!["bafypublished".to_owned()];
+            let before = {
+                let mut held = engine.held_records.borrow_mut();
+                let record = held.get_mut(&ROOT.0).expect("held under the root node id");
+                record.content_cids.clone_from(&published);
+                record.record_bytes.clone()
+            };
+
+            // A strictly newer record over the same head: an `Adopted` poll,
+            // which rebuilds the hold wholesale rather than skipping it.
+            let reseed = |sequence| {
+                for endpoint in device.record_store.endpoints() {
+                    device.record_store.seed_record(
+                        &endpoint,
+                        root_name.as_str(),
+                        root_record(&head_cid, sequence),
+                    );
+                }
+            };
+            reseed(2);
+            tick(&world, &device, &mut tasks);
+            let held = engine.held_records.borrow();
+            assert_ne!(
+                held[&ROOT.0].record_bytes, before,
+                "the poll really did re-hold, so the assertion below is not vacuous"
+            );
+            assert_eq!(
+                held[&ROOT.0].content_cids, published,
+                "the re-hold carried the published set forward"
+            );
+            drop(held);
+
+            // Stamped against a head this device did not author: that block set
+            // is superseded, so it must not ride the new head's renewal.
+            engine
+                .held_records
+                .borrow_mut()
+                .get_mut(&ROOT.0)
+                .expect("held under the root node id")
+                .head_cid = "bafyotherhead".to_owned();
+            reseed(3);
+            tick(&world, &device, &mut tasks);
+            assert!(
+                engine.held_records.borrow()[&ROOT.0]
+                    .content_cids
+                    .is_empty(),
+                "CIDs held for a different head are dropped, not carried over"
+            );
+        }
+
+        /// A rotation that raises the scope's durable read-epoch floor revokes
+        /// the epoch the cached seed was recovered under, so the seed goes —
+        /// least privilege binds retention, not only install (#1040).
+        #[test]
+        fn a_read_epoch_floor_rise_evicts_the_cached_scope_read_seed() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (engine, _events, mut tasks) = started_and_parked(&world, &device);
+            tick(&world, &device, &mut tasks);
+            assert!(engine.scope_read_seeds.borrow().contains_key(&SCOPE));
+
+            block_on(device.floor_store.raise_epoch_floor(&SCOPE, EPOCH + 1)).unwrap();
+            tick(&world, &device, &mut tasks);
+
+            assert!(
+                !engine.scope_read_seeds.borrow().contains_key(&SCOPE),
+                "the seed recovered below the new floor is evicted"
+            );
+            assert!(
+                engine.scope_write_seeds.borrow().contains_key(&SCOPE),
+                "the write-epoch floor is a separate clock and did not move"
+            );
+        }
+
+        /// The write-epoch floor is the same rule on the seed the drain mints
+        /// every new node's name and signer from.
+        #[test]
+        fn a_write_epoch_floor_rise_evicts_the_cached_scope_write_seed() {
+            let world = FakeWorld::new();
+            let device = world.device(b"alice-pk");
+            let (engine, _events, mut tasks) = started_and_parked(&world, &device);
+            tick(&world, &device, &mut tasks);
+            assert!(engine.scope_write_seeds.borrow().contains_key(&SCOPE));
+
+            block_on(floor::advance_write_epoch_on_sight(
+                &device.floor_store,
+                &SCOPE,
+                EPOCH + 1,
+            ))
+            .unwrap();
+            tick(&world, &device, &mut tasks);
+
+            assert!(
+                !engine.scope_write_seeds.borrow().contains_key(&SCOPE),
+                "the seed recovered below the new write floor is evicted"
+            );
+            assert!(
+                engine.scope_read_seeds.borrow().contains_key(&SCOPE),
+                "and the read seed, whose floor did not move, stays"
             );
         }
 

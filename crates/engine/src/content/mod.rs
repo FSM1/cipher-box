@@ -82,7 +82,7 @@ impl SealedContent {
         Ok(Self {
             content_cid: compute_cid(DAG_ROOT_CODEC, root_block),
             size: manifest.size,
-            leaf_cids: manifest.leaf_cids,
+            leaf_cids: manifest.leaf_cid_vecs(),
         })
     }
 

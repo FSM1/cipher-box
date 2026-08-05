@@ -42,9 +42,9 @@ use cipherbox_engine::testkit::{
     OwnerRootSpec, SeededEntropy, block_on, frame_version as frame, owner_root_fixture,
 };
 use cipherbox_engine::{
-    BlockProgress, Command, ContentProfile, DeadLetter, DeadLetterReason, Engine, EngineError,
-    Event, EventStream, GatewayConfig, LoginSecret, MAX_OPEN_STREAMS, NodeId, NodeKind, Op,
-    OpPhase, RecordSeal, StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
+    ApiBaseUrl, BlockProgress, Command, ContentProfile, DeadLetter, DeadLetterReason, Engine,
+    EngineError, Event, EventStream, GatewayConfig, LoginSecret, MAX_OPEN_STREAMS, NodeId,
+    NodeKind, Op, OpPhase, RecordSeal, StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -361,9 +361,9 @@ fn engine_on(device: &FakeDevice, entropy_seed: u64) -> (Engine<FakeSeamTypes>, 
         SyncTimingProfile::CI,
         ContentProfile::CI,
         StoragePolicy::CI,
-        // The API base URL is empty, so `start` skips login: this suite exercises
-        // the record plane, not the auth handshake.
-        String::new(),
+        // Offline: `start` skips login, because this suite exercises the record
+        // plane, not the auth handshake.
+        ApiBaseUrl::offline(),
         GatewayConfig {
             accelerator: Some(GatewaySource {
                 base_url: "https://gw.test".into(),
@@ -999,7 +999,8 @@ fn a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
 }
 
 /// Past [`MAX_OPEN_STREAMS`] an open is refused fail-closed, never evicting a
-/// live stream.
+/// live stream, and the refusal costs no network: the slot is reserved before
+/// the resolve, so a doomed open never pays for one (#1008).
 #[test]
 fn opening_past_the_stream_ceiling_is_refused() {
     let world = FakeWorld::new();
@@ -1009,7 +1010,7 @@ fn opening_past_the_stream_ceiling_is_refused() {
 
     let (_engine_a, _events_a, _tasks, node) = publish_clip(&world, &blocks, &plaintext);
     // A few calls per open, plus the reads below.
-    let (_bob, engine_b, _events_b) = open_reader(&world, &blocks, MAX_OPEN_STREAMS * 8 + 64);
+    let (bob, engine_b, _events_b) = open_reader(&world, &blocks, MAX_OPEN_STREAMS * 8 + 64);
 
     let handles: Vec<_> = (0..MAX_OPEN_STREAMS)
         .map(|open| {
@@ -1018,10 +1019,16 @@ fn opening_past_the_stream_ceiling_is_refused() {
         })
         .collect();
 
+    let fetches_at_ceiling = bob.http.requests().len();
     assert_eq!(
         block_on(engine_b.open_content_stream(node)),
         Err(EngineError::TooManyStreams),
         "the open past the ceiling is refused"
+    );
+    assert_eq!(
+        bob.http.requests().len(),
+        fetches_at_ceiling,
+        "the refused open spent no network on a resolve it could not use"
     );
 
     // The refusal did not evict: an earlier handle still serves its version.
@@ -1637,7 +1644,12 @@ fn staged_version(device: &FakeDevice) -> (Vec<u8>, Vec<Vec<u8>>) {
             .await
             .unwrap()
             .unwrap();
-        let leaves = decode_root(&root_block).unwrap().leaf_cids;
+        let leaves = decode_root(&root_block)
+            .unwrap()
+            .leaf_cids
+            .iter()
+            .map(|cid| cid.to_vec())
+            .collect();
         (root_cid, leaves)
     })
 }
@@ -4015,8 +4027,9 @@ fn queued_version(device: &FakeDevice, op_id: OpId) -> Vec<Vec<u8>> {
             .await
             .unwrap()
             .unwrap();
+        let leaves = decode_root(&root_block).unwrap().leaf_cids;
         core::iter::once(root_cid)
-            .chain(decode_root(&root_block).unwrap().leaf_cids)
+            .chain(leaves.iter().map(|cid| cid.to_vec()))
             .collect()
     })
 }
@@ -5023,9 +5036,9 @@ fn stage_a_second_version(
             .await
             .unwrap()
             .unwrap();
-        core::iter::once(&root_cid)
-            .chain(&decode_root(&root_block).unwrap().leaf_cids)
-            .map(|cid| encode_content_cid_str(cid))
+        let leaves = decode_root(&root_block).unwrap().leaf_cids;
+        core::iter::once(encode_content_cid_str(&root_cid))
+            .chain(leaves.iter().map(|cid| encode_content_cid_str(cid)))
             .collect()
     });
     (engine, tasks, version)

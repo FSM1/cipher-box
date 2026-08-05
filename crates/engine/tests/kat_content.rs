@@ -286,7 +286,8 @@ fn accept_vectors_reproduce_the_frozen_root_bytes() {
             .unwrap_or_else(|e| panic!("{}: own root must decode, got {e:?}", v.name));
         assert_eq!(decoded.chunk_size, v.chunk_size, "{}: chunk size", v.name);
         assert_eq!(decoded.size, v.size, "{}: size", v.name);
-        assert_eq!(decoded.leaf_cids, leaf_cids, "{}: link order", v.name);
+        let links = decoded.leaf_cid_vecs();
+        assert_eq!(links, leaf_cids, "{}: link order", v.name);
     }
 }
 

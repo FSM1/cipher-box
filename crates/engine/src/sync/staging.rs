@@ -103,7 +103,9 @@ pub(crate) async fn version_leaf_cids<S: StagingStore>(store: &S, root_cid: &[u8
     if verify_cid(root_cid, &block).is_err() {
         return Vec::new();
     }
-    decode_root(&block).map(|m| m.leaf_cids).unwrap_or_default()
+    decode_root(&block)
+        .map(|m| m.leaf_cid_vecs())
+        .unwrap_or_default()
 }
 
 /// Keep one dead letter's op record after it leaves the durable queue, so orphan
@@ -343,7 +345,7 @@ pub async fn orphan_staging_keys<S: StagingStore>(
             let Ok(manifest) = decode_root(&block) else {
                 return Ok(Vec::new());
             };
-            referenced.extend(manifest.leaf_cids);
+            referenced.extend(manifest.leaf_cid_vecs());
         }
         referenced.insert(root);
     }

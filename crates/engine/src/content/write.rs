@@ -200,7 +200,8 @@ mod tests {
         let (leaves, finished) = stream(&plaintext, 9, 5);
         let manifest = decode_root(&finished.root_block).unwrap();
         assert_eq!(manifest.size, plaintext.len() as u64);
-        assert_eq!(manifest.leaf_cids, finished.content.leaf_cids());
+        let decoded = manifest.leaf_cid_vecs();
+        assert_eq!(decoded, finished.content.leaf_cids());
 
         let mut recovered = Vec::new();
         for (leaf, cid) in leaves.iter().zip(&manifest.leaf_cids) {

@@ -18,7 +18,7 @@
 use std::rc::Rc;
 
 use async_lock::{Mutex, RwLock};
-use cipherbox_engine::facade::{Engine, EngineError, EventStream, LoginSecret};
+use cipherbox_engine::facade::{ApiBaseUrl, Engine, EngineError, EventStream, LoginSecret};
 use cipherbox_engine::seams::OpId;
 use cipherbox_engine::{
     ContentProfile, Entropy, EntropyError, GatewayConfig, GatewaySource, SeamSet, SeamTypes,
@@ -109,12 +109,7 @@ impl EngineHandle {
         // Rust-owned bearer String unzeroized (security rule 7).
         let accelerator_bearer = accelerator_bearer.map(Zeroizing::new);
 
-        let api_base_url = api_base_url
-            .map(|url| url.trim().to_owned())
-            .filter(|url| !url.is_empty())
-            .ok_or_else(|| {
-                JsError::new("apiBaseUrl is required: the engine must authenticate to the API")
-            })?;
+        let api_base_url = ApiBaseUrl::parse(api_base_url.as_deref().unwrap_or_default())?;
 
         let seam_set = SeamSet::<WebSeamTypes> {
             floor_store: FloorStoreAdapter {

@@ -249,10 +249,8 @@ fn build_dag_root_accept() -> Vec<DagRootAcceptVector> {
         let manifest = decode_root(&dag.root_block).expect("own root decodes");
         assert_eq!(manifest.chunk_size, chunk as u64, "{name}: chunk size");
         assert_eq!(manifest.size, size as u64, "{name}: size");
-        assert_eq!(
-            manifest.leaf_cids, leaf_cids,
-            "{name}: links preserve file order"
-        );
+        let decoded = manifest.leaf_cid_vecs();
+        assert_eq!(decoded, leaf_cids, "{name}: links preserve file order");
 
         out.push(DagRootAcceptVector {
             name: name.to_string(),
