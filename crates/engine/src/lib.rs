@@ -49,11 +49,10 @@ pub use api::{
 pub use content::{
     ByoIpfsConfig, ByoKind, ContentDag, ContentKey, ContentPlane, ContentProfile, ContentVersion,
     ContentWriter, DAG_ROOT_CODEC, DagError, FinishedContent, Gateway, GatewayConfig,
-    GatewaySource, PinMode, Placement, PlacementDecision, PlacementRefusal, ProviderError,
-    PrunePlan, QuotaExceeded, ROOT_FORMAT_VERSION, ReadError, RetentionPolicy, RootManifest,
-    SealError, SealedChunk, SealedContent, assemble, decide_placement, decode_root, frame_and_seal,
-    leaf_range_for_byte_range, place_block, plan_prune, pre_flight_quota_check, read_block,
-    seal_one_chunk, test_connection, validate_byo_config,
+    GatewaySource, PinMode, ProviderError, PrunePlan, QuotaExceeded, ROOT_FORMAT_VERSION,
+    ReadError, RetentionPolicy, RootManifest, SealError, SealedChunk, SealedContent, assemble,
+    decode_root, frame_and_seal, leaf_range_for_byte_range, plan_prune, pre_flight_quota_check,
+    read_block, seal_one_chunk, test_connection, validate_byo_config,
 };
 pub use entropy::{Entropy, EntropyError};
 pub use facade::{
@@ -87,7 +86,8 @@ pub use rotation::{
 };
 pub use seams::{SeamError, SeamResult, SeamSet, SeamTypes};
 pub use settings::{
-    DefaultsReason, SettingsLoad, SettingsPublishError, VaultSettings, load_settings,
+    DefaultsReason, Placement, PlacementDecision, PlacementRefusal, SettingsLoad,
+    SettingsPublishError, VaultSettings, decide_placement, load_settings, placement_of,
     publish_settings, settings_name,
 };
 pub use storage_policy::{Headroom, StoragePlatform, StoragePolicy};

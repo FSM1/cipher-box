@@ -33,10 +33,9 @@ use zeroize::Zeroizing;
 use crate::api::{ApiClient, ApiError, IdentityChallengeSigner};
 use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
-    ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, PinMode,
-    PlacementDecision, PlacementRefusal, Refused, RootManifest, SealError, StagingLedger,
-    decide_placement, open_content_range, open_content_root, pre_flight_quota_check,
-    read_pinned_range, sealed_total_bytes,
+    ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, Refused,
+    RootManifest, SealError, StagingLedger, open_content_range, open_content_root,
+    pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
 use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
@@ -54,7 +53,7 @@ use crate::seams::{
     UnixMillis,
 };
 use crate::session::SessionIdentity;
-use crate::settings::load_settings;
+use crate::settings::{PlacementDecision, PlacementRefusal, decide_placement, load_settings};
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::cancel::UploadCancels;
@@ -318,10 +317,7 @@ impl LoginSecret {
     }
 
     /// Borrow the raw secret bytes for in-crate cold-start derivation only.
-    /// `pub(crate)` so the secret never leaves engine memory; the callers are
-    /// [`SessionIdentity::derive`](crate::session::SessionIdentity::derive) and
-    /// the settings-record load, whose name and seal are both pure functions of
-    /// it (blueprint/engine.md "Vault settings record").
+    /// `pub(crate)` so the secret never leaves engine memory.
     pub(crate) fn expose(&self) -> &[u8] {
         &self.0
     }
@@ -1525,6 +1521,11 @@ pub struct Engine<T: SeamTypes> {
     /// then, and emptied on drop like [`tick_enc_subkey`](Self::tick_enc_subkey)
     /// — the config it holds carries the member's provider bearer.
     placement: Rc<RefCell<Option<PlacementDecision>>>,
+    /// Whether this session has already held the account's `byo` flag to the
+    /// vaulted mode. Once a session: the flag is account-wide and the mode is
+    /// fixed at [`start`](Self::start), so re-deriving it per write would only
+    /// let two devices flap it.
+    byo_reconciled: Cell<bool>,
     /// The one shared API client, built and logged in at [`start`](Self::start)
     /// and handed to the liveness loop so the access JWT is shared across
     /// publish/renew (no redundant 401→refresh). `None` until then.
@@ -1576,6 +1577,7 @@ impl<T: SeamTypes> Engine<T> {
                 session: None,
                 tick_enc_subkey: Rc::new(RefCell::new(None)),
                 placement: Rc::new(RefCell::new(None)),
+                byo_reconciled: Cell::new(false),
                 api: None,
                 started: false,
             },
@@ -1632,9 +1634,7 @@ impl<T: SeamTypes> Engine<T> {
 
         // Where this session's bytes go. Server-free and ahead of any vault
         // resolve, so a self-hosting owner never needs CipherBox to tell them
-        // where their own node is (blueprint/engine.md "Vault settings record");
-        // the profile's own budget bounds it, so an unreachable record plane
-        // degrades the decision rather than blocking start.
+        // where their own node is (blueprint/engine.md "Vault settings record").
         let settings = load_settings(
             &self.seams.record_transport,
             &self.gateway,
@@ -1990,8 +1990,8 @@ impl<T: SeamTypes> Engine<T> {
                 let Some(enc_subkey) = enc_subkey else {
                     return LivenessControl::Stop;
                 };
-                // The placement decision carries the member's BYO bearer, so the
-                // pass borrows it on the same terms as the enc subkey above.
+                // Carries the member's BYO bearer, so the pass owns a copy on the
+                // same terms as the enc subkey above.
                 let decision = placement.borrow().clone();
                 let Some(decision) = decision else {
                     return LivenessControl::Stop;
@@ -2363,8 +2363,7 @@ impl<T: SeamTypes> Engine<T> {
                 check: error.check(),
             }
         })?;
-        // Sized in sealed bytes, which is what the hosted ingress counts, and
-        // run here because this is where the write already waits.
+        // Sized in sealed bytes, which is what the hosted ingress counts.
         self.hosted_quota_pre_flight(requested).await?;
         let staged = self
             .seams
@@ -2414,31 +2413,32 @@ impl<T: SeamTypes> Engine<T> {
     /// Refuse a write whose hosted leg the account quota cannot admit, before
     /// the version is sealed and staged rather than at the drain.
     ///
-    /// Two directions, deliberately different. The placement decision is
-    /// fail-closed: a session that cannot authenticate the member's choice
-    /// refuses rather than picking a destination. The quota probe is not: the
-    /// API upload endpoint is the authoritative gate and this is only a
-    /// fail-fast, so an unreachable or unconfigured API leaves the write to
-    /// queue offline like any other.
+    /// Two directions, deliberately different: the placement decision is
+    /// fail-closed, while the quota probe is not — the API upload endpoint is
+    /// the authoritative gate, so an unreachable one leaves the write to queue
+    /// offline like any other.
     async fn hosted_quota_pre_flight(&self, requested: u64) -> Result<(), EngineError> {
-        let decision = self.placement.borrow().clone();
-        let placement = decision
-            .ok_or(EngineError::NotStarted)?
-            .map_err(|refusal| EngineError::NoPlacement { refusal })?;
+        // Only the predicate leaves the borrow: cloning the placement would copy
+        // the member's provider bearer on every write.
+        let hosted_leg = match self.placement.borrow().as_ref() {
+            None => return Err(EngineError::NotStarted),
+            Some(Err(refusal)) => return Err(EngineError::NoPlacement { refusal: *refusal }),
+            Some(Ok(placement)) => placement.has_hosted_leg(),
+        };
         let Some(api) = self.api.as_ref() else {
             return Ok(());
         };
         let Ok(quota) = api.quota().await else {
             return Ok(());
         };
-        // The vaulted mode is the source of truth; the server flag is what it is
-        // reconciled against. Best-effort — a failed reconcile leaves the flag
-        // stale, which costs accounting, never correctness.
-        let byo = placement.mode() == PinMode::External;
-        if quota.advisory != byo {
-            let _ = api.set_byo(byo).await;
+        // The account's flag is two-state where the mode is three and dual has
+        // no server representation, so `byo=true` is exactly `External`. The
+        // vaulted mode is the source of truth; the flag is reconciled to it at
+        // most once a session, so two devices cannot flap it per file.
+        if !self.byo_reconciled.replace(true) && quota.advisory == hosted_leg {
+            let _ = api.set_byo(!hosted_leg).await;
         }
-        pre_flight_quota_check(requested, &quota, placement.mode()).map_err(|refused| {
+        pre_flight_quota_check(requested, &quota, hosted_leg).map_err(|refused| {
             EngineError::OverBudget {
                 cause: OverBudgetCause::AccountQuota,
                 requested,

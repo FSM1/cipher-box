@@ -33,10 +33,7 @@ use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
-use crate::content::{
-    Gateway, Placement, PlacementDecision, ProviderError, SealedContent, place_block,
-    pre_flight_quota_check,
-};
+use crate::content::{Gateway, ProviderError, SealedContent, place_block, pre_flight_quota_check};
 use crate::entropy::Entropy;
 use crate::facade::{BlockProgress, Event, NodeId, OpPhase};
 use crate::gate::floor;
@@ -61,6 +58,7 @@ use crate::seams::{
     StagingStore,
 };
 use crate::session::SessionIdentity;
+use crate::settings::{Placement, PlacementDecision};
 use crate::sync::cancel::UploadCancels;
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, StagedContent};
@@ -352,9 +350,8 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     pub(crate) scheduler: &'a Sch,
     pub(crate) http: &'a H,
     pub(crate) gateway: &'a Gateway,
-    /// Where this session's bytes go, decided once from the vault settings load.
-    /// An `Err` holds every content op — the drain publishes no version it
-    /// cannot place (blueprint/engine.md "Settings-load policy").
+    /// Where this session's bytes go. An `Err` holds every content op — the
+    /// drain publishes no version it cannot place.
     pub(crate) placement: &'a PlacementDecision,
     pub(crate) profile: &'a SyncTimingProfile,
     /// Seal nonces enter as injected entropy; the drain reads no RNG of its own.
@@ -434,9 +431,8 @@ struct UploadedVersion {
     /// Every content CID the registration names: the root first, then the
     /// leaves in file order.
     content_cids: Vec<String>,
-    /// A dual write's external leg that did not take the bytes. The op still
-    /// publishes — only the hosted leg can fail it — so this rides out as a
-    /// per-op report rather than being swallowed.
+    /// A dual write's external leg that did not take the bytes, reported rather
+    /// than swallowed ([`OpPhase::ExternalPinFailed`]).
     external_failure: Option<ProviderError>,
 }
 
@@ -650,7 +646,8 @@ where
         let Ok(quota) = self.api.quota().await else {
             return false;
         };
-        if pre_flight_quota_check(blocked.needed_bytes, &quota, placement.mode()).is_err() {
+        if pre_flight_quota_check(blocked.needed_bytes, &quota, placement.has_hosted_leg()).is_err()
+        {
             return false;
         }
         self.clear_block();
@@ -1494,8 +1491,7 @@ where
         if !self.cancels.borrow_mut().enter_publish(applied.op_id) {
             return Err(Halt::Cancelled);
         }
-        // Reported once per op, not per block: the version published and is
-        // retrievable, but it is not on the member's own node (#34 D1).
+        // Once per op, not per block.
         if let Some(error) = &uploaded.external_failure {
             self.emit_upload(
                 applied,
@@ -1553,7 +1549,9 @@ where
         // mark this pass keeps: past it, a missing block is loss, and the
         // version can never be assembled.
         let leaves = content.leaf_cids().len();
-        let uploaded = self.upload_mark(&staged.root_cid, leaves).await?;
+        let uploaded = self
+            .upload_mark(placement, &staged.root_cid, leaves)
+            .await?;
         // The root manifest is block zero and goes up last, so the version's
         // whole block count is its leaves plus one.
         let total = blocks(leaves + 1);
@@ -1570,17 +1568,17 @@ where
             self.cancel_checkpoint(applied.op_id).await?;
             match self.staged_block(leaf_cid).await? {
                 Some(block) => {
-                    external_failure = self
-                        .upload_block(placement, leaf_cid, &block)
-                        .await?
-                        .or(external_failure);
+                    // First failure wins: the report names one leg, not the
+                    // last block that happened to miss it.
+                    let missed = self.upload_block(placement, leaf_cid, &block).await?;
+                    external_failure = external_failure.or(missed);
                     self.cancels.borrow_mut().confirmed(applied.op_id, leaf_cid);
                     // A leaf a lost release left staged behind the mark is
                     // re-uploaded here, and must not drag the mark back down
                     // over the leaves past it — those are released, so an
                     // uncovered one reads as loss.
                     if index + 1 > uploaded {
-                        self.mark_uploaded(&staged.root_cid, index + 1, leaves)
+                        self.mark_uploaded(placement, &staged.root_cid, index + 1, leaves)
                             .await?;
                     }
                     self.staging
@@ -1599,10 +1597,10 @@ where
         // The root goes up last and stays staged until the publish confirms: it
         // is the manifest every retry re-derives the plan from, so releasing it
         // before the record lands would strand a fully-uploaded version.
-        external_failure = self
+        let missed = self
             .upload_block(placement, &staged.root_cid, &root_block)
-            .await?
-            .or(external_failure);
+            .await?;
+        external_failure = external_failure.or(missed);
         self.cancels
             .borrow_mut()
             .confirmed(applied.op_id, &staged.root_cid);
@@ -1647,13 +1645,20 @@ where
 
     /// How many of this version's `leaves` a previous pass durably confirmed
     /// ([`decode_upload_mark`]).
-    async fn upload_mark(&self, root_cid: &[u8], leaves: usize) -> Result<usize, Halt> {
+    async fn upload_mark(
+        &self,
+        placement: &Placement,
+        root_cid: &[u8],
+        leaves: usize,
+    ) -> Result<usize, Halt> {
         Ok(self
             .staging
             .staged_bytes(UPLOAD_MARK_KEY)
             .await
             .map_err(seam)?
-            .map_or(0, |stored| decode_upload_mark(&stored, root_cid, leaves)))
+            .map_or(0, |stored| {
+                decode_upload_mark(&stored, &placement.tag(), root_cid, leaves)
+            }))
     }
 
     /// Record that `count` of this version's `leaves` have uploaded. A
@@ -1663,11 +1668,13 @@ where
     /// read those uploaded bytes as loss.
     async fn mark_uploaded(
         &self,
+        placement: &Placement,
         root_cid: &[u8],
         count: usize,
         leaves: usize,
     ) -> Result<(), Halt> {
-        let mark = encode_upload_mark(root_cid, count, leaves).ok_or(Halt::Unclassified)?;
+        let mark = encode_upload_mark(&placement.tag(), root_cid, count, leaves)
+            .ok_or(Halt::Unclassified)?;
         self.staging
             .put_staged_bytes(UPLOAD_MARK_KEY, &mark)
             .await
@@ -1692,34 +1699,39 @@ where
     /// confirmed [`UploadResult`](crate::UploadResult), which is what makes the
     /// still-staged set a suffix.
     ///
-    /// The hosted leg is authoritative: it alone can fail the op. A dual write's
-    /// external leg is reported instead of failing the op, because under
-    /// strict-FIFO stop-at-first-failure an offline home node would stall every
-    /// later mutation in the vault (#34 D1). Under `External` the member's
-    /// provider *is* the byte path, so its refusal is the op's.
+    /// Only the hosted leg can fail the op — see [`OpPhase::ExternalPinFailed`]
+    /// for why a dual write's mirror is reported instead.
     async fn upload_block(
         &self,
         placement: &Placement,
         cid: &[u8],
         block: &[u8],
     ) -> Result<Option<ProviderError>, Halt> {
-        if !matches!(placement, Placement::External(_)) {
-            self.api
-                .upload(&encode_content_cid_str(cid), block)
-                .await
-                .map(drop)
-                .map_err(|error| classify_upload(error, block.len() as u64))?;
+        match placement {
+            Placement::Hosted => {
+                self.hosted_upload(cid, block).await?;
+                Ok(None)
+            }
+            Placement::External(config) => {
+                place_block(config, cid, block, self.http)
+                    .await
+                    .map_err(|_| Halt::UploadAttempt)?;
+                Ok(None)
+            }
+            Placement::Dual(config) => {
+                self.hosted_upload(cid, block).await?;
+                Ok(place_block(config, cid, block, self.http).await.err())
+            }
         }
-        let Some(config) = placement.external() else {
-            return Ok(None);
-        };
-        match place_block(config, cid, block, self.http).await {
-            Ok(()) => Ok(None),
-            Err(error) => match placement {
-                Placement::Dual(_) => Ok(Some(error)),
-                _ => Err(Halt::UploadAttempt),
-            },
-        }
+    }
+
+    /// One block to the hosted ingress, under its own content address.
+    async fn hosted_upload(&self, cid: &[u8], block: &[u8]) -> Result<(), Halt> {
+        self.api
+            .upload(&encode_content_cid_str(cid), block)
+            .await
+            .map(drop)
+            .map_err(|error| classify_upload(error, block.len() as u64))
     }
 
     /// Drop every staged block of an op's version — on a landed publish, and on
@@ -2262,23 +2274,34 @@ fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
 /// reached — AGENTS.md rule 8's release-active mirror of
 /// [`decode_upload_mark`]'s bound, so a mark the reader discards as corrupt can
 /// never be written.
-fn encode_upload_mark(root_cid: &[u8], count: usize, leaves: usize) -> Option<Vec<u8>> {
+fn encode_upload_mark(
+    placement: &[u8],
+    root_cid: &[u8],
+    count: usize,
+    leaves: usize,
+) -> Option<Vec<u8>> {
     let claim = u32::try_from(count).ok().filter(|_| count <= leaves)?;
-    let mut mark = root_cid.to_vec();
+    let mut mark = placement.to_vec();
+    mark.extend_from_slice(root_cid);
     mark.extend_from_slice(&claim.to_be_bytes());
     Some(mark)
 }
 
-/// How many of `root_cid`'s `leaves` the stored mark claims. A mark naming
-/// another version has nothing to say about this one, and one claiming more
-/// leaves than the version has is proof of a torn or rotted mark — both read as
-/// no progress, so every absent leaf stays loss rather than being covered by
-/// bytes already known to be corrupt.
-fn decode_upload_mark(stored: &[u8], root_cid: &[u8], leaves: usize) -> usize {
-    let Some((root, count)) = stored.split_at_checked(stored.len().saturating_sub(4)) else {
+/// How many of `root_cid`'s `leaves` the stored mark claims, under `placement`.
+/// A mark naming another version — or the same version's blocks sent to *other*
+/// destinations, which are released from staging and can no longer be placed
+/// here — has nothing to say about this one, and one claiming more leaves than
+/// the version has is proof of a torn or rotted mark. All read as no progress,
+/// so every absent leaf stays loss rather than being covered by bytes this
+/// placement never received.
+fn decode_upload_mark(stored: &[u8], placement: &[u8], root_cid: &[u8], leaves: usize) -> usize {
+    let Some((named, count)) = stored.split_at_checked(stored.len().saturating_sub(4)) else {
         return 0;
     };
-    if root != root_cid {
+    if named.len() != placement.len() + root_cid.len()
+        || &named[..placement.len()] != placement
+        || &named[placement.len()..] != root_cid
+    {
         return 0;
     }
     let count = <[u8; 4]>::try_from(count).map_or(0, |c| u32::from_be_bytes(c) as usize);
@@ -2381,7 +2404,8 @@ fn provider_failure(error: &ProviderError) -> &'static str {
         ProviderError::AddressMismatch => {
             "your own IPFS provider stored the block at a different address"
         }
-        _ => "your own IPFS provider did not accept the block",
+        ProviderError::NoVerdict => "your own IPFS provider gave no usable answer",
+        _ => "your own IPFS provider refused the config it was given",
     }
 }
 
@@ -2449,31 +2473,63 @@ mod tests {
     #[test]
     fn a_mark_claiming_more_leaves_than_the_version_has_is_refused_on_both_sides() {
         const ROOT: &[u8] = b"root-cid";
+        const HERE: &[u8] = b"placement-a";
         let planted = |count: u32| {
-            let mut mark = ROOT.to_vec();
+            let mut mark = HERE.to_vec();
+            mark.extend_from_slice(ROOT);
             mark.extend_from_slice(&count.to_be_bytes());
             mark
         };
         for count in [4usize, 5, usize::try_from(u32::MAX).expect("64-bit")] {
             assert!(
-                encode_upload_mark(ROOT, count, 3).is_none(),
+                encode_upload_mark(HERE, ROOT, count, 3).is_none(),
                 "{count}: the writer refuses what the reader discards",
             );
             assert_eq!(
-                decode_upload_mark(&planted(u32::try_from(count).unwrap_or(u32::MAX)), ROOT, 3),
+                decode_upload_mark(
+                    &planted(u32::try_from(count).unwrap_or(u32::MAX)),
+                    HERE,
+                    ROOT,
+                    3
+                ),
                 0,
                 "{count}: a corrupt mark covers no leaf at all",
             );
         }
         // The in-range case still round-trips, so the bound is the only change.
         assert_eq!(
-            decode_upload_mark(&encode_upload_mark(ROOT, 2, 3).expect("in range"), ROOT, 3),
+            decode_upload_mark(
+                &encode_upload_mark(HERE, ROOT, 2, 3).expect("in range"),
+                HERE,
+                ROOT,
+                3
+            ),
             2,
         );
         assert_eq!(
-            decode_upload_mark(&planted(2), b"another-root", 3),
+            decode_upload_mark(&planted(2), HERE, b"another-root", 3),
             0,
             "a mark naming another version has nothing to say about this one",
+        );
+    }
+
+    /// Progress towards one set of destinations is not progress towards
+    /// another: the blocks it covers were released from staging, so reading it
+    /// under a new placement would publish a version that placement never
+    /// received.
+    #[test]
+    fn a_mark_written_under_other_destinations_covers_nothing_here() {
+        const ROOT: &[u8] = b"root-cid";
+        let elsewhere = encode_upload_mark(b"placement-a", ROOT, 2, 3).expect("in range");
+        assert_eq!(
+            decode_upload_mark(&elsewhere, b"placement-b", ROOT, 3),
+            0,
+            "another placement's progress covers no leaf here",
+        );
+        assert_eq!(
+            decode_upload_mark(&elsewhere, b"placement-a", ROOT, 3),
+            2,
+            "and its own still does",
         );
     }
 

@@ -61,6 +61,8 @@ const ROOT: NodeId = NodeId(SCOPE);
 /// The sole v2 re-point payload version (`facade::POINTER_PAYLOAD_VERSION`).
 const POINTER_PAYLOAD_VERSION: u64 = 1;
 const TTL_NANOS: u64 = 2_000_000_000;
+/// The BLAKE3 placement tag the upload mark is keyed by (`Placement::tag`).
+const PLACEMENT_TAG_LEN: usize = 32;
 const EOL: &str = "2099-01-01T00:00:00Z";
 
 fn owner_identity() -> EcdsaSigner {
@@ -1783,11 +1785,13 @@ fn evict_leaf(device: &FakeDevice, index: impl Fn(usize) -> usize) -> Vec<Vec<u8
         .collect()
 }
 
-/// The durable upload mark as [`UPLOAD_MARK_KEY`] holds it: the version root it
-/// names and the leaf count it claims.
+/// The durable upload mark as [`UPLOAD_MARK_KEY`] holds it, minus the placement
+/// tag it opens on: the version root it names and the leaf count it claims.
 fn upload_mark(device: &FakeDevice) -> Option<(Vec<u8>, u32)> {
     let stored = block_on(device.staging_store.staged_bytes(UPLOAD_MARK_KEY)).unwrap()?;
-    let (root, count) = stored.split_at(stored.len() - 4);
+    let (named, count) = stored.split_at(stored.len() - 4);
+    // The mark opens on the placement tag its progress was written under.
+    let root = &named[PLACEMENT_TAG_LEN..];
     Some((root.to_vec(), u32::from_be_bytes(count.try_into().unwrap())))
 }
 
@@ -4360,7 +4364,7 @@ fn a_cancelled_versions_upload_mark_never_counts_towards_the_next_one() {
         .unwrap()
         .expect("the cancelled pass left its progress mark behind");
     assert!(
-        mark.starts_with(&root_cid),
+        mark[PLACEMENT_TAG_LEN..].starts_with(&root_cid),
         "the residue names the cancelled root, so the next version must not read it as progress"
     );
 
@@ -6046,42 +6050,57 @@ fn a_hosted_write_over_quota_is_refused_at_command_time() {
     );
 }
 
-/// The command path reconciles the account's server-side flag against the
-/// vaulted mode, which is the source of truth — the flag is an accounting
-/// display, never the gate.
+/// The account's server-side flag is reconciled to the vaulted mode, which is
+/// the source of truth — the flag is an accounting display, never the gate.
 #[test]
-fn the_command_path_reconciles_the_accounts_byo_flag_against_the_vaulted_mode() {
+fn the_session_reconciles_the_accounts_byo_flag_to_the_vaulted_mode() {
     let world = FakeWorld::new();
     let blocks = Blocks::default();
     seed_account(&world, &blocks);
     let alice = world.device(b"alice");
     seed_settings(&world, &alice, &blocks, PinMode::External);
-
-    let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
     assert!(
         !blocks.advisory_quota.load(Ordering::Relaxed),
         "the account starts classified as hosted"
     );
-    write_file(
-        &mut engine,
-        WriteTarget::NewFile {
-            parent: ROOT,
-            name: "photo.bin".into(),
-        },
-        &(0..200u8).collect::<Vec<_>>(),
-    )
-    .expect("the write commits");
+
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
+    let toggles = |device: &FakeDevice| {
+        device
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.ends_with("/account/byo"))
+            .count()
+    };
+    let write = |engine: &mut Engine<FakeSeamTypes>, name: &str| {
+        write_file(
+            engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: name.to_owned(),
+            },
+            &(0..200u8).collect::<Vec<_>>(),
+        )
+        .expect("the write commits")
+    };
+
+    write(&mut engine, "photo.bin");
     assert!(
         blocks.advisory_quota.load(Ordering::Relaxed),
         "an external mode moved the account onto advisory accounting"
     );
-    let toggles = alice
-        .http
-        .requests()
-        .iter()
-        .filter(|request| request.url.ends_with("/account/byo"))
-        .count();
-    assert_eq!(toggles, 1, "and only while the two disagreed");
+    assert_eq!(toggles(&alice), 1, "and only while the two disagreed");
+
+    // The mode is fixed for the session, so no later write re-derives it.
+    write(&mut engine, "photo2.bin");
+    assert_eq!(toggles(&alice), 1, "at most once a session");
+
+    // A second device on the same settings finds the flag already right.
+    let bob = world.device(b"alice-second-device");
+    let (mut engine_b, _events, _tasks) = boot(&world, &blocks, &bob, 43);
+    write(&mut engine_b, "photo3.bin");
+    assert_eq!(toggles(&bob), 0, "nothing to reconcile once they agree");
 }
 
 /// A settings load that cannot authenticate the member's choice refuses the

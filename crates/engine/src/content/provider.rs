@@ -1,30 +1,30 @@
-//! The pin-provider layer — hosted / external / dual placement and the
-//! engine-side BYO connection test over the `Http` seam (blueprint/engine.md
-//! "Content plane").
+//! The pin-provider layer — block dispatch to a member's own IPFS provider and
+//! the engine-side BYO connection test, both over the `Http` seam
+//! (blueprint/engine.md "Content plane").
 //!
-//! This module owns the placement decision surface, the BYO config type, its
-//! engine-side reachability probe, and the concrete block dispatch each provider
-//! kind takes. Registration and the publish pipeline (register-first, every
-//! mode) live in the net plane; sealing the config into vault settings is the
-//! vault-settings slice — the type here is the plaintext it seals.
+//! This module owns the BYO config type, its engine-side reachability probe,
+//! and the concrete block dispatch each provider kind takes. Which of them a
+//! write uses is the placement decision, which reads a vault settings load and
+//! so lives with it (`crate::settings`).
 
 use core::fmt;
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-use cipherbox_core::content::{CONTENT_CID_CODEC, CONTENT_CID_LEN, encode_content_cid_str};
+use cipherbox_core::content::{
+    CONTENT_CID_CODEC, decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid,
+};
 use zeroize::Zeroizing;
 
 use crate::content::DAG_ROOT_CODEC;
 use crate::seams::{Http, HttpCredentials, HttpMethod, HttpRequest};
-use crate::settings::{DefaultsReason, SettingsLoad, VaultSettings};
 
 /// Deadline for a BYO-provider reachability probe: an unresponsive endpoint
 /// must read as unreachable rather than hang the settings flow.
 const PROBE_TIMEOUT_MS: u64 = 10_000;
 
-/// Deadline for one block placed on a member's provider — the same class of
-/// transfer the hosted ingress runs under, not the settings-flow probe above.
-const TRANSFER_TIMEOUT_MS: u64 = 60_000;
+/// Deadline for one block placed on a member's provider. Longer than the
+/// settings-flow probe above: this one moves up to a whole block.
+const PLACEMENT_TIMEOUT_MS: u64 = 60_000;
 
 const AUTHORIZATION: &str = "Authorization";
 const CONTENT_TYPE: &str = "Content-Type";
@@ -45,7 +45,8 @@ const METADATA: [IpAddr; 3] = [
 pub enum PinMode {
     /// CipherBox's hosted pin store (the default). Quota is authoritative.
     Hosted,
-    /// The member's own provider only. Quota is advisory.
+    /// The member's own provider only. No content block reaches the hosted
+    /// store; record heads and registration still do.
     External,
     /// Both hosted and the member's own provider.
     Dual,
@@ -91,104 +92,15 @@ impl fmt::Debug for ByoIpfsConfig {
     }
 }
 
-/// Where one write's bytes go, decided from the vault settings load and held
-/// for the session. The hosted leg is authoritative in both directions (#34 D1):
-/// only it can fail an op, and only it is quota-gated.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Placement {
-    /// CipherBox's hosted pin store only.
-    Hosted,
-    /// The member's own provider only — no byte reaches the hosted store.
-    External(ByoIpfsConfig),
-    /// Both legs.
-    Dual(ByoIpfsConfig),
-}
-
-impl Placement {
-    /// The mode this placement was decided from — what the quota pre-flight
-    /// gates on.
-    #[must_use]
-    pub fn mode(&self) -> PinMode {
-        match self {
-            Self::Hosted => PinMode::Hosted,
-            Self::External(_) => PinMode::External,
-            Self::Dual(_) => PinMode::Dual,
-        }
-    }
-
-    /// The member's own provider, when this placement names one.
-    #[must_use]
-    pub fn external(&self) -> Option<&ByoIpfsConfig> {
-        match self {
-            Self::Hosted => None,
-            Self::External(config) | Self::Dual(config) => Some(config),
-        }
-    }
-}
-
-/// The session's placement decision, as the command path and the drain both
-/// read it: where bytes go, or why no destination could be authenticated.
-pub type PlacementDecision = Result<Placement, PlacementRefusal>;
-
-/// Why no byte destination could be decided. Every variant refuses the write:
-/// a placement that cannot be authenticated must not widen to the hosted
-/// default (blueprint/engine.md "Settings-load policy").
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlacementRefusal {
-    /// The settings load degraded past a first run with no last-known-good copy,
-    /// so the member's own placement choice is unavailable.
-    SettingsUnavailable(DefaultsReason),
-    /// The vaulted mode names an external leg the record carries no config for.
-    NoProvider,
-    /// External-only over a pin-by-CID provider, which has no byte ingress: no
-    /// leg would hold the block for it to fetch.
-    NoExternalIngress(ByoKind),
-}
-
-/// The byte destinations a settings load authorises.
+/// Place one already-addressed block on the member's own provider. `cid` must
+/// be the block's own content address, which the caller has already verified
+/// (`Drain::staged_block`).
 ///
-/// The built-in defaults describe a first run and nothing else: every other
-/// degraded reason with no last-known-good copy refuses rather than resolving
-/// to [`PinMode::Hosted`] (blueprint/engine.md "Settings-load policy").
-pub fn decide_placement(load: &SettingsLoad) -> Result<Placement, PlacementRefusal> {
-    let first_run;
-    let settings = match load {
-        SettingsLoad::Resolved(settings) | SettingsLoad::Stale { settings, .. } => settings,
-        SettingsLoad::Defaults(DefaultsReason::NoRecord) => {
-            first_run = VaultSettings::default();
-            &first_run
-        }
-        SettingsLoad::Defaults(reason) => {
-            return Err(PlacementRefusal::SettingsUnavailable(*reason));
-        }
-    };
-    let config = || settings.byo.clone().ok_or(PlacementRefusal::NoProvider);
-    match settings.pin_mode {
-        PinMode::Hosted => Ok(Placement::Hosted),
-        PinMode::Dual => Ok(Placement::Dual(config()?)),
-        PinMode::External => match config()? {
-            config @ ByoIpfsConfig {
-                kind: ByoKind::Kubo,
-                ..
-            } => Ok(Placement::External(config)),
-            config => Err(PlacementRefusal::NoExternalIngress(config.kind)),
-        },
-    }
-}
-
-/// Place one already-addressed block on the member's own provider.
-///
-/// Kubo takes the bytes under exactly the caller's address — `block/put` under
-/// the CID's own multicodec and the frozen BLAKE3-256 framing — and the address
-/// it answers with is checked against the caller's, so a provider that stored
-/// the block elsewhere is a failure rather than a silent divergence. PSA and
-/// Pinata have no byte ingress that preserves an address: they are asked to pin
-/// the CID and fetch it themselves, which is why [`decide_placement`] only ever
-/// pairs them with a hosted leg.
-///
-/// The config passes [`validate_byo_config`] here as it does everywhere else it
-/// reaches the seam — the endpoint and the bearer are spliced into a request.
-pub async fn place_block(
+/// Kubo takes the bytes under exactly that address — `block/put` under the CID's
+/// own multicodec and the frozen BLAKE3-256 framing. PSA and Pinata have no byte
+/// ingress that preserves an address: they are asked to pin the CID and fetch it
+/// themselves.
+pub(crate) async fn place_block(
     config: &ByoIpfsConfig,
     cid: &[u8],
     block: &[u8],
@@ -211,9 +123,7 @@ pub async fn place_block(
         });
     }
     match config.kind {
-        ByoKind::Kubo => kubo_stored_address(&response.body, &address.cid),
-        // A pin-by-CID service reports progress out of band; a 2xx is only an
-        // accepted request, so there is no address to check here.
+        ByoKind::Kubo => kubo_stored_address(&response.body, cid),
         ByoKind::Psa | ByoKind::Pinata => Ok(()),
     }
 }
@@ -226,12 +136,16 @@ struct ContentAddress {
 }
 
 /// Read a block's address, fail-closed on anything outside the two frozen
-/// content-plane shapes — a codec no provider could be told to store it under.
+/// content-plane shapes. Core's own framing predicate runs first: it is what
+/// [`encode_content_cid_str`] asserts on, so screening the codec alone would
+/// turn a malformed address into a panic instead of this verdict.
 fn content_address(cid: &[u8]) -> Result<ContentAddress, ProviderError> {
-    const CODEC: usize = 1;
-    let codec = match cid.get(CODEC) {
-        Some(&CONTENT_CID_CODEC) if cid.len() == CONTENT_CID_LEN => "raw",
-        Some(&DAG_ROOT_CODEC) if cid.len() == CONTENT_CID_LEN => "dag-cbor",
+    if !is_wellformed_content_cid(cid) {
+        return Err(ProviderError::MalformedBlockAddress);
+    }
+    let codec = match cid[1] {
+        CONTENT_CID_CODEC => "raw",
+        DAG_ROOT_CODEC => "dag-cbor",
         _ => return Err(ProviderError::MalformedBlockAddress),
     };
     Ok(ContentAddress {
@@ -244,23 +158,30 @@ fn content_address(cid: &[u8]) -> Result<ContentAddress, ProviderError> {
 /// pinned in the same call, so the member's node addresses it exactly as the
 /// engine does.
 fn kubo_block_put(config: &ByoIpfsConfig, address: &ContentAddress, block: &[u8]) -> HttpRequest {
-    // Derived from the block's own address: a block containing its own BLAKE3
-    // digest would be a preimage, so the delimiter cannot occur in the payload
-    // and the framing needs no escape or collision check.
+    // Derived from the block's own address, so the delimiter cannot occur in the
+    // payload it frames: that would take a block carrying the base32 of its own
+    // BLAKE3 digest, which is a preimage. 62 bytes of base32 and `-`, inside RFC
+    // 2046's 70-character cap.
     let boundary = format!("cb-{}", address.cid);
-    let mut body = format!(
+    let head = format!(
         "--{boundary}\r\n\
          Content-Disposition: form-data; name=\"data\"; filename=\"blob\"\r\n\
          Content-Type: application/octet-stream\r\n\r\n"
-    )
-    .into_bytes();
+    );
+    let tail = format!("\r\n--{boundary}--\r\n");
+    let mut body = Vec::with_capacity(head.len() + block.len() + tail.len());
+    body.extend_from_slice(head.as_bytes());
     body.extend_from_slice(block);
-    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    body.extend_from_slice(tail.as_bytes());
     let codec = address.codec;
     HttpRequest {
         method: HttpMethod::Post,
+        // A DAG root inlines a CID per leaf, so it passes Kubo's 1 MiB
+        // block/put advisory well before the flat-DAG ceiling does. The block is
+        // content-addressed and self-verifying, so the advice does not apply.
         url: format!(
-            "{}/api/v0/block/put?cid-codec={codec}&mhtype=blake3&mhlen=32&pin=true",
+            "{}/api/v0/block/put\
+             ?cid-codec={codec}&mhtype=blake3&mhlen=32&pin=true&allow-big-block=true",
             base(config)
         ),
         headers: headers(
@@ -269,7 +190,7 @@ fn kubo_block_put(config: &ByoIpfsConfig, address: &ContentAddress, block: &[u8]
         ),
         body: Some(body),
         credentials: HttpCredentials::Omit,
-        timeout_ms: Some(TRANSFER_TIMEOUT_MS),
+        timeout_ms: Some(PLACEMENT_TIMEOUT_MS),
     }
 }
 
@@ -282,16 +203,21 @@ fn pin_by_cid(config: &ByoIpfsConfig, path: &str, field: &str, cid: &str) -> Htt
         // The CID is base32 alphanumerics, so it needs no JSON escaping.
         body: Some(format!("{{\"{field}\":\"{cid}\"}}").into_bytes()),
         credentials: HttpCredentials::Omit,
-        timeout_ms: Some(TRANSFER_TIMEOUT_MS),
+        timeout_ms: Some(PLACEMENT_TIMEOUT_MS),
     }
 }
 
 /// The address Kubo reports storing the block under, held to the caller's.
+/// Decoded to bytes before the compare, so a node that spells the same address
+/// in another multibase is a match rather than a disagreement.
+///
+/// This catches a node that re-chunked or hashed the block differently — a
+/// misconfiguration, not an attack. A provider can always claim an address it
+/// does not serve; what makes a read safe is the reader's own `verify_cid`.
 ///
 /// Kubo streams newline-delimited JSON; a trailing error object parses but
-/// carries no `Key`, so an absent one is a store fault rather than a
-/// disagreeing address.
-fn kubo_stored_address(body: &[u8], expected: &str) -> Result<(), ProviderError> {
+/// carries no `Key`, so an absent one is no usable answer.
+fn kubo_stored_address(body: &[u8], expected: &[u8]) -> Result<(), ProviderError> {
     #[derive(serde::Deserialize)]
     struct BlockPut {
         #[serde(rename = "Key")]
@@ -302,11 +228,10 @@ fn kubo_stored_address(body: &[u8], expected: &str) -> Result<(), ProviderError>
         .and_then(|body| body.trim().lines().next_back().map(str::to_owned));
     let stored = last
         .and_then(|line| serde_json::from_str::<BlockPut>(&line).ok())
-        .ok_or(ProviderError::Unreachable)?;
-    if stored.key == expected {
-        Ok(())
-    } else {
-        Err(ProviderError::AddressMismatch)
+        .ok_or(ProviderError::NoVerdict)?;
+    match decode_content_cid_str(&stored.key) {
+        Ok(stored) if stored == expected => Ok(()),
+        _ => Err(ProviderError::AddressMismatch),
     }
 }
 
@@ -352,6 +277,8 @@ pub enum ProviderError {
     InvalidCredential,
     /// The provider could not be reached (transport-level failure).
     Unreachable,
+    /// The provider answered, but with nothing that says what it did.
+    NoVerdict,
     /// The provider was reached but rejected the request (bad endpoint, auth
     /// failure, or an unhealthy node): a non-2xx status.
     Rejected {
@@ -737,115 +664,6 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Placement: what a settings load authorises, and what it refuses.
-    // -----------------------------------------------------------------------
-
-    fn settings(mode: PinMode, byo: Option<ByoIpfsConfig>) -> VaultSettings {
-        VaultSettings {
-            pin_mode: mode,
-            byo,
-            ..VaultSettings::default()
-        }
-    }
-
-    #[test]
-    fn a_resolved_record_places_bytes_where_the_member_chose() {
-        let kubo = config(ByoKind::Kubo, Some("tok"));
-        for (mode, expected) in [
-            (PinMode::Hosted, Placement::Hosted),
-            (PinMode::External, Placement::External(kubo.clone())),
-            (PinMode::Dual, Placement::Dual(kubo.clone())),
-        ] {
-            let load = SettingsLoad::Resolved(settings(mode, Some(kubo.clone())));
-            assert_eq!(decide_placement(&load).unwrap(), expected);
-        }
-    }
-
-    /// The last-known-good copy is the member's own choice, so it decides
-    /// placement exactly as a resolved record does — that is the whole point of
-    /// keeping it (blueprint/engine.md "Settings-load policy").
-    #[test]
-    fn a_stale_copy_decides_placement_like_a_resolved_record() {
-        let load = SettingsLoad::Stale {
-            settings: settings(PinMode::External, Some(config(ByoKind::Kubo, None))),
-            reason: DefaultsReason::Suppressed,
-        };
-        assert_eq!(
-            decide_placement(&load).unwrap(),
-            Placement::External(config(ByoKind::Kubo, None))
-        );
-    }
-
-    /// The built-in defaults describe a first run and nothing else: every other
-    /// degraded reason refuses rather than widening an unknown choice onto the
-    /// hosted store.
-    #[test]
-    fn only_a_first_run_falls_back_to_the_hosted_default() {
-        assert_eq!(
-            decide_placement(&SettingsLoad::Defaults(DefaultsReason::NoRecord)).unwrap(),
-            Placement::Hosted
-        );
-        for reason in [
-            DefaultsReason::Suppressed,
-            DefaultsReason::RolledBack {
-                floor: 4,
-                sequence: 2,
-            },
-            DefaultsReason::RevisionRolledBack {
-                floor: 4,
-                revision: 2,
-            },
-            DefaultsReason::Expired,
-            DefaultsReason::TimedOut,
-            DefaultsReason::Unreadable,
-            DefaultsReason::FloorUnreadable,
-        ] {
-            assert_eq!(
-                decide_placement(&SettingsLoad::Defaults(reason)).unwrap_err(),
-                PlacementRefusal::SettingsUnavailable(reason),
-                "{reason:?} must not widen placement"
-            );
-        }
-    }
-
-    #[test]
-    fn a_mode_naming_an_external_leg_with_no_provider_is_refused() {
-        for mode in [PinMode::External, PinMode::Dual] {
-            let load = SettingsLoad::Resolved(settings(mode, None));
-            assert_eq!(
-                decide_placement(&load).unwrap_err(),
-                PlacementRefusal::NoProvider
-            );
-        }
-    }
-
-    /// A pinning service fetches content from the network rather than receiving
-    /// it, so external-only over one would publish a record naming bytes no leg
-    /// holds. Paired with a hosted leg it is exactly right.
-    #[test]
-    fn a_pin_by_cid_provider_cannot_be_the_only_byte_destination() {
-        for kind in [ByoKind::Psa, ByoKind::Pinata] {
-            let byo = Some(config(kind, Some("tok")));
-            assert_eq!(
-                decide_placement(&SettingsLoad::Resolved(settings(
-                    PinMode::External,
-                    byo.clone()
-                )))
-                .unwrap_err(),
-                PlacementRefusal::NoExternalIngress(kind)
-            );
-            assert!(
-                decide_placement(&SettingsLoad::Resolved(settings(PinMode::Dual, byo))).is_ok(),
-                "{kind:?} is a fine second leg"
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Block placement: what each provider kind is actually sent.
-    // -----------------------------------------------------------------------
-
     fn leaf(bytes: &[u8]) -> Vec<u8> {
         compute_cid(CONTENT_CID_CODEC, bytes)
     }
@@ -874,7 +692,7 @@ mod tests {
         assert_eq!(
             request.url,
             "https://ipfs.member.test/api/v0/block/put\
-             ?cid-codec=raw&mhtype=blake3&mhlen=32&pin=true"
+             ?cid-codec=raw&mhtype=blake3&mhlen=32&pin=true&allow-big-block=true"
         );
         let boundary = request
             .headers
@@ -884,12 +702,6 @@ mod tests {
             .expect("the request declares its multipart boundary")
             .to_owned();
         let body = request.body.as_ref().expect("a block/put carries a body");
-        assert!(
-            !block
-                .windows(boundary.len())
-                .any(|w| w == boundary.as_bytes()),
-            "the delimiter cannot occur in the payload it frames"
-        );
         assert!(
             body.windows(block.len()).any(|window| window == block),
             "the block rides the body verbatim"
@@ -1035,15 +847,29 @@ mod tests {
         assert!(http.requests().is_empty());
     }
 
+    /// Every byte of the frozen framing, not just the codec: the address is
+    /// rendered for the request, and core's renderer aborts rather than returns
+    /// on a malformed one.
     #[test]
     fn a_block_address_outside_the_frozen_shapes_is_refused_before_the_seam() {
         let http = ScriptedHttp::default();
-        let mut wrong_codec = leaf(b"x");
-        wrong_codec[1] = 0x70; // dag-pb: not a content-plane codec.
-        for cid in [wrong_codec, leaf(b"x")[..8].to_vec(), Vec::new()] {
+        let mutated = |index: usize, byte: u8| {
+            let mut cid = leaf(b"x");
+            cid[index] = byte;
+            cid
+        };
+        for cid in [
+            mutated(0, 0x02), // CID version
+            mutated(1, 0x70), // dag-pb: not a content-plane codec
+            mutated(2, 0x12), // sha2-256: not the frozen multihash
+            mutated(3, 0x40), // a digest width the framing does not carry
+            leaf(b"x")[..8].to_vec(),
+            Vec::new(),
+        ] {
             assert_eq!(
                 block_on(place_block(&config(ByoKind::Kubo, None), &cid, b"x", &http)).unwrap_err(),
-                ProviderError::MalformedBlockAddress
+                ProviderError::MalformedBlockAddress,
+                "{cid:02x?}"
             );
         }
         assert!(http.requests().is_empty());

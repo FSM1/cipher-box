@@ -223,7 +223,10 @@ degraded outcome applies a different policy rather than showing stale data.
   the gate already owes a rejected record.
 - **No last-known-good copy fails the placement decision closed.** The
   built-in defaults describe a first run — no record anywhere, no durable
-  floor. Under any other reason, with no cached copy to fall back on, a
+  floor. Residual: that is a verdict about _this device_, so a record-plane
+  adversary who withholds the record from one that has never synced still
+  reaches the first-run default; closing it needs positive evidence that the
+  account has never published settings, which no device-local seam carries. Under any other reason, with no cached copy to fall back on, a
   placement decision refuses the hosted upload rather than resolving to
   `PinMode::Hosted`; the member is told their settings are unavailable. A
   consumer that branches only on the resolved case, letting the degraded ones
@@ -660,6 +663,20 @@ contract-test suite owned by the testing-strategy blueprint (#28 D6).
     is reported per op rather than swallowed, and no retry is queued for it.
     Under external, the member's provider _is_ the byte path, so its refusal
     is the op's.
+  - **Durable upload progress is keyed by the placement it was written
+    under.** A resumed version's confirmed prefix is no longer on the device,
+    so progress towards one set of destinations can never be read as progress
+    towards another — a mode changed between sessions re-fetches rather than
+    publishing a version the new placement never received.
+  - The placement is decided once at start and holds for the session, so a
+    provider or credential revoked elsewhere still receives blocks until the
+    process restarts. Stated, not closed.
+- **A publish refuses settings no reader could place under** (AGENTS.md rule
+  8): the produce path runs the consumer's own placement predicate, so a
+  record naming a mode with no usable byte destination — an external leg with
+  no provider, or external-only over a pin-by-CID one — is never signed. Left
+  unchecked it would be a durable, account-wide refusal of every content
+  write, recoverable only by publishing a new record.
 - **The quota pre-flight gates this write's byte path, not the account.** It
   runs at command time, where the write already waits, sized in **sealed**
   bytes: `Hosted` and `Dual` are checked, `External` is skipped. `advisory` on
