@@ -2433,10 +2433,16 @@ impl<T: SeamTypes> Engine<T> {
         };
         // The account's flag is two-state where the mode is three and dual has
         // no server representation, so `byo=true` is exactly `External`. The
-        // vaulted mode is the source of truth; the flag is reconciled to it at
-        // most once a session, so two devices cannot flap it per file.
-        if !self.byo_reconciled.replace(true) && quota.advisory == hosted_leg {
-            let _ = api.set_byo(!hosted_leg).await;
+        // vaulted mode is the source of truth; the flag is latched only once the
+        // PATCH lands, so two devices still cannot flap it per file while a
+        // transient failure stays retryable — the hosted ingress rejects a BYO
+        // account, so an unreconciled flag fails every hosted upload the session
+        // makes.
+        if !self.byo_reconciled.get()
+            && quota.advisory == hosted_leg
+            && api.set_byo(!hosted_leg).await.is_ok()
+        {
+            self.byo_reconciled.set(true);
         }
         pre_flight_quota_check(requested, &quota, hosted_leg).map_err(|refused| {
             EngineError::OverBudget {

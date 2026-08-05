@@ -58,7 +58,7 @@ use crate::seams::{
     StagingStore,
 };
 use crate::session::SessionIdentity;
-use crate::settings::{Placement, PlacementDecision};
+use crate::settings::{Destinations, Placement, PlacementDecision};
 use crate::sync::cancel::UploadCancels;
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, StagedContent};
@@ -434,6 +434,9 @@ struct UploadedVersion {
     /// A dual write's external leg that did not take the bytes, reported rather
     /// than swallowed ([`OpPhase::ExternalPinFailed`]).
     external_failure: Option<ProviderError>,
+    /// The mirror is short of blocks a previous pass released to a provider
+    /// this session's settings no longer name ([`Resume::mirror_gap`]).
+    mirror_gap: bool,
 }
 
 /// One record as this pass published it.
@@ -643,11 +646,17 @@ where
         let Ok(placement) = self.placement.as_ref() else {
             return false;
         };
+        // Only the hosted leg is quota-gated, so no answer the quota endpoint
+        // could give bears on a hold under a placement without one — and an
+        // endpoint that will not answer would park the head on that question.
+        if !placement.has_hosted_leg() {
+            self.clear_block();
+            return true;
+        }
         let Ok(quota) = self.api.quota().await else {
             return false;
         };
-        if pre_flight_quota_check(blocked.needed_bytes, &quota, placement.has_hosted_leg()).is_err()
-        {
+        if pre_flight_quota_check(blocked.needed_bytes, &quota, true).is_err() {
             return false;
         }
         self.clear_block();
@@ -1491,14 +1500,15 @@ where
         if !self.cancels.borrow_mut().enter_publish(applied.op_id) {
             return Err(Halt::Cancelled);
         }
-        // Once per op, not per block.
-        if let Some(error) = &uploaded.external_failure {
-            self.emit_upload(
-                applied,
-                OpPhase::ExternalPinFailed,
-                None,
-                Some(provider_failure(error)),
-            );
+        // Once per op, not per block. A live refusal outranks the standing gap:
+        // it is the condition the member can still act on.
+        let mirror = uploaded
+            .external_failure
+            .as_ref()
+            .map(provider_failure)
+            .or_else(|| uploaded.mirror_gap.then_some(MIRROR_GAP));
+        if let Some(reason) = mirror {
+            self.emit_upload(applied, OpPhase::ExternalPinFailed, None, Some(reason));
         }
         Ok(uploaded)
     }
@@ -1549,7 +1559,10 @@ where
         // mark this pass keeps: past it, a missing block is loss, and the
         // version can never be assembled.
         let leaves = content.leaf_cids().len();
-        let uploaded = self
+        let Resume {
+            uploaded,
+            mirror_gap,
+        } = self
             .upload_mark(placement, &staged.root_cid, leaves)
             .await?;
         // The root manifest is block zero and goes up last, so the version's
@@ -1611,6 +1624,7 @@ where
             version: content.version(*key, applied.op.authored_at.0),
             content_cids,
             external_failure,
+            mirror_gap,
         })
     }
 
@@ -1643,21 +1657,22 @@ where
         });
     }
 
-    /// How many of this version's `leaves` a previous pass durably confirmed
+    /// What a previous pass durably confirmed of this version's `leaves`
     /// ([`decode_upload_mark`]).
     async fn upload_mark(
         &self,
         placement: &Placement,
         root_cid: &[u8],
         leaves: usize,
-    ) -> Result<usize, Halt> {
+    ) -> Result<Resume, Halt> {
+        let here = placement.destinations();
         Ok(self
             .staging
             .staged_bytes(UPLOAD_MARK_KEY)
             .await
             .map_err(seam)?
-            .map_or(0, |stored| {
-                decode_upload_mark(&stored, &placement.tag(), root_cid, leaves)
+            .map_or(Resume::default(), |stored| {
+                decode_upload_mark(&stored, &here, root_cid, leaves)
             }))
     }
 
@@ -1673,7 +1688,7 @@ where
         count: usize,
         leaves: usize,
     ) -> Result<(), Halt> {
-        let mark = encode_upload_mark(&placement.tag(), root_cid, count, leaves)
+        let mark = encode_upload_mark(&placement.destinations(), root_cid, count, leaves)
             .ok_or(Halt::Unclassified)?;
         self.staging
             .put_staged_bytes(UPLOAD_MARK_KEY, &mark)
@@ -1715,7 +1730,7 @@ where
             Placement::External(config) => {
                 place_block(config, cid, block, self.http)
                     .await
-                    .map_err(|_| Halt::UploadAttempt)?;
+                    .map_err(classify_placement)?;
                 Ok(None)
             }
             Placement::Dual(config) => {
@@ -2269,43 +2284,67 @@ fn classify_publish(error: RecordPublishError, refused_bytes: u64) -> Halt {
     }
 }
 
-/// The upload mark's wire form: the version root CID followed by a big-endian
-/// `u32` leaf count. `None` where the count is not one this version could have
-/// reached — AGENTS.md rule 8's release-active mirror of
-/// [`decode_upload_mark`]'s bound, so a mark the reader discards as corrupt can
-/// never be written.
+/// The upload mark's wire form: the destinations the progress was made towards,
+/// the version root CID, then a big-endian `u32` leaf count. `None` where the
+/// count is not one this version could have reached — AGENTS.md rule 8's
+/// release-active mirror of [`decode_upload_mark`]'s bound, so a mark the reader
+/// discards as corrupt can never be written.
 fn encode_upload_mark(
-    placement: &[u8],
+    destinations: &Destinations,
     root_cid: &[u8],
     count: usize,
     leaves: usize,
 ) -> Option<Vec<u8>> {
     let claim = u32::try_from(count).ok().filter(|_| count <= leaves)?;
-    let mut mark = placement.to_vec();
+    let mut mark = destinations.encode().to_vec();
     mark.extend_from_slice(root_cid);
     mark.extend_from_slice(&claim.to_be_bytes());
     Some(mark)
 }
 
-/// How many of `root_cid`'s `leaves` the stored mark claims, under `placement`.
-/// A mark naming another version — or the same version's blocks sent to *other*
-/// destinations, which are released from staging and can no longer be placed
-/// here — has nothing to say about this one, and one claiming more leaves than
-/// the version has is proof of a torn or rotted mark. All read as no progress,
-/// so every absent leaf stays loss rather than being covered by bytes this
-/// placement never received.
-fn decode_upload_mark(stored: &[u8], placement: &[u8], root_cid: &[u8], leaves: usize) -> usize {
+/// What a stored upload mark says about resuming this version at `here`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Resume {
+    /// Leaves already released from staging that the leg which can fail this op
+    /// holds, so their absence is progress rather than loss.
+    uploaded: usize,
+    /// Leaves a dual write's mirror will never hold, because they were released
+    /// to a provider these destinations do not name.
+    mirror_gap: bool,
+}
+
+/// Read the stored mark against the destinations this pass must reach.
+///
+/// A mark naming another version, or one claiming more leaves than the version
+/// has, is a torn or superseded mark and covers nothing. So is a mark whose
+/// destinations do not include the leg that can fail this op: those leaves were
+/// released to somewhere else, and no absence is excused by bytes this leg never
+/// received. A mirror the mark leaves short is reported, not fatal — a dual
+/// write's external leg never fails the op.
+fn decode_upload_mark(
+    stored: &[u8],
+    here: &Destinations,
+    root_cid: &[u8],
+    leaves: usize,
+) -> Resume {
     let Some((named, count)) = stored.split_at_checked(stored.len().saturating_sub(4)) else {
-        return 0;
+        return Resume::default();
     };
-    if named.len() != placement.len() + root_cid.len()
-        || &named[..placement.len()] != placement
-        || &named[placement.len()..] != root_cid
+    if named.len() != Destinations::LEN + root_cid.len() || &named[Destinations::LEN..] != root_cid
     {
-        return 0;
+        return Resume::default();
     }
+    let Some(earlier) = Destinations::decode(&named[..Destinations::LEN]) else {
+        return Resume::default();
+    };
     let count = <[u8; 4]>::try_from(count).map_or(0, |c| u32::from_be_bytes(c) as usize);
-    if count > leaves { 0 } else { count }
+    if count == 0 || count > leaves || !here.required_legs_hold(&earlier) {
+        return Resume::default();
+    }
+    Resume {
+        uploaded: count,
+        mirror_gap: !here.mirror_leg_holds(&earlier),
+    }
 }
 
 /// The op-id high-water stored at `key`; `None` when nothing has been marked on
@@ -2369,6 +2408,18 @@ fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
     }
 }
 
+/// Classify an external-only placement failure for the valve, on the same
+/// positive-evidence rule [`classify_upload`] applies to the hosted leg: a
+/// transport failure carries no verdict about these bytes, and charging the
+/// attempt budget for one would spend the version's five tries on a condition
+/// that repairs itself. Everything the provider *answered* is charged.
+fn classify_placement(error: ProviderError) -> Halt {
+    match error {
+        ProviderError::Unreachable => Halt::Unclassified,
+        _ => Halt::UploadAttempt,
+    }
+}
+
 /// A block count as [`BlockProgress`] carries it; the root manifest's own
 /// ceiling bounds a version's leaves far below `u32::MAX`.
 fn blocks(count: usize) -> u32 {
@@ -2395,8 +2446,17 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
     }
 }
 
+/// An [`OpPhase::ExternalPinFailed`] for a mirror that no request could have
+/// filled: the blocks left staging for the provider the settings named at the
+/// time, and only the leg that can fail the op still holds them.
+const MIRROR_GAP: &str = "your own IPFS provider changed while this upload was in flight, so it never received \
+     the blocks already sent";
+
 /// The key-free classification an [`OpPhase::ExternalPinFailed`] carries. It
 /// names the leg, never the endpoint or the bearer the config carries.
+///
+/// Exhaustive by construction: a new [`ProviderError`] must be attributed here
+/// rather than falling into whichever wording happened to be the catch-all.
 fn provider_failure(error: &ProviderError) -> &'static str {
     match error {
         ProviderError::Unreachable => "your own IPFS provider could not be reached",
@@ -2405,7 +2465,15 @@ fn provider_failure(error: &ProviderError) -> &'static str {
             "your own IPFS provider stored the block at a different address"
         }
         ProviderError::NoVerdict => "your own IPFS provider gave no usable answer",
-        _ => "your own IPFS provider refused the config it was given",
+        // Policy verdicts reached before any request is built, so the member's
+        // own settings are what to fix, not their node.
+        ProviderError::InvalidEndpoint
+        | ProviderError::InsecureTransport
+        | ProviderError::BlockedAddress
+        | ProviderError::InvalidCredential => "your own IPFS provider settings were refused",
+        ProviderError::MalformedBlockAddress => {
+            "the block's address is not one any provider can be told to store"
+        }
     }
 }
 
@@ -2467,69 +2535,171 @@ mod tests {
         }
     }
 
+    const ROOT: &[u8] = b"root-cid";
+
+    fn byo(endpoint: &str) -> crate::content::ByoIpfsConfig {
+        crate::content::ByoIpfsConfig {
+            endpoint: endpoint.to_owned(),
+            kind: crate::content::ByoKind::Kubo,
+            access_token: None,
+        }
+    }
+
     /// AGENTS.md rule 8 for the upload mark: one bound, both directions. The
     /// encode guard returns `None` in every build rather than asserting, and the
     /// reader reaches the same verdict on bytes planted past it.
     #[test]
     fn a_mark_claiming_more_leaves_than_the_version_has_is_refused_on_both_sides() {
-        const ROOT: &[u8] = b"root-cid";
-        const HERE: &[u8] = b"placement-a";
+        let here = Placement::Hosted.destinations();
         let planted = |count: u32| {
-            let mut mark = HERE.to_vec();
+            let mut mark = here.encode().to_vec();
             mark.extend_from_slice(ROOT);
             mark.extend_from_slice(&count.to_be_bytes());
             mark
         };
         for count in [4usize, 5, usize::try_from(u32::MAX).expect("64-bit")] {
             assert!(
-                encode_upload_mark(HERE, ROOT, count, 3).is_none(),
+                encode_upload_mark(&here, ROOT, count, 3).is_none(),
                 "{count}: the writer refuses what the reader discards",
             );
             assert_eq!(
                 decode_upload_mark(
                     &planted(u32::try_from(count).unwrap_or(u32::MAX)),
-                    HERE,
+                    &here,
                     ROOT,
                     3
                 ),
-                0,
+                Resume::default(),
                 "{count}: a corrupt mark covers no leaf at all",
             );
         }
         // The in-range case still round-trips, so the bound is the only change.
         assert_eq!(
             decode_upload_mark(
-                &encode_upload_mark(HERE, ROOT, 2, 3).expect("in range"),
-                HERE,
+                &encode_upload_mark(&here, ROOT, 2, 3).expect("in range"),
+                &here,
                 ROOT,
                 3
             ),
-            2,
+            Resume {
+                uploaded: 2,
+                mirror_gap: false
+            },
         );
         assert_eq!(
-            decode_upload_mark(&planted(2), HERE, b"another-root", 3),
-            0,
+            decode_upload_mark(&planted(2), &here, b"another-root", 3),
+            Resume::default(),
             "a mark naming another version has nothing to say about this one",
         );
     }
 
-    /// Progress towards one set of destinations is not progress towards
-    /// another: the blocks it covers were released from staging, so reading it
-    /// under a new placement would publish a version that placement never
-    /// received.
+    /// A leaf released from staging is excused only where the leg that can fail
+    /// this op already holds it. Turning the mirror on or off leaves the hosted
+    /// store holding everything it held, so the version resumes; moving the leg
+    /// that must hold the bytes leaves the mark covering nothing, and the hole
+    /// guard reports the loss it is.
     #[test]
-    fn a_mark_written_under_other_destinations_covers_nothing_here() {
-        const ROOT: &[u8] = b"root-cid";
-        let elsewhere = encode_upload_mark(b"placement-a", ROOT, 2, 3).expect("in range");
+    fn a_resumed_mark_covers_only_what_the_op_failing_leg_already_holds() {
+        let one = Placement::Dual(byo("https://one.example"));
+        let two = Placement::Dual(byo("https://two.example"));
+        let external = Placement::External(byo("https://one.example"));
+        let full = Resume {
+            uploaded: 2,
+            mirror_gap: false,
+        };
+        let gapped = Resume {
+            uploaded: 2,
+            mirror_gap: true,
+        };
+
+        let resume = |here: &Placement, earlier: &Placement| {
+            let mark = encode_upload_mark(&earlier.destinations(), ROOT, 2, 3).expect("in range");
+            decode_upload_mark(&mark, &here.destinations(), ROOT, 3)
+        };
+
+        assert_eq!(resume(&Placement::Hosted, &one), full);
+        assert_eq!(resume(&one, &one), full);
+        assert_eq!(resume(&external, &one), full);
         assert_eq!(
-            decode_upload_mark(&elsewhere, b"placement-b", ROOT, 3),
-            0,
-            "another placement's progress covers no leaf here",
+            resume(&one, &Placement::Hosted),
+            gapped,
+            "the hosted store holds them; only the new mirror does not"
         );
+        assert_eq!(resume(&one, &two), gapped);
         assert_eq!(
-            decode_upload_mark(&elsewhere, b"placement-a", ROOT, 3),
-            2,
-            "and its own still does",
+            resume(&external, &two),
+            Resume::default(),
+            "external-only publishes from the provider that never took them"
+        );
+        assert_eq!(resume(&external, &Placement::Hosted), Resume::default());
+        assert_eq!(resume(&Placement::Hosted, &external), Resume::default());
+    }
+
+    /// A mark claiming nothing releases nothing, so a placement change over it
+    /// is not a gap to report.
+    #[test]
+    fn an_empty_mark_gaps_no_mirror() {
+        let mark =
+            encode_upload_mark(&Placement::Hosted.destinations(), ROOT, 0, 3).expect("in range");
+        assert_eq!(
+            decode_upload_mark(
+                &mark,
+                &Placement::Dual(byo("https://one.example")).destinations(),
+                ROOT,
+                3
+            ),
+            Resume::default(),
+        );
+    }
+
+    /// The mark's destination prefix is read fail-closed: bytes no encode could
+    /// have produced excuse no absent leaf.
+    #[test]
+    fn a_mark_opening_on_unencodable_destinations_covers_nothing() {
+        let here = Placement::Hosted.destinations();
+        let mut mark = encode_upload_mark(&here, ROOT, 2, 3).expect("in range");
+        mark[0] = 3;
+        assert_eq!(decode_upload_mark(&mark, &here, ROOT, 3), Resume::default());
+    }
+
+    /// A transport failure carries no verdict about these bytes, so it must not
+    /// spend the version's attempt budget — the hosted leg's own rule
+    /// ([`classify_upload`]) applied to the member's provider.
+    #[test]
+    fn only_an_answered_placement_charges_the_attempt_budget() {
+        assert_eq!(
+            classify_placement(ProviderError::Unreachable),
+            Halt::Unclassified,
+        );
+        for answered in [
+            ProviderError::NoVerdict,
+            ProviderError::Rejected { status: 500 },
+            ProviderError::AddressMismatch,
+            ProviderError::InvalidCredential,
+        ] {
+            assert_eq!(classify_placement(answered), Halt::UploadAttempt);
+        }
+    }
+
+    /// The report names what the member must fix. A verdict reached before any
+    /// request is built is their own settings, not their node.
+    #[test]
+    fn a_policy_verdict_is_attributed_to_the_settings_not_the_node() {
+        for settings in [
+            ProviderError::InvalidEndpoint,
+            ProviderError::InsecureTransport,
+            ProviderError::BlockedAddress,
+            ProviderError::InvalidCredential,
+        ] {
+            assert_eq!(
+                provider_failure(&settings),
+                "your own IPFS provider settings were refused",
+            );
+        }
+        assert_ne!(
+            provider_failure(&ProviderError::MalformedBlockAddress),
+            "your own IPFS provider settings were refused",
+            "a block this plane cannot address is not a settings mistake",
         );
     }
 

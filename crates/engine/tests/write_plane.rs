@@ -35,7 +35,7 @@ use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
     StagingStore, UnixMillis,
 };
-use cipherbox_engine::settings::{VaultSettings, publish_settings, settings_name};
+use cipherbox_engine::settings::{Destinations, VaultSettings, publish_settings, settings_name};
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
     DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, StagedContent, UPLOAD_MARK_KEY, op_mark_key,
@@ -50,8 +50,8 @@ use cipherbox_engine::testkit::{
 use cipherbox_engine::{
     ApiBaseUrl, ApiClient, BlockProgress, Command, ContentProfile, DeadLetter, DeadLetterReason,
     DefaultsReason, Engine, EngineError, Event, EventStream, GatewayConfig, LoginSecret,
-    MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpPhase, OverBudgetCause, PlacementRefusal, RecordSeal,
-    StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
+    MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpPhase, OverBudgetCause, Placement, PlacementRefusal,
+    RecordSeal, StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -61,8 +61,8 @@ const ROOT: NodeId = NodeId(SCOPE);
 /// The sole v2 re-point payload version (`facade::POINTER_PAYLOAD_VERSION`).
 const POINTER_PAYLOAD_VERSION: u64 = 1;
 const TTL_NANOS: u64 = 2_000_000_000;
-/// The BLAKE3 placement tag the upload mark is keyed by (`Placement::tag`).
-const PLACEMENT_TAG_LEN: usize = 32;
+/// The destination set the upload mark opens on.
+const DESTINATIONS_LEN: usize = Destinations::LEN;
 const EOL: &str = "2099-01-01T00:00:00Z";
 
 fn owner_identity() -> EcdsaSigner {
@@ -197,6 +197,11 @@ struct Blocks {
     /// The 400 body every `POST /registry/register` answers with instead of
     /// acking.
     register_refusal: Arc<Mutex<Option<Vec<u8>>>>,
+    /// Whether `GET /account/quota` is reachable at all: the transport failure
+    /// a flaky API leg gives, not a verdict.
+    quota_down: Arc<AtomicBool>,
+    /// The same for `PATCH /account/byo`.
+    byo_down: Arc<AtomicBool>,
 }
 
 impl Blocks {
@@ -333,6 +338,12 @@ impl Blocks {
             // and only once those bytes really address to it.
             self.put_declared(&declared, block);
             return ok(format!("{{\"cid\":\"{declared}\",\"size\":{size}}}").into_bytes());
+        }
+        if url.ends_with("/account/quota") && self.quota_down.load(Ordering::Relaxed) {
+            return Err(SeamError::new("the quota endpoint is unreachable"));
+        }
+        if url.ends_with("/account/byo") && self.byo_down.load(Ordering::Relaxed) {
+            return Err(SeamError::new("the byo endpoint is unreachable"));
         }
         if url.ends_with("/account/quota") {
             let (used, limit) = self
@@ -1717,10 +1728,12 @@ fn a_corrupt_upload_mark_is_no_progress_rather_than_blanket_coverage() {
     )
     .unwrap();
 
-    // A mark naming this very version and claiming more leaves than it has.
+    // A mark under this session's own destinations, naming this very version
+    // and claiming more leaves than it has.
     let version = evict_leaf(&alice, |leaves| leaves / 2);
     let (root_cid, _) = staged_version(&alice);
-    let mut corrupt = root_cid;
+    let mut corrupt = Placement::Hosted.destinations().encode().to_vec();
+    corrupt.extend_from_slice(&root_cid);
     corrupt.extend_from_slice(&u32::MAX.to_be_bytes());
     block_on(
         alice
@@ -1785,13 +1798,13 @@ fn evict_leaf(device: &FakeDevice, index: impl Fn(usize) -> usize) -> Vec<Vec<u8
         .collect()
 }
 
-/// The durable upload mark as [`UPLOAD_MARK_KEY`] holds it, minus the placement
-/// tag it opens on: the version root it names and the leaf count it claims.
+/// The durable upload mark as [`UPLOAD_MARK_KEY`] holds it, minus the
+/// destinations it opens on: the version root it names and the leaf count it
+/// claims.
 fn upload_mark(device: &FakeDevice) -> Option<(Vec<u8>, u32)> {
     let stored = block_on(device.staging_store.staged_bytes(UPLOAD_MARK_KEY)).unwrap()?;
     let (named, count) = stored.split_at(stored.len() - 4);
-    // The mark opens on the placement tag its progress was written under.
-    let root = &named[PLACEMENT_TAG_LEN..];
+    let root = &named[DESTINATIONS_LEN..];
     Some((root.to_vec(), u32::from_be_bytes(count.try_into().unwrap())))
 }
 
@@ -4364,7 +4377,7 @@ fn a_cancelled_versions_upload_mark_never_counts_towards_the_next_one() {
         .unwrap()
         .expect("the cancelled pass left its progress mark behind");
     assert!(
-        mark[PLACEMENT_TAG_LEN..].starts_with(&root_cid),
+        mark[DESTINATIONS_LEN..].starts_with(&root_cid),
         "the residue names the cancelled root, so the next version must not read it as progress"
     );
 
@@ -5885,6 +5898,144 @@ fn an_external_write_places_every_block_on_the_members_node_and_none_on_the_host
     );
 }
 
+/// Leaves already released from staging can never be placed again, so a
+/// placement changed mid-upload is decided on one question: does the leg this
+/// version must now publish from already hold them?
+///
+/// Dropping the mirror leaves the hosted store holding everything it held, so
+/// the version resumes. Moving off the leg that holds them does not, and the
+/// hole guard reports the loss rather than publishing a manifest naming blocks
+/// the new destination will never serve.
+#[test]
+fn a_placement_changed_mid_upload_resumes_only_where_the_bytes_already_are() {
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    let leaves = frame_version(&plaintext).0.len();
+    assert!(
+        leaves > 2,
+        "a multi-leaf version, so the resume point is real"
+    );
+
+    // `(started under, resumed under, the version still publishes)`.
+    for (before, after, survives) in [
+        (PinMode::Dual, PinMode::Hosted, true),
+        (PinMode::Dual, PinMode::Dual, true),
+        (PinMode::External, PinMode::Hosted, false),
+    ] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let alice = world.device(b"alice");
+        seed_settings(&world, &alice, &blocks, before);
+
+        let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        // The mark for leaf 2 never lands: the process died the instant after
+        // that leaf uploaded and the two before it were released.
+        alice
+            .staging_store
+            .interrupt_staged_write_after(UPLOAD_MARK_KEY, 2);
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "photo.bin".into(),
+            },
+            &plaintext,
+        )
+        .expect("the write commits");
+        let (root_cid, _) = staged_version(&alice);
+        tick(&world, &engine, &mut tasks);
+        assert_eq!(
+            upload_mark(&alice),
+            Some((root_cid, 2)),
+            "{before:?}: two leaves left staging for the destinations of the day"
+        );
+        drop(engine);
+
+        // The member changes their mind while the version is half-placed.
+        seed_settings(&world, &alice, &blocks, after);
+        let (engine, mut events_after, mut tasks) = boot(&world, &blocks, &alice, 43);
+        tick(&world, &engine, &mut tasks);
+        tick(&world, &engine, &mut tasks);
+
+        let dead_lettered = |events: &mut EventStream| {
+            events_so_far(events).iter().any(|event| {
+                matches!(
+                    event,
+                    Event::DeadLetter {
+                        reason: DeadLetterReason::ContentUnrecoverable,
+                        ..
+                    }
+                )
+            })
+        };
+        let lost = dead_lettered(&mut events) || dead_lettered(&mut events_after);
+        assert_eq!(
+            !lost, survives,
+            "{before:?} -> {after:?}: the verdict follows where the released bytes are"
+        );
+        if survives {
+            drop(engine);
+            assert_round_trips(&world, &blocks, "photo.bin", &plaintext);
+        }
+    }
+}
+
+/// An external placement puts no byte in the hosted store, so nothing the quota
+/// endpoint could say bears on a hold under one. The hold clears without asking
+/// — an unanswerable probe must not park the queue head on a question with no
+/// answer to wait for.
+#[test]
+fn a_hold_under_an_external_placement_clears_without_a_quota_probe() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::External);
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+
+    // The record head block still traverses the hosted ingress, so it is what
+    // the account quota can refuse under an external placement.
+    blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("QUOTA_EXCEEDED")))));
+    create(&mut engine, "photos");
+    tick(&world, &engine, &mut tasks);
+    assert!(
+        block_on(engine.snapshot(ROOT))
+            .expect("a snapshot")
+            .blocked
+            .is_some(),
+        "the refused head block held the op"
+    );
+
+    blocks.accept_uploads();
+    blocks.quota_down.store(true, Ordering::Relaxed);
+    let probes = || {
+        alice
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.ends_with("/account/quota"))
+            .count()
+    };
+    let before = probes();
+    tick(&world, &engine, &mut tasks);
+
+    let view = block_on(engine.snapshot(ROOT)).expect("a snapshot");
+    assert!(
+        view.blocked.is_none(),
+        "an unreachable quota endpoint never gates a placement it does not cover"
+    );
+    assert_eq!(
+        probes(),
+        before,
+        "and the hold clears without asking a question it cannot use"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, ROOT),
+        vec!["photos".to_owned()],
+        "the head drained once the stale hold was gone"
+    );
+}
+
 /// Dual runs both legs and only the hosted one can fail the op: an offline home
 /// node must not stall every later mutation in the vault. The outcome is
 /// reported per op rather than swallowed.
@@ -6101,6 +6252,64 @@ fn the_session_reconciles_the_accounts_byo_flag_to_the_vaulted_mode() {
     let (mut engine_b, _events, _tasks) = boot(&world, &blocks, &bob, 43);
     write(&mut engine_b, "photo3.bin");
     assert_eq!(toggles(&bob), 0, "nothing to reconcile once they agree");
+}
+
+/// The once-a-session guard latches on the reconcile *landing*, not on the
+/// attempt. The hosted ingress rejects a BYO account, so a flag left disagreeing
+/// by one transient PATCH failure would fail every hosted upload the session
+/// makes until the process restarts.
+#[test]
+fn a_byo_reconcile_that_did_not_land_is_retried_by_the_next_write() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    // The account carries the flag an external session set; this one is hosted.
+    blocks.advisory_quota.store(true, Ordering::Relaxed);
+    blocks.byo_down.store(true, Ordering::Relaxed);
+
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
+    let toggles = || {
+        alice
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.ends_with("/account/byo"))
+            .count()
+    };
+    let write = |engine: &mut Engine<FakeSeamTypes>, name: &str| {
+        write_file(
+            engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: name.to_owned(),
+            },
+            &(0..200u8).collect::<Vec<_>>(),
+        )
+        .expect("the write commits")
+    };
+
+    write(&mut engine, "photo.bin");
+    assert_eq!(toggles(), 1, "the session tried to reconcile");
+    assert!(
+        blocks.advisory_quota.load(Ordering::Relaxed),
+        "and the account still disagrees with the vaulted mode"
+    );
+
+    blocks.byo_down.store(false, Ordering::Relaxed);
+    write(&mut engine, "photo2.bin");
+    assert_eq!(toggles(), 2, "so the next write tries again");
+    assert!(
+        !blocks.advisory_quota.load(Ordering::Relaxed),
+        "and this one landed"
+    );
+
+    write(&mut engine, "photo3.bin");
+    assert_eq!(
+        toggles(),
+        2,
+        "a landed reconcile closes the window for good"
+    );
 }
 
 /// A settings load that cannot authenticate the member's choice refuses the

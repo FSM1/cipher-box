@@ -207,9 +207,11 @@ fn pin_by_cid(config: &ByoIpfsConfig, path: &str, field: &str, cid: &str) -> Htt
     }
 }
 
-/// The address Kubo reports storing the block under, held to the caller's.
-/// Decoded to bytes before the compare, so a node that spells the same address
-/// in another multibase is a match rather than a disagreement.
+/// The address Kubo reports storing the block under, held to the caller's. The
+/// compare accepts only the canonical base32 spelling `encode_content_cid_str`
+/// sent — the strict `decode_content_cid_str` is deliberately the one decoder
+/// the content plane has, and widening it to every multibase alphabet to read a
+/// provider's echo would enlarge what a remote can steer for no safety gained.
 ///
 /// This catches a node that re-chunked or hashed the block differently — a
 /// misconfiguration, not an attack. A provider can always claim an address it

@@ -17,6 +17,7 @@
 //! ([`DefaultsReason`]) — silently reverting a member's placement choice to the
 //! hosted default is what an adversary who can withhold the record gains.
 
+use core::fmt;
 use core::future::{Future, poll_fn};
 use core::num::NonZeroU64;
 use core::pin::pin;
@@ -100,21 +101,131 @@ impl Placement {
         !matches!(self, Self::External(_))
     }
 
-    /// A fixed-width tag for the destinations this placement names. Durable
-    /// per-version upload progress is written under it, so a resumed version
-    /// never reads a previous session's progress towards *other* destinations as
-    /// progress towards these — the blocks that progress covers are released
-    /// from staging and can no longer be placed anywhere else.
+    /// The byte destinations this placement names, as durable upload progress
+    /// records them.
     #[must_use]
-    pub fn tag(&self) -> [u8; SECRET_LEN] {
-        let (mode, endpoint) = match self {
-            Self::Hosted => (b"hosted", ""),
-            Self::External(config) => (b"extrnl", config.endpoint.as_str()),
-            Self::Dual(config) => (b"dual\0\0", config.endpoint.as_str()),
+    pub fn destinations(&self) -> Destinations {
+        match self {
+            Self::Hosted => Destinations {
+                hosted: true,
+                external: None,
+            },
+            Self::External(config) => Destinations {
+                hosted: false,
+                external: Some(byo_tag(config)),
+            },
+            Self::Dual(config) => Destinations {
+                hosted: true,
+                external: Some(byo_tag(config)),
+            },
+        }
+    }
+}
+
+/// A provider's identity as the upload mark records it. The destination is the
+/// account the credential names, not the URL alone, so a config differing only
+/// in kind or bearer must tag apart. Hashed because the bearer is secret: the
+/// preimage never leaves this function, and only the digest reaches staging.
+fn byo_tag(config: &ByoIpfsConfig) -> [u8; SECRET_LEN] {
+    let token = config
+        .access_token
+        .as_ref()
+        .map_or("", |token| token.as_str());
+    let mut tagged = Zeroizing::new(b"cipherbox/byo-destination\0".to_vec());
+    tagged.push(config.kind as u8);
+    // Length-prefixed: without it a differently-split endpoint/token pair
+    // concatenates to the same preimage.
+    tagged.extend_from_slice(&(config.endpoint.len() as u64).to_be_bytes());
+    tagged.extend_from_slice(config.endpoint.as_bytes());
+    tagged.extend_from_slice(&(token.len() as u64).to_be_bytes());
+    tagged.extend_from_slice(token.as_bytes());
+    hash(&tagged)
+}
+
+/// The set of byte destinations one write's blocks go to. Durable per-version
+/// upload progress is written under it, so a resumed version reads a previous
+/// session's progress only where the destinations it must reach now already
+/// hold those blocks — progress releases them from staging, after which they
+/// can never be placed anywhere else.
+///
+/// The two legs are kept apart rather than folded into one tag because they
+/// fail differently: only the leg that can fail an op has to hold the released
+/// blocks for the version to publish (#34 D1).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Destinations {
+    hosted: bool,
+    external: Option<[u8; SECRET_LEN]>,
+}
+
+impl fmt::Debug for Destinations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Destinations")
+            .field("hosted", &self.hosted)
+            .field("external", &self.external.map(|_| "<tag>"))
+            .finish()
+    }
+}
+
+impl Destinations {
+    /// The fixed width of the encoded form.
+    pub const LEN: usize = 2 + SECRET_LEN;
+
+    /// The wire form the upload mark carries.
+    #[must_use]
+    pub fn encode(&self) -> [u8; Self::LEN] {
+        let mut out = [0u8; Self::LEN];
+        out[0] = u8::from(self.hosted);
+        out[1] = u8::from(self.external.is_some());
+        if let Some(tag) = &self.external {
+            out[2..].copy_from_slice(tag);
+        }
+        out
+    }
+
+    /// Recover destinations from a stored mark, fail-closed: a leg flag outside
+    /// `{0, 1}`, a tag under an absent leg, or a set naming no destination at
+    /// all is not something [`encode`](Self::encode) can produce, so it says
+    /// nothing about where any block went.
+    #[must_use]
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        let bytes: [u8; Self::LEN] = bytes.try_into().ok()?;
+        let (hosted, external) = match (bytes[0], bytes[1]) {
+            (0, 1) => (false, true),
+            (1, 0) => (true, false),
+            (1, 1) => (true, true),
+            _ => return None,
         };
-        let mut tagged = mode.to_vec();
-        tagged.extend_from_slice(endpoint.as_bytes());
-        hash(&tagged)
+        let tag: [u8; SECRET_LEN] = bytes[2..].try_into().ok()?;
+        if !external && tag != [0u8; SECRET_LEN] {
+            return None;
+        }
+        Some(Self {
+            hosted,
+            external: external.then_some(tag),
+        })
+    }
+
+    /// Whether blocks already placed at `earlier` reached every leg that can
+    /// fail an op under *these* destinations — the hosted store, except under
+    /// external-only where the member's own provider is the only leg there is.
+    ///
+    /// This is what makes a leaf missing from staging safe to skip: it is not
+    /// that some destination once took it, but that the destination this
+    /// version must publish from holds it.
+    #[must_use]
+    pub fn required_legs_hold(&self, earlier: &Self) -> bool {
+        match self.hosted {
+            true => earlier.hosted,
+            false => self.external.is_some() && earlier.external == self.external,
+        }
+    }
+
+    /// Whether a dual write's best-effort mirror also holds those blocks. A
+    /// mirror that does not is reported, never fatal: it is the same gap a live
+    /// [`ProviderError`] on the external leg leaves.
+    #[must_use]
+    pub fn mirror_leg_holds(&self, earlier: &Self) -> bool {
+        !self.hosted || self.external.is_none() || earlier.external == self.external
     }
 }
 
@@ -1130,24 +1241,125 @@ mod tests {
     }
 
     /// Placement is what the durable upload mark is keyed by, so two placements
-    /// must not share a tag — a resumed version would otherwise read progress
-    /// towards destinations these are not.
+    /// must not share destinations — a resumed version would otherwise read
+    /// progress towards destinations these are not. One endpoint is not one
+    /// destination: the provider kind and the bearer name the account.
     #[test]
     fn each_set_of_destinations_tags_itself_apart() {
-        let a = byo("https://a.example", ByoKind::Kubo, Some("tok"));
-        let b = byo("https://b.example", ByoKind::Kubo, Some("tok"));
-        let tags = [
+        let one = "https://a.example";
+        let variants = [
             Placement::Hosted,
-            Placement::External(a.clone()),
-            Placement::External(b.clone()),
-            Placement::Dual(a),
-            Placement::Dual(b),
+            Placement::External(byo(one, ByoKind::Kubo, Some("tok"))),
+            Placement::External(byo(one, ByoKind::Kubo, Some("other-tok"))),
+            Placement::External(byo(one, ByoKind::Kubo, None)),
+            Placement::External(byo("https://b.example", ByoKind::Kubo, Some("tok"))),
+            Placement::Dual(byo(one, ByoKind::Kubo, Some("tok"))),
+            Placement::Dual(byo(one, ByoKind::Psa, Some("tok"))),
+            Placement::Dual(byo(one, ByoKind::Pinata, Some("tok"))),
         ]
-        .map(|placement| placement.tag());
-        for (i, tag) in tags.iter().enumerate() {
-            for other in &tags[i + 1..] {
+        .map(|placement| placement.destinations().encode());
+        for (i, tag) in variants.iter().enumerate() {
+            for other in &variants[i + 1..] {
                 assert_ne!(tag, other, "distinct destinations, distinct tags");
             }
         }
+    }
+
+    /// The tag preimage is length-prefixed, so splitting the same bytes
+    /// differently across endpoint and bearer is a different destination.
+    #[test]
+    fn a_resplit_endpoint_and_bearer_are_not_one_destination() {
+        assert_ne!(
+            byo_tag(&byo("https://a.example/x", ByoKind::Kubo, Some("y"))),
+            byo_tag(&byo("https://a.example/", ByoKind::Kubo, Some("xy"))),
+        );
+    }
+
+    /// A leaf released from staging is safe to skip only where the leg that can
+    /// fail this op already holds it. The hosted leg is that leg everywhere but
+    /// external-only, so switching the mirror on or off never strands a version
+    /// whose bytes the hosted store already took.
+    #[test]
+    fn progress_carries_exactly_where_the_op_failing_leg_already_holds_the_bytes() {
+        let one = byo("https://a.example", ByoKind::Kubo, Some("tok"));
+        let two = byo("https://b.example", ByoKind::Kubo, Some("tok"));
+        let carries = |here: &Placement, earlier: &Placement| {
+            here.destinations()
+                .required_legs_hold(&earlier.destinations())
+        };
+
+        let hosted = Placement::Hosted;
+        let dual_one = Placement::Dual(one.clone());
+        let dual_two = Placement::Dual(two.clone());
+        let external_one = Placement::External(one);
+        let external_two = Placement::External(two);
+
+        for (here, earlier) in [
+            (&dual_one, &hosted),
+            (&hosted, &dual_one),
+            (&dual_one, &dual_two),
+            (&external_one, &dual_one),
+            (&external_one, &external_one),
+        ] {
+            assert!(carries(here, earlier), "the required leg holds the bytes");
+        }
+        for (here, earlier) in [
+            (&hosted, &external_one),
+            (&dual_one, &external_one),
+            (&external_one, &hosted),
+            (&external_one, &external_two),
+            (&external_one, &dual_two),
+        ] {
+            assert!(
+                !carries(here, earlier),
+                "the required leg never received them"
+            );
+        }
+    }
+
+    /// A dual mirror that missed the released blocks is a gap to report, and
+    /// only dual has a mirror to gap.
+    #[test]
+    fn only_a_dual_mirror_can_gap() {
+        let one = byo("https://a.example", ByoKind::Kubo, Some("tok"));
+        let two = byo("https://b.example", ByoKind::Kubo, Some("tok"));
+        let holds = |here: &Placement, earlier: &Placement| {
+            here.destinations()
+                .mirror_leg_holds(&earlier.destinations())
+        };
+        let dual_one = Placement::Dual(one.clone());
+
+        assert!(!holds(&dual_one, &Placement::Hosted));
+        assert!(!holds(&dual_one, &Placement::Dual(two)));
+        assert!(holds(&dual_one, &dual_one));
+        assert!(holds(&Placement::Hosted, &dual_one));
+        assert!(holds(&Placement::External(one), &Placement::Hosted));
+    }
+
+    /// AGENTS.md rule 8: the reader accepts exactly what the writer can emit.
+    #[test]
+    fn destinations_decode_only_what_encode_can_produce() {
+        let one = byo("https://a.example", ByoKind::Kubo, Some("tok"));
+        for placement in [
+            Placement::Hosted,
+            Placement::External(one.clone()),
+            Placement::Dual(one),
+        ] {
+            let encoded = placement.destinations().encode();
+            assert_eq!(
+                Destinations::decode(&encoded),
+                Some(placement.destinations()),
+            );
+        }
+        let mut hosted = Placement::Hosted.destinations().encode();
+        hosted[2] = 1;
+        assert_eq!(
+            Destinations::decode(&hosted),
+            None,
+            "a tag under an absent external leg is not an encoding"
+        );
+        assert_eq!(Destinations::decode(&[0u8; Destinations::LEN]), None);
+        assert_eq!(Destinations::decode(&[2u8; Destinations::LEN]), None);
+        assert_eq!(Destinations::decode(&[]), None);
     }
 }
