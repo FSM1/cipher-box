@@ -11,8 +11,13 @@
 //! `ipnsName`, the IPNS signing keypair, and `writeKey` all derive from
 //! `writeSeed(node) = KDF(writeScopeSeed, node.id)` (CONTEXT.md "Write seed"), so a
 //! fresh write scope seed moves every node to a fresh name under a fresh signing
-//! key. The read plane is untouched — override seeds, read keys, and `minReadEpoch`
-//! carry verbatim, and no rotation path re-encrypts content bytes (#26 D6).
+//! key. The read plane's **keys** are untouched — override seeds, read keys, and
+//! `minReadEpoch` carry verbatim, and no rotation path re-encrypts content bytes
+//! (#26 D6). Read-body *metadata* is not: every `ChildRef.ipnsName` in the subtree
+//! names a node the wave moves, and a read-only survivor derives no write name, so
+//! each parent's read body is rewritten and re-sealed under its unchanged read key
+//! at its unchanged read epoch (blueprint/engine.md "rotateScopeWrite"). The
+//! republish is therefore not byte-stable.
 //!
 //! # Ordering is the safety property (#34 D4)
 //!
@@ -50,9 +55,9 @@
 //! [`build_repoint_object`]'s two encode-side invariants are release-active, never
 //! a `debug_assert!` (AGENTS.md rule 8). Entropy enters only through the
 //! [`Entropy`] seam; the impure edges are the injected [`WriteSubtreeResolver`] and
-//! [`WriteWavePublisher`] (network wiring not landed, faked in this slice).
+//! [`WriteWavePublisher`] (`net/rotation.rs` holds the production publisher).
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use zeroize::Zeroizing;
 
@@ -61,7 +66,7 @@ use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{GrantSetCommitment, verify_grant_set};
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
-use cipherbox_core::suite::secret::SECRET_LEN;
+use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 
 use super::eager_set::ResolveFailure;
 use crate::entropy::{Entropy, EntropyError};
@@ -97,25 +102,37 @@ pub enum RepointChannel {
     Tombstone,
 }
 
-/// The three channels in canonical publish order: pointer first (the authoritative
-/// switch), then the two accelerators.
-const REPOINT_CHANNELS: [RepointChannel; 3] = [
-    RepointChannel::ScopePointer,
-    RepointChannel::Mailbox,
-    RepointChannel::Tombstone,
-];
+/// The two accelerator channels, published after the canonical
+/// [`RepointChannel::ScopePointer`] flip.
+const REPOINT_ACCELERATORS: [RepointChannel; 2] =
+    [RepointChannel::Mailbox, RepointChannel::Tombstone];
 
-/// One node re-published at its freshly derived name — the record the publisher
-/// CAS-installs. Assembling the record bytes (read-body carried verbatim, write-
-/// body re-sealed at the new write epoch for the root) and IPNS-signing them under
-/// the node's fresh write keypair is not landed; this slice
-/// fakes the publish and carries only the routing identity.
+/// The order to republish one node at its freshly derived name. It carries
+/// routing identity and the narrowest key material the publish needs — never the
+/// record's authoring material: the publisher re-resolves the node at
+/// [`Self::current_name`] and rewrites what moved, so the wave drags neither
+/// O(subtree) bodies nor per-node read keys through this primitive
+/// (blueprint/engine.md "rotateScopeWrite").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepublishedNode {
     /// The node id being republished.
     pub node_id: [u8; 16],
+    /// The node's current (pre-wave) `ipnsName` — where the publisher does its
+    /// gated read of the record it is about to succeed.
+    pub current_name: IpnsName,
     /// The freshly derived `ipnsName` the record is published at.
     pub new_name: IpnsName,
+    /// Each in-scope direct child's freshly derived name, keyed by child node id.
+    /// The publisher rewrites the matching `ChildRef.ipnsName` and re-seals the
+    /// read body: a read-only survivor holds no `writeScopeSeed` and can derive
+    /// no name, so without the rewrite it reaches the new root and stops. Empty
+    /// for a leaf. Child-first ordering makes every entry known before the parent
+    /// publishes.
+    pub child_names: BTreeMap<[u8; 16], IpnsName>,
+    /// `writeSeed(freshWriteScopeSeed, node_id)` — the capability that signs at
+    /// [`Self::new_name`], and nothing wider: the wave's scope seed never leaves
+    /// the orchestrator, so the publisher can derive no other node's name.
+    pub write_seed: SecretBytes,
     /// The write epoch the record publishes at (bumped for the whole scope).
     pub write_epoch: u64,
     /// Whether this is the scope root (re-pointed last, old name lingers).
@@ -134,27 +151,29 @@ pub trait WriteSubtreeResolver {
     async fn resolve_node(&self, node_id: &[u8; 16]) -> Result<WriteScopeNode, ResolveFailure>;
 }
 
-/// The write edge of the name wave: register-first name enrollment, CAS republish,
-/// batch retire, and the three-channel re-point — the analogue of the cascade's
-/// `ScopeRootPublisher`, mapping to the API pin/name registry and `/routing/v1`
-/// transport. That wiring is not landed; tests fake it.
+/// The write edge of the name wave: CAS republish, batch retire, and the
+/// three-channel re-point — the analogue of the cascade's `ScopeRootPublisher`,
+/// mapping to the API pin/name registry and `/routing/v1` transport
+/// (`net/rotation.rs::WriteWaveNet`).
+///
+/// Register-first is **not** a method here. The publish pipeline registers the
+/// name it is about to PUT and blocks on it (#28 D5), so the trait offers no way
+/// to reach the transport with an unregistered name — the ordering law is
+/// structural rather than an orchestrator convention.
 ///
 /// Contract the orchestrator relies on and the fake honours:
 ///
-/// - **register / retire are idempotent** — a resumed wave re-registers and
+/// - **republish / retire are idempotent** — a resumed wave re-publishes and
 ///   re-retires the same names harmlessly.
 /// - **`is_republished` reads published state only** — it is how a resumed wave
 ///   skips already-done nodes without any in-memory checkpoint.
 pub trait WriteWavePublisher {
-    /// Register-first: enroll `new_name` in the name registry (idempotent). MUST
-    /// precede retiring the predecessor it replaces — never orphan a name.
-    async fn register(&self, new_name: &IpnsName) -> Result<(), WritePublishError>;
-
     /// Whether a record is already published at `new_name` — the resume query,
     /// answered from published state only (no in-memory carry across a crash).
     async fn is_republished(&self, new_name: &IpnsName) -> Result<bool, WritePublishError>;
 
-    /// CAS-publish `node`'s record at its freshly derived name.
+    /// Register-first then CAS-publish `node`'s record at its freshly derived
+    /// name, rewriting the child refs [`RepublishedNode::child_names`] names.
     async fn republish(&self, node: &RepublishedNode) -> Result<(), WritePublishError>;
 
     /// Batch-retire interior old names at wave completion. MUST run only **after**
@@ -169,8 +188,10 @@ pub trait WriteWavePublisher {
     ) -> Result<(), WritePublishError>;
 }
 
-/// Why one write-plane transport op did not durably land. All variants mean the
-/// wave must abort — it never claims completion on a dropped effect.
+/// Why one write-plane transport op did not durably land. Every variant aborts
+/// the wave — it never claims completion on a dropped effect — but only
+/// [`Self::Rejected`] is a trust verdict a retry cannot clear (rule 6: a
+/// fail-closed rejection is never laundered into an availability stall).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WritePublishError {
     /// The register / PUT did not land; nothing durable. Retryable.
@@ -181,6 +202,11 @@ pub enum WritePublishError {
     /// Register-first was rejected by the name registry (quota). Retryable once
     /// capacity frees.
     RegistryFull,
+    /// The publisher's own fail-closed verdict on the bytes it was about to sign
+    /// or the effect it was about to make irreversible — a gate rejection on the
+    /// re-resolve, a read body whose children disagree with the wave, or a retire
+    /// batch naming the lingering root. Re-running reaches the same verdict.
+    Rejected,
 }
 
 impl core::fmt::Display for WritePublishError {
@@ -189,6 +215,7 @@ impl core::fmt::Display for WritePublishError {
             WritePublishError::NotLanded => f.write_str("write-plane record did not land"),
             WritePublishError::LostRace => f.write_str("write-plane publish lost the CAS race"),
             WritePublishError::RegistryFull => f.write_str("name registry rejected register-first"),
+            WritePublishError::Rejected => f.write_str("write-plane publish refused fail-closed"),
         }
     }
 }
@@ -226,14 +253,19 @@ pub struct RotateScopeWritePlan<'a> {
 }
 
 /// A completed write rotation. Holding one is proof the whole subtree was
-/// republished, the root re-pointed on all three channels, and interior old names
-/// retired — an incomplete wave returns [`WriteRotateError`] instead.
+/// republished, the **canonical** re-point landed, and interior old names retired
+/// — an incomplete wave returns [`WriteRotateError`] instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WriteRotationOutcome {
     /// The new write epoch the scope was cut to (`current_write_epoch + 1`).
     pub new_write_epoch: u64,
     /// The scope root's new `ipnsName` (`currentRootName` in the re-point object).
     pub new_root_name: IpnsName,
+    /// Which accelerator channels the re-point actually reached, in publish
+    /// order. Nothing on them is load-bearing (see [`RepointChannel`]), so a
+    /// refused accelerator leaves the wave complete and is reported rather than
+    /// aborting a rotation whose canonical re-point already flipped the pointer.
+    pub repoint_accelerators: Vec<RepointChannel>,
     /// The number of interior (non-root) nodes in the scope's subtree — the wave
     /// covers all of them, though a resumed wave may have republished some in a
     /// prior run (skipped via `is_republished`), and a post-flip-crash resume
@@ -356,7 +388,8 @@ impl WriteRotateError {
             | WriteRotateError::EpochExhausted
             | WriteRotateError::WriteEpochNotAdvancing
             | WriteRotateError::IdentityRepoint => false,
-            WriteRotateError::Entropy(_) | WriteRotateError::Publish { .. } => true,
+            WriteRotateError::Entropy(_) => true,
+            WriteRotateError::Publish { error, .. } => *error != WritePublishError::Rejected,
             WriteRotateError::Resolve { reason, .. } => *reason == ResolveFailure::Unavailable,
             WriteRotateError::Repoint(e) => matches!(e, PointerError::Entropy(_)),
         }
@@ -470,12 +503,20 @@ where
         .split_first()
         .expect("collect_subtree always yields at least the root");
 
-    // 5) Child-first wave over the descendants (deepest first): register-first, then
-    //    republish unless already done (resume skips it via published state).
+    // 5) Child-first wave over the descendants (deepest first): republish unless
+    //    already done (resume skips it via published state).
     let mut interior_old_names: Vec<IpnsName> = Vec::with_capacity(descendants.len());
     for node in descendants.iter().rev() {
         let new_name = derive_write_name(&write_scope_seed, &node.node_id);
-        republish_node(publisher, node.node_id, &new_name, new_write_epoch, false).await?;
+        republish_node(
+            publisher,
+            &write_scope_seed,
+            node,
+            &new_name,
+            new_write_epoch,
+            false,
+        )
+        .await?;
         // Retire only a superseded name, never one a node still lives at: on a
         // post-flip resume the resolver reports the already-migrated (new) name as
         // current, and retiring it would orphan a live descendant (never orphan).
@@ -489,7 +530,8 @@ where
     let new_root_name = derive_write_name(&write_scope_seed, &root.node_id);
     republish_node(
         publisher,
-        root.node_id,
+        &write_scope_seed,
+        root,
         &new_root_name,
         new_write_epoch,
         true,
@@ -516,15 +558,19 @@ where
         &repoint,
     )
     .map_err(WriteRotateError::Repoint)?;
-    for channel in REPOINT_CHANNELS {
-        publisher
-            .publish_repoint(channel, &block)
-            .await
-            .map_err(|error| WriteRotateError::Publish {
-                stage: repoint_stage(channel),
-                node_id: scope_id,
-                error,
-            })?;
+    publisher
+        .publish_repoint(RepointChannel::ScopePointer, &block)
+        .await
+        .map_err(|error| WriteRotateError::Publish {
+            stage: repoint_stage(RepointChannel::ScopePointer),
+            node_id: scope_id,
+            error,
+        })?;
+    let mut repoint_accelerators = Vec::with_capacity(REPOINT_ACCELERATORS.len());
+    for channel in REPOINT_ACCELERATORS {
+        if publisher.publish_repoint(channel, &block).await.is_ok() {
+            repoint_accelerators.push(channel);
+        }
     }
 
     // 8) Batch-retire the interior old names — only now, after the re-point flipped
@@ -543,56 +589,55 @@ where
     Ok(WriteRotationOutcome {
         new_write_epoch,
         new_root_name,
+        repoint_accelerators,
         interior_node_count: descendants.len(),
     })
 }
 
-/// Register-first then CAS-republish one node at `new_name`, skipping the
-/// republish when published state already carries it (the resume idempotence).
+/// CAS-republish one node at `new_name`, skipping the republish when published
+/// state already carries it (the resume idempotence).
 async fn republish_node<P: WriteWavePublisher>(
     publisher: &P,
-    node_id: [u8; 16],
+    write_scope_seed: &[u8; SECRET_LEN],
+    node: &WriteScopeNode,
     new_name: &IpnsName,
     write_epoch: u64,
     is_root: bool,
 ) -> Result<(), WriteRotateError> {
-    // Register-first: enroll the new name BEFORE its predecessor is ever retired.
-    publisher
-        .register(new_name)
-        .await
-        .map_err(|error| WriteRotateError::Publish {
-            stage: "register",
-            node_id,
-            error,
-        })?;
+    let node_id = node.node_id;
+    let publish_error = |error| WriteRotateError::Publish {
+        stage: "republish",
+        node_id,
+        error,
+    };
 
     // Resume: skip a node whose new-name record already landed on a prior run.
-    let already =
-        publisher
-            .is_republished(new_name)
-            .await
-            .map_err(|error| WriteRotateError::Publish {
-                stage: "republish",
-                node_id,
-                error,
-            })?;
-    if already {
+    if publisher
+        .is_republished(new_name)
+        .await
+        .map_err(publish_error)?
+    {
         return Ok(());
     }
+
+    let child_names = node
+        .child_node_ids
+        .iter()
+        .map(|child| (*child, derive_write_name(write_scope_seed, child)))
+        .collect();
 
     publisher
         .republish(&RepublishedNode {
             node_id,
+            current_name: node.current_name.clone(),
             new_name: new_name.clone(),
+            child_names,
+            write_seed: kdf::write_seed(write_scope_seed, &node_id),
             write_epoch,
             is_root,
         })
         .await
-        .map_err(|error| WriteRotateError::Publish {
-            stage: "republish",
-            node_id,
-            error,
-        })
+        .map_err(publish_error)
 }
 
 /// The `repoint-<channel>` publish-stage label for an error.
@@ -691,7 +736,6 @@ mod tests {
     /// are asserted over.
     #[derive(Debug, Clone, PartialEq, Eq)]
     enum Event {
-        Register(String),
         Republish { node_id: [u8; 16], is_root: bool },
         Retire(Vec<String>),
         Repoint(RepointChannel),
@@ -761,18 +805,22 @@ mod tests {
     #[derive(Clone, Default)]
     struct WaveState {
         published: Rc<RefCell<HashSet<String>>>,
-        registered: Rc<RefCell<HashSet<String>>>,
         retired: Rc<RefCell<HashSet<String>>>,
         events: Rc<RefCell<Vec<Event>>>,
         republish_calls: Rc<RefCell<HashMap<String, usize>>>,
         repoint_channels: Rc<RefCell<Vec<RepointChannel>>>,
+        /// Every order the wave issued, in call order — the rewrite material the
+        /// concrete publisher acts on.
+        orders: Rc<RefCell<Vec<RepublishedNode>>>,
     }
 
     /// A fake publisher over shared [`WaveState`], optionally scripted to fail once
-    /// a given number of republish calls have landed (to crash a wave mid-flight).
+    /// a given number of republish calls have landed (to crash a wave mid-flight),
+    /// or to refuse a given re-point channel.
     struct FakePublisher {
         state: WaveState,
         fail_republish_after: Option<usize>,
+        refuse_channel: Option<RepointChannel>,
     }
 
     impl FakePublisher {
@@ -780,29 +828,26 @@ mod tests {
             Self {
                 state,
                 fail_republish_after: None,
+                refuse_channel: None,
             }
         }
         fn failing_after(state: WaveState, n: usize) -> Self {
             Self {
                 state,
                 fail_republish_after: Some(n),
+                refuse_channel: None,
+            }
+        }
+        fn refusing(state: WaveState, channel: RepointChannel) -> Self {
+            Self {
+                state,
+                fail_republish_after: None,
+                refuse_channel: Some(channel),
             }
         }
     }
 
     impl WriteWavePublisher for FakePublisher {
-        async fn register(&self, new_name: &IpnsName) -> Result<(), WritePublishError> {
-            self.state
-                .registered
-                .borrow_mut()
-                .insert(new_name.as_str().to_owned());
-            self.state
-                .events
-                .borrow_mut()
-                .push(Event::Register(new_name.as_str().to_owned()));
-            Ok(())
-        }
-
         async fn is_republished(&self, new_name: &IpnsName) -> Result<bool, WritePublishError> {
             Ok(self.state.published.borrow().contains(new_name.as_str()))
         }
@@ -818,11 +863,6 @@ mod tests {
                     }
                 }
             }
-            // Register-first invariant: a name is registered before it is published.
-            assert!(
-                self.state.registered.borrow().contains(&key),
-                "republish before register — orphaned name"
-            );
             *self
                 .state
                 .republish_calls
@@ -830,6 +870,7 @@ mod tests {
                 .entry(key.clone())
                 .or_insert(0) += 1;
             self.state.published.borrow_mut().insert(key);
+            self.state.orders.borrow_mut().push(node.clone());
             self.state.events.borrow_mut().push(Event::Republish {
                 node_id: node.node_id,
                 is_root: node.is_root,
@@ -851,6 +892,9 @@ mod tests {
             channel: RepointChannel,
             _block: &[u8],
         ) -> Result<(), WritePublishError> {
+            if self.refuse_channel == Some(channel) {
+                return Err(WritePublishError::NotLanded);
+            }
             self.state.repoint_channels.borrow_mut().push(channel);
             self.state.events.borrow_mut().push(Event::Repoint(channel));
             Ok(())
@@ -973,6 +1017,10 @@ mod tests {
             ],
             "all three channels, pointer first"
         );
+        assert_eq!(
+            outcome.repoint_accelerators,
+            vec![RepointChannel::Mailbox, RepointChannel::Tombstone]
+        );
 
         // Retire is LAST, after the re-point, and the old ROOT name is never retired.
         let retire_pos = events
@@ -992,10 +1040,7 @@ mod tests {
     }
 
     #[test]
-    fn register_first_never_orphans_a_name() {
-        // No interior name is retired before the pointer flips, and every republished
-        // node was registered first (the publisher's own assert also enforces the
-        // per-node ordering).
+    fn no_interior_name_retires_before_the_pointer_flips() {
         let owner = owner();
         let (c, sig) = commitment(&owner);
         let resolver = tree();
@@ -1025,16 +1070,162 @@ mod tests {
             first_retire.map(|r| r > first_repoint).unwrap_or(true),
             "no interior name is retired before the pointer flips (never orphan)"
         );
-        let registers = events
+        assert_eq!(
+            events
+                .iter()
+                .filter(|ev| matches!(ev, Event::Republish { .. }))
+                .count(),
+            5
+        );
+    }
+
+    #[test]
+    fn every_order_carries_the_derived_names_of_its_in_scope_children() {
+        // ADR 0004: a read-only survivor derives no write name, so the wave must
+        // hand each parent its children's freshly derived names for the read-body
+        // rewrite. Child-first ordering makes them known before the parent's turn.
+        let owner = owner();
+        let (c, sig) = commitment(&owner);
+        let resolver = tree();
+        let state = WaveState::default();
+        let publisher = FakePublisher::new(state.clone());
+        let current_root = old_name_of(&SCOPE);
+        let seed = [0x5e; 32];
+
+        block_on(async {
+            let mut e = SeededEntropy::new(11);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &publisher,
+                &plan(&owner, &c, &sig, &current_root, Some(&seed)),
+            )
+            .await
+        })
+        .expect("rotation succeeds");
+
+        let orders = state.orders.borrow();
+        let by_id: HashMap<[u8; 16], &RepublishedNode> =
+            orders.iter().map(|o| (o.node_id, o)).collect();
+        let expected_children: HashMap<[u8; 16], Vec<[u8; 16]>> = resolver
+            .nodes
             .iter()
-            .filter(|ev| matches!(ev, Event::Register(_)))
-            .count();
-        let republishes = events
-            .iter()
-            .filter(|ev| matches!(ev, Event::Republish { .. }))
-            .count();
-        assert_eq!(registers, 5);
-        assert_eq!(republishes, 5);
+            .map(|(id, kids)| (*id, kids.clone()))
+            .collect();
+
+        for order in orders.iter() {
+            let kids = &expected_children[&order.node_id];
+            assert_eq!(
+                order.child_names.len(),
+                kids.len(),
+                "one rewrite entry per in-scope child"
+            );
+            for kid in kids {
+                let mapped = &order.child_names[kid];
+                // The name the parent will write is exactly the name the child was
+                // republished at — the whole point of the child-first ordering.
+                assert_eq!(mapped, &by_id[kid].new_name);
+                assert_eq!(mapped, &derive_write_name(&seed, kid));
+            }
+            // The write seed is the node's own, and nothing wider: it signs at the
+            // new name and derives no other node's.
+            assert_eq!(order.write_seed, kdf::write_seed(&seed, &order.node_id));
+            assert_eq!(
+                IpnsName::from_public_key(
+                    &kdf::ipns_keypair(order.write_seed.as_bytes()).verifying_key()
+                ),
+                order.new_name,
+                "the handed seed signs at the handed name"
+            );
+            assert_eq!(order.current_name, old_name_of(&order.node_id));
+        }
+    }
+
+    #[test]
+    fn a_refused_accelerator_leaves_the_wave_complete() {
+        // The mailbox and the tombstone carry nothing load-bearing, so a wave whose
+        // canonical pointer flip landed must not be re-run for them — it reports
+        // which accelerators it reached instead.
+        let owner = owner();
+        let (c, sig) = commitment(&owner);
+        let resolver = tree();
+        let state = WaveState::default();
+        let publisher = FakePublisher::refusing(state.clone(), RepointChannel::Mailbox);
+        let current_root = old_name_of(&SCOPE);
+
+        let outcome = block_on(async {
+            let mut e = SeededEntropy::new(21);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &publisher,
+                &plan(&owner, &c, &sig, &current_root, None),
+            )
+            .await
+        })
+        .expect("a refused accelerator does not abort the wave");
+
+        assert_eq!(
+            outcome.repoint_accelerators,
+            vec![RepointChannel::Tombstone]
+        );
+        assert_eq!(
+            *state.repoint_channels.borrow(),
+            vec![RepointChannel::ScopePointer, RepointChannel::Tombstone]
+        );
+        assert_eq!(
+            state.retired.borrow().len(),
+            4,
+            "the wave still completes its retirement"
+        );
+    }
+
+    #[test]
+    fn a_refused_canonical_repoint_aborts_before_any_retire() {
+        // The scope pointer is the authoritative switch: without it the old names
+        // are still the live ones, so retiring them would orphan the subtree.
+        let owner = owner();
+        let (c, sig) = commitment(&owner);
+        let resolver = tree();
+        let state = WaveState::default();
+        let publisher = FakePublisher::refusing(state.clone(), RepointChannel::ScopePointer);
+        let current_root = old_name_of(&SCOPE);
+
+        let err = block_on(async {
+            let mut e = SeededEntropy::new(22);
+            rotate_scope_write(
+                &mut e,
+                &resolver,
+                &publisher,
+                &plan(&owner, &c, &sig, &current_root, None),
+            )
+            .await
+        })
+        .expect_err("the canonical channel is not optional");
+        assert_eq!(err.check(), "publish-failed");
+        assert!(
+            state.retired.borrow().is_empty(),
+            "nothing retires while the old names are still the live ones"
+        );
+    }
+
+    #[test]
+    fn a_fail_closed_publish_refusal_is_not_retryable() {
+        // Rule 6: a publisher's own trust verdict must not be laundered into an
+        // availability stall a retry loop keeps charging.
+        for (error, retryable) in [
+            (WritePublishError::NotLanded, true),
+            (WritePublishError::LostRace, true),
+            (WritePublishError::RegistryFull, true),
+            (WritePublishError::Rejected, false),
+        ] {
+            let err = WriteRotateError::Publish {
+                stage: "republish",
+                node_id: SCOPE,
+                error,
+            };
+            assert_eq!(err.is_retryable(), retryable);
+        }
     }
 
     #[test]
@@ -1110,6 +1301,20 @@ mod tests {
             calls.values().all(|&n| n == 1),
             "no node republished twice — resume is idempotent off published records"
         );
+        // Across both runs every node was ordered with its children's post-wave
+        // names, so a resume leaves no stale child name behind.
+        let orders = state.orders.borrow();
+        let published: HashMap<[u8; 16], IpnsName> = orders
+            .iter()
+            .map(|o| (o.node_id, o.new_name.clone()))
+            .collect();
+        for order in orders.iter() {
+            for (child, name) in &order.child_names {
+                assert_eq!(name, &published[child]);
+            }
+        }
+        drop(orders);
+
         // The wave completed: pointer flipped on all three channels, interior retired.
         assert_eq!(state.repoint_channels.borrow().len(), 3);
         assert_eq!(state.retired.borrow().len(), 4);

@@ -57,4 +57,4 @@ pub(crate) use resolve::{
 };
 pub use retire::{OrphanHeads, orphaned_head, retire, root_retire_ready};
 pub use revival::{ReviveError, ReviveRequest, revive};
-pub use rotation::{OwnerRotationKeys, OwnerRotationNet};
+pub use rotation::{OwnerRotationKeys, OwnerRotationNet, WriteWaveNet};
