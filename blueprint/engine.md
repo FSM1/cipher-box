@@ -657,17 +657,35 @@ contract-test suite owned by the testing-strategy blueprint (#28 D6).
     write's second leg, and **external-only over a pin-by-CID provider is a
     placement refusal** — no leg would hold the block for the service to
     fetch, so the published record would name bytes that exist nowhere.
-  - **Dual runs both legs and only hosted can fail the op.** Under strict-FIFO
-    stop-at-first-failure a both-must-succeed rule would let an offline home
-    node stall every later mutation in the vault. The external leg's outcome
-    is reported per op rather than swallowed, and no retry is queued for it.
-    Under external, the member's provider _is_ the byte path, so its refusal
-    is the op's.
-  - **Durable upload progress is keyed by the placement it was written
-    under.** A resumed version's confirmed prefix is no longer on the device,
-    so progress towards one set of destinations can never be read as progress
-    towards another — a mode changed between sessions re-fetches rather than
-    publishing a version the new placement never received.
+  - **Dual runs both legs, both retrying inside the op, and only hosted can
+    fail it** (#34 D1). Under strict-FIFO stop-at-first-failure a
+    both-must-succeed rule would let an offline home node stall every later
+    mutation in the vault, so the op completes once hosted succeeds and
+    external has either succeeded or exhausted its attempts. That budget is
+    the **op's, not each block's**: a node that is down refuses every block
+    alike, so once it is spent the mirror is abandoned for that version rather
+    than re-asked per block. The outcome is reported per op rather than
+    swallowed, and no retry is queued for it. Under external, the member's
+    provider _is_ the byte path, so its refusal is the op's.
+  - **A partial-success report waits for the publish.** The external-pin
+    shortfall says the version published and its content is retrievable, so it
+    is emitted after the record lands, never at the end of block upload — a
+    pass that still fails to publish has made no such promise.
+  - **Durable upload progress is keyed by the destinations that took the
+    bytes.** A resumed version's confirmed prefix is no longer on the device,
+    so a session only skips it where the leg that can fail _this_ op already
+    holds it: the hosted store, except under external-only where the member's
+    provider is the only leg there is. A mark therefore records what the legs
+    actually took, not what the mode named — a dual write whose mirror missed
+    a block narrows its mark to the hosted leg, so a later external-only
+    session re-places rather than publishing content that node never received.
+  - **The destination identity is the provider, not the credential.** It
+    covers the provider kind and endpoint and deliberately excludes the
+    bearer: a mark that stops matching is not merely ignored, since the leaves
+    it covered are already released, so keying on a rotatable secret would
+    make a routine credential rotation leave the version unpublishable.
+    Residual: two accounts on one multi-tenant pin service tag alike, which
+    only ever reaches the best-effort mirror report.
   - The placement is decided once at start and holds for the session, so a
     provider or credential revoked elsewhere still receives blocks until the
     process restarts. Stated, not closed.

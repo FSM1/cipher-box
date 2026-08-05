@@ -439,6 +439,51 @@ struct UploadedVersion {
     mirror_gap: bool,
 }
 
+/// Attempts one op may spend on the member's own provider before its mirror is
+/// abandoned for that version. A dual write completes when hosted succeeds and
+/// external has either succeeded or exhausted its attempts (#34 D1), so the leg
+/// needs attempts to spend — one refusal is a blip, not a verdict.
+const MIRROR_ATTEMPTS: u32 = 3;
+
+/// A dual write's best-effort mirror leg, carried across one op's blocks.
+///
+/// The budget is per op rather than per block because a provider that is down
+/// refuses every block alike: spending a fresh budget on each would stall the
+/// whole pass behind one dead endpoint, and a version the mirror has already
+/// missed a block of is not one it can serve whatever the rest do.
+struct MirrorLeg {
+    /// Attempts left to spend. Reaching zero is what abandons the mirror: the
+    /// block that spent the last one never landed on it.
+    attempts: u32,
+    /// The first refusal, reported once the leg is abandoned.
+    refusal: Option<ProviderError>,
+}
+
+impl MirrorLeg {
+    fn new() -> Self {
+        Self {
+            attempts: MIRROR_ATTEMPTS,
+            refusal: None,
+        }
+    }
+
+    /// Whether the mirror is short of this version. Refusals a later attempt
+    /// recovered from are not: the block reached the provider.
+    fn missed(&self) -> bool {
+        self.attempts == 0
+    }
+
+    fn refused(&mut self, error: ProviderError) {
+        self.attempts = self.attempts.saturating_sub(1);
+        self.refusal.get_or_insert(error);
+    }
+
+    /// The refusal to report, which is one only where the mirror stayed short.
+    fn failure(self) -> Option<ProviderError> {
+        self.missed().then_some(self.refusal).flatten()
+    }
+}
+
 /// One record as this pass published it.
 struct Published {
     /// The sequence the self-adopt authenticated.
@@ -1035,6 +1080,7 @@ where
         let name = applied.effective_name.clone().ok_or(Halt::Unclassified)?;
         self.ensure_folder(scope, pass, parent).await?;
 
+        let mut shortfall = None;
         let (body, content_cids) = match node {
             NewNode::Folder => (NewNodeBody::Folder, Vec::new()),
             NewNode::File { content: None } => (
@@ -1047,6 +1093,7 @@ where
                 content: Some(staged),
             } => {
                 let uploaded = self.upload_version(scope, applied, staged).await?;
+                shortfall = mirror_shortfall(&uploaded);
                 (
                     NewNodeBody::File {
                         versions: vec![uploaded.version],
@@ -1096,6 +1143,7 @@ where
         .await
         .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
+        self.emit_mirror_shortfall(applied, shortfall);
         // Held only once the parent names it: a record nothing references is
         // not one the liveness loop should keep alive.
         self.hold(child_id.0, published.held);
@@ -1422,6 +1470,7 @@ where
             return Err(Halt::Unclassified);
         };
         let uploaded = self.upload_version(scope, applied, staged).await?;
+        let shortfall = mirror_shortfall(&uploaded);
         // Newest first, head is current (`crates/core/src/seal/body.rs`).
         versions.insert(0, uploaded.version);
         // Every retained version's root stays registered under this name, so a
@@ -1457,6 +1506,7 @@ where
             .await
             .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
+        self.emit_mirror_shortfall(applied, shortfall);
         if let Some(node) = self.base.borrow_mut().node_mut(target) {
             node.record_sequence = published.sequence;
             node.mtime = Some(modified_at);
@@ -1500,17 +1550,16 @@ where
         if !self.cancels.borrow_mut().enter_publish(applied.op_id) {
             return Err(Halt::Cancelled);
         }
-        // Once per op, not per block. A live refusal outranks the standing gap:
-        // it is the condition the member can still act on.
-        let mirror = uploaded
-            .external_failure
-            .as_ref()
-            .map(provider_failure)
-            .or_else(|| uploaded.mirror_gap.then_some(MIRROR_GAP));
-        if let Some(reason) = mirror {
+        Ok(uploaded)
+    }
+
+    /// Tell the member their mirror is short of this version — after the record
+    /// published, because [`OpPhase::ExternalPinFailed`] promises the content is
+    /// retrievable, which is only true once the record naming it is live.
+    fn emit_mirror_shortfall(&self, applied: &AppliedOp, reason: Option<&'static str>) {
+        if let Some(reason) = reason {
             self.emit_upload(applied, OpPhase::ExternalPinFailed, None, Some(reason));
         }
-        Ok(uploaded)
     }
 
     /// One version's blocks, uploaded and pinned: the `Version` its record
@@ -1525,7 +1574,10 @@ where
         // member's placement choice holds its content ops rather than picking a
         // destination for them.
         let placement = self.placement.as_ref().map_err(|_| Halt::Unclassified)?;
-        let mut external_failure = None;
+        // What the mark may claim, narrowed as the mirror misses blocks the mark
+        // covers ([`Destinations::mirror_missed`]).
+        let mut reached = placement.destinations();
+        let mut mirror = MirrorLeg::new();
         let root_block = self
             .staged_block(&staged.root_cid)
             .await?
@@ -1565,6 +1617,9 @@ where
         } = self
             .upload_mark(placement, &staged.root_cid, leaves)
             .await?;
+        if mirror_gap {
+            reached.mirror_missed();
+        }
         // The root manifest is block zero and goes up last, so the version's
         // whole block count is its leaves plus one.
         let total = blocks(leaves + 1);
@@ -1581,17 +1636,18 @@ where
             self.cancel_checkpoint(applied.op_id).await?;
             match self.staged_block(leaf_cid).await? {
                 Some(block) => {
-                    // First failure wins: the report names one leg, not the
-                    // last block that happened to miss it.
-                    let missed = self.upload_block(placement, leaf_cid, &block).await?;
-                    external_failure = external_failure.or(missed);
+                    self.upload_block(placement, &mut mirror, applied.op_id, leaf_cid, &block)
+                        .await?;
                     self.cancels.borrow_mut().confirmed(applied.op_id, leaf_cid);
+                    if mirror.missed() {
+                        reached.mirror_missed();
+                    }
                     // A leaf a lost release left staged behind the mark is
                     // re-uploaded here, and must not drag the mark back down
                     // over the leaves past it — those are released, so an
                     // uncovered one reads as loss.
                     if index + 1 > uploaded {
-                        self.mark_uploaded(placement, &staged.root_cid, index + 1, leaves)
+                        self.mark_uploaded(&reached, &staged.root_cid, index + 1, leaves)
                             .await?;
                     }
                     self.staging
@@ -1610,10 +1666,14 @@ where
         // The root goes up last and stays staged until the publish confirms: it
         // is the manifest every retry re-derives the plan from, so releasing it
         // before the record lands would strand a fully-uploaded version.
-        let missed = self
-            .upload_block(placement, &staged.root_cid, &root_block)
-            .await?;
-        external_failure = external_failure.or(missed);
+        self.upload_block(
+            placement,
+            &mut mirror,
+            applied.op_id,
+            &staged.root_cid,
+            &root_block,
+        )
+        .await?;
         self.cancels
             .borrow_mut()
             .confirmed(applied.op_id, &staged.root_cid);
@@ -1623,7 +1683,7 @@ where
         Ok(UploadedVersion {
             version: content.version(*key, applied.op.authored_at.0),
             content_cids,
-            external_failure,
+            external_failure: mirror.failure(),
             mirror_gap,
         })
     }
@@ -1676,20 +1736,23 @@ where
             }))
     }
 
-    /// Record that `count` of this version's `leaves` have uploaded. A
-    /// high-water mark, written *before* the leaf is released: it may
-    /// over-claim a leaf still staged, which the next pass re-uploads, but must
-    /// never lag or regress below one already released — the hole guard would
-    /// read those uploaded bytes as loss.
+    /// Record that `count` of this version's `leaves` have uploaded to
+    /// `reached`. A high-water mark, written *before* the leaf is released: it
+    /// may over-claim a leaf still staged, which the next pass re-uploads, but
+    /// must never lag or regress below one already released — the hole guard
+    /// would read those uploaded bytes as loss.
+    ///
+    /// `reached` is what the destinations *took*, not what the placement named:
+    /// a mark may only claim a leg that actually holds every leaf it covers.
     async fn mark_uploaded(
         &self,
-        placement: &Placement,
+        reached: &Destinations,
         root_cid: &[u8],
         count: usize,
         leaves: usize,
     ) -> Result<(), Halt> {
-        let mark = encode_upload_mark(&placement.destinations(), root_cid, count, leaves)
-            .ok_or(Halt::Unclassified)?;
+        let mark =
+            encode_upload_mark(reached, root_cid, count, leaves).ok_or(Halt::Unclassified)?;
         self.staging
             .put_staged_bytes(UPLOAD_MARK_KEY, &mark)
             .await
@@ -1715,27 +1778,36 @@ where
     /// still-staged set a suffix.
     ///
     /// Only the hosted leg can fail the op — see [`OpPhase::ExternalPinFailed`]
-    /// for why a dual write's mirror is reported instead.
+    /// for why a dual write's mirror is reported instead. That mirror retries
+    /// within the op out of `mirror`'s shared budget ([`MirrorLeg`]); an
+    /// external-only write has no second leg to absorb a refusal, so its
+    /// retries are the op-level valve's.
     async fn upload_block(
         &self,
         placement: &Placement,
+        mirror: &mut MirrorLeg,
+        op_id: OpId,
         cid: &[u8],
         block: &[u8],
-    ) -> Result<Option<ProviderError>, Halt> {
+    ) -> Result<(), Halt> {
         match placement {
-            Placement::Hosted => {
-                self.hosted_upload(cid, block).await?;
-                Ok(None)
-            }
-            Placement::External(config) => {
-                place_block(config, cid, block, self.http)
-                    .await
-                    .map_err(classify_placement)?;
-                Ok(None)
-            }
+            Placement::Hosted => self.hosted_upload(cid, block).await,
+            Placement::External(config) => place_block(config, cid, block, self.http)
+                .await
+                .map_err(classify_placement),
             Placement::Dual(config) => {
                 self.hosted_upload(cid, block).await?;
-                Ok(place_block(config, cid, block, self.http).await.err())
+                while !mirror.missed() {
+                    // The budget spans several provider deadlines, so a cancel
+                    // gets to run between them rather than only at the block
+                    // boundary below.
+                    self.cancel_checkpoint(op_id).await?;
+                    match place_block(config, cid, block, self.http).await {
+                        Ok(()) => return Ok(()),
+                        Err(error) => mirror.refused(error),
+                    }
+                }
+                Ok(())
             }
         }
     }
@@ -2451,6 +2523,16 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
 /// time, and only the leg that can fail the op still holds them.
 const MIRROR_GAP: &str = "your own IPFS provider changed while this upload was in flight, so it never received \
      the blocks already sent";
+
+/// What this version's mirror is short by. A live refusal outranks the standing
+/// gap: it is the condition the member can still act on.
+fn mirror_shortfall(uploaded: &UploadedVersion) -> Option<&'static str> {
+    uploaded
+        .external_failure
+        .as_ref()
+        .map(provider_failure)
+        .or_else(|| uploaded.mirror_gap.then_some(MIRROR_GAP))
+}
 
 /// The key-free classification an [`OpPhase::ExternalPinFailed`] carries. It
 /// names the leg, never the endpoint or the bearer the config carries.

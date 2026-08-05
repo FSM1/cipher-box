@@ -16,7 +16,9 @@ use cipherbox_core::content::{
 use zeroize::Zeroizing;
 
 use crate::content::DAG_ROOT_CODEC;
-use crate::seams::{Http, HttpCredentials, HttpMethod, HttpRequest};
+use crate::seams::{
+    CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse,
+};
 
 /// Deadline for a BYO-provider reachability probe: an unresponsive endpoint
 /// must read as unreachable rather than hang the settings flow.
@@ -25,6 +27,13 @@ const PROBE_TIMEOUT_MS: u64 = 10_000;
 /// Deadline for one block placed on a member's provider. Longer than the
 /// settings-flow probe above: this one moves up to a whole block.
 const PLACEMENT_TIMEOUT_MS: u64 = 60_000;
+
+/// Ceiling on what a BYO provider may answer with. The endpoint is
+/// member-supplied and answers over the network, so an uncapped read lets it
+/// size this process's memory. Every reply these requests have a use for is a
+/// status line and a small JSON object; Kubo's newline-delimited `block/put`
+/// stream is the largest, one short object per block put.
+const MAX_PROVIDER_RESPONSE_BYTES: usize = 64 * 1024;
 
 const AUTHORIZATION: &str = "Authorization";
 const CONTENT_TYPE: &str = "Content-Type";
@@ -113,10 +122,7 @@ pub(crate) async fn place_block(
         ByoKind::Psa => pin_by_cid(config, "/pins", "cid", &address.cid),
         ByoKind::Pinata => pin_by_cid(config, "/pinning/pinByHash", "hashToPin", &address.cid),
     };
-    let response = http
-        .send(request)
-        .await
-        .map_err(|_| ProviderError::Unreachable)?;
+    let response = capped(http, request).await?;
     if !(200..300).contains(&response.status) {
         return Err(ProviderError::Rejected {
             status: response.status,
@@ -126,6 +132,19 @@ pub(crate) async fn place_block(
         ByoKind::Kubo => kubo_stored_address(&response.body, cid),
         ByoKind::Psa | ByoKind::Pinata => Ok(()),
     }
+}
+
+/// One request to a member's provider, its response bounded by
+/// [`MAX_PROVIDER_RESPONSE_BYTES`]. An over-cap body is
+/// [`ProviderError::NoVerdict`]: the transport aborted before the answer was
+/// whole, so nothing in it says what the provider did.
+async fn capped(http: &impl Http, request: HttpRequest) -> Result<HttpResponse, ProviderError> {
+    http.send_capped(request, MAX_PROVIDER_RESPONSE_BYTES)
+        .await
+        .map_err(|error| match error {
+            CappedFetchError::Transport(_) => ProviderError::Unreachable,
+            CappedFetchError::BodyTooLarge { .. } => ProviderError::NoVerdict,
+        })
 }
 
 /// One block's content address in the two spellings a provider request needs.
@@ -307,11 +326,7 @@ pub async fn test_connection(
     http: &impl Http,
 ) -> Result<(), ProviderError> {
     validate_byo_config(config)?;
-    let request = probe_request(config);
-    let response = http
-        .send(request)
-        .await
-        .map_err(|_| ProviderError::Unreachable)?;
+    let response = capped(http, probe_request(config)).await?;
     if (200..300).contains(&response.status) {
         Ok(())
     } else {
@@ -875,6 +890,37 @@ mod tests {
             );
         }
         assert!(http.requests().is_empty());
+    }
+
+    /// The endpoint is member-supplied and answers over the network, so what it
+    /// returns is bounded before it is read. An over-cap body is no answer at
+    /// all, never bytes this process accumulates.
+    #[test]
+    fn an_over_cap_provider_body_is_no_verdict() {
+        let oversized = || HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: vec![b'{'; MAX_PROVIDER_RESPONSE_BYTES + 1],
+        };
+        let block = b"sealed leaf bytes".to_vec();
+        let cid = leaf(&block);
+        for kind in [ByoKind::Kubo, ByoKind::Psa, ByoKind::Pinata] {
+            let http = ScriptedHttp::default();
+            http.enqueue_response(oversized());
+            assert_eq!(
+                block_on(place_block(&config(kind, Some("tok")), &cid, &block, &http)).unwrap_err(),
+                ProviderError::NoVerdict,
+                "{kind:?}"
+            );
+
+            let http = ScriptedHttp::default();
+            http.enqueue_response(oversized());
+            assert_eq!(
+                block_on(test_connection(&config(kind, Some("tok")), &http)).unwrap_err(),
+                ProviderError::NoVerdict,
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]

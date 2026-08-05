@@ -7,7 +7,7 @@
 
 use core::task::{Context, Poll, Waker};
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
@@ -194,6 +194,9 @@ struct Blocks {
     /// block under, and whether it can be reached at all.
     member_node: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
     member_node_down: Arc<AtomicBool>,
+    /// Requests the member's node refuses before answering normally again — the
+    /// transient blip a mirror retry inside the op exists for.
+    member_node_refusals: Arc<AtomicUsize>,
     /// The 400 body every `POST /registry/register` answers with instead of
     /// acking.
     register_refusal: Arc<Mutex<Option<Vec<u8>>>>,
@@ -271,6 +274,15 @@ impl Blocks {
     fn member_node_reply(&self, request: &HttpRequest) -> SeamResult<HttpResponse> {
         if self.member_node_down.load(Ordering::Relaxed) {
             return Err(SeamError::new("the member's node is offline"));
+        }
+        if self
+            .member_node_refusals
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(SeamError::new("the member's node refused this attempt"));
         }
         assert!(
             request.url.contains("mhtype=blake3&mhlen=32"),
@@ -6156,6 +6168,216 @@ fn a_dual_write_places_the_same_block_set_on_both_legs() {
         )),
         "both legs took it, so there is no partial outcome to report"
     );
+}
+
+/// One refusal from the member's node is a blip, not a verdict: the op spends
+/// another of its attempts and the mirror ends up whole, with nothing to report.
+#[test]
+fn a_mirror_refusal_the_op_retries_past_leaves_nothing_to_report() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::Dual);
+
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.member_node_refusals.store(1, Ordering::Relaxed);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    let mut registered = registered_content_cids(&alice, &write_name(photo));
+    registered.sort();
+    registered.dedup();
+    assert_eq!(
+        blocks.member_node_cids(),
+        registered,
+        "the retry put the refused block on the member's node"
+    );
+    assert!(
+        !events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::OpProgress {
+                phase: OpPhase::ExternalPinFailed,
+                ..
+            }
+        )),
+        "a refusal the op recovered from is not a shortfall"
+    );
+}
+
+/// `ExternalPinFailed` promises the version published and its content is
+/// retrievable — only the member's own node is short of it. A pass whose
+/// registration is still being refused has published nothing, so it has no such
+/// promise to make yet.
+#[test]
+fn a_mirror_shortfall_is_reported_only_once_the_record_published() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::Dual);
+
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.member_node_down.store(true, Ordering::Relaxed);
+    blocks.refuse_register(proxy_400());
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+
+    let shortfalls = |events: &mut EventStream| {
+        events_so_far(events)
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    Event::OpProgress {
+                        op_id: Some(id),
+                        phase: OpPhase::ExternalPinFailed,
+                        ..
+                    } if *id == op_id
+                )
+            })
+            .count()
+    };
+    assert_eq!(
+        shortfalls(&mut events),
+        0,
+        "the blocks went up, but no record names them yet"
+    );
+
+    blocks.accept_registrations();
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        published(&world.record_store, child_id(&engine, ROOT, "photo.bin")).0,
+        1,
+        "the retry published the version"
+    );
+    assert_eq!(
+        shortfalls(&mut events),
+        1,
+        "and only now is the mirror's shortfall the member's to act on"
+    );
+}
+
+/// The attempt budget is the op's, not each block's: a node that is simply down
+/// refuses every block alike, and re-asking it once per block would stall the
+/// whole pass behind one dead endpoint.
+#[test]
+fn a_dead_mirror_costs_the_op_a_bounded_number_of_attempts() {
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::Dual);
+
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let before = alice.http.requests().len();
+    blocks.member_node_down.store(true, Ordering::Relaxed);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &plaintext,
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+
+    let attempts = alice.http.requests()[before..]
+        .iter()
+        .filter(|request| request.url.starts_with(MEMBER_NODE))
+        .count();
+    assert!(
+        attempts > 1,
+        "the mirror leg retried inside the op rather than giving up on one refusal"
+    );
+    assert!(
+        attempts < frame_version(&plaintext).0.len(),
+        "and stopped well short of asking a dead node once per block"
+    );
+}
+
+/// A dual write's mark may name the mirror only where the mirror actually took
+/// the bytes. Otherwise an external-only session resuming that version reads
+/// blocks it never received as progress, skips them, and publishes a manifest
+/// naming content the member's node cannot serve.
+#[test]
+fn a_dual_mark_names_the_mirror_only_where_the_mirror_took_the_bytes() {
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    // `(the member's node was up for the dual session, the resume publishes)`.
+    for (mirror_up, survives) in [(true, true), (false, false)] {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let alice = world.device(b"alice");
+        seed_settings(&world, &alice, &blocks, PinMode::Dual);
+
+        let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        blocks.member_node_down.store(!mirror_up, Ordering::Relaxed);
+        // The process dies two leaves in, with those two already released.
+        alice
+            .staging_store
+            .interrupt_staged_write_after(UPLOAD_MARK_KEY, 2);
+        write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "photo.bin".into(),
+            },
+            &plaintext,
+        )
+        .expect("the write commits");
+        let (root_cid, _) = staged_version(&alice);
+        tick(&world, &engine, &mut tasks);
+        assert_eq!(
+            upload_mark(&alice),
+            Some((root_cid, 2)),
+            "mirror up {mirror_up}: two leaves left staging either way"
+        );
+        drop(engine);
+
+        // The member moves to external-only, and their node is reachable now.
+        blocks.member_node_down.store(false, Ordering::Relaxed);
+        seed_settings(&world, &alice, &blocks, PinMode::External);
+        let (engine, mut events_after, mut tasks) = boot(&world, &blocks, &alice, 43);
+        tick(&world, &engine, &mut tasks);
+        tick(&world, &engine, &mut tasks);
+
+        let dead_lettered = |events: &mut EventStream| {
+            events_so_far(events).iter().any(|event| {
+                matches!(
+                    event,
+                    Event::DeadLetter {
+                        reason: DeadLetterReason::ContentUnrecoverable,
+                        ..
+                    }
+                )
+            })
+        };
+        let lost = dead_lettered(&mut events) || dead_lettered(&mut events_after);
+        assert_eq!(
+            !lost, survives,
+            "mirror up {mirror_up}: the resume follows whether that node holds the released leaves"
+        );
+    }
 }
 
 /// The pre-flight's whole point: a hosted write the account cannot admit is

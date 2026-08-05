@@ -122,23 +122,23 @@ impl Placement {
     }
 }
 
-/// A provider's identity as the upload mark records it. The destination is the
-/// account the credential names, not the URL alone, so a config differing only
-/// in kind or bearer must tag apart. Hashed because the bearer is secret: the
-/// preimage never leaves this function, and only the digest reaches staging.
+/// A provider's identity as the upload mark records it: the kind, plus the
+/// endpoint naming the node or service the blocks land on.
+///
+/// The bearer is deliberately out of the preimage. It rotates while the
+/// destination stays put, and a mark that stops matching is not merely ignored —
+/// the leaves it covered are already released from staging, so under
+/// external-only a rotation would leave the version unpublishable. That mode is
+/// Kubo-only ([`placement_of`]), where the endpoint *is* the member's node and
+/// the bearer only fronts it. On a multi-tenant pin service two accounts do
+/// share an endpoint, but such a config only ever reaches
+/// [`Destinations::mirror_leg_holds`], which reports a gap and never fails an op.
 fn byo_tag(config: &ByoIpfsConfig) -> [u8; SECRET_LEN] {
-    let token = config
-        .access_token
-        .as_ref()
-        .map_or("", |token| token.as_str());
-    let mut tagged = Zeroizing::new(b"cipherbox/byo-destination\0".to_vec());
+    let mut tagged = b"cipherbox/byo-destination\0".to_vec();
+    // The kind is one fixed byte ahead of the endpoint, so no two configs share
+    // a preimage without sharing both fields.
     tagged.push(config.kind as u8);
-    // Length-prefixed: without it a differently-split endpoint/token pair
-    // concatenates to the same preimage.
-    tagged.extend_from_slice(&(config.endpoint.len() as u64).to_be_bytes());
     tagged.extend_from_slice(config.endpoint.as_bytes());
-    tagged.extend_from_slice(&(token.len() as u64).to_be_bytes());
-    tagged.extend_from_slice(token.as_bytes());
     hash(&tagged)
 }
 
@@ -226,6 +226,22 @@ impl Destinations {
     #[must_use]
     pub fn mirror_leg_holds(&self, earlier: &Self) -> bool {
         !self.hosted || self.external.is_none() || earlier.external == self.external
+    }
+
+    /// Drop the mirror from what a mark may claim, because the external leg did
+    /// not take some block the mark covers. Progress is one high-water prefix
+    /// under one destination set, so a mirror that missed anything inside that
+    /// prefix cannot be named by it — otherwise a later external-only session
+    /// reads [`required_legs_hold`](Self::required_legs_hold) as satisfied and
+    /// skips blocks that provider never received.
+    ///
+    /// Only a leg that cannot fail the op is droppable, which is why this is a
+    /// no-op without a hosted leg: the set must never narrow to no destination
+    /// at all, which [`decode`](Self::decode) rejects.
+    pub fn mirror_missed(&mut self) {
+        if self.hosted {
+            self.external = None;
+        }
     }
 }
 
@@ -1243,15 +1259,13 @@ mod tests {
     /// Placement is what the durable upload mark is keyed by, so two placements
     /// must not share destinations — a resumed version would otherwise read
     /// progress towards destinations these are not. One endpoint is not one
-    /// destination: the provider kind and the bearer name the account.
+    /// destination: the provider kind names it too.
     #[test]
     fn each_set_of_destinations_tags_itself_apart() {
         let one = "https://a.example";
         let variants = [
             Placement::Hosted,
             Placement::External(byo(one, ByoKind::Kubo, Some("tok"))),
-            Placement::External(byo(one, ByoKind::Kubo, Some("other-tok"))),
-            Placement::External(byo(one, ByoKind::Kubo, None)),
             Placement::External(byo("https://b.example", ByoKind::Kubo, Some("tok"))),
             Placement::Dual(byo(one, ByoKind::Kubo, Some("tok"))),
             Placement::Dual(byo(one, ByoKind::Psa, Some("tok"))),
@@ -1265,20 +1279,25 @@ mod tests {
         }
     }
 
-    /// The tag preimage is length-prefixed, so splitting the same bytes
-    /// differently across endpoint and bearer is a different destination.
+    /// Rotating the credential does not move the destination. The blocks are
+    /// still on that node, and re-tagging would strand every leaf already
+    /// released to it.
     #[test]
-    fn a_resplit_endpoint_and_bearer_are_not_one_destination() {
-        assert_ne!(
-            byo_tag(&byo("https://a.example/x", ByoKind::Kubo, Some("y"))),
-            byo_tag(&byo("https://a.example/", ByoKind::Kubo, Some("xy"))),
-        );
+    fn a_rotated_bearer_is_the_same_destination() {
+        let endpoint = "https://a.example";
+        let tag = |token| byo_tag(&byo(endpoint, ByoKind::Kubo, token));
+        assert_eq!(tag(Some("tok")), tag(Some("rotated")));
+        assert_eq!(tag(Some("tok")), tag(None));
     }
 
     /// A leaf released from staging is safe to skip only where the leg that can
     /// fail this op already holds it. The hosted leg is that leg everywhere but
     /// external-only, so switching the mirror on or off never strands a version
     /// whose bytes the hosted store already took.
+    ///
+    /// The `External` reading of a prior `Dual` mark rests on
+    /// [`Destinations::mirror_missed`]: a dual write only names its mirror in a
+    /// mark that mirror actually took.
     #[test]
     fn progress_carries_exactly_where_the_op_failing_leg_already_holds_the_bytes() {
         let one = byo("https://a.example", ByoKind::Kubo, Some("tok"));
@@ -1334,6 +1353,35 @@ mod tests {
         assert!(holds(&dual_one, &dual_one));
         assert!(holds(&Placement::Hosted, &dual_one));
         assert!(holds(&Placement::External(one), &Placement::Hosted));
+    }
+
+    /// A mirror that missed a block narrows the mark to the hosted leg, so a
+    /// later external-only session no longer reads it as progress — and the set
+    /// never narrows to no destination at all.
+    #[test]
+    fn a_missed_mirror_narrows_the_mark_to_the_hosted_leg() {
+        let one = byo("https://a.example", ByoKind::Kubo, Some("tok"));
+        let mut dual = Placement::Dual(one.clone()).destinations();
+        dual.mirror_missed();
+        assert_eq!(dual, Placement::Hosted.destinations());
+        assert!(
+            !Placement::External(one.clone())
+                .destinations()
+                .required_legs_hold(&dual)
+        );
+        assert!(
+            Placement::Dual(one.clone())
+                .destinations()
+                .required_legs_hold(&dual)
+        );
+
+        let mut external = Placement::External(one).destinations();
+        external.mirror_missed();
+        assert_eq!(
+            Destinations::decode(&external.encode()),
+            Some(external),
+            "the only leg there is never drops out of the set"
+        );
     }
 
     /// AGENTS.md rule 8: the reader accepts exactly what the writer can emit.
