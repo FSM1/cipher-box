@@ -1,0 +1,94 @@
+/* ==========================================================================
+   Modal Shell - Terminal Aesthetic
+
+   Stacking: the backdrop sits above every portalled overlay (context menu at
+   900) so a dialog raised from a menu is never painted under it.
+   ========================================================================== */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-md);
+  background-color: rgb(0 0 0 / 85%);
+}
+
+.modal-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 500px;
+  max-height: 85vh;
+  overflow: hidden;
+  background-color: var(--color-background);
+  border: var(--border-thickness) solid var(--color-green-primary);
+  box-shadow: var(--glow-green);
+}
+
+.modal-backdrop--wide .modal-container {
+  max-width: 900px;
+}
+
+/* ==========================================================================
+   Header
+   ========================================================================== */
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  flex-shrink: 0;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: var(--border-thickness) solid var(--color-green-primary);
+}
+
+.modal-title {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary);
+}
+
+.modal-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-md);
+  line-height: 1;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  background: none;
+  border: none;
+  transition: color 0.15s ease;
+}
+
+.modal-close:hover {
+  color: var(--color-text-primary);
+}
+
+/* ==========================================================================
+   Body
+   ========================================================================== */
+
+.modal-body {
+  flex: 1;
+  min-height: 0;
+  padding: var(--spacing-md);
+  overflow-y: auto;
+  color: var(--color-text-primary);
+}

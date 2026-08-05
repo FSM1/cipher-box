@@ -8,10 +8,11 @@ interface FileListProps {
   showParentRow: boolean;
   onOpen: (node: Uint8Array) => void;
   onNavigateUp: () => void;
+  onRowMenu: (event: React.MouseEvent, row: ListingRow) => void;
 }
 
 /** The routed folder's direct children, in columns. */
-export function FileList({ rows, showParentRow, onOpen, onNavigateUp }: FileListProps) {
+export function FileList({ rows, showParentRow, onOpen, onNavigateUp, onRowMenu }: FileListProps) {
   return (
     <div className="file-list" role="grid" data-testid="file-list">
       <div className="file-list-header" role="row">
@@ -28,7 +29,7 @@ export function FileList({ rows, showParentRow, onOpen, onNavigateUp }: FileList
       <div className="file-list-body" role="rowgroup">
         {showParentRow && <ParentDirRow onActivate={onNavigateUp} />}
         {rows.map((row) => (
-          <FileListItem key={row.key} row={row} onOpen={onOpen} />
+          <FileListItem key={row.key} row={row} onOpen={onOpen} onRowMenu={onRowMenu} />
         ))}
       </div>
     </div>

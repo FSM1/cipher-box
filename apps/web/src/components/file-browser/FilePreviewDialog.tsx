@@ -1,0 +1,77 @@
+import { useFilePreview } from '../../hooks/useFilePreview';
+import type { ListingRow } from '../../vault/listing';
+import { Modal } from '../ui/Modal';
+
+interface FilePreviewDialogProps {
+  row: ListingRow;
+  onClose: () => void;
+  onDownload: () => void;
+}
+
+/** Shows one file's plaintext in the shapes the browser can render safely. */
+export function FilePreviewDialog({ row, onClose, onDownload }: FilePreviewDialogProps) {
+  const preview = useFilePreview({ key: row.key, name: row.name });
+
+  return (
+    <Modal open onClose={onClose} title={row.name} className="modal-backdrop--wide">
+      <div className="preview-body" data-testid="file-preview-dialog">
+        <PreviewContent preview={preview} name={row.name} />
+      </div>
+      <div className="dialog-actions">
+        <button
+          type="button"
+          className="dialog-button"
+          onClick={onDownload}
+          data-testid="preview-download"
+        >
+          download
+        </button>
+        <button type="button" className="dialog-button dialog-button--primary" onClick={onClose}>
+          close
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function PreviewContent({
+  preview,
+  name,
+}: {
+  preview: ReturnType<typeof useFilePreview>;
+  name: string;
+}) {
+  if (preview === null || preview.status === 'loading') {
+    return <p className="preview-status">{'// decrypting...'}</p>;
+  }
+  if (preview.status === 'error') {
+    return (
+      <p className="preview-status preview-status--error" role="alert">
+        {preview.message}
+      </p>
+    );
+  }
+  if (preview.status === 'image') {
+    return (
+      <img className="preview-image" src={preview.url} alt={name} data-testid="preview-image" />
+    );
+  }
+  if (preview.status === 'pdf') {
+    // A blob URL is same-origin with the app, so the embedded document runs
+    // under a sandbox that grants it nothing.
+    return (
+      <iframe
+        className="preview-pdf"
+        src={preview.url}
+        title={name}
+        sandbox=""
+        data-testid="preview-pdf"
+      />
+    );
+  }
+  return (
+    <pre className="preview-text" data-testid="preview-text">
+      {preview.text}
+    </pre>
+  );
+}
