@@ -981,6 +981,30 @@ fn write_file(
     block_on(engine.commit_write(handle))
 }
 
+/// One committed file under the root, for tests about what a write *triggers*
+/// rather than what it stores.
+fn write_photo(engine: &mut Engine<FakeSeamTypes>, name: &str) -> OpId {
+    write_file(
+        engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: name.to_owned(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits")
+}
+
+/// How many times this device asked the API to move the account's BYO flag.
+fn byo_toggles(device: &FakeDevice) -> usize {
+    device
+        .http
+        .requests()
+        .iter()
+        .filter(|request| request.url.ends_with("/account/byo"))
+        .count()
+}
+
 /// Alice publishes `plaintext` as `clip.bin` under the root, handing back her
 /// engine and pump tasks so a caller can republish over it.
 fn publish_clip(
@@ -6485,42 +6509,22 @@ fn the_session_reconciles_the_accounts_byo_flag_to_the_vaulted_mode() {
     );
 
     let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
-    let toggles = |device: &FakeDevice| {
-        device
-            .http
-            .requests()
-            .iter()
-            .filter(|request| request.url.ends_with("/account/byo"))
-            .count()
-    };
-    let write = |engine: &mut Engine<FakeSeamTypes>, name: &str| {
-        write_file(
-            engine,
-            WriteTarget::NewFile {
-                parent: ROOT,
-                name: name.to_owned(),
-            },
-            &(0..200u8).collect::<Vec<_>>(),
-        )
-        .expect("the write commits")
-    };
-
-    write(&mut engine, "photo.bin");
+    write_photo(&mut engine, "photo.bin");
     assert!(
         blocks.advisory_quota.load(Ordering::Relaxed),
         "an external mode moved the account onto advisory accounting"
     );
-    assert_eq!(toggles(&alice), 1, "and only while the two disagreed");
+    assert_eq!(byo_toggles(&alice), 1, "and only while the two disagreed");
 
     // The mode is fixed for the session, so no later write re-derives it.
-    write(&mut engine, "photo2.bin");
-    assert_eq!(toggles(&alice), 1, "at most once a session");
+    write_photo(&mut engine, "photo2.bin");
+    assert_eq!(byo_toggles(&alice), 1, "at most once a session");
 
     // A second device on the same settings finds the flag already right.
     let bob = world.device(b"alice-second-device");
     let (mut engine_b, _events, _tasks) = boot(&world, &blocks, &bob, 43);
-    write(&mut engine_b, "photo3.bin");
-    assert_eq!(toggles(&bob), 0, "nothing to reconcile once they agree");
+    write_photo(&mut engine_b, "photo3.bin");
+    assert_eq!(byo_toggles(&bob), 0, "nothing to reconcile once they agree");
 }
 
 /// The once-a-session guard latches on the reconcile *landing*, not on the
@@ -6538,44 +6542,24 @@ fn a_byo_reconcile_that_did_not_land_is_retried_by_the_next_write() {
     blocks.byo_down.store(true, Ordering::Relaxed);
 
     let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
-    let toggles = || {
-        alice
-            .http
-            .requests()
-            .iter()
-            .filter(|request| request.url.ends_with("/account/byo"))
-            .count()
-    };
-    let write = |engine: &mut Engine<FakeSeamTypes>, name: &str| {
-        write_file(
-            engine,
-            WriteTarget::NewFile {
-                parent: ROOT,
-                name: name.to_owned(),
-            },
-            &(0..200u8).collect::<Vec<_>>(),
-        )
-        .expect("the write commits")
-    };
-
-    write(&mut engine, "photo.bin");
-    assert_eq!(toggles(), 1, "the session tried to reconcile");
+    write_photo(&mut engine, "photo.bin");
+    assert_eq!(byo_toggles(&alice), 1, "the session tried to reconcile");
     assert!(
         blocks.advisory_quota.load(Ordering::Relaxed),
         "and the account still disagrees with the vaulted mode"
     );
 
     blocks.byo_down.store(false, Ordering::Relaxed);
-    write(&mut engine, "photo2.bin");
-    assert_eq!(toggles(), 2, "so the next write tries again");
+    write_photo(&mut engine, "photo2.bin");
+    assert_eq!(byo_toggles(&alice), 2, "so the next write tries again");
     assert!(
         !blocks.advisory_quota.load(Ordering::Relaxed),
         "and this one landed"
     );
 
-    write(&mut engine, "photo3.bin");
+    write_photo(&mut engine, "photo3.bin");
     assert_eq!(
-        toggles(),
+        byo_toggles(&alice),
         2,
         "a landed reconcile closes the window for good"
     );
