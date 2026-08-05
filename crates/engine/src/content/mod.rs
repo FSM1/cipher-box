@@ -26,6 +26,7 @@ pub use dag::{
     root_block_cid,
 };
 pub use profile::ContentProfile;
+pub(crate) use provider::place_block;
 pub use provider::{
     ByoIpfsConfig, ByoKind, PinMode, ProviderError, test_connection, validate_byo_config,
 };

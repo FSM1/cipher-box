@@ -477,6 +477,7 @@ fn engine_error(error: EngineError) -> JsValue {
         EngineError::UnsupportedContentFormat { .. } => "unsupportedContentFormat",
         EngineError::Unimplemented { .. } => "unimplemented",
         EngineError::OverBudget { .. } => "overBudget",
+        EngineError::NoPlacement { .. } => "noPlacement",
         EngineError::ContentSizeMismatch { .. } => "contentSizeMismatch",
         EngineError::UnknownWriteHandle => "unknownWriteHandle",
         EngineError::UnknownStreamHandle => "unknownStreamHandle",

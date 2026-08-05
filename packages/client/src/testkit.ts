@@ -39,6 +39,7 @@ export const fakeWasmEnums = {
     UploadCompleted: 5,
     UploadFailed: 6,
     UploadCancelled: 7,
+    ExternalPinFailed: 8,
   },
   DeadLetterReason: {
     TargetGone: 0,

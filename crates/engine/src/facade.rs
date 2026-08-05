@@ -35,7 +35,7 @@ use crate::content::budget::{Refusal, ReservationId};
 use crate::content::{
     ContentKey, ContentProfile, ContentWriter, Gateway, GatewayConfig, OpenError, Refused,
     RootManifest, SealError, StagingLedger, open_content_range, open_content_root,
-    read_pinned_range, sealed_total_bytes,
+    pre_flight_quota_check, read_pinned_range, sealed_total_bytes,
 };
 use crate::entropy::Entropy;
 use crate::gate::{GateError, floor};
@@ -53,6 +53,7 @@ use crate::seams::{
     UnixMillis,
 };
 use crate::session::SessionIdentity;
+use crate::settings::{PlacementDecision, PlacementRefusal, decide_placement, load_settings};
 use crate::storage_policy::StoragePolicy;
 use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_start};
 use crate::sync::cancel::UploadCancels;
@@ -316,8 +317,7 @@ impl LoginSecret {
     }
 
     /// Borrow the raw secret bytes for in-crate cold-start derivation only.
-    /// `pub(crate)` so the secret never leaves engine memory; the only caller
-    /// is [`SessionIdentity::derive`](crate::session::SessionIdentity::derive).
+    /// `pub(crate)` so the secret never leaves engine memory.
     pub(crate) fn expose(&self) -> &[u8] {
         &self.0
     }
@@ -644,6 +644,10 @@ pub enum OpPhase {
     /// The user cancelled the upload and its staged blocks were released
     /// (`Command::CancelUpload`).
     UploadCancelled,
+    /// A dual write's hosted leg landed but the member's own provider did not
+    /// take the version. The op published and the content is retrievable; it is
+    /// simply not on their node, and no retry is queued.
+    ExternalPinFailed,
 }
 
 /// Errors returned by facade calls.
@@ -681,6 +685,14 @@ pub enum EngineError {
     UnsupportedContentFormat {
         /// The version the root declared.
         version: u64,
+    },
+    /// No byte destination could be decided, so the write is refused rather
+    /// than placed on a store the member did not choose (blueprint/engine.md
+    /// "Settings-load policy"). Recoverable: republishing or re-resolving the
+    /// vault settings record clears it.
+    NoPlacement {
+        /// Which rule refused, so a host can say what to fix.
+        refusal: PlacementRefusal,
     },
     /// The command's pipeline slice has not landed yet (scaffold state).
     Unimplemented {
@@ -876,6 +888,17 @@ impl fmt::Display for EngineError {
                 OverBudgetCause::AccountQuota => write!(
                     f,
                     "this write needs {requested} bytes but the account's storage quota leaves {available}"
+                ),
+            },
+            EngineError::NoPlacement { refusal } => match refusal {
+                PlacementRefusal::SettingsUnavailable(_) => f.write_str(
+                    "your vault settings are unavailable, so this device cannot tell where your files should be stored; reconnect or save your settings again",
+                ),
+                PlacementRefusal::NoProvider => f.write_str(
+                    "your vault settings choose your own IPFS provider but name none; add one in settings",
+                ),
+                PlacementRefusal::NoExternalIngress(_) => f.write_str(
+                    "a pinning service cannot be your only storage — it fetches content from the network rather than receiving it; add your own IPFS node, or store on CipherBox as well",
                 ),
             },
             EngineError::ContentSizeMismatch { declared, observed } => write!(
@@ -1493,6 +1516,16 @@ pub struct Engine<T: SeamTypes> {
     /// resident for up to that wake past the engine (security rules 1/7); every
     /// shared cell below carrying key material is cleared the same way.
     tick_enc_subkey: Rc<RefCell<Option<X25519Secret>>>,
+    /// Where this session's bytes go, decided once at [`start`](Self::start)
+    /// from the vault settings load and shared with the drain. `None` until
+    /// then, and emptied on drop like [`tick_enc_subkey`](Self::tick_enc_subkey)
+    /// — the config it holds carries the member's provider bearer.
+    placement: Rc<RefCell<Option<PlacementDecision>>>,
+    /// Whether this session has already held the account's `byo` flag to the
+    /// vaulted mode. Once a session: the flag is account-wide and the mode is
+    /// fixed at [`start`](Self::start), so re-deriving it per write would only
+    /// let two devices flap it.
+    byo_reconciled: Cell<bool>,
     /// The one shared API client, built and logged in at [`start`](Self::start)
     /// and handed to the liveness loop so the access JWT is shared across
     /// publish/renew (no redundant 401→refresh). `None` until then.
@@ -1543,6 +1576,8 @@ impl<T: SeamTypes> Engine<T> {
                 alive: Rc::new(Cell::new(true)),
                 session: None,
                 tick_enc_subkey: Rc::new(RefCell::new(None)),
+                placement: Rc::new(RefCell::new(None)),
+                byo_reconciled: Cell::new(false),
                 api: None,
                 started: false,
             },
@@ -1578,10 +1613,8 @@ impl<T: SeamTypes> Engine<T> {
         if secret.is_empty() {
             return Err(EngineError::InvalidSecret);
         }
-        // Pure derivation from the injected secret — no clock, no RNG — then
-        // the secret zeroizes on drop here, at its terminal owner.
+        // Pure derivation from the injected secret — no clock, no RNG.
         let session = SessionIdentity::derive(&secret)?;
-        drop(secret);
 
         // The one shared client for login, publish, and renewal. Login is
         // fail-closed: a rejected login returns before the session is committed
@@ -1598,6 +1631,24 @@ impl<T: SeamTypes> Engine<T> {
                 .await
                 .map_err(EngineError::from_api)?;
         }
+
+        // Where this session's bytes go. Server-free and ahead of any vault
+        // resolve, so a self-hosting owner never needs CipherBox to tell them
+        // where their own node is (blueprint/engine.md "Vault settings record").
+        let settings = load_settings(
+            &self.seams.record_transport,
+            &self.gateway,
+            &self.seams.http,
+            &self.seams.floor_store,
+            &self.seams.snapshot_cache,
+            &self.seams.scheduler,
+            &self.profile,
+            secret.expose(),
+        )
+        .await;
+        *self.placement.borrow_mut() = Some(decide_placement(&settings));
+        // The secret zeroizes on drop here, at its terminal owner.
+        drop(secret);
 
         self.session = Some(session);
 
@@ -1637,9 +1688,10 @@ impl<T: SeamTypes> Engine<T> {
             Ok(outcome) => outcome,
             Err(err) => {
                 // Fail-closed symmetry with the login path: clear the derived
-                // session so no key material stays resident and the engine reports
-                // unstarted.
+                // session and the placement decision beside it, so no key material
+                // stays resident and the engine reports unstarted.
                 self.session = None;
+                *self.placement.borrow_mut() = None;
                 return Err(EngineError::from_cold_start(err));
             }
         };
@@ -1711,6 +1763,9 @@ impl<T: SeamTypes> Engine<T> {
         self.alive.set(false);
         if let Ok(mut enc_subkey) = self.tick_enc_subkey.try_borrow_mut() {
             *enc_subkey = None;
+        }
+        if let Ok(mut placement) = self.placement.try_borrow_mut() {
+            *placement = None;
         }
         if let Ok(mut held) = self.held_records.try_borrow_mut() {
             held.clear();
@@ -1907,6 +1962,7 @@ impl<T: SeamTypes> Engine<T> {
         let floors = self.seams.floor_store.clone();
         let http = self.seams.http.clone();
         let gateway = self.gateway.clone();
+        let placement = self.placement.clone();
         let held = self.held_records.clone();
         let base = self.snapshot.clone();
         let events = self.events.clone();
@@ -1932,6 +1988,12 @@ impl<T: SeamTypes> Engine<T> {
                 // emptied the cell if it is already gone.
                 let enc_subkey = tick_enc_subkey.borrow().clone();
                 let Some(enc_subkey) = enc_subkey else {
+                    return LivenessControl::Stop;
+                };
+                // Carries the member's BYO bearer, so the pass owns a copy on the
+                // same terms as the enc subkey above.
+                let decision = placement.borrow().clone();
+                let Some(decision) = decision else {
                     return LivenessControl::Stop;
                 };
                 // Before the steady-state hold consults them: a floor raised
@@ -2053,6 +2115,7 @@ impl<T: SeamTypes> Engine<T> {
                         scheduler: &scheduler,
                         http: &http,
                         gateway: &gateway,
+                        placement: &decision,
                         profile: &profile,
                         entropy: &entropy,
                         base: &base,
@@ -2300,6 +2363,8 @@ impl<T: SeamTypes> Engine<T> {
                 check: error.check(),
             }
         })?;
+        // Sized in sealed bytes, which is what the hosted ingress counts.
+        self.hosted_quota_pre_flight(requested).await?;
         let staged = self
             .seams
             .staging_store
@@ -2343,6 +2408,49 @@ impl<T: SeamTypes> Engine<T> {
             },
         );
         Ok(handle)
+    }
+
+    /// Refuse a write whose hosted leg the account quota cannot admit, before
+    /// the version is sealed and staged rather than at the drain.
+    ///
+    /// Two directions, deliberately different: the placement decision is
+    /// fail-closed, while the quota probe is not — the API upload endpoint is
+    /// the authoritative gate, so an unreachable one leaves the write to queue
+    /// offline like any other.
+    async fn hosted_quota_pre_flight(&self, requested: u64) -> Result<(), EngineError> {
+        // Only the predicate leaves the borrow: cloning the placement would copy
+        // the member's provider bearer on every write.
+        let hosted_leg = match self.placement.borrow().as_ref() {
+            None => return Err(EngineError::NotStarted),
+            Some(Err(refusal)) => return Err(EngineError::NoPlacement { refusal: *refusal }),
+            Some(Ok(placement)) => placement.has_hosted_leg(),
+        };
+        let Some(api) = self.api.as_ref() else {
+            return Ok(());
+        };
+        let Ok(quota) = api.quota().await else {
+            return Ok(());
+        };
+        // The account's flag is two-state where the mode is three and dual has
+        // no server representation, so `byo=true` is exactly `External`. The
+        // vaulted mode is the source of truth; the flag is latched only once the
+        // PATCH lands, so two devices still cannot flap it per file while a
+        // transient failure stays retryable — the hosted ingress rejects a BYO
+        // account, so an unreconciled flag fails every hosted upload the session
+        // makes.
+        if !self.byo_reconciled.get()
+            && quota.advisory == hosted_leg
+            && api.set_byo(!hosted_leg).await.is_ok()
+        {
+            self.byo_reconciled.set(true);
+        }
+        pre_flight_quota_check(requested, &quota, hosted_leg).map_err(|refused| {
+            EngineError::OverBudget {
+                cause: OverBudgetCause::AccountQuota,
+                requested,
+                available: refused.limit_bytes.saturating_sub(refused.used_bytes),
+            }
+        })
     }
 
     /// Feed the next slice of the file. Seals and stages every whole chunk it

@@ -1,25 +1,43 @@
-//! The pin-provider layer — hosted / external / dual placement and the
-//! engine-side BYO connection test over the `Http` seam (blueprint/engine.md
-//! "Content plane").
+//! The pin-provider layer — block dispatch to a member's own IPFS provider and
+//! the engine-side BYO connection test, both over the `Http` seam
+//! (blueprint/engine.md "Content plane").
 //!
-//! This module owns the placement decision surface and the BYO config type plus
-//! its engine-side reachability probe. Registration and the publish pipeline
-//! (register-first, every mode) live in the net plane; sealing the config into
-//! vault settings is the payload/vault-settings slice — the type here is the
-//! plaintext it seals.
+//! This module owns the BYO config type, its engine-side reachability probe,
+//! and the concrete block dispatch each provider kind takes. Which of them a
+//! write uses is the placement decision, which reads a vault settings load and
+//! so lives with it (`crate::settings`).
 
 use core::fmt;
 use core::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
+use cipherbox_core::content::{
+    CONTENT_CID_CODEC, decode_content_cid_str, encode_content_cid_str, is_wellformed_content_cid,
+};
 use zeroize::Zeroizing;
 
-use crate::seams::{Http, HttpCredentials, HttpMethod, HttpRequest};
+use crate::content::DAG_ROOT_CODEC;
+use crate::seams::{
+    CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse,
+};
 
 /// Deadline for a BYO-provider reachability probe: an unresponsive endpoint
 /// must read as unreachable rather than hang the settings flow.
 const PROBE_TIMEOUT_MS: u64 = 10_000;
 
+/// Deadline for one block placed on a member's provider. Longer than the
+/// settings-flow probe above: this one moves up to a whole block.
+const PLACEMENT_TIMEOUT_MS: u64 = 60_000;
+
+/// Ceiling on what a BYO provider may answer with. The endpoint is
+/// member-supplied and answers over the network, so an uncapped read lets it
+/// size this process's memory. Every reply these requests have a use for is a
+/// status line and a small JSON object; Kubo's newline-delimited `block/put`
+/// stream is the largest, one short object per block put.
+const MAX_PROVIDER_RESPONSE_BYTES: usize = 64 * 1024;
+
 const AUTHORIZATION: &str = "Authorization";
+const CONTENT_TYPE: &str = "Content-Type";
+const APPLICATION_JSON: &str = "application/json";
 
 /// The cloud metadata service, which no IPFS provider serves: the link-local
 /// address in the two IPv6 spellings `to_canonical` does not fold, and the IPv6
@@ -36,7 +54,8 @@ const METADATA: [IpAddr; 3] = [
 pub enum PinMode {
     /// CipherBox's hosted pin store (the default). Quota is authoritative.
     Hosted,
-    /// The member's own provider only. Quota is advisory.
+    /// The member's own provider only. No content block reaches the hosted
+    /// store; record heads and registration still do.
     External,
     /// Both hosted and the member's own provider.
     Dual,
@@ -82,6 +101,181 @@ impl fmt::Debug for ByoIpfsConfig {
     }
 }
 
+/// Place one already-addressed block on the member's own provider. `cid` must
+/// be the block's own content address, which the caller has already verified
+/// (`Drain::staged_block`).
+///
+/// Kubo takes the bytes under exactly that address — `block/put` under the CID's
+/// own multicodec and the frozen BLAKE3-256 framing. PSA and Pinata have no byte
+/// ingress that preserves an address: they are asked to pin the CID and fetch it
+/// themselves.
+pub(crate) async fn place_block(
+    config: &ByoIpfsConfig,
+    cid: &[u8],
+    block: &[u8],
+    http: &impl Http,
+) -> Result<(), ProviderError> {
+    validate_byo_config(config)?;
+    let address = content_address(cid)?;
+    let request = match config.kind {
+        ByoKind::Kubo => kubo_block_put(config, &address, block),
+        ByoKind::Psa => pin_by_cid(config, "/pins", "cid", &address.cid),
+        ByoKind::Pinata => pin_by_cid(config, "/pinning/pinByHash", "hashToPin", &address.cid),
+    };
+    let response = capped(http, request).await?;
+    if !(200..300).contains(&response.status) {
+        return Err(ProviderError::Rejected {
+            status: response.status,
+        });
+    }
+    match config.kind {
+        ByoKind::Kubo => kubo_stored_address(&response.body, cid),
+        ByoKind::Psa | ByoKind::Pinata => Ok(()),
+    }
+}
+
+/// One request to a member's provider, its response bounded by
+/// [`MAX_PROVIDER_RESPONSE_BYTES`]. An over-cap body is
+/// [`ProviderError::NoVerdict`]: the transport aborted before the answer was
+/// whole, so nothing in it says what the provider did.
+async fn capped(http: &impl Http, request: HttpRequest) -> Result<HttpResponse, ProviderError> {
+    http.send_capped(request, MAX_PROVIDER_RESPONSE_BYTES)
+        .await
+        .map_err(|error| match error {
+            CappedFetchError::Transport(_) => ProviderError::Unreachable,
+            CappedFetchError::BodyTooLarge { .. } => ProviderError::NoVerdict,
+        })
+}
+
+/// One block's content address in the two spellings a provider request needs.
+struct ContentAddress {
+    cid: String,
+    /// The Kubo `cid-codec` name for the CID's own multicodec.
+    codec: &'static str,
+}
+
+/// Read a block's address, fail-closed on anything outside the two frozen
+/// content-plane shapes. Core's own framing predicate runs first: it is what
+/// [`encode_content_cid_str`] asserts on, so screening the codec alone would
+/// turn a malformed address into a panic instead of this verdict.
+fn content_address(cid: &[u8]) -> Result<ContentAddress, ProviderError> {
+    if !is_wellformed_content_cid(cid) {
+        return Err(ProviderError::MalformedBlockAddress);
+    }
+    let codec = match cid[1] {
+        CONTENT_CID_CODEC => "raw",
+        DAG_ROOT_CODEC => "dag-cbor",
+        _ => return Err(ProviderError::MalformedBlockAddress),
+    };
+    Ok(ContentAddress {
+        cid: encode_content_cid_str(cid),
+        codec,
+    })
+}
+
+/// `block/put` under the block's own codec and the frozen BLAKE3-256 framing,
+/// pinned in the same call, so the member's node addresses it exactly as the
+/// engine does.
+fn kubo_block_put(config: &ByoIpfsConfig, address: &ContentAddress, block: &[u8]) -> HttpRequest {
+    // Derived from the block's own address, so the delimiter cannot occur in the
+    // payload it frames: that would take a block carrying the base32 of its own
+    // BLAKE3 digest, which is a preimage. 62 bytes of base32 and `-`, inside RFC
+    // 2046's 70-character cap.
+    let boundary = format!("cb-{}", address.cid);
+    let head = format!(
+        "--{boundary}\r\n\
+         Content-Disposition: form-data; name=\"data\"; filename=\"blob\"\r\n\
+         Content-Type: application/octet-stream\r\n\r\n"
+    );
+    let tail = format!("\r\n--{boundary}--\r\n");
+    let mut body = Vec::with_capacity(head.len() + block.len() + tail.len());
+    body.extend_from_slice(head.as_bytes());
+    body.extend_from_slice(block);
+    body.extend_from_slice(tail.as_bytes());
+    let codec = address.codec;
+    HttpRequest {
+        method: HttpMethod::Post,
+        // A DAG root inlines a CID per leaf, so it passes Kubo's 1 MiB
+        // block/put advisory well before the flat-DAG ceiling does. The block is
+        // content-addressed and self-verifying, so the advice does not apply.
+        url: format!(
+            "{}/api/v0/block/put\
+             ?cid-codec={codec}&mhtype=blake3&mhlen=32&pin=true&allow-big-block=true",
+            base(config)
+        ),
+        headers: headers(
+            config,
+            Some(format!("multipart/form-data; boundary={boundary}")),
+        ),
+        body: Some(body),
+        credentials: HttpCredentials::Omit,
+        timeout_ms: Some(PLACEMENT_TIMEOUT_MS),
+    }
+}
+
+/// Ask a pin-by-CID service to pin an address it fetches itself.
+fn pin_by_cid(config: &ByoIpfsConfig, path: &str, field: &str, cid: &str) -> HttpRequest {
+    HttpRequest {
+        method: HttpMethod::Post,
+        url: format!("{}{path}", base(config)),
+        headers: headers(config, Some(APPLICATION_JSON.to_owned())),
+        // The CID is base32 alphanumerics, so it needs no JSON escaping.
+        body: Some(format!("{{\"{field}\":\"{cid}\"}}").into_bytes()),
+        credentials: HttpCredentials::Omit,
+        timeout_ms: Some(PLACEMENT_TIMEOUT_MS),
+    }
+}
+
+/// The address Kubo reports storing the block under, held to the caller's. The
+/// compare accepts only the canonical base32 spelling `encode_content_cid_str`
+/// sent — the strict `decode_content_cid_str` is deliberately the one decoder
+/// the content plane has, and widening it to every multibase alphabet to read a
+/// provider's echo would enlarge what a remote can steer for no safety gained.
+///
+/// This catches a node that re-chunked or hashed the block differently — a
+/// misconfiguration, not an attack. A provider can always claim an address it
+/// does not serve; what makes a read safe is the reader's own `verify_cid`.
+///
+/// Kubo streams newline-delimited JSON; a trailing error object parses but
+/// carries no `Key`, so an absent one is no usable answer.
+fn kubo_stored_address(body: &[u8], expected: &[u8]) -> Result<(), ProviderError> {
+    #[derive(serde::Deserialize)]
+    struct BlockPut {
+        #[serde(rename = "Key")]
+        key: String,
+    }
+    let last = core::str::from_utf8(body)
+        .ok()
+        .and_then(|body| body.trim().lines().next_back().map(str::to_owned));
+    let stored = last
+        .and_then(|line| serde_json::from_str::<BlockPut>(&line).ok())
+        .ok_or(ProviderError::NoVerdict)?;
+    match decode_content_cid_str(&stored.key) {
+        Ok(stored) if stored == expected => Ok(()),
+        _ => Err(ProviderError::AddressMismatch),
+    }
+}
+
+fn base(config: &ByoIpfsConfig) -> &str {
+    config.endpoint.trim_end_matches('/')
+}
+
+/// The bearer the config carries, plus a content type when the request has a
+/// body. The configured access token is the only credential a BYO endpoint gets.
+fn headers(config: &ByoIpfsConfig, content_type: Option<String>) -> Vec<(String, String)> {
+    let mut headers = Vec::new();
+    if let Some(token) = &config.access_token {
+        headers.push((
+            AUTHORIZATION.to_owned(),
+            format!("Bearer {}", token.as_str()),
+        ));
+    }
+    if let Some(content_type) = content_type {
+        headers.push((CONTENT_TYPE.to_owned(), content_type));
+    }
+    headers
+}
+
 /// Why a provider connection test did not succeed. The first four are policy
 /// verdicts reached before any request is issued, kept distinct so a host can
 /// say which rule refused the config instead of showing a bare failure.
@@ -104,12 +298,20 @@ pub enum ProviderError {
     InvalidCredential,
     /// The provider could not be reached (transport-level failure).
     Unreachable,
-    /// The provider was reached but rejected the probe (bad endpoint, auth
+    /// The provider answered, but with nothing that says what it did.
+    NoVerdict,
+    /// The provider was reached but rejected the request (bad endpoint, auth
     /// failure, or an unhealthy node): a non-2xx status.
     Rejected {
         /// The status the provider returned.
         status: u16,
     },
+    /// The block's address is not one of the two frozen content-plane shapes,
+    /// so no provider can be told the codec to store it under.
+    MalformedBlockAddress,
+    /// The provider stored the block under an address other than the one it was
+    /// given, so the published record would name bytes it does not serve.
+    AddressMismatch,
 }
 
 /// Test that a member's BYO provider is reachable and authenticated, engine-side
@@ -124,11 +326,7 @@ pub async fn test_connection(
     http: &impl Http,
 ) -> Result<(), ProviderError> {
     validate_byo_config(config)?;
-    let request = probe_request(config);
-    let response = http
-        .send(request)
-        .await
-        .map_err(|_| ProviderError::Unreachable)?;
+    let response = capped(http, probe_request(config)).await?;
     if (200..300).contains(&response.status) {
         Ok(())
     } else {
@@ -276,26 +474,16 @@ fn is_bearer_byte(b: u8) -> bool {
 /// identity/auth check: Kubo `POST /api/v0/id`, PSA `GET /pins?limit=1`, Pinata
 /// `GET /data/testAuthentication`.
 fn probe_request(config: &ByoIpfsConfig) -> HttpRequest {
-    let base = config.endpoint.trim_end_matches('/');
     let (method, path) = match config.kind {
         ByoKind::Kubo => (HttpMethod::Post, "/api/v0/id"),
         ByoKind::Psa => (HttpMethod::Get, "/pins?limit=1"),
         ByoKind::Pinata => (HttpMethod::Get, "/data/testAuthentication"),
     };
-    let mut headers = Vec::new();
-    if let Some(token) = &config.access_token {
-        headers.push((
-            AUTHORIZATION.to_owned(),
-            format!("Bearer {}", token.as_str()),
-        ));
-    }
     HttpRequest {
         method,
-        url: format!("{base}{path}"),
-        headers,
+        url: format!("{}{path}", base(config)),
+        headers: headers(config, None),
         body: None,
-        // The configured access token above is the only credential a BYO
-        // endpoint gets.
         credentials: HttpCredentials::Omit,
         timeout_ms: Some(PROBE_TIMEOUT_MS),
     }
@@ -304,6 +492,8 @@ fn probe_request(config: &ByoIpfsConfig) -> HttpRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_core::content::compute_cid;
+
     use crate::seams::HttpResponse;
     use crate::testkit::block_on;
     use crate::testkit::fakes::ScriptedHttp;
@@ -489,6 +679,261 @@ mod tests {
             http.requests().is_empty(),
             "a refused credential never reaches the seam"
         );
+    }
+
+    fn leaf(bytes: &[u8]) -> Vec<u8> {
+        compute_cid(CONTENT_CID_CODEC, bytes)
+    }
+
+    #[test]
+    fn kubo_puts_the_block_under_its_own_codec_and_the_frozen_hash() {
+        let http = ScriptedHttp::default();
+        let block = b"sealed leaf bytes".to_vec();
+        let cid = leaf(&block);
+        let address = encode_content_cid_str(&cid);
+        http.enqueue_response(HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: format!("{{\"Key\":\"{address}\",\"Size\":17}}\n").into_bytes(),
+        });
+        block_on(place_block(
+            &config(ByoKind::Kubo, Some("tok")),
+            &cid,
+            &block,
+            &http,
+        ))
+        .unwrap();
+
+        let request = &http.requests()[0];
+        assert_eq!(request.method, HttpMethod::Post);
+        assert_eq!(
+            request.url,
+            "https://ipfs.member.test/api/v0/block/put\
+             ?cid-codec=raw&mhtype=blake3&mhlen=32&pin=true&allow-big-block=true"
+        );
+        let boundary = request
+            .headers
+            .iter()
+            .find(|(name, _)| name == CONTENT_TYPE)
+            .and_then(|(_, value)| value.split("boundary=").nth(1))
+            .expect("the request declares its multipart boundary")
+            .to_owned();
+        // Kubo parses exactly these bytes, so the part is asserted whole: an
+        // opening delimiter that disagreed with the declared boundary, or a
+        // malformed part header, would frame the block out of the request.
+        let body = request.body.as_ref().expect("a block/put carries a body");
+        let head = format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"data\"; filename=\"blob\"\r\n\
+             Content-Type: application/octet-stream\r\n\r\n"
+        );
+        let tail = format!("\r\n--{boundary}--\r\n");
+        assert_eq!(
+            *body,
+            [head.as_bytes(), &block, tail.as_bytes()].concat(),
+            "the block rides the declared boundary verbatim"
+        );
+    }
+
+    #[test]
+    fn a_dag_root_is_put_under_the_dag_cbor_codec() {
+        let http = ScriptedHttp::default();
+        let block = b"root manifest".to_vec();
+        let cid = compute_cid(DAG_ROOT_CODEC, &block);
+        let address = encode_content_cid_str(&cid);
+        http.enqueue_response(HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: format!("{{\"Key\":\"{address}\"}}").into_bytes(),
+        });
+        block_on(place_block(
+            &config(ByoKind::Kubo, None),
+            &cid,
+            &block,
+            &http,
+        ))
+        .unwrap();
+        assert!(http.requests()[0].url.contains("cid-codec=dag-cbor"));
+    }
+
+    /// A provider that stored the block somewhere else would leave the published
+    /// record naming bytes it does not serve, so the address it answers with is
+    /// held to the one it was given.
+    #[test]
+    fn a_kubo_node_that_stored_the_block_elsewhere_is_a_failure() {
+        let block = b"sealed leaf bytes".to_vec();
+        let cid = leaf(&block);
+        for (body, verdict) in [
+            (
+                r#"{"Key":"bafkr4iamjdirj4vmqmpizgefavwr4nftqhx6p4bbqdigodc6ja2g3lwumi"}"#,
+                ProviderError::AddressMismatch,
+            ),
+            // A trailing error object parses but names no address: a store
+            // fault, never a disagreeing one.
+            (
+                r#"{"Message":"boom","Type":"error"}"#,
+                ProviderError::NoVerdict,
+            ),
+            ("", ProviderError::NoVerdict),
+        ] {
+            let http = ScriptedHttp::default();
+            http.enqueue_response(HttpResponse {
+                status: 200,
+                headers: Vec::new(),
+                body: body.as_bytes().to_vec(),
+            });
+            assert_eq!(
+                block_on(place_block(
+                    &config(ByoKind::Kubo, None),
+                    &cid,
+                    &block,
+                    &http
+                ))
+                .unwrap_err(),
+                verdict,
+                "{body:?} must not read as a stored block"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pinning_service_is_asked_to_pin_the_address_it_fetches_itself() {
+        let block = b"sealed leaf bytes".to_vec();
+        let cid = leaf(&block);
+        let address = encode_content_cid_str(&cid);
+        for (kind, path, field) in [
+            (ByoKind::Psa, "/pins", "cid"),
+            (ByoKind::Pinata, "/pinning/pinByHash", "hashToPin"),
+        ] {
+            let http = ScriptedHttp::default();
+            http.enqueue_response(ok());
+            block_on(place_block(&config(kind, Some("tok")), &cid, &block, &http)).unwrap();
+            let request = &http.requests()[0];
+            assert_eq!(request.url, format!("https://ipfs.member.test{path}"));
+            assert_eq!(
+                request.body.as_deref(),
+                Some(format!("{{\"{field}\":\"{address}\"}}").as_bytes()),
+                "the request names the address and carries no block bytes"
+            );
+            assert!(
+                request
+                    .headers
+                    .iter()
+                    .any(|(n, v)| n == CONTENT_TYPE && v == APPLICATION_JSON)
+            );
+        }
+    }
+
+    #[test]
+    fn a_provider_that_refuses_or_cannot_be_reached_is_classified() {
+        let block = b"sealed leaf bytes".to_vec();
+        let cid = leaf(&block);
+        let http = ScriptedHttp::default();
+        http.enqueue_response(HttpResponse {
+            status: 507,
+            headers: Vec::new(),
+            body: Vec::new(),
+        });
+        assert_eq!(
+            block_on(place_block(
+                &config(ByoKind::Psa, Some("t")),
+                &cid,
+                &block,
+                &http
+            ))
+            .unwrap_err(),
+            ProviderError::Rejected { status: 507 }
+        );
+        let http = ScriptedHttp::default();
+        http.enqueue_error(crate::seams::SeamError::new("connection refused"));
+        assert_eq!(
+            block_on(place_block(
+                &config(ByoKind::Kubo, None),
+                &cid,
+                &block,
+                &http
+            ))
+            .unwrap_err(),
+            ProviderError::Unreachable
+        );
+    }
+
+    /// The same gate the settings record passes, applied here because the
+    /// endpoint and the bearer are spliced into this request too.
+    #[test]
+    fn a_config_the_seam_may_not_be_pointed_at_never_reaches_it() {
+        let block = b"sealed leaf bytes".to_vec();
+        let cid = leaf(&block);
+        let http = ScriptedHttp::default();
+        let bad = ByoIpfsConfig {
+            endpoint: "http://169.254.169.254".into(),
+            kind: ByoKind::Kubo,
+            access_token: None,
+        };
+        assert_eq!(
+            block_on(place_block(&bad, &cid, &block, &http)).unwrap_err(),
+            ProviderError::BlockedAddress
+        );
+        assert!(http.requests().is_empty());
+    }
+
+    /// Every byte of the frozen framing, not just the codec: the address is
+    /// rendered for the request, and core's renderer aborts rather than returns
+    /// on a malformed one.
+    #[test]
+    fn a_block_address_outside_the_frozen_shapes_is_refused_before_the_seam() {
+        let http = ScriptedHttp::default();
+        let mutated = |index: usize, byte: u8| {
+            let mut cid = leaf(b"x");
+            cid[index] = byte;
+            cid
+        };
+        for cid in [
+            mutated(0, 0x02), // CID version
+            mutated(1, 0x70), // dag-pb: not a content-plane codec
+            mutated(2, 0x12), // sha2-256: not the frozen multihash
+            mutated(3, 0x40), // a digest width the framing does not carry
+            leaf(b"x")[..8].to_vec(),
+            Vec::new(),
+        ] {
+            assert_eq!(
+                block_on(place_block(&config(ByoKind::Kubo, None), &cid, b"x", &http)).unwrap_err(),
+                ProviderError::MalformedBlockAddress,
+                "{cid:02x?}"
+            );
+        }
+        assert!(http.requests().is_empty());
+    }
+
+    /// The endpoint is member-supplied and answers over the network, so what it
+    /// returns is bounded before it is read. An over-cap body is no answer at
+    /// all, never bytes this process accumulates.
+    #[test]
+    fn an_over_cap_provider_body_is_no_verdict() {
+        let oversized = || HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: vec![b'{'; MAX_PROVIDER_RESPONSE_BYTES + 1],
+        };
+        let block = b"sealed leaf bytes".to_vec();
+        let cid = leaf(&block);
+        for kind in [ByoKind::Kubo, ByoKind::Psa, ByoKind::Pinata] {
+            let http = ScriptedHttp::default();
+            http.enqueue_response(oversized());
+            assert_eq!(
+                block_on(place_block(&config(kind, Some("tok")), &cid, &block, &http)).unwrap_err(),
+                ProviderError::NoVerdict,
+                "{kind:?}"
+            );
+
+            let http = ScriptedHttp::default();
+            http.enqueue_response(oversized());
+            assert_eq!(
+                block_on(test_connection(&config(kind, Some("tok")), &http)).unwrap_err(),
+                ProviderError::NoVerdict,
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]

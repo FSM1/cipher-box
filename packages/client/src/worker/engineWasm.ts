@@ -152,6 +152,7 @@ export interface EngineWasm {
     readonly UploadCompleted: number;
     readonly UploadFailed: number;
     readonly UploadCancelled: number;
+    readonly ExternalPinFailed: number;
   };
   Staleness: {
     readonly Fresh: number;

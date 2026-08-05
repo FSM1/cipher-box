@@ -223,7 +223,10 @@ degraded outcome applies a different policy rather than showing stale data.
   the gate already owes a rejected record.
 - **No last-known-good copy fails the placement decision closed.** The
   built-in defaults describe a first run — no record anywhere, no durable
-  floor. Under any other reason, with no cached copy to fall back on, a
+  floor. Residual: that is a verdict about _this device_, so a record-plane
+  adversary who withholds the record from one that has never synced still
+  reaches the first-run default; closing it needs positive evidence that the
+  account has never published settings, which no device-local seam carries. Under any other reason, with no cached copy to fall back on, a
   placement decision refuses the hosted upload rather than resolving to
   `PinMode::Hosted`; the member is told their settings are unavailable. A
   consumer that branches only on the resolved case, letting the degraded ones
@@ -639,6 +642,69 @@ contract-test suite owned by the testing-strategy blueprint (#28 D6).
   every mode's publish flow still traverses registration. `ByoIpfsConfig`
   stays sealed in vault settings; provider connection testing is engine-side
   over the Http seam (the TEE tester is gone).
+- **Dispatch is concrete over the Http seam, and only content versions
+  dispatch.** A record head block always takes the hosted path — the record
+  plane's publish compares the ingress's returned address against the head
+  block's own, and the republisher re-PUTs from the hosted store — so
+  placement decides a version's blocks, not a record's.
+  - The byte destinations a mode names are exactly what the provider's API
+    supports. Kubo takes bytes under the caller's own address (`block/put`
+    with the CID's multicodec and the frozen `blake3`/32 framing) and the
+    address it answers with is held to the one it was given. PSA and Pinata
+    are pin-by-CID services: they fetch the block from the network rather than
+    receive it, and their own ingress re-chunks under a different multihash,
+    so neither can preserve an address. They are therefore only ever a dual
+    write's second leg, and **external-only over a pin-by-CID provider is a
+    placement refusal** — no leg would hold the block for the service to
+    fetch, so the published record would name bytes that exist nowhere.
+  - **Dual runs both legs, both retrying inside the op, and only hosted can
+    fail it** (#34 D1). Under strict-FIFO stop-at-first-failure a
+    both-must-succeed rule would let an offline home node stall every later
+    mutation in the vault, so the op completes once hosted succeeds and
+    external has either succeeded or exhausted its attempts. That budget is
+    the **op's, not each block's**: a node that is down refuses every block
+    alike, so once it is spent the mirror is abandoned for that version rather
+    than re-asked per block. The outcome is reported per op rather than
+    swallowed, and no retry is queued for it. Under external, the member's
+    provider _is_ the byte path, so its refusal is the op's.
+  - **A partial-success report waits for the publish.** The external-pin
+    shortfall says the version published and its content is retrievable, so it
+    is emitted after the record lands, never at the end of block upload — a
+    pass that still fails to publish has made no such promise.
+  - **Durable upload progress is keyed by the destinations that took the
+    bytes.** A resumed version's confirmed prefix is no longer on the device,
+    so a session only skips it where the leg that can fail _this_ op already
+    holds it: the hosted store, except under external-only where the member's
+    provider is the only leg there is. A mark therefore records what the legs
+    actually took, not what the mode named — a dual write whose mirror missed
+    a block narrows its mark to the hosted leg, so a later external-only
+    session re-places rather than publishing content that node never received.
+  - **The destination identity is the provider, not the credential.** It
+    covers the provider kind and endpoint and deliberately excludes the
+    bearer: a mark that stops matching is not merely ignored, since the leaves
+    it covered are already released, so keying on a rotatable secret would
+    make a routine credential rotation leave the version unpublishable.
+    Residual: two accounts on one multi-tenant pin service tag alike, which
+    only ever reaches the best-effort mirror report.
+  - The placement is decided once at start and holds for the session, so a
+    provider or credential revoked elsewhere still receives blocks until the
+    process restarts. Stated, not closed.
+- **A publish refuses settings no reader could place under** (AGENTS.md rule
+  8): the produce path runs the consumer's own placement predicate, so a
+  record naming a mode with no usable byte destination — an external leg with
+  no provider, or external-only over a pin-by-CID one — is never signed. Left
+  unchecked it would be a durable, account-wide refusal of every content
+  write, recoverable only by publishing a new record.
+- **The quota pre-flight gates this write's byte path, not the account.** It
+  runs at command time, where the write already waits, sized in **sealed**
+  bytes: `Hosted` and `Dual` are checked, `External` is skipped. `advisory` on
+  the quota response is a display hint that lags the vaulted mode — the mode
+  is the source of truth and the account flag is reconciled against it, since
+  `users.byo` is two-state where the mode is three and dual has no server
+  representation (`byo=true` is exactly `External`). The pre-flight can never
+  be authoritative — the API upload endpoint stays the enforcement — so an
+  unreachable or unconfigured API leaves the write to queue offline like any
+  other, while a placement that cannot be authenticated refuses it.
 - **BYO endpoint policy** (#905): one gate over the whole config, applied
   identically to a member-typed config and to one resolved back off the
   network, and release-active on the encode side so nothing is published that

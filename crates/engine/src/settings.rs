@@ -17,6 +17,7 @@
 //! ([`DefaultsReason`]) — silently reverting a member's placement choice to the
 //! hosted default is what an adversary who can withhold the record gains.
 
+use core::fmt;
 use core::future::{Future, poll_fn};
 use core::num::NonZeroU64;
 use core::pin::pin;
@@ -28,6 +29,8 @@ use cipherbox_core::error::{CodecError, Malformed};
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{open_settings_record, seal_settings_record};
+use cipherbox_core::suite::hash::hash;
+use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
@@ -71,12 +74,242 @@ impl Default for VaultSettings {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The placement decision: which byte destinations a settings load authorises.
+// ---------------------------------------------------------------------------
+
+/// Where one write's bytes go, decided from the vault settings load and held
+/// for the session. The hosted leg is authoritative in both directions (#34 D1):
+/// only it can fail an op, and only it is quota-gated.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Placement {
+    /// CipherBox's hosted pin store only.
+    Hosted,
+    /// The member's own provider only. No *content* block reaches the hosted
+    /// store; record heads and registration still traverse it
+    /// (blueprint/engine.md "Content plane").
+    External(ByoIpfsConfig),
+    /// Both legs.
+    Dual(ByoIpfsConfig),
+}
+
+impl Placement {
+    /// Whether this placement puts bytes in the hosted store — what the account
+    /// quota gates.
+    #[must_use]
+    pub fn has_hosted_leg(&self) -> bool {
+        !matches!(self, Self::External(_))
+    }
+
+    /// The byte destinations this placement names, as durable upload progress
+    /// records them.
+    #[must_use]
+    pub fn destinations(&self) -> Destinations {
+        match self {
+            Self::Hosted => Destinations {
+                hosted: true,
+                external: None,
+            },
+            Self::External(config) => Destinations {
+                hosted: false,
+                external: Some(byo_tag(config)),
+            },
+            Self::Dual(config) => Destinations {
+                hosted: true,
+                external: Some(byo_tag(config)),
+            },
+        }
+    }
+}
+
+/// A provider's identity as the upload mark records it: the kind, plus the
+/// endpoint naming the node or service the blocks land on.
+///
+/// The bearer is deliberately out of the preimage. It rotates while the
+/// destination stays put, and a mark that stops matching is not merely ignored —
+/// the leaves it covered are already released from staging, so under
+/// external-only a rotation would leave the version unpublishable. That mode is
+/// Kubo-only ([`placement_of`]), where the endpoint *is* the member's node and
+/// the bearer only fronts it. On a multi-tenant pin service two accounts do
+/// share an endpoint, but such a config only ever reaches
+/// [`Destinations::mirror_leg_holds`], which reports a gap and never fails an op.
+fn byo_tag(config: &ByoIpfsConfig) -> [u8; SECRET_LEN] {
+    let mut tagged = b"cipherbox/byo-destination\0".to_vec();
+    // The kind is one fixed byte ahead of the endpoint, so no two configs share
+    // a preimage without sharing both fields.
+    tagged.push(config.kind as u8);
+    tagged.extend_from_slice(config.endpoint.as_bytes());
+    hash(&tagged)
+}
+
+/// The set of byte destinations one write's blocks go to. Durable per-version
+/// upload progress is written under it, so a resumed version reads a previous
+/// session's progress only where the destinations it must reach now already
+/// hold those blocks — progress releases them from staging, after which they
+/// can never be placed anywhere else.
+///
+/// The two legs are kept apart rather than folded into one tag because they
+/// fail differently: only the leg that can fail an op has to hold the released
+/// blocks for the version to publish (#34 D1).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Destinations {
+    hosted: bool,
+    external: Option<[u8; SECRET_LEN]>,
+}
+
+impl fmt::Debug for Destinations {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Destinations")
+            .field("hosted", &self.hosted)
+            .field("external", &self.external.map(|_| "<tag>"))
+            .finish()
+    }
+}
+
+impl Destinations {
+    /// The fixed width of the encoded form.
+    pub const LEN: usize = 2 + SECRET_LEN;
+
+    /// The wire form the upload mark carries.
+    #[must_use]
+    pub fn encode(&self) -> [u8; Self::LEN] {
+        let mut out = [0u8; Self::LEN];
+        out[0] = u8::from(self.hosted);
+        out[1] = u8::from(self.external.is_some());
+        if let Some(tag) = &self.external {
+            out[2..].copy_from_slice(tag);
+        }
+        out
+    }
+
+    /// Recover destinations from a stored mark, fail-closed: a leg flag outside
+    /// `{0, 1}`, a tag under an absent leg, or a set naming no destination at
+    /// all is not something [`encode`](Self::encode) can produce, so it says
+    /// nothing about where any block went.
+    #[must_use]
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        let bytes: [u8; Self::LEN] = bytes.try_into().ok()?;
+        let (hosted, external) = match (bytes[0], bytes[1]) {
+            (0, 1) => (false, true),
+            (1, 0) => (true, false),
+            (1, 1) => (true, true),
+            _ => return None,
+        };
+        let tag: [u8; SECRET_LEN] = bytes[2..].try_into().ok()?;
+        if !external && tag != [0u8; SECRET_LEN] {
+            return None;
+        }
+        Some(Self {
+            hosted,
+            external: external.then_some(tag),
+        })
+    }
+
+    /// Whether blocks already placed at `earlier` reached every leg that can
+    /// fail an op under *these* destinations — the hosted store, except under
+    /// external-only where the member's own provider is the only leg there is.
+    ///
+    /// This is what makes a leaf missing from staging safe to skip: it is not
+    /// that some destination once took it, but that the destination this
+    /// version must publish from holds it.
+    #[must_use]
+    pub fn required_legs_hold(&self, earlier: &Self) -> bool {
+        match self.hosted {
+            true => earlier.hosted,
+            false => self.external.is_some() && earlier.external == self.external,
+        }
+    }
+
+    /// Whether a dual write's best-effort mirror also holds those blocks. A
+    /// mirror that does not is reported, never fatal: it is the same gap a live
+    /// [`ProviderError`] on the external leg leaves.
+    #[must_use]
+    pub fn mirror_leg_holds(&self, earlier: &Self) -> bool {
+        !self.hosted || self.external.is_none() || earlier.external == self.external
+    }
+
+    /// Drop the mirror from what a mark may claim, because the external leg did
+    /// not take some block the mark covers. Progress is one high-water prefix
+    /// under one destination set, so a mirror that missed anything inside that
+    /// prefix cannot be named by it — otherwise a later external-only session
+    /// reads [`required_legs_hold`](Self::required_legs_hold) as satisfied and
+    /// skips blocks that provider never received.
+    ///
+    /// Only a leg that cannot fail the op is droppable, which is why this is a
+    /// no-op without a hosted leg: the set must never narrow to no destination
+    /// at all, which [`decode`](Self::decode) rejects.
+    pub fn mirror_missed(&mut self) {
+        if self.hosted {
+            self.external = None;
+        }
+    }
+}
+
+/// The session's placement decision, as the command path and the drain both
+/// read it: where bytes go, or why no destination could be authenticated.
+pub type PlacementDecision = Result<Placement, PlacementRefusal>;
+
+/// Why no byte destination could be decided. Every variant refuses the write:
+/// a placement that cannot be authenticated must not widen to the hosted
+/// default (blueprint/engine.md "Settings-load policy").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlacementRefusal {
+    /// The settings load degraded past a first run with no last-known-good copy,
+    /// so the member's own placement choice is unavailable.
+    SettingsUnavailable(DefaultsReason),
+    /// The mode names an external leg the settings carry no config for.
+    NoProvider,
+    /// External-only over a pin-by-CID provider, which has no byte ingress: no
+    /// leg would hold the block for it to fetch.
+    NoExternalIngress(ByoKind),
+}
+
+/// The byte destinations a settings load authorises.
+///
+/// The built-in defaults describe a first run and nothing else: every other
+/// degraded reason with no last-known-good copy refuses rather than resolving
+/// to [`PinMode::Hosted`] (blueprint/engine.md "Settings-load policy").
+///
+/// Residual, stated there too: `NoRecord` is a verdict about *this device*, so a
+/// record-plane adversary who withholds the record from a device that has never
+/// synced still gets the first-run default.
+pub fn decide_placement(load: &SettingsLoad) -> Result<Placement, PlacementRefusal> {
+    match load {
+        SettingsLoad::Resolved(settings) | SettingsLoad::Stale { settings, .. } => {
+            placement_of(settings)
+        }
+        SettingsLoad::Defaults(DefaultsReason::NoRecord) => Ok(Placement::Hosted),
+        SettingsLoad::Defaults(reason) => Err(PlacementRefusal::SettingsUnavailable(*reason)),
+    }
+}
+
+/// The byte destinations `settings` name, in the two places that must agree:
+/// the reader deciding where this session's bytes go, and the writer refusing
+/// to publish settings no reader could place under (AGENTS.md rule 8).
+pub fn placement_of(settings: &VaultSettings) -> Result<Placement, PlacementRefusal> {
+    let config = || settings.byo.clone().ok_or(PlacementRefusal::NoProvider);
+    match settings.pin_mode {
+        PinMode::Hosted => Ok(Placement::Hosted),
+        PinMode::Dual => Ok(Placement::Dual(config()?)),
+        PinMode::External => match config()? {
+            config @ ByoIpfsConfig {
+                kind: ByoKind::Kubo,
+                ..
+            } => Ok(Placement::External(config)),
+            config => Err(PlacementRefusal::NoExternalIngress(config.kind)),
+        },
+    }
+}
+
 /// Why a settings publish did not reach the network. Every variant is
 /// fail-closed: nothing is published.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingsPublishError {
     /// The BYO config is not one the Http seam may be pointed at.
     Byo(ProviderError),
+    /// The settings name a mode no reader could place bytes under, so
+    /// publishing them would strand every device on the account.
+    Placement(PlacementRefusal),
     /// Core refused to encode or seal the body.
     Codec(CodecError),
     /// The host could not supply the per-record HPKE ephemeral scalar.
@@ -249,6 +482,11 @@ where
     Sch: Scheduler + Clone + 'static,
 {
     validate(settings).map_err(SettingsPublishError::Byo)?;
+    // Rule 8, one layer out from the codec: `decide_placement` hard-refuses a
+    // mode with no usable byte destination, so a record carrying one would be a
+    // durable, account-wide refusal of every content write. Release-active, and
+    // the reader's own predicate rather than a restatement of it.
+    placement_of(settings).map_err(SettingsPublishError::Placement)?;
     let signer = kdf::settings_ipns_keypair(login_secret);
     let name = IpnsName::from_public_key(&signer.verifying_key());
     let revision = next_revision(floors, &name).await?;
@@ -712,6 +950,7 @@ fn kind_str(kind: ByoKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testkit::{FakeWorld, SeededEntropy, block_on};
 
     fn keep(n: u64) -> RetentionPolicy {
         RetentionPolicy::KeepLatest(NonZeroU64::new(n).expect("nonzero"))
@@ -856,5 +1095,319 @@ mod tests {
                 "{endpoint}: the reader must refuse what the writer refuses",
             );
         }
+    }
+    // -----------------------------------------------------------------------
+    // Placement: what a settings load authorises, and what it refuses.
+    // -----------------------------------------------------------------------
+
+    fn placed(mode: PinMode, config: Option<ByoIpfsConfig>) -> VaultSettings {
+        VaultSettings {
+            pin_mode: mode,
+            byo: config,
+            ..VaultSettings::default()
+        }
+    }
+
+    fn kubo() -> ByoIpfsConfig {
+        byo("https://node.example", ByoKind::Kubo, Some("tok"))
+    }
+
+    #[test]
+    fn a_resolved_record_places_bytes_where_the_member_chose() {
+        for (mode, expected) in [
+            (PinMode::Hosted, Placement::Hosted),
+            (PinMode::External, Placement::External(kubo())),
+            (PinMode::Dual, Placement::Dual(kubo())),
+        ] {
+            let load = SettingsLoad::Resolved(placed(mode, Some(kubo())));
+            assert_eq!(decide_placement(&load).unwrap(), expected);
+        }
+    }
+
+    /// The last-known-good copy is the member's own choice, so it decides
+    /// placement exactly as a resolved record does — that is the whole point of
+    /// keeping it (blueprint/engine.md "Settings-load policy").
+    #[test]
+    fn a_stale_copy_decides_placement_like_a_resolved_record() {
+        let load = SettingsLoad::Stale {
+            settings: placed(
+                PinMode::External,
+                Some(byo("https://node.example", ByoKind::Kubo, None)),
+            ),
+            reason: DefaultsReason::Suppressed,
+        };
+        assert_eq!(
+            decide_placement(&load).unwrap(),
+            Placement::External(byo("https://node.example", ByoKind::Kubo, None))
+        );
+    }
+
+    /// The built-in defaults describe a first run and nothing else: every other
+    /// degraded reason refuses rather than widening an unknown choice onto the
+    /// hosted store.
+    #[test]
+    fn only_a_first_run_falls_back_to_the_hosted_default() {
+        assert_eq!(
+            decide_placement(&SettingsLoad::Defaults(DefaultsReason::NoRecord)).unwrap(),
+            Placement::Hosted
+        );
+        for reason in [
+            DefaultsReason::Suppressed,
+            DefaultsReason::RolledBack {
+                floor: 4,
+                sequence: 2,
+            },
+            DefaultsReason::RevisionRolledBack {
+                floor: 4,
+                revision: 2,
+            },
+            DefaultsReason::Expired,
+            DefaultsReason::TimedOut,
+            DefaultsReason::Unreadable,
+            DefaultsReason::FloorUnreadable,
+        ] {
+            assert_eq!(
+                decide_placement(&SettingsLoad::Defaults(reason)).unwrap_err(),
+                PlacementRefusal::SettingsUnavailable(reason),
+                "{reason:?} must not widen placement"
+            );
+        }
+    }
+
+    #[test]
+    fn a_mode_naming_an_external_leg_with_no_provider_is_refused() {
+        for mode in [PinMode::External, PinMode::Dual] {
+            let load = SettingsLoad::Resolved(placed(mode, None));
+            assert_eq!(
+                decide_placement(&load).unwrap_err(),
+                PlacementRefusal::NoProvider
+            );
+        }
+    }
+
+    /// A pinning service fetches content from the network rather than receiving
+    /// it, so external-only over one would publish a record naming bytes no leg
+    /// holds. Paired with a hosted leg it is exactly right.
+    #[test]
+    fn a_pin_by_cid_provider_cannot_be_the_only_byte_destination() {
+        for kind in [ByoKind::Psa, ByoKind::Pinata] {
+            let provider = Some(byo("https://node.example", kind, Some("tok")));
+            assert_eq!(
+                decide_placement(&SettingsLoad::Resolved(placed(
+                    PinMode::External,
+                    provider.clone()
+                )))
+                .unwrap_err(),
+                PlacementRefusal::NoExternalIngress(kind)
+            );
+            assert!(
+                decide_placement(&SettingsLoad::Resolved(placed(PinMode::Dual, provider))).is_ok(),
+                "{kind:?} is a fine second leg"
+            );
+        }
+    }
+
+    /// Rule 8: the publish path refuses the very shapes `decide_placement`
+    /// refuses, so no record can strand every device on the account.
+    #[test]
+    fn publishing_settings_no_reader_could_place_under_is_refused() {
+        let world = FakeWorld::new();
+        let device = world.device(b"alice");
+        for (settings, refusal) in [
+            (
+                placed(PinMode::External, None),
+                PlacementRefusal::NoProvider,
+            ),
+            (placed(PinMode::Dual, None), PlacementRefusal::NoProvider),
+            (
+                placed(
+                    PinMode::External,
+                    Some(byo("https://api.pinata.cloud", ByoKind::Pinata, Some("t"))),
+                ),
+                PlacementRefusal::NoExternalIngress(ByoKind::Pinata),
+            ),
+        ] {
+            let api = ApiClient::new(
+                device.http.clone(),
+                device.credential_store.clone(),
+                String::new(),
+            );
+            let outcome = block_on(publish_settings(
+                &device.record_store,
+                &api,
+                &device.floor_store,
+                &device.snapshot_cache,
+                &world.scheduler,
+                &SyncTimingProfile::CI,
+                &mut SeededEntropy::new(3),
+                &OrphanHeads::default(),
+                &[7u8; 32],
+                &settings,
+            ));
+            assert_eq!(
+                outcome.unwrap_err(),
+                SettingsPublishError::Placement(refusal),
+                "{settings:?} must never be published"
+            );
+            assert!(
+                device.http.requests().is_empty(),
+                "a refused publish never reaches the network"
+            );
+        }
+    }
+
+    /// Placement is what the durable upload mark is keyed by, so two placements
+    /// must not share destinations — a resumed version would otherwise read
+    /// progress towards destinations these are not. One endpoint is not one
+    /// destination: the provider kind names it too.
+    #[test]
+    fn each_set_of_destinations_tags_itself_apart() {
+        let one = "https://a.example";
+        let variants = [
+            Placement::Hosted,
+            Placement::External(byo(one, ByoKind::Kubo, Some("tok"))),
+            Placement::External(byo("https://b.example", ByoKind::Kubo, Some("tok"))),
+            Placement::Dual(byo(one, ByoKind::Kubo, Some("tok"))),
+            Placement::Dual(byo(one, ByoKind::Psa, Some("tok"))),
+            Placement::Dual(byo(one, ByoKind::Pinata, Some("tok"))),
+        ]
+        .map(|placement| placement.destinations().encode());
+        for (i, tag) in variants.iter().enumerate() {
+            for other in &variants[i + 1..] {
+                assert_ne!(tag, other, "distinct destinations, distinct tags");
+            }
+        }
+    }
+
+    /// Rotating the credential does not move the destination. The blocks are
+    /// still on that node, and re-tagging would strand every leaf already
+    /// released to it.
+    #[test]
+    fn a_rotated_bearer_is_the_same_destination() {
+        let endpoint = "https://a.example";
+        let tag = |token| byo_tag(&byo(endpoint, ByoKind::Kubo, token));
+        assert_eq!(tag(Some("tok")), tag(Some("rotated")));
+        assert_eq!(tag(Some("tok")), tag(None));
+    }
+
+    /// A leaf released from staging is safe to skip only where the leg that can
+    /// fail this op already holds it. The hosted leg is that leg everywhere but
+    /// external-only, so switching the mirror on or off never strands a version
+    /// whose bytes the hosted store already took.
+    ///
+    /// The `External` reading of a prior `Dual` mark rests on
+    /// [`Destinations::mirror_missed`]: a dual write only names its mirror in a
+    /// mark that mirror actually took.
+    #[test]
+    fn progress_carries_exactly_where_the_op_failing_leg_already_holds_the_bytes() {
+        let one = byo("https://a.example", ByoKind::Kubo, Some("tok"));
+        let two = byo("https://b.example", ByoKind::Kubo, Some("tok"));
+        let carries = |here: &Placement, earlier: &Placement| {
+            here.destinations()
+                .required_legs_hold(&earlier.destinations())
+        };
+
+        let hosted = Placement::Hosted;
+        let dual_one = Placement::Dual(one.clone());
+        let dual_two = Placement::Dual(two.clone());
+        let external_one = Placement::External(one);
+        let external_two = Placement::External(two);
+
+        for (here, earlier) in [
+            (&dual_one, &hosted),
+            (&hosted, &dual_one),
+            (&dual_one, &dual_two),
+            (&external_one, &dual_one),
+            (&external_one, &external_one),
+        ] {
+            assert!(carries(here, earlier), "the required leg holds the bytes");
+        }
+        for (here, earlier) in [
+            (&hosted, &external_one),
+            (&dual_one, &external_one),
+            (&external_one, &hosted),
+            (&external_one, &external_two),
+            (&external_one, &dual_two),
+        ] {
+            assert!(
+                !carries(here, earlier),
+                "the required leg never received them"
+            );
+        }
+    }
+
+    /// A dual mirror that missed the released blocks is a gap to report, and
+    /// only dual has a mirror to gap.
+    #[test]
+    fn only_a_dual_mirror_can_gap() {
+        let one = byo("https://a.example", ByoKind::Kubo, Some("tok"));
+        let two = byo("https://b.example", ByoKind::Kubo, Some("tok"));
+        let holds = |here: &Placement, earlier: &Placement| {
+            here.destinations()
+                .mirror_leg_holds(&earlier.destinations())
+        };
+        let dual_one = Placement::Dual(one.clone());
+
+        assert!(!holds(&dual_one, &Placement::Hosted));
+        assert!(!holds(&dual_one, &Placement::Dual(two)));
+        assert!(holds(&dual_one, &dual_one));
+        assert!(holds(&Placement::Hosted, &dual_one));
+        assert!(holds(&Placement::External(one), &Placement::Hosted));
+    }
+
+    /// A mirror that missed a block narrows the mark to the hosted leg, so a
+    /// later external-only session no longer reads it as progress — and the set
+    /// never narrows to no destination at all.
+    #[test]
+    fn a_missed_mirror_narrows_the_mark_to_the_hosted_leg() {
+        let one = byo("https://a.example", ByoKind::Kubo, Some("tok"));
+        let mut dual = Placement::Dual(one.clone()).destinations();
+        dual.mirror_missed();
+        assert_eq!(dual, Placement::Hosted.destinations());
+        assert!(
+            !Placement::External(one.clone())
+                .destinations()
+                .required_legs_hold(&dual)
+        );
+        assert!(
+            Placement::Dual(one.clone())
+                .destinations()
+                .required_legs_hold(&dual)
+        );
+
+        let mut external = Placement::External(one).destinations();
+        external.mirror_missed();
+        assert_eq!(
+            Destinations::decode(&external.encode()),
+            Some(external),
+            "the only leg there is never drops out of the set"
+        );
+    }
+
+    /// AGENTS.md rule 8: the reader accepts exactly what the writer can emit.
+    #[test]
+    fn destinations_decode_only_what_encode_can_produce() {
+        let one = byo("https://a.example", ByoKind::Kubo, Some("tok"));
+        for placement in [
+            Placement::Hosted,
+            Placement::External(one.clone()),
+            Placement::Dual(one),
+        ] {
+            let encoded = placement.destinations().encode();
+            assert_eq!(
+                Destinations::decode(&encoded),
+                Some(placement.destinations()),
+            );
+        }
+        let mut hosted = Placement::Hosted.destinations().encode();
+        hosted[2] = 1;
+        assert_eq!(
+            Destinations::decode(&hosted),
+            None,
+            "a tag under an absent external leg is not an encoding"
+        );
+        assert_eq!(Destinations::decode(&[0u8; Destinations::LEN]), None);
+        assert_eq!(Destinations::decode(&[2u8; Destinations::LEN]), None);
+        assert_eq!(Destinations::decode(&[]), None);
     }
 }
