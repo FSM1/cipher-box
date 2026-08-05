@@ -4,6 +4,7 @@ import './index.css';
 import './styles/login.css';
 import './styles/layout.css';
 import './styles/file-browser.css';
+import './styles/upload.css';
 import './styles/breadcrumbs.css';
 import './styles/responsive.css';
 

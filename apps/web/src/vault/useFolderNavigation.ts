@@ -19,6 +19,8 @@ const NOT_A_FOLDER: SnapshotError = { message: 'that is not a folder id' };
 export interface FolderNavigation {
   /** Direct children of the routed folder, folders first. */
   rows: ListingRow[];
+  /** The folder the snapshot listed, or `null` until one lands for this route. */
+  folder: Uint8Array | null;
   /** Root-first trail, ending at the folder on screen. */
   breadcrumbs: BreadcrumbDescriptor[];
   /** True until the engine reports a snapshot *of the routed folder*. */
@@ -75,6 +77,7 @@ export function useFolderNavigation(): FolderNavigation {
 
   return {
     rows,
+    folder: listed?.folder ?? null,
     breadcrumbs,
     isLoading: route.kind !== 'invalid' && listed === null && error === null,
     isRoot: listed !== null && sameNode(listed.folder, listed.root),

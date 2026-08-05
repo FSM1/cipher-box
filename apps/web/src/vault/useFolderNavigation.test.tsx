@@ -268,4 +268,15 @@ describe('the vault browser read path', () => {
     expect(screen.getByTestId('file-browser-error').textContent).toBe('that is not a folder id');
     expect(engine.focus).toEqual([]);
   });
+
+  it('takes no drop for a route that is not a folder, whatever the store still holds', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine, '/files/not-a-node');
+
+    // The root view outlives the bad route, and must not stand in for it.
+    await landSnapshot(engine, folderView());
+
+    expect(screen.getByTestId('file-browser-error').textContent).toBe('that is not a folder id');
+    expect(screen.queryByTestId('upload-zone')).toBeNull();
+  });
 });
