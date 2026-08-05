@@ -1,0 +1,89 @@
+# Web E2E
+
+The PR gate's smoke slice: `apps/web` driven in a real browser against a real
+API, a real engine, and the hermetic `/routing/v1` record store. Wired as the
+merge-blocking `Web E2E Smoke` job (`.github/workflows/web-e2e.yml`), reported
+through the stable `Web E2E Smoke Result` context in `ci.yml`.
+
+Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
+
+## What it covers
+
+- the front door renders every built login method
+- a tab with no session lists no vault contents
+- a cold start reaches a settled, empty vault at its root; the chrome renders
+  it, and the event taps saw the snapshot that produced it
+- signing out returns the tab to the front door
+- the shipping bundle exposes no introspection hook
+
+## What it does not cover yet
+
+Nothing on the write path — no folder create/rename/move/delete, no upload, no
+download. `blueprint/testing.md` scopes this tier at login-and-CRUD; two
+independent blockers, neither of them this suite's, hold the CRUD half:
+
+- **No affordance to drive.** `apps/web` ships no create, rename, move, delete,
+  or download control; the drop zone is the only write surface that exists.
+  Specs bind to `data-testid`s that ship, so those slices land with their
+  components rather than ahead of them.
+- **No pin store under the job.** The API pins hosted uploads through Kubo and
+  this workflow starts none, so `POST /content/upload` answers 503. The engine
+  reads that verdict as unclassified, charges no attempt, and retries instead of
+  dead-lettering — so an upload spec would hang rather than fail. A write-path
+  slice needs a Kubo service here first, as the contract suite already runs one.
+
+## How the suite logs in
+
+There is no interactive Core Kit login in CI. The `e2e` build carries the
+introspection hook (`apps/web/src/engine/introspection.ts`), which hands the
+engine a login secret the test generates. Challenge-signature login creates the
+account on first contact, so each test's fresh 32-byte secret is a fresh,
+isolated vault — no fixture setup and no shared state to serialize around.
+
+The `release` project runs the same specs' counterpart against a bundle built
+**without** the flag, and asserts `window.__CIPHERBOX_ENGINE__` is absent.
+
+## Running it locally
+
+Both bundles must be built before Playwright starts; the config only serves
+them.
+
+1. Bring up Postgres and the record store:
+
+   ```sh
+   docker compose -f docker/docker-compose.yml up -d postgres mock-ipns-routing
+   ```
+
+2. Apply migrations and boot the API:
+
+   ```sh
+   export DB_HOST=localhost DB_PORT=5432 DB_USERNAME=postgres \
+     DB_PASSWORD=postgres DB_DATABASE=cipherbox NODE_ENV=test \
+     JWT_SECRET=web-e2e-jwt-secret THROTTLE_AUTH_LIMIT=200 \
+     CORS_ALLOWED_ORIGINS=http://localhost:4173,http://localhost:4174
+   pnpm --filter @cipherbox/api migration:run
+   pnpm --filter @cipherbox/api build && node apps/api/dist/main.js
+   ```
+
+3. Build both bundles:
+
+   ```sh
+   export VITE_ENVIRONMENT=ci VITE_API_URL=http://localhost:3000 \
+     VITE_ROUTING_ENDPOINTS=http://localhost:3001
+   pnpm --filter @cipherbox/web run build:wasm
+   pnpm --filter @cipherbox/web run build:bundle
+   mv apps/web/dist apps/web/dist-release
+   VITE_E2E_HOOK=true pnpm --filter @cipherbox/web run build:bundle
+   ```
+
+4. Run the suite:
+
+   ```sh
+   pnpm --filter @cipherbox/web-e2e test:e2e
+   ```
+
+   The script is `test:e2e`, not `test`: the workspace-wide `Test` gate runs no
+   suite that needs a live stack.
+
+Rebuild the bundle after any `apps/web` change — the suite serves `dist/`, not
+a dev server.

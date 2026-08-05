@@ -1,9 +1,9 @@
 # v2 PR gate (blueprint/testing.md). Jobs cover what exists: the cargo
 # workspace (incl. the core KAT manifest job, native + WASM), the TS
-# workspace stubs, and the live contract suite against the CI stack. The
-# remaining PR-gate suites (packages/client browser suite, Windows adapter
-# tests, e2e smoke slice) land with their code and must block merges in a
-# named job the day they land (law 1).
+# workspace stubs, the live contract suite against the CI stack, and the web
+# e2e smoke slice. The remaining PR-gate suites (Windows adapter tests, the
+# cross-client timing scenario) land with their code and must block merges in
+# a named job the day they land (law 1).
 name: CI
 
 on:
@@ -23,6 +23,7 @@ jobs:
       ts: ${{ steps.filter.outputs.ts }}
       rust: ${{ steps.filter.outputs.rust }}
       web: ${{ steps.filter.outputs.web }}
+      e2e: ${{ steps.filter.outputs.e2e }}
       desktop: ${{ steps.filter.outputs.desktop }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -33,6 +34,7 @@ jobs:
             ts:
               - 'apps/**'
               - 'packages/**'
+              - 'tests/**'
               # The TS suite pins MEDIA_WINDOW_BYTES against this manifest, so a
               # Rust-side chunk-size change must run it.
               - 'crates/engine/kat/**'
@@ -61,6 +63,14 @@ jobs:
               - 'package.json'
               - 'tsconfig*.json'
               - '.github/workflows/ci.yml'
+            # What the smoke slice depends on *beyond* `web` — it drives the
+            # browser against a live API and the hermetic record store. Its job
+            # runs on `web || e2e`, so widening `web` widens the gate too.
+            e2e:
+              - 'apps/api/**'
+              - 'tests/**'
+              - 'tools/mock-ipns-routing/**'
+              - '.github/workflows/web-e2e.yml'
             desktop:
               - 'apps/desktop/**'
               - 'Cargo.toml'
@@ -841,6 +851,38 @@ jobs:
           echo "contract-suite result: ${CONTRACT_SUITE_RESULT}"
           if [ "${CONTRACT_SUITE_RESULT}" = 'failure' ] || [ "${CONTRACT_SUITE_RESULT}" = 'cancelled' ]; then
             echo "::error::contract-suite ${CONTRACT_SUITE_RESULT}"
+            exit 1
+          fi
+
+  web-e2e:
+    name: Web E2E Smoke
+    needs: [changes, lint]
+    if: |
+      !failure() && !cancelled() &&
+      (needs.changes.outputs.web == 'true' || needs.changes.outputs.e2e == 'true')
+    permissions:
+      contents: read
+    uses: ./.github/workflows/web-e2e.yml
+
+  # Single always-reporting gate for the smoke slice, mirroring
+  # contract-suite-result: branch protection requires this stable context, so a
+  # PR that touches nothing the suite covers is not blocked forever while a real
+  # smoke failure still fails this gate.
+  web-e2e-result:
+    name: Web E2E Smoke Result
+    needs: web-e2e
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Require the smoke slice to pass or be skipped
+        env:
+          WEB_E2E_RESULT: ${{ needs.web-e2e.result }}
+        run: |
+          echo "web-e2e result: ${WEB_E2E_RESULT}"
+          if [ "${WEB_E2E_RESULT}" = 'failure' ] || [ "${WEB_E2E_RESULT}" = 'cancelled' ]; then
+            echo "::error::web-e2e ${WEB_E2E_RESULT}"
             exit 1
           fi
 

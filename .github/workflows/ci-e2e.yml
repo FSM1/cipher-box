@@ -81,7 +81,6 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/web-e2e.yml
-    secrets: inherit
 
   desktop-e2e:
     name: Desktop E2E

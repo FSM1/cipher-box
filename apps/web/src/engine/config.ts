@@ -120,3 +120,13 @@ export function missingDeployEnv(env: Partial<ImportMetaEnv>): string[] {
   if (!DEPLOYED.includes(environment(env))) return [];
   return DEPLOY_ENV.filter((name) => configured(env[name]) === undefined);
 }
+
+/**
+ * Whether this build would ship the e2e introspection hook. `loadEnv` takes
+ * `VITE_` variables from the process environment and from any `.env.<mode>`
+ * file, so a deployed build refuses the flag rather than trusting that nobody
+ * exported it.
+ */
+export function shipsE2eHook(env: Partial<ImportMetaEnv>): boolean {
+  return DEPLOYED.includes(environment(env)) && configured(env.VITE_E2E_HOOK) !== undefined;
+}

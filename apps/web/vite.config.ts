@@ -6,7 +6,7 @@ import react from '@vitejs/plugin-react';
 import { build, loadEnv, type Plugin } from 'vite';
 import { defineConfig } from 'vitest/config';
 
-import { missingDeployEnv } from './src/engine/config';
+import { missingDeployEnv, shipsE2eHook } from './src/engine/config';
 
 const OUT_DIR = fileURLToPath(new URL('dist', import.meta.url));
 const SW_ENTRY = fileURLToPath(new URL('src/sw.ts', import.meta.url));
@@ -81,7 +81,10 @@ function appShell(): Plugin[] {
   ];
 }
 
-/** Fails a deployment build whose login-critical environment is unset. */
+/**
+ * Fails a deployment build whose login-critical environment is unset, or one
+ * that would ship the e2e introspection hook.
+ */
 function deployEnvGate(): Plugin {
   return {
     name: 'cipherbox:deploy-env-gate',
@@ -93,6 +96,9 @@ function deployEnvGate(): Plugin {
         throw new Error(
           `a ${env.VITE_ENVIRONMENT} build cannot log in without ${missing.join(', ')}`
         );
+      }
+      if (shipsE2eHook(env)) {
+        throw new Error(`a ${env.VITE_ENVIRONMENT} build must not set VITE_E2E_HOOK`);
       }
     },
   };

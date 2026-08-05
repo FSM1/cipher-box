@@ -7,6 +7,8 @@ export default [
   {
     ignores: [
       '**/dist/**',
+      // The web e2e suite's release-bundle comparison build.
+      '**/dist-release/**',
       '**/node_modules/**',
       '**/.planning/**',
       '**/.claude/**',

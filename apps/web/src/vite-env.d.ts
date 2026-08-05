@@ -11,6 +11,8 @@ interface ImportMetaEnv {
   readonly VITE_PUBLIC_GATEWAYS?: string;
   /** `local` | `ci` | `staging` | `production` — picks the Web3Auth network. */
   readonly VITE_ENVIRONMENT?: string;
+  /** `true` builds the e2e introspection hook in; any other value leaves it out. */
+  readonly VITE_E2E_HOOK?: string;
   readonly VITE_WEB3AUTH_CLIENT_ID?: string;
   /** The Web3Auth verifier the Core Kit login flows authenticate against. */
   readonly VITE_WEB3AUTH_VERIFIER?: string;
