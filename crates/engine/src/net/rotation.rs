@@ -314,13 +314,14 @@ fn publish_verdict(failure: ResolveFailure) -> ScopeRootPublishError {
     }
 }
 
-/// Carry an authoring refusal into the publish arm on the same rule-6 axis. A
-/// trust refusal is this build's own gate verdict on the bytes it was about to
-/// sign, reached before the PUT: re-authoring the same section reaches it again.
-/// A codec or size refusal is a property of the body this pass built from the
-/// record it just resolved, and the next pass resolves that record again — so it
-/// stays retryable rather than permanently blocking a revocation over bytes a
-/// later read may not carry.
+/// Carry an authoring refusal into the publish arm on the same rule-6 axis as
+/// [`publish_verdict`]. A trust refusal is this build's own gate verdict on the
+/// bytes it was about to sign, reached before the PUT: re-authoring the same
+/// section reaches it again, so retrying it would launder a trust violation into
+/// an availability stall. A codec or size refusal is a property of the body this
+/// pass built, and stays retryable: it is reached from a record the next pass
+/// re-resolves, and a permanent verdict on it would let anyone who can grow that
+/// record block the owner's revocation for good.
 fn author_verdict(refusal: AuthorError) -> ScopeRootPublishError {
     if refusal.is_trust_refusal() {
         ScopeRootPublishError::Rejected

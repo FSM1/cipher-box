@@ -488,14 +488,17 @@ pub fn reseal_scope_root<E: Entropy>(
     })
 }
 
-/// The produce-side half of the gate's stage-3 ascent-link cross-check
-/// (`gate/adoption.rs`), release-active per AGENTS.md rule 8: reopen the link as
-/// an ancestor reader does and confirm it carries the seed and epoch this
-/// re-seal publishes at. The expected pair comes from [`ResealSeeds`], never
-/// from the payload under test, so a link minted off the wrong local — the prior
-/// epoch's seed, a stale epoch — fails here rather than at every ancestor
-/// reader. Nothing downstream can catch it: the publisher holds no ancestor
-/// seed, so the link stays unopenable until it reaches one.
+/// Reopen the freshly sealed ascent link as an ancestor reader does and refuse
+/// unless it carries the seed and epoch this re-seal publishes at — the
+/// release-active produce-side half of the gate's stage-3 predicate
+/// (`gate/adoption.rs`, AGENTS.md rule 8). The expected pair comes from
+/// [`ResealSeeds`], never from the payload under test, so the ascent arm cannot
+/// drift from the seed and epoch the rest of the section is minted at.
+///
+/// The mirror stops one axis short of the gate's: seal and open derive the
+/// ascent keypair from the single `parent_node_seed` this re-seal was handed, so
+/// a caller that threads the wrong ancestor seed passes here and is caught only
+/// by a reader, which derives its own from cached state.
 ///
 /// The gate compares the read key the recovered seed derives; comparing the seed
 /// is the same predicate one derivation earlier.
@@ -842,22 +845,46 @@ mod tests {
         )
         .expect("a minted link is the one an ancestor reader opens");
 
-        let sealed = |seed: &[u8; 32], carried: [u8; 32], epoch: u64| {
+        let sealed = |seed: &[u8; 32], carried: [u8; 32], epoch: u64, c: &AadContext| {
             seal_ascent_link(
                 seed,
                 &[0x07; 32],
-                &ctx,
+                c,
                 &OverrideSeedPayload::new(carried, epoch),
             )
             .expect("seals")
         };
+        // A valid foreign public half with this link's own `enc`/ciphertext: the
+        // reader re-derives the public half, never trusts the carried one.
+        let mut foreign_public = sealed(&parent_node_seed, override_seed, ctx.epoch, &ctx);
+        foreign_public.ascent_public = X25519Secret::from_scalar([0x31; 32]).public().to_bytes();
         for link in [
             // Sealed to a keypair no ancestor of this node derives.
-            sealed(&[0x45; 32], override_seed, ctx.epoch),
+            sealed(&[0x45; 32], override_seed, ctx.epoch, &ctx),
             // Carries a seed that does not derive this node's read key.
-            sealed(&parent_node_seed, [0x9a; 32], ctx.epoch),
+            sealed(&parent_node_seed, [0x9a; 32], ctx.epoch, &ctx),
             // Carries an epoch the record does not publish at.
-            sealed(&parent_node_seed, override_seed, ctx.epoch + 1),
+            sealed(&parent_node_seed, override_seed, ctx.epoch + 1, &ctx),
+            // AAD transplants: the context is load-bearing, not decoration.
+            sealed(
+                &parent_node_seed,
+                override_seed,
+                ctx.epoch,
+                &ctx_for(V, [0xee; 16], ctx.epoch, STRUCT_TAG_ASCENT_LINK),
+            ),
+            sealed(
+                &parent_node_seed,
+                override_seed,
+                ctx.epoch,
+                &ctx_for(V, SCOPE, ctx.epoch, STRUCT_TAG_OWNER_BLOB),
+            ),
+            sealed(
+                &parent_node_seed,
+                override_seed,
+                ctx.epoch,
+                &ctx_for(V + 1, SCOPE, ctx.epoch, STRUCT_TAG_ASCENT_LINK),
+            ),
+            foreign_public,
         ] {
             assert_eq!(
                 verify_ascent_link(&parent_node_seed, &ctx, &override_seed, &link),
@@ -868,6 +895,57 @@ mod tests {
             ResealError::AscentLinkMismatch.check(),
             "ascent-link-mismatch"
         );
+    }
+
+    /// The publish arm keys the record's read body off the seed it recovers from
+    /// the **owner blob** (`net/rotation.rs`), while an ancestor reader derives
+    /// its expected read key from the **ascent link**. A section whose two
+    /// structures disagreed would publish a root its own ancestors reject, so the
+    /// agreement is asserted on `reseal_scope_root`'s output, not assumed.
+    #[test]
+    fn the_ascent_link_and_the_owner_blob_carry_one_seed() {
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let override_seed = [0x99; 32];
+        let id = identity(
+            &fx,
+            &owner_pub,
+            b"scope-root-name",
+            Some(&fx.parent_node_seed),
+        );
+        let s = seeds(
+            &override_seed,
+            5,
+            None,
+            &fx.write_scope_seed,
+            &fx.pointer_read_key,
+        );
+        let cs = committed_set(&commitment, &sig, &ledger);
+        let section =
+            reseal_scope_root(&mut SeededEntropy::new(17), &id, &s, &cs, &[]).expect("reseal");
+
+        let owner = open_owner_blob(
+            &fx.owner_enc,
+            &section.owner_blob.enc,
+            &ctx_for(V, SCOPE, 5, STRUCT_TAG_OWNER_BLOB),
+            &section.owner_blob.ciphertext,
+        )
+        .expect("owner opens its blob");
+        let ascent = section.ascent_link.expect("interior root has ascent");
+        let recovered = open_ascent_link(
+            &fx.parent_node_seed,
+            &ctx_for(V, SCOPE, 5, STRUCT_TAG_ASCENT_LINK),
+            &AscentLink {
+                ascent_public: ascent.ascent_public,
+                enc: ascent.enc,
+                ciphertext: ascent.ciphertext,
+                unknown: PreservedFields::new(),
+            },
+        )
+        .expect("an ancestor opens the link");
+        assert!(ct_eq(recovered.override_seed(), owner.override_seed()));
+        assert_eq!(recovered.epoch, owner.epoch);
     }
 
     #[test]
