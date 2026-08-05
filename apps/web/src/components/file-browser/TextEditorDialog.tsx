@@ -5,7 +5,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { useFilePreview } from '../../hooks/useFilePreview';
+import { useFilePreview, type FilePreview } from '../../hooks/useFilePreview';
 import { errorMessage } from '../../lib/errorMessage';
 import { useEngine } from '../../providers/EngineProvider';
 import type { ListingRow } from '../../vault/listing';
@@ -62,7 +62,7 @@ export function TextEditorDialog({ row, onClose }: TextEditorDialogProps) {
       onClose={onClose}
       title={`edit ${row.name}`}
       className="modal-backdrop--wide"
-      error={failure ?? (loaded.status === 'error' ? loaded.message : null)}
+      error={failure ?? refusal(loaded)}
       busy={saving}
     >
       <div className="dialog-content" data-testid="text-editor-dialog">
@@ -106,6 +106,14 @@ export function TextEditorDialog({ row, onClose }: TextEditorDialogProps) {
       </div>
     </Modal>
   );
+}
+
+/** Why this file cannot be edited, or `null` while it still might be. */
+function refusal(loaded: FilePreview): string | null {
+  if (loaded.status === 'error') return loaded.message;
+  return loaded.status === 'image' || loaded.status === 'pdf'
+    ? 'no editor for this file type'
+    : null;
 }
 
 /** A detachable copy: `pushChunk` transfers the buffer it is handed. */

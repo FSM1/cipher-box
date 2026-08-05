@@ -6,8 +6,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MediaService } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
+import { streamTicket } from '../lib/streamTicket';
 import { useEngine, useMediaService } from '../providers/EngineProvider';
 
 /** Never a renderable type: a blob URL is same-origin with the app. */
@@ -25,24 +25,6 @@ export interface FileDownload {
   save(node: Uint8Array, name: string, size: bigint | null): Promise<void>;
   /** Drops a failure the user has moved on from. */
   clearError(): void;
-}
-
-/**
- * A stream ticket for `node`, or `null` where this tab must buffer instead. A
- * size past `Number.MAX_SAFE_INTEGER` is not addressable by a Range, so it fails
- * closed to the buffered path rather than serving a truncated file.
- */
-export function streamTicket(
-  media: MediaService | null,
-  node: Uint8Array,
-  size: bigint | null,
-  mimeType: string
-): string | null {
-  if (media === null || size === null || !media.streaming) return null;
-  const bytes = Number(size);
-  return Number.isSafeInteger(bytes)
-    ? media.createStreamUrl({ node, size: bytes, mimeType })
-    : null;
 }
 
 export function useFileDownload(): FileDownload {

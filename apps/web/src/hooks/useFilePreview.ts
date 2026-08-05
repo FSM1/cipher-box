@@ -8,12 +8,12 @@
 import { useEffect, useState } from 'react';
 import { fromHex } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
+import { streamTicket } from '../lib/streamTicket';
 import { useEngine, useMediaService } from '../providers/EngineProvider';
 import { previewKind, previewMime, type PreviewKind } from '../vault/previewKind';
-import { streamTicket } from './useFileDownload';
 
 /** What a preview may pull into the tab: a memory ceiling, and a decode budget. */
-export const MAX_BUFFERED_BYTES = 32n * 1024n * 1024n;
+const MAX_BUFFERED_BYTES = 32n * 1024n * 1024n;
 
 const TOO_LARGE = 'too large to preview - download it instead';
 
@@ -52,8 +52,8 @@ export function useFilePreview(key: string, name: string, size: bigint | null): 
     }
 
     const node = fromHex(key);
-    // Only an image survives the pipe's media-type allow-list, so the other
-    // shapes buffer (packages/client/src/media/range.ts `safeMimeType`).
+    // The pipe declares media types only, and an image is the one preview shape
+    // that is one (packages/client/src/media/range.ts `safeMimeType`).
     if (kind === 'image') {
       const ticket = streamTicket(media, node, size, previewMime(name));
       if (ticket !== null) {

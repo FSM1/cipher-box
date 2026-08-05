@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import type { ListingRow } from '../../../vault/listing';
 import { copyToClipboard } from './copy-clipboard';
 
 /** How long the copy button stays acknowledged before it offers itself again. */
@@ -23,6 +24,38 @@ export function DetailSection({ label }: { label: string }) {
 /** A value the snapshot did not carry; never rendered as `undefined`. */
 export function DimValue({ children }: { children: ReactNode }) {
   return <span className="details-value--dim">{children}</span>;
+}
+
+/** What every node reports about itself, whatever its kind. */
+export function NodeRows({ row }: { row: ListingRow }) {
+  return (
+    <>
+      <DetailSection label="node" />
+      <DetailRow label="name">
+        <CopyableValue value={row.name} label="name" />
+      </DetailRow>
+      <DetailRow label="type">
+        <span className="details-badge">{row.icon}</span>
+      </DetailRow>
+      <DetailRow label="node id">
+        <CopyableValue value={row.key} label="node id" />
+      </DetailRow>
+      <DetailRow label="modified">{row.modified}</DetailRow>
+    </>
+  );
+}
+
+/** What the op queue holds for this node. */
+export function StateRows({ row }: { row: ListingRow }) {
+  return (
+    <>
+      <DetailSection label="queue" />
+      <DetailRow label="queued">
+        {row.pending === 'none' ? <DimValue>nothing pending</DimValue> : `${row.pending} change`}
+      </DetailRow>
+      {row.deadLetter && <DetailRow label="dead letter">this change will not publish</DetailRow>}
+    </>
+  );
 }
 
 /** An identifying field, with a copy button that only confirms a real write. */
