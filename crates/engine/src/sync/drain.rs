@@ -1638,7 +1638,6 @@ where
                 Some(block) => {
                     self.upload_block(placement, &mut mirror, applied.op_id, leaf_cid, &block)
                         .await?;
-                    self.cancels.borrow_mut().confirmed(applied.op_id, leaf_cid);
                     if mirror.missed() {
                         reached.mirror_missed();
                     }
@@ -1674,9 +1673,6 @@ where
             &root_block,
         )
         .await?;
-        self.cancels
-            .borrow_mut()
-            .confirmed(applied.op_id, &staged.root_cid);
         emit(OpPhase::UploadCompleted, total);
 
         let content_cids = registry_cids(&staged.root_cid, content.leaf_cids());
@@ -1791,25 +1787,41 @@ where
         block: &[u8],
     ) -> Result<(), Halt> {
         match placement {
-            Placement::Hosted => self.hosted_upload(cid, block).await,
-            Placement::External(config) => place_block(config, cid, block, self.http)
-                .await
-                .map_err(classify_placement),
+            Placement::Hosted => {
+                self.hosted_upload(cid, block).await?;
+                self.charged(op_id, cid);
+            }
+            Placement::External(config) => {
+                place_block(config, cid, block, self.http)
+                    .await
+                    .map_err(classify_placement)?;
+                self.charged(op_id, cid);
+            }
             Placement::Dual(config) => {
                 self.hosted_upload(cid, block).await?;
+                self.charged(op_id, cid);
                 while !mirror.missed() {
                     // The budget spans several provider deadlines, so a cancel
                     // gets to run between them rather than only at the block
-                    // boundary below.
+                    // boundary. The charge above is already recorded, so one
+                    // landing here still retires these bytes.
                     self.cancel_checkpoint(op_id).await?;
                     match place_block(config, cid, block, self.http).await {
-                        Ok(()) => return Ok(()),
+                        Ok(()) => break,
                         Err(error) => mirror.refused(error),
                     }
                 }
-                Ok(())
             }
         }
+        Ok(())
+    }
+
+    /// Record one block as on the network for `op_id`, which is the only
+    /// evidence a cancel has that this upload charged for it
+    /// ([`UploadCancels`]). Written the instant the leg that charges confirms,
+    /// so no later await can abandon the upload with the charge unrecorded.
+    fn charged(&self, op_id: OpId, cid: &[u8]) {
+        self.cancels.borrow_mut().confirmed(op_id, cid);
     }
 
     /// One block to the hosted ingress, under its own content address.

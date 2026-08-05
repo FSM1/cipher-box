@@ -5519,6 +5519,20 @@ fn stage_a_second_version(
     (engine, tasks, version)
 }
 
+/// Whether this stream carries the verdict a version whose released blocks are
+/// gone ends on — the hole guard's, not a mere failed attempt.
+fn content_lost(events: &mut EventStream) -> bool {
+    events_so_far(events).iter().any(|event| {
+        matches!(
+            event,
+            Event::DeadLetter {
+                reason: DeadLetterReason::ContentUnrecoverable,
+                ..
+            }
+        )
+    })
+}
+
 /// Tick until the drain dead-letters something, and report how many passes that
 /// took — the budget is finite, but spending it takes more than one pass.
 fn tick_until_dead_lettered(
@@ -5969,18 +5983,7 @@ fn a_placement_changed_mid_upload_resumes_only_where_the_bytes_already_are() {
         tick(&world, &engine, &mut tasks);
         tick(&world, &engine, &mut tasks);
 
-        let dead_lettered = |events: &mut EventStream| {
-            events_so_far(events).iter().any(|event| {
-                matches!(
-                    event,
-                    Event::DeadLetter {
-                        reason: DeadLetterReason::ContentUnrecoverable,
-                        ..
-                    }
-                )
-            })
-        };
-        let lost = dead_lettered(&mut events) || dead_lettered(&mut events_after);
+        let lost = content_lost(&mut events) || content_lost(&mut events_after);
         assert_eq!(
             !lost, survives,
             "{before:?} -> {after:?}: the verdict follows where the released bytes are"
@@ -6315,6 +6318,61 @@ fn a_dead_mirror_costs_the_op_a_bounded_number_of_attempts() {
     );
 }
 
+/// The hosted leg charges the account the instant a block lands, and the only
+/// evidence a cancel has to retire it by is the confirmed set. So no block may
+/// reach the hosted store without entering that set first — including under
+/// dual, where the mirror's retries put awaits between the two.
+#[test]
+fn a_cancel_while_the_mirror_retries_still_retires_the_hosted_blocks() {
+    let plaintext: Vec<u8> = (0..200u8).collect();
+    for polls in 1..14 {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+        let alice = world.device(b"alice");
+        seed_settings(&world, &alice, &blocks, PinMode::Dual);
+
+        let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+        // A mirror that refuses every attempt is what puts the cancel window
+        // between the hosted upload and the end of the block.
+        blocks.member_node_down.store(true, Ordering::Relaxed);
+        let op_id = write_file(
+            &mut engine,
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: "photo.bin".into(),
+            },
+            &plaintext,
+        )
+        .expect("the write commits");
+        let version: Vec<String> = queued_version(&alice, op_id)
+            .iter()
+            .map(|cid| encode_content_cid_str(cid))
+            .collect();
+
+        world.scheduler.advance(engine.profile().poll_cadence);
+        for _ in 0..polls {
+            poll_once(&mut tasks);
+        }
+        if block_on(engine.command(Command::CancelUpload { op_id })).is_err() {
+            // Past publish entry, where a cancel is refused by design.
+            continue;
+        }
+        poll_each(&mut tasks);
+
+        let retired: Vec<String> = retire_batches(&alice).into_iter().flatten().collect();
+        for cid in uploaded_cids(&alice)
+            .iter()
+            .filter(|cid| version.contains(cid))
+        {
+            assert!(
+                retired.contains(cid),
+                "polls {polls}: the hosted store took {cid} and the cancel left it charged"
+            );
+        }
+    }
+}
+
 /// A dual write's mark may name the mirror only where the mirror actually took
 /// the bytes. Otherwise an external-only session resuming that version reads
 /// blocks it never received as progress, skips them, and publishes a manifest
@@ -6361,18 +6419,7 @@ fn a_dual_mark_names_the_mirror_only_where_the_mirror_took_the_bytes() {
         tick(&world, &engine, &mut tasks);
         tick(&world, &engine, &mut tasks);
 
-        let dead_lettered = |events: &mut EventStream| {
-            events_so_far(events).iter().any(|event| {
-                matches!(
-                    event,
-                    Event::DeadLetter {
-                        reason: DeadLetterReason::ContentUnrecoverable,
-                        ..
-                    }
-                )
-            })
-        };
-        let lost = dead_lettered(&mut events) || dead_lettered(&mut events_after);
+        let lost = content_lost(&mut events) || content_lost(&mut events_after);
         assert_eq!(
             !lost, survives,
             "mirror up {mirror_up}: the resume follows whether that node holds the released leaves"

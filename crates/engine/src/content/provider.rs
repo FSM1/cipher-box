@@ -718,14 +718,20 @@ mod tests {
             .and_then(|(_, value)| value.split("boundary=").nth(1))
             .expect("the request declares its multipart boundary")
             .to_owned();
+        // Kubo parses exactly these bytes, so the part is asserted whole: an
+        // opening delimiter that disagreed with the declared boundary, or a
+        // malformed part header, would frame the block out of the request.
         let body = request.body.as_ref().expect("a block/put carries a body");
-        assert!(
-            body.windows(block.len()).any(|window| window == block),
-            "the block rides the body verbatim"
+        let head = format!(
+            "--{boundary}\r\n\
+             Content-Disposition: form-data; name=\"data\"; filename=\"blob\"\r\n\
+             Content-Type: application/octet-stream\r\n\r\n"
         );
-        assert!(
-            body.ends_with(format!("\r\n--{boundary}--\r\n").as_bytes()),
-            "and the body closes on the boundary"
+        let tail = format!("\r\n--{boundary}--\r\n");
+        assert_eq!(
+            *body,
+            [head.as_bytes(), &block, tail.as_bytes()].concat(),
+            "the block rides the declared boundary verbatim"
         );
     }
 
@@ -757,12 +763,18 @@ mod tests {
     fn a_kubo_node_that_stored_the_block_elsewhere_is_a_failure() {
         let block = b"sealed leaf bytes".to_vec();
         let cid = leaf(&block);
-        for body in [
-            r#"{"Key":"bafkr4iamjdirj4vmqmpizgefavwr4nftqhx6p4bbqdigodc6ja2g3lwumi"}"#,
+        for (body, verdict) in [
+            (
+                r#"{"Key":"bafkr4iamjdirj4vmqmpizgefavwr4nftqhx6p4bbqdigodc6ja2g3lwumi"}"#,
+                ProviderError::AddressMismatch,
+            ),
             // A trailing error object parses but names no address: a store
             // fault, never a disagreeing one.
-            r#"{"Message":"boom","Type":"error"}"#,
-            "",
+            (
+                r#"{"Message":"boom","Type":"error"}"#,
+                ProviderError::NoVerdict,
+            ),
+            ("", ProviderError::NoVerdict),
         ] {
             let http = ScriptedHttp::default();
             http.enqueue_response(HttpResponse {
@@ -770,14 +782,15 @@ mod tests {
                 headers: Vec::new(),
                 body: body.as_bytes().to_vec(),
             });
-            assert!(
+            assert_eq!(
                 block_on(place_block(
                     &config(ByoKind::Kubo, None),
                     &cid,
                     &block,
                     &http
                 ))
-                .is_err(),
+                .unwrap_err(),
+                verdict,
                 "{body:?} must not read as a stored block"
             );
         }
