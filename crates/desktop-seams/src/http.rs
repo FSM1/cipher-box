@@ -34,25 +34,15 @@ impl ReqwestHttp {
     pub fn new() -> SeamResult<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                // The engine decides over which transport a request carrying an
-                // `Authorization` header may go (blueprint/engine.md "Content
-                // plane"). A redirect that downgrades to plaintext would carry
-                // the credential onto the clear network past that decision, so
-                // it is surfaced as the 3xx it is rather than followed.
-                let downgrade = attempt.url().scheme() == "http"
-                    && attempt
-                        .previous()
-                        .last()
-                        .is_some_and(|previous| previous.scheme() == "https");
-                if downgrade {
-                    attempt.stop()
-                } else if attempt.previous().len() > 10 {
-                    attempt.error("too many redirects")
-                } else {
-                    attempt.follow()
-                }
-            }))
+            // The engine picks every target on this seam and gates it on the URL
+            // it supplied — the API base, a gateway, a BYO endpoint past
+            // `validate_byo_config`. A hop the engine did not choose can only
+            // escape that gate, so none is followed: it re-points a directly
+            // addressed request at a host of the responder's choosing, and a
+            // downgrade to `http` would carry an `Authorization` header onto the
+            // clear network. Mirrors `ReqwestRecordTransport`; a 3xx comes back
+            // as the non-2xx response it is.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|err| SeamError::new(format!("http client build: {err}")))?;
         Ok(Self { client })

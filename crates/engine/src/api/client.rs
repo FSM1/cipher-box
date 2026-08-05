@@ -25,7 +25,10 @@ use super::types::{
     TestLoginResponse, TokenResponse, UploadResult,
 };
 use crate::content::DAG_ROOT_CODEC;
-use crate::seams::{CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse};
+use crate::seams::{
+    CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, SeamError,
+    bearer_header,
+};
 
 /// Control-plane deadline: small JSON round trips must not park a UI flow.
 const CONTROL_TIMEOUT_MS: u64 = 10_000;
@@ -34,7 +37,6 @@ const CONTROL_TIMEOUT_MS: u64 = 10_000;
 const TRANSFER_TIMEOUT_MS: u64 = 120_000;
 
 const CONTENT_TYPE: &str = "Content-Type";
-const AUTHORIZATION: &str = "Authorization";
 const APPLICATION_JSON: &str = "application/json";
 const APPLICATION_OCTET_STREAM: &str = "application/octet-stream";
 /// Carries an upload's declared content address. A header, not a query
@@ -54,6 +56,35 @@ struct State {
     /// `Some(vec)` means a refresh is in progress; the leader owns the vec and
     /// notifies every waiter with a clone of the result when it finishes.
     refresh_waiters: Option<Vec<oneshot::Sender<Result<(), ApiError>>>>,
+}
+
+/// Holds single-flight leadership for the duration of one rotation and gives it
+/// back however the leader leaves — including a drop mid-`await`.
+///
+/// Without this, a leader cancelled while parked on the network leaves
+/// `refresh_waiters` occupied with senders nothing will ever fire, and every
+/// later caller enqueues behind it forever.
+struct RefreshLead<'a> {
+    state: &'a RefCell<State>,
+}
+
+impl RefreshLead<'_> {
+    /// Releases leadership and takes the waiters to notify.
+    fn finish(self) -> Vec<oneshot::Sender<Result<(), ApiError>>> {
+        self.state
+            .borrow_mut()
+            .refresh_waiters
+            .take()
+            .unwrap_or_default()
+    }
+}
+
+impl Drop for RefreshLead<'_> {
+    fn drop(&mut self) {
+        // Dropping the senders wakes every waiter with `Canceled`; leaving the
+        // slot occupied would park them, and everyone after, indefinitely.
+        self.state.borrow_mut().refresh_waiters = None;
+    }
 }
 
 /// The engine's single API client. Generic over the two seams it drives so the
@@ -116,6 +147,9 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
                 .await?;
             let response = ok_or_err(response)?;
             let body: ChallengeResponse = decode(&response)?;
+            if !is_identity_challenge(&body.challenge) {
+                return Err(ApiError::Decode("unusable login challenge".into()));
+            }
             body.challenge
         };
         let signature = signer.sign_challenge(&challenge);
@@ -236,17 +270,21 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         if let Some(rx) = receiver {
             return match rx.await {
                 Ok(result) => result,
-                Err(oneshot::Canceled) => Err(ApiError::Unauthorized),
+                // The leader was dropped before it could answer: availability,
+                // not a dead session — the caller must not be told to re-login.
+                // The leader clears the slot as it goes, so the next call leads
+                // a fresh rotation instead of parking behind this one.
+                Err(oneshot::Canceled) => Err(ApiError::Transport(SeamError::new(
+                    "refresh was cancelled before it completed",
+                ))),
             };
         }
 
+        let lead = RefreshLead { state: &self.state };
         let result = self.do_refresh().await;
-        let waiters = self
-            .state
-            .borrow_mut()
-            .refresh_waiters
-            .take()
-            .unwrap_or_default();
+        // Hand leadership back before notifying: a waiter woken with an error
+        // may lead its own retry, and must not find the slot still occupied.
+        let waiters = lead.finish();
         for tx in waiters {
             let _ = tx.send(result.clone());
         }
@@ -515,12 +553,14 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         for (name, value) in extra_headers {
             headers.push(((*name).to_owned(), (*value).to_owned()));
         }
-        // Scope the borrow so it never crosses the await below.
+        // Scope the borrow so it never crosses the await below. The access token
+        // is decoded out of an `/auth/*` body, so it is the API's bytes, not the
+        // engine's: it meets the seam's header-value rule like any other bearer.
         if let Some(token) = self.state.borrow().access_token.as_ref() {
-            headers.push((
-                AUTHORIZATION.to_owned(),
-                format!("Bearer {}", token.as_str()),
-            ));
+            headers.push(
+                bearer_header(token.as_str())
+                    .map_err(|_| ApiError::Decode("unusable access token".into()))?,
+            );
         }
         let request = HttpRequest {
             method,
@@ -605,6 +645,33 @@ fn is_success(status: u16) -> bool {
     (200..300).contains(&status)
 }
 
+/// The domain tag the API stamps on an identity login challenge
+/// (`apps/api/src/auth/services/challenge.service.ts`). Versioned, so a format
+/// change bumps it rather than silently widening what this key will sign.
+const IDENTITY_CHALLENGE_PREFIX: &str = "cipherbox-login:v2:";
+/// The challenge's random tail: 32 bytes rendered lowercase hex.
+const IDENTITY_CHALLENGE_NONCE_LEN: usize = 64;
+
+/// Whether the server's answer is a challenge this key may sign: the login
+/// domain tag followed by exactly the API's random tail.
+///
+/// The signer hands `sha256(utf8(challenge))` to the same secp256k1 identity
+/// key that signs det-CBOR structures, so an unchecked challenge is a signing
+/// oracle for any UTF-8 preimage. The prefix alone would not close it — it
+/// pins the first 19 bytes and leaves the rest of the preimage to whatever
+/// answers at the API base URL — so the whole shape is pinned instead, leaving
+/// a hostile responder no steerable bytes outside `[0-9a-f]`.
+fn is_identity_challenge(challenge: &str) -> bool {
+    challenge
+        .strip_prefix(IDENTITY_CHALLENGE_PREFIX)
+        .is_some_and(|nonce| {
+            nonce.len() == IDENTITY_CHALLENGE_NONCE_LEN
+                && nonce
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+}
+
 /// EIP-4361 fixes the nonce at 8+ alphanumerics. The check is fail-closed
 /// rather than cosmetic: the nonce is interpolated verbatim into the text a
 /// wallet signs, so anything outside that class lets a hostile challenge
@@ -651,6 +718,7 @@ mod tests {
     use super::*;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 
+    use crate::seams::AUTHORIZATION;
     use crate::testkit::block_on;
     use crate::testkit::fakes::{InMemoryCredentialStore, ScriptedHttp};
     use serde_json::{Value, json};
@@ -702,11 +770,17 @@ mod tests {
         (http, creds, client)
     }
 
+    /// A challenge shaped exactly as the API issues one: the login domain tag
+    /// plus 32 random bytes in lowercase hex.
+    fn challenge() -> String {
+        IDENTITY_CHALLENGE_PREFIX.to_owned() + &"0123456789abcdef".repeat(4)
+    }
+
     /// Log in so the client holds an access token and a stored refresh token.
     fn login(http: &ScriptedHttp, client: &ApiClient<ScriptedHttp, InMemoryCredentialStore>) {
         http.enqueue_response(json_response(
             200,
-            json!({ "challenge": "cipherbox-login:v2:abc", "expiresAt": "2026-01-01T00:00:00Z" }),
+            json!({ "challenge": challenge(), "expiresAt": "2026-01-01T00:00:00Z" }),
         ));
         http.enqueue_response(json_response(
             200,
@@ -737,11 +811,62 @@ mod tests {
         );
         assert_eq!(requests[1].url, "http://api.test/auth/login");
         let login_body = body_json(&requests[1]);
-        assert_eq!(login_body["challenge"], "cipherbox-login:v2:abc");
-        assert_eq!(login_body["signature"], "sig-for-cipherbox-login:v2:abc");
+        assert_eq!(login_body["challenge"], challenge());
+        assert_eq!(login_body["signature"], format!("sig-for-{}", challenge()));
 
         let stored = block_on(creds.load_refresh_token()).unwrap().unwrap();
         assert_eq!(stored, "a".repeat(64).as_bytes());
+    }
+
+    /// A challenge the API could not have issued is never signed, and the flow
+    /// stops before `/auth/login` — the identity key answers no one else's
+    /// preimage. Each case names the part of the shape it breaks.
+    #[test]
+    fn a_challenge_the_api_could_not_have_issued_is_never_signed() {
+        let hex64 = "0123456789abcdef".repeat(4);
+        let hostile = [
+            "".to_owned(),
+            // No domain tag: an arbitrary preimage of the responder's choosing.
+            hex64.clone(),
+            // Another protocol's tag.
+            format!("cipherbox-grant:v2:{hex64}"),
+            // Right tag, but the tail is the responder's text.
+            "cipherbox-login:v2:sign-over-this-instead".to_owned(),
+            // Right tag and alphabet, wrong width — short.
+            format!("{IDENTITY_CHALLENGE_PREFIX}{}", "ab".repeat(8)),
+            // Right tag and alphabet, wrong width — long.
+            format!("{IDENTITY_CHALLENGE_PREFIX}{hex64}0"),
+            // Right width, outside the hex alphabet the API renders.
+            format!(
+                "{IDENTITY_CHALLENGE_PREFIX}{}",
+                "0123456789ABCDEF".repeat(4)
+            ),
+            // The tag as a suffix rather than a prefix.
+            format!("{hex64}{IDENTITY_CHALLENGE_PREFIX}"),
+            // Leading whitespace before the tag.
+            format!(" {IDENTITY_CHALLENGE_PREFIX}{hex64}"),
+        ];
+
+        for challenge in hostile {
+            let (http, _creds, client) = fakes();
+            http.enqueue_response(json_response(
+                200,
+                json!({ "challenge": challenge, "expiresAt": "2026-01-01T00:00:00Z" }),
+            ));
+            assert_eq!(
+                block_on(client.login_identity(&StubSigner)).unwrap_err(),
+                ApiError::Decode("unusable login challenge".into()),
+                "challenge {challenge:?} must be refused"
+            );
+            let requests = http.requests();
+            assert_eq!(
+                requests.len(),
+                1,
+                "only /auth/challenge was sent for {challenge:?}"
+            );
+            assert_eq!(requests[0].url, "http://api.test/auth/challenge");
+            assert!(!client.is_authenticated());
+        }
     }
 
     #[test]
@@ -749,7 +874,7 @@ mod tests {
         let (http, _creds, client) = fakes();
         http.enqueue_response(json_response(
             200,
-            json!({ "challenge": "c", "expiresAt": "2026-01-01T00:00:00Z" }),
+            json!({ "challenge": challenge(), "expiresAt": "2026-01-01T00:00:00Z" }),
         ));
         http.enqueue_response(json_response(
             401,
@@ -1135,6 +1260,85 @@ mod tests {
         assert!(matches!(second.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
         assert_eq!(http.request_count(), 1, "one refresh served both callers");
         assert!(client.is_authenticated());
+    }
+
+    /// A leader dropped while parked on the network must hand leadership back,
+    /// or every later caller enqueues behind a rotation that will never finish.
+    #[test]
+    fn a_cancelled_refresh_leader_lets_the_next_caller_lead() {
+        let http = GatedHttp::default();
+        let creds = InMemoryCredentialStore::default();
+        block_on(creds.store_refresh_token(b"seed-refresh-token")).unwrap();
+        let client = ApiClient::new(http.clone(), creds, "http://api.test");
+        let mut cx = Context::from_waker(Waker::noop());
+
+        {
+            let mut leader = pin!(client.refresh());
+            assert!(leader.as_mut().poll(&mut cx).is_pending());
+            assert_eq!(http.request_count(), 1);
+        } // The leader's future is dropped mid-flight.
+
+        // The next caller leads a fresh rotation rather than parking.
+        let mut next = pin!(client.refresh());
+        assert!(next.as_mut().poll(&mut cx).is_pending());
+        assert_eq!(http.request_count(), 2, "the slot was handed back");
+
+        http.release(json_response(
+            200,
+            json!({ "accessToken": "jwt", "refreshToken": "f".repeat(64) }),
+        ));
+        assert!(matches!(next.as_mut().poll(&mut cx), Poll::Ready(Ok(()))));
+        assert!(client.is_authenticated());
+    }
+
+    /// A waiter behind a cancelled leader is woken, and told it was an
+    /// availability failure — not that its session is dead.
+    #[test]
+    fn a_waiter_behind_a_cancelled_leader_is_woken_not_parked() {
+        let http = GatedHttp::default();
+        let creds = InMemoryCredentialStore::default();
+        block_on(creds.store_refresh_token(b"seed-refresh-token")).unwrap();
+        let client = ApiClient::new(http.clone(), creds, "http://api.test");
+        let mut cx = Context::from_waker(Waker::noop());
+
+        let mut waiter = pin!(client.refresh());
+        {
+            let mut leader = pin!(client.refresh());
+            assert!(leader.as_mut().poll(&mut cx).is_pending());
+            assert!(waiter.as_mut().poll(&mut cx).is_pending());
+            assert_eq!(http.request_count(), 1, "the waiter coalesced");
+        }
+
+        match waiter.as_mut().poll(&mut cx) {
+            Poll::Ready(Err(ApiError::Transport(_))) => {}
+            other => panic!("a cancelled leader is availability, got {other:?}"),
+        }
+    }
+
+    /// The access token is the API's bytes, so it meets the seam's header-value
+    /// rule like any other bearer: an unusable one fails closed rather than
+    /// reaching the transport.
+    #[test]
+    fn an_access_token_that_cannot_be_a_header_value_is_refused() {
+        let (http, _creds, client) = fakes();
+        http.enqueue_response(json_response(
+            200,
+            json!({ "challenge": challenge(), "expiresAt": "2026-01-01T00:00:00Z" }),
+        ));
+        http.enqueue_response(json_response(
+            200,
+            json!({
+                "accessToken": "jwt-1\r\nX-Injected: yes",
+                "refreshToken": "a".repeat(64),
+            }),
+        ));
+        block_on(client.login_identity(&StubSigner)).expect("login");
+
+        assert_eq!(
+            block_on(client.quota()).unwrap_err(),
+            ApiError::Decode("unusable access token".into())
+        );
+        assert_eq!(http.requests().len(), 2, "no request carried the token");
     }
 
     #[test]

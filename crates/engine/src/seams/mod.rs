@@ -22,7 +22,10 @@ mod staging_store;
 
 pub use credential_store::CredentialStore;
 pub use floor_store::{FloorNamespace, FloorRaise, FloorStore};
-pub use http::{CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse};
+pub use http::{
+    AUTHORIZATION, CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse,
+    InvalidBearer, bearer_header,
+};
 pub use mailbox::{Mailbox, MailboxItem};
 pub use record_transport::{EndpointId, RecordTransport};
 pub use refresh_hint::{RefreshHint, RefreshHintSource};

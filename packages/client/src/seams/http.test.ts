@@ -95,6 +95,27 @@ describe('FetchHttp credential scoping', () => {
   });
 });
 
+describe('FetchHttp redirects', () => {
+  it('refuses them on both paths, as the record transport does', async () => {
+    const fetches = recordingFetch();
+    const http = new FetchHttp();
+
+    await http.send(GET);
+    await http.sendCapped(GET, 1000);
+
+    expect(fetches.inits.map((init) => init.redirect)).toEqual(['error', 'error']);
+  });
+
+  it('rejects rather than resolving when the browser refuses a hop', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.reject(new TypeError('Failed to fetch')))
+    );
+
+    await expect(new FetchHttp().send(GET)).rejects.toThrow(TypeError);
+  });
+});
+
 describe('FetchHttp deadlines', () => {
   it('carries no abort signal when the request sets no deadline', async () => {
     const fetches = recordingFetch();

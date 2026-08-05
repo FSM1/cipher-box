@@ -17,7 +17,7 @@ use zeroize::Zeroizing;
 
 use crate::content::DAG_ROOT_CODEC;
 use crate::seams::{
-    CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse,
+    CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, bearer_header,
 };
 
 /// Deadline for a BYO-provider reachability probe: an unresponsive endpoint
@@ -35,7 +35,6 @@ const PLACEMENT_TIMEOUT_MS: u64 = 60_000;
 /// stream is the largest, one short object per block put.
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 64 * 1024;
 
-const AUTHORIZATION: &str = "Authorization";
 const CONTENT_TYPE: &str = "Content-Type";
 const APPLICATION_JSON: &str = "application/json";
 
@@ -118,9 +117,9 @@ pub(crate) async fn place_block(
     validate_byo_config(config)?;
     let address = content_address(cid)?;
     let request = match config.kind {
-        ByoKind::Kubo => kubo_block_put(config, &address, block),
-        ByoKind::Psa => pin_by_cid(config, "/pins", "cid", &address.cid),
-        ByoKind::Pinata => pin_by_cid(config, "/pinning/pinByHash", "hashToPin", &address.cid),
+        ByoKind::Kubo => kubo_block_put(config, &address, block)?,
+        ByoKind::Psa => pin_by_cid(config, "/pins", "cid", &address.cid)?,
+        ByoKind::Pinata => pin_by_cid(config, "/pinning/pinByHash", "hashToPin", &address.cid)?,
     };
     let response = capped(http, request).await?;
     if !(200..300).contains(&response.status) {
@@ -176,7 +175,11 @@ fn content_address(cid: &[u8]) -> Result<ContentAddress, ProviderError> {
 /// `block/put` under the block's own codec and the frozen BLAKE3-256 framing,
 /// pinned in the same call, so the member's node addresses it exactly as the
 /// engine does.
-fn kubo_block_put(config: &ByoIpfsConfig, address: &ContentAddress, block: &[u8]) -> HttpRequest {
+fn kubo_block_put(
+    config: &ByoIpfsConfig,
+    address: &ContentAddress,
+    block: &[u8],
+) -> Result<HttpRequest, ProviderError> {
     // Derived from the block's own address, so the delimiter cannot occur in the
     // payload it frames: that would take a block carrying the base32 of its own
     // BLAKE3 digest, which is a preimage. 62 bytes of base32 and `-`, inside RFC
@@ -193,7 +196,7 @@ fn kubo_block_put(config: &ByoIpfsConfig, address: &ContentAddress, block: &[u8]
     body.extend_from_slice(block);
     body.extend_from_slice(tail.as_bytes());
     let codec = address.codec;
-    HttpRequest {
+    Ok(HttpRequest {
         method: HttpMethod::Post,
         // A DAG root inlines a CID per leaf, so it passes Kubo's 1 MiB
         // block/put advisory well before the flat-DAG ceiling does. The block is
@@ -206,24 +209,29 @@ fn kubo_block_put(config: &ByoIpfsConfig, address: &ContentAddress, block: &[u8]
         headers: headers(
             config,
             Some(format!("multipart/form-data; boundary={boundary}")),
-        ),
+        )?,
         body: Some(body),
         credentials: HttpCredentials::Omit,
         timeout_ms: Some(PLACEMENT_TIMEOUT_MS),
-    }
+    })
 }
 
 /// Ask a pin-by-CID service to pin an address it fetches itself.
-fn pin_by_cid(config: &ByoIpfsConfig, path: &str, field: &str, cid: &str) -> HttpRequest {
-    HttpRequest {
+fn pin_by_cid(
+    config: &ByoIpfsConfig,
+    path: &str,
+    field: &str,
+    cid: &str,
+) -> Result<HttpRequest, ProviderError> {
+    Ok(HttpRequest {
         method: HttpMethod::Post,
         url: format!("{}{path}", base(config)),
-        headers: headers(config, Some(APPLICATION_JSON.to_owned())),
+        headers: headers(config, Some(APPLICATION_JSON.to_owned()))?,
         // The CID is base32 alphanumerics, so it needs no JSON escaping.
         body: Some(format!("{{\"{field}\":\"{cid}\"}}").into_bytes()),
         credentials: HttpCredentials::Omit,
         timeout_ms: Some(PLACEMENT_TIMEOUT_MS),
-    }
+    })
 }
 
 /// The address Kubo reports storing the block under, held to the caller's. The
@@ -262,18 +270,22 @@ fn base(config: &ByoIpfsConfig) -> &str {
 
 /// The bearer the config carries, plus a content type when the request has a
 /// body. The configured access token is the only credential a BYO endpoint gets.
-fn headers(config: &ByoIpfsConfig, content_type: Option<String>) -> Vec<(String, String)> {
+///
+/// Fallible at the splice as well as at [`validate_byo_config`]: the rule that
+/// makes a bearer safe to send belongs to the request being built, not to
+/// whichever caller remembered to run the config gate first.
+fn headers(
+    config: &ByoIpfsConfig,
+    content_type: Option<String>,
+) -> Result<Vec<(String, String)>, ProviderError> {
     let mut headers = Vec::new();
     if let Some(token) = &config.access_token {
-        headers.push((
-            AUTHORIZATION.to_owned(),
-            format!("Bearer {}", token.as_str()),
-        ));
+        headers.push(bearer_header(token.as_str()).map_err(|_| ProviderError::InvalidCredential)?);
     }
     if let Some(content_type) = content_type {
         headers.push((CONTENT_TYPE.to_owned(), content_type));
     }
-    headers
+    Ok(headers)
 }
 
 /// Why a provider connection test did not succeed. The first four are policy
@@ -326,7 +338,7 @@ pub async fn test_connection(
     http: &impl Http,
 ) -> Result<(), ProviderError> {
     validate_byo_config(config)?;
-    let response = capped(http, probe_request(config)).await?;
+    let response = capped(http, probe_request(config)?).await?;
     if (200..300).contains(&response.status) {
         Ok(())
     } else {
@@ -343,14 +355,14 @@ pub async fn test_connection(
 pub fn validate_byo_config(config: &ByoIpfsConfig) -> Result<(), ProviderError> {
     validate_endpoint(&config.endpoint)?;
     match &config.access_token {
-        // The token is spliced into a header value verbatim, so a control
-        // character in it would inject a header. A present-but-empty one is an
-        // `Authorization: Bearer ` no provider accepts; `None` is how a
-        // credential-less provider is spelled.
-        Some(token) if token.is_empty() || !token.bytes().all(is_bearer_byte) => {
-            Err(ProviderError::InvalidCredential)
-        }
-        _ => Ok(()),
+        // Held to the seam's header-value rule: a present-but-empty token is an
+        // `Authorization: Bearer ` no provider accepts, and a control character
+        // in one would inject a header. `None` is how a credential-less
+        // provider is spelled, so it is not a verdict.
+        Some(token) => bearer_header(token.as_str())
+            .map(drop)
+            .map_err(|_| ProviderError::InvalidCredential),
+        None => Ok(()),
     }
 }
 
@@ -464,29 +476,23 @@ fn is_path_byte(b: u8) -> bool {
     is_authority_byte(b) || matches!(b, b'/' | b'_' | b'~' | b'%' | b'+' | b'=' | b'&' | b',')
 }
 
-/// The bytes a bearer credential admits: visible ASCII, the header-value set
-/// minus the whitespace no token carries.
-fn is_bearer_byte(b: u8) -> bool {
-    matches!(b, 0x21..=0x7e)
-}
-
 /// The per-kind reachability probe. The endpoints are each provider's standard
 /// identity/auth check: Kubo `POST /api/v0/id`, PSA `GET /pins?limit=1`, Pinata
 /// `GET /data/testAuthentication`.
-fn probe_request(config: &ByoIpfsConfig) -> HttpRequest {
+fn probe_request(config: &ByoIpfsConfig) -> Result<HttpRequest, ProviderError> {
     let (method, path) = match config.kind {
         ByoKind::Kubo => (HttpMethod::Post, "/api/v0/id"),
         ByoKind::Psa => (HttpMethod::Get, "/pins?limit=1"),
         ByoKind::Pinata => (HttpMethod::Get, "/data/testAuthentication"),
     };
-    HttpRequest {
+    Ok(HttpRequest {
         method,
         url: format!("{}{path}", base(config)),
-        headers: headers(config, None),
+        headers: headers(config, None)?,
         body: None,
         credentials: HttpCredentials::Omit,
         timeout_ms: Some(PROBE_TIMEOUT_MS),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -494,7 +500,7 @@ mod tests {
     use super::*;
     use cipherbox_core::content::compute_cid;
 
-    use crate::seams::HttpResponse;
+    use crate::seams::{AUTHORIZATION, HttpResponse};
     use crate::testkit::block_on;
     use crate::testkit::fakes::ScriptedHttp;
 

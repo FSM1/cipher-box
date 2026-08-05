@@ -24,6 +24,31 @@ pub enum CappedFetchError {
     },
 }
 
+/// The `Authorization` header name — one spelling for every splice site.
+pub const AUTHORIZATION: &str = "Authorization";
+
+/// A bearer credential refused before it became a header value. Carries
+/// nothing: the token itself must never reach an error string or a log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidBearer;
+
+/// Builds the `Authorization: Bearer …` pair for `token`, refusing an empty one
+/// or one carrying a byte outside visible ASCII (`0x21..=0x7e`).
+///
+/// A header value is the host transport's input, and a control character or
+/// space in one splits or injects a header — which of the two happens depends
+/// on the transport, so the decision does not belong to the seam. The engine's
+/// three bearer sources differ in trust class (a member's BYO config token, an
+/// access token decoded out of an `/auth/*` body, a gateway source's token) but
+/// not in this obligation, so it lives once, here, beside the request type that
+/// carries it.
+pub fn bearer_header(token: &str) -> Result<(String, String), InvalidBearer> {
+    if token.is_empty() || !token.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
+        return Err(InvalidBearer);
+    }
+    Ok((AUTHORIZATION.to_owned(), format!("Bearer {token}")))
+}
+
 /// Formats headers as their names only. Header values ride this seam
 /// carrying live credentials (`Authorization` bearer JWTs, refresh
 /// cookies) and must never reach logs.
@@ -154,10 +179,14 @@ impl fmt::Debug for HttpResponse {
 /// are responses, not errors — a seam `Err` is reserved for transport-level
 /// failure (unreachable, aborted, deadline elapsed).
 ///
-/// One obligation the transport owns: a request the engine sent over `https`
-/// must not be replayed over `http` by following a redirect, or an
-/// `Authorization` header would reach the clear network past the engine's
-/// transport decision (blueprint/engine.md "Content plane").
+/// One obligation the transport owns: it must not follow a redirect. Every
+/// target on this seam — the API, a gateway, a BYO provider — is directly
+/// addressed and gated on the URL the engine supplied, so a hop the engine did
+/// not choose can only escape that gate: it replays the request past
+/// [`crate::content::validate_byo_config`]'s endpoint rules, and a downgrade to
+/// `http` would carry an `Authorization` header onto the clear network
+/// (blueprint/engine.md "Content plane"). A 3xx is surfaced as the response it
+/// is, and the engine treats it as the non-2xx it is.
 ///
 /// No conformance kit ships for this seam: it has no seam-local durable
 /// semantics; its behavior is exercised end-to-end by the live contract
@@ -218,6 +247,41 @@ mod tests {
         assert!(!debug.contains("refresh-token-bytes"), "body must not leak");
         assert!(debug.contains("Authorization"), "header names stay visible");
         assert!(debug.contains("<19 bytes>"), "body renders as a length");
+    }
+
+    #[test]
+    fn a_usable_bearer_becomes_the_authorization_pair() {
+        assert_eq!(
+            bearer_header("eyJhbGciOi.J9-_~+/=").unwrap(),
+            (
+                AUTHORIZATION.to_owned(),
+                "Bearer eyJhbGciOi.J9-_~+/=".to_owned()
+            )
+        );
+    }
+
+    #[test]
+    fn a_bearer_that_could_reshape_the_request_is_refused() {
+        for token in [
+            "",                     // an `Authorization: Bearer ` no server accepts
+            "jwt\r\nX-Injected: 1", // header injection
+            "jwt\nX-Injected: 1",   // bare LF
+            "jwt\r",                // bare CR
+            "jwt token",            // a space splits the credential
+            "jwt\ttoken",           // tab
+            "jwt\0",                // NUL
+            "jwt\u{7f}",            // DEL
+            "jwt\u{80}",            // non-ASCII
+            "jwt\u{2028}",          // line separator
+        ] {
+            assert_eq!(bearer_header(token), Err(InvalidBearer), "token {token:?}");
+        }
+    }
+
+    #[test]
+    fn the_bearer_refusal_carries_no_credential() {
+        let refusal = bearer_header("super-secret-jwt token").unwrap_err();
+        assert!(!format!("{refusal:?}").contains("super-secret-jwt"));
     }
 
     #[test]
