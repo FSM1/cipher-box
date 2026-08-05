@@ -413,7 +413,10 @@ ordinary writes advance it for free. It also converges a subtree before a grant
 (the epoch-converged requirement) and self-heals the direct-child-scope index —
 a scope root encountered but missing from its parent's index is repaired and
 flagged (#38 D6), a walk-time repair that runs whether or not any node is being
-re-sealed. Sweeps re-seal metadata only; content bytes are never re-encrypted
+re-sealed. Only a name the walk resolved current may be written to an index: a
+below-floor root is classified and re-resolved first (below), so the repair can
+never persist the superseded name that caused it. Sweeps re-seal metadata only;
+content bytes are never re-encrypted
 by any rotation path (#26 D6). Scheduling is engineering judgment (#26 handed
 it to #33, which did not fix it): the sweep runs as an idle-cadence Scheduler
 job; idempotence plus CAS make concurrent sweepers safe — a lost race drops
@@ -443,7 +446,7 @@ child's freshly derived name and re-seals that parent's read body under its
 unchanged read key at its unchanged read epoch; without it they reach the new
 root and stop ([ADR 0004](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0004-read-body-child-names-on-the-name-wave.md)).
 The republish is therefore **not** byte-stable, and the wave touches read-plane
-_metadata_ while never re-keying it — override seeds, read keys and
+_metadata_ while never re-keying it — the **read** override seed, read keys and
 `minReadEpoch` still carry verbatim, and the read-epoch floor never moves. The
 re-point publishes to three channels (#38 D3): the scope pointer record
 (canonical), the mailbox
@@ -576,12 +579,12 @@ the republish it already does.
 - **Owner write-seed cold start**: a per-scope `writeScopeSeed` is random
   KDF-non-edge material an owner cannot re-derive from the login secret, so a
   fresh device that has lost its cache cannot renew its own records. Every
-  reseal authors an **owner-write-blob** — the `writeScopeSeed` sealed to the
-  owner's own enc subkey, beside the write-body (`reseal_scope_root`, so every
-  root/interior write-scope cut, rotation, and cascade carries one) — the
-  owner's recovery source for `write_name_signer`. The sweep authors none: it
-  re-seals interior nodes, which publish no write-body for a blob to sit beside
-  (#27 D6). This slice authors and
+  reseal **that publishes a write-body** authors an **owner-write-blob** — the
+  `writeScopeSeed` sealed to the owner's own enc subkey, beside that write-body
+  (`reseal_scope_root`, so every root/interior write-scope cut, rotation, and
+  cascade carries one) — the owner's recovery source for `write_name_signer`.
+  The sweep authors none: it re-seals interior nodes, which publish no
+  write-body for a blob to sit beside (#27 D6). This slice authors and
   gate-verifies the blob; the owner read/consume that opens it into
   `HeldMaterial.write_scope_seed` rides a later facade slice.
 

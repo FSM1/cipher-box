@@ -113,8 +113,8 @@ node UUID.
   dual-link repair (#33 D5). No key wraps, no size/mtime mirrors: child writes
   never republish the parent. The one exception is the write-plane name wave,
   which moves every child's `ipnsName` at once and so rewrites the parent's
-  child refs, re-sealing its read body at the **unchanged** read epoch — a
-  metadata rewrite, never a read rotation
+  child refs, re-sealing its read body under its **unchanged** read key at its
+  **unchanged** read epoch — a metadata rewrite, never a read rotation
   ([ADR 0004](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0004-read-body-child-names-on-the-name-wave.md)).
   A node's own body still
   moves names untouched, since `ipnsName` is not in the AAD (#39 D7).
