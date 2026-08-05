@@ -185,8 +185,8 @@ is not the contract gate.
   replaces v1's window-store poking as the e2e seam; deterministic waits
   poll it — never sleep. Tests run against the production build served
   statically (v1 tested the Vite dev server; the artifact that ships was
-  never the artifact tested). Per-test vault isolation via test-login makes
-  workers parallel; `retries: 0` ports as policy — a flaky test is a defect.
+  never the artifact tested). Per-test vault isolation makes workers
+  parallel; `retries: 0` ports as policy — a flaky test is a defect.
   The hook rides a dedicated build flag rather than `DEV`, precisely because
   the artifact under test is a production build; the suite builds that bundle
   a second time without the flag and asserts the shipping one exposes no hook.
