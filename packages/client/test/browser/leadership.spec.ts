@@ -325,11 +325,14 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
 
     // The commit emitted an engine event carrying a node id and a block count;
     // the follower received it over its private port.
+    let progress: ObservedEvent | undefined;
     await expect
-      .poll(async () => (await follower.events()).map((event) => event.kind))
-      .toContain('opProgress');
-    const progress = (await follower.events()).find((event) => event.kind === 'opProgress')!;
-    expect(progress.bytesHex.length).toBeGreaterThan(0);
+      .poll(async () => {
+        progress = (await follower.events()).find((event) => event.kind === 'opProgress');
+        return progress !== undefined;
+      })
+      .toBe(true);
+    expect(progress!.bytesHex.length).toBeGreaterThan(0);
 
     const observed = await eavesdropper.observed();
     expect(observed.length).toBeGreaterThan(0);
@@ -349,7 +352,7 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     expect(seenBytes).not.toContain(hex(plaintext.slice(0, 16)));
     // Whatever bytes that descriptor carried, the bystander saw none of them —
     // so a field added to `EventDescriptor` later cannot leak here unnoticed.
-    expect(seenBytes).not.toContain(progress.bytesHex);
+    expect(seenBytes).not.toContain(progress!.bytesHex);
     const seenText = observed.map((message) => message.text).join(' ');
     expect(seenText).not.toContain(filename);
     expect(seenText).not.toContain('rothko-appraisal');

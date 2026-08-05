@@ -119,10 +119,10 @@ export type FollowerMessage =
 
 /**
  * Leader → follower messages. Every one carries the current leadership's
- * `token` — an unguessable per-leadership capability minted at election. Same
- * origin is the trust boundary, but any same-origin context can post a forged
- * `cb:portHost`; followers reject any leader message whose token isn't the
- * active leader's, so a non-leader cannot divert the port rendezvous.
+ * `token` — an unguessable per-leadership capability minted at election, which
+ * followers check before acting on a beacon or a port rendezvous. The token is
+ * itself broadcast, so it bounds accidental and passive delivery, never a
+ * same-origin context that read the beacon: same origin is the trust boundary.
  */
 export type LeaderMessage =
   /** The current leader announces itself (on election and on demand). */
@@ -142,6 +142,8 @@ export const BROADCAST_CHANNEL_NAME = 'cipherbox-engine';
  * death: the browser releases it on close, crash or discard, and the leader's
  * queued request for the same name is granted at exactly that moment. Namespaced
  * away from the engine lock, which elects rather than reports presence.
+ * `navigator.locks.query()` reads these names origin-wide, so a name carries a
+ * `clientId` and nothing else — never a node id, a name or a count.
  */
 export function presenceLockName(clientId: string): string {
   return `cipherbox-presence:${clientId}`;

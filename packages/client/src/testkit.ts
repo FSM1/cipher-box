@@ -133,8 +133,12 @@ export class StubEngineHost implements EngineHostLike {
   }
 }
 
-/** A same-origin broadcast bus: a posted message reaches every *other* channel. */
+/**
+ * A same-origin broadcast bus: a posted message reaches every *other* channel.
+ * One bus is one origin, so it also carries that origin's lock manager.
+ */
 export class FakeBus {
+  readonly locks = new FakeLockManager();
   private readonly channels = new Set<FakeChannel>();
 
   channel(): FakeChannel {
@@ -275,6 +279,8 @@ export class FakeCourierNetwork {
 /** One lock name's state: at most one holder, FIFO queue behind it. */
 interface FakeLock {
   held: boolean;
+  /** Settles the current holder's callback in failure (`fail`). */
+  fail: ((error: Error) => void) | null;
   readonly queue: Array<() => void>;
 }
 
@@ -302,14 +308,20 @@ export class FakeLockManager implements LockManagerLike {
           return;
         }
         lock.held = true;
-        void Promise.resolve(callback({ name })).then(
+        // Raced, not chained: a steal has to beat a holder that never settles.
+        const stolen = new Promise<never>((_resolve, rejectHold) => {
+          lock.fail = rejectHold;
+        });
+        void Promise.race([Promise.resolve(callback({ name })), stolen]).then(
           (value) => {
             lock.held = false;
+            lock.fail = null;
             resolveRequest(value);
             this.next(name);
           },
           (error: unknown) => {
             lock.held = false;
+            lock.fail = null;
             rejectRequest(error);
             this.next(name);
           }
@@ -328,10 +340,16 @@ export class FakeLockManager implements LockManagerLike {
     });
   }
 
+  /** Settles this name's holder in failure, as a stolen lock does. */
+  fail(name: string, error: Error): void {
+    const lock = this.lock(name);
+    lock.fail?.(error);
+  }
+
   private lock(name: string): FakeLock {
     const existing = this.locks.get(name);
     if (existing) return existing;
-    const created: FakeLock = { held: false, queue: [] };
+    const created: FakeLock = { held: false, fail: null, queue: [] };
     this.locks.set(name, created);
     return created;
   }
@@ -347,8 +365,33 @@ export class FakeLockManager implements LockManagerLike {
   }
 }
 
-function abortError(): DOMException {
+export function abortError(): DOMException {
   return new DOMException('aborted', 'AbortError');
+}
+
+/**
+ * Every byte and every string anywhere in a message, flattened so a leak scan
+ * can search them: `bytesHex` catches payloads and node ids, `text` catches
+ * names, routing keys and codes.
+ */
+export function collect(value: unknown): { bytesHex: string; text: string } {
+  const found: number[] = [];
+  const strings: string[] = [];
+  const walk = (node: unknown): void => {
+    if (node instanceof ArrayBuffer) for (const byte of new Uint8Array(node)) found.push(byte);
+    else if (ArrayBuffer.isView(node)) {
+      const view = new Uint8Array(node.buffer, node.byteOffset, node.byteLength);
+      for (const byte of view) found.push(byte);
+    } else if (typeof node === 'string') strings.push(node);
+    // Counts and ids are values a scan has to see: a block count is a size proxy.
+    else if (typeof node === 'number' || typeof node === 'bigint') strings.push(String(node));
+    else if (Array.isArray(node)) for (const entry of node) walk(entry);
+    else if (node && typeof node === 'object') for (const entry of Object.values(node)) walk(entry);
+  };
+  walk(value);
+  let bytesHex = '';
+  for (const byte of found) bytesHex += byte.toString(16).padStart(2, '0');
+  return { bytesHex, text: strings.join(' ') };
 }
 
 /** A minimal in-process EngineTransport for relay/orchestrator tests. */

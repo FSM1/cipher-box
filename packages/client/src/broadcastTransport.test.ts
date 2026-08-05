@@ -12,7 +12,7 @@ import {
   FakeChannelPort,
   FakeCourierNetwork,
   FakeEngineTransport,
-  FakeLockManager,
+  collect,
 } from './testkit.js';
 import type { EngineTransport } from './transport.js';
 import type { EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
@@ -20,28 +20,13 @@ import type { EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
 const after = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const tick = (): Promise<void> => after(0);
 
-/**
- * One origin's `navigator.locks`, shared by every relay and follower on that
- * bus: presence watches only mean anything when leader and follower request the
- * same lock names against the same manager.
- */
-const locksOf = new WeakMap<FakeBus, FakeLockManager>();
-
-function locksFor(bus: FakeBus): FakeLockManager {
-  const existing = locksOf.get(bus);
-  if (existing) return existing;
-  const created = new FakeLockManager();
-  locksOf.set(bus, created);
-  return created;
-}
-
 function relayOn(
   bus: FakeBus,
   transport: EngineTransport,
   courier: PortCourier,
   options?: LeaderRelayOptions
 ): LeaderRelay {
-  return new LeaderRelay(bus.channel(), transport, courier, locksFor(bus), options);
+  return new LeaderRelay(bus.channel(), transport, courier, bus.locks, options);
 }
 
 function followerOn(
@@ -50,7 +35,7 @@ function followerOn(
   courier: PortCourier,
   options?: BroadcastTransportOptions
 ): BroadcastTransport {
-  return new BroadcastTransport(bus.channel(), clientId, courier, locksFor(bus), options);
+  return new BroadcastTransport(bus.channel(), clientId, courier, bus.locks, options);
 }
 
 /**
@@ -59,7 +44,7 @@ function followerOn(
  */
 function livePresence(bus: FakeBus, clientId: string): () => void {
   let release: (() => void) | null = null;
-  void locksFor(bus).request(
+  void bus.locks.request(
     presenceLockName(clientId),
     { mode: 'exclusive' },
     () =>
@@ -70,29 +55,15 @@ function livePresence(bus: FakeBus, clientId: string): () => void {
   return () => release?.();
 }
 
-/** Every byte and every string anywhere in a message, so a leak scan can see it. */
-function collect(message: unknown): { type: string; bytesHex: string; text: string } {
-  const bytes: number[] = [];
-  const strings: string[] = [];
-  const walk = (node: unknown): void => {
-    if (node instanceof ArrayBuffer) bytes.push(...new Uint8Array(node));
-    else if (ArrayBuffer.isView(node))
-      bytes.push(...new Uint8Array(node.buffer, node.byteOffset, node.byteLength));
-    else if (typeof node === 'string') strings.push(node);
-    else if (Array.isArray(node)) for (const entry of node) walk(entry);
-    else if (node && typeof node === 'object') for (const entry of Object.values(node)) walk(entry);
-  };
-  walk(message);
-  const type = (message as { type?: unknown })?.type;
-  return {
-    type: typeof type === 'string' ? type : '(untyped)',
-    bytesHex: hex(Uint8Array.from(bytes)),
-    text: strings.join(' '),
-  };
+function hex(bytes: Uint8Array): string {
+  let out = '';
+  for (const byte of bytes) out += byte.toString(16).padStart(2, '0');
+  return out;
 }
 
-function hex(bytes: Uint8Array): string {
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+/** Settles a tab's presence request in failure, as a stolen lock does. */
+function losePresence(bus: FakeBus, clientId: string): void {
+  bus.locks.fail(presenceLockName(clientId), new Error('presence lock stolen'));
 }
 
 function wire(): {
@@ -124,12 +95,7 @@ describe('broadcast transport ↔ leader relay', () => {
     const leaderChannel = bus.channel();
     leaderChannel.addEventListener('message', (event) => posted.push(event.data));
     // A relay makes a leader "present" so start resolves.
-    new LeaderRelay(
-      leaderChannel,
-      new FakeEngineTransport(),
-      ports.courier('leader'),
-      locksFor(bus)
-    );
+    new LeaderRelay(leaderChannel, new FakeEngineTransport(), ports.courier('leader'), bus.locks);
     const follower = followerOn(bus, 'f', ports.courier('f'));
 
     // The keyless follower transport receives no secret at all — `start` has no
@@ -811,36 +777,107 @@ describe('broadcast transport ↔ leader relay', () => {
     await follower.pushChunk(handle, Uint8Array.of(7).buffer);
     await follower.commitWrite(handle);
 
+    // One of every variant, each field distinctive, so the scan below covers the
+    // whole union rather than the two variants that happen to carry bytes.
     const node = new Uint8Array(16).fill(0xa7);
     const ipnsName = Uint8Array.of(0xbe, 0xef, 0xca, 0xfe);
-    engine.emit({
-      kind: 'opProgress',
-      opId: 42n,
-      node,
-      phase: 'uploadProgress',
-      blocksConfirmed: 3,
-      blocksTotal: 9,
-      error: null,
-    });
-    engine.emit({ kind: 'withheldUpdateEscalation', ipnsName });
-    engine.emit({ kind: 'renewalFailed', routingKey: 'k51-routing-key', detail: 'no peers' });
+    const emitted: EventDescriptor[] = [
+      { kind: 'snapshotUpdated' },
+      { kind: 'stalenessChanged', staleness: 'reconciling' },
+      { kind: 'withheldUpdateEscalation', ipnsName },
+      { kind: 'deadLetter', opId: 606060n, reason: 'undecodable' },
+      { kind: 'attributableAbuse', description: 'abuse-707070' },
+      { kind: 'renewalFailed', routingKey: 'k51-routing-key', detail: 'no peers' },
+      {
+        kind: 'opProgress',
+        opId: 424242n,
+        node,
+        phase: 'uploadProgress',
+        blocksConfirmed: 30003,
+        blocksTotal: 90009,
+        error: null,
+      },
+    ];
+    for (const event of emitted) engine.emit(event);
     await tick();
 
     // The follower still sees the whole stream, in emission order.
-    expect(events.map((event) => event.kind)).toEqual([
-      'opProgress',
-      'withheldUpdateEscalation',
-      'renewalFailed',
+    expect(events).toEqual(emitted);
+
+    // The bystander saw no event, and not one value any variant carries — bytes,
+    // strings, ids and counts alike — so a descriptor field added later cannot
+    // ride the channel unnoticed.
+    const seen = overheard.map((message) => ({
+      type: (message as { type?: string }).type,
+      ...collect(message),
+    }));
+    expect([...new Set(seen.map((message) => message.type))].sort()).toEqual([
+      'cb:hello',
+      'cb:leader',
+      'cb:portHost',
+      'cb:portWanted',
     ]);
-    // The bystander saw no event, and none of the bytes or strings one carries:
-    // a descriptor field added later cannot ride the channel unnoticed.
-    const seen = overheard.map(collect);
-    expect(seen.map((message) => message.type)).not.toContain('cb:portEvent');
     const bytes = seen.map((message) => message.bytesHex).join('|');
-    expect(bytes).not.toContain(hex(node));
-    expect(bytes).not.toContain(hex(ipnsName));
     const text = seen.map((message) => message.text).join(' ');
-    expect(text).not.toContain('k51-routing-key');
+    for (const needle of [hex(node), hex(ipnsName)]) expect(bytes).not.toContain(needle);
+    for (const needle of [
+      'k51-routing-key',
+      'abuse-707070',
+      'undecodable',
+      'reconciling',
+      '424242',
+      '606060',
+      '30003',
+      '90009',
+    ]) {
+      expect(text).not.toContain(needle);
+    }
+  });
+
+  it('re-brokers when the leader drops its port, so the event stream resumes', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    relayOn(bus, engine, ports.courier('leader'));
+    const follower = followerOn(bus, 'f', ports.courier('f'));
+    const events: EventDescriptor[] = [];
+    follower.subscribe((event) => events.push(event));
+    await follower.snapshot(null);
+
+    // Any same-origin context can post an unauthenticated farewell; the leader
+    // reclaims the live tab's port under the same leadership. The event stream
+    // is one-way, so nothing else would re-dial: this tab would mirror no
+    // further event for the rest of that leadership.
+    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f' });
+    await after(20);
+    engine.emit({ kind: 'snapshotUpdated' });
+    await after(20);
+
+    expect(events).toEqual([{ kind: 'snapshotUpdated' }]);
+  });
+
+  it('refuses to greet again once its presence lock is lost', async () => {
+    const bus = new FakeBus();
+    const ports = new FakeCourierNetwork();
+    const engine = new FakeEngineTransport();
+    relayOn(bus, engine, ports.courier('leader'));
+    const follower = followerOn(bus, 'f', ports.courier('f'), { portTimeoutMs: 50 });
+    await follower.snapshot(null);
+    const greetings = (): number =>
+      ports.messages.filter((m) => (m as { type?: string }).type === 'cb:portHello').length;
+    expect(greetings()).toBe(1);
+
+    // The tab's presence request settles in failure — a stolen lock, or a
+    // document the browser will not grant one to.
+    losePresence(bus, 'f');
+    await tick();
+
+    // Greeting on a name it no longer holds would invite the leader's watch to
+    // reclaim it live, over and over; it fails closed instead.
+    bus.channel().postMessage({ type: 'cb:bye', clientId: 'f' });
+    await after(20);
+    await expect(follower.snapshot(null)).rejects.toThrow();
+    expect(greetings()).toBe(1);
   });
 
   it('rejects a forged response bearing a wrong or absent leader token, and takes no event off the channel (P1-4)', async () => {

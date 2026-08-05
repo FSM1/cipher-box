@@ -42,8 +42,8 @@ async function journal(kind: string): Promise<void> {
 }
 
 class JournalHost extends StubEngineHost {
-  private readonly events: EventDescriptor[] = [];
-  private wake: (() => void) | null = null;
+  private readonly queued: EventDescriptor[] = [];
+  private readonly waiters: Array<(event: EventDescriptor) => void> = [];
   private nextHandle = 1n;
   // Op ids are a separate id space from write handles; keep them disjoint so a
   // client that conflates the two cannot pass against this fake.
@@ -102,20 +102,16 @@ class JournalHost extends StubEngineHost {
     return Promise.resolve();
   }
 
-  async nextEvent(): Promise<EventDescriptor | null> {
-    if (this.events.length === 0) {
-      await new Promise<void>((resolve) => {
-        this.wake = resolve;
-      });
-    }
-    return this.events.shift() ?? null;
+  nextEvent(): Promise<EventDescriptor | null> {
+    const next = this.queued.shift();
+    if (next) return Promise.resolve(next);
+    return new Promise((resolve) => this.waiters.push(resolve));
   }
 
   private publish(event: EventDescriptor): void {
-    this.events.push(event);
-    const wake = this.wake;
-    this.wake = null;
-    wake?.();
+    const waiter = this.waiters.shift();
+    if (waiter) waiter(event);
+    else this.queued.push(event);
   }
 }
 

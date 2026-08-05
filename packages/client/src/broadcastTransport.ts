@@ -30,6 +30,7 @@
 import {
   presenceLockName,
   type BroadcastChannelLike,
+  type FollowerMessage,
   type LeaderMessage,
   type PortRequest,
   type PortResponse,
@@ -38,6 +39,7 @@ import {
   type WireWrite,
 } from './broadcast.js';
 import { CorrelatedTransport } from './correlatedTransport.js';
+import { asError } from './errorMessage.js';
 import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type {
@@ -88,11 +90,12 @@ export class BroadcastTransport extends CorrelatedTransport {
   private readonly portTimeoutMs: number;
   private readonly onLeadershipChange: () => void;
 
-  // Settles once this tab holds its presence lock; the greeting waits on it, so
-  // the leader's death watch can never be granted against a live tab.
   private readonly presenceHeld: Promise<void>;
   private readonly presenceRequest = new AbortController();
   private releasePresence: (() => void) | null = null;
+  // Set if the presence request ever settles in failure — including a lock
+  // stolen out from under a live tab, which the browser reports here.
+  private presenceLost: Error | null = null;
 
   private readonly onMessage = (event: MessageEvent): void => this.receive(event.data);
 
@@ -110,13 +113,10 @@ export class BroadcastTransport extends CorrelatedTransport {
     this.armLeaderReady();
     this.channel.addEventListener('message', this.onMessage);
     // Announce ourselves so a live leader replies with a `leader` beacon.
-    this.channel.postMessage({ type: 'cb:hello', clientId: this.clientId });
+    this.post({ type: 'cb:hello', clientId: this.clientId });
   }
 
-  /**
-   * Takes the lock naming this tab and holds it until `close()` or until the
-   * browser releases it on the tab's death — the leader's death signal.
-   */
+  /** Takes the lock naming this tab; the browser releases it when the tab dies. */
   private holdPresence(locks: LockManagerLike): Promise<void> {
     const held = new Promise<void>((resolve, reject) => {
       void locks
@@ -130,7 +130,10 @@ export class BroadcastTransport extends CorrelatedTransport {
             });
           }
         )
-        .catch((error: unknown) => reject(asError(error)));
+        .catch((error: unknown) => {
+          this.presenceLost = asError(error);
+          reject(this.presenceLost);
+        });
     });
     // A broker re-observes this rejection; swallow the unobserved-rejection warn.
     held.catch(() => undefined);
@@ -235,9 +238,8 @@ export class BroadcastTransport extends CorrelatedTransport {
     // in force when a read first asked for a port.
     const generation = this.portGeneration;
     if (this.closed) throw retryError();
-    // Before the greeting, never after: a leader that watched this tab's
-    // presence name while it held nothing would be granted at once and reclaim
-    // a live tab.
+    // Before the greeting, never after: a leader watching a presence name this
+    // tab does not hold is granted at once and reclaims a live tab.
     await this.awaitPresence();
     const port = await this.courier.connect(await this.awaitHost());
     const release = this.bindPort(port);
@@ -279,6 +281,9 @@ export class BroadcastTransport extends CorrelatedTransport {
       if (message.type === 'cb:portClosed') {
         this.dropPort(retryError());
         this.rejectPending(retryError());
+        // The event stream is one-way, so nothing else would re-dial: without
+        // this a dropped port silently ends it until the next request.
+        void this.ensurePort().catch(() => undefined);
         return;
       }
       if (message.type !== 'cb:portResult') return;
@@ -294,8 +299,11 @@ export class BroadcastTransport extends CorrelatedTransport {
     };
   }
 
-  /** This tab's presence lock, under the brokerage timeout like every step. */
+  /** This tab's presence, under the brokerage timeout like every other step. */
   private awaitPresence(): Promise<void> {
+    // A presence that was held and then lost must not latch resolved: greeting
+    // on a name this tab no longer holds invites the leader to reclaim it live.
+    if (this.presenceLost) return Promise.reject(this.presenceLost);
     return this.awaitBrokerage<void>('this tab holds no presence lock', (settle) => {
       void this.presenceHeld.then(settle, (error: unknown) =>
         this.abortBrokerage?.(asError(error))
@@ -307,7 +315,7 @@ export class BroadcastTransport extends CorrelatedTransport {
   private awaitHost(): Promise<string> {
     return this.awaitBrokerage<string>('the leader published no port host', (settle) => {
       this.settleHost = settle;
-      this.channel.postMessage({ type: 'cb:portWanted', clientId: this.clientId });
+      this.post({ type: 'cb:portWanted', clientId: this.clientId });
     });
   }
 
@@ -379,17 +387,21 @@ export class BroadcastTransport extends CorrelatedTransport {
     this.rejectLeaderReady(error);
     this.fail(error);
     this.dropPort(error);
-    // Held → released; still queued → withdrawn. Either way this tab stops
-    // claiming a presence the leader would go on watching.
+    // Held → released; still queued → withdrawn.
     this.releasePresence?.();
     this.releasePresence = null;
     this.presenceRequest.abort();
     try {
-      this.channel.postMessage({ type: 'cb:bye', clientId: this.clientId });
+      this.post({ type: 'cb:bye', clientId: this.clientId });
     } catch {
       // The channel may already be torn down; teardown proceeds regardless.
     }
     this.channel.removeEventListener('message', this.onMessage);
+  }
+
+  /** Every follower→leader channel post, so the union is a constraint, not a note. */
+  private post(message: FollowerMessage): void {
+    this.channel.postMessage(message);
   }
 
   private armLeaderReady(): void {
@@ -455,8 +467,4 @@ export class BroadcastTransport extends CorrelatedTransport {
 
 function retryError(): Error {
   return new Error('leader changed; retry');
-}
-
-function asError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
