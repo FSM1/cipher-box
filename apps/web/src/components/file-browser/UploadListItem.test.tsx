@@ -32,12 +32,20 @@ describe('an upload row', () => {
     expect(screen.getByTestId('upload-row-status').textContent).toBe('50%');
   });
 
-  it('stays indeterminate while the engine has no block count to give', () => {
+  it('shimmers only while the client is feeding the engine', () => {
     show(entry({ phase: 'staging' }));
 
     const bar = screen.getByRole('progressbar');
     expect(bar.getAttribute('aria-valuenow')).toBeNull();
     expect(bar.className).toContain('upload-row-track--indeterminate');
+  });
+
+  it('leaves a queued row still, because nothing is moving yet', () => {
+    show(entry({ phase: 'queued', opId: 1n }));
+
+    const bar = screen.getByRole('progressbar');
+    expect(bar.getAttribute('aria-valuetext')).toBe('queued');
+    expect(bar.className).not.toContain('upload-row-track--indeterminate');
   });
 
   it('offers cancel while the engine still has work', () => {
@@ -53,7 +61,7 @@ describe('an upload row', () => {
     const handlers = show(entry({ phase: 'failed', error: 'no reachable pin provider' }));
 
     fireEvent.click(screen.getByLabelText('Retry upload of report.pdf'));
-    fireEvent.click(screen.getByLabelText('Dismiss failed upload of report.pdf'));
+    fireEvent.click(screen.getByLabelText('Dismiss upload of report.pdf'));
 
     expect(handlers.onRetry).toHaveBeenCalledWith('upload-1');
     expect(handlers.onDismiss).toHaveBeenCalledWith('upload-1');
@@ -61,7 +69,16 @@ describe('an upload row', () => {
     expect(screen.getByRole('alert').textContent).toBe('no reachable pin provider');
   });
 
-  it('marks an over-budget refusal apart from a terminal failure', () => {
+  it('lets a cancelled row be cleared, so none can strand its file', () => {
+    const handlers = show(entry({ phase: 'cancelled', opId: 1n }));
+
+    fireEvent.click(screen.getByLabelText('Dismiss upload of report.pdf'));
+
+    expect(handlers.onDismiss).toHaveBeenCalledWith('upload-1');
+    expect(screen.queryByLabelText('Cancel upload of report.pdf')).toBeNull();
+  });
+
+  it('marks an over-budget refusal apart from a failure that will never clear', () => {
     show(
       entry({
         phase: 'failed',
@@ -70,6 +87,17 @@ describe('an upload row', () => {
       })
     );
 
-    expect(screen.getByTestId('upload-row-error').className).toContain('upload-row-error--budget');
+    expect(screen.getByTestId('upload-row-error').className).toContain(
+      'upload-row-error--transient'
+    );
+  });
+
+  it('marks a stopped attempt as retryable, not settled', () => {
+    show(entry({ phase: 'stalled', opId: 1n, error: 'no reachable pin provider' }));
+
+    expect(screen.getByTestId('upload-row-error').className).toContain(
+      'upload-row-error--transient'
+    );
+    expect(screen.getByTestId('upload-row-error').getAttribute('role')).toBeNull();
   });
 });

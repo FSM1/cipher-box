@@ -8,9 +8,6 @@ interface UploadListItemProps {
   onDismiss: (id: string) => void;
 }
 
-/** The phases whose bar can quote a fraction; the rest are indeterminate. */
-const MEASURED: readonly UploadPhase[] = ['uploading', 'uploaded'];
-
 const LABELS: Record<UploadPhase, string> = {
   staging: 'sealing',
   queued: 'queued',
@@ -24,9 +21,15 @@ const LABELS: Record<UploadPhase, string> = {
 /** One in-flight upload, in the columns the listing below it uses. */
 export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadListItemProps) {
   const { id, name, phase, error } = upload;
-  const measured = MEASURED.includes(phase);
+  const measured = phase === 'uploading' || phase === 'uploaded';
   const percent = Math.round(upload.progress * 100);
   const settled = !isActiveUpload(phase);
+  // Only the row the client is actually feeding animates; a queued or retrying
+  // one has nothing moving to report.
+  const indeterminate = phase === 'staging';
+  // An over-budget refusal is a ceiling and a stopped attempt is retried, so
+  // neither reads as the settled red of a row that will never publish.
+  const transient = phase === 'stalled' || upload.code === 'overBudget';
 
   return (
     <div
@@ -43,7 +46,7 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
           <span className="file-list-item-name">{name}</span>
           {!settled && (
             <div
-              className={`upload-row-track${measured ? '' : ' upload-row-track--indeterminate'}`}
+              className={`upload-row-track${indeterminate ? ' upload-row-track--indeterminate' : ''}`}
               role="progressbar"
               aria-label={`Upload progress for ${name}`}
               {...(measured
@@ -61,7 +64,7 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
           <span className="upload-row-status" data-testid="upload-row-status">
             {phase === 'uploading' ? `${percent}%` : LABELS[phase]}
           </span>
-          {isActiveUpload(phase) && (
+          {!settled && (
             <button
               type="button"
               className="upload-row-button"
@@ -71,20 +74,23 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
               [x]
             </button>
           )}
-          {phase === 'failed' && (
+          {settled && (
             <>
-              <button
-                type="button"
-                className="upload-row-button upload-row-button--retry"
-                aria-label={`Retry upload of ${name}`}
-                onClick={() => onRetry(id)}
-              >
-                [r]
-              </button>
+              {phase !== 'uploaded' && (
+                <button
+                  type="button"
+                  className="upload-row-button upload-row-button--retry"
+                  aria-label={`Retry upload of ${name}`}
+                  onClick={() => onRetry(id)}
+                >
+                  [r]
+                </button>
+              )}
+              {/* Every settled row is clearable, so none can strand its `File`. */}
               <button
                 type="button"
                 className="upload-row-button"
-                aria-label={`Dismiss failed upload of ${name}`}
+                aria-label={`Dismiss upload of ${name}`}
                 onClick={() => onDismiss(id)}
               >
                 [x]
@@ -95,7 +101,7 @@ export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadL
       </div>
       {error !== null && (
         <p
-          className={`upload-row-error${upload.code === 'overBudget' ? ' upload-row-error--budget' : ''}`}
+          className={`upload-row-error${transient ? ' upload-row-error--transient' : ''}`}
           data-testid="upload-row-error"
           role={phase === 'failed' ? 'alert' : undefined}
         >

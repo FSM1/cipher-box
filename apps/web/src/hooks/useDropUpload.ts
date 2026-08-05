@@ -1,7 +1,7 @@
 /**
  * The upload path: `File` handles in, facade write handles out
- * (blueprint/web-client.md "Content paths"). One slice of plaintext exists at a
- * time and is transferred into the engine, never copied through React state.
+ * (blueprint/web-client.md "Content paths"). A slice of plaintext is read and
+ * transferred into the engine in one step and never copied through React state.
  *
  * Rows are transient UI state keyed on the upload's op id; what the vault holds
  * stays the snapshot store's word alone (UI state law).
@@ -13,17 +13,13 @@ import type { EventDescriptor } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
 import { useEngine } from '../providers/EngineProvider';
 
-/** Plaintext crosses to the engine one slice at a time; peak heap is one slice. */
+/** Peak heap is one slice, however large the file. */
 const CHUNK_BYTES = 1024 * 1024;
 
 /** How long a settled row stays on screen before it retires itself. */
 const SETTLED_ROW_MILLIS = 1500;
 
-/**
- * Where an upload has got to. `uploaded` means the version's blocks are on the
- * network, not that its record published; `stalled` is one attempt the drain
- * will retry, where `failed` is terminal.
- */
+/** Where an upload has got to; `staging` is the only rung the engine does not name. */
 export type UploadPhase =
   | 'staging'
   | 'queued'
@@ -34,6 +30,9 @@ export type UploadPhase =
   | 'failed';
 
 const ACTIVE_PHASES: readonly UploadPhase[] = ['staging', 'queued', 'uploading', 'stalled'];
+
+/** Settled with nothing left to say, so the row clears itself. */
+const RETIRING_PHASES: readonly UploadPhase[] = ['uploaded', 'cancelled'];
 
 /** Whether the engine still has work for this row. */
 export function isActiveUpload(phase: UploadPhase): boolean {
@@ -70,6 +69,8 @@ export interface DropUpload {
 interface Job {
   file: File;
   parent: Uint8Array;
+  /** Set once the write commits, so a cancel names the op without a render read. */
+  opId: bigint | null;
 }
 
 /** What one engine event says about the row holding its op. */
@@ -86,21 +87,22 @@ export function useDropUpload(): DropUpload {
   const jobs = useRef(new Map<string, Job>());
   const cancelled = useRef(new Set<string>());
   const rowByOp = useRef(new Map<string, string>());
-  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   // Uploads run one at a time: `beginWrite` reserves the whole version against
   // the staging budget, so files started together contend for room only one has.
   const queue = useRef<Promise<void>>(Promise.resolve());
-  // A drain that reports an op before its `commitWrite` reply lands has no row
-  // to update yet; one slot covers it, because only one commit is ever open and
-  // the op id it is claimed under is unique.
+  // Replies and events cross on different channels, so an op can be reported
+  // before its `commitWrite` reply lands. Only events from inside a commit
+  // window may claim a slot, so a foreign op's report cannot accumulate here.
   const committing = useRef(false);
-  const unbound = useRef<RowUpdate | null>(null);
+  const unbound = useRef(new Map<string, Partial<UploadEntry>>());
 
   const patch = useCallback((id: string, change: Partial<UploadEntry>) => {
     setUploads((rows) => rows.map((row) => (row.id === id ? { ...row, ...change } : row)));
   }, []);
 
   const forget = useCallback((id: string) => {
+    stopRetire(timers.current, id);
     jobs.current.delete(id);
     cancelled.current.delete(id);
     unbind(rowByOp.current, id);
@@ -109,11 +111,11 @@ export function useDropUpload(): DropUpload {
 
   const retire = useCallback(
     (id: string) => {
-      const timer = setTimeout(() => {
-        timers.current.delete(timer);
-        forget(id);
-      }, SETTLED_ROW_MILLIS);
-      timers.current.add(timer);
+      stopRetire(timers.current, id);
+      timers.current.set(
+        id,
+        setTimeout(() => forget(id), SETTLED_ROW_MILLIS)
+      );
     },
     [forget]
   );
@@ -121,25 +123,38 @@ export function useDropUpload(): DropUpload {
   useEffect(() => {
     const pending = timers.current;
     return () => {
-      for (const timer of pending) clearTimeout(timer);
+      for (const timer of pending.values()) clearTimeout(timer);
       pending.clear();
     };
   }, []);
+
+  /** Lands one engine update on a row, retiring it once nothing is left to do. */
+  const apply = useCallback(
+    (id: string, change: Partial<UploadEntry>) => {
+      patch(id, change);
+      if (change.phase === undefined) return;
+      // A dead letter can follow the blocks landing, so a row that moves on must
+      // not be swept by the timer its earlier phase scheduled.
+      if (RETIRING_PHASES.includes(change.phase)) retire(id);
+      else stopRetire(timers.current, id);
+    },
+    [patch, retire]
+  );
 
   useEffect(() => {
     if (engine === null) return;
     return engine.facade.subscribe((event) => {
       const update = rowUpdate(event);
       if (update === null) return;
-      const row = rowByOp.current.get(update.opId.toString());
+      const key = update.opId.toString();
+      const row = rowByOp.current.get(key);
       if (row === undefined) {
-        if (committing.current) unbound.current = update;
+        if (committing.current) unbound.current.set(key, update.change);
         return;
       }
-      patch(row, update.change);
-      if (update.change.phase === 'uploaded') retire(row);
+      apply(row, update.change);
     });
-  }, [engine, patch, retire]);
+  }, [apply, engine]);
 
   /** Asks the engine to drop a committed op; a refusal says why on the row. */
   const dropOp = useCallback(
@@ -172,8 +187,7 @@ export function useDropUpload(): DropUpload {
       const abandoned = async (): Promise<boolean> => {
         if (!cancelled.current.has(id)) return false;
         await release();
-        patch(id, { phase: 'cancelled', error: null });
-        retire(id);
+        apply(id, { phase: 'cancelled', error: null });
         return true;
       };
 
@@ -185,8 +199,6 @@ export function useDropUpload(): DropUpload {
         );
         for (let offset = 0; offset < job.file.size; offset += CHUNK_BYTES) {
           if (await abandoned()) return;
-          // Read and handed over in one step: the push detaches the buffer, so
-          // no plaintext slice outlives the call that consumed it.
           await facade.pushChunk(
             handle,
             await job.file.slice(offset, offset + CHUNK_BYTES).arrayBuffer()
@@ -202,19 +214,19 @@ export function useDropUpload(): DropUpload {
           committing.current = false;
         }
         handle = null;
-
+        job.opId = opId;
         rowByOp.current.set(opId.toString(), id);
-        const early = unbound.current?.opId === opId ? unbound.current.change : undefined;
-        unbound.current = null;
-        patch(id, { opId, phase: 'queued', ...early });
-        if (early?.phase === 'uploaded') retire(id);
+        patch(id, { opId, phase: 'queued' });
+
+        const early = unbound.current.get(opId.toString());
+        unbound.current.clear();
+        if (early !== undefined) apply(id, early);
         // A cancel that arrived mid-commit has an op to name now.
         if (cancelled.current.has(id)) dropOp(id, opId);
       } catch (error) {
         await release();
         if (cancelled.current.has(id)) {
-          patch(id, { phase: 'cancelled', error: null });
-          retire(id);
+          apply(id, { phase: 'cancelled', error: null });
           return;
         }
         patch(id, {
@@ -224,7 +236,7 @@ export function useDropUpload(): DropUpload {
         });
       }
     },
-    [dropOp, engine, patch, retire]
+    [apply, dropOp, engine, patch, retire]
   );
 
   const enqueue = useCallback(
@@ -236,9 +248,10 @@ export function useDropUpload(): DropUpload {
 
   const upload = useCallback(
     (files: readonly File[], parent: Uint8Array) => {
+      if (files.length === 0) return;
       const started = files.map((file) => {
         const id = `upload-${(sequence += 1)}`;
-        jobs.current.set(id, { file, parent });
+        jobs.current.set(id, { file, parent, opId: null });
         return {
           id,
           name: file.name,
@@ -250,7 +263,6 @@ export function useDropUpload(): DropUpload {
           code: null,
         } satisfies UploadEntry;
       });
-      if (started.length === 0) return;
       setUploads((rows) => [...rows, ...started]);
       for (const row of started) enqueue(row.id);
     },
@@ -260,18 +272,19 @@ export function useDropUpload(): DropUpload {
   const cancel = useCallback(
     (id: string) => {
       cancelled.current.add(id);
-      const opId = uploads.find((row) => row.id === id)?.opId;
-      // Still staging: the run loop reads the flag at its next chunk boundary.
+      const opId = jobs.current.get(id)?.opId;
       if (opId != null) dropOp(id, opId);
     },
-    [dropOp, uploads]
+    [dropOp]
   );
 
   const retry = useCallback(
     (id: string) => {
-      if (!jobs.current.has(id)) return;
+      const job = jobs.current.get(id);
+      if (job === undefined) return;
       cancelled.current.delete(id);
       unbind(rowByOp.current, id);
+      job.opId = null;
       patch(id, { phase: 'staging', progress: 0, opId: null, error: null, code: null });
       enqueue(id);
     },
@@ -279,6 +292,13 @@ export function useDropUpload(): DropUpload {
   );
 
   return { uploads, upload, cancel, retry, dismiss: forget };
+}
+
+function stopRetire(timers: Map<string, ReturnType<typeof setTimeout>>, id: string): void {
+  const timer = timers.get(id);
+  if (timer === undefined) return;
+  clearTimeout(timer);
+  timers.delete(id);
 }
 
 function unbind(rowByOp: Map<string, string>, id: string): void {

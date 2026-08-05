@@ -258,6 +258,37 @@ describe('reporting what the engine says about the op', () => {
     });
     expect(result.current.uploads).toHaveLength(0);
   });
+
+  it('keeps a row a dead letter overtook, rather than sweeping it on the old timer', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const engine = uploadEngine();
+    const { result } = mount(engine.client);
+
+    await act(async () => {
+      result.current.upload([file('a.bin', 10)], PARENT);
+    });
+    await waitFor(() => expect(result.current.uploads[0].opId).toBe(1n));
+
+    act(() =>
+      engine.emit({
+        kind: 'opProgress',
+        opId: 1n,
+        node: new Uint8Array(16),
+        phase: 'uploadCompleted',
+        blocksConfirmed: 2,
+        blocksTotal: 2,
+        error: null,
+      })
+    );
+    // The record still has to publish, so a dead letter can follow the blocks.
+    act(() => engine.emit({ kind: 'deadLetter', opId: 1n, reason: 'targetGone' }));
+
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(result.current.uploads).toHaveLength(1);
+    expect(result.current.uploads[0].phase).toBe('failed');
+  });
 });
 
 describe('cancelling', () => {
@@ -309,6 +340,35 @@ describe('cancelling', () => {
       })
     );
     expect(result.current.uploads[0].phase).toBe('cancelled');
+  });
+
+  it('retires a row the engine cancelled, rather than stranding it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const engine = uploadEngine();
+    const { result } = mount(engine.client);
+
+    await act(async () => {
+      result.current.upload([file('a.bin', 10)], PARENT);
+    });
+    await waitFor(() => expect(result.current.uploads[0].opId).toBe(1n));
+
+    act(() => result.current.cancel(result.current.uploads[0].id));
+    act(() =>
+      engine.emit({
+        kind: 'opProgress',
+        opId: 1n,
+        node: new Uint8Array(16),
+        phase: 'uploadCancelled',
+        blocksConfirmed: null,
+        blocksTotal: null,
+        error: null,
+      })
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    expect(result.current.uploads).toHaveLength(0);
   });
 
   it('shows a refused cancel without moving the row off the upload', async () => {

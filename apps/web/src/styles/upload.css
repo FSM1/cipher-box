@@ -60,16 +60,17 @@
   margin-bottom: var(--spacing-sm);
 }
 
-.upload-row {
+/* Doubled up so the row's own affordances win wherever this sheet is loaded. */
+.file-list-item.upload-row {
   cursor: default;
 }
 
-.upload-row:hover {
+.file-list-item.upload-row:hover {
   background-color: transparent;
 }
 
-.upload-row--failed {
-  background-color: rgb(239 68 68 / 8%);
+.file-list-item.upload-row--failed {
+  background-color: color-mix(in srgb, var(--color-error) 8%, transparent);
 }
 
 .upload-row--failed .file-list-item-icon {
@@ -102,8 +103,8 @@
   transition: width 0.2s ease;
 }
 
-/* An indeterminate stage — sealing, queued, or waiting on a retry — animates
-   the track itself, so the fill has no width to jump back from. */
+/* Sealing animates the track itself, so the fill has no width to jump back from
+   when the drain's first block lands. */
 @keyframes upload-row-shimmer {
   from {
     background-position: -200% 0;
@@ -151,11 +152,6 @@
   color: var(--color-text-primary);
 }
 
-.upload-row-button:focus-visible {
-  outline: var(--border-thickness) solid var(--color-green-primary);
-  outline-offset: 1px;
-}
-
 .upload-row-button--retry {
   color: var(--color-green-primary);
 }
@@ -168,9 +164,7 @@
   color: var(--color-error);
 }
 
-/* An over-budget refusal is a ceiling, not a verdict: it reads as a warning
-   because the same write can be admitted once room frees. */
-.upload-row-error--budget {
+.upload-row-error--transient {
   color: var(--color-warning);
 }
 

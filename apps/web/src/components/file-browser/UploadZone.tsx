@@ -15,8 +15,7 @@ function carriesFiles(transfer: DataTransfer): boolean {
 /** Where files enter the vault: a drop target that doubles as a file picker. */
 export function UploadZone({ onFiles, busy }: UploadZoneProps) {
   const [dragging, setDragging] = useState(false);
-  // `dragleave` fires for every child the pointer crosses, so a boolean alone
-  // would clear the highlight while the drag is still over the zone.
+  // `dragleave` fires for every child the pointer crosses.
   const depth = useRef(0);
   const picker = useRef<HTMLInputElement>(null);
 
