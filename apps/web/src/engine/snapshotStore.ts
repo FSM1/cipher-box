@@ -23,6 +23,19 @@ export interface SnapshotState {
   error: SnapshotError | null;
 }
 
+/**
+ * Engine codes a later pull clears on its own: resource ceilings, not verdicts.
+ * Everything else — including a codeless transport fault and any code this list
+ * does not name — is fatal, so a new engine variant can never render as
+ * recoverable without someone adding it here.
+ */
+const RECOVERABLE_CODES: ReadonlySet<string> = new Set(['tooManyStreams', 'overBudget']);
+
+/** Whether a later pull can clear this failure without anything else changing. */
+export function isRecoverable(error: SnapshotError): boolean {
+  return error.code !== undefined && RECOVERABLE_CODES.has(error.code);
+}
+
 export interface SnapshotStore {
   /** `useSyncExternalStore` subscribe: fires on every committed change. */
   subscribe(onStoreChange: () => void): () => void;
@@ -32,6 +45,14 @@ export interface SnapshotStore {
   getStaleness(): Staleness;
   /** Points the adapter (and the engine's focus window) at a folder. */
   setFocus(node: Uint8Array | null): void;
+  /**
+   * Re-asserts the cached focus after a consumer drove `facade.setFocus` itself.
+   * The `setFocus` short-circuit cannot see such a borrow, so without this the
+   * engine stays on the borrower's folder for the rest of the session.
+   */
+  refocus(): void;
+  /** Resolves with nocache semantics, then re-pulls the focused folder. */
+  refresh(): void;
   /** Releases the event subscription. */
   dispose(): void;
 }
@@ -44,6 +65,8 @@ export const idleSnapshotStore: SnapshotStore = {
   getSnapshot: () => IDLE,
   getStaleness: () => 'reconciling',
   setFocus: () => undefined,
+  refocus: () => undefined,
+  refresh: () => undefined,
   dispose: () => undefined,
 };
 
@@ -113,6 +136,19 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       });
   };
 
+  const assertFocus = (): void => {
+    client.reportFocus(focus);
+    const id = ++generation;
+    client.facade.setFocus(focus).then(
+      () => {
+        if (id === generation) pull();
+      },
+      (error: unknown) => {
+        if (id === generation) commit({ error: describe(error) });
+      }
+    );
+  };
+
   const unsubscribe = client.facade.subscribe((event) => {
     if (event.kind === 'snapshotUpdated') {
       pull();
@@ -132,9 +168,12 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     setFocus(node) {
       if (sameNode(focus, node)) return;
       focus = node;
-      client.reportFocus(node);
-      const id = ++generation;
-      client.facade.setFocus(node).then(
+      assertFocus();
+    },
+    refocus: assertFocus,
+    refresh() {
+      const id = generation;
+      client.facade.manualRefresh().then(
         () => {
           if (id === generation) pull();
         },

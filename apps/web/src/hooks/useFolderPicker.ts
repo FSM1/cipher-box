@@ -8,7 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SnapshotDescriptor } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
 import { sameNode } from '../lib/nodeId';
-import { useEngine } from '../providers/EngineProvider';
+import { useEngine, useSnapshotStore } from '../providers/EngineProvider';
 import { listingRows, type ListingRow } from '../vault/listing';
 
 export interface FolderPicker {
@@ -28,14 +28,14 @@ export interface FolderPicker {
 }
 
 /**
- * @param openOn the folder to start on and to hand the focus window back to,
- * captured on mount
+ * @param openOn the folder to start the walk on, captured on mount
  * @param excludedKey a subtree the picker must not offer, by hex node id —
  * hiding the node hides everything under it, since the walk only descends
  * through what it lists
  */
 export function useFolderPicker(openOn: Uint8Array | null, excludedKey: string): FolderPicker {
   const client = useEngine();
+  const store = useSnapshotStore();
   const home = useRef(openOn).current;
   const [cursor, setCursor] = useState<Uint8Array | null>(home);
   const [listing, setListing] = useState<SnapshotDescriptor | null>(null);
@@ -65,9 +65,10 @@ export function useFolderPicker(openOn: Uint8Array | null, excludedKey: string):
     };
   }, [client, cursor]);
 
-  // Handing the focus window back is best-effort: the picker is gone, and the
-  // route's own focus effect reasserts it either way.
-  useEffect(() => () => void client?.facade.setFocus(home).catch(() => undefined), [client, home]);
+  // The walk borrows the focus window; only the store knows where it belongs by
+  // the time the picker closes, so the store takes it back rather than the
+  // picker restoring the folder it opened on.
+  useEffect(() => () => store.refocus(), [store]);
 
   // The read effect retires the listing a render later than the cursor moves,
   // and a listing outliving its cursor names the folder just left as the

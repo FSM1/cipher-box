@@ -1,4 +1,6 @@
+import { isRecoverable } from '../../engine/snapshotStore';
 import { useSnapshot } from '../../engine/useSnapshot';
+import { useSnapshotStore } from '../../providers/EngineProvider';
 import { useFolderNavigation } from '../../vault/useFolderNavigation';
 import { Breadcrumbs } from './Breadcrumbs';
 import { DeadLetterNotice } from './DeadLetterNotice';
@@ -11,17 +13,33 @@ export function FileBrowser() {
   const { rows, folder, breadcrumbs, isLoading, isRoot, error, navigateTo, navigateUp } =
     useFolderNavigation();
   const { view } = useSnapshot();
-  const settled = !isLoading && error === null;
+  const store = useSnapshotStore();
+  // A ceiling refusal clears on its own, so it renders over the listing it
+  // interrupted; anything else is a verdict and blanks it.
+  const recoverable = error !== null && isRecoverable(error);
+  const settled = !isLoading && (error === null || (recoverable && folder !== null));
 
   return (
     <div className="file-browser" data-testid="file-browser">
       <Breadcrumbs crumbs={breadcrumbs} onNavigate={navigateTo} />
       <DeadLetterNotice deadLetters={view?.deadLetters ?? []} />
-      {error && (
-        <p className="file-browser-error" role="alert" data-testid="file-browser-error">
-          {error.message}
-        </p>
-      )}
+      {error !== null &&
+        (recoverable ? (
+          <div className="file-browser-notice" role="status" data-testid="file-browser-notice">
+            <span className="file-browser-notice-message">{error.message}</span>
+            <button
+              type="button"
+              className="file-browser-notice-retry"
+              onClick={() => store.refresh()}
+            >
+              [retry]
+            </button>
+          </div>
+        ) : (
+          <p className="file-browser-error" role="alert" data-testid="file-browser-error">
+            {error.message}
+          </p>
+        ))}
       {isLoading && (
         <p className="file-browser-loading" data-testid="file-browser-loading">
           {'// LOADING VAULT...'}
