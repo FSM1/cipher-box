@@ -23,9 +23,10 @@ use cipherbox_core::error::{CodecError, Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, Envelope, ReadBody, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
-    SignedOwnerBlob, SignedOwnerWriteBlob, decode_envelope, decode_grant_section,
-    grant_section_bytes, open_owner_blob, open_owner_write_blob, open_read_body,
+    AadContext, Envelope, GrantSection, ReadBody, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_OWNER_WRITE_BLOB, SignedOwnerBlob, SignedOwnerWriteBlob, decode_envelope,
+    decode_grant_section, grant_section_bytes, open_owner_blob, open_owner_write_blob,
+    open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -181,7 +182,7 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
             .recover_own_scope_root(name, record_bytes)
             .await?
             .map(|root| OwnScopeMaterial {
-                node_id: root.candidate.envelope.id,
+                node_id: root.envelope.id,
                 read_scope_seed: root.read_scope_seed,
                 write_scope_seed: root.write_scope_seed,
             }))
@@ -189,11 +190,13 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
 }
 
 /// The owner's own scope root as recovered at exactly the durable sequence
-/// floor: the authenticated candidate plus what a gate pass surfaces from it.
-/// Terminal owner of the recovered seeds — they zeroize when it drops.
+/// floor: what a gate pass surfaces, off the candidate the rejected adopt
+/// authenticated. Terminal owner of the recovered seeds — they zeroize on drop.
 pub(crate) struct RecoveredScopeRoot {
-    /// The candidate the rejected adopt authenticated through stages 1-3.
-    pub(crate) candidate: Candidate,
+    /// The record's envelope.
+    pub(crate) envelope: Envelope,
+    /// Its grant section, authenticated by the gate's stages 1-3.
+    pub(crate) grant_section: GrantSection,
     /// The read-body the recovery re-unsealed under the recovered seed.
     pub(crate) read_body: ReadBody,
     /// The scope read seed this record's own owner blob wraps.
@@ -206,8 +209,8 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     /// Recover the owner's own scope root from a record the gate rejected at
     /// **exactly** the durable sequence floor. The caller establishes that
     /// equality from the rejection ([`RejectionReason::SequenceNotNewer`] with
-    /// `sequence == floor`, [`floor::Strictness::AtFloor`]); a strictly lower
-    /// sequence is a replay and never reaches here.
+    /// `sequence == floor`); a strictly lower sequence is a replay and never
+    /// reaches here.
     ///
     /// Fail-OPEN, never a trust verdict: anything unproved yields `Ok(None)`
     /// (a `Current` never hardens — [`Adopter::recover_own_scope_material`]).
@@ -221,9 +224,9 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
             return Ok(None);
         }
         // Only the candidate the rejected [`Adopter::adopt`] cached for these
-        // exact bytes is eligible. That candidate reached the floor stages, so
-        // the gate's stages 1-3 authenticated the grant section it carries;
-        // re-assembling here would run none of them.
+        // exact bytes is eligible. Nothing but a sequence-stage verdict is ever
+        // cached, so the gate's stages 1-3 authenticated the grant section it
+        // carries; re-assembling here would run none of them.
         let Some(candidate) = self
             .assembled
             .borrow_mut()
@@ -232,16 +235,36 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
         else {
             return Ok(None);
         };
-        let env = &candidate.envelope;
         // Stages 4/5 did NOT run: `floor::check` returns `SequenceNotNewer`
-        // before it reads the epoch floor. Re-impose what they would have —
-        // scope binding and the read-epoch floor — or a forgery-window writer
-        // re-serving a pre-rotation section at the floor would hand back the
-        // revoked epoch's read seed.
-        let epoch_floor = floor::read_epoch_floor(self.floors, &self.root_scope_id)
-            .await?
-            .unwrap_or(0);
-        if env.scope != self.root_scope_id || env.epoch < epoch_floor {
+        // before it reads the epoch floor. Re-impose both here rather than
+        // trusting the caller's reading of the rejection — `AtFloor` admits only
+        // the exact sequence floor, so a replay below it recovers nothing, and
+        // the read-epoch floor still bars a forgery-window writer re-serving a
+        // pre-rotation section at the floor.
+        let Ok(sequence) = IpnsRecord::unmarshal(&candidate.record_bytes)
+            .and_then(|record| record.verify(name))
+            .map(|verified| verified.sequence)
+        else {
+            return Ok(None);
+        };
+        let env = &candidate.envelope;
+        if let Err(rejected) = floor::check(
+            self.floors,
+            name.as_str().as_bytes(),
+            &self.root_scope_id,
+            sequence,
+            env.epoch,
+            floor::Strictness::AtFloor,
+        )
+        .await
+        {
+            return match rejected {
+                GateError::Seam(seam) => Err(seam),
+                GateError::Rejected(_) => Ok(None),
+            };
+        }
+        // Stage 6's reader-scope binding, which did not run either.
+        if env.scope != self.root_scope_id {
             return Ok(None);
         }
         let Ok(read_scope_seed) =
@@ -267,7 +290,8 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
             },
         };
         Ok(Some(RecoveredScopeRoot {
-            candidate,
+            envelope: candidate.envelope,
+            grant_section: candidate.grant_section,
             read_body,
             read_scope_seed,
             write_scope_seed,
@@ -324,8 +348,20 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
             Ok(pass) => pass,
             Err(err) => {
                 // Keep the candidate for the equal-floor recovery path — it
-                // re-resolves the same head CID otherwise.
-                *self.assembled.borrow_mut() = Some(candidate);
+                // re-resolves the same head CID otherwise. Only a sequence-stage
+                // verdict is kept: that is the one rejection reached with stages
+                // 1-3 already passed, and the recovery reads seeds straight out
+                // of the grant section those stages authenticate. Caching a
+                // stage-1/2/3 rejection would let a forged section reach it.
+                if matches!(
+                    err,
+                    GateError::Rejected(GateRejection {
+                        stage: GateStage::Sequence,
+                        ..
+                    })
+                ) {
+                    *self.assembled.borrow_mut() = Some(candidate);
+                }
                 return Err(err);
             }
         };
@@ -954,6 +990,60 @@ mod tests {
             .expect("recovery is fail-open, never an error")
             .expect("our own current root recovers");
         assert_eq!(recovered.read_body, adopted);
+    }
+
+    /// The recovery enforces its own equal-floor precondition rather than
+    /// trusting the caller's reading of the rejection: a record strictly below
+    /// the sequence floor is a replay and recovers no seed.
+    #[test]
+    fn equal_floor_recovery_refuses_a_record_below_the_sequence_floor() {
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        block_on(floors.raise_sequence_floor(fx.name.as_str().as_bytes(), 9)).unwrap();
+        let gw = gateway();
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+
+        let record = fx.record(1);
+        assert!(block_on(adopter.adopt(&fx.name, &record)).is_err());
+        assert!(
+            block_on(adopter.recover_own_scope_root(&fx.name, &record))
+                .expect("fail-open")
+                .is_none(),
+            "a replay below the floor is not our own current record",
+        );
+    }
+
+    /// The candidate cache is the recovery's whole claim to stages 1-3, so only
+    /// a sequence-stage verdict may populate it. A record rejected earlier — here
+    /// an unrecognised owner identity, gate stage 2 — must leave nothing behind,
+    /// or a forged grant section would reach the seed recovery unauthenticated.
+    #[test]
+    fn a_pre_floor_rejection_caches_no_candidate_for_the_recovery() {
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        let gw = gateway();
+        let impostor = EcdsaSigner::from_scalar(&[0x22; 32])
+            .expect("valid scalar")
+            .verifying_key();
+        let adopter = fx.adopter(&http, &floors, &impostor, &gw);
+
+        let record = fx.record(1);
+        match block_on(adopter.adopt(&fx.name, &record)) {
+            Err(GateError::Rejected(r)) => assert_eq!(r.stage, GateStage::CommitmentVerify),
+            other => panic!("expected a commitment rejection, got {:?}", other.is_ok()),
+        }
+        assert!(
+            block_on(adopter.recover_own_scope_root(&fx.name, &record))
+                .expect("fail-open")
+                .is_none(),
+            "a candidate that never cleared the commitment stage is not recoverable",
+        );
     }
 
     #[test]

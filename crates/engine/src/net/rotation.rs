@@ -35,7 +35,7 @@ use super::record_publish::{HeadBinding, RecordPublishRequest, preflight, publis
 use crate::api::ApiClient;
 use crate::content::Gateway;
 use crate::entropy::Entropy;
-use crate::gate::{GateError, GateRejection, RejectionReason, floor};
+use crate::gate::{GateError, RejectionReason, floor};
 use crate::net::fanout_get_verify;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
@@ -179,8 +179,14 @@ struct Ancestry {
 }
 
 impl RotationAncestry {
-    /// Seed the walk at the rotating root: its own override seed, plus the
-    /// parent edge for each entry of its caller-held direct-child-scope index.
+    /// Seed the walk at the rotating root: the override seed its descendants'
+    /// **published** records sealed their ascent links under, plus the parent
+    /// edge for each entry of its caller-held direct-child-scope index.
+    ///
+    /// After the root's own cut has landed that is the root's **pre-cut** seed,
+    /// not the plan's current one — a descendant that never republished still
+    /// carries the previous derivation, and gating it under the post-cut seed
+    /// fails closed at the ascent link.
     pub fn rooted_at(
         scope_id: [u8; 16],
         override_seed: &[u8; SECRET_LEN],
@@ -338,24 +344,23 @@ fn nonce<E: Entropy>(entropy: &RefCell<E>) -> Result<[u8; 24], ScopeRootPublishE
     Ok(nonce)
 }
 
-/// The rejection arm of a rotation's gated read, resolved at the durable
+/// The rejection arm of a rotation's gated read, recovered at the durable
 /// sequence floor.
 ///
 /// Adopting a scope root raises that name's sequence floor, so re-reading the
-/// **unchanged** record rejects as not-newer. The rotation reads in order to
-/// re-key, and a pass that aborts before publishing must be able to read again —
-/// otherwise one transient failure leaves the scope permanently unrotatable and
-/// the revoke can never complete. Only the exact floor recovers, through the
-/// adopter's equal-floor path; a strictly lower sequence stays a replay and
-/// every other rejection stays a fail-closed trust violation (rule 6).
+/// **unchanged** record rejects as not-newer — and a rotation reads in order to
+/// re-key, so a pass that aborts before publishing must be able to read again or
+/// the revoke can never complete. Only the exact floor recovers; a strictly
+/// lower sequence is a replay, and every other rejection stays a fail-closed
+/// trust violation (rule 6).
 async fn reread_at_floor<H: Http, F: FloorStore>(
     adopter: &RootAdopter<'_, H, F>,
     name: &IpnsName,
     record_bytes: &[u8],
-    rejection: &GateRejection,
+    reason: &RejectionReason,
 ) -> Result<GatedScopeRoot, ResolveFailure> {
     if !matches!(
-        rejection.reason,
+        reason,
         RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor
     ) {
         return Err(ResolveFailure::Rejected);
@@ -364,12 +369,11 @@ async fn reread_at_floor<H: Http, F: FloorStore>(
         .recover_own_scope_root(name, record_bytes)
         .await
         .map_err(|_| ResolveFailure::Unavailable)?
-        // The recovery is fail-open by contract; for the rotation an unproved
-        // record is the gate's original verdict, never an availability stall.
+        // The recovery is fail-open; the rotation keeps the gate's own verdict.
         .ok_or(ResolveFailure::Rejected)?;
     Ok(GatedScopeRoot {
-        envelope: recovered.candidate.envelope,
-        section: recovered.candidate.grant_section,
+        envelope: recovered.envelope,
+        section: recovered.grant_section,
         read_body: recovered.read_body,
         read_scope_seed: recovered.read_scope_seed,
         write_scope_seed: recovered.write_scope_seed,
@@ -385,9 +389,8 @@ where
     /// under `scope_id` — the caller's own trusted label, imposed on the gate so
     /// a record claiming another scope is a transplant it rejects
     /// ([`ChildIndexResolver::direct_child_index`]'s binding obligation).
-    ///
-    /// Idempotent: a record already at this name's sequence floor re-reads
-    /// through [`reread_at_floor`] rather than rejecting.
+    /// Idempotent: a record at this name's own sequence floor recovers through
+    /// [`reread_at_floor`].
     async fn gated_root(
         &self,
         scope_id: [u8; 16],
@@ -417,7 +420,7 @@ where
             }),
             Err(GateError::Seam(_)) => Err(ResolveFailure::Unavailable),
             Err(GateError::Rejected(rejection)) => {
-                reread_at_floor(&adopter, name, &record_bytes, &rejection).await
+                reread_at_floor(&adopter, name, &record_bytes, &rejection.reason).await
             }
         }
     }
@@ -495,8 +498,8 @@ where
     ///   owner-write-blob's AAD binds — below it the root publishes write-plane
     ///   dead, and floors are monotonic, so it can never be rotated back.
     ///
-    /// Runs **after** this pass's gated read of the scope root, whose adoption
-    /// advances the read-epoch floor: measured before it, the floor comparison
+    /// Runs **after** this pass's gated read of the scope root, which may itself
+    /// advance the read-epoch floor: measured before it, the floor comparison
     /// would miss a cut minted below the epoch that read just adopted.
     async fn check_publishable(
         &self,
@@ -931,13 +934,23 @@ mod tests {
         }
 
         /// The wiring rooted at the vault root, whose own record carries no
-        /// ascent link — the ancestry the walk extends from.
-        fn net(&self, root_child_index: &[ChildScopeRef]) -> Net<'_, T> {
+        /// ascent link — the ancestry the walk extends from. `ascent_seed` is
+        /// the seed the descendants' **published** records sealed their ascent
+        /// links under ([`RotationAncestry::rooted_at`]).
+        fn net_under(
+            &self,
+            ascent_seed: &[u8; 32],
+            root_child_index: &[ChildScopeRef],
+        ) -> Net<'_, T> {
             self.net_rooted(RotationAncestry::rooted_at(
                 SCOPE,
-                &OWNER_ROOT_SCOPE_SEED,
+                ascent_seed,
                 root_child_index,
             ))
+        }
+
+        fn net(&self, root_child_index: &[ChildScopeRef]) -> Net<'_, T> {
+            self.net_under(&OWNER_ROOT_SCOPE_SEED, root_child_index)
         }
 
         fn net_rooted(&self, ancestry: RotationAncestry) -> Net<'_, T> {
@@ -1746,6 +1759,57 @@ mod tests {
         assert!(ct_eq(&again.write_scope_seed, &first.write_scope_seed));
     }
 
+    /// The equal-floor re-read is no way around the ascent link: a reader that
+    /// cannot place the descendant under its parent stays rejected even once the
+    /// record sits at its own sequence floor. The gate reaches the ascent link
+    /// (stage 3) before the sequence floor (stage 4), so the re-read never sees
+    /// a `SequenceNotNewer` verdict to recover from.
+    #[test]
+    fn a_scope_root_at_the_floor_off_the_ancestry_is_still_rejected() {
+        let (_, child, child_ref) = owner_tree();
+        let harness = Harness::plain();
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        let index = vec![child_ref.clone()];
+
+        block_on(harness.net(&index).resolve(&child_ref)).expect("the first read raises the floor");
+        assert_eq!(
+            block_on(
+                harness
+                    .net_rooted(RotationAncestry::default())
+                    .resolve(&child_ref)
+            )
+            .err(),
+            Some(ResolveFailure::Rejected),
+        );
+    }
+
+    /// The ancestry seed is what the descendants' **published** ascent links
+    /// were sealed under, never the rotating root's post-cut seed — the trap a
+    /// retry that reused the plan's own `current_override_seed` would fall into,
+    /// which would fail closed at the gate and strand the descendant again.
+    #[test]
+    fn a_descendant_gated_under_the_post_cut_root_seed_is_rejected() {
+        let (_, child, child_ref) = owner_tree();
+        let harness = Harness::plain();
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        let index = vec![child_ref.clone()];
+
+        assert_eq!(
+            block_on(harness.net_under(&[0xab; 32], &index).resolve(&child_ref)).err(),
+            Some(ResolveFailure::Rejected),
+            "a post-cut root seed derives the wrong ascent authority",
+        );
+        assert!(
+            block_on(
+                harness
+                    .net_under(&OWNER_ROOT_SCOPE_SEED, &index)
+                    .resolve(&child_ref)
+            )
+            .is_ok(),
+            "the seed its published ascent link was sealed under still gates it",
+        );
+    }
+
     /// A record strictly **below** the durable sequence floor is a replay, not
     /// our own current record: the equal-floor re-read must not launder it into
     /// a rotatable target.
@@ -1863,10 +1927,16 @@ mod tests {
     /// publisher, rooted at `SCOPE`. The plan re-seals the root the harness
     /// staged, so its committed set and signer come off that fixture rather than
     /// being rebuilt beside it.
+    ///
+    /// `override_seed` is the root's own current seed the plan re-keys from;
+    /// `ascent_seed` is what the descendants' published ascent links were sealed
+    /// under. They diverge on a retry after the root's cut already landed — see
+    /// [`RotationAncestry::rooted_at`].
     fn cascade_pass<T>(
         harness: &Harness<T>,
         root: &OwnerRootFixture,
         override_seed: &[u8; 32],
+        ascent_seed: &[u8; 32],
         read_epoch: u64,
         index: &[ChildScopeRef],
         entropy_seed: u64,
@@ -1878,7 +1948,7 @@ mod tests {
         let owner_enc_pub = owner_enc().public();
         let pointer_read_key = OwnerSeeds.pointer_read_key(&SCOPE);
         let mut entropy = SeededEntropy::new(entropy_seed);
-        let net = harness.net(index);
+        let net = harness.net_under(ascent_seed, index);
         block_on(cascade_rotate_scope(
             &mut entropy,
             &harness.floors,
@@ -1927,6 +1997,7 @@ mod tests {
         let outcome = cascade_pass(
             &harness,
             &root,
+            &OWNER_ROOT_SCOPE_SEED,
             &OWNER_ROOT_SCOPE_SEED,
             OWNER_ROOT_EPOCH,
             &index,
@@ -2008,6 +2079,7 @@ mod tests {
             &harness,
             &root,
             &OWNER_ROOT_SCOPE_SEED,
+            &OWNER_ROOT_SCOPE_SEED,
             OWNER_ROOT_EPOCH,
             &index,
             41,
@@ -2021,12 +2093,15 @@ mod tests {
 
         // The retry rebuilds the plan from current state, as the module contract
         // requires: the root already advanced to its own fresh seed and epoch.
+        // The ancestry stays on the PRE-cut seed — the descendant never
+        // republished, so its ascent link still carries that derivation.
         *refusing.lock().expect("lock") = false;
         let root_fresh = published_override_seed(&harness, &root.name, SCOPE, OWNER_ROOT_EPOCH + 1);
         let outcome = cascade_pass(
             &harness,
             &root,
             &root_fresh,
+            &OWNER_ROOT_SCOPE_SEED,
             OWNER_ROOT_EPOCH + 1,
             &index,
             43,
@@ -2059,6 +2134,7 @@ mod tests {
         let outcome = cascade_pass(
             &harness,
             &root,
+            &OWNER_ROOT_SCOPE_SEED,
             &OWNER_ROOT_SCOPE_SEED,
             OWNER_ROOT_EPOCH,
             &index,
