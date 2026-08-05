@@ -42,7 +42,7 @@ pub trait RecordTransport {
     /// bounds the read at `max_bytes` while the body arrives, exactly as
     /// [`super::Http::send_capped`] does. An over-cap body is an `Err`: no
     /// record above the cap is adoptable, and fan-out treats the endpoint as
-    /// having served nothing (#949).
+    /// having served nothing.
     async fn get_record(
         &self,
         endpoint: &EndpointId,

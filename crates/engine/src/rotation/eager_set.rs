@@ -44,7 +44,7 @@
 //! [`canonicalize`](crate::grants::child_index::canonicalize) convention) and each
 //! level is canonicalized before descent, so a shared descendant reached via
 //! multiple parents is recorded once, permutation-independently — or, if those
-//! parents disagree on its `ipns_name`, the walk aborts fail-closed (C2, #746;
+//! parents disagree on its `ipns_name`, the walk aborts fail-closed (C2;
 //! [`ResolveFailure::ConflictingChildLabel`]). Replayed or multi-writer runs
 //! converge to byte-identical output.
 
@@ -69,13 +69,13 @@ pub enum ResolveFailure {
     /// availability. Retryable; not a trust verdict.
     Unavailable,
     /// The same `scope_id` was reached via two parents carrying **different**
-    /// `ipns_name` labels (C2, #746). A [`ChildScopeRef`] carries no ordering
+    /// `ipns_name` labels (C2). A [`ChildScopeRef`] carries no ordering
     /// signal, so first-seen-wins would be a coin-flip; picking the stale name in a
     /// revocation cascade re-keys a dead name and leaves the real descendant
     /// unrotated — a silent revocation hole. The walk aborts fail-closed instead.
     /// Retryable: converges once the write-rotation re-point wave repairs both
-    /// parent indexes (engine.md #38 D6). The accept-freshest alternative needs a
-    /// core schema change and is deferred to #778.
+    /// parent indexes (engine.md #38 D6). The accept-freshest alternative would
+    /// need a core schema change.
     ConflictingChildLabel,
 }
 
@@ -179,7 +179,7 @@ pub trait ChildIndexResolver {
 
 /// Bind each ref's `scope_id -> ipns_name` label into `labels`, aborting
 /// fail-closed on the C2 conflict: a `scope_id` already bound to a **different**
-/// `ipns_name` (#746). Returns the conflicting `scope_id` on abort. The root is
+/// `ipns_name`. Returns the conflicting `scope_id` on abort. The root is
 /// skipped — a back-edge to it is ignored by the walk, never a labeled
 /// descendant. Rationale for the hard abort lives on
 /// [`ResolveFailure::ConflictingChildLabel`].
@@ -472,7 +472,7 @@ mod tests {
 
     #[test]
     fn c2_conflicting_ipns_name_aborts_fail_closed_permutation_independent() {
-        // C2 (#746): root -> A(0x01), B(0x02); both parents list the same
+        // C2: root -> A(0x01), B(0x02); both parents list the same
         // descendant scope D(0x04) but carry DIFFERING ipns_name values. A
         // ChildScopeRef has no ordering signal, so first-seen would be a coin-flip
         // and picking the stale name is a silent revocation hole — the walk aborts

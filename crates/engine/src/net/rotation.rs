@@ -1,6 +1,6 @@
 //! The production rotation seams: the owner arm of the impure edges the
 //! read-plane rotation primitives run on (blueprint/engine.md "Rotation
-//! primitives", "Pointer planes"; #1014, #1029).
+//! primitives", "Pointer planes").
 //!
 //! [`crate::rotation`] is pure apart from a gated read of a descendant scope
 //! root's own write-body index ([`ChildIndexResolver`]), the same read widened
@@ -62,7 +62,7 @@ pub struct OwnerRotationKeys<'a> {
 /// must not be handed the seeds they come from either: `ownerPointerSeed` also
 /// derives the scope-pointer **signing** key, and the root secret is the owner's
 /// master material. This narrows the rotation to exactly the two edges it uses
-/// (`store the narrowest derived capability`, #789).
+/// (store the narrowest derived capability).
 pub trait OwnerScopeKeys {
     /// `pseudonym-sign` for this scope — the signer every re-sealed structure
     /// is detach-signed under, and which the record's commitment must name.
@@ -1440,7 +1440,7 @@ mod tests {
         );
     }
 
-    // --- The cascade's re-seal resolver (#1029) ---
+    // --- The cascade's re-seal resolver ---
 
     /// Author a scope root exactly as the owner itself would — section re-sealed
     /// under the pseudonym `OWNER_ROOT_SECRET` derives for this scope, so a

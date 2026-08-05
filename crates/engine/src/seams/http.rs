@@ -12,8 +12,8 @@ pub enum CappedFetchError {
     Transport(SeamError),
     /// The response body would exceed `max_bytes`, rejected at the transport
     /// before the whole body is buffered so a lying/huge gateway cannot force an
-    /// unbounded allocation (the peak-memory bound of #787). Fail-closed and
-    /// terminal: an over-cap block is never adoptable from any source.
+    /// unbounded allocation. Fail-closed and terminal: an over-cap block is
+    /// never adoptable from any source.
     BodyTooLarge {
         /// The observed lower bound on the body size — the declared
         /// `Content-Length` if that alone exceeded the cap, else the bytes
@@ -71,7 +71,7 @@ pub enum HttpMethod {
 /// reads need no authority (`content::read` attaches an explicit
 /// `Authorization` bearer where one is configured), and sending credentials to
 /// an arbitrary gateway lets it set a `SameSite=None` cookie and correlate
-/// every subsequent leaf fetch (#949; blueprint/web-client.md seam table).
+/// every subsequent leaf fetch (blueprint/web-client.md seam table).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HttpCredentials {
     /// Send no ambient credentials.
@@ -102,7 +102,7 @@ pub struct HttpRequest {
     ///
     /// Per request class, not global: a nonce fetch and a 1 MiB block read do
     /// not share a deadline. `None` leaves the bound to the host transport's
-    /// own policy — a request that must never hang a UI flow sets one (#939).
+    /// own policy — a request that must never hang a UI flow sets one.
     pub timeout_ms: Option<u64>,
 }
 
@@ -174,7 +174,7 @@ pub trait Http {
     /// body would pass the cap. The body is never accumulated past `max_bytes`;
     /// the transport hands over whole chunks, so peak memory is `max_bytes` —
     /// twice that on the arm that concatenates the chunks at the end — plus at
-    /// most the one chunk that tripped the cap (#641, #787).
+    /// most the one chunk that tripped the cap.
     ///
     /// The default implementation only backstops: it buffers the whole body via
     /// [`send`](Self::send) and then checks the length, which bounds nothing. It

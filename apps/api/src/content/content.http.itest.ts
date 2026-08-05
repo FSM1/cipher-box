@@ -20,7 +20,7 @@ import { ContentService } from './content.service';
 import { QUOTA_EXCEEDED, UPLOAD_TOO_LARGE } from './upload-error-codes';
 
 /**
- * The hosted-upload HTTP surface re-homed onto a REAL Postgres (#725): the raw
+ * The hosted-upload HTTP surface re-homed onto a REAL Postgres: the raw
  * octet-stream body buffered to a Buffer, the empty-body/auth pipes, the real
  * quota/pin-fault faults mapping to their statuses, and the absolute size cap +
  * its pre-buffer auth gate. The upload runs the REAL ContentService against real

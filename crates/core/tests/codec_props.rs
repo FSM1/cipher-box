@@ -91,7 +91,7 @@ fn build_map_and_flags(entries: &FlaggedEntries) -> (Map, HashMap<String, bool>)
     (map, flags)
 }
 
-/// The wipe is terminal across the crate boundary too (#936): once a caller has
+/// The wipe is terminal across the crate boundary too: once a caller has
 /// scrubbed the fields it decoded, the public encoder refuses to emit from them
 /// rather than publishing a record whose values silently came back empty.
 #[test]
@@ -109,7 +109,7 @@ fn the_public_encoder_refuses_a_wiped_map() {
     assert_eq!(encode(&Value::Map(m)).unwrap_err().check(), "wiped-map");
 }
 
-/// The wipe seam from outside `crates/core` (#902): a caller holding the known
+/// The wipe seam from outside `crates/core`: a caller holding the known
 /// fields `decode_map_partial` split out is their terminal owner and can scrub
 /// them, in the buffer that held the secret rather than a fresh one.
 #[test]

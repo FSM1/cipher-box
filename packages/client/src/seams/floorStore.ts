@@ -29,7 +29,7 @@ export class IdbFloorStore implements FloorStoreSeam {
   private async floor(store: string, key: Uint8Array): Promise<number | null> {
     // Hex the key before the first await: `key` may be a view into WASM linear
     // memory that a concurrent `Memory.grow()` detaches across the await, and a
-    // floor read under the wrong key answers "no floor" (#717, #730).
+    // floor read under the wrong key answers "no floor".
     const floorKey = toHex(key);
     const db = await this.open();
     const tx = db.transaction(store, 'readonly');
@@ -44,7 +44,7 @@ export class IdbFloorStore implements FloorStoreSeam {
         `FloorStore: floor value must be a non-negative safe integer, got ${value}`
       );
     }
-    // Hex the key before the first await, as in `floor` (#717, #730).
+    // Hex the key before the first await, as in `floor`.
     const hexKey = toHex(key);
     const db = await this.open();
     const tx = db.transaction(store, 'readwrite');

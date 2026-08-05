@@ -43,11 +43,10 @@ pub trait Adopter {
 
     /// Recover the OWNER's own scope material for an equal-floor `Current` own
     /// record: the read seed the child pipeline and the drain seal under, and
-    /// the write seed the liveness loop renews with (#752 F3). `Ok(None)` when
-    /// the record is not our own or its owner blob will not open. Fail-OPEN:
-    /// returns a [`SeamError`], never a `Rejected` verdict (a `Current` must
-    /// never harden into a trust error). The default suits every non-owner
-    /// adopter stub.
+    /// the write seed the liveness loop renews with. `Ok(None)` when the record
+    /// is not our own or its owner blob will not open. Fail-OPEN: returns a
+    /// [`SeamError`], never a `Rejected` verdict (a `Current` must never harden
+    /// into a trust error). The default suits every non-owner adopter stub.
     async fn recover_own_scope_material(
         &self,
         _name: &IpnsName,
@@ -219,10 +218,9 @@ where
                     RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor => {
                         // Our own current root at exactly the floor: recover the
                         // owner's own scope seeds (fail-open) so the liveness loop
-                        // can hold+renew it before its EOL lapses (#752 F3) and the
-                        // write plane keeps the keys it seals under across a
-                        // session that adopts nothing. A non-owner record yields
-                        // neither.
+                        // can hold+renew it before its EOL lapses and the write
+                        // plane keeps the keys it seals under across a session
+                        // that adopts nothing. A non-owner record yields neither.
                         let material = adopter.recover_own_scope_material(name, &bytes).await?;
                         let (hold, read_scope_seed) = match material {
                             Some(material) => (
@@ -360,7 +358,7 @@ where
         }
         let mut held = held.borrow_mut();
         // The drain is the only source of a head's held content CIDs, so a
-        // re-hold carries the set forward rather than wiping it (#1041).
+        // re-hold carries the set forward rather than wiping it.
         let content_cids = held
             .remove(&node_id)
             .filter(|prior| prior.head_cid == head_cid)
@@ -434,8 +432,8 @@ mod tests {
         /// on an `Accept` — `None` models a read-only/own-scope adopt.
         grant: Option<([u8; 32], [u8; 16])>,
         /// The (node id, write scope seed) the owner recovers for its own
-        /// equal-floor `Current` record (#752 F3) — `None` models a non-owner
-        /// record with no recoverable seed (held keyless).
+        /// equal-floor `Current` record — `None` models a non-owner record with
+        /// no recoverable seed (held keyless).
         own_seed: Option<([u8; 16], [u8; 32])>,
     }
 
@@ -573,7 +571,7 @@ mod tests {
     }
 
     /// The drain registers a head's content CIDs; a re-hold of that same head
-    /// must carry them, and a re-hold under a different head must not (#1041).
+    /// must carry them, and a re-hold under a different head must not.
     #[test]
     fn a_re_hold_carries_the_content_cids_held_for_the_same_head() {
         let world = FakeWorld::new();
@@ -819,7 +817,7 @@ mod tests {
         }
 
         // Equal-floor Current, but no recoverable owner write seed and no caller
-        // material seed: the record is never force-held (#752 F3 least-privilege).
+        // material seed: the record is never force-held (least privilege).
         let held: RefCell<HeldRecords> = RefCell::new(HeldRecords::new());
         let material = HeldMaterial {
             node_id: [0u8; 16],

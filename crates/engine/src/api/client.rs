@@ -27,7 +27,7 @@ use super::types::{
 use crate::content::DAG_ROOT_CODEC;
 use crate::seams::{CredentialStore, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse};
 
-/// Control-plane deadline: small JSON round trips must not park a UI flow (#939).
+/// Control-plane deadline: small JSON round trips must not park a UI flow.
 const CONTROL_TIMEOUT_MS: u64 = 10_000;
 /// Upload deadline: a content block legitimately moves megabytes on a slow
 /// uplink, so it cannot share the control-plane bound.

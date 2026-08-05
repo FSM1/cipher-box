@@ -234,7 +234,7 @@ export class RegistryService {
     // this unpin a concurrent upload can re-pin the same CID under the upload
     // path's `pin-durability:` session lock, commit a row, and return success —
     // an unguarded unpin here would then delete freshly-pinned, durably-held
-    // bytes (#714). Re-serialize on that SAME session key and recount under it:
+    // bytes. Re-serialize on that SAME session key and recount under it:
     // if a survivor row now exists the bytes are legitimately held, so skip.
     //
     // The destructive work — the row deletes — is already committed, so `retired`
@@ -242,7 +242,7 @@ export class RegistryService {
     // contract: a failed unpin never fails a retire; the CID decays via GC), so a
     // per-CID durability lock that is contended here — almost always a concurrent
     // upload re-pinning that same CID — leaves the CID pinned and moves on,
-    // rather than discarding the committed result behind a misleading 503 (#723).
+    // rather than discarding the committed result behind a misleading 503.
     let unpinned = 0;
     for (const cid of unpinCids) {
       try {
@@ -277,7 +277,7 @@ export class RegistryService {
   /**
    * The per-account quota (blueprint/api.md). `usedBytes` is the GATED sum the
    * upload gate itself enforces, so a client pre-flight and a server refusal
-   * read one number by construction (#843); `pinnedBytes` is the all-rows sum,
+   * read one number by construction; `pinnedBytes` is the all-rows sum,
    * informational only. `limitBytes` is the per-account override, else the env
    * default. A BYO account's rows are advisory (`advisory: true`, quota always
    * allows) — the bytes live on the user's own provider.
@@ -289,7 +289,7 @@ export class RegistryService {
     }
 
     // Compute in BigInt (exact above 2^53) and narrow to the wire number at the
-    // edge; the DTO is a JSON number, but the gate math never rounds (#677).
+    // edge; the DTO is a JSON number, but the gate math never rounds.
     const sums = await quotaSums(this.pinRepository, accountId);
     const limit = resolveLimitBytes(user.quotaLimitOverride, this.defaultLimitBytes);
 

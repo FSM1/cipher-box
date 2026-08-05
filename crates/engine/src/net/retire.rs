@@ -60,7 +60,7 @@ impl OrphanHeads {
 /// Whether a failed publish left its head block charged and unreachable: the
 /// upload landed under its own pin row, no record naming it reached the
 /// transport, and the retry re-authors under a fresh seal nonce
-/// (blueprint/engine.md "Resolve/publish pipeline: Retirement", #921).
+/// (blueprint/engine.md "Resolve/publish pipeline: Retirement").
 #[must_use]
 pub fn orphaned_head(error: &RecordPublishError) -> bool {
     match error {
@@ -79,8 +79,7 @@ pub fn orphaned_head(error: &RecordPublishError) -> bool {
             // Nothing was ever addressed, so there is no CID to retire.
             PublishError::EmptyHeadCid => false,
             // No ack is not proof nothing stored: unpinning a head a live
-            // record may still name is loss, where the row is only a leak
-            // (#916).
+            // record may still name is loss, where the row is only a leak.
             PublishError::AllEndpointsFailed => false,
         },
     }

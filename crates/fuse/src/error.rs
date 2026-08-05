@@ -180,7 +180,7 @@ mod tests {
     }
 
     /// A full device and a full account are different errnos to the user, so
-    /// the cause has to survive the crossing (#867).
+    /// the cause has to survive the crossing.
     #[test]
     fn each_budget_keeps_its_own_cause() {
         for cause in [

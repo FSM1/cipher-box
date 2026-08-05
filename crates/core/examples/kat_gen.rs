@@ -276,7 +276,7 @@ struct OpRecordSection {
     struct_tag: u8,
     v: u64,
     /// RFC 9180 mode: auth, so a record's author is authenticated and not only
-    /// its recipient (#879).
+    /// its recipient.
     hpke_mode: u8,
     hpke_info: String,
     accept: FileCount,
@@ -362,7 +362,7 @@ struct ContentKeyRejectVector {
 }
 
 // --- Content section: the content-seal primitive over caller-framed chunks and
-// --- the content-DAG CID compute/verify codec (ticket #691).
+// --- the content-DAG CID compute/verify codec.
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -436,7 +436,7 @@ struct ContentCidRejectVector {
 }
 
 // --- Grant section: write-body, grant/owner blobs, ascent + history links,
-// --- structure signatures, and the grant-set commitment (ticket #621).
+// --- structure signatures, and the grant-set commitment.
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -687,7 +687,7 @@ struct EnvelopeAcceptVector {
     read_body: String,
 }
 
-// --- IPNS records + name codec (ticket #622) --------------------------------
+// --- IPNS records + name codec ----------------------------------------------
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -747,7 +747,7 @@ struct RecordReputVector {
     record: String,
 }
 
-// --- Pointer + mailbox payloads (ticket #622) -------------------------------
+// --- Pointer + mailbox payloads ---------------------------------------------
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1648,7 +1648,7 @@ fn reject_specs() -> Vec<(&'static str, String, &'static str, &'static str)> {
             "depth-exceeded",
             "malformed",
         ),
-        // --- crypto-review additions (PR #659 security review) ----------
+        // --- crypto-review additions ------------------------------------
         // f8 ff — two-byte simple value 255: well-formed CBOR (arg >= 32,
         // unassigned) yet profile-forbidden; f8 14 pins the ill-formed half.
         (
@@ -2203,9 +2203,8 @@ fn build_manifest(m: ManifestInputs) -> Manifest {
     }
 }
 
-/// The content-section manifest metadata (ticket #691): the frozen CIDv1
-/// codec/multihash bytes and the generated content-seal + content-CID counts and
-/// reject checks.
+/// The content-section manifest metadata: the frozen CIDv1 codec/multihash
+/// bytes and the generated content-seal + content-CID counts and reject checks.
 fn build_content_section(m: &ManifestInputs) -> ContentSection {
     let file = |name: &str, len: usize| FileCount {
         file: format!("vectors/content/{name}.json"),
@@ -2383,9 +2382,9 @@ fn seal_probe() -> SealProbe {
 }
 
 // ---------------------------------------------------------------------------
-// Content plane: the content-seal primitive and the content-DAG CID codec
-// (ticket #691). The content key is fixed; nonces vary per chunk (nonce reuse
-// under one key is a break), so the vectors model correct per-chunk nonces.
+// Content plane: the content-seal primitive and the content-DAG CID codec. The
+// content key is fixed; nonces vary per chunk (nonce reuse under one key is a
+// break), so the vectors model correct per-chunk nonces.
 // ---------------------------------------------------------------------------
 
 /// The frozen content key for the content KATs (random per version in
@@ -2513,8 +2512,8 @@ fn build_content_seal_reject() -> Vec<ContentSealRejectVector> {
 
 fn build_content_cid() -> Vec<ContentCidVector> {
     let key = content_key();
-    // dag-cbor multicodec (0x71): a non-raw DAG-root codec, engine-owned (#630,
-    // engine.md:497), pins the codec parameterization. `verify_cid` keys off the
+    // dag-cbor multicodec (0x71): a non-raw DAG-root codec, engine-owned
+    // (engine.md:497), pins the codec parameterization. `verify_cid` keys off the
     // claimed CID's own codec, so the version `contentCid` root verifies too.
     const DAG_CBOR_CODEC: u8 = 0x71;
     // (name, codec, bytes) → deterministic CIDv1. Three raw leaves (a real
@@ -3410,7 +3409,7 @@ fn build_hpke_seal() -> Vec<HpkeSealVector> {
 type HpkeOpenRejectCase = (&'static str, [u8; 32], Vec<u8>, &'static [u8], &'static str);
 
 /// An RFC 7748 order-8 X25519 u-coordinate: a low-order point that forces an
-/// all-zero ECDH, so a grant blob sealed to it would be world-readable (#708).
+/// all-zero ECDH, so a grant blob sealed to it would be world-readable.
 const LOW_ORDER_X25519: [u8; 32] = [
     0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4, 0x6a,
     0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49, 0xb8, 0x00,
@@ -3526,7 +3525,7 @@ fn build_contact_accept() -> Vec<ContactAcceptVector> {
 
 /// The 65-byte uncompressed SEC1 encoding of a compressed secp256k1 key: a
 /// byte-distinct re-encoding of the same point that the frozen 33-byte identity
-/// width must reject (issue #709).
+/// width must reject.
 fn uncompressed_sec1(compressed: &[u8]) -> Vec<u8> {
     use k256::elliptic_curve::sec1::ToEncodedPoint;
     let pk = k256::PublicKey::from_sec1_bytes(compressed).expect("valid compressed key");
@@ -3671,10 +3670,10 @@ fn build_contact_reject() -> Vec<RejectVector> {
 }
 
 // ===========================================================================
-// IPNS records + name codec (ticket #622). Accept vectors come from the live
-// codec/signer; reject and re-PUT vectors are hand-built protobuf so the frozen
-// wire structure is pinned independently. Every vector self-checks against the
-// live IPNS module before it is written.
+// IPNS records + name codec. Accept vectors come from the live codec/signer;
+// reject and re-PUT vectors are hand-built protobuf so the frozen wire
+// structure is pinned independently. Every vector self-checks against the live
+// IPNS module before it is written.
 // ===========================================================================
 
 /// The `signatureV2` domain prefix, mirrored here so the generator builds the
@@ -4042,9 +4041,9 @@ fn build_ipns_record_reput() -> Vec<RecordReputVector> {
 }
 
 // ===========================================================================
-// Pointer + mailbox payloads (ticket #622). Accept vectors freeze the sealed
-// bytes under fixed keys/nonces/ephemerals; reject vectors pin the fail-closed
-// checks. Each self-checks against the live payload module.
+// Pointer + mailbox payloads. Accept vectors freeze the sealed bytes under
+// fixed keys/nonces/ephemerals; reject vectors pin the fail-closed checks.
+// Each self-checks against the live payload module.
 // ===========================================================================
 
 fn build_pointer_accept() -> Vec<PointerAcceptVector> {
@@ -4303,7 +4302,7 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
     // re-encoding of the sender key: the frozen 33-byte identity width rejects it
     // as identity-signature-invalid, and — because sig_preimage hashes the raw
     // sender key — an uncompressed re-encode is byte-distinct from the authentic
-    // block, so admitting it would forge a distinct signed preimage (issue #709).
+    // block, so admitting it would forge a distinct signed preimage.
     let uncompressed_eph = [0x57u8; 32];
     let mut uncompressed_inner = Map::new();
     uncompressed_inner.insert("payload", Value::Bytes(b"uncompressed".to_vec()));
@@ -4328,8 +4327,8 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
     uncompressed_block_map.insert("enc", Value::Bytes(sealed_uncompressed.enc.to_vec()));
     let uncompressed_block = encode(&Value::Map(uncompressed_block_map)).unwrap();
 
-    // Cross-recipient relay lift (#712): R1 opens an item sealed to it and
-    // re-seals the untouched inner — sender signature included — to R2. Recipient
+    // Cross-recipient relay lift: R1 opens an item sealed to it and re-seals
+    // the untouched inner — sender signature included — to R2. Recipient
     // binding in the signature preimage makes R2's identity check fail.
     let r2_scalar = [0x42u8; 32];
     let r2 = X25519Secret::from_scalar(r2_scalar);
@@ -4420,12 +4419,12 @@ fn build_mailbox_reject() -> Vec<MailboxRejectVector> {
 }
 
 // ===========================================================================
-// Grant section (ticket #621): the write-body, the grant/owner blobs, the
-// ascent + history links, the structure signatures, and the grant-set
-// commitment. Every vector self-checks against the live code before it is
-// written, and the fixed keys/scalars/nonces make each seal byte-reproducible
-// (the eciesjs lesson, applied per structure; production sources a fresh
-// per-seal ephemeral/nonce from the entropy seam — see the seal-layer docs).
+// Grant section: the write-body, the grant/owner blobs, the ascent + history
+// links, the structure signatures, and the grant-set commitment. Every vector
+// self-checks against the live code before it is written, and the fixed
+// keys/scalars/nonces make each seal byte-reproducible (the eciesjs lesson,
+// applied per structure; production sources a fresh per-seal ephemeral/nonce
+// from the entropy seam — see the seal-layer docs).
 // ===========================================================================
 
 /// The whole grant-family vector inventory, returned by [`build_grant_vectors`].

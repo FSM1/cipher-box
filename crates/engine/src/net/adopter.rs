@@ -10,11 +10,11 @@
 //! logic: it only assembles inputs; every trust decision (commitment, structure
 //! signatures, seed cross-checks, read-body unseal, floor law) stays in the gate.
 //!
-//! Cold-start scope (#789): read-plane assembly plus owner cold-start
-//! write-plane recovery (E8) — the owner-write-blob hands the owner the
-//! write-scope seed it cannot re-derive. The owner-seed-cache tri-way abuse
-//! cross-check is a later slice; a tampered owner blob still fails closed here at
-//! the grant-section structure signature and the read-body unseal.
+//! Cold-start scope: read-plane assembly plus owner cold-start write-plane
+//! recovery (E8) — the owner-write-blob hands the owner the write-scope seed it
+//! cannot re-derive. The owner-seed-cache tri-way abuse cross-check is a later
+//! slice; a tampered owner blob still fails closed here at the grant-section
+//! structure signature and the read-body unseal.
 
 use core::cell::RefCell;
 
@@ -182,7 +182,7 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
             return Ok(None);
         }
         // Recovery is fail-open, never a trust verdict: anything unproved yields
-        // `Ok(None)`, held keyless (#752 F3: a Current never hardens).
+        // `Ok(None)`, held keyless (a `Current` never hardens).
         //
         // Only the candidate the rejected [`Adopter::adopt`] cached for these
         // exact bytes is eligible. That candidate reached the floor stages, so
@@ -335,7 +335,7 @@ impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
     /// The AAD binds the durable, monotonic write-epoch floor — cold-seeded from
     /// the owner-vouched pointer before `resolve` runs (`sync/boot.rs`). A stale
     /// owner-write-blob authored below the floor cannot open under the newer
-    /// floor's AAD, so an older write epoch can never be replayed (#752 rollback
+    /// floor's AAD, so an older write epoch can never be replayed (rollback
     /// defense). No known write floor, an open failure, or an epoch mismatch ⇒
     /// re-authorable, held keyless — never a `Rejected` verdict, no abuse event.
     /// The gate independently authenticates this blob's structure signature at the
@@ -796,8 +796,8 @@ mod tests {
     #[test]
     fn stale_owner_write_blob_below_the_write_floor_is_ignored() {
         // Blob authored one write epoch below the durable floor: its AAD under the
-        // newer floor cannot open it (#752 rollback defense) — a stale owner-write
-        // -blob is re-authorable, not a rejection. This invariant holds in release.
+        // newer floor cannot open it (rollback defense) — a stale owner-write-blob
+        // is re-authorable, not a rejection. This invariant holds in release.
         let fx = Fixture::build(Some(OWB_WRITE_EPOCH - 1));
         let http = ScriptedHttp::default();
         http.enqueue_response(ok_response(fx.head_block.clone()));

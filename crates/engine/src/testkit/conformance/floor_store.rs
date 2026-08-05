@@ -118,10 +118,10 @@ where
     // Retry convergence: re-committing a batch (as a caller retry after an
     // interrupted commit would) is idempotent — a re-applied entry never
     // double-advances and never regresses. This is the convergence property
-    // every impl's #685 contract rests on, whether it closes the hazard by
-    // all-or-nothing rollback, by roll-forward replay, or by the ordered
-    // fail-safe fallback. `scope_b` advances so the retry has an observable:
-    // a `commit_floors` that silently applied nothing fails here.
+    // every impl's `commit_floors` contract rests on, whether it closes the
+    // hazard by all-or-nothing rollback, by roll-forward replay, or by the
+    // ordered fail-safe fallback. `scope_b` advances so the retry has an
+    // observable: a `commit_floors` that silently applied nothing fails here.
     reopened
         .commit_floors(&[
             FloorRaise::epoch(scope_a.to_vec(), 6), // still below 7 → no-op

@@ -2,7 +2,7 @@
 //! against a real NestJS API on the CI stack (blueprint/testing.md).
 //!
 //! Coverage mirrors api.md surface for surface, over the auth/token surface
-//! that exists server-side today (#624): challenge-signature login and account
+//! that exists server-side today: challenge-signature login and account
 //! identity, refresh rotation with reuse detection, test-login environment
 //! gating + deterministic keypair + cross-consistency with identity login, the
 //! production block on the test-profile auth-limit override,
@@ -70,7 +70,7 @@ async fn client_seeded_with(base: &str, refresh_token: &[u8]) -> Client {
 /// Unwrap an auth-surface call, naming the per-IP throttle explicitly on a 429.
 /// One bucket is shared by every login-shaped route, so exhausting it fails
 /// whichever test happens to log in next — which reads as an unrelated auth
-/// failure unless the diagnostic says otherwise (#837).
+/// failure unless the diagnostic says otherwise.
 fn expect_auth<T>(what: &str, result: Result<T, ApiError>) -> T {
     match result {
         Ok(value) => value,
@@ -260,7 +260,7 @@ async fn test_login_is_hard_blocked_in_production() {
 /// `THROTTLE_AUTH_LIMIT` says (`apps/api/src/ops/throttling.ts`).
 const PRODUCTION_AUTH_LIMIT: usize = 10;
 
-/// The test-profile auth-limit override is hard-blocked in production (#837):
+/// The test-profile auth-limit override is hard-blocked in production:
 /// the CI job sets `THROTTLE_AUTH_LIMIT` far above the catalog limit for BOTH
 /// instances, so the production-mode one still throttling inside a catalog
 /// window is the live evidence that no configuration widens a real rate limit.
@@ -382,7 +382,7 @@ async fn logout_revokes_the_refresh_token_server_side() {
     );
 }
 
-// --- pin/name registry and quota (blueprint/api.md; #627) -------------------
+// --- pin/name registry and quota (blueprint/api.md) -------------------------
 
 /// Register-first, fail-closed (blueprint/api.md): the register call is the one
 /// mandatory gate — content enters the inventory only through a valid
@@ -531,12 +531,12 @@ async fn fetch_block(cid: &str) -> Vec<u8> {
     response.body
 }
 
-/// Hosted ingress pins under the **caller-computed** content address (#906,
-/// blueprint/api.md Ingress). The engine addresses every block as CIDv1 base32
-/// over a BLAKE3-256 multihash — `raw` for sealed leaves, `dag-cbor` for DAG
-/// roots and record heads — and a published record's value is `/ipfs/<that
-/// CID>`. If the store pinned bytes under an address of its own choosing, every
-/// record would point at a block the accelerator does not hold.
+/// Hosted ingress pins under the **caller-computed** content address
+/// (blueprint/api.md Ingress). The engine addresses every block as CIDv1
+/// base32 over a BLAKE3-256 multihash — `raw` for sealed leaves, `dag-cbor`
+/// for DAG roots and record heads — and a published record's value is
+/// `/ipfs/<that CID>`. If the store pinned bytes under an address of its own
+/// choosing, every record would point at a block the accelerator does not hold.
 ///
 /// The proof is the gateway round-trip, not the echoed CID: the API answers
 /// with the address it was handed, so only fetching `/ipfs/<declared>` back and
@@ -626,7 +626,7 @@ async fn upload_pins_under_the_caller_computed_content_address() {
     );
 }
 
-/// Quota + hosted ingress (blueprint/api.md; #629, #701): hosted accounts are
+/// Quota + hosted ingress (blueprint/api.md): hosted accounts are
 /// authoritative (`advisory: false`) with a positive limit and gate uploads; a
 /// BYO account's quota is advisory (`advisory: true`, quota always allows) and
 /// its bytes bypass the API entirely — so hosted ingress is REFUSED for a BYO
@@ -676,7 +676,7 @@ async fn quota_is_hosted_authoritative_and_byo_advisory() {
     // Enabling BYO makes the account's quota advisory (quota always allows), but
     // hosted ingress is a hosted-only path: a BYO account's bytes belong on its
     // own provider, so the upload endpoint refuses it (409) instead of pinning
-    // to hosted Kubo off an uncounted row (#701).
+    // to hosted Kubo off an uncounted row.
     client.set_byo(true).await.expect("enable BYO");
     let byo = client.quota().await.expect("byo quota");
     assert!(byo.advisory, "a BYO account's quota is advisory");
@@ -704,14 +704,14 @@ async fn quota_is_hosted_authoritative_and_byo_advisory() {
 }
 
 /// The content write plane's residual API surface, composed the way the drain
-/// composes it (#868): a version's blocks upload one at a time, root last, then
-/// one registration names the file's `ipnsName` and every block CID under it,
-/// and an abandoned version retires the same set.
+/// composes it: a version's blocks upload one at a time, root last, then one
+/// registration names the file's `ipnsName` and every block CID under it, and
+/// an abandoned version retires the same set.
 ///
-/// This is the write path's first live coverage. It exercises the API contract
-/// the drain depends on — per-block ingress, batch registration carrying a whole
-/// block set, quota accounting over the sum, and retirement of both a name and
-/// its content — against a real API, Postgres, and Kubo.
+/// It exercises the API contract the drain depends on — per-block ingress, batch
+/// registration carrying a whole block set, quota accounting over the sum, and
+/// retirement of both a name and its content — against a real API, Postgres, and
+/// Kubo.
 #[tokio::test]
 async fn a_content_version_uploads_registers_and_retires_as_one_block_set() {
     let base = require_stack!("a_content_version_uploads_registers_and_retires_as_one_block_set");
@@ -761,7 +761,7 @@ async fn a_content_version_uploads_registers_and_retires_as_one_block_set() {
         .register(&registration)
         .await
         .expect("a version's whole block set registers in one batch");
-    // A republish re-registers the same set (the sub-EOL renewal shape, #797).
+    // A republish re-registers the same set (the sub-EOL renewal shape).
     client
         .register(&registration)
         .await
@@ -786,7 +786,7 @@ async fn a_content_version_uploads_registers_and_retires_as_one_block_set() {
 /// failed, and the `upload` calls alone are what created the accountable pin
 /// rows. Retirement therefore has to name **every** block — a root-only retire
 /// leaves the leaves charged forever against an account that can no longer
-/// reach them (#916). Hosted bytes must come back to the pre-upload figure.
+/// reach them. Hosted bytes must come back to the pre-upload figure.
 #[tokio::test]
 async fn an_abandoned_versions_whole_block_set_retires_back_to_the_pre_upload_figure() {
     let base = require_stack!(
@@ -829,7 +829,7 @@ async fn an_abandoned_versions_whole_block_set_retires_back_to_the_pre_upload_fi
 /// block does, and every publish attempt authors its own under a fresh seal
 /// nonce — so an op that retried left one charged, unreferenced head row per
 /// attempt. Retiring only the last of them leaves the rest spending the quota
-/// that refuses later uploads (#921).
+/// that refuses later uploads.
 #[tokio::test]
 async fn every_head_block_a_retrying_publish_orphaned_retires_back_to_the_pre_upload_figure() {
     let base = require_stack!(
@@ -928,7 +928,7 @@ async fn an_oversize_retire_batch_is_refused_fail_closed() {
 /// (blueprint/api.md "Batch bounds"): an oversize array is refused, never
 /// truncated, and the refusal carries the `code` the engine's failure valve
 /// dead-letters on. Register-first blocks the record PUT on this call, so a
-/// version past the cap could never publish without the chunking (#920).
+/// version past the cap could never publish without the chunking.
 #[tokio::test]
 async fn an_oversize_register_entry_is_refused_fail_closed() {
     let base = require_stack!("an_oversize_register_entry_is_refused_fail_closed");
@@ -979,7 +979,7 @@ async fn an_oversize_register_entry_is_refused_fail_closed() {
         .expect("chunked entries at the cap are accepted");
 }
 
-// --- mailbox (blueprint/api.md, Mailbox; #827) ------------------------------
+// --- mailbox (blueprint/api.md, Mailbox) ------------------------------------
 
 /// An account addressable as a mailbox recipient: the client plus its identity
 /// publicKey. Minted through test-login, whose deterministic per-handle keypair
@@ -1081,7 +1081,7 @@ async fn mailbox_post_is_bounded_by_recipient_existence_and_blob_size() {
     );
 }
 
-// --- grant delivery over the live mailbox (blueprint/engine.md; #954) -------
+// --- grant delivery over the live mailbox (blueprint/engine.md) -------------
 
 /// The `Mailbox` seam over the engine's real API client: byte address → the
 /// API's hex `recipientPublicKey`.
@@ -1150,7 +1150,7 @@ impl ScopeRootPublisher for LocalNet {
 }
 
 /// A real read grant's share pointer reaches the live mailbox: the grant path's
-/// own routing address and idempotency key must satisfy `PostMessageDto` (#954).
+/// own routing address and idempotency key must satisfy `PostMessageDto`.
 #[tokio::test]
 async fn a_read_grant_delivers_its_share_pointer_through_the_live_mailbox() {
     let base = require_stack!("a_read_grant_delivers_its_share_pointer_through_the_live_mailbox");

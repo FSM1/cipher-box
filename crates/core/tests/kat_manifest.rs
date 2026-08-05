@@ -579,7 +579,7 @@ struct MailboxRejectVector {
     class: String,
 }
 
-// --- Grant section (ticket #621) schema ------------------------------------
+// --- Grant section schema --------------------------------------------------
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -1496,7 +1496,7 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
     covered.extend(record_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(pointer_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(mailbox_reject_vectors(&m).into_iter().map(|v| v.check));
-    // Grant-family reject families (ticket #621).
+    // Grant-family reject families.
     covered.extend(write_body_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(
         grant_blob_reject_vectors(&m)
@@ -1522,8 +1522,8 @@ fn every_crate_check_is_pinned_by_a_vector_family() {
     );
     covered.extend(grant_set_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(section_reject_vectors(&m).into_iter().map(|v| v.check));
-    // Content plane (ticket #691): the content-open and content-CID reject
-    // families pin `seal-open-failed`/`truncated` and `content-cid-mismatch`.
+    // Content plane: the content-open and content-CID reject families pin
+    // `seal-open-failed`/`truncated` and `content-cid-mismatch`.
     covered.extend(content_seal_reject_vectors(&m).into_iter().map(|v| v.check));
     covered.extend(content_cid_reject_vectors(&m).into_iter().map(|v| v.check));
     // The content-CID string codec's strict decode pins `content-cid-str-malformed`.
@@ -2474,10 +2474,10 @@ fn contact_reject_family_covers_the_binding_checks() {
 }
 
 // ---------------------------------------------------------------------------
-// IPNS records + name codec, and pointer + mailbox payloads (ticket #622). The
-// name codec, the fixed-key injected-timestamp full-record KATs, the keyless
-// byte-stable re-PUT, and the pointer/mailbox accept+reject vectors — all
-// consumed from the manifest and asserted against the live modules.
+// IPNS records + name codec, and pointer + mailbox payloads. The name codec,
+// the fixed-key injected-timestamp full-record KATs, the keyless byte-stable
+// re-PUT, and the pointer/mailbox accept+reject vectors — all consumed from
+// the manifest and asserted against the live modules.
 // ---------------------------------------------------------------------------
 
 fn name_accept_vectors(m: &Manifest) -> Vec<NameAcceptVector> {
@@ -2987,11 +2987,10 @@ fn mailbox_reject_vectors_fail_closed() {
 }
 
 // ---------------------------------------------------------------------------
-// Grant section (ticket #621): the write-body, the grant/owner blobs, the
-// ascent + history links, the structure signatures, and the grant-set
-// commitment. Each family's accept vectors round-trip / reproduce / verify
-// against the live code, and its reject vectors fire the named fail-closed
-// check.
+// Grant section: the write-body, the grant/owner blobs, the ascent + history
+// links, the structure signatures, and the grant-set commitment. Each family's
+// accept vectors round-trip / reproduce / verify against the live code, and its
+// reject vectors fire the named fail-closed check.
 // ---------------------------------------------------------------------------
 
 /// An optional recipient tag: empty hex is `None`, else a 32-byte blinded tag.
@@ -4422,9 +4421,9 @@ fn grant_set_reject_vectors_fail_closed() {
 }
 
 // ---------------------------------------------------------------------------
-// Content plane (ticket #691): the content-seal primitive over caller-framed
-// chunks and the content-DAG CID compute/verify codec. Frozen CIDv1 codec bytes,
-// the fixed-parameter seal KAT, deterministic CID KATs (byte-identical native +
+// Content plane: the content-seal primitive over caller-framed chunks and the
+// content-DAG CID compute/verify codec. Frozen CIDv1 codec bytes, the
+// fixed-parameter seal KAT, deterministic CID KATs (byte-identical native +
 // wasm32), and the fail-closed open / verify reject families.
 // ---------------------------------------------------------------------------
 

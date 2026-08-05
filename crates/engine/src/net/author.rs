@@ -2,9 +2,9 @@
 //! body, seal it into an envelope, and mint the parent's ref to it
 //! (blueprint/engine.md "Resolve/publish pipeline: Publish").
 //!
-//! Home of the encode-side fail-closed guards #823 assigned to the engine
-//! rather than to core (security rule 8). None is a `debug_assert!`, so a
-//! release build refuses exactly the bytes a debug build does:
+//! Home of the encode-side fail-closed guards the engine owns rather than core
+//! (security rule 8). None is a `debug_assert!`, so a release build refuses
+//! exactly the bytes a debug build does:
 //!
 //! - a child envelope carrying a grant section returns `Err`, off core's own
 //!   `has_grant_section` — the produce guard and the decode reject cannot drift;
@@ -721,10 +721,9 @@ mod tests {
         }
     }
 
-    /// The encode side of `read_content`'s kind-transplant reject (rule 8;
-    /// #812 guard 2). Structural in every build: the body variant and the
-    /// parent ref's kind are two reads of one value, including for a file that
-    /// carries a version.
+    /// The encode side of `read_content`'s kind-transplant reject (rule 8).
+    /// Structural in every build: the body variant and the parent ref's kind
+    /// are two reads of one value, including for a file that carries a version.
     #[test]
     fn a_new_child_agrees_with_its_parent_ref_on_kind_for_every_kind() {
         let versioned = NewNodeBody::File {

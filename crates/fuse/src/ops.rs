@@ -229,7 +229,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
     }
 
     /// Stage an intent op. The staged `OpId` is the journal-ack handle, which
-    /// the write plane claims in #648; the projection needs only the outcome.
+    /// the write plane claims; the projection needs only the outcome.
     async fn command(&mut self, command: Command) -> Result<(), VfsError> {
         self.engine.command(command).await?;
         Ok(())

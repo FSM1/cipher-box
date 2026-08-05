@@ -61,7 +61,7 @@ export class OpfsStagingStore implements StagingStoreSeam {
 
   async enqueueOp(op: Uint8Array): Promise<number> {
     // Copy before the first await: `op` may be a view into WASM linear memory
-    // that a concurrent task's `Memory.grow()` can detach across the await (#717).
+    // that a concurrent task's `Memory.grow()` can detach across the await.
     const staged = op.slice();
     const db = await this.open();
     const tx = db.transaction(OPS_STORE, 'readwrite');
@@ -92,7 +92,7 @@ export class OpfsStagingStore implements StagingStoreSeam {
     // Encode the key and copy the value before the first await: both may be
     // views into WASM linear memory that a concurrent task's `Memory.grow()`
     // can detach across the awaits below — a detached key hexes to '' and a
-    // detached value truncates or throws on `handle.write` (#717).
+    // detached value truncates or throws on `handle.write`.
     const fileName = toHex(stagingKey);
     const staged = bytes.slice();
     const dir = await this.stagedDir();
@@ -128,7 +128,7 @@ export class OpfsStagingStore implements StagingStoreSeam {
 
   async stagedBytes(stagingKey: Uint8Array): Promise<Uint8Array | null> {
     // Hex the key before the first await: a WASM-backed view detached by a
-    // concurrent `Memory.grow()` across the await would hex to '' (#717).
+    // concurrent `Memory.grow()` across the await would hex to ''.
     const fileName = toHex(stagingKey);
     const dir = await this.stagedDir();
     let fileHandle: FileSystemFileHandle;
@@ -156,7 +156,7 @@ export class OpfsStagingStore implements StagingStoreSeam {
 
   async removeStagedBytes(stagingKey: Uint8Array): Promise<void> {
     // Hex the key before the first await: a WASM-backed view detached by a
-    // concurrent `Memory.grow()` across the await would hex to '' (#717).
+    // concurrent `Memory.grow()` across the await would hex to ''.
     const fileName = toHex(stagingKey);
     const dir = await this.stagedDir();
     await removeIfPresent(dir, fileName);

@@ -8,7 +8,7 @@ import { MailboxService } from '../services/mailbox.service';
 const DEFAULT_INTERVAL_MS = 12 * 60 * 60 * 1000;
 
 /**
- * The scheduled dormant-mailbox TTL sweep (#667), shaped as a reusable
+ * The scheduled dormant-mailbox TTL sweep, shaped as a reusable
  * {@link PeriodicTask} on the shared worker loop. It is a thin scheduling wrapper
  * over {@link MailboxService.sweepExpired} — all delete semantics, the injected
  * Clock cutoff, and batching live in the service, so the sweep is exercised

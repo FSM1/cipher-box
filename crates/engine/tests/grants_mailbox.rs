@@ -72,7 +72,8 @@ struct GrantFixture {
     commitment: GrantSetCommitment,
     commitment_sig: EcdsaSignature,
     /// The record's grant section (commitment, grant blob, owner blob, write-body
-    /// with real structure signatures) the gate enumerates and recomputes (#687).
+    /// with real structure signatures) the gate enumerates and recomputes over
+    /// rather than trusting any caller-supplied hash.
     grant_section: GrantSection,
     envelope: Envelope,
     owner_contact: Vec<u8>,

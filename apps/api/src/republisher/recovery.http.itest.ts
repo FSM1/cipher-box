@@ -15,7 +15,7 @@ import { RecoveryController } from './recovery.controller';
 import { RecordCacheService } from './services/record-cache.service';
 
 /**
- * The recovery HTTP surface re-homed onto a REAL Postgres (#725): the real
+ * The recovery HTTP surface re-homed onto a REAL Postgres: the real
  * RecordCacheService serving cached record bytes from a real `record_cache` row,
  * the absent/malformed-name 404s, the auth guard, and the real per-account 429s.
  * The cache lookup is genuine SQL against the varchar-keyed table, so the

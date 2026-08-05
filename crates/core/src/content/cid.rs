@@ -16,8 +16,8 @@
 //! | …      | 32-byte BLAKE3 digest of `bytes`                            |
 //!
 //! Core addresses *leaf* sealed chunks as `raw` ([`CONTENT_CID_CODEC`]); a
-//! version's `contentCid` is a DAG **root** whose codec is engine-owned (#630,
-//! engine.md:497), so the codec is a parameter here, not a constant.
+//! version's `contentCid` is a DAG **root** whose codec is engine-owned
+//! (engine.md:497), so the codec is a parameter here, not a constant.
 //! [`verify_cid`] therefore keys off the claimed CID's *own* codec byte —
 //! validating a raw leaf and a DAG root alike (engine.md:468) — while the
 //! version, multihash, and length framing stay fixed and fail-closed.
@@ -33,8 +33,8 @@ const CID_VERSION: u8 = 0x01;
 const CID_CODEC_INDEX: usize = 1;
 
 /// The leaf (raw, 0x55) multicodec: core content-addresses each opaque sealed
-/// chunk as raw bytes. The DAG-root `contentCid` codec is engine-owned (#630,
-/// engine.md:497), passed to [`compute_cid`] by the engine — not fixed here.
+/// chunk as raw bytes. The DAG-root `contentCid` codec is engine-owned
+/// (engine.md:497), passed to [`compute_cid`] by the engine — not fixed here.
 pub const CONTENT_CID_CODEC: u8 = 0x55;
 
 /// Multihash code for BLAKE3-256 (0x1e) — the frozen suite hash
@@ -53,7 +53,7 @@ pub const CONTENT_CID_LEN: usize = CID_PREFIX_LEN + DIGEST_LEN;
 
 /// Compute the content CID (binary CIDv1) of `bytes` under multicodec `codec`.
 /// Leaf sealed chunks pass [`CONTENT_CID_CODEC`] (`raw`); the engine passes the
-/// DAG-root codec for a version's `contentCid` (#630). Deterministic and
+/// DAG-root codec for a version's `contentCid`. Deterministic and
 /// byte-identical across native and wasm32; a public content address, so no key
 /// material flows through here.
 ///
@@ -77,7 +77,7 @@ pub fn compute_cid(codec: u8, bytes: &[u8]) -> Vec<u8> {
 }
 
 /// Verify that `bytes` content-addresses to `claimed_cid`, fail-closed. The
-/// codec is read from `claimed_cid` itself (#630 owns the DAG-root codec,
+/// codec is read from `claimed_cid` itself (the engine owns the DAG-root codec,
 /// engine.md:497), so a raw leaf and a DAG-root `contentCid` both verify while
 /// the version, multihash code, digest length, and digest are recomputed and
 /// compared byte-for-byte. A malformed/truncated/foreign claimed CID, a codec byte
@@ -114,7 +114,7 @@ const MULTIBASE_BASE32: char = 'b';
 const BASE32_ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
 
 /// Whether `cid` is the frozen content-plane CIDv1 framing: 36 bytes,
-/// `version=1`, a single-byte multicodec (`< 0x80`, engine-owned #630), the
+/// `version=1`, a single-byte multicodec (`< 0x80`, engine-owned), the
 /// BLAKE3 multihash code, and the 32-byte digest length. The invariant both the
 /// encoder guards (release-active) and the decoder rejects on, kept symmetric.
 pub fn is_wellformed_content_cid(cid: &[u8]) -> bool {
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn compute_cid_carries_the_caller_codec() {
-        // The DAG-root codec (dag-cbor 0x71) is engine-chosen (#630).
+        // The DAG-root codec (dag-cbor 0x71) is engine-chosen.
         let cid = compute_cid(0x71, b"dag root bytes");
         assert_eq!(cid[CID_CODEC_INDEX], 0x71, "codec byte is the parameter");
         assert_eq!(

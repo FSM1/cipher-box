@@ -12,8 +12,7 @@
 //!   verified against the contact-code-anchored key after opening.
 //!
 //! The structure-tag registry (`pointer-payload = 0x07`,
-//! `mailbox-payload = 0x08`) is the one #620 froze — consumed here, never
-//! redefined.
+//! `mailbox-payload = 0x08`) is frozen — consumed here, never redefined.
 
 pub mod mailbox;
 pub mod pointer;

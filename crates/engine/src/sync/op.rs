@@ -52,7 +52,7 @@ pub struct StagedContent {
     pub root_cid: Vec<u8>,
     /// Plaintext byte length of the content this root reassembles to, as the
     /// commit observed it. The overlay renders it; the drain cross-checks it
-    /// against the staged root's own manifest before publishing (#830).
+    /// against the staged root's own manifest before publishing.
     pub plaintext_size: u64,
     /// The per-version content key, HPKE-to-self sealed under the owner's enc
     /// subkey ([`cipherbox_core::seal::seal_content_key`]). The subkey comes
@@ -78,7 +78,7 @@ pub struct Replaced {
 /// its initial content, so a folder carrying file content is unrepresentable
 /// rather than refused at publish — the op-queue end of the same structural
 /// guard [`new_child`](crate::net::author::new_child) makes on the wire
-/// (AGENTS.md rule 8; #812 guard 2).
+/// (AGENTS.md rule 8).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NewNode {
     /// A folder, always created empty.
@@ -127,9 +127,7 @@ pub enum OpKind {
     /// Move a node to a new parent. Intra-scope this is a pure relink;
     /// cross-scope it re-seals the subtree at the destination epoch and, when
     /// it leaves a granted source scope, **queues a scope-exit rotation
-    /// trigger** — this slice queues the trigger only, it does not rotate
-    /// (CONTEXT.md #632 scope: "does NOT land: scope-exit rotation
-    /// triggering").
+    /// trigger** — this slice queues the trigger only, it does not rotate.
     Relink {
         /// The source parent the move was formed against — the presence
         /// condition for the source-remove and the move-race detector

@@ -7,8 +7,8 @@
 //! cross-check. Read-grant *creation* ([`create`]) composes the sweep + re-seal +
 //! mailbox primitives into the owner-side mint; [`invite`] mints the ephemeral
 //! identity a bearer link's grant is wrapped to. Write grants, claim conversion,
-//! and revoke *actions* ride further slices of #635. Every trust decision is a composed core
-//! verdict or the adoption gate's; this layer holds no crypto.
+//! and revoke *actions* are not implemented here. Every trust decision is a
+//! composed core verdict or the adoption gate's; this layer holds no crypto.
 
 pub mod accept;
 pub mod child_index;

@@ -85,9 +85,9 @@ function makeGate(): Gate {
 }
 
 interface GateHooks {
-  /** No-op the advisory lock + lock_timeout, and drop the users-row lock — the pre-#677 path. */
+  /** No-op the advisory lock + lock_timeout, and drop the users-row lock — the unlocked path. */
   stripLock?: boolean;
-  /** No-op the post-commit SESSION advisory lock — the pre-#714 unguarded-unpin path. */
+  /** No-op the post-commit SESSION advisory lock — the unguarded-unpin path. */
   stripSessionLock?: boolean;
   afterUserRead?: () => Promise<void>;
   afterPinFind?: () => Promise<void>;
@@ -140,7 +140,7 @@ function gatedDataSource(real: DataSource, hooks: GateHooks): DataSource {
 
   // Strip the SESSION advisory (un)lock the post-commit unpin guard takes on a
   // dedicated runner, so retire's recount races the concurrent upload instead of
-  // serializing behind it — the pre-#714 unguarded-unpin path.
+  // serializing behind it — the unguarded-unpin path.
   const wrapQueryRunner = (runner: ReturnType<DataSource['createQueryRunner']>) =>
     new Proxy(runner, {
       get(target, prop, receiver) {
@@ -369,7 +369,7 @@ describe('RegistryService concurrency (real Postgres)', () => {
 
       const gate = makeGate();
       const pinStore = new RecordingPinStore();
-      // Both paths skip the advisory lock (the pre-#677 code path).
+      // Both paths skip the advisory lock (the unlocked code path).
       const registerB = buildService(
         gatedDataSource(db.dataSource, { stripLock: true, afterPinInsert: gate.onReach }),
         pinStore
@@ -498,7 +498,7 @@ describe('RegistryService concurrency (real Postgres)', () => {
     });
   });
 
-  describe('retire post-commit unpin guard (#714)', () => {
+  describe('retire post-commit unpin guard', () => {
     it('at true global-zero the guarded unpin fires exactly once', async () => {
       const a = await seedAccount(false);
       const cid = token();

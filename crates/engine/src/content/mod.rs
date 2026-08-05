@@ -5,9 +5,9 @@
 //! content-seal primitive under a fresh per-version content key, assembles a DAG
 //! addressed by the version's `contentCid`, and reads blocks back through the
 //! trustless gateway with a fail-closed CID verify on every response. All crypto
-//! and the content-address codec are core's ([`cipherbox_core::content`], #691);
-//! this plane composes them and owns the framing/DAG shape and the placement,
-//! quota, and retention judgment (#630).
+//! and the content-address codec are core's ([`cipherbox_core::content`]); this
+//! plane composes them and owns the framing/DAG shape and the placement, quota,
+//! and retention judgment.
 
 pub(crate) mod budget;
 pub mod chunk;
@@ -53,7 +53,7 @@ use crate::seams::Http;
 /// The three always come from one decoded root manifest, so the published
 /// [`Version`] cannot disagree with the manifest [`open_content_range`] checks it
 /// against — the encode side of that reject is unrepresentable rather than
-/// merely guarded (AGENTS.md rule 8; #812 guard 3).
+/// merely guarded (AGENTS.md rule 8).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SealedContent {
     content_cid: Vec<u8>,
@@ -366,7 +366,7 @@ mod tests {
 
     /// The encode side of [`open_content_range`]'s manifest-vs-version size reject:
     /// both figures come from one value, so they cannot be made to disagree
-    /// (AGENTS.md rule 8; #812 guard 3). Fires in a release build.
+    /// (AGENTS.md rule 8). Fires in a release build.
     #[test]
     fn a_published_version_carries_its_own_manifests_size() {
         let (root_block, content) = sealed(&(0..40u8).collect::<Vec<_>>(), 3);
@@ -386,7 +386,7 @@ mod tests {
         assert_eq!(
             open_dag_error(DagError::UnsupportedFormat { version: 2 }),
             OpenError::UnsupportedFormat { version: 2 },
-            "an out-of-date client is not a forged record (#820)"
+            "an out-of-date client is not a forged record"
         );
         assert!(matches!(
             open_dag_error(DagError::LinkCountMismatch),

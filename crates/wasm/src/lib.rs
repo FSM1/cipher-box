@@ -171,7 +171,7 @@ impl From<facade::Staleness> for Staleness {
 
 /// Why a queued op dead-lettered. Each reason calls for a different message
 /// and a different user action, so the classification crosses with the op
-/// rather than being reduced to a flag (#859).
+/// rather than being reduced to a flag.
 #[wasm_bindgen]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeadLetterReason {

@@ -20,7 +20,7 @@ import { MailboxSweepTask } from './tasks/mailbox-sweep.task';
  * IdentityService for publicKey normalization. Route auth reuses the auth
  * slice's JwtAuthGuard and JWT configuration.
  *
- * The scheduled dormant-mailbox TTL sweep (#667) registers on the shared
+ * The scheduled dormant-mailbox TTL sweep registers on the shared
  * {@link SchedulerModule} loop in `onModuleInit` — independent of per-recipient
  * activity and of the republisher's own opt-out, so a dormant mailbox's expired
  * rows are still swept.

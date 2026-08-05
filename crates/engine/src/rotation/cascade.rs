@@ -85,7 +85,7 @@ use cipherbox_core::hex::lower as hex_lower;
 /// sweep reuses the published derivation). No self-identifying `scope_id` /
 /// `ipns_name`: re-seal, publish, parent-seed derivation, and floor-raise all run
 /// under the **enumerated** [`ChildScopeRef`] alone, so there is no second copy
-/// for a network hint to diverge from (#756).
+/// for a network hint to diverge from.
 ///
 /// Owns its secrets so the cascade is their terminal owner: the seed fields are
 /// [`Zeroizing`] and the pseudonym signer zeroizes on drop. Seeds are handed to
@@ -144,8 +144,8 @@ pub trait CascadeResealResolver {
     /// The resolver MUST gate `scope`'s record under the enumerated
     /// `scope.scope_id` and `scope.ipns_name`, and the gated record's
     /// `commitment.ipns_name` MUST equal `scope.ipns_name`. It returns **no**
-    /// self-identifying `scope_id` or `ipns_name` — see [`CascadeTarget`] for why
-    /// (#756).
+    /// self-identifying `scope_id` or `ipns_name` — see [`CascadeTarget`] for
+    /// why.
     async fn resolve(&self, scope: &ChildScopeRef) -> Result<CascadeTarget, ResolveFailure>;
 }
 
@@ -186,7 +186,7 @@ impl CascadeOutcome {
 pub enum CascadeError {
     /// A reachable descendant could not be authoritatively resolved — a gate
     /// rejection, host unavailability, or a C2 label conflict (the same
-    /// `scope_id` reached via two parents with different `ipns_name`, #746) — so
+    /// `scope_id` reached via two parents with different `ipns_name`) — so
     /// the cascade is not provably complete.
     Resolve {
         /// The descendant scope root that could not be resolved.
@@ -457,7 +457,7 @@ where
     // 2) Top-down threaded walk over the descendant tree, each frontier entry
     //    carrying its parent's freshly-minted seed (module docs). Re-implements
     //    `enumerate_eager_set`'s canonicalized-frontier walk — including its C2
-    //    label-conflict abort (#746) — because the re-key needs the parent edges
+    //    label-conflict abort — because the re-key needs the parent edges
     //    the flat `EagerSet` does not carry.
     let mut visited: BTreeSet<[u8; 16]> = BTreeSet::new();
     visited.insert(root_scope_id);
@@ -522,7 +522,7 @@ where
                 identity: ScopeRootIdentity {
                     v: target.v,
                     // The enumerated ChildScopeRef is the sole identity authority
-                    // (#756; see CascadeTarget).
+                    // (see CascadeTarget).
                     scope_id: child.scope_id,
                     ipns_name: &child.ipns_name,
                     owner_enc_pub: &target.owner_enc_pub,
@@ -1131,7 +1131,7 @@ mod tests {
 
     #[test]
     fn c2_conflicting_ipns_name_aborts_fail_closed_permutation_independent() {
-        // Test B (C2, #746): root -> A(0x0a), B(0x0b); both list D(0x0d) but under
+        // Test B (C2): root -> A(0x0a), B(0x0b); both list D(0x0d) but under
         // DIFFERENT ipns_name labels. First-seen would be a coin-flip that could
         // re-key a dead name and leave the real D unrotated — a revocation hole —
         // so the walk aborts fail-closed naming D, identically under either parent

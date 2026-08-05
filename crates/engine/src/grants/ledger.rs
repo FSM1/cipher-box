@@ -4,7 +4,7 @@
 //! Grants live in the published scope root: grant blobs keyed by blinded tags,
 //! the authoritative write-body ledger, and the epoch-free owner-signed grant-set
 //! commitment. This module composes core's codecs/KDF over those three; it mints
-//! nothing (grant creation rides the #635 rotation primitives) and holds no crypto.
+//! nothing (grant creation rides the rotation primitives) and holds no crypto.
 //!
 //! Two boundary rules it enforces:
 //!
@@ -171,7 +171,7 @@ fn committed_permissions(commitment: &GrantSetCommitment) -> BTreeMap<[u8; 32], 
 /// a committed entry share — the owner also signs each entry's `pseudonymPk`, but
 /// no ledger row carries one. So a row's `recipientIdentityPk`, `recipientEncPk`,
 /// and `expiresAt` go unchecked here and a write-grantee may alter them
-/// undetectably. The tag↔enc_pk binding is a resolve-time check (#745); the
+/// undetectably. The tag↔enc_pk binding is a resolve-time check; the
 /// deadline is not a capability boundary ([`GrantLedgerEntry::expires_at`]).
 pub fn enforce_committed_ledger(
     commitment: &GrantSetCommitment,

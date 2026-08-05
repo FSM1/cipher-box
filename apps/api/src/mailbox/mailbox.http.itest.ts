@@ -20,7 +20,7 @@ import { MailboxController } from './mailbox.controller';
 import { MailboxService } from './services/mailbox.service';
 
 /**
- * The mailbox HTTP surface re-homed onto a REAL Postgres (#725): the
+ * The mailbox HTTP surface re-homed onto a REAL Postgres: the
  * post→poll→ack lifecycle and idempotent replay against real `mailbox_messages`
  * rows, the existence-oracle 404, the per-recipient pending-cap 409, the blob
  * 413, the fail-closed validation 400s, ack ownership scoping, the real

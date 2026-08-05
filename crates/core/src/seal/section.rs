@@ -1,5 +1,5 @@
 //! The scope-root grant section (blueprint/core.md "Envelope and structures:
-//! Grant section", CONTEXT.md "Grant section", ticket #635 slice 1).
+//! Grant section", CONTEXT.md "Grant section").
 //!
 //! A scope root publishes, in `envelope.grantSection`, every seed-bearing
 //! structure it carries bundled with that structure's detached signature, plus

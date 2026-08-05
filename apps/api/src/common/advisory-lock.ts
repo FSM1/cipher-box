@@ -93,7 +93,7 @@ export function accountLockKey(accountId: string): bigint {
  * lock on its own connection, xact lock on the tx connection — without a
  * same-key self-deadlock. Upload and retire MUST share this key so retire's
  * post-commit unpin of a CID serializes against a concurrent upload re-pinning
- * the same CID (#714).
+ * the same CID.
  */
 export function pinDurabilityLockKey(cid: string): bigint {
   return advisoryLockKey(`pin-durability:${cid}`);

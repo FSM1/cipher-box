@@ -97,7 +97,7 @@ impl CredentialStore for KeyringCredentialStore {
 }
 
 /// A file-backed [`CredentialStore`] **test double** for headless CI, where
-/// no OS keyring is available (hard-constraint note in issue #646).
+/// no OS keyring is available.
 ///
 /// Gated behind the `test-support` feature and never compiled into a
 /// production build. It writes its values to plaintext files, so it must

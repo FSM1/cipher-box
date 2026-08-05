@@ -16,7 +16,7 @@ const TEST_PROFILES = ['test', 'development'];
  * The effective per-IP auth limit, resolved per request by the throttler guard.
  *
  * A whole test suite logs in from ONE IP, so this bucket silently caps how many
- * tests can exist (#837); `THROTTLE_AUTH_LIMIT` raises it, but ONLY on an
+ * tests can exist; `THROTTLE_AUTH_LIMIT` raises it, but ONLY on an
  * undeployed profile — an allowlist rather than a production denylist, so no
  * internet-facing deployment can be configured out of a live rate limit. The
  * env is read directly because the guard resolves this outside Nest's DI graph,

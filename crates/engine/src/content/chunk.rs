@@ -2,7 +2,7 @@
 //! per-version content key (blueprint/engine.md "Content plane").
 //!
 //! Framing is the engine's job; the seal and the leaf content-address are
-//! core's ([`cipherbox_core::content`], #691). This module owns only the
+//! core's ([`cipherbox_core::content`]). This module owns only the
 //! split-into-fixed-chunks decision and the per-chunk nonce draw from injected
 //! entropy — no crypto of its own (AGENTS.md rule 4).
 
@@ -16,7 +16,7 @@ use crate::entropy::{Entropy, EntropyError};
 /// The sealed byte overhead one leaf adds to its plaintext chunk:
 /// `nonce(24) || ciphertext || tag(16)`, with ciphertext length equal to
 /// plaintext length. The staging admission ledger sizes a version from this, so
-/// the reservation is the exact sealed total rather than an estimate (#828).
+/// the reservation is the exact sealed total rather than an estimate.
 pub const SEALED_LEAF_OVERHEAD: u64 = (NONCE_LEN + TAG_LEN) as u64;
 
 /// A fresh random per-version content key (blueprint/engine.md, #26 D6). The

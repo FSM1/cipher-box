@@ -9,11 +9,11 @@
 //! [`cipherbox_core::content::compute_cid`] under the engine-chosen `dag-cbor`
 //! codec, so there is one codec and one KAT set (AGENTS.md rules 4-5).
 //!
-//! The shape is frozen (#820, blueprint/engine.md "Content plane"): a single
-//! flat root over the ordered leaf CIDs plus the fixed chunk size, the
-//! plaintext length, and [`ROOT_FORMAT_VERSION`]. Flat keeps the byte→leaf map
-//! a single division, which is the chunk-alignment a ranged fetch needs, and
-//! costs the ceiling documented on [`DagError::RootTooLarge`].
+//! The shape is frozen (blueprint/engine.md "Content plane"): a single flat
+//! root over the ordered leaf CIDs plus the fixed chunk size, the plaintext
+//! length, and [`ROOT_FORMAT_VERSION`]. Flat keeps the byte→leaf map a single
+//! division, which is the chunk-alignment a ranged fetch needs, and costs the
+//! ceiling documented on [`DagError::RootTooLarge`].
 
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::content::{
@@ -25,8 +25,8 @@ use super::limits::MAX_RESOLVED_RECORD_BYTES;
 use super::profile::ContentProfile;
 
 /// The multicodec of the DAG-root `contentCid`: `dag-cbor` (0x71). Engine-owned
-/// (#630, engine.md:497) — core keeps the leaf `raw` codec but takes the root
-/// codec as a parameter. Single-byte, inside core's frozen content-plane set.
+/// (engine.md:497) — core keeps the leaf `raw` codec but takes the root codec
+/// as a parameter. Single-byte, inside core's frozen content-plane set.
 pub const DAG_ROOT_CODEC: u8 = 0x71;
 
 /// A root-plane block's own content address, as a record `Value` and a link
@@ -39,7 +39,7 @@ pub fn root_block_cid(block: &[u8]) -> String {
 /// The root-manifest format version this crate writes and the only one it
 /// reads. A discriminator, not a compatibility arm: a root carrying any other
 /// version is refused as [`DagError::UnsupportedFormat`], so a client meeting a
-/// future shape reports "upgrade" instead of a rule-6 trust violation (#820).
+/// future shape reports "upgrade" instead of a rule-6 trust violation.
 pub const ROOT_FORMAT_VERSION: u64 = 1;
 
 /// CIDv1 version byte, and the digest-length byte (BLAKE3-256 = 32) — the two
@@ -75,7 +75,7 @@ pub enum DagError {
     /// flat root inlines every leaf CID, so a file past the flat-DAG ceiling
     /// (~108 GiB) produces a root [`read_block`](super::read::read_block) would
     /// reject on fetch. Fails closed here so the encoder never emits an
-    /// unreadable root (AGENTS.md rule 8; #788).
+    /// unreadable root (AGENTS.md rule 8).
     RootTooLarge {
         /// The encoded root size.
         size: usize,
@@ -206,7 +206,7 @@ pub struct RootManifest {
     pub size: u64,
     /// The leaf content CIDs, in file order. One allocation for the whole list,
     /// not one per leaf: a stream pins its manifest for the handle's whole life
-    /// and a leaf is a fixed [`CONTENT_CID_LEN`] bytes (#1009).
+    /// and a leaf is a fixed [`CONTENT_CID_LEN`] bytes.
     pub leaf_cids: Box<[LeafCid]>,
 }
 

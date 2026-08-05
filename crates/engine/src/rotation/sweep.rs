@@ -72,7 +72,7 @@ use cipherbox_core::hex::lower as hex_lower;
 /// `scope_id`/`ipns_name`, plus the record epoch the epoch-lag predicate compares
 /// against the floor. The re-seal identity and CAS-publish destination run under
 /// the **enumerated** [`ChildScopeRef`] (`scope_id`/`ipns_name`) alone — the
-/// target carries no second copy for a network hint to diverge from (#756).
+/// target carries no second copy for a network hint to diverge from.
 ///
 /// Owns its secrets so the sweep is their terminal owner: the seed fields are
 /// [`Zeroizing`] and the pseudonym signer zeroizes on drop, so a resolved target
@@ -347,8 +347,8 @@ where
         let identity = ScopeRootIdentity {
             v: target.v,
             scope_id,
-            // The enumerated ChildScopeRef is the sole identity authority (#756;
-            // see SweepTarget).
+            // The enumerated ChildScopeRef is the sole identity authority
+            // (see SweepTarget).
             ipns_name: &descendant.ipns_name,
             owner_enc_pub: &target.owner_enc_pub,
             parent_node_seed: target.parent_node_seed.as_deref(),
@@ -431,10 +431,9 @@ where
 /// An `Ok` outcome is convergence-complete **only when
 /// [`SweepOutcome::dropped_lost_race`] is empty** — a caller that retires the
 /// sweep job must inspect that bucket, not just `is_ok()`, and re-enqueue on a
-/// non-empty residual (the production-caller assert lands with #752). The
-/// returned outcome reflects the **final** pass; `converged`/`flagged_indexes`
-/// from earlier passes are durable on the network but are not aggregated into it
-/// (cumulative reporting is #754).
+/// non-empty residual. The returned outcome reflects the **final** pass;
+/// `converged`/`flagged_indexes` from earlier passes are durable on the network
+/// but are not aggregated into it.
 ///
 /// Scheduling is engineering judgment (blueprint/engine.md L275-278): the cadence
 /// and attempt cap are the host's, injected here; time enters only through the

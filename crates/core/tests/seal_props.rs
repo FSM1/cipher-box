@@ -197,8 +197,8 @@ proptest! {
 
     /// (c2) the content-seal round-trips and its content CID is a deterministic
     /// 36-byte CIDv1 that verify accepts; tampering any sealed byte breaks the
-    /// content address fail-closed (ticket #691). Runs under the wasm32
-    /// harness too, so the CID is byte-identical across targets.
+    /// content address fail-closed. Runs under the wasm32 harness too, so the
+    /// CID is byte-identical across targets.
     #[test]
     fn content_seal_and_cid_round_trip(
         key in prop::array::uniform32(any::<u8>()),

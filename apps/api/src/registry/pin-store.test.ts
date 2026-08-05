@@ -17,7 +17,7 @@ function store(apiUrl = 'http://kubo.test'): KuboPinStore {
 }
 
 /**
- * The pin store's Kubo effects (#906): the block is written under the declared
+ * The pin store's Kubo effects: the block is written under the declared
  * CID's own codec, pinned only once Kubo agrees on the address, and removed
  * again on every path that will not pin it — an unpinned block is not reclaimed,
  * so a refused upload must not leave one behind.

@@ -39,7 +39,7 @@ pub trait FloorStore {
     ///
     /// A single floor advance raises several distinctly-keyed floors at once
     /// (read-epoch, write-epoch, per-name sequence). An implementation closes the
-    /// partial-advance hazard (#685) one of two ways: **transactionally** (a
+    /// partial-advance hazard one of two ways: **transactionally** (a
     /// cross-key transaction leaves no entry durably changed on error) or by
     /// **roll-forward** (the desktop store fsyncs a batch intent record before any
     /// per-key write and replays it on reopen — it heals forward, never rewinds).
@@ -47,10 +47,10 @@ pub trait FloorStore {
     /// The default fallback applies the raises one key at a time in the given
     /// order — not atomic. **Callers MUST order entries revocation-before-
     /// liveness**: an interrupted fallback then fails toward *more* restriction
-    /// and re-converges idempotently on retry (the #682 mitigation this method
-    /// subsumes). The web IndexedDB seam rides this fallback — its JS boundary
-    /// exposes only the per-key methods — and web-atomic commit is deferred as a
-    /// durability/liveness concern, not a trust hole.
+    /// and re-converges idempotently on retry. The web IndexedDB seam rides this
+    /// fallback — its JS boundary exposes only the per-key methods — and
+    /// web-atomic commit is deferred as a durability/liveness concern, not a
+    /// trust hole.
     async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
         for raise in raises {
             match raise.namespace {

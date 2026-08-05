@@ -52,7 +52,7 @@ export interface HttpIntegrationOptions {
  * under test exactly as its NestJS module wires them, so what is asserted over
  * HTTP is what ships. Advisory-lock serialization, refcount survivor checks, and
  * transaction isolation are exercised by genuine Postgres, closing the drift a
- * fake DataSource hides (#707, #725).
+ * fake DataSource hides.
  */
 export async function createHttpIntegrationApp(
   options: HttpIntegrationOptions

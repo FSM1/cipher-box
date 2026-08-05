@@ -28,7 +28,7 @@ import { RecordCacheService } from './services/record-cache.service';
  *
  * The {@link RepublisherTask} registers on the shared {@link SchedulerModule}
  * loop, not a scheduler bound here — one loop carries every PeriodicTask (the
- * dormant-mailbox sweep, #667, is the sibling). Registration happens in
+ * dormant-mailbox sweep is the sibling). Registration happens in
  * `onModuleInit`; the shared module owns `start()`/`stop()`, so the loop runs
  * even when this slice opts out.
  */

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { resolveAuthLimit } from './throttling';
 
 /**
- * The per-IP auth limit's test-profile override (#837). The deployed-profile
+ * The per-IP auth limit's test-profile override. The deployed-profile
  * refusal is the security-relevant half: it is what keeps the knob from being a
  * way to turn a live rate limit off.
  */

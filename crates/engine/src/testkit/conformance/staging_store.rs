@@ -100,7 +100,7 @@ where
 
     // Removing the highest id must not release it while lower ids are still
     // queued. The engine's queue-scan memo reads an unchanged high-water id plus
-    // an unchanged length as proof that nothing was enqueued or removed (#880),
+    // an unchanged length as proof that nothing was enqueued or removed,
     // so a store allocating `max(queued) + 1` would hand the next op the id it
     // just freed and rebuild that exact pair over different records.
     reopened.remove_op(id_d).await.unwrap();

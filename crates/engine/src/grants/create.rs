@@ -1,5 +1,5 @@
 //! Owner-side read-grant creation (blueprint/engine.md "Grants and ledger:
-//! Grant creation"; #635).
+//! Grant creation").
 //!
 //! Mints the owner-only **read** sharing path in the sequence the blueprint
 //! fixes: converge the subtree, mint the grantee scope at read epoch 1, publish
@@ -12,10 +12,11 @@
 //! # Simulation boundary
 //!
 //! Deterministic-simulation slice: entropy is the injected [`Entropy`] seam and
-//! the read/floor/publish/mailbox effects are faked in tests. The production
-//! resolver/publisher this composes over lives in [`crate::net::rotation`].
+//! the read/floor/publish/mailbox effects are faked in tests. The publisher this
+//! composes over has a production implementation in [`crate::net::rotation`]; the
+//! sweep resolver does not, and is faked everywhere.
 //!
-//! # Deferred (follow-on slices of #635)
+//! # Not implemented here
 //!
 //! - **Write grants**: the write-scope cut via [`rotate_scope_write`](super::
 //!   super::rotation::rotate_scope_write) plus the both-seeds grant blob, layered
@@ -155,7 +156,7 @@ pub struct CreateGrantOutcome {
 /// fail-closed — nothing is minted or shared. Failures **after** that publish
 /// are NOT atomic: the grantee root is already committed to the network, so a
 /// stale orphan can outlive the error. Each post-publish variant below documents
-/// what it leaves behind; orphan reconciliation is deferred to #745/#746.
+/// what it leaves behind; no reconciliation pass reclaims those orphans.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CreateGrantError {
     /// The pre-grant convergence sweep aborted (enumeration/floor/publish/reseal).
@@ -180,8 +181,8 @@ pub enum CreateGrantError {
     Publish(ScopeRootPublishError),
     /// Resolving a reparented descendant for its re-key failed. Post-publish: the
     /// grantee root and any earlier-re-keyed descendants are committed; this one
-    /// keeps its old parent derivation (grantee cannot yet descend into it) —
-    /// reconciled by #745/#746.
+    /// keeps its old parent derivation (grantee cannot yet descend into it) and
+    /// stays unreconciled.
     DescendantResolve {
         /// The descendant that could not be resolved.
         scope_id: [u8; 16],
@@ -199,7 +200,7 @@ pub enum CreateGrantError {
     },
     /// Publishing a re-keyed descendant failed. Post-publish: the grantee root and
     /// any earlier-re-keyed descendants are committed; this one keeps its old
-    /// parent derivation — reconciled by #745/#746.
+    /// parent derivation and stays unreconciled.
     DescendantPublish {
         /// The descendant whose re-keyed record did not land.
         scope_id: [u8; 16],
@@ -208,11 +209,11 @@ pub enum CreateGrantError {
     },
     /// Re-sealing the reparented parent scope root failed. Post-publish: the
     /// grantee root is already on the network with no parent reference — an
-    /// orphan reconciled by #745/#746.
+    /// unreconciled orphan.
     ParentMint(ResealError),
     /// Publishing the reparented parent scope root failed. Post-publish: the
     /// grantee root is already on the network with no parent reference — an
-    /// orphan reconciled by #745/#746.
+    /// unreconciled orphan.
     ParentPublish(ScopeRootPublishError),
     /// Posting the sealed share pointer to the recipient mailbox failed.
     /// Post-publish: both scope roots are published and the parent index is
@@ -1030,9 +1031,9 @@ mod tests {
     fn parent_publish_failure_leaves_the_grantee_root_committed_and_no_share() {
         // Post-publish partial commit: the grantee root publishes (call 0), then
         // the parent publish (call 1) loses the CAS race. The primitive is NOT
-        // atomic past step 5 — the grantee root is already on the network (orphan
-        // cleanup belongs to #745/#746) and NO share pointer is posted. This pins
-        // the doc comment's post-publish caveat to behavior.
+        // atomic past step 5 — the grantee root is already on the network and NO
+        // share pointer is posted. This pins the doc comment's post-publish caveat
+        // to behavior.
         let (outcome, published, hub) = run(
             7,
             &[],
@@ -1061,7 +1062,7 @@ mod tests {
         // publishes (call 0), then the reparented descendant's re-keyed record
         // (call 1) loses the CAS race. Fail-safe under-share — the grantee root is
         // committed but NO share pointer is posted, so the recipient never learns
-        // where to look and sees zero exposure (orphan cleanup: #745/#746).
+        // where to look and sees zero exposure.
         let subtree = vec![ChildScopeRef::new(
             DESCENDANT_SCOPE,
             DESCENDANT_NAME.to_vec(),
@@ -1127,8 +1128,8 @@ mod tests {
 
     #[test]
     fn delivery_is_addressed_and_keyed_in_the_shape_the_transport_accepts() {
-        // #954: the grant path posted the X25519 subkey as the routing address
-        // and a `grant:`-prefixed key, each a `PostMessageDto` refusal.
+        // Posting the X25519 subkey as the routing address, or a `grant:`-prefixed
+        // idempotency key, is a `PostMessageDto` refusal.
         let (delivery, _) = delivery_for(7, &recipient_enc());
 
         assert_eq!(
@@ -1145,13 +1146,12 @@ mod tests {
 
     #[test]
     fn grantee_can_descend_into_a_reparented_descendant() {
-        // The #770 fix: a reparented descendant re-keys under the fresh grantee
-        // derivation (see `GranteeScopePlan::subtree_child_index`) so the grantee,
-        // holding only its grant-blob seed, can descend the shared subtree. No
-        // floor is raised, so the pre-mint sweep publishes nothing (the descendant
-        // is already converged); the descendant record below is published solely by
-        // the re-key step. Pre-fix, no descendant record is published, so the lookup
-        // below finds nothing and this test fails.
+        // A reparented descendant re-keys under the fresh grantee derivation (see
+        // `GranteeScopePlan::subtree_child_index`) so the grantee, holding only its
+        // grant-blob seed, can descend the shared subtree. No floor is raised, so
+        // the pre-mint sweep publishes nothing (the descendant is already
+        // converged); the descendant record below is published solely by the re-key
+        // step, and the lookup finds nothing without it.
         let subtree = vec![ChildScopeRef::new(
             DESCENDANT_SCOPE,
             DESCENDANT_NAME.to_vec(),
@@ -1231,9 +1231,9 @@ mod tests {
     fn descendant_scope_root_publishes_under_the_enumerated_ref_name() {
         // The re-key step 5b must publish/reseal the reparented descendant under
         // the name from the enumerated `ChildScopeRef` (`descendant.ipns_name`),
-        // not the resolved target's — the scope-root publication binding #779
-        // fixed in sweep.rs. A regression to any other name (e.g. the parent's)
-        // is caught here.
+        // not the resolved target's — the scope-root publication binding enforced
+        // in sweep.rs. A regression to any other name (e.g. the parent's) is
+        // caught here.
         let subtree = vec![ChildScopeRef::new(
             DESCENDANT_SCOPE,
             DESCENDANT_NAME.to_vec(),

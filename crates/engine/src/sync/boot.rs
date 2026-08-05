@@ -14,7 +14,7 @@
 //! session inputs, so two engines on independent virtual clocks agree.
 //!
 //! The record-plane fetchers are the two seam traits the resolver slices
-//! (#745/#746) implement against the content plane:
+//! implement against the content plane:
 //! [`PointerFetch`](crate::sync::PointerFetch) fronts the vault-pointer block
 //! resolve, and [`Adopter`](crate::net::Adopter) fronts the root-record
 //! candidate assembly and the adoption gate. This slice owns the sequencing and
@@ -211,7 +211,7 @@ where
     // move either floor backward is a rolled-back pointer, a trust violation.
     // The vault pointer is the root/vault anchor, so the read-epoch check is
     // sound here (`AnchorRole::Root`); a shared-scope cold-seed would pass
-    // `Shared` (#763).
+    // `Shared`.
     floor::cold_seed_checked(floors, &adoption.repoint, floor::AnchorRole::Root)
         .await
         .map_err(|e| match e {

@@ -363,7 +363,7 @@ fn a_durable_queue_outage_never_destroys_the_destination_a_rename_did_not_replac
     // POSIX: an observer always sees either the old destination or the new one.
     // A rename that replaces is one journal entry, so a queue that accepts only
     // one more write either takes the whole rename or none of it — never the
-    // destination's removal while the source stays put (#884).
+    // destination's removal while the source stays put.
     for budget in [0, 1] {
         let (mut engine, root, staging) = started_engine_with_staging();
         let source = seed_child(&mut engine, root, "new.txt", NodeKind::File);

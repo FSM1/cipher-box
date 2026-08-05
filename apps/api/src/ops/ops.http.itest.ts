@@ -20,7 +20,7 @@ import { createIntegrationDatabase, IntegrationDatabase } from '../testing/integ
 import { resolveAuthLimit } from './throttling';
 
 /**
- * The Ops HTTP surface on a booted app against a throwaway Postgres (#725): the
+ * The Ops HTTP surface on a booted app against a throwaway Postgres: the
  * WORKING global throttler driving real per-surface 429s (v1's inert @Throttle
  * is a named defect), the @SkipThrottle exemptions for health/metrics, the
  * health stub, and the Prometheus text output. The real AuthController is

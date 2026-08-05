@@ -78,7 +78,7 @@ export class FetchRecordTransport implements RecordTransportSeam {
       headers: { 'Content-Type': IPNS_RECORD_MEDIA_TYPE },
       // `record` is a live view into WASM linear memory, unlike the JS-owned
       // body `Http` receives. Copy rather than rely on `fetch` reading it
-      // before any `Memory.grow()` can detach it (#717).
+      // before any `Memory.grow()` can detach it.
       body: record.slice(),
       ...endpointPolicy(),
     });

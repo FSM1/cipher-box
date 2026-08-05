@@ -1,5 +1,5 @@
 //! Property layer over the IPNS name codec (blueprint/testing.md "crates/core
-//! — KATs and property tests", ticket #622): the base36 CIDv1 libp2p-key
+//! — KATs and property tests"): the base36 CIDv1 libp2p-key
 //! encode∘decode round-trip over arbitrary Ed25519 keys, and strict-decode
 //! totality (parse never panics and only ever accepts the one canonical form).
 //! Case counts are bounded for CI speed; the same suite runs under

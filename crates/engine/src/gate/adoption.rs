@@ -224,7 +224,7 @@ pub struct Candidate {
     /// The scope root's grant section — the commitment (+ its owner signature)
     /// and every seed-bearing structure with its detached structure signature.
     /// The gate enumerates its structures for stage-3 authentication **from this
-    /// record's own bytes**, recomputing each `H(ciphertext)` (#687), so
+    /// record's own bytes**, recomputing each `H(ciphertext)`, so
     /// completeness is gate-enforced and never caller-asserted.
     pub grant_section: GrantSection,
     /// The scope root's envelope (carries the plaintext epoch tag and the
@@ -325,7 +325,7 @@ fn committed_write_pseudonyms(commitment: &GrantSetCommitment) -> Vec<Ed25519Ver
 
 /// Authenticate one seed-bearing structure against the committed write-capable
 /// pseudonyms, recomputing the signed input **from the record's actual sealed
-/// bytes** (#687): the `ciphertext_hash` is `H(ciphertext)` over `ciphertext`,
+/// bytes**: the `ciphertext_hash` is `H(ciphertext)` over `ciphertext`,
 /// and `scope`/`epoch` come from the authenticated envelope — never a
 /// caller-supplied [`StructureSigInput`]. A signature therefore proves "the
 /// committed writer signed *these* bytes at *this* scope/epoch", not merely "the
@@ -506,7 +506,7 @@ pub async fn adopt_deferred<F: FloorStore>(
     }
 
     // Stage 3 — grant-section authentication under `authenticate_structure`'s
-    // recompute contract (#687). Any failure rejects the whole record (#39 D3).
+    // recompute contract. Any failure rejects the whole record (#39 D3).
     let epoch = candidate.envelope.epoch;
     authenticate_section_structures(section, &candidate.envelope)
         .map_err(|e| reject(GateStage::GrantSection, RejectionReason::Trust(e)))?;

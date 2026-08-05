@@ -117,7 +117,7 @@ impl std::error::Error for ColdSeedError {}
 /// false-positive into a self-inflicted fail-closed **DoS** (a bricked boot) —
 /// never a security hole, since no rollback is accepted and the write-epoch
 /// check stays unconditionally sound. `Shared` therefore never runs the
-/// read-epoch check; only `Root` does (#763).
+/// read-epoch check; only `Root` does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnchorRole {
     /// The vault/root anchor: read-epoch check runs (alongside write-epoch).
@@ -125,7 +125,7 @@ pub enum AnchorRole {
     /// A shared scope: read-epoch check skipped; only write-epoch runs.
     ///
     /// A production `Shared` caller MUST select this role from authenticated
-    /// scope identity, never a network/`RepointObject` field (#775).
+    /// scope identity, never a network/`RepointObject` field.
     Shared,
 }
 
@@ -242,7 +242,7 @@ pub async fn check<F: FloorStore>(
 /// still reject) with only the sequence floor stale-low, whose sole effect is a
 /// harmless idempotent re-adoption of the identical record on retry. A backing
 /// that honors [`FloorStore::commit_floors`] atomically makes the pair
-/// all-or-nothing instead (#685); either way the monotonic-max, idempotent
+/// all-or-nothing instead; either way the monotonic-max, idempotent
 /// raises let a retried `adopt` re-converge.
 pub async fn advance_on_unseal<F: FloorStore>(
     floors: &F,
@@ -515,7 +515,7 @@ mod tests {
     /// under [`AnchorRole::Shared`] a `minReadEpoch` far below the durable
     /// read-epoch floor (the legitimate steady state once grantee lazy rotation
     /// has unseal-advanced that floor) seeds cleanly instead of false-positiving
-    /// into a fail-closed DoS (#763). The same input under `Root` is fail-closed.
+    /// into a fail-closed DoS. The same input under `Root` is fail-closed.
     #[test]
     fn cold_seed_checked_shared_scope_skips_the_read_epoch_check() {
         let floors = InMemoryFloorStore::default();

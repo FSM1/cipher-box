@@ -11,7 +11,7 @@ export const MAX_TIMER_DELAY_MS = 2_147_483_647;
  * A unit of periodic background work. The scheduler owns the cadence; the task
  * owns one sweep. Deliberately capability-free so it is reusable: the
  * republisher's inventory walk is the first implementer, and the dormant-mailbox
- * scheduled sweep (#667) builds its scheduling on this same seam.
+ * scheduled sweep builds its scheduling on this same seam.
  *
  * A sweep SHOULD settle on its own, but need not: the scheduler bounds every run
  * with a per-run timeout, so a wedged sweep (a DB op that never returns) is

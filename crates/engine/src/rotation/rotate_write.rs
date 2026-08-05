@@ -40,7 +40,7 @@
 //! [`RotateScopeWritePlan::resume_write_scope_seed`]. Accepted limitation: a crash
 //! after the pointer flip but before interior retirement orphans the prior run's
 //! interior old names — the fail-safe direction (leaking a registration beats
-//! retiring a live name); reclaim is tracked in #764.
+//! retiring a live name); those names are never reclaimed.
 //!
 //! # Owner-only, fail-closed, deterministic
 //!

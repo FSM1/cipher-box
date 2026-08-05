@@ -76,7 +76,7 @@ pub struct StoragePolicy {
     /// The platform's hard staging cap this split was computed under. Carried so
     /// a refused write can say *which* limit it hit — the platform ceiling this
     /// device will never exceed, or a budget this device's measured headroom cut
-    /// below it. The two call for different user actions (#829).
+    /// below it. The two call for different user actions.
     pub staging_cap_bytes: u64,
     /// Where the budgets above came from.
     pub headroom: Headroom,
@@ -102,7 +102,7 @@ impl StoragePolicy {
     }
 
     /// The policy for a host that cannot measure headroom: zero budgets —
-    /// inventing one is the floor-up #829 rules out — and
+    /// inventing one is the floor-up this policy rules out — and
     /// [`Headroom::Unmeasured`] so a rejection says "unknown", not "full".
     pub const UNMEASURED: Self = Self {
         staging_budget_bytes: 0,

@@ -72,7 +72,7 @@ async function adminExec(sql: string): Promise<void> {
  * schema into it, and hand back a ready DataSource. The name carries a
  * `crypto.randomUUID()` suffix so it can never collide with a shared dev database
  * or another concurrent run, and teardown force-drops ONLY that name — a fixed
- * shared database is never touched (Greptile P2 on #683).
+ * shared database is never touched.
  */
 export async function createIntegrationDatabase(
   options: IntegrationDatabaseOptions = {}

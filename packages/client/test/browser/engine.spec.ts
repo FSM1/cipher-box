@@ -77,7 +77,7 @@ test.describe('engine worker host', () => {
     expect(result.rootEchoed).toBe(true);
 
     // A rootless read is answered from the engine's own root, so a host never
-    // has to name one before it has seen a view (#900).
+    // has to name one before it has seen a view.
     expect(result.rootlessFolderHex).toBe(result.rootHex);
 
     // Both metadata creates project as pending children with no content plane.
@@ -131,7 +131,7 @@ test.describe('engine worker host', () => {
 
   test('a WASM-backed seam view is copied before await, surviving detachment', async ({ page }) => {
     const outcome = await runBoundary(page, 'stagingDetachment');
-    expect(outcome.error ?? '', 'staging detachment failure (#717)').toBe('');
+    expect(outcome.error ?? '', 'staging detachment failure').toBe('');
     expect(outcome.ok).toBe(true);
   });
 
@@ -139,7 +139,7 @@ test.describe('engine worker host', () => {
     page,
   }) => {
     const outcome = await runBoundary(page, 'stagingKeyDetachment');
-    expect(outcome.error ?? '', 'staging key detachment failure (#717)').toBe('');
+    expect(outcome.error ?? '', 'staging key detachment failure').toBe('');
     expect(outcome.ok).toBe(true);
   });
 
@@ -147,7 +147,7 @@ test.describe('engine worker host', () => {
     page,
   }) => {
     const outcome = await runBoundary(page, 'snapshotKeyDetachment');
-    expect(outcome.error ?? '', 'snapshot key detachment failure (#717)').toBe('');
+    expect(outcome.error ?? '', 'snapshot key detachment failure').toBe('');
     expect(outcome.ok).toBe(true);
   });
 
@@ -155,7 +155,7 @@ test.describe('engine worker host', () => {
     page,
   }) => {
     const outcome = await runBoundary(page, 'floorKeyDetachment');
-    expect(outcome.error ?? '', 'floor key detachment failure (#730)').toBe('');
+    expect(outcome.error ?? '', 'floor key detachment failure').toBe('');
     expect(outcome.ok).toBe(true);
   });
 });

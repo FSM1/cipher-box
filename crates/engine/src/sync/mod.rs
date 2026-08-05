@@ -11,7 +11,7 @@
 //! the five per-op race rules — and a terminally unrebasable op dead-letters
 //! with its staged bytes preserved rather than being silently dropped.
 //!
-//! Out of this slice, by design (CONTEXT.md #632): scope-exit rotation
+//! Out of this slice, by design (CONTEXT.md): scope-exit rotation
 //! *triggering* — a cross-scope relink out of a granted scope **queues** the
 //! trigger event ([`rebase::ReplayReport::scope_exit_triggers`]); the rotation
 //! primitives themselves land with the rotation slice.

@@ -340,8 +340,9 @@ fn capacity_leaves(count: u64) -> Vec<Vec<u8>> {
 }
 
 /// The largest link count that still assembles at the production chunk size —
-/// the flat-DAG ceiling #820 committed to knowingly. Every probe subslices one
-/// leaf vector, so the search costs the bound rather than the sum of its probes.
+/// the flat-DAG ceiling the content format commits to knowingly. Every probe
+/// subslices one leaf vector, so the search costs the bound rather than the sum
+/// of its probes.
 fn max_leaf_count(leaves: &[Vec<u8>]) -> u64 {
     let profile = ContentProfile::PRODUCTION;
     let chunk = profile.chunk_size() as u64;

@@ -1,5 +1,5 @@
-//! Hardware verification gates 1–3 for issue #644 (FSM1/cipher-box-next#32
-//! pre-build checks), run by hand against FUSE-T >= 1.2.7 with the SMB backend.
+//! Hardware verification gates 1–3 (FSM1/cipher-box-next#32 pre-build checks),
+//! run by hand against FUSE-T >= 1.2.7 with the SMB backend.
 //!
 //! Gate 1: SMB invalidation round-trip latency (data / attr / entry), plus a
 //!         no-invalidation control that measures natural SMB cache staleness.
@@ -1139,7 +1139,7 @@ fn main() {
         .unwrap_or_else(|| std::env::temp_dir().join("hwgates-mnt"));
 
     println!(
-        "FUSE-T hardware gates (issue #644) — mount at {}",
+        "FUSE-T hardware gates — mount at {}",
         mnt.display()
     );
     match cmd {

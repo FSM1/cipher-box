@@ -125,10 +125,10 @@ pub enum UndoDestAdd<T> {
 /// (`observed == cas_base`). Any version divergence fails closed with
 /// [`UndoDestAdd::Conflict`] rather than blind-removing, so a concurrent
 /// authoritative write always wins and the caller re-reads + re-derives instead
-/// of clobbering it (#743, deferred from #741; blueprint/engine.md).
+/// of clobbering it (blueprint/engine.md).
 ///
 /// The version rule is index-agnostic — it governs the direct-child-scope index
-/// here and a folder's own child list in the drain's relink envelope (#786) —
+/// here and a folder's own child list in the drain's relink envelope —
 /// so `remove` stays the caller's, carrying that index's own removal semantics.
 pub fn undo_dest_add_versioned<T>(
     dest: &[T],
@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn reversed_duplicate_inserts_converge_on_last_authoritative_write() {
-        // CR #741: differing-content dups are resolved by the op (last insert
+        // Differing-content dups are resolved by the op (last insert
         // wins), not by a permutation-blind tie-break. Convergence tracks the
         // latest authoritative write, independent of prior content or sibling
         // build order.
