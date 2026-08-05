@@ -578,8 +578,10 @@ the republish it already does.
   fresh device that has lost its cache cannot renew its own records. Every
   reseal authors an **owner-write-blob** — the `writeScopeSeed` sealed to the
   owner's own enc subkey, beside the write-body (`reseal_scope_root`, so every
-  root/interior write-scope cut, rotation, cascade, and sweep carries one) — the
-  owner's recovery source for `write_name_signer`. This slice authors and
+  root/interior write-scope cut, rotation, and cascade carries one) — the
+  owner's recovery source for `write_name_signer`. The sweep authors none: it
+  re-seals interior nodes, which publish no write-body for a blob to sit beside
+  (#27 D6). This slice authors and
   gate-verifies the blob; the owner read/consume that opens it into
   `HeldMaterial.write_scope_seed` rides a later facade slice.
 
