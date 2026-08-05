@@ -21,9 +21,9 @@ const LABELS: Record<UploadPhase, string> = {
 /** One in-flight upload, in the columns the listing below it uses. */
 export function UploadListItem({ upload, onCancel, onRetry, onDismiss }: UploadListItemProps) {
   const { id, name, phase, error } = upload;
-  const measured = phase === 'uploading' || phase === 'uploaded';
   const percent = Math.round(upload.progress * 100);
   const settled = !isActiveUpload(phase);
+  const measured = phase === 'uploading';
   // Only the row the client is actually feeding animates; a queued or retrying
   // one has nothing moving to report.
   const indeterminate = phase === 'staging';
