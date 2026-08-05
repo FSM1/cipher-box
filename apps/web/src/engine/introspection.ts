@@ -1,0 +1,103 @@
+/**
+ * The e2e seam (blueprint/testing.md "E2E"): read-only taps over the facade's
+ * snapshot and event stream, plus the cold start the suite drives in place of
+ * an interactive Core Kit login.
+ *
+ * Gated on `VITE_E2E_HOOK` rather than on `DEV`, because the suite runs against
+ * the production static build — a release bundle sets no flag, so the branch
+ * below folds away and `window.__CIPHERBOX_ENGINE__` is never assigned. The
+ * login secret travels one way, into the engine; nothing here reads key
+ * material back out.
+ */
+
+import { fromHex, toHex } from '@cipherbox/client';
+import type { EngineClient, EventDescriptor, SnapshotDescriptor } from '@cipherbox/client';
+import { authStore } from '../stores/auth.store';
+import { handOffLoginSecret } from './loginHandoff';
+
+/**
+ * A structured-clone-safe projection of an engine descriptor: `Uint8Array`
+ * becomes hex and `bigint` becomes a decimal string, neither of which survives
+ * the Playwright evaluation boundary as itself.
+ */
+export type Plain<T> = T extends Uint8Array
+  ? string
+  : T extends bigint
+    ? string
+    : T extends readonly (infer U)[]
+      ? Plain<U>[]
+      : T extends object
+        ? { [K in keyof T]: Plain<T[K]> }
+        : T;
+
+export interface IntrospectedView {
+  view: Plain<SnapshotDescriptor>;
+  /** The view is the latest version and the queue holds nothing for it. */
+  settled: boolean;
+}
+
+export interface EngineIntrospection {
+  /** Cold-starts the engine from a 32-byte hex login secret. */
+  signIn(loginSecretHex: string): Promise<void>;
+  /** The engine's view of `folder` (a hex node id), or of the vault root. */
+  snapshot(folder: string | null): Promise<IntrospectedView>;
+  /** Every engine event this tab has seen, in emission order. */
+  events(): Plain<EventDescriptor>[];
+}
+
+declare global {
+  interface Window {
+    __CIPHERBOX_ENGINE__?: EngineIntrospection;
+  }
+}
+
+/** The previous install's event subscription, released when a rebuild replaces it. */
+let release: (() => void) | null = null;
+
+/**
+ * Publishes the taps for `client` on `window`, and returns it so a host can
+ * wrap its client factory. A no-op outside an e2e build.
+ */
+export function installIntrospection(client: EngineClient): EngineClient {
+  if (import.meta.env.VITE_E2E_HOOK !== 'true') return client;
+
+  release?.();
+  const seen: Plain<EventDescriptor>[] = [];
+  release = client.facade.subscribe((event) => {
+    seen.push(plain(event) as Plain<EventDescriptor>);
+  });
+
+  window.__CIPHERBOX_ENGINE__ = {
+    async signIn(loginSecretHex) {
+      await handOffLoginSecret(client, {
+        _UNSAFE_exportTssKey: () => Promise.resolve(loginSecretHex),
+      });
+      authStore.signedIn('test');
+    },
+    async snapshot(folder) {
+      const view = await client.facade.snapshot(folder === null ? null : fromHex(folder));
+      return { view: plain(view) as Plain<SnapshotDescriptor>, settled: settled(view) };
+    },
+    events: () => seen,
+  };
+  return client;
+}
+
+/** The deterministic wait the suite polls in place of a sleep. */
+function settled(view: SnapshotDescriptor): boolean {
+  return (
+    view.staleness === 'fresh' &&
+    view.blocked === null &&
+    view.children.every((child) => child.pending === 'none')
+  );
+}
+
+function plain(value: unknown): unknown {
+  if (value instanceof Uint8Array) return toHex(value);
+  if (typeof value === 'bigint') return value.toString();
+  if (Array.isArray(value)) return value.map(plain);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, plain(item)]));
+  }
+  return value;
+}

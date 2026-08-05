@@ -36,10 +36,15 @@ coverage/
 # Generated wasm-bindgen glue for the web app's engine worker
 apps/web/src/wasm/
 
+# The web e2e suite's release-bundle comparison build
+apps/web/dist-release/
+
 # Playwright test results
 packages/client/test/browser/pkg/
 packages/client/playwright-report/
 packages/client/test-results/
+tests/web-e2e/playwright-report/
+tests/web-e2e/test-results/
 
 # Playwright screenshots
 .playwright-mcp/*.png

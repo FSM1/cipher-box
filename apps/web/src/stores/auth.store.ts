@@ -6,8 +6,8 @@
 
 import { useSyncExternalStore } from 'react';
 
-/** How the session was established. */
-export type LoginMethod = 'google' | 'email' | 'wallet';
+/** How the session was established. `test` is the e2e build's injected login. */
+export type LoginMethod = 'google' | 'email' | 'wallet' | 'test';
 
 export interface AuthState {
   readonly isAuthenticated: boolean;

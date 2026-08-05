@@ -21,6 +21,7 @@ import { App } from './App';
 import { createCoreKitSession } from './auth/coreKit';
 import { CoreKitProvider } from './auth/CoreKitProvider';
 import { createEngineClient } from './engine/createEngineClient';
+import { installIntrospection } from './engine/introspection';
 import { wagmiConfig } from './lib/wagmi';
 import { EngineProvider } from './providers/EngineProvider';
 
@@ -38,7 +39,9 @@ createRoot(rootElement).render(
         connector errors on a page that needs a signature, not a session. */}
     <WagmiProvider config={wagmiConfig} reconnectOnMount={false}>
       <QueryClientProvider client={queryClient}>
-        <EngineProvider createClient={createEngineClient}>
+        <EngineProvider
+          createClient={(secrets) => installIntrospection(createEngineClient(secrets))}
+        >
           <CoreKitProvider createSession={() => createCoreKitSession(import.meta.env)}>
             <BrowserRouter>
               <App />
