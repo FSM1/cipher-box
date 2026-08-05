@@ -10,7 +10,9 @@
 //!   the [`cascade`] (each eager-set descendant, fresh seed), and by the sweep.
 //! - [`rotate`] — `rotateScope`, the read-plane root cut: mint a fresh override
 //!   seed, re-seal, publish CAS, raise `minReadEpoch`, enqueue the sweep.
-//! - [`trigger`] — the read-revoke / scope-exit / manual trigger surface.
+//! - [`trigger`] — the read-revoke / scope-exit / manual trigger surface, and
+//!   the driver that turns a replay's queued scope-exit triggers into one flat
+//!   `rotateScope` per source scope root.
 //! - [`sweep`] — the lazy-wave epoch-lag convergence pass (metadata-only,
 //!   existing seed, `prev = None`) plus its idle-cadence driver and the
 //!   direct-child-scope index self-heal. It does **not** mint fresh descendant
@@ -28,8 +30,9 @@
 //!
 //! [`ChildIndexResolver`], [`CascadeResealResolver`], [`ScopeRootPublisher`] and
 //! [`WriteWavePublisher`] have production implementations over the real transport
-//! in [`crate::net::rotation`]. [`SweepResolver`] and [`WriteSubtreeResolver`]
-//! have no production implementation yet; tests fake them.
+//! in [`crate::net::rotation`]. [`SweepResolver`], [`ScopeExitRotator`] and
+//! [`WriteSubtreeResolver`] have no production implementation yet; tests fake
+//! them.
 
 pub mod cascade;
 pub mod eager_set;
@@ -59,4 +62,7 @@ pub use rotate_write::{
     build_repoint_object, derive_write_name, rotate_scope_write,
 };
 pub use sweep::{SweepError, SweepOutcome, SweepResolver, SweepTarget, run_sweep, sweep_pass};
-pub use trigger::{RevokeError, RevokedCommittedSet, RotationTrigger, revoke_read_grant};
+pub use trigger::{
+    RevokeError, RevokedCommittedSet, RotationTrigger, ScopeExitReport, ScopeExitRotator,
+    consume_scope_exit_triggers, revoke_read_grant,
+};

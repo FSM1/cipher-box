@@ -30,6 +30,9 @@ use cipherbox_core::seal::{
 };
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
 
+use super::rotate::{RotateError, RotationOutcome};
+use crate::facade::NodeId;
+
 /// Which trigger fired a rotation — a host-facing classifier carrying no key
 /// material. Scope-exit and manual rotations re-seal the unchanged committed set;
 /// read-revoke first applies [`revoke_read_grant`].
@@ -53,6 +56,64 @@ impl RotationTrigger {
             RotationTrigger::Manual => "manual",
         }
     }
+}
+
+/// The scope-exit rotation edge: cut one scope root that a grantee just left.
+///
+/// The pure driver ([`consume_scope_exit_triggers`]) owns the ordering and the
+/// retention law; this seam owns assembling the root's
+/// [`RotateScopePlan`](super::rotate::RotateScopePlan) from its resolved record
+/// and running [`rotate_scope`](super::rotate::rotate_scope) over the live
+/// plane. The grantee-arm implementation over the real transport is not landed.
+pub trait ScopeExitRotator {
+    /// Run the flat, grantee-triggered [`RotationTrigger::ScopeExit`] cut at
+    /// `scope_root`. `Err` means nothing was cut.
+    async fn rotate_on_scope_exit(
+        &self,
+        scope_root: NodeId,
+    ) -> Result<RotationOutcome, RotateError>;
+}
+
+/// What one pass of [`consume_scope_exit_triggers`] cut, and what it did not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeExitReport {
+    /// The scope roots this pass durably cut, in the order it cut them.
+    pub rotated: Vec<(NodeId, RotationOutcome)>,
+    /// The scope roots whose rotation failed, with why. Each is still a live
+    /// trigger: the caller re-drives it rather than treating the pass as done.
+    pub failed: Vec<(NodeId, RotateError)>,
+}
+
+impl ScopeExitReport {
+    /// Whether every queued trigger was cut — the only state in which the
+    /// caller may consider the scope exits settled.
+    pub fn is_complete(&self) -> bool {
+        self.failed.is_empty()
+    }
+}
+
+/// Drive one [`RotationTrigger::ScopeExit`] rotation per queued scope root.
+///
+/// `roots` is [`ReplayReport::scope_exit_triggers`](crate::sync::ReplayReport),
+/// already deduped to one entry per source scope root. A failure neither
+/// short-circuits the pass nor is swallowed: the remaining roots still rotate
+/// and the failed one comes back in [`ScopeExitReport::failed`], because a
+/// scope exit that never rotates leaves a revokee holding a live seed.
+pub async fn consume_scope_exit_triggers<R: ScopeExitRotator>(
+    rotator: &R,
+    roots: &[NodeId],
+) -> ScopeExitReport {
+    let mut report = ScopeExitReport {
+        rotated: Vec::new(),
+        failed: Vec::new(),
+    };
+    for root in roots {
+        match rotator.rotate_on_scope_exit(*root).await {
+            Ok(outcome) => report.rotated.push((*root, outcome)),
+            Err(e) => report.failed.push((*root, e)),
+        }
+    }
+    report
 }
 
 /// The owner-only committed-set cut produced by [`revoke_read_grant`]: the new
@@ -161,9 +222,89 @@ pub fn revoke_read_grant(
 
 #[cfg(test)]
 mod tests {
+    use core::cell::RefCell;
+
     use super::*;
+    use crate::testkit::block_on;
     use cipherbox_core::seal::{GrantSetEntry, Permission, PreservedFields, verify_grant_set};
     use cipherbox_core::suite::ecdsa::EcdsaSignature;
+
+    /// Records the roots it was asked to cut, failing the ones named in
+    /// `refuse` — the driver's only view of the rotation edge.
+    struct FakeRotator {
+        seen: RefCell<Vec<NodeId>>,
+        refuse: Vec<NodeId>,
+    }
+
+    impl FakeRotator {
+        fn refusing(refuse: &[NodeId]) -> Self {
+            Self {
+                seen: RefCell::new(Vec::new()),
+                refuse: refuse.to_vec(),
+            }
+        }
+    }
+
+    impl ScopeExitRotator for FakeRotator {
+        async fn rotate_on_scope_exit(
+            &self,
+            scope_root: NodeId,
+        ) -> Result<RotationOutcome, RotateError> {
+            self.seen.borrow_mut().push(scope_root);
+            if self.refuse.contains(&scope_root) {
+                return Err(RotateError::Publish(
+                    super::super::rotate::ScopeRootPublishError::NotPublished,
+                ));
+            }
+            Ok(RotationOutcome {
+                new_read_epoch: 2,
+                epoch_floor: 2,
+            })
+        }
+    }
+
+    fn node(b: u8) -> NodeId {
+        NodeId([b; 16])
+    }
+
+    #[test]
+    fn each_queued_root_is_cut_once_in_order() {
+        let rotator = FakeRotator::refusing(&[]);
+        let roots = [node(1), node(2)];
+        let report = block_on(consume_scope_exit_triggers(&rotator, &roots));
+
+        assert_eq!(*rotator.seen.borrow(), roots);
+        assert_eq!(
+            report.rotated.iter().map(|(r, _)| *r).collect::<Vec<_>>(),
+            roots
+        );
+        assert!(report.is_complete());
+    }
+
+    #[test]
+    fn a_failed_rotation_surfaces_and_the_rest_still_cut() {
+        // A swallowed failure is a revokee left holding a live seed, and a
+        // short-circuit would strand every later root behind it.
+        let rotator = FakeRotator::refusing(&[node(2)]);
+        let report = block_on(consume_scope_exit_triggers(
+            &rotator,
+            &[node(1), node(2), node(3)],
+        ));
+
+        assert_eq!(*rotator.seen.borrow(), [node(1), node(2), node(3)]);
+        assert_eq!(
+            report.rotated.iter().map(|(r, _)| *r).collect::<Vec<_>>(),
+            [node(1), node(3)]
+        );
+        assert_eq!(
+            report.failed.iter().map(|(r, _)| *r).collect::<Vec<_>>(),
+            [node(2)]
+        );
+        assert!(
+            !report.is_complete(),
+            "an unsettled trigger keeps the pass incomplete"
+        );
+    }
 
     fn owner() -> EcdsaSigner {
         EcdsaSigner::from_scalar(&[0x33; 32]).unwrap()

@@ -28,6 +28,8 @@ use crate::seams::OpId;
 use crate::sync::model::{NodeMeta, Snapshot, collation_key, suffix_name};
 #[cfg(test)]
 use crate::sync::op::NewNode;
+#[cfg(test)]
+use crate::sync::op::ScopeCrossing;
 use crate::sync::op::{Op, OpKind, Replaced};
 use crate::sync::record::{RecordClass, RecordReader};
 
@@ -46,9 +48,10 @@ pub enum OpResolution {
         effective_name: Option<String>,
         /// The add/add auto-suffix fired.
         suffixed: bool,
-        /// A cross-scope relink that left a granted source scope: the source
-        /// scope root whose scope-exit rotation is **queued** (this slice does
-        /// not rotate).
+        /// The granted source scope root this op exited, resolved full-depth
+        /// ([`source_scope_root`]) — the root a
+        /// [`ScopeExit`](crate::rotation::RotationTrigger::ScopeExit) rotation
+        /// must cut.
         scope_exit_trigger: Option<crate::facade::NodeId>,
     },
     /// The op was dropped as a no-op or a lost race.
@@ -130,7 +133,9 @@ pub struct ReplayReport {
     pub dropped: Vec<(OpId, DropReason)>,
     /// Dead-lettered ops — surfaced to the host; staged bytes preserved.
     pub dead_letters: Vec<(OpId, DeadLetterReason)>,
-    /// Scope-exit rotation triggers this replay queued (the source scope roots).
+    /// The granted source scope roots this replay exited, deduped and in
+    /// first-seen order: N ops leaving one scope are one rotation, never N
+    /// (blueprint/engine.md "Rotation primitives: Triggers").
     pub scope_exit_triggers: Vec<crate::facade::NodeId>,
 }
 
@@ -225,24 +230,32 @@ impl QueueScanMemo {
 /// Replay `ops` FIFO onto the gate-passing base. `local` (the pre-rebase
 /// overlay view) supplies node metadata for the edit-resurrects-a-delete case
 /// — the only rule that must re-materialize a node the gate-passing base no
-/// longer carries.
-pub fn replay(gate_passing: &Snapshot, local: &Snapshot, ops: &[(OpId, Op)]) -> ReplayReport {
+/// longer carries. `scope_roots` is the scope-root policy the full-depth
+/// scope-exit walk resolves against ([`source_scope_root`]).
+pub fn replay(
+    gate_passing: &Snapshot,
+    local: &Snapshot,
+    ops: &[(OpId, Op)],
+    scope_roots: &[crate::facade::NodeId],
+) -> ReplayReport {
     // The one necessary clone: rebase advances `working` but must never mutate
     // the caller's gate-passing base.
     let mut working = gate_passing.clone();
     let mut applied = Vec::new();
     let mut dropped = Vec::new();
     let mut dead_letters = Vec::new();
-    let mut scope_exit_triggers = Vec::new();
+    let mut scope_exit_triggers: Vec<crate::facade::NodeId> = Vec::new();
 
     for (op_id, op) in ops {
-        match rebase_one(&mut working, local, op) {
+        match rebase_one(&mut working, local, op, scope_roots) {
             OpResolution::Applied {
                 effective_name,
                 suffixed,
                 scope_exit_trigger,
             } => {
-                if let Some(scope_root) = scope_exit_trigger {
+                if let Some(scope_root) = scope_exit_trigger
+                    && !scope_exit_triggers.contains(&scope_root)
+                {
                     scope_exit_triggers.push(scope_root);
                 }
                 applied.push(AppliedOp {
@@ -268,7 +281,7 @@ pub fn replay(gate_passing: &Snapshot, local: &Snapshot, ops: &[(OpId, Op)]) -> 
 
 impl OpResolution {
     /// An applied op that carries no resolved name and no auto-suffix (delete,
-    /// move, content edit); `scope_exit_trigger` is the queued source scope
+    /// relink, content edit); `scope_exit_trigger` is the resolved source scope
     /// root, if any.
     fn applied(scope_exit_trigger: Option<crate::facade::NodeId>) -> Self {
         OpResolution::Applied {
@@ -281,7 +294,17 @@ impl OpResolution {
 
 /// Rebase one op onto the mutable working base and apply it. Returns the
 /// resolution and, on `Applied`, mutates `working` to reflect it.
-pub fn rebase_one(working: &mut Snapshot, local: &Snapshot, op: &Op) -> OpResolution {
+pub fn rebase_one(
+    working: &mut Snapshot,
+    local: &Snapshot,
+    op: &Op,
+    scope_roots: &[crate::facade::NodeId],
+) -> OpResolution {
+    // Resolved off the pre-move base: after the relink the target hangs under
+    // the destination, and the scope it *left* is no longer walkable from it.
+    let scope_exit_trigger = op
+        .scope_exit_source()
+        .map(|from_parent| source_scope_root(working, from_parent, scope_roots));
     match &op.kind {
         OpKind::Create { parent, name, node } => {
             rebase_create(working, op, *parent, name, node.kind())
@@ -291,23 +314,44 @@ pub fn rebase_one(working: &mut Snapshot, local: &Snapshot, op: &Op) -> OpResolu
         OpKind::Relink {
             from_parent,
             new_parent,
-            exits_granted_source,
             ..
-        } => rebase_relink(
-            working,
-            op,
-            *from_parent,
-            *new_parent,
-            *exits_granted_source,
-        ),
+        } => rebase_relink(working, op, *from_parent, *new_parent, scope_exit_trigger),
         OpKind::Move {
             from_parent,
             new_parent,
             new_name,
             replacing,
-        } => rebase_move(working, op, *from_parent, *new_parent, new_name, *replacing),
+            ..
+        } => rebase_move(
+            working,
+            op,
+            *from_parent,
+            *new_parent,
+            new_name,
+            *replacing,
+            scope_exit_trigger,
+        ),
         OpKind::UpdateContent { .. } => rebase_update_content(working, local, op),
     }
+}
+
+/// The granted scope root a move exited, walking `from_parent` and then its
+/// ancestors nearest-first — **full-depth** detection, so a move out of depth N
+/// names the same root as a move out of depth 1 (blueprint/engine.md "Rotation
+/// primitives: Triggers"; the one-level check is the v1 coverage hole).
+///
+/// A chain that reaches no listed root falls back to the snapshot root: a
+/// scope exit that rotates nothing leaves a revokee holding a live seed, and
+/// over-rotating an enclosing root only costs a wave.
+fn source_scope_root(
+    working: &Snapshot,
+    from_parent: crate::facade::NodeId,
+    scope_roots: &[crate::facade::NodeId],
+) -> crate::facade::NodeId {
+    core::iter::once(from_parent)
+        .chain(working.ancestors(from_parent))
+        .find(|node| scope_roots.contains(node))
+        .unwrap_or(working.root)
 }
 
 /// Add vs add: always visible; the rebasing loser auto-suffixes.
@@ -390,13 +434,12 @@ fn rebase_relink(
     op: &Op,
     from_parent: crate::facade::NodeId,
     new_parent: crate::facade::NodeId,
-    exits_granted_source: bool,
+    scope_exit_trigger: Option<crate::facade::NodeId>,
 ) -> OpResolution {
     if let Some(dead_letter) = relocation_guards(working, op, new_parent) {
         return dead_letter;
     }
 
-    let scope_exit_trigger = exits_granted_source.then_some(from_parent);
     match working.parent_of(op.target) {
         // Already at the destination — our move (or an identical concurrent one)
         // already landed.
@@ -453,6 +496,7 @@ fn rebase_move(
     new_parent: crate::facade::NodeId,
     new_name: &str,
     replacing: Option<Replaced>,
+    scope_exit_trigger: Option<crate::facade::NodeId>,
 ) -> OpResolution {
     if let Some(dead_letter) = relocation_guards(working, op, new_parent) {
         return dead_letter;
@@ -518,7 +562,7 @@ fn rebase_move(
     OpResolution::Applied {
         effective_name: Some(effective),
         suffixed,
-        scope_exit_trigger: None,
+        scope_exit_trigger,
     }
 }
 
@@ -720,6 +764,10 @@ mod tests {
         NodeId([b; 16])
     }
 
+    /// The one scope root these fixtures hang under — the full-depth
+    /// scope-exit walk resolves against it.
+    const SCOPE_ROOTS: &[NodeId] = &[NodeId([0; 16])];
+
     fn tree() -> Snapshot {
         Snapshot::new(id(0))
     }
@@ -737,7 +785,7 @@ mod tests {
 
         // The delete snapshotted the target at sequence 3.
         let local = base.clone();
-        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3));
+        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3), SCOPE_ROOTS);
         assert_eq!(res, OpResolution::Dropped(DropReason::TargetAdvanced));
         assert!(base.contains(id(1)), "edit wins — the node survives");
     }
@@ -749,7 +797,7 @@ mod tests {
         base.node_mut(id(1)).unwrap().record_sequence = 3;
 
         let local = base.clone();
-        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3));
+        let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3), SCOPE_ROOTS);
         assert!(matches!(res, OpResolution::Applied { .. }));
         assert!(!base.contains(id(1)));
     }
@@ -765,6 +813,7 @@ mod tests {
             &mut working,
             &local,
             &Op::update_content(id(1), staged_k(), 1, AT),
+            SCOPE_ROOTS,
         );
         assert!(matches!(res, OpResolution::Applied { .. }));
         assert!(working.contains(id(1)), "the edit resurrected the node");
@@ -786,6 +835,7 @@ mod tests {
             &mut working,
             &local,
             &Op::update_content(id(1), staged_k(), 1, AT),
+            SCOPE_ROOTS,
         );
         assert_eq!(
             res,
@@ -848,6 +898,7 @@ mod tests {
             &mut gate_passing.clone(),
             &local,
             &Op::update_content(id(1), staged_k(), 1, AT),
+            SCOPE_ROOTS,
         );
         assert_eq!(
             res,
@@ -873,6 +924,7 @@ mod tests {
                 1,
                 AT,
             ),
+            SCOPE_ROOTS,
         );
         assert_eq!(
             res,
@@ -895,7 +947,12 @@ mod tests {
         base.node_mut(id(1)).unwrap().name = "other.txt".into();
 
         let local = base.clone();
-        let res = rebase_one(&mut base, &local, &Op::rename(id(1), "final.txt", 1, AT));
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::rename(id(1), "final.txt", 1, AT),
+            SCOPE_ROOTS,
+        );
         assert!(matches!(
             res,
             OpResolution::Applied {
@@ -920,7 +977,8 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::relink(id(2), id(0), id(1), 1, AT, false, false),
+            &Op::relink(id(2), id(0), id(1), 1, AT, ScopeCrossing::Intra),
+            SCOPE_ROOTS,
         );
         assert!(matches!(res, OpResolution::Applied { .. }));
         assert_eq!(base.parent_of(id(2)), Some(id(1)), "dest-linked");
@@ -942,7 +1000,8 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::relink(id(3), id(0), id(1), 1, AT, false, false),
+            &Op::relink(id(3), id(0), id(1), 1, AT, ScopeCrossing::Intra),
+            SCOPE_ROOTS,
         );
         assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
         assert_eq!(
@@ -953,28 +1012,201 @@ mod tests {
         assert!(base.children(id(1)).is_empty(), "no dest-add residue");
     }
 
-    #[test]
-    fn cross_scope_move_out_of_a_granted_scope_queues_a_trigger_only() {
+    /// `granted` (id 5) is a scope root holding a chain `a`/`b`/`c` down to
+    /// depth 3, beside a sibling destination outside it.
+    fn granted_scope() -> Snapshot {
         let mut base = tree();
         with_node(&mut base, id(0), id(5), "granted", NodeKind::Folder);
-        with_node(&mut base, id(5), id(6), "dest", NodeKind::Folder);
-        with_node(&mut base, id(5), id(7), "moved", NodeKind::File);
+        with_node(&mut base, id(0), id(6), "dest", NodeKind::Folder);
+        with_node(&mut base, id(5), id(10), "a", NodeKind::Folder);
+        with_node(&mut base, id(10), id(11), "b", NodeKind::Folder);
+        with_node(&mut base, id(11), id(12), "c", NodeKind::Folder);
+        base
+    }
 
+    /// The scope roots for [`granted_scope`]: the vault root and the granted
+    /// scope nested under it.
+    const NESTED_ROOTS: &[NodeId] = &[NodeId([0; 16]), NodeId([5; 16])];
+
+    #[test]
+    fn a_scope_exit_names_the_granted_root_at_depth_one_and_at_depth_n() {
+        // The v1 coverage hole: a one-level check names `from_parent`, which is
+        // the scope root only for the depth-1 move.
+        for (from_parent, depth) in [(id(5), 1), (id(12), 4)] {
+            let mut base = granted_scope();
+            with_node(&mut base, from_parent, id(7), "moved", NodeKind::File);
+            let local = base.clone();
+            let res = rebase_one(
+                &mut base,
+                &local,
+                &Op::relink(
+                    id(7),
+                    from_parent,
+                    id(6),
+                    1,
+                    AT,
+                    ScopeCrossing::ExitsGrantedSource,
+                ),
+                NESTED_ROOTS,
+            );
+            assert_eq!(
+                res,
+                OpResolution::Applied {
+                    effective_name: None,
+                    suffixed: false,
+                    scope_exit_trigger: Some(id(5)),
+                },
+                "an exit from depth {depth} names the granted scope root"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cross_scope_move_with_rename_queues_the_same_trigger() {
+        // A kernel rename journals `Move`, not `Relink`, so the desktop's whole
+        // move surface would be blind to a scope exit if this did not fire.
+        let mut base = granted_scope();
+        with_node(&mut base, id(12), id(7), "moved", NodeKind::File);
         let local = base.clone();
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::relink(id(7), id(5), id(6), 1, AT, true, true),
+            &Op::move_node(
+                id(7),
+                id(12),
+                id(6),
+                "renamed.txt",
+                None,
+                1,
+                AT,
+                ScopeCrossing::ExitsGrantedSource,
+            ),
+            NESTED_ROOTS,
+        );
+        assert_eq!(
+            res,
+            OpResolution::Applied {
+                effective_name: Some("renamed.txt".to_owned()),
+                suffixed: false,
+                scope_exit_trigger: Some(id(5)),
+            }
+        );
+    }
+
+    #[test]
+    fn a_source_chain_reaching_no_listed_root_falls_back_to_the_snapshot_root() {
+        // Rotating an enclosing root over-rotates; rotating nothing would leave
+        // a revokee holding a live seed.
+        let mut base = granted_scope();
+        with_node(&mut base, id(12), id(7), "moved", NodeKind::File);
+        let local = base.clone();
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::relink(
+                id(7),
+                id(12),
+                id(6),
+                1,
+                AT,
+                ScopeCrossing::ExitsGrantedSource,
+            ),
+            &[],
         );
         assert_eq!(
             res,
             OpResolution::Applied {
                 effective_name: None,
                 suffixed: false,
-                scope_exit_trigger: Some(id(5)),
-            },
-            "the trigger is queued; no rotation happens in this slice"
+                scope_exit_trigger: Some(id(0)),
+            }
         );
+    }
+
+    #[test]
+    fn an_intra_scope_relocation_fires_no_trigger() {
+        let mut base = granted_scope();
+        with_node(&mut base, id(12), id(7), "moved", NodeKind::File);
+        let local = base.clone();
+        for op in [
+            Op::relink(id(7), id(12), id(11), 1, AT, ScopeCrossing::Intra),
+            Op::move_node(
+                id(7),
+                id(12),
+                id(11),
+                "r.txt",
+                None,
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+        ] {
+            let res = rebase_one(&mut base.clone(), &local, &op, NESTED_ROOTS);
+            assert!(
+                matches!(
+                    res,
+                    OpResolution::Applied {
+                        scope_exit_trigger: None,
+                        ..
+                    }
+                ),
+                "the non-trigger list holds for {:?}",
+                op.kind
+            );
+        }
+    }
+
+    #[test]
+    fn many_ops_exiting_one_scope_queue_exactly_one_trigger() {
+        let mut base = granted_scope();
+        for node in [id(7), id(8), id(9)] {
+            with_node(&mut base, id(12), node, "moved", NodeKind::File);
+        }
+        let ops: Vec<(OpId, Op)> = [id(7), id(8), id(9)]
+            .into_iter()
+            .enumerate()
+            .map(|(n, node)| {
+                (
+                    OpId(n as u64),
+                    Op::move_node(
+                        node,
+                        id(12),
+                        id(6),
+                        format!("m{n}.txt"),
+                        None,
+                        1,
+                        AT,
+                        ScopeCrossing::ExitsGrantedSource,
+                    ),
+                )
+            })
+            .collect();
+
+        let report = replay(&base, &base, &ops, NESTED_ROOTS);
+        assert_eq!(report.applied.len(), 3);
+        assert_eq!(report.scope_exit_triggers, vec![id(5)]);
+    }
+
+    #[test]
+    fn a_move_that_loses_its_race_queues_no_trigger() {
+        // The exit never happened here, so there is nothing to rotate for.
+        let mut base = granted_scope();
+        with_node(&mut base, id(11), id(7), "moved", NodeKind::File);
+        let local = base.clone();
+        let res = rebase_one(
+            &mut base,
+            &local,
+            &Op::relink(
+                id(7),
+                id(12),
+                id(6),
+                1,
+                AT,
+                ScopeCrossing::ExitsGrantedSource,
+            ),
+            NESTED_ROOTS,
+        );
+        assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
     }
 
     /// The `(base, local)` pair for a move over `dir`/`f` plus an occupied
@@ -1002,7 +1234,17 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::move_node(id(2), id(0), id(1), "target.txt", replacing(1), 1, AT),
+            &Op::move_node(
+                id(2),
+                id(0),
+                id(1),
+                "target.txt",
+                replacing(1),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+            SCOPE_ROOTS,
         );
         assert_eq!(
             res,
@@ -1028,7 +1270,17 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::move_node(id(2), id(0), id(1), "target.txt", replacing(1), 1, AT),
+            &Op::move_node(
+                id(2),
+                id(0),
+                id(1),
+                "target.txt",
+                replacing(1),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+            SCOPE_ROOTS,
         );
         assert_eq!(
             res,
@@ -1054,7 +1306,17 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::move_node(id(2), id(0), id(1), "target.txt", replacing(1), 1, AT),
+            &Op::move_node(
+                id(2),
+                id(0),
+                id(1),
+                "target.txt",
+                replacing(1),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+            SCOPE_ROOTS,
         );
         assert_eq!(
             res,
@@ -1079,7 +1341,17 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::move_node(id(2), id(0), id(1), "target.txt", replacing(1), 1, AT),
+            &Op::move_node(
+                id(2),
+                id(0),
+                id(1),
+                "target.txt",
+                replacing(1),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+            SCOPE_ROOTS,
         );
         assert!(matches!(
             res,
@@ -1116,7 +1388,9 @@ mod tests {
                 }),
                 1,
                 AT,
+                ScopeCrossing::Intra,
             ),
+            SCOPE_ROOTS,
         );
         assert!(matches!(res, OpResolution::Applied { .. }));
         assert!(base.contains(id(2)), "the target survives its own replace");
@@ -1132,7 +1406,17 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::move_node(id(2), id(0), id(0), "g.txt", None, 1, AT),
+            &Op::move_node(
+                id(2),
+                id(0),
+                id(0),
+                "g.txt",
+                None,
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+            SCOPE_ROOTS,
         );
         assert!(matches!(
             res,
@@ -1162,7 +1446,17 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::move_node(id(2), id(0), id(1), "target.txt", replacing(1), 1, AT),
+            &Op::move_node(
+                id(2),
+                id(0),
+                id(1),
+                "target.txt",
+                replacing(1),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+            SCOPE_ROOTS,
         );
         assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
         assert_eq!(
@@ -1183,7 +1477,17 @@ mod tests {
             let res = rebase_one(
                 &mut working,
                 &base,
-                &Op::move_node(target, id(0), dest, "target.txt", replacing(1), 1, AT),
+                &Op::move_node(
+                    target,
+                    id(0),
+                    dest,
+                    "target.txt",
+                    replacing(1),
+                    1,
+                    AT,
+                    ScopeCrossing::Intra,
+                ),
+                SCOPE_ROOTS,
             );
             assert_eq!(res, OpResolution::DeadLetter(reason));
             assert_eq!(working, base, "a dead letter changes nothing");
@@ -1202,7 +1506,17 @@ mod tests {
         let res = rebase_one(
             &mut base,
             &local,
-            &Op::move_node(id(2), id(0), id(1), "target.txt", replacing(1), 1, AT),
+            &Op::move_node(
+                id(2),
+                id(0),
+                id(1),
+                "target.txt",
+                replacing(1),
+                1,
+                AT,
+                ScopeCrossing::Intra,
+            ),
+            SCOPE_ROOTS,
         );
         assert_eq!(res, OpResolution::Dropped(DropReason::AlreadySatisfied));
     }
@@ -1241,6 +1555,7 @@ mod tests {
                 1,
                 AT,
             ),
+            SCOPE_ROOTS,
         );
         assert_eq!(res, OpResolution::DeadLetter(DeadLetterReason::TargetGone));
     }
@@ -1256,7 +1571,8 @@ mod tests {
             let res = rebase_one(
                 &mut base.clone(),
                 &local,
-                &Op::relink(id(1), id(0), dest, 1, AT, false, false),
+                &Op::relink(id(1), id(0), dest, 1, AT, ScopeCrossing::Intra),
+                SCOPE_ROOTS,
             );
             assert_eq!(
                 res,
@@ -1306,7 +1622,7 @@ mod tests {
                 ),
             ), // dead-letter
         ];
-        let report = replay(&gate_passing, &gate_passing, &ops);
+        let report = replay(&gate_passing, &gate_passing, &ops, SCOPE_ROOTS);
 
         assert_eq!(report.applied.len(), 2);
         assert!(report.applied[1].suffixed);

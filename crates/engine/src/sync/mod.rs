@@ -11,10 +11,11 @@
 //! the five per-op race rules — and a terminally unrebasable op dead-letters
 //! with its staged bytes preserved rather than being silently dropped.
 //!
-//! Out of this slice, by design: scope-exit rotation
-//! *triggering* — a cross-scope relink out of a granted scope **queues** the
-//! trigger event ([`rebase::ReplayReport::scope_exit_triggers`]); the rotation
-//! primitives themselves land with the rotation slice.
+//! A cross-scope relocation out of a granted scope resolves its source scope
+//! root full-depth and queues one trigger per root
+//! ([`rebase::ReplayReport::scope_exit_triggers`]);
+//! [`consume_scope_exit_triggers`](crate::rotation::consume_scope_exit_triggers)
+//! cuts them.
 
 pub mod boot;
 pub(crate) mod cancel;
@@ -36,7 +37,7 @@ pub use drain::{
     op_mark_key,
 };
 pub use model::{Link, NodeMeta, Snapshot, collation_key, suffix_name};
-pub use op::{NewNode, Op, OpDecodeError, OpKind, Replaced, StagedContent};
+pub use op::{NewNode, Op, OpDecodeError, OpKind, Replaced, ScopeCrossing, StagedContent};
 pub use overlay::apply_overlay;
 pub use pointer::{
     ConsultReason, PointerError, PointerFetch, SessionRole, VaultPointerAdoption, open_repoint,

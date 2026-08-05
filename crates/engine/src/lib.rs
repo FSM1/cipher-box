@@ -81,8 +81,9 @@ pub use profile::SyncTimingProfile;
 pub use rotation::{
     ChildIndexResolver, CommittedSet, EagerSet, EnumerationError, PrevEpochSeed, ResealError,
     ResealSeeds, ResealedScopeRoot, ResolveFailure, RevokeError, RevokedCommittedSet, RotateError,
-    RotateScopePlan, RotationOutcome, RotationTrigger, ScopeRootIdentity, ScopeRootPublishError,
-    ScopeRootPublisher, enumerate_eager_set, reseal_scope_root, revoke_read_grant, rotate_scope,
+    RotateScopePlan, RotationOutcome, RotationTrigger, ScopeExitReport, ScopeExitRotator,
+    ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher, consume_scope_exit_triggers,
+    enumerate_eager_set, reseal_scope_root, revoke_read_grant, rotate_scope,
 };
 pub use seams::{SeamError, SeamResult, SeamSet, SeamTypes};
 pub use settings::{
@@ -95,7 +96,7 @@ pub use sync::{
     AppliedOp, BlockedOp, Connectivity, DeadLetterReason, DropReason, FocusTarget, FocusWindow,
     HeadReconciliation, Link, NewNode, NodeMeta, Op, OpKind, OpRecordError, OpResolution,
     PointerError, PointerFetch, RecordClass, RecordReader, RecordSeal, Repair, Replaced,
-    ReplayReport, SessionRole, Snapshot, StagedContent, TickCause, TickControl,
+    ReplayReport, ScopeCrossing, SessionRole, Snapshot, StagedContent, TickCause, TickControl,
     VaultPointerAdoption, apply_overlay, apply_repairs, classify, decode_queue, encode_op_record,
     focus_set, observed_repair, rebase_one, reconcile_head, record_content_root_cid, replay,
     resolve_vault_pointer, stage_op,

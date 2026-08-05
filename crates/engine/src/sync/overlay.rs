@@ -10,6 +10,8 @@
 //! local divergence from the remote snapshot.
 
 use crate::sync::model::{NodeMeta, Snapshot};
+#[cfg(test)]
+use crate::sync::op::ScopeCrossing;
 use crate::sync::op::{Op, OpKind};
 
 /// Apply the pending op queue onto `base` in FIFO order, returning the rendered
@@ -168,7 +170,7 @@ mod tests {
         base.link(id(0), id(1), 1);
         base.link(id(0), id(2), 1);
 
-        let ops = vec![Op::relink(id(2), id(0), id(1), 1, AT, false, false)];
+        let ops = vec![Op::relink(id(2), id(0), id(1), 1, AT, ScopeCrossing::Intra)];
         let view = apply_overlay(&base, &ops);
         assert_eq!(view.parent_of(id(2)), Some(id(1)));
         assert_eq!(view.children(id(0)).len(), 1, "moved out of root");
@@ -196,6 +198,7 @@ mod tests {
             replacing,
             1,
             AT,
+            ScopeCrossing::Intra,
         )];
         let view = apply_overlay(&base, &ops);
 
@@ -225,6 +228,7 @@ mod tests {
                 replacing,
                 1,
                 AT,
+                ScopeCrossing::Intra,
             )],
         );
 

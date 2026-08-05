@@ -16,7 +16,9 @@
 //! What the pass does when a publish will not succeed is the failure valve
 //! ([`Halt`]).
 //!
-//! Out of this slice: cross-scope re-seal with the scope-exit rotation trigger.
+//! A cross-scope relocation halts rather than publishing: its destination-epoch
+//! re-seal is not a plan this driver authors. Its scope-exit trigger still
+//! reaches [`DrainReport::scope_exit_triggers`].
 
 use core::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -61,7 +63,7 @@ use crate::session::SessionIdentity;
 use crate::settings::{Destinations, Placement, PlacementDecision};
 use crate::sync::cancel::UploadCancels;
 use crate::sync::model::{Snapshot, collation_key};
-use crate::sync::op::{NewNode, Op, OpKind, StagedContent};
+use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::project::project_folder;
 use crate::sync::rebase::{AppliedOp, DeadLetterReason, decode_queue, replay};
@@ -118,6 +120,13 @@ pub(crate) struct DrainReport {
     /// Ops removed as restore residue: already drained on this device, so the
     /// queue that holds them is older than the completion record.
     pub(crate) restore_residue: Vec<OpId>,
+    /// The granted source scope roots this pass's replay exited, deduped — the
+    /// input to
+    /// [`consume_scope_exit_triggers`](crate::rotation::consume_scope_exit_triggers).
+    /// A cross-scope relocation never publishes, so its op is still queued when
+    /// the pass ends and the next pass re-derives the trigger: the durable
+    /// queue is what makes the intent durable.
+    pub(crate) scope_exit_triggers: Vec<NodeId>,
 }
 
 impl DrainReport {
@@ -580,8 +589,13 @@ where
             let base = self.base.borrow();
             let ops: Vec<Op> = queued.iter().map(|(_, op)| op.clone()).collect();
             let local = apply_overlay(&base, &ops);
-            replay(&base, &local, queued)
+            // This session holds one scope, so its root is the only scope root
+            // a full-depth exit walk can land on.
+            replay(&base, &local, queued, &[scope.root])
         };
+        report
+            .scope_exit_triggers
+            .clone_from(&rebased.scope_exit_triggers);
 
         for (op_id, reason) in &rebased.dead_letters {
             let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {
@@ -1026,8 +1040,7 @@ where
             OpKind::Relink {
                 from_parent,
                 new_parent,
-                cross_scope: false,
-                ..
+                crossing: ScopeCrossing::Intra,
             } => {
                 let plan = MovePlan {
                     from_parent: *from_parent,
@@ -1042,6 +1055,7 @@ where
                 from_parent,
                 new_parent,
                 replacing,
+                crossing: ScopeCrossing::Intra,
                 ..
             } => {
                 let plan = MovePlan {
@@ -1062,7 +1076,11 @@ where
                 self.publish_update_content(scope, pass, applied, content)
                     .await
             }
-            OpKind::Relink { .. } => Err(Halt::Unclassified),
+            // A cross-scope relocation re-seals the moved subtree at the
+            // destination epoch — a plan this driver does not author. Publishing
+            // it as a plain ref move would carry the subtree into the
+            // destination still sealed at the source epoch.
+            OpKind::Relink { .. } | OpKind::Move { .. } => Err(Halt::Unclassified),
         }
     }
 
