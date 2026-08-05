@@ -40,10 +40,10 @@ use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 
 use super::aad::{AadContext, build_aad};
 use super::body::{
-    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, bytes_fixed,
-    collect_unknown, merge_unknown, req,
+    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, assert_within_bound,
+    bytes_fixed, collect_unknown, merge_unknown, req,
 };
-use super::section::{MAX_GRANT_BLOBS, assert_within_bound};
+use super::section::MAX_GRANT_BLOBS;
 
 /// The HPKE `info` for every grant-section seal. The structured AAD already
 /// binds `(v, id, scope, epoch, structTag)`, so no additional info label is
@@ -754,9 +754,7 @@ const GRANT_SET_KNOWN: &[&str] = &["entries", "ipnsName", "ownerPseudonymPk"];
 /// Decode a grant-set commitment (strict det-CBOR, unknown fields preserved).
 ///
 /// `entries` is bounded fail-closed at [`MAX_GRANT_BLOBS`] before any entry is
-/// parsed: every write-permission entry becomes another key the gate's stage 3
-/// trial-verifies each structure against, so an unbounded set is a reader-CPU
-/// amplifier (blueprint/core.md "Grant section").
+/// parsed.
 pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, CodecError> {
     let value = decode(bytes)?;
     let map = value.as_map()?;
@@ -782,12 +780,12 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
 ///
 /// Fails closed on a duplicate-tag commitment, or on an entry set past
 /// [`MAX_GRANT_BLOBS`], with the same verdict `decode_grant_set_commitment`
-/// raises, so the sign path never attests bytes every recipient rejects — and an
-/// owner learns the ceiling at the mint rather than at the publish that would
-/// have left the scope root unpublishable (AGENTS.md rule 8).
+/// raises, so the sign path never attests bytes every recipient rejects.
 pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, CodecError> {
-    assert_grant_tags_unique(c.entries.iter().map(|e| e.tag))?;
+    // Bound first, the order the decoder checks them in, so a value violating
+    // both invariants gets the same verdict from either side.
     assert_within_bound("entries", c.entries.len(), MAX_GRANT_BLOBS)?;
+    assert_grant_tags_unique(c.entries.iter().map(|e| e.tag))?;
     let mut m = Map::new();
     m.insert(
         "entries",
@@ -1218,9 +1216,7 @@ mod tests {
 
     #[test]
     fn entries_past_the_bound_reject_at_decode_encode_and_sign() {
-        // Release-active on all three: a `debug_assert` would let a release build
-        // sign a commitment its own decoder always rejects, bricking the scope
-        // root. All tags distinct, so the bound is what fires.
+        // Distinct tags, so the bound is what fires.
         let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
         let over = commitment_of(MAX_GRANT_BLOBS + 1);
         assert_eq!(
@@ -1232,9 +1228,19 @@ mod tests {
             "too-many-structures"
         );
 
-        // Hand-built CBOR, the way a hostile peer's bytes arrive, with every
-        // entry sharing one tag: the bound must fire before the entries are
-        // parsed at all, so it is the verdict rather than `duplicate-grant-tag`.
+        // One value violating BOTH invariants, fed to both sides: over the bound
+        // and every tag equal. Each side must name the bound, so the verdicts
+        // agree rather than depending on which guard each happens to run first.
+        let mut both = commitment_of(MAX_GRANT_BLOBS + 1);
+        for e in &mut both.entries {
+            e.tag = [0x01; SECRET_LEN];
+        }
+        assert_eq!(
+            encode_grant_set_commitment(&both).unwrap_err().check(),
+            "too-many-structures"
+        );
+        // Hand-built CBOR, the way a hostile peer's bytes arrive: the bound must
+        // fire before any entry is parsed at all.
         let entry = || {
             let mut e = Map::new();
             e.insert("permission", Value::Text("write".into()));

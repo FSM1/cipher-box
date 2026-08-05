@@ -17,6 +17,7 @@
 //! AAD-confirmed-unseal rule of the floor law.
 
 use core::fmt;
+use std::collections::BTreeSet;
 
 use cipherbox_core::error::{CodecError, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -308,19 +309,22 @@ impl PendingAdoption {
 /// The committed write-capable pseudonyms of a scope root: the owner pseudonym
 /// plus every write-permission entry's pseudonym. Read-only entries never
 /// authorize a seed-bearing structure.
+///
+/// Deduplicated: only a tag is unique across committed entries, so one pseudonym
+/// may be named by many. A repeat authenticates nothing the first copy did not,
+/// and each copy would cost every structure another trial verification.
 fn committed_write_pseudonyms(commitment: &GrantSetCommitment) -> Vec<Ed25519Verifier> {
-    let mut set = Vec::new();
-    if let Some(owner) = Ed25519Verifier::from_bytes(commitment.owner_pseudonym_pk) {
-        set.push(owner);
-    }
-    for entry in &commitment.entries {
-        if entry.permission == Permission::Write {
-            if let Some(pk) = Ed25519Verifier::from_bytes(entry.pseudonym_pk) {
-                set.push(pk);
-            }
-        }
-    }
-    set
+    let writers = commitment
+        .entries
+        .iter()
+        .filter(|e| e.permission == Permission::Write)
+        .map(|e| e.pseudonym_pk);
+    let mut seen = BTreeSet::new();
+    core::iter::once(commitment.owner_pseudonym_pk)
+        .chain(writers)
+        .filter(|pk| seen.insert(*pk))
+        .filter_map(Ed25519Verifier::from_bytes)
+        .collect()
 }
 
 /// Trial-verifier over a section's committed write-capable pseudonyms, carrying

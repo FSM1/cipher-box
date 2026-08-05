@@ -154,9 +154,8 @@ pub enum ResealError {
     /// More carried history links than the codec's frozen bound admits — a set
     /// that could only ever produce a section this build's own encoder rejects.
     TooManyHistoryLinks,
-    /// More committed grants than the codec's frozen bound admits. One blob is
-    /// wrapped per committed grant, so the section could only ever be refused by
-    /// this build's own encoder — caught before the wraps are spent.
+    /// More committed grants than the codec's frozen bound admits — a set that
+    /// could only ever produce a section this build's own encoder rejects.
     TooManyCommittedGrants,
     /// A re-sealed structure could not be encoded — a duplicate ledger tag, or
     /// nesting past the codec's `MAX_DEPTH`.
@@ -291,14 +290,14 @@ pub fn reseal_scope_root<E: Entropy>(
     }
 
     // Fail-closed BEFORE any seal: the produce-side mirror of the codec's own
-    // bounds (AGENTS.md rule 8), so a sweep — which prunes nothing — can never
-    // spend a section's worth of signatures, or one HPKE wrap per committed
-    // grant, on a set the encoder then refuses. Both are O(1) and precede the
-    // set comparison below, so an over-large commitment costs nothing.
+    // bounds (AGENTS.md rule 8). The ledger is bounded alongside the commitment
+    // because it, not the commitment, is what the wrap loop below walks.
     if carried_history_links.len() > MAX_HISTORY_LINKS {
         return Err(ResealError::TooManyHistoryLinks);
     }
-    if committed.commitment.entries.len() > MAX_GRANT_BLOBS {
+    if committed.commitment.entries.len() > MAX_GRANT_BLOBS
+        || committed.grant_ledger.len() > MAX_GRANT_BLOBS
+    {
         return Err(ResealError::TooManyCommittedGrants);
     }
 

@@ -34,8 +34,8 @@ use crate::suite::hpke::ENC_LEN;
 use crate::suite::secret::SECRET_LEN;
 
 use super::body::{
-    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, bytes_fixed,
-    collect_unknown, merge_unknown, req,
+    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, assert_within_bound,
+    bytes_fixed, collect_unknown, merge_unknown, req,
 };
 use super::grant::{GrantSetCommitment, decode_grant_set_commitment, encode_grant_set_commitment};
 
@@ -278,24 +278,6 @@ pub const MAX_HISTORY_LINKS: usize = 256;
 /// encoder refuses.
 pub const MAX_GRANT_BLOBS: usize = 1024;
 
-/// Release-active bound on a repeated collection, symmetric across decode and
-/// encode (AGENTS.md rule 8).
-pub(super) fn assert_within_bound(
-    collection: &'static str,
-    count: usize,
-    limit: usize,
-) -> Result<(), CodecError> {
-    if count > limit {
-        return Err(Malformed::TooManyStructures {
-            collection,
-            count,
-            limit,
-        }
-        .into());
-    }
-    Ok(())
-}
-
 /// Release-active uniqueness check over history-link sealed bytes, symmetric
 /// across decode and encode. Each epoch mints one link under a fresh nonce over
 /// a distinct payload, so equal sealed bytes are never an honest rotator's
@@ -386,13 +368,15 @@ pub fn encode_grant_section(section: &GrantSection) -> Result<Vec<u8>, CodecErro
     // `ascentLink`/`ownerWriteBlob` are optional, so `merge_unknown`'s
     // presence-based precedence does not cover them.
     assert_unknown_disjoint(&section.unknown, GRANT_SECTION_KNOWN)?;
-    assert_grant_tags_unique(section.grant_blobs.iter().map(|b| b.tag))?;
+    // Bounds before the uniqueness walks, the order the decoder checks them in,
+    // so a value violating both gets the same verdict from either side.
     assert_within_bound("grantBlobs", section.grant_blobs.len(), MAX_GRANT_BLOBS)?;
     assert_within_bound(
         "historyLinks",
         section.history_links.len(),
         MAX_HISTORY_LINKS,
     )?;
+    assert_grant_tags_unique(section.grant_blobs.iter().map(|b| b.tag))?;
     assert_history_links_unique(&section.history_links)?;
     let commitment_bytes = encode_grant_set_commitment(&section.commitment)?;
 
@@ -673,6 +657,25 @@ mod tests {
             decode_grant_section(&wire_section(over, Vec::new()))
                 .unwrap_err()
                 .check(),
+            "too-many-structures"
+        );
+
+        // Violating both invariants at once — over the bound and every tag
+        // equal — must name the bound on either side, so encode and decode do
+        // not disagree on which guard owns the verdict.
+        let dup: Vec<SignedGrantBlob> = (0..=MAX_GRANT_BLOBS).map(|_| blob(0)).collect();
+        section.grant_blobs = dup.clone();
+        assert_eq!(
+            encode_grant_section(&section).unwrap_err().check(),
+            "too-many-structures"
+        );
+        assert_eq!(
+            decode_grant_section(&wire_section(
+                dup.iter().map(SignedGrantBlob::to_value).collect(),
+                Vec::new()
+            ))
+            .unwrap_err()
+            .check(),
             "too-many-structures"
         );
     }
