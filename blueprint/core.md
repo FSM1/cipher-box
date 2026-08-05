@@ -133,13 +133,16 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   grant-section map carries `ownerWriteBlob` as `{enc, ciphertext, sig}`
   (`GrantSection.owner_write_blob: Option<SignedOwnerWriteBlob>`, `Option` = an
   additive evolution: records predating the tag, and read-only records, decode
-  with `None`). Both repeated collections are bounded fail-closed at decode and
-  encode — `historyLinks` at 256, `grantBlobs` at 1024 (`too-many-structures`) —
-  and two history links may not carry equal sealed bytes
-  (`duplicate-history-link`): the gate verifies one signature per structure per
-  committed pseudonym, so an unbounded collection is a reader-CPU amplifier, and
-  each epoch mints one link under a fresh nonce, so a repeat is an authored
-  anomaly. `historyLinks` is ordered **oldest epoch first** — an invariant the
+  with `None`). Every repeated collection is bounded fail-closed at decode and
+  encode — `historyLinks` at 256, `grantBlobs` and the commitment's `entries`
+  both at 1024 (`too-many-structures`) — and two history links may not carry
+  equal sealed bytes (`duplicate-history-link`): the gate verifies one signature
+  per structure per committed pseudonym, so an unbounded collection on **either**
+  side of that product is a reader-CPU amplifier, and each epoch mints one link
+  under a fresh nonce, so a repeat is an authored anomaly. The two 1024 ceilings
+  are one number: the ledger must match the committed set exactly and a re-seal
+  wraps one blob per ledger row, so a commitment past the ceiling could only mint
+  a section its own encoder refuses. `historyLinks` is ordered **oldest epoch first** — an invariant the
   codec cannot check, since a link's epoch lives in its untransmitted AAD and
   inside its ciphertext, leaving `crates/core` an opaque sealed blob.
 - **History-link retention**: a link minted at epoch `e` is sealed under **its

@@ -32,11 +32,12 @@ use zeroize::{Zeroize, Zeroizing};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, AscentLink, GrantBlobPayload, GrantLedgerEntry, GrantSection, GrantSetCommitment,
-    HistoryLinkPayload, MAX_HISTORY_LINKS, OverrideSeedPayload, OwnerWriteBlobPayload, Permission,
-    PreservedFields, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
-    STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedAscentLink,
-    SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput,
-    WriteBody, encode_write_body, open_ascent_link, open_history_link, seal, seal_ascent_link,
+    HistoryLinkPayload, MAX_GRANT_BLOBS, MAX_HISTORY_LINKS, OverrideSeedPayload,
+    OwnerWriteBlobPayload, Permission, PreservedFields, STRUCT_TAG_ASCENT_LINK,
+    STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK, STRUCT_TAG_OWNER_BLOB,
+    STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedAscentLink, SignedGrantBlob,
+    SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput, WriteBody,
+    encode_write_body, open_ascent_link, open_history_link, seal, seal_ascent_link,
     seal_grant_blob, seal_history_link, seal_owner_blob, seal_owner_write_blob, sign_structure,
 };
 use cipherbox_core::suite::aead;
@@ -153,6 +154,10 @@ pub enum ResealError {
     /// More carried history links than the codec's frozen bound admits — a set
     /// that could only ever produce a section this build's own encoder rejects.
     TooManyHistoryLinks,
+    /// More committed grants than the codec's frozen bound admits. One blob is
+    /// wrapped per committed grant, so the section could only ever be refused by
+    /// this build's own encoder — caught before the wraps are spent.
+    TooManyCommittedGrants,
     /// A re-sealed structure could not be encoded — a duplicate ledger tag, or
     /// nesting past the codec's `MAX_DEPTH`.
     Encode(cipherbox_core::error::CodecError),
@@ -177,6 +182,9 @@ impl core::fmt::Display for ResealError {
             ResealError::TooManyHistoryLinks => {
                 f.write_str("carried history links exceed the codec's frozen bound")
             }
+            ResealError::TooManyCommittedGrants => {
+                f.write_str("committed grants exceed the codec's frozen bound")
+            }
             ResealError::Encode(e) => write!(f, "structure encode failed: {}", e.check()),
         }
     }
@@ -194,6 +202,7 @@ impl ResealError {
             ResealError::AscentLinkMismatch => "ascent-link-mismatch",
             ResealError::Entropy(_) => "entropy-error",
             ResealError::TooManyHistoryLinks => "too-many-history-links",
+            ResealError::TooManyCommittedGrants => "too-many-committed-grants",
             ResealError::Encode(_) => "structure-encode-failed",
         }
     }
@@ -281,19 +290,24 @@ pub fn reseal_scope_root<E: Entropy>(
         return Err(ResealError::SignerNotCommitted);
     }
 
+    // Fail-closed BEFORE any seal: the produce-side mirror of the codec's own
+    // bounds (AGENTS.md rule 8), so a sweep — which prunes nothing — can never
+    // spend a section's worth of signatures, or one HPKE wrap per committed
+    // grant, on a set the encoder then refuses. Both are O(1) and precede the
+    // set comparison below, so an over-large commitment costs nothing.
+    if carried_history_links.len() > MAX_HISTORY_LINKS {
+        return Err(ResealError::TooManyHistoryLinks);
+    }
+    if committed.commitment.entries.len() > MAX_GRANT_BLOBS {
+        return Err(ResealError::TooManyCommittedGrants);
+    }
+
     // Fail-closed BEFORE any seal (see `ResealError::LedgerDivergesFromCommitment`
     // and the module's revocation-completeness rule). Reseal trusts each entry's
     // `recipient_enc_pk` verbatim from the committed ledger; the tag<->enc_pk
     // binding is enforced at resolve time.
     enforce_committed_ledger(committed.commitment, committed.grant_ledger)
         .map_err(|_| ResealError::LedgerDivergesFromCommitment)?;
-
-    // Fail-closed BEFORE any seal: the produce-side mirror of the codec's own
-    // bound (AGENTS.md rule 8), so a sweep — which prunes nothing — can never
-    // spend a section's worth of signatures on a set the encoder then refuses.
-    if carried_history_links.len() > MAX_HISTORY_LINKS {
-        return Err(ResealError::TooManyHistoryLinks);
-    }
 
     let scope_id = identity.scope_id;
     let read_epoch = seeds.read_epoch;
@@ -1157,6 +1171,29 @@ mod tests {
         let err = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &carried)
             .expect_err("past the bound");
         assert_eq!(err.check(), "too-many-history-links");
+    }
+
+    #[test]
+    fn a_commitment_past_the_codec_bound_fails_closed_before_any_seal() {
+        // The owner learns the ceiling here, before one HPKE wrap per committed
+        // grant is spent on a section `encode_grant_section` would refuse.
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (mut commitment, sig, ledger) = fx.committed();
+        commitment.entries = (0..=MAX_GRANT_BLOBS)
+            .map(|i| {
+                let mut tag = [0u8; SECRET_LEN];
+                tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                GrantSetEntry::new(tag, Permission::Read, [0x02; 32])
+            })
+            .collect();
+        let id = identity(&fx, &owner_pub, b"n", None);
+        let seed = chain_seed(9);
+        let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
+        let cs = committed_set(&commitment, &sig, &ledger);
+        let err = reseal_scope_root(&mut SeededEntropy::new(3), &id, &s, &cs, &[])
+            .expect_err("past the bound");
+        assert_eq!(err.check(), "too-many-committed-grants");
     }
 
     #[test]

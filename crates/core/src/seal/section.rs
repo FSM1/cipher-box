@@ -272,11 +272,15 @@ pub struct GrantSection {
 pub const MAX_HISTORY_LINKS: usize = 256;
 
 /// The frozen bound on a section's grant blobs — one per committed grantee.
+/// It is equally the bound on [`GrantSetCommitment::entries`]: the ledger must
+/// match the committed set exactly and a re-seal wraps one blob per ledger row,
+/// so a commitment past this ceiling can only ever mint a section its own
+/// encoder refuses.
 pub const MAX_GRANT_BLOBS: usize = 1024;
 
 /// Release-active bound on a repeated collection, symmetric across decode and
 /// encode (AGENTS.md rule 8).
-fn assert_within_bound(
+pub(super) fn assert_within_bound(
     collection: &'static str,
     count: usize,
     limit: usize,
