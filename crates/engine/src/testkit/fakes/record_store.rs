@@ -106,12 +106,20 @@ impl InMemoryRecordStore {
     }
 
     /// Refuse every PUT under `routing_key` while the rest of the name space
-    /// publishes normally.
+    /// publishes normally, until [`heal_put_for`](Self::heal_put_for) clears it.
     pub fn fail_put_for(&self, routing_key: &str) {
         self.put_failing_keys
             .lock()
             .expect("lock")
             .insert(routing_key.to_owned());
+    }
+
+    /// Restore `routing_key`'s PUT path.
+    pub fn heal_put_for(&self, routing_key: &str) {
+        self.put_failing_keys
+            .lock()
+            .expect("lock")
+            .remove(routing_key);
     }
 
     /// Whether `endpoint`'s GET path is currently injected to fail.

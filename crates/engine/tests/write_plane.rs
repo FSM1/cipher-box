@@ -4699,6 +4699,57 @@ fn a_cross_folder_moves_dest_add_never_marks_on_its_own() {
     );
 }
 
+/// The retry the compensation leaves queued does complete the move: once the
+/// source-remove's PUT lands, the record that marks is the one that carries it.
+#[test]
+fn a_retried_cross_folder_move_marks_when_its_source_remove_lands() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (photos, moved) = seed_folder_and_file(&world, &mut engine, &mut tasks);
+    let before = published_op_mark(&alice);
+
+    world.record_store.fail_put_for(root_name.as_str());
+    let op_id = block_on(engine.command(Command::Move {
+        node: moved,
+        new_parent: photos,
+        new_name: "a.txt".into(),
+        replacing: None,
+    }))
+    .unwrap()
+    .expect("the move queues");
+    tick(&world, &engine, &mut tasks);
+    assert_eq!(
+        published_op_mark(&alice),
+        before,
+        "the compensated attempt must not have marked"
+    );
+
+    world.record_store.heal_put_for(root_name.as_str());
+    tick(&world, &engine, &mut tasks);
+
+    assert_eq!(
+        published_names(&world.record_store, &blocks, photos),
+        ["a.txt"],
+        "the retry republishes the dest-add the compensation undid"
+    );
+    assert_eq!(
+        published_op_mark(&alice),
+        Some(op_id.0),
+        "the landed source-remove marks the move published"
+    );
+    assert!(
+        !block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .iter()
+            .any(|(id, _)| *id == op_id),
+        "the completed move leaves the queue"
+    );
+}
+
 /// The publish-entry interlock is session-scoped, so a reboot clears it. The
 /// durable mark is what keeps a published version uncancellable across one.
 #[test]
