@@ -1,7 +1,7 @@
 //! The content-plane cryptographic edge (blueprint/core.md "Open edges").
 //!
 //! Two core-owned pieces, and nothing more — chunk framing, DAG assembly shape,
-//! and version-retention policy stay engine-owned (#630): the content-seal over
+//! and version-retention policy stay engine-owned: the content-seal over
 //! caller-framed chunks ([`seal`]), and the content-DAG CID with its fail-closed
 //! verify and base32 string codec ([`cid`]).
 

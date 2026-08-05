@@ -1,5 +1,5 @@
 //! Staging admission: the exact sealed total a version will occupy, reserved
-//! whole before its first chunk is pushed (#828, #829).
+//! whole before its first chunk is pushed.
 //!
 //! A write handle stages for as long as it takes the client to feed the file and
 //! the drain to upload it, so two handles opened moments apart would both read

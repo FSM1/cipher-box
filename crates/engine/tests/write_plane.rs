@@ -1,7 +1,7 @@
 //! The write plane, joined end to end: every metadata op kind is staged,
 //! drained, authored, published, self-adopted, and resolved back — first by the
 //! device that wrote it, then by a second device of the same account that only
-//! ever saw the network (#865, #866).
+//! ever saw the network.
 //!
 //! Later write-plane slices extend this file rather than starting their own.
 
@@ -77,7 +77,7 @@ fn unreachable_upload() -> SeamResult<HttpResponse> {
 }
 
 /// A server 413, optionally carrying the `code` discriminator that tells the
-/// account-quota gate apart from the transport cap (#848).
+/// account-quota gate apart from the transport cap.
 fn upload_413(code: Option<&str>) -> SeamResult<HttpResponse> {
     let code = code.map_or(String::new(), |code| format!(",\"code\":\"{code}\""));
     Ok(HttpResponse {
@@ -159,7 +159,7 @@ impl Blocks {
 
     /// Store an uploaded block under the address its caller declared, refusing
     /// one the bytes do not hash to under either content-plane codec — the
-    /// ingress's put-and-compare (#906).
+    /// ingress's put-and-compare.
     fn put_declared(&self, declared: &str, block: Vec<u8>) {
         let raw = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, &block));
         let root = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
@@ -230,7 +230,7 @@ impl Blocks {
                 return reply;
             }
             let size = block.len();
-            // Mirror the API's fail-closed bind (#906): the block is stored —
+            // Mirror the API's fail-closed bind: the block is stored —
             // and served back — only under the address the caller declared,
             // and only once those bytes really address to it.
             self.put_declared(&declared, block);
@@ -513,7 +513,7 @@ fn uploaded_node_ids(device: &FakeDevice) -> Vec<[u8; 16]> {
 }
 
 /// Every registration entry the device sent for `name`, in wire order across
-/// however many batches it took (#920).
+/// however many batches it took.
 fn registration_entries(device: &FakeDevice, name: &IpnsName) -> Vec<serde_json::Value> {
     device
         .http
@@ -539,8 +539,8 @@ fn entry_content_cids(entry: &serde_json::Value) -> Vec<String> {
 }
 
 /// The `contentCids` the device's last registration for `name` carried — what a
-/// sub-EOL renewal will re-pin (#797). One registration is the entry carrying
-/// the head plus every content-only entry the chunker split off after it.
+/// sub-EOL renewal will re-pin. One registration is the entry carrying the head
+/// plus every content-only entry the chunker split off after it.
 fn registered_content_cids(device: &FakeDevice, name: &IpnsName) -> Vec<String> {
     let entries = registration_entries(device, name);
     let head = entries
@@ -625,7 +625,7 @@ fn a_folder_create_publishes_and_resolves_back() {
     assert_eq!(sequence, 2, "the root advanced past the seeded sequence 1");
 
     // The completion record marks the op as drained, so a restored copy of this
-    // queue cannot replay it (#860).
+    // queue cannot replay it.
     assert_eq!(
         block_on(drained_mark(&alice)),
         op_id.map(|id| id.0),
@@ -947,7 +947,7 @@ fn a_file_create_round_trips_its_bytes_to_a_second_device() {
 }
 
 /// A stream's windows serve the matching slices of the whole-file read — the
-/// media pipe's read path (#641).
+/// media pipe's read path.
 #[test]
 fn a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
     let world = FakeWorld::new();
@@ -1000,7 +1000,7 @@ fn a_stream_window_serves_the_same_bytes_as_the_slice_of_the_whole_file() {
 
 /// Past [`MAX_OPEN_STREAMS`] an open is refused fail-closed, never evicting a
 /// live stream, and the refusal costs no network: the slot is reserved before
-/// the resolve, so a doomed open never pays for one (#1008).
+/// the resolve, so a doomed open never pays for one.
 #[test]
 fn opening_past_the_stream_ceiling_is_refused() {
     let world = FakeWorld::new();
@@ -1049,8 +1049,7 @@ fn opening_past_the_stream_ceiling_is_refused() {
 }
 
 /// A stream pins the head version it opened on: a head change mid-stream leaves
-/// every later window a slice of the pinned version, never a splice of two
-/// (#948).
+/// every later window a slice of the pinned version, never a splice of two.
 #[test]
 fn a_stream_serves_the_pinned_version_across_a_head_change() {
     let world = FakeWorld::new();
@@ -1102,7 +1101,8 @@ fn a_stream_serves_the_pinned_version_across_a_head_change() {
 }
 
 /// A stream resolves, gates, and verifies its root once, however many windows it
-/// serves — the per-window cost #641's ranged read paid on every megabyte.
+/// serves — the per-window cost the media pipe's ranged read paid on every
+/// megabyte.
 #[test]
 fn a_stream_pays_one_resolve_and_one_root_fetch_for_the_whole_body() {
     let world = FakeWorld::new();
@@ -1184,7 +1184,7 @@ fn an_update_content_write_round_trips_the_new_version_to_a_second_device() {
 }
 
 /// The publish registers every block the version links, and the held record
-/// keeps that list so a sub-EOL renewal re-pins the same content (#797).
+/// keeps that list so a sub-EOL renewal re-pins the same content.
 #[test]
 fn a_published_version_registers_its_whole_block_set() {
     let world = FakeWorld::new();
@@ -1222,7 +1222,7 @@ fn a_published_version_registers_its_whole_block_set() {
 /// A version with more blocks than the registry's per-entry `contentCids` cap
 /// splits across several entries under one name, so the registration that
 /// register-first blocks the record PUT on is accepted and the version
-/// publishes (#920).
+/// publishes.
 #[test]
 fn a_version_past_the_registration_cap_registers_in_chunks_and_publishes() {
     let world = FakeWorld::new();
@@ -1287,7 +1287,7 @@ fn a_version_past_the_registration_cap_registers_in_chunks_and_publishes() {
 
 /// A registration the registry itself refuses is refused on every retry, and
 /// the queue is strict FIFO — so the op dead-letters instead of holding the head
-/// and re-registering every tick (#920).
+/// and re-registering every tick.
 #[test]
 fn a_registration_the_registry_refuses_dead_letters_instead_of_holding_the_queue_head() {
     let world = FakeWorld::new();
@@ -1325,9 +1325,9 @@ fn a_registration_the_registry_refuses_dead_letters_instead_of_holding_the_queue
     );
 }
 
-/// A `400` the registry did not stamp is evidence of nothing (#848): the op is
-/// charged like any other pre-PUT refusal and survives until its budget runs
-/// out, rather than being abandoned on an intermediary's say-so.
+/// A `400` the registry did not stamp is evidence of nothing: the op is charged
+/// like any other pre-PUT refusal and survives until its budget runs out, rather
+/// than being abandoned on an intermediary's say-so.
 #[test]
 fn a_registration_400_from_an_intermediary_is_charged_not_permanent() {
     let world = FakeWorld::new();
@@ -1363,7 +1363,7 @@ fn a_registration_400_from_an_intermediary_is_charged_not_permanent() {
 
 /// The `pushChunk` total is cross-checked against the `beginWrite` declaration:
 /// a backing file truncated mid-read fails the commit rather than publishing a
-/// short version as a success (#830).
+/// short version as a success.
 #[test]
 fn a_truncated_file_fails_the_commit_and_publishes_nothing() {
     let world = FakeWorld::new();
@@ -1430,7 +1430,7 @@ fn stage_blocks(device: &FakeDevice, leaves: &[SealedChunk], root_block: &[u8], 
 
 /// A version whose key blob will not open can never be read again, whatever its
 /// bytes say. The op dead-letters through the failure valve, which **releases**
-/// its blocks: bytes no key opens are not the user's recoverable work (#818).
+/// its blocks: bytes no key opens are not the user's recoverable work.
 #[test]
 fn a_version_whose_content_key_will_not_open_dead_letters_and_releases_its_blocks() {
     let world = FakeWorld::new();
@@ -1701,7 +1701,7 @@ fn assert_round_trips(world: &FakeWorld, blocks: &Blocks, name: &str, plaintext:
 /// The per-leaf durable sequence is `upload → mark → release`, and an
 /// interruption at the mark must cost the version nothing: those bytes reached
 /// the pin store, so the write is recoverable by definition. Every leaf is
-/// interrupted in turn, since the window is reachable on any of them (#924).
+/// interrupted in turn, since the window is reachable on any of them.
 #[test]
 fn an_interrupted_leaf_mark_never_costs_the_version_its_uploaded_bytes() {
     let plaintext: Vec<u8> = (0..200u8).collect();
@@ -1769,7 +1769,7 @@ fn an_interrupted_leaf_mark_never_costs_the_version_its_uploaded_bytes() {
 
 /// The residue that marking first leaves — a leaf both marked and still staged
 /// — costs nothing: the next pass re-uploads it, a pinned CID short-circuiting
-/// the transfer (#819), and re-removes it.
+/// the transfer, and re-removes it.
 #[test]
 fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() {
     let plaintext: Vec<u8> = (0..200u8).collect();
@@ -1830,9 +1830,9 @@ fn a_leaf_left_marked_and_staged_is_re_uploaded_and_released_by_the_next_pass() 
 /// the same crash: leaf 0 comes back from the dead behind a mark that later
 /// leaves already advanced. Re-uploading it must not pull the mark back down
 /// over the leaves between — those are released, so an uncovered one reads as
-/// loss and the valve destroys the version. That is #924 with one extra step,
-/// and it is reachable because `packages/client` flushes a staged write but
-/// releases with a bare `removeEntry`.
+/// loss and the valve destroys the version. That is the interrupted-mark hazard
+/// with one extra step, and it is reachable because `packages/client` flushes a
+/// staged write but releases with a bare `removeEntry`.
 #[test]
 fn a_re_uploaded_leaf_never_pulls_the_mark_back_over_leaves_it_covers() {
     let world = FakeWorld::new();
@@ -2056,7 +2056,7 @@ fn a_resumed_upload_opens_on_the_leaves_an_earlier_pass_confirmed() {
 ///
 /// Both shapes a stopped attempt takes are covered: a transport that never
 /// answered, and an unattributable 413 that is charged against the budget but
-/// abandons nothing on one response (#916).
+/// abandons nothing on one response.
 #[test]
 fn a_halted_upload_attempt_is_reported_and_leaves_the_op_queued() {
     for refusal in [unreachable_upload(), proxy_413()] {
@@ -2150,8 +2150,8 @@ fn a_permanently_refused_upload_reports_the_attempt_and_the_dead_letter() {
 }
 
 /// An over-quota refusal is a hold, not a failed attempt: the op and its
-/// reservation stand until a probe finds room (#841), and the host reads it from
-/// the snapshot rather than from a failure it cannot act on.
+/// reservation stand until a probe finds room, and the host reads it from the
+/// snapshot rather than from a failure it cannot act on.
 #[test]
 fn an_over_quota_upload_holds_the_op_without_reporting_a_failure() {
     let world = FakeWorld::new();
@@ -2208,7 +2208,7 @@ fn an_over_quota_upload_holds_the_op_without_reporting_a_failure() {
 /// An op the completion record already covers is restore residue: a data dir
 /// whose queue predates its own high-water mark. It leaves the queue without
 /// publishing, so a restored backup cannot re-apply mutations the user never
-/// asked for again (#860).
+/// asked for again.
 #[test]
 fn an_op_the_completion_record_already_covers_never_republishes() {
     let world = FakeWorld::new();
@@ -2273,7 +2273,7 @@ async fn drained_mark(device: &FakeDevice) -> Option<u64> {
 }
 
 // ---------------------------------------------------------------------------
-// The four remaining op kinds (#866), each to a second device.
+// The four remaining op kinds, each to a second device.
 // ---------------------------------------------------------------------------
 
 /// The display name lives only in the parent's child ref
@@ -2328,7 +2328,7 @@ fn a_rename_republishes_only_the_parent_and_a_second_device_resolves_it() {
 }
 
 /// A delete drops the parent's ref. The name itself is not retired here —
-/// retire fires on abandonment only (#819 as amended by #824), which is #867's.
+/// retire fires on abandonment only, which the failure-valve suite covers.
 #[test]
 fn a_delete_drops_the_parent_ref_and_a_second_device_resolves_it() {
     let world = FakeWorld::new();
@@ -2423,7 +2423,7 @@ fn a_relink_publishes_the_dest_before_the_source_and_a_second_device_resolves_it
 
 /// A replacing rename in place: the vacated ref and the moved one land in a
 /// **single** destination record, so no observer sees the destination name
-/// unresolvable (#884).
+/// unresolvable.
 #[test]
 fn a_replacing_rename_lands_the_vacated_and_moved_refs_in_one_record() {
     let world = FakeWorld::new();
@@ -2593,7 +2593,7 @@ fn an_update_content_republishes_the_files_own_record_and_not_its_parent() {
 }
 
 // ---------------------------------------------------------------------------
-// The reference-ordering law (#819) and the dest-add compensation (#786).
+// The reference-ordering law and the dest-add compensation.
 // ---------------------------------------------------------------------------
 
 /// The one rule whose violation cannot be retracted: a reference must never
@@ -2648,7 +2648,7 @@ fn a_rename_of_a_still_queued_create_publishes_child_before_parent() {
 }
 
 /// A create below the scope root publishes, and its parent folder is authored
-/// through the child envelope path rather than the root's (#887).
+/// through the child envelope path rather than the root's.
 #[test]
 fn a_create_below_the_scope_root_publishes_and_projects() {
     let world = FakeWorld::new();
@@ -2698,8 +2698,7 @@ fn a_create_below_the_scope_root_publishes_and_projects() {
 /// non-root parent's own record — the only record that carries the depth-2
 /// child — through the child gate, on its own cold floors and cache. The
 /// assertion sits at the record plane; its facade half is
-/// `a_second_device_lists_below_the_scope_root_once_it_focuses_there`
-/// (#895, #917).
+/// `a_second_device_lists_below_the_scope_root_once_it_focuses_there`.
 #[test]
 fn a_create_below_the_scope_root_is_adoptable_by_a_second_device() {
     let DeepCreate {
@@ -2862,7 +2861,8 @@ fn planted_body() -> ReadBody {
 
 /// The facade half of the deep create's round trip: a device that never
 /// authored the subtree sets focus on the depth-1 parent and lists the depth-2
-/// child out of its own rendered view — the assertion #895 could not make.
+/// child out of its own rendered view — the assertion the record-plane half
+/// cannot make.
 #[test]
 fn a_second_device_lists_below_the_scope_root_once_it_focuses_there() {
     let DeepCreate {
@@ -3219,7 +3219,7 @@ fn an_unattributable_source_remove_refusal_spends_the_attempt_budget() {
 
 /// The compensation must restore what the dest-add vacated too: a destination
 /// left holding neither the moved node nor the one it replaced has lost an
-/// entry outright (#884).
+/// entry outright.
 #[test]
 fn a_compensated_move_restores_the_ref_its_dest_add_replaced() {
     let world = FakeWorld::new();
@@ -3273,7 +3273,7 @@ fn a_compensated_move_restores_the_ref_its_dest_add_replaced() {
 /// The compensation's restore is an inverse of **our own** edit, so it may only
 /// run while our bytes are still the destination head. A winner that built on
 /// the listing our dest-add published must not have the vacated ref re-asserted
-/// over it (#786's rule, extended to the replace).
+/// over it (the versioned compare-and-remove rule, extended to the replace).
 #[test]
 fn a_compensated_move_does_not_resurrect_a_replaced_ref_over_a_concurrent_winner() {
     let world = FakeWorld::new();
@@ -3327,7 +3327,7 @@ fn a_compensated_move_does_not_resurrect_a_replaced_ref_over_a_concurrent_winner
 /// The adversarial interleave at the compensation seam: a concurrent writer
 /// lands a strictly-newer dest record between the dest-add and its undo. The
 /// versioned compare-and-remove refuses to replay a stale copy over the winner
-/// and re-derives the removal onto the record the winner published (#786).
+/// and re-derives the removal onto the record the winner published.
 #[test]
 fn a_concurrent_dest_writer_is_re_derived_onto_never_clobbered() {
     let world = FakeWorld::new();
@@ -3368,9 +3368,9 @@ fn a_concurrent_dest_writer_is_re_derived_onto_never_clobbered() {
     );
 }
 
-/// #786's guarantee has to hold when the destination is the scope root — the
-/// commonest move there is. The root is otherwise read from this device's own
-/// cache, which could never show the concurrent writer the compare exists to
+/// The re-derive guarantee has to hold when the destination is the scope root —
+/// the commonest move there is. The root is otherwise read from this device's
+/// own cache, which could never show the concurrent writer the compare exists to
 /// yield to.
 #[test]
 fn a_concurrent_writer_at_the_root_dest_is_re_derived_onto_never_clobbered() {
@@ -3625,7 +3625,7 @@ fn every_record_one_pass_seals_carries_a_distinct_nonce() {
 
 // ---------------------------------------------------------------------------
 // The failure valve: dead-letter classification, the over-quota block, and the
-// abandonment retire (#867).
+// abandonment retire.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -3829,7 +3829,7 @@ fn an_abandoned_create_retires_the_child_name_it_registered_exactly_once() {
 /// its file still publishes the versions it had — so every block it uploaded
 /// leaves the republish inventory with the op while the file's own name stays
 /// live. Each upload creates its own charged pin row, so a leaf the root
-/// retirement misses spends account quota forever (#916).
+/// retirement misses spends account quota forever.
 #[test]
 fn an_abandoned_version_retires_every_block_it_uploaded_and_keeps_the_files_name() {
     let world = FakeWorld::new();
@@ -3860,7 +3860,7 @@ fn an_abandoned_version_retires_every_block_it_uploaded_and_keeps_the_files_name
 
 /// Exhausting the budget on refusals raised **before** any record PUT is an
 /// abandonment too: nothing can link the version, so it retires what its uploads
-/// charged, exactly as a permanent refusal does (#916). The acked-PUT arm is the
+/// charged, exactly as a permanent refusal does. The acked-PUT arm is the
 /// opposite case and retires nothing.
 #[test]
 fn a_version_whose_upload_budget_runs_out_retires_every_block_it_uploaded() {
@@ -3891,7 +3891,7 @@ fn a_version_whose_upload_budget_runs_out_retires_every_block_it_uploaded() {
 
 /// The opposite arm: an acked PUT may already be resolvable at the name, so
 /// exhausting the budget there retires nothing. Unpinning content a live record
-/// still names is loss, where leaving the rows charged is only a leak (#916).
+/// still names is loss, where leaving the rows charged is only a leak.
 #[test]
 fn an_unconfirmed_publish_never_retires_the_version_it_may_already_name() {
     let world = FakeWorld::new();
@@ -3929,8 +3929,8 @@ fn an_unconfirmed_publish_never_retires_the_version_it_may_already_name() {
 /// charged its own pin row, and each attempt re-authors under a fresh seal
 /// nonce — so a retrying op orphans a byte-different head every pass. Each
 /// leaves the inventory on the pass that orphaned it, and the abandonment still
-/// owes back the name on top (#921). The refusal is an intermediary's `400`, so
-/// it is charged rather than permanent and the op survives to retry.
+/// owes back the name on top. The refusal is an intermediary's `400`, so it is
+/// charged rather than permanent and the op survives to retry.
 #[test]
 fn every_head_block_a_retrying_op_orphaned_leaves_the_inventory() {
     let world = FakeWorld::new();
@@ -3980,8 +3980,7 @@ fn every_head_block_a_retrying_op_orphaned_leaves_the_inventory() {
 /// A PUT fan-out that acknowledges nothing is not proof that nothing stored:
 /// an endpoint may hold the record and have lost its ack. Retiring that head
 /// would unpin the block a record still resolvable at the name points at —
-/// loss, where leaving the row charged is only a leak (#916 as extended by
-/// #921).
+/// loss, where leaving the row charged is only a leak.
 #[test]
 fn a_publish_that_reached_the_transport_never_retires_its_head() {
     let world = FakeWorld::new();
@@ -4008,7 +4007,7 @@ fn a_publish_that_reached_the_transport_never_retires_its_head() {
 }
 
 // ---------------------------------------------------------------------------
-// Cancel, and the staged-byte lifetime around it (#824, #828, #853).
+// Cancel, and the staged-byte lifetime around it.
 // ---------------------------------------------------------------------------
 
 /// The version an op has staged: its root first, then every leaf in file order.
@@ -4034,10 +4033,10 @@ fn queued_version(device: &FakeDevice, op_id: OpId) -> Vec<Vec<u8>> {
     })
 }
 
-/// The focus window's folder refresh runs before the drain each pass (#945) and
-/// merges a folder's *published* children into the base. A cancelled upload was
-/// never published, so the refresh cannot carry it back into the folder the user
-/// is looking at.
+/// The focus window's folder refresh runs before the drain each pass and merges
+/// a folder's *published* children into the base. A cancelled upload was never
+/// published, so the refresh cannot carry it back into the folder the user is
+/// looking at.
 #[test]
 fn a_focus_refresh_never_renders_back_an_upload_the_user_cancelled() {
     let world = FakeWorld::new();
@@ -4094,7 +4093,7 @@ fn a_focus_refresh_never_renders_back_an_upload_the_user_cancelled() {
         file_ref([0xC1; 16], "from-elsewhere.bin"),
     );
     // The next pass refreshes the focused folder before its drain, which is the
-    // ordering the overlap turns on (#945).
+    // ordering the overlap turns on.
     tick(&world, &engine, &mut tasks);
 
     assert_eq!(
@@ -4168,7 +4167,7 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
     );
     // Every block that reached the network is a charged pin row with no
     // reachable record behind it, so the cancel must retire exactly those and
-    // nothing the version never sent (#916).
+    // nothing the version never sent.
     let charged: Vec<String> = version
         .iter()
         .map(|cid| encode_content_cid_str(cid))
@@ -4209,8 +4208,7 @@ fn a_cancel_mid_upload_releases_every_block_and_returns_the_staging_budget() {
 /// A cancel releases leaves the durable mark still covers, and leaves that mark
 /// behind naming a root nothing will ever upload again. That residue must not
 /// reach the next version: a mark read as this version's progress would skip
-/// leaves it never sent and publish a manifest naming blocks nobody holds
-/// (#924's mark, #824's release).
+/// leaves it never sent and publish a manifest naming blocks nobody holds.
 #[test]
 fn a_cancelled_versions_upload_mark_never_counts_towards_the_next_one() {
     let world = FakeWorld::new();
@@ -5057,7 +5055,7 @@ fn a_cancel_that_cannot_dequeue_retires_nothing_and_leaves_the_op_publishable() 
 /// that stops on that claim cannot assume the op has left the queue. Its retire
 /// is gated on a removal of its own: proving the op is gone is what makes
 /// unpinning its leaves safe, and a removal it cannot make means it retires
-/// nothing rather than stranding a still-publishable version (#824).
+/// nothing rather than stranding a still-publishable version.
 #[test]
 fn the_drains_cancel_retire_is_gated_on_the_op_leaving_the_durable_queue() {
     let world = FakeWorld::new();
@@ -5208,10 +5206,10 @@ fn orphan_residue_is_collected_and_a_live_handles_blocks_are_not() {
     );
 }
 
-/// A release that reports done without dropping the bytes strands a staged leaf
-/// (#924's residue shape). On the cancel path nothing re-runs that release — the
-/// op is gone from the queue — so orphan GC is the only thing that reclaims it,
-/// and it does so precisely because nothing references it any more.
+/// A release that reports done without dropping the bytes strands a staged
+/// leaf. On the cancel path nothing re-runs that release — the op is gone from
+/// the queue — so orphan GC is the only thing that reclaims it, and it does so
+/// precisely because nothing references it any more.
 #[test]
 fn a_leaf_a_lost_release_stranded_on_a_cancel_is_reclaimed_by_the_next_sweep() {
     let world = FakeWorld::new();
@@ -5264,7 +5262,7 @@ fn a_leaf_a_lost_release_stranded_on_a_cancel_is_reclaimed_by_the_next_sweep() {
 
 /// A terminally unrebasable op keeps its staged bytes — and keeping them is only
 /// real if they survive the cold start that drops the op record, and the GC pass
-/// that runs there (#853).
+/// that runs there.
 #[test]
 fn a_dead_lettered_ops_blocks_survive_a_cold_start_and_a_gc_pass() {
     let world = FakeWorld::new();

@@ -9,11 +9,11 @@
 //! key and the nonce are caller-supplied (KATs pin them; core samples no
 //! entropy and reads no clock).
 //!
-//! No AAD is bound (#630 owns chunk framing, where any index/order binding would
-//! live): a chunk's authenticity anchor is its `contentCid` — a BLAKE3 digest
-//! over these sealed bytes ([`super::cid`]) that the metadata read-body carries
-//! and the metadata envelope binds into its own AAD — so the content plane
-//! inherits that binding transitively.
+//! No AAD is bound (chunk framing is engine-owned): a chunk's authenticity
+//! anchor is its `contentCid` — a
+//! BLAKE3 digest over these sealed bytes ([`super::cid`]) that the metadata
+//! read-body carries and the metadata envelope binds into its own AAD — so the
+//! content plane inherits that binding transitively.
 
 use crate::error::{CodecError, Malformed, TrustViolation};
 use crate::suite::aead::{self, KEY_LEN, NONCE_LEN, TAG_LEN};

@@ -59,8 +59,8 @@ fn record(signer: &Ed25519Signer, value: &[u8], sequence: u64, mint_millis: u64)
 }
 
 /// A held record for `name` carrying `bytes` plus a placeholder renewal signer
-/// (#750 exercises the signer/CID fields; the keyless re-PUT layer reads only
-/// routing key + bytes).
+/// (the sub-EOL renewal loop exercises the signer/CID fields; the keyless
+/// re-PUT layer reads only routing key + bytes).
 fn held_record(name: &IpnsName, bytes: Vec<u8>) -> HeldRecord {
     HeldRecord {
         routing_key: name.as_str().to_owned(),

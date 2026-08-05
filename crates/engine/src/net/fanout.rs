@@ -16,7 +16,7 @@ use crate::seams::{EndpointId, RecordTransport};
 /// Hard ceiling on one signed IPNS record fetched from a `/routing/v1`
 /// endpoint. The IPNS spec caps a record at 10 KiB, and the endpoint set
 /// includes at least one untrusted public endpoint — anything larger is a
-/// hostile or broken endpoint whose bytes are never adoptable (#949).
+/// hostile or broken endpoint whose bytes are never adoptable.
 pub const MAX_RECORD_BYTES: usize = 10 * 1024;
 
 /// The outcome of a parallel PUT across the endpoint set.

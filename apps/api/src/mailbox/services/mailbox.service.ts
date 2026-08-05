@@ -270,7 +270,7 @@ export class MailboxService {
   }
 
   /**
-   * The global, recipient-less TTL sweep the scheduled worker drives (#667): the
+   * The global, recipient-less TTL sweep the scheduled worker drives: the
    * lazy `purgeExpired` only fires on a recipient's own post/poll, so a dormant
    * mailbox keeps expired rows forever. This makes the 90-day bound a hard
    * guarantee independent of activity.

@@ -32,7 +32,7 @@ export interface MediaBrokerOptions {
  * The one engine stream every response for a ticket reads against, opened on the
  * first pull — a ticket answered with a head and then abandoned costs no
  * resolve. Pinning per ticket rather than per request holds a single content
- * version across a whole playback, not merely one response (#948).
+ * version across a whole playback, not merely one response.
  */
 interface Pin {
   stream: Promise<StreamHandle> | null;
@@ -54,7 +54,7 @@ interface Cursor {
   /**
    * The stream this body's first window came from. One response never spans two
    * of them: concatenating windows of two content versions under one
-   * `Content-Range` is a tear the reader cannot detect (#948).
+   * `Content-Range` is a tear the reader cannot detect.
    */
   bound: Promise<StreamHandle> | null;
   /** The mint-time window end, pulled in when a read proves the version is shorter. */

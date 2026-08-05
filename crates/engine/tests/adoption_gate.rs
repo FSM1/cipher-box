@@ -79,7 +79,7 @@ struct Fixture {
     owner_blob_aad: AadContext,
     /// The record's grant section — the commitment, owner blob, and write-body
     /// with real detached structure signatures. The gate enumerates and
-    /// recomputes over this (#687).
+    /// recomputes over this rather than trusting any caller-supplied hash.
     grant_section: GrantSection,
     valid_envelope: Envelope,
 }
@@ -690,9 +690,9 @@ fn matrix_table_and_reject_surface_mirror_one_to_one() {
 
 #[test]
 fn foreign_scope_label_rejected_at_stage_six_binding() {
-    // Resolver binding (#745/#756): the record is a fully valid scope root sealed
-    // for its own scope and the reader's read_key opens it (the scope UUID is not
-    // in the read-key KDF) — only the reader's `scope_id`, the trusted parent-index
+    // Resolver binding: the record is a fully valid scope root sealed for its own
+    // scope and the reader's read_key opens it (the scope UUID is not in the
+    // read-key KDF) — only the reader's `scope_id`, the trusted parent-index
     // label, is foreign. Adopting under it would dedup/rotate the WRONG scope key,
     // a silent revocation hole, so stage 6 binds `envelope.scope` to
     // `reader.scope_id` and fails closed.
@@ -1093,7 +1093,7 @@ fn simulation_n_engines_one_record_store_adversarial() {
 #[test]
 fn non_empty_history_link_authenticates_and_rejects_tamper_and_replay() {
     // Every other fixture leaves history_links empty, so the STRUCT_TAG_HISTORY_LINK
-    // recompute-and-verify loop is exercised here over a populated list (#687).
+    // recompute-and-verify loop is exercised here over a populated list.
     let fx = Fixture::new();
     let sealed = b"prior-write-epoch-history-link".to_vec();
     let sign_link = |epoch: u64, bytes: &[u8]| -> [u8; 64] {
@@ -1323,7 +1323,7 @@ fn cross_epoch_structure_replay_rejected_at_grant_section() {
     )
     .expect("epoch-2 folder seals");
     // The gate recomputes each preimage at the envelope's epoch, so there is no
-    // caller-asserted epoch to trust (#687).
+    // caller-asserted epoch to trust.
     let mut candidate = fx.candidate(1);
     candidate.envelope = envelope_e2;
     let err = block_on(adopt(&floors, &fx.reader(), &candidate)).unwrap_err();
@@ -1334,12 +1334,11 @@ fn cross_epoch_structure_replay_rejected_at_grant_section() {
 
 #[test]
 fn swapped_structure_ciphertext_rejected_at_grant_section() {
-    // #687: the owner-blob signature is authentically the committed owner
-    // pseudonym's, over the ORIGINAL ciphertext at the correct scope/epoch — but
-    // the grant section presents a DIFFERENT ciphertext. The gate recomputes
+    // The owner-blob signature is authentically the committed owner pseudonym's,
+    // over the ORIGINAL ciphertext at the correct scope/epoch — but the grant
+    // section presents a DIFFERENT ciphertext. The gate recomputes
     // `H(ciphertext)` from the actual bytes, so the signed hash no longer
-    // matches. (Before the fix the gate trusted a caller-supplied hash and this
-    // swap adopted.)
+    // matches. A gate that trusted a caller-supplied hash would adopt this swap.
     let fx = Fixture::new();
     let floors = InMemoryFloorStore::default();
     let mut candidate = fx.candidate(1);

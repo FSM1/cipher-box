@@ -1,4 +1,4 @@
-//! The sync-core simulation harness — the issue #632 gate mirrored 1:1
+//! The sync-core simulation harness — the sync-core gate mirrored 1:1
 //! (blueprint/engine.md "Sync core", "Pointer planes"; blueprint/testing.md
 //! "the simulation harness").
 //!
@@ -331,7 +331,7 @@ fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
         assert_eq!(report.dead_letters[0].1, DeadLetterReason::TargetGone);
 
         // A terminally unrebasable op keeps its staged bytes (blueprint/engine.md,
-        // #33 D6) — only the failure valve's abandonments release them (#818).
+        // #33 D6) — only the failure valve's abandonments release them.
         assert_eq!(
             store.staged_bytes(&staged_root.root_cid).await.unwrap(),
             Some(b"sealed-bytes".to_vec()),

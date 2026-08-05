@@ -4,20 +4,19 @@
 //!
 //! One pass rebases the durable queue onto gate-passing state ([`replay`]) and
 //! publishes each applied op under one law: **a reference must never outlive
-//! its referent** (#819). Child before parent, dest-add before source-remove,
-//! and strict FIFO stopping at the first failure — so a partial drain can leave
-//! an unreferenced record but never a ref pointing at a name nothing resolves.
+//! its referent**. Child before parent, dest-add before source-remove, and
+//! strict FIFO stopping at the first failure — so a partial drain can leave an
+//! unreferenced record but never a ref pointing at a name nothing resolves.
 //!
 //! Every published record is fed straight back through the adoption gate from
 //! the bytes in hand: the write path skips the fetch, never the gate, and the
 //! per-name sequence floor advances only as the gate's stage-6 consequence
-//! (#817; `gate/floor.rs` stays the only place floors move).
+//! (`gate/floor.rs` stays the only place floors move).
 //!
 //! What the pass does when a publish will not succeed is the failure valve
-//! ([`Halt`], #867).
+//! ([`Halt`]).
 //!
-//! Out of this slice: content bytes (#868), and cross-scope re-seal with the
-//! scope-exit rotation trigger (#635).
+//! Out of this slice: cross-scope re-seal with the scope-exit rotation trigger.
 
 use core::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -69,7 +68,7 @@ use crate::sync::record::RecordReader;
 use crate::sync::staging::{preserve_dead_letter, release_version_blocks, version_leaf_cids};
 
 /// The staging-key prefix for the drained-op high-water mark: every op id at or
-/// below the stored value has left this device's queue (#860).
+/// below the stored value has left this device's queue.
 ///
 /// It lives in the staging store rather than the floors so the mark and the op
 /// ids it names share one durability domain — a store that loses its queue
@@ -116,7 +115,7 @@ pub(crate) struct DrainReport {
     /// Terminally unrebasable ops, with the reason to surface.
     pub(crate) dead_letters: Vec<(OpId, NodeId, DeadLetterReason)>,
     /// Ops removed as restore residue: already drained on this device, so the
-    /// queue that holds them is older than the completion record (#860).
+    /// queue that holds them is older than the completion record.
     pub(crate) restore_residue: Vec<OpId>,
 }
 
@@ -191,7 +190,7 @@ impl Attempts {
     }
 }
 
-/// What stopped a drain pass, and what the valve does about it (#867). Strict
+/// What stopped a drain pass, and what the valve does about it. Strict
 /// FIFO throughout: the op that stopped the pass keeps its place at the head of
 /// the durable queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,14 +212,14 @@ enum Halt {
     /// Classified-permanent: the same bytes are refused on every retry.
     Permanent(DeadLetterReason),
     /// Over the account quota. Not a failure of the op — it holds the head and
-    /// its staging reservation until a quota probe reports room (#841).
+    /// its staging reservation until a quota probe reports room.
     Blocked {
         /// The byte count the refused upload asked for, and so the figure the
         /// resume probe must find room for.
         needed_bytes: u64,
     },
     /// The user cancelled the upload. The facade has already undone it, so the
-    /// valve does nothing but stop the pass (#824).
+    /// valve does nothing but stop the pass.
     Cancelled,
 }
 
@@ -310,7 +309,7 @@ struct Queue {
 
 /// The queue head is held over rather than failed: the account quota refused
 /// it, and it keeps its place and its staging reservation until a probe on a
-/// later drain tick reports room (#841).
+/// later drain tick reports room.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockedOp {
     /// The held op.
@@ -535,7 +534,7 @@ where
             };
             // A terminally unrebasable op keeps its staged bytes, and this is
             // what keeps them reachable — and openable — once the abandonment
-            // has dropped its record from the queue (#853).
+            // has dropped its record from the queue.
             if op.content_root_cid().is_some() {
                 self.preserve_dead_letter(*op_id).await?;
             }
@@ -583,13 +582,13 @@ where
             // upload the drain was already awaiting — and it would be charged
             // with nothing left to reach it, so the complete set is retired
             // here. Idempotent, so the overlap with the facade's batch is a
-            // no-op (#916).
+            // no-op.
             //
             // The dequeue gates the retire on the rule the facade's own path
             // follows: the claim is published before that removal commits, so
             // an op reaching here may still be queued — and unpinning the
             // leading leaves of something still publishable would land a
-            // version whose blocks are gone (#824).
+            // version whose blocks are gone.
             Halt::Cancelled => {
                 if self.dequeue_op(op_id).await.is_ok() {
                     self.retire_cancelled(op_id).await;
@@ -624,8 +623,8 @@ where
     }
 
     /// Whether a held head may be tried again this tick. A `GET /account/quota`
-    /// probe reporting room is the hold's only exit (#841), so an unanswered
-    /// probe leaves it in place.
+    /// probe reporting room is the hold's only exit, so an unanswered probe
+    /// leaves it in place.
     async fn quota_admits_the_held_head(&self, queued: &[(OpId, Op)]) -> bool {
         let Some(blocked) = *self.blocked.borrow() else {
             return true;
@@ -650,7 +649,7 @@ where
 
     /// This identity's queued ops, minus restore residue: an op at or below the
     /// durable drained-op mark already left this queue once, so the queue it
-    /// came back in predates the completion record (#860).
+    /// came back in predates the completion record.
     async fn queued_ops(
         &self,
         scope: &DrainScope<'_>,
@@ -729,7 +728,7 @@ where
         .await
         .map_err(|_| Halt::Unclassified)?;
         // The cache can be older than the floors — a restored data dir is
-        // exactly that (#860). The whole pass anchors here: this record's epoch
+        // exactly that. The whole pass anchors here: this record's epoch
         // becomes the epoch every record it publishes is sealed at, so a
         // below-floor anchor would bind a stale epoch into the AAD while the
         // live session seed derives the key — records nobody can open. One
@@ -998,7 +997,6 @@ where
                 self.publish_update_content(scope, pass, applied, content)
                     .await
             }
-            // Cross-scope re-seal is #635's.
             OpKind::Relink { .. } => Err(Halt::Unclassified),
         }
     }
@@ -1085,8 +1083,7 @@ where
     }
 
     /// Delete: drop the parent's ref. The name itself is retired only on
-    /// abandonment (#819 as amended by #824), which is the failure-policy
-    /// slice's (#867).
+    /// abandonment, which the failure valve owns.
     async fn publish_delete(
         &self,
         scope: &DrainScope<'_>,
@@ -1256,10 +1253,10 @@ where
     /// Two fail-closed conditions, because undoing wrongly is the one error the
     /// ordering law cannot absorb — it leaves the child referenced by neither
     /// parent. The source must still name the child (the publish may have
-    /// landed and only its self-adopt failed), and the dest must still be at the
-    /// sequence our dest-add published; a dest that moved is re-read and the
-    /// removal re-derived onto the winner's record rather than replayed over it
-    /// (#786).
+    /// landed and only its self-adopt failed), and the dest must still be at
+    /// the sequence our dest-add published; a dest that moved is re-read and
+    /// the removal re-derived onto the winner's record rather than replayed
+    /// over it.
     ///
     /// The undo also restores the ref the dest-add vacated: a dest keeping
     /// neither the moved node nor the one it replaced has lost an entry
@@ -1458,7 +1455,7 @@ where
     ///
     /// Publish entry — the point past which a cancel is refused — is the moment
     /// the last block confirms: everything after it authors and publishes the
-    /// version's record with no further block boundary to stop at (#824).
+    /// version's record with no further block boundary to stop at.
     async fn upload_version(
         &self,
         scope: &DrainScope<'_>,
@@ -1502,7 +1499,7 @@ where
         // The observed `pushChunk` total against the manifest the reader will
         // check the version's size against. The reachable mismatch is a backing
         // file truncated mid-upload, which would otherwise publish short bytes
-        // as a success (#830).
+        // as a success.
         if content.size() != staged.plaintext_size {
             return Err(CONTENT_LOST);
         }
@@ -1523,7 +1520,7 @@ where
 
         // File order, root last, each leaf removed on its confirmed
         // `UploadResult` — but a lost release can strand one staged anywhere
-        // below the mark (#924). An absence is only progress up to the durable
+        // below the mark. An absence is only progress up to the durable
         // mark this pass keeps: past it, a missing block is loss, and the
         // version can never be assembled.
         let leaves = content.leaf_cids().len();
@@ -1549,7 +1546,7 @@ where
                     // A leaf a lost release left staged behind the mark is
                     // re-uploaded here, and must not drag the mark back down
                     // over the leaves past it — those are released, so an
-                    // uncovered one reads as loss (#924).
+                    // uncovered one reads as loss.
                     if index + 1 > uploaded {
                         self.mark_uploaded(&staged.root_cid, index + 1, leaves)
                             .await?;
@@ -1585,7 +1582,7 @@ where
 
     /// The block boundary a cancel gets to run at. Without the yield a whole
     /// version uploads inside one turn of the host's executor, and the cancel
-    /// guarantee collapses to "only before the op starts" (#824).
+    /// guarantee collapses to "only before the op starts".
     async fn cancel_checkpoint(&self, op_id: OpId) -> Result<(), Halt> {
         yield_now().await;
         match self.cancels.borrow().is_cancelled(op_id) {
@@ -1627,7 +1624,7 @@ where
     /// high-water mark, written *before* the leaf is released: it may
     /// over-claim a leaf still staged, which the next pass re-uploads, but must
     /// never lag or regress below one already released — the hole guard would
-    /// read those uploaded bytes as loss (#924).
+    /// read those uploaded bytes as loss.
     async fn mark_uploaded(
         &self,
         root_cid: &[u8],
@@ -1655,7 +1652,7 @@ where
 
     /// Upload one block to the pin provider under `cid`, its staging key and
     /// own content address, so the ingress pins it where the published record
-    /// points (#906). A block is only ever removed from staging on a confirmed
+    /// points. A block is only ever removed from staging on a confirmed
     /// [`UploadResult`](crate::UploadResult), which is what makes the
     /// still-staged set a suffix.
     async fn upload_block(&self, cid: &[u8], block: &[u8]) -> Result<(), Halt> {
@@ -1738,7 +1735,7 @@ where
 
     /// Author, publish and self-adopt one node's record. Only a confirmed
     /// publish reaches the gate: adopting an unconfirmed one would advance the
-    /// sequence floor and destroy the idempotent-in-sequence retry (#821).
+    /// sequence floor and destroy the idempotent-in-sequence retry.
     ///
     /// `completes` names the op this record is the **last** publish of, if any;
     /// see [`Drain::mark_published`] for why the ack rather than the adopt is
@@ -1830,7 +1827,7 @@ where
                 signer: SessionIdentity::write_name_signer(scope.write_scope_seed, &node.0),
                 head_cid: head.cid,
                 // The same list the publish registered, so a sub-EOL renewal
-                // re-pins exactly the content this record points at (#797).
+                // re-pins exactly the content this record points at.
                 content_cids,
             },
         })
@@ -1972,7 +1969,7 @@ where
     }
 
     /// Abandon one op: retire what its publish registered, then drop it from
-    /// the queue (#819 as amended by #824).
+    /// the queue.
     async fn abandon(&self, scope: &DrainScope<'_>, op_id: OpId, op: &Op) -> Result<(), Halt> {
         retire(self.api, &self.registered_by(scope, op).await)
             .await
@@ -2008,7 +2005,7 @@ where
     /// unreachable, so no record a parent links can name the version.
     ///
     /// Reads the manifest before [`Self::release_staged_blocks`] drops it: after
-    /// that the leaf CIDs are recoverable from nowhere (#916).
+    /// that the leaf CIDs are recoverable from nowhere.
     async fn registered_by(&self, scope: &DrainScope<'_>, op: &Op) -> Vec<String> {
         let target_published = self.base.borrow().contains(op.target);
         let name = (!target_published && matches!(op.kind, OpKind::Create { .. })).then(|| {
@@ -2054,7 +2051,7 @@ where
     /// Raise the completion mark over this pass's **contiguous** drained prefix.
     /// The mark is a high-water line, so it may only pass ops that have all
     /// left the queue: advancing it over a halted op would make a restored data
-    /// dir discard that op as residue instead of publishing it (#860).
+    /// dir discard that op as residue instead of publishing it.
     async fn mark_drained(
         &self,
         scope: &DrainScope<'_>,
@@ -2252,7 +2249,7 @@ pub(crate) async fn published_op_mark<St: StagingStore>(
 /// Classify a register-first refusal on the discriminator the registry stamps,
 /// never the status alone (the [`classify_upload`] discipline): the batch this
 /// op builds is refused identically on every retry, and the queue is strict
-/// FIFO, so an unclassified refusal parks the op at the head forever (#920).
+/// FIFO, so an unclassified refusal parks the op at the head forever.
 fn classify_register(error: ApiError) -> Halt {
     let ApiError::Status {
         status: 400, code, ..
@@ -2277,7 +2274,7 @@ fn classify_upload(error: ApiError, refused_bytes: u64) -> Halt {
         return Halt::Unclassified;
     };
     // 413 covers two unrelated causes, so each verdict rests on **positive
-    // evidence only**: the discriminators the API stamps (#848). A response
+    // evidence only**: the discriminators the API stamps. A response
     // carrying neither did not come from a gate that inspected these bytes — a
     // proxy body cap answers 413 with no code at all — and neither holding the
     // head nor abandoning the op is a conclusion it supports.
@@ -2298,7 +2295,7 @@ fn blocks(count: usize) -> u32 {
 
 /// The key-free classification an [`OpPhase::UploadFailed`] carries, or `None`
 /// where the halt is not a failed attempt: an over-quota hold keeps the op and
-/// its reservation, and the host reads it from `SnapshotView::blocked` (#841).
+/// its reservation, and the host reads it from `SnapshotView::blocked`.
 fn upload_failure(halt: Halt) -> Option<&'static str> {
     match halt {
         // A cancel reports `UploadCancelled` from the facade that ordered it.

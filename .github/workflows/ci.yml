@@ -90,6 +90,21 @@ jobs:
       - name: Run linter
         run: pnpm lint
 
+  tracker-refs:
+    name: Tracker Refs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: 'package.json'
+
+      - name: No source comment names a tracking issue
+        run: node scripts/check-tracker-refs.mjs
+
   typecheck:
     name: Typecheck
     needs: [changes, lint]
@@ -537,7 +552,7 @@ jobs:
       - name: WASM facade boundary tests (wasm32-unknown-unknown)
         run: cargo test -p cipherbox-wasm --target wasm32-unknown-unknown
 
-      # getrandom tripwire (#718): core is pure — entropy is injected, never
+      # getrandom tripwire: core is pure — entropy is injected, never
       # sourced in-tree (blueprint/core.md "Doctrine"). The global
       # getrandom_backend cfg in .cargo/config.toml defeats getrandom-0.3's
       # no-backend compile error, so a getrandom that sneaked into core's
@@ -624,7 +639,7 @@ jobs:
       # `test:browser` builds the conformance WASM, typechecks the harness
       # against the freshly generated wasm-bindgen glue, then runs Playwright.
       # The harness typecheck lives here rather than in the Typecheck job
-      # because that glue only exists after the Rust build (#975).
+      # because that glue only exists after the Rust build.
       - name: Typecheck harness + browser seam conformance suite
         run: pnpm --filter @cipherbox/client test:browser
 
@@ -738,7 +753,7 @@ jobs:
       # The client-presented secret must equal the API's TEST_LOGIN_SECRET.
       TEST_LOGIN_SECRET: contract-suite-secret
       # The whole suite logs in from one IP, so the per-IP auth bucket would
-      # otherwise cap how many tests can exist (#837). Only the test-mode
+      # otherwise cap how many tests can exist. Only the test-mode
       # instance honors it; the production-mode one on 3100 refuses it, which
       # the suite asserts.
       THROTTLE_AUTH_LIMIT: '200'
@@ -746,7 +761,7 @@ jobs:
       CONTRACT_API_PROD_URL: http://localhost:3100
       CONTRACT_TEST_LOGIN_SECRET: contract-suite-secret
       # The stack's gateway, so the suite can fetch back a block the ingress
-      # pinned and prove it landed under the caller-computed address (#906).
+      # pinned and prove it landed under the caller-computed address.
       CONTRACT_GATEWAY_URL: http://localhost:8080
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

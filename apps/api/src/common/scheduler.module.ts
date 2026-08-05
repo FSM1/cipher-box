@@ -5,7 +5,7 @@ import { TimerWorkerScheduler, WorkerScheduler } from './worker-scheduler';
  * The one shared worker loop (blueprint/api.md: in-process, worker-shaped,
  * cleanly extractable). A single {@link WorkerScheduler} instance is provided and
  * exported here, so every feature module that owns a {@link PeriodicTask} — the
- * republisher walk, the dormant-mailbox sweep (#667) — registers on the SAME loop
+ * republisher walk, the dormant-mailbox sweep — registers on the SAME loop
  * rather than binding a second scheduler.
  *
  * Lifecycle is owned here, not by the task modules: feature modules register

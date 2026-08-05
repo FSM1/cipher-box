@@ -2,8 +2,8 @@
  * Shared request-correlation machinery for the two `EngineTransport`s
  * (`LocalTransport` over a worker, `BroadcastTransport` over a channel). Both
  * correlate responses to requests by a monotonic id and honor the same teardown
- * contract hardened in #728: a torn-down or dead transport **rejects** every
- * pending request instead of hanging.
+ * contract: a torn-down or dead transport **rejects** every pending request
+ * instead of hanging.
  *
  * A subclass supplies only its readiness gate and its send primitive; this base
  * owns the pending map, the no-hang request skeleton, response settlement, the

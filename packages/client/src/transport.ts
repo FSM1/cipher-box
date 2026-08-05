@@ -2,11 +2,11 @@
  * The facade transport seam (blueprint/web-client.md "The facade is
  * transport-agnostic").
  *
- * The facade talks to exactly one `EngineTransport`. This slice ships the
+ * The facade talks to exactly one `EngineTransport`. This module ships the
  * **local** transport (UI ↔ its own engine worker over `postMessage`, binary
- * payloads transferred). The leader-follower **broadcast** transport is the next
- * slice (#640) and slots in behind this same interface — the facade never
- * changes when leadership swaps the transport underneath it.
+ * payloads transferred); the leader-follower **broadcast** transport slots in
+ * behind this same interface — the facade never changes when leadership swaps
+ * the transport underneath it.
  */
 
 import { CorrelatedTransport } from './correlatedTransport.js';

@@ -138,9 +138,9 @@ impl SessionIdentity {
     /// The per-name write-plane IPNS signer for a node: `writeSeed(node) =
     /// KDF(writeScopeSeed, node.id)` then the `ipns-keypair` edge. This is the
     /// per-name `Ed25519Signer` the held set stores for its sub-EOL `seq+1`
-    /// renewal (#750/#751) — the resolve/gate path supplies the unsealed
-    /// `write_scope_seed`. Keyed solely by its arguments (no session field), so
-    /// it is an associated function the held-set insert can call directly.
+    /// renewal — the resolve/gate path supplies the unsealed `write_scope_seed`.
+    /// Keyed solely by its arguments (no session field), so it is an associated
+    /// function the held-set insert can call directly.
     pub(crate) fn write_name_signer(
         write_scope_seed: &[u8; 32],
         node_id: &[u8; 16],

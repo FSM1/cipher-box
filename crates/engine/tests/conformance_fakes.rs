@@ -1,6 +1,6 @@
 //! Every seam conformance kit executed against its in-memory fake — the
-//! kits are proven by the fakes passing them (issue #623), and the fakes
-//! are proven honest by the kits.
+//! kits are proven by the fakes passing them, and the fakes are proven honest
+//! by the kits.
 
 use cipherbox_engine::seams::EndpointId;
 use cipherbox_engine::testkit::fakes::{

@@ -4,17 +4,17 @@
  *
  * - `bigint`: the facade's `u64`→`bigint` boundary round-trips a value beyond
  *   `Number.MAX_SAFE_INTEGER` intact, through the real wasm-bindgen `Event`.
- * - `stagingDetachment` (#717): a WASM-backed byte *value* handed to a seam is
+ * - `stagingDetachment`: a WASM-backed byte *value* handed to a seam is
  *   copied synchronously at entry, so detaching it across the seam's awaits
  *   cannot corrupt or truncate the stored bytes. The test grows a
  *   `WebAssembly.Memory` (detaching the view) right after the call, before its
  *   awaits resolve; a copy-after-await implementation would write a detached
  *   view and fail.
- * - `stagingKeyDetachment` / `snapshotKeyDetachment` / `floorKeyDetachment`
- *   (#717, #730): the *key* view is likewise encoded synchronously at entry. A
- *   key hexed after the await would read a detached view as '' and store the
- *   entry under the wrong name, so the read-back under the real key here would
- *   miss — the fix stores it correctly.
+ * - `stagingKeyDetachment` / `snapshotKeyDetachment` / `floorKeyDetachment`: the
+ *   *key* view is likewise encoded synchronously at entry. A key hexed after the
+ *   await would read a detached view as '' and store the entry under the wrong
+ *   name, so the read-back under the real key here would miss — the fix stores
+ *   it correctly.
  */
 import init, { deadLetterEvent } from './pkg/cipherbox_wasm.js';
 import wasmUrl from './pkg/cipherbox_wasm_bg.wasm?url';

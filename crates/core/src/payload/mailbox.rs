@@ -286,7 +286,7 @@ mod tests {
     #[test]
     fn relay_to_other_recipient_fails_identity_check() {
         // R1 re-seals its untouched inner plaintext — sender signature included —
-        // to R2; recipient binding makes R2's signature check fail (#712).
+        // to R2; recipient binding makes R2's signature check fail.
         let r1 = recipient();
         let r2 = X25519Secret::from_scalar([0x42; 32]);
         let block = seal_mailbox_payload(&r1.public(), &[0x54; 32], 2, &sender(), b"relayed");
@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn per_recipient_binding_both_verify() {
         // The binding is per-recipient, not pinned to one key: separate seals to
-        // R1 and R2 both verify, and a cross-open fails HPKE (#712).
+        // R1 and R2 both verify, and a cross-open fails HPKE.
         let s = sender();
         let r1 = recipient();
         let r2 = X25519Secret::from_scalar([0x42; 32]);
@@ -330,7 +330,7 @@ mod tests {
 
     #[test]
     fn same_recipient_reseal_still_verifies() {
-        // The reject is specifically cross-recipient (#712), not "any re-seal
+        // The reject is specifically cross-recipient, not "any re-seal
         // breaks": the signature binds the recipient, not the reseal act.
         let r1 = recipient();
         let block = seal_mailbox_payload(&r1.public(), &[0x54; 32], 2, &sender(), b"relayed");

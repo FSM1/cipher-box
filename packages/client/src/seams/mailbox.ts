@@ -15,7 +15,7 @@ const decoder = new TextDecoder();
 
 /**
  * Mailbox routes are API-origin control-plane calls: they ride the HTTP-only
- * refresh cookie (#949) and carry the control-plane deadline (#939).
+ * refresh cookie and carry the control-plane deadline.
  */
 const API_REQUEST = { credentials: 'include', timeoutMs: 10_000 } as const;
 

@@ -1,8 +1,8 @@
 /**
  * `POST /content/upload` answers 413 for two unrelated causes, so the body
- * carries a stable `code` a client classifies on instead of parsing `message`
- * (#842): the transport cap is permanent for the request, the quota gate clears
- * once the account frees space.
+ * carries a stable `code` a client classifies on instead of parsing `message`:
+ * the transport cap is permanent for the request, the quota gate clears once
+ * the account frees space.
  */
 export const UPLOAD_TOO_LARGE = 'UPLOAD_TOO_LARGE';
 export const QUOTA_EXCEEDED = 'QUOTA_EXCEEDED';

@@ -1,6 +1,7 @@
 //! The rebase engine — FIFO replay of the op queue onto gate-passing state,
 //! the five per-op race rules, dead-lettering, and dual-link observed repair
-//! (blueprint/engine.md "Sync core: Per-op rebase rules"; CONTEXT.md).
+//! (blueprint/engine.md "Sync core: Per-op rebase rules"; CONTEXT.md "Sync and
+//! refresh").
 //!
 //! Replay is FIFO in performed order and rebases **only onto gate-passing
 //! state** (#33 D5–D7): the caller resolves a fresh last-known-good snapshot
@@ -47,7 +48,7 @@ pub enum OpResolution {
         suffixed: bool,
         /// A cross-scope relink that left a granted source scope: the source
         /// scope root whose scope-exit rotation is **queued** (this slice does
-        /// not rotate — CONTEXT.md #632 scope).
+        /// not rotate).
         scope_exit_trigger: Option<crate::facade::NodeId>,
     },
     /// The op was dropped as a no-op or a lost race.
@@ -94,13 +95,13 @@ pub enum DeadLetterReason {
     PayloadRefused,
     /// The op's drain attempt budget ran out. A budget spent before the record
     /// PUT retires what the op uploaded; once a PUT is acked the publish may
-    /// have landed, so that half retires nothing (#819 as amended).
+    /// have landed, so that half retires nothing.
     AttemptsExhausted,
     /// The op's staged content can never publish: its per-version key will not
     /// open, its root block is gone or unreadable, or a leaf is missing from the
     /// middle of the block set. The content key is a KDF non-edge, so none of
     /// these is recoverable — the abandonment **releases** the version's staged
-    /// blocks rather than preserving bytes no key opens (#818).
+    /// blocks rather than preserving bytes no key opens.
     ContentUnrecoverable,
 }
 
@@ -174,7 +175,7 @@ pub fn decode_queue(reader: &RecordReader<'_>, raw: &[(OpId, Vec<u8>)]) -> Queue
 
 /// A memo of one [`decode_queue`] pass: the decode is an HPKE open per record
 /// this identity owns, and the queue is uncapped, so an un-memoized render pays
-/// for the whole backlog (#880).
+/// for the whole backlog.
 ///
 /// Keyed on the reading identity plus the queue's high-water [`OpId`] and its
 /// length — no enqueue or removal leaves both unchanged
@@ -670,7 +671,7 @@ pub enum HeadReconciliation {
 /// `observed_sequence`) — both already record-verified upstream by the gate.
 ///
 /// Closes the same-sequence split-brain the publish confirm-by-re-resolve
-/// cannot resolve by sequence alone (deferred from the net publish slice, #692):
+/// cannot resolve by sequence alone (deferred from the net publish slice):
 /// the tiebreak is a total order over the exact verified record bytes every
 /// client fetches, so all clients converge on the same canonical head with no
 /// shared state (see [`HeadReconciliation::SameSequenceDivergence`]).

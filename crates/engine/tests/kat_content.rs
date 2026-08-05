@@ -1,6 +1,7 @@
 //! The engine's content-DAG KAT suite — the sibling of core's manifest sweep
-//! (#820 §5). Core's sweep is core-scoped by construction: it enumerates core's
-//! error surface and cannot regenerate engine-produced bytes.
+//! over the frozen content format. Core's sweep is core-scoped by construction:
+//! it enumerates core's error surface and cannot regenerate engine-produced
+//! bytes.
 //!
 //! Fixtures are embedded at compile time, so the suite never depends on the
 //! working directory. `crates/engine/kat` is written only by
@@ -346,7 +347,7 @@ fn an_unreadable_format_version_is_never_a_trust_verdict() {
         assert_eq!(
             error.class(),
             "unsupported",
-            "{}: an out-of-date client is not a forged record (#820)",
+            "{}: an out-of-date client is not a forged record",
             v.name
         );
     }

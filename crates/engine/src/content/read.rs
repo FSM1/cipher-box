@@ -25,7 +25,7 @@ use crate::seams::{CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequ
 const AUTHORIZATION: &str = "Authorization";
 const ACCEPT: &str = "Accept";
 /// Deadline for one leaf-block GET: a seek issues one per leaf against sources
-/// of unknown quality, so a stalled gateway must fail over (#939).
+/// of unknown quality, so a stalled gateway must fail over.
 const BLOCK_FETCH_TIMEOUT_MS: u64 = 30_000;
 /// The trustless-gateway raw-block content type (IPIP-0402).
 const RAW_BLOCK: &str = "application/vnd.ipld.raw";
@@ -139,7 +139,7 @@ pub enum ReadError {
     /// exhausted with no correctly-sized block. An oversized body is an
     /// availability failure that rotates to the next source (a non-authoritative
     /// source can serve an arbitrary huge body for any CID); this surfaces only
-    /// once every source is exhausted having hit that (#742).
+    /// once every source is exhausted having hit that.
     TooLarge {
         /// The oversized response body length.
         size: usize,
@@ -211,7 +211,7 @@ pub async fn read_block(
             // the block is over-cap (a malicious source can serve an arbitrary
             // huge body — e.g. a non-2xx error page — for any CID), so a healthy
             // source may still serve the correctly-sized block. Terminal only
-            // once every source is exhausted (#742).
+            // once every source is exhausted.
             Err(CappedFetchError::BodyTooLarge { observed, limit }) => {
                 over_cap = Some((observed, limit));
                 continue;
@@ -222,8 +222,8 @@ pub async fn read_block(
         }
         // Defense-in-depth backstop behind the transport cap: a seam using the
         // buffering default (or one that mis-sizes) still cannot slip an over-cap
-        // body past this before it is hashed, decoded, or gated (#742). Same
-        // rotation as the transport cap — an oversized body is not authoritative.
+        // body past this before it is hashed, decoded, or gated. Same rotation as
+        // the transport cap — an oversized body is not authoritative.
         if response.body.len() > MAX_RESOLVED_RECORD_BYTES {
             over_cap = Some((response.body.len(), MAX_RESOLVED_RECORD_BYTES));
             continue;
@@ -257,7 +257,7 @@ fn is_canonical_content_cid_str(cid_str: &str) -> bool {
 }
 
 /// Send the raw-block GET to one source under the block-size cap. The transport
-/// bounds peak memory while reading the body (#787): a `Content-Length`
+/// bounds peak memory while reading the body: a `Content-Length`
 /// pre-check plus a capped streaming read, so an over-cap body fails closed
 /// ([`CappedFetchError::BodyTooLarge`]) before it is fully allocated. A
 /// transport-level failure ([`CappedFetchError::Transport`]) is an availability
@@ -280,7 +280,7 @@ async fn fetch(
         url: format!("{base}/ipfs/{cid_str}?format=raw"),
         headers,
         body: None,
-        // The bearer above is the only credential a gateway source gets (#949).
+        // The bearer above is the only credential a gateway source gets.
         credentials: HttpCredentials::Omit,
         timeout_ms: Some(BLOCK_FETCH_TIMEOUT_MS),
     };

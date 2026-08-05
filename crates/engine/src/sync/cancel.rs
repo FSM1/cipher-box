@@ -1,4 +1,4 @@
-//! The upload-cancel interlock shared by the facade and the drain (#824).
+//! The upload-cancel interlock shared by the facade and the drain.
 //!
 //! Cancel is **guaranteed until publish entry and refused after**, so it can
 //! never mutate published state. Both halves of that guarantee are decided here,
@@ -18,7 +18,7 @@ struct InFlight {
     /// Session-scoped by design: it is the only evidence a cancel has that a
     /// block was charged by *this* upload rather than by a version that has
     /// since published, and a retire without that evidence would unpin content
-    /// a live record still names (#916).
+    /// a live record still names.
     confirmed: Vec<Vec<u8>>,
     /// Whether the version's record has been authored and PUT. Sticky across a
     /// retry: a PUT that did not confirm may still be live at the name.

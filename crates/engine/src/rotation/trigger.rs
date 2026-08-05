@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn revoke_tampered_commitment_preimage_fails_closed() {
-        // The engine-layer preimage-binding lock (#747 F1): a real owner signer
+        // The engine-layer preimage-binding lock: a real owner signer
         // presents a signature it genuinely produced, but over a *different*
         // (tampered) commitment than the one being revoked. verify_grant_set binds
         // the signature to THIS commitment's preimage, so the mismatch is rejected

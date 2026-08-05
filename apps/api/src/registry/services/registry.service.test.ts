@@ -327,7 +327,7 @@ describe('RegistryService', () => {
 
       // A refcount-zero CID whose unpin is swallowed (Kubo hiccup / unconfigured
       // store) returns false — the row delete still commits, but the count must
-      // reflect the seam, not assume a release happened (#729).
+      // reflect the seam, not assume a release happened.
       const noopStore = new (class extends FakePinStore {
         override async unpin(): Promise<boolean> {
           return false;

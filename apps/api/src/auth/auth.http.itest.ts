@@ -23,7 +23,7 @@ import { TestAuthService } from './services/test-auth.service';
 import { TokenService } from './services/token.service';
 
 /**
- * The auth HTTP flows re-homed onto a REAL Postgres (#725): challenge-signature
+ * The auth HTTP flows re-homed onto a REAL Postgres: challenge-signature
  * login with implicit account creation, refresh-token rotation and the
  * reuse-kills-the-family invariant, SIWE link/login uniqueness, logout
  * revocation, and the staging-gated test-login — all against real

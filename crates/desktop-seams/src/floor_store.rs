@@ -29,15 +29,15 @@ use crate::fs_util::{
 /// per-key writes leaves the already-written floors in place and *completes* the
 /// rest on the next open (idempotent monotonic-max) — it never rewinds an
 /// applied floor. Each commit writes its own uniquely-named intent file, so
-/// overlapping commits neither clobber nor remove one another's recovery record
-/// (#685).
+/// overlapping commits neither clobber nor remove one another's recovery
+/// record.
 pub struct FileFloorStore {
     epoch_dir: PathBuf,
     seq_dir: PathBuf,
     intent_dir: PathBuf,
     /// Serializes the read-modify-write in [`Self::raise_floor`] within this
     /// handle: interleaved raises can durably regress a floor, and intent
-    /// replay cannot heal that loss (#704).
+    /// replay cannot heal that loss.
     write_lock: Mutex<()>,
 }
 
@@ -169,8 +169,8 @@ impl FloorStore for FileFloorStore {
     /// Crash-consistent across keys via a write-ahead intent record, roll-forward
     /// (not rollback): the whole batch is fsynced to its own `intent/<unique>`
     /// file first, so an advance interrupted between per-key writes is *completed*
-    /// by [`open`](Self::open)'s replay rather than left partial (#685). The
-    /// unique filename keeps overlapping commits from clobbering or removing each
+    /// by [`open`](Self::open)'s replay rather than left partial. The unique
+    /// filename keeps overlapping commits from clobbering or removing each
     /// other's record. A commit that returns `Ok` has cleared its intent.
     async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
         if raises.is_empty() {
@@ -292,8 +292,6 @@ mod tests {
         assert!(intent_key_len(u32::MAX as u64 + 1).is_err());
     }
 
-    /// The #704 regression: with the raises unserialized, the low one can read
-    /// the pre-raise floor and land last.
     #[test]
     fn concurrent_raises_never_regress_a_floor() {
         let dir = tempfile::tempdir().unwrap();
@@ -330,8 +328,8 @@ mod tests {
 
     /// A batch commit interrupted mid-apply (intent fsynced, only the first of
     /// two floors on the platter) is completed by reopen — the second floor
-    /// lands and the intent clears, so no partial advance survives (#685). This
-    /// is the roll-forward recovery contract: reopen *heals forward*, it never
+    /// lands and the intent clears, so no partial advance survives. This is
+    /// the roll-forward recovery contract: reopen *heals forward*, it never
     /// rewinds the floor that already landed.
     #[test]
     fn open_replays_an_interrupted_batch_commit() {
@@ -373,7 +371,7 @@ mod tests {
     /// clobbers nor removes the other's — and reopen replays BOTH, healing every
     /// floor forward. This is the crash-consistency hole a single shared intent
     /// path had: the second commit could overwrite or delete the first's
-    /// recovery record (#685).
+    /// recovery record.
     #[test]
     fn open_replays_multiple_overlapping_intents() {
         let dir = tempfile::tempdir().unwrap();
@@ -419,9 +417,9 @@ mod tests {
 
     /// A corrupt leftover intent on disk fails the whole reopen closed: `open`
     /// surfaces the decode error rather than panicking or silently skipping the
-    /// record, so a garbled recovery journal can never be quietly discarded
-    /// (#685). This is the crash-recovery fail-closed contract, exercised through
-    /// the public `open` surface (not just `decode_intent` in isolation).
+    /// record, so a garbled recovery journal can never be quietly discarded.
+    /// This is the crash-recovery fail-closed contract, exercised through the
+    /// public `open` surface (not just `decode_intent` in isolation).
     #[test]
     fn open_fails_closed_on_a_corrupt_intent() {
         let dir = tempfile::tempdir().unwrap();

@@ -41,9 +41,9 @@ pub const RE_PUT_INTERVAL: Duration = Duration::from_secs(60 * 60);
 /// One held record to keep alive across both re-PUT layers.
 ///
 /// [`keyless_re_put`] needs only [`routing_key`](Self::routing_key) +
-/// [`record_bytes`](Self::record_bytes); the sub-EOL seq+1 renewal (#750)
-/// rebuilds a [`PublishRequest`] from the rest. It stores the **narrow per-name
-/// signer** the renewal signs with — not the scope's write seed, which would
+/// [`record_bytes`](Self::record_bytes); the sub-EOL seq+1 renewal rebuilds a
+/// [`PublishRequest`] from the rest. It stores the **narrow per-name signer**
+/// the renewal signs with — not the scope's write seed, which would
 /// derive the full write plane (content + IPNS) for every node in the scope
 /// (least privilege; security rules 2 and 5). The signer is derived once at
 /// insert from the scope seed + node id (see `HeldMaterial`) and the seed is
@@ -245,8 +245,8 @@ where
         if hr.head_cid.is_empty() {
             continue;
         }
-        // The held signer signs for this name by the insert-time bind (#751:
-        // resolve_and_hold rejects a signer whose derived name is not the
+        // The held signer signs for this name by the insert-time bind
+        // (`resolve_and_hold` rejects a signer whose derived name is not the
         // routing key), so no signing key is derived in the loop.
         let request = PublishRequest {
             name: &name,

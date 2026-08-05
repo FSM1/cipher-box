@@ -411,7 +411,7 @@ describe('ContentService upload concurrency (real Postgres)', () => {
   describe('quota gate — BigInt exactness above 2^53', () => {
     it('refuses an upload a Number comparison would wrongly admit', async () => {
       // A limit and existing use far above 2^53, where a JS number cannot tell
-      // `limit` from `limit + 1` (folded from #677).
+      // `limit` from `limit + 1`.
       const limit = (1n << 60n) + 1n;
       const accountId = await seedAccount({ quotaLimitOverride: limit.toString() });
       await db.dataSource
@@ -475,7 +475,7 @@ describe('ContentService upload concurrency (real Postgres)', () => {
   });
 
   // A BYO account's bytes live on its own provider and bypass the API
-  // (blueprint/api.md, Content plane; #701). Hosted ingress must refuse it — a
+  // (blueprint/api.md, Content plane). Hosted ingress must refuse it — a
   // 409 with NO pin and NO row — never pin to hosted Kubo off an advisory,
   // uncounted row (which would be unbounded free hosted storage).
   describe('hosted ingress refuses a BYO account', () => {
@@ -523,7 +523,7 @@ describe('ContentService upload concurrency (real Postgres)', () => {
   // the toggle commit true under it, and still pinning to hosted Kubo (free
   // hosted storage for a BYO account) — or reading true and 409ing an upload the
   // toggle just made hosted. The read takes the same FOR UPDATE registry.register
-  // uses; setByo's UPDATE blocks on it (#716).
+  // uses; setByo's UPDATE blocks on it.
   describe('hosted ingress — BYO-flag serialization', () => {
     function buildRegistry(): RegistryService {
       return new RegistryService(

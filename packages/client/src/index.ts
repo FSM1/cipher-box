@@ -6,7 +6,7 @@
  * `fetch`), the dedicated engine worker that hosts the WASM engine over those
  * seams, the promise-correlated RPC layer, the single typed async facade behind
  * a transport seam, and tab leadership with the leader/follower broadcast
- * transports and failover (#640).
+ * transports and failover.
  */
 export const CLIENT_PACKAGE = '@cipherbox/client';
 

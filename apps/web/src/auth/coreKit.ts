@@ -93,7 +93,7 @@ export function createCoreKitSession(env: Partial<ImportMetaEnv>): CoreKitSessio
     // Core Kit persists its own device-factor share and session id here. The
     // login secret is not among them — it only ever leaves this realm as the
     // transferred buffer — but this store is a bearer path back to a logged-in
-    // Core Kit, so its scope is a decision, not a default: see #913.
+    // Core Kit.
     storage: window.localStorage,
     manualSync: true,
     tssLib,

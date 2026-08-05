@@ -1,13 +1,12 @@
 //! The content profile — the frozen chunk-framing constant
-//! (blueprint/engine.md "Content plane"; frozen by #820 and pinned by the
-//! engine KAT).
+//! (blueprint/engine.md "Content plane"; frozen and pinned by the engine KAT).
 //!
 //! Chunk size is engine-owned per core.md's hand-off and, like the sync timing
 //! profile, is injected rather than hardcoded at a call site: framing reads the
 //! size from the profile handed in.
 
-/// The content-plane framing profile (#630). Fixed-size chunking over a flat
-/// DAG is the whole of the shape, frozen by #820.
+/// The content-plane framing profile. Fixed-size chunking over a flat DAG is
+/// the whole of the frozen shape.
 ///
 /// There is deliberately **no `Default`** (mirrors [`crate::profile`]): every
 /// construction site names its profile, and the chunk size is always a real,
@@ -26,7 +25,7 @@ pub struct ContentProfile {
 }
 
 impl ContentProfile {
-    /// Shipped framing, frozen by #820: the **sealed leaf** is exactly 1 MiB.
+    /// Shipped framing: the **sealed leaf** is exactly 1 MiB.
     ///
     /// The 1 MiB budget belongs to the block, not the plaintext, because the
     /// ecosystem imposes its limits on blocks — so the plaintext chunk is

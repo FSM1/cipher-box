@@ -60,7 +60,7 @@ where
     }
 
     // One byte under the record's size fails closed: an over-cap body is never
-    // handed to the engine, whatever the endpoint declares (#949).
+    // handed to the engine, whatever the endpoint declares.
     if let Some(cap) = record.len().checked_sub(1) {
         for endpoint in &endpoints {
             assert!(

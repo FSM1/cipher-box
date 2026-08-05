@@ -1,4 +1,4 @@
-//! Cross-key atomic floor-commit durability (#685).
+//! Cross-key atomic floor-commit durability.
 //!
 //! A floor advance raises several distinctly-keyed floors (read-epoch,
 //! per-name sequence) at once. This suite drives the engine's floor law
@@ -6,12 +6,11 @@
 //! and contrasts them:
 //!
 //! - a backing whose [`FloorStore::commit_floors`] is transactional → a
-//!   mid-advance seam fault leaves **no** floor moved (all-or-nothing, the #685
-//!   fix);
+//!   mid-advance seam fault leaves **no** floor moved (all-or-nothing);
 //! - a backing on the seam's non-atomic default fallback → the same fault
 //!   leaves a *partial* advance. That negative control makes the atomic
 //!   assertion non-vacuous (it is what "the test fails with the atomic commit
-//!   disabled" means here) while confirming #682's fail-safe ordering and
+//!   disabled" means here) while confirming the fail-safe raise ordering and
 //!   idempotent re-convergence still hold.
 //!
 //! The desktop file store closes the same hazard by **roll-forward** replay
@@ -36,7 +35,7 @@ const DISARMED: usize = usize::MAX;
 // ---------------------------------------------------------------------------
 // A backing that faults the Nth single-key raise and does NOT override
 // commit_floors — so an advance runs the seam's non-atomic default fallback,
-// the pre-#685 split-write behaviour.
+// the split-write behaviour.
 // ---------------------------------------------------------------------------
 
 struct SplitFaultyStore {
@@ -173,9 +172,9 @@ fn advance_on_unseal_is_all_or_nothing_when_the_backing_commits_atomically() {
 }
 
 /// The negative control (atomic commit disabled): the same fault leaves a
-/// PARTIAL advance — the hazard #685 closes. It also proves #682's fail-safe
-/// ordering (revocation floor commits first, so the partial fails closed) and
-/// idempotent re-convergence on retry.
+/// PARTIAL advance — the hazard the atomic commit closes. It also proves the
+/// fail-safe ordering (revocation floor commits first, so the partial fails
+/// closed) and idempotent re-convergence on retry.
 #[test]
 fn advance_on_unseal_leaves_a_fail_safe_partial_without_atomic_commit() {
     // Budget 1: the first raise (revocation floor) succeeds, the second

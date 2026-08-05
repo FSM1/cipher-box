@@ -3,7 +3,7 @@
 //! Home of the F-4 read-plane rotation cascade:
 //!
 //! - [`eager_set`] — the transitive-closure walk that names every descendant
-//!   scope root a revocation rotation must touch (#744).
+//!   scope root a revocation rotation must touch.
 //! - [`reseal`] — the shared per-scope-root re-seal helper: assemble one scope
 //!   root's signed grant section at a given epoch/seed, re-wrapping grant blobs
 //!   for exactly the committed set. Consumed by `rotate_scope` (the root cut), by

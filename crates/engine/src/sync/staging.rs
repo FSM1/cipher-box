@@ -11,10 +11,10 @@
 //! the staged-byte hygiene that outlives it.
 //!
 //! One rule decides a staged version's fate, and it lives here: **preserved when
-//! the engine gave up on the op, released when the user did** (#853). Preserved
-//! on a terminally unrebasable dead letter ([`preserve_dead_letter`]); released
-//! on a cancel, on a version proven unopenable (#818), and on a staged root that
-//! cannot be expanded ([`release_version_blocks`]).
+//! the engine gave up on the op, released when the user did**. Preserved on a
+//! terminally unrebasable dead letter ([`preserve_dead_letter`]); released on a
+//! cancel, on a version proven unopenable, and on a staged root that cannot be
+//! expanded ([`release_version_blocks`]).
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -69,7 +69,7 @@ pub async fn stage_op<S: StagingStore>(
 ///
 /// It holds the whole record, not just the root CID, because the record is the
 /// only carrier of the version's content key — a KDF non-edge nothing can
-/// re-derive (#818). Preserving the blocks without it would keep ciphertext no
+/// re-derive. Preserving the blocks without it would keep ciphertext no
 /// key ever opens, which is the condition that *releases* a version, not the one
 /// that preserves it. Orphan GC reads each entry's root keylessly through the
 /// same frozen clear header a queue entry exposes ([`record_content_root_cid`]),
@@ -109,7 +109,7 @@ pub(crate) async fn version_leaf_cids<S: StagingStore>(store: &S, root_cid: &[u8
 }
 
 /// Keep one dead letter's op record after it leaves the durable queue, so orphan
-/// GC keeps the blocks it names and the version stays openable (#853).
+/// GC keeps the blocks it names and the version stays openable.
 ///
 /// Fails closed on a preserved record this build cannot read: overwriting it
 /// would drop the dead letters it already holds, and those are exactly what the
@@ -232,8 +232,7 @@ impl LiveBlocks {
 }
 
 /// One orphan-GC pass: expand every staged root into its leaf set and remove the
-/// blocks nothing references (#828). Runs at cold start and after each drain
-/// pass.
+/// blocks nothing references. Runs at cold start and after each drain pass.
 ///
 /// Best-effort throughout — a store that cannot enumerate or remove leaves its
 /// residue for the next pass — and it also prunes [`PRESERVED_DEAD_LETTERS_KEY`] of
@@ -288,7 +287,7 @@ async fn prune_preserved_dead_letters<S: StagingStore>(store: &S) {
 /// expanded into the leaf keys its own manifest lists — so a foreign account's
 /// or a forward-version record's whole block set is retained. A **preserved dead
 /// letter**'s record is read the same way, which is what keeps the bytes the
-/// contract promises once that record has left the queue (#853). An **open write
+/// contract promises once that record has left the queue. An **open write
 /// handle**'s blocks are staged before any op is journaled, so they are
 /// unreferenced by construction and must be passed in as `live`; collecting them
 /// mid-write would publish a version whose manifest names blocks nothing holds.
@@ -532,7 +531,7 @@ mod tests {
     }
 
     /// Collecting the drain's completion mark would let a restored queue replay
-    /// ops that already published (#860), so it is never orphan residue.
+    /// ops that already published, so it is never orphan residue.
     ///
     /// The op-id marks are per-identity, so this holds for a mark **this**
     /// session cannot read too: its owner is the identity that still needs it,
@@ -673,7 +672,7 @@ mod tests {
 
     /// The dead-letter contract keeps a terminally unrebasable op's staged
     /// bytes, but the abandonment removes its op record — so without a second
-    /// reference source GC reclaims exactly what was promised (#853).
+    /// reference source GC reclaims exactly what was promised.
     #[test]
     fn a_preserved_dead_letters_block_set_is_never_collected() {
         let store = InMemoryStagingStore::default();
@@ -694,7 +693,7 @@ mod tests {
 
     /// Preserving the whole record, not just the root, is what keeps the version
     /// openable: the sealed content key is a KDF non-edge and the record is its
-    /// only carrier (#818).
+    /// only carrier.
     #[test]
     fn a_preserved_dead_letter_still_carries_the_key_that_opens_its_version() {
         let store = InMemoryStagingStore::default();

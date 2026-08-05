@@ -21,11 +21,9 @@
  * regression is a property of `raise*` never lowering a floor).
  *
  * Per-key only, by design: there is deliberately no batch/commit method here.
- * A cross-key floor advance (#685) rides the engine seam's ordered fail-safe
- * fallback (`FloorStore::commit_floors` default), which commits the
- * revocation floor first and re-converges idempotently on retry — the #682
- * mitigation. Web-atomic commit is designed-for but deferred: #685 is a
- * durability/liveness concern, not a trust hole.
+ * A cross-key floor advance rides the engine seam's ordered fail-safe fallback
+ * (`FloorStore::commit_floors` default), which commits the revocation floor
+ * first and re-converges idempotently on retry.
  */
 export interface FloorStoreSeam {
   epochFloor(scopeId: Uint8Array): Promise<number | null>;
@@ -101,10 +99,10 @@ export interface HttpRequestData {
   /**
    * Ambient-credential scope. Absent means `'omit'`: only the API origin is
    * asked for the HTTP-only refresh cookie, so a gateway gets no authority it
-   * could use to correlate the per-leaf fetches (#949).
+   * could use to correlate the per-leaf fetches.
    */
   credentials?: 'include' | 'omit';
-  /** Whole-request deadline in ms, per request class; absent leaves it unbounded (#939). */
+  /** Whole-request deadline in ms, per request class; absent leaves it unbounded. */
   timeoutMs?: number | null;
 }
 

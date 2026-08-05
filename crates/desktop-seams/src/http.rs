@@ -30,7 +30,7 @@ impl ReqwestHttp {
     /// fails fast instead of hanging the engine task forever. The whole-request
     /// bound is per request class and rides [`HttpRequest::timeout_ms`], so a
     /// nonce fetch and a content-chunk upload do not share one client-wide
-    /// deadline (#939).
+    /// deadline.
     pub fn new() -> SeamResult<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -134,7 +134,7 @@ impl Http for ReqwestHttp {
 
         // Reject a body that declares itself over the cap before reading a byte;
         // a missing or lying Content-Length is still bounded by the streaming
-        // drain below (#787).
+        // drain below.
         if let Some(declared) = response.content_length() {
             if declared > max_bytes as u64 {
                 return Err(CappedFetchError::BodyTooLarge {

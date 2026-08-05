@@ -26,7 +26,7 @@ export function byteConfigBigInt(raw: unknown, fallback: bigint): bigint {
  * Postgres returns the `bigint` sum as `numeric` (a driver STRING), so
  * `BigInt(...)` preserves precision that TypeORM's `sum()` — which returns a
  * lossy JS `number` and can only type numeric columns — would drop above 2^53
- * bytes (folded from #677). `COALESCE(..., 0)` makes an empty account read 0.
+ * bytes. `COALESCE(..., 0)` makes an empty account read 0.
  * `narrow` optionally restricts the summed rows.
  */
 async function sumSizeBytes(
@@ -44,9 +44,8 @@ async function sumSizeBytes(
 }
 
 /**
- * The rows the hosted quota counts. Written ONCE and shared by the gate sum and
- * the reported sum: #843 was two callers disagreeing about which rows count, so
- * the predicate must not be re-typed per query.
+ * The rows the hosted quota counts — shared by the gate sum and the reported sum
+ * so the two cannot disagree about which rows count.
  */
 const HOSTED_ROWS = 'pin.advisory = false';
 
@@ -98,7 +97,7 @@ export function resolveLimitBytes(
 
 /**
  * The over-quota decision, exact at any magnitude — BigInt throughout so a large
- * account gates correctly where a JS `number` comparison would round (#677).
+ * account gates correctly where a JS `number` comparison would round.
  */
 export function exceedsQuota(used: bigint, incoming: bigint, limit: bigint): boolean {
   return used + incoming > limit;

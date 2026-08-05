@@ -244,7 +244,7 @@ impl Reconciled {
 /// Persist-fail returns un-acked with the floor untouched, so the item redelivers
 /// and re-accepts idempotently (the bookmark self-heals). Injected as a grants-layer
 /// seam, not one of the nine host seams; the facade wires a concrete store when the
-/// accept flow is mounted (#635).
+/// accept flow is mounted.
 pub trait ReceivedShareStore {
     /// Durably persist the whole received-shares list. A failure returns a
     /// [`SeamError`] and the accept flow does not ack.

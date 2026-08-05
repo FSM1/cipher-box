@@ -89,8 +89,7 @@ pub struct NodeId(pub [u8; 16]);
 /// Content never crosses the facade as one buffer: the client slices the file
 /// and feeds chunks through [`Engine::push_chunk`], the engine seals and stages
 /// each, and the op is journaled once at [`Engine::commit_write`] — so peak heap
-/// is one chunk however large the file (blueprint/engine.md "Content plane";
-/// #815).
+/// is one chunk however large the file (blueprint/engine.md "Content plane").
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WriteHandle(pub u64);
 
@@ -101,7 +100,7 @@ pub struct WriteHandle(pub u64);
 /// that one authenticated object. Re-resolving per window would let a head
 /// change mid-stream splice two versions into one response body, which no
 /// downstream check can detect — every byte is still CID-verified and unsealed
-/// under its own version's key (#948).
+/// under its own version's key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StreamHandle(pub u64);
 
@@ -231,7 +230,7 @@ pub enum OverBudgetCause {
 
 /// One retained dead-lettered op and why it will never publish. The reason is
 /// the whole surface: "the folder this was going into no longer exists" and
-/// "this queued change is corrupt" call for different user actions (#859).
+/// "this queued change is corrupt" call for different user actions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeadLetter {
     /// The dead-lettered op.
@@ -262,13 +261,12 @@ pub struct SnapshotView {
     pub dead_letters: Vec<DeadLetter>,
     /// The over-quota hold, if the drain has one. Read here and never as an
     /// event: this is a state that *clears*, and a lost "resumed" would strand
-    /// the UI on a blockage that is gone (#841).
+    /// the UI on a blockage that is gone.
     pub blocked: Option<BlockedOp>,
     /// How many durable queue entries this session holds but cannot read
     /// (CONTEXT.md "Retained record"). Deliberately unattributed — it says the
     /// device is not empty, never whose work it holds — and it exists so an
-    /// over-budget rejection on an apparently empty vault has an explanation
-    /// (#832 §6 residual).
+    /// over-budget rejection on an apparently empty vault has an explanation.
     pub retained_records: usize,
     /// The staleness rung at read time.
     pub staleness: Staleness,
@@ -336,7 +334,7 @@ impl fmt::Debug for LoginSecret {
 ///
 /// [`parse`](Self::parse) is the only way to build a configured base and
 /// [`offline`](Self::offline) exists only under `test-kit`, so a shipped host
-/// cannot bring up an engine that never authenticates (#1032).
+/// cannot bring up an engine that never authenticates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApiBaseUrl(Option<String>);
 
@@ -440,7 +438,7 @@ pub enum Command {
     /// pushes the whole file through the network and never returns the staging
     /// budget. Guaranteed until the version's last block confirms and refused
     /// after with [`EngineError::TooLateToCancel`], so a cancel never mutates
-    /// published state (#824).
+    /// published state.
     CancelUpload {
         /// The queue id [`Engine::commit_write`] returned.
         op_id: OpId,
@@ -575,8 +573,7 @@ pub enum Event {
     DeadLetter {
         /// The dead-lettered op.
         op_id: OpId,
-        /// Why it dead-lettered — the four reasons need four different messages
-        /// (#859).
+        /// Why it dead-lettered — the four reasons need four different messages.
         reason: DeadLetterReason,
     },
     /// Attributable abuse: a fail-closed adoption-gate rejection, or an
@@ -645,7 +642,7 @@ pub enum OpPhase {
     /// is what says the op will never publish.
     UploadFailed,
     /// The user cancelled the upload and its staged blocks were released
-    /// (`Command::CancelUpload`, #869).
+    /// (`Command::CancelUpload`).
     UploadCancelled,
 }
 
@@ -693,7 +690,7 @@ pub enum EngineError {
     /// A write was refused for want of room. The cause names which budget and
     /// which user action, and `available` is the room left — never the whole
     /// budget, which a caller cannot act on when other writes already hold most
-    /// of it (#829).
+    /// of it.
     OverBudget {
         /// Which budget refused it, and what a user can do about it.
         cause: OverBudgetCause,
@@ -706,7 +703,7 @@ pub enum EngineError {
     /// The bytes fed to a write handle did not add up to the size declared at
     /// [`begin_write`](Engine::begin_write). The reachable cause is a backing
     /// file truncated mid-upload; committing it would publish a short version as
-    /// a success (#830).
+    /// a success.
     ContentSizeMismatch {
         /// The size declared at `beginWrite`.
         declared: u64,
@@ -724,7 +721,7 @@ pub enum EngineError {
     /// [`Command::CancelUpload`] named an op that is no longer cancellable: its
     /// version's last block confirmed and its record is publishing, or it has
     /// already left the durable queue. Never converted into a compensating
-    /// delete, which would substitute an irreversible published mutation (#824).
+    /// delete, which would substitute an irreversible published mutation.
     TooLateToCancel {
         /// The op the cancel named.
         op_id: OpId,
@@ -1156,7 +1153,7 @@ struct SyncStatus {
 /// The bound is the seed's expiry: a rotation that raises the scope's durable
 /// floor past it revokes that epoch, so the seed is evicted rather than left
 /// resident for the rest of the session. Least privilege is a retention rule,
-/// not only an install rule (#795, #1040).
+/// not only an install rule.
 struct CachedSeed {
     seed: Zeroizing<[u8; 32]>,
     floor: u64,
@@ -1221,7 +1218,7 @@ async fn refresh_seed_floor<F: FloorStore>(
 /// recovery arm refuses an envelope below the floor it read (`gate::adoption`
 /// stage 5, `RootAdopter::recover_own_scope_material`). What is *not* valid is a
 /// floor re-read after the resolve: a rise that landed mid-pass would be absorbed
-/// into the stamp and keep a revoked-epoch seed resident (#1040).
+/// into the stamp and keep a revoked-epoch seed resident.
 ///
 /// `None` skips the deposit — the floor could not be read, so nothing can be
 /// stamped and the eviction pass has already cleared the cell.
@@ -1478,7 +1475,7 @@ pub struct Engine<T: SeamTypes> {
     blocked: Rc<RefCell<Option<BlockedOp>>>,
     /// Head blocks the drain uploaded for a publish that never reached the
     /// record transport, pending retirement. Session-lived so a retire the
-    /// registry refused goes out again on a later pass (#921).
+    /// registry refused goes out again on a later pass.
     orphan_heads: Rc<OrphanHeads>,
     /// Session-alive latch: cleared on drop so the spawned liveness loop
     /// stops at its next wake instead of re-PUTting after the engine is gone.
@@ -1687,7 +1684,7 @@ impl<T: SeamTypes> Engine<T> {
 
         // A crash between staging a version's blocks and journaling its op
         // leaves them referenced by nothing, so cold start is the first place
-        // that residue can be reclaimed (#828).
+        // that residue can be reclaimed.
         collect_orphans(&self.seams.staging_store, &self.live_blocks).await;
 
         self.spawn_liveness_loop(api.clone());
@@ -1773,7 +1770,7 @@ impl<T: SeamTypes> Engine<T> {
 
         // Surface every undecodable queue entry as `Event::DeadLetter` and drop
         // its op record from the durable queue so a corrupt entry is not
-        // re-decoded and re-emitted on every boot (#768).
+        // re-decoded and re-emitted on every boot.
         //
         // `DeadLetter` delivery is best-effort over a non-durable in-process
         // channel, so hosts MUST dedup by `op_id`. Gate the durable removal on a
@@ -1939,8 +1936,8 @@ impl<T: SeamTypes> Engine<T> {
                 };
                 // Before the steady-state hold consults them: a floor raised
                 // since the last pass revokes the seeds this pass would
-                // otherwise read and seal under (#1040). The floors it reports
-                // stamp whatever this pass's own resolve recovers.
+                // otherwise read and seal under. The floors it reports stamp
+                // whatever this pass's own resolve recovers.
                 let floors_before =
                     refresh_seed_floors(&floors, &root_id, &scope_read_seeds, &scope_write_seeds)
                         .await;
@@ -2077,7 +2074,7 @@ impl<T: SeamTypes> Engine<T> {
                     surface_drain_report(&events, &dead_letters, &report);
                 }
                 // After the drain, so the pass's own removals are swept in the
-                // same tick rather than a cadence later (#828).
+                // same tick rather than a cadence later.
                 collect_orphans(&staging, &live_blocks).await;
                 // `Adopted`/`Current` are the reconciled outcomes: both prove the
                 // record plane answered with gate-passing state, so both stamp
@@ -2222,8 +2219,8 @@ impl<T: SeamTypes> Engine<T> {
     }
 
     /// The scope's cached read seed, evicted first if the durable read-epoch
-    /// floor has risen past the one it was recovered under (#1040). Every
-    /// on-demand read goes through here; the resolve tick evicts once per pass.
+    /// floor has risen past the one it was recovered under. Every on-demand
+    /// read goes through here; the resolve tick evicts once per pass.
     async fn scope_read_seed(&self, scope_id: &[u8; 16]) -> Option<Zeroizing<[u8; 32]>> {
         refresh_seed_floor(
             &self.seams.floor_store,
@@ -2270,7 +2267,7 @@ impl<T: SeamTypes> Engine<T> {
     }
 
     // -----------------------------------------------------------------------
-    // Write handles: the content path across the facade (#815).
+    // Write handles: the content path across the facade.
     // -----------------------------------------------------------------------
 
     /// Open a write handle for `size` plaintext bytes, reserving the exact
@@ -2411,7 +2408,7 @@ impl<T: SeamTypes> Engine<T> {
     ///
     /// Fails closed when the pushes did not add up to the declared size — the
     /// reachable cause is a backing file truncated mid-read, and committing it
-    /// would publish a short version as a success (#830).
+    /// would publish a short version as a success.
     pub async fn commit_write(&mut self, handle: WriteHandle) -> Result<OpId, EngineError> {
         if !self.started {
             return Err(EngineError::NotStarted);
@@ -2577,7 +2574,7 @@ impl<T: SeamTypes> Engine<T> {
     /// Cancel one queued upload ([`Command::CancelUpload`]).
     ///
     /// Staged bytes are **released**, not preserved: the rule that splits the
-    /// two is whether the engine gave up on the op or the user did (#824).
+    /// two is whether the engine gave up on the op or the user did.
     async fn cancel_upload(&self, op_id: OpId) -> Result<(), EngineError> {
         let session = self.session.as_ref().ok_or(EngineError::NotStarted)?;
         let queued = self.scan_queue().await?.mine;
@@ -3456,7 +3453,7 @@ mod tests {
     }
 
     /// The three device-side refusals are three different user actions, and each
-    /// quotes the room left rather than the whole budget (#829).
+    /// quotes the room left rather than the whole budget.
     #[test]
     fn over_budget_messages_name_the_action_and_quote_the_room_left() {
         let message = |cause| {
@@ -3589,13 +3586,13 @@ mod tests {
         assert_eq!(
             children[0].size,
             Some(plaintext.len() as u64),
-            "the overlay renders the committed size (#830)"
+            "the overlay renders the committed size"
         );
         assert!(drain(&mut events).contains(&Event::SnapshotUpdated));
     }
 
     /// The acceptance case: a backing file that shrinks mid-read must fail the
-    /// commit, never publish a short version as a success (#830).
+    /// commit, never publish a short version as a success.
     #[test]
     fn a_write_whose_bytes_fall_short_of_the_declaration_fails_the_commit() {
         let (mut engine, _events) = started();
@@ -3846,7 +3843,7 @@ mod tests {
 
     /// The stream ceiling bounds live pinned versions, and an in-flight
     /// `read_stream` holds its `Rc` past the map removal `close_stream` does —
-    /// so the slot must ride the pin, not the table entry (#1008).
+    /// so the slot must ride the pin, not the table entry.
     #[test]
     fn a_pinned_stream_holds_its_slot_past_the_map_removal() {
         let mut streams = LiveStreams::default();
@@ -3877,7 +3874,7 @@ mod tests {
 
     /// The cache's retention rule, at the mechanism: a seed lives exactly as
     /// long as the durable floor stays at or below its stamp, and an unreadable
-    /// floor holds nothing (#1040).
+    /// floor holds nothing.
     #[test]
     fn a_cached_seed_lives_only_while_the_floor_stays_at_its_stamp() {
         use crate::testkit::fakes::InMemoryFloorStore;
@@ -3934,7 +3931,7 @@ mod tests {
     }
 
     /// A floor that cannot be read evicts: a seed whose currency cannot be
-    /// established is dropped, not trusted for the rest of the session (#1040).
+    /// established is dropped, not trusted for the rest of the session.
     /// Stamped far above any floor either arm could return, so only the read
     /// failure can account for the eviction.
     #[test]
@@ -4123,8 +4120,8 @@ mod tests {
         }
 
         /// Ops enqueue and drain through the staging seam, not through the
-        /// engine's command path, so the memoized queue scan (#880) has to key
-        /// on the durable queue itself.
+        /// engine's command path, so the memoized queue scan has to key on the
+        /// durable queue itself.
         #[test]
         fn a_record_enqueued_behind_the_engines_back_renders_on_the_next_read() {
             let (mut engine, _events) = started();
@@ -5211,7 +5208,7 @@ mod tests {
         }
 
         /// The drain is the only source of a head's content CIDs, so a re-hold
-        /// that carries none must keep the set the publish registered (#1041).
+        /// that carries none must keep the set the publish registered.
         #[test]
         fn a_re_hold_keeps_the_content_cids_the_publish_registered() {
             let world = FakeWorld::new();
@@ -5272,7 +5269,7 @@ mod tests {
 
         /// A rotation that raises the scope's durable read-epoch floor revokes
         /// the epoch the cached seed was recovered under, so the seed goes —
-        /// least privilege binds retention, not only install (#1040).
+        /// least privilege binds retention, not only install.
         #[test]
         fn a_read_epoch_floor_rise_evicts_the_cached_scope_read_seed() {
             let world = FakeWorld::new();

@@ -1,7 +1,7 @@
 {
   // A separate project so `tsconfig.json` keeps `rootDir: src`, but typechecked
   // all the same: an unchecked test double drifts from the interface it claims
-  // to implement and the browser suite reports green anyway (#975).
+  // to implement and the browser suite reports green anyway.
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "rootDir": ".",

@@ -43,7 +43,7 @@ describe('quota sums — aggregation scope and BigInt read-back', () => {
     const { repo, select, andWhere } = fakeRepo({ hosted: '42', pinned: '99' });
     expect(await quotaSums(repo, 'acct-1')).toEqual({ hosted: 42n, pinned: 99n });
     // The gate predicate rides a FILTER rather than a second query, so the
-    // reported and enforced sums cannot drift apart (#843).
+    // reported and enforced sums cannot drift apart.
     expect(select).toHaveBeenCalledWith(
       'COALESCE(SUM(pin.size) FILTER (WHERE pin.advisory = false), 0)',
       'hosted'
@@ -71,9 +71,8 @@ describe('quota sums — aggregation scope and BigInt read-back', () => {
 
 /**
  * The quota arithmetic that gates uploads, proven exact in BigInt where a JS
- * `number` comparison would round (folded from #677). 2^53 is the first integer
- * `number` cannot represent alongside its neighbor — the boundary these tests
- * straddle.
+ * `number` comparison would round. 2^53 is the first integer `number` cannot
+ * represent alongside its neighbor — the boundary these tests straddle.
  */
 const TWO_POW_53 = 1n << 53n; // 9_007_199_254_740_992
 

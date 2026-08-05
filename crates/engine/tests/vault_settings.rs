@@ -1,7 +1,7 @@
 //! The vault settings record, joined end to end: sealed HPKE-to-self under
 //! `enc-subkey`, published through the shared publish port at the
 //! `settings-ipns-keypair` name, and resolved back by a second device of the
-//! same account that only ever saw the network (#870).
+//! same account that only ever saw the network.
 //!
 //! Its contract is the inverse of the write plane's: a settings record that
 //! will not resolve must never block cold start, so every failure degrades —

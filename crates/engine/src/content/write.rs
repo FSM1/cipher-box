@@ -1,6 +1,6 @@
 //! The streaming framer behind a facade write handle: the client slices the
 //! file and feeds chunks, the engine seals and stages each one, and the op is
-//! journaled once at commit (blueprint/engine.md "Content plane"; #815).
+//! journaled once at commit (blueprint/engine.md "Content plane").
 //!
 //! Peak plaintext held is one chunk however much a caller pushes at once —
 //! [`ContentWriter::push`] copies only up to the chunk boundary and hands the
@@ -75,8 +75,7 @@ impl ContentWriter {
     /// that completed one. Returns the bytes not yet absorbed, so a caller
     /// loops until the slice is empty. Progress holds only within the declared
     /// size: past it nothing is absorbed, and the over-push is
-    /// [`Engine::push_chunk`](crate::Engine::push_chunk)'s to fail closed
-    /// (#830).
+    /// [`Engine::push_chunk`](crate::Engine::push_chunk)'s to fail closed.
     pub fn push<'a>(
         &mut self,
         bytes: &'a [u8],
@@ -94,7 +93,7 @@ impl ContentWriter {
     }
 
     /// Total plaintext absorbed so far — the observed size the commit
-    /// cross-checks against the declaration (#830).
+    /// cross-checks against the declaration.
     pub fn observed_size(&self) -> u64 {
         self.observed
     }

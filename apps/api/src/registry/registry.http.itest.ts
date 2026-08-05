@@ -22,7 +22,7 @@ import { AccountService } from './services/account.service';
 import { RegistryService } from './services/registry.service';
 
 /**
- * The registry + account HTTP surface re-homed onto a REAL Postgres (#725): the
+ * The registry + account HTTP surface re-homed onto a REAL Postgres: the
  * register/retire/quota/BYO/delete contract end-to-end through the booted app,
  * the fail-closed validation pipes, and the auth guard — asserting the real
  * `pinned_cids`/`name_inventory`/`users` rows a fake DataSource could only

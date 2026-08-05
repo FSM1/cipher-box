@@ -132,8 +132,8 @@ fn fsync_dir(dir: &Path) -> io::Result<()> {
 /// prefix, so `sync_all`ing a file created *after* an unlink or rename also
 /// persists it. This covers both barriers, not just unlinks: std's Windows
 /// `rename` passes `MOVEFILE_REPLACE_EXISTING` alone, never
-/// `MOVEFILE_WRITE_THROUGH` (#665). The temp carries [`TEMP_PREFIX`], so a
-/// crash before its removal leaves debris [`ensure_dir`] sweeps on reopen.
+/// `MOVEFILE_WRITE_THROUGH`. The temp carries [`TEMP_PREFIX`], so a crash
+/// before its removal leaves debris [`ensure_dir`] sweeps on reopen.
 #[cfg(any(not(unix), test))]
 fn metadata_log_barrier(dir: &Path) -> io::Result<()> {
     // A byte of content makes the flush a data-and-metadata transaction

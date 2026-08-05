@@ -90,8 +90,8 @@ impl FloorStore for InMemoryFloorStore {
     }
 
     /// Genuinely all-or-nothing: the whole batch applies under one lock guard,
-    /// so no observer sees a partial commit (the atomic contract #685 asks of a
-    /// transactional backing).
+    /// so no observer sees a partial commit (the atomic contract `commit_floors`
+    /// asks of a transactional backing).
     async fn commit_floors(&self, raises: &[FloorRaise]) -> SeamResult<()> {
         let mut inner = self.inner.lock().expect("lock");
         if let Some(error) = raises.iter().find_map(|r| inner.refuse(&r.key)) {

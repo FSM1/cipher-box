@@ -10,7 +10,7 @@ const DEFAULT_TIMEOUT_MS = 10_000;
  * record of ~10 KB by someguy/Kubo discipline — so 64 KiB is a generous cap.
  * fetch is time-bounded (AbortSignal.timeout) but NOT size-bounded, so without
  * this a misbehaving/compromised routing endpoint could stream a multi-GB body
- * into API heap and into record_cache (defense-in-depth, #702).
+ * into API heap and into record_cache (defense-in-depth).
  */
 const MAX_RECORD_BYTES = 64 * 1024;
 
@@ -92,7 +92,7 @@ export class RoutingV1RecordTransport extends RecordTransport {
 
   /**
    * Read the body enforcing the cap as bytes arrive, so heap stays bounded to
-   * ~the cap plus one chunk even when Content-Length is absent or lies (#722).
+   * ~the cap plus one chunk even when Content-Length is absent or lies.
    * Buffering the whole body first would let a misbehaving routing endpoint spike
    * heap to GBs before any post-facto assert could reject it.
    */

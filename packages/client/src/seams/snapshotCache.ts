@@ -28,7 +28,7 @@ export class IdbSnapshotCache implements SnapshotCacheSeam {
     // Encode the key and copy the value synchronously, before the first await:
     // both may be views into WASM linear memory that a concurrent task's
     // `Memory.grow()` can detach across the await — a detached key hexes to ''
-    // (cross-key collision) and a detached value corrupts the stored bytes (#717).
+    // (cross-key collision) and a detached value corrupts the stored bytes.
     const storeKey = toHex(cacheKey);
     const value = ciphertext.slice();
     const db = await this.open();

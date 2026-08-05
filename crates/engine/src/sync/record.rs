@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn a_record_forged_from_our_public_owner_tag_is_never_replayed() {
-        // #879: the tag is our enc-subkey public half, in the clear on every
+        // The tag is our enc-subkey public half, in the clear on every
         // record in a store the op queue shares per origin, not per account. A
         // co-tenant can seal to it in HPKE base mode; only the auth-mode open
         // stops the intent riding our write keys. It must not classify as

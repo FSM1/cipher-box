@@ -79,7 +79,7 @@ export function NavItem({ to, icon, label, active, comingSoon = false }: NavItem
       <span
         className="nav-item nav-item--disabled"
         aria-disabled="true"
-        title="coming soon - #643"
+        title="coming soon"
         data-testid={testId}
       >
         {body}

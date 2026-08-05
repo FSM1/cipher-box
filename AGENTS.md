@@ -53,10 +53,11 @@ There are **no generated API clients** and no codegen loop. The engine contains 
 
 Comments explain _why_, not _what_, and stay short. **If you need a paragraph-long comment to justify why a workaround is OK, the code is wrong — fix the code.** A long apologia for a hack is a smell: rework the code so it no longer needs defending, rather than documenting the shortcut. Reserve multi-line comments for genuinely non-obvious domain rationale — a spec citation, a cryptographic invariant, a wire-format or fail-closed constraint — not for excusing a shortcut.
 
-Two recurring shapes of this smell go beyond excusing a hack — avoid both:
+Three recurring shapes of this smell go beyond excusing a hack — avoid all three:
 
 - **Absence-justifying comments** — prose explaining why a path that is _not_ in the code does not happen (e.g. "`replay()` does not run here, so `decode_queue` is the only source at this stage"). It bloats the diff and rots into a falsehood the moment that path is wired — a stale in-code claim that actively misleads. Describe what the present code does; a bare cross-reference suffices if a reader must know a related path lives elsewhere.
 - **Unchanged-code apologia** — a doc block defending code this change does not modify (e.g. why a parameter stays a raw borrow, on a function the diff leaves untouched). It is scope creep into untouched code and reads as pre-emptive defensiveness. Leave that rationale where it already lives.
+- **Tracker references** — a bare `#1234` claims something about the _tracker_, not the code, so nothing in CI, review, or the type system catches it drifting when the issue closes, splits, or gets re-scoped. State the condition instead: `the real wiring is #1026` becomes `the real wiring is not landed`, which is checkable from the code and stops being true in the same diff that falsifies it. Enforced by `pnpm lint:tracker-refs` (the **Tracker Refs** gate); repo-qualified citations of the decision corpus (`FSM1/cipher-box-next#32`) name a durable record and are exempt, as are commit messages and PR bodies, which are timestamped and do not rot.
 
 State genuine non-obvious domain rationale **once**, at its home (the type or definition), not restated on every caller. These cost real review cycles — `/simplify`, CodeRabbit, and Greptile all flag them.
 

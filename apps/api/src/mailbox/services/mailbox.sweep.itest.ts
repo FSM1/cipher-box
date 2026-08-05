@@ -11,7 +11,7 @@ import { MailboxMessage } from '../entities/mailbox-message.entity';
 import { MailboxService, SWEEP_MAX_BATCHES } from './mailbox.service';
 
 /**
- * The global dormant-mailbox TTL sweep (#667) proven against a REAL Postgres.
+ * The global dormant-mailbox TTL sweep proven against a REAL Postgres.
  *
  * The lazy per-recipient purge only fires on a recipient's own post/poll, so the
  * cases that matter here — a dormant mailbox that never polls, and a concurrent
