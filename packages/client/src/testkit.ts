@@ -343,7 +343,9 @@ export class FakeLockManager implements LockManagerLike {
   /** Settles this name's holder in failure, as a stolen lock does. */
   fail(name: string, error: Error): void {
     const lock = this.lock(name);
-    lock.fail?.(error);
+    // Silence here would let a fail-closed test assert a loss it never staged.
+    if (!lock.fail) throw new Error(`no holder to fail for lock "${name}"`);
+    lock.fail(error);
   }
 
   private lock(name: string): FakeLock {
@@ -386,6 +388,14 @@ export function collect(value: unknown): { bytesHex: string; text: string } {
     // Counts and ids are values a scan has to see: a block count is a size proxy.
     else if (typeof node === 'number' || typeof node === 'bigint') strings.push(String(node));
     else if (Array.isArray(node)) for (const entry of node) walk(entry);
+    // A container the scan cannot open is a blind spot that reads as clean, so
+    // the keyed and set forms structured clone carries are opened too.
+    else if (node instanceof Map)
+      for (const [key, entry] of node) {
+        walk(key);
+        walk(entry);
+      }
+    else if (node instanceof Set) for (const entry of node) walk(entry);
     else if (node && typeof node === 'object') for (const entry of Object.values(node)) walk(entry);
   };
   walk(value);

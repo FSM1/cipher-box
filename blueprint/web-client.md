@@ -113,10 +113,14 @@ mechanism; the invariant — one engine writer per origin — is D4's):
   leader until it dies, and the leader requests that same lock for each follower
   it adopts. The browser grants that request at exactly the moment the tab
   closes, crashes or is discarded, so the leader reclaims the follower's focus
-  entry, write handles and read streams on that turn — a frozen or bfcached tab,
-  which answers no probe, is never a false positive, and no crashed follower pins
-  a content version, and its key, for the rest of the leadership. The watch is
-  keyed on the client, so a tab that re-brokers a port keeps its handles.
+  entry, write handles and read streams on that turn — a frozen tab, which
+  answers no probe, is never a false positive, and no crashed follower pins a
+  content version, and its key, for the rest of the leadership. The watch is
+  keyed on the client, so a tab that re-brokers a port keeps its handles. Holding
+  that lock costs the tab back/forward-cache eligibility — a browser does not
+  restore a page that held a Web Lock — and that is the intended trade: a back
+  navigation re-elects and re-brokers from a fresh page, which a restored mirror
+  would have had to do anyway.
 - **Failover**: the lock releases → some follower acquires it, spawns a fresh
   engine worker, and rehydrates from the durable seams (floors, op queue,
   staged bytes, snapshot cache — all origin-shared). Ops journal durably

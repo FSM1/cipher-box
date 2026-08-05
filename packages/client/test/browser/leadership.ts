@@ -129,6 +129,9 @@ window.cbCreate = async ({ lockName, channelName, worker }: HarnessOptions): Pro
     // Failover re-derivation: a real login re-exports this from Core Kit.
     secretSource: { provideSecret: () => Promise.resolve(secret()) },
   });
+  // A fresh client observes a fresh stream: a prior client's events are not its
+  // own, and a leak poll that matched one would pass for the wrong reason.
+  events.length = 0;
   client.subscribe((event) => events.push({ kind: event.kind, ...collect(event) }));
   await awaitElection(client, lockName);
 };

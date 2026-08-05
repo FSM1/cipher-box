@@ -356,6 +356,12 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     const seenText = observed.map((message) => message.text).join(' ');
     expect(seenText).not.toContain(filename);
     expect(seenText).not.toContain('rothko-appraisal');
+    // And the strings and counts it carried, so a string-valued descriptor field
+    // added later cannot leak here either. A block count or a one-digit op id
+    // would match a digit inside a clientId, so only distinctive values count.
+    const needles = progress!.text.split(' ').filter((value) => value.length >= 4);
+    expect(needles.length).toBeGreaterThan(0);
+    for (const needle of needles) expect(seenText).not.toContain(needle);
 
     await a.dispose();
     await b.dispose();

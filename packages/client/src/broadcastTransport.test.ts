@@ -52,7 +52,12 @@ function livePresence(bus: FakeBus, clientId: string): () => void {
         release = resolve;
       })
   );
-  return () => release?.();
+  // Killing before the grant would stage no death at all, and the test asserting
+  // the reclaim would pass on a presence that was never held.
+  return () => {
+    if (!release) throw new Error(`presence for ${clientId} was never granted`);
+    release();
+  };
 }
 
 function hex(bytes: Uint8Array): string {
@@ -1386,8 +1391,8 @@ describe('leader relay follower presence', () => {
     });
     await tick();
 
-    // A discarded or bfcached tab runs no handler at all, so it could answer no
-    // probe — but it still holds its presence lock, so it is never a candidate.
+    // A frozen tab runs no handler at all, so it could answer no probe — but it
+    // still holds its presence lock, so it is never a candidate.
     await after(30);
 
     expect(engine.closedStreams).toEqual([]);
