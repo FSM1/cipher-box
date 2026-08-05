@@ -1,0 +1,183 @@
+/* ==========================================================================
+   Upload - Terminal Aesthetic
+   ========================================================================== */
+
+.upload-zone {
+  display: flex;
+  margin-bottom: var(--spacing-sm);
+  border: var(--border-thickness) dashed var(--color-border-dim);
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.upload-zone:hover {
+  border-color: var(--color-green-primary);
+}
+
+.upload-zone--dragging {
+  border-style: solid;
+  border-color: var(--color-green-primary);
+  background-color: var(--color-green-darker);
+  box-shadow: var(--glow-green);
+}
+
+.upload-zone-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  padding: var(--spacing-xs) var(--spacing-md);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.upload-zone-button:focus-visible {
+  outline: var(--border-thickness) solid var(--color-green-primary);
+  outline-offset: -2px;
+}
+
+.upload-zone-icon {
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-secondary);
+}
+
+.upload-zone-input {
+  display: none;
+}
+
+/* ==========================================================================
+   Upload Rows
+   ========================================================================== */
+
+.upload-list {
+  border: var(--border-thickness) solid var(--color-border-dim);
+  border-bottom: none;
+  margin-bottom: var(--spacing-sm);
+}
+
+.upload-row {
+  cursor: default;
+}
+
+.upload-row:hover {
+  background-color: transparent;
+}
+
+.upload-row--failed {
+  background-color: rgb(239 68 68 / 8%);
+}
+
+.upload-row--failed .file-list-item-icon {
+  color: var(--color-error);
+}
+
+.upload-row--cancelled,
+.upload-row--uploaded {
+  opacity: 0.6;
+}
+
+.upload-row-name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.upload-row-track {
+  height: 3px;
+  width: 100%;
+  overflow: hidden;
+  background-color: var(--color-border-dim);
+}
+
+.upload-row-fill {
+  height: 100%;
+  background-color: var(--color-green-primary);
+  transition: width 0.2s ease;
+}
+
+/* An indeterminate stage — sealing, queued, or waiting on a retry — animates
+   the track itself, so the fill has no width to jump back from. */
+@keyframes upload-row-shimmer {
+  from {
+    background-position: -200% 0;
+  }
+
+  to {
+    background-position: 200% 0;
+  }
+}
+
+.upload-row-track--indeterminate {
+  background: linear-gradient(
+    90deg,
+    var(--color-border-dim) 30%,
+    var(--color-green-primary) 50%,
+    var(--color-border-dim) 70%
+  );
+  background-size: 200% 100%;
+  animation: upload-row-shimmer 1.5s ease-in-out infinite;
+}
+
+.upload-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-xs);
+}
+
+.upload-row-status {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.upload-row-button {
+  padding: 2px var(--spacing-xs);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.upload-row-button:hover {
+  color: var(--color-text-primary);
+}
+
+.upload-row-button:focus-visible {
+  outline: var(--border-thickness) solid var(--color-green-primary);
+  outline-offset: 1px;
+}
+
+.upload-row-button--retry {
+  color: var(--color-green-primary);
+}
+
+.upload-row-error {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-error);
+}
+
+/* An over-budget refusal is a ceiling, not a verdict: it reads as a warning
+   because the same write can be admitted once room frees. */
+.upload-row-error--budget {
+  color: var(--color-warning);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .upload-row-fill,
+  .upload-row-track--indeterminate {
+    transition: none;
+    animation: none;
+  }
+}
