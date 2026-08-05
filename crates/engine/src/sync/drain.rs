@@ -17,8 +17,9 @@
 //! ([`Halt`]).
 //!
 //! A cross-scope relocation halts rather than publishing: its destination-epoch
-//! re-seal is not a plan this driver authors. Its scope-exit trigger still
-//! reaches [`DrainReport::scope_exit_triggers`].
+//! re-seal is not a plan this driver authors. Its scope-exit trigger reaches
+//! [`ReplayReport::scope_exit_triggers`](crate::sync::ReplayReport) all the
+//! same, off the same [`replay`] this pass runs.
 
 use core::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -120,13 +121,6 @@ pub(crate) struct DrainReport {
     /// Ops removed as restore residue: already drained on this device, so the
     /// queue that holds them is older than the completion record.
     pub(crate) restore_residue: Vec<OpId>,
-    /// The granted source scope roots this pass's replay exited, deduped — the
-    /// input to
-    /// [`consume_scope_exit_triggers`](crate::rotation::consume_scope_exit_triggers).
-    /// A cross-scope relocation never publishes, so its op is still queued when
-    /// the pass ends and the next pass re-derives the trigger: the durable
-    /// queue is what makes the intent durable.
-    pub(crate) scope_exit_triggers: Vec<NodeId>,
 }
 
 impl DrainReport {
@@ -593,9 +587,6 @@ where
             // a full-depth exit walk can land on.
             replay(&base, &local, queued, &[scope.root])
         };
-        report
-            .scope_exit_triggers
-            .clone_from(&rebased.scope_exit_triggers);
 
         for (op_id, reason) in &rebased.dead_letters {
             let Some((_, op)) = queued.iter().find(|(id, _)| id == op_id) else {

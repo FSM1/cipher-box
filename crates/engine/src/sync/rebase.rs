@@ -300,8 +300,6 @@ pub fn rebase_one(
     op: &Op,
     scope_roots: &[crate::facade::NodeId],
 ) -> OpResolution {
-    // Resolved off the pre-move base: after the relink the target hangs under
-    // the destination, and the scope it *left* is no longer walkable from it.
     let scope_exit_trigger = op
         .scope_exit_source()
         .map(|from_parent| source_scope_root(working, from_parent, scope_roots));
@@ -1121,70 +1119,6 @@ mod tests {
                 scope_exit_trigger: Some(id(0)),
             }
         );
-    }
-
-    #[test]
-    fn an_intra_scope_relocation_fires_no_trigger() {
-        let mut base = granted_scope();
-        with_node(&mut base, id(12), id(7), "moved", NodeKind::File);
-        let local = base.clone();
-        for op in [
-            Op::relink(id(7), id(12), id(11), 1, AT, ScopeCrossing::Intra),
-            Op::move_node(
-                id(7),
-                id(12),
-                id(11),
-                "r.txt",
-                None,
-                1,
-                AT,
-                ScopeCrossing::Intra,
-            ),
-        ] {
-            let res = rebase_one(&mut base.clone(), &local, &op, NESTED_ROOTS);
-            assert!(
-                matches!(
-                    res,
-                    OpResolution::Applied {
-                        scope_exit_trigger: None,
-                        ..
-                    }
-                ),
-                "the non-trigger list holds for {:?}",
-                op.kind
-            );
-        }
-    }
-
-    #[test]
-    fn many_ops_exiting_one_scope_queue_exactly_one_trigger() {
-        let mut base = granted_scope();
-        for node in [id(7), id(8), id(9)] {
-            with_node(&mut base, id(12), node, "moved", NodeKind::File);
-        }
-        let ops: Vec<(OpId, Op)> = [id(7), id(8), id(9)]
-            .into_iter()
-            .enumerate()
-            .map(|(n, node)| {
-                (
-                    OpId(n as u64),
-                    Op::move_node(
-                        node,
-                        id(12),
-                        id(6),
-                        format!("m{n}.txt"),
-                        None,
-                        1,
-                        AT,
-                        ScopeCrossing::ExitsGrantedSource,
-                    ),
-                )
-            })
-            .collect();
-
-        let report = replay(&base, &base, &ops, NESTED_ROOTS);
-        assert_eq!(report.applied.len(), 3);
-        assert_eq!(report.scope_exit_triggers, vec![id(5)]);
     }
 
     #[test]

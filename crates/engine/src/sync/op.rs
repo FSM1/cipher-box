@@ -118,13 +118,6 @@ pub enum ScopeCrossing {
     ExitsGrantedSource,
 }
 
-impl ScopeCrossing {
-    /// Whether the moved subtree must re-seal at the destination scope's epoch.
-    pub fn is_cross_scope(self) -> bool {
-        !matches!(self, ScopeCrossing::Intra)
-    }
-}
-
 /// The six intent-op mutations (#33 D6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpKind {
