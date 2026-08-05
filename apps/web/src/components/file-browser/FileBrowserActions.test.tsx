@@ -1,7 +1,13 @@
-import type { EngineClient, EventDescriptor, SnapshotDescriptor } from '@cipherbox/client';
+import {
+  toHex,
+  type EngineClient,
+  type EventDescriptor,
+  type SnapshotDescriptor,
+} from '@cipherbox/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useFolderPicker } from '../../hooks/useFolderPicker';
 import { EngineProvider } from '../../providers/EngineProvider';
 import { FileBrowser } from './FileBrowser';
 
@@ -224,6 +230,45 @@ describe('the vault browser write path', () => {
     await settlePickerRead(engine, listing());
 
     expect(screen.queryAllByTestId('move-dialog-folder')).toHaveLength(0);
+  });
+
+  it('never names the folder it is walking out of as the destination', async () => {
+    const engine = fakeEngine();
+    const frames: { atHome: boolean; destination: string | null }[] = [];
+
+    function Probe() {
+      const picker = useFolderPicker(DOCS, toHex(NOTE));
+      frames.push({
+        atHome: picker.atHome,
+        destination: picker.destination === null ? null : toHex(picker.destination),
+      });
+      return (
+        <button type="button" onClick={() => picker.enter(PICTURE)}>
+          descend
+        </button>
+      );
+    }
+
+    render(
+      <EngineProvider createClient={() => engine.client}>
+        <Probe />
+      </EngineProvider>
+    );
+    await settlePickerRead(engine, folderView({ folder: DOCS, folderName: 'documents' }));
+    frames.length = 0;
+
+    fireEvent.click(screen.getByRole('button', { name: 'descend' }));
+    await act(async () => {
+      for (let hop = 0; hop < 5; hop += 1) await Promise.resolve();
+    });
+
+    // Descending renders before the read effect lands, so no frame may still
+    // name the folder left behind: a move confirmed from one of those would
+    // relink the row straight back to where it started.
+    expect(frames.some((frame) => !frame.atHome)).toBe(true);
+    expect(frames.filter((frame) => !frame.atHome && frame.destination === toHex(DOCS))).toEqual(
+      []
+    );
   });
 
   it('hands the focus window back when the picker closes', async () => {

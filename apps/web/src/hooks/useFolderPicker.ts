@@ -69,6 +69,14 @@ export function useFolderPicker(openOn: Uint8Array | null, excludedKey: string):
   // route's own focus effect reasserts it either way.
   useEffect(() => () => void client?.facade.setFocus(home).catch(() => undefined), [client, home]);
 
+  // The read effect retires the listing a render later than the cursor moves,
+  // and a listing outliving its cursor names the folder just left as the
+  // destination — so moving the cursor retires it in the same update.
+  const navigate = useCallback((target: Uint8Array | null) => {
+    setListing(null);
+    setCursor(target);
+  }, []);
+
   const folders = useMemo(
     () =>
       listingRows(listing?.children ?? []).filter(
@@ -88,19 +96,19 @@ export function useFolderPicker(openOn: Uint8Array | null, excludedKey: string):
     enter: useCallback(
       (node: Uint8Array) => {
         setDescended((trail) => [...trail, cursor]);
-        setCursor(node);
+        navigate(node);
       },
-      [cursor]
+      [cursor, navigate]
     ),
     leave: useCallback(() => {
       if (descended.length > 0) {
-        setCursor(descended[descended.length - 1]);
+        navigate(descended[descended.length - 1]);
         setDescended((trail) => trail.slice(0, -1));
         return;
       }
       // Climbing above where the picker opened needs the listing's own
       // ancestry; without it there is no parent to name, so it stays put.
-      if (listing !== null) setCursor(listing.ancestors[0]?.id ?? null);
-    }, [descended, listing]),
+      if (listing !== null) navigate(listing.ancestors[0]?.id ?? null);
+    }, [descended, listing, navigate]),
   };
 }
