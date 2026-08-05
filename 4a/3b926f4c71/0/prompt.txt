@@ -2964,3 +2964,64 @@ remember to add 10 min (70 minutes in total) to the review cycles since 1 hr has
 <status>completed</status>
 <summary>Background command "Poll for CodeRabbit review on 1072" completed (exit code 0)</summary>
 </task-notification>
+
+---
+
+<task-notification>
+<task-id>ae69c6048c3a1de12</task-id>
+<tool-use-id>REDACTED</tool-use-id>
+<output-file>/private/tmp/claude-501/-Users-myankelev-Code-random-cipher-box/7e498c84-2e26-4525-b549-6aab056ef7a4/tasks/ae69c6048c3a1de12.output</output-file>
+<status>completed</status>
+<summary>Agent "Resolve 1072 review findings" finished</summary>
+<note>A task-notification fires each time this agent stops with no live background children of its own. The user can send it another message and resume it, so the same task-id may notify more than once.</note>
+<result>Done. **PR #1072 is still a draft** (`draft: true`, head `4b14d2f7b`).
+
+## Findings table
+
+| # | Finding | Verdict | What I did |
+|---|---|---|---|
+| 1 | macroscope HIGH `settings.rs:109` — `tag()` omits `kind`/`access_token` | **Valid — fixed, but not as suggested** | Replaced the single tag with a destination *set* (`Destinations`). Provider tag now covers `kind` + `endpoint` + `access_token`, domain-separated and length-prefixed, built in a `Zeroizing` buffer |
+| 2 | macroscope HIGH `provider.rs:232` — doc claims decoded-byte multibase compare | **Valid, doc-vs-code** | Narrowed the doc, did **not** widen the decoder |
+| 3 | macroscope HIGH `facade.rs:2438` — `byo_reconciled` latches before PATCH returns | **Valid — fixed** | Latch only on `set_byo(...).is_ok()`; anti-flap property preserved |
+| 4 | macroscope MEDIUM `drain.rs:643` — quota probe blocks external placement | **Valid, reachable by a different route** | Clear the hold before probing when there's no hosted leg |
+| 5 | macroscope HIGH `drain.rs:2272` — pre-upgrade marks → `CONTENT_LOST` | **Half declined, half fixed** | Pushed back on the migration; fixed the underlying mechanism |
+| 6 | CodeRabbit MAJOR `drain.rs:1715` — `Unreachable` consumes an attempt | **Valid — fixed** | Extracted `classify_placement`; `Unreachable` → `Halt::Unclassified` |
+| 7 | CodeRabbit `drain.rs:2398` — catch-all misattributes config errors | **Valid, suggestion was wrong** | Exhaustive match; `MalformedBlockAddress` given its own arm |
+| 8 | CodeRabbit nitpick `settings.rs:109` | **Folded into 1** | Its fix (`kind` only) would have been incomplete |
+
+## Resolution of the 1+5 interaction
+
+They are one defect. `decode_upload_mark` returned 0 on **any** tag mismatch, and by then the covered leaves are released from staging, so the hole guard reaches `CONTENT_LOST`. Tightening the tag alone would have converted a silent gap into a destroyed version on a legitimate mid-upload settings change.
+
+The mark now records the destination set, and a resume asks only: **does the leg that can fail this op already hold the released blocks?** (hosted for Hosted/Dual; the member's provider for External-only). So `Dual → Hosted` and `Dual → External(same config)` resume instead of dying; a short dual mirror is reported through the existing `ExternalPinFailed` channel; `External → Hosted` still fails closed, because there the bytes genuinely are unreachable from the new destination.
+
+`a_placement_changed_mid_upload_resumes_only_where_the_bytes_already_are` fails with `Dual -&gt; Hosted` dead-lettered if the rule is reduced to strict tag equality — i.e. it directly pins the hazard the naive fix would have created.
+
+## Push-backs with evidence
+
+- **Finding 5's migration premise:** no `v2*` tag exists (newest is `v0.45.2`, last v1 tag is `v1-freeze`), staging cutover hasn't happened, and `AGENTS.md` freezes v1 on its own branch — no device holds a legacy mark. Also, a pre-`Destinations` mark fails the length check before anything else, so it reads as no progress rather than a wrong count.
+- **Finding 4's scenario:** placement is decided once at `start` (sole `decide_placement` call in `facade.rs`) and never reassigned, so "the session switches to External" cannot happen. The real route is a `QUOTA_EXCEEDED` on the **record head block**, which traverses the hosted ingress under every placement. Fixed anyway; the test drives the real path.
+- **Finding 7's wording:** the catch-all also covers `MalformedBlockAddress`, which is not a settings mistake — the verbatim suggestion would have misdirected the member.
+
+## Verification
+
+- `cargo test -p cipherbox-engine -p cipherbox-core`: **1269 passed, 0 failed**
+- `cargo clippy --all-targets`: clean
+- `cargo fmt --all --check`: clean
+- `pnpm lint:tracker-refs`: clean (611 files)
+- `cargo check -p cipherbox-wasm --target wasm32-unknown-unknown`: clean
+
+Each fix was verified to fail without it by temporarily reverting: findings 3 and 4 both failed their new tests; finding 1+5 failed under strict-tag semantics.
+
+## Review threads
+
+All 7 replied to and resolved.
+
+## Follow-up filed
+
+**#1090** — the four pre-request policy verdicts (`InvalidEndpoint`, `InsecureTransport`, `BlockedAddress`, `InvalidCredential`) still charge the attempt budget, so a typo'd BYO endpoint dead-letters member content after five ticks. Neither existing halt is right; it wants a `Halt::Blocked`-shaped hold whose exit is a settings change. Labelled `v2-build`, `blocked_by` #871.
+
+One note for you: only `crates/engine/src/{settings,facade,content/provider,sync/drain}.rs` and `tests/write_plane.rs` were touched — no other PR's files. I ran `pnpm install --ignore-scripts` in the worktree because the pre-commit hook needed `lint-staged`; the hook reported no matching staged files (Rust-only diff).</result>
+<usage><subagent_tokens>216749</subagent_tokens><tool_uses>136</tool_uses><duration_ms>1477852</duration_ms></usage>
+<worktree><worktreePath>/Users/myankelev/Code/random/cipher-box/.claude/worktrees/agent-ae69c6048c3a1de12</worktreePath><worktreeBranch>worktree-agent-ae69c6048c3a1de12</worktreeBranch></worktree>
+</task-notification>
