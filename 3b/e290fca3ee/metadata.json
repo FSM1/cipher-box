@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "3be290fca3ee",
+  "strategy": "manual-commit",
+  "branch": "chore/add-macroscope-ticket-requirements-agent",
+  "checkpoints_count": 10,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/3b/e290fca3ee/0/metadata.json",
+      "transcript": "/3b/e290fca3ee/0/full.jsonl",
+      "compact_transcript": "/3b/e290fca3ee/0/transcript.jsonl",
+      "content_hash": "/3b/e290fca3ee/0/content_hash.txt",
+      "prompt": "/3b/e290fca3ee/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 2043,
+    "cache_creation_tokens": 3722401,
+    "cache_read_tokens": 222993851,
+    "output_tokens": 881520,
+    "api_call_count": 1027
+  }
+}
