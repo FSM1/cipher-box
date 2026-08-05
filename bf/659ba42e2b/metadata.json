@@ -1,0 +1,49 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "bf659ba42e2b",
+  "strategy": "manual-commit",
+  "branch": "chore/drop-tracker-refs-from-comments",
+  "checkpoints_count": 4,
+  "files_touched": [
+    ".github/workflows/ci.yml",
+    "AGENTS.md",
+    "apps/api/src/registry/quota.ts",
+    "apps/api/src/registry/services/registry.service.itest.ts",
+    "apps/desktop/src-tauri/Cargo.toml",
+    "apps/web/src/auth/coreKit.ts",
+    "apps/web/src/components/file-browser/FileListItem.tsx",
+    "apps/web/src/components/layout/AppSidebar.tsx",
+    "blueprint/testing.md",
+    "crates/core/src/content/seal.rs",
+    "crates/desktop-seams/src/floor_store.rs",
+    "crates/engine/src/grants/create.rs",
+    "crates/engine/src/rotation/rotate_write.rs",
+    "crates/engine/src/rotation/trigger.rs",
+    "crates/engine/src/sync/boot.rs",
+    "crates/engine/src/sync/drain.rs",
+    "crates/engine/src/sync/mod.rs",
+    "crates/engine/src/sync/rebase.rs",
+    "crates/fuse/src/ops.rs",
+    "packages/client/src/seams/types.ts",
+    "packages/client/tsconfig.browser-test.json",
+    "scripts/check-tracker-refs.mjs",
+    "tools/hw-gates/Cargo.toml",
+    "tools/hw-gates/src/main.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/bf/659ba42e2b/0/metadata.json",
+      "transcript": "/bf/659ba42e2b/0/full.jsonl",
+      "compact_transcript": "/bf/659ba42e2b/0/transcript.jsonl",
+      "content_hash": "/bf/659ba42e2b/0/content_hash.txt",
+      "prompt": "/bf/659ba42e2b/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1825,
+    "cache_creation_tokens": 3460006,
+    "cache_read_tokens": 201048287,
+    "output_tokens": 753769,
+    "api_call_count": 918
+  }
+}
