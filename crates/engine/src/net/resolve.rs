@@ -359,11 +359,8 @@ where
             return Ok(done(resolved));
         }
         let mut held = held.borrow_mut();
-        // The drain registers a head's content CIDs when it publishes and is
-        // their only source, so a re-hold carries the held set forward rather
-        // than wiping it (#1041). Bound to the head CID: a head this device did
-        // not author lists a different block set, and re-pinning the superseded
-        // one would keep dead content alive.
+        // The drain is the only source of a head's held content CIDs, so a
+        // re-hold carries the set forward rather than wiping it (#1041).
         let content_cids = held
             .remove(&node_id)
             .filter(|prior| prior.head_cid == head_cid)

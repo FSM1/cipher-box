@@ -1150,8 +1150,6 @@ struct SyncStatus {
     reported: Option<Staleness>,
 }
 
-/// A recovered scope seed and the durable epoch floor it was recovered under.
-///
 /// A recovered scope seed and a lower bound on the epoch it belongs to (see
 /// [`deposit_seed`]).
 ///
