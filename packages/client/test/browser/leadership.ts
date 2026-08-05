@@ -8,6 +8,7 @@
  * kill-the-leader failover with no accepted-op loss.
  */
 import { EngineClient } from '../../src/engineClient.js';
+import { collect } from '../../src/testkit.js';
 import type { PendingClass } from '../../src/worker/protocol.js';
 import { awaitElection } from './election.js';
 import { hex, unhex } from './hexUtil.js';
@@ -41,6 +42,13 @@ export interface ObservedMessage {
   text: string;
 }
 
+/** One engine event this tab's facade received, flattened the same way. */
+export interface ObservedEvent {
+  kind: string;
+  bytesHex: string;
+  text: string;
+}
+
 /** A page.evaluate-safe download projection; `code` is the engine's stable error code. */
 export interface DownloadResult {
   bytes?: number[];
@@ -69,6 +77,7 @@ declare global {
     cbCreate(options: HarnessOptions): Promise<void>;
     cbObserve(channelName: string): void;
     cbObserved(): ObservedMessage[];
+    cbEvents(): ObservedEvent[];
     cbReadStream(offset: number, length: number): Promise<RangeResult>;
     cbRole(): string;
     cbStart(): Promise<string>;
@@ -87,29 +96,9 @@ declare global {
 
 let client: EngineClient | null = null;
 const observed: ObservedMessage[] = [];
+const events: ObservedEvent[] = [];
 
 const rootNode = new Uint8Array(16);
-
-/**
- * Every byte and every string anywhere in a message, flattened so a plaintext or
- * argument search can scan them: `bytesHex` catches upload and read payloads,
- * `text` catches names, contact codes and signatures.
- */
-function collect(value: unknown): { bytesHex: string; text: string } {
-  const found: number[] = [];
-  const strings: string[] = [];
-  const walk = (node: unknown): void => {
-    if (node instanceof ArrayBuffer) for (const byte of new Uint8Array(node)) found.push(byte);
-    else if (ArrayBuffer.isView(node)) {
-      const view = new Uint8Array(node.buffer, node.byteOffset, node.byteLength);
-      for (const byte of view) found.push(byte);
-    } else if (typeof node === 'string') strings.push(node);
-    else if (Array.isArray(node)) for (const entry of node) walk(entry);
-    else if (node && typeof node === 'object') for (const entry of Object.values(node)) walk(entry);
-  };
-  walk(value);
-  return { bytesHex: hex(Uint8Array.from(found)), text: strings.join(' ') };
-}
 
 function settle(error: unknown): string {
   if (error === undefined) return 'ok';
@@ -140,8 +129,15 @@ window.cbCreate = async ({ lockName, channelName, worker }: HarnessOptions): Pro
     // Failover re-derivation: a real login re-exports this from Core Kit.
     secretSource: { provideSecret: () => Promise.resolve(secret()) },
   });
+  // A fresh client observes a fresh stream: a prior client's events are not its
+  // own, and a leak poll that matched one would pass for the wrong reason.
+  events.length = 0;
+  client.subscribe((event) => events.push({ kind: event.kind, ...collect(event) }));
   await awaitElection(client, lockName);
 };
+
+/** Every engine event this tab's facade received, in arrival order. */
+window.cbEvents = (): ObservedEvent[] => events;
 
 window.cbRole = (): string => client?.currentRole() ?? 'none';
 

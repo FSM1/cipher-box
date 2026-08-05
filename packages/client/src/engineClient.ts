@@ -288,9 +288,15 @@ export class EngineClient implements EngineTransport {
     // Leadership moving between two *other* tabs replaces the engine without
     // replacing this transport, so the handle fence rides the same signal as the
     // transport's own port fence.
-    const follower = new BroadcastTransport(this.channel, this.clientId, this.courier, {
-      onLeadershipChange: () => this.retireHandles(),
-    });
+    const follower = new BroadcastTransport(
+      this.channel,
+      this.clientId,
+      this.courier,
+      this.config.locks,
+      {
+        onLeadershipChange: () => this.retireHandles(),
+      }
+    );
     this.swapCurrent(follower);
     this.innerUnsub = follower.subscribe((event) => this.fanOut(event));
     return follower;
@@ -353,7 +359,7 @@ export class EngineClient implements EngineTransport {
       this.role = 'leader';
       this.swapCurrent(local);
       this.innerUnsub = local.subscribe((event) => this.fanOut(event));
-      this.relay = new LeaderRelay(this.channel, local, this.courier);
+      this.relay = new LeaderRelay(this.channel, local, this.courier, this.config.locks);
       if (this.ownFocus) this.relay.reportLocalFocus(this.clientId, this.ownFocus);
     } catch (error) {
       this.abortPromotion(local, error);

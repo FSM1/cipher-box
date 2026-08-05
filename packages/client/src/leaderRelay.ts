@@ -5,31 +5,36 @@
  *
  * - follower command / read / write step → the leader's worker → correlated
  *   result back, all over that follower's private `PortCourier` port;
- * - every engine event → fanned out to all followers over the channel, in
- *   emission order;
+ * - every engine event → fanned out over those same ports, in emission order;
  * - each tab's open folder → the leader's **focus-window union**, so freshness
  *   follows whichever tab is focused (the RefreshHintSource seam, cross-tab).
  *
- * No plaintext, key material or user-supplied name touches the
- * `BroadcastChannel` in either direction: it carries election, the port
- * rendezvous, and the `EventDescriptor` stream (see `broadcast.ts` for what an
- * event still exposes). One port per follower per leadership.
+ * Nothing that names or measures vault content touches the `BroadcastChannel`
+ * in either direction: it carries election and the port rendezvous only. One
+ * port per follower per leadership.
  */
 
-import type {
-  BroadcastChannelLike,
-  FollowerMessage,
-  LeaderMessage,
-  PortRequest,
-  PortResponse,
-  WireRead,
-  WireStream,
-  WireWrite,
+import {
+  presenceLockName,
+  type BroadcastChannelLike,
+  type FollowerMessage,
+  type LeaderMessage,
+  type PortRequest,
+  type PortResponse,
+  type WireRead,
+  type WireStream,
+  type WireWrite,
 } from './broadcast.js';
 import { EngineRequestError, unknownHandle, type HandleKind } from './correlatedTransport.js';
+import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type { EngineTransport } from './transport.js';
-import type { SnapshotDescriptor, StreamHandle, WriteHandle } from './worker/protocol.js';
+import type {
+  EventDescriptor,
+  SnapshotDescriptor,
+  StreamHandle,
+  WriteHandle,
+} from './worker/protocol.js';
 import { WriteQueue } from './writeQueue.js';
 
 /** One follower's private port, with the listener bound to it. */
@@ -39,24 +44,14 @@ interface PortEntry {
   clientId: string | null;
   /** Reclaims a port that never named itself, so an unnamed one cannot pile up. */
   readonly naming: ReturnType<typeof setTimeout>;
-  /** Consecutive liveness sweeps this port has not answered. */
-  missed: number;
 }
 
 export interface LeaderRelayOptions {
   /** How long a freshly dialed port has to name the follower behind it. */
   namingTimeoutMs?: number;
-  /** How often the leader probes each named port for the tab behind it. */
-  livenessIntervalMs?: number;
-  /** Consecutive unanswered probes before a follower is presumed dead. */
-  livenessMisses?: number;
 }
 
 const DEFAULT_NAMING_TIMEOUT_MS = 5000;
-// Generous by design: a backgrounded tab's timers are throttled, and a
-// false positive tears down a live tab's in-flight media playback.
-const DEFAULT_LIVENESS_INTERVAL_MS = 15_000;
-const DEFAULT_LIVENESS_MISSES = 4;
 
 /**
  * Wipes the upload chunk a write payload carries. A chunk arrives transferred,
@@ -153,15 +148,17 @@ export class LeaderRelay {
   // open pins a content version (and its key) in the leader's engine.
   private readonly streamOwners = new Map<StreamHandle, string>();
   private readonly ports = new Set<PortEntry>();
+  // One presence watch per named follower, keyed on the client rather than the
+  // port so a re-brokering tab keeps the watch it already proved alive under.
+  private readonly presence = new Map<string, AbortController>();
   private readonly namingTimeoutMs: number;
-  private readonly livenessMisses: number;
-  private readonly liveness: ReturnType<typeof setInterval>;
   private readonly unsubscribe: () => void;
   private readonly unsubscribePorts: () => void;
   private closed = false;
   // An unguessable per-leadership capability. It stamps every leader→follower
-  // message so followers reject forged acks/events from a non-leader same-origin
-  // context (integrity defense-in-depth; same-origin is the trust boundary).
+  // message so followers reject a forged beacon or port rendezvous from a
+  // non-leader same-origin context (integrity defense-in-depth; same-origin is
+  // the trust boundary).
   private readonly token = globalThis.crypto.randomUUID();
   private readonly onMessage = (event: MessageEvent): void => this.receive(event.data);
 
@@ -169,19 +166,13 @@ export class LeaderRelay {
     private readonly channel: BroadcastChannelLike,
     private readonly transport: EngineTransport,
     private readonly courier: PortCourier,
+    private readonly locks: LockManagerLike,
     options: LeaderRelayOptions = {}
   ) {
     this.namingTimeoutMs = options.namingTimeoutMs ?? DEFAULT_NAMING_TIMEOUT_MS;
-    this.livenessMisses = options.livenessMisses ?? DEFAULT_LIVENESS_MISSES;
-    this.liveness = setInterval(
-      () => this.sweepLiveness(),
-      options.livenessIntervalMs ?? DEFAULT_LIVENESS_INTERVAL_MS
-    );
     this.channel.addEventListener('message', this.onMessage);
     this.unsubscribePorts = this.courier.onPort((port) => this.adoptPort(port));
-    this.unsubscribe = this.transport.subscribe((event) => {
-      this.post({ type: 'cb:event', token: this.token, event });
-    });
+    this.unsubscribe = this.transport.subscribe((event) => this.fanOut(event));
     // Announce leadership so followers (existing or newly-elected-away) reconnect.
     this.post({ type: 'cb:leader', token: this.token });
   }
@@ -202,7 +193,8 @@ export class LeaderRelay {
     // Detach before latching: `postPort` drops messages once closed, so the
     // `cb:portClosed` notice has to go out while the relay is still open.
     this.unsubscribePorts();
-    clearInterval(this.liveness);
+    for (const watch of this.presence.values()) watch.abort();
+    this.presence.clear();
     for (const entry of [...this.ports]) this.detachPort(entry);
     this.closed = true;
     this.releaseHandles(null);
@@ -226,34 +218,51 @@ export class LeaderRelay {
     }
   }
 
+  /** Every engine event, to every adopted port, in emission order. */
+  private fanOut(event: EventDescriptor): void {
+    for (const entry of this.ports) {
+      if (entry.clientId !== null) this.postPort(entry.port, { type: 'cb:portEvent', event });
+    }
+  }
+
   /**
    * Abandons everything a follower held: its focus, its write and stream
-   * handles, and its port. Driven by `cb:bye` and by the liveness sweep, which
+   * handles, and its port. Driven by `cb:bye` and by the presence watch, which
    * is the only signal a crashed tab leaves behind.
    */
   private reclaim(clientId: string): void {
+    this.retirePresence(clientId);
     if (this.focus.remove(clientId)) this.refreshHint();
     this.releaseHandles(clientId);
     this.detachPortOf(clientId);
   }
 
   /**
-   * Probes each named port and reclaims the follower behind one that has stopped
-   * answering — the only signal a tab that died without `cb:bye` leaves behind.
-   * The probe is answered from a message handler, not a timer, and any port
-   * traffic at all resets the count, so a throttled or mid-playback tab is never
-   * a candidate.
+   * Watches for the death of the tab behind a named port. The follower holds its
+   * presence lock from before it greets until its tab closes, crashes or is
+   * discarded, so this request is granted at exactly the moment the tab is gone
+   * — an event-driven death signal, in place of a probe a live-but-frozen tab
+   * would fail. A follower that greets without holding the lock is granted
+   * immediately and reclaimed, so the greeting cannot outlive the presence.
    */
-  private sweepLiveness(): void {
-    for (const entry of [...this.ports]) {
-      if (entry.clientId === null) continue; // the naming timeout owns unnamed ports
-      if (entry.missed >= this.livenessMisses) {
-        this.reclaim(entry.clientId);
-        continue;
-      }
-      entry.missed += 1;
-      this.postPort(entry.port, { type: 'cb:portPing' });
-    }
+  private watchPresence(clientId: string): void {
+    if (this.presence.has(clientId)) return;
+    const watch = new AbortController();
+    this.presence.set(clientId, watch);
+    void this.locks
+      .request(presenceLockName(clientId), { signal: watch.signal, mode: 'exclusive' }, () => {
+        this.reclaim(clientId);
+        // Released at once: the watch is the grant, not a lock to hold.
+        return Promise.resolve();
+      })
+      .catch(() => undefined); // an aborted watch is the retirement path
+  }
+
+  private retirePresence(clientId: string): void {
+    const watch = this.presence.get(clientId);
+    if (!watch) return;
+    this.presence.delete(clientId);
+    watch.abort();
   }
 
   /**
@@ -281,7 +290,6 @@ export class LeaderRelay {
       clientId: null,
       listener: (event) => this.onPortMessage(entry, event.data),
       naming: setTimeout(() => this.detachPort(entry), this.namingTimeoutMs),
-      missed: 0,
     };
     port.addEventListener('message', entry.listener);
     port.start?.();
@@ -302,9 +310,6 @@ export class LeaderRelay {
    */
   private serve(entry: PortEntry, message: PortRequest | { type?: unknown }): boolean {
     if (this.closed) return false;
-    // Any traffic at all proves the tab behind this port is still running.
-    entry.missed = 0;
-    if (message.type === 'cb:portPong') return true;
     if (message.type === 'cb:portHello') {
       const { clientId } = message as Extract<PortRequest, { type: 'cb:portHello' }>;
       if (entry.clientId !== null || typeof clientId !== 'string') return false;
@@ -313,6 +318,7 @@ export class LeaderRelay {
       this.detachPortOf(clientId);
       clearTimeout(entry.naming);
       entry.clientId = clientId;
+      this.watchPresence(clientId);
       this.postPort(entry.port, { type: 'cb:portReady', token: this.token });
       return true;
     }

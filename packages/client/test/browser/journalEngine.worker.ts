@@ -42,6 +42,8 @@ async function journal(kind: string): Promise<void> {
 }
 
 class JournalHost extends StubEngineHost {
+  private readonly queued: EventDescriptor[] = [];
+  private readonly waiters: Array<(event: EventDescriptor) => void> = [];
   private nextHandle = 1n;
   // Op ids are a separate id space from write handles; keep them disjoint so a
   // client that conflates the two cannot pass against this fake.
@@ -80,7 +82,19 @@ class JournalHost extends StubEngineHost {
     if (write.received !== write.size) throw new Error('content size mismatch');
     this.open.delete(handle);
     await journal('commitWrite');
-    return this.nextOpId++;
+    const opId = this.nextOpId++;
+    // A descriptor carrying the metadata the spec scans every wire for: a node
+    // id and a block count, as the real engine reports an upload.
+    this.publish({
+      kind: 'opProgress',
+      opId,
+      node: new Uint8Array(16).fill(0xa7),
+      phase: 'uploadCompleted',
+      blocksConfirmed: 4,
+      blocksTotal: 4,
+      error: null,
+    });
+    return opId;
   }
 
   abortWrite(handle: bigint): Promise<void> {
@@ -89,8 +103,15 @@ class JournalHost extends StubEngineHost {
   }
 
   nextEvent(): Promise<EventDescriptor | null> {
-    // No engine events in this fake; park the pump forever.
-    return new Promise<EventDescriptor | null>(() => undefined);
+    const next = this.queued.shift();
+    if (next) return Promise.resolve(next);
+    return new Promise((resolve) => this.waiters.push(resolve));
+  }
+
+  private publish(event: EventDescriptor): void {
+    const waiter = this.waiters.shift();
+    if (waiter) waiter(event);
+    else this.queued.push(event);
   }
 }
 

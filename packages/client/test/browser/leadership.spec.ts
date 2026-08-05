@@ -1,6 +1,12 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
 
-import type { DownloadResult, ObservedMessage, RangeResult, SnapshotResult } from './leadership.js';
+import type {
+  DownloadResult,
+  ObservedEvent,
+  ObservedMessage,
+  RangeResult,
+  SnapshotResult,
+} from './leadership.js';
 import { hex } from './hexUtil.js';
 import { fixtureSlice, LEADER_SEED } from './mediaFixture.js';
 
@@ -22,6 +28,7 @@ interface LeadershipHarness {
   }): Promise<void>;
   cbObserve(channelName: string): void;
   cbObserved(): ObservedMessage[];
+  cbEvents(): ObservedEvent[];
   cbReadStream(offset: number, length: number): Promise<RangeResult>;
   cbRole(): string;
   cbStart(): Promise<string>;
@@ -57,6 +64,7 @@ function harness(page: Page): {
   ): Promise<void>;
   observe(channelName: string): Promise<void>;
   observed(): Promise<ObservedMessage[]>;
+  events(): Promise<ObservedEvent[]>;
   readStream(offset: number, length: number): Promise<RangeResult>;
   role(): Promise<string>;
   start(): Promise<string>;
@@ -85,6 +93,7 @@ function harness(page: Page): {
         channelName
       ),
     observed: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbObserved()),
+    events: () => page.evaluate(() => (window as unknown as LeadershipHarness).cbEvents()),
     readStream: (offset, length) =>
       page.evaluate(
         (args) => (window as unknown as LeadershipHarness).cbReadStream(args.offset, args.length),
@@ -314,14 +323,24 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
     expect(await follower.upload(filename, hex(plaintext))).toBe('ok');
     expect(await follower.createNode('rothko-appraisal', 'folder')).toBe('ok');
 
+    // The commit emitted an engine event carrying a node id and a block count;
+    // the follower received it over its private port.
+    let progress: ObservedEvent | undefined;
+    await expect
+      .poll(async () => {
+        progress = (await follower.events()).find((event) => event.kind === 'opProgress');
+        return progress !== undefined;
+      })
+      .toBe(true);
+    expect(progress!.bytesHex.length).toBeGreaterThan(0);
+
     const observed = await eavesdropper.observed();
     expect(observed.length).toBeGreaterThan(0);
-    // The channel carries election, the port rendezvous, and key-free events —
-    // no write step and no command, so no argument can ride one.
+    // The channel carries election and the port rendezvous — no write step, no
+    // command and no event, so no argument and no descriptor can ride one.
     for (const type of new Set(observed.map((message) => message.type))) {
       expect([
         'cb:bye',
-        'cb:event',
         'cb:hello',
         'cb:leader',
         'cb:leaderGone',
@@ -329,11 +348,20 @@ test.describe('tab leadership over real Web Locks + BroadcastChannel', () => {
         'cb:portWanted',
       ]).toContain(type);
     }
-    const seenBytes = observed.map((message) => message.bytesHex).join('');
+    const seenBytes = observed.map((message) => message.bytesHex).join('|');
     expect(seenBytes).not.toContain(hex(plaintext.slice(0, 16)));
+    // Whatever bytes that descriptor carried, the bystander saw none of them —
+    // so a field added to `EventDescriptor` later cannot leak here unnoticed.
+    expect(seenBytes).not.toContain(progress!.bytesHex);
     const seenText = observed.map((message) => message.text).join(' ');
     expect(seenText).not.toContain(filename);
     expect(seenText).not.toContain('rothko-appraisal');
+    // And the strings and counts it carried, so a string-valued descriptor field
+    // added later cannot leak here either. A block count or a one-digit op id
+    // would match a digit inside a clientId, so only distinctive values count.
+    const needles = progress!.text.split(' ').filter((value) => value.length >= 4);
+    expect(needles.length).toBeGreaterThan(0);
+    for (const needle of needles) expect(seenText).not.toContain(needle);
 
     await a.dispose();
     await b.dispose();

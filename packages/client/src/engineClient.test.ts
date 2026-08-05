@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
+import { BROADCAST_CHANNEL_NAME } from './broadcast.js';
 import { EngineClient, type EngineClientConfig } from './engineClient.js';
 import { LeaderRelay } from './leaderRelay.js';
 import type { LockManagerLike } from './leadership.js';
 import {
+  abortError,
   FakeBus,
   FakeCourierNetwork,
   FakeEngineTransport,
@@ -15,22 +17,26 @@ import type { EventDescriptor } from './worker/protocol.js';
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 /**
- * Pins a tab as a follower: the lock is never granted, so it is never promoted.
- * The request still settles on abort, so `dispose()` can await its election.
+ * Pins a tab as a follower: the engine lock is never granted, so it is never
+ * promoted. The request still settles on abort, so `dispose()` can await its
+ * election. Every other name — the tab's presence lock — takes the origin's own
+ * manager, which the leader relay watches.
  */
-const neverGrant: LockManagerLike = {
-  request: (_name, options) =>
-    new Promise((_resolve, reject) => {
-      options.signal?.addEventListener('abort', () =>
-        reject(new DOMException('aborted', 'AbortError'))
-      );
-    }),
-};
+function pinnedFollower(locks: FakeLockManager): LockManagerLike {
+  return {
+    request: (name, options, callback) =>
+      name === BROADCAST_CHANNEL_NAME
+        ? new Promise((_resolve, reject) => {
+            options.signal?.addEventListener('abort', () => reject(abortError()));
+          })
+        : locks.request(name, options, callback),
+  };
+}
 
 /** A shared origin: one lock manager, one broadcast bus, one worker registry. */
 function origin() {
-  const locks = new FakeLockManager();
   const bus = new FakeBus();
+  const locks = bus.locks;
   const ports = new FakeCourierNetwork();
   let tabs = 0;
   const workers: FakeEngineWorker[] = [];
@@ -427,9 +433,9 @@ describe('EngineClient leadership + transport swap', () => {
     const bus = new FakeBus();
     const ports = new FakeCourierNetwork();
     const engineA = new FakeEngineTransport();
-    const relayA = new LeaderRelay(bus.channel(), engineA, ports.courier('leaderA'));
+    const relayA = new LeaderRelay(bus.channel(), engineA, ports.courier('leaderA'), bus.locks);
     const follower = new EngineClient({
-      locks: neverGrant,
+      locks: pinnedFollower(bus.locks),
       createChannel: () => bus.channel(),
       spawnWorker: () => {
         throw new Error('follower never spawns');
@@ -444,7 +450,7 @@ describe('EngineClient leadership + transport swap', () => {
     await tick();
 
     const engineB = new FakeEngineTransport();
-    const relayB = new LeaderRelay(bus.channel(), engineB, ports.courier('leaderB'));
+    const relayB = new LeaderRelay(bus.channel(), engineB, ports.courier('leaderB'), bus.locks);
     for (let i = 0; i < 4; i += 1) await tick();
     expect(follower.currentRole()).toBe('follower');
 

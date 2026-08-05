@@ -133,8 +133,12 @@ export class StubEngineHost implements EngineHostLike {
   }
 }
 
-/** A same-origin broadcast bus: a posted message reaches every *other* channel. */
+/**
+ * A same-origin broadcast bus: a posted message reaches every *other* channel.
+ * One bus is one origin, so it also carries that origin's lock manager.
+ */
 export class FakeBus {
+  readonly locks = new FakeLockManager();
   private readonly channels = new Set<FakeChannel>();
 
   channel(): FakeChannel {
@@ -272,68 +276,137 @@ export class FakeCourierNetwork {
   }
 }
 
-interface Held {
-  release: () => void;
-  done: Promise<unknown>;
+/** One lock name's state: at most one holder, FIFO queue behind it. */
+interface FakeLock {
+  held: boolean;
+  /** Settles the current holder's callback in failure (`fail`). */
+  fail: ((error: Error) => void) | null;
+  readonly queue: Array<() => void>;
 }
 
-/** An origin-exclusive lock: at most one holder at a time, FIFO queue behind it. */
+/**
+ * `navigator.locks` for the unit suite: one exclusive lock **per name**, FIFO
+ * behind the holder, granted on a later turn like the real API — a tab's
+ * presence lock and the engine election lock are separate names, and a queued
+ * request is granted only when the holder lets go.
+ */
 export class FakeLockManager implements LockManagerLike {
-  private held: Held | null = null;
-  private readonly queue: Array<() => void> = [];
+  private readonly locks = new Map<string, FakeLock>();
 
   request(
     name: string,
     options: { signal?: AbortSignal; mode?: 'exclusive' },
     callback: LockRequestCallback
   ): Promise<unknown> {
+    const lock = this.lock(name);
     return new Promise<unknown>((resolveRequest, rejectRequest) => {
       const signal = options.signal;
       const grant = (): void => {
         if (signal?.aborted) {
-          rejectRequest(new DOMException('aborted', 'AbortError'));
-          this.next();
+          rejectRequest(abortError());
+          this.next(name);
           return;
         }
-        const done = Promise.resolve(callback({ name }));
-        this.held = { release: () => undefined, done };
-        void done.then(
+        lock.held = true;
+        // Raced, not chained: a steal has to beat a holder that never settles.
+        const stolen = new Promise<never>((_resolve, rejectHold) => {
+          lock.fail = rejectHold;
+        });
+        void Promise.race([Promise.resolve(callback({ name })), stolen]).then(
           (value) => {
-            this.held = null;
+            lock.held = false;
+            lock.fail = null;
             resolveRequest(value);
-            this.next();
+            this.next(name);
           },
-          (error) => {
-            this.held = null;
+          (error: unknown) => {
+            lock.held = false;
+            lock.fail = null;
             rejectRequest(error);
-            this.next();
+            this.next(name);
           }
         );
       };
 
-      const enqueue = (): void => {
-        this.queue.push(grant);
-        if (!this.held) this.next();
-      };
-
-      if (signal) {
-        signal.addEventListener('abort', () => {
-          const index = this.queue.indexOf(grant);
-          if (index >= 0) {
-            this.queue.splice(index, 1);
-            rejectRequest(new DOMException('aborted', 'AbortError'));
-          }
-        });
-      }
-      enqueue();
+      signal?.addEventListener('abort', () => {
+        const index = lock.queue.indexOf(grant);
+        if (index >= 0) {
+          lock.queue.splice(index, 1);
+          rejectRequest(abortError());
+        }
+      });
+      lock.queue.push(grant);
+      this.next(name);
     });
   }
 
-  private next(): void {
-    if (this.held || this.queue.length === 0) return;
-    const grant = this.queue.shift();
-    grant?.();
+  /** Settles this name's holder in failure, as a stolen lock does. */
+  fail(name: string, error: Error): void {
+    const lock = this.lock(name);
+    // Silence here would let a fail-closed test assert a loss it never staged.
+    if (!lock.fail) throw new Error(`no holder to fail for lock "${name}"`);
+    lock.fail(error);
   }
+
+  private lock(name: string): FakeLock {
+    const existing = this.locks.get(name);
+    if (existing) return existing;
+    const created: FakeLock = { held: false, fail: null, queue: [] };
+    this.locks.set(name, created);
+    return created;
+  }
+
+  private next(name: string): void {
+    const lock = this.lock(name);
+    if (lock.held || lock.queue.length === 0) return;
+    // A real grant never lands synchronously inside `request`.
+    queueMicrotask(() => {
+      if (lock.held) return;
+      lock.queue.shift()?.();
+    });
+  }
+}
+
+export function abortError(): DOMException {
+  return new DOMException('aborted', 'AbortError');
+}
+
+/** Renders bytes as one lowercase hex run, the form a leak scan searches. */
+export function hex(bytes: Iterable<number>): string {
+  let out = '';
+  for (const byte of bytes) out += byte.toString(16).padStart(2, '0');
+  return out;
+}
+
+/**
+ * Every byte and every string anywhere in a message, flattened so a leak scan
+ * can search them: `bytesHex` catches payloads and node ids, `text` catches
+ * names, routing keys and codes.
+ */
+export function collect(value: unknown): { bytesHex: string; text: string } {
+  const found: number[] = [];
+  const strings: string[] = [];
+  const walk = (node: unknown): void => {
+    if (node instanceof ArrayBuffer) for (const byte of new Uint8Array(node)) found.push(byte);
+    else if (ArrayBuffer.isView(node)) {
+      const view = new Uint8Array(node.buffer, node.byteOffset, node.byteLength);
+      for (const byte of view) found.push(byte);
+    } else if (typeof node === 'string') strings.push(node);
+    // Counts and ids are values a scan has to see: a block count is a size proxy.
+    else if (typeof node === 'number' || typeof node === 'bigint') strings.push(String(node));
+    else if (Array.isArray(node)) for (const entry of node) walk(entry);
+    // A container the scan cannot open is a blind spot that reads as clean, so
+    // the keyed and set forms structured clone carries are opened too.
+    else if (node instanceof Map)
+      for (const [key, entry] of node) {
+        walk(key);
+        walk(entry);
+      }
+    else if (node instanceof Set) for (const entry of node) walk(entry);
+    else if (node && typeof node === 'object') for (const entry of Object.values(node)) walk(entry);
+  };
+  walk(value);
+  return { bytesHex: hex(found), text: strings.join(' ') };
 }
 
 /** A minimal in-process EngineTransport for relay/orchestrator tests. */
