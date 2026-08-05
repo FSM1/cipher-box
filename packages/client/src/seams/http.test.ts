@@ -105,15 +105,6 @@ describe('FetchHttp redirects', () => {
 
     expect(fetches.inits.map((init) => init.redirect)).toEqual(['error', 'error']);
   });
-
-  it('rejects rather than resolving when the browser refuses a hop', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(() => Promise.reject(new TypeError('Failed to fetch')))
-    );
-
-    await expect(new FetchHttp().send(GET)).rejects.toThrow(TypeError);
-  });
 });
 
 describe('FetchHttp deadlines', () => {

@@ -25,9 +25,7 @@ function requestInit(request: HttpRequestData): RequestInit {
     headers,
     // Fail-safe default: authority is opt-in per request, never inferred.
     credentials: request.credentials ?? 'omit',
-    // Every target here is directly addressed and gated on the URL the engine
-    // supplied, so a hop the engine did not choose can only escape that gate.
-    // Mirrors `FetchRecordTransport`; a redirect rejects rather than resolving.
+    // No redirects; see the `Http` seam contract. Rejects rather than resolving.
     redirect: 'error',
   };
   const timeoutMs = request.timeoutMs;

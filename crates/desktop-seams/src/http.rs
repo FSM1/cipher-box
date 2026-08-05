@@ -34,14 +34,7 @@ impl ReqwestHttp {
     pub fn new() -> SeamResult<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            // The engine picks every target on this seam and gates it on the URL
-            // it supplied — the API base, a gateway, a BYO endpoint past
-            // `validate_byo_config`. A hop the engine did not choose can only
-            // escape that gate, so none is followed: it re-points a directly
-            // addressed request at a host of the responder's choosing, and a
-            // downgrade to `http` would carry an `Authorization` header onto the
-            // clear network. Mirrors `ReqwestRecordTransport`; a 3xx comes back
-            // as the non-2xx response it is.
+            // No redirects; see the `Http` seam contract.
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|err| SeamError::new(format!("http client build: {err}")))?;

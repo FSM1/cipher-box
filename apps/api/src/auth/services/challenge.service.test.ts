@@ -21,6 +21,14 @@ describe('ChallengeService', () => {
     expect(expiresAt.getTime()).toBe(clock.now().getTime() + 300_000);
   });
 
+  // The engine pins this exact shape before it will sign a challenge, and
+  // refuses anything else. Narrowing the tail here fails every login, so the
+  // contract is pinned on both sides rather than only in Rust.
+  it('issues a tail the engine will sign: 32 bytes of lowercase hex', () => {
+    const { challenge } = service.issueIdentityChallenge(PUBLIC_KEY);
+    expect(challenge).toMatch(/^cipherbox-login:v2:[0-9a-f]{64}$/);
+  });
+
   it('consumes a live challenge exactly once', () => {
     const { challenge } = service.issueIdentityChallenge(PUBLIC_KEY);
     service.consume(challenge, 'identity', PUBLIC_KEY);

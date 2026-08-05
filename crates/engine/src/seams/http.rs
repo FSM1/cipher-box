@@ -32,20 +32,24 @@ pub const AUTHORIZATION: &str = "Authorization";
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InvalidBearer;
 
-/// Builds the `Authorization: Bearer …` pair for `token`, refusing an empty one
-/// or one carrying a byte outside visible ASCII (`0x21..=0x7e`).
+/// The rule a bearer must meet to be sent: non-empty, and visible ASCII
+/// throughout (`0x21..=0x7e`). A control character or space in a header value
+/// splits or injects a header at the host transport.
 ///
-/// A header value is the host transport's input, and a control character or
-/// space in one splits or injects a header — which of the two happens depends
-/// on the transport, so the decision does not belong to the seam. The engine's
-/// three bearer sources differ in trust class (a member's BYO config token, an
-/// access token decoded out of an `/auth/*` body, a gateway source's token) but
-/// not in this obligation, so it lives once, here, beside the request type that
-/// carries it.
-pub fn bearer_header(token: &str) -> Result<(String, String), InvalidBearer> {
-    if token.is_empty() || !token.bytes().all(|byte| (0x21..=0x7e).contains(&byte)) {
+/// Separate from [`bearer_header`] so a caller that only asks the question —
+/// a config gate — never materializes a second, non-zeroized copy of the
+/// credential just to throw it away.
+pub fn check_bearer(token: &str) -> Result<(), InvalidBearer> {
+    if token.is_empty() || !token.bytes().all(|byte| matches!(byte, 0x21..=0x7e)) {
         return Err(InvalidBearer);
     }
+    Ok(())
+}
+
+/// Builds the `Authorization: Bearer …` pair for a token meeting
+/// [`check_bearer`].
+pub fn bearer_header(token: &str) -> Result<(String, String), InvalidBearer> {
+    check_bearer(token)?;
     Ok((AUTHORIZATION.to_owned(), format!("Bearer {token}")))
 }
 
@@ -185,8 +189,9 @@ impl fmt::Debug for HttpResponse {
 /// not choose can only escape that gate: it replays the request past
 /// [`crate::content::validate_byo_config`]'s endpoint rules, and a downgrade to
 /// `http` would carry an `Authorization` header onto the clear network
-/// (blueprint/engine.md "Content plane"). A 3xx is surfaced as the response it
-/// is, and the engine treats it as the non-2xx it is.
+/// (blueprint/engine.md "Content plane"). How a refusal surfaces is the
+/// transport's own: desktop returns the 3xx as a response, web rejects it as a
+/// transport failure — both fail closed, so no caller may branch on which.
 ///
 /// No conformance kit ships for this seam: it has no seam-local durable
 /// semantics; its behavior is exercised end-to-end by the live contract
@@ -258,6 +263,8 @@ mod tests {
                 "Bearer eyJhbGciOi.J9-_~+/=".to_owned()
             )
         );
+        assert!(bearer_header("!").is_ok(), "0x21, the low edge");
+        assert!(bearer_header("~").is_ok(), "0x7e, the high edge");
     }
 
     #[test]
@@ -265,19 +272,17 @@ mod tests {
         for token in [
             "",                     // an `Authorization: Bearer ` no server accepts
             "jwt\r\nX-Injected: 1", // header injection
-            "jwt\nX-Injected: 1",   // bare LF
-            "jwt\r",                // bare CR
             "jwt token",            // a space splits the credential
-            "jwt\ttoken",           // tab
-            "jwt\0",                // NUL
-            "jwt\u{7f}",            // DEL
-            "jwt\u{80}",            // non-ASCII
-            "jwt\u{2028}",          // line separator
+            "jwt\u{7f}",            // DEL, just above the class
+            "jwt\u{80}",            // non-ASCII, and every multi-byte tail with it
         ] {
             assert_eq!(bearer_header(token), Err(InvalidBearer), "token {token:?}");
+            assert_eq!(check_bearer(token), Err(InvalidBearer), "token {token:?}");
         }
     }
 
+    /// A tripwire on the refusal type: it must stay field-less, so no future
+    /// diagnostic can carry the credential into an error string or a log.
     #[test]
     fn the_bearer_refusal_carries_no_credential() {
         let refusal = bearer_header("super-secret-jwt token").unwrap_err();

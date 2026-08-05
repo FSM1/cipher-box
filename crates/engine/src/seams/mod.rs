@@ -23,9 +23,12 @@ mod staging_store;
 pub use credential_store::CredentialStore;
 pub use floor_store::{FloorNamespace, FloorRaise, FloorStore};
 pub use http::{
-    AUTHORIZATION, CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse,
-    InvalidBearer, bearer_header,
+    CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse, InvalidBearer,
+    bearer_header, check_bearer,
 };
+// The header name is an engine-internal spelling: a host implements the
+// transport, it never builds a bearer.
+pub(crate) use http::AUTHORIZATION;
 pub use mailbox::{Mailbox, MailboxItem};
 pub use record_transport::{EndpointId, RecordTransport};
 pub use refresh_hint::{RefreshHint, RefreshHintSource};

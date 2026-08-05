@@ -10,6 +10,7 @@
 //!   header; records the request for assertions.
 //! - `GET /teapot` — returns 418, to prove a non-2xx status is a response,
 //!   not a seam error.
+//! - `GET /redirect` — 302 to `/echo`, to prove the seam follows no hop.
 //! - `GET /stream/<n>` — `n` bytes with `Transfer-Encoding: chunked` and no
 //!   `Content-Length`, so a capped read has only the streaming drain to gate
 //!   on.
@@ -28,6 +29,8 @@ use std::time::Duration;
 /// One request the server received, captured for test assertions.
 #[derive(Clone)]
 pub struct RecordedRequest {
+    /// Request target, so a test can prove which route was reached.
+    pub path: String,
     pub headers: Vec<(String, String)>,
     pub body: Vec<u8>,
 }
@@ -157,6 +160,7 @@ fn handle_conn(
     body.truncate(content_length);
 
     *last.lock().expect("lock") = Some(RecordedRequest {
+        path: path.clone(),
         headers,
         body: body.clone(),
     });
@@ -186,6 +190,8 @@ fn handle_conn(
             (200, "OK", vec![("x-echo", "yes")], body)
         } else if path == "/teapot" {
             (418, "I'm a teapot", Vec::new(), b"teapot".to_vec())
+        } else if path == "/redirect" {
+            (302, "Found", vec![("location", "/echo")], Vec::new())
         } else {
             (404, "Not Found", Vec::new(), Vec::new())
         };

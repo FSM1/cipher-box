@@ -58,19 +58,16 @@ struct State {
     refresh_waiters: Option<Vec<oneshot::Sender<Result<(), ApiError>>>>,
 }
 
-/// Holds single-flight leadership for the duration of one rotation and gives it
-/// back however the leader leaves — including a drop mid-`await`.
-///
-/// Without this, a leader cancelled while parked on the network leaves
-/// `refresh_waiters` occupied with senders nothing will ever fire, and every
-/// later caller enqueues behind it forever.
+/// Holds single-flight leadership for one rotation and releases it on `Drop`,
+/// so a leader cancelled while parked on the network cannot leave the slot
+/// occupied by senders nothing will ever fire.
 struct RefreshLead<'a> {
     state: &'a RefCell<State>,
 }
 
 impl RefreshLead<'_> {
-    /// Releases leadership and takes the waiters to notify.
-    fn finish(self) -> Vec<oneshot::Sender<Result<(), ApiError>>> {
+    /// Takes the waiters to notify, leaving the slot for `Drop` to release.
+    fn waiters(&self) -> Vec<oneshot::Sender<Result<(), ApiError>>> {
         self.state
             .borrow_mut()
             .refresh_waiters
@@ -81,8 +78,6 @@ impl RefreshLead<'_> {
 
 impl Drop for RefreshLead<'_> {
     fn drop(&mut self) {
-        // Dropping the senders wakes every waiter with `Canceled`; leaving the
-        // slot occupied would park them, and everyone after, indefinitely.
         self.state.borrow_mut().refresh_waiters = None;
     }
 }
@@ -270,10 +265,8 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         if let Some(rx) = receiver {
             return match rx.await {
                 Ok(result) => result,
-                // The leader was dropped before it could answer: availability,
-                // not a dead session — the caller must not be told to re-login.
-                // The leader clears the slot as it goes, so the next call leads
-                // a fresh rotation instead of parking behind this one.
+                // A cancelled leader is availability, not a dead session — the
+                // caller must not be told to re-login.
                 Err(oneshot::Canceled) => Err(ApiError::Transport(SeamError::new(
                     "refresh was cancelled before it completed",
                 ))),
@@ -282,10 +275,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
 
         let lead = RefreshLead { state: &self.state };
         let result = self.do_refresh().await;
-        // Hand leadership back before notifying: a waiter woken with an error
-        // may lead its own retry, and must not find the slot still occupied.
-        let waiters = lead.finish();
-        for tx in waiters {
+        for tx in lead.waiters() {
             let _ = tx.send(result.clone());
         }
         result
@@ -553,9 +543,7 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
         for (name, value) in extra_headers {
             headers.push(((*name).to_owned(), (*value).to_owned()));
         }
-        // Scope the borrow so it never crosses the await below. The access token
-        // is decoded out of an `/auth/*` body, so it is the API's bytes, not the
-        // engine's: it meets the seam's header-value rule like any other bearer.
+        // Scope the borrow so it never crosses the await below.
         if let Some(token) = self.state.borrow().access_token.as_ref() {
             headers.push(
                 bearer_header(token.as_str())
@@ -655,12 +643,10 @@ const IDENTITY_CHALLENGE_NONCE_LEN: usize = 64;
 /// Whether the server's answer is a challenge this key may sign: the login
 /// domain tag followed by exactly the API's random tail.
 ///
-/// The signer hands `sha256(utf8(challenge))` to the same secp256k1 identity
-/// key that signs det-CBOR structures, so an unchecked challenge is a signing
-/// oracle for any UTF-8 preimage. The prefix alone would not close it — it
-/// pins the first 19 bytes and leaves the rest of the preimage to whatever
-/// answers at the API base URL — so the whole shape is pinned instead, leaving
-/// a hostile responder no steerable bytes outside `[0-9a-f]`.
+/// The signer hands `sha256(utf8(challenge))` to the secp256k1 identity key,
+/// so an unchecked challenge makes that key a signing oracle for any UTF-8
+/// preimage. Pinning the whole shape — not just the tag — leaves a hostile
+/// responder no steerable byte outside the hex alphabet the API renders.
 fn is_identity_challenge(challenge: &str) -> bool {
     challenge
         .strip_prefix(IDENTITY_CHALLENGE_PREFIX)
@@ -668,7 +654,7 @@ fn is_identity_challenge(challenge: &str) -> bool {
             nonce.len() == IDENTITY_CHALLENGE_NONCE_LEN
                 && nonce
                     .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
         })
 }
 
@@ -818,52 +804,81 @@ mod tests {
         assert_eq!(stored, "a".repeat(64).as_bytes());
     }
 
-    /// A challenge the API could not have issued is never signed, and the flow
-    /// stops before `/auth/login` — the identity key answers no one else's
-    /// preimage. Each case names the part of the shape it breaks.
-    #[test]
-    fn a_challenge_the_api_could_not_have_issued_is_never_signed() {
+    /// Every shape the API could not have issued. Each breaks a different part
+    /// of the pin, so none is subsumed by another.
+    fn hostile_challenges() -> Vec<String> {
         let hex64 = "0123456789abcdef".repeat(4);
-        let hostile = [
-            "".to_owned(),
+        vec![
+            String::new(),
+            // The tag with no tail at all.
+            IDENTITY_CHALLENGE_PREFIX.to_owned(),
             // No domain tag: an arbitrary preimage of the responder's choosing.
             hex64.clone(),
-            // Another protocol's tag.
+            // Another protocol's tag, and an older version of this one.
             format!("cipherbox-grant:v2:{hex64}"),
-            // Right tag, but the tail is the responder's text.
-            "cipherbox-login:v2:sign-over-this-instead".to_owned(),
-            // Right tag and alphabet, wrong width — short.
-            format!("{IDENTITY_CHALLENGE_PREFIX}{}", "ab".repeat(8)),
-            // Right tag and alphabet, wrong width — long.
+            format!("cipherbox-login:v1:{hex64}"),
+            // The tag as a suffix, not a prefix — guards a `contains` regression.
+            format!("{hex64}{IDENTITY_CHALLENGE_PREFIX}"),
+            // Right tag and alphabet, wrong width — short, then long.
+            format!("{IDENTITY_CHALLENGE_PREFIX}{}", &hex64[..63]),
             format!("{IDENTITY_CHALLENGE_PREFIX}{hex64}0"),
-            // Right width, outside the hex alphabet the API renders.
+            // Right width, outside the hex alphabet: all-caps, one uppercase
+            // digit among 64, then a wholly attacker-chosen tail.
             format!(
                 "{IDENTITY_CHALLENGE_PREFIX}{}",
                 "0123456789ABCDEF".repeat(4)
             ),
-            // The tag as a suffix rather than a prefix.
-            format!("{hex64}{IDENTITY_CHALLENGE_PREFIX}"),
-            // Leading whitespace before the tag.
-            format!(" {IDENTITY_CHALLENGE_PREFIX}{hex64}"),
-        ];
+            format!("{IDENTITY_CHALLENGE_PREFIX}{}A", &hex64[..63]),
+            format!("{IDENTITY_CHALLENGE_PREFIX}{:_<64}", "sign anything"),
+            // 64 chars but 65 bytes, then 64 bytes with a multi-byte tail: the
+            // width check counts bytes, and the alphabet catches what it misses.
+            format!("{IDENTITY_CHALLENGE_PREFIX}{}\u{e9}", &hex64[..63]),
+            format!("{IDENTITY_CHALLENGE_PREFIX}{}\u{e9}", &hex64[..62]),
+            // An interior control character; the tail is echoed to /auth/login.
+            format!("{IDENTITY_CHALLENGE_PREFIX}{}\0", &hex64[..63]),
+        ]
+    }
 
-        for challenge in hostile {
+    /// The accept side of the pin: every tail the API's hex renderer can emit
+    /// is admitted, so a tightening that would break a real login fails here
+    /// rather than in staging.
+    #[test]
+    fn the_shape_the_api_issues_is_accepted_at_the_class_boundaries() {
+        for tail in ["0".repeat(64), "f".repeat(64), "0123456789abcdef".repeat(4)] {
+            assert!(is_identity_challenge(&format!(
+                "{IDENTITY_CHALLENGE_PREFIX}{tail}"
+            )));
+        }
+    }
+
+    /// The guard is "never signs", not merely "never sends": a refused
+    /// challenge must not reach the identity key at all.
+    #[test]
+    fn a_challenge_the_api_could_not_have_issued_is_never_signed() {
+        struct PanickingSigner;
+
+        impl ChallengeSigner for PanickingSigner {
+            fn public_key_hex(&self) -> String {
+                "02".to_owned() + &"ab".repeat(32)
+            }
+            fn sign_challenge(&self, challenge: &str) -> String {
+                panic!("the identity key signed a refused challenge: {challenge:?}");
+            }
+        }
+
+        for challenge in hostile_challenges() {
             let (http, _creds, client) = fakes();
             http.enqueue_response(json_response(
                 200,
                 json!({ "challenge": challenge, "expiresAt": "2026-01-01T00:00:00Z" }),
             ));
             assert_eq!(
-                block_on(client.login_identity(&StubSigner)).unwrap_err(),
+                block_on(client.login_identity(&PanickingSigner)).unwrap_err(),
                 ApiError::Decode("unusable login challenge".into()),
                 "challenge {challenge:?} must be refused"
             );
             let requests = http.requests();
-            assert_eq!(
-                requests.len(),
-                1,
-                "only /auth/challenge was sent for {challenge:?}"
-            );
+            assert_eq!(requests.len(), 1, "only /auth/challenge for {challenge:?}");
             assert_eq!(requests[0].url, "http://api.test/auth/challenge");
             assert!(!client.is_authenticated());
         }
