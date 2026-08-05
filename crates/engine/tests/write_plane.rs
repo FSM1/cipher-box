@@ -7,6 +7,7 @@
 
 use core::task::{Context, Poll, Waker};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
@@ -22,14 +23,19 @@ use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use cipherbox_engine::api::REGISTRY_BATCH_REFUSED;
-use cipherbox_engine::content::{DAG_ROOT_CODEC, GatewaySource, SealedChunk, decode_root};
+use cipherbox_engine::content::{
+    ByoIpfsConfig, ByoKind, DAG_ROOT_CODEC, GatewaySource, PinMode, RetentionPolicy, SealedChunk,
+    decode_root,
+};
 use cipherbox_engine::facade::PendingClass;
+use cipherbox_engine::net::OrphanHeads;
 use cipherbox_engine::net::author::{AuthoredHead, EnvelopeAuthoring, author_child_envelope};
 use cipherbox_engine::net::{ChildAdopter, REGISTRY_BATCH_MAX, ResolveOutcome, resolve};
 use cipherbox_engine::seams::{
     BoxedTask, FloorStore, HttpRequest, HttpResponse, OpId, RecordTransport, SeamError, SeamResult,
     StagingStore, UnixMillis,
 };
+use cipherbox_engine::settings::{VaultSettings, publish_settings, settings_name};
 use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
     DRAINED_OP_MARK_PREFIX, PUBLISHED_OP_MARK_PREFIX, StagedContent, UPLOAD_MARK_KEY, op_mark_key,
@@ -42,9 +48,10 @@ use cipherbox_engine::testkit::{
     OwnerRootSpec, SeededEntropy, block_on, frame_version as frame, owner_root_fixture,
 };
 use cipherbox_engine::{
-    ApiBaseUrl, BlockProgress, Command, ContentProfile, DeadLetter, DeadLetterReason, Engine,
-    EngineError, Event, EventStream, GatewayConfig, LoginSecret, MAX_OPEN_STREAMS, NodeId,
-    NodeKind, Op, OpPhase, RecordSeal, StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
+    ApiBaseUrl, ApiClient, BlockProgress, Command, ContentProfile, DeadLetter, DeadLetterReason,
+    DefaultsReason, Engine, EngineError, Event, EventStream, GatewayConfig, LoginSecret,
+    MAX_OPEN_STREAMS, NodeId, NodeKind, Op, OpPhase, OverBudgetCause, PlacementRefusal, RecordSeal,
+    StoragePolicy, SyncTimingProfile, WriteTarget, stage_op,
 };
 
 const SECRET: [u8; 32] = [7u8; 32];
@@ -133,12 +140,58 @@ fn proxy_413() -> SeamResult<HttpResponse> {
     })
 }
 
+/// The member's own IPFS node, as their vault settings name it.
+const MEMBER_NODE: &str = "https://kubo.member.test";
+
+/// The one file part out of a `multipart/form-data` body, framed against the
+/// boundary the request's own `Content-Type` declares. Deliberately strict: the
+/// point of the fake is to catch framing the real Kubo would reject.
+fn multipart_file(request: &HttpRequest) -> Vec<u8> {
+    let content_type = request
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("Content-Type"))
+        .map(|(_, value)| value.clone())
+        .expect("a multipart body declares its content type");
+    let boundary = content_type
+        .split("boundary=")
+        .nth(1)
+        .expect("the content type names the boundary")
+        .to_owned();
+    let body = request.body.clone().expect("a block/put carries a body");
+    let head = format!("--{boundary}\r\n");
+    let tail = format!("\r\n--{boundary}--\r\n");
+    let body = std::str::from_utf8(&body[..head.len()])
+        .ok()
+        .filter(|opening| *opening == head)
+        .map(|_| &body[head.len()..])
+        .expect("the body opens on the declared boundary");
+    let body = body
+        .strip_suffix(tail.as_bytes())
+        .expect("the body closes on the declared boundary");
+    // Past the part headers: the blank line that ends them is the file's start.
+    let start = body
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .expect("the part headers end")
+        + 4;
+    body[start..].to_vec()
+}
+
 #[derive(Clone, Default)]
 struct Blocks {
     store: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
     on_upload: Arc<Mutex<Option<UploadHook>>>,
-    /// What `GET /account/quota` reports, as `(usedBytes, limitBytes)`.
+    /// What `GET /account/quota` reports, as `(usedBytes, limitBytes)`. Unset is
+    /// an account with room, so only a test about the quota scripts one.
     quota: Arc<Mutex<Option<(u64, u64)>>>,
+    /// The account's server-side BYO flag, which `GET /account/quota` reports as
+    /// `advisory` and `PATCH /account/byo` moves.
+    advisory_quota: Arc<AtomicBool>,
+    /// The member's own node: what it holds, keyed by the address it stored each
+    /// block under, and whether it can be reached at all.
+    member_node: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+    member_node_down: Arc<AtomicBool>,
     /// The 400 body every `POST /registry/register` answers with instead of
     /// acking.
     register_refusal: Arc<Mutex<Option<Vec<u8>>>>,
@@ -203,6 +256,49 @@ impl Blocks {
         *self.register_refusal.lock().expect("lock") = None;
     }
 
+    /// Answer the member's own Kubo node: store the block the `block/put` body
+    /// carries under the address that node computes for it, and answer with that
+    /// address — the same put-and-compare the hosted ingress runs, so a
+    /// mis-framed body or a wrong codec shows up as a disagreeing address rather
+    /// than passing silently.
+    fn member_node_reply(&self, request: &HttpRequest) -> SeamResult<HttpResponse> {
+        if self.member_node_down.load(Ordering::Relaxed) {
+            return Err(SeamError::new("the member's node is offline"));
+        }
+        assert!(
+            request.url.contains("mhtype=blake3&mhlen=32"),
+            "a block/put must name the frozen content-plane hash: {}",
+            request.url
+        );
+        let codec = if request.url.contains("cid-codec=raw") {
+            CONTENT_CID_CODEC
+        } else {
+            assert!(request.url.contains("cid-codec=dag-cbor"), "a known codec");
+            DAG_ROOT_CODEC
+        };
+        let block = multipart_file(request);
+        let cid = encode_content_cid_str(&compute_cid(codec, &block));
+        self.member_node
+            .lock()
+            .expect("lock")
+            .insert(cid.clone(), block);
+        Ok(HttpResponse {
+            status: 200,
+            headers: Vec::new(),
+            body: format!("{{\"Key\":\"{cid}\",\"Size\":0}}\n").into_bytes(),
+        })
+    }
+
+    /// Every address the member's own node holds.
+    fn member_node_cids(&self) -> Vec<String> {
+        self.member_node
+            .lock()
+            .expect("lock")
+            .keys()
+            .cloned()
+            .collect()
+    }
+
     /// Answer one engine HTTP call: a content upload lands its bytes here and
     /// echoes their address, a registry call acks, and a gateway GET serves the
     /// block back. Enqueued as many times as the pass needs, so no test depends
@@ -241,11 +337,28 @@ impl Blocks {
                 .quota
                 .lock()
                 .expect("lock")
-                .expect("the test scripted a quota before the drain probed it");
+                .unwrap_or((0, u64::MAX / 2));
+            let advisory = self.advisory_quota.load(Ordering::Relaxed);
             return ok(format!(
-                "{{\"usedBytes\":{used},\"limitBytes\":{limit},\"advisory\":false}}"
+                "{{\"usedBytes\":{used},\"limitBytes\":{limit},\"advisory\":{advisory}}}"
             )
             .into_bytes());
+        }
+        if url.starts_with(MEMBER_NODE) {
+            return self.member_node_reply(request);
+        }
+        if url.ends_with("/account/byo") {
+            let enabled = serde_json::from_slice::<serde_json::Value>(
+                request
+                    .body
+                    .as_deref()
+                    .expect("a byo toggle carries a body"),
+            )
+            .expect("a byo body is JSON")["byo"]
+                .as_bool()
+                .expect("the toggle names a boolean");
+            self.advisory_quota.store(enabled, Ordering::Relaxed);
+            return ok(Vec::new());
         }
         if url.ends_with("/registry/register") {
             if let Some(body) = self.register_refusal.lock().expect("lock").clone() {
@@ -2152,6 +2265,10 @@ fn a_permanently_refused_upload_reports_the_attempt_and_the_dead_letter() {
 /// An over-quota refusal is a hold, not a failed attempt: the op and its
 /// reservation stand until a probe finds room, and the host reads it from the
 /// snapshot rather than from a failure it cannot act on.
+///
+/// The account fills *after* the write is admitted, which is the only way the
+/// drain sees a 413 at all now that the command path pre-flights the quota —
+/// and exactly why that pre-flight can never be the enforcement.
 #[test]
 fn an_over_quota_upload_holds_the_op_without_reporting_a_failure() {
     let world = FakeWorld::new();
@@ -2160,8 +2277,6 @@ fn an_over_quota_upload_holds_the_op_without_reporting_a_failure() {
 
     let alice = world.device(b"alice");
     let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("QUOTA_EXCEEDED")))));
-    blocks.set_quota(1_000, 1_000);
     let op_id = write_file(
         &mut engine,
         WriteTarget::NewFile {
@@ -2171,6 +2286,8 @@ fn an_over_quota_upload_holds_the_op_without_reporting_a_failure() {
         &(0..200u8).collect::<Vec<_>>(),
     )
     .expect("the write commits");
+    blocks.refuse_upload(Box::new(|_| Some(upload_413(Some("QUOTA_EXCEEDED")))));
+    blocks.set_quota(1_000, 1_000);
     tick(&world, &engine, &mut tasks);
 
     let emitted = events_so_far(&mut events);
@@ -5670,4 +5787,341 @@ fn publish_next_record(
     for endpoint in records.endpoints() {
         records.seed_record(&endpoint, write_name(folder).as_str(), record.clone());
     }
+}
+
+// ---------------------------------------------------------------------------
+// The pin-provider layer: where a version's bytes go, decided from the vault
+// settings record and dispatched across the hosted and external legs.
+// ---------------------------------------------------------------------------
+
+/// The member's own node, as a BYO config naming it.
+fn member_node(kind: ByoKind) -> ByoIpfsConfig {
+    ByoIpfsConfig {
+        endpoint: MEMBER_NODE.to_owned(),
+        kind,
+        access_token: Some(Zeroizing::new("member-token".to_owned())),
+    }
+}
+
+/// Publish the account's vault settings record from `device`, so a cold start on
+/// it decides placement from the member's own choice rather than the first-run
+/// defaults.
+fn seed_settings(world: &FakeWorld, device: &FakeDevice, blocks: &Blocks, mode: PinMode) {
+    serve_http(device, blocks, 8);
+    let api = ApiClient::new(
+        device.http.clone(),
+        device.credential_store.clone(),
+        String::new(),
+    );
+    block_on(publish_settings(
+        &device.record_store,
+        &api,
+        &device.floor_store,
+        &device.snapshot_cache,
+        &world.scheduler,
+        &SyncTimingProfile::CI,
+        &mut SeededEntropy::new(9),
+        &OrphanHeads::default(),
+        &SECRET,
+        &VaultSettings {
+            pin_mode: mode,
+            byo: Some(member_node(ByoKind::Kubo)),
+            retention: RetentionPolicy::KeepAll,
+        },
+    ))
+    .expect("the settings record publishes");
+}
+
+/// `External` means what it says: not one byte reaches CipherBox's store, and
+/// the hosted quota — full here — never gates a write it will never see.
+#[test]
+fn an_external_write_places_every_block_on_the_members_node_and_none_on_the_hosted_store() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::External);
+    blocks.set_quota(1_000, 1_000);
+
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let plaintext = (0..200u8).collect::<Vec<_>>();
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &plaintext,
+    )
+    .expect("a full hosted quota does not gate an external write");
+    tick(&world, &engine, &mut tasks);
+
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    let mut registered = registered_content_cids(&alice, &write_name(photo));
+    registered.sort();
+    registered.dedup();
+    assert!(
+        !registered.is_empty(),
+        "every mode still registers for union-liveness accounting"
+    );
+    assert_eq!(
+        blocks.member_node_cids(),
+        registered,
+        "the member's node holds exactly the block set the registration names"
+    );
+    let hosted = uploaded_cids(&alice);
+    assert!(
+        registered.iter().all(|cid| !hosted.contains(cid)),
+        "not one of the version's blocks took the hosted path"
+    );
+    assert_eq!(
+        published(&world.record_store, photo).0,
+        1,
+        "the version still published its own record"
+    );
+}
+
+/// Dual runs both legs and only the hosted one can fail the op: an offline home
+/// node must not stall every later mutation in the vault. The outcome is
+/// reported per op rather than swallowed.
+#[test]
+fn a_dual_write_publishes_and_reports_the_leg_the_members_node_did_not_take() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::Dual);
+
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.member_node_down.store(true, Ordering::Relaxed);
+    let op_id = write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    assert_eq!(
+        published(&world.record_store, photo).0,
+        1,
+        "the hosted leg landed, so the version published"
+    );
+    assert!(
+        !uploaded_cids(&alice).is_empty(),
+        "the hosted leg took the bytes"
+    );
+    assert!(
+        blocks.member_node_cids().is_empty(),
+        "the offline node took none"
+    );
+    let emitted = events_so_far(&mut events);
+    assert_eq!(
+        emitted
+            .iter()
+            .filter(|event| matches!(
+                event,
+                Event::OpProgress {
+                    op_id: Some(id),
+                    phase: OpPhase::ExternalPinFailed,
+                    ..
+                } if *id == op_id
+            ))
+            .count(),
+        1,
+        "the partial outcome is reported once for the op, not once per block"
+    );
+    assert!(
+        !emitted.iter().any(|event| matches!(
+            event,
+            Event::OpProgress {
+                phase: OpPhase::UploadFailed,
+                ..
+            }
+        )),
+        "a mirror that did not take the bytes is not a failed upload"
+    );
+    assert!(
+        block_on(engine.snapshot(ROOT))
+            .expect("a snapshot")
+            .dead_letters
+            .is_empty(),
+        "and never a dead letter"
+    );
+}
+
+/// A dual write whose home node is up mirrors every block, and the hosted leg
+/// still holds the whole set.
+#[test]
+fn a_dual_write_places_the_same_block_set_on_both_legs() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::Dual);
+
+    let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits");
+    tick(&world, &engine, &mut tasks);
+
+    let photo = child_id(&engine, ROOT, "photo.bin");
+    let mut registered = registered_content_cids(&alice, &write_name(photo));
+    registered.sort();
+    registered.dedup();
+    assert!(!registered.is_empty(), "the version has blocks");
+    let hosted = uploaded_cids(&alice);
+    assert!(
+        registered.iter().all(|cid| hosted.contains(cid)),
+        "the hosted leg took every block"
+    );
+    assert_eq!(
+        blocks.member_node_cids(),
+        registered,
+        "and the member's node holds the same addresses, under its own hashing"
+    );
+    assert!(
+        !events_so_far(&mut events).iter().any(|event| matches!(
+            event,
+            Event::OpProgress {
+                phase: OpPhase::ExternalPinFailed,
+                ..
+            }
+        )),
+        "both legs took it, so there is no partial outcome to report"
+    );
+}
+
+/// The pre-flight's whole point: a hosted write the account cannot admit is
+/// refused before the version is sealed and staged, not after a whole upload's
+/// worth of work at the drain.
+#[test]
+fn a_hosted_write_over_quota_is_refused_at_command_time() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
+    blocks.set_quota(900, 1_000);
+
+    let refused = block_on(engine.begin_write(
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        200,
+    ))
+    .expect_err("the account cannot admit it");
+    assert!(
+        matches!(
+            refused,
+            EngineError::OverBudget {
+                cause: OverBudgetCause::AccountQuota,
+                available: 100,
+                ..
+            }
+        ),
+        "the refusal names the account quota and the room left: {refused:?}"
+    );
+    assert!(
+        block_on(alice.staging_store.queued_ops())
+            .expect("the queue reads")
+            .is_empty(),
+        "nothing was staged or journaled"
+    );
+    assert!(
+        uploaded_cids(&alice).is_empty(),
+        "and no byte was offered to the ingress"
+    );
+}
+
+/// The command path reconciles the account's server-side flag against the
+/// vaulted mode, which is the source of truth — the flag is an accounting
+/// display, never the gate.
+#[test]
+fn the_command_path_reconciles_the_accounts_byo_flag_against_the_vaulted_mode() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    seed_settings(&world, &alice, &blocks, PinMode::External);
+
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
+    assert!(
+        !blocks.advisory_quota.load(Ordering::Relaxed),
+        "the account starts classified as hosted"
+    );
+    write_file(
+        &mut engine,
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        &(0..200u8).collect::<Vec<_>>(),
+    )
+    .expect("the write commits");
+    assert!(
+        blocks.advisory_quota.load(Ordering::Relaxed),
+        "an external mode moved the account onto advisory accounting"
+    );
+    let toggles = alice
+        .http
+        .requests()
+        .iter()
+        .filter(|request| request.url.ends_with("/account/byo"))
+        .count();
+    assert_eq!(toggles, 1, "and only while the two disagreed");
+}
+
+/// A settings load that cannot authenticate the member's choice refuses the
+/// write rather than placing it on the hosted default — the widening that
+/// blueprint/engine.md's settings-load policy exists to prevent.
+#[test]
+fn a_withheld_settings_record_refuses_the_write_instead_of_widening_it() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let alice = world.device(b"alice");
+    // A durable floor for the settings name and no record to meet it: this
+    // device adopted one before, so its absence now is suppression.
+    block_on(
+        alice
+            .floor_store
+            .raise_sequence_floor(settings_name(&SECRET).as_str().as_bytes(), 3),
+    )
+    .expect("the floor raises");
+
+    let (mut engine, _events, _tasks) = boot(&world, &blocks, &alice, 42);
+    let refused = block_on(engine.begin_write(
+        WriteTarget::NewFile {
+            parent: ROOT,
+            name: "photo.bin".into(),
+        },
+        200,
+    ))
+    .expect_err("no placement could be authenticated");
+    assert!(
+        matches!(
+            refused,
+            EngineError::NoPlacement {
+                refusal: PlacementRefusal::SettingsUnavailable(DefaultsReason::Suppressed),
+            }
+        ),
+        "the refusal says which rule bit: {refused:?}"
+    );
+    assert!(
+        uploaded_cids(&alice).is_empty(),
+        "and no byte went anywhere"
+    );
 }

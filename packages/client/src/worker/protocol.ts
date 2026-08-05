@@ -39,7 +39,8 @@ export type OpProgressPhase =
   | 'uploadProgress'
   | 'uploadCompleted'
   | 'uploadFailed'
-  | 'uploadCancelled';
+  | 'uploadCancelled'
+  | 'externalPinFailed';
 
 /** One ancestor step in a snapshot's breadcrumb trail, as data. */
 export interface BreadcrumbDescriptor {

@@ -131,6 +131,8 @@ function opPhase(wasm: EngineWasm, phase: number | undefined): OpProgressPhase {
       return 'uploadFailed';
     case wasm.OpPhase.UploadCancelled:
       return 'uploadCancelled';
+    case wasm.OpPhase.ExternalPinFailed:
+      return 'externalPinFailed';
     default:
       // Fail closed: an unmapped value means a JS/WASM version mismatch, not a
       // safe-to-ignore state (the event pump turns this throw into a fatal).

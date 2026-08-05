@@ -9,10 +9,11 @@
 use core::num::NonZeroU64;
 
 use crate::api::Quota;
+use crate::content::PinMode;
 
 /// A pre-flight quota rejection: the hosted account cannot admit `needed_bytes`.
-/// Advisory (BYO) accounts never produce this — their bytes live on the member's
-/// own provider and are counted, never gated.
+/// A write that takes no hosted byte path never produces this — its bytes live
+/// on the member's own provider and are counted, never gated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaExceeded {
     /// Bytes already counted against the account.
@@ -24,12 +25,22 @@ pub struct QuotaExceeded {
 }
 
 /// Fail fast before bytes move if a hosted upload of `needed_bytes` would exceed
-/// the account limit. A BYO account's quota is advisory (`advisory: true`) and
-/// always admits — its rows are counted for accounting, never quota-enforced
-/// (CONTEXT.md "Advisory pin row"). The API upload endpoint remains the
-/// authoritative gate; this is the fail-fast pre-flight, not the enforcement.
-pub fn pre_flight_quota_check(needed_bytes: u64, quota: &Quota) -> Result<(), QuotaExceeded> {
-    if quota.advisory {
+/// the account limit.
+///
+/// The gate is this write's own byte path, not the account's server-side flag:
+/// [`PinMode::External`] sends nothing to the hosted store and so is never
+/// gated, while [`PinMode::Dual`] is, because its hosted leg is a real hosted
+/// upload however the account is classified. `quota.advisory` is a display hint
+/// — it lags the vaulted mode, which is the source of truth, so gating on it
+/// admits a hosted upload the ingress then refuses (and refuses an external one
+/// it would never see). The API upload endpoint remains the authoritative gate;
+/// this is the fail-fast pre-flight, not the enforcement.
+pub fn pre_flight_quota_check(
+    needed_bytes: u64,
+    quota: &Quota,
+    mode: PinMode,
+) -> Result<(), QuotaExceeded> {
+    if matches!(mode, PinMode::External) {
         return Ok(());
     }
     // Saturating so a pathological used+needed can never wrap under the limit.
@@ -111,12 +122,12 @@ mod tests {
 
     #[test]
     fn admits_an_upload_that_fits() {
-        assert!(pre_flight_quota_check(100, &hosted(400, 1000)).is_ok());
+        assert!(pre_flight_quota_check(100, &hosted(400, 1000), PinMode::Hosted).is_ok());
     }
 
     #[test]
     fn rejects_an_upload_that_would_exceed_the_limit() {
-        let err = pre_flight_quota_check(700, &hosted(400, 1000)).unwrap_err();
+        let err = pre_flight_quota_check(700, &hosted(400, 1000), PinMode::Hosted).unwrap_err();
         assert_eq!(
             err,
             QuotaExceeded {
@@ -129,19 +140,34 @@ mod tests {
 
     #[test]
     fn exactly_filling_the_limit_is_admitted() {
-        assert!(pre_flight_quota_check(600, &hosted(400, 1000)).is_ok());
+        assert!(pre_flight_quota_check(600, &hosted(400, 1000), PinMode::Hosted).is_ok());
     }
 
+    /// The write's own byte path decides, not the account's advisory flag: a
+    /// mode that sends nothing to the hosted store is never gated, and one that
+    /// does is gated however the server classified the account.
     #[test]
-    fn advisory_byo_quota_always_admits() {
-        let byo = Quota {
-            used_bytes: u64::MAX - 1,
-            limit_bytes: 0,
+    fn the_gate_follows_the_byte_path_not_the_advisory_flag() {
+        let advisory = Quota {
+            used_bytes: 400,
+            limit_bytes: 1000,
             advisory: true,
         };
         assert!(
-            pre_flight_quota_check(u64::MAX, &byo).is_ok(),
-            "BYO is never gated"
+            pre_flight_quota_check(u64::MAX, &advisory, PinMode::External).is_ok(),
+            "external sends no hosted byte"
+        );
+        assert!(
+            pre_flight_quota_check(700, &advisory, PinMode::Dual).is_err(),
+            "dual's hosted leg is a hosted upload"
+        );
+        assert!(
+            pre_flight_quota_check(700, &advisory, PinMode::Hosted).is_err(),
+            "an advisory flag does not open the hosted store"
+        );
+        assert!(
+            pre_flight_quota_check(u64::MAX, &hosted(0, 1000), PinMode::External).is_ok(),
+            "a non-advisory account on external is still never gated"
         );
     }
 

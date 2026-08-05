@@ -232,6 +232,9 @@ pub enum OpPhase {
     UploadFailed,
     /// The user cancelled the upload.
     UploadCancelled,
+    /// The version published, but the member's own IPFS provider did not take
+    /// it. No retry is queued.
+    ExternalPinFailed,
 }
 
 impl From<facade::OpPhase> for OpPhase {
@@ -245,6 +248,7 @@ impl From<facade::OpPhase> for OpPhase {
             facade::OpPhase::UploadCompleted => OpPhase::UploadCompleted,
             facade::OpPhase::UploadFailed => OpPhase::UploadFailed,
             facade::OpPhase::UploadCancelled => OpPhase::UploadCancelled,
+            facade::OpPhase::ExternalPinFailed => OpPhase::ExternalPinFailed,
         }
     }
 }

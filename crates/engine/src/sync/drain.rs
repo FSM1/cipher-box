@@ -33,7 +33,10 @@ use futures_channel::mpsc;
 use zeroize::Zeroizing;
 
 use crate::api::{ApiClient, ApiError, QUOTA_EXCEEDED, REGISTRY_BATCH_REFUSED, UPLOAD_TOO_LARGE};
-use crate::content::{Gateway, SealedContent, pre_flight_quota_check};
+use crate::content::{
+    Gateway, Placement, PlacementDecision, ProviderError, SealedContent, place_block,
+    pre_flight_quota_check,
+};
 use crate::entropy::Entropy;
 use crate::facade::{BlockProgress, Event, NodeId, OpPhase};
 use crate::gate::floor;
@@ -349,6 +352,10 @@ pub(crate) struct Drain<'a, T, H: Http, C: CredentialStore, F, S, St, Sch> {
     pub(crate) scheduler: &'a Sch,
     pub(crate) http: &'a H,
     pub(crate) gateway: &'a Gateway,
+    /// Where this session's bytes go, decided once from the vault settings load.
+    /// An `Err` holds every content op — the drain publishes no version it
+    /// cannot place (blueprint/engine.md "Settings-load policy").
+    pub(crate) placement: &'a PlacementDecision,
     pub(crate) profile: &'a SyncTimingProfile,
     /// Seal nonces enter as injected entropy; the drain reads no RNG of its own.
     pub(crate) entropy: &'a RefCell<Box<dyn Entropy>>,
@@ -427,6 +434,10 @@ struct UploadedVersion {
     /// Every content CID the registration names: the root first, then the
     /// leaves in file order.
     content_cids: Vec<String>,
+    /// A dual write's external leg that did not take the bytes. The op still
+    /// publishes — only the hosted leg can fail it — so this rides out as a
+    /// per-op report rather than being swallowed.
+    external_failure: Option<ProviderError>,
 }
 
 /// One record as this pass published it.
@@ -633,10 +644,13 @@ where
             self.clear_block();
             return true;
         }
+        let Ok(placement) = self.placement.as_ref() else {
+            return false;
+        };
         let Ok(quota) = self.api.quota().await else {
             return false;
         };
-        if pre_flight_quota_check(blocked.needed_bytes, &quota).is_err() {
+        if pre_flight_quota_check(blocked.needed_bytes, &quota, placement.mode()).is_err() {
             return false;
         }
         self.clear_block();
@@ -1480,6 +1494,16 @@ where
         if !self.cancels.borrow_mut().enter_publish(applied.op_id) {
             return Err(Halt::Cancelled);
         }
+        // Reported once per op, not per block: the version published and is
+        // retrievable, but it is not on the member's own node (#34 D1).
+        if let Some(error) = &uploaded.external_failure {
+            self.emit_upload(
+                applied,
+                OpPhase::ExternalPinFailed,
+                None,
+                Some(provider_failure(error)),
+            );
+        }
         Ok(uploaded)
     }
 
@@ -1491,6 +1515,11 @@ where
         applied: &AppliedOp,
         staged: &StagedContent,
     ) -> Result<UploadedVersion, Halt> {
+        // Resolved before any byte moves: a session that cannot authenticate the
+        // member's placement choice holds its content ops rather than picking a
+        // destination for them.
+        let placement = self.placement.as_ref().map_err(|_| Halt::Unclassified)?;
+        let mut external_failure = None;
         let root_block = self
             .staged_block(&staged.root_cid)
             .await?
@@ -1541,7 +1570,10 @@ where
             self.cancel_checkpoint(applied.op_id).await?;
             match self.staged_block(leaf_cid).await? {
                 Some(block) => {
-                    self.upload_block(leaf_cid, &block).await?;
+                    external_failure = self
+                        .upload_block(placement, leaf_cid, &block)
+                        .await?
+                        .or(external_failure);
                     self.cancels.borrow_mut().confirmed(applied.op_id, leaf_cid);
                     // A leaf a lost release left staged behind the mark is
                     // re-uploaded here, and must not drag the mark back down
@@ -1567,7 +1599,10 @@ where
         // The root goes up last and stays staged until the publish confirms: it
         // is the manifest every retry re-derives the plan from, so releasing it
         // before the record lands would strand a fully-uploaded version.
-        self.upload_block(&staged.root_cid, &root_block).await?;
+        external_failure = self
+            .upload_block(placement, &staged.root_cid, &root_block)
+            .await?
+            .or(external_failure);
         self.cancels
             .borrow_mut()
             .confirmed(applied.op_id, &staged.root_cid);
@@ -1577,6 +1612,7 @@ where
         Ok(UploadedVersion {
             version: content.version(*key, applied.op.authored_at.0),
             content_cids,
+            external_failure,
         })
     }
 
@@ -1650,17 +1686,40 @@ where
         Ok(Some(block))
     }
 
-    /// Upload one block to the pin provider under `cid`, its staging key and
-    /// own content address, so the ingress pins it where the published record
-    /// points. A block is only ever removed from staging on a confirmed
-    /// [`UploadResult`](crate::UploadResult), which is what makes the
+    /// Upload one block to every leg `placement` names, under `cid` — its
+    /// staging key and own content address — so each provider pins it where the
+    /// published record points. A block is only ever removed from staging on a
+    /// confirmed [`UploadResult`](crate::UploadResult), which is what makes the
     /// still-staged set a suffix.
-    async fn upload_block(&self, cid: &[u8], block: &[u8]) -> Result<(), Halt> {
-        self.api
-            .upload(&encode_content_cid_str(cid), block)
-            .await
-            .map(drop)
-            .map_err(|error| classify_upload(error, block.len() as u64))
+    ///
+    /// The hosted leg is authoritative: it alone can fail the op. A dual write's
+    /// external leg is reported instead of failing the op, because under
+    /// strict-FIFO stop-at-first-failure an offline home node would stall every
+    /// later mutation in the vault (#34 D1). Under `External` the member's
+    /// provider *is* the byte path, so its refusal is the op's.
+    async fn upload_block(
+        &self,
+        placement: &Placement,
+        cid: &[u8],
+        block: &[u8],
+    ) -> Result<Option<ProviderError>, Halt> {
+        if !matches!(placement, Placement::External(_)) {
+            self.api
+                .upload(&encode_content_cid_str(cid), block)
+                .await
+                .map(drop)
+                .map_err(|error| classify_upload(error, block.len() as u64))?;
+        }
+        let Some(config) = placement.external() else {
+            return Ok(None);
+        };
+        match place_block(config, cid, block, self.http).await {
+            Ok(()) => Ok(None),
+            Err(error) => match placement {
+                Placement::Dual(_) => Ok(Some(error)),
+                _ => Err(Halt::UploadAttempt),
+            },
+        }
     }
 
     /// Drop every staged block of an op's version — on a landed publish, and on
@@ -2310,6 +2369,19 @@ fn upload_failure(halt: Halt) -> Option<&'static str> {
             Some("the network refused the payload")
         }
         Halt::Permanent(_) => Some("the staged version can never publish"),
+    }
+}
+
+/// The key-free classification an [`OpPhase::ExternalPinFailed`] carries. It
+/// names the leg, never the endpoint or the bearer the config carries.
+fn provider_failure(error: &ProviderError) -> &'static str {
+    match error {
+        ProviderError::Unreachable => "your own IPFS provider could not be reached",
+        ProviderError::Rejected { .. } => "your own IPFS provider refused the block",
+        ProviderError::AddressMismatch => {
+            "your own IPFS provider stored the block at a different address"
+        }
+        _ => "your own IPFS provider did not accept the block",
     }
 }
 

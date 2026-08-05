@@ -639,6 +639,37 @@ contract-test suite owned by the testing-strategy blueprint (#28 D6).
   every mode's publish flow still traverses registration. `ByoIpfsConfig`
   stays sealed in vault settings; provider connection testing is engine-side
   over the Http seam (the TEE tester is gone).
+- **Dispatch is concrete over the Http seam, and only content versions
+  dispatch.** A record head block always takes the hosted path — the record
+  plane's publish compares the ingress's returned address against the head
+  block's own, and the republisher re-PUTs from the hosted store — so
+  placement decides a version's blocks, not a record's.
+  - The byte destinations a mode names are exactly what the provider's API
+    supports. Kubo takes bytes under the caller's own address (`block/put`
+    with the CID's multicodec and the frozen `blake3`/32 framing) and the
+    address it answers with is held to the one it was given. PSA and Pinata
+    are pin-by-CID services: they fetch the block from the network rather than
+    receive it, and their own ingress re-chunks under a different multihash,
+    so neither can preserve an address. They are therefore only ever a dual
+    write's second leg, and **external-only over a pin-by-CID provider is a
+    placement refusal** — no leg would hold the block for the service to
+    fetch, so the published record would name bytes that exist nowhere.
+  - **Dual runs both legs and only hosted can fail the op.** Under strict-FIFO
+    stop-at-first-failure a both-must-succeed rule would let an offline home
+    node stall every later mutation in the vault. The external leg's outcome
+    is reported per op rather than swallowed, and no retry is queued for it.
+    Under external, the member's provider _is_ the byte path, so its refusal
+    is the op's.
+- **The quota pre-flight gates this write's byte path, not the account.** It
+  runs at command time, where the write already waits, sized in **sealed**
+  bytes: `Hosted` and `Dual` are checked, `External` is skipped. `advisory` on
+  the quota response is a display hint that lags the vaulted mode — the mode
+  is the source of truth and the account flag is reconciled against it, since
+  `users.byo` is two-state where the mode is three and dual has no server
+  representation (`byo=true` is exactly `External`). The pre-flight can never
+  be authoritative — the API upload endpoint stays the enforcement — so an
+  unreachable or unconfigured API leaves the write to queue offline like any
+  other, while a placement that cannot be authenticated refuses it.
 - **BYO endpoint policy** (#905): one gate over the whole config, applied
   identically to a member-typed config and to one resolved back off the
   network, and release-active on the encode side so nothing is published that

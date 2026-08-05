@@ -67,6 +67,12 @@ impl From<EngineError> for VfsError {
             }
             EngineError::OverBudget { cause, .. } => VfsError::OverBudget(cause),
             EngineError::ContentUnavailable { message } => VfsError::Unavailable { message },
+            // Retryable once the vault settings resolve or are saved again, and
+            // not a storage verdict: the device has room, the engine simply does
+            // not know where the member wants the bytes.
+            error @ EngineError::NoPlacement { .. } => VfsError::Unavailable {
+                message: error.to_string(),
+            },
             // Retryable once the mount closes a stream, not a storage verdict.
             error @ EngineError::TooManyStreams => VfsError::Unavailable {
                 message: error.to_string(),
