@@ -1000,56 +1000,6 @@ mod tests {
         }
     }
 
-    impl Harness<FlakyPut> {
-        fn flaky(key: &str, refusing: &Arc<Mutex<bool>>) -> Self {
-            let key = key.to_owned();
-            let refusing = Arc::clone(refusing);
-            Self::build(move |store| FlakyPut {
-                inner: store,
-                key,
-                refusing,
-            })
-        }
-    }
-
-    /// A transport whose PUTs at one name fail while `refusing` is set — the
-    /// transient publish failure a cascade retry has to survive.
-    #[derive(Clone)]
-    struct FlakyPut {
-        inner: InMemoryRecordStore,
-        key: String,
-        refusing: Arc<Mutex<bool>>,
-    }
-
-    impl RecordTransport for FlakyPut {
-        fn endpoints(&self) -> Vec<EndpointId> {
-            self.inner.endpoints()
-        }
-
-        async fn get_record(
-            &self,
-            endpoint: &EndpointId,
-            routing_key: &str,
-            max_bytes: usize,
-        ) -> SeamResult<Option<Vec<u8>>> {
-            self.inner
-                .get_record(endpoint, routing_key, max_bytes)
-                .await
-        }
-
-        async fn put_record(
-            &self,
-            endpoint: &EndpointId,
-            routing_key: &str,
-            record: &[u8],
-        ) -> SeamResult<()> {
-            if routing_key == self.key && *self.refusing.lock().expect("lock") {
-                return Err(SeamError::new("endpoint down"));
-            }
-            self.inner.put_record(endpoint, routing_key, record).await
-        }
-    }
-
     /// The concurrent writer's record, keyed by the name it lands at.
     type Winner = Arc<Mutex<Option<(String, Vec<u8>)>>>;
 
@@ -2069,8 +2019,8 @@ mod tests {
     #[test]
     fn a_cascade_that_aborts_after_resolving_a_descendant_completes_on_retry() {
         let (root, child, child_ref) = owner_tree();
-        let refusing = Arc::new(Mutex::new(true));
-        let harness = Harness::flaky(child.name.as_str(), &refusing);
+        let harness = Harness::plain();
+        harness.store.fail_put_for(child.name.as_str());
         harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
         harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
         let index = vec![child_ref];
@@ -2095,7 +2045,7 @@ mod tests {
         // requires: the root already advanced to its own fresh seed and epoch.
         // The ancestry stays on the PRE-cut seed — the descendant never
         // republished, so its ascent link still carries that derivation.
-        *refusing.lock().expect("lock") = false;
+        harness.store.heal_put_for(child.name.as_str());
         let root_fresh = published_override_seed(&harness, &root.name, SCOPE, OWNER_ROOT_EPOCH + 1);
         let outcome = cascade_pass(
             &harness,
