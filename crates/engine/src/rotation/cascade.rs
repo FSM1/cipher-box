@@ -46,9 +46,8 @@
 //!
 //! Entropy enters only through [`Entropy`] and time only through [`Scheduler`];
 //! the sole impure edges are the injected [`CascadeResealResolver`] and
-//! [`ScopeRootPublisher`] (as `rotate_scope` and the sweep also carry). Real
-//! resolver wiring is not landed; this slice fakes it and proves the cascade in
-//! simulation.
+//! [`ScopeRootPublisher`] (as `rotate_scope` and the sweep also carry), whose
+//! owner arm is `crate::net::rotation::OwnerRotationNet`.
 //!
 //! [`enumerate_eager_set`]: super::eager_set::enumerate_eager_set
 
@@ -132,8 +131,8 @@ pub struct CascadeTarget {
 /// The impure edge that resolves a descendant scope root's current re-seal
 /// material — the cascade's analogue of the eager-set walk's `ChildIndexResolver`
 /// and the sweep's [`SweepResolver`](super::sweep::SweepResolver). Resolve +
-/// adoption-gate + unseal live behind this trait; the real network/gate wiring is
-/// not landed and tests fake it. A resolve either yields the full
+/// adoption-gate + unseal live behind this trait; the owner arm is
+/// `crate::net::rotation::OwnerRotationNet`. A resolve either yields the full
 /// [`CascadeTarget`] or a fail-closed [`ResolveFailure`] — a partial or
 /// gate-failing record is never a work-list entry.
 pub trait CascadeResealResolver {
@@ -204,10 +203,10 @@ pub enum CascadeError {
         /// The underlying re-seal rejection.
         error: ResealError,
     },
-    /// A re-sealed record did not land (register-first/PUT failed, or a concurrent
-    /// writer won the CAS). For a revocation the fresh seed MUST install, so both
-    /// failure modes abort — a lost race is fatal to *this* attempt, not tolerated
-    /// as it is in the idempotent sweep. Availability, retryable.
+    /// A re-sealed record did not land (register-first/PUT failed, a concurrent
+    /// writer won the CAS, or the publisher refused the bytes). For a revocation
+    /// the fresh seed MUST install, so every failure mode aborts — a lost race is
+    /// fatal to *this* attempt, not tolerated as it is in the idempotent sweep.
     Publish {
         /// The scope whose record did not land.
         scope_id: [u8; 16],
@@ -301,7 +300,10 @@ impl CascadeError {
                 ResolveFailure::Unavailable | ResolveFailure::ConflictingChildLabel
             ),
             CascadeError::Reseal { error, .. } => matches!(error, ResealError::Entropy(_)),
-            CascadeError::Publish { .. } => true,
+            // A publish that did not land is availability; one the publisher
+            // refused is its own fail-closed verdict on the bytes, and retrying
+            // it forever would launder a trust violation into a stall (rule 6).
+            CascadeError::Publish { error, .. } => error.is_retryable(),
             CascadeError::Floor { .. } => true,
             CascadeError::EpochExhausted { .. } => false,
         }
@@ -1256,6 +1258,21 @@ mod tests {
         assert_eq!(err.check(), "publish-failed");
         assert_eq!(err.scope_id(), sid(0x0a));
         assert!(err.is_retryable(), "not-landed is an availability stall");
+        assert_eq!(spawned, 0);
+    }
+
+    /// A publisher that refuses the bytes has made its own fail-closed verdict,
+    /// so the abort is fatal — retrying it forever would launder a trust
+    /// violation into an availability stall (AGENTS.md rule 6).
+    #[test]
+    fn a_publish_the_publisher_refused_is_fatal_not_retryable() {
+        let net = FakeNet::new()
+            .scope(0x0a, 4, &[])
+            .publish_fault(0x0a, ScopeRootPublishError::Rejected);
+        let (outcome, _net, _f, spawned) = run(net, &[0x0a]);
+        let err = outcome.expect_err("a refused publish fails closed");
+        assert_eq!(err.check(), "publish-failed");
+        assert!(!err.is_retryable());
         assert_eq!(spawned, 0);
     }
 
