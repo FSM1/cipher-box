@@ -72,14 +72,14 @@ Functional decomposition, not final file layout:
 
 ## Crypto suite
 
-| Role                       | Algorithm                                               | Used for                                                                        |
-| -------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Symmetric sealing          | XChaCha20-Poly1305 (24-byte nonce)                      | All sealed bodies and structures, content bytes                                 |
-| Key derivation             | BLAKE3 `derive_key` / `keyed_hash`                      | The whole edge catalog                                                          |
+| Role                       | Algorithm                                               | Used for                                                                                     |
+| -------------------------- | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Symmetric sealing          | XChaCha20-Poly1305 (24-byte nonce)                      | All sealed bodies and structures, content bytes                                              |
+| Key derivation             | BLAKE3 `derive_key` / `keyed_hash`                      | The whole edge catalog                                                                       |
 | Sealing to a person        | RFC 9180 HPKE (X25519-HKDF-SHA256 + XChaCha20-Poly1305) | Base mode: grant blobs, owner blob, ascent links, mailbox payloads; auth mode: the op record |
-| Pairwise secrets           | X25519 ECDH                                             | Blinded tags, pseudonym derivation                                              |
-| Identity signing           | secp256k1 ECDSA (RFC 6979) over det-CBOR                | Grant-set commitment, subkey binding, re-point object, mailbox sender signature |
-| Pseudonym + record signing | Ed25519                                                 | Structure signatures; IPNS records                                              |
+| Pairwise secrets           | X25519 ECDH                                             | Blinded tags, pseudonym derivation                                                           |
+| Identity signing           | secp256k1 ECDSA (RFC 6979) over det-CBOR                | Grant-set commitment, subkey binding, re-point object, mailbox sender signature              |
+| Pseudonym + record signing | Ed25519                                                 | Structure signatures; IPNS records                                                           |
 
 - Every user derives an **X25519 encryption subkey** from their login secret;
   the identity key only signs, the subkey only seals. The **subkey binding**
@@ -111,7 +111,13 @@ node UUID.
 - **Child refs**: `{id, name, ipnsName, kind, linkCounter}` — immutable fields
   plus the monotonic link counter that picks the deterministic loser in
   dual-link repair (#33 D5). No key wraps, no size/mtime mirrors: child writes
-  never republish the parent.
+  never republish the parent. The one exception is the write-plane name wave,
+  which moves every child's `ipnsName` at once and so rewrites the parent's
+  child refs, re-sealing its read body at the **unchanged** read epoch — a
+  metadata rewrite, never a read rotation
+  ([ADR 0004](https://github.com/FSM1/cipher-box-next/blob/main/decisions/0004-read-body-child-names-on-the-name-wave.md)).
+  A node's own body still
+  moves names untouched, since `ipnsName` is not in the AAD (#39 D7).
 - **Write-body** (scope roots only, #27 D6): `{grant ledger, write-plane
 history link, directChildScopeIndex}` sealed under the root's writeKey. The
   ledger is `(recipientIdentityPk, recipientEncPk, permission, tag)`; the
