@@ -44,9 +44,13 @@ pub enum AuthorError {
     /// child adoption always rejects (`net/child.rs`). Refusing here keeps the
     /// produce side and the decode side on the same predicate.
     GrantSectionOnChild,
-    /// A scope root carried no decodable `grantSection` — the marker every root
-    /// adoption requires (`net/adopter.rs` step 5).
+    /// A scope root carried no `grantSection` — the marker every root adoption
+    /// requires (`net/adopter.rs` step 5).
     MissingGrantSection,
+    /// A scope root's carried `grantSection` did not decode. The same bytes are
+    /// a whole-record reject on arrival (`net/adopter.rs` step 5), so they are a
+    /// trust refusal here rather than a codec failure of this pass's own body.
+    InvalidGrantSection,
     /// The carried grant-set commitment names a different `ipnsName` than the
     /// record is published under, which the gate's stage 2 rejects.
     CommitmentNameMismatch,
@@ -84,6 +88,7 @@ impl AuthorError {
         match self {
             Self::GrantSectionOnChild => "grant-section-on-child",
             Self::MissingGrantSection => "missing-grant-section",
+            Self::InvalidGrantSection => "invalid-grant-section",
             // Stage 2's single `commitment-invalid` verdict, split by cause: the
             // producer knows which half of its own bytes is wrong, where a
             // reader deliberately tells an attacker nothing.
@@ -106,6 +111,7 @@ impl AuthorError {
         match self {
             Self::GrantSectionOnChild
             | Self::MissingGrantSection
+            | Self::InvalidGrantSection
             | Self::CommitmentNameMismatch
             | Self::CommitmentSignatureInvalid
             | Self::SectionSignatureInvalid => true,
@@ -223,7 +229,7 @@ fn check_scope_root(
     let section = decode_grant_section(
         grant_section_bytes(envelope).ok_or(AuthorError::MissingGrantSection)?,
     )
-    .map_err(AuthorError::Seal)?;
+    .map_err(|_| AuthorError::InvalidGrantSection)?;
     let commitment_sig = EcdsaSignature::from_compact(&section.commitment_sig)
         .ok_or(AuthorError::CommitmentSignatureInvalid)?;
     verify_grant_set(owner_identity, &section.commitment, &commitment_sig)
@@ -592,6 +598,7 @@ mod tests {
         let refusals = [
             (AuthorError::GrantSectionOnChild, true),
             (AuthorError::MissingGrantSection, true),
+            (AuthorError::InvalidGrantSection, true),
             (AuthorError::CommitmentNameMismatch, true),
             (AuthorError::CommitmentSignatureInvalid, true),
             (AuthorError::SectionSignatureInvalid, true),
@@ -603,6 +610,20 @@ mod tests {
             assert!(names.insert(error.check()), "{error} reuses a check name");
             assert!(format!("{error}").contains(error.check()), "{error:?}");
         }
+    }
+
+    #[test]
+    fn a_scope_root_envelope_whose_grant_section_does_not_decode_is_refused() {
+        // Release-active (security rule 8).
+        assert_eq!(
+            author_scope_root_envelope(
+                authoring(&folder(), grant_section_field()),
+                &name(),
+                &owner(),
+            )
+            .unwrap_err(),
+            AuthorError::InvalidGrantSection,
+        );
     }
 
     #[test]

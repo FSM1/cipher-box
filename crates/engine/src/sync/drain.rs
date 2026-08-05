@@ -224,6 +224,40 @@ enum Halt {
     Cancelled,
 }
 
+/// A failed publish, and whether its record nonetheless confirmed at its name.
+/// The two are independent: the self-adopt and the snapshot-cache write both
+/// run with the record already live, so a caller that compensates must branch on
+/// the fact rather than re-read a name its own publish left stale.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PublishHalt {
+    halt: Halt,
+    confirmed: bool,
+}
+
+impl PublishHalt {
+    /// A failure raised before the record reached the transport.
+    fn before_the_put(halt: Halt) -> Self {
+        Self {
+            halt,
+            confirmed: false,
+        }
+    }
+
+    /// A failure raised once the publish confirmed at its name.
+    fn past_the_put(halt: Halt) -> Self {
+        Self {
+            halt,
+            confirmed: true,
+        }
+    }
+}
+
+impl From<PublishHalt> for Halt {
+    fn from(failure: PublishHalt) -> Self {
+        failure.halt
+    }
+}
+
 /// The one verdict every unrecoverable-content path returns: the version's key,
 /// root, or a leaf is gone, and no retry brings any of them back.
 const CONTENT_LOST: Halt = Halt::Permanent(DeadLetterReason::ContentUnrecoverable);
@@ -1029,7 +1063,8 @@ where
                 // here would drop an op on restart whose child no parent names.
                 None,
             )
-            .await?;
+            .await
+            .map_err(Halt::from)?;
 
         // Referent published: only now does the parent gain the ref to it.
         pass.folder_mut(parent)?.children.push(child.child_ref);
@@ -1040,7 +1075,8 @@ where
             applied.op.authored_at.0,
             Some(applied.op_id),
         )
-        .await?;
+        .await
+        .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
         // Held only once the parent names it: a record nothing references is
         // not one the liveness loop should keep alive.
@@ -1067,8 +1103,15 @@ where
         if children.len() == before {
             return Ok(());
         }
-        self.publish_folder(scope, pass, parent, applied.op.authored_at.0, None)
-            .await?;
+        self.publish_folder(
+            scope,
+            pass,
+            parent,
+            applied.op.authored_at.0,
+            Some(applied.op_id),
+        )
+        .await
+        .map_err(Halt::from)?;
         Ok(())
     }
 
@@ -1154,10 +1197,20 @@ where
             Some(existing) => *existing = moved,
             None => dest_children.push(moved),
         }
+        // Only when one folder collapses the plan is the dest-add also its last
+        // record; otherwise the source-remove below is.
+        let single_record = source == dest;
         let cas_base = self
-            .publish_folder(scope, pass, dest, modified_at, None)
-            .await?;
-        if source == dest {
+            .publish_folder(
+                scope,
+                pass,
+                dest,
+                modified_at,
+                single_record.then_some(applied.op_id),
+            )
+            .await
+            .map_err(Halt::from)?;
+        if single_record {
             return Ok(());
         }
 
@@ -1169,24 +1222,31 @@ where
         // forever, so a quota refusal, a permanent one, or a spent attempt must
         // not be flattened into it. Only the undo's own failure is genuinely
         // unclassified.
-        if let Err(halt) = self
-            .publish_folder(scope, pass, source, modified_at, None)
+        if let Err(failure) = self
+            .publish_folder(scope, pass, source, modified_at, Some(applied.op_id))
             .await
         {
-            self.compensate_dest_add(
-                scope,
-                pass,
-                DestAdd {
-                    dest,
-                    source,
-                    target,
-                    replaced,
-                    cas_base,
-                    modified_at,
-                },
-            )
-            .await?;
-            return Err(halt);
+            // A confirmed source-remove is the move complete on the network, so
+            // undoing the dest-add would strip the child from the only parent
+            // that still names it. The compensation decides that by re-reading
+            // the source, which this very publish left stale in the cache; the
+            // publish itself already knows.
+            if !failure.confirmed {
+                self.compensate_dest_add(
+                    scope,
+                    pass,
+                    DestAdd {
+                        dest,
+                        source,
+                        target,
+                        replaced,
+                        cas_base,
+                        modified_at,
+                    },
+                )
+                .await?;
+            }
+            return Err(failure.halt);
         }
         Ok(())
     }
@@ -1262,7 +1322,8 @@ where
         };
         pass.folder_mut(dest)?.children = children;
         self.publish_folder(scope, pass, dest, modified_at, None)
-            .await?;
+            .await
+            .map_err(Halt::from)?;
         Ok(())
     }
 
@@ -1376,7 +1437,8 @@ where
                 loaded.epoch_tag_unknown,
                 Some(applied.op_id),
             )
-            .await?;
+            .await
+            .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
         if let Some(node) = self.base.borrow_mut().node_mut(target) {
             node.record_sequence = published.sequence;
@@ -1634,9 +1696,9 @@ where
         folder: NodeId,
         modified_at: u64,
         completes: Option<OpId>,
-    ) -> Result<u64, Halt> {
+    ) -> Result<u64, PublishHalt> {
         let (name, is_scope_root, body, envelope_unknown, epoch_tag_unknown) = {
-            let state = pass.folder(folder)?;
+            let state = pass.folder(folder).map_err(PublishHalt::before_the_put)?;
             (
                 state.name.clone(),
                 state.is_scope_root,
@@ -1665,7 +1727,7 @@ where
             )
             .await?;
 
-        let state = pass.folder_mut(folder)?;
+        let state = pass.folder_mut(folder).map_err(PublishHalt::past_the_put)?;
         state.sequence = published.sequence;
         state.modified_at = modified_at;
         let children = state.children.clone();
@@ -1694,9 +1756,9 @@ where
         carried_unknown: PreservedFields,
         carried_epoch_tag_unknown: PreservedFields,
         completes: Option<OpId>,
-    ) -> Result<Published, Halt> {
+    ) -> Result<Published, PublishHalt> {
         let read_key = self.node_read_key(scope, &node.0);
-        let nonce = self.nonce()?;
+        let nonce = self.nonce().map_err(PublishHalt::before_the_put)?;
         let authoring = EnvelopeAuthoring {
             node_id: node.0,
             scope_id: scope.root.0,
@@ -1712,14 +1774,16 @@ where
         } else {
             author_child_envelope(authoring)
         }
-        .map_err(classify_author)?;
+        .map_err(|error| PublishHalt::before_the_put(classify_author(error)))?;
 
         let record_bytes = self
             .publish_head(scope, name, &node.0, epoch, &head, content_cids.clone())
-            .await?;
+            .await
+            .map_err(PublishHalt::before_the_put)?;
         if let Some(op_id) = completes {
             self.mark_published(scope, op_id).await;
         }
+        // The record is live from here: everything below is a local step.
         let local = local_head(&head);
         let sequence = if is_scope_root {
             let adopter = RootAdopter::new(
@@ -1734,7 +1798,7 @@ where
             adopter
                 .adopt(name, &record_bytes)
                 .await
-                .map_err(|_| Halt::Unclassified)?
+                .map_err(|_| PublishHalt::past_the_put(Halt::Unclassified))?
         } else {
             let adopter = ChildAdopter::new(
                 self.gateway,
@@ -1748,7 +1812,7 @@ where
             adopter
                 .adopt(name, &record_bytes)
                 .await
-                .map_err(|_| Halt::Unclassified)?
+                .map_err(|_| PublishHalt::past_the_put(Halt::Unclassified))?
         }
         .adopted
         .sequence;
@@ -1757,7 +1821,7 @@ where
         self.snapshot_cache
             .put(name.as_str().as_bytes(), &record_bytes)
             .await
-            .map_err(seam)?;
+            .map_err(|e| PublishHalt::past_the_put(seam(e)))?;
         Ok(Published {
             sequence,
             held: HeldRecord {
@@ -2445,6 +2509,30 @@ mod tests {
         }
     }
 
+    /// The compensation branches on this and nothing else: a failure carries
+    /// its classification and, separately, whether the record it was publishing
+    /// is live. Collapsing the two would undo a move that landed.
+    #[test]
+    fn a_publish_failure_keeps_its_verdict_and_its_confirmation_apart() {
+        for halt in [Halt::Unclassified, Halt::Attempt] {
+            assert_eq!(
+                PublishHalt::before_the_put(halt),
+                PublishHalt {
+                    halt,
+                    confirmed: false
+                }
+            );
+            assert_eq!(
+                PublishHalt::past_the_put(halt),
+                PublishHalt {
+                    halt,
+                    confirmed: true
+                }
+            );
+            assert_eq!(Halt::from(PublishHalt::past_the_put(halt)), halt);
+        }
+    }
+
     /// Every other publish failure is availability: retried indefinitely and
     /// charged nothing, so an unreachable network never abandons an op.
     #[test]
@@ -2474,6 +2562,7 @@ mod tests {
         for (error, expected) in [
             (AuthorError::GrantSectionOnChild, Halt::UploadAttempt),
             (AuthorError::MissingGrantSection, Halt::UploadAttempt),
+            (AuthorError::InvalidGrantSection, Halt::UploadAttempt),
             (AuthorError::CommitmentNameMismatch, Halt::UploadAttempt),
             (AuthorError::CommitmentSignatureInvalid, Halt::UploadAttempt),
             (AuthorError::SectionSignatureInvalid, Halt::UploadAttempt),

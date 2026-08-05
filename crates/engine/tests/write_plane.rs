@@ -4442,11 +4442,6 @@ fn a_publish_whose_self_adopt_failed_still_marks_the_op_published() {
 
     let alice = world.device(b"alice");
     let (mut engine, mut events, mut tasks) = boot(&world, &blocks, &alice, 42);
-    // The create's last record is the parent's, so the root's own self-adopt is
-    // the step that fails after its record is already live.
-    alice
-        .floor_store
-        .fail_floor_raises_for(root_name.as_str().as_bytes());
     let op_id = write_file(
         &mut engine,
         WriteTarget::NewFile {
@@ -4457,19 +4452,7 @@ fn a_publish_whose_self_adopt_failed_still_marks_the_op_published() {
     )
     .unwrap();
     let version = staged_version(&alice);
-    tick(&world, &engine, &mut tasks);
-
-    assert_eq!(
-        published_op_mark(&alice),
-        Some(op_id.0),
-        "the ack raised the mark, not the adopt"
-    );
-    assert!(
-        !block_on(StagingStore::queued_ops(&alice.staging_store))
-            .unwrap()
-            .is_empty(),
-        "the failed adopt left the op queued — that is the window"
-    );
+    assert_a_failed_root_adopt_still_marks(&world, &alice, &engine, &mut tasks, &root_name, op_id);
 
     // A restart clears the session interlock, leaving only the mark to stop the
     // replay.
@@ -4518,6 +4501,201 @@ fn a_create_whose_parent_publish_never_ran_leaves_the_mark_down() {
             .unwrap()
             .is_empty(),
         "the create stays queued for the retry that completes it"
+    );
+}
+
+/// The plan's last record confirms and marks the op, and only then does its
+/// self-adopt fail. The fault sits on the scope root because that is the one
+/// folder a pass reads from the cache rather than through an adopt, so the loads
+/// the plan makes before that record are left intact.
+fn assert_a_failed_root_adopt_still_marks(
+    world: &FakeWorld,
+    device: &FakeDevice,
+    engine: &Engine<FakeSeamTypes>,
+    tasks: &mut [BoxedTask],
+    root_name: &IpnsName,
+    op_id: OpId,
+) {
+    device
+        .floor_store
+        .fail_floor_raises_for(root_name.as_str().as_bytes());
+    let before = published(&world.record_store, ROOT).0;
+    tick(world, engine, tasks);
+
+    assert_eq!(
+        published(&world.record_store, ROOT).0,
+        before + 1,
+        "the record the mark rests on did land"
+    );
+    assert_eq!(
+        published_op_mark(device),
+        Some(op_id.0),
+        "the ack raised the mark, not the adopt"
+    );
+    assert!(
+        !block_on(StagingStore::queued_ops(&device.staging_store))
+            .unwrap()
+            .is_empty(),
+        "the failed adopt left the op queued — that is the window"
+    );
+}
+
+/// The restart the mark exists for: the op leaves the queue without re-authoring
+/// the record it already landed, and unpins nothing while doing it.
+fn assert_restart_drops_without_republishing(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    device: &FakeDevice,
+) {
+    device.floor_store.heal_floors();
+    let before = published(&world.record_store, ROOT).0;
+    let (restarted, _events, mut tasks) = boot(world, blocks, device, 43);
+    tick(world, &restarted, &mut tasks);
+
+    assert!(
+        block_on(StagingStore::queued_ops(&device.staging_store))
+            .unwrap()
+            .is_empty(),
+        "the op leaves the queue"
+    );
+    assert_eq!(
+        published(&world.record_store, ROOT).0,
+        before,
+        "a dropped op republishes nothing"
+    );
+    assert!(
+        retire_targets(device).is_empty(),
+        "a drop is not an abandonment: nothing published is unpinned"
+    );
+}
+
+/// A delete authors exactly one record, so that record is its last and marks.
+#[test]
+fn a_delete_whose_self_adopt_failed_still_marks_the_op_published() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    create(&mut engine, "doomed");
+    tick(&world, &engine, &mut tasks);
+    let doomed = child_id(&engine, ROOT, "doomed");
+
+    let op_id = block_on(engine.command(Command::Delete { node: doomed }))
+        .unwrap()
+        .expect("the delete queues");
+    assert_a_failed_root_adopt_still_marks(&world, &alice, &engine, &mut tasks, &root_name, op_id);
+    assert_restart_drops_without_republishing(&world, &blocks, &alice);
+}
+
+/// Source and destination being one folder collapses a reference move into a
+/// single record, so the dest-add is also the plan's last.
+#[test]
+fn a_rename_whose_self_adopt_failed_still_marks_the_op_published() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    create(&mut engine, "before");
+    tick(&world, &engine, &mut tasks);
+
+    let op_id = block_on(engine.command(Command::Rename {
+        node: child_id(&engine, ROOT, "before"),
+        new_name: "after".into(),
+    }))
+    .unwrap()
+    .expect("the rename queues");
+    assert_a_failed_root_adopt_still_marks(&world, &alice, &engine, &mut tasks, &root_name, op_id);
+    assert_restart_drops_without_republishing(&world, &blocks, &alice);
+}
+
+/// Across folders the plan is dest-add then source-remove, so the **source**
+/// record is the last one and the one that marks.
+#[test]
+fn a_cross_folder_moves_source_remove_is_the_record_that_marks() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    // The move leaves the root for `photos`, so the root carries the
+    // source-remove and the destination publishes first and adopts cleanly.
+    let (photos, moved) = seed_folder_and_file(&world, &mut engine, &mut tasks);
+
+    let op_id = block_on(engine.command(Command::Move {
+        node: moved,
+        new_parent: photos,
+        new_name: "a.txt".into(),
+        replacing: None,
+    }))
+    .unwrap()
+    .expect("the move queues");
+    assert_a_failed_root_adopt_still_marks(&world, &alice, &engine, &mut tasks, &root_name, op_id);
+    assert_eq!(
+        published_names(&world.record_store, &blocks, photos),
+        ["a.txt"],
+        "a confirmed source-remove is the move complete, never compensated"
+    );
+    assert_restart_drops_without_republishing(&world, &blocks, &alice);
+}
+
+/// A dest-add that lands while the source-remove never does is not a published
+/// move: the compensation undoes it. Marking there would drop the op on restart
+/// with the move rolled back and never retried, losing it outright.
+#[test]
+fn a_cross_folder_moves_dest_add_never_marks_on_its_own() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    let root_name = seed_account(&world, &blocks);
+
+    let alice = world.device(b"alice");
+    let (mut engine, _events, mut tasks) = boot(&world, &blocks, &alice, 42);
+    let (photos, moved) = seed_folder_and_file(&world, &mut engine, &mut tasks);
+    let before = published_op_mark(&alice);
+    let dest_sequence = published(&world.record_store, photos).0;
+
+    // The root carries the source-remove, so refusing its PUT stops the plan
+    // after the destination has published and adopted.
+    world.record_store.fail_put_for(root_name.as_str());
+    let op_id = block_on(engine.command(Command::Move {
+        node: moved,
+        new_parent: photos,
+        new_name: "a.txt".into(),
+        replacing: None,
+    }))
+    .unwrap()
+    .expect("the move queues");
+    tick(&world, &engine, &mut tasks);
+
+    assert!(
+        before < Some(op_id.0),
+        "the setup's own mark must not already cover the move"
+    );
+    assert_eq!(
+        published_op_mark(&alice),
+        before,
+        "a dest-add the compensation undid is not a published op"
+    );
+    assert_eq!(
+        published(&world.record_store, photos).0,
+        dest_sequence + 2,
+        "the dest-add published, then the compensation undid it"
+    );
+    assert_eq!(
+        published_names(&world.record_store, &blocks, photos),
+        [] as [String; 0],
+        "the destination keeps nothing the source still names"
+    );
+    assert!(
+        block_on(StagingStore::queued_ops(&alice.staging_store))
+            .unwrap()
+            .iter()
+            .any(|(id, _)| *id == op_id),
+        "the move stays queued for the retry that completes it"
     );
 }
 
