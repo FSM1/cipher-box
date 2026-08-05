@@ -16,6 +16,22 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 - signing out returns the tab to the front door
 - the shipping bundle exposes no introspection hook
 
+## What it does not cover yet
+
+Nothing on the write path — no folder create/rename/move/delete, no upload, no
+download. `blueprint/testing.md` scopes this tier at login-and-CRUD; two
+independent blockers, neither of them this suite's, hold the CRUD half:
+
+- **No affordance to drive.** `apps/web` ships no create, rename, move, delete,
+  or download control; the drop zone is the only write surface that exists.
+  Specs bind to `data-testid`s that ship, so those slices land with their
+  components rather than ahead of them.
+- **No pin store under the job.** The API pins hosted uploads through Kubo and
+  this workflow starts none, so `POST /content/upload` answers 503. The engine
+  reads that verdict as unclassified, charges no attempt, and retries instead of
+  dead-lettering — so an upload spec would hang rather than fail. A write-path
+  slice needs a Kubo service here first, as the contract suite already runs one.
+
 ## How the suite logs in
 
 There is no interactive Core Kit login in CI. The `e2e` build carries the
