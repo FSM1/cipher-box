@@ -13,11 +13,7 @@
 //! fresh write scope seed moves every node to a fresh name under a fresh signing
 //! key. The read plane's **keys** are untouched — override seeds, read keys, and
 //! `minReadEpoch` carry verbatim, and no rotation path re-encrypts content bytes
-//! (#26 D6). Read-body *metadata* is not: every `ChildRef.ipnsName` in the subtree
-//! names a node the wave moves, and a read-only survivor derives no write name, so
-//! each parent's read body is rewritten and re-sealed under its unchanged read key
-//! at its unchanged read epoch (blueprint/engine.md "rotateScopeWrite"). The
-//! republish is therefore not byte-stable.
+//! (#26 D6). Read-body *metadata* is not: see [`RepublishedNode::child_names`].
 //!
 //! # Ordering is the safety property (#34 D4)
 //!
@@ -27,13 +23,12 @@
 //! batch-retire only **after** the root re-point; the old root name lingers past
 //! the migration window.
 //!
-//! # Three-channel re-point (#38 D3)
+//! # Re-point channels (#38 D3)
 //!
-//! The owner-identity-signed re-point object publishes to the scope pointer record
-//! (canonical), the mailbox, and the old root name's tombstone (feeding the
-//! depth-guarded `movedTo` chase). `writeEpoch` advances here; `minReadEpoch` is
-//! carried unchanged, so each plane's clock stays authored by its owning authority
-//! (#38 D1).
+//! The owner-identity-signed re-point object flips the canonical scope pointer
+//! record, then goes out on the two accelerator channels (see [`RepointChannel`]).
+//! `writeEpoch` advances here; `minReadEpoch` is carried unchanged, so each plane's
+//! clock stays authored by its owning authority (#38 D1).
 //!
 //! # Crash recovery from published records only (#26 D8)
 //!
@@ -66,6 +61,7 @@ use cipherbox_core::kdf;
 use cipherbox_core::payload::RepointObject;
 use cipherbox_core::seal::{GrantSetCommitment, verify_grant_set};
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, SIGNATURE_LEN as ECDSA_SIG_LEN};
+use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 
 use super::eager_set::ResolveFailure;
@@ -113,7 +109,7 @@ const REPOINT_ACCELERATORS: [RepointChannel; 2] =
 /// [`Self::current_name`] and rewrites what moved, so the wave drags neither
 /// O(subtree) bodies nor per-node read keys through this primitive
 /// (blueprint/engine.md "rotateScopeWrite").
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RepublishedNode {
     /// The node id being republished.
     pub node_id: [u8; 16],
@@ -123,16 +119,23 @@ pub struct RepublishedNode {
     /// The freshly derived `ipnsName` the record is published at.
     pub new_name: IpnsName,
     /// Each in-scope direct child's freshly derived name, keyed by child node id.
-    /// The publisher rewrites the matching `ChildRef.ipnsName` and re-seals the
-    /// read body: a read-only survivor holds no `writeScopeSeed` and can derive
-    /// no name, so without the rewrite it reaches the new root and stops. Empty
-    /// for a leaf. Child-first ordering makes every entry known before the parent
+    ///
+    /// A read-only survivor holds no `writeScopeSeed` and can derive no name, so
+    /// the wave rewrites the matching `ChildRef.ipnsName` and re-seals the parent's
+    /// read body under its unchanged read key at its unchanged read epoch — without
+    /// it a read-only holder reaches the new root and cannot descend. Empty for a
+    /// leaf; child-first ordering makes every entry known before the parent
     /// publishes.
     pub child_names: BTreeMap<[u8; 16], IpnsName>,
-    /// `writeSeed(freshWriteScopeSeed, node_id)` — the capability that signs at
-    /// [`Self::new_name`], and nothing wider: the wave's scope seed never leaves
-    /// the orchestrator, so the publisher can derive no other node's name.
-    pub write_seed: SecretBytes,
+    /// Signs the record at [`Self::new_name`] — the narrow per-name capability
+    /// (the shape `net/liveness.rs` holds for the same reason), never the seed it
+    /// derives from, so the publisher can derive no other node's name.
+    pub signer: Ed25519Signer,
+    /// The wave's fresh write scope seed, carried **only** for the scope root:
+    /// the root's grant section is the sole channel that distributes it (the
+    /// owner-write blob and every write grantee's blob), and a root republished
+    /// without it strands the whole write plane on the retired names.
+    pub write_scope_seed: Option<SecretBytes>,
     /// The write epoch the record publishes at (bumped for the whole scope).
     pub write_epoch: u64,
     /// Whether this is the scope root (re-pointed last, old name lingers).
@@ -156,24 +159,21 @@ pub trait WriteSubtreeResolver {
 /// mapping to the API pin/name registry and `/routing/v1` transport
 /// (`net/rotation.rs::WriteWaveNet`).
 ///
-/// Register-first is **not** a method here. The publish pipeline registers the
-/// name it is about to PUT and blocks on it (#28 D5), so the trait offers no way
-/// to reach the transport with an unregistered name — the ordering law is
-/// structural rather than an orchestrator convention.
-///
 /// Contract the orchestrator relies on and the fake honours:
 ///
 /// - **republish / retire are idempotent** — a resumed wave re-publishes and
 ///   re-retires the same names harmlessly.
 /// - **`is_republished` reads published state only** — it is how a resumed wave
 ///   skips already-done nodes without any in-memory checkpoint.
+/// - **`republish` registers the name it PUTs**, first and fail-closed
+///   (`net/publish.rs`, #28 D5) — the never-orphan ordering law.
 pub trait WriteWavePublisher {
     /// Whether a record is already published at `new_name` — the resume query,
     /// answered from published state only (no in-memory carry across a crash).
     async fn is_republished(&self, new_name: &IpnsName) -> Result<bool, WritePublishError>;
 
     /// Register-first then CAS-publish `node`'s record at its freshly derived
-    /// name, rewriting the child refs [`RepublishedNode::child_names`] names.
+    /// name, rewriting [`RepublishedNode::child_names`] into its read body.
     async fn republish(&self, node: &RepublishedNode) -> Result<(), WritePublishError>;
 
     /// Batch-retire interior old names at wave completion. MUST run only **after**
@@ -188,10 +188,10 @@ pub trait WriteWavePublisher {
     ) -> Result<(), WritePublishError>;
 }
 
-/// Why one write-plane transport op did not durably land. Every variant aborts
-/// the wave — it never claims completion on a dropped effect — but only
-/// [`Self::Rejected`] is a trust verdict a retry cannot clear (rule 6: a
-/// fail-closed rejection is never laundered into an availability stall).
+/// Why one write-plane op did not durably land. Only [`Self::Rejected`] is a
+/// trust verdict a retry cannot clear (rule 6: a fail-closed rejection is never
+/// laundered into an availability stall), and it aborts the wave on every
+/// channel; the rest abort every stage except an accelerator re-point.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WritePublishError {
     /// The register / PUT did not land; nothing durable. Retryable.
@@ -312,7 +312,7 @@ pub enum WriteRotateError {
     /// A write-plane transport op did not land. Names the stage so a retry knows
     /// where the wave stopped (it re-derives and resumes from published state).
     Publish {
-        /// The wave stage that failed (`register` / `republish` / `retire` /
+        /// The wave stage that failed (`republish` / `retire` /
         /// `repoint-<channel>`).
         stage: &'static str,
         /// The offending node id, or the scope id for the retire/re-point stages.
@@ -538,8 +538,8 @@ where
     )
     .await?;
 
-    // 7) Three-channel re-point: seal the owner-signed re-point object and publish
-    //    it in `REPOINT_CHANNELS` order.
+    // 7) Seal the owner-signed re-point object; flip the canonical pointer, then
+    //    the accelerators.
     let repoint = build_repoint_object(
         scope_id,
         new_root_name.clone(),
@@ -568,8 +568,19 @@ where
         })?;
     let mut repoint_accelerators = Vec::with_capacity(REPOINT_ACCELERATORS.len());
     for channel in REPOINT_ACCELERATORS {
-        if publisher.publish_repoint(channel, &block).await.is_ok() {
-            repoint_accelerators.push(channel);
+        match publisher.publish_repoint(channel, &block).await {
+            Ok(()) => repoint_accelerators.push(channel),
+            // An accelerator carries nothing load-bearing, so an availability
+            // failure is reported, not fatal. A `Rejected` is not availability:
+            // the publisher refused to sign, and rule 6 forbids absorbing that.
+            Err(WritePublishError::Rejected) => {
+                return Err(WriteRotateError::Publish {
+                    stage: repoint_stage(channel),
+                    node_id: scope_id,
+                    error: WritePublishError::Rejected,
+                });
+            }
+            Err(_) => {}
         }
     }
 
@@ -632,7 +643,8 @@ async fn republish_node<P: WriteWavePublisher>(
             current_name: node.current_name.clone(),
             new_name: new_name.clone(),
             child_names,
-            write_seed: kdf::write_seed(write_scope_seed, &node_id),
+            signer: kdf::ipns_keypair(kdf::write_seed(write_scope_seed, &node_id).as_bytes()),
+            write_scope_seed: is_root.then(|| SecretBytes::new(*write_scope_seed)),
             write_epoch,
             is_root,
         })
@@ -833,16 +845,14 @@ mod tests {
         }
         fn failing_after(state: WaveState, n: usize) -> Self {
             Self {
-                state,
                 fail_republish_after: Some(n),
-                refuse_channel: None,
+                ..Self::new(state)
             }
         }
         fn refusing(state: WaveState, channel: RepointChannel) -> Self {
             Self {
-                state,
-                fail_republish_after: None,
                 refuse_channel: Some(channel),
+                ..Self::new(state)
             }
         }
     }
@@ -1127,15 +1137,17 @@ mod tests {
                 assert_eq!(mapped, &by_id[kid].new_name);
                 assert_eq!(mapped, &derive_write_name(&seed, kid));
             }
-            // The write seed is the node's own, and nothing wider: it signs at the
-            // new name and derives no other node's.
-            assert_eq!(order.write_seed, kdf::write_seed(&seed, &order.node_id));
+            // The capability is the node's own, and nothing wider: it signs at
+            // the new name and derives no other node's.
             assert_eq!(
-                IpnsName::from_public_key(
-                    &kdf::ipns_keypair(order.write_seed.as_bytes()).verifying_key()
-                ),
+                IpnsName::from_public_key(&order.signer.verifying_key()),
                 order.new_name,
-                "the handed seed signs at the handed name"
+                "the handed signer is the new name's key"
+            );
+            assert_eq!(
+                order.write_scope_seed.is_some(),
+                order.is_root,
+                "only the root carries the scope seed its section distributes"
             );
             assert_eq!(order.current_name, old_name_of(&order.node_id));
         }

@@ -147,6 +147,71 @@ pub enum PublishError {
     },
 }
 
+/// One record the pipeline is about to sign: the name it publishes under, its
+/// signer, the `Value` bytes, and the registration that must land first. The
+/// shape both entry points reduce to, so the publish laws are stated once.
+struct Publishable<'a> {
+    name: &'a IpnsName,
+    signer: &'a Ed25519Signer,
+    value: Vec<u8>,
+    registration: NameRegistration,
+    min_current_sequence: Option<u64>,
+}
+
+/// One record whose `Value` is the payload itself rather than an `/ipfs/` head
+/// pointer — the pointer plane's shape, which
+/// [`RecordPointerFetch`](super::pointer_fetch::RecordPointerFetch) reads back
+/// verbatim.
+pub struct InlineRecordRequest<'a> {
+    /// The IPNS name being published (its Ed25519 key is [`Self::signer`]'s).
+    pub name: &'a IpnsName,
+    /// The name's Ed25519 signing key.
+    pub signer: &'a Ed25519Signer,
+    /// The record `Value` bytes.
+    pub value: &'a [u8],
+    /// Raises the CAS expected-current sequence, exactly as
+    /// [`PublishRequest::min_current_sequence`] does.
+    pub min_current_sequence: Option<u64>,
+}
+
+/// Publish an inline-value record. Same pipeline as [`publish`], same laws;
+/// only the record `Value` differs.
+pub async fn publish_inline<T, H, C, F, Sch>(
+    transport: &T,
+    api: &ApiClient<H, C>,
+    floors: &F,
+    scheduler: &Sch,
+    profile: &SyncTimingProfile,
+    request: &InlineRecordRequest<'_>,
+) -> Result<PublishReceipt, PublishError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
+    run(
+        transport,
+        api,
+        floors,
+        scheduler,
+        profile,
+        Publishable {
+            name: request.name,
+            signer: request.signer,
+            value: request.value.to_vec(),
+            registration: NameRegistration {
+                ipns_name: request.name.as_str().to_owned(),
+                head_cid: None,
+                content_cids: Vec::new(),
+            },
+            min_current_sequence: request.min_current_sequence,
+        },
+    )
+    .await
+}
+
 /// Run the publish pipeline for `request`. Register-first and fail-closed:
 /// on a registration failure nothing is PUT.
 pub async fn publish<T, H, C, F, Sch>(
@@ -170,10 +235,41 @@ where
     if request.head_cid.is_empty() {
         return Err(PublishError::EmptyHeadCid);
     }
+    run(
+        transport,
+        api,
+        floors,
+        scheduler,
+        profile,
+        Publishable {
+            name: request.name,
+            signer: request.signer,
+            value: request.value(),
+            registration: request.registration(),
+            min_current_sequence: request.min_current_sequence,
+        },
+    )
+    .await
+}
 
+async fn run<T, H, C, F, Sch>(
+    transport: &T,
+    api: &ApiClient<H, C>,
+    floors: &F,
+    scheduler: &Sch,
+    profile: &SyncTimingProfile,
+    request: Publishable<'_>,
+) -> Result<PublishReceipt, PublishError>
+where
+    T: RecordTransport + Clone + 'static,
+    H: Http,
+    C: CredentialStore,
+    F: FloorStore,
+    Sch: Scheduler + Clone + 'static,
+{
     // Register-first, fail-closed: the record never reaches the transport unless
     // the registration succeeds (#24 D6 / #34 D2).
-    register(api, std::slice::from_ref(&request.registration()))
+    register(api, std::slice::from_ref(&request.registration))
         .await
         .map_err(PublishError::Register)?;
 
@@ -194,8 +290,7 @@ where
     let ttl_nanos = u64::try_from(profile.record_ttl.as_nanos()).unwrap_or(u64::MAX);
     let eol = eol::eol_from(scheduler.now());
     let record_bytes =
-        IpnsRecord::create_v2(request.signer, &request.value(), sequence, ttl_nanos, &eol)
-            .marshal();
+        IpnsRecord::create_v2(request.signer, &request.value, sequence, ttl_nanos, &eol).marshal();
     if record_bytes.len() > MAX_RECORD_BYTES {
         return Err(PublishError::RecordTooLarge {
             size: record_bytes.len(),
