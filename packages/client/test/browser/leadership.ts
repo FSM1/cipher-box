@@ -41,6 +41,13 @@ export interface ObservedMessage {
   text: string;
 }
 
+/** One engine event this tab's facade received, flattened the same way. */
+export interface ObservedEvent {
+  kind: string;
+  bytesHex: string;
+  text: string;
+}
+
 /** A page.evaluate-safe download projection; `code` is the engine's stable error code. */
 export interface DownloadResult {
   bytes?: number[];
@@ -69,6 +76,7 @@ declare global {
     cbCreate(options: HarnessOptions): Promise<void>;
     cbObserve(channelName: string): void;
     cbObserved(): ObservedMessage[];
+    cbEvents(): ObservedEvent[];
     cbReadStream(offset: number, length: number): Promise<RangeResult>;
     cbRole(): string;
     cbStart(): Promise<string>;
@@ -87,6 +95,7 @@ declare global {
 
 let client: EngineClient | null = null;
 const observed: ObservedMessage[] = [];
+const events: ObservedEvent[] = [];
 
 const rootNode = new Uint8Array(16);
 
@@ -140,8 +149,12 @@ window.cbCreate = async ({ lockName, channelName, worker }: HarnessOptions): Pro
     // Failover re-derivation: a real login re-exports this from Core Kit.
     secretSource: { provideSecret: () => Promise.resolve(secret()) },
   });
+  client.subscribe((event) => events.push({ kind: event.kind, ...collect(event) }));
   await awaitElection(client, lockName);
 };
+
+/** Every engine event this tab's facade received, in arrival order. */
+window.cbEvents = (): ObservedEvent[] => events;
 
 window.cbRole = (): string => client?.currentRole() ?? 'none';
 

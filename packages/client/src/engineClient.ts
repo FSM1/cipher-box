@@ -113,6 +113,7 @@ export class EngineClient implements EngineTransport {
   private readonly channel: BroadcastChannelLike;
   private readonly clientId: string;
   private readonly courier: PortCourier;
+  private readonly locks: LockManagerLike;
   private readonly election: LeaderElection;
 
   private role: EngineClientRole = 'follower';
@@ -133,6 +134,7 @@ export class EngineClient implements EngineTransport {
     this.clientId = config.clientId ?? newClientId();
     this.channel = (config.createChannel ?? defaultChannel)();
     this.courier = config.courier ?? defaultCourier();
+    this.locks = config.locks;
 
     this.installFollower();
 
@@ -145,7 +147,7 @@ export class EngineClient implements EngineTransport {
       );
 
     this.election = new LeaderElection(
-      config.locks,
+      this.locks,
       config.lockName ?? BROADCAST_CHANNEL_NAME,
       () => this.becomeLeader(),
       config.onError
@@ -288,7 +290,7 @@ export class EngineClient implements EngineTransport {
     // Leadership moving between two *other* tabs replaces the engine without
     // replacing this transport, so the handle fence rides the same signal as the
     // transport's own port fence.
-    const follower = new BroadcastTransport(this.channel, this.clientId, this.courier, {
+    const follower = new BroadcastTransport(this.channel, this.clientId, this.courier, this.locks, {
       onLeadershipChange: () => this.retireHandles(),
     });
     this.swapCurrent(follower);
@@ -353,7 +355,7 @@ export class EngineClient implements EngineTransport {
       this.role = 'leader';
       this.swapCurrent(local);
       this.innerUnsub = local.subscribe((event) => this.fanOut(event));
-      this.relay = new LeaderRelay(this.channel, local, this.courier);
+      this.relay = new LeaderRelay(this.channel, local, this.courier, this.locks);
       if (this.ownFocus) this.relay.reportLocalFocus(this.clientId, this.ownFocus);
     } catch (error) {
       this.abortPromotion(local, error);

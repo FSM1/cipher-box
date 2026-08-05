@@ -14,15 +14,21 @@
  * rendezvous, and lets the follower reject forgeries from a non-leader
  * same-origin context.
  *
- * Every value-bearing exchange takes a different wire: the channel only
- * rendezvouses a private `MessagePort` this tab dials to the leader, and command
- * arguments, upload chunks, snapshots and plaintext windows all cross it — so a
- * same-origin context that merely opened the channel is no longer a receiver.
- * The rendezvous is as authenticated as the `cb:leader` beacon and no more: same
- * origin remains the trust boundary.
+ * Every exchange that names or measures vault content takes a different wire:
+ * the channel only rendezvouses a private `MessagePort` this tab dials to the
+ * leader, and command arguments, upload chunks, snapshots, plaintext windows and
+ * the engine event stream all cross it — so a same-origin context that merely
+ * opened the channel is no longer a receiver. The rendezvous is as authenticated
+ * as the `cb:leader` beacon and no more: same origin remains the trust boundary.
+ *
+ * The tab also holds a **presence lock** for its whole life, released by the
+ * browser when it dies; the leader watches that release to reclaim what this tab
+ * held. It is taken before the greeting, so the leader never watches a name no
+ * one holds.
  */
 
 import {
+  presenceLockName,
   type BroadcastChannelLike,
   type LeaderMessage,
   type PortRequest,
@@ -32,6 +38,7 @@ import {
   type WireWrite,
 } from './broadcast.js';
 import { CorrelatedTransport } from './correlatedTransport.js';
+import type { LockManagerLike } from './leadership.js';
 import type { MessagePortLike, PortCourier } from './portRelay.js';
 import type {
   CommandDescriptor,
@@ -81,21 +88,53 @@ export class BroadcastTransport extends CorrelatedTransport {
   private readonly portTimeoutMs: number;
   private readonly onLeadershipChange: () => void;
 
+  // Settles once this tab holds its presence lock; the greeting waits on it, so
+  // the leader's death watch can never be granted against a live tab.
+  private readonly presenceHeld: Promise<void>;
+  private readonly presenceRequest = new AbortController();
+  private releasePresence: (() => void) | null = null;
+
   private readonly onMessage = (event: MessageEvent): void => this.receive(event.data);
 
   constructor(
     private readonly channel: BroadcastChannelLike,
     private readonly clientId: string,
     private readonly courier: PortCourier,
+    locks: LockManagerLike,
     options: BroadcastTransportOptions = {}
   ) {
     super();
     this.portTimeoutMs = options.portTimeoutMs ?? DEFAULT_PORT_TIMEOUT_MS;
     this.onLeadershipChange = options.onLeadershipChange ?? ((): void => undefined);
+    this.presenceHeld = this.holdPresence(locks);
     this.armLeaderReady();
     this.channel.addEventListener('message', this.onMessage);
     // Announce ourselves so a live leader replies with a `leader` beacon.
     this.channel.postMessage({ type: 'cb:hello', clientId: this.clientId });
+  }
+
+  /**
+   * Takes the lock naming this tab and holds it until `close()` or until the
+   * browser releases it on the tab's death — the leader's death signal.
+   */
+  private holdPresence(locks: LockManagerLike): Promise<void> {
+    const held = new Promise<void>((resolve, reject) => {
+      void locks
+        .request(
+          presenceLockName(this.clientId),
+          { signal: this.presenceRequest.signal, mode: 'exclusive' },
+          () => {
+            resolve();
+            return new Promise<void>((release) => {
+              this.releasePresence = release;
+            });
+          }
+        )
+        .catch((error: unknown) => reject(asError(error)));
+    });
+    // A broker re-observes this rejection; swallow the unobserved-rejection warn.
+    held.catch(() => undefined);
+    return held;
   }
 
   /**
@@ -196,6 +235,10 @@ export class BroadcastTransport extends CorrelatedTransport {
     // in force when a read first asked for a port.
     const generation = this.portGeneration;
     if (this.closed) throw retryError();
+    // Before the greeting, never after: a leader that watched this tab's
+    // presence name while it held nothing would be granted at once and reclaim
+    // a live tab.
+    await this.awaitPresence();
     const port = await this.courier.connect(await this.awaitHost());
     const release = this.bindPort(port);
     try {
@@ -228,10 +271,9 @@ export class BroadcastTransport extends CorrelatedTransport {
         return;
       }
       if (!adopted) return;
-      if (message.type === 'cb:portPing') {
-        // Answered from the message handler, not a timer, so a throttled
-        // background tab still proves it is alive to the leader's sweep.
-        port.postMessage({ type: 'cb:portPong' } satisfies PortRequest);
+      if (message.type === 'cb:portEvent') {
+        const { event } = message as Extract<PortResponse, { type: 'cb:portEvent' }>;
+        this.emit(event);
         return;
       }
       if (message.type === 'cb:portClosed') {
@@ -250,6 +292,15 @@ export class BroadcastTransport extends CorrelatedTransport {
       port.removeEventListener('message', listener);
       port.close();
     };
+  }
+
+  /** This tab's presence lock, under the brokerage timeout like every step. */
+  private awaitPresence(): Promise<void> {
+    return this.awaitBrokerage<void>('this tab holds no presence lock', (settle) => {
+      void this.presenceHeld.then(settle, (error: unknown) =>
+        this.abortBrokerage?.(asError(error))
+      );
+    });
   }
 
   /** Asks where this leadership takes follower ports, for this leadership only. */
@@ -328,6 +379,11 @@ export class BroadcastTransport extends CorrelatedTransport {
     this.rejectLeaderReady(error);
     this.fail(error);
     this.dropPort(error);
+    // Held → released; still queued → withdrawn. Either way this tab stops
+    // claiming a presence the leader would go on watching.
+    this.releasePresence?.();
+    this.releasePresence = null;
+    this.presenceRequest.abort();
     try {
       this.channel.postMessage({ type: 'cb:bye', clientId: this.clientId });
     } catch {
@@ -359,12 +415,6 @@ export class BroadcastTransport extends CorrelatedTransport {
         const host = message as Extract<LeaderMessage, { type: 'cb:portHost' }>;
         if (!this.fromActiveLeader(host.token) || typeof host.address !== 'string') return;
         this.settleHost?.(host.address);
-        return;
-      }
-      case 'cb:event': {
-        const event = message as Extract<LeaderMessage, { type: 'cb:event' }>;
-        if (!this.fromActiveLeader(event.token)) return; // forged / stale event
-        this.emit(event.event);
         return;
       }
     }
@@ -405,4 +455,8 @@ export class BroadcastTransport extends CorrelatedTransport {
 
 function retryError(): Error {
   return new Error('leader changed; retry');
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }

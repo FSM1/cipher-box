@@ -92,21 +92,31 @@ mechanism; the invariant — one engine writer per origin — is D4's):
   exactly the failover primitive needed.
 - **Followers are thin mirrors, not engines**: a non-leader tab spawns no
   worker and holds no keys. It renders view projections served by the leader
-  and sends commands as data. Election, the port rendezvous, and the one-way
-  event stream ride a `BroadcastChannel` as plain structured-clone data — every
-  context on the origin holds that channel, so no plaintext, key material or
-  user-supplied name may touch it (an `EventDescriptor` still carries node ids,
-  IPNS names and block counts). Everything else takes a different wire: each
-  follower dials the leader a private `MessagePort` through the Service Worker
-  (the only cross-tab route for a transferable) and drives commands, uploads,
-  reads and its focus report over that, buffers transferred rather than cloned.
-  The leadership token gating the port is itself broadcast, so it bounds
-  accidental and passive delivery, never a same-origin context that read the
-  beacon — same origin remains the trust boundary. A tab with no Service Worker
-  mirrors nothing: it fails closed rather than fall back to the shared channel.
-  The leader probes each port for the tab behind it and reclaims the handles of
-  one that stops answering, so a crashed follower does not pin a content version
-  — and its key — for the rest of the leadership.
+  and sends commands as data. Election and the port rendezvous ride a
+  `BroadcastChannel` as plain structured-clone data — every context on the
+  origin holds that channel, so nothing that names or measures vault content may
+  touch it: no plaintext, no key material, no user-supplied name, and no node id,
+  IPNS name, routing key or block count. Everything else takes a different wire:
+  each follower dials the leader a private `MessagePort` through the Service
+  Worker (the only cross-tab route for a transferable) and drives commands,
+  uploads, reads and its focus report over that, buffers transferred rather than
+  cloned, with the one-way `EventDescriptor` stream fanned back down the same
+  ports. A follower therefore mirrors events only once its port is adopted; it
+  brokers eagerly at each leadership change, and a missed event costs staleness,
+  never correctness. The leadership token gating the port is itself broadcast, so
+  it bounds accidental and passive delivery, never a same-origin context that
+  read the beacon — same origin remains the trust boundary. A tab with no Service
+  Worker mirrors nothing: it fails closed rather than fall back to the shared
+  channel.
+- **Follower death is structural, not a heartbeat**: every tab holds a Web Lock
+  naming itself (`cipherbox-presence:<clientId>`) from before it greets the
+  leader until it dies, and the leader requests that same lock for each follower
+  it adopts. The browser grants that request at exactly the moment the tab
+  closes, crashes or is discarded, so the leader reclaims the follower's focus
+  entry, write handles and read streams on that turn — a frozen or bfcached tab,
+  which answers no probe, is never a false positive, and no crashed follower pins
+  a content version, and its key, for the rest of the leadership. The watch is
+  keyed on the client, so a tab that re-brokers a port keeps its handles.
 - **Failover**: the lock releases → some follower acquires it, spawns a fresh
   engine worker, and rehydrates from the durable seams (floors, op queue,
   staged bytes, snapshot cache — all origin-shared). Ops journal durably

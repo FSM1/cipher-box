@@ -272,68 +272,83 @@ export class FakeCourierNetwork {
   }
 }
 
-interface Held {
-  release: () => void;
-  done: Promise<unknown>;
+/** One lock name's state: at most one holder, FIFO queue behind it. */
+interface FakeLock {
+  held: boolean;
+  readonly queue: Array<() => void>;
 }
 
-/** An origin-exclusive lock: at most one holder at a time, FIFO queue behind it. */
+/**
+ * `navigator.locks` for the unit suite: one exclusive lock **per name**, FIFO
+ * behind the holder, granted on a later turn like the real API — a tab's
+ * presence lock and the engine election lock are separate names, and a queued
+ * request is granted only when the holder lets go.
+ */
 export class FakeLockManager implements LockManagerLike {
-  private held: Held | null = null;
-  private readonly queue: Array<() => void> = [];
+  private readonly locks = new Map<string, FakeLock>();
 
   request(
     name: string,
     options: { signal?: AbortSignal; mode?: 'exclusive' },
     callback: LockRequestCallback
   ): Promise<unknown> {
+    const lock = this.lock(name);
     return new Promise<unknown>((resolveRequest, rejectRequest) => {
       const signal = options.signal;
       const grant = (): void => {
         if (signal?.aborted) {
-          rejectRequest(new DOMException('aborted', 'AbortError'));
-          this.next();
+          rejectRequest(abortError());
+          this.next(name);
           return;
         }
-        const done = Promise.resolve(callback({ name }));
-        this.held = { release: () => undefined, done };
-        void done.then(
+        lock.held = true;
+        void Promise.resolve(callback({ name })).then(
           (value) => {
-            this.held = null;
+            lock.held = false;
             resolveRequest(value);
-            this.next();
+            this.next(name);
           },
-          (error) => {
-            this.held = null;
+          (error: unknown) => {
+            lock.held = false;
             rejectRequest(error);
-            this.next();
+            this.next(name);
           }
         );
       };
 
-      const enqueue = (): void => {
-        this.queue.push(grant);
-        if (!this.held) this.next();
-      };
-
-      if (signal) {
-        signal.addEventListener('abort', () => {
-          const index = this.queue.indexOf(grant);
-          if (index >= 0) {
-            this.queue.splice(index, 1);
-            rejectRequest(new DOMException('aborted', 'AbortError'));
-          }
-        });
-      }
-      enqueue();
+      signal?.addEventListener('abort', () => {
+        const index = lock.queue.indexOf(grant);
+        if (index >= 0) {
+          lock.queue.splice(index, 1);
+          rejectRequest(abortError());
+        }
+      });
+      lock.queue.push(grant);
+      this.next(name);
     });
   }
 
-  private next(): void {
-    if (this.held || this.queue.length === 0) return;
-    const grant = this.queue.shift();
-    grant?.();
+  private lock(name: string): FakeLock {
+    const existing = this.locks.get(name);
+    if (existing) return existing;
+    const created: FakeLock = { held: false, queue: [] };
+    this.locks.set(name, created);
+    return created;
   }
+
+  private next(name: string): void {
+    const lock = this.lock(name);
+    if (lock.held || lock.queue.length === 0) return;
+    // A real grant never lands synchronously inside `request`.
+    queueMicrotask(() => {
+      if (lock.held) return;
+      lock.queue.shift()?.();
+    });
+  }
+}
+
+function abortError(): DOMException {
+  return new DOMException('aborted', 'AbortError');
 }
 
 /** A minimal in-process EngineTransport for relay/orchestrator tests. */
