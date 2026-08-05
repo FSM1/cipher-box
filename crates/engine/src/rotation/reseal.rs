@@ -144,9 +144,9 @@ pub enum ResealError {
     /// A grant-ledger entry's recipient encryption key is unusable (malformed or
     /// low-order X25519). A grant can never be wrapped to an unopenable key.
     UnusableRecipientKey,
-    /// The freshly sealed ascent link does not reopen under the parent node seed
-    /// as this epoch's override seed — bytes every ancestor reader rejects
-    /// whole-record at the gate's stage 3 (fail-closed symmetry).
+    /// The freshly sealed ascent link does not reopen as this epoch's override
+    /// seed — bytes the gate's stage 3 rejects whole-record
+    /// ([`verify_ascent_link`]).
     AscentLinkMismatch,
     /// Entropy acquisition failed; no seal proceeds without fresh randomness.
     Entropy(EntropyError),
@@ -488,12 +488,14 @@ pub fn reseal_scope_root<E: Entropy>(
     })
 }
 
-/// The produce-side half of the gate's ascent-link cross-check
-/// (`gate/adoption.rs` stage 3), release-active per AGENTS.md rule 8: reopen the
-/// link exactly as an ancestor reader does and confirm it yields this epoch's
-/// override seed. `seal_ascent_link` and `open_ascent_link` derive the ascent
-/// keypair independently, so nothing else stops a re-seal signing a link every
-/// ancestor reader rejects whole-record — an unopenable interior scope root.
+/// The produce-side half of the gate's stage-3 ascent-link cross-check
+/// (`gate/adoption.rs`), release-active per AGENTS.md rule 8: reopen the link as
+/// an ancestor reader does and confirm it carries the seed and epoch this
+/// re-seal publishes at. The expected pair comes from [`ResealSeeds`], never
+/// from the payload under test, so a link minted off the wrong local — the prior
+/// epoch's seed, a stale epoch — fails here rather than at every ancestor
+/// reader. Nothing downstream can catch it: the publisher holds no ancestor
+/// seed, so the link stays unopenable until it reaches one.
 ///
 /// The gate compares the read key the recovered seed derives; comparing the seed
 /// is the same predicate one derivation earlier.
@@ -801,15 +803,45 @@ mod tests {
         encode_grant_section(&section).expect("section encodes");
     }
 
-    /// The produce-side mirror of the gate's stage-3 ascent-link cross-check,
-    /// release-active (rule 8): the guard returns `Err`, so a `--release` build
-    /// refuses exactly the links a debug build does. Every row is a link an
-    /// ancestor reader rejects whole-record.
+    /// Release-active (rule 8): the guard returns `Err`, so a `--release` build
+    /// refuses exactly the links a debug build does. Every reject row is a link
+    /// an ancestor reader rejects whole-record.
     #[test]
     fn an_ascent_link_the_gate_would_reject_is_never_signed() {
-        let parent_node_seed = [0x44; 32];
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let parent_node_seed = fx.parent_node_seed;
         let override_seed = [0x99; 32];
         let ctx = ctx_for(V, SCOPE, 5, STRUCT_TAG_ASCENT_LINK);
+
+        // The link a real re-seal mints passes its own guard.
+        let id = identity(&fx, &owner_pub, b"scope-root-name", Some(&parent_node_seed));
+        let s = seeds(
+            &override_seed,
+            ctx.epoch,
+            None,
+            &fx.write_scope_seed,
+            &fx.pointer_read_key,
+        );
+        let cs = committed_set(&commitment, &sig, &ledger);
+        let minted = reseal_scope_root(&mut SeededEntropy::new(13), &id, &s, &cs, &[])
+            .expect("reseal")
+            .ascent_link
+            .expect("interior root has ascent");
+        verify_ascent_link(
+            &parent_node_seed,
+            &ctx,
+            &override_seed,
+            &AscentLink {
+                ascent_public: minted.ascent_public,
+                enc: minted.enc,
+                ciphertext: minted.ciphertext,
+                unknown: PreservedFields::new(),
+            },
+        )
+        .expect("a minted link is the one an ancestor reader opens");
+
         let sealed = |seed: &[u8; 32], carried: [u8; 32], epoch: u64| {
             seal_ascent_link(
                 seed,
@@ -819,15 +851,6 @@ mod tests {
             )
             .expect("seals")
         };
-
-        verify_ascent_link(
-            &parent_node_seed,
-            &ctx,
-            &override_seed,
-            &sealed(&parent_node_seed, override_seed, ctx.epoch),
-        )
-        .expect("the link a re-seal mints is the one an ancestor reader opens");
-
         for link in [
             // Sealed to a keypair no ancestor of this node derives.
             sealed(&[0x45; 32], override_seed, ctx.epoch),
