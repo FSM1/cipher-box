@@ -23,7 +23,9 @@ export function FileBrowser() {
           {'// LOADING VAULT...'}
         </p>
       )}
-      {folder !== null && <UploadPanel folder={folder} />}
+      {/* Mounted whatever the route says, so a running upload survives a folder
+          change; only its drop target waits for a folder that can take one. */}
+      <UploadPanel folder={settled ? folder : null} />
       {/* An empty non-root folder still lists, so `[..]` remains reachable. */}
       {settled && (rows.length > 0 || !isRoot) && (
         <FileList

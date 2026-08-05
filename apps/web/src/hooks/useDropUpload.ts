@@ -180,6 +180,8 @@ export function useDropUpload(): DropUpload {
 
       let handle: bigint | null = null;
       const release = async (): Promise<void> => {
+        // A refused abort has nothing to add: the row is already about to report
+        // the cancel or the error that brought it here.
         if (handle !== null) await facade.abortWrite(handle).catch(() => undefined);
         handle = null;
       };
@@ -236,7 +238,7 @@ export function useDropUpload(): DropUpload {
         });
       }
     },
-    [apply, dropOp, engine, patch, retire]
+    [apply, dropOp, engine, patch]
   );
 
   const enqueue = useCallback(
@@ -285,10 +287,12 @@ export function useDropUpload(): DropUpload {
       cancelled.current.delete(id);
       unbind(rowByOp.current, id);
       job.opId = null;
-      patch(id, { phase: 'staging', progress: 0, opId: null, error: null, code: null });
+      // Through `apply`, so the retirement timer the settled phase scheduled is
+      // stopped before it sweeps the row out from under the run about to start.
+      apply(id, { phase: 'staging', progress: 0, opId: null, error: null, code: null });
       enqueue(id);
     },
-    [enqueue, patch]
+    [apply, enqueue]
   );
 
   return { uploads, upload, cancel, retry, dismiss: forget };

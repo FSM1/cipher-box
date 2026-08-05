@@ -371,6 +371,44 @@ describe('cancelling', () => {
     expect(result.current.uploads).toHaveLength(0);
   });
 
+  it('keeps a retried row that the cancel retirement timer would have swept', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const engine = uploadEngine();
+    const { result } = mount(engine.client);
+
+    await act(async () => {
+      result.current.upload([file('a.bin', 10)], PARENT);
+    });
+    await waitFor(() => expect(result.current.uploads[0].opId).toBe(1n));
+
+    act(() => result.current.cancel(result.current.uploads[0].id));
+    act(() =>
+      engine.emit({
+        kind: 'opProgress',
+        opId: 1n,
+        node: new Uint8Array(16),
+        phase: 'uploadCancelled',
+        blocksConfirmed: null,
+        blocksTotal: null,
+        error: null,
+      })
+    );
+    expect(result.current.uploads[0].phase).toBe('cancelled');
+
+    // The retry button is on screen for the whole retirement window.
+    await act(async () => {
+      result.current.retry(result.current.uploads[0].id);
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+
+    expect(result.current.uploads).toHaveLength(1);
+    expect(result.current.uploads[0].phase).toBe('queued');
+    expect(result.current.uploads[0].opId).toBe(2n);
+    expect(engine.facade.commitWrite).toHaveBeenCalledTimes(2);
+  });
+
   it('shows a refused cancel without moving the row off the upload', async () => {
     const engine = uploadEngine();
     engine.facade.cancelUpload.mockRejectedValueOnce(
