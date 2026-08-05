@@ -35,7 +35,7 @@ use super::record_publish::{HeadBinding, RecordPublishRequest, preflight, publis
 use crate::api::ApiClient;
 use crate::content::Gateway;
 use crate::entropy::Entropy;
-use crate::gate::{GateError, floor};
+use crate::gate::{GateError, GateRejection, RejectionReason, floor};
 use crate::net::fanout_get_verify;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
@@ -104,13 +104,11 @@ pub struct OwnerRotationNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
 
 /// The one scope root this pass gated and has not yet republished.
 ///
-/// Adoption advances the durable **sequence** floor, so a second read of the
-/// same record rejects as not-newer (`gate/adoption.rs` stage 4). A cascade
-/// resolves a descendant and then immediately publishes its re-key, which would
-/// be two reads of one record — so the resolve parks what the publish needs and
-/// the publish takes it. One slot, because that hand-off is the only contract:
-/// a second park evicts the first rather than retaining every descendant's
-/// record for the length of the walk.
+/// A cascade resolves a descendant and then immediately publishes its re-key,
+/// which would otherwise fetch and gate the same record twice — so the resolve
+/// parks what the publish needs and the publish takes it. One slot, because
+/// that hand-off is the only contract: a second park evicts the first rather
+/// than retaining every descendant's record for the length of the walk.
 #[derive(Default)]
 pub struct GatedRoots {
     inner: RefCell<Option<(IpnsName, RepublishBase)>>,
@@ -340,16 +338,56 @@ fn nonce<E: Entropy>(entropy: &RefCell<E>) -> Result<[u8; 24], ScopeRootPublishE
     Ok(nonce)
 }
 
+/// The rejection arm of a rotation's gated read, resolved at the durable
+/// sequence floor.
+///
+/// Adopting a scope root raises that name's sequence floor, so re-reading the
+/// **unchanged** record rejects as not-newer. The rotation reads in order to
+/// re-key, and a pass that aborts before publishing must be able to read again —
+/// otherwise one transient failure leaves the scope permanently unrotatable and
+/// the revoke can never complete. Only the exact floor recovers, through the
+/// adopter's equal-floor path; a strictly lower sequence stays a replay and
+/// every other rejection stays a fail-closed trust violation (rule 6).
+async fn reread_at_floor<H: Http, F: FloorStore>(
+    adopter: &RootAdopter<'_, H, F>,
+    name: &IpnsName,
+    record_bytes: &[u8],
+    rejection: &GateRejection,
+) -> Result<GatedScopeRoot, ResolveFailure> {
+    if !matches!(
+        rejection.reason,
+        RejectionReason::SequenceNotNewer { floor, sequence } if sequence == floor
+    ) {
+        return Err(ResolveFailure::Rejected);
+    }
+    let recovered = adopter
+        .recover_own_scope_root(name, record_bytes)
+        .await
+        .map_err(|_| ResolveFailure::Unavailable)?
+        // The recovery is fail-open by contract; for the rotation an unproved
+        // record is the gate's original verdict, never an availability stall.
+        .ok_or(ResolveFailure::Rejected)?;
+    Ok(GatedScopeRoot {
+        envelope: recovered.candidate.envelope,
+        section: recovered.candidate.grant_section,
+        read_body: recovered.read_body,
+        read_scope_seed: recovered.read_scope_seed,
+        write_scope_seed: recovered.write_scope_seed,
+    })
+}
+
 impl<T, H: Http, C: CredentialStore, F, Sch, E> OwnerRotationNet<'_, T, H, C, F, Sch, E>
 where
     T: RecordTransport,
     F: FloorStore,
 {
-    /// The root this pass already gated ([`GatedRoots`]), else the freshest
-    /// verified record at `name` run through the adoption gate under
-    /// `scope_id` — the caller's own trusted label, imposed
-    /// on the gate so a record claiming another scope is a transplant it
-    /// rejects ([`ChildIndexResolver::direct_child_index`]'s binding obligation).
+    /// The freshest verified record at `name` run through the adoption gate
+    /// under `scope_id` — the caller's own trusted label, imposed on the gate so
+    /// a record claiming another scope is a transplant it rejects
+    /// ([`ChildIndexResolver::direct_child_index`]'s binding obligation).
+    ///
+    /// Idempotent: a record already at this name's sequence floor re-reads
+    /// through [`reread_at_floor`] rather than rejecting.
     async fn gated_root(
         &self,
         scope_id: [u8; 16],
@@ -369,22 +407,19 @@ where
         if let Some(seed) = self.ancestry.parent_node_seed(&scope_id) {
             adopter = adopter.under_parent_node_seed(seed);
         }
-        let (candidate, outcome) =
-            adopter
-                .adopt_root(name, &record_bytes)
-                .await
-                .map_err(|error| match error {
-                    GateError::Rejected(_) => ResolveFailure::Rejected,
-                    GateError::Seam(_) => ResolveFailure::Unavailable,
-                })?;
-        let read_scope_seed = outcome.read_scope_seed.ok_or(ResolveFailure::Unavailable)?;
-        Ok(GatedScopeRoot {
-            envelope: candidate.envelope,
-            section: candidate.grant_section,
-            read_body: outcome.adopted.read_body,
-            read_scope_seed,
-            write_scope_seed: outcome.write_scope_seed,
-        })
+        match adopter.adopt_root(name, &record_bytes).await {
+            Ok((candidate, outcome)) => Ok(GatedScopeRoot {
+                envelope: candidate.envelope,
+                section: candidate.grant_section,
+                read_body: outcome.adopted.read_body,
+                read_scope_seed: outcome.read_scope_seed.ok_or(ResolveFailure::Unavailable)?,
+                write_scope_seed: outcome.write_scope_seed,
+            }),
+            Err(GateError::Seam(_)) => Err(ResolveFailure::Unavailable),
+            Err(GateError::Rejected(rejection)) => {
+                reread_at_floor(&adopter, name, &record_bytes, &rejection).await
+            }
+        }
     }
 
     /// Unseal a gated scope root's write-body under the owner's recovered write
@@ -667,8 +702,9 @@ mod tests {
     use super::*;
     use crate::content::GatewaySource;
     use crate::rotation::{
-        CommittedSet, PrevEpochSeed, ResealSeeds, RotateScopePlan, ScopeRootIdentity,
-        cascade_rotate_scope, enumerate_eager_set, reseal_scope_root, rotate_scope,
+        CascadeError, CascadeOutcome, CommittedSet, PrevEpochSeed, ResealSeeds, RotateScopePlan,
+        ScopeRootIdentity, cascade_rotate_scope, enumerate_eager_set, reseal_scope_root,
+        rotate_scope,
     };
     use crate::seams::{EndpointId, HttpResponse, SeamError, SeamResult};
     use crate::testkit::fakes::{
@@ -778,7 +814,7 @@ mod tests {
     /// answer from `blocks`, `/content/upload` files the bytes under the CID the
     /// caller declared, and the registry acks.
     fn serve_plane(http: &ScriptedHttp, blocks: &Blocks) {
-        for _ in 0..64 {
+        for _ in 0..256 {
             let blocks = Arc::clone(blocks);
             http.enqueue_derived(move |request| {
                 if request.url.contains("/content/upload") {
@@ -948,6 +984,56 @@ mod tests {
                 inner: store,
                 winner: Arc::new(Mutex::new(Some((key, winner)))),
             })
+        }
+    }
+
+    impl Harness<FlakyPut> {
+        fn flaky(key: &str, refusing: &Arc<Mutex<bool>>) -> Self {
+            let key = key.to_owned();
+            let refusing = Arc::clone(refusing);
+            Self::build(move |store| FlakyPut {
+                inner: store,
+                key,
+                refusing,
+            })
+        }
+    }
+
+    /// A transport whose PUTs at one name fail while `refusing` is set — the
+    /// transient publish failure a cascade retry has to survive.
+    #[derive(Clone)]
+    struct FlakyPut {
+        inner: InMemoryRecordStore,
+        key: String,
+        refusing: Arc<Mutex<bool>>,
+    }
+
+    impl RecordTransport for FlakyPut {
+        fn endpoints(&self) -> Vec<EndpointId> {
+            self.inner.endpoints()
+        }
+
+        async fn get_record(
+            &self,
+            endpoint: &EndpointId,
+            routing_key: &str,
+            max_bytes: usize,
+        ) -> SeamResult<Option<Vec<u8>>> {
+            self.inner
+                .get_record(endpoint, routing_key, max_bytes)
+                .await
+        }
+
+        async fn put_record(
+            &self,
+            endpoint: &EndpointId,
+            routing_key: &str,
+            record: &[u8],
+        ) -> SeamResult<()> {
+            if routing_key == self.key && *self.refusing.lock().expect("lock") {
+                return Err(SeamError::new("endpoint down"));
+            }
+            self.inner.put_record(endpoint, routing_key, record).await
         }
     }
 
@@ -1635,21 +1721,53 @@ mod tests {
         );
     }
 
-    /// What [`GatedRoots`] exists for: discard the parked read and the record
-    /// the pass already adopted is unreadable.
+    /// The rotation's gated read is idempotent. Adopting the record raised this
+    /// name's sequence floor, so without the equal-floor re-read a second pass
+    /// over the unchanged record would reject it — and the scope could never be
+    /// re-keyed again.
     #[test]
-    fn a_scope_root_this_pass_already_adopted_cannot_be_read_again() {
+    fn a_scope_root_this_pass_already_adopted_re_reads_at_the_sequence_floor() {
         let (_, child, child_ref) = owner_tree();
         let harness = Harness::plain();
         harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
         let net = harness.net(core::slice::from_ref(&child_ref));
 
-        block_on(net.resolve(&child_ref)).expect("the first read");
+        let first = block_on(net.resolve(&child_ref)).expect("the first read");
         net.gated
             .take(&child.name)
             .expect("the resolve parked its gated read for the publish");
+
+        let again = block_on(net.resolve(&child_ref)).expect("the unchanged record re-reads");
+        assert_eq!(again.current_read_epoch, first.current_read_epoch);
+        assert!(
+            ct_eq(&again.override_seed, &first.override_seed),
+            "the re-read recovers the same read seed the adopt did",
+        );
+        assert!(ct_eq(&again.write_scope_seed, &first.write_scope_seed));
+    }
+
+    /// A record strictly **below** the durable sequence floor is a replay, not
+    /// our own current record: the equal-floor re-read must not launder it into
+    /// a rotatable target.
+    #[test]
+    fn a_scope_root_below_the_sequence_floor_stays_a_fail_closed_rejection() {
+        let (_, child, child_ref) = owner_tree();
+        let harness = Harness::plain();
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        block_on(floor::advance_sequence_on_unseal(
+            &harness.floors,
+            child.name.as_str().as_bytes(),
+            9,
+        ))
+        .expect("raise the sequence floor above the staged record");
+
         assert_eq!(
-            block_on(net.resolve(&child_ref)).err(),
+            block_on(
+                harness
+                    .net(core::slice::from_ref(&child_ref))
+                    .resolve(&child_ref)
+            )
+            .err(),
             Some(ResolveFailure::Rejected),
         );
     }
@@ -1741,27 +1859,27 @@ mod tests {
         );
     }
 
-    /// The whole owner-revocation cascade over the production resolver and
-    /// publisher: both levels re-keyed with **fresh** seeds, and the descendant's
-    /// ascent link re-sealed under the root's newly minted derivation — the
-    /// top-down thread that actually locks a revoked reader out.
-    #[test]
-    fn the_cascade_composes_over_the_production_resolver_and_publisher() {
-        let (root, child, child_ref) = owner_tree();
-        let harness = Harness::plain();
-        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
-        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
-
-        // The plan re-seals the root the harness staged, so its committed set and
-        // signer come off that fixture rather than being rebuilt beside it.
+    /// One owner-revocation cascade pass over the production resolver and
+    /// publisher, rooted at `SCOPE`. The plan re-seals the root the harness
+    /// staged, so its committed set and signer come off that fixture rather than
+    /// being rebuilt beside it.
+    fn cascade_pass<T>(
+        harness: &Harness<T>,
+        root: &OwnerRootFixture,
+        override_seed: &[u8; 32],
+        read_epoch: u64,
+        index: &[ChildScopeRef],
+        entropy_seed: u64,
+    ) -> Result<CascadeOutcome, CascadeError>
+    where
+        T: RecordTransport + Clone + 'static,
+    {
         let pseudonym = OwnerSeeds.writer_pseudonym(&SCOPE);
         let owner_enc_pub = owner_enc().public();
         let pointer_read_key = OwnerSeeds.pointer_read_key(&SCOPE);
-        let index = vec![child_ref.clone()];
-        let mut entropy = SeededEntropy::new(41);
-        let net = harness.net(&index);
-
-        let outcome = block_on(cascade_rotate_scope(
+        let mut entropy = SeededEntropy::new(entropy_seed);
+        let net = harness.net(index);
+        block_on(cascade_rotate_scope(
             &mut entropy,
             &harness.floors,
             &harness.world.scheduler,
@@ -1781,10 +1899,10 @@ mod tests {
                     commitment_sig: &root.grant_section.commitment_sig,
                     grant_ledger: &[],
                     write_history_link: &[],
-                    direct_child_scope_index: &index,
+                    direct_child_scope_index: index,
                 },
-                current_override_seed: &OWNER_ROOT_SCOPE_SEED,
-                current_read_epoch: OWNER_ROOT_EPOCH,
+                current_override_seed: override_seed,
+                current_read_epoch: read_epoch,
                 write_scope_seed: &OWNER_ROOT_WRITE_SCOPE_SEED,
                 write_epoch: OWNER_ROOT_EPOCH,
                 pointer_read_key: &pointer_read_key,
@@ -1792,6 +1910,28 @@ mod tests {
             },
             || Box::pin(async {}),
         ))
+    }
+
+    /// The whole owner-revocation cascade over the production resolver and
+    /// publisher: both levels re-keyed with **fresh** seeds, and the descendant's
+    /// ascent link re-sealed under the root's newly minted derivation — the
+    /// top-down thread that actually locks a revoked reader out.
+    #[test]
+    fn the_cascade_composes_over_the_production_resolver_and_publisher() {
+        let (root, child, child_ref) = owner_tree();
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        let index = vec![child_ref];
+
+        let outcome = cascade_pass(
+            &harness,
+            &root,
+            &OWNER_ROOT_SCOPE_SEED,
+            OWNER_ROOT_EPOCH,
+            &index,
+            41,
+        )
         .expect("the cascade completes");
 
         assert_eq!(
@@ -1848,6 +1988,84 @@ mod tests {
             open_ascent_link(&stale_parent_seed, &ctx, &link).is_err(),
             "the pre-cascade derivation no longer opens it — the revocation",
         );
+    }
+
+    /// The cascade's own retry contract, end to end: a descendant whose publish
+    /// never lands leaves it resolved-but-unpublished, and the retry has to read
+    /// it again. Without the equal-floor re-read the second pass rejected the
+    /// unchanged record — a retryable abort that could never succeed, leaving
+    /// the revoked reader in that subtree for good.
+    #[test]
+    fn a_cascade_that_aborts_after_resolving_a_descendant_completes_on_retry() {
+        let (root, child, child_ref) = owner_tree();
+        let refusing = Arc::new(Mutex::new(true));
+        let harness = Harness::flaky(child.name.as_str(), &refusing);
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        let index = vec![child_ref];
+
+        let aborted = cascade_pass(
+            &harness,
+            &root,
+            &OWNER_ROOT_SCOPE_SEED,
+            OWNER_ROOT_EPOCH,
+            &index,
+            41,
+        )
+        .expect_err("the descendant's record never lands");
+        assert_eq!(aborted.scope_id(), CHILD_SCOPE);
+        assert!(
+            aborted.is_retryable(),
+            "a PUT no endpoint took is availability, not a trust verdict",
+        );
+
+        // The retry rebuilds the plan from current state, as the module contract
+        // requires: the root already advanced to its own fresh seed and epoch.
+        *refusing.lock().expect("lock") = false;
+        let root_fresh = published_override_seed(&harness, &root.name, SCOPE, OWNER_ROOT_EPOCH + 1);
+        let outcome = cascade_pass(
+            &harness,
+            &root,
+            &root_fresh,
+            OWNER_ROOT_EPOCH + 1,
+            &index,
+            43,
+        )
+        .expect("the retry completes");
+
+        assert_eq!(outcome.descendant_count(), 1);
+        let child_fresh =
+            published_override_seed(&harness, &child.name, CHILD_SCOPE, OWNER_ROOT_EPOCH + 1);
+        assert!(
+            !ct_eq(&child_fresh, &OWNER_ROOT_SCOPE_SEED),
+            "the descendant was re-keyed on the retry, not left on its cached seed",
+        );
+    }
+
+    /// Enumerating the eager set adopts every descendant record and publishes
+    /// none of them, so the cascade that follows re-reads each at its own
+    /// sequence floor.
+    #[test]
+    fn a_cascade_after_an_eager_set_enumeration_still_completes() {
+        let (root, child, child_ref) = owner_tree();
+        let harness = Harness::plain();
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        harness.stage(CHILD_SCOPE, &child, Some(OWNER_ROOT_EPOCH));
+        let index = vec![child_ref];
+
+        block_on(enumerate_eager_set(SCOPE, &index, &harness.net(&index)))
+            .expect("every reachable descendant resolved");
+
+        let outcome = cascade_pass(
+            &harness,
+            &root,
+            &OWNER_ROOT_SCOPE_SEED,
+            OWNER_ROOT_EPOCH,
+            &index,
+            41,
+        )
+        .expect("the cascade still completes over already-adopted descendants");
+        assert_eq!(outcome.descendant_count(), 1);
     }
 
     /// The verified record now standing at `name` and the head envelope it

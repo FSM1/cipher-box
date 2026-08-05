@@ -23,9 +23,9 @@ use cipherbox_core::error::{CodecError, Malformed, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, Envelope, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, SignedOwnerBlob,
-    SignedOwnerWriteBlob, decode_envelope, decode_grant_section, grant_section_bytes,
-    open_owner_blob, open_owner_write_blob, open_read_body,
+    AadContext, Envelope, ReadBody, STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB,
+    SignedOwnerBlob, SignedOwnerWriteBlob, decode_envelope, decode_grant_section,
+    grant_section_bytes, open_owner_blob, open_owner_write_blob, open_read_body,
 };
 use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::x25519::X25519Secret;
@@ -177,13 +177,49 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         name: &IpnsName,
         record_bytes: &[u8],
     ) -> Result<Option<OwnScopeMaterial>, SeamError> {
+        Ok(self
+            .recover_own_scope_root(name, record_bytes)
+            .await?
+            .map(|root| OwnScopeMaterial {
+                node_id: root.candidate.envelope.id,
+                read_scope_seed: root.read_scope_seed,
+                write_scope_seed: root.write_scope_seed,
+            }))
+    }
+}
+
+/// The owner's own scope root as recovered at exactly the durable sequence
+/// floor: the authenticated candidate plus what a gate pass surfaces from it.
+/// Terminal owner of the recovered seeds — they zeroize when it drops.
+pub(crate) struct RecoveredScopeRoot {
+    /// The candidate the rejected adopt authenticated through stages 1-3.
+    pub(crate) candidate: Candidate,
+    /// The read-body the recovery re-unsealed under the recovered seed.
+    pub(crate) read_body: ReadBody,
+    /// The scope read seed this record's own owner blob wraps.
+    pub(crate) read_scope_seed: Zeroizing<[u8; 32]>,
+    /// The scope write seed, `None` when the root is held keyless.
+    pub(crate) write_scope_seed: Option<Zeroizing<[u8; 32]>>,
+}
+
+impl<H: Http, F: FloorStore> RootAdopter<'_, H, F> {
+    /// Recover the owner's own scope root from a record the gate rejected at
+    /// **exactly** the durable sequence floor. The caller establishes that
+    /// equality from the rejection ([`RejectionReason::SequenceNotNewer`] with
+    /// `sequence == floor`, [`floor::Strictness::AtFloor`]); a strictly lower
+    /// sequence is a replay and never reaches here.
+    ///
+    /// Fail-OPEN, never a trust verdict: anything unproved yields `Ok(None)`
+    /// (a `Current` never hardens — [`Adopter::recover_own_scope_material`]).
+    pub(crate) async fn recover_own_scope_root(
+        &self,
+        name: &IpnsName,
+        record_bytes: &[u8],
+    ) -> Result<Option<RecoveredScopeRoot>, SeamError> {
         // Steady state — see [`Self::holding`].
         if self.held_current.as_deref() == Some(record_bytes) {
             return Ok(None);
         }
-        // Recovery is fail-open, never a trust verdict: anything unproved yields
-        // `Ok(None)`, held keyless (a `Current` never hardens).
-        //
         // Only the candidate the rejected [`Adopter::adopt`] cached for these
         // exact bytes is eligible. That candidate reached the floor stages, so
         // the gate's stages 1-3 authenticated the grant section it carries;
@@ -218,9 +254,9 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
         // this scope's seed.
         let node_seed = kdf::node_seed(&read_scope_seed, &env.id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
-        if open_read_body(env, &read_key).is_err() {
+        let Ok(read_body) = open_read_body(env, &read_key) else {
             return Ok(None);
-        }
+        };
         let write_scope_seed = match &candidate.grant_section.owner_write_blob {
             None => None,
             // Map a recovery seam to availability, never a trust verdict.
@@ -230,8 +266,9 @@ impl<H: Http, F: FloorStore> Adopter for RootAdopter<'_, H, F> {
                 Err(GateError::Rejected(_)) => return Ok(None),
             },
         };
-        Ok(Some(OwnScopeMaterial {
-            node_id: env.id,
+        Ok(Some(RecoveredScopeRoot {
+            candidate,
+            read_body,
             read_scope_seed,
             write_scope_seed,
         }))
@@ -879,6 +916,44 @@ mod tests {
         // The recovered seed reproduces the record's IPNS routing name.
         let signer = SessionIdentity::write_name_signer(&seed, &fx.root_id);
         assert_eq!(IpnsName::from_public_key(&signer.verifying_key()), fx.name);
+    }
+
+    /// The equal-floor recovery re-unseals the very body the gate's stage 6
+    /// produces, so a caller that republishes our own current record (the
+    /// rotation's gated read) carries it forward byte-for-byte.
+    #[test]
+    fn recovery_returns_the_read_body_the_gate_would_have_unsealed() {
+        let fx = Fixture::build(Some(OWB_WRITE_EPOCH));
+        let gw = gateway();
+
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        let adopted = block_on(
+            fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw)
+                .adopt(&fx.name, &fx.record(1)),
+        )
+        .expect("a record above the floor adopts")
+        .adopted
+        .read_body;
+
+        let http = ScriptedHttp::default();
+        http.enqueue_response(ok_response(fx.head_block.clone()));
+        let floors = InMemoryFloorStore::default();
+        seed_write_floor(&floors, &fx.scope_id, OWB_WRITE_EPOCH);
+        let adopter = fx.adopter(&http, &floors, &fx.owner_identity_verifier, &gw);
+        block_on(floors.raise_sequence_floor(fx.name.as_str().as_bytes(), 1)).unwrap();
+        let record = fx.record(1);
+        assert!(
+            block_on(adopter.adopt(&fx.name, &record)).is_err(),
+            "an equal-floor record must reject at the sequence stage"
+        );
+
+        let recovered = block_on(adopter.recover_own_scope_root(&fx.name, &record))
+            .expect("recovery is fail-open, never an error")
+            .expect("our own current root recovers");
+        assert_eq!(recovered.read_body, adopted);
     }
 
     #[test]
