@@ -1138,10 +1138,7 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("hwgates-mnt"));
 
-    println!(
-        "FUSE-T hardware gates — mount at {}",
-        mnt.display()
-    );
+    println!("FUSE-T hardware gates — mount at {}", mnt.display());
     match cmd {
         "gate1" => gate1(&mnt, if iters == 0 { 30 } else { iters }, ttl),
         "gate1b" => gate1b(&mnt, ttl),

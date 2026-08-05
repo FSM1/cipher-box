@@ -1,7 +1,7 @@
 import { useLocation } from 'react-router-dom';
 import { NavItem } from './NavItem';
 
-/** Vault navigation. Only `/files` is served in this build; the rest is coming soon. */
+/** Vault navigation. */
 export function AppSidebar() {
   const { pathname } = useLocation();
 

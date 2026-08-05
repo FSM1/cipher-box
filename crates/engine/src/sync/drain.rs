@@ -997,7 +997,6 @@ where
                 self.publish_update_content(scope, pass, applied, content)
                     .await
             }
-            // Cross-scope re-seal is not landed.
             OpKind::Relink { .. } => Err(Halt::Unclassified),
         }
     }

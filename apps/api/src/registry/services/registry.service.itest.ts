@@ -85,7 +85,7 @@ function makeGate(): Gate {
 }
 
 interface GateHooks {
-  /** No-op the advisory lock + lock_timeout, and drop the users-row lock — the unlocked path. */
+  /** No-op the advisory lock + lock_timeout, and drop the users-row lock. */
   stripLock?: boolean;
   /** No-op the post-commit SESSION advisory lock — the unguarded-unpin path. */
   stripSessionLock?: boolean;
@@ -369,7 +369,7 @@ describe('RegistryService concurrency (real Postgres)', () => {
 
       const gate = makeGate();
       const pinStore = new RecordingPinStore();
-      // Both paths skip the advisory lock (the unlocked code path).
+      // Both paths skip the advisory lock.
       const registerB = buildService(
         gatedDataSource(db.dataSource, { stripLock: true, afterPinInsert: gate.onReach }),
         pinStore

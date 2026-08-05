@@ -2,7 +2,7 @@ import type { ListingRow } from '../../vault/listing';
 
 interface FileListItemProps {
   row: ListingRow;
-  /** Opens a folder. Files have no read action yet. */
+  /** Opens a folder. */
   onOpen: (node: Uint8Array) => void;
 }
 

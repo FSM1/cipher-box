@@ -14,7 +14,7 @@
 //! Deterministic-simulation slice: entropy is the injected [`Entropy`] seam and
 //! the read/floor/publish/mailbox effects are faked in tests. The publisher this
 //! composes over has a production implementation in [`crate::net::rotation`]; the
-//! sweep resolver does not, and is faked everywhere.
+//! sweep resolver does not.
 //!
 //! # Not implemented here
 //!
@@ -181,8 +181,7 @@ pub enum CreateGrantError {
     Publish(ScopeRootPublishError),
     /// Resolving a reparented descendant for its re-key failed. Post-publish: the
     /// grantee root and any earlier-re-keyed descendants are committed; this one
-    /// keeps its old parent derivation (grantee cannot yet descend into it) and
-    /// stays unreconciled.
+    /// keeps its old parent derivation (grantee cannot yet descend into it).
     DescendantResolve {
         /// The descendant that could not be resolved.
         scope_id: [u8; 16],
@@ -200,7 +199,7 @@ pub enum CreateGrantError {
     },
     /// Publishing a re-keyed descendant failed. Post-publish: the grantee root and
     /// any earlier-re-keyed descendants are committed; this one keeps its old
-    /// parent derivation and stays unreconciled.
+    /// parent derivation.
     DescendantPublish {
         /// The descendant whose re-keyed record did not land.
         scope_id: [u8; 16],
@@ -208,12 +207,10 @@ pub enum CreateGrantError {
         error: ScopeRootPublishError,
     },
     /// Re-sealing the reparented parent scope root failed. Post-publish: the
-    /// grantee root is already on the network with no parent reference — an
-    /// unreconciled orphan.
+    /// grantee root is already on the network with no parent reference.
     ParentMint(ResealError),
     /// Publishing the reparented parent scope root failed. Post-publish: the
-    /// grantee root is already on the network with no parent reference — an
-    /// unreconciled orphan.
+    /// grantee root is already on the network with no parent reference.
     ParentPublish(ScopeRootPublishError),
     /// Posting the sealed share pointer to the recipient mailbox failed.
     /// Post-publish: both scope roots are published and the parent index is

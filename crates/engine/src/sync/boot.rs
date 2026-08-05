@@ -13,8 +13,7 @@
 //! read here — the entire chain is a function of the injected seams plus the
 //! session inputs, so two engines on independent virtual clocks agree.
 //!
-//! The record-plane fetchers are the two seam traits the resolver slices
-//! implement against the content plane:
+//! The record plane is fetched through two seam traits:
 //! [`PointerFetch`](crate::sync::PointerFetch) fronts the vault-pointer block
 //! resolve, and [`Adopter`](crate::net::Adopter) fronts the root-record
 //! candidate assembly and the adoption gate. This slice owns the sequencing and

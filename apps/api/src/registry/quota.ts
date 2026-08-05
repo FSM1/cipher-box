@@ -44,9 +44,8 @@ async function sumSizeBytes(
 }
 
 /**
- * The rows the hosted quota counts. Written ONCE and shared by the gate sum and
- * the reported sum, so the two cannot disagree about which rows count: the
- * predicate must not be re-typed per query.
+ * The rows the hosted quota counts — shared by the gate sum and the reported sum
+ * so the two cannot disagree about which rows count.
  */
 const HOSTED_ROWS = 'pin.advisory = false';
 

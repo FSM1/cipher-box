@@ -1,4 +1,4 @@
-# Standalone workspace on purpose: the hardware gates (issue #644) are
+# Standalone workspace on purpose: the hardware gates are
 # task-shaped, run-by-hand tools — not CI, not part of the frozen product
 # workspace, so the root Cargo.lock never moves for them.
 [workspace]

@@ -1,6 +1,7 @@
 //! The rebase engine — FIFO replay of the op queue onto gate-passing state,
 //! the five per-op race rules, dead-lettering, and dual-link observed repair
-//! (blueprint/engine.md "Sync core: Per-op rebase rules"; CONTEXT.md).
+//! (blueprint/engine.md "Sync core: Per-op rebase rules"; CONTEXT.md "Sync and
+//! refresh").
 //!
 //! Replay is FIFO in performed order and rebases **only onto gate-passing
 //! state** (#33 D5–D7): the caller resolves a fresh last-known-good snapshot

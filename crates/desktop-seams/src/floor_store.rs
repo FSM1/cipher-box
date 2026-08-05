@@ -292,8 +292,6 @@ mod tests {
         assert!(intent_key_len(u32::MAX as u64 + 1).is_err());
     }
 
-    /// With the raises unserialized, the low one can read the pre-raise floor
-    /// and land last.
     #[test]
     fn concurrent_raises_never_regress_a_floor() {
         let dir = tempfile::tempdir().unwrap();

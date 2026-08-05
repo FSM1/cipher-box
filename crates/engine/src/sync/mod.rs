@@ -1,7 +1,7 @@
 //! The sync core — the state law, the durable op queue, FIFO rebase, budgeted
 //! offline staging, the focus-window tick, the staleness ladder, and the
 //! pointer planes (blueprint/engine.md "Sync core", "Pointer planes";
-//! CONTEXT.md).
+//! CONTEXT.md "Sync and refresh").
 //!
 //! One model, single owner: rendered state = last-known-good gate-passing
 //! snapshot ⊕ pending-op overlay, and the op queue is the only local
@@ -11,7 +11,7 @@
 //! the five per-op race rules — and a terminally unrebasable op dead-letters
 //! with its staged bytes preserved rather than being silently dropped.
 //!
-//! Out of this slice, by design (CONTEXT.md): scope-exit rotation
+//! Out of this slice, by design: scope-exit rotation
 //! *triggering* — a cross-scope relink out of a granted scope **queues** the
 //! trigger event ([`rebase::ReplayReport::scope_exit_triggers`]); the rotation
 //! primitives themselves land with the rotation slice.
