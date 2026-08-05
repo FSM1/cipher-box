@@ -14,6 +14,10 @@
 # Finalized specifications - do not modify
 00-Preliminary-R&D/
 
+# Macroscope check-run agent definitions - the frontmatter is parsed by
+# Macroscope, not by us; prettier rewrites its double-quoted YAML scalars
+.macroscope/
+
 # KAT manifest and vector fixtures - written only by the committed generator
 # (cargo run -p cipherbox-core --example kat_gen); the CI freshness gate
 # diffs them byte-for-byte against generator output
