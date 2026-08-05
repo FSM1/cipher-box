@@ -13,6 +13,7 @@ import {
   FakeCourierNetwork,
   FakeEngineTransport,
   collect,
+  hex,
 } from './testkit.js';
 import type { EngineTransport } from './transport.js';
 import type { EventDescriptor, SnapshotDescriptor } from './worker/protocol.js';
@@ -58,12 +59,6 @@ function livePresence(bus: FakeBus, clientId: string): () => void {
     if (!release) throw new Error(`presence for ${clientId} was never granted`);
     release();
   };
-}
-
-function hex(bytes: Uint8Array): string {
-  let out = '';
-  for (const byte of bytes) out += byte.toString(16).padStart(2, '0');
-  return out;
 }
 
 /** Settles a tab's presence request in failure, as a stolen lock does. */

@@ -371,6 +371,13 @@ export function abortError(): DOMException {
   return new DOMException('aborted', 'AbortError');
 }
 
+/** Renders bytes as one lowercase hex run, the form a leak scan searches. */
+export function hex(bytes: Iterable<number>): string {
+  let out = '';
+  for (const byte of bytes) out += byte.toString(16).padStart(2, '0');
+  return out;
+}
+
 /**
  * Every byte and every string anywhere in a message, flattened so a leak scan
  * can search them: `bytesHex` catches payloads and node ids, `text` catches
@@ -399,9 +406,7 @@ export function collect(value: unknown): { bytesHex: string; text: string } {
     else if (node && typeof node === 'object') for (const entry of Object.values(node)) walk(entry);
   };
   walk(value);
-  let bytesHex = '';
-  for (const byte of found) bytesHex += byte.toString(16).padStart(2, '0');
-  return { bytesHex, text: strings.join(' ') };
+  return { bytesHex: hex(found), text: strings.join(' ') };
 }
 
 /** A minimal in-process EngineTransport for relay/orchestrator tests. */
