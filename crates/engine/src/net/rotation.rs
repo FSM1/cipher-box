@@ -20,16 +20,16 @@ use cipherbox_core::kdf;
 use cipherbox_core::seal::{
     AadContext, ChildScopeRef, Envelope, GrantSection, PreservedFields, ReadBody,
     STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_WRITE_BODY, WriteBody, decode_write_body, open_owner_blob,
-    unseal, verify_grant_set,
+    unseal,
 };
-use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
+use cipherbox_core::suite::ecdsa::EcdsaVerifier;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::secret::SECRET_LEN;
 use cipherbox_core::suite::x25519::X25519Secret;
 use zeroize::Zeroizing;
 
 use super::adopter::RootAdopter;
-use super::author::{ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section};
+use super::author::{AuthorError, ENVELOPE_V, EnvelopeAuthoring, author_scope_root_with_section};
 use super::publish::PublishOutcome;
 use super::record_publish::{HeadBinding, RecordPublishRequest, preflight, publish_record};
 use crate::api::ApiClient;
@@ -314,6 +314,22 @@ fn publish_verdict(failure: ResolveFailure) -> ScopeRootPublishError {
     }
 }
 
+/// Carry an authoring refusal into the publish arm on the same rule-6 axis as
+/// [`publish_verdict`]. A trust refusal is this build's own gate verdict on the
+/// bytes it was about to sign, reached before the PUT: re-authoring the same
+/// section reaches it again, so retrying it would launder a trust violation into
+/// an availability stall. A codec or size refusal is a property of the body this
+/// pass built, and stays retryable: it is reached from a record the next pass
+/// re-resolves, and a permanent verdict on it would let anyone who can grow that
+/// record block the owner's revocation for good.
+fn author_verdict(refusal: AuthorError) -> ScopeRootPublishError {
+    if refusal.is_trust_refusal() {
+        ScopeRootPublishError::Rejected
+    } else {
+        ScopeRootPublishError::NotPublished
+    }
+}
+
 /// A fresh per-seal nonce from the injected entropy seam.
 fn nonce<E: Entropy>(entropy: &RefCell<E>) -> Result<[u8; 24], ScopeRootPublishError> {
     let mut nonce = [0u8; 24];
@@ -435,11 +451,10 @@ where
         })
     }
 
-    /// The three encode-side mirrors of gate rejects this build would itself
-    /// make on the record about to be signed — all release-active, because a
-    /// signed record cannot be unpublished (security rule 8):
+    /// The two durable-floor mirrors of gate rejects this build would itself make
+    /// on the record about to be signed — release-active, because a signed record
+    /// cannot be unpublished (security rule 8):
     ///
-    /// - the commitment must verify under the owner identity (gate stage 2);
     /// - the read epoch must not sit below the durable revocation floor (stage 5);
     /// - the write epoch must not sit below the durable write floor, which the
     ///   owner-write-blob's AAD binds — below it the root publishes write-plane
@@ -452,12 +467,6 @@ where
         &self,
         record: &ResealedScopeRoot,
     ) -> Result<(), ScopeRootPublishError> {
-        let section = &record.section;
-        let signature = EcdsaSignature::from_compact(&section.commitment_sig)
-            .ok_or(ScopeRootPublishError::Rejected)?;
-        verify_grant_set(self.keys.identity, &section.commitment, &signature)
-            .map_err(|_| ScopeRootPublishError::Rejected)?;
-
         let floors = self.floors;
         let scope_id = &record.scope_id;
         let read_floor = floor::read_epoch_floor(floors, scope_id)
@@ -577,10 +586,6 @@ where
             ),
         };
         self.check_publishable(record).await?;
-        let write_scope_seed = current
-            .write_scope_seed
-            .as_deref()
-            .ok_or(ScopeRootPublishError::NotPublished)?;
 
         let node_seed = kdf::node_seed(&override_seed, &record.scope_id);
         let read_key = Zeroizing::new(*kdf::read_key(node_seed.as_bytes()).as_bytes());
@@ -600,7 +605,12 @@ where
             &record.section,
             self.keys.identity,
         )
-        .map_err(|_| ScopeRootPublishError::NotPublished)?;
+        .map_err(author_verdict)?;
+
+        let write_scope_seed = current
+            .write_scope_seed
+            .as_deref()
+            .ok_or(ScopeRootPublishError::NotPublished)?;
 
         let binding = HeadBinding {
             node_id: record.scope_id,
@@ -1269,23 +1279,30 @@ mod tests {
         .expect("the interior root's cut lands under its supplied ancestor seed");
     }
 
-    /// Gate stage 2's encode-side mirror: a commitment that will not verify
-    /// under the owner identity is refused before the record is signed.
+    /// The encode-side mirrors of gate stages 2 and 3, and the verdict they
+    /// carry: a section this build's own gate would reject is refused before the
+    /// record is signed, and fatally — re-authoring the same section reaches the
+    /// same refusal, so retrying it would launder a trust violation into an
+    /// availability stall (rule 6).
     #[test]
-    fn a_commitment_that_will_not_verify_is_never_signed() {
-        let (harness, root, mut cut) = staged_cut();
-        cut.section.commitment_sig[0] ^= 0xff;
+    fn a_section_the_gate_would_reject_is_a_verdict_not_a_stall() {
+        for corrupt in [
+            |cut: &mut ResealedScopeRoot| cut.section.commitment_sig[0] ^= 0xff,
+            |cut: &mut ResealedScopeRoot| cut.section.owner_blob.signature[0] ^= 0xff,
+        ] {
+            let (harness, root, mut cut) = staged_cut();
+            corrupt(&mut cut);
 
-        assert_eq!(
-            block_on(harness.net(&[]).publish_scope_root(&cut)),
-            Err(ScopeRootPublishError::Rejected),
-        );
-        let endpoint = &harness.store.endpoints()[0];
-        assert_eq!(
-            harness.store.record_at(endpoint, root.name.as_str()),
-            Some(record_for(&SCOPE, &root.head_cid_str, 1)),
-            "the pre-rotation record still stands — nothing was published",
-        );
+            let outcome = block_on(harness.net(&[]).publish_scope_root(&cut));
+            assert_eq!(outcome, Err(ScopeRootPublishError::Rejected));
+            assert!(!outcome.unwrap_err().is_retryable());
+            let endpoint = &harness.store.endpoints()[0];
+            assert_eq!(
+                harness.store.record_at(endpoint, root.name.as_str()),
+                Some(record_for(&SCOPE, &root.head_cid_str, 1)),
+                "the pre-rotation record still stands — nothing was published",
+            );
+        }
     }
 
     /// Gate stage 5's encode-side mirror: a plan built from a stale snapshot

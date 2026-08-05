@@ -31,18 +31,18 @@ use zeroize::{Zeroize, Zeroizing};
 
 use cipherbox_core::kdf;
 use cipherbox_core::seal::{
-    AadContext, GrantBlobPayload, GrantLedgerEntry, GrantSection, GrantSetCommitment,
+    AadContext, AscentLink, GrantBlobPayload, GrantLedgerEntry, GrantSection, GrantSetCommitment,
     HistoryLinkPayload, MAX_HISTORY_LINKS, OverrideSeedPayload, OwnerWriteBlobPayload, Permission,
     PreservedFields, STRUCT_TAG_ASCENT_LINK, STRUCT_TAG_GRANT_BLOB, STRUCT_TAG_HISTORY_LINK,
     STRUCT_TAG_OWNER_BLOB, STRUCT_TAG_OWNER_WRITE_BLOB, STRUCT_TAG_WRITE_BODY, SignedAscentLink,
     SignedGrantBlob, SignedOwnerBlob, SignedOwnerWriteBlob, SignedSealed, StructureSigInput,
-    WriteBody, encode_write_body, open_history_link, seal, seal_ascent_link, seal_grant_blob,
-    seal_history_link, seal_owner_blob, seal_owner_write_blob, sign_structure,
+    WriteBody, encode_write_body, open_ascent_link, open_history_link, seal, seal_ascent_link,
+    seal_grant_blob, seal_history_link, seal_owner_blob, seal_owner_write_blob, sign_structure,
 };
 use cipherbox_core::suite::aead;
 use cipherbox_core::suite::ecdsa::SIGNATURE_LEN as ECDSA_SIG_LEN;
 use cipherbox_core::suite::ed25519::Ed25519Signer;
-use cipherbox_core::suite::secret::SECRET_LEN;
+use cipherbox_core::suite::secret::{SECRET_LEN, ct_eq};
 use cipherbox_core::suite::x25519::X25519Public;
 
 use crate::entropy::{Entropy, EntropyError};
@@ -144,6 +144,10 @@ pub enum ResealError {
     /// A grant-ledger entry's recipient encryption key is unusable (malformed or
     /// low-order X25519). A grant can never be wrapped to an unopenable key.
     UnusableRecipientKey,
+    /// The freshly sealed ascent link does not reopen as this epoch's override
+    /// seed — bytes the gate's stage 3 rejects whole-record
+    /// ([`verify_ascent_link`]).
+    AscentLinkMismatch,
     /// Entropy acquisition failed; no seal proceeds without fresh randomness.
     Entropy(EntropyError),
     /// More carried history links than the codec's frozen bound admits — a set
@@ -166,6 +170,9 @@ impl core::fmt::Display for ResealError {
             ResealError::UnusableRecipientKey => {
                 f.write_str("grant-ledger recipient encryption key is unusable")
             }
+            ResealError::AscentLinkMismatch => {
+                f.write_str("sealed ascent link does not reopen as this scope root's override seed")
+            }
             ResealError::Entropy(e) => write!(f, "entropy error: {e}"),
             ResealError::TooManyHistoryLinks => {
                 f.write_str("carried history links exceed the codec's frozen bound")
@@ -184,6 +191,7 @@ impl ResealError {
             ResealError::LedgerDivergesFromCommitment => "ledger-diverges-from-commitment",
             ResealError::SignerNotCommitted => "signer-not-committed",
             ResealError::UnusableRecipientKey => "unusable-recipient-key",
+            ResealError::AscentLinkMismatch => "ascent-link-mismatch",
             ResealError::Entropy(_) => "entropy-error",
             ResealError::TooManyHistoryLinks => "too-many-history-links",
             ResealError::Encode(_) => "structure-encode-failed",
@@ -391,6 +399,7 @@ pub fn reseal_scope_root<E: Entropy>(
             let link = seal_ascent_link(parent_node_seed, &ephemeral, &ctx, &payload);
             ephemeral.zeroize();
             let link = link.map_err(ResealError::Encode)?;
+            verify_ascent_link(parent_node_seed, &ctx, seeds.override_seed, &link)?;
             let signature = sign_over(STRUCT_TAG_ASCENT_LINK, None, &link.ciphertext);
             Some(SignedAscentLink {
                 ascent_public: link.ascent_public,
@@ -477,6 +486,34 @@ pub fn reseal_scope_root<E: Entropy>(
         write_body,
         unknown: PreservedFields::new(),
     })
+}
+
+/// Reopen the freshly sealed ascent link as an ancestor reader does and refuse
+/// unless it carries the seed and epoch this re-seal publishes at — the
+/// release-active produce-side half of the gate's stage-3 predicate
+/// (`gate/adoption.rs`, AGENTS.md rule 8). The expected pair comes from
+/// [`ResealSeeds`], never from the payload under test, so the ascent arm cannot
+/// drift from the seed and epoch the rest of the section is minted at.
+///
+/// The mirror stops one axis short of the gate's: seal and open derive the
+/// ascent keypair from the single `parent_node_seed` this re-seal was handed, so
+/// a caller that threads the wrong ancestor seed passes here and is caught only
+/// by a reader, which derives its own from cached state.
+///
+/// The gate compares the read key the recovered seed derives; comparing the seed
+/// is the same predicate one derivation earlier.
+fn verify_ascent_link(
+    parent_node_seed: &[u8; SECRET_LEN],
+    ctx: &AadContext,
+    override_seed: &[u8; SECRET_LEN],
+    link: &AscentLink,
+) -> Result<(), ResealError> {
+    let payload = open_ascent_link(parent_node_seed, ctx, link)
+        .map_err(|_| ResealError::AscentLinkMismatch)?;
+    if payload.epoch != ctx.epoch || !ct_eq(payload.override_seed(), override_seed) {
+        return Err(ResealError::AscentLinkMismatch);
+    }
+    Ok(())
 }
 
 /// The AAD context for a scope-root structure: `id == scope == scope_id` (a
@@ -767,6 +804,148 @@ mod tests {
 
         // The whole section encodes (the release-active dup-tag guard passes).
         encode_grant_section(&section).expect("section encodes");
+    }
+
+    /// Release-active (rule 8): the guard returns `Err`, so a `--release` build
+    /// refuses exactly the links a debug build does. Every reject row is a link
+    /// an ancestor reader rejects whole-record.
+    #[test]
+    fn an_ascent_link_the_gate_would_reject_is_never_signed() {
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let parent_node_seed = fx.parent_node_seed;
+        let override_seed = [0x99; 32];
+        let ctx = ctx_for(V, SCOPE, 5, STRUCT_TAG_ASCENT_LINK);
+
+        // The link a real re-seal mints passes its own guard.
+        let id = identity(&fx, &owner_pub, b"scope-root-name", Some(&parent_node_seed));
+        let s = seeds(
+            &override_seed,
+            ctx.epoch,
+            None,
+            &fx.write_scope_seed,
+            &fx.pointer_read_key,
+        );
+        let cs = committed_set(&commitment, &sig, &ledger);
+        let minted = reseal_scope_root(&mut SeededEntropy::new(13), &id, &s, &cs, &[])
+            .expect("reseal")
+            .ascent_link
+            .expect("interior root has ascent");
+        verify_ascent_link(
+            &parent_node_seed,
+            &ctx,
+            &override_seed,
+            &AscentLink {
+                ascent_public: minted.ascent_public,
+                enc: minted.enc,
+                ciphertext: minted.ciphertext,
+                unknown: PreservedFields::new(),
+            },
+        )
+        .expect("a minted link is the one an ancestor reader opens");
+
+        let sealed = |seed: &[u8; 32], carried: [u8; 32], epoch: u64, c: &AadContext| {
+            seal_ascent_link(
+                seed,
+                &[0x07; 32],
+                c,
+                &OverrideSeedPayload::new(carried, epoch),
+            )
+            .expect("seals")
+        };
+        // A valid foreign public half with this link's own `enc`/ciphertext: the
+        // reader re-derives the public half, never trusts the carried one.
+        let mut foreign_public = sealed(&parent_node_seed, override_seed, ctx.epoch, &ctx);
+        foreign_public.ascent_public = X25519Secret::from_scalar([0x31; 32]).public().to_bytes();
+        for link in [
+            // Sealed to a keypair no ancestor of this node derives.
+            sealed(&[0x45; 32], override_seed, ctx.epoch, &ctx),
+            // Carries a seed that does not derive this node's read key.
+            sealed(&parent_node_seed, [0x9a; 32], ctx.epoch, &ctx),
+            // Carries an epoch the record does not publish at.
+            sealed(&parent_node_seed, override_seed, ctx.epoch + 1, &ctx),
+            // AAD transplants: the context is load-bearing, not decoration.
+            sealed(
+                &parent_node_seed,
+                override_seed,
+                ctx.epoch,
+                &ctx_for(V, [0xee; 16], ctx.epoch, STRUCT_TAG_ASCENT_LINK),
+            ),
+            sealed(
+                &parent_node_seed,
+                override_seed,
+                ctx.epoch,
+                &ctx_for(V, SCOPE, ctx.epoch, STRUCT_TAG_OWNER_BLOB),
+            ),
+            sealed(
+                &parent_node_seed,
+                override_seed,
+                ctx.epoch,
+                &ctx_for(V + 1, SCOPE, ctx.epoch, STRUCT_TAG_ASCENT_LINK),
+            ),
+            foreign_public,
+        ] {
+            assert_eq!(
+                verify_ascent_link(&parent_node_seed, &ctx, &override_seed, &link),
+                Err(ResealError::AscentLinkMismatch),
+            );
+        }
+        assert_eq!(
+            ResealError::AscentLinkMismatch.check(),
+            "ascent-link-mismatch"
+        );
+    }
+
+    /// The publish arm keys the record's read body off the seed it recovers from
+    /// the **owner blob** (`net/rotation.rs`), while an ancestor reader derives
+    /// its expected read key from the **ascent link**. A section whose two
+    /// structures disagreed would publish a root its own ancestors reject, so the
+    /// agreement is asserted on `reseal_scope_root`'s output, not assumed.
+    #[test]
+    fn the_ascent_link_and_the_owner_blob_carry_one_seed() {
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, ledger) = fx.committed();
+        let override_seed = [0x99; 32];
+        let id = identity(
+            &fx,
+            &owner_pub,
+            b"scope-root-name",
+            Some(&fx.parent_node_seed),
+        );
+        let s = seeds(
+            &override_seed,
+            5,
+            None,
+            &fx.write_scope_seed,
+            &fx.pointer_read_key,
+        );
+        let cs = committed_set(&commitment, &sig, &ledger);
+        let section =
+            reseal_scope_root(&mut SeededEntropy::new(17), &id, &s, &cs, &[]).expect("reseal");
+
+        let owner = open_owner_blob(
+            &fx.owner_enc,
+            &section.owner_blob.enc,
+            &ctx_for(V, SCOPE, 5, STRUCT_TAG_OWNER_BLOB),
+            &section.owner_blob.ciphertext,
+        )
+        .expect("owner opens its blob");
+        let ascent = section.ascent_link.expect("interior root has ascent");
+        let recovered = open_ascent_link(
+            &fx.parent_node_seed,
+            &ctx_for(V, SCOPE, 5, STRUCT_TAG_ASCENT_LINK),
+            &AscentLink {
+                ascent_public: ascent.ascent_public,
+                enc: ascent.enc,
+                ciphertext: ascent.ciphertext,
+                unknown: PreservedFields::new(),
+            },
+        )
+        .expect("an ancestor opens the link");
+        assert!(ct_eq(recovered.override_seed(), owner.override_seed()));
+        assert_eq!(recovered.epoch, owner.epoch);
     }
 
     #[test]
