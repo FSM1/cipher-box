@@ -172,6 +172,32 @@
 }
 
 /* ==========================================================================
+   Text editor
+   ========================================================================== */
+
+.text-editor-field {
+  width: 100%;
+  min-height: 50vh;
+  padding: var(--spacing-xs);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-primary);
+  resize: vertical;
+  background-color: var(--color-background);
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.text-editor-field:focus {
+  outline: none;
+  border-color: var(--color-text-secondary);
+}
+
+.text-editor-field:disabled {
+  color: var(--color-text-secondary);
+}
+
+/* ==========================================================================
    Details
    ========================================================================== */
 
@@ -200,6 +226,54 @@
   line-height: 1.5;
   overflow-wrap: anywhere;
   color: var(--color-text-primary);
+}
+
+.details-value--dim {
+  color: var(--color-text-secondary);
+}
+
+.details-section {
+  padding: var(--spacing-sm) 0 var(--spacing-xs);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.1em;
+  color: var(--color-text-secondary);
+}
+
+.details-badge {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  letter-spacing: 0.1em;
+  color: var(--color-text-secondary);
+}
+
+.details-copyable {
+  display: flex;
+  gap: var(--spacing-xs);
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.details-copyable-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.details-copy {
+  flex: none;
+  padding: 0 var(--spacing-xs);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  background: none;
+  border: var(--border-thickness) solid var(--color-border-dim);
+}
+
+.details-copy:hover,
+.details-copy[aria-pressed='true'] {
+  color: var(--color-text-primary);
+  border-color: var(--color-text-secondary);
 }
 
 /* ==========================================================================

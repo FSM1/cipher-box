@@ -1,16 +1,19 @@
 /**
- * One file's plaintext, held only while its preview is on screen: the facade's
- * verified read, typed from the name allow-list, and revoked on close.
+ * One file's plaintext, held only while its preview is on screen. An image is
+ * pulled range by range through the Service Worker byte pipe, so nothing of it
+ * is held in the tab; the shapes that must be decoded whole read through the
+ * facade under a byte budget, and every URL is dropped on close.
  */
 
 import { useEffect, useState } from 'react';
 import { fromHex } from '@cipherbox/client';
 import { errorMessage } from '../lib/errorMessage';
-import { useEngine } from '../providers/EngineProvider';
+import { useEngine, useMediaService } from '../providers/EngineProvider';
 import { previewKind, previewMime, type PreviewKind } from '../vault/previewKind';
+import { streamTicket } from './useFileDownload';
 
-/** Past this a preview is a memory hazard, not a convenience. */
-const MAX_PREVIEW_BYTES = 32n * 1024n * 1024n;
+/** What a preview may pull into the tab: a memory ceiling, and a decode budget. */
+export const MAX_BUFFERED_BYTES = 32n * 1024n * 1024n;
 
 const TOO_LARGE = 'too large to preview - download it instead';
 
@@ -23,11 +26,12 @@ export type FilePreview =
 
 /**
  * @param key the file's node id as lowercase hex, so the read keys on a value
- * @param size the engine's byte count, which caps the read before it decrypts
- * a file too large to show; `null` while the projection is still resolving
+ * @param size the engine's byte count, which caps the buffered read before it
+ * decrypts a file too large to show; `null` while the projection is resolving
  */
 export function useFilePreview(key: string, name: string, size: bigint | null): FilePreview {
   const client = useEngine();
+  const media = useMediaService();
   const [preview, setPreview] = useState<FilePreview>({ status: 'loading' });
 
   useEffect(() => {
@@ -41,12 +45,26 @@ export function useFilePreview(key: string, name: string, size: bigint | null): 
       return;
     }
     // Reading first and measuring after would decrypt the whole file into the
-    // tab before the cap could refuse it, so an unprojected size refuses now.
+    // tab before the budget could refuse it, so an unprojected size refuses now.
     if (size === null) {
       setPreview({ status: 'error', message: 'size not known yet - preview it again in a moment' });
       return;
     }
-    if (size > MAX_PREVIEW_BYTES) {
+
+    const node = fromHex(key);
+    // Only an image survives the pipe's media-type allow-list, so the other
+    // shapes buffer (packages/client/src/media/range.ts `safeMimeType`).
+    if (kind === 'image') {
+      const ticket = streamTicket(media, node, size, previewMime(name));
+      if (ticket !== null) {
+        setPreview({ status: 'image', url: ticket });
+        return () => {
+          media?.revokeStreamUrl(ticket);
+        };
+      }
+    }
+
+    if (size > MAX_BUFFERED_BYTES) {
       setPreview({ status: 'error', message: TOO_LARGE });
       return;
     }
@@ -55,11 +73,11 @@ export function useFilePreview(key: string, name: string, size: bigint | null): 
     let live = true;
     setPreview({ status: 'loading' });
 
-    client.facade.download(fromHex(key)).then(
+    client.facade.download(node).then(
       (bytes) => {
         if (!live) return;
         // The projection can lag the file, so the bytes get the last word.
-        if (BigInt(bytes.byteLength) > MAX_PREVIEW_BYTES) {
+        if (BigInt(bytes.byteLength) > MAX_BUFFERED_BYTES) {
           setPreview({ status: 'error', message: TOO_LARGE });
           return;
         }
@@ -76,7 +94,7 @@ export function useFilePreview(key: string, name: string, size: bigint | null): 
       live = false;
       if (url !== null) URL.revokeObjectURL(url);
     };
-  }, [key, name, size, client]);
+  }, [key, name, size, client, media]);
 
   return preview;
 }
