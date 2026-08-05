@@ -11,9 +11,8 @@ Normative source: [`blueprint/testing.md`](../../blueprint/testing.md).
 
 - the front door renders every built login method
 - a tab with no session lists no vault contents
-- a cold start reaches a settled, empty vault at its root, and the chrome
-  renders it
-- the chrome renders the staleness the engine taps report
+- a cold start reaches a settled, empty vault at its root; the chrome renders
+  it, and the event taps saw the snapshot that produced it
 - signing out returns the tab to the front door
 - the shipping bundle exposes no introspection hook
 

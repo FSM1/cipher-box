@@ -6,8 +6,8 @@
 
 import { useSyncExternalStore } from 'react';
 
-/** How the session was established. `test` is the e2e build's injected login. */
-export type LoginMethod = 'google' | 'email' | 'wallet' | 'test';
+/** How the session was established. */
+export type LoginMethod = 'google' | 'email' | 'wallet';
 
 export interface AuthState {
   readonly isAuthenticated: boolean;
@@ -47,7 +47,8 @@ export const authStore = {
     return () => listeners.delete(onStoreChange);
   },
   getState: (): AuthState => state,
-  signedIn(method: LoginMethod, email: string | null = null): void {
+  /** `method` is `null` for a session established by a means the chrome does not name. */
+  signedIn(method: LoginMethod | null, email: string | null = null): void {
     // Drop an email a wallet login had no business carrying rather than hold
     // PII the state contract declares absent.
     set({ isAuthenticated: true, email: method === 'wallet' ? null : email, method });

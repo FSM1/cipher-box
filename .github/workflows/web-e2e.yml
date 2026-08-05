@@ -20,7 +20,9 @@ jobs:
   web-e2e:
     name: Web E2E Smoke
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The suite itself runs in seconds; the budget is the cold-cache wasm build
+    # and the wasm-bindgen-cli install ahead of it.
+    timeout-minutes: 45
     permissions:
       contents: read
 
@@ -76,7 +78,11 @@ jobs:
             ~/.cargo/bin
             target/wasm32-unknown-unknown
           key: web-e2e-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: web-e2e-cargo-
+          # `Web Bundle` caches the same paths off the same lockfile, so fall
+          # back to its entry rather than paying a cold wasm build twice.
+          restore-keys: |
+            web-e2e-cargo-
+            web-bundle-cargo-
 
       - name: Add wasm target
         run: rustup target add wasm32-unknown-unknown

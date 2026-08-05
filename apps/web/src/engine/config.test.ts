@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { engineHostConfig, environment, loginEnv, missingDeployEnv } from './config';
+import { engineHostConfig, environment, loginEnv, missingDeployEnv, shipsE2eHook } from './config';
 
 const artifact = {
   wasmModuleUrl: '/assets/cipherbox_wasm-deadbeef.js',
@@ -125,6 +125,28 @@ describe('missingDeployEnv', () => {
   it('exempts builds that name no deployment', () => {
     expect(missingDeployEnv({})).toEqual([]);
     expect(missingDeployEnv({ VITE_ENVIRONMENT: 'ci' })).toEqual([]);
+  });
+});
+
+describe('shipsE2eHook', () => {
+  it('refuses a deployed build carrying the e2e introspection flag', () => {
+    for (const deployment of ['staging', 'production']) {
+      for (const value of ['true', 'false', 'anything']) {
+        expect(shipsE2eHook({ VITE_ENVIRONMENT: deployment, VITE_E2E_HOOK: value })).toBe(true);
+      }
+    }
+  });
+
+  it('passes a deployed build that leaves the flag unset or blank', () => {
+    expect(shipsE2eHook({ VITE_ENVIRONMENT: 'staging' })).toBe(false);
+    for (const blank of ['', '   ', '\n']) {
+      expect(shipsE2eHook({ VITE_ENVIRONMENT: 'staging', VITE_E2E_HOOK: blank })).toBe(false);
+    }
+  });
+
+  it('exempts the builds the suite itself runs against', () => {
+    expect(shipsE2eHook({ VITE_ENVIRONMENT: 'ci', VITE_E2E_HOOK: 'true' })).toBe(false);
+    expect(shipsE2eHook({ VITE_E2E_HOOK: 'true' })).toBe(false);
   });
 });
 

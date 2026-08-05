@@ -44,7 +44,6 @@ jobs:
     uses: ./.github/workflows/web-e2e.yml
     with:
       ref: ${{ needs.resolve-main.outputs.sha }}
-    secrets: inherit
 
   desktop-e2e:
     needs: resolve-main

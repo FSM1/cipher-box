@@ -38,7 +38,7 @@ describe('installIntrospection', () => {
       const engine = fakeEngine();
       installIntrospection(engine.client);
 
-      const pending = window.__CIPHERBOX_ENGINE__?.snapshot(null);
+      const pending = window.__CIPHERBOX_ENGINE__?.snapshot();
       await flush();
       const child = { ...view(ROOT_ID, 'fresh', 1).children[0]!, size: 42n };
       engine.pulls[0]?.resolve({ ...view(), children: [child] });
@@ -50,23 +50,11 @@ describe('installIntrospection', () => {
       expect(answer?.settled).toBe(true);
     });
 
-    it('addresses a folder by its hex node id', async () => {
-      const engine = fakeEngine();
-      installIntrospection(engine.client);
-
-      void window.__CIPHERBOX_ENGINE__?.snapshot('0102030405060708090a0b0c0d0e0f10');
-      await flush();
-
-      expect(engine.pulls[0]?.folder).toEqual(
-        new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
-      );
-    });
-
     it('is unsettled while the queue holds an op for a child', async () => {
       const engine = fakeEngine();
       installIntrospection(engine.client);
 
-      const pending = window.__CIPHERBOX_ENGINE__?.snapshot(null);
+      const pending = window.__CIPHERBOX_ENGINE__?.snapshot();
       await flush();
       const listing = view(ROOT_ID, 'fresh', 1);
       listing.children[0]!.pending = 'content';
@@ -79,7 +67,7 @@ describe('installIntrospection', () => {
       const engine = fakeEngine();
       installIntrospection(engine.client);
 
-      const pending = window.__CIPHERBOX_ENGINE__?.snapshot(null);
+      const pending = window.__CIPHERBOX_ENGINE__?.snapshot();
       await flush();
       engine.pulls[0]?.resolve(view(ROOT_ID, 'reconciling'));
 
@@ -101,12 +89,12 @@ describe('installIntrospection', () => {
       ]);
     });
 
-    it('drops the replaced client subscription when a rebuild reinstalls', () => {
+    it('republishes over the replaced client when a rebuild reinstalls', () => {
       const first = fakeEngine();
       installIntrospection(first.client);
+      first.emit({ kind: 'snapshotUpdated' });
       installIntrospection(fakeEngine().client);
 
-      expect(first.subscriberCount()).toBe(0);
       expect(window.__CIPHERBOX_ENGINE__?.events()).toEqual([]);
     });
 
@@ -119,7 +107,8 @@ describe('installIntrospection', () => {
       await window.__CIPHERBOX_ENGINE__?.signIn('11'.repeat(32));
 
       expect(start).toHaveBeenCalledOnce();
-      expect(authStore.getState()).toMatchObject({ isAuthenticated: true, method: 'test' });
+      // The chrome names no login method: an injected cold start is none of them.
+      expect(authStore.getState()).toMatchObject({ isAuthenticated: true, method: null });
     });
 
     it('refuses a secret that is not a 32-byte scalar, leaving the chrome signed out', async () => {

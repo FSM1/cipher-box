@@ -32,23 +32,12 @@ test('a cold start opens a fresh vault at its root', async ({ page }) => {
   expect(view.folder).toBe(view.root);
   expect(view.children).toEqual([]);
   expect(view.deadLetters).toEqual([]);
+  expect((await vault.events()).map((event) => event.kind)).toContain('snapshotUpdated');
 
   await expect(files.browser).toBeVisible();
   await expect(files.emptyState).toBeVisible();
   await expect(files.breadcrumbs).toBeVisible();
-  await expect(files.status).toHaveAttribute('data-staleness', 'fresh');
-});
-
-test('the vault chrome renders the staleness the taps report', async ({ page }) => {
-  const vault = new VaultPage(page);
-  const files = new FilesPage(page);
-
-  await vault.open();
-  await vault.coldStart();
-  const { view } = await vault.settled();
-
   await expect(files.status).toHaveAttribute('data-staleness', view.staleness);
-  expect((await vault.events()).map((event) => event.kind)).toContain('snapshotUpdated');
 });
 
 test('signing out returns the tab to the front door', async ({ page }) => {

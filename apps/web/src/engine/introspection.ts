@@ -4,13 +4,11 @@
  * an interactive Core Kit login.
  *
  * Gated on `VITE_E2E_HOOK` rather than on `DEV`, because the suite runs against
- * the production static build — a release bundle sets no flag, so the branch
- * below folds away and `window.__CIPHERBOX_ENGINE__` is never assigned. The
- * login secret travels one way, into the engine; nothing here reads key
- * material back out.
+ * the production static build — the artifact a `DEV` gate would exclude the
+ * hook from is the very one under test.
  */
 
-import { fromHex, toHex } from '@cipherbox/client';
+import { toHex } from '@cipherbox/client';
 import type { EngineClient, EventDescriptor, SnapshotDescriptor } from '@cipherbox/client';
 import { authStore } from '../stores/auth.store';
 import { handOffLoginSecret } from './loginHandoff';
@@ -39,8 +37,8 @@ export interface IntrospectedView {
 export interface EngineIntrospection {
   /** Cold-starts the engine from a 32-byte hex login secret. */
   signIn(loginSecretHex: string): Promise<void>;
-  /** The engine's view of `folder` (a hex node id), or of the vault root. */
-  snapshot(folder: string | null): Promise<IntrospectedView>;
+  /** The engine's view of the vault root. */
+  snapshot(): Promise<IntrospectedView>;
   /** Every engine event this tab has seen, in emission order. */
   events(): Plain<EventDescriptor>[];
 }
@@ -51,9 +49,6 @@ declare global {
   }
 }
 
-/** The previous install's event subscription, released when a rebuild replaces it. */
-let release: (() => void) | null = null;
-
 /**
  * Publishes the taps for `client` on `window`, and returns it so a host can
  * wrap its client factory. A no-op outside an e2e build.
@@ -61,9 +56,8 @@ let release: (() => void) | null = null;
 export function installIntrospection(client: EngineClient): EngineClient {
   if (import.meta.env.VITE_E2E_HOOK !== 'true') return client;
 
-  release?.();
   const seen: Plain<EventDescriptor>[] = [];
-  release = client.facade.subscribe((event) => {
+  client.facade.subscribe((event) => {
     seen.push(plain(event) as Plain<EventDescriptor>);
   });
 
@@ -72,10 +66,10 @@ export function installIntrospection(client: EngineClient): EngineClient {
       await handOffLoginSecret(client, {
         _UNSAFE_exportTssKey: () => Promise.resolve(loginSecretHex),
       });
-      authStore.signedIn('test');
+      authStore.signedIn(null);
     },
-    async snapshot(folder) {
-      const view = await client.facade.snapshot(folder === null ? null : fromHex(folder));
+    async snapshot() {
+      const view = await client.facade.snapshot(null);
       return { view: plain(view) as Plain<SnapshotDescriptor>, settled: settled(view) };
     },
     events: () => seen,

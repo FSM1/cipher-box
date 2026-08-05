@@ -12,5 +12,6 @@
       "@web/*": ["../../apps/web/src/*"]
     }
   },
+  "references": [{ "path": "../../packages/client/tsconfig.build.json" }],
   "include": ["**/*.ts"]
 }

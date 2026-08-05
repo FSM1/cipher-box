@@ -34,6 +34,7 @@ jobs:
             ts:
               - 'apps/**'
               - 'packages/**'
+              - 'tests/**'
               # The TS suite pins MEDIA_WINDOW_BYTES against this manifest, so a
               # Rust-side chunk-size change must run it.
               - 'crates/engine/kat/**'
@@ -62,24 +63,13 @@ jobs:
               - 'package.json'
               - 'tsconfig*.json'
               - '.github/workflows/ci.yml'
-            # The e2e smoke slice drives the browser against a live API and the
-            # hermetic record store, so its blast radius is wider than `web`.
+            # What the smoke slice depends on *beyond* `web` — it drives the
+            # browser against a live API and the hermetic record store. Its job
+            # runs on `web || e2e`, so widening `web` widens the gate too.
             e2e:
-              - 'apps/web/**'
               - 'apps/api/**'
-              - 'packages/client/**'
-              - 'tests/web-e2e/**'
+              - 'tests/**'
               - 'tools/mock-ipns-routing/**'
-              - 'crates/**'
-              - 'Cargo.toml'
-              - 'Cargo.lock'
-              - 'rust-toolchain.toml'
-              - '.cargo/config.toml'
-              - 'pnpm-lock.yaml'
-              - 'pnpm-workspace.yaml'
-              - 'package.json'
-              - 'tsconfig*.json'
-              - '.github/workflows/ci.yml'
               - '.github/workflows/web-e2e.yml'
             desktop:
               - 'apps/desktop/**'
@@ -869,7 +859,7 @@ jobs:
     needs: [changes, lint]
     if: |
       !failure() && !cancelled() &&
-      needs.changes.outputs.e2e == 'true'
+      (needs.changes.outputs.web == 'true' || needs.changes.outputs.e2e == 'true')
     permissions:
       contents: read
     uses: ./.github/workflows/web-e2e.yml

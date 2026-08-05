@@ -237,6 +237,9 @@ importers:
       '@cipherbox/client':
         specifier: workspace:*
         version: link:../../packages/client
+      '@cipherbox/web':
+        specifier: workspace:*
+        version: link:../../apps/web
       '@playwright/test':
         specifier: ^1.56.0
         version: 1.61.1
