@@ -5,7 +5,12 @@
  */
 
 import { MediaBroker, type MediaReader } from './broker.js';
-import { MEDIA_PORT_OFFER, MEDIA_PORT_REQUEST, type MediaPortOffer } from './protocol.js';
+import {
+  MEDIA_PORT_OFFER,
+  MEDIA_PORT_REQUEST,
+  ticketFromUrl,
+  type MediaPortOffer,
+} from './protocol.js';
 import { StreamRegistry, type MediaSource } from './registry.js';
 
 /** The `ServiceWorker` surface the offer needs. */
@@ -48,6 +53,7 @@ export interface MediaServiceConfig {
 export class MediaService {
   private readonly registry: StreamRegistry;
   private readonly broker: MediaBroker;
+  private readonly origin: string;
   private readonly createChannel: () => MessageChannel;
   private registration: ServiceWorkerRegistrationLike | null = null;
   private channel: MessageChannel | null = null;
@@ -55,7 +61,8 @@ export class MediaService {
   private disposed = false;
 
   constructor(private readonly config: MediaServiceConfig) {
-    this.registry = new StreamRegistry(config.origin ?? globalThis.location.origin);
+    this.origin = config.origin ?? globalThis.location.origin;
+    this.registry = new StreamRegistry(this.origin);
     this.broker = new MediaBroker(this.registry, config.reader);
     this.createChannel = config.createChannel ?? ((): MessageChannel => new MessageChannel());
   }
@@ -86,7 +93,10 @@ export class MediaService {
 
   /** False when the URL named no live ticket of this tab's. */
   revokeStreamUrl(url: string): boolean {
-    return this.registry.revoke(url);
+    const ticket = ticketFromUrl(url, this.origin);
+    if (ticket === null || !this.registry.revoke(url)) return false;
+    this.broker.revoke(ticket);
+    return true;
   }
 
   /** Leaves the worker registered — the app-shell precache must outlive the tab. */

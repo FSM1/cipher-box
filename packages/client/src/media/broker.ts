@@ -1,5 +1,6 @@
 /** The tab-side server for the media byte pipe, answering over a brokered `MessagePort`. */
 
+import { engineErrorCode, isRecoverableEngineError } from '../correlatedTransport.js';
 import { errorMessage } from '../errorMessage.js';
 import type { MessagePortLike } from '../portRelay.js';
 import type { StreamHandle } from '../worker/protocol.js';
@@ -14,14 +15,48 @@ export interface MediaReader {
   closeStream(handle: StreamHandle): Promise<void>;
 }
 
+/**
+ * A `<video>` closes a body before opening the range it seeks to, so a pin whose
+ * count hits zero is held this long before its engine stream is released.
+ */
+const DEFAULT_PIN_LINGER_MS = 5000;
+
+export interface MediaBrokerOptions {
+  /** The plaintext window read per pull. */
+  windowBytes?: number;
+  /** How long a ticket's engine stream outlives its last cursor. */
+  lingerMs?: number;
+}
+
+/**
+ * The one engine stream every response for a ticket reads against, opened on the
+ * first pull — a ticket answered with a head and then abandoned costs no
+ * resolve. Pinning per ticket rather than per request holds a single content
+ * version across a whole playback, not merely one response (#948).
+ */
+interface Pin {
+  stream: Promise<StreamHandle> | null;
+  cursors: number;
+  linger: ReturnType<typeof setTimeout> | null;
+}
+
+/** An open engine stream and the memo it came from, so a failure can drop it. */
+interface Pinned {
+  readonly handle: StreamHandle;
+  readonly stream: Promise<StreamHandle>;
+}
+
 /** An open response body: the unread remainder of a resolved window. */
 interface Cursor {
+  readonly ticket: string;
   readonly node: Uint8Array;
+  readonly pin: Pin;
   /**
-   * The engine stream every window of this response is read against, opened on
-   * the first pull — a request abandoned after its head costs nothing.
+   * The stream this body's first window came from. One response never spans two
+   * of them: concatenating windows of two content versions under one
+   * `Content-Range` is a tear the reader cannot detect (#948).
    */
-  stream: Promise<StreamHandle> | null;
+  bound: Promise<StreamHandle> | null;
   /** The mint-time window end, pulled in when a read proves the version is shorter. */
   end: number;
   offset: number;
@@ -30,15 +65,21 @@ interface Cursor {
 }
 
 export class MediaBroker {
-  private readonly streams = new Map<number, Cursor>();
+  private readonly cursors = new Map<number, Cursor>();
+  private readonly pins = new Map<string, Pin>();
+  private readonly windowBytes: number;
+  private readonly lingerMs: number;
   private port: MessagePortLike | null = null;
   private listener: ((event: MessageEvent) => void) | null = null;
 
   constructor(
     private readonly registry: StreamRegistry,
     private readonly reader: MediaReader,
-    private readonly windowBytes: number = MEDIA_WINDOW_BYTES
-  ) {}
+    options: MediaBrokerOptions = {}
+  ) {
+    this.windowBytes = options.windowBytes ?? MEDIA_WINDOW_BYTES;
+    this.lingerMs = options.lingerMs ?? DEFAULT_PIN_LINGER_MS;
+  }
 
   /** The pipe carries one port; a fresh offer supersedes the port it replaces. */
   serve(port: MessagePortLike): void {
@@ -58,15 +99,125 @@ export class MediaBroker {
     }
     this.port = null;
     this.listener = null;
-    for (const requestId of [...this.streams.keys()]) this.drop(requestId);
+    this.cursors.clear();
+    for (const pin of this.pins.values()) void this.discard(pin);
+    this.pins.clear();
   }
 
-  /** Forgets a cursor and releases the engine stream it pinned, if it opened one. */
+  /**
+   * Ends every body reading a revoked ticket and releases its engine stream. A
+   * ticket is a bearer capability to plaintext, so withdrawing it must stop the
+   * bytes already in flight, not merely the next request.
+   */
+  revoke(ticket: string): void {
+    for (const [requestId, cursor] of [...this.cursors]) {
+      if (cursor.ticket !== ticket) continue;
+      this.cursors.delete(requestId);
+      if (this.port !== null) {
+        post(this.port, { type: 'cb:media:error', requestId, message: 'the stream was revoked' });
+      }
+    }
+    const pin = this.pins.get(ticket);
+    if (pin === undefined) return;
+    this.pins.delete(ticket);
+    void this.discard(pin);
+  }
+
+  /** Forgets a cursor and gives up its share of the ticket's engine stream. */
   private drop(requestId: number): void {
-    const cursor = this.streams.get(requestId);
+    const cursor = this.cursors.get(requestId);
     if (cursor === undefined) return;
-    this.streams.delete(requestId);
-    void cursor.stream?.then((handle) => this.reader.closeStream(handle)).catch(() => undefined);
+    this.cursors.delete(requestId);
+    cursor.pin.cursors -= 1;
+    if (cursor.pin.cursors > 0) return;
+    cursor.pin.linger = setTimeout(() => this.evict(cursor.ticket), this.lingerMs);
+  }
+
+  private acquire(ticket: string): Pin {
+    const held = this.pins.get(ticket);
+    if (held === undefined) {
+      const pin: Pin = { stream: null, cursors: 1, linger: null };
+      this.pins.set(ticket, pin);
+      return pin;
+    }
+    if (held.linger !== null) clearTimeout(held.linger);
+    held.linger = null;
+    held.cursors += 1;
+    return held;
+  }
+
+  /** Closes a ticket's engine stream unless a cursor took the pin back. */
+  private evict(ticket: string): void {
+    const pin = this.pins.get(ticket);
+    if (pin === undefined || pin.cursors > 0) return;
+    this.pins.delete(ticket);
+    void this.discard(pin);
+  }
+
+  /** Resolves when the engine has the stream back. */
+  private release(stream: Promise<StreamHandle>): Promise<void> {
+    return stream.then((handle) => this.reader.closeStream(handle)).catch(() => undefined);
+  }
+
+  private discard(pin: Pin): Promise<void> | null {
+    if (pin.linger !== null) clearTimeout(pin.linger);
+    pin.linger = null;
+    const stream = pin.stream;
+    pin.stream = null;
+    return stream === null ? null : this.release(stream);
+  }
+
+  /**
+   * Gives back every stream held by the linger alone, so a refusal at the
+   * engine's open-stream ceiling has a slot to retry into. Resolves false when
+   * there was nothing to give back.
+   */
+  private async reclaimIdle(): Promise<boolean> {
+    const closing: Array<Promise<void>> = [];
+    for (const [ticket, pin] of [...this.pins]) {
+      if (pin.cursors > 0) continue;
+      this.pins.delete(ticket);
+      const closed = this.discard(pin);
+      if (closed !== null) closing.push(closed);
+    }
+    if (closing.length === 0) return false;
+    await Promise.all(closing);
+    return true;
+  }
+
+  /** Drops a stream the pin still names, so the next pull opens a fresh one. */
+  private forget(pin: Pin, stream: Promise<StreamHandle>): void {
+    if (pin.stream !== stream) return;
+    pin.stream = null;
+    void this.release(stream);
+  }
+
+  private async openOnto(cursor: Cursor): Promise<Pinned> {
+    const pin = cursor.pin;
+    const stream = (pin.stream ??= this.reader.openContentStream(cursor.node));
+    try {
+      return { handle: await stream, stream };
+    } catch (error) {
+      // A rejected open must not be remembered, or every cursor on the ticket
+      // replays it.
+      this.forget(pin, stream);
+      throw error;
+    }
+  }
+
+  private async pinnedStream(cursor: Cursor): Promise<Pinned> {
+    try {
+      return await this.openOnto(cursor);
+    } catch (error) {
+      if (!isRecoverableEngineError(engineErrorCode(error))) throw error;
+      if (!(await this.reclaimIdle())) throw error;
+      // A close, a revoke, an eviction, or the reclaim itself can drop the pin
+      // across the await. Every release path reaches a stream through `pins`, so
+      // opening onto a pin no longer in it strands the handle and its content
+      // key for the life of the worker.
+      if (this.pins.get(cursor.ticket) !== cursor.pin) throw error;
+      return this.openOnto(cursor);
+    }
   }
 
   private dispatch(port: MessagePortLike, data: unknown): void {
@@ -110,9 +261,11 @@ export class MediaBroker {
       return;
     }
 
-    this.streams.set(requestId, {
+    this.cursors.set(requestId, {
+      ticket,
       node: source.node,
-      stream: null,
+      pin: this.acquire(ticket),
+      bound: null,
       offset: head.window.offset,
       end: head.window.offset + head.window.length,
       pump: Promise.resolve(),
@@ -121,9 +274,11 @@ export class MediaBroker {
   }
 
   private pull(port: MessagePortLike, requestId: number): void {
-    const cursor = this.streams.get(requestId);
+    const cursor = this.cursors.get(requestId);
     if (cursor === undefined) return;
-    cursor.pump = cursor.pump.then(() => this.pump(port, requestId, cursor));
+    // A post onto a port that died mid-pump must not poison the chain: every
+    // later pull would chain off a rejection and silently never run.
+    cursor.pump = cursor.pump.then(() => this.pump(port, requestId, cursor)).catch(() => undefined);
   }
 
   /**
@@ -132,7 +287,7 @@ export class MediaBroker {
    * stream's plaintext under this request id.
    */
   private isCurrent(requestId: number, cursor: Cursor): boolean {
-    return this.streams.get(requestId) === cursor;
+    return this.cursors.get(requestId) === cursor;
   }
 
   private async pump(port: MessagePortLike, requestId: number, cursor: Cursor): Promise<void> {
@@ -147,29 +302,63 @@ export class MediaBroker {
 
     const offset = cursor.offset;
     const length = Math.min(this.windowBytes, remaining);
+
+    let pinned: Pinned;
     try {
-      cursor.stream ??= this.reader.openContentStream(cursor.node);
-      const handle = await cursor.stream;
-      if (!this.isCurrent(requestId, cursor)) return;
-      const chunk = await this.reader.readStream(handle, offset, length);
-      if (!this.isCurrent(requestId, cursor)) {
-        // Nobody will receive this window; wipe it rather than leave plaintext
-        // for the collector (AGENTS.md 7 — this is its terminal owner).
-        new Uint8Array(chunk).fill(0);
-        return;
-      }
-      cursor.offset = offset + chunk.byteLength;
-      // A short read means the live version is smaller than the head promised;
-      // ending here is a clean EOF, where under-delivering content-length is a
-      // network error to the media element.
-      if (chunk.byteLength < length) cursor.end = cursor.offset;
-      const response: MediaResponse = { type: 'cb:media:chunk', requestId, chunk };
+      pinned = await this.pinnedStream(cursor);
+    } catch (error) {
+      this.fail(port, requestId, cursor, error);
+      return;
+    }
+    if (!this.isCurrent(requestId, cursor)) return;
+
+    cursor.bound ??= pinned.stream;
+    if (cursor.bound !== pinned.stream) {
+      this.fail(port, requestId, cursor, new Error('the content version changed mid-response'));
+      return;
+    }
+
+    let chunk: ArrayBuffer;
+    try {
+      chunk = await this.reader.readStream(pinned.handle, offset, length);
+    } catch (error) {
+      // A handle the engine no longer knows is dead for every cursor sharing it,
+      // so the ticket re-opens. Any other read failure leaves the pinned version
+      // alone.
+      if (engineErrorCode(error) === 'unknownStreamHandle') this.forget(cursor.pin, pinned.stream);
+      this.fail(port, requestId, cursor, error);
+      return;
+    }
+
+    // Past here the window is plaintext this broker owns outright, so every exit
+    // either transfers it or wipes it (AGENTS.md 7).
+    if (!this.isCurrent(requestId, cursor)) {
+      new Uint8Array(chunk).fill(0);
+      return;
+    }
+    // Read before the transfer detaches the buffer and zeroes its length.
+    const delivered = chunk.byteLength;
+    const response: MediaResponse = { type: 'cb:media:chunk', requestId, chunk };
+    try {
       port.postMessage(response, [chunk]);
     } catch (error) {
-      if (!this.isCurrent(requestId, cursor)) return;
-      this.drop(requestId);
-      post(port, { type: 'cb:media:error', requestId, message: errorMessage(error) });
+      // A transfer that threw before detaching still leaves the window here;
+      // one that detached reports zero bytes and needs no wipe.
+      if (chunk.byteLength > 0) new Uint8Array(chunk).fill(0);
+      this.fail(port, requestId, cursor, error);
+      return;
     }
+    cursor.offset = offset + delivered;
+    // A short read means the live version is smaller than the head promised;
+    // ending here is a clean EOF, where under-delivering content-length is a
+    // network error to the media element.
+    if (delivered < length) cursor.end = cursor.offset;
+  }
+
+  private fail(port: MessagePortLike, requestId: number, cursor: Cursor, error: unknown): void {
+    if (!this.isCurrent(requestId, cursor)) return;
+    this.drop(requestId);
+    post(port, { type: 'cb:media:error', requestId, message: errorMessage(error) });
   }
 }
 

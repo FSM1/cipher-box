@@ -42,6 +42,21 @@ export class EngineRequestError extends Error {
   }
 }
 
+/** The engine's stable code for a failure, or `undefined` for a transport fault. */
+export function engineErrorCode(error: unknown): string | undefined {
+  return error instanceof EngineRequestError ? error.code : undefined;
+}
+
+/**
+ * Whether the same call can succeed once the caller frees the resource the
+ * engine refused over — `tooManyStreams` is a ceiling, not a verdict
+ * (`EngineError` in `crates/engine/src/facade.rs`). Every trust code is a
+ * distinct string, so none of them can widen into this.
+ */
+export function isRecoverableEngineError(code: string | undefined): boolean {
+  return code === 'tooManyStreams';
+}
+
 /** Which of the engine's handle tables a step addresses. */
 export type HandleKind = 'write' | 'stream';
 

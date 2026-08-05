@@ -58,6 +58,11 @@ export class MediaPipe {
   private readonly ports = new Map<string, PortEntry>();
   private readonly portWaiters = new Set<(adopted: string) => void>();
   private readonly sinks = new Map<number, ResponseSink>();
+  /**
+   * Every response body still streaming and the port it reads from; a sink
+   * exists only between a pull and its answer.
+   */
+  private readonly bodies = new Map<number, MessagePortLike>();
   /** The armed pull deadline per request, so a cancel can disarm its own. */
   private readonly pullTimers = new Map<number, ReturnType<typeof setTimeout>>();
   private nextRequestId = 1;
@@ -106,11 +111,19 @@ export class MediaPipe {
       const requestId = this.nextRequestId;
       this.nextRequestId += 1;
       const head = await this.open(port, requestId, ticket, range);
+      // An open the tab answered late, or answered with a head that carries no
+      // body, still left it holding a cursor and the stream that cursor pins.
       if (!head) {
+        this.post(port, { type: 'cb:media:close', requestId });
         this.discardPort(port);
         continue;
       }
-      if (head.status >= 300) return sealed(head.status, head.headers);
+      // Only these two carry a body; `Response` throws on a body under a
+      // null-body status, and the port that named the status is untrusted.
+      if (head.status !== 200 && head.status !== 206) {
+        this.post(port, { type: 'cb:media:close', requestId });
+        return sealed(head.status, head.headers);
+      }
       return sealed(head.status, head.headers, this.body(port, requestId));
     }
     return sealed(503);
@@ -151,6 +164,7 @@ export class MediaPipe {
 
   /** A zero high-water mark keeps exactly one window in flight: pull on demand. */
   private body(port: MessagePortLike, requestId: number): ReadableStream<Uint8Array> {
+    this.bodies.set(requestId, port);
     return new ReadableStream<Uint8Array>(
       {
         pull: (controller) => this.pullWindow(port, requestId, controller),
@@ -159,11 +173,17 @@ export class MediaPipe {
           // the port — taking every other body streaming on it down too.
           this.clearPull(requestId);
           this.sinks.delete(requestId);
-          this.post(port, { type: 'cb:media:close', requestId });
+          this.closeBody(port, requestId);
         },
       },
       { highWaterMark: 0 }
     );
+  }
+
+  /** Ends a body and tells the tab to release the cursor and pin behind it. */
+  private closeBody(port: MessagePortLike, requestId: number): void {
+    this.bodies.delete(requestId);
+    this.post(port, { type: 'cb:media:close', requestId });
   }
 
   private pullWindow(
@@ -195,9 +215,11 @@ export class MediaPipe {
               settle(() => controller.enqueue(new Uint8Array(response.chunk)));
               return;
             case 'cb:media:end':
+              this.bodies.delete(requestId);
               settle(() => controller.close());
               return;
             case 'cb:media:error':
+              this.bodies.delete(requestId);
               settle(() => controller.error(new Error(response.message)));
               return;
             default:
@@ -271,6 +293,12 @@ export class MediaPipe {
     const entry = this.ports.get(clientId);
     if (!entry) return;
     this.ports.delete(clientId);
+    // `MessagePort` has no close event, so this is the tab's only notice that
+    // the bodies reading over this port are gone and their pins are free.
+    // Posted before the port is disentangled, or it never leaves.
+    for (const [requestId, bound] of [...this.bodies]) {
+      if (bound === entry.port) this.closeBody(entry.port, requestId);
+    }
     entry.port.removeEventListener('message', entry.listener);
     entry.port.close();
     // Bodies still pulling on the dead port would hang forever; failing them

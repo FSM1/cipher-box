@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { MediaBroker, type MediaReader } from './broker.js';
+import { MediaBroker, type MediaBrokerOptions, type MediaReader } from './broker.js';
+import { EngineRequestError } from '../correlatedTransport.js';
 import type { StreamHandle } from '../worker/protocol.js';
 import type { MediaRequest, MediaResponse } from './protocol.js';
 import { StreamRegistry } from './registry.js';
 
 const NODE = new Uint8Array([1, 2, 3, 4]);
+const OTHER_NODE = new Uint8Array([5, 6, 7, 8]);
 const WINDOW = 4;
 
 /** Deterministic plaintext so a reassembled range can be compared byte for byte. */
@@ -27,15 +29,27 @@ class FakeReader implements MediaReader {
   failure: Error | null = null;
   /** Set below the registered size to model a version that shrank after the ticket was minted. */
   liveSize: number | null = null;
+  /** The engine's open-stream ceiling; opening past it refuses like the real one. */
+  ceiling = Number.POSITIVE_INFINITY;
+  /** Fires inside `closeStream`, to land a broker call mid-reclaim. */
+  onClose: (() => void) | null = null;
   private nextHandle = 1n;
   private readonly live = new Set<StreamHandle>();
 
   constructor(private readonly bytes: Uint8Array) {}
 
+  /** Handles the engine still holds — a stranded one never reaches zero. */
+  get liveCount(): number {
+    return this.live.size;
+  }
+
   async openContentStream(node: Uint8Array): Promise<StreamHandle> {
     this.opens.push(node);
     // A real open resolves, gates, and fetches the root manifest; it suspends.
     await flush();
+    if (this.live.size >= this.ceiling) {
+      throw new EngineRequestError('too many read streams are already open', 'tooManyStreams');
+    }
     const handle = this.nextHandle++;
     this.live.add(handle);
     return handle;
@@ -60,6 +74,9 @@ class FakeReader implements MediaReader {
   closeStream(handle: StreamHandle): Promise<void> {
     this.closes.push(handle);
     this.live.delete(handle);
+    const hook = this.onClose;
+    this.onClose = null;
+    hook?.();
     return Promise.resolve();
   }
 }
@@ -86,11 +103,17 @@ interface Harness {
 
 const openHarnesses: Array<() => void> = [];
 
-function harness(size: number, windowBytes = WINDOW): Harness {
+/** Zero linger by default, so a released pin evicts on the next flush. */
+function harness(size: number, options: MediaBrokerOptions = {}): Harness {
   const reader = new FakeReader(plaintext(size));
-  const registry = new StreamRegistry('https://vault.example', () => 'ticket-1');
+  let minted = 0;
+  const registry = new StreamRegistry('https://vault.example', () => `ticket-${++minted}`);
   registry.register({ node: NODE, size, mimeType: 'video/mp4' });
-  const broker = new MediaBroker(registry, reader, windowBytes);
+  const broker = new MediaBroker(registry, reader, {
+    windowBytes: WINDOW,
+    lingerMs: 0,
+    ...options,
+  });
 
   const channel = new MessageChannel();
   const received: MediaResponse[] = [];
@@ -181,6 +204,7 @@ describe('MediaBroker', () => {
       await flush();
     }
     await waitFor(() => kinds(h.received).includes('cb:media:end'), 'end');
+    await waitFor(() => h.reader.closes.length === 1, 'stream released');
 
     expect(bodyOf(h.received)).toEqual(plaintext(size));
     // One open however many windows the body took: no per-window resolve, and
@@ -188,6 +212,196 @@ describe('MediaBroker', () => {
     expect(h.reader.opens).toEqual([NODE]);
     expect(h.reader.calls).toHaveLength(5);
     expect(h.reader.closes).toEqual([1n]);
+  });
+
+  it('shares one engine stream across concurrent responses for a ticket', async () => {
+    const h = harness(20);
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: 'bytes=0-3' });
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: h.ticket, range: 'bytes=8-11' });
+    await waitFor(() => h.received.length === 2, 'heads');
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(
+      () => h.received.filter((message) => message.type === 'cb:media:chunk').length === 2,
+      'both chunks'
+    );
+
+    // The second range pays no resolve and no root-manifest fetch of its own.
+    expect(h.reader.opens).toEqual([NODE]);
+    expect(h.reader.closes).toEqual([]);
+  });
+
+  it('holds the pin across a seek that closes its body before opening the next', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => h.received.length === 2, 'first chunk');
+    h.send({ type: 'cb:media:close', requestId: 1 });
+    await flush();
+
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: h.ticket, range: 'bytes=8-11' });
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(() => h.received.length === 4, 'seeked chunk');
+
+    // One version for the whole playback, not one per Range request.
+    expect(h.reader.opens).toEqual([NODE]);
+    expect(h.reader.closes).toEqual([]);
+    expect(h.reader.calls).toEqual([
+      { offset: 0, length: 4 },
+      { offset: 8, length: 4 },
+    ]);
+  });
+
+  it('releases the pin once its last cursor drops and nothing re-opens it', async () => {
+    const h = harness(20);
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => h.received.length === 2, 'first chunk');
+    h.send({ type: 'cb:media:close', requestId: 1 });
+
+    await waitFor(() => h.reader.closes.length === 1, 'stream released');
+    expect(h.reader.closes).toEqual([1n]);
+  });
+
+  it('re-opens a ticket whose handle the engine forgot', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+    h.reader.failure = new EngineRequestError('unknown stream handle', 'unknownStreamHandle');
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => kinds(h.received).includes('cb:media:error'), 'error');
+
+    h.reader.failure = null;
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(
+      () => h.received.filter((message) => message.type === 'cb:media:chunk').length === 1,
+      'chunk after recovery'
+    );
+
+    expect(h.reader.opens).toEqual([NODE, NODE]);
+  });
+
+  it('keeps the pinned version when one cursor of a ticket fails its read', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: 'bytes=0-3' });
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: h.ticket, range: 'bytes=8-11' });
+    await waitFor(() => h.received.length === 2, 'heads');
+
+    h.reader.failure = new Error('gateway unreachable');
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => kinds(h.received).includes('cb:media:error'), 'error');
+
+    h.reader.failure = null;
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(
+      () => h.received.filter((message) => message.type === 'cb:media:chunk').length === 1,
+      'the other cursor still reads'
+    );
+
+    // Re-opening under the surviving body would tear its response across two
+    // content versions.
+    expect(h.reader.opens).toEqual([NODE]);
+    expect(h.reader.closes).toEqual([]);
+  });
+
+  it('refuses to finish a body whose stream was replaced under it', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(
+      () => h.received.filter((message) => message.type === 'cb:media:chunk').length === 1,
+      'the second body reads its first window'
+    );
+
+    // A leadership swap retires the handle; the cursor that notices re-opens
+    // the ticket, which must not silently continue the body already in flight.
+    h.reader.failure = new EngineRequestError('unknown stream handle', 'unknownStreamHandle');
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => kinds(h.received).includes('cb:media:error'), 'the first body errors');
+
+    h.reader.failure = null;
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(
+      () => h.received.filter((message) => message.type === 'cb:media:error').length === 2,
+      'the second body errors rather than splicing two versions'
+    );
+    // The ticket re-opened, but no window of the new stream reached the body
+    // that had already delivered one from the old.
+    expect(h.reader.opens).toEqual([NODE, NODE]);
+    expect(h.reader.calls).toEqual([
+      { offset: 0, length: 4 },
+      { offset: 0, length: 4 },
+    ]);
+  });
+
+  it('ends every body of a revoked ticket and releases its stream', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => h.received.length === 2, 'first chunk');
+
+    h.broker.revoke(h.ticket);
+    await waitFor(() => h.reader.closes.length === 1, 'stream released');
+
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await flush();
+    expect(kinds(h.received)).toEqual(['cb:media:head', 'cb:media:chunk', 'cb:media:error']);
+    expect(h.reader.calls).toHaveLength(1);
+  });
+
+  it('reclaims the streams only the linger holds when the engine refuses at its ceiling', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+
+    // A first playback leaves its stream pinned by the linger alone.
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => h.received.length === 2, 'first chunk');
+    h.send({ type: 'cb:media:close', requestId: 1 });
+    await flush();
+
+    h.registry.register({ node: OTHER_NODE, size: 20, mimeType: 'video/mp4' });
+    h.reader.ceiling = 1;
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: 'ticket-2', range: null });
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(
+      () => h.received.filter((message) => message.type === 'cb:media:chunk').length === 2,
+      'chunk past the ceiling'
+    );
+
+    // The idle pin was given back and the refused open retried into its slot.
+    expect(h.reader.closes).toEqual([1n]);
+    expect(h.reader.opens).toEqual([NODE, OTHER_NODE, OTHER_NODE]);
+  });
+
+  it('strands no engine stream when its ticket is revoked during the reclaim', async () => {
+    const h = harness(20, { lingerMs: 10_000 });
+
+    h.send({ type: 'cb:media:open', requestId: 1, ticket: h.ticket, range: null });
+    h.send({ type: 'cb:media:pull', requestId: 1 });
+    await waitFor(() => h.received.length === 2, 'first chunk');
+    h.send({ type: 'cb:media:close', requestId: 1 });
+    await flush();
+
+    h.registry.register({ node: OTHER_NODE, size: 20, mimeType: 'video/mp4' });
+    h.reader.ceiling = 1;
+    // The revoke lands between giving the idle stream back and retrying the open.
+    h.reader.onClose = () => h.broker.revoke('ticket-2');
+    h.send({ type: 'cb:media:open', requestId: 2, ticket: 'ticket-2', range: null });
+    h.send({ type: 'cb:media:pull', requestId: 2 });
+    await waitFor(() => h.reader.closes.length === 1, 'the idle stream was reclaimed');
+    await flush();
+
+    // The retry was refused rather than opening onto a pin nothing can release.
+    expect(h.reader.opens).toEqual([NODE, OTHER_NODE]);
+    expect(h.reader.liveCount).toBe(0);
   });
 
   it('answers an unknown ticket with a 404 head and reads nothing', async () => {

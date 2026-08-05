@@ -25,6 +25,10 @@ export class StreamRegistry {
   /** Mints a ticket for `source` and returns the URL a media element requests. */
   register(source: MediaSource): string {
     const ticket = this.mintTicket();
+    // A ticket names one file for its whole life — the broker pins an engine
+    // stream per ticket, so a repeat would serve one file's plaintext under
+    // another's head.
+    if (this.sources.has(ticket)) throw new Error('a stream ticket must be minted once');
     this.sources.set(ticket, source);
     return `${STREAM_PATH_PREFIX}${ticket}`;
   }

@@ -240,6 +240,24 @@ describe('MediaPipe.respond', () => {
     expect(stalled.closed).toBe(true);
   });
 
+  it('closes the cursor of an open it gave up waiting for', async () => {
+    vi.useFakeTimers();
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    // The tab answers the open after the pipe stopped listening, so it is left
+    // holding a cursor and the engine stream that cursor pins.
+    const silent = new FakePort();
+    pipe.adoptPort(silent);
+
+    const pending = pipe.respond(streamRequest());
+    await vi.advanceTimersByTimeAsync(TIMEOUTS.responseTimeoutMs);
+
+    const open = silent.sent.find((message) => message.type === 'cb:media:open');
+    expect(silent.sent).toContainEqual({ type: 'cb:media:close', requestId: open!.requestId });
+
+    await vi.advanceTimersByTimeAsync(TIMEOUTS.brokerTimeoutMs);
+    expect((await pending).status).toBe(503);
+  });
+
   it('answers 404 for a stream path carrying no ticket', async () => {
     const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
     const port = streamingPort([]);
@@ -356,6 +374,35 @@ describe('MediaPipe.adoptPort', () => {
     pipe.adoptPort(new FakePort());
 
     await expect(drained).rejects.toThrow(/media port replaced/);
+  });
+
+  it('closes the tab-side cursor of every body still reading on a replaced port', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    // Two windows deep, so the body is live but between pulls when the port dies.
+    const port = streamingPort([new Uint8Array([1]), new Uint8Array([2])]);
+    pipe.adoptPort(port, 'tab-a');
+
+    const response = await pipe.respond(streamRequest(), 'tab-a');
+    const reader = response.body!.getReader();
+    await reader.read();
+    expect(port.countOf('cb:media:close')).toBe(0);
+
+    pipe.adoptPort(new FakePort(), 'tab-a');
+
+    const open = port.sent.find((message) => message.type === 'cb:media:open');
+    expect(port.sent).toContainEqual({ type: 'cb:media:close', requestId: open!.requestId });
+  });
+
+  it('leaves nothing to close once the body has ended', async () => {
+    const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
+    const port = streamingPort([new Uint8Array([1])]);
+    pipe.adoptPort(port, 'tab-a');
+
+    const response = await pipe.respond(streamRequest(), 'tab-a');
+    await response.arrayBuffer();
+    pipe.adoptPort(new FakePort(), 'tab-a');
+
+    expect(port.countOf('cb:media:close')).toBe(0);
   });
 
   it('ignores a response for an unknown request id', async () => {

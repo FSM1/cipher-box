@@ -162,8 +162,11 @@ describe('MediaService', () => {
     expect(answers[0]).toMatchObject({ type: 'cb:media:head', status: 200 });
 
     expect(service.revokeStreamUrl(url)).toBe(true);
+    // Revoking withdraws the capability from the body already open, not just
+    // from the next request.
+    expect(answers[1]).toMatchObject({ type: 'cb:media:error', requestId: 1 });
     channels[0].port2.postMessage({ type: 'cb:media:open', requestId: 2, ticket, range: null });
-    expect(answers[1]).toMatchObject({ type: 'cb:media:head', status: 404 });
+    expect(answers[2]).toMatchObject({ type: 'cb:media:head', status: 404 });
   });
 
   it('revokes the absolute form of a minted url and reports an unknown one', async () => {

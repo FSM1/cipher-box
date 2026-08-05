@@ -106,4 +106,12 @@ describe('StreamRegistry', () => {
     expect(registry.register(source(1))).toBe(`${STREAM_PATH_PREFIX}t1`);
     expect(registry.register(source(2))).toBe(`${STREAM_PATH_PREFIX}t2`);
   });
+
+  it('refuses to mint a ticket it already holds', () => {
+    const registry = new StreamRegistry(ORIGIN, () => 'fixed');
+    registry.register(source(1));
+
+    // Reuse would serve the first file's pinned stream under the second's head.
+    expect(() => registry.register(source(2))).toThrow(/minted once/);
+  });
 });

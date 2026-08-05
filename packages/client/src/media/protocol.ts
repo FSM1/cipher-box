@@ -10,9 +10,10 @@ export const STREAM_PATH_PREFIX = '/stream/';
 
 /**
  * The plaintext window read per pull: peak memory on both sides of the port is
- * one window, never the file. Exactly one content chunk, so a window at a
- * chunk-aligned offset covers exactly one leaf (`ContentProfile::PRODUCTION`,
- * frozen by blueprint/engine.md "Content plane").
+ * one window, never the file. Exactly one `ContentProfile::PRODUCTION` chunk —
+ * 1 MiB less core's seal overhead, because the budget belongs to the sealed
+ * block — so a window at a chunk-aligned offset covers exactly one leaf, and
+ * any other value makes every read straddle two. Pinned by `protocol.test.ts`.
  */
 export const MEDIA_WINDOW_BYTES = 1_048_536;
 
