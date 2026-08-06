@@ -389,6 +389,17 @@ jobs:
           name: web-dist
           path: web-dist/
 
+      # appleboy's actions skip host-key verification when `fingerprint` is empty,
+      # so an unset variable would silently restore the trust-on-first-use hole.
+      - name: Require a pinned host key
+        env:
+          SSH_HOST_FINGERPRINT: ${{ vars.SSH_HOST_FINGERPRINT }}
+        run: |
+          if [ -z "$SSH_HOST_FINGERPRINT" ]; then
+            echo '::error::the staging environment needs the SSH_HOST_FINGERPRINT variable (ssh-keyscan -t ed25519 HOST | ssh-keygen -lf -)'
+            exit 1
+          fi
+
       - name: Generate .env.staging
         run: |
           cat > .env.staging << 'ENVEOF'
@@ -431,6 +442,7 @@ jobs:
           host: ${{ vars.HOST }}
           username: ${{ vars.USER }}
           key: ${{ secrets.SSH_KEY }}
+          fingerprint: ${{ vars.SSH_HOST_FINGERPRINT }}
           source: '.env.staging,docker/docker-compose.staging.yml,docker/Caddyfile,docker/alloy-config.river,docker/ipfs-init/001-provide-strategy.sh'
           target: /opt/cipherbox
           strip_components: 0
@@ -441,6 +453,7 @@ jobs:
           host: ${{ vars.HOST }}
           username: ${{ vars.USER }}
           key: ${{ secrets.SSH_KEY }}
+          fingerprint: ${{ vars.SSH_HOST_FINGERPRINT }}
           script: |
             # Move files to correct locations
             mv /opt/cipherbox/.env.staging /opt/cipherbox/docker/.env.staging 2>/dev/null || true
@@ -462,6 +475,7 @@ jobs:
           host: ${{ vars.HOST }}
           username: ${{ vars.USER }}
           key: ${{ secrets.SSH_KEY }}
+          fingerprint: ${{ vars.SSH_HOST_FINGERPRINT }}
           source: 'web-dist/*'
           target: /opt/cipherbox/web
           strip_components: 1
@@ -473,6 +487,7 @@ jobs:
           host: ${{ vars.HOST }}
           username: ${{ vars.USER }}
           key: ${{ secrets.SSH_KEY }}
+          fingerprint: ${{ vars.SSH_HOST_FINGERPRINT }}
           script: |
             set -euo pipefail
             cd /opt/cipherbox/docker
