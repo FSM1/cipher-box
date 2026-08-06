@@ -1,0 +1,122 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "ad876b4c3ac0",
+  "session_id": "8ed080ed-fffa-498c-9012-8e777bd9ef50",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-06T11:28:59.876428Z",
+  "branch": "chore/rename-staging-api-url-var",
+  "checkpoints_count": 6,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "c0abedc80031",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1422,
+    "cache_creation_tokens": 2685765,
+    "cache_read_tokens": 163299916,
+    "output_tokens": 589709,
+    "api_call_count": 714
+  },
+  "session_metrics": {
+    "turn_count": 21
+  },
+  "summary": {
+    "intent": "Plan and execute Wave 5 of the CipherBox v2 rewrite (recon, tracker hygiene, dispatch 7 PRs, drive review cycles overnight without merging), then handle post-merge rebases, tracker corrections, Wave 6 planning, a #648 issue split, and a staging-infrastructure cleanup (env var renames, secret rotation, SSH deploy key rotation after a VPS reimage).",
+    "outcome": "All 7 Wave 5 PRs were reviewed, resolved, merged, and main verified green; a semantic ResealError merge conflict was fixed during rebase; tracker hygiene (#1014 forensics, #1107/#1108 filed, #648 split into 4 sequenced issues) completed; Wave 6 plan (8 PRs) written; staging env vars renamed off the STAGING_ prefix, redis/tee-worker retired, gateway var renamed to IPFS_GATEWAY_URL, and DB_PASSWORD/SSH_KEY secrets rotated after confirming a legitimate VPS reimage via host-key fingerprint comparison.",
+    "learnings": {
+      "repo": [
+        "Squash-merge repo: branch tips are never ancestors of main, so 'is it merged' must be checked via PR state, not git reachability.",
+        "GitHub REST `.parent` field on issues always returns null (false negative) — must use the GraphQL/sub-issues API and parent orphaned issues before judging any umbrella issue's completeness.",
+        "macroscope check-runs 'completed' includes 'skipped' (e.g. credit exhaustion) — coverage detection must check conclusion/output.title, not just completion.",
+        "macroscope can post findings well after its check-runs complete (seen: 9 minutes after) — re-query threads before declaring a PR clean.",
+        "A seam trait with only test-fake implementors compiles and passes tests while reading as delivered — audit by checking whether any impl exists outside a #[cfg(test)] module, and whether the primitive has any production caller at all.",
+        "`Web E2E Smoke Result` required check is flaky at smoke.spec.ts:43 ('signing out returns the tab to the front door') and blocks unrelated PRs; a same-commit rerun clears it.",
+        "GitHub environment-scoped variables API paginates at 10 per page by default with no warning — must pass per_page=100 or compare against .total_count, or vars past the 10th silently appear missing.",
+        "GitHub Actions secrets are write-only (no read endpoint via API or UI) — rotation requires generate-and-set, not extract-and-copy.",
+        "Postgres only applies POSTGRES_PASSWORD on an empty/fresh data volume — rotating DB_PASSWORD against an existing volume desyncs the API from the live role unless paired with ALTER USER (unless the volume itself is being recreated).",
+        "SSH deploy key rotation requires appending the new public key to authorized_keys and verifying login with the new key alone (agent disabled) before setting the CI secret, to avoid locking the pipeline out.",
+        "docker-compose.staging.yml can reference ${VAR} names that are simply absent from the generated .env.staging, causing services to silently start with empty values (e.g. redis --requirepass '')."
+      ],
+      "code": [
+        {
+          "path": "crates/engine/src/net/rotation.rs",
+          "line": 849,
+          "end_line": 862,
+          "finding": "reseal_verdict maps ResealError variants to WritePublishError; PR #1101 rewrote this as an exhaustive match with no catch-all, which then had to gain a `TooManyCommittedGrants` arm to compile against #1098's new variant — a genuine semantic (not textual) merge conflict."
+        },
+        {
+          "path": "crates/engine/src/rotation/rotate_write.rs",
+          "line": 150,
+          "end_line": 150,
+          "finding": "WriteSubtreeResolver trait doc still says 'the real network/gate wiring is not landed and tests fake it' — only test fakes exist (FakeResolver/PostFlipResolver/FailingResolver at :761/:784/:805); no open issue tracked its production impl until #1108 was filed."
+        },
+        {
+          "path": "crates/engine/src/rotation/mod.rs",
+          "line": 29,
+          "end_line": 31,
+          "finding": "Module doc lists which seam traits have production vs faked impls — this exact paragraph is what the #1014 audit used to find untracked gaps, and it required a genuine 3-way merge (not a union) during #1103's rebase to stay accurate."
+        },
+        {
+          "path": "crates/engine/src/content/profile.rs",
+          "line": 28,
+          "end_line": 37,
+          "finding": "PRODUCTION.chunk_size = 1_048_536 is deliberate, not a typo: sealed leaf is exactly 1 MiB, so plaintext chunk = 1MiB - NONCE_LEN(24) - TAG_LEN(16), per crates/core/src/suite/aead.rs:103."
+        },
+        {
+          "path": "crates/engine/src/facade.rs",
+          "line": 465,
+          "end_line": 465,
+          "finding": "Command::Grant lives at :465 (not :459 as originally misread); catch-all unimplemented arm is at :2278; 9 Command variants fall through but only 7 are in scope for #1016 (ManualRefresh and Logout belong to sync/session slices)."
+        },
+        {
+          "path": "crates/load/src/plan.rs",
+          "line": 264,
+          "end_line": 268,
+          "finding": "gateway-read scenario already fails closed with an explicit error when LOAD_TEST_GATEWAY_URL is unset on a deployed target — not a silent-empty-target bug as initially assumed, just a late failure after a release build."
+        }
+      ],
+      "workflow": [
+        "Set an explicit non-merge boundary before unattended overnight work ('handle the reviews till I wake up' does not imply merge authority) and state it up front.",
+        "Build and compile combined N-way merges of parallel PRs in a scratch worktree before trusting `mergeable=MERGEABLE` — textually-clean merges can still fail to compile (semantic conflicts) and this is invisible to any single PR's CI.",
+        "Never apply a reviewer's (CodeRabbit/macroscope) suggested diff literally — verify the mechanism first; three suggestions this session would have been worse than the bug (deriving Debug on a Zeroizing secret type, clear_session causing a DoS, a helper that ignores its params).",
+        "Read exit codes directly/unpiped (`cmd; echo $?` not `cmd | tail; echo $?`) — piping masks the real command's exit status.",
+        "Give parallel/worktree agents unique scratchpad file paths — a shared scratchpad directory causes agents to clobber each other's PR-body drafts silently.",
+        "When rotating a host's SSH deploy key after suspected host-key change, verify the new fingerprint out-of-band (e.g. via cloud provider's browser console) against the live host before trusting any SSH-based read — treat a changed host key as a hard stop until independently corroborated.",
+        "Diagnose 'connection refused' methodically rather than assuming a firewall/ban: check sshd listening, ufw/iptables/nft rules, and journalctl auth logs for the actual source IP before hypothesizing csf/fail2ban.",
+        "Verify a rotated secret's downstream consumer (e.g. deployed .env.staging) will pick up the new value before assuming the rotation is complete — some values self-heal on next deploy, others need a paired manual step (DB ALTER USER, authorized_keys)."
+      ]
+    },
+    "friction": [
+      "Repeated transient network outages during the overnight session (GitHub API connection refused, intermittent) requiring retry/backoff logic and a connectivity-recovery notifier.",
+      "zsh vs bash differences caused silent bugs: unquoted $EXP not word-splitting in a loop, causing three fingerprints to be compared as one string.",
+      "gh CLI quirks: `gh api --arg` invalid, `--jq 'as $d|...'` syntax errors on arrays, requiring workarounds.",
+      "Fleet concurrency limit (20 subagents) made /simplify, /security-review, /crypto-privacy-review subagents unavailable for one PR, requiring manual passes instead.",
+      "Self-inflicted SSH lockout scare: retrying SSH connections after a host-key-verification failure was initially misdiagnosed as fail2ban/firewall blocking, when it was actually local network flakiness affecting the same egress IP seen in GitHub API failures.",
+      "Hostinger hPanel has no UI surface for SSH host fingerprints, requiring a browser console workaround.",
+      "macroscope ran out of credits mid-wave, silently downgrading review coverage on 6 of 7 PRs until the script's detection was fixed to recognize 'skipped' as non-coverage."
+    ],
+    "open_items": [
+      "#1109–#1112 (split #648 desktop FUSE work) — only #1109 fits Wave 6; pipeline dependency means #648 needs multiple waves to close.",
+      "Wave 6 plan (8 PRs) drafted but not yet launched as of end of transcript.",
+      "STAGING_DB_PASSWORD and STAGING_SSH_KEY secrets/vars (and the 5 old unprefixed-rename originals: STAGING_API_URL, STAGING_HOST, STAGING_USER, STAGING_DB_USERNAME, plus 3 old secret names) still need deletion after PR #1113 merges.",
+      "Deploy workflow's SCP/SSH steps do not verify host keys (StrictHostKeyChecking effectively bypassed) — confirmed as a real gap while investigating the VPS reimage; needs a separate fix.",
+      "desktop-e2e.yml still installs/starts Redis on all three OSes and sets REDIS_HOST/REDIS_PORT even though redis was retired from staging — left alone as a separate, dispatch-gated change.",
+      "Whether a staging deploy has actually succeeded since the 2026-07-07 VPS reimage is unconfirmed — worth checking deploy history before trusting staging as healthy.",
+      "#1102 (crypto DoS ~1000x amplification) fix scoped for Wave 6 but not yet dispatched.",
+      "#1106 (silent content-write clobber on concurrent publish, no edit-vs-edit conflict-resolution row in blueprint/engine.md) filed but not scheduled into a wave yet.",
+      "#1083 (unauthenticated leadership rendezvous over shared origin channel) identified as security-relevant and startable but deliberately left out of Wave 6 on batch-size grounds — flagged as a candidate PR-9.",
+      "Wider v1-legacy redis/TEE prose in ARCHITECTURE.md, GETTING-STARTED.md, CONFIGURATION.md, CAPACITY.md left uncorrected per AGENTS.md (docs rewrite deferred to later in the build)."
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
