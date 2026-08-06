@@ -304,11 +304,10 @@ const GATE_KAT_GRANTEE_PSEUDONYM_SEED: [u8; 32] = [0x55; 32];
 /// Stage 3's **one section, one signer** rule frozen over whole scope-root head
 /// blocks (blueprint/engine.md "Adoption gate and floors").
 ///
-/// Every vector shares one commitment naming two write-capable pseudonyms, so
-/// the accept family pins that pinning narrows how many signers a section may
-/// have and not which pseudonym may sign it, and every reject carries structure
-/// signatures that are each individually valid under a committed pseudonym —
-/// only the pin refuses them.
+/// Every vector shares one commitment naming two write-capable pseudonyms: the
+/// accept family shows the pin bounds how many signers a section has, not which
+/// pseudonym may sign, and every reject's structure signatures are each valid
+/// under a committed pseudonym, so only the pin refuses them.
 fn build_section_signer_vectors() -> (Vec<SectionSignerVector>, Vec<SectionSignerVector>) {
     let owner_identity = EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid scalar");
     let owner_enc = kdf::enc_subkey(&GATE_KAT_OWNER_ENC_SEED).public();
