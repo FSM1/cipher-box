@@ -13,7 +13,8 @@
 //! pipeline stays the only path to the transport.
 
 use core::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
+use std::collections::{BTreeMap, BTreeSet};
 
 use cipherbox_core::ipns::IpnsName;
 use cipherbox_core::kdf;
@@ -50,7 +51,7 @@ use crate::rotation::{
     CascadeResealResolver, CascadeTarget, ChildIndexResolver, CommittedSet, RepointChannel,
     RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure,
     ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher, WritePublishError,
-    WriteWavePublisher, reseal_scope_root,
+    WriteScopeNode, WriteSubtreeResolver, WriteWavePublisher, reseal_scope_root,
 };
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 use crate::session::SessionIdentity;
@@ -688,8 +689,9 @@ where
 }
 
 /// The write-plane name wave's transport edge (blueprint/engine.md
-/// "rotateScopeWrite"): the owner arm of [`WriteWavePublisher`] over the same net
-/// plane the read-plane seams above run on.
+/// "rotateScopeWrite"): the owner arm of both [`WriteSubtreeResolver`] and
+/// [`WriteWavePublisher`] over the same net plane the read-plane seams above run
+/// on.
 ///
 /// The wave hands this no authoring material — only routing identity and the one
 /// write seed that signs at the new name ([`RepublishedNode`]) — so every
@@ -742,6 +744,72 @@ pub struct WriteWaveNet<'a, T, H: Http, C: CredentialStore, F, Sch, E> {
     /// The root read this pass gated and has not yet republished
     /// ([`GatedWaveRoot`]). One rotation pass per net.
     pub gated_root: GatedWaveRoot,
+    /// The subtree index the enumeration builds as it descends
+    /// ([`WaveSubtree`]). One rotation pass per net.
+    pub subtree: WaveSubtree,
+}
+
+/// The write scope's node index, as this pass's own gated reads discovered it.
+///
+/// A node id locates nothing on its own — only a gated parent's read body names
+/// its children — so the enumeration's descent is what supplies every name below
+/// the root, and no caller-supplied label ever chooses where a node is read.
+#[derive(Default)]
+pub struct WaveSubtree {
+    inner: RefCell<Discovered>,
+}
+
+#[derive(Default)]
+struct Discovered {
+    names: BTreeMap<[u8; 16], IpnsName>,
+    /// The root's directly-descendant scope roots: each rotates under its own
+    /// write scope seed, so the wave stops at them (`grants/child_index.rs`).
+    child_scopes: BTreeSet<[u8; 16]>,
+}
+
+impl WaveSubtree {
+    /// The name a gated parent gave `node_id`.
+    fn name(&self, node_id: &[u8; 16]) -> Option<IpnsName> {
+        self.inner.borrow().names.get(node_id).cloned()
+    }
+
+    fn record_child_scopes(&self, index: &[ChildScopeRef]) {
+        self.inner
+            .borrow_mut()
+            .child_scopes
+            .extend(index.iter().map(|child| child.scope_id));
+    }
+
+    /// Record `body`'s in-scope children at the names it gives them and return
+    /// their ids for the walk to descend into.
+    ///
+    /// Two parents naming one id at **different** names is the read plane's C2
+    /// conflict ([`ResolveFailure::ConflictingChildLabel`]): rotating the one
+    /// picked would leave the other name live, so the walk aborts instead.
+    fn record_children(&self, body: &ReadBody) -> Result<Vec<[u8; 16]>, ResolveFailure> {
+        let ReadBody::Folder { children, .. } = body else {
+            return Ok(Vec::new());
+        };
+        let mut inner = self.inner.borrow_mut();
+        let mut ids = Vec::with_capacity(children.len());
+        for child in children {
+            if inner.child_scopes.contains(&child.id) {
+                continue;
+            }
+            let name = scope_name(&child.ipns_name)?;
+            match inner.names.entry(child.id) {
+                Entry::Occupied(seen) if *seen.get() != name => {
+                    return Err(ResolveFailure::ConflictingChildLabel);
+                }
+                Entry::Occupied(_) => {}
+                Entry::Vacant(slot) => {
+                    slot.insert(name);
+                }
+            }
+            ids.push(child.id);
+        }
+        Ok(ids)
+    }
 }
 
 /// The scope root's gated read, held across a failed publish.
@@ -837,6 +905,27 @@ fn wave_verdict(error: GateError) -> WritePublishError {
     match error {
         GateError::Rejected(_) => WritePublishError::Rejected,
         GateError::Seam(_) => WritePublishError::NotLanded,
+    }
+}
+
+/// The same axis for a read the wave shares with the read-plane rotation edges.
+fn wave_read_verdict(failure: ResolveFailure) -> WritePublishError {
+    match failure {
+        ResolveFailure::Unavailable => WritePublishError::NotLanded,
+        ResolveFailure::Rejected | ResolveFailure::ConflictingChildLabel => {
+            WritePublishError::Rejected
+        }
+    }
+}
+
+/// The same axis back out to the subtree enumeration: only a fail-closed refusal
+/// is a rejection, so no trust verdict is laundered into a retryable stall.
+fn subtree_verdict(error: WritePublishError) -> ResolveFailure {
+    match error {
+        WritePublishError::Rejected => ResolveFailure::Rejected,
+        WritePublishError::NotLanded
+        | WritePublishError::LostRace
+        | WritePublishError::RegistryFull => ResolveFailure::Unavailable,
     }
 }
 
@@ -949,46 +1038,55 @@ where
         if let Some(seed) = self.parent_node_seed {
             adopter = adopter.under_parent_node_seed(Zeroizing::new(*seed));
         }
-        let (candidate, outcome) = adopter
-            .adopt_root(name, record_bytes)
-            .await
-            .map_err(wave_verdict)?;
-        let envelope = candidate.envelope;
+        // Adopting the root raises this name's sequence floor, so the pass that
+        // enumerated it reads its own record back through the at-floor recovery
+        // — a wave must be able to re-read the root it has not yet re-pointed.
+        let gated = match adopter.adopt_root(name, record_bytes).await {
+            Ok((candidate, outcome)) => GatedScopeRoot {
+                envelope: candidate.envelope,
+                section: candidate.grant_section,
+                read_body: outcome.adopted.read_body,
+                read_scope_seed: outcome
+                    .read_scope_seed
+                    .ok_or(WritePublishError::NotLanded)?,
+                write_scope_seed: outcome.write_scope_seed,
+            },
+            Err(GateError::Seam(_)) => return Err(WritePublishError::NotLanded),
+            Err(GateError::Rejected(rejection)) => {
+                reread_at_floor(&adopter, name, record_bytes, &rejection.reason)
+                    .await
+                    .map_err(wave_read_verdict)?
+            }
+        };
+        let envelope = gated.envelope;
         // The root gate binds `envelope.scope` but not `envelope.id`, and every
         // AAD this republish authors binds the id — so a root whose record claims
         // another node would be re-sealed under a key no reader re-derives.
         if envelope.v != ENVELOPE_V || envelope.id != self.scope_id {
             return Err(WritePublishError::Rejected);
         }
-        let read_scope_seed = outcome
-            .read_scope_seed
-            .ok_or(WritePublishError::NotLanded)?;
-        let write_scope_seed = outcome
-            .write_scope_seed
-            .ok_or(WritePublishError::NotLanded)?;
+        let read_scope_seed = gated.read_scope_seed;
+        let write_scope_seed = gated.write_scope_seed.ok_or(WritePublishError::NotLanded)?;
         let write_epoch = floor::write_epoch_floor(self.floors, &self.scope_id)
             .await
             .map_err(|_| WritePublishError::NotLanded)?
             .ok_or(WritePublishError::NotLanded)?;
         let write_body = open_write_body(
             &envelope,
-            &candidate.grant_section,
+            &gated.section,
             &self.scope_id,
             &write_scope_seed,
             write_epoch,
         )
-        .map_err(|failure| match failure {
-            ResolveFailure::Unavailable => WritePublishError::NotLanded,
-            _ => WritePublishError::Rejected,
-        })?;
+        .map_err(wave_read_verdict)?;
         Ok(WaveSource {
-            read_body: outcome.adopted.read_body,
-            read_epoch: outcome.adopted.epoch,
+            read_body: gated.read_body,
+            read_epoch: envelope.epoch,
             read_key: read_key_for(&read_scope_seed, &envelope.id),
             unknown: envelope.unknown,
             epoch_tag_unknown: envelope.epoch_tag_unknown,
             root: Some(RootPlane {
-                section: candidate.grant_section,
+                section: gated.section,
                 read_scope_seed,
                 write_body,
                 write_epoch,
@@ -1245,6 +1343,48 @@ where
     }
 }
 
+impl<T, H: Http, C: CredentialStore, F, Sch, E> WriteSubtreeResolver
+    for WriteWaveNet<'_, T, H, C, F, Sch, E>
+where
+    T: RecordTransport,
+    F: FloorStore,
+{
+    async fn resolve_node(&self, node_id: &[u8; 16]) -> Result<WriteScopeNode, ResolveFailure> {
+        let is_root = *node_id == self.scope_id;
+        let current_name = if is_root {
+            self.current_root_name.clone()
+        } else {
+            self.subtree.name(node_id).ok_or(ResolveFailure::Rejected)?
+        };
+        let Some((_, record_bytes)) = fanout_get_verify(self.transport, &current_name).await else {
+            return Err(ResolveFailure::Unavailable);
+        };
+        let source = if is_root {
+            self.root_source(&current_name, &record_bytes).await
+        } else {
+            self.interior_source(*node_id, &current_name, &record_bytes)
+                .await
+        }
+        .map_err(subtree_verdict)?;
+
+        if let Some(plane) = &source.root {
+            self.subtree
+                .record_child_scopes(&plane.write_body.direct_child_scope_index);
+        }
+        let child_node_ids = self.subtree.record_children(&source.read_body)?;
+        // The enumeration's read of the root is the one its republish runs off
+        // ([`GatedWaveRoot`]); an interior node re-opens its own record instead.
+        if is_root {
+            self.gated_root.park(&current_name, source);
+        }
+        Ok(WriteScopeNode {
+            node_id: *node_id,
+            current_name,
+            child_node_ids,
+        })
+    }
+}
+
 impl<T, H: Http, C: CredentialStore, F, Sch, E> WriteWavePublisher
     for WriteWaveNet<'_, T, H, C, F, Sch, E>
 where
@@ -1341,10 +1481,12 @@ mod tests {
     use crate::content::GatewaySource;
     use crate::rotation::{
         CascadeError, CascadeOutcome, CommittedSet, PrevEpochSeed, ResealSeeds, RotateScopePlan,
-        ScopeRootIdentity, cascade_rotate_scope, derive_write_name, enumerate_eager_set,
-        reseal_scope_root, rotate_scope,
+        RotateScopeWritePlan, ScopeRootIdentity, WriteRotateError, cascade_rotate_scope,
+        derive_write_name, enumerate_eager_set, reseal_scope_root, rotate_scope,
+        rotate_scope_write,
     };
     use crate::seams::{EndpointId, HttpResponse, SeamError, SeamResult};
+    use crate::sync::pointer::open_repoint;
     use crate::testkit::fakes::{
         InMemoryCredentialStore, InMemoryFloorStore, InMemoryRecordStore, ScriptedHttp,
         VirtualScheduler,
@@ -2854,6 +2996,7 @@ mod tests {
             owner_enc_secret: &harness.enc_secret,
             scope_keys: &WaveSeeds,
             gated_root: GatedWaveRoot::default(),
+            subtree: WaveSubtree::default(),
             owner_pointer_seed: &OWNER_POINTER_SEED,
             current_root_name: current_root,
         }
@@ -3349,5 +3492,321 @@ mod tests {
                 "{check} is deterministic on inputs the wave already gated; retrying never converges"
             );
         }
+    }
+
+    // --- the subtree enumeration: the wave's read edge ---------------------
+
+    const MID: [u8; 16] = [0x60; 16];
+    const LEAF: [u8; 16] = [0x61; 16];
+
+    /// A scope whose root names `MID` (which names `LEAF`) plus a descendant
+    /// scope root the wave must stop at, with the scope root staged and gated.
+    ///
+    /// The descendant scope root's own record is deliberately never served: a
+    /// walk that descended into it would stall on an unresolvable node.
+    fn staged_scope(harness: &Harness<InMemoryRecordStore>) -> (OwnerRootFixture, IpnsName) {
+        let leaf_old = stage_node(harness, LEAF, &folder(Vec::new()));
+        let mid_old = stage_node(harness, MID, &folder(vec![ref_to(LEAF, &leaf_old)]));
+        let descendant = interior(CHILD_SCOPE, &OWNER_ROOT_SCOPE_SEED, Vec::new());
+        let root = owner_root_fixture(OwnerRootSpec {
+            owner_identity: &owner_identity(),
+            owner_enc: &owner_enc().public(),
+            scope_id: SCOPE,
+            root_id: SCOPE,
+            children: vec![ref_to(MID, &mid_old), ref_to(CHILD_SCOPE, &descendant.name)],
+            child_scope_index: vec![child_ref(CHILD_SCOPE, &descendant)],
+            parent_node_seed: None,
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+        });
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        (root, mid_old)
+    }
+
+    /// A root whose read body names one child, staged and gated.
+    fn staged_root_naming(
+        harness: &Harness<InMemoryRecordStore>,
+        children: Vec<ChildRef>,
+    ) -> OwnerRootFixture {
+        let root = owner_root_fixture(OwnerRootSpec {
+            owner_identity: &owner_identity(),
+            owner_enc: &owner_enc().public(),
+            scope_id: SCOPE,
+            root_id: SCOPE,
+            children,
+            child_scope_index: Vec::new(),
+            parent_node_seed: None,
+            owner_write_blob_epoch: Some(OWNER_ROOT_EPOCH),
+        });
+        harness.stage(SCOPE, &root, Some(OWNER_ROOT_EPOCH));
+        root
+    }
+
+    /// The wave the write-plane rotation runs, pinned to a known fresh seed so
+    /// every derived name in the assertions is computable.
+    fn write_plan<'a>(
+        root: &'a OwnerRootFixture,
+        owner: &'a EcdsaSigner,
+    ) -> RotateScopeWritePlan<'a> {
+        RotateScopeWritePlan {
+            scope_id: SCOPE,
+            payload_version: 1,
+            owner_pointer_seed: &OWNER_POINTER_SEED,
+            commitment: &root.grant_section.commitment,
+            commitment_sig: &root.grant_section.commitment_sig,
+            owner_identity_signer: owner,
+            current_write_epoch: OWNER_ROOT_EPOCH,
+            min_read_epoch: OWNER_ROOT_EPOCH,
+            current_root_name: &root.name,
+            resume_write_scope_seed: Some(&FRESH_WRITE_SCOPE_SEED),
+        }
+    }
+
+    /// Whether anything at all was published at `name`.
+    fn published_at<T: RecordTransport + Clone>(harness: &Harness<T>, name: &IpnsName) -> bool {
+        harness
+            .store
+            .record_at(&harness.store.endpoints()[0], name.as_str())
+            .is_some()
+    }
+
+    #[test]
+    fn the_enumeration_descends_gated_records_and_stops_at_a_descendant_scope_root() {
+        let harness = Harness::plain();
+        let (root, mid_old) = staged_scope(&harness);
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+
+        let resolved = block_on(net.resolve_node(&SCOPE)).expect("the root resolves");
+        assert_eq!(
+            resolved,
+            WriteScopeNode {
+                node_id: SCOPE,
+                current_name: root.name.clone(),
+                child_node_ids: vec![MID],
+            },
+            "a descendant scope root rotates under its own write scope seed, so \
+             the wave never descends into it"
+        );
+
+        let mid = block_on(net.resolve_node(&MID)).expect("the child resolves");
+        assert_eq!(
+            mid.current_name, mid_old,
+            "at the name its gated parent gave"
+        );
+        assert_eq!(mid.child_node_ids, vec![LEAF]);
+        assert_eq!(
+            block_on(net.resolve_node(&LEAF))
+                .expect("the leaf resolves")
+                .child_node_ids,
+            Vec::<[u8; 16]>::new()
+        );
+    }
+
+    #[test]
+    fn a_node_no_gated_record_named_has_no_name_to_read_at() {
+        // The enumeration's own descent is the only source of a node's name, so
+        // an id nothing gated named is a fail-closed refusal, not a fetch.
+        let harness = Harness::plain();
+        let (root, _) = staged_scope(&harness);
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+
+        assert_eq!(
+            block_on(net.resolve_node(&[0xee; 16])),
+            Err(ResolveFailure::Rejected)
+        );
+    }
+
+    #[test]
+    fn one_id_named_at_two_names_aborts_rather_than_picking() {
+        // Rotating whichever name was seen first would leave the other live under
+        // a root that claims to have moved.
+        let harness = Harness::plain();
+        let elsewhere = derive_write_name(&FRESH_WRITE_SCOPE_SEED, &LEAF);
+        let leaf_old = stage_node(&harness, LEAF, &folder(Vec::new()));
+        let mid_old = stage_node(&harness, MID, &folder(vec![ref_to(LEAF, &elsewhere)]));
+        let root = staged_root_naming(
+            &harness,
+            vec![ref_to(MID, &mid_old), ref_to(LEAF, &leaf_old)],
+        );
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+
+        block_on(net.resolve_node(&SCOPE)).expect("the root resolves");
+        assert_eq!(
+            block_on(net.resolve_node(&MID)),
+            Err(ResolveFailure::ConflictingChildLabel)
+        );
+    }
+
+    #[test]
+    fn a_gate_rejected_node_aborts_the_wave_and_is_never_reported_as_staleness() {
+        // A record that cannot be authoritatively obtained must not be laundered
+        // into a retryable stall (rule 6), and a truncated enumeration would
+        // re-point the root over interior nodes that never moved.
+        let harness = Harness::plain();
+        let served = stage_node(&harness, LEAF, &folder(Vec::new()));
+        // The root names a node id at a record that claims a different id — the
+        // transplant the child gate refuses.
+        let root = staged_root_naming(&harness, vec![ref_to(MID, &served)]);
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let mut entropy = SeededEntropy::new(13);
+
+        let error = block_on(rotate_scope_write(
+            &mut entropy,
+            &net,
+            &net,
+            &write_plan(&root, &owner),
+        ))
+        .expect_err("the wave aborts");
+        assert_eq!(
+            error,
+            WriteRotateError::Resolve {
+                node_id: MID,
+                reason: ResolveFailure::Rejected,
+            }
+        );
+        assert!(!error.is_retryable(), "a gate verdict no retry can clear");
+        assert!(
+            !published_at(&harness, &scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE)),
+            "the root is never re-pointed over a subtree the wave could not enumerate"
+        );
+        assert!(!published_at(
+            &harness,
+            &derive_write_name(&FRESH_WRITE_SCOPE_SEED, &SCOPE)
+        ));
+    }
+
+    #[test]
+    fn an_unresolvable_node_aborts_the_wave_rather_than_truncating_the_subtree() {
+        let harness = Harness::plain();
+        let unserved = derive_write_name(&OWNER_ROOT_WRITE_SCOPE_SEED, &LEAF);
+        let root = staged_root_naming(&harness, vec![ref_to(LEAF, &unserved)]);
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let mut entropy = SeededEntropy::new(13);
+
+        let error = block_on(rotate_scope_write(
+            &mut entropy,
+            &net,
+            &net,
+            &write_plan(&root, &owner),
+        ))
+        .expect_err("the wave aborts");
+        assert_eq!(
+            error,
+            WriteRotateError::Resolve {
+                node_id: LEAF,
+                reason: ResolveFailure::Unavailable,
+            }
+        );
+        assert!(error.is_retryable(), "no host served it — availability");
+        assert!(
+            !published_at(&harness, &scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE)),
+            "an incomplete enumeration never reaches the re-point"
+        );
+    }
+
+    #[test]
+    fn the_production_edges_carry_the_whole_wave_from_enumeration_to_re_point() {
+        let harness = Harness::plain();
+        let (root, mid_old) = staged_scope(&harness);
+        let owner = owner_identity();
+        let net = wave(&harness, &owner, &root.name);
+        let mut entropy = SeededEntropy::new(13);
+
+        let outcome = block_on(rotate_scope_write(
+            &mut entropy,
+            &net,
+            &net,
+            &write_plan(&root, &owner),
+        ))
+        .expect("the wave completes over the production seams");
+
+        assert_eq!(outcome.new_write_epoch, OWNER_ROOT_EPOCH + 1);
+        assert_eq!(
+            outcome.new_root_name,
+            derive_write_name(&FRESH_WRITE_SCOPE_SEED, &SCOPE)
+        );
+        assert_eq!(
+            outcome.interior_node_count, 2,
+            "MID and LEAF, and not the descendant scope root"
+        );
+        assert!(
+            outcome.repoint_accelerators.is_empty(),
+            "neither accelerator has a wire shape to publish on"
+        );
+
+        // The canonical flip carries the owner-signed re-point object.
+        let pointer = scope_pointer_name(&OWNER_POINTER_SEED, &SCOPE);
+        let block = harness
+            .store
+            .record_at(&harness.store.endpoints()[0], pointer.as_str())
+            .and_then(|bytes| IpnsRecord::unmarshal(&bytes).ok()?.verify(&pointer).ok())
+            .expect("the pointer record verifies under its own name")
+            .value;
+        let repoint = open_repoint(
+            kdf::pointer_read_key(&OWNER_POINTER_SEED, &SCOPE).as_bytes(),
+            1,
+            &SCOPE,
+            &owner.verifying_key(),
+            &block,
+        )
+        .expect("the re-point object opens under the owner's pointer key");
+        assert_eq!(repoint.current_root, outcome.new_root_name);
+        assert_eq!(repoint.prev_root, Some(root.name.clone()));
+
+        // A read-only holder follows the re-point and descends by child refs
+        // alone — the proof every interior node moved and every parent was
+        // rewritten.
+        let mut name = outcome.new_root_name.clone();
+        let mut node_id = SCOPE;
+        for expected in [MID, LEAF] {
+            let refs = child_names_of(&read_only_open(&harness, node_id, &name));
+            let next = refs
+                .iter()
+                .map(|bytes| core::str::from_utf8(bytes).expect("a utf8 name"))
+                .find(|text| {
+                    *text == derive_write_name(&FRESH_WRITE_SCOPE_SEED, &expected).as_str()
+                })
+                .expect("the parent names the child at the name the wave moved it to");
+            name = IpnsName::parse(next).expect("a canonical name");
+            node_id = expected;
+        }
+        assert_ne!(name, mid_old, "no retired name survives the descent");
+
+        // The descendant scope root keeps its own name: it rotates under its own
+        // write scope seed, not this wave's.
+        let descendant = interior(CHILD_SCOPE, &OWNER_ROOT_SCOPE_SEED, Vec::new());
+        assert!(
+            child_names_of(&read_only_open(&harness, SCOPE, &outcome.new_root_name))
+                .contains(&descendant.name.as_str().as_bytes().to_vec())
+        );
+    }
+
+    #[test]
+    fn a_resumed_wave_re_resolves_the_subtree_from_published_records_alone() {
+        // A crash leaves the durable floors raised, so the resumed pass reads its
+        // own un-re-pointed root back through the at-floor recovery rather than a
+        // second adopt — with no in-memory carry from the pass that raised them.
+        let harness = Harness::plain();
+        let (root, _) = staged_scope(&harness);
+        let owner = owner_identity();
+
+        let first = wave(&harness, &owner, &root.name);
+        let before: Vec<WriteScopeNode> = [SCOPE, MID, LEAF]
+            .into_iter()
+            .map(|id| block_on(first.resolve_node(&id)).expect("the first pass enumerates"))
+            .collect();
+        drop(first);
+
+        let resumed = wave(&harness, &owner, &root.name);
+        let after: Vec<WriteScopeNode> = [SCOPE, MID, LEAF]
+            .into_iter()
+            .map(|id| block_on(resumed.resolve_node(&id)).expect("the resumed pass enumerates"))
+            .collect();
+
+        assert_eq!(before, after);
     }
 }
