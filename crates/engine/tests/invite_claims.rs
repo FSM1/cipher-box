@@ -255,6 +255,12 @@ fn the_transport_sees_no_claim_field_in_the_clear() {
         &claimant_identity.verifying_key().to_sec1(),
         scope_name().as_slice(),
     ] {
+        // `windows` yields nothing when the payload is shorter than the needle,
+        // which would pass the scan below without scanning anything.
+        assert!(
+            sealed.len() >= secret.len(),
+            "the sealed payload is too short for this scan to mean anything",
+        );
         assert!(
             !sealed.windows(secret.len()).any(|w| w == secret),
             "the transport must carry no claim field in the clear",

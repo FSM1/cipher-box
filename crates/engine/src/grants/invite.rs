@@ -642,6 +642,18 @@ pub fn revoke_invite_link(
     link: &RecordedInvite,
 ) -> Result<InviteRevocation, InviteError> {
     owner.authorise(scope)?;
+    // Re-derive the record's tag on the same rule as `convert_invite_claim`, so a
+    // record from another scope root cannot cut an ordinary grantee's entry.
+    let link_enc =
+        X25519Public::from_bytes(link.ephemeral_enc_pk).ok_or(InviteError::LinkNotCommitted)?;
+    if recipient_blinded_tag(
+        owner.enc_secret,
+        &link_enc,
+        scope.commitment.ipns_name.as_slice(),
+    ) != Some(link.tag)
+    {
+        return Err(InviteError::LinkNotCommitted);
+    }
     let capability = scope
         .commitment
         .entries
@@ -1467,6 +1479,20 @@ mod tests {
             )
             .is_ok()
         );
+        // Two records answering to one ephemeral identity refuse rather than
+        // resolve to the first match.
+        assert_eq!(
+            convert_invite_claim(
+                &owner,
+                &scope,
+                &[l.link, l.link],
+                &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
+                UnixMillis(0),
+            )
+            .unwrap_err()
+            .check(),
+            "link-not-committed",
+        );
         // A link the owner revoked from the committed set no longer converts.
         let (cut, cut_sig, cut_ledger) = committed(&[]);
         assert_eq!(
@@ -1625,6 +1651,18 @@ mod tests {
         let unknown = link(0x73, Permission::Read, None);
         assert_eq!(
             revoke_invite_link(&owner, &scope, &unknown.link)
+                .unwrap_err()
+                .check(),
+            "link-not-committed",
+        );
+        // A record carrying a committed tag its own ephemeral key does not derive
+        // is refused, so an owner-side mix-up cannot cut an ordinary grantee.
+        let mixed = RecordedInvite {
+            tag: read.row.tag,
+            ..unknown.link
+        };
+        assert_eq!(
+            revoke_invite_link(&owner, &scope, &mixed)
                 .unwrap_err()
                 .check(),
             "link-not-committed",
