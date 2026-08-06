@@ -544,11 +544,28 @@ impl<H: Http, C: CredentialStore> ApiClient<H, C> {
             headers.push(((*name).to_owned(), (*value).to_owned()));
         }
         // Scope the borrow so it never crosses the await below.
-        if let Some(token) = self.state.borrow().access_token.as_ref() {
-            headers.push(
-                bearer_header(token.as_str())
-                    .map_err(|_| ApiError::Decode("unusable access token".into()))?,
-            );
+        let bearer = {
+            let mut state = self.state.borrow_mut();
+            let built = state
+                .access_token
+                .as_ref()
+                .map(|token| bearer_header(token.as_str()));
+            match built {
+                Some(Ok(header)) => Some(header),
+                // Drop a token that can never be a header value instead of
+                // refusing every later call while still holding it: the next
+                // call then goes out unauthenticated and its 401 drives one
+                // refresh. The refresh credential is a separate secret and
+                // stays, so a malformed response cannot end the session.
+                Some(Err(_)) => {
+                    state.access_token = None;
+                    return Err(ApiError::Decode("unusable access token".into()));
+                }
+                None => None,
+            }
+        };
+        if let Some(header) = bearer {
+            headers.push(header);
         }
         let request = HttpRequest {
             method,
@@ -1354,6 +1371,25 @@ mod tests {
             ApiError::Decode("unusable access token".into())
         );
         assert_eq!(http.requests().len(), 2, "no request carried the token");
+        assert!(!client.is_authenticated(), "the unusable token was dropped");
+
+        // Self-heal: the next call goes out unauthenticated, and its 401 buys
+        // one rotation off the still-held refresh credential.
+        http.enqueue_response(json_response(401, json!({ "message": "no bearer" })));
+        http.enqueue_response(json_response(
+            200,
+            json!({ "accessToken": "jwt-2", "refreshToken": "b".repeat(64) }),
+        ));
+        http.enqueue_response(json_response(
+            200,
+            json!({ "usedBytes": 1, "limitBytes": 2, "advisory": false }),
+        ));
+
+        block_on(client.quota()).expect("the session recovered");
+        let requests = http.requests();
+        assert!(!has_bearer(&requests[2]), "the dropped token was not sent");
+        assert_eq!(requests[3].url, "http://api.test/auth/refresh");
+        assert!(has_bearer(&requests[4]), "the retry carried the new token");
     }
 
     #[test]

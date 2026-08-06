@@ -95,6 +95,22 @@ describe('FetchHttp credential scoping', () => {
   });
 });
 
+/**
+ * A server answering 3xx, modelled as the Fetch spec resolves one: under
+ * `redirect: 'error'` the redirect is a network error, otherwise it is handed
+ * back as a response.
+ */
+function redirectingFetch(): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((_url: string, init: RequestInit) =>
+      init.redirect === 'error'
+        ? Promise.reject(new TypeError('Failed to fetch'))
+        : Promise.resolve(new Response(null, { status: 302, headers: { location: '/elsewhere' } }))
+    )
+  );
+}
+
 describe('FetchHttp redirects', () => {
   it('refuses them on both paths, as the record transport does', async () => {
     const fetches = recordingFetch();
@@ -104,6 +120,14 @@ describe('FetchHttp redirects', () => {
     await http.sendCapped(GET, 1000);
 
     expect(fetches.inits.map((init) => init.redirect)).toEqual(['error', 'error']);
+  });
+
+  it('rejects a redirecting server rather than following or returning it', async () => {
+    redirectingFetch();
+    const http = new FetchHttp();
+
+    await expect(http.send(GET)).rejects.toThrow(TypeError);
+    await expect(http.sendCapped(GET, 1000)).rejects.toThrow(TypeError);
   });
 });
 
