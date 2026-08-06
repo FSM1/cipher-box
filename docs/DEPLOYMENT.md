@@ -92,7 +92,7 @@ The `deploy-vps` job:
 
 1. Downloads the web dist artifact
 2. Generates `.env.staging` from GitHub Actions secrets/vars and appends image tags and component versions
-3. SCPs `.env.staging`, `docker/docker-compose.staging.yml`, `docker/Caddyfile`, and `docker/alloy-config.river` to `/opt/cipherbox/` on the staging VPS <!-- VERIFY: VPS host address is in STAGING_HOST secret -->
+3. SCPs `.env.staging`, `docker/docker-compose.staging.yml`, `docker/Caddyfile`, and `docker/alloy-config.river` to `/opt/cipherbox/` on the staging VPS <!-- VERIFY: VPS host address is in the HOST variable -->
 4. Copies the web dist to `/opt/cipherbox/web/` (with `rm: true` to replace previous dist)
 5. On the VPS: logs in to GHCR, pulls new images, runs database migrations (`node dist/run-migrations.js`), brings services up with `docker compose up -d`, restarts Caddy, and prunes old images
 
@@ -258,10 +258,10 @@ Key vars (non-secret):
 
 | Variable                  | Description                                                     |
 | ------------------------- | --------------------------------------------------------------- |
-| `STAGING_HOST`            | VPS hostname/IP <!-- VERIFY -->                                 |
-| `STAGING_USER`            | VPS SSH username <!-- VERIFY -->                                |
+| `HOST`                    | VPS hostname/IP <!-- VERIFY -->                                 |
+| `USER`                    | VPS SSH username <!-- VERIFY -->                                |
 | `API_URL`                 | Public API URL injected into web/desktop builds <!-- VERIFY --> |
-| `STAGING_DB_USERNAME`     | PostgreSQL username                                             |
+| `DB_USERNAME`             | PostgreSQL username                                             |
 | `CORS_ALLOWED_ORIGINS`    | Comma-separated allowed CORS origins                            |
 | `VITE_WEB3AUTH_CLIENT_ID` | Web3Auth client ID                                              |
 | `GOOGLE_CLIENT_ID`        | Google OAuth client ID                                          |

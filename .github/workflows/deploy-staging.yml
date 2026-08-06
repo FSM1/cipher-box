@@ -398,7 +398,7 @@ jobs:
           PORT=3000
           DB_HOST=postgres
           DB_PORT=5432
-          DB_USERNAME=${{ vars.STAGING_DB_USERNAME }}
+          DB_USERNAME=${{ vars.DB_USERNAME }}
           DB_PASSWORD=${{ secrets.STAGING_DB_PASSWORD }}
           DB_DATABASE=cipherbox_staging
           JWT_SECRET=${{ secrets.STAGING_JWT_SECRET }}
@@ -428,8 +428,8 @@ jobs:
       - name: Copy files to VPS
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
-          host: ${{ vars.STAGING_HOST }}
-          username: ${{ vars.STAGING_USER }}
+          host: ${{ vars.HOST }}
+          username: ${{ vars.USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
           source: '.env.staging,docker/docker-compose.staging.yml,docker/Caddyfile,docker/alloy-config.river,docker/ipfs-init/001-provide-strategy.sh'
           target: /opt/cipherbox
@@ -438,8 +438,8 @@ jobs:
       - name: Arrange files on VPS
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
-          host: ${{ vars.STAGING_HOST }}
-          username: ${{ vars.STAGING_USER }}
+          host: ${{ vars.HOST }}
+          username: ${{ vars.USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
           script: |
             # Move files to correct locations
@@ -459,8 +459,8 @@ jobs:
       - name: Deploy web app files to VPS
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
-          host: ${{ vars.STAGING_HOST }}
-          username: ${{ vars.STAGING_USER }}
+          host: ${{ vars.HOST }}
+          username: ${{ vars.USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
           source: 'web-dist/*'
           target: /opt/cipherbox/web
@@ -470,8 +470,8 @@ jobs:
       - name: Deploy services
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
-          host: ${{ vars.STAGING_HOST }}
-          username: ${{ vars.STAGING_USER }}
+          host: ${{ vars.HOST }}
+          username: ${{ vars.USER }}
           key: ${{ secrets.STAGING_SSH_KEY }}
           script: |
             set -euo pipefail
