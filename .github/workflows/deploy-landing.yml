@@ -20,16 +20,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # appleboy's actions skip host-key verification when `fingerprint` is empty,
-      # so an unset variable would silently restore the trust-on-first-use hole.
+      # appleboy's actions skip host-key verification entirely when `fingerprint`
+      # is empty, so a missing or malformed value must fail the job here rather
+      # than open an unverified connection.
       - name: Require a pinned host key
         env:
           SSH_HOST_FINGERPRINT: ${{ vars.SSH_HOST_FINGERPRINT }}
         run: |
-          if [ -z "$SSH_HOST_FINGERPRINT" ]; then
-            echo '::error::the staging environment needs the SSH_HOST_FINGERPRINT variable (ssh-keyscan -t ed25519 HOST | ssh-keygen -lf -)'
-            exit 1
-          fi
+          case "$SSH_HOST_FINGERPRINT" in
+            SHA256:?*) ;;
+            *)
+              echo "::error::the staging environment needs SSH_HOST_FINGERPRINT set to the host key's SHA256 fingerprint: ssh-keyscan HOST | ssh-keygen -lf - | cut -d' ' -f2"
+              exit 1
+              ;;
+          esac
 
       - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
 
