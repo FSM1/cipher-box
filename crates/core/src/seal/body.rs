@@ -375,6 +375,24 @@ pub(crate) fn assert_grant_tags_unique(
     Ok(())
 }
 
+/// Release-active bound on a repeated collection, symmetric across decode and
+/// encode (AGENTS.md rule 8).
+pub(crate) fn assert_within_bound(
+    collection: &'static str,
+    count: usize,
+    limit: usize,
+) -> Result<(), CodecError> {
+    if count > limit {
+        return Err(Malformed::TooManyStructures {
+            collection,
+            count,
+            limit,
+        }
+        .into());
+    }
+    Ok(())
+}
+
 /// Fail-closed uniqueness over one folder's child listing (#39 D7).
 fn assert_children_unique(children: &[ChildRef]) -> Result<(), CodecError> {
     let mut ids = BTreeSet::new();

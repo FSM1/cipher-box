@@ -5729,6 +5729,23 @@ fn build_grant_set_reject() -> Vec<GrantSetRejectVector> {
             commitment_of(vec![], true),
             "missing-field",
         ),
+        (
+            // One past the ceiling, all tags distinct so the bound is what fires
+            // — every write entry is another key the gate trial-verifies each
+            // structure against.
+            "entries-past-the-bound",
+            commitment_of(
+                (0..=seal::MAX_GRANT_BLOBS as u64)
+                    .map(|i| {
+                        let mut tag = vec![0u8; 32];
+                        tag[..8].copy_from_slice(&i.to_be_bytes());
+                        grant_set_entry_map(tag, "write", vec![0x02; 32])
+                    })
+                    .collect(),
+                false,
+            ),
+            "too-many-structures",
+        ),
     ];
 
     let mut names = BTreeSet::new();

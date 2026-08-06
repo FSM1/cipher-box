@@ -17,6 +17,7 @@
 //! AAD-confirmed-unseal rule of the floor law.
 
 use core::fmt;
+use std::collections::BTreeSet;
 
 use cipherbox_core::error::{CodecError, TrustViolation};
 use cipherbox_core::ipns::{IpnsName, IpnsRecord};
@@ -308,48 +309,66 @@ impl PendingAdoption {
 /// The committed write-capable pseudonyms of a scope root: the owner pseudonym
 /// plus every write-permission entry's pseudonym. Read-only entries never
 /// authorize a seed-bearing structure.
+///
+/// Deduplicated: only a tag is unique across committed entries, so one pseudonym
+/// may be named by many. A repeat authenticates nothing the first copy did not,
+/// and each copy would cost every structure another trial verification.
 fn committed_write_pseudonyms(commitment: &GrantSetCommitment) -> Vec<Ed25519Verifier> {
-    let mut set = Vec::new();
-    if let Some(owner) = Ed25519Verifier::from_bytes(commitment.owner_pseudonym_pk) {
-        set.push(owner);
-    }
-    for entry in &commitment.entries {
-        if entry.permission == Permission::Write {
-            if let Some(pk) = Ed25519Verifier::from_bytes(entry.pseudonym_pk) {
-                set.push(pk);
-            }
-        }
-    }
-    set
+    let writers = commitment
+        .entries
+        .iter()
+        .filter(|e| e.permission == Permission::Write)
+        .map(|e| e.pseudonym_pk);
+    let mut seen = BTreeSet::new();
+    core::iter::once(commitment.owner_pseudonym_pk)
+        .chain(writers)
+        .filter(|pk| seen.insert(*pk))
+        .filter_map(Ed25519Verifier::from_bytes)
+        .collect()
 }
 
-/// Authenticate one seed-bearing structure against the committed write-capable
-/// pseudonyms, recomputing the signed input **from the record's actual sealed
-/// bytes**: the `ciphertext_hash` is `H(ciphertext)` over `ciphertext`,
-/// and `scope`/`epoch` come from the authenticated envelope — never a
-/// caller-supplied [`StructureSigInput`]. A signature therefore proves "the
-/// committed writer signed *these* bytes at *this* scope/epoch", not merely "the
-/// writer once signed some hash". The structure is trusted iff the recomputed
-/// input verifies under at least one committed pseudonym; otherwise the whole
-/// record is a `structure-signature-invalid` trust violation.
-fn authenticate_structure(
-    committed: &[Ed25519Verifier],
-    scope: [u8; 16],
-    epoch: u64,
-    struct_tag: u8,
-    recipient_tag: Option<[u8; 32]>,
-    ciphertext: &[u8],
-    signature: &[u8; 64],
-) -> Result<(), CodecError> {
-    let input =
-        StructureSigInput::over_ciphertext(scope, epoch, struct_tag, recipient_tag, ciphertext);
-    let sig = Ed25519Signature::from_bytes(*signature);
-    for pseudonym in committed {
-        if verify_structure(pseudonym, &input, &sig).is_ok() {
-            return Ok(());
+/// Trial-verifier over a section's committed write-capable pseudonyms, carrying
+/// the index that last verified. One re-seal signs every structure under a
+/// single rotator pseudonym, so resuming the scan there costs an honest section
+/// `pseudonyms + structures` trial verifications instead of their product.
+struct StructureAuthenticator {
+    committed: Vec<Ed25519Verifier>,
+    resume_at: usize,
+}
+
+impl StructureAuthenticator {
+    /// Authenticate one seed-bearing structure against the committed write-capable
+    /// pseudonyms, recomputing the signed input **from the record's actual sealed
+    /// bytes**: the `ciphertext_hash` is `H(ciphertext)` over `ciphertext`,
+    /// and `scope`/`epoch` come from the authenticated envelope — never a
+    /// caller-supplied [`StructureSigInput`]. A signature therefore proves "the
+    /// committed writer signed *these* bytes at *this* scope/epoch", not merely
+    /// "the writer once signed some hash". The structure is trusted iff the
+    /// recomputed input verifies under at least one committed pseudonym;
+    /// otherwise the whole record is a `structure-signature-invalid` trust
+    /// violation.
+    fn authenticate(
+        &mut self,
+        scope: [u8; 16],
+        epoch: u64,
+        struct_tag: u8,
+        recipient_tag: Option<[u8; 32]>,
+        ciphertext: &[u8],
+        signature: &[u8; 64],
+    ) -> Result<(), CodecError> {
+        let input =
+            StructureSigInput::over_ciphertext(scope, epoch, struct_tag, recipient_tag, ciphertext);
+        let sig = Ed25519Signature::from_bytes(*signature);
+        let n = self.committed.len();
+        for step in 0..n {
+            let i = (self.resume_at + step) % n;
+            if verify_structure(&self.committed[i], &input, &sig).is_ok() {
+                self.resume_at = i;
+                return Ok(());
+            }
         }
+        Err(TrustViolation::StructureSignatureInvalid.into())
     }
-    Err(TrustViolation::StructureSignatureInvalid.into())
 }
 
 /// The gate's stage-3 predicate: authenticate every structure signature
@@ -364,9 +383,12 @@ pub fn authenticate_section_structures(
     envelope: &Envelope,
 ) -> Result<(), CodecError> {
     let (scope, epoch) = (envelope.scope, envelope.epoch);
-    let committed = committed_write_pseudonyms(&section.commitment);
-    let authenticate = |tag: u8, recipient: Option<[u8; 32]>, ct: &[u8], sig: &[u8; 64]| {
-        authenticate_structure(&committed, scope, epoch, tag, recipient, ct, sig)
+    let mut auth = StructureAuthenticator {
+        committed: committed_write_pseudonyms(&section.commitment),
+        resume_at: 0,
+    };
+    let mut authenticate = |tag: u8, recipient: Option<[u8; 32]>, ct: &[u8], sig: &[u8; 64]| {
+        auth.authenticate(scope, epoch, tag, recipient, ct, sig)
     };
     authenticate(
         STRUCT_TAG_OWNER_BLOB,
@@ -667,6 +689,8 @@ fn reject(stage: GateStage, reason: RejectionReason) -> GateError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cipherbox_core::seal::sign_structure;
+    use cipherbox_core::suite::ed25519::Ed25519Signer;
 
     #[test]
     fn stage_names_are_stable_and_complete() {
@@ -712,5 +736,56 @@ mod tests {
     #[test]
     fn floor_verdicts_are_the_two_engine_domain_names() {
         assert_eq!(FLOOR_VERDICTS, &["sequence-not-newer", "epoch-below-floor"]);
+    }
+
+    #[test]
+    fn the_resume_hint_never_widens_or_narrows_who_authenticates() {
+        // The scan resumes where it last verified, so it must still accept a
+        // signature from any committed pseudonym — whatever its index — and
+        // still reject one from none of them.
+        let signers: Vec<Ed25519Signer> = (0u8..4)
+            .map(|i| Ed25519Signer::from_seed([i; 32]))
+            .collect();
+        let mut auth = StructureAuthenticator {
+            committed: signers.iter().map(|s| s.verifying_key()).collect(),
+            resume_at: 0,
+        };
+        let input = StructureSigInput::over_ciphertext(
+            [0x11; 16],
+            7,
+            STRUCT_TAG_OWNER_BLOB,
+            None,
+            b"ciphertext",
+        );
+        // Walk the committed set backwards, so every call starts from a resume
+        // index that is not the answer.
+        for signer in signers.iter().rev() {
+            let sig = sign_structure(signer, &input).to_bytes();
+            auth.authenticate(
+                [0x11; 16],
+                7,
+                STRUCT_TAG_OWNER_BLOB,
+                None,
+                b"ciphertext",
+                &sig,
+            )
+            .expect("a committed pseudonym authenticates from any resume point");
+        }
+
+        let outsider = Ed25519Signer::from_seed([0x99; 32]);
+        let sig = sign_structure(&outsider, &input).to_bytes();
+        assert_eq!(
+            auth.authenticate(
+                [0x11; 16],
+                7,
+                STRUCT_TAG_OWNER_BLOB,
+                None,
+                b"ciphertext",
+                &sig
+            )
+            .unwrap_err()
+            .check(),
+            "structure-signature-invalid"
+        );
     }
 }

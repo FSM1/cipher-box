@@ -40,9 +40,10 @@ use crate::codec::scrub::{ScrubOnDrop, ScrubOwned};
 
 use super::aad::{AadContext, build_aad};
 use super::body::{
-    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, bytes_fixed,
-    collect_unknown, merge_unknown, req,
+    PreservedFields, assert_grant_tags_unique, assert_unknown_disjoint, assert_within_bound,
+    bytes_fixed, collect_unknown, merge_unknown, req,
 };
+use super::section::MAX_GRANT_BLOBS;
 
 /// The HPKE `info` for every grant-section seal. The structured AAD already
 /// binds `(v, id, scope, epoch, structTag)`, so no additional info label is
@@ -751,13 +752,18 @@ pub struct GrantSetCommitment {
 const GRANT_SET_KNOWN: &[&str] = &["entries", "ipnsName", "ownerPseudonymPk"];
 
 /// Decode a grant-set commitment (strict det-CBOR, unknown fields preserved).
+///
+/// `entries` is bounded fail-closed at [`MAX_GRANT_BLOBS`] before any entry is
+/// parsed.
 pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, CodecError> {
     let value = decode(bytes)?;
     let map = value.as_map()?;
     let ipns_name = req(map, "ipnsName")?.as_bytes()?.to_vec();
     let owner_pseudonym_pk = bytes_fixed::<32>(req(map, "ownerPseudonymPk")?, "ownerPseudonymPk")?;
-    let mut entries = Vec::new();
-    for item in req(map, "entries")?.as_array()? {
+    let raw_entries = req(map, "entries")?.as_array()?;
+    assert_within_bound("entries", raw_entries.len(), MAX_GRANT_BLOBS)?;
+    let mut entries = Vec::with_capacity(raw_entries.len());
+    for item in raw_entries {
         entries.push(GrantSetEntry::from_value(item)?);
     }
     assert_grant_tags_unique(entries.iter().map(|e| e.tag))?;
@@ -772,10 +778,13 @@ pub fn decode_grant_set_commitment(bytes: &[u8]) -> Result<GrantSetCommitment, C
 /// Encode a grant-set commitment to its canonical det-CBOR form — the exact
 /// preimage the owner ECDSA-signs and a recipient verifies.
 ///
-/// Fails closed on a duplicate-tag commitment with the same `duplicate-grant-tag`
-/// verdict `decode_grant_set_commitment` raises, so the sign path never attests
-/// bytes every recipient rejects.
+/// Fails closed on a duplicate-tag commitment, or on an entry set past
+/// [`MAX_GRANT_BLOBS`], with the same verdict `decode_grant_set_commitment`
+/// raises, so the sign path never attests bytes every recipient rejects.
 pub fn encode_grant_set_commitment(c: &GrantSetCommitment) -> Result<Vec<u8>, CodecError> {
+    // Bound first, the order the decoder checks them in, so a value violating
+    // both invariants gets the same verdict from either side.
+    assert_within_bound("entries", c.entries.len(), MAX_GRANT_BLOBS)?;
     assert_grant_tags_unique(c.entries.iter().map(|e| e.tag))?;
     let mut m = Map::new();
     m.insert(
@@ -1187,6 +1196,83 @@ mod tests {
             sign_grant_set(&owner, &c).unwrap_err().check(),
             "duplicate-grant-tag"
         );
+    }
+
+    /// A commitment of `n` distinct-tag read entries.
+    fn commitment_of(n: usize) -> GrantSetCommitment {
+        GrantSetCommitment {
+            ipns_name: b"n".to_vec(),
+            owner_pseudonym_pk: [0x88; 32],
+            entries: (0..n)
+                .map(|i| {
+                    let mut tag = [0u8; SECRET_LEN];
+                    tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                    GrantSetEntry::new(tag, Permission::Read, [0x02; 32])
+                })
+                .collect(),
+            unknown: PreservedFields::new(),
+        }
+    }
+
+    #[test]
+    fn entries_past_the_bound_reject_at_decode_encode_and_sign() {
+        // Distinct tags, so the bound is what fires.
+        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+        let over = commitment_of(MAX_GRANT_BLOBS + 1);
+        assert_eq!(
+            encode_grant_set_commitment(&over).unwrap_err().check(),
+            "too-many-structures"
+        );
+        assert_eq!(
+            sign_grant_set(&owner, &over).unwrap_err().check(),
+            "too-many-structures"
+        );
+
+        // One value violating BOTH invariants, fed to both sides: over the bound
+        // and every tag equal. Each side must name the bound, so the verdicts
+        // agree rather than depending on which guard each happens to run first.
+        let mut both = commitment_of(MAX_GRANT_BLOBS + 1);
+        for e in &mut both.entries {
+            e.tag = [0x01; SECRET_LEN];
+        }
+        assert_eq!(
+            encode_grant_set_commitment(&both).unwrap_err().check(),
+            "too-many-structures"
+        );
+        // Hand-built CBOR, the way a hostile peer's bytes arrive: the bound must
+        // fire before any entry is parsed at all.
+        let entry = || {
+            let mut e = Map::new();
+            e.insert("permission", Value::Text("write".into()));
+            e.insert("pseudonymPk", Value::Bytes(vec![0x02; 32]));
+            e.insert("tag", Value::Bytes(vec![0x01; SECRET_LEN]));
+            Value::Map(e)
+        };
+        let mut m = Map::new();
+        m.insert(
+            "entries",
+            Value::Array((0..=MAX_GRANT_BLOBS).map(|_| entry()).collect()),
+        );
+        m.insert("ipnsName", Value::Bytes(b"n".to_vec()));
+        m.insert("ownerPseudonymPk", Value::Bytes(vec![0x88; 32]));
+        assert_eq!(
+            decode_grant_set_commitment(&encode(&Value::Map(m)).unwrap())
+                .unwrap_err()
+                .check(),
+            "too-many-structures"
+        );
+    }
+
+    #[test]
+    fn distinct_entries_at_the_bound_round_trip() {
+        // Anti-vacuity: exactly at the bound the commitment still encodes,
+        // decodes, and verifies.
+        let owner = EcdsaSigner::from_scalar(&[0x11; 32]).unwrap();
+        let c = commitment_of(MAX_GRANT_BLOBS);
+        let bytes = encode_grant_set_commitment(&c).expect("at the bound encodes");
+        assert_eq!(decode_grant_set_commitment(&bytes).unwrap(), c);
+        let sig = sign_grant_set(&owner, &c).expect("at the bound signs");
+        assert!(verify_grant_set(&owner.verifying_key(), &c, &sig).is_ok());
     }
 
     #[test]
