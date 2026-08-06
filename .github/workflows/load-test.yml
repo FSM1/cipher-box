@@ -152,12 +152,12 @@ jobs:
         env:
           API_URL: ${{ vars.API_URL }}
           IPFS_GATEWAY_URL: ${{ vars.IPFS_GATEWAY_URL }}
-          STAGING_TEST_LOGIN_SECRET: ${{ secrets.STAGING_TEST_LOGIN_SECRET }}
-          STAGING_GATEWAY_TOKEN: ${{ secrets.STAGING_GATEWAY_TOKEN }}
+          TEST_LOGIN_SECRET: ${{ secrets.TEST_LOGIN_SECRET }}
+          IPFS_GATEWAY_TOKEN: ${{ secrets.IPFS_GATEWAY_TOKEN }}
         run: |
           if [ "$TARGET" = 'staging' ]; then
-            if [ -z "$API_URL" ] || [ -z "$STAGING_TEST_LOGIN_SECRET" ]; then
-              echo '::error::staging runs need the API_URL variable and STAGING_TEST_LOGIN_SECRET secret'
+            if [ -z "$API_URL" ] || [ -z "$TEST_LOGIN_SECRET" ]; then
+              echo '::error::staging runs need the API_URL variable and TEST_LOGIN_SECRET secret'
               exit 1
             fi
             if [ "$SCENARIO" = 'gateway-read' ]; then
@@ -167,15 +167,15 @@ jobs:
                 echo '::error::gateway-read on staging needs the IPFS_GATEWAY_URL variable'
                 exit 1
               fi
-              if [ -z "$STAGING_GATEWAY_TOKEN" ]; then
-                echo '::error::gateway-read on staging needs the STAGING_GATEWAY_TOKEN secret; the read accelerator is behind forward_auth'
+              if [ -z "$IPFS_GATEWAY_TOKEN" ]; then
+                echo '::error::gateway-read on staging needs the IPFS_GATEWAY_TOKEN secret; the read accelerator is behind forward_auth'
                 exit 1
               fi
             fi
             echo "LOAD_TEST_API_URL=$API_URL" >> "$GITHUB_ENV"
             echo "LOAD_TEST_GATEWAY_URL=$IPFS_GATEWAY_URL" >> "$GITHUB_ENV"
-            echo "LOAD_TEST_SECRET=$STAGING_TEST_LOGIN_SECRET" >> "$GITHUB_ENV"
-            echo "LOAD_TEST_GATEWAY_TOKEN=$STAGING_GATEWAY_TOKEN" >> "$GITHUB_ENV"
+            echo "LOAD_TEST_SECRET=$TEST_LOGIN_SECRET" >> "$GITHUB_ENV"
+            echo "LOAD_TEST_GATEWAY_TOKEN=$IPFS_GATEWAY_TOKEN" >> "$GITHUB_ENV"
           else
             echo 'LOAD_TEST_SECRET=load-harness-secret' >> "$GITHUB_ENV"
           fi

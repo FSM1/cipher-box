@@ -100,18 +100,16 @@ The `deploy-vps` job:
 
 Configuration: `docker/docker-compose.staging.yml`
 
-| Service      | Image                                        | Description                                                                                                                              |
-| ------------ | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `api`        | `ghcr.io/{owner}/cipherbox-api:{tag}`        | NestJS API, port 3000 (loopback only)                                                                                                    |
-| `postgres`   | `postgres:16-alpine`                         | PostgreSQL database, port 5432 (loopback only)                                                                                           |
-| `redis`      | `redis:7-alpine`                             | Redis (password-protected), port 6379 (loopback only)                                                                                    |
-| `ipfs`       | `ipfs/kubo:v0.42.0`                          | Kubo IPFS node (pebbleds profile), p2p port 4001 public, API/gateway loopback                                                            |
-| `tee-worker` | `ghcr.io/{owner}/cipherbox-tee-worker:{tag}` | TEE worker in `TEE_MODE=simulator` for staging                                                                                           |
-| `someguy`    | `ghcr.io/ipfs/someguy:v0.11.1`               | Delegated IPFS routing (accelerated DHT), p2p port 4004 public, routing API 8190 internal-only (unlike local dev, where it is published) |
-| `caddy`      | `caddy:2-alpine`                             | Reverse proxy / TLS termination / web app static serving                                                                                 |
-| `alloy`      | `grafana/alloy:v1.6.1`                       | Log and metrics shipper to Grafana Cloud                                                                                                 |
+| Service    | Image                                 | Description                                                                                                                              |
+| ---------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `api`      | `ghcr.io/{owner}/cipherbox-api:{tag}` | NestJS API, port 3000 (loopback only)                                                                                                    |
+| `postgres` | `postgres:16-alpine`                  | PostgreSQL database, port 5432 (loopback only)                                                                                           |
+| `ipfs`     | `ipfs/kubo:v0.42.0`                   | Kubo IPFS node (pebbleds profile), p2p port 4001 public, API/gateway loopback                                                            |
+| `someguy`  | `ghcr.io/ipfs/someguy:v0.11.1`        | Delegated IPFS routing (accelerated DHT), p2p port 4004 public, routing API 8190 internal-only (unlike local dev, where it is published) |
+| `caddy`    | `caddy:2-alpine`                      | Reverse proxy / TLS termination / web app static serving                                                                                 |
+| `alloy`    | `grafana/alloy:v1.6.1`                | Log and metrics shipper to Grafana Cloud                                                                                                 |
 
-The `api` service health-checks depend on both `postgres` and `redis` being healthy before starting.
+The `api` service health-check depends on `postgres` being healthy before starting.
 
 ### Rollback procedure
 
@@ -243,11 +241,9 @@ Key secrets required in the GitHub Actions `staging` environment:
 | ------------------------------------ | ---------------------------------------------- |
 | `STAGING_SSH_KEY`                    | SSH private key for VPS access                 |
 | `STAGING_DB_PASSWORD`                | PostgreSQL password                            |
-| `STAGING_JWT_SECRET`                 | JWT signing secret                             |
-| `STAGING_TEE_WORKER_SECRET`          | Shared secret between API and TEE worker       |
-| `STAGING_REDIS_PASSWORD`             | Redis password                                 |
-| `STAGING_TEST_LOGIN_SECRET`          | Test login bypass secret (non-production only) |
-| `STAGING_THROTTLE_BYPASS_SECRET`     | Rate-limit bypass secret                       |
+| `JWT_SECRET`                         | JWT signing secret                             |
+| `TEST_LOGIN_SECRET`                  | Test login bypass secret (non-production only) |
+| `THROTTLE_BYPASS_SECRET`             | Rate-limit bypass secret                       |
 | `TAURI_SIGNING_PRIVATE_KEY`          | Desktop app update signing key                 |
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Desktop app update signing key password        |
 | `CLOUDFLARE_API_TOKEN`               | Cloudflare API token for DNSLink updates       |

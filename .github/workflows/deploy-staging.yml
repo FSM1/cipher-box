@@ -394,21 +394,21 @@ jobs:
           cat > .env.staging << 'ENVEOF'
           NODE_ENV=staging
           CIPHERBOX_ENVIRONMENT=staging
-          TEST_LOGIN_SECRET=${{ secrets.STAGING_TEST_LOGIN_SECRET }}
+          TEST_LOGIN_SECRET=${{ secrets.TEST_LOGIN_SECRET }}
           PORT=3000
           DB_HOST=postgres
           DB_PORT=5432
           DB_USERNAME=${{ vars.DB_USERNAME }}
           DB_PASSWORD=${{ secrets.STAGING_DB_PASSWORD }}
           DB_DATABASE=cipherbox_staging
-          JWT_SECRET=${{ secrets.STAGING_JWT_SECRET }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
           CORS_ALLOWED_ORIGINS=${{ vars.CORS_ALLOWED_ORIGINS }}
           IPFS_PROVIDER=local
           IPFS_LOCAL_API_URL=http://ipfs:5001
           IPFS_LOCAL_GATEWAY_URL=http://ipfs:8080
           DELEGATED_ROUTING_URL=http://someguy:8190
           DELEGATED_ROUTING_FALLBACK_URL=https://delegated-ipfs.dev
-          THROTTLE_BYPASS_SECRET=${{ secrets.STAGING_THROTTLE_BYPASS_SECRET }}
+          THROTTLE_BYPASS_SECRET=${{ secrets.THROTTLE_BYPASS_SECRET }}
           GRAFANA_LOKI_URL=${{ vars.GRAFANA_LOKI_URL }}
           GRAFANA_LOKI_USERNAME=${{ vars.GRAFANA_LOKI_USERNAME }}
           GRAFANA_LOKI_API_KEY=${{ secrets.GRAFANA_LOKI_API_KEY }}
