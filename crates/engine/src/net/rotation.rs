@@ -48,9 +48,9 @@ use crate::net::resolve::Adopter;
 use crate::profile::SyncTimingProfile;
 use crate::rotation::{
     CascadeResealResolver, CascadeTarget, ChildIndexResolver, CommittedSet, RepointChannel,
-    RepublishedNode, ResealSeeds, ResealedScopeRoot, ResolveFailure, ScopeRootIdentity,
-    ScopeRootPublishError, ScopeRootPublisher, WritePublishError, WriteWavePublisher,
-    reseal_scope_root,
+    RepublishedNode, ResealError, ResealSeeds, ResealedScopeRoot, ResolveFailure,
+    ScopeRootIdentity, ScopeRootPublishError, ScopeRootPublisher, WritePublishError,
+    WriteWavePublisher, reseal_scope_root,
 };
 use crate::seams::{CredentialStore, FloorStore, Http, RecordTransport, Scheduler};
 use crate::session::SessionIdentity;
@@ -840,6 +840,24 @@ fn wave_verdict(error: GateError) -> WritePublishError {
     }
 }
 
+/// The same axis for the re-seal that mints a moved root's section. Every
+/// variant but one is this build's own fail-closed verdict on material the wave
+/// already gated — the committed set, the ledger it must equal, the carried
+/// links the decoder already bounded — so re-sealing the same inputs reaches it
+/// again. Entropy is the injected seam failing, not a verdict on any of that.
+/// Matched exhaustively: a new variant must be classified here, not defaulted.
+fn reseal_verdict(error: ResealError) -> WritePublishError {
+    match error {
+        ResealError::Entropy(_) => WritePublishError::NotLanded,
+        ResealError::LedgerDivergesFromCommitment
+        | ResealError::SignerNotCommitted
+        | ResealError::UnusableRecipientKey
+        | ResealError::AscentLinkMismatch
+        | ResealError::TooManyHistoryLinks
+        | ResealError::Encode(_) => WritePublishError::Rejected,
+    }
+}
+
 /// The same axis for the publish pipeline. A CID the API echoes back wrong, and
 /// the pipeline's own release-active encode refusals, are deterministic on the
 /// bytes this pass built — a retry re-uploads and re-charges a head block
@@ -1075,7 +1093,7 @@ where
             },
             &plane.section.history_links,
         )
-        .map_err(|_| WritePublishError::Rejected)
+        .map_err(reseal_verdict)
     }
 
     /// Author and CAS-publish `node`'s rewritten record at its new name, signing
@@ -1305,6 +1323,8 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use crate::content::dag::root_block_cid;
+    use crate::entropy::EntropyError;
+    use cipherbox_core::error::{CodecError, Malformed};
     use cipherbox_core::ipns::{IpnsRecord, VerifiedRecord};
     use cipherbox_core::seal::{
         AscentLink, ChildRef, GrantSetCommitment, NodeKind, STRUCT_TAG_ASCENT_LINK,
@@ -3301,5 +3321,32 @@ mod tests {
             block_on(net.is_republished(&node.new_name)).expect("query"),
             "a resumed wave skips this node off published state, with no in-memory carry"
         );
+    }
+
+    #[test]
+    fn a_reseal_seam_failure_stays_retryable_and_a_trust_failure_does_not() {
+        assert_eq!(
+            reseal_verdict(ResealError::Entropy(EntropyError::new("seam down"))),
+            WritePublishError::NotLanded,
+            "the entropy seam being down is availability, not a verdict on the section"
+        );
+
+        for terminal in [
+            ResealError::LedgerDivergesFromCommitment,
+            ResealError::SignerNotCommitted,
+            ResealError::UnusableRecipientKey,
+            ResealError::AscentLinkMismatch,
+            ResealError::TooManyHistoryLinks,
+            ResealError::Encode(CodecError::Malformed(Malformed::DepthExceeded {
+                offset: 0,
+            })),
+        ] {
+            let check = terminal.check();
+            assert_eq!(
+                reseal_verdict(terminal),
+                WritePublishError::Rejected,
+                "{check} is deterministic on inputs the wave already gated; retrying never converges"
+            );
+        }
     }
 }
