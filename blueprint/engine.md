@@ -182,13 +182,24 @@ re-signing at the record's read epoch even the history links it carries forward
 verbatim (`rotation/reseal.rs`). The gate therefore **pins** the pseudonym that
 authenticated the section's first structure and requires every later structure
 to verify under that key alone; a section signed by two committed pseudonyms is
-unadoptable, not merely unusual. Pinning is what bounds stage 3's work at
-`pseudonyms + structures` rather than their product — without it an accepted
-contact commits 1024 write pseudonyms of their own and spreads a section's
-signatures across them, buying ~1000x reader-CPU amplification for ~1284
-signatures. The produce side runs the same predicate release-active
-(`net/author.rs::check_scope_root`), so this build never signs a section its own
-gate rejects.
+unadoptable, not merely unusual.
+
+It closes a **structure splice**: a structure lifted verbatim out of a different
+record at the same scope and epoch, authored by a different committed writer,
+recomputes an identical signed input — `scope`, `epoch`, `structTag`,
+`recipientTag` and `H(ciphertext)` all match — so per-structure trial-verify
+adopted it. It is also what bounds stage 3's work at `pseudonyms + structures`
+rather than their product: without it an accepted contact commits 1024 write
+pseudonyms of their own and spreads a section's signatures across them, buying
+~1000x reader-CPU amplification for ~1284 signatures. The produce side runs the
+same predicate release-active (`net/author.rs::check_scope_root`), so this build
+never signs a section its own gate rejects.
+
+The pinned signer may be **any** committed write-capable pseudonym, not the
+owner's specifically: the commitment is epoch-free so that grantee-triggered
+rotation needs no owner signature (`CONTEXT.md`). Per-structure signers would
+need a per-structure signer index on the wire, since the gate cannot otherwise
+avoid the product — a format change, not a relaxation of this rule.
 
 A gate failure is never mere staleness: the engine pins last-known-good,
 raises the withheld-update escalation where applicable, and never renders the

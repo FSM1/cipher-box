@@ -1,19 +1,21 @@
 //! The adoption gate's frozen stage-3 vectors: **one section, one signer**
-//! (blueprint/engine.md "Adoption gate and floors").
-//!
-//! Sibling of the content-DAG suite and self-contained — its own manifest under
-//! `kat/gate/`, since the gate freezes a trust predicate over whole scope-root
-//! head blocks rather than a content format. `crates/engine/kat` is written only
-//! by `cargo run -p cipherbox-engine --example kat_gen`; CI diffs the
-//! regenerated tree, so a verdict change that is not a deliberate re-freeze
-//! fails there.
+//! (blueprint/engine.md "Adoption gate and floors"). Sibling of the content-DAG
+//! suite, with its own manifest under `kat/gate/` because it freezes a trust
+//! predicate over whole scope-root head blocks rather than a content format.
 
 use std::collections::BTreeSet;
+use std::convert::Infallible;
 
 use cipherbox_core::error::TrustViolation;
-use cipherbox_core::seal::{decode_envelope, decode_grant_section, grant_section_bytes};
+use cipherbox_core::seal::{
+    Envelope, GrantSection, Permission, StructureSigInput, decode_envelope, decode_grant_section,
+    grant_section_bytes, verify_grant_set, verify_structure,
+};
 use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaVerifier};
-use cipherbox_engine::gate::authenticate_section_structures;
+use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Verifier};
+use cipherbox_engine::gate::{
+    authenticate_section_structures, committed_write_pseudonyms, for_each_structure,
+};
 use serde::Deserialize;
 
 const MANIFEST: &str = include_str!("../kat/gate/manifest.json");
@@ -83,10 +85,10 @@ fn bytes(hex_str: &str) -> Vec<u8> {
     hex::decode(hex_str).expect("vector hex decodes")
 }
 
-/// Run the vector's head block through the gate's stage 2 and stage 3, in the
-/// gate's own order. Stage 2 must pass on every vector — otherwise a stage-3
-/// vector would be proving nothing but a bad commitment signature.
-fn authenticate(v: &SectionSignerVector) -> Result<(), cipherbox_core::error::CodecError> {
+/// The vector's decoded head block, after asserting the gate's **stage 2**
+/// passes: a stage-3 vector whose commitment signature is bad would prove
+/// nothing about stage 3.
+fn stage_two(v: &SectionSignerVector) -> (Envelope, GrantSection) {
     let envelope = decode_envelope(&bytes(&v.head_block)).expect("head block decodes");
     let section = decode_grant_section(
         grant_section_bytes(&envelope).expect("a scope root carries its grant section"),
@@ -95,10 +97,47 @@ fn authenticate(v: &SectionSignerVector) -> Result<(), cipherbox_core::error::Co
 
     let owner = EcdsaVerifier::from_sec1(&bytes(&v.owner_identity_pk)).expect("owner identity");
     let sig = EcdsaSignature::from_compact(&section.commitment_sig).expect("commitment signature");
-    cipherbox_core::seal::verify_grant_set(&owner, &section.commitment, &sig)
+    verify_grant_set(&owner, &section.commitment, &sig)
         .expect("every vector passes stage 2, so stage 3 owns the verdict");
+    (envelope, section)
+}
 
-    authenticate_section_structures(&section, &envelope)
+/// Stage 3's **pre-pin** predicate: for each seed-bearing structure, every
+/// committed write-capable pseudonym whose key verifies it. Driven off the
+/// gate's own [`for_each_structure`] and [`committed_write_pseudonyms`], so a
+/// new structure kind or a change to the committed set cannot leave this
+/// harness describing a section the gate no longer reads the same way.
+///
+/// The pin makes stage 3 stop at the first signer, so only this wider view can
+/// show that a reject vector's every signature is individually valid — that the
+/// pin, and nothing else, is what refuses it.
+fn signers_per_structure(section: &GrantSection, envelope: &Envelope) -> Vec<BTreeSet<[u8; 32]>> {
+    let committed = committed_write_pseudonyms(&section.commitment);
+    let mut out = Vec::new();
+    let walked: Result<(), Infallible> =
+        for_each_structure(section, |tag, recipient, ct, signature| {
+            let input = StructureSigInput::over_ciphertext(
+                envelope.scope,
+                envelope.epoch,
+                tag,
+                recipient,
+                ct,
+            );
+            let sig = Ed25519Signature::from_bytes(*signature);
+            out.push(
+                committed
+                    .iter()
+                    .filter(|pk| {
+                        Ed25519Verifier::from_bytes(**pk)
+                            .is_some_and(|v| verify_structure(&v, &input, &sig).is_ok())
+                    })
+                    .copied()
+                    .collect(),
+            );
+            Ok(())
+        });
+    walked.expect("the walk never fails");
+    out
 }
 
 #[test]
@@ -137,11 +176,39 @@ fn accept_vectors_authenticate_under_one_committed_signer() {
     let m = manifest();
     let vs = vectors(&m.section_signer_accept.file);
     let mut names = BTreeSet::new();
+    let mut signed_by_a_non_owner = false;
     for v in &vs {
         assert!(names.insert(v.name.clone()), "duplicate vector {}", v.name);
         assert!(v.check.is_none() && v.class.is_none(), "{}", v.name);
-        authenticate(v).unwrap_or_else(|e| panic!("{}: {e}", v.name));
+        let (envelope, section) = stage_two(v);
+        authenticate_section_structures(&section, &envelope)
+            .unwrap_or_else(|e| panic!("{}: {e}", v.name));
+
+        // Non-vacuous: more than one committed write-capable pseudonym is on
+        // offer, and exactly one of them signed the whole section.
+        assert!(
+            section
+                .commitment
+                .entries
+                .iter()
+                .any(|e| e.permission == Permission::Write),
+            "{}: a one-pseudonym commitment pins vacuously",
+            v.name
+        );
+        let signers: BTreeSet<[u8; 32]> = signers_per_structure(&section, &envelope)
+            .into_iter()
+            .flatten()
+            .collect();
+        let [signer] = signers.into_iter().collect::<Vec<_>>()[..] else {
+            panic!("{}: one section, one signer", v.name);
+        };
+        signed_by_a_non_owner |= signer != section.commitment.owner_pseudonym_pk;
     }
+    assert!(
+        signed_by_a_non_owner,
+        "pinning must not narrow *who* may sign: one accept vector is signed \
+         throughout by a committed pseudonym that is not the owner's"
+    );
 }
 
 #[test]
@@ -152,23 +219,37 @@ fn a_section_signed_by_two_committed_pseudonyms_fails_closed() {
     let mut seen = BTreeSet::new();
     for v in &vs {
         assert!(names.insert(v.name.clone()), "duplicate vector {}", v.name);
-        let error = authenticate(v).expect_err(&format!("{} must fail closed", v.name));
+        let (envelope, section) = stage_two(v);
+        let error = authenticate_section_structures(&section, &envelope)
+            .expect_err(&format!("{} must fail closed", v.name));
         assert_eq!(Some(error.check()), v.check.as_deref(), "{}", v.name);
         assert_eq!(Some(error.class()), v.class.as_deref(), "{}", v.name);
         seen.insert(error.check().to_string());
+
+        // The pin, and nothing else, is what refuses these: every structure
+        // signature is individually valid under some committed pseudonym, and
+        // together they name more than one.
+        let per_structure = signers_per_structure(&section, &envelope);
+        for (i, signers) in per_structure.iter().enumerate() {
+            assert_eq!(
+                signers.len(),
+                1,
+                "{}: structure {i} must verify under exactly one committed pseudonym",
+                v.name
+            );
+        }
+        let distinct: BTreeSet<[u8; 32]> = per_structure.into_iter().flatten().collect();
+        assert_eq!(
+            distinct.len(),
+            2,
+            "{}: a pin vector must carry exactly two committed signers",
+            v.name
+        );
     }
     assert_eq!(
-        seen.into_iter().collect::<Vec<_>>(),
-        {
-            let mut c = m.section_signer_reject.checks.clone();
-            c.sort();
-            c
-        },
+        seen,
+        m.section_signer_reject.checks.iter().cloned().collect(),
         "the manifest's check list is exactly what the vectors fire"
-    );
-    assert!(
-        vs.iter().any(|v| v.name == "two-committed-signers"),
-        "the mixed-signer vector is the whole point of this family"
     );
 }
 

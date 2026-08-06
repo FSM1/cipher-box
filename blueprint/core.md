@@ -137,11 +137,11 @@ ownerPseudonymPk, [(tag, permission, pseudonymPk)]}`), owner blob, the optional
   fail-closed at decode and
   encode — `historyLinks` at 256, `grantBlobs` and the commitment's `entries`
   both at 1024 (`too-many-structures`) — and two history links may not carry
-  equal sealed bytes (`duplicate-history-link`): the gate resolves the section's
-  single signer by trial-verifying its first structure against the committed
-  pseudonyms, so an unbounded collection on **either** side of that
-  `pseudonyms + structures` sum is a reader-CPU amplifier, and each epoch mints
-  one link under a fresh nonce, so a repeat is an authored anomaly. The two 1024 ceilings
+  equal sealed bytes (`duplicate-history-link`): the gate's stage-3 work is
+  `pseudonyms + structures` (engine.md "One section, one signer"), so an
+  unbounded collection on **either** side of that sum is a reader-CPU amplifier,
+  and each epoch mints one link under a fresh nonce, so a repeat is an authored
+  anomaly. The two 1024 ceilings
   are one number: the ledger must match the committed set exactly and a re-seal
   wraps one blob per ledger row, so a commitment past the ceiling could only mint
   a section its own encoder refuses. `historyLinks` is ordered **oldest epoch

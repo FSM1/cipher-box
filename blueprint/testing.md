@@ -116,13 +116,13 @@ Adversarial cases are first-class: the harness can replay, transplant, and
 re-sign records with any key it holds; every crypto-review finding (#35)
 gets a pinned regression scenario.
 
-The engine also ships **its own KAT sets**, under core's regime but for the
-formats and predicates core cannot reach: `kat/` freezes the content-DAG root,
-`kat/gate/` freezes the adoption gate's stage-3 verdict over whole scope-root
-head blocks — including the **one section, one signer** reject. Both are
-written only by `cargo run -p cipherbox-engine --example kat_gen`, and the
-**Engine Tests** gate regenerates the tree and diffs it before running the
-suites, so a verdict change that is not a deliberate re-freeze fails there.
+The engine also ships **its own KAT vectors**, under core's regime but for the
+formats and predicates core cannot reach: the content-DAG root, and the
+adoption gate's stage-3 verdict over whole scope-root head blocks — including
+the **one section, one signer** reject. They are written only by
+`cargo run -p cipherbox-engine --example kat_gen`, and the **Engine Tests** gate
+regenerates all of `crates/engine/kat` and diffs it before running the suites,
+so a verdict change that is not a deliberate re-freeze fails there.
 
 ### The contract suite — the live API gate
 

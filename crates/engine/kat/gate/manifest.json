@@ -3,11 +3,11 @@
   "profile": "cipherbox/v2 engine adoption-gate",
   "sectionSignerAccept": {
     "file": "vectors/section_signer_accept.json",
-    "count": 1
+    "count": 2
   },
   "sectionSignerReject": {
     "file": "vectors/section_signer_reject.json",
-    "count": 1,
+    "count": 2,
     "checks": [
       "structure-signature-invalid"
     ]

@@ -543,10 +543,9 @@ mod tests {
 
     #[test]
     fn a_scope_root_envelope_whose_section_has_two_signers_is_refused() {
-        // Release-active (security rule 8): the gate pins a section to the
-        // pseudonym its first structure verified under, so a section spread
-        // across two *committed* pseudonyms is unadoptable and must never be
-        // signed. Both signers are committed here, so only the pin rejects it.
+        // Release-active (security rule 8). Both signers are committed and the
+        // commitment is re-signed, so stages 2 and 3's other checks pass and
+        // only the section-signer pin can reject this.
         let fixture = owner_root();
         let second = Ed25519Signer::from_seed([0x55; 32]);
         let mut section = fixture.grant_section.clone();
