@@ -20,11 +20,6 @@ export class FilesPage {
     return this.page.getByTestId('status-indicator');
   }
 
-  /** What the route renders in place of the vault when no session backs it. */
-  get checkingSession(): Locator {
-    return this.page.getByTestId('files-signing-in');
-  }
-
   async goto(): Promise<void> {
     await this.page.goto('/files');
   }

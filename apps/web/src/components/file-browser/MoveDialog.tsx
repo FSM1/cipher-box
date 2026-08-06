@@ -1,10 +1,13 @@
+import { useMemo } from 'react';
 import { useFolderPicker } from '../../hooks/useFolderPicker';
 import type { ListingRow } from '../../vault/listing';
+import { describeRows } from '../../vault/selection';
 import { Modal } from '../ui/Modal';
 
 interface MoveDialogProps {
-  row: ListingRow;
-  /** The folder the row is in today; moving into it would be a no-op. */
+  /** What the move will relink; each row becomes a command of its own. */
+  rows: ListingRow[];
+  /** The folder the rows are in today; moving into it would be a no-op. */
   parent: Uint8Array | null;
   onClose: () => void;
   onConfirm: (newParent: Uint8Array) => void;
@@ -14,13 +17,14 @@ interface MoveDialogProps {
 }
 
 /** Picks a destination by walking the vault one folder at a time. */
-export function MoveDialog({ row, parent, onClose, onConfirm, busy, error }: MoveDialogProps) {
-  const picker = useFolderPicker(parent, row.key);
+export function MoveDialog({ rows, parent, onClose, onConfirm, busy, error }: MoveDialogProps) {
+  const excluded = useMemo(() => new Set(rows.map((row) => row.key)), [rows]);
+  const picker = useFolderPicker(parent, excluded);
   const destination = picker.destination;
   const canMove = !busy && destination !== null && !picker.atHome;
 
   return (
-    <Modal onClose={onClose} title={`move ${row.name}`} error={error} busy={busy}>
+    <Modal onClose={onClose} title={`move ${describeRows(rows)}`} error={error} busy={busy}>
       <div className="dialog-content" data-testid="move-dialog">
         <p className="dialog-label">
           {'destination: '}

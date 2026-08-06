@@ -17,11 +17,29 @@ export interface VaultActions {
   busy: VaultCommand | null;
   /** The last dispatch's failure, cleared by the next dispatch. */
   error: string | null;
-  /** Every action resolves `true` once the engine accepted the command. */
+  /** Every action resolves `true` once the engine accepted every command. */
   createFolder(parent: Uint8Array, name: string): Promise<boolean>;
   rename(node: Uint8Array, newName: string): Promise<boolean>;
-  move(node: Uint8Array, newParent: Uint8Array): Promise<boolean>;
-  remove(node: Uint8Array): Promise<boolean>;
+  /** One `facade.relink` per node — a batch is not a command of its own. */
+  move(nodes: readonly Uint8Array[], newParent: Uint8Array): Promise<boolean>;
+  /** One `facade.delete` per node. */
+  remove(nodes: readonly Uint8Array[]): Promise<boolean>;
+}
+
+/**
+ * Dispatches one command per node in listing order. Every node is attempted
+ * even after one is refused — the nodes are independent, and the snapshot is
+ * what reports which of them the engine took.
+ */
+async function perNode(
+  nodes: readonly Uint8Array[],
+  dispatch: (node: Uint8Array) => Promise<void>
+): Promise<void> {
+  const refusals: unknown[] = [];
+  for (const node of nodes) {
+    await dispatch(node).catch((failure: unknown) => refusals.push(failure));
+  }
+  if (refusals.length > 0) throw refusals[0];
 }
 
 export function useVaultActions(): VaultActions {
@@ -69,11 +87,15 @@ export function useVaultActions(): VaultActions {
       [dispatchOrFail]
     ),
     move: useCallback(
-      (node, newParent) => dispatchOrFail('relink', (facade) => facade.relink(node, newParent)),
+      (nodes, newParent) =>
+        dispatchOrFail('relink', (facade) =>
+          perNode(nodes, (node) => facade.relink(node, newParent))
+        ),
       [dispatchOrFail]
     ),
     remove: useCallback(
-      (node) => dispatchOrFail('delete', (facade) => facade.delete(node)),
+      (nodes) =>
+        dispatchOrFail('delete', (facade) => perNode(nodes, (node) => facade.delete(node))),
       [dispatchOrFail]
     ),
   };

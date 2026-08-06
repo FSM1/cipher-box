@@ -18,6 +18,8 @@ export function ParentDirRow({ onActivate }: ParentDirRowProps) {
       data-testid="parent-dir-row"
     >
       <div className="file-list-item-row-top" role="gridcell">
+        {/* Holds the selection column open: `[..]` is not a selectable row. */}
+        <span className="file-list-item-select-gap" aria-hidden="true" />
         <span className="file-list-item-icon" aria-hidden="true">
           [..]
         </span>

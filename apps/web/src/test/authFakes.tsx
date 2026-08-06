@@ -74,12 +74,17 @@ export interface CoreKitCalls {
 }
 
 export function fakeCoreKitSession(
-  options: { loggedIn?: boolean; email?: () => string | null } = {}
+  options: {
+    loggedIn?: boolean;
+    email?: () => string | null;
+    /** Stands in for the mount-time restore; omit for one that settles at once. */
+    restore?: () => Promise<void>;
+  } = {}
 ) {
   const calls: CoreKitCalls = { logins: [], exports: 0, logouts: 0 };
   let loggedIn = options.loggedIn ?? false;
   const session: CoreKitSession = {
-    restore: () => Promise.resolve(),
+    restore: options.restore ?? (() => Promise.resolve()),
     isLoggedIn: () => loggedIn,
     login(method, email) {
       calls.logins.push({ method, email });

@@ -2,6 +2,9 @@ import type { ListingRow } from '../../vault/listing';
 
 interface FileListItemProps {
   row: ListingRow;
+  selected: boolean;
+  /** Adds or drops this row from the batch selection. */
+  onToggle: (key: string) => void;
   /** Opens a folder. */
   onOpen: (node: Uint8Array) => void;
   /** Raises the row's action menu, anchored on the event that asked for it. */
@@ -9,7 +12,7 @@ interface FileListItemProps {
 }
 
 /** One direct child: kind marker, name, size, mtime, and its queue status. */
-export function FileListItem({ row, onOpen, onRowMenu }: FileListItemProps) {
+export function FileListItem({ row, selected, onToggle, onOpen, onRowMenu }: FileListItemProps) {
   const isFolder = row.kind === 'folder';
   const open = () => {
     if (isFolder) onOpen(row.id);
@@ -17,7 +20,7 @@ export function FileListItem({ row, onOpen, onRowMenu }: FileListItemProps) {
 
   return (
     <div
-      className="file-list-item"
+      className={`file-list-item${selected ? ' file-list-item--selected' : ''}`}
       data-node-id={row.key}
       data-testid="file-list-item"
       role="row"
@@ -34,6 +37,17 @@ export function FileListItem({ row, onOpen, onRowMenu }: FileListItemProps) {
       }}
     >
       <div className="file-list-item-row-top" role="gridcell">
+        {/* Its own click, not the row's: selecting must not also open. */}
+        <input
+          type="checkbox"
+          className="file-list-item-select"
+          checked={selected}
+          aria-label={`select ${row.name}`}
+          data-testid="file-list-item-select"
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+          onChange={() => onToggle(row.key)}
+        />
         <span className="file-list-item-icon" aria-hidden="true">
           {row.icon}
         </span>

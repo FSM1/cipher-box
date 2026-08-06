@@ -9,7 +9,7 @@ const HOME = new Uint8Array(16).fill(1);
 const NEXT = new Uint8Array(16).fill(2);
 
 function Picker() {
-  useFolderPicker(HOME, '');
+  useFolderPicker(HOME, new Set());
   return null;
 }
 

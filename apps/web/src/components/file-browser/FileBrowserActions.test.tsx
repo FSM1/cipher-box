@@ -248,7 +248,7 @@ describe('the vault browser write path', () => {
     const frames: { atHome: boolean; destination: string | null }[] = [];
 
     function Probe() {
-      const picker = useFolderPicker(DOCS, toHex(NOTE));
+      const picker = useFolderPicker(DOCS, new Set([toHex(NOTE)]));
       frames.push({
         atHome: picker.atHome,
         destination: picker.destination === null ? null : toHex(picker.destination),
@@ -361,6 +361,121 @@ describe('the vault browser write path', () => {
       await Promise.resolve();
     });
     await waitFor(() => expect(screen.queryByTestId('create-folder-dialog')).toBeNull());
+  });
+});
+
+describe('the vault browser selection', () => {
+  const select = (name: string) => fireEvent.click(screen.getByLabelText(`select ${name}`));
+  const count = () => screen.queryByTestId('selection-count')?.textContent ?? null;
+
+  it('counts the rows toggled on, and empties on clear', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    expect(screen.queryByTestId('selection-action-bar')).toBeNull();
+
+    select('notes.txt');
+    expect(count()).toBe('notes.txt selected');
+    select('documents');
+    expect(count()).toBe('1 file, 1 folder selected');
+    select('notes.txt');
+    expect(count()).toBe('documents selected');
+
+    fireEvent.click(screen.getByTestId('selection-clear'));
+    expect(screen.queryByTestId('selection-action-bar')).toBeNull();
+  });
+
+  it('takes the whole listing from the header, and gives it back', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    fireEvent.click(screen.getByTestId('select-all'));
+    expect(count()).toBe('1 file, 1 folder selected');
+
+    fireEvent.click(screen.getByTestId('select-all'));
+    expect(screen.queryByTestId('selection-action-bar')).toBeNull();
+  });
+
+  it('dispatches one delete per selected node', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    fireEvent.click(screen.getByTestId('select-all'));
+    fireEvent.click(screen.getByTestId('selection-delete'));
+    fireEvent.click(screen.getByTestId('delete-confirm'));
+
+    await waitFor(() => expect(engine.facade.delete).toHaveBeenCalledTimes(2));
+    expect(engine.facade.delete.mock.calls).toEqual([[DOCS], [NOTE]]);
+    await waitFor(() => expect(screen.queryByTestId('selection-action-bar')).toBeNull());
+  });
+
+  it('dispatches one relink per selected node, all to the picked destination', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(
+      engine,
+      folderView({ children: [file(NOTE, 'notes.txt'), file(PICTURE, 'shot.png')] })
+    );
+
+    fireEvent.click(screen.getByTestId('select-all'));
+    fireEvent.click(screen.getByTestId('selection-move'));
+    await settlePickerRead(engine, listing());
+
+    fireEvent.click(screen.getByTestId('move-dialog-folder'));
+    await settlePickerRead(
+      engine,
+      folderView({ folder: DOCS, folderName: 'documents', ancestors: [{ id: ROOT, name: '' }] })
+    );
+    fireEvent.click(screen.getByTestId('move-confirm'));
+
+    await waitFor(() => expect(engine.facade.relink).toHaveBeenCalledTimes(2));
+    expect(engine.facade.relink.mock.calls).toEqual([
+      [NOTE, DOCS],
+      [PICTURE, DOCS],
+    ]);
+  });
+
+  it('reads every selected file and leaves the folders alone', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(
+      engine,
+      folderView({
+        children: [folder(DOCS, 'documents'), file(NOTE, 'notes.txt'), file(PICTURE, 'shot.png')],
+      })
+    );
+
+    fireEvent.click(screen.getByTestId('select-all'));
+    fireEvent.click(screen.getByTestId('selection-download'));
+
+    await waitFor(() => expect(engine.facade.download).toHaveBeenCalledTimes(2));
+    expect(engine.facade.download.mock.calls).toEqual([[NOTE], [PICTURE]]);
+  });
+
+  it('starts over when the route moves to another folder', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    fireEvent.click(screen.getByTestId('select-all'));
+    expect(count()).toBe('1 file, 1 folder selected');
+
+    fireEvent.doubleClick(screen.getByText('documents'));
+    await landSnapshot(
+      engine,
+      folderView({
+        folder: DOCS,
+        folderName: 'documents',
+        children: [file(PICTURE, 'shot.png')],
+        ancestors: [{ id: ROOT, name: '' }],
+      })
+    );
+
+    expect(screen.getByText('shot.png')).toBeDefined();
+    expect(screen.queryByTestId('selection-action-bar')).toBeNull();
   });
 });
 

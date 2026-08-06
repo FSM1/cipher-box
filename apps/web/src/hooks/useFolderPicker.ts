@@ -29,11 +29,14 @@ export interface FolderPicker {
 
 /**
  * @param openOn the folder to start the walk on, captured on mount
- * @param excludedKey a subtree the picker must not offer, by hex node id —
- * hiding the node hides everything under it, since the walk only descends
+ * @param excludedKeys subtrees the picker must not offer, by hex node id —
+ * hiding a node hides everything under it, since the walk only descends
  * through what it lists
  */
-export function useFolderPicker(openOn: Uint8Array | null, excludedKey: string): FolderPicker {
+export function useFolderPicker(
+  openOn: Uint8Array | null,
+  excludedKeys: ReadonlySet<string>
+): FolderPicker {
   const client = useEngine();
   const store = useSnapshotStore();
   const home = useRef(openOn).current;
@@ -79,9 +82,9 @@ export function useFolderPicker(openOn: Uint8Array | null, excludedKey: string):
   const folders = useMemo(
     () =>
       listingRows(listing?.children ?? []).filter(
-        (row) => row.kind === 'folder' && row.key !== excludedKey
+        (row) => row.kind === 'folder' && !excludedKeys.has(row.key)
       ),
-    [listing, excludedKey]
+    [listing, excludedKeys]
   );
 
   return {

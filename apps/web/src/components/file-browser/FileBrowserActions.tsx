@@ -10,6 +10,7 @@ import { useFileDownload } from '../../hooks/useFileDownload';
 import { useVaultActions } from '../../hooks/useVaultActions';
 import type { ListingRow } from '../../vault/listing';
 import { previewKind } from '../../vault/previewKind';
+import { useSelection } from '../../vault/selection';
 import { ConfirmDeleteDialog } from './ConfirmDeleteDialog';
 import { ContextMenu, type ContextMenuItem } from './ContextMenu';
 import { DetailsDialog } from './DetailsDialog';
@@ -17,11 +18,16 @@ import { FileList } from './FileList';
 import { FilePreviewDialog } from './FilePreviewDialog';
 import { MoveDialog } from './MoveDialog';
 import { NamePromptDialog } from './NamePromptDialog';
+import { SelectionActionBar } from './SelectionActionBar';
 import { TextEditorDialog } from './TextEditorDialog';
 
 type Dialog =
   | { kind: 'create' }
-  | { kind: 'rename' | 'move' | 'delete' | 'details' | 'preview' | 'edit'; row: ListingRow };
+  | { kind: 'rename' | 'details' | 'preview' | 'edit'; row: ListingRow }
+  // Batch and single-row commands are the same dialog over a different count.
+  | { kind: 'move' | 'delete'; rows: ListingRow[] };
+
+const toNodeId = (row: ListingRow): Uint8Array => row.id;
 
 interface FileBrowserActionsProps {
   rows: ListingRow[];
@@ -43,6 +49,7 @@ export function FileBrowserActions({
   const menu = useContextMenu();
   const actions = useVaultActions();
   const downloads = useFileDownload();
+  const selection = useSelection(rows, folder);
   const failure = actions.error ?? downloads.error;
 
   const close = () => setDialog(null);
@@ -50,11 +57,19 @@ export function FileBrowserActions({
    * A dispatch the engine accepted closes its dialog; a rejected one stays up.
    * The banner reports one failure, so a dispatch also retires the last read's.
    */
-  const closeOnSuccess = (dispatched: Promise<boolean>) => {
+  const closeOnSuccess = (dispatched: Promise<boolean>, andThen?: () => void) => {
     downloads.clearError();
     void dispatched.then((accepted) => {
-      if (accepted) close();
+      if (!accepted) return;
+      close();
+      andThen?.();
     });
+  };
+
+  const downloadSelection = async (): Promise<void> => {
+    for (const row of selection.rows) {
+      if (row.kind === 'file') await downloads.save(row.id, row.name, row.bytes);
+    }
   };
 
   const menuItems = (row: ListingRow): ContextMenuItem[] => {
@@ -74,12 +89,12 @@ export function FileBrowserActions({
     }
     items.push(
       { label: 'rename', onSelect: () => setDialog({ kind: 'rename', row }) },
-      { label: 'move to...', onSelect: () => setDialog({ kind: 'move', row }) },
+      { label: 'move to...', onSelect: () => setDialog({ kind: 'move', rows: [row] }) },
       { label: 'details', onSelect: () => setDialog({ kind: 'details', row }) },
       {
         label: 'delete',
         destructive: true,
-        onSelect: () => setDialog({ kind: 'delete', row }),
+        onSelect: () => setDialog({ kind: 'delete', rows: [row] }),
       }
     );
     return items;
@@ -98,6 +113,14 @@ export function FileBrowserActions({
           [+ NEW FOLDER]
         </button>
       </div>
+      <SelectionActionBar
+        rows={selection.rows}
+        busy={actions.busy !== null}
+        onClear={selection.clear}
+        onDownload={() => void downloadSelection()}
+        onMove={() => setDialog({ kind: 'move', rows: selection.rows })}
+        onDelete={() => setDialog({ kind: 'delete', rows: selection.rows })}
+      />
       {failure !== null && (
         <p className="file-browser-error" role="alert" data-testid="vault-action-error">
           {failure}
@@ -108,6 +131,7 @@ export function FileBrowserActions({
       {(rows.length > 0 || showParentRow) && (
         <FileList
           rows={rows}
+          selection={selection}
           showParentRow={showParentRow}
           onOpen={onOpen}
           onNavigateUp={onNavigateUp}
@@ -155,21 +179,25 @@ export function FileBrowserActions({
       )}
       {dialog?.kind === 'move' && (
         <MoveDialog
-          row={dialog.row}
+          rows={dialog.rows}
           parent={folder}
           onClose={close}
           busy={actions.busy === 'relink'}
           error={actions.error}
-          onConfirm={(newParent) => closeOnSuccess(actions.move(dialog.row.id, newParent))}
+          onConfirm={(newParent) =>
+            closeOnSuccess(actions.move(dialog.rows.map(toNodeId), newParent), selection.clear)
+          }
         />
       )}
       {dialog?.kind === 'delete' && (
         <ConfirmDeleteDialog
-          row={dialog.row}
+          rows={dialog.rows}
           onClose={close}
           busy={actions.busy === 'delete'}
           error={actions.error}
-          onConfirm={() => closeOnSuccess(actions.remove(dialog.row.id))}
+          onConfirm={() =>
+            closeOnSuccess(actions.remove(dialog.rows.map(toNodeId)), selection.clear)
+          }
         />
       )}
       {dialog?.kind === 'details' && <DetailsDialog row={dialog.row} onClose={close} />}
