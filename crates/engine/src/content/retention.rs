@@ -8,13 +8,15 @@
 
 use core::num::NonZeroU64;
 
-use cipherbox_core::content::encode_content_cid_str;
+use cipherbox_core::content::{decode_content_cid_str, encode_content_cid_str, verify_cid};
+use cipherbox_core::error::CodecError;
 
 use super::budget::sealed_total_bytes;
 use super::chunk::SEALED_LEAF_OVERHEAD;
-use super::dag::{DagError, decode_root, root_block_cid};
+use super::dag::{DagError, decode_root};
 use super::limits::MAX_RESOLVED_RECORD_BYTES;
 use super::profile::ContentProfile;
+use super::read::{ContentPlane, is_plane_anchor};
 use crate::api::Quota;
 
 /// A pre-flight quota rejection: the hosted account cannot admit `needed_bytes`.
@@ -79,8 +81,8 @@ pub enum RetentionPolicy {
 /// Pinned bytes are not the version's plaintext size — the number a version
 /// record carries ([`cipherbox_core::seal::Version::size`]). Sealing adds a
 /// nonce and a tag to every leaf and stages a root block besides, and pinned
-/// bytes are what the registry charges. The two units never meet by assignment:
-/// [`ContentVersion::from_plaintext_size`] is the only way to build one.
+/// bytes are what the registry charges. [`ContentVersion::from_plaintext_size`]
+/// is the conversion between the two.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContentVersion {
     /// The version's root content CID (multibase string), the retire target.
@@ -110,12 +112,10 @@ impl ContentVersion {
 /// reclaiming them frees.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PrunePlan {
-    /// The doomed versions' **root** content CIDs, oldest first. Each expands to
-    /// its own full retire set via [`expand_retire_targets`] once its root block
-    /// is in hand; a root alone retires none of its leaves.
+    /// The doomed versions' **root** content CIDs, oldest first. Each is an
+    /// [`expand_retire_targets`] input, not a retire target on its own.
     pub retire_targets: Vec<String>,
-    /// Pinned bytes freed by retiring [`Self::retire_targets`] and everything
-    /// they expand to.
+    /// Pinned bytes freed by retiring the expansion of [`Self::retire_targets`].
     pub reclaimed_bytes: u64,
 }
 
@@ -124,12 +124,8 @@ pub struct PrunePlan {
 /// ordered newest to oldest. Pure and deterministic — the net plane runs the
 /// retire against the returned targets. Keeping at least as many as exist prunes
 /// nothing (an empty plan).
-///
-/// `keep_latest` is a [`NonZeroU64`], matching [`RetentionPolicy::KeepLatest`]:
-/// keeping zero would retire the live version the file record still points at.
 pub fn plan_prune(versions_newest_first: &[ContentVersion], keep_latest: NonZeroU64) -> PrunePlan {
-    // Saturating: a keep-count past `usize` on a 32-bit target keeps everything,
-    // which is what a count that large asks for.
+    // Clamped: a keep-count past `usize` on a 32-bit target keeps everything.
     let keep = usize::try_from(keep_latest.get()).unwrap_or(usize::MAX);
     let doomed = versions_newest_first.iter().skip(keep);
     let mut plan = PrunePlan {
@@ -147,11 +143,21 @@ pub fn plan_prune(versions_newest_first: &[ContentVersion], keep_latest: NonZero
 /// Why a doomed root could not be expanded into its retire targets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExpandError {
-    /// The block does not address to the root CID it was fetched for. Reading
-    /// targets out of it would retire CIDs this version never named.
-    CidMismatch,
+    /// The version's `contentCid` is not a canonical `dag-cbor` root address, so
+    /// no block can be checked against it.
+    MalformedRootCid,
+    /// The block does not address to the version's `contentCid`. Reading targets
+    /// out of it would retire CIDs this version never named.
+    TrustViolation(CodecError),
     /// The block addresses correctly but is not a readable root manifest.
     Root(DagError),
+    /// The manifest accounts for a different pinned total than the plan quoted.
+    PinnedBytesMismatch {
+        /// The doomed version's [`ContentVersion::pinned_bytes`].
+        planned: u64,
+        /// The total the root block and its link list actually account for.
+        manifest: u64,
+    },
 }
 
 impl From<DagError> for ExpandError {
@@ -160,35 +166,26 @@ impl From<DagError> for ExpandError {
     }
 }
 
-/// One doomed version expanded into everything retiring it frees.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RetireExpansion {
-    /// The retire targets in retire order: every leaf, then the root **last**.
-    /// The root block is the only record of its leaf list, so retiring it first
-    /// makes the leaves unnameable and leaves them charged forever; a drain that
-    /// dies mid-expansion can always re-expand from a root still pinned.
-    pub targets: Vec<String>,
-    /// The exact pinned bytes retiring [`Self::targets`] frees.
-    pub pinned_bytes: u64,
-}
-
-/// Expand a doomed version root into the full set of CIDs a retire must name.
+/// Expand a doomed version into the full set of CIDs a retire must name, in
+/// retire order: every leaf, then the root **last**.
 ///
 /// The registry deletes rows for exactly the CIDs handed to it and never
 /// interprets content, so a root-only retire leaves every sealed leaf pinned and
-/// charged. `root_block` is the plaintext det-CBOR root the version's
+/// charged forever. `root_block` is the plaintext det-CBOR root that `version`'s
 /// `contentCid` addresses — no key is needed to read the leaf list.
 ///
-/// Fail-closed on `root_block`: it is re-addressed against `root_content_cid`
-/// before it is decoded, and refused past the block ceiling first, so an
-/// oversized or substituted block cannot drive the expansion. The walk is one
-/// level and bounded by that ceiling — leaf links are `raw`-codec CIDs
-/// ([`decode_root`] enforces it), which name no further links, so no cycle and
-/// no unbounded descent is representable.
+/// The root block is the only record of its own leaf list, so it retires last: a
+/// drain that dies mid-expansion can re-expand from a root that is still pinned,
+/// where a root-first order would leave its leaves unnameable and charged.
+///
+/// Fail-closed throughout. The block is refused past the resolved-block ceiling
+/// before it is hashed, verified against `version.content_cid`, decoded, and
+/// finally held to the pinned total the plan quoted — a version whose bytes
+/// cannot be accounted for is never retired.
 pub fn expand_retire_targets(
-    root_content_cid: &str,
+    version: &ContentVersion,
     root_block: &[u8],
-) -> Result<RetireExpansion, ExpandError> {
+) -> Result<Vec<String>, ExpandError> {
     if root_block.len() > MAX_RESOLVED_RECORD_BYTES {
         return Err(DagError::RootTooLarge {
             size: root_block.len(),
@@ -196,35 +193,42 @@ pub fn expand_retire_targets(
         }
         .into());
     }
-    if root_block_cid(root_block) != root_content_cid {
-        return Err(ExpandError::CidMismatch);
+    let expected =
+        decode_content_cid_str(&version.content_cid).map_err(|_| ExpandError::MalformedRootCid)?;
+    if !is_plane_anchor(&version.content_cid, &expected, ContentPlane::Root) {
+        return Err(ExpandError::MalformedRootCid);
     }
+    verify_cid(&expected, root_block).map_err(ExpandError::TrustViolation)?;
     let manifest = decode_root(root_block)?;
 
-    let mut targets: Vec<String> = manifest
-        .leaf_cids
-        .iter()
-        .map(|cid| encode_content_cid_str(cid))
-        .collect();
-    let leaf_overhead = (manifest.leaf_cids.len() as u64).saturating_mul(SEALED_LEAF_OVERHEAD);
-    targets.push(root_content_cid.to_owned());
+    let accounted = manifest
+        .size
+        .saturating_add((manifest.leaf_cids.len() as u64).saturating_mul(SEALED_LEAF_OVERHEAD))
+        .saturating_add(root_block.len() as u64);
+    if accounted != version.pinned_bytes {
+        return Err(ExpandError::PinnedBytesMismatch {
+            planned: version.pinned_bytes,
+            manifest: accounted,
+        });
+    }
 
-    Ok(RetireExpansion {
-        targets,
-        pinned_bytes: manifest
-            .size
-            .saturating_add(leaf_overhead)
-            .saturating_add(root_block.len() as u64),
-    })
+    let mut targets = Vec::with_capacity(manifest.leaf_cids.len() + 1);
+    targets.extend(
+        manifest
+            .leaf_cids
+            .iter()
+            .map(|cid| encode_content_cid_str(cid)),
+    );
+    targets.push(version.content_cid.clone());
+    Ok(targets)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::content::chunk::{ContentKey, frame_and_seal};
-    use crate::content::dag::assemble;
+    use crate::content::dag::{DAG_ROOT_CODEC, assemble};
     use crate::net::REGISTRY_BATCH_MAX;
-    use crate::testkit::SeededEntropy;
+    use crate::testkit::frame_version;
     use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
     use cipherbox_core::suite::aead::KEY_LEN;
 
@@ -308,20 +312,13 @@ mod tests {
     #[test]
     fn keeping_all_or_more_prunes_nothing() {
         let history = vec![version("v2", 20), version("v1", 10)];
-        assert_eq!(plan_prune(&history, keep(2)), PrunePlan::default());
-        assert_eq!(
-            plan_prune(&history, keep(5)),
-            PrunePlan::default(),
-            "keep>len is a no-op"
-        );
-    }
-
-    /// A keep-count larger than `usize` (reachable on a 32-bit target) must keep
-    /// everything, never wrap into retiring the live version.
-    #[test]
-    fn an_enormous_keep_count_prunes_nothing() {
-        let history = vec![version("v2", 20), version("v1", 10)];
-        assert_eq!(plan_prune(&history, keep(u64::MAX)), PrunePlan::default());
+        for keep_latest in [keep(2), keep(5), keep(u64::MAX)] {
+            assert_eq!(
+                plan_prune(&history, keep_latest),
+                PrunePlan::default(),
+                "keeping at least as many as exist retires nothing"
+            );
+        }
     }
 
     /// The plaintext size a version record carries is never the pinned size.
@@ -345,44 +342,43 @@ mod tests {
         ));
     }
 
-    /// Build a real sealed version and return its root CID, root block, and the
-    /// leaf CIDs as the registry would see them.
-    fn sealed_version(plaintext: &[u8]) -> (String, Vec<u8>, Vec<String>, ContentProfile) {
-        let profile = ContentProfile::CI;
-        let key = ContentKey::from_bytes([9u8; KEY_LEN]);
-        let leaves = frame_and_seal(plaintext, &key, &mut SeededEntropy::new(11), &profile)
-            .expect("seeded entropy");
-        let leaf_cids: Vec<Vec<u8>> = leaves.into_iter().map(|leaf| leaf.cid).collect();
-        let dag = assemble(&leaf_cids, plaintext.len() as u64, &profile).expect("assembles");
-        let spelled = leaf_cids
+    /// A version framed by the same writer the drain uses: the doomed
+    /// `ContentVersion`, its root block, and the leaf CIDs as the registry spells
+    /// them.
+    fn sealed_version(plaintext: &[u8]) -> (ContentVersion, Vec<u8>, Vec<String>) {
+        let (_, root_block, content) = frame_version(plaintext, [9u8; KEY_LEN], 11);
+        let doomed = ContentVersion::from_plaintext_size(
+            encode_content_cid_str(content.content_cid()),
+            plaintext.len() as u64,
+            &ContentProfile::CI,
+        )
+        .expect("under the ceiling");
+        let leaf_cids = content
+            .leaf_cids()
             .iter()
             .map(|cid| encode_content_cid_str(cid))
             .collect();
-        (
-            encode_content_cid_str(&dag.content_cid),
-            dag.root_block,
-            spelled,
-            profile,
-        )
+        (doomed, root_block, leaf_cids)
     }
 
     #[test]
     fn expansion_retires_every_leaf_and_puts_the_root_last() {
         let plaintext: Vec<u8> = (0..100u8).collect();
-        let (root_cid, root_block, leaf_cids, _) = sealed_version(&plaintext);
-        let expansion = expand_retire_targets(&root_cid, &root_block).expect("expands");
-
+        let (doomed, root_block, leaf_cids) = sealed_version(&plaintext);
         assert!(
             leaf_cids.len() > 1,
             "a multi-chunk version is the normal case"
         );
-        let (leaves, root) = expansion
-            .targets
-            .split_last()
-            .map(|(root, leaves)| (leaves, root))
-            .expect("at least the root");
-        assert_eq!(leaves, leaf_cids, "every leaf, in file order");
-        assert_eq!(root, &root_cid, "the expansion key retires last");
+
+        let expected: Vec<String> = leaf_cids
+            .into_iter()
+            .chain([doomed.content_cid.clone()])
+            .collect();
+        assert_eq!(
+            expand_retire_targets(&doomed, &root_block).expect("expands"),
+            expected,
+            "every leaf in file order, then the expansion key last"
+        );
     }
 
     /// At the frozen 1 MiB framing a 1 GiB version expands past the registry's
@@ -399,36 +395,50 @@ mod tests {
             .collect();
         let plaintext_len = leaves as u64 * profile.chunk_size() as u64;
         let dag = assemble(&leaf_cids, plaintext_len, &profile).expect("assembles");
-        let root_cid = encode_content_cid_str(&dag.content_cid);
+        let doomed = ContentVersion::from_plaintext_size(
+            encode_content_cid_str(&dag.content_cid),
+            plaintext_len,
+            &profile,
+        )
+        .expect("under the ceiling");
 
-        let expansion = expand_retire_targets(&root_cid, &dag.root_block).expect("expands");
-        assert_eq!(expansion.targets.len(), leaves + 1);
+        let targets = expand_retire_targets(&doomed, &dag.root_block).expect("expands");
+        assert_eq!(targets.len(), leaves + 1);
         assert!(
-            expansion.targets.len() > REGISTRY_BATCH_MAX,
+            targets.len() > REGISTRY_BATCH_MAX,
             "the expansion cannot ride one retire call"
         );
         assert_eq!(
-            expansion.targets.last().expect("non-empty"),
-            &root_cid,
+            targets.last().expect("non-empty"),
+            &doomed.content_cid,
             "the root rides the final batch, after every leaf it names"
         );
     }
 
-    /// The plan-time figure and the drain-time figure are two derivations of one
-    /// number; a prune that quotes one and frees the other is the misreport.
+    /// The plan-time figure derives the pinned total from the framing profile;
+    /// the drain-time figure measures it off the manifest. A prune that quotes
+    /// one and frees the other is the misreport, so the expansion refuses to
+    /// proceed unless they agree.
     #[test]
-    fn the_planned_reclaim_equals_what_the_expanded_retire_frees() {
+    fn a_planned_reclaim_that_the_manifest_cannot_account_for_is_refused() {
         for size in [0usize, 1, 15, 16, 17, 40, 100] {
-            let plaintext = vec![3u8; size];
-            let (root_cid, root_block, _, profile) = sealed_version(&plaintext);
-            let planned =
-                ContentVersion::from_plaintext_size(root_cid.clone(), size as u64, &profile)
-                    .expect("under the ceiling");
-            let expansion = expand_retire_targets(&root_cid, &root_block).expect("expands");
+            let (doomed, root_block, _) = sealed_version(&vec![3u8; size]);
+            assert!(
+                expand_retire_targets(&doomed, &root_block).is_ok(),
+                "size {size}: the two derivations must agree"
+            );
+
+            let overstated = ContentVersion {
+                pinned_bytes: doomed.pinned_bytes + 1,
+                ..doomed.clone()
+            };
             assert_eq!(
-                plan_prune(&[version("live", 0), planned], keep(1)).reclaimed_bytes,
-                expansion.pinned_bytes,
-                "size {size}: planned reclaim must equal the retired total"
+                expand_retire_targets(&overstated, &root_block),
+                Err(ExpandError::PinnedBytesMismatch {
+                    planned: doomed.pinned_bytes + 1,
+                    manifest: doomed.pinned_bytes,
+                }),
+                "size {size}: bytes the manifest cannot account for are never retired"
             );
         }
     }
@@ -437,30 +447,50 @@ mod tests {
     /// CIDs the version never named.
     #[test]
     fn a_block_that_does_not_address_to_its_root_cid_is_refused() {
-        let (root_cid, root_block, ..) = sealed_version(&[1u8; 40]);
-        let (other_cid, ..) = sealed_version(&[2u8; 40]);
-        assert_ne!(root_cid, other_cid);
+        let (doomed, root_block, _) = sealed_version(&[1u8; 40]);
+        let (other, ..) = sealed_version(&[2u8; 40]);
+        assert_ne!(doomed.content_cid, other.content_cid);
+        assert!(matches!(
+            expand_retire_targets(&other, &root_block),
+            Err(ExpandError::TrustViolation(_))
+        ));
+    }
+
+    /// A leaf CID names a `raw` block, so spelling one as the doomed root must be
+    /// refused rather than verified against a root-plane block.
+    #[test]
+    fn a_root_cid_off_the_dag_cbor_plane_is_refused() {
+        let (_, root_block, leaf_cids) = sealed_version(&[5u8; 40]);
+        let off_plane = ContentVersion {
+            content_cid: leaf_cids[0].clone(),
+            pinned_bytes: 0,
+        };
         assert_eq!(
-            expand_retire_targets(&other_cid, &root_block),
-            Err(ExpandError::CidMismatch)
+            expand_retire_targets(&off_plane, &root_block),
+            Err(ExpandError::MalformedRootCid)
         );
     }
 
     #[test]
     fn an_oversized_block_is_refused_before_it_is_decoded() {
+        let (doomed, ..) = sealed_version(&[6u8; 40]);
         assert!(matches!(
-            expand_retire_targets("anything", &vec![0u8; MAX_RESOLVED_RECORD_BYTES + 1]),
+            expand_retire_targets(&doomed, &vec![0u8; MAX_RESOLVED_RECORD_BYTES + 1]),
             Err(ExpandError::Root(DagError::RootTooLarge { .. }))
         ));
     }
 
     /// A correctly-addressed block that is not a root manifest must fail closed,
-    /// never expand to an empty target set that reports the version freed.
+    /// never expand to a bare root that reports the version freed.
     #[test]
     fn a_correctly_addressed_non_manifest_block_is_refused() {
         let junk = b"not a root manifest";
+        let doomed = ContentVersion {
+            content_cid: encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, junk)),
+            pinned_bytes: 0,
+        };
         assert!(matches!(
-            expand_retire_targets(&root_block_cid(junk), junk),
+            expand_retire_targets(&doomed, junk),
             Err(ExpandError::Root(_))
         ));
     }
