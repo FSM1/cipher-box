@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "6708e08c9a09",
+  "strategy": "manual-commit",
+  "branch": "chore/rename-staging-api-url-var",
+  "checkpoints_count": 2,
+  "files_touched": [
+    "scripts/rotate-staging-secrets.sh"
+  ],
+  "sessions": [
+    {
+      "metadata": "/67/08e08c9a09/0/metadata.json",
+      "transcript": "/67/08e08c9a09/0/full.jsonl",
+      "compact_transcript": "/67/08e08c9a09/0/transcript.jsonl",
+      "content_hash": "/67/08e08c9a09/0/content_hash.txt",
+      "prompt": "/67/08e08c9a09/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1310,
+    "cache_creation_tokens": 2616972,
+    "cache_read_tokens": 142933641,
+    "output_tokens": 539198,
+    "api_call_count": 658
+  }
+}
