@@ -2135,7 +2135,7 @@
       },
       "targets": [
         {
-          "expr": "{service=~\"api|tee-worker\"} |~ \"(?i)(republish|TEE)\"",
+          "expr": "{service=\"api\"} |~ \"(?i)republish\"",
           "legendFormat": "",
           "refId": "A"
         }

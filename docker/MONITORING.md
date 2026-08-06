@@ -124,15 +124,7 @@ Use these in the **Explore** panel in Grafana Cloud.
 ```
 
 ```logql
-{service="redis"}
-```
-
-```logql
 {service="ipfs"}
-```
-
-```logql
-{service="tee-worker"}
 ```
 
 ```logql
@@ -165,14 +157,6 @@ Database queries (if TypeORM logging enabled):
 
 ```logql
 {service="api"} |= "query:"
-```
-
-### TEE worker
-
-TEE republish activity:
-
-```logql
-{service="tee-worker"} |= "republish"
 ```
 
 ### IPFS
@@ -219,7 +203,7 @@ rate(cipherbox_republish_entries_processed_total{result="succeeded"}[1h])
 ## Architecture
 
 ```text
-  Containers (api, postgres, redis, ipfs, tee-worker, caddy)
+  Containers (api, postgres, ipfs, someguy, caddy)
       |                           |
       | Docker logs               | GET /metrics (every 30s)
       | (json-file driver)        |

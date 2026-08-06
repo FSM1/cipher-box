@@ -37,9 +37,9 @@ jobs:
       - name: Upload dist to VPS
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
-          host: ${{ vars.STAGING_HOST }}
-          username: ${{ vars.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
+          host: ${{ vars.HOST }}
+          username: ${{ vars.USER }}
+          key: ${{ secrets.SSH_KEY }}
           source: 'landing/dist/*'
           target: /tmp/cipherbox-landing
           strip_components: 2
@@ -48,9 +48,9 @@ jobs:
         id: ipfs
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
-          host: ${{ vars.STAGING_HOST }}
-          username: ${{ vars.STAGING_USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
+          host: ${{ vars.HOST }}
+          username: ${{ vars.USER }}
+          key: ${{ secrets.SSH_KEY }}
           capture_stdout: true
           script: |
             set -euo pipefail
