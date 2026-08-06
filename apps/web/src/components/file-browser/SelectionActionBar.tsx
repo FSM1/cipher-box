@@ -22,7 +22,7 @@ export function SelectionActionBar({
   onDelete,
 }: SelectionActionBarProps) {
   if (rows.length === 0) return null;
-  const files = rows.filter((row) => row.kind === 'file').length;
+  const hasFiles = rows.some((row) => row.kind === 'file');
 
   return (
     <div
@@ -35,7 +35,7 @@ export function SelectionActionBar({
         {`${describeRows(rows)} selected`}
       </span>
       <div className="selection-action-bar-actions">
-        {files > 0 && (
+        {hasFiles && (
           <button
             type="button"
             className="file-browser-toolbar-button"

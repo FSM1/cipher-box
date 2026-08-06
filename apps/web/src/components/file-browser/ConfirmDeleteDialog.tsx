@@ -3,7 +3,7 @@ import { describeRows } from '../../vault/selection';
 import { Modal } from '../ui/Modal';
 
 interface ConfirmDeleteDialogProps {
-  /** What the delete will retire; each row becomes a command of its own. */
+  /** The rows the delete will retire, named as one or counted as many. */
   rows: ListingRow[];
   onClose: () => void;
   onConfirm: () => void;
@@ -20,17 +20,16 @@ export function ConfirmDeleteDialog({
   error,
 }: ConfirmDeleteDialogProps) {
   const what = describeRows(rows);
-  // A single row is named, so it is quoted; a count is not a name.
-  const single = rows.length === 1;
-  const target = single ? `"${what}"` : what;
-  const inside = rows.some((row) => row.kind === 'folder')
-    ? ` and everything inside${single ? ' it' : ''}`
-    : '';
+  const recursive = rows.some((row) => row.kind === 'folder');
+  const message =
+    rows.length === 1
+      ? `delete "${what}"${recursive ? ' and everything inside it' : ''}?`
+      : `delete ${what}${recursive ? ' and everything inside' : ''}?`;
 
   return (
     <Modal onClose={onClose} title={`delete ${what}`} error={error} busy={busy}>
       <div className="dialog-content" data-testid="delete-dialog">
-        <p className="dialog-message">{`delete ${target}${inside}?`}</p>
+        <p className="dialog-message">{message}</p>
         <div className="dialog-actions">
           <button type="button" className="dialog-button" onClick={onClose} disabled={busy}>
             cancel

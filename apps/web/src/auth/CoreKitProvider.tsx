@@ -2,16 +2,10 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import { errorMessage } from '../lib/errorMessage';
 import type { CoreKitSession } from './coreKit';
 
-/**
- * Whether this tab knows if it has a session. `unavailable` is a verdict, not a
- * stage on the way to `ready`: a route gating on it has its answer.
- */
+/** Whether this tab knows if it has a session. */
 export type CoreKitStatus = 'checking' | 'ready' | 'unavailable';
 
-/**
- * How long the mount-time restore may run before the tab calls Core Kit
- * unreachable. Generous, so a slow-but-working restore still lands `ready`.
- */
+/** Generous, so a slow-but-working restore still lands `ready`. */
 const RESTORE_DEADLINE_MS = 10_000;
 
 const UNREACHABLE = 'the login provider is not responding — check your connection and reload';
@@ -59,8 +53,7 @@ export function CoreKitProvider({ createSession, children }: CoreKitProviderProp
     }
 
     // A restore that never settles would hold every route gating on this at
-    // `checking` forever; the deadline turns that silence into a verdict, and a
-    // restore that lands late still promotes the tab back to `ready`.
+    // `checking` forever, so silence past the deadline is a verdict.
     const deadline = setTimeout(() => {
       if (live) setValue({ session: null, status: 'unavailable', error: UNREACHABLE });
     }, RESTORE_DEADLINE_MS);

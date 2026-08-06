@@ -5,9 +5,11 @@
  * leaves the selection with it.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toHex } from '@cipherbox/client';
 import type { ListingRow } from './listing';
+
+const EMPTY: ReadonlySet<string> = new Set();
 
 export interface Selection {
   /** The selected rows, in listing order. */
@@ -16,6 +18,8 @@ export interface Selection {
   toggle(key: string): void;
   /** Selects every listed row, or clears once they all already are. */
   toggleAll(): void;
+  /** Retires the rows a command has just acted on, and nothing else. */
+  drop(keys: readonly string[]): void;
   clear(): void;
   allSelected: boolean;
 }
@@ -31,32 +35,28 @@ export function useSelection(rows: ListingRow[], folder: Uint8Array | null): Sel
   useEffect(() => setKeys(EMPTY), [folderKey]);
 
   const selected = useMemo(() => rows.filter((row) => keys.has(row.key)), [keys, rows]);
-
-  const toggleAll = useCallback(() => {
-    setKeys((current) =>
-      rows.length > 0 && rows.every((row) => current.has(row.key))
-        ? EMPTY
-        : new Set(rows.map((row) => row.key))
-    );
-  }, [rows]);
+  const allSelected = rows.length > 0 && selected.length === rows.length;
+  const clear = () => setKeys(EMPTY);
 
   return {
     rows: selected,
-    allSelected: rows.length > 0 && selected.length === rows.length,
-    has: useCallback((key: string) => keys.has(key), [keys]),
-    toggle: useCallback((key: string) => {
+    allSelected,
+    clear,
+    has: (key) => keys.has(key),
+    toggle: (key) =>
       setKeys((current) => {
         const next = new Set(current);
         if (!next.delete(key)) next.add(key);
         return next;
-      });
-    }, []),
-    toggleAll,
-    clear: useCallback(() => setKeys(EMPTY), []),
+      }),
+    toggleAll: () => (allSelected ? clear() : setKeys(new Set(rows.map((row) => row.key)))),
+    drop: (dropped) =>
+      setKeys((current) => {
+        const next = new Set(current);
+        return dropped.filter((key) => next.delete(key)).length > 0 ? next : current;
+      }),
   };
 }
-
-const EMPTY: ReadonlySet<string> = new Set();
 
 /** How a command names what it acts on: one row by name, several by count. */
 export function describeRows(rows: readonly ListingRow[]): string {

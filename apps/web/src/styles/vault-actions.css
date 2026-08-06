@@ -38,19 +38,28 @@
    Selection
    ========================================================================== */
 
+.file-list {
+  --selection-box: 13px;
+}
+
 .file-list-item-select,
 .file-list-select-all,
 .file-list-item-select-gap {
   flex-shrink: 0;
-  width: 13px;
-  height: 13px;
-  margin: 0 var(--spacing-xs) 0 0;
+  width: var(--selection-box);
+  height: var(--selection-box);
+  margin: 0;
   accent-color: var(--color-green-primary);
+}
+
+.file-list-item-select,
+.file-list-select-all {
   cursor: pointer;
 }
 
-.file-list-item-select-gap {
-  cursor: inherit;
+/* The header row has no flex gap of its own to inherit. */
+.file-list-select-all {
+  margin-right: var(--spacing-xs);
 }
 
 .file-list-select-all:disabled {

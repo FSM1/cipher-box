@@ -19,8 +19,7 @@ export interface Auth {
   isReady: boolean;
   /**
    * True once the tab knows it has no session — the check settled signed out,
-   * or Core Kit could never answer it. Gating a route on `isReady` alone hangs
-   * that tab forever on an answer that is not coming.
+   * or Core Kit could never answer it.
    */
   isSignedOut: boolean;
   /** True while a restore, login, or logout is in flight. */

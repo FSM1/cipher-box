@@ -24,10 +24,7 @@ import { TextEditorDialog } from './TextEditorDialog';
 type Dialog =
   | { kind: 'create' }
   | { kind: 'rename' | 'details' | 'preview' | 'edit'; row: ListingRow }
-  // Batch and single-row commands are the same dialog over a different count.
   | { kind: 'move' | 'delete'; rows: ListingRow[] };
-
-const toNodeId = (row: ListingRow): Uint8Array => row.id;
 
 interface FileBrowserActionsProps {
   rows: ListingRow[];
@@ -54,15 +51,16 @@ export function FileBrowserActions({
 
   const close = () => setDialog(null);
   /**
-   * A dispatch the engine accepted closes its dialog; a rejected one stays up.
-   * The banner reports one failure, so a dispatch also retires the last read's.
+   * A dispatch the engine accepted closes its dialog and retires the rows it
+   * acted on; a rejected one stays up. The banner reports one failure, so a
+   * dispatch also retires the last read's.
    */
-  const closeOnSuccess = (dispatched: Promise<boolean>, andThen?: () => void) => {
+  const closeOnSuccess = (dispatched: Promise<boolean>, acted: ListingRow[] = []) => {
     downloads.clearError();
     void dispatched.then((accepted) => {
       if (!accepted) return;
       close();
-      andThen?.();
+      selection.drop(acted.map((row) => row.key));
     });
   };
 
@@ -185,7 +183,13 @@ export function FileBrowserActions({
           busy={actions.busy === 'relink'}
           error={actions.error}
           onConfirm={(newParent) =>
-            closeOnSuccess(actions.move(dialog.rows.map(toNodeId), newParent), selection.clear)
+            closeOnSuccess(
+              actions.move(
+                dialog.rows.map((row) => row.id),
+                newParent
+              ),
+              dialog.rows
+            )
           }
         />
       )}
@@ -196,7 +200,7 @@ export function FileBrowserActions({
           busy={actions.busy === 'delete'}
           error={actions.error}
           onConfirm={() =>
-            closeOnSuccess(actions.remove(dialog.rows.map(toNodeId)), selection.clear)
+            closeOnSuccess(actions.remove(dialog.rows.map((row) => row.id)), dialog.rows)
           }
         />
       )}

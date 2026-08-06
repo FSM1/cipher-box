@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import type { ListingRow } from '../../vault/listing';
 import type { Selection } from '../../vault/selection';
 import { FileListItem } from './FileListItem';
@@ -23,6 +24,13 @@ export function FileList({
   onRowMenu,
 }: FileListProps) {
   const partial = selection.rows.length > 0 && !selection.allSelected;
+  // `indeterminate` is a DOM property with no attribute, so it is written here.
+  const markPartial = useCallback(
+    (node: HTMLInputElement | null) => {
+      if (node) node.indeterminate = partial;
+    },
+    [partial]
+  );
 
   return (
     <div className="file-list" role="grid" data-testid="file-list">
@@ -32,9 +40,7 @@ export function FileList({
             type="checkbox"
             className="file-list-select-all"
             checked={selection.allSelected}
-            ref={(node) => {
-              if (node) node.indeterminate = partial;
-            }}
+            ref={markPartial}
             disabled={rows.length === 0}
             aria-label="select all"
             data-testid="select-all"

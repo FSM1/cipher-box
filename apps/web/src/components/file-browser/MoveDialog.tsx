@@ -5,7 +5,7 @@ import { describeRows } from '../../vault/selection';
 import { Modal } from '../ui/Modal';
 
 interface MoveDialogProps {
-  /** What the move will relink; each row becomes a command of its own. */
+  /** The rows the move will relink, named as one or counted as many. */
   rows: ListingRow[];
   /** The folder the rows are in today; moving into it would be a no-op. */
   parent: Uint8Array | null;

@@ -455,6 +455,21 @@ describe('the vault browser selection', () => {
     expect(engine.facade.download.mock.calls).toEqual([[NOTE], [PICTURE]]);
   });
 
+  it('retires only the rows a command acted on, not the whole selection', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    fireEvent.click(screen.getByTestId('select-all'));
+    // A command raised from one row's own menu is about that row, not the batch.
+    openRowMenu('notes.txt');
+    chooseMenuItem('delete');
+    fireEvent.click(screen.getByTestId('delete-confirm'));
+
+    await waitFor(() => expect(engine.facade.delete.mock.calls).toEqual([[NOTE]]));
+    await waitFor(() => expect(count()).toBe('documents selected'));
+  });
+
   it('starts over when the route moves to another folder', async () => {
     const engine = fakeEngine();
     renderBrowser(engine);
