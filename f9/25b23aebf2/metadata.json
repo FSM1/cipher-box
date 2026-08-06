@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "f925b23aebf2",
+  "strategy": "manual-commit",
+  "branch": "feat/1093-details-panel-text-editor-and-streamed-preview",
+  "checkpoints_count": 72,
+  "files_touched": [
+    "apps/web/src/components/file-browser/details/FileDetails.tsx"
+  ],
+  "sessions": [
+    {
+      "metadata": "/f9/25b23aebf2/0/metadata.json",
+      "transcript": "/f9/25b23aebf2/0/full.jsonl",
+      "compact_transcript": "/f9/25b23aebf2/0/transcript.jsonl",
+      "content_hash": "/f9/25b23aebf2/0/content_hash.txt",
+      "prompt": "/f9/25b23aebf2/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 874,
+    "cache_creation_tokens": 2313354,
+    "cache_read_tokens": 100901568,
+    "output_tokens": 381098,
+    "api_call_count": 440
+  }
+}
