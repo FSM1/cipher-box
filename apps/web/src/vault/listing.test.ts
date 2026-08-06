@@ -44,6 +44,15 @@ describe('listingRows', () => {
     expect(row.modified).not.toBe('...');
   });
 
+  it('carries the content version the snapshot projected, and its absence', () => {
+    const rows = listingRows([
+      child({ id: new Uint8Array(16).fill(1), name: 'a', contentVersion: 7n }),
+      child({ id: new Uint8Array(16).fill(2), name: 'b', contentVersion: null }),
+    ]);
+
+    expect(rows.map((row) => row.contentVersion)).toEqual([7n, null]);
+  });
+
   it('renders an mtime past the Date range rather than throwing out of Intl', () => {
     // A u64 mtime authored elsewhere must not blank the listing.
     const [row] = listingRows([child({ mtime: 8_640_000_000_000_001n })]);

@@ -14,6 +14,7 @@ function fileRow(overrides: Partial<ListingRow> = {}): ListingRow {
     icon: '[FILE]',
     size: '12 B',
     bytes: 12n,
+    contentVersion: 3n,
     modified: '14 Nov 2023',
     pending: 'none',
     deadLetter: false,
@@ -51,6 +52,7 @@ describe('the details panel', () => {
     expect(rowText('node id')).toContain('abababab');
     expect(rowText('size')).toBe('12 B');
     expect(rowText('bytes')).toBe('12');
+    expect(rowText('version')).toBe('3');
     expect(rowText('modified')).toBe('14 Nov 2023');
     expect(rowText('queued')).toBe('nothing pending');
   });
@@ -62,13 +64,20 @@ describe('the details panel', () => {
     expect(rowText('type')).toBe('[DIR]');
     expect(screen.queryByText('size')).toBeNull();
     expect(screen.queryByText('bytes')).toBeNull();
+    expect(screen.queryByText('version')).toBeNull();
   });
 
-  it('renders an empty state for a size the snapshot has not projected', () => {
-    render(<DetailsDialog row={fileRow({ bytes: null, size: '...' })} onClose={() => undefined} />);
+  it('renders an empty state for content the snapshot has not projected', () => {
+    render(
+      <DetailsDialog
+        row={fileRow({ bytes: null, size: '...', contentVersion: null })}
+        onClose={() => undefined}
+      />
+    );
 
     expect(rowText('size')).toBe('unknown');
     expect(rowText('bytes')).toBe('unknown');
+    expect(rowText('version')).toBe('unknown');
   });
 
   it('reports the queued change and the dead letter the snapshot carries', () => {

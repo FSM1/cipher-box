@@ -21,6 +21,13 @@ export function FileDetails({ row }: { row: ListingRow }) {
       <DetailRow label="bytes">
         {row.bytes === null ? <DimValue>{UNKNOWN}</DimValue> : row.bytes.toString()}
       </DetailRow>
+      <DetailRow label="version">
+        {row.contentVersion === null ? (
+          <DimValue>{UNKNOWN}</DimValue>
+        ) : (
+          row.contentVersion.toString()
+        )}
+      </DetailRow>
 
       <StateRows row={row} />
     </dl>

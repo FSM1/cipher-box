@@ -29,6 +29,8 @@ export interface ListingRow {
   size: string;
   /** The engine's byte count, before formatting; `null` until projected. */
   bytes: bigint | null;
+  /** The engine's content version count; `null` until projected. */
+  contentVersion: bigint | null;
   /** Formatted mtime, or `...` while the projection is still resolving. */
   modified: string;
   pending: PendingClass;
@@ -53,6 +55,7 @@ function toRow(child: SnapshotChildDescriptor): ListingRow {
     icon: isFolder ? '[DIR]' : '[FILE]',
     size: isFolder ? NOT_APPLICABLE : projectedSize(child.size),
     bytes: isFolder ? null : child.size,
+    contentVersion: child.contentVersion,
     modified: projectedDate(child.mtime),
     pending: child.pending,
     deadLetter: child.deadLetter,
