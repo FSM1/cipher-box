@@ -57,6 +57,39 @@ struct Link {
     invitee: EphemeralInvitee,
 }
 
+impl Link {
+    fn scope(&self) -> CommittedScope<'_> {
+        CommittedScope {
+            scope_id: &SCOPE,
+            commitment: &self.commitment,
+            commitment_sig: &self.commitment_sig,
+            ledger: &self.ledger,
+        }
+    }
+}
+
+/// The owner's two halves, held so an `OwnerAuthority` can borrow them.
+struct Owner {
+    identity: EcdsaSigner,
+    enc: X25519Secret,
+}
+
+impl Owner {
+    fn new() -> Self {
+        Self {
+            identity: owner_identity(),
+            enc: owner_enc(),
+        }
+    }
+
+    fn authority(&self) -> OwnerAuthority<'_> {
+        OwnerAuthority {
+            identity_signer: &self.identity,
+            enc_secret: &self.enc,
+        }
+    }
+}
+
 fn link(permission: Permission) -> Link {
     let invitee = EphemeralInvitee::from_secret(&[0x4e; 32]).expect("valid");
     let minted = mint_invite_grant(
@@ -119,19 +152,10 @@ fn a_link_holder_claims_over_the_mailbox_and_the_owner_converts_it() {
         "the claim authenticates as the link's ephemeral identity",
     );
 
-    let owner_id = owner_identity();
-    let owner_e = owner_enc();
+    let keys = Owner::new();
     let converted = convert_invite_claim(
-        &OwnerAuthority {
-            identity_signer: &owner_id,
-            enc_secret: &owner_e,
-        },
-        &CommittedScope {
-            scope_id: &SCOPE,
-            commitment: &l.commitment,
-            commitment_sig: &l.commitment_sig,
-            ledger: &l.ledger,
-        },
+        &keys.authority(),
+        &l.scope(),
         &items[0],
         cipherbox_engine::seams::UnixMillis(0),
     )
@@ -177,20 +201,11 @@ fn a_claim_signed_by_a_key_the_link_does_not_commit_never_becomes_a_grant() {
     let items = block_on(poll_verified(&owner_box, &owner_enc(), V)).expect("polls");
     assert_eq!(items.len(), 1);
 
-    let owner_id = owner_identity();
-    let owner_e = owner_enc();
+    let keys = Owner::new();
     assert_eq!(
         convert_invite_claim(
-            &OwnerAuthority {
-                identity_signer: &owner_id,
-                enc_secret: &owner_e,
-            },
-            &CommittedScope {
-                scope_id: &SCOPE,
-                commitment: &l.commitment,
-                commitment_sig: &l.commitment_sig,
-                ledger: &l.ledger,
-            },
+            &keys.authority(),
+            &l.scope(),
             &items[0],
             cipherbox_engine::seams::UnixMillis(0),
         )

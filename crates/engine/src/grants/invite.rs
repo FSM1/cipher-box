@@ -542,15 +542,17 @@ fn check_publishable(
     commitment: &GrantSetCommitment,
     ledger: &[GrantLedgerEntry],
 ) -> Result<(), InviteError> {
-    let mut seen = BTreeSet::new();
-    if !commitment.entries.iter().all(|e| seen.insert(e.tag)) {
-        return Err(InviteError::DuplicateTag);
-    }
-    let mut seen = BTreeSet::new();
-    if !ledger.iter().all(|e| seen.insert(e.tag)) {
+    if !tags_are_unique(commitment.entries.iter().map(|e| e.tag))
+        || !tags_are_unique(ledger.iter().map(|e| e.tag))
+    {
         return Err(InviteError::DuplicateTag);
     }
     enforce_committed_ledger(commitment, ledger).map_err(InviteError::Authority)
+}
+
+fn tags_are_unique(tags: impl Iterator<Item = [u8; 32]>) -> bool {
+    let mut seen = BTreeSet::new();
+    tags.into_iter().all(|t| seen.insert(t))
 }
 
 #[cfg(test)]
@@ -1044,6 +1046,41 @@ mod tests {
         )
     }
 
+    /// The owner's two halves, held so an [`OwnerAuthority`] can borrow them.
+    struct Owner {
+        identity: EcdsaSigner,
+        enc: X25519Secret,
+    }
+
+    impl Owner {
+        fn new() -> Self {
+            Self {
+                identity: owner_identity(),
+                enc: owner_enc(),
+            }
+        }
+
+        fn authority(&self) -> OwnerAuthority<'_> {
+            OwnerAuthority {
+                identity_signer: &self.identity,
+                enc_secret: &self.enc,
+            }
+        }
+    }
+
+    fn committed_scope<'a>(
+        commitment: &'a GrantSetCommitment,
+        commitment_sig: &'a EcdsaSignature,
+        ledger: &'a [GrantLedgerEntry],
+    ) -> CommittedScope<'a> {
+        CommittedScope {
+            scope_id: &SCOPE,
+            commitment,
+            commitment_sig,
+            ledger,
+        }
+    }
+
     /// A claimant's own keypair and the contact code binding the two halves.
     fn claimant(seed: u8) -> (EcdsaSigner, X25519Secret) {
         (
@@ -1097,23 +1134,14 @@ mod tests {
         )
         .expect("mints");
         let (commitment, sig, ledger) = committed(&[link.row.clone()]);
-        let owner_id = owner_identity();
-        let owner_e = owner_enc();
-        let owner = OwnerAuthority {
-            identity_signer: &owner_id,
-            enc_secret: &owner_e,
-        };
+        let keys = Owner::new();
+        let owner = keys.authority();
         let signer = link_signer(&minted);
 
         let (a_id, a_enc) = claimant(0x61);
         let first = convert_invite_claim(
             &owner,
-            &CommittedScope {
-                scope_id: &SCOPE,
-                commitment: &commitment,
-                commitment_sig: &sig,
-                ledger: &ledger,
-            },
+            &committed_scope(&commitment, &sig, &ledger),
             &claim_item(&signer, contact_code(&a_id, &a_enc)),
             UnixMillis(0),
         )
@@ -1126,12 +1154,7 @@ mod tests {
         let (b_id, b_enc) = claimant(0x62);
         let second = convert_invite_claim(
             &owner,
-            &CommittedScope {
-                scope_id: &SCOPE,
-                commitment: &first.commitment,
-                commitment_sig: &second_sig,
-                ledger: &first.ledger,
-            },
+            &committed_scope(&first.commitment, &second_sig, &first.ledger),
             &claim_item(&signer, contact_code(&b_id, &b_enc)),
             UnixMillis(0),
         )
@@ -1163,18 +1186,9 @@ mod tests {
         )
         .expect("mints");
         let (commitment, sig, ledger) = committed(&[link.row.clone()]);
-        let owner_id = owner_identity();
-        let owner_e = owner_enc();
-        let owner = OwnerAuthority {
-            identity_signer: &owner_id,
-            enc_secret: &owner_e,
-        };
-        let scope = CommittedScope {
-            scope_id: &SCOPE,
-            commitment: &commitment,
-            commitment_sig: &sig,
-            ledger: &ledger,
-        };
+        let keys = Owner::new();
+        let owner = keys.authority();
+        let scope = committed_scope(&commitment, &sig, &ledger);
         let signer = link_signer(&minted);
         let (id, enc) = claimant(0x63);
 
@@ -1228,18 +1242,9 @@ mod tests {
         let minted = invitee();
         let link = invite(Permission::Read, None);
         let (commitment, sig, ledger) = committed(&[link]);
-        let owner_id = owner_identity();
-        let owner_e = owner_enc();
-        let owner = OwnerAuthority {
-            identity_signer: &owner_id,
-            enc_secret: &owner_e,
-        };
-        let scope = CommittedScope {
-            scope_id: &SCOPE,
-            commitment: &commitment,
-            commitment_sig: &sig,
-            ledger: &ledger,
-        };
+        let keys = Owner::new();
+        let owner = keys.authority();
+        let scope = committed_scope(&commitment, &sig, &ledger);
         let (id, enc) = claimant(0x64);
 
         // A different ephemeral identity than the one the ledger commits.
@@ -1280,18 +1285,9 @@ mod tests {
         )
         .expect("mints");
         let (commitment, sig, ledger) = committed(&[link.row.clone()]);
-        let owner_id = owner_identity();
-        let owner_e = owner_enc();
-        let owner = OwnerAuthority {
-            identity_signer: &owner_id,
-            enc_secret: &owner_e,
-        };
-        let scope = CommittedScope {
-            scope_id: &SCOPE,
-            commitment: &commitment,
-            commitment_sig: &sig,
-            ledger: &ledger,
-        };
+        let keys = Owner::new();
+        let owner = keys.authority();
+        let scope = committed_scope(&commitment, &sig, &ledger);
         let (id, enc) = claimant(0x65);
         let item = claim_item(&link_signer(&minted), contact_code(&id, &enc));
 
@@ -1317,12 +1313,7 @@ mod tests {
         let link = invite(Permission::Read, None);
         let tag = link.tag;
         let (commitment, sig, ledger) = committed(&[link]);
-        let scope = CommittedScope {
-            scope_id: &SCOPE,
-            commitment: &commitment,
-            commitment_sig: &sig,
-            ledger: &ledger,
-        };
+        let scope = committed_scope(&commitment, &sig, &ledger);
         let (id, enc) = claimant(0x66);
         let item = claim_item(&link_signer(&minted), contact_code(&id, &enc));
 
@@ -1389,19 +1380,10 @@ mod tests {
         assert!(!read.capability.is_bearer_write());
         let (read_link, write_link) = (read.row, write.row);
 
-        let owner_id = owner_identity();
-        let owner_e = owner_enc();
-        let owner = OwnerAuthority {
-            identity_signer: &owner_id,
-            enc_secret: &owner_e,
-        };
+        let keys = Owner::new();
+        let owner = keys.authority();
         let (commitment, sig, ledger) = committed(&[read_link.clone(), write_link.clone()]);
-        let scope = CommittedScope {
-            scope_id: &SCOPE,
-            commitment: &commitment,
-            commitment_sig: &sig,
-            ledger: &ledger,
-        };
+        let scope = committed_scope(&commitment, &sig, &ledger);
 
         let cut = revoke_invite_link(&owner, &scope, &write_link.tag).expect("cuts");
         assert!(
@@ -1443,23 +1425,14 @@ mod tests {
         let minted = invitee();
         let link = invite(Permission::Read, None);
         let (commitment, sig, ledger) = committed(&[link]);
-        let owner_id = owner_identity();
-        let owner_e = owner_enc();
-        let owner = OwnerAuthority {
-            identity_signer: &owner_id,
-            enc_secret: &owner_e,
-        };
+        let keys = Owner::new();
+        let owner = keys.authority();
         let (id, enc) = claimant(0x67);
         let item = claim_item(&link_signer(&minted), contact_code(&id, &enc));
 
         let first = convert_invite_claim(
             &owner,
-            &CommittedScope {
-                scope_id: &SCOPE,
-                commitment: &commitment,
-                commitment_sig: &sig,
-                ledger: &ledger,
-            },
+            &committed_scope(&commitment, &sig, &ledger),
             &item,
             UnixMillis(0),
         )
@@ -1468,12 +1441,7 @@ mod tests {
         let resigned = sign_grant_set(&owner_identity(), &first.commitment).expect("signs");
         let again = convert_invite_claim(
             &owner,
-            &CommittedScope {
-                scope_id: &SCOPE,
-                commitment: &first.commitment,
-                commitment_sig: &resigned,
-                ledger: &first.ledger,
-            },
+            &committed_scope(&first.commitment, &resigned, &first.ledger),
             &item,
             UnixMillis(0),
         )
@@ -1489,22 +1457,13 @@ mod tests {
         let minted = invitee();
         let link = invite(Permission::Read, None);
         let (commitment, sig, ledger) = committed(&[link]);
-        let owner_id = owner_identity();
-        let owner_e = owner_enc();
-        let owner = OwnerAuthority {
-            identity_signer: &owner_id,
-            enc_secret: &owner_e,
-        };
+        let keys = Owner::new();
+        let owner = keys.authority();
         let (id, enc) = claimant(0x68);
         assert_eq!(
             convert_invite_claim(
                 &owner,
-                &CommittedScope {
-                    scope_id: &SCOPE,
-                    commitment: &commitment,
-                    commitment_sig: &sig,
-                    ledger: &ledger,
-                },
+                &committed_scope(&commitment, &sig, &ledger),
                 &claim_item_for(
                     &link_signer(&minted),
                     contact_code(&id, &enc),
@@ -1523,12 +1482,8 @@ mod tests {
         let minted = invitee();
         let link = invite(Permission::Read, None);
         let (commitment, sig, ledger) = committed(&[link]);
-        let owner_id = owner_identity();
-        let owner_e = owner_enc();
-        let owner = OwnerAuthority {
-            identity_signer: &owner_id,
-            enc_secret: &owner_e,
-        };
+        let keys = Owner::new();
+        let owner = keys.authority();
         let (id, enc) = claimant(0x69);
         let mut code = contact_code(&id, &enc);
         let last = code.len() - 1;
@@ -1537,12 +1492,7 @@ mod tests {
         assert_eq!(
             convert_invite_claim(
                 &owner,
-                &CommittedScope {
-                    scope_id: &SCOPE,
-                    commitment: &commitment,
-                    commitment_sig: &sig,
-                    ledger: &ledger,
-                },
+                &committed_scope(&commitment, &sig, &ledger),
                 &claim_item(&link_signer(&minted), code),
                 UnixMillis(0),
             )
@@ -1560,12 +1510,8 @@ mod tests {
         // Err`, not an assertion a release build strips.
         let minted = invitee();
         let link = invite(Permission::Read, None);
-        let owner_id = owner_identity();
-        let owner_e = owner_enc();
-        let owner = OwnerAuthority {
-            identity_signer: &owner_id,
-            enc_secret: &owner_e,
-        };
+        let keys = Owner::new();
+        let owner = keys.authority();
         let (id, enc) = claimant(0x6a);
         let item = claim_item(&link_signer(&minted), contact_code(&id, &enc));
 
@@ -1586,12 +1532,7 @@ mod tests {
         assert_eq!(
             convert_invite_claim(
                 &owner,
-                &CommittedScope {
-                    scope_id: &SCOPE,
-                    commitment: &commitment,
-                    commitment_sig: &sig,
-                    ledger: &ledger,
-                },
+                &committed_scope(&commitment, &sig, &ledger),
                 &item,
                 UnixMillis(0),
             )
@@ -1608,12 +1549,7 @@ mod tests {
         assert_eq!(
             convert_invite_claim(
                 &owner,
-                &CommittedScope {
-                    scope_id: &SCOPE,
-                    commitment: &commitment,
-                    commitment_sig: &sig,
-                    ledger: &[link.ledger_entry.clone(), stray],
-                },
+                &committed_scope(&commitment, &sig, &[link.ledger_entry.clone(), stray]),
                 &item,
                 UnixMillis(0),
             )
