@@ -223,7 +223,9 @@ mod tests {
     use super::*;
     use crate::content::chunk::{ContentKey, frame_and_seal};
     use crate::content::dag::assemble;
+    use crate::net::REGISTRY_BATCH_MAX;
     use crate::testkit::SeededEntropy;
+    use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
     use cipherbox_core::suite::aead::KEY_LEN;
 
     fn hosted(used: u64, limit: u64) -> Quota {
@@ -381,6 +383,35 @@ mod tests {
             .expect("at least the root");
         assert_eq!(leaves, leaf_cids, "every leaf, in file order");
         assert_eq!(root, &root_cid, "the expansion key retires last");
+    }
+
+    /// At the frozen 1 MiB framing a 1 GiB version expands past the registry's
+    /// batch cap, so a prune spanning several batches is the normal case rather
+    /// than an edge one — and the root must still land in the last batch.
+    #[test]
+    fn a_gibibyte_version_expands_past_one_retire_batch_with_the_root_last() {
+        let profile = ContentProfile::PRODUCTION;
+        let leaves = 1024usize;
+        // Address-only: a 1 GiB version's leaf *blocks* are irrelevant to an
+        // expansion, which reads the root's link list alone.
+        let leaf_cids: Vec<Vec<u8>> = (0..leaves)
+            .map(|i| compute_cid(CONTENT_CID_CODEC, &(i as u64).to_be_bytes()))
+            .collect();
+        let plaintext_len = leaves as u64 * profile.chunk_size() as u64;
+        let dag = assemble(&leaf_cids, plaintext_len, &profile).expect("assembles");
+        let root_cid = encode_content_cid_str(&dag.content_cid);
+
+        let expansion = expand_retire_targets(&root_cid, &dag.root_block).expect("expands");
+        assert_eq!(expansion.targets.len(), leaves + 1);
+        assert!(
+            expansion.targets.len() > REGISTRY_BATCH_MAX,
+            "the expansion cannot ride one retire call"
+        );
+        assert_eq!(
+            expansion.targets.last().expect("non-empty"),
+            &root_cid,
+            "the root rides the final batch, after every leaf it names"
+        );
     }
 
     /// The plan-time figure and the drain-time figure are two derivations of one
