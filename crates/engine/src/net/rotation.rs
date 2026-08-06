@@ -854,6 +854,7 @@ fn reseal_verdict(error: ResealError) -> WritePublishError {
         | ResealError::UnusableRecipientKey
         | ResealError::AscentLinkMismatch
         | ResealError::TooManyHistoryLinks
+        | ResealError::TooManyCommittedGrants
         | ResealError::Encode(_) => WritePublishError::Rejected,
     }
 }
@@ -1341,8 +1342,7 @@ mod tests {
     use crate::rotation::{
         CascadeError, CascadeOutcome, CommittedSet, PrevEpochSeed, ResealSeeds, RotateScopePlan,
         ScopeRootIdentity, cascade_rotate_scope, derive_write_name, enumerate_eager_set,
-        reseal_scope_root,
-        rotate_scope,
+        reseal_scope_root, rotate_scope,
     };
     use crate::seams::{EndpointId, HttpResponse, SeamError, SeamResult};
     use crate::testkit::fakes::{
@@ -3337,6 +3337,7 @@ mod tests {
             ResealError::UnusableRecipientKey,
             ResealError::AscentLinkMismatch,
             ResealError::TooManyHistoryLinks,
+            ResealError::TooManyCommittedGrants,
             ResealError::Encode(CodecError::Malformed(Malformed::DepthExceeded {
                 offset: 0,
             })),
