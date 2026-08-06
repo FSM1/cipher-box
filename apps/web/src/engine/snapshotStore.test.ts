@@ -1,6 +1,6 @@
 import { EngineRequestError } from '@cipherbox/client';
 import { describe, expect, it } from 'vitest';
-import { createSnapshotStore, idleSnapshotStore } from './snapshotStore';
+import { createSnapshotStore, idleSnapshotStore, isRecoverable } from './snapshotStore';
 import { ROOT_ID, fakeEngine, flush, view } from './testFakes';
 
 describe('snapshotStore', () => {
@@ -251,5 +251,132 @@ describe('snapshotStore', () => {
 
     engine.emit({ kind: 'snapshotUpdated' });
     expect(engine.pulls).toHaveLength(0);
+  });
+});
+
+describe('the focus window', () => {
+  const FOLDER = new Uint8Array(16).fill(3);
+
+  it('re-asserts the cached focus after a consumer borrowed the window', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+    store.setFocus(FOLDER);
+    engine.ackFocus();
+    await flush();
+
+    // A folder picker drove `facade.setFocus` itself; the store's cache is
+    // unchanged, so asking it for the same folder short-circuits.
+    store.setFocus(FOLDER);
+    expect(engine.focus).toEqual([FOLDER]);
+
+    store.refocus();
+    expect(engine.focus).toEqual([FOLDER, FOLDER]);
+    expect(engine.reported).toEqual([FOLDER, FOLDER]);
+  });
+
+  it('pulls its own folder after taking the window back', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+    store.setFocus(FOLDER);
+    engine.ackFocus();
+    await flush();
+    engine.pulls[0].resolve(view(FOLDER));
+    await flush();
+
+    store.refocus();
+    engine.ackFocus();
+    await flush();
+
+    expect(engine.pulls[1].folder).toBe(FOLDER);
+  });
+
+  it('starts no pull for a focus that lands after disposal', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+    store.setFocus(FOLDER);
+
+    // The provider disposes the store, then the client; the focus it asked for
+    // settles afterwards and must not reach the closed facade.
+    store.dispose();
+    engine.ackFocus();
+    await flush();
+
+    expect(engine.pulls).toEqual([]);
+
+    // Nor may a later consumer call reopen one.
+    store.refresh();
+    store.refocus();
+    await flush();
+    expect(engine.pulls).toEqual([]);
+    expect(engine.focus).toEqual([FOLDER]);
+  });
+});
+
+describe('a manual refresh', () => {
+  it('resolves nocache, then re-pulls the focused folder', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+
+    store.refresh();
+    await flush();
+
+    expect(engine.refreshes()).toBe(1);
+    expect(engine.pulls).toHaveLength(1);
+    const refreshed = view();
+    engine.pulls[0].resolve(refreshed);
+    await flush();
+    expect(store.getSnapshot().view).toBe(refreshed);
+  });
+
+  it('still pulls, and keeps the listing, when the engine refuses the refresh', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+    engine.emit({ kind: 'snapshotUpdated' });
+    const listed = view(ROOT_ID, 'fresh', 2);
+    engine.pulls[0].resolve(listed);
+    await flush();
+
+    // A refused hint is a verdict on the hint, never on the listing.
+    engine.refuseRefresh(new EngineRequestError('not implemented yet', 'unimplemented'));
+    store.refresh();
+    await flush();
+
+    expect(engine.pulls).toHaveLength(2);
+    expect(store.getSnapshot()).toEqual({ view: listed, error: null });
+  });
+
+  it('clears a failure the retry cleared', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+    engine.emit({ kind: 'snapshotUpdated' });
+    engine.pulls[0].reject(new EngineRequestError('at the ceiling', 'tooManyStreams'));
+    await flush();
+    expect(store.getSnapshot().error).toEqual({
+      message: 'at the ceiling',
+      code: 'tooManyStreams',
+    });
+
+    store.refresh();
+    await flush();
+    engine.pulls[1].resolve(view());
+    await flush();
+
+    expect(store.getSnapshot().error).toBeNull();
+  });
+});
+
+describe('failure classification', () => {
+  it('treats the stream ceiling as recoverable', () => {
+    expect(isRecoverable({ message: 'ceiling', code: 'tooManyStreams' })).toBe(true);
+  });
+
+  it('fails closed on anything it does not name', () => {
+    // A verdict, an unmapped future engine code, and a codeless transport fault
+    // all read as fatal rather than as something a retry would clear.
+    expect(isRecoverable({ message: 'refused', code: 'trustViolation' })).toBe(false);
+    expect(isRecoverable({ message: 'gone', code: 'unknownNode' })).toBe(false);
+    expect(isRecoverable({ message: 'new', code: 'someFutureCeiling' })).toBe(false);
+    expect(isRecoverable({ message: 'no room', code: 'overBudget' })).toBe(false);
+    expect(isRecoverable({ message: 'worker died' })).toBe(false);
   });
 });

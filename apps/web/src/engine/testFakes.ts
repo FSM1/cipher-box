@@ -54,6 +54,8 @@ export function fakeEngine() {
   const reported: (Uint8Array | null)[] = [];
   let settleFocus: (() => void) | null = null;
   let failFocus: ((error: Error) => void) | null = null;
+  let refreshes = 0;
+  let refuseRefresh: Error | null = null;
 
   const client = {
     facade: {
@@ -73,6 +75,10 @@ export function fakeEngine() {
           failFocus = reject;
         });
       },
+      manualRefresh() {
+        refreshes += 1;
+        return refuseRefresh === null ? Promise.resolve() : Promise.reject(refuseRefresh);
+      },
     },
     reportFocus(node: Uint8Array | null) {
       reported.push(node);
@@ -90,9 +96,29 @@ export function fakeEngine() {
     },
     ackFocus: () => settleFocus?.(),
     rejectFocus: (error: Error) => failFocus?.(error),
+    refreshes: () => refreshes,
+    refuseRefresh: (error: Error) => (refuseRefresh = error),
     subscriberCount: () => listeners.size,
   };
 }
 
 /** Lets every pending promise callback in the store run. */
 export const flush = (): Promise<unknown> => new Promise((resolve) => setTimeout(resolve, 0));
+
+/**
+ * jsdom leaves `navigator.onLine` and `document.visibilityState` read-only, so
+ * both stubs must redefine the property *and* fire the event the store listens
+ * on — a value change alone notifies nothing.
+ */
+export function setOnline(online: boolean): void {
+  Object.defineProperty(navigator, 'onLine', { configurable: true, value: online });
+  window.dispatchEvent(new Event(online ? 'online' : 'offline'));
+}
+
+export function setVisible(visible: boolean): void {
+  Object.defineProperty(document, 'visibilityState', {
+    configurable: true,
+    get: () => (visible ? 'visible' : 'hidden'),
+  });
+  document.dispatchEvent(new Event('visibilitychange'));
+}
