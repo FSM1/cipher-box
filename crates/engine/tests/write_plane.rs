@@ -6711,6 +6711,7 @@ fn a_second_queued_edit_does_not_slip_past_the_writer_that_beat_the_first() {
     let (dead_letters, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
     // The pass stops at the first loser, so the second is reached on a later
     // tick; both must end the same way.
+    let mut passes = 0;
     while block_on(engine_b.snapshot(ROOT))
         .unwrap()
         .dead_letters
@@ -6718,6 +6719,11 @@ fn a_second_queued_edit_does_not_slip_past_the_writer_that_beat_the_first() {
         < 2
     {
         tick(&world, &engine_b, &mut tasks_b);
+        passes += 1;
+        assert!(
+            passes < 50,
+            "the second loser must be reached in finite ticks"
+        );
     }
 
     assert_eq!(dead_letters.len(), 1, "one loser per pass");
