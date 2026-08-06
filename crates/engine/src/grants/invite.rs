@@ -407,6 +407,15 @@ pub struct ConvertedClaim {
 /// point of conversion, so the minted grant binds the claimant's imported
 /// contact and never the ephemeral half. `now` is the injected
 /// [`Scheduler::now`](crate::seams::Scheduler::now) instant.
+///
+/// Residual: a ledger row's `recipientIdentityPk` sits outside the owner-signed
+/// commitment ([`enforce_committed_ledger`]), so a write-grantee re-authoring the
+/// write-body can point a committed row at an ephemeral identity it holds and
+/// have a claim convert at that row's committed permission. It gains no
+/// permission it does not already hold — only an extra committed tag surviving a
+/// cut of its original one. Pinned by
+/// `a_write_grantee_can_retarget_a_committed_row_at_an_ephemeral_identity`, so
+/// tightening this has to update that test.
 pub fn convert_invite_claim(
     owner: &OwnerAuthority<'_>,
     scope: &CommittedScope<'_>,
@@ -422,12 +431,16 @@ pub fn convert_invite_claim(
 
     // The seal's inner sender signature is already verified; binding it to the
     // ephemeral half this owner committed is what makes it a claim on this link.
+    // Ambiguity is refused rather than resolved to the first match.
     let sender = item.sender_identity.to_sec1();
-    let link = scope
+    let mut matches = scope
         .ledger
         .iter()
-        .find(|e| e.recipient_identity_pk == sender)
-        .ok_or(InviteError::LinkNotCommitted)?;
+        .filter(|e| e.recipient_identity_pk == sender);
+    let link = matches.next().ok_or(InviteError::LinkNotCommitted)?;
+    if matches.next().is_some() {
+        return Err(InviteError::LinkNotCommitted);
+    }
     let link_enc =
         X25519Public::from_bytes(link.recipient_enc_pk).ok_or(InviteError::LinkNotCommitted)?;
     if recipient_blinded_tag(owner.enc_secret, &link_enc, name) != Some(link.tag) {
@@ -572,6 +585,7 @@ mod tests {
         open_grant_blob, sign_grant_set, verify_structure,
     };
     use cipherbox_core::suite::contact::ContactCode;
+    use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
     use cipherbox_core::suite::ed25519::{Ed25519Signature, Ed25519Signer};
     use cipherbox_core::suite::secret::ct_eq;
 
@@ -1421,6 +1435,46 @@ mod tests {
     }
 
     #[test]
+    fn a_write_grantee_can_retarget_a_committed_row_at_an_ephemeral_identity() {
+        // The honest bound on conversion: `recipientIdentityPk` sits outside the
+        // owner-signed commitment, so a write-grantee re-authoring the write-body
+        // can make a committed row answer to an ephemeral identity it holds. It
+        // gains no permission it does not already hold — only an extra tag.
+        // Pins the residual so tightening it must update this test.
+        let victim_identity = EcdsaSigner::from_scalar(&[0x7a; 32]).expect("valid scalar");
+        let victim_enc = X25519Secret::from_scalar([0x7b; 32]);
+        let victim = mint_grant_row(
+            &owner_enc(),
+            &victim_identity.verifying_key(),
+            &victim_enc.public(),
+            &SCOPE,
+            &scope_name(),
+            Permission::Write,
+        )
+        .expect("contributory");
+        let (commitment, sig, mut ledger) = committed(&[victim.clone()]);
+
+        let attacker = invitee();
+        ledger[0].recipient_identity_pk = attacker.identity_pk().to_sec1();
+
+        let keys = Owner::new();
+        let owner = keys.authority();
+        let (id, enc) = claimant(0x7c);
+        let converted = convert_invite_claim(
+            &owner,
+            &committed_scope(&commitment, &sig, &ledger),
+            &claim_item(&link_signer(&attacker), contact_code(&id, &enc)),
+            UnixMillis(0),
+        )
+        .expect("converts — the residual");
+        assert_eq!(
+            converted.row.commitment_entry.permission,
+            Permission::Write,
+            "the retargeted row's committed permission, not an escalation past it",
+        );
+    }
+
+    #[test]
     fn a_redelivered_claim_converts_to_the_same_grant_and_changes_nothing() {
         let minted = invitee();
         let link = invite(Permission::Read, None);
@@ -1546,6 +1600,7 @@ mod tests {
         let sig = sign_grant_set(&owner_identity(), &commitment).expect("signs");
         let mut stray = link.ledger_entry.clone();
         stray.tag = [0x7e; 32];
+        stray.recipient_identity_pk = [0x02; IDENTITY_PUBLIC_LEN];
         assert_eq!(
             convert_invite_claim(
                 &owner,
