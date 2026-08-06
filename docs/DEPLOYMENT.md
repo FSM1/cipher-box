@@ -240,7 +240,7 @@ Key secrets required in the GitHub Actions `staging` environment:
 | Secret                               | Description                                    |
 | ------------------------------------ | ---------------------------------------------- |
 | `STAGING_SSH_KEY`                    | SSH private key for VPS access                 |
-| `STAGING_DB_PASSWORD`                | PostgreSQL password                            |
+| `DB_PASSWORD`                        | PostgreSQL password                            |
 | `JWT_SECRET`                         | JWT signing secret                             |
 | `TEST_LOGIN_SECRET`                  | Test login bypass secret (non-production only) |
 | `THROTTLE_BYPASS_SECRET`             | Rate-limit bypass secret                       |

@@ -399,7 +399,7 @@ jobs:
           DB_HOST=postgres
           DB_PORT=5432
           DB_USERNAME=${{ vars.DB_USERNAME }}
-          DB_PASSWORD=${{ secrets.STAGING_DB_PASSWORD }}
+          DB_PASSWORD=${{ secrets.DB_PASSWORD }}
           DB_DATABASE=cipherbox_staging
           JWT_SECRET=${{ secrets.JWT_SECRET }}
           CORS_ALLOWED_ORIGINS=${{ vars.CORS_ALLOWED_ORIGINS }}
