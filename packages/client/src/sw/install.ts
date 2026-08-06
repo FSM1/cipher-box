@@ -85,9 +85,8 @@ export function installServiceWorker(
   };
   // A restarted worker gets no fresh `install`, so it re-learns the shell here.
   let learning = refresh().catch(ignore);
-  // It gets no fresh `activate` either, and it holds none of the ports its
-  // predecessor served — the tabs must re-broker to release those cursors.
-  void pipe.requestPorts();
+  // It gets no fresh `activate` either — see `MediaPipe.requestPorts`.
+  void pipe.requestPorts().catch(ignore);
 
   scope.addEventListener('install', (event) => {
     void scope.skipWaiting();

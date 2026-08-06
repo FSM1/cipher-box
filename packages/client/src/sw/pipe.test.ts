@@ -64,6 +64,19 @@ function stalledPort(): FakePort {
   });
 }
 
+/** Streams one window and then sits between pulls, as a buffered element does. */
+async function idleBody(
+  pipe: MediaPipe,
+  port: FakePort,
+  clientId?: string
+): Promise<{ reader: ReadableStreamDefaultReader<Uint8Array>; requestId: number }> {
+  const response = await pipe.respond(streamRequest(), clientId);
+  const reader = response.body!.getReader();
+  expect((await reader.read()).value).toEqual(new Uint8Array([1]));
+  const open = port.sent.find((message) => message.type === 'cb:media:open')!;
+  return { reader, requestId: open.requestId };
+}
+
 const streamRequest = (ticket = 'tkt', range: string | null = 'bytes=0-4'): Request =>
   new Request(`${ORIGIN}/stream/${ticket}`, {
     headers: range === null ? undefined : { range },
@@ -349,19 +362,6 @@ describe('MediaPipe.respond', () => {
 });
 
 describe('MediaPipe idle bodies', () => {
-  /** Streams one window and then sits between pulls, as a buffered element does. */
-  async function idleBody(
-    pipe: MediaPipe,
-    port: FakePort,
-    clientId?: string
-  ): Promise<{ reader: ReadableStreamDefaultReader<Uint8Array>; requestId: number }> {
-    const response = await pipe.respond(streamRequest(), clientId);
-    const reader = response.body!.getReader();
-    expect((await reader.read()).value).toEqual(new Uint8Array([1]));
-    const open = port.sent.find((message) => message.type === 'cb:media:open')!;
-    return { reader, requestId: open.requestId };
-  }
-
   it('ends an idle body as soon as the tab withdraws the stream', async () => {
     const pipe = new MediaPipe(new FakeScope(), TIMEOUTS);
     const port = streamingPort([new Uint8Array([1]), new Uint8Array([2])]);
@@ -447,9 +447,7 @@ describe('MediaPipe.requestPorts', () => {
     const pipe = new MediaPipe(scope, TIMEOUTS);
     const port = streamingPort([new Uint8Array([1]), new Uint8Array([2])]);
     pipe.adoptPort(port, 'tab-a');
-    const response = await pipe.respond(streamRequest(), 'tab-a');
-    const reader = response.body!.getReader();
-    await reader.read();
+    const { reader } = await idleBody(pipe, port, 'tab-a');
 
     await pipe.requestPorts();
 
