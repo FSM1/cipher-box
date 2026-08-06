@@ -917,6 +917,11 @@ fn wave_verdict(error: GateError) -> WritePublishError {
 }
 
 /// The same axis for a read the wave shares with the read-plane rotation edges.
+///
+/// [`ResolveFailure::ConflictingChildLabel`] is retryable to the cascade and the
+/// sweep because the write-rotation re-point wave repairs both parent indexes.
+/// This *is* that wave, so it has nothing left to wait for: retrying here spins
+/// on a conflict only this run can clear.
 fn wave_read_verdict(failure: ResolveFailure) -> WritePublishError {
     match failure {
         ResolveFailure::Unavailable => WritePublishError::NotLanded,
