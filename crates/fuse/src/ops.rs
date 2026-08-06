@@ -11,9 +11,12 @@
 use std::collections::BTreeSet;
 
 use cipherbox_engine::seams::SeamTypes;
-use cipherbox_engine::{Command, Engine, EngineView, NodeAttrs, NodeId, NodeKind, StatFs};
+use cipherbox_engine::{
+    Command, Engine, EngineView, NodeAttrs, NodeId, NodeKind, StatFs, StreamHandle,
+};
 
 use crate::adapter::{CacheTtls, HostAdapter, Invalidation};
+use crate::cache::{CacheBudget, ChunkCache};
 use crate::error::VfsError;
 use crate::handle::{Access, HandleId, HandleTable, OpenFile};
 use crate::inode::{InodeTable, ROOT_INO};
@@ -54,17 +57,26 @@ pub struct OperationCore<T: SeamTypes, A: HostAdapter> {
     adapter: A,
     inodes: InodeTable,
     handles: HandleTable,
+    cache: ChunkCache,
 }
 
 impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
-    /// Mount `engine` behind `adapter`. The engine must already be started.
-    pub fn new(engine: Engine<T>, adapter: A) -> Self {
+    /// Mount `engine` behind `adapter`, holding at most `cache`'s worth of
+    /// plaintext. The engine must already be started.
+    pub fn new(engine: Engine<T>, adapter: A, cache: CacheBudget) -> Self {
         Self {
             engine,
             adapter,
             inodes: InodeTable::new(),
             handles: HandleTable::new(),
+            cache: ChunkCache::new(cache),
         }
+    }
+
+    /// Plaintext this mount is holding right now — never above the budget it
+    /// was mounted with.
+    pub fn cached_plaintext_bytes(&self) -> usize {
+        self.cache.retained_bytes()
     }
 
     /// The kernel cache lifetimes this mount's adapter earned.
@@ -204,10 +216,116 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         self.handles.get(handle).ok_or(VfsError::BadHandle)
     }
 
-    /// Close a file handle.
+    /// Read up to `size` bytes at `offset`.
+    ///
+    /// The window is served block by block: a cached block answers from memory
+    /// and a missed one costs exactly the sealed chunks it covers, so the first
+    /// byte never waits for the last (blueprint/desktop.md "Reads, writes, and
+    /// the never-block law"). A short answer is end-of-file, the way `pread` is.
+    pub async fn read(
+        &mut self,
+        handle: HandleId,
+        offset: u64,
+        size: u32,
+    ) -> Result<Vec<u8>, VfsError> {
+        let stream = self.stream_for(handle).await?;
+        let block_bytes = self.cache.block_bytes();
+        let end = offset.saturating_add(u64::from(size));
+        let mut out = Vec::new();
+        let mut cursor = offset;
+        while cursor < end {
+            let index = cursor / block_bytes;
+            let within = (cursor - index * block_bytes) as usize;
+            let want = (end - cursor) as usize;
+            let (taken, whole) = match self.cache.get((stream, index)) {
+                Some(block) => (
+                    take_from(&mut out, block, within, want),
+                    block.len() as u64 == block_bytes,
+                ),
+                None => {
+                    let block = self
+                        .engine
+                        .read_stream(stream, index * block_bytes, block_bytes)
+                        .await?;
+                    let taken = take_from(&mut out, &block, within, want);
+                    let whole = block.len() as u64 == block_bytes;
+                    // A window past the end frames no block; caching one would
+                    // let an erratic reader grow the table without ever
+                    // spending a byte of the budget that bounds it.
+                    if !block.is_empty() {
+                        self.cache.insert((stream, index), block);
+                    }
+                    (taken, whole)
+                }
+            };
+            // A block short of the framing width is the file's last one, so the
+            // window ends here however much of it the caller asked for.
+            if taken == 0 || !whole {
+                break;
+            }
+            cursor += taken as u64;
+        }
+        Ok(out)
+    }
+
+    /// Close a file handle, releasing the stream it pinned and the plaintext
+    /// that stream cached.
     pub fn release(&mut self, handle: HandleId) -> Result<(), VfsError> {
-        self.handles.close(handle).ok_or(VfsError::BadHandle)?;
+        let open = self.handles.close(handle).ok_or(VfsError::BadHandle)?;
+        self.release_stream(open);
         Ok(())
+    }
+
+    /// Tear the mount down: every pinned stream released and every cached
+    /// plaintext block zeroized.
+    pub fn unmount(&mut self) {
+        for open in self.handles.drain() {
+            self.release_stream(open);
+        }
+        self.cache.clear();
+    }
+
+    /// The read stream pinning `handle`'s content version, opened on first use:
+    /// a handle opened to write, or on a file whose bytes are never read, pays
+    /// neither the resolve nor a slot against the engine's stream ceiling.
+    async fn stream_for(&mut self, handle: HandleId) -> Result<StreamHandle, VfsError> {
+        let open = self.handles.get(handle).ok_or(VfsError::BadHandle)?;
+        if let Some(stream) = open.stream {
+            return Ok(stream);
+        }
+        if !matches!(open.access, Access::Read | Access::ReadWrite) {
+            return Err(VfsError::BadHandle);
+        }
+        let before = self.projected_content(open.node).await?;
+        let stream = self.engine.open_content_stream(open.node).await?;
+        if !self.handles.attach_stream(handle, stream) {
+            self.engine.close_stream(stream);
+            return Err(VfsError::BadHandle);
+        }
+        // Opening the stream verified a head version the kernel's page cache
+        // for this inode may predate.
+        if self.projected_content(open.node).await? != before {
+            let ino = self.inodes.ino_for(open.node);
+            self.adapter.invalidate(Invalidation::Data { ino });
+        }
+        Ok(stream)
+    }
+
+    fn release_stream(&mut self, open: OpenFile) {
+        if let Some(stream) = open.stream {
+            self.engine.close_stream(stream);
+            self.cache.forget_stream(stream);
+        }
+    }
+
+    /// What the projection currently believes a node's content is.
+    async fn projected_content(
+        &mut self,
+        node: NodeId,
+    ) -> Result<(Option<u64>, Option<u64>), VfsError> {
+        let view = self.render().await?;
+        let meta = view.attrs(node).ok_or(VfsError::NotFound)?;
+        Ok((meta.size, meta.mtime))
     }
 
     /// Filesystem counters. The longest admissible name is
@@ -336,6 +454,17 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         }
         Ok(())
     }
+}
+
+/// Append at most `want` bytes of `block` from `within` onto `out`, reporting
+/// how many the block actually held.
+fn take_from(out: &mut Vec<u8>, block: &[u8], within: usize, want: usize) -> usize {
+    // An offset past a short block's end takes nothing rather than indexing
+    // outside it.
+    let start = within.min(block.len());
+    let take = (block.len() - start).min(want);
+    out.extend_from_slice(&block[start..start + take]);
+    take
 }
 
 /// Whether `candidate` is `node` or lives somewhere beneath it. Relinking a

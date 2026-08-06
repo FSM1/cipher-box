@@ -684,7 +684,9 @@ dependencies = [
 name = "cipherbox-fuse"
 version = "0.0.0"
 dependencies = [
+ "cipherbox-core",
  "cipherbox-engine",
+ "zeroize",
 ]
 
 [[package]]
