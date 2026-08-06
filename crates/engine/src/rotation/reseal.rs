@@ -1196,6 +1196,42 @@ mod tests {
     }
 
     #[test]
+    fn a_committed_ledger_past_the_codec_bound_fails_closed_before_any_seal() {
+        // The commitment stays inside the bound, so only the ledger — the side the
+        // wrap loop walks — trips the guard. Entropy panics if drawn, pinning the
+        // rejection ahead of the first HPKE wrap rather than merely eventual.
+        struct UndrawnEntropy;
+        impl Entropy for UndrawnEntropy {
+            fn fill(&mut self, _dest: &mut [u8]) -> Result<(), EntropyError> {
+                panic!("the bound rejects before any wrap draws entropy");
+            }
+        }
+
+        let fx = Fixture::new();
+        let owner_pub = fx.owner_enc.public();
+        let (commitment, sig, _) = fx.committed();
+        let ledger: Vec<GrantLedgerEntry> = (0..=MAX_GRANT_BLOBS)
+            .map(|i| {
+                let mut tag = [0u8; SECRET_LEN];
+                tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
+                GrantLedgerEntry::new(
+                    [0x02; 33],
+                    fx.read_grantee.public().to_bytes(),
+                    Permission::Read,
+                    tag,
+                )
+            })
+            .collect();
+        let id = identity(&fx, &owner_pub, b"n", None);
+        let seed = chain_seed(9);
+        let s = seeds(&seed, 9, None, &fx.write_scope_seed, &fx.pointer_read_key);
+        let cs = committed_set(&commitment, &sig, &ledger);
+        let err =
+            reseal_scope_root(&mut UndrawnEntropy, &id, &s, &cs, &[]).expect_err("past the bound");
+        assert_eq!(err.check(), "too-many-committed-grants");
+    }
+
+    #[test]
     fn a_sweep_carries_its_chain_through_unpruned() {
         // A sweep mints no link, so the record's epoch label can outrun the
         // newest link's minting epoch — the AAD a walk needs. It neither walks
