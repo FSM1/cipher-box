@@ -17,8 +17,8 @@ use cipherbox_engine::{
     StoragePolicy, SyncTimingProfile,
 };
 use cipherbox_fuse::{
-    Access, HostAdapter, HostCapabilities, Invalidation, MAX_NAME_BYTES, NameError, OperationCore,
-    ROOT_INO, VfsError,
+    Access, CacheBudget, HandleId, HostAdapter, HostCapabilities, Invalidation, MAX_NAME_BYTES,
+    NameError, OperationCore, ROOT_INO, VfsError,
 };
 
 /// A mount that records what it was told to invalidate.
@@ -118,7 +118,7 @@ fn mount_seeded(adapter: RecordingAdapter, root_children: &[(&str, NodeKind)]) -
     for (name, kind) in root_children {
         seed_child(&mut engine, root, name, *kind);
     }
-    OperationCore::new(engine, adapter)
+    OperationCore::new(engine, adapter, CacheBudget::CI)
 }
 
 /// Poll a future exactly once. `Ready` proves the operation reached its answer
@@ -368,7 +368,8 @@ fn a_durable_queue_outage_never_destroys_the_destination_a_rename_did_not_replac
         let (mut engine, root, staging) = started_engine_with_staging();
         let source = seed_child(&mut engine, root, "new.txt", NodeKind::File);
         let victim = seed_child(&mut engine, root, "target.txt", NodeKind::File);
-        let mut core = OperationCore::new(engine, RecordingAdapter::push_capable());
+        let mut core =
+            OperationCore::new(engine, RecordingAdapter::push_capable(), CacheBudget::CI);
         staging.fail_enqueue_after(budget);
 
         let outcome = block_on(core.rename(ROOT_INO, "new.txt", ROOT_INO, "target.txt"));
@@ -394,7 +395,7 @@ fn renaming_a_node_onto_itself_journals_nothing() {
     // journal entry — proven by refusing every durable write.
     let (mut engine, root, staging) = started_engine_with_staging();
     seed_child(&mut engine, root, "f.txt", NodeKind::File);
-    let mut core = OperationCore::new(engine, RecordingAdapter::push_capable());
+    let mut core = OperationCore::new(engine, RecordingAdapter::push_capable(), CacheBudget::CI);
     staging.fail_enqueue_after(0);
 
     block_on(core.rename(ROOT_INO, "f.txt", ROOT_INO, "f.txt")).expect("a no-op rename succeeds");
@@ -410,7 +411,7 @@ fn replacing_a_junk_holding_folder_keeps_the_destination_entry_when_the_queue_fa
     let source = seed_child(&mut engine, root, "dir", NodeKind::Folder);
     let victim = seed_child(&mut engine, root, "target", NodeKind::Folder);
     seed_child(&mut engine, victim, ".DS_Store", NodeKind::File);
-    let mut core = OperationCore::new(engine, RecordingAdapter::push_capable());
+    let mut core = OperationCore::new(engine, RecordingAdapter::push_capable(), CacheBudget::CI);
     // The junk delete lands; the move that would unlink the folder does not.
     staging.fail_enqueue_after(1);
 
@@ -664,7 +665,7 @@ fn seeded_junk_folder() -> Core {
     let (mut engine, root) = started_engine();
     let dir = seed_child(&mut engine, root, "dir", NodeKind::Folder);
     seed_child(&mut engine, dir, ".DS_Store", NodeKind::File);
-    OperationCore::new(engine, RecordingAdapter::push_capable())
+    OperationCore::new(engine, RecordingAdapter::push_capable(), CacheBudget::CI)
 }
 
 /// A `dir` holding one junk-prefixed folder, which itself holds a real file.
@@ -673,7 +674,7 @@ fn seeded_nested_junk_folder() -> Core {
     let dir = seed_child(&mut engine, root, "dir", NodeKind::Folder);
     let junk = seed_child(&mut engine, dir, ".Trash-1000", NodeKind::Folder);
     seed_child(&mut engine, junk, "buried.txt", NodeKind::File);
-    OperationCore::new(engine, RecordingAdapter::push_capable())
+    OperationCore::new(engine, RecordingAdapter::push_capable(), CacheBudget::CI)
 }
 
 // --- structurally impossible moves ---
@@ -710,4 +711,553 @@ fn an_unprojected_size_is_reported_as_unknown_never_as_empty() {
     let (file, _handle) = block_on(core.create(ROOT_INO, "f.txt", Access::Write)).unwrap();
     assert_eq!(file.size, None);
     assert_eq!(block_on(core.getattr(file.ino)).unwrap().size, None);
+}
+
+// --- the content read path ---
+
+#[test]
+fn reading_content_that_was_never_published_is_unavailable_rather_than_a_hang() {
+    // A file created through the mount has no version yet: the read must land
+    // on an availability verdict the adapter can turn into an errno, and it
+    // must land on it now.
+    let (mut core, _adapter) = mount();
+    let (_file, handle) = block_on(core.create(ROOT_INO, "f.txt", Access::Read)).unwrap();
+
+    let Poll::Ready(outcome) = poll_once(core.read(handle, 0, 16)) else {
+        panic!("a read with nothing to fetch parked instead of answering");
+    };
+    assert!(
+        matches!(outcome, Err(VfsError::Unavailable { .. })),
+        "expected an availability verdict, got {outcome:?}"
+    );
+}
+
+#[test]
+fn a_read_through_a_write_only_handle_is_refused() {
+    let (mut core, _adapter) = mount();
+    let (_file, handle) = block_on(core.create(ROOT_INO, "f.txt", Access::Write)).unwrap();
+    assert_eq!(block_on(core.read(handle, 0, 16)), Err(VfsError::BadHandle));
+    assert_eq!(
+        block_on(core.read(HandleId(9999), 0, 16)),
+        Err(VfsError::BadHandle)
+    );
+}
+
+/// The read path over a real published file, which needs the account fixture
+/// the write plane publishes rather than the empty mount above.
+mod published {
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+
+    use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
+    use cipherbox_core::ipns::IpnsRecord;
+    use cipherbox_core::kdf;
+    use cipherbox_core::payload::RepointObject;
+    use cipherbox_core::suite::ecdsa::EcdsaSigner;
+    use cipherbox_engine::content::{DAG_ROOT_CODEC, GatewaySource};
+    use cipherbox_engine::seams::{
+        BoxedTask, HttpRequest, HttpResponse, RecordTransport, SeamError, SeamResult,
+    };
+    use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
+    use cipherbox_engine::testkit::{
+        FakeDevice, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
+        OwnerRootSpec, owner_root_fixture, requested_cid,
+    };
+    use cipherbox_engine::{MAX_OPEN_STREAMS, WriteTarget};
+
+    use super::*;
+
+    const SECRET: [u8; 32] = [7u8; 32];
+    /// The all-zero bootstrap anchor a cold start binds its scope to.
+    const SCOPE: [u8; 16] = [0u8; 16];
+    const ROOT: NodeId = NodeId(SCOPE);
+    /// The sole v2 re-point payload version.
+    const POINTER_PAYLOAD_VERSION: u64 = 1;
+    const TTL_NANOS: u64 = 2_000_000_000;
+    const EOL: &str = "2099-01-01T00:00:00Z";
+    /// The published file's name under the root.
+    const CLIP: &str = "clip.bin";
+
+    /// 200 distinct bytes: 12 whole chunks and a short tail at the CI profile's
+    /// 16-byte framing, so a window can land inside, across, and past a chunk.
+    fn clip_bytes() -> Vec<u8> {
+        (0..200u8).collect()
+    }
+
+    fn chunk() -> u64 {
+        ContentProfile::CI.chunk_size() as u64
+    }
+
+    /// One content-addressed store behind the upload endpoint and the gateway,
+    /// so a block the engine uploads is a block it can later fetch.
+    #[derive(Clone, Default)]
+    struct Blocks {
+        store: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+    }
+
+    impl Blocks {
+        /// Index a block under both content-plane codecs: the ingress carries
+        /// none, so a reader may ask for either address.
+        fn put(&self, block: Vec<u8>) {
+            let root = encode_content_cid_str(&compute_cid(DAG_ROOT_CODEC, &block));
+            let leaf = encode_content_cid_str(&compute_cid(CONTENT_CID_CODEC, &block));
+            let mut store = self.store.lock().expect("lock");
+            store.insert(leaf, block.clone());
+            store.insert(root, block);
+        }
+
+        fn reply(&self, request: &HttpRequest) -> SeamResult<HttpResponse> {
+            let ok = |body: Vec<u8>| {
+                Ok(HttpResponse {
+                    status: 200,
+                    headers: Vec::new(),
+                    body,
+                })
+            };
+            let url = &request.url;
+            if url.ends_with("/content/upload") {
+                let declared = request
+                    .headers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case("X-Content-Cid"))
+                    .map(|(_, value)| value.clone())
+                    .expect("an upload declares its CID");
+                let block = request.body.clone().unwrap_or_default();
+                let size = block.len();
+                self.store
+                    .lock()
+                    .expect("lock")
+                    .insert(declared.clone(), block);
+                return ok(format!("{{\"cid\":\"{declared}\",\"size\":{size}}}").into_bytes());
+            }
+            if url.ends_with("/account/quota") {
+                return ok(
+                    br#"{"usedBytes":0,"limitBytes":1099511627776,"advisory":false}"#.to_vec(),
+                );
+            }
+            if url.contains("/registry/") {
+                return ok(Vec::new());
+            }
+            let cid = requested_cid(url);
+            match self.store.lock().expect("lock").get(&cid).cloned() {
+                Some(block) => ok(block),
+                None => Err(SeamError::new("no such block")),
+            }
+        }
+    }
+
+    /// How many blocks this device has fetched from the gateway.
+    fn block_fetches(device: &FakeDevice) -> usize {
+        device
+            .http
+            .requests()
+            .iter()
+            .filter(|request| request.url.contains("/ipfs/"))
+            .count()
+    }
+
+    fn serve_http(device: &FakeDevice, blocks: &Blocks, calls: usize) {
+        for _ in 0..calls {
+            let blocks = blocks.clone();
+            device
+                .http
+                .enqueue_derived(move |request| blocks.reply(request));
+        }
+    }
+
+    /// Publish the account's initial state: an empty owner root at sequence 1
+    /// and the vault pointer naming it.
+    fn seed_account(world: &FakeWorld, blocks: &Blocks) {
+        let owner_identity = EcdsaSigner::from_scalar(&SECRET).expect("valid scalar");
+        let fixture = owner_root_fixture(OwnerRootSpec {
+            owner_identity: &owner_identity,
+            owner_enc: &kdf::enc_subkey(&SECRET).public(),
+            scope_id: SCOPE,
+            root_id: ROOT.0,
+            children: Vec::new(),
+            child_scope_index: Vec::new(),
+            parent_node_seed: None,
+            owner_write_blob_epoch: Some(EPOCH),
+        });
+        blocks.put(fixture.head_block.clone());
+
+        let root_signer = kdf::ipns_keypair(kdf::write_seed(&WRITE_SCOPE_SEED, &ROOT.0).as_bytes());
+        let root_record = IpnsRecord::create_v2(
+            &root_signer,
+            format!("/ipfs/{}", fixture.head_cid_str).as_bytes(),
+            1,
+            TTL_NANOS,
+            EOL,
+        )
+        .marshal();
+
+        let pointer_block = seal_repoint(
+            SessionRole::Owner,
+            &mut SeededEntropy::new(0),
+            kdf::pointer_read_key(kdf::owner_pointer_seed(&SECRET).as_bytes(), &SCOPE).as_bytes(),
+            POINTER_PAYLOAD_VERSION,
+            &owner_identity,
+            &RepointObject {
+                scope_id: SCOPE,
+                current_root: fixture.name.clone(),
+                write_epoch: EPOCH,
+                min_read_epoch: EPOCH,
+                prev_root: None,
+            },
+        )
+        .expect("seal the re-point");
+        let pointer_record = IpnsRecord::create_v2(
+            &kdf::vault_pointer_index(&SECRET, 0),
+            &pointer_block,
+            1,
+            TTL_NANOS,
+            EOL,
+        )
+        .marshal();
+        let pointer_name = vault_pointer_name(&SECRET, 0);
+
+        for endpoint in world.record_store.endpoints() {
+            world
+                .record_store
+                .seed_record(&endpoint, fixture.name.as_str(), root_record.clone());
+            world.record_store.seed_record(
+                &endpoint,
+                pointer_name.as_str(),
+                pointer_record.clone(),
+            );
+        }
+    }
+
+    fn engine_on(device: &FakeDevice) -> Engine<FakeSeamTypes> {
+        let (engine, _events) = Engine::new(
+            device.seam_set(),
+            Box::new(SeededEntropy::new(42)),
+            SyncTimingProfile::CI,
+            ContentProfile::CI,
+            StoragePolicy::CI,
+            ApiBaseUrl::offline(),
+            GatewayConfig {
+                accelerator: Some(GatewaySource {
+                    base_url: "https://gw.test".into(),
+                    bearer: None,
+                }),
+                public_fallbacks: Vec::new(),
+            },
+        );
+        engine
+    }
+
+    /// Poll every spawned loop until each parks rather than yielding.
+    fn pump(tasks: &mut [BoxedTask]) {
+        let woken = Arc::new(Woken(Mutex::new(false)));
+        let waker = Waker::from(woken.clone());
+        let mut cx = Context::from_waker(&waker);
+        loop {
+            *woken.0.lock().expect("lock") = false;
+            for task in tasks.iter_mut() {
+                let _ = task.as_mut().poll(&mut cx);
+            }
+            if !*woken.0.lock().expect("lock") {
+                return;
+            }
+        }
+    }
+
+    /// A waker that records only that it fired — enough to tell a cooperative
+    /// yield from a parked sleep.
+    struct Woken(Mutex<bool>);
+
+    impl std::task::Wake for Woken {
+        fn wake(self: Arc<Self>) {
+            self.wake_by_ref();
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            *self.0.lock().expect("lock") = true;
+        }
+    }
+
+    /// A mount over an engine that has published `plaintext` as `clip.bin`.
+    struct Mount {
+        core: Core,
+        adapter: RecordingAdapter,
+        device: FakeDevice,
+        world: FakeWorld,
+        ino: u64,
+    }
+
+    fn mount_published(plaintext: &[u8], budget: CacheBudget) -> Mount {
+        let world = FakeWorld::new();
+        let blocks = Blocks::default();
+        seed_account(&world, &blocks);
+
+        let device = world.device(b"alice");
+        serve_http(&device, &blocks, 1_000);
+        let mut engine = engine_on(&device);
+        block_on(engine.start(LoginSecret::new(SECRET.to_vec())))
+            .expect("the cold start adopts the owner root");
+        let mut tasks = world.scheduler.take_spawned_tasks();
+        pump(&mut tasks);
+
+        let handle = block_on(engine.begin_write(
+            WriteTarget::NewFile {
+                parent: ROOT,
+                name: CLIP.to_owned(),
+            },
+            plaintext.len() as u64,
+        ))
+        .expect("the write opens");
+        for slice in plaintext.chunks(7) {
+            block_on(engine.push_chunk(handle, slice)).expect("the slice lands");
+        }
+        block_on(engine.commit_write(handle)).expect("the write commits");
+        world.scheduler.advance(engine.profile().poll_cadence);
+        pump(&mut tasks);
+
+        let adapter = RecordingAdapter::push_capable();
+        let mut core = OperationCore::new(engine, adapter.clone(), budget);
+        let ino = block_on(core.lookup(ROOT_INO, CLIP))
+            .expect("the published file is rendered")
+            .ino;
+        adapter.drain();
+        Mount {
+            core,
+            adapter,
+            device,
+            world,
+            ino,
+        }
+    }
+
+    fn opened(mount: &mut Mount) -> HandleId {
+        block_on(mount.core.open(mount.ino, Access::Read)).expect("the file opens")
+    }
+
+    #[test]
+    fn a_ranged_read_serves_the_right_bytes_across_a_chunk_boundary() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let handle = opened(&mut mount);
+
+        for (offset, size) in [
+            (0u64, 16u32),
+            (15, 2),
+            (16, 16),
+            (8, 40),
+            (190, 999),
+            (0, 200),
+        ] {
+            let end = (offset + u64::from(size)).min(plaintext.len() as u64) as usize;
+            assert_eq!(
+                block_on(mount.core.read(handle, offset, size)).expect("the window serves"),
+                plaintext[offset as usize..end],
+                "range {offset}+{size}"
+            );
+        }
+        for offset in [plaintext.len() as u64, plaintext.len() as u64 + 1, u64::MAX] {
+            assert!(
+                block_on(mount.core.read(handle, offset, 16))
+                    .expect("a window past the end is not an error")
+                    .is_empty(),
+                "offset {offset}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_first_byte_does_not_wait_for_the_last() {
+        // The whole point of the ranged path: a window costs the chunks it
+        // covers, never the file.
+        let plaintext = clip_bytes();
+        let leaves = (plaintext.len() as u64).div_ceil(chunk());
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let handle = opened(&mut mount);
+
+        let before = block_fetches(&mount.device);
+        block_on(mount.core.read(handle, 0, chunk() as u32)).expect("the first chunk serves");
+        let opening = block_fetches(&mount.device) - before;
+        assert!(
+            (opening as u64) < leaves,
+            "the first chunk cost {opening} fetches of a {leaves}-leaf file"
+        );
+
+        // Past the stream's one-time head and root fetch, a window costs
+        // exactly the leaves it covers.
+        let before = block_fetches(&mount.device);
+        block_on(mount.core.read(handle, 5 * chunk(), chunk() as u32)).expect("a later chunk");
+        assert_eq!(block_fetches(&mount.device) - before, 1);
+    }
+
+    #[test]
+    fn a_cached_chunk_is_served_without_touching_the_network() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let handle = opened(&mut mount);
+
+        block_on(mount.core.read(handle, 0, 4)).expect("the first sip");
+        let after_miss = block_fetches(&mount.device);
+        assert_eq!(
+            mount.core.cached_plaintext_bytes(),
+            chunk() as usize,
+            "a 4-byte read caches the whole chunk it framed"
+        );
+
+        for offset in 0..=(chunk() - 4) {
+            assert_eq!(
+                block_on(mount.core.read(handle, offset, 4)).expect("a hit"),
+                plaintext[offset as usize..offset as usize + 4]
+            );
+        }
+        assert_eq!(
+            block_fetches(&mount.device),
+            after_miss,
+            "every window inside a cached chunk was served from memory"
+        );
+    }
+
+    #[test]
+    fn no_read_ever_waits_on_the_record_plane() {
+        // The never-block law: a read may block on a chunk fetch and on nothing
+        // else. With every routing endpoint dark, a window that re-resolved,
+        // republished, or walked a rotation could not serve at all.
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let handle = opened(&mut mount);
+        block_on(mount.core.read(handle, 0, 4)).expect("the stream opens on a live plane");
+
+        for endpoint in mount.world.record_store.endpoints() {
+            mount.world.record_store.fail_endpoint(&endpoint);
+        }
+
+        let mut assembled = Vec::new();
+        while assembled.len() < plaintext.len() {
+            let window = block_on(mount.core.read(handle, assembled.len() as u64, 24))
+                .expect("a window off the pinned version");
+            assert!(!window.is_empty(), "a window short of the end stalled");
+            assembled.extend_from_slice(&window);
+        }
+        assert_eq!(assembled, plaintext);
+    }
+
+    #[test]
+    fn the_plaintext_the_mount_holds_stays_under_its_bound() {
+        let plaintext = clip_bytes();
+        let budget = CacheBudget::for_profile(ContentProfile::CI, 3).expect("three chunks");
+        let mut mount = mount_published(&plaintext, budget);
+        let handle = opened(&mut mount);
+
+        for index in 0..(plaintext.len() as u64).div_ceil(chunk()) {
+            block_on(mount.core.read(handle, index * chunk(), chunk() as u32))
+                .expect("every chunk serves");
+            assert!(
+                mount.core.cached_plaintext_bytes() <= budget.max_bytes(),
+                "chunk {index} pushed the mount past its plaintext ceiling"
+            );
+        }
+
+        // Eviction really happened: the first chunk is gone and costs a fetch.
+        let before = block_fetches(&mount.device);
+        block_on(mount.core.read(handle, 0, chunk() as u32)).expect("the first chunk re-serves");
+        assert_eq!(
+            block_fetches(&mount.device) - before,
+            1,
+            "reading past the bound must have evicted the oldest chunk"
+        );
+    }
+
+    #[test]
+    fn releasing_a_handle_frees_its_stream_and_the_plaintext_it_cached() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+
+        // Past the engine's ceiling: a release that left its stream pinned would
+        // exhaust the table long before the last open.
+        for round in 0..(MAX_OPEN_STREAMS + 8) {
+            let handle = opened(&mut mount);
+            assert_eq!(
+                block_on(mount.core.read(handle, 0, 8))
+                    .unwrap_or_else(|err| panic!("round {round}: {err}")),
+                plaintext[..8]
+            );
+            mount.core.release(handle).expect("the handle closes");
+            assert_eq!(
+                mount.core.cached_plaintext_bytes(),
+                0,
+                "round {round} left the released stream's plaintext behind"
+            );
+        }
+    }
+
+    #[test]
+    fn unmounting_releases_every_stream_and_the_plaintext_they_cached() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let handles: Vec<_> = (0..4).map(|_| opened(&mut mount)).collect();
+        for handle in &handles {
+            block_on(mount.core.read(*handle, 0, 8)).expect("each handle reads");
+        }
+        assert!(mount.core.cached_plaintext_bytes() > 0);
+
+        mount.core.unmount();
+
+        assert_eq!(mount.core.cached_plaintext_bytes(), 0);
+        for handle in &handles {
+            assert_eq!(mount.core.handle(*handle), Err(VfsError::BadHandle));
+        }
+        // Every stream slot came back, so nothing stayed pinned.
+        let reopened: Vec<_> = (0..MAX_OPEN_STREAMS)
+            .map(|round| {
+                let handle = opened(&mut mount);
+                block_on(mount.core.read(handle, 0, 8))
+                    .unwrap_or_else(|err| panic!("round {round}: {err}"));
+                handle
+            })
+            .collect();
+        assert_eq!(reopened.len(), MAX_OPEN_STREAMS);
+    }
+
+    #[test]
+    fn two_handles_on_one_file_read_independently() {
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let first = opened(&mut mount);
+        let second = opened(&mut mount);
+
+        assert_eq!(
+            block_on(mount.core.read(first, 0, 8)).unwrap(),
+            plaintext[..8]
+        );
+        mount.core.release(first).expect("the first handle closes");
+
+        assert_eq!(
+            block_on(mount.core.read(second, 0, 8)).unwrap(),
+            plaintext[..8],
+            "closing one handle must not disturb another's stream"
+        );
+    }
+
+    #[test]
+    fn the_first_read_invalidates_the_kernels_data_cache_for_the_inode() {
+        // Opening the stream verifies a head version the kernel's page cache
+        // may predate, so the mount has to say so.
+        let plaintext = clip_bytes();
+        let mut mount = mount_published(&plaintext, CacheBudget::CI);
+        let handle = opened(&mut mount);
+        mount.adapter.drain();
+
+        block_on(mount.core.read(handle, 0, 8)).expect("the first window");
+        let pushed = mount.adapter.drain();
+
+        let ino = mount.ino;
+        assert!(
+            pushed.contains(&Invalidation::Data { ino }),
+            "expected a data invalidation for ino {ino}, got {pushed:?}"
+        );
+
+        block_on(mount.core.read(handle, 8, 8)).expect("a later window");
+        assert!(
+            mount.adapter.drain().is_empty(),
+            "a window off an already-pinned stream repaints nothing"
+        );
+    }
 }

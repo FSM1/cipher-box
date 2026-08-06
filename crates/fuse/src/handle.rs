@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use cipherbox_engine::NodeId;
+use cipherbox_engine::{NodeId, StreamHandle};
 
 /// A kernel file-handle token, unique for the mount session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -35,6 +35,9 @@ pub struct OpenFile {
     pub node: NodeId,
     /// How it was opened.
     pub access: Access,
+    /// The engine read stream pinning this handle's content version, once a
+    /// read has needed one. An opaque session id, not key material.
+    pub stream: Option<StreamHandle>,
 }
 
 /// The session's open handles.
@@ -55,7 +58,14 @@ impl HandleTable {
     pub fn open(&mut self, node: NodeId, access: Access) -> HandleId {
         let id = HandleId(self.next);
         self.next += 1;
-        self.open.insert(id, OpenFile { node, access });
+        self.open.insert(
+            id,
+            OpenFile {
+                node,
+                access,
+                stream: None,
+            },
+        );
         id
     }
 
@@ -64,9 +74,26 @@ impl HandleTable {
         self.open.get(&id).copied()
     }
 
+    /// Bind the read stream a handle's first read opened, reporting whether the
+    /// handle was still open to receive it.
+    pub fn attach_stream(&mut self, id: HandleId, stream: StreamHandle) -> bool {
+        match self.open.get_mut(&id) {
+            Some(open) => {
+                open.stream = Some(stream);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Close a handle, reporting whether it was open.
     pub fn close(&mut self, id: HandleId) -> Option<OpenFile> {
         self.open.remove(&id)
+    }
+
+    /// Close every handle, handing back what each was holding.
+    pub fn drain(&mut self) -> Vec<OpenFile> {
+        self.open.drain().map(|(_, open)| open).collect()
     }
 }
 
@@ -86,9 +113,50 @@ mod tests {
             table.get(id),
             Some(OpenFile {
                 node: node(1),
-                access: Access::Read
+                access: Access::Read,
+                stream: None
             })
         );
+    }
+
+    #[test]
+    fn a_streams_lifetime_is_the_handles() {
+        let mut table = HandleTable::new();
+        let id = table.open(node(1), Access::Read);
+        assert!(table.attach_stream(id, StreamHandle(9)));
+        assert_eq!(
+            table.get(id).and_then(|open| open.stream),
+            Some(StreamHandle(9))
+        );
+
+        assert_eq!(
+            table.close(id).and_then(|open| open.stream),
+            Some(StreamHandle(9)),
+            "a close hands back the stream it must release"
+        );
+        assert!(
+            !table.attach_stream(id, StreamHandle(10)),
+            "a closed handle cannot take a stream nothing would ever release"
+        );
+    }
+
+    #[test]
+    fn draining_hands_back_every_open_handles_stream() {
+        let mut table = HandleTable::new();
+        let first = table.open(node(1), Access::Read);
+        let second = table.open(node(2), Access::Read);
+        table.attach_stream(first, StreamHandle(1));
+        table.attach_stream(second, StreamHandle(2));
+
+        let mut streams: Vec<_> = table
+            .drain()
+            .into_iter()
+            .filter_map(|open| open.stream)
+            .collect();
+        streams.sort();
+        assert_eq!(streams, vec![StreamHandle(1), StreamHandle(2)]);
+        assert_eq!(table.get(first), None);
+        assert_eq!(table.get(second), None);
     }
 
     #[test]

@@ -486,6 +486,32 @@ jobs:
       - name: Engine tests and seam conformance kits
         run: cargo test -p cipherbox-engine
 
+  # The `fuse-op-core` suite: every vfs operation driven against a real engine
+  # on the in-memory seam fakes — no kernel, so it runs on any runner.
+  fuse-op-core:
+    name: FUSE Op Core
+    needs: [changes, lint]
+    if: |
+      !failure() && !cancelled() &&
+      needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: linux-cargo-
+
+      - name: FUSE operation-core suite
+        run: cargo test -p cipherbox-fuse
+
   # The WASM parity gate. Runs the core KAT + property suite in three shapes —
   # native, wasm32-wasip1 (libtest under wasmtime), and the browser-shaped
   # wasm32-unknown-unknown (wasm-bindgen-test → Node) that exercises the
