@@ -15,8 +15,10 @@ use cipherbox_engine::{
     Command, Engine, EngineView, NodeAttrs, NodeId, NodeKind, StatFs, StreamHandle,
 };
 
+use zeroize::Zeroizing;
+
 use crate::adapter::{CacheTtls, HostAdapter, Invalidation};
-use crate::cache::{CacheBudget, ChunkCache};
+use crate::cache::{CacheBudget, ChunkCache, grow_wiping};
 use crate::error::VfsError;
 use crate::handle::{Access, HandleId, HandleTable, OpenFile};
 use crate::inode::{InodeTable, ROOT_INO};
@@ -218,10 +220,15 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
 
     /// Read up to `size` bytes at `offset`.
     ///
-    /// The window is served block by block: a cached block answers from memory
-    /// and a missed one costs exactly the sealed chunks it covers, so the first
-    /// byte never waits for the last (blueprint/desktop.md "Reads, writes, and
-    /// the never-block law"). A short answer is end-of-file, the way `pread` is.
+    /// The engine would serve any window in one call; the loop exists to frame
+    /// the window into cache-aligned blocks, so a cached block answers from
+    /// memory and a missed one costs exactly the sealed chunks it covers — the
+    /// first byte never waits for the last (blueprint/desktop.md "Reads,
+    /// writes, and the never-block law"). A short answer is end-of-file, the
+    /// way `pread` is.
+    ///
+    /// The caller takes terminal ownership of the plaintext it hands back; the
+    /// window it was assembled in is wiped, including on the failure path.
     pub async fn read(
         &mut self,
         handle: HandleId,
@@ -231,7 +238,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
         let stream = self.stream_for(handle).await?;
         let block_bytes = self.cache.block_bytes();
         let end = offset.saturating_add(u64::from(size));
-        let mut out = Vec::new();
+        let mut out = Zeroizing::new(Vec::new());
         let mut cursor = offset;
         while cursor < end {
             let index = cursor / block_bytes;
@@ -249,9 +256,8 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
                         .await?;
                     let taken = take_from(&mut out, &block, within, want);
                     let whole = block.len() as u64 == block_bytes;
-                    // A window past the end frames no block; caching one would
-                    // let an erratic reader grow the table without ever
-                    // spending a byte of the budget that bounds it.
+                    // Caching an empty block past the end would grow the table
+                    // without spending a byte of the budget that bounds it.
                     if !block.is_empty() {
                         self.cache.insert((stream, index), block);
                     }
@@ -265,7 +271,7 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
             }
             cursor += taken as u64;
         }
-        Ok(out)
+        Ok(core::mem::take(&mut *out))
     }
 
     /// Close a file handle, releasing the stream it pinned and the plaintext
@@ -458,11 +464,12 @@ impl<T: SeamTypes, A: HostAdapter> OperationCore<T, A> {
 
 /// Append at most `want` bytes of `block` from `within` onto `out`, reporting
 /// how many the block actually held.
-fn take_from(out: &mut Vec<u8>, block: &[u8], within: usize, want: usize) -> usize {
+fn take_from(out: &mut Zeroizing<Vec<u8>>, block: &[u8], within: usize, want: usize) -> usize {
     // An offset past a short block's end takes nothing rather than indexing
     // outside it.
     let start = within.min(block.len());
     let take = (block.len() - start).min(want);
+    grow_wiping(out, take);
     out.extend_from_slice(&block[start..start + take]);
     take
 }

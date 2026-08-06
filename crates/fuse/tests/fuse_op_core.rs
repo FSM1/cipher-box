@@ -761,7 +761,7 @@ mod published {
     use cipherbox_engine::sync::pointer::{SessionRole, seal_repoint, vault_pointer_name};
     use cipherbox_engine::testkit::{
         FakeDevice, OWNER_ROOT_EPOCH as EPOCH, OWNER_ROOT_WRITE_SCOPE_SEED as WRITE_SCOPE_SEED,
-        OwnerRootSpec, owner_root_fixture,
+        OwnerRootSpec, owner_root_fixture, requested_cid,
     };
     use cipherbox_engine::{MAX_OPEN_STREAMS, WriteTarget};
 
@@ -838,12 +838,8 @@ mod published {
             if url.contains("/registry/") {
                 return ok(Vec::new());
             }
-            let cid = url
-                .rsplit('/')
-                .next()
-                .and_then(|tail| tail.split('?').next())
-                .unwrap_or_default();
-            match self.store.lock().expect("lock").get(cid).cloned() {
+            let cid = requested_cid(url);
+            match self.store.lock().expect("lock").get(&cid).cloned() {
                 Some(block) => ok(block),
                 None => Err(SeamError::new("no such block")),
             }

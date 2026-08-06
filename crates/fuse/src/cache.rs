@@ -21,9 +21,10 @@ type BlockKey = (StreamHandle, u64);
 
 /// How much plaintext one mount may hold, and at what granularity.
 ///
-/// `block_bytes` matches the content plane's chunk framing so a cache block
-/// maps onto exactly one sealed chunk: a smaller block would make every miss
-/// fetch a whole leaf and keep a fraction of it.
+/// `block_bytes` is chosen to match the content plane's chunk framing so a
+/// cache block maps onto one sealed chunk. Only performance rests on it: a
+/// smaller block would make every miss fetch a whole leaf and keep a fraction
+/// of it, but the engine clamps every window to the pinned version either way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CacheBudget {
     max_bytes: usize,
@@ -35,27 +36,29 @@ impl CacheBudget {
     const BLOCKS: usize = 64;
 
     /// The production budget: 64 chunks of hot plaintext per mount.
-    pub const PRODUCTION: Self = Self::of(ContentProfile::PRODUCTION);
+    pub const PRODUCTION: Self = Self::of(ContentProfile::PRODUCTION, Self::BLOCKS);
     /// The CI budget, at the CI profile's framing.
-    pub const CI: Self = Self::of(ContentProfile::CI);
+    pub const CI: Self = Self::of(ContentProfile::CI, Self::BLOCKS);
 
-    const fn of(profile: ContentProfile) -> Self {
-        Self {
-            max_bytes: profile.chunk_size() * Self::BLOCKS,
-            block_bytes: profile.chunk_size() as u64,
+    /// A budget of `blocks` chunks at `profile`'s framing. At least one block,
+    /// so a miss the cache could never hold is not representable.
+    pub const fn for_profile(profile: ContentProfile, blocks: usize) -> Option<Self> {
+        // A ceiling that wrapped would be a plaintext bound the mount cannot
+        // keep, and the multiply is silent in release.
+        match profile.chunk_size().checked_mul(blocks) {
+            Some(max_bytes) if blocks > 0 => Some(Self {
+                max_bytes,
+                block_bytes: profile.chunk_size() as u64,
+            }),
+            _ => None,
         }
     }
 
-    /// A budget of `blocks` chunks at `profile`'s framing. At least one block,
-    /// so a miss the cache can never hold is not representable.
-    pub const fn for_profile(profile: ContentProfile, blocks: usize) -> Option<Self> {
-        if blocks == 0 {
-            return None;
-        }
-        Some(Self {
+    const fn of(profile: ContentProfile, blocks: usize) -> Self {
+        Self {
             max_bytes: profile.chunk_size() * blocks,
             block_bytes: profile.chunk_size() as u64,
-        })
+        }
     }
 
     /// The plaintext ceiling, in bytes.
@@ -67,6 +70,25 @@ impl CacheBudget {
     pub const fn block_bytes(&self) -> u64 {
         self.block_bytes
     }
+}
+
+/// Make room in `buf` for `additional` more bytes, wiping the allocation it
+/// leaves behind.
+///
+/// A `Zeroizing<Vec<u8>>` wipes only the allocation it currently owns, so
+/// letting `Vec` reallocate would free the old one with plaintext still in it
+/// (security rule 7). The engine's own leaf-assembly buffer grows the same way
+/// for the same reason.
+pub(crate) fn grow_wiping(buf: &mut Zeroizing<Vec<u8>>, additional: usize) {
+    let needed = buf.len().saturating_add(additional);
+    if needed <= buf.capacity() {
+        return;
+    }
+    let mut grown = Zeroizing::new(Vec::with_capacity(
+        buf.capacity().saturating_mul(2).max(needed),
+    ));
+    grown.extend_from_slice(buf);
+    core::mem::swap(buf, &mut grown);
 }
 
 struct Entry {
@@ -115,9 +137,7 @@ impl ChunkCache {
         entry.used = tick;
         self.next_tick += 1;
         self.recency.insert(tick, key);
-        self.blocks
-            .get(&key)
-            .map(|entry| entry.plaintext.as_slice())
+        Some(entry.plaintext.as_slice())
     }
 
     /// Retain `plaintext` under `key`, evicting until it fits. A block larger
@@ -207,6 +227,38 @@ mod tests {
     #[test]
     fn a_zero_block_budget_is_not_representable() {
         assert_eq!(CacheBudget::for_profile(ContentProfile::CI, 0), None);
+    }
+
+    #[test]
+    fn a_budget_that_would_wrap_its_ceiling_is_not_representable() {
+        assert_eq!(
+            CacheBudget::for_profile(ContentProfile::PRODUCTION, usize::MAX),
+            None
+        );
+    }
+
+    #[test]
+    fn a_grow_that_fits_never_relocates_the_plaintext_it_holds() {
+        let mut buf = Zeroizing::new(Vec::with_capacity(64));
+        buf.extend_from_slice(b"secret");
+        let held = buf.as_ptr();
+
+        grow_wiping(&mut buf, 8);
+
+        assert_eq!(buf.as_ptr(), held, "a fitting grow must not reallocate");
+    }
+
+    #[test]
+    fn a_grow_past_capacity_carries_the_bytes_into_room_it_reserved() {
+        let mut buf = Zeroizing::new(Vec::from(b"secret".as_slice()));
+
+        grow_wiping(&mut buf, 4096);
+
+        assert_eq!(&buf[..], b"secret");
+        assert!(
+            buf.capacity() >= 6 + 4096,
+            "the caller must not have to grow again for the bytes it asked room for"
+        );
     }
 
     #[test]
