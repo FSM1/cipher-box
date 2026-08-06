@@ -17,10 +17,11 @@ import { FileList } from './FileList';
 import { FilePreviewDialog } from './FilePreviewDialog';
 import { MoveDialog } from './MoveDialog';
 import { NamePromptDialog } from './NamePromptDialog';
+import { TextEditorDialog } from './TextEditorDialog';
 
 type Dialog =
   | { kind: 'create' }
-  | { kind: 'rename' | 'move' | 'delete' | 'details' | 'preview'; row: ListingRow };
+  | { kind: 'rename' | 'move' | 'delete' | 'details' | 'preview' | 'edit'; row: ListingRow };
 
 interface FileBrowserActionsProps {
   rows: ListingRow[];
@@ -59,10 +60,17 @@ export function FileBrowserActions({
   const menuItems = (row: ListingRow): ContextMenuItem[] => {
     const items: ContextMenuItem[] = [];
     if (row.kind === 'file') {
-      if (previewKind(row.name) !== 'none') {
+      const kind = previewKind(row.name);
+      if (kind !== 'none') {
         items.push({ label: 'preview', onSelect: () => setDialog({ kind: 'preview', row }) });
       }
-      items.push({ label: 'download', onSelect: () => void downloads.save(row.id, row.name) });
+      if (kind === 'text') {
+        items.push({ label: 'edit', onSelect: () => setDialog({ kind: 'edit', row }) });
+      }
+      items.push({
+        label: 'download',
+        onSelect: () => void downloads.save(row.id, row.name, row.bytes),
+      });
     }
     items.push(
       { label: 'rename', onSelect: () => setDialog({ kind: 'rename', row }) },
@@ -165,11 +173,12 @@ export function FileBrowserActions({
         />
       )}
       {dialog?.kind === 'details' && <DetailsDialog row={dialog.row} onClose={close} />}
+      {dialog?.kind === 'edit' && <TextEditorDialog row={dialog.row} onClose={close} />}
       {dialog?.kind === 'preview' && (
         <FilePreviewDialog
           row={dialog.row}
           onClose={close}
-          onDownload={() => void downloads.save(dialog.row.id, dialog.row.name)}
+          onDownload={() => void downloads.save(dialog.row.id, dialog.row.name, dialog.row.bytes)}
         />
       )}
     </>

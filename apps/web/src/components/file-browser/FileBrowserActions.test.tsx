@@ -2,6 +2,7 @@ import {
   toHex,
   type EngineClient,
   type EventDescriptor,
+  type MediaService,
   type SnapshotDescriptor,
 } from '@cipherbox/client';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -10,6 +11,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useFolderPicker } from '../../hooks/useFolderPicker';
 import { EngineProvider } from '../../providers/EngineProvider';
 import { FileBrowser } from './FileBrowser';
+
+/** The pipe this tab gets; `null` is the browser without a Service Worker. */
+const mediaControl = { create: (): MediaService | null => null };
+vi.mock('../../engine/createMediaService', () => ({
+  createMediaService: () => mediaControl.create(),
+}));
 
 const ROOT = new Uint8Array(16).fill(0);
 const DOCS = new Uint8Array(16).fill(7);
@@ -73,6 +80,10 @@ function fakeEngine(
     relink: vi.fn(() => Promise.resolve()),
     delete: vi.fn(() => Promise.resolve()),
     download: vi.fn(download),
+    beginWrite: vi.fn((_target: { node: Uint8Array }, _size: number) => Promise.resolve(9n)),
+    pushChunk: vi.fn((_handle: bigint, _chunk: ArrayBuffer) => Promise.resolve()),
+    commitWrite: vi.fn(() => Promise.resolve(1n)),
+    abortWrite: vi.fn(() => Promise.resolve()),
   };
   const client = {
     facade,
@@ -526,6 +537,226 @@ describe('the vault browser read path over the facade', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert').textContent).toBe('adoption gate refused the record')
     );
+  });
+});
+
+describe('the vault browser read path over the streaming pipe', () => {
+  const minted: { node: Uint8Array; size: number; mimeType: string }[] = [];
+  const revoked: string[] = [];
+  const clicked: { href: string | null; download: string }[] = [];
+  const originalClick = HTMLAnchorElement.prototype.click;
+
+  beforeEach(() => {
+    minted.length = 0;
+    revoked.length = 0;
+    clicked.length = 0;
+    mediaControl.create = () =>
+      ({
+        streaming: true,
+        start: () => Promise.resolve(),
+        dispose: () => Promise.resolve(),
+        createStreamUrl: (source: { node: Uint8Array; size: number; mimeType: string }) => {
+          minted.push(source);
+          return `/stream/ticket-${minted.length}`;
+        },
+        revokeStreamUrl: (url: string) => {
+          revoked.push(url);
+          return true;
+        },
+      }) as unknown as MediaService;
+    HTMLAnchorElement.prototype.click = function click(this: HTMLAnchorElement) {
+      clicked.push({ href: this.getAttribute('href'), download: this.download });
+    };
+  });
+
+  afterEach(() => {
+    mediaControl.create = () => null;
+    HTMLAnchorElement.prototype.click = originalClick;
+  });
+
+  it('hands a save to the browser as a ticket instead of buffering the plaintext', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('download');
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(engine.facade.download).not.toHaveBeenCalled();
+    expect(minted).toEqual([{ node: NOTE, size: 12, mimeType: 'application/octet-stream' }]);
+    expect(clicked).toEqual([{ href: '/stream/ticket-1', download: 'notes.txt' }]);
+  });
+
+  it('buffers a save whose size the engine has not projected', async () => {
+    const engine = fakeEngine(() => Promise.resolve(new ArrayBuffer(3)));
+    renderBrowser(engine);
+    await landSnapshot(engine, folderView({ children: [file(NOTE, 'notes.txt', { size: null })] }));
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('download');
+
+    await waitFor(() => expect(engine.facade.download).toHaveBeenCalledWith(NOTE));
+    expect(minted).toEqual([]);
+  });
+
+  it('streams an image preview and revokes its ticket on close', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(engine, folderView({ children: [file(PICTURE, 'cat.png')] }));
+
+    openRowMenu('cat.png');
+    chooseMenuItem('preview');
+
+    await waitFor(() =>
+      expect(screen.getByTestId('preview-image').getAttribute('src')).toBe('/stream/ticket-1')
+    );
+    expect(engine.facade.download).not.toHaveBeenCalled();
+    expect(minted[0].mimeType).toBe('image/png');
+
+    fireEvent.click(screen.getByLabelText('close'));
+    await waitFor(() => expect(revoked).toEqual(['/stream/ticket-1']));
+  });
+
+  it('shows an image the byte budget would have refused', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(
+      engine,
+      folderView({ children: [file(PICTURE, 'cat.png', { size: 64n * 1024n * 1024n })] })
+    );
+
+    openRowMenu('cat.png');
+    chooseMenuItem('preview');
+
+    await waitFor(() => expect(screen.getByTestId('preview-image')).toBeDefined());
+    expect(engine.facade.download).not.toHaveBeenCalled();
+  });
+
+  it('buffers a pdf, which the pipe would serve under an opaque type', async () => {
+    const engine = fakeEngine(() => Promise.resolve(new ArrayBuffer(5)));
+    renderBrowser(engine);
+    await landSnapshot(engine, folderView({ children: [file(PICTURE, 'deed.pdf')] }));
+
+    openRowMenu('deed.pdf');
+    chooseMenuItem('preview');
+
+    await waitFor(() => expect(screen.getByTestId('preview-pdf')).toBeDefined());
+    expect(minted).toEqual([]);
+  });
+});
+
+describe('the text editor', () => {
+  const text = (value: string) => () =>
+    Promise.resolve(new TextEncoder().encode(value).buffer as ArrayBuffer);
+
+  it('offers an editor only for a type the preview allow-list calls text', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(
+      engine,
+      folderView({ children: [file(NOTE, 'notes.txt'), file(PICTURE, 'cat.png')] })
+    );
+
+    openRowMenu('cat.png');
+    expect(screen.queryByRole('menuitem', { name: 'edit' })).toBeNull();
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    openRowMenu('notes.txt');
+    expect(screen.getByRole('menuitem', { name: 'edit' })).toBeDefined();
+  });
+
+  it('writes the edited bytes through one facade write', async () => {
+    const engine = fakeEngine(text('to do: nothing'));
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('edit');
+    const field = await screen.findByTestId('text-editor-field');
+    fireEvent.change(field, { target: { value: 'to do: everything' } });
+    fireEvent.click(screen.getByTestId('text-editor-save'));
+
+    await waitFor(() => expect(engine.facade.commitWrite).toHaveBeenCalledWith(9n));
+    expect(engine.facade.beginWrite).toHaveBeenCalledWith({ node: NOTE }, 17);
+    const [, chunk] = engine.facade.pushChunk.mock.calls[0];
+    expect(new TextDecoder().decode(chunk)).toBe('to do: everything');
+    await waitFor(() => expect(screen.queryByTestId('text-editor-dialog')).toBeNull());
+  });
+
+  it('refuses to dismiss while the save is in flight', async () => {
+    const engine = fakeEngine(text('to do: nothing'));
+    let release: () => void = () => undefined;
+    engine.facade.commitWrite.mockImplementationOnce(
+      () =>
+        new Promise<bigint>((resolve) => {
+          release = () => resolve(1n);
+        })
+    );
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('edit');
+    fireEvent.change(await screen.findByTestId('text-editor-field'), {
+      target: { value: 'changed' },
+    });
+    fireEvent.click(screen.getByTestId('text-editor-save'));
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.mouseDown(screen.getByTestId('modal-backdrop'));
+    expect(screen.getByTestId('text-editor-dialog')).toBeDefined();
+
+    await act(async () => {
+      release();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(screen.queryByTestId('text-editor-dialog')).toBeNull());
+  });
+
+  it('releases the write when the engine refuses it, and keeps the draft up', async () => {
+    const engine = fakeEngine(text('to do: nothing'));
+    engine.facade.commitWrite.mockRejectedValueOnce(new Error('the op queue is full'));
+    renderBrowser(engine);
+    await landSnapshot(engine, listing());
+
+    openRowMenu('notes.txt');
+    chooseMenuItem('edit');
+    fireEvent.change(await screen.findByTestId('text-editor-field'), {
+      target: { value: 'changed' },
+    });
+    fireEvent.click(screen.getByTestId('text-editor-save'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('dialog-error').textContent).toBe('the op queue is full')
+    );
+    expect(engine.facade.abortWrite).toHaveBeenCalledWith(9n);
+    expect(screen.getByTestId('text-editor-field')).toBeDefined();
+  });
+
+  it('refuses a file over the byte budget before it decrypts anything', async () => {
+    const engine = fakeEngine();
+    renderBrowser(engine);
+    await landSnapshot(
+      engine,
+      folderView({ children: [file(NOTE, 'huge.txt', { size: 64n * 1024n * 1024n })] })
+    );
+
+    openRowMenu('huge.txt');
+    chooseMenuItem('edit');
+
+    await waitFor(() =>
+      expect(screen.getByTestId('dialog-error').textContent).toBe(
+        'too large to preview - download it instead'
+      )
+    );
+    expect(engine.facade.download).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('text-editor-field')).toBeNull();
   });
 });
 
