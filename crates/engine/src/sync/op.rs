@@ -432,6 +432,7 @@ mod tests {
                 at(1_003),
                 ScopeCrossing::ExitsGrantedSource,
             ),
+            Op::relink(id(8), id(0), id(9), 7, at(1_006), ScopeCrossing::Cross),
             Op::update_content(id(5), staged(b"stage2", 12), 8, at(1_004)),
             Op::move_node(
                 id(6),
