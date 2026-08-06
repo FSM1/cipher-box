@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "43ac060828b7",
+  "strategy": "manual-commit",
+  "branch": "rb-1116",
+  "checkpoints_count": 28,
+  "files_touched": [
+    "crates/engine/src/net/rotation.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/43/ac060828b7/0/metadata.json",
+      "transcript": "/43/ac060828b7/0/full.jsonl",
+      "compact_transcript": "/43/ac060828b7/0/transcript.jsonl",
+      "content_hash": "/43/ac060828b7/0/content_hash.txt",
+      "prompt": "/43/ac060828b7/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1692,
+    "cache_creation_tokens": 3107291,
+    "cache_read_tokens": 189095182,
+    "output_tokens": 691026,
+    "api_call_count": 850
+  }
+}
