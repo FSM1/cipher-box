@@ -1,0 +1,123 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "4312a40ec29a",
+  "session_id": "8ed080ed-fffa-498c-9012-8e777bd9ef50",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-06T10:49:44.27997Z",
+  "branch": "chore/rename-staging-api-url-var",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "fbf58f268ccb",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1348,
+    "cache_creation_tokens": 2645480,
+    "cache_read_tokens": 149363883,
+    "output_tokens": 553749,
+    "api_call_count": 677
+  },
+  "session_metrics": {
+    "turn_count": 14
+  },
+  "summary": {
+    "intent": "Drive Wave 4 and Wave 5 of the CipherBox v2 rewrite to completion: rebase, review-cycle, and merge queues of draft PRs unattended overnight and during the day, then plan and partially launch Wave 5/6, clean up tracker/branch hygiene, and fix a stale staging environment-variable naming scheme and its dead redis/tee-worker services.",
+    "outcome": "All six Wave 4 PRs and all seven Wave 5 PRs were reviewed, resolved, verified to combine, and merged; tracker hygiene (milestones, parenting, comp labels, stale blocked_by edges) was corrected; issue #981 was closed with residue tracked; branch protection was tightened; Wave 6 was planned (8 PRs) with #648 split into 4 sequenced sub-issues; and a staging env-var rename (STAGING_ prefix removal, IPFS_GATEWAY_URL, redis/tee-worker teardown) is in progress on PR #1113.",
+    "learnings": {
+      "repo": [
+        "`recycle-both.sh` is the working review-cycle script; `review2.sh`/`cycle.sh` are broken and must not be used — any of their historical logs may report false all-clears",
+        "A `success` conclusion on a macroscope check-run does NOT mean zero findings — findings can post minutes after check-runs complete (up to ~9 min later on #1104), so threads must always be re-queried, never inferred from conclusion",
+        "CodeRabbit's clean verdict posts to the status comment only, never a review entry — polling review bodies alone hangs to timeout",
+        "Two PRs adding an identical field/enum-variant to the same file merge textually clean into a duplicate/non-exhaustive-match compile break; git reports no conflict — must build+compile the combined tree, not trust `mergeable`",
+        "gh REST `/issues/N --jq '.parent'` always returns null — a false negative; must use the GraphQL parent lookup before judging umbrella-issue completeness, or orphaned children (e.g. #1050 under #989) get silently missed",
+        "GitHub environment-variables API paginates at 10 per page by default with no warning — must pass per_page and compare against total_count, or existing vars (e.g. STAGING_API_URL) appear to not exist",
+        "Parallel agents share one scratchpad directory, one Puppeteer browser instance, and dev-server ports — must give each agent a unique scratchpad path/port or work silently clobbers",
+        "Reviewer-suggested diffs are frequently unsafe if applied literally: `{other:?}` would have required deriving Debug on a Zeroizing-wrapped secret type; `clear_session` would destroy a valid refresh credential turning a wedge into a DoS; a proposed helper ignored its parameters and returned a constant",
+        "GitHub Actions secrets are write-only on both API and UI — no way to read a value back; rotation requires generate-and-set, and paired external state (DB passwords, SSH keys) needs manual coordination, not blind rotation",
+        "`docker-compose.staging.yml` had declared `redis` and `tee-worker` services referencing undefined/unused env vars — v2's API has zero redis dependency despite the workflow header already stating redis was removed with the v1 layout",
+        "`crates/engine/src/content/profile.rs` PRODUCTION chunk_size=1_048_536 is deliberate seal-overhead accounting `(1<<20) - NONCE_LEN - TAG_LEN`, not a typo, per `crates/core/src/suite/aead.rs:103`",
+        "Faked seam traits (only test-module implementors of a trait) are invisible tracker gaps — code compiles, tests pass, reads as delivered; must check whether the primitive has any production caller at all (`rotate_scope`/`rotate_scope_write` had none)"
+      ],
+      "code": [
+        {
+          "path": "crates/engine/src/net/rotation.rs",
+          "line": 849,
+          "end_line": 862,
+          "finding": "`reseal_verdict` exhaustive match over `ResealError` — required updating when #1098 added `TooManyCommittedGrants` variant; the no-catch-all design is what made the semantic merge conflict a compile error rather than a silent miscategorization"
+        },
+        {
+          "path": "crates/engine/src/api/client.rs",
+          "line": 108,
+          "end_line": 121,
+          "finding": "Signed `body.challenge` from server response with no prefix validation — live signing oracle on the identity key, fixed in #1099/#1034 by pinning the exact prefix+hex shape"
+        },
+        {
+          "path": "crates/engine/src/sync/rebase.rs",
+          "line": 528,
+          "end_line": 528,
+          "finding": "`rebase_update_content` never reads `op.base_sequence` — a present target applies unconditionally, enabling silent last-write-wins clobber of concurrent content writes (filed as #1106)"
+        },
+        {
+          "path": "crates/engine/src/facade.rs",
+          "line": 465,
+          "end_line": 465,
+          "finding": "`Command::Grant` (not `Command::Share`) is the actual variant name; catch-all fallthrough for unimplemented commands is at line 2278"
+        },
+        {
+          "path": "crates/engine/src/rotation/rotate_write.rs",
+          "line": 150,
+          "end_line": 150,
+          "finding": "`WriteSubtreeResolver` has no production implementation — only test fakes; trait doc explicitly notes real network/gate wiring is not landed (led to filing #1108)"
+        },
+        {
+          "path": ".github/workflows/ci.yml",
+          "line": 857,
+          "end_line": 887,
+          "finding": "Result-gate vacuity: `web-e2e`/`web-e2e-result` (and identically-shaped `desktop-build`/`desktop-build-result`) pass when the guarded job is `skipped`, so if the upstream `Detect Changes` job fails, the gate reports green having verified nothing"
+        }
+      ],
+      "workflow": [
+        "Build and compile the full N-way combined merge tree (all target PRs' final heads asserted as ancestors) before declaring a wave ready, not just pairwise `mergeable` checks — this is the only way to catch semantic (non-textual) merge conflicts",
+        "Read exit codes directly/unpiped (`cmd >/dev/null 2>&1; echo $?`) — piping through `tail`/`grep` masks the real command's exit status",
+        "When cleaning up worktrees/branches, verify each against its merged PR (or record SHAs) before deleting, since squash-merges mean branch tips are never ancestors of main — reachability checks alone will falsely flag merged work as unmerged",
+        "Give every parallel/background agent a unique scratchpad file path and, where relevant, unique ports — a generic shared filename gets silently overwritten by a sibling agent",
+        "Never apply a code-review suggested diff literally — treat it as a symptom report; verify the underlying mechanism and check whether the fix itself introduces a regression (e.g. deriving Debug on a secret type, destroying valid credentials)",
+        "When an umbrella/tracking issue shows 0 open children, verify with a proper GraphQL parent lookup before closing it — REST's null `.parent` bug creates false completions",
+        "Fence bot-rate-limited actions (e.g. CodeRabbit's 1/hr slot) using timestamps from the authoritative source (GitHub) with a safety buffer, never a local tool's clock (vitest prints local time, not UTC)",
+        "When a required CI check is intermittently flaky, verify isolation (does it fail across all PRs or just one) before assuming a real regression, and re-run the specific job rather than the whole workflow when it's `workflow_call`-based (can't be rerun standalone)"
+      ]
+    },
+    "friction": [
+      "macroscope ran out of credits mid-wave (00:54Z), silently degrading review coverage on 6 of 7 Wave 5 PRs since the script initially scored 'skipped' check-runs as full coverage",
+      "Web E2E Smoke Result flaky test (`smoke.spec.ts:43` sign-out redirect) intermittently blocks unrelated engine-only PRs now that the gate is required",
+      "Greptile has been quota-locked since before Wave 4 and remained so through Wave 5/6 planning",
+      "Repeated transient GitHub API network outages during the overnight run required retry/notifier logic to avoid stalling the review cycles",
+      "Several of my own verification checks used loose substring matching that produced false positives (issue parenting/dependency edges, worktree removal success) — required explicit read-back verification to catch",
+      "gh api's `--arg` flag doesn't exist and silently breaks jq filters, an error that had gone undetected in the prior `review2.sh` script for its entire lifetime",
+      "Locked harness-managed worktrees (still resumable by finished agents) couldn't be force-removed, requiring `git -C` workarounds in follow-up agents"
+    ],
+    "open_items": [
+      "#1101 rebase note applies only historically now (already resolved and merged); future PRs touching `net/rotation.rs`/`ResealError` should watch for similar non-exhaustive-match breaks",
+      "vars.STAGING_GATEWAY_URL (now IPFS_GATEWAY_URL) has no real value yet — user specified hostname ipfs-gw-staging.cipherbox.cc; needs a Caddy forward_auth route and GATEWAY_TOKEN secret, deferred as #653-adjacent work",
+      "7 STAGING_-prefixed secrets need manual rotation via scratchpad script `rotate-staging-secrets.sh` (run once, not committed) — DB_PASSWORD and SSH_KEY require manual coordinated steps (paired ALTER USER / authorized_keys install) and were excluded from the automatic rotation",
+      "PR #1113 (staging env var rename + redis/tee-worker teardown + gateway rename) is still open/in-progress, not yet merged",
+      "Wave 6 plan (8 PRs) is written but not yet launched; #1109 (first #648 slice) is the critical-path item",
+      "#1083 (authenticate tab-leadership rendezvous, now startable since #1052 closed) was deliberately left out of Wave 6 for batch size, not merit — candidate PR-9",
+      "#1102 (crypto DoS, ~1000x amplification) is scheduled in Wave 6 PR-3 but not yet shipped",
+      "#1107 and #1108 (grantee-arm rotation, WriteSubtreeResolver) both want net/rotation.rs and are deferred to Wave 7 alongside #1025/#1076/#1077/#1056",
+      "Old STAGING_ prefixed GitHub variables (API_URL/HOST/USER/DB_USERNAME) still exist alongside new unprefixed ones — to be deleted after PR #1113 merges",
+      "desktop track (#648→#649→#650→#651→#653 staging cutover→#652/#654/#656) fully unblocked this session but still requires 4 sequential PRs (#1109-#1112) plus #649/#650 before cutover is reachable"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
