@@ -1877,3 +1877,7 @@ the api url is correctly defined in github staging env variables. the variable n
 ---
 
 ok, is there any way to extract the existing secret values from github? if not then the new values should jsut be generated and set by a script.
+
+---
+
+also regarding `vars.STAGING_GATEWAY_URL` this should rather be labeled as IPFS_GATEWAY_URL and the variable should be set per environment.
