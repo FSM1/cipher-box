@@ -163,17 +163,32 @@ the #33 pipeline with the #39 D3 seal-auth stage and the D4 floor law:
    against the contact-code-anchored owner identity (#34 D6, #39 D1).
 3. **Grant-section authentication** (scope roots) — every seed-bearing
    structure (grant blobs, owner blob, the optional owner-write-blob, ascent
-   link, history links, write-body) verifies under a committed write-capable
-   pseudonym via core's pure per-structure checks; any failure rejects the
-   **whole record** as a trust violation (#39 D3). The owner-write-blob is
-   optional on the wire, but a **present** one with a missing or invalid
-   structure signature is a whole-record trust violation, never staleness (its
-   signature is recomputed at the authenticated envelope epoch like every other
-   structure, though its sealed AAD binds the write epoch).
+   link, history links, write-body) verifies under **one** committed
+   write-capable pseudonym via core's pure per-structure checks; any failure
+   rejects the **whole record** as a trust violation (#39 D3). The
+   owner-write-blob is optional on the wire, but a **present** one with a
+   missing or invalid structure signature is a whole-record trust violation,
+   never staleness (its signature is recomputed at the authenticated envelope
+   epoch like every other structure, though its sealed AAD binds the write
+   epoch).
 4. **Sequence** — strictly newer than the durable per-name floor.
 5. **Epoch** — epoch tag at or above the scope's durable epoch floor.
 6. **Unseal** — success required; core's trust-violation error class carries
    through fail-closed.
+
+**One section, one signer** (stage 3). A section is a single rotator's work: it
+re-seals and detached-signs every structure with its own writer pseudonym,
+re-signing at the record's read epoch even the history links it carries forward
+verbatim (`rotation/reseal.rs`). The gate therefore **pins** the pseudonym that
+authenticated the section's first structure and requires every later structure
+to verify under that key alone; a section signed by two committed pseudonyms is
+unadoptable, not merely unusual. Pinning is what bounds stage 3's work at
+`pseudonyms + structures` rather than their product — without it an accepted
+contact commits 1024 write pseudonyms of their own and spreads a section's
+signatures across them, buying ~1000x reader-CPU amplification for ~1284
+signatures. The produce side runs the same predicate release-active
+(`net/author.rs::check_scope_root`), so this build never signs a section its own
+gate rejects.
 
 A gate failure is never mere staleness: the engine pins last-known-good,
 raises the withheld-update escalation where applicable, and never renders the

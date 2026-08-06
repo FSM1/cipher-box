@@ -354,8 +354,12 @@ mod tests {
     use cipherbox_core::content::{compute_cid, encode_content_cid_str};
     use cipherbox_core::ipns::IpnsName;
     use cipherbox_core::kdf;
-    use cipherbox_core::seal::{decode_envelope, encode_grant_section, open_read_body};
+    use cipherbox_core::seal::{
+        GrantSetEntry, Permission, STRUCT_TAG_WRITE_BODY, StructureSigInput, decode_envelope,
+        encode_grant_section, open_read_body, sign_grant_set, sign_structure,
+    };
     use cipherbox_core::suite::ecdsa::EcdsaSigner;
+    use cipherbox_core::suite::ed25519::Ed25519Signer;
 
     use crate::content::DAG_ROOT_CODEC;
     use crate::testkit::{OWNER_ROOT_EPOCH, OwnerRootFixture, OwnerRootSpec, owner_root_fixture};
@@ -526,6 +530,45 @@ mod tests {
         let fixture = owner_root();
         let mut section = fixture.grant_section.clone();
         section.owner_blob.signature[0] ^= 0xFF;
+        assert_eq!(
+            author_scope_root_envelope(
+                authoring(&folder(), carried_section(&section)),
+                &fixture.name,
+                &owner(),
+            )
+            .unwrap_err(),
+            AuthorError::SectionSignatureInvalid,
+        );
+    }
+
+    #[test]
+    fn a_scope_root_envelope_whose_section_has_two_signers_is_refused() {
+        // Release-active (security rule 8): the gate pins a section to the
+        // pseudonym its first structure verified under, so a section spread
+        // across two *committed* pseudonyms is unadoptable and must never be
+        // signed. Both signers are committed here, so only the pin rejects it.
+        let fixture = owner_root();
+        let second = Ed25519Signer::from_seed([0x55; 32]);
+        let mut section = fixture.grant_section.clone();
+        section.commitment.entries.push(GrantSetEntry::new(
+            [0x66; 32],
+            Permission::Write,
+            second.verifying_key().to_bytes(),
+        ));
+        section.commitment_sig = sign_grant_set(
+            &EcdsaSigner::from_scalar(&[0x11; 32]).expect("valid scalar"),
+            &section.commitment,
+        )
+        .expect("commitment signs")
+        .to_compact();
+        let input = StructureSigInput::over_ciphertext(
+            [2u8; 16],
+            OWNER_ROOT_EPOCH,
+            STRUCT_TAG_WRITE_BODY,
+            None,
+            &section.write_body.sealed,
+        );
+        section.write_body.signature = sign_structure(&second, &input).to_bytes();
         assert_eq!(
             author_scope_root_envelope(
                 authoring(&folder(), carried_section(&section)),

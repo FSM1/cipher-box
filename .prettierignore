@@ -18,10 +18,12 @@
 # Macroscope, not by us; prettier rewrites its double-quoted YAML scalars
 .macroscope/
 
-# KAT manifest and vector fixtures - written only by the committed generator
-# (cargo run -p cipherbox-core --example kat_gen); the CI freshness gate
-# diffs them byte-for-byte against generator output
+# KAT manifests and vector fixtures - written only by the committed generators
+# (cargo run -p cipherbox-{core,engine} --example kat_gen); the CI freshness
+# gates diff them byte-for-byte against generator output, so a prettier rewrite
+# would fail the gate it cannot fix
 crates/core/kat/
+crates/engine/kat/
 
 # Generated OpenAPI docs artifact - byte-stability is owned by the generator
 # (CI openapi-freshness diffs a regeneration against the committed file)
