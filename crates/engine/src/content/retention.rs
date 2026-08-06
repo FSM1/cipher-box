@@ -178,10 +178,9 @@ impl From<DagError> for ExpandError {
 /// drain that dies mid-expansion can re-expand from a root that is still pinned,
 /// where a root-first order would leave its leaves unnameable and charged.
 ///
-/// Fail-closed throughout. The block is refused past the resolved-block ceiling
-/// before it is hashed, verified against `version.content_cid`, decoded, and
-/// finally held to the pinned total the plan quoted — a version whose bytes
-/// cannot be accounted for is never retired.
+/// The manifest is held to the pinned total the plan quoted, so a prune can never
+/// free bytes it did not report — and a `size`/`chunkSize` pair the link count
+/// alone cannot constrain has to reproduce that figure.
 pub fn expand_retire_targets(
     version: &ContentVersion,
     root_block: &[u8],
