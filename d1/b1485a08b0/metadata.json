@@ -1,0 +1,26 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "d1b1485a08b0",
+  "strategy": "manual-commit",
+  "branch": "rb-1123",
+  "checkpoints_count": 3,
+  "files_touched": [
+    "crates/engine/tests/write_plane.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/d1/b1485a08b0/0/metadata.json",
+      "transcript": "/d1/b1485a08b0/0/full.jsonl",
+      "compact_transcript": "/d1/b1485a08b0/0/transcript.jsonl",
+      "content_hash": "/d1/b1485a08b0/0/content_hash.txt",
+      "prompt": "/d1/b1485a08b0/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1822,
+    "cache_creation_tokens": 3413151,
+    "cache_read_tokens": 206307150,
+    "output_tokens": 721752,
+    "api_call_count": 915
+  }
+}
