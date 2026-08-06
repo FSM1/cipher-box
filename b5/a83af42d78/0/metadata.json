@@ -1,0 +1,42 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "b5a83af42d78",
+  "session_id": "8ed080ed-fffa-498c-9012-8e777bd9ef50",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-06T10:24:33.503586Z",
+  "branch": "chore/rename-staging-api-url-var",
+  "checkpoints_count": 11,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "72dec7119bf9",
+  "checkpoint_transcript_start": 5525,
+  "transcript_lines_at_start": 5525,
+  "compact_transcript_start": 760,
+  "token_usage": {
+    "input_tokens": 14,
+    "cache_creation_tokens": 12068,
+    "cache_read_tokens": 1886117,
+    "output_tokens": 5061,
+    "api_call_count": 7
+  },
+  "session_metrics": {
+    "turn_count": 11
+  },
+  "summary": {
+    "intent": "Finish renaming the remaining STAGING_-prefixed CI/CD variables and secrets (including HOST and USER) to unprefixed names across GitHub Actions workflows.",
+    "outcome": "Verified how the remaining STAGING_ variables were consumed, copied the three remaining variables to unprefixed names, updated workflow references and docs, and committed the second rename.",
+    "learnings": {
+      "repo": [
+        "GitHub Actions variables in this repo are consumed only via inline ${{ vars.X }} expressions passed directly into action inputs, never through a workflow-level env: block — so renaming vars.STAGING_HOST/USER to bare HOST/USER carries no risk of shadowing shell environment variables.",
+        "deploy-landing workflow has environment-specific scoping that needed to be checked before renaming variables to avoid breaking per-environment variable resolution."
+      ],
+      "code": [],
+      "workflow": [
+        "When renaming CI variables, first grep all usages to confirm whether they pass through an env: block (risk of shell shadowing) versus only inline into action inputs (safe) before deciding on unprefixed names like HOST/USER."
+      ]
+    },
+    "friction": [],
+    "open_items": []
+  }
+}
