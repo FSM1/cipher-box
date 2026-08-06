@@ -1036,7 +1036,8 @@ mod tests {
         let record = fx.record(1);
         match block_on(adopter.adopt(&fx.name, &record)) {
             Err(GateError::Rejected(r)) => assert_eq!(r.stage, GateStage::CommitmentVerify),
-            other => panic!("expected a commitment rejection, got {:?}", other.is_ok()),
+            Err(GateError::Seam(e)) => panic!("expected a commitment rejection, got seam {e}"),
+            Ok(_) => panic!("an unrecognised owner identity must be rejected"),
         }
         assert!(
             block_on(adopter.recover_own_scope_root(&fx.name, &record))
