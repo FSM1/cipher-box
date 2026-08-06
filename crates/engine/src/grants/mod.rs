@@ -6,9 +6,9 @@
 //! contact import, the accept flow, revocation classification, and the owner seed
 //! cross-check. Read-grant *creation* ([`create`]) composes the sweep + re-seal +
 //! mailbox primitives into the owner-side mint; [`invite`] mints the ephemeral
-//! identity a bearer link's grant is wrapped to. Write grants, claim conversion,
-//! and revoke *actions* are not implemented here. Every trust decision is a
-//! composed core verdict or the adoption gate's; this layer holds no crypto.
+//! identity a bearer link's grant is wrapped to and converts its claims into
+//! personal grants. Write grants are not implemented here. Every trust decision
+//! is a composed core verdict or the adoption gate's; this layer holds no crypto.
 
 pub mod accept;
 pub mod child_index;
@@ -32,10 +32,14 @@ pub use create::{
     CreateGrantError, CreateGrantOutcome, GrantRecipient, GranteeScopePlan, OwnerGrantKeys,
     ParentScopePlan, create_read_grant,
 };
-pub use invite::{EphemeralInvitee, InviteError, mint_invite_grant};
+pub use invite::{
+    CommittedScope, ConvertedClaim, EphemeralInvitee, InviteClaim, InviteError, InviteRevocation,
+    LinkCapability, MintedInvite, OwnerAuthority, convert_invite_claim, mint_invite_grant,
+    post_invite_claim, revoke_invite_link,
+};
 pub use ledger::{
     AuthorityViolation, GrantRow, PublishedGrantBlob, enforce_committed_ledger, entry_is_live,
-    mint_grant_row, recipient_blinded_tag, self_locate,
+    live_entry, mint_grant_row, recipient_blinded_tag, self_locate,
 };
 pub use owner_entry::{AbuseEvent, OwnerEntry, OwnerSeedCache, OwnerSeedEntry, cross_check};
 pub use revocation::{ResolutionClass, ResolutionFacts, classify};
