@@ -13,7 +13,7 @@ import {
 } from '../media/protocol.js';
 import { safeMimeType } from '../media/range.js';
 import type { MessagePortLike } from '../portRelay.js';
-import type { ClientsLike } from './clients.js';
+import type { ClientsLike, WindowClientLike } from './clients.js';
 
 /** The subset of a Service Worker global scope the pipe drives. */
 export interface MediaPipeScopeLike {
@@ -35,6 +35,9 @@ const DEFAULT_PULL_TIMEOUT_MS = 30000;
 /** One entry for every offer and request without a client identity; a real client id is never empty. */
 const ANONYMOUS_CLIENT = '';
 
+/** Why a body reading over a superseded or discarded port ends. */
+const PORT_REPLACED = 'media port replaced';
+
 type MediaHeadResponse = Extract<MediaResponse, { type: 'cb:media:head' }>;
 
 /** A client's end of the pipe, with the listener bound to it. */
@@ -49,6 +52,14 @@ interface ResponseSink {
   readonly deliver: (response: MediaResponse) => void;
 }
 
+/** A response body still streaming, and the port it reads from. */
+interface BodyEntry {
+  readonly port: MessagePortLike;
+  readonly controller: ReadableStreamDefaultController<Uint8Array>;
+  /** Resolves the pull in flight; a body ended between pulls has none. */
+  pulling: (() => void) | null;
+}
+
 export class MediaPipe {
   /**
    * One port per client: a tab's registry only knows the tickets that tab
@@ -59,10 +70,11 @@ export class MediaPipe {
   private readonly portWaiters = new Set<(adopted: string) => void>();
   private readonly sinks = new Map<number, ResponseSink>();
   /**
-   * Every response body still streaming and the port it reads from; a sink
-   * exists only between a pull and its answer.
+   * Every response body still streaming, held with its stream controller so an
+   * idle one can be ended now: a sink exists only between a pull and its answer,
+   * and a buffered media element may go a long time without pulling again.
    */
-  private readonly bodies = new Map<number, MessagePortLike>();
+  private readonly bodies = new Map<number, BodyEntry>();
   /** The armed pull deadline per request, so a cancel can disarm its own. */
   private readonly pullTimers = new Map<number, ReturnType<typeof setTimeout>>();
   private nextRequestId = 1;
@@ -93,6 +105,20 @@ export class MediaPipe {
     // Insertion order is adoption order, which the anonymous fallback reads.
     this.ports.set(clientId, { port, listener });
     for (const waiter of [...this.portWaiters]) waiter(clientId);
+  }
+
+  /**
+   * Asks every window client for a fresh channel, for a worker instance that
+   * holds none. A terminated worker runs no `detachPort`, so the cursors its
+   * bodies pinned — and the engine streams and content keys behind them — are
+   * released only when the tab re-brokers, which serving a new port does.
+   */
+  async requestPorts(): Promise<void> {
+    if (this.ports.size > 0) return;
+    const clients = await this.scope.clients.matchAll({ type: 'window' });
+    // A port adopted across the await already carries the tab's re-broker.
+    if (this.ports.size > 0) return;
+    this.askForPort(clients);
   }
 
   async respond(request: Request, clientId: string = ANONYMOUS_CLIENT): Promise<Response> {
@@ -133,9 +159,16 @@ export class MediaPipe {
     const response = asResponse(event.data);
     if (response === null) return;
     const sink = this.sinks.get(response.requestId);
-    // An unknown or already-settled id is stale traffic; another client's id is
-    // not this port's to answer.
-    if (sink?.port === port) sink.deliver(response);
+    if (sink !== undefined) {
+      // An id another client owns is not this port's to answer.
+      if (sink.port === port) sink.deliver(response);
+      return;
+    }
+    // Nothing is listening between a pull and its answer, so an unsolicited
+    // failure — a revoked ticket — has to reach the body directly.
+    if (response.type !== 'cb:media:error') return;
+    if (this.bodies.get(response.requestId)?.port !== port) return;
+    this.closeBody(response.requestId)?.controller.error(new Error(response.message));
   }
 
   private open(
@@ -152,10 +185,12 @@ export class MediaPipe {
       this.sinks.set(requestId, {
         port,
         deliver: (response) => {
-          if (response.type !== 'cb:media:head') return;
+          // An error answers the open as unusable — a dead port fails it now
+          // rather than at the response deadline, so the retry re-brokers at once.
+          if (response.type !== 'cb:media:head' && response.type !== 'cb:media:error') return;
           clearTimeout(timer);
           this.sinks.delete(requestId);
-          resolve(response);
+          resolve(response.type === 'cb:media:head' ? response : null);
         },
       });
       this.post(port, { type: 'cb:media:open', requestId, ticket, range });
@@ -164,26 +199,40 @@ export class MediaPipe {
 
   /** A zero high-water mark keeps exactly one window in flight: pull on demand. */
   private body(port: MessagePortLike, requestId: number): ReadableStream<Uint8Array> {
-    this.bodies.set(requestId, port);
     return new ReadableStream<Uint8Array>(
       {
+        // `start` runs inside this constructor, so the controller is held before
+        // the response can be read from.
+        start: (controller) => void this.bodies.set(requestId, { port, controller, pulling: null }),
         pull: (controller) => this.pullWindow(port, requestId, controller),
-        cancel: () => {
-          // The pull this cancels leaves its timer armed, and that timer discards
-          // the port — taking every other body streaming on it down too.
-          this.clearPull(requestId);
-          this.sinks.delete(requestId);
-          this.closeBody(port, requestId);
-        },
+        cancel: () => void this.closeBody(requestId),
       },
       { highWaterMark: 0 }
     );
   }
 
-  /** Ends a body and tells the tab to release the cursor and pin behind it. */
-  private closeBody(port: MessagePortLike, requestId: number): void {
+  /**
+   * Forgets a body and everything keyed to its request, or answers null when
+   * another path already ended it: the map entry is the token that makes ending
+   * a body exactly-once. Disarming the pull deadline is part of that — left
+   * armed it discards the port, taking every sibling body on it down too.
+   */
+  private takeBody(requestId: number): BodyEntry | null {
+    const body = this.bodies.get(requestId);
+    if (body === undefined) return null;
     this.bodies.delete(requestId);
-    this.post(port, { type: 'cb:media:close', requestId });
+    this.clearPull(requestId);
+    this.sinks.delete(requestId);
+    body.pulling?.();
+    body.pulling = null;
+    return body;
+  }
+
+  /** Takes a body and tells the tab to release the cursor and pin behind it. */
+  private closeBody(requestId: number): BodyEntry | null {
+    const body = this.takeBody(requestId);
+    if (body !== null) this.post(body.port, { type: 'cb:media:close', requestId });
+    return body;
   }
 
   private pullWindow(
@@ -192,9 +241,17 @@ export class MediaPipe {
     controller: ReadableStreamDefaultController<Uint8Array>
   ): Promise<void> {
     return new Promise<void>((resolve) => {
+      const body = this.bodies.get(requestId);
+      // Already ended out of band; the stream is settled and wants no window.
+      if (body === undefined) {
+        resolve();
+        return;
+      }
+      body.pulling = resolve;
       const settle = (finish: () => void): void => {
         this.clearPull(requestId);
         this.sinks.delete(requestId);
+        body.pulling = null;
         finish();
         resolve();
       };
@@ -202,8 +259,8 @@ export class MediaPipe {
       // never settles and the response hangs open forever.
       const timer = setTimeout(() => {
         settle(() => {
+          this.closeBody(requestId)?.controller.error(new Error('media pull timed out'));
           this.discardPort(port);
-          controller.error(new Error('media pull timed out'));
         });
       }, this.pullTimeoutMs);
       this.pullTimers.set(requestId, timer);
@@ -215,12 +272,13 @@ export class MediaPipe {
               settle(() => controller.enqueue(new Uint8Array(response.chunk)));
               return;
             case 'cb:media:end':
-              this.bodies.delete(requestId);
-              settle(() => controller.close());
+              // A completed window sequence left the tab nothing to release.
+              settle(() => this.takeBody(requestId)?.controller.close());
               return;
             case 'cb:media:error':
-              this.bodies.delete(requestId);
-              settle(() => controller.error(new Error(response.message)));
+              settle(() =>
+                this.closeBody(requestId)?.controller.error(new Error(response.message))
+              );
               return;
             default:
               return;
@@ -239,9 +297,12 @@ export class MediaPipe {
     // its channel, and the superseded broker drops the cursors of live bodies.
     // An unidentified client has no target, so it falls back to asking everyone.
     const owner = clients.filter((client) => client.id === clientId);
-    const targets = clientId !== ANONYMOUS_CLIENT && owner.length > 0 ? owner : clients;
-    for (const client of targets) client.postMessage({ type: MEDIA_PORT_REQUEST });
+    this.askForPort(clientId !== ANONYMOUS_CLIENT && owner.length > 0 ? owner : clients);
     return this.waitForPort(clientId);
+  }
+
+  private askForPort(targets: readonly WindowClientLike[]): void {
+    for (const client of targets) client.postMessage({ type: MEDIA_PORT_REQUEST });
   }
 
   /** Only an unidentified client may borrow a port, and only the newest offered. */
@@ -295,18 +356,21 @@ export class MediaPipe {
     this.ports.delete(clientId);
     // `MessagePort` has no close event, so this is the tab's only notice that
     // the bodies reading over this port are gone and their pins are free.
-    // Posted before the port is disentangled, or it never leaves.
-    for (const [requestId, bound] of [...this.bodies]) {
-      if (bound === entry.port) this.closeBody(entry.port, requestId);
+    // Posted before the port is disentangled, or it never leaves. Ending each
+    // body here rather than at its next pull is what keeps an idle one — a
+    // media element that has buffered enough — off the pull deadline.
+    for (const [requestId, body] of [...this.bodies]) {
+      if (body.port !== entry.port) continue;
+      this.closeBody(requestId)?.controller.error(new Error(PORT_REPLACED));
     }
     entry.port.removeEventListener('message', entry.listener);
     entry.port.close();
-    // Bodies still pulling on the dead port would hang forever; failing them
-    // makes the media element re-request, which re-brokers and re-buffers.
+    // What is left is an `open` still waiting on the dead port; failing it makes
+    // the response re-broker and retry instead of waiting out its deadline.
     for (const [requestId, sink] of [...this.sinks]) {
       if (sink.port !== entry.port) continue;
       this.sinks.delete(requestId);
-      sink.deliver({ type: 'cb:media:error', requestId, message: 'media port replaced' });
+      sink.deliver({ type: 'cb:media:error', requestId, message: PORT_REPLACED });
     }
   }
 }

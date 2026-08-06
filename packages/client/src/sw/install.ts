@@ -61,7 +61,7 @@ export interface ServiceWorkerScopeLike extends MediaPipeScopeLike {
 }
 
 /** The pipe surface the fetch and message listeners drive. */
-export type MediaPipeLike = Pick<MediaPipe, 'handles' | 'respond' | 'adoptPort'>;
+export type MediaPipeLike = Pick<MediaPipe, 'handles' | 'respond' | 'adoptPort' | 'requestPorts'>;
 
 export interface ServiceWorkerDeps {
   pipe?: MediaPipeLike;
@@ -85,6 +85,9 @@ export function installServiceWorker(
   };
   // A restarted worker gets no fresh `install`, so it re-learns the shell here.
   let learning = refresh().catch(ignore);
+  // It gets no fresh `activate` either, and it holds none of the ports its
+  // predecessor served — the tabs must re-broker to release those cursors.
+  void pipe.requestPorts();
 
   scope.addEventListener('install', (event) => {
     void scope.skipWaiting();

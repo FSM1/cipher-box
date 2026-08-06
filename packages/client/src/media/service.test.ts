@@ -83,14 +83,14 @@ interface Setup {
   channels: FakeChannel[];
 }
 
-function setup(): Setup {
+function setup(override?: MediaReader): Setup {
   const container = new FakeContainer();
   const worker = new FakeWorker();
   const channels: FakeChannel[] = [];
   const service = new MediaService({
     container,
     scriptUrl: '/sw.js',
-    reader,
+    reader: override ?? reader,
     origin: ORIGIN,
     createChannel: () => {
       const channel = new FakeChannel();
@@ -102,6 +102,9 @@ function setup(): Setup {
 }
 
 const brokeredPort = (channels: FakeChannel[]): FakePort => channels[channels.length - 1].port1;
+
+/** Drains the broker's pump and pin-release chains, which run over several ticks. */
+const settled = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe('MediaService', () => {
   it('registers the worker at the root scope and offers a port to the controller', async () => {
@@ -198,6 +201,46 @@ describe('MediaService', () => {
     expect(worker.offers).toHaveLength(2);
     expect(worker.offers[1].transfer).toEqual([channels[1].port2]);
     expect(brokeredPort(channels).started).toBe(true);
+  });
+
+  it('releases the engine stream a killed worker left pinned, on its successor asking to re-broker', async () => {
+    const closed: bigint[] = [];
+    let opens = 0;
+    const { container, worker, service, channels } = setup({
+      openContentStream: () => {
+        opens += 1;
+        return Promise.resolve(7n);
+      },
+      readStream: (_handle, _offset, length) => Promise.resolve(new ArrayBuffer(length)),
+      closeStream: (handle) => {
+        closed.push(handle);
+        return Promise.resolve();
+      },
+    });
+    container.controller = worker;
+    await service.start();
+    const url = service.createStreamUrl({
+      node: new Uint8Array([9]),
+      size: 8,
+      mimeType: 'audio/o',
+    });
+    const ticket = url.slice('/stream/'.length);
+    const port = channels[0].port2;
+    port.postMessage({ type: 'cb:media:open', requestId: 1, ticket, range: null });
+    port.postMessage({ type: 'cb:media:pull', requestId: 1 });
+    await settled();
+
+    // The worker is killed mid-playback, so no `cb:media:close` ever arrives:
+    // nothing on this side may reclaim a cursor that is still legitimately held.
+    expect(opens).toBe(1);
+    expect(closed).toEqual([]);
+
+    // Its replacement holds no ports and asks every tab to re-broker.
+    container.emit('message', { type: MEDIA_PORT_REQUEST });
+    await settled();
+
+    expect(closed).toEqual([7n]);
+    expect(channels).toHaveLength(2);
   });
 
   it('ignores an unrelated message from the worker', async () => {
