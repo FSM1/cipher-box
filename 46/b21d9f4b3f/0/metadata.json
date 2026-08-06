@@ -1,0 +1,100 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "46b21d9f4b3f",
+  "session_id": "8ed080ed-fffa-498c-9012-8e777bd9ef50",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-06T11:41:45.166612Z",
+  "branch": "fix/verify-staging-ssh-host-key",
+  "checkpoints_count": 3,
+  "save_step_count": 1,
+  "files_touched": [],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "94282ad3281b",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1486,
+    "cache_creation_tokens": 2759107,
+    "cache_read_tokens": 171312893,
+    "output_tokens": 609245,
+    "api_call_count": 746
+  },
+  "session_metrics": {
+    "turn_count": 24
+  },
+  "summary": {
+    "intent": "Rebase and merge wave 5's seven PRs of the CipherBox v2 rotation/engine/web work, audit and fix tracker (issue) hygiene, split issue #648 and plan wave 6, then rename/rotate all staging deploy secrets and variables off the 'STAGING_' prefix and fix SSH host-key verification in the deploy workflow.",
+    "outcome": "All 7 wave-5 PRs merged after resolving one real semantic merge conflict (ResealError exhaustive match); tracker gaps (#1107, #1108, #1102 mis-parenting, stale blocked_by edges) found and fixed; #648 split into 4 sequenced sub-issues; wave-6 plan (8 PRs) written; PR #1113 renamed/rotated staging vars and secrets (API_URL, HOST, USER, DB_USERNAME, IPFS_GATEWAY_URL, DB_PASSWORD, JWT_SECRET, TEST_LOGIN_SECRET, THROTTLE_BYPASS_SECRET, SSH_KEY via 1Password), removed redis/tee-worker, and merged; old STAGING_* vars/secrets deleted; SSH host-key pinning fix for deploy-staging.yml/deploy-landing.yml is in progress on a new branch.",
+    "learnings": {
+      "repo": [
+        "Two PRs can merge textually clean yet break compilation when one adds an enum variant (ResealError::TooManyCommittedGrants in #1098) and another replaces a blanket map_err with an exhaustive match with no catch-all (#1101) — the no-catch-all design is what made the gap a compile error instead of a silent miscategorization",
+        "A GitHub issue can look unblocked (blocked_by points at a CLOSED issue) while still being functionally blocked on work nothing tracks — #1018's only blocked_by was #1014 (closed), but the grantee-arm rotation it needs was never filed until #1107",
+        "Seam traits with only test-fake implementors (ScopeExitRotator, SweepResolver, WriteSubtreeResolver) compile and pass tests but have zero production callers — invisible in the tracker unless someone checks 'does this primitive have any production caller at all'",
+        "docker-compose.staging.yml referenced ${REDIS_PASSWORD} and ${TEE_WORKER_SECRET} that .env.staging never emitted, so compose silently substituted empty strings and staging Redis ran with --requirepass ''",
+        "crates/load/src/plan.rs fails closed (returns Err) when LOAD_TEST_GATEWAY_URL is unset for a staging target — not a silent bug, just a late failure (after a release build)",
+        "GitHub environments-variables/secrets REST API paginates at 10 without indicating truncation — must pass per_page=100 or check .total_count, otherwise entries alphabetically past the 10th (e.g. STAGING_API_URL) appear to not exist",
+        "Postgres only applies POSTGRES_PASSWORD on an empty-volume init, so rotating DB_PASSWORD for an existing staging volume requires a paired ALTER USER, not just a secret update",
+        "REST .parent on GitHub issues is always null; use .parent_issue_url or the sub-issues API instead — an orphan-detection sweep built on .parent produces false negatives (this caused #989 to look complete when #1050 was actually its only open child)"
+      ],
+      "code": [
+        {
+          "path": "crates/engine/src/net/rotation.rs",
+          "line": 849,
+          "finding": "reseal_verdict must exhaustively classify every ResealError variant into WritePublishError::NotLanded (retryable, seam-availability) vs Rejected (terminal, trust verdict) — TooManyCommittedGrants added here during #1101 rebase after #1098 added it"
+        },
+        {
+          "path": "crates/engine/src/rotation/mod.rs",
+          "line": 29,
+          "finding": "Module doc lists which seam traits (ChildIndexResolver, CascadeResealResolver, ScopeRootPublisher, WriteWavePublisher = production; SweepResolver, ScopeExitRotator, WriteSubtreeResolver = faked) — must be kept accurate since it's the single source other audits rely on"
+        },
+        {
+          "path": "crates/load/src/plan.rs",
+          "line": 261,
+          "end_line": 270,
+          "finding": "gateway URL resolution: env var override, else local default, else fail closed with Err on staging target — refutes the assumption that missing LOAD_TEST_GATEWAY_URL silently no-ops"
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "line": 1,
+          "end_line": 4,
+          "finding": "Header comment documents that redis, tee-worker image build, and SendGrid plumbing are gone with the v1 layout — used as evidence redis/TEE removal from compose was correct"
+        }
+      ],
+      "workflow": [
+        "Building the full N-way combined merge of independently-rebased PRs (fresh worktree, own CARGO_TARGET_DIR, unpiped exit codes) before flagging anything mergeable is the only way to catch semantic (non-textual) merge conflicts — GitHub's mergeable=MERGEABLE says nothing about this",
+        "Before deleting old credential/variable names after a rename, verify zero references remain in workflows on the merged main first, then delete with read-back verification per item (one secret delete failed silently on first attempt and needed a retry)",
+        "When rotating an SSH deploy key, generate it inside the credential manager (1Password op item create --ssh-generate-key) so the private key never touches disk, verify the new key authenticates ALONE (IdentitiesOnly=yes, agent disabled) before writing it as the CI secret, and leave the old key in authorized_keys as rollback until a real deploy proves the new one works",
+        "Host key changes on a remote VPS should be verified out-of-band (browser console, not SSH) by comparing fingerprints AND checking key file mtimes against uptime -s to distinguish a legitimate reimage from a MITM",
+        "zsh (which the Bash tool runs) does not word-split unquoted variables in for loops — use an explicit function/loop per item instead of `for x in $var`",
+        "Pipe gate commands (cargo check | tail; echo $?) mask exit codes — always run unpiped and check $? directly, or write to a file and read it back"
+      ]
+    },
+    "friction": [
+      "Local network connectivity was intermittently flaky throughout the session (connection refused to GitHub API and to the staging VPS), and this was twice misdiagnosed as a server-side problem (fail2ban, then a stopped sshd) before the journalctl log proved connections were reaching the VPS fine and the flakiness was local",
+      "gh api pagination defaults silently truncated results (10 vs 15 environment variables), producing a false 'variable does not exist' conclusion that propagated into two written planning documents before being caught",
+      "ssh-keyscan returned empty output transiently, triggering a false key-mismatch abort that required a retry to disambiguate from a real problem",
+      "GitHub secrets are write-only with no read endpoint, so renaming any secret requires minting an entirely new value rather than copying — this blocked a simple env-var-style rename for DB_PASSWORD, SSH_KEY, JWT_SECRET, TEST_LOGIN_SECRET, THROTTLE_BYPASS_SECRET",
+      "Reusable workflow runs (web-e2e.yml invoked via workflow_call) cannot be re-run standalone through gh — had to target the parent CI run id instead",
+      "Agent worktree scratchpad, Puppeteer browser session, and dev-server ports were shared across parallel wave-5 ship agents, causing at least one file clobber (PR body overwritten) and a docker/vite port collision"
+    ],
+    "open_items": [
+      "SSH host-key verification fix for deploy-staging.yml and deploy-landing.yml is in progress on a new branch (fingerprint: input added to appleboy actions, SSH_HOST_FINGERPRINT staging variable set) but not yet committed/pushed/merged",
+      "Old CD SSH key (SHA256:J7ky7+i0JAN+D1...) must be removed from VPS authorized_keys, and its 1Password item archived, once a green staging deploy proves the new key works",
+      "A staging deploy must be run to push rotated secrets (JWT_SECRET, TEST_LOGIN_SECRET, THROTTLE_BYPASS_SECRET, DB_PASSWORD) into .env.staging — until then a staging load test would fail auth against stale values",
+      "IPFS_GATEWAY_URL is set (https://ipfs-gw-staging.cipherbox.cc) but nothing serves it yet — needs a Caddy route with forward_auth and an IPFS_GATEWAY_TOKEN secret, considered #653-adjacent work",
+      "desktop-e2e.yml installs/starts Redis on macOS/Linux/Windows and references REDIS_HOST/REDIS_PORT even though v2 has no redis usage — flagged as dead but not removed",
+      "Wave 6 plan (8 PRs) is written but no ship agents have been launched yet",
+      "macroscope reviewer credits are exhausted (noted as still relevant); Web E2E Smoke Result required check is flaky (smoke.spec.ts:43)",
+      "#1083 (authenticate leaderRelay tab rendezvous, unblocked when #1052 closed) was considered for wave 6 but left out purely on batch-size grounds"
+    ]
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}

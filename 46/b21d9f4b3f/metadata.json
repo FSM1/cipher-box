@@ -1,0 +1,24 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "46b21d9f4b3f",
+  "strategy": "manual-commit",
+  "branch": "fix/verify-staging-ssh-host-key",
+  "checkpoints_count": 3,
+  "files_touched": null,
+  "sessions": [
+    {
+      "metadata": "/46/b21d9f4b3f/0/metadata.json",
+      "transcript": "/46/b21d9f4b3f/0/full.jsonl",
+      "compact_transcript": "/46/b21d9f4b3f/0/transcript.jsonl",
+      "content_hash": "/46/b21d9f4b3f/0/content_hash.txt",
+      "prompt": "/46/b21d9f4b3f/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1486,
+    "cache_creation_tokens": 2759107,
+    "cache_read_tokens": 171312893,
+    "output_tokens": 609245,
+    "api_call_count": 746
+  }
+}
