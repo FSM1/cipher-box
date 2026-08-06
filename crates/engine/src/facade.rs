@@ -59,7 +59,7 @@ use crate::sync::boot::{ColdStartError, ColdStartOutcome, ColdStartParams, cold_
 use crate::sync::cancel::UploadCancels;
 use crate::sync::drain::{Drain, DrainReport, DrainScope, published_op_mark};
 use crate::sync::model::{NodeMeta, Snapshot, collation_key};
-use crate::sync::op::{NewNode, Op, OpKind, Replaced, StagedContent};
+use crate::sync::op::{NewNode, Op, OpKind, Replaced, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
 use crate::sync::pointer::PointerFetch;
 use crate::sync::project::project_child_version;
@@ -2218,15 +2218,15 @@ impl<T: SeamTypes> Engine<T> {
             Command::Relink { node, new_parent } => {
                 let rendered = self.render().await?;
                 let (from_parent, base_sequence) = self.relocation_anchors(&rendered, node);
-                // trailing bools: cross_scope=false, exits_granted_source=false — intra-scope pure relink
+                // This session holds one scope, so every relocation it can form
+                // stays inside it.
                 let op = Op::relink(
                     node,
                     from_parent,
                     new_parent,
                     base_sequence,
                     authored_at,
-                    false,
-                    false,
+                    ScopeCrossing::Intra,
                 );
                 self.stage_and_notify(&op).await
             }
@@ -2253,6 +2253,7 @@ impl<T: SeamTypes> Engine<T> {
                     replacing,
                     base_sequence,
                     authored_at,
+                    ScopeCrossing::Intra,
                 );
                 self.stage_and_notify(&op).await
             }

@@ -100,6 +100,24 @@ impl NewNode {
     }
 }
 
+/// Where a relocation lands relative to the source scope — the one field both
+/// relocation ops carry (blueprint/engine.md "Sync core: Ops", #26 D1/D7).
+///
+/// One value rather than a `cross_scope`/`exits_granted_source` pair: an exit
+/// from a granted source is cross-scope by definition, so the pair could encode
+/// an incoherent op the decoder would have to reject. Here it is unrepresentable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScopeCrossing {
+    /// Stays inside one scope: a pure relink, no re-seal, no trigger.
+    Intra,
+    /// Leaves a scope that grants nobody: the moved subtree re-seals at the
+    /// destination epoch, and nothing rotates.
+    Cross,
+    /// Leaves a **granted** source scope: the destination re-seal plus a
+    /// scope-exit rotation trigger for the source scope root.
+    ExitsGrantedSource,
+}
+
 /// The six intent-op mutations (#33 D6).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpKind {
@@ -124,10 +142,7 @@ pub enum OpKind {
         /// The new name as entered.
         new_name: String,
     },
-    /// Move a node to a new parent. Intra-scope this is a pure relink;
-    /// cross-scope it re-seals the subtree at the destination epoch and, when
-    /// it leaves a granted source scope, **queues a scope-exit rotation
-    /// trigger** — this slice queues the trigger only, it does not rotate.
+    /// Move a node to a new parent.
     Relink {
         /// The source parent the move was formed against — the presence
         /// condition for the source-remove and the move-race detector
@@ -135,11 +150,8 @@ pub enum OpKind {
         from_parent: NodeId,
         /// The destination parent.
         new_parent: NodeId,
-        /// Whether the move crosses a scope boundary.
-        cross_scope: bool,
-        /// Whether the move leaves a granted source scope (a scope-exit
-        /// rotation trigger for the source).
-        exits_granted_source: bool,
+        /// Where the destination sits relative to the source scope.
+        crossing: ScopeCrossing,
     },
     /// Relink **and** rename a node in one entry, optionally replacing the node
     /// already at the destination name. One kernel rename is one of these, so
@@ -155,6 +167,10 @@ pub enum OpKind {
         new_name: String,
         /// The destination node this move vacates, if any.
         replacing: Option<Replaced>,
+        /// Where the destination sits relative to the source scope. A kernel
+        /// rename is the desktop's whole move surface, so a scope exit reaches
+        /// the engine through this op as readily as through [`Self::Relink`].
+        crossing: ScopeCrossing,
     },
     /// Write a new file version (fresh per-version content key).
     UpdateContent {
@@ -224,8 +240,7 @@ impl Op {
         new_parent: NodeId,
         base_sequence: u64,
         authored_at: UnixMillis,
-        cross_scope: bool,
-        exits_granted_source: bool,
+        crossing: ScopeCrossing,
     ) -> Self {
         Self {
             target,
@@ -234,13 +249,13 @@ impl Op {
             kind: OpKind::Relink {
                 from_parent,
                 new_parent,
-                cross_scope,
-                exits_granted_source,
+                crossing,
             },
         }
     }
 
     /// A combined `move` op.
+    #[allow(clippy::too_many_arguments)]
     pub fn move_node(
         target: NodeId,
         from_parent: NodeId,
@@ -249,6 +264,7 @@ impl Op {
         replacing: Option<Replaced>,
         base_sequence: u64,
         authored_at: UnixMillis,
+        crossing: ScopeCrossing,
     ) -> Self {
         Self {
             target,
@@ -259,6 +275,7 @@ impl Op {
                 new_parent,
                 new_name: new_name.into(),
                 replacing,
+                crossing,
             },
         }
     }
@@ -290,6 +307,26 @@ impl Op {
             | OpKind::UpdateContent { content } => Some(content),
             _ => None,
         }
+    }
+
+    /// The parent this op moved its target out of when the move left a granted
+    /// source scope — the node the full-depth scope-root walk starts from
+    /// ([`crate::sync::rebase`]). `None` for every other op.
+    pub fn scope_exit_source(&self) -> Option<NodeId> {
+        let (from_parent, crossing) = match &self.kind {
+            OpKind::Relink {
+                from_parent,
+                crossing,
+                ..
+            }
+            | OpKind::Move {
+                from_parent,
+                crossing,
+                ..
+            } => (from_parent, crossing),
+            _ => return None,
+        };
+        matches!(crossing, ScopeCrossing::ExitsGrantedSource).then_some(*from_parent)
     }
 
     /// The pending class this op puts its target in — a staged content write
@@ -387,7 +424,15 @@ mod tests {
             ),
             Op::delete(id(2), 4, at(1_001), 7),
             Op::rename(id(3), "b.txt", 5, at(1_002)),
-            Op::relink(id(4), id(0), id(9), 6, at(1_003), true, true),
+            Op::relink(
+                id(4),
+                id(0),
+                id(9),
+                6,
+                at(1_003),
+                ScopeCrossing::ExitsGrantedSource,
+            ),
+            Op::relink(id(8), id(0), id(9), 7, at(1_006), ScopeCrossing::Cross),
             Op::update_content(id(5), staged(b"stage2", 12), 8, at(1_004)),
             Op::move_node(
                 id(6),
@@ -400,8 +445,18 @@ mod tests {
                 }),
                 9,
                 at(1_005),
+                ScopeCrossing::Intra,
             ),
-            Op::move_node(id(6), id(0), id(9), "c.txt", None, 9, at(1_005)),
+            Op::move_node(
+                id(6),
+                id(0),
+                id(9),
+                "c.txt",
+                None,
+                9,
+                at(1_005),
+                ScopeCrossing::Intra,
+            ),
         ];
         for op in ops {
             assert_eq!(Op::decode_body(&op.encode_body()).unwrap(), op);
@@ -464,8 +519,18 @@ mod tests {
             Op::create(id(1), id(0), "d", NewNode::Folder, 1, at(1)).pending_class(),
             Op::delete(id(2), 1, at(1), 1).pending_class(),
             Op::rename(id(3), "b", 1, at(1)).pending_class(),
-            Op::relink(id(4), id(0), id(9), 1, at(1), false, false).pending_class(),
-            Op::move_node(id(4), id(0), id(9), "b", None, 1, at(1)).pending_class(),
+            Op::relink(id(4), id(0), id(9), 1, at(1), ScopeCrossing::Intra).pending_class(),
+            Op::move_node(
+                id(4),
+                id(0),
+                id(9),
+                "b",
+                None,
+                1,
+                at(1),
+                ScopeCrossing::Intra,
+            )
+            .pending_class(),
             Op::update_content(id(5), staged(b"k", 1), 1, at(1)).pending_class(),
         ];
         assert_eq!(

@@ -9,6 +9,7 @@
 //! cold-start-adopts-nothing sequence each get a narrative here, driven only
 //! through the engine's public sync surface.
 
+use core::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -21,13 +22,17 @@ use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid};
 use cipherbox_core::suite::x25519::X25519Secret;
 use cipherbox_engine::gate::floor;
 use cipherbox_engine::profile::SyncTimingProfile;
+use cipherbox_engine::rotation::{
+    RotateError, RotationOutcome, ScopeExitReport, ScopeExitRotator, ScopeRootPublishError,
+    consume_scope_exit_triggers,
+};
 use cipherbox_engine::seams::{SeamResult, StagingStore, UnixMillis};
 use cipherbox_engine::sync::model::NodeMeta;
 use cipherbox_engine::sync::pointer::{seal_repoint, vault_pointer_name};
 use cipherbox_engine::sync::{
     self, Connectivity, DeadLetterReason, DropReason, NewNode, Op, OpResolution, PointerFetch,
-    RecordReader, RecordSeal, SessionRole, Snapshot, StagedContent, apply_repairs, classify,
-    decode_queue, observed_repair, rebase_one, replay, resolve_vault_pointer, stage_op,
+    RecordReader, RecordSeal, ScopeCrossing, SessionRole, Snapshot, StagedContent, apply_repairs,
+    classify, decode_queue, observed_repair, rebase_one, replay, resolve_vault_pointer, stage_op,
     withheld_escalation,
 };
 use cipherbox_engine::testkit::fakes::{InMemoryFloorStore, InMemoryStagingStore};
@@ -71,6 +76,10 @@ fn id(b: u8) -> NodeId {
     NodeId([b; 16])
 }
 
+/// The one scope root these fixtures hang under — the full-depth scope-exit
+/// walk resolves against it.
+const SCOPE_ROOTS: &[NodeId] = &[NodeId([0; 16])];
+
 fn with_child(snap: &mut Snapshot, parent: NodeId, node: NodeId, name: &str, kind: NodeKind) {
     snap.upsert_node(NodeMeta::new(node, name, kind));
     snap.link(parent, node, 1);
@@ -91,7 +100,7 @@ fn race_1_delete_vs_concurrent_edit_edit_wins() {
     base.node_mut(id(1)).unwrap().record_sequence = 6;
     let local = base.clone();
 
-    let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3));
+    let res = rebase_one(&mut base, &local, &Op::delete(id(1), 1, AT, 3), SCOPE_ROOTS);
     assert_eq!(res, OpResolution::Dropped(DropReason::TargetAdvanced));
     assert!(
         base.contains(id(1)),
@@ -112,6 +121,7 @@ fn race_1_reverse_edit_resurrects_a_concurrently_deleted_node() {
         &mut working,
         &local,
         &Op::update_content(id(1), staged(b"v2"), 1, AT),
+        SCOPE_ROOTS,
     );
     assert!(matches!(res, OpResolution::Applied { .. }));
     assert!(
@@ -129,7 +139,12 @@ fn race_2_rename_vs_rename_serialized_by_parent_cas_higher_writer_wins() {
     base.node_mut(id(1)).unwrap().name = "other.txt".into();
     let local = base.clone();
 
-    let res = rebase_one(&mut base, &local, &Op::rename(id(1), "mine.txt", 1, AT));
+    let res = rebase_one(
+        &mut base,
+        &local,
+        &Op::rename(id(1), "mine.txt", 1, AT),
+        SCOPE_ROOTS,
+    );
     assert!(matches!(
         res,
         OpResolution::Applied {
@@ -159,6 +174,7 @@ fn race_3_add_vs_add_name_collision_auto_suffixes_the_loser() {
             1,
             AT,
         ),
+        SCOPE_ROOTS,
     );
     assert_eq!(
         res,
@@ -181,7 +197,8 @@ fn race_4_move_dest_first_then_presence_conditional_source_remove() {
     let res = rebase_one(
         &mut base,
         &local,
-        &Op::relink(id(2), id(0), id(1), 1, AT, false, false),
+        &Op::relink(id(2), id(0), id(1), 1, AT, ScopeCrossing::Intra),
+        SCOPE_ROOTS,
     );
     assert!(matches!(res, OpResolution::Applied { .. }));
     assert_eq!(base.parent_of(id(2)), Some(id(1)), "dest-linked");
@@ -206,7 +223,8 @@ fn race_4_move_race_loser_undoes_its_dest_add() {
     let res = rebase_one(
         &mut base,
         &local,
-        &Op::relink(id(3), id(0), id(1), 1, AT, false, false),
+        &Op::relink(id(3), id(0), id(1), 1, AT, ScopeCrossing::Intra),
+        SCOPE_ROOTS,
     );
     assert_eq!(res, OpResolution::Dropped(DropReason::MoveRaceLost));
     assert_eq!(
@@ -280,7 +298,7 @@ fn offline_queue_replays_fifo_onto_gate_passing_state() {
         assert_eq!(scan.retained, 0);
 
         let base = Snapshot::new(id(0));
-        let report = replay(&base, &base, &scan.mine);
+        let report = replay(&base, &base, &scan.mine, SCOPE_ROOTS);
 
         assert_eq!(report.applied.len(), 3, "every op replayed in FIFO order");
         assert_eq!(report.rebased.node(id(1)).unwrap().name, "notes-v2.txt");
@@ -323,7 +341,7 @@ fn revoked_while_offline_dead_letters_with_staged_bytes_preserved() {
         let gate_passing = Snapshot::new(id(0)); // no id(5)
         let raw = store.queued_ops().await.unwrap();
         let scan = decode_queue(&RecordReader::new(&me), &raw);
-        let report = replay(&gate_passing, &gate_passing, &scan.mine);
+        let report = replay(&gate_passing, &gate_passing, &scan.mine, SCOPE_ROOTS);
 
         // The op terminally dead-letters — nothing silently dropped.
         assert_eq!(report.applied.len(), 0);
@@ -623,4 +641,175 @@ fn state_law_renders_the_snapshot_plus_the_pending_overlay() {
     // The gate-passing snapshot is the only source of truth and is untouched.
     assert!(!base.contains(id(2)));
     assert_eq!(base.node(id(1)).unwrap().name, "confirmed.txt");
+}
+
+// ---------------------------------------------------------------------------
+// Scope-exit rotation triggers — full-depth detection, one rotation per source
+// scope root, and a failure that surfaces (blueprint/engine.md "Rotation
+// primitives: Triggers").
+// ---------------------------------------------------------------------------
+
+/// A granted scope root (id 5) under the vault root, holding a chain down to
+/// depth 3, beside a destination folder outside it.
+fn granted_scope_tree() -> Snapshot {
+    let mut base = Snapshot::new(id(0));
+    with_child(&mut base, id(0), id(5), "granted", NodeKind::Folder);
+    with_child(&mut base, id(0), id(6), "outside", NodeKind::Folder);
+    with_child(&mut base, id(5), id(10), "a", NodeKind::Folder);
+    with_child(&mut base, id(10), id(11), "b", NodeKind::Folder);
+    with_child(&mut base, id(11), id(12), "c", NodeKind::Folder);
+    base
+}
+
+/// The vault root plus the granted scope root nested under it.
+const GRANTED_ROOTS: &[NodeId] = &[NodeId([0; 16]), NodeId([5; 16])];
+
+/// Records every root it is asked to cut, refusing the ones named.
+struct RecordingRotator {
+    seen: RefCell<Vec<NodeId>>,
+    refuse: Vec<NodeId>,
+}
+
+impl RecordingRotator {
+    fn refusing(refuse: &[NodeId]) -> Self {
+        Self {
+            seen: RefCell::new(Vec::new()),
+            refuse: refuse.to_vec(),
+        }
+    }
+}
+
+impl ScopeExitRotator for RecordingRotator {
+    async fn rotate_on_scope_exit(
+        &self,
+        scope_root: NodeId,
+    ) -> Result<RotationOutcome, RotateError> {
+        self.seen.borrow_mut().push(scope_root);
+        if self.refuse.contains(&scope_root) {
+            return Err(RotateError::Publish(ScopeRootPublishError::NotPublished));
+        }
+        Ok(RotationOutcome {
+            new_read_epoch: 2,
+            epoch_floor: 2,
+        })
+    }
+}
+
+/// Replay `ops` off the durable queue and drive whatever scope exits it found.
+/// `placements` seeds each moved file where the op was formed against it.
+fn exits_of(
+    placements: &[(NodeId, NodeId)],
+    ops: &[Op],
+    rotator: &RecordingRotator,
+) -> (Vec<NodeId>, ScopeExitReport) {
+    let store = InMemoryStagingStore::default();
+    let me = owner();
+    block_on(async {
+        for (n, op) in ops.iter().enumerate() {
+            stage_op(&store, seal(&me, n as u8), op).await.unwrap();
+        }
+        let raw = store.queued_ops().await.unwrap();
+        let scan = decode_queue(&RecordReader::new(&me), &raw);
+        let mut base = granted_scope_tree();
+        for (target, parent) in placements {
+            with_child(&mut base, *parent, *target, "m.txt", NodeKind::File);
+        }
+        let report = replay(&base, &base, &scan.mine, GRANTED_ROOTS);
+        let triggers = report.scope_exit_triggers.clone();
+        let cut = consume_scope_exit_triggers(rotator, &triggers).await;
+        (triggers, cut)
+    })
+}
+
+/// A file at `parent` moved out to `outside`, exiting the granted source.
+fn exiting_move(target: NodeId, parent: NodeId, name: &str) -> Op {
+    Op::move_node(
+        target,
+        parent,
+        id(6),
+        name,
+        None,
+        1,
+        AT,
+        ScopeCrossing::ExitsGrantedSource,
+    )
+}
+
+#[test]
+fn a_scope_exit_rotates_the_source_scope_root_at_depth_one_and_at_depth_n() {
+    for (parent, depth) in [(id(5), 1), (id(12), 4)] {
+        let rotator = RecordingRotator::refusing(&[]);
+        let (triggers, cut) = exits_of(
+            &[(id(7), parent)],
+            &[exiting_move(id(7), parent, "m.txt")],
+            &rotator,
+        );
+
+        assert_eq!(
+            triggers,
+            vec![id(5)],
+            "a move out of depth {depth} names the granted scope root, not its parent"
+        );
+        assert_eq!(*rotator.seen.borrow(), vec![id(5)]);
+        assert!(cut.is_complete());
+    }
+}
+
+#[test]
+fn many_ops_exiting_one_scope_rotate_it_exactly_once() {
+    let rotator = RecordingRotator::refusing(&[]);
+    let placements = [(id(7), id(5)), (id(8), id(11)), (id(9), id(12))];
+    let ops: Vec<Op> = placements
+        .into_iter()
+        .enumerate()
+        .map(|(n, (target, parent))| exiting_move(target, parent, &format!("m{n}.txt")))
+        .collect();
+
+    let (triggers, cut) = exits_of(&placements, &ops, &rotator);
+
+    assert_eq!(triggers, vec![id(5)], "three exits, one source scope root");
+    assert_eq!(*rotator.seen.borrow(), vec![id(5)]);
+    assert_eq!(cut.rotated.len(), 1);
+}
+
+#[test]
+fn an_intra_scope_move_rotates_nothing() {
+    let rotator = RecordingRotator::refusing(&[]);
+    let (triggers, cut) = exits_of(
+        &[(id(7), id(12))],
+        &[Op::move_node(
+            id(7),
+            id(12),
+            id(11),
+            "m.txt",
+            None,
+            1,
+            AT,
+            ScopeCrossing::Intra,
+        )],
+        &rotator,
+    );
+
+    assert!(triggers.is_empty(), "the non-trigger list holds");
+    assert!(rotator.seen.borrow().is_empty());
+    assert!(cut.is_complete());
+}
+
+#[test]
+fn a_failed_scope_exit_rotation_surfaces_and_keeps_its_trigger() {
+    let rotator = RecordingRotator::refusing(&[id(5)]);
+    let (triggers, cut) = exits_of(
+        &[(id(7), id(12))],
+        &[exiting_move(id(7), id(12), "m.txt")],
+        &rotator,
+    );
+
+    assert_eq!(triggers, vec![id(5)]);
+    assert!(cut.rotated.is_empty());
+    assert_eq!(
+        cut.failed.iter().map(|(root, _)| *root).collect::<Vec<_>>(),
+        vec![id(5)],
+        "the trigger comes back rather than being swallowed"
+    );
+    assert!(!cut.is_complete());
 }
