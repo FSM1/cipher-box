@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "1a3a6c8c2266",
+  "strategy": "manual-commit",
+  "branch": "fix/verify-staging-ssh-host-key",
+  "checkpoints_count": 1,
+  "files_touched": [
+    ".github/workflows/deploy-landing.yml",
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "sessions": [
+    {
+      "metadata": "/1a/3a6c8c2266/0/metadata.json",
+      "transcript": "/1a/3a6c8c2266/0/full.jsonl",
+      "compact_transcript": "/1a/3a6c8c2266/0/transcript.jsonl",
+      "content_hash": "/1a/3a6c8c2266/0/content_hash.txt",
+      "prompt": "/1a/3a6c8c2266/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1516,
+    "cache_creation_tokens": 2774290,
+    "cache_read_tokens": 172720512,
+    "output_tokens": 620766,
+    "api_call_count": 761
+  }
+}

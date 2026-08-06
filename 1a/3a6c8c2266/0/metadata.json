@@ -1,0 +1,128 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "1a3a6c8c2266",
+  "session_id": "8ed080ed-fffa-498c-9012-8e777bd9ef50",
+  "strategy": "manual-commit",
+  "created_at": "2026-08-06T11:49:47.552143Z",
+  "branch": "fix/verify-staging-ssh-host-key",
+  "checkpoints_count": 1,
+  "save_step_count": 1,
+  "files_touched": [
+    ".github/workflows/deploy-landing.yml",
+    ".github/workflows/deploy-staging.yml"
+  ],
+  "agent": "Claude Code",
+  "model": "claude-opus-5",
+  "turn_id": "ede5ac6cf3dd",
+  "compact_transcript_start": 0,
+  "token_usage": {
+    "input_tokens": 1516,
+    "cache_creation_tokens": 2774290,
+    "cache_read_tokens": 172720512,
+    "output_tokens": 620766,
+    "api_call_count": 761
+  },
+  "session_metrics": {
+    "turn_count": 25
+  },
+  "summary": {
+    "intent": "Drive Wave 4 and Wave 5 of the CipherBox v2 rewrite to completion: resolve PR reviews across a queue of draft PRs, rebase and merge them in dependency order, clean up tracker/worktree hygiene, plan and launch Wave 5 and Wave 6, and rotate/rename staging deployment secrets and env vars including a live SSH host-key MITM fix.",
+    "outcome": "Wave 4 (6 PRs) and Wave 5 (7 PRs) fully merged with all review findings resolved; tracker hygiene fixed (milestones, parenting, dependency edges); staging env vars/secrets renamed and rotated including a new 1Password-held SSH deploy key; a real host-key verification gap in deploy workflows was found and partially fixed (ed25519 pin) before a security-review agent caught that the pin would fail closed due to Go's SSH algorithm negotiation order, which was then fixed at the sshd_config level; Wave 6 plan (8 PRs) written but not yet launched.",
+    "learnings": {
+      "repo": [
+        "CodeRabbit posts a 'clean' verdict only by editing its status comment ('No actionable comments were generated'), never a review body — polling only review bodies causes an infinite hang on a passing PR",
+        "macroscope's check-run 'completed' state includes 'skipped' (e.g. when credits are exhausted with 'Credit balance exhausted' in output.title), so completion must not be conflated with actual review coverage",
+        "macroscope can post findings up to ~9 minutes after its check-runs show completed — querying threads right after completion can miss late findings",
+        "A `success` conclusion on a macroscope check-run does NOT mean zero threads were posted",
+        "Two PRs adding an identical field/enum variant to the same file at different offsets can merge with git reporting NO conflict, producing silent duplicate declarations (TS2300/E0004-style) that neither PR's CI can catch — always run `git merge-file`/build the actual combined tree before trusting `mergeable: CLEAN`",
+        "GitHub REST `.parent` field on issues always returns null — must use `.parent_issue_url`; any orphan sweep built on REST `.parent` produces false negatives",
+        "GitHub environments-variables/secrets list API paginates at 10 by default without indicating truncation — must pass per_page=100 or check .total_count",
+        "GitHub Actions secrets are write-only with no read endpoint at any scope — rotation requires generating and setting new values, not copying old ones",
+        "`gh api` does not accept `--arg` — using it silently breaks jq filters and returns empty results that read as 'no findings'",
+        "Squash-merge repos mean a merged branch tip is never an ancestor of main — reachability checks for 'is this landed' must use PR state, not `git merge-base --is-ancestor`",
+        "Seam trait implementations that exist only as test fakes (no production `impl Trait for RealType`) compile clean and pass all tests while being completely non-functional in production — check for production callers, not just green tests, when auditing 'is X delivered'",
+        "zsh (used by the Bash tool) does not word-split unquoted variables in for-loops, unlike bash — `for x in $VAR` with multi-value $VAR silently iterates once as one string",
+        "Piping a command through `tail`/`tee` masks its real exit code (`$?` reflects the pipe's last command) — always capture exit codes unpiped",
+        "Go's ssh.ClientConfig default HostKeyAlgorithms order prefers RSA/ECDSA before Ed25519, so pinning an Ed25519 fingerprint fails closed unless the server is configured to offer only Ed25519 (or `HostKeyAlgorithms` is set client-side)",
+        "`easyssh-proxy` (used by appleboy ssh-action/scp-action) falls back to `ssh.InsecureIgnoreHostKey()` (accept any key, always) when the `fingerprint` input is empty — not TOFU, full MITM exposure",
+        "Postgres only applies `POSTGRES_PASSWORD` on an empty/uninitialized data volume — rotating it against a live volume just breaks auth until a paired `ALTER USER`",
+        "v2 has no Redis or TEE-worker dependency (removed from `apps/api`), but `docker-compose.staging.yml` still declared both services referencing env vars that `.env.staging` never emitted, so they silently ran with empty passwords"
+      ],
+      "code": [
+        {
+          "path": "crates/engine/src/net/rotation.rs",
+          "line": 849,
+          "finding": "reseal_verdict exhaustive match over ResealError — adding a new ResealError variant elsewhere (e.g. TooManyCommittedGrants) is a compile-time break here since there's no catch-all arm, which is what caught wave 5's semantic merge conflict"
+        },
+        {
+          "path": "crates/engine/src/rotation/rotate_write.rs",
+          "line": 150,
+          "finding": "WriteSubtreeResolver trait doc says production wiring is not landed and tests fake it — confirmed true with zero production callers on main, leading to filing issue #1108"
+        },
+        {
+          "path": "crates/load/src/plan.rs",
+          "line": 264,
+          "end_line": 268,
+          "finding": "gateway-read scenario against staging fails closed with an explicit error if LOAD_TEST_GATEWAY_URL is unset — not a silent bug as initially assumed"
+        },
+        {
+          "path": ".github/workflows/deploy-staging.yml",
+          "line": 394,
+          "end_line": 400,
+          "finding": "hand-rolled if/echo/exit guard for SSH_HOST_FINGERPRINT could be replaced by the repo's existing `: \"${VAR:?msg}\"` idiom used elsewhere in the same file"
+        }
+      ],
+      "workflow": [
+        "Never apply a code-review bot's suggested diff literally — treat it as a symptom report; multiple times this session the literal fix would have been wrong (deriving Debug on a Zeroizing secret type, destroying a persisted refresh credential via clear_session, a helper that ignores its parameters and returns a constant)",
+        "When driving unattended overnight PR review cycles, explicitly set and communicate the boundary of not merging anything, since merges to protected branches are hard to reverse",
+        "Before evaluating whether an umbrella/tracking issue is 'complete', parent all orphaned children first — an issue can look 0/0 done only because a real child was never attached to the rollup",
+        "Give parallel agents unique scratchpad paths, ports, and browser instances — shared scratchpad file names, shared Puppeteer browser sessions, and shared dev server ports between concurrent agents caused clobbering and context loss",
+        "Verify the committed tree (`git show HEAD:<path>`, `git status --porcelain` empty before AND after gates), not just the working tree — an agent fixed a bug in the working tree, ran green gates against it, then pushed the unamended pre-fix commit, causing a CI failure",
+        "When rotating a credential that must live in 1Password per convention, generate it via `op item create --ssh-generate-key` and `op read` so the private key never touches disk, rather than generating locally and shredding after upload",
+        "Diagnosing infra connectivity issues under intermittent local network flakiness can lead to false diagnoses (fail2ban, stopped sshd) — check server-side logs (journalctl) for the actual source IP reaching the box before assuming server-side blocking",
+        "Confirm host key changes out-of-band (e.g. via cloud provider's browser console) rather than trusting a network-path SSH scan when a host key mismatch is detected"
+      ]
+    },
+    "friction": [
+      "Persistent intermittent local network flakiness throughout the session, refusing GitHub API calls and SSH connections, twice leading to misdiagnosis of server-side causes (fail2ban, stopped sshd) before being correctly identified as local",
+      "Six distinct 'false all-clear' defects discovered in the custom recycle-both.sh review cycle script across two waves, all failing in the same direction (reporting coverage/success when none occurred)",
+      "Fleet concurrency limit (20 subagents) caused the /simplify, /security-review, /crypto-privacy-review subagents to be unavailable for one PR, requiring manual passes instead",
+      "zsh shell quirks (word-splitting, pipe exit-code masking) caused several false-negative verification results mid-session",
+      "macroscope reviewer ran out of credits mid-wave, leaving 6 of 7 wave-5 PRs with only one bot reviewer instead of two",
+      "Web E2E Smoke Result required CI check is flaky (smoke.spec.ts:43 sign-out test) and blocked at least one engine-only PR unrelated to web code",
+      "GitHub secrets/variables API silently truncates list responses at 10 without pagination hints, causing a false 'variable does not exist' conclusion that propagated into two planning documents before being corrected"
+    ],
+    "open_items": [
+      "Remove old CD SSH key from VPS authorized_keys after first green staging deploy confirms the new 1Password-held key works via the Actions ssh-action",
+      "Run a staging deploy to push rotated secrets (JWT_SECRET, TEST_LOGIN_SECRET, THROTTLE_BYPASS_SECRET) into live .env.staging",
+      "Publish the IPFS gateway (Caddy route + forward_auth + IPFS_GATEWAY_TOKEN secret) — IPFS_GATEWAY_URL is set but nothing serves it yet",
+      "Wave 6 execution not yet started — plan written (8 PRs) but no ship agents launched",
+      "desktop-e2e.yml still installs/starts Redis and sets REDIS_HOST/REDIS_PORT despite v2 having no Redis dependency — inert but not cleaned up",
+      "macroscope credits need topping up before further waves with crypto/data-integrity-sensitive PRs",
+      "Top-level docs (ARCHITECTURE.md, GETTING-STARTED.md, CONFIGURATION.md, CAPACITY.md) still contain stale v1 redis/TEE references, deliberately left as-is since they're being rewritten separately per AGENTS.md",
+      "Residual SSH host-key fix PR (#1114) fingerprint corrected at sshd_config level (ed25519-only) after security-review caught that Go's algorithm negotiation order would have selected RSA and failed the pin closed — needs final CI verification and merge",
+      "#1107 and #1108 (grantee-arm rotation resolver, WriteSubtreeResolver) filed but not scheduled until wave 7 due to net/rotation.rs contention with wave 6's #1108(PR2)"
+    ]
+  },
+  "initial_attribution": {
+    "calculated_at": "2026-08-06T11:49:00.090839Z",
+    "agent_lines": 0,
+    "agent_removed": 0,
+    "human_added": 8,
+    "human_modified": 12,
+    "human_removed": 0,
+    "total_committed": 8,
+    "total_lines_changed": 20,
+    "agent_percentage": 0,
+    "metric_version": 2
+  },
+  "prompt_attributions": [
+    {
+      "checkpoint_number": 2,
+      "user_lines_added": 0,
+      "user_lines_removed": 0,
+      "agent_lines_added": 0,
+      "agent_lines_removed": 0
+    }
+  ]
+}
