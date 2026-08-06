@@ -10,6 +10,7 @@ const REASONS: Record<DeadLetterReason, string> = {
   payloadRefused: 'the network refused the payload',
   attemptsExhausted: 'it failed too many times',
   contentUnrecoverable: 'its content could not be recovered',
+  baseSuperseded: 'someone else saved a newer version of the file first',
 };
 
 /**

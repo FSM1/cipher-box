@@ -239,7 +239,13 @@ mod tests {
     fn a_forward_version_record_still_yields_its_staged_root() {
         let me = owner(3);
         let cid = compute_cid(CONTENT_CID_CODEC, b"sealed root");
-        let op = Op::update_content(NodeId([4; 16]), staged(cid.clone(), 11), 1, UnixMillis(5));
+        let op = Op::update_content(
+            NodeId([4; 16]),
+            staged(cid.clone(), 11),
+            None,
+            1,
+            UnixMillis(5),
+        );
         let record = at_version(
             &encode_op_record(seal_for(&me, 8), &op).unwrap(),
             OP_RECORD_V + 1,
@@ -346,7 +352,13 @@ mod tests {
     fn a_content_record_exposes_its_root_cid_keylessly() {
         let me = owner(3);
         let cid = compute_cid(CONTENT_CID_CODEC, b"sealed root");
-        let op = Op::update_content(NodeId([4; 16]), staged(cid.clone(), 11), 1, UnixMillis(5));
+        let op = Op::update_content(
+            NodeId([4; 16]),
+            staged(cid.clone(), 11),
+            None,
+            1,
+            UnixMillis(5),
+        );
         let record = encode_op_record(seal_for(&me, 8), &op).unwrap();
 
         assert_eq!(record_content_root_cid(&record), Ok(Some(cid)));
@@ -370,6 +382,7 @@ mod tests {
         let op = Op::update_content(
             NodeId([1; 16]),
             staged(b"not a cid".to_vec(), 9),
+            None,
             1,
             UnixMillis(1),
         );

@@ -253,7 +253,7 @@ mod tests {
         meta.content_version = Some(4);
         base.upsert_node(meta);
         base.link(id(0), id(1), 1);
-        let view = apply_overlay(&base, &[Op::update_content(id(1), staged(), 1, AT)]);
+        let view = apply_overlay(&base, &[Op::update_content(id(1), staged(), None, 1, AT)]);
         assert_eq!(
             view.node(id(1)).unwrap().content_version,
             Some(5),
@@ -271,7 +271,7 @@ mod tests {
         let mut base = base();
         base.upsert_node(NodeMeta::new(id(1), "f.txt", NodeKind::File));
         base.link(id(0), id(1), 1);
-        let view = apply_overlay(&base, &[Op::update_content(id(1), staged(), 1, AT)]);
+        let view = apply_overlay(&base, &[Op::update_content(id(1), staged(), None, 1, AT)]);
         assert_eq!(
             view.node(id(1)).unwrap().content_version,
             None,

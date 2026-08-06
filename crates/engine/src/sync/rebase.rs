@@ -9,11 +9,12 @@
 //! applied op advances the working base so later ops rebase onto the updated
 //! state.
 //!
-//! The five races, one rule each:
+//! The six races, one rule each:
 //!
 //! | Race                | Rule                                                       |
 //! | ------------------- | ---------------------------------------------------------- |
 //! | Delete vs edit      | Conditional delete: drop if the target advanced (edit wins)|
+//! | Edit vs edit        | Conditional edit: dead-letter if the target gained a version|
 //! | Rename vs rename    | Parent-CAS serialized; the rebasing writer re-anchors, wins|
 //! | Add vs add          | Always visible; the loser auto-suffixes `name (2).ext`     |
 //! | Move                | Dest-first, presence-conditional source-remove; loser undoes|
@@ -100,6 +101,11 @@ pub enum DeadLetterReason {
     /// PUT retires what the op uploaded; once a PUT is acked the publish may
     /// have landed, so that half retires nothing.
     AttemptsExhausted,
+    /// A concurrent publish gave the target a version this edit was not formed
+    /// against. Publishing anyway would move the head off bytes this device
+    /// never saw and no read path can reach again, so the edit refuses and
+    /// keeps its own staged version instead (the conditional-edit rule).
+    BaseSuperseded,
     /// The op's staged content can never publish: its per-version key will not
     /// open, its root block is gone or unreadable, or a leaf is missing from the
     /// middle of the block set. The content key is a KDF non-edge, so none of
@@ -329,7 +335,9 @@ pub fn rebase_one(
             *replacing,
             scope_exit_trigger,
         ),
-        OpKind::UpdateContent { .. } => rebase_update_content(working, local, op),
+        OpKind::UpdateContent {
+            base_version_cid, ..
+        } => rebase_update_content(working, local, op, base_version_cid.as_deref()),
     }
 }
 
@@ -567,10 +575,30 @@ fn rebase_move(
 /// Edit: applies onto a present target; onto a concurrently-deleted target the
 /// edit **resurrects** it from the local overlay view (edit wins in both
 /// directions). A target absent from both is a dead-letter.
-fn rebase_update_content(working: &mut Snapshot, local: &Snapshot, op: &Op) -> OpResolution {
+///
+/// Conditional edit: a head this edit was not formed against is another
+/// writer's, so the edit dead-letters rather than publishing over it. An
+/// applied edit advances the head here, which is what makes the next queued
+/// edit of the same file its successor rather than its rival. Judged only where
+/// the base has actually projected a head — a pass can be stale about it, and
+/// the authoritative check is the drain's, against the live record.
+fn rebase_update_content(
+    working: &mut Snapshot,
+    local: &Snapshot,
+    op: &Op,
+    base_version_cid: Option<&[u8]>,
+) -> OpResolution {
+    let projected = working
+        .node(op.target)
+        .filter(|node| node.content_version.is_some());
+    if projected.is_some_and(|node| node.head_content_cid.as_deref() != base_version_cid) {
+        return OpResolution::DeadLetter(DeadLetterReason::BaseSuperseded);
+    }
     if working.contains(op.target) {
+        let authored = op.staged_content().map(|content| content.root_cid.clone());
         if let Some(node) = working.node_mut(op.target) {
             node.content_version = node.content_version.map(|count| count + 1);
+            node.head_content_cid = authored;
         }
         return OpResolution::applied(None);
     }
@@ -589,6 +617,7 @@ fn rebase_update_content(working: &mut Snapshot, local: &Snapshot, op: &Op) -> O
             let mut resurrected = meta.clone();
             resurrected.name = effective.clone();
             resurrected.content_version = resurrected.content_version.map(|count| count + 1);
+            resurrected.head_content_cid = op.staged_content().map(|c| c.root_cid.clone());
             working.upsert_node(resurrected);
             working.link_next(parent, op.target);
             OpResolution::Applied {
@@ -800,6 +829,146 @@ mod tests {
         assert!(!base.contains(id(1)));
     }
 
+    /// The staged version a second edit authors, distinct from [`staged_k`] so
+    /// the two heads are told apart by identity.
+    fn staged_next() -> crate::sync::op::StagedContent {
+        crate::sync::op::StagedContent {
+            root_cid: b"next".to_vec(),
+            ..staged_k()
+        }
+    }
+
+    /// One edit-vs-edit fixture: a published file whose head the working base
+    /// projects as `head`.
+    fn edited_file(head: &[u8]) -> Snapshot {
+        let mut base = tree();
+        with_node(&mut base, id(0), id(1), "f.txt", NodeKind::File);
+        let node = base.node_mut(id(1)).unwrap();
+        node.content_version = Some(1);
+        node.head_content_cid = Some(head.to_vec());
+        base
+    }
+
+    #[test]
+    fn conditional_edit_dead_letters_when_another_writer_took_the_head() {
+        let mut working = edited_file(b"theirs");
+        let local = working.clone();
+
+        let res = rebase_one(
+            &mut working,
+            &local,
+            &Op::update_content(id(1), staged_k(), Some(b"ours".to_vec()), 1, AT),
+            SCOPE_ROOTS,
+        );
+
+        assert_eq!(
+            res,
+            OpResolution::DeadLetter(DeadLetterReason::BaseSuperseded)
+        );
+        assert_eq!(
+            working.node(id(1)).unwrap().head_content_cid.as_deref(),
+            Some(&b"theirs"[..]),
+            "the concurrent version stands — the edit never applied over it"
+        );
+    }
+
+    #[test]
+    fn conditional_edit_applies_onto_the_version_it_was_formed_against() {
+        let mut working = edited_file(b"head");
+        let local = working.clone();
+
+        let res = rebase_one(
+            &mut working,
+            &local,
+            &Op::update_content(id(1), staged_k(), Some(b"head".to_vec()), 1, AT),
+            SCOPE_ROOTS,
+        );
+
+        assert!(matches!(res, OpResolution::Applied { .. }));
+        assert_eq!(working.node(id(1)).unwrap().content_version, Some(2));
+        assert_eq!(
+            working.node(id(1)).unwrap().head_content_cid,
+            Some(staged_k().root_cid),
+            "the applied edit is the head the next one anchors on"
+        );
+    }
+
+    /// A base that has never projected the file's head judges nothing: the
+    /// drain's live record decides.
+    #[test]
+    fn conditional_edit_defers_when_the_base_projected_no_head() {
+        let mut working = tree();
+        with_node(&mut working, id(0), id(1), "f.txt", NodeKind::File);
+        let local = working.clone();
+
+        let res = rebase_one(
+            &mut working,
+            &local,
+            &Op::update_content(id(1), staged_k(), Some(b"head".to_vec()), 1, AT),
+            SCOPE_ROOTS,
+        );
+
+        assert!(matches!(res, OpResolution::Applied { .. }));
+    }
+
+    /// Two edits of one file queued back to back: the first advances the
+    /// working head, and the second — formed against that pending version — is
+    /// its successor, not its rival.
+    #[test]
+    fn a_second_queued_edit_of_one_file_is_not_its_own_race() {
+        let working = edited_file(b"head");
+        let local = working.clone();
+        let ops = [
+            (
+                OpId(1),
+                Op::update_content(id(1), staged_k(), Some(b"head".to_vec()), 1, AT),
+            ),
+            (
+                OpId(2),
+                Op::update_content(id(1), staged_next(), Some(staged_k().root_cid), 1, AT),
+            ),
+        ];
+
+        let report = replay(&working, &local, &ops, SCOPE_ROOTS);
+
+        assert!(report.dead_letters.is_empty(), "neither edit is a loser");
+        assert_eq!(report.applied.len(), 2);
+        assert_eq!(
+            report.rebased.node(id(1)).unwrap().head_content_cid,
+            Some(staged_next().root_cid)
+        );
+    }
+
+    /// The second of two queued edits inherits the first one's fate: its anchor
+    /// names a version that never published, so it cannot claim to be rebased
+    /// on the head that beat it.
+    #[test]
+    fn a_second_queued_edit_dead_letters_behind_a_superseded_first() {
+        let working = edited_file(b"theirs");
+        let local = working.clone();
+        let ops = [
+            (
+                OpId(1),
+                Op::update_content(id(1), staged_k(), Some(b"ours".to_vec()), 1, AT),
+            ),
+            (
+                OpId(2),
+                Op::update_content(id(1), staged_next(), Some(staged_k().root_cid), 1, AT),
+            ),
+        ];
+
+        let report = replay(&working, &local, &ops, SCOPE_ROOTS);
+
+        assert_eq!(
+            report.dead_letters,
+            vec![
+                (OpId(1), DeadLetterReason::BaseSuperseded),
+                (OpId(2), DeadLetterReason::BaseSuperseded),
+            ]
+        );
+        assert!(report.applied.is_empty());
+    }
+
     #[test]
     fn edit_resurrects_a_concurrently_deleted_node() {
         let gate_passing = tree(); // the node was deleted remotely — absent here
@@ -810,7 +979,7 @@ mod tests {
         let res = rebase_one(
             &mut working,
             &local,
-            &Op::update_content(id(1), staged_k(), 1, AT),
+            &Op::update_content(id(1), staged_k(), None, 1, AT),
             SCOPE_ROOTS,
         );
         assert!(matches!(res, OpResolution::Applied { .. }));
@@ -832,7 +1001,7 @@ mod tests {
         let res = rebase_one(
             &mut working,
             &local,
-            &Op::update_content(id(1), staged_k(), 1, AT),
+            &Op::update_content(id(1), staged_k(), None, 1, AT),
             SCOPE_ROOTS,
         );
         assert_eq!(
@@ -895,7 +1064,7 @@ mod tests {
         let res = rebase_one(
             &mut gate_passing.clone(),
             &local,
-            &Op::update_content(id(1), staged_k(), 1, AT),
+            &Op::update_content(id(1), staged_k(), None, 1, AT),
             SCOPE_ROOTS,
         );
         assert_eq!(

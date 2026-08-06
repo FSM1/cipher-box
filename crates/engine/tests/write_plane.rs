@@ -1623,6 +1623,8 @@ fn a_version_whose_content_key_will_not_open_dead_letters_and_releases_its_block
                 sealed_content_key: b"not a key blob".to_vec(),
                 epoch: EPOCH,
             },
+            // The create published no version, so this edit follows none.
+            None,
             file_sequence,
             UnixMillis(4_242),
         ),
@@ -5454,6 +5456,7 @@ fn a_dead_lettered_ops_blocks_survive_a_cold_start_and_a_gc_pass() {
                 sealed_content_key: b"never opened".to_vec(),
                 epoch: EPOCH,
             },
+            None,
             1,
             UnixMillis(4_242),
         ),
@@ -6604,5 +6607,207 @@ fn a_withheld_settings_record_refuses_the_write_instead_of_widening_it() {
     assert!(
         uploaded_cids(&alice).is_empty(),
         "and no byte went anywhere"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Edit vs edit: the conditional-edit rule (blueprint/engine.md "Per-op rebase
+// rules").
+// ---------------------------------------------------------------------------
+
+/// The three bodies one contested file goes through: what both devices read,
+/// what the second one writes, and what the first one publishes over it.
+fn contested_bodies() -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    (
+        (0..200u8).collect(),
+        (0..200u8).map(|byte| byte.wrapping_add(1)).collect(),
+        (0..200u8).map(|byte| 255 - byte).collect(),
+    )
+}
+
+/// A second write-capable device of the same account that has read the file, so
+/// its edits anchor on the version it saw.
+fn open_writer(
+    world: &FakeWorld,
+    blocks: &Blocks,
+    node: NodeId,
+    expected: &[u8],
+) -> (FakeDevice, Engine<FakeSeamTypes>, Vec<BoxedTask>) {
+    let device = world.device(b"alice-second-device");
+    let (engine, _events, tasks) = boot(world, blocks, &device, 7);
+    assert_eq!(
+        block_on(engine.read_content(node)).expect("the second device reads the head"),
+        expected
+    );
+    (device, engine, tasks)
+}
+
+/// A version another device published between the commit and the drain is not
+/// superseded: the queued edit dead-letters with its own bytes preserved, and
+/// the concurrent version stays the head every reader sees.
+#[test]
+fn an_edit_refuses_to_supersede_a_version_published_after_it_was_formed() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let (first, bobs, alices) = contested_bodies();
+    let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
+    let (bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
+
+    let op_id = write_file(&mut engine_b, WriteTarget::Version { node }, &bobs)
+        .expect("the second device's write commits");
+    let (root_cid, leaves) = staged_version(&bob);
+    // The first device publishes over the version the queued edit was formed
+    // against.
+    write_file(&mut engine_a, WriteTarget::Version { node }, &alices)
+        .expect("the first device's write commits");
+    tick(&world, &engine_a, &mut tasks_a);
+
+    let (dead_letters, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
+
+    assert_eq!(
+        dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::BaseSuperseded
+        }]
+    );
+    assert_eq!(
+        block_on(engine_b.read_content(node)).expect("the head still reads"),
+        alices,
+        "the concurrent version stands rather than being overwritten"
+    );
+    let after_drain = block_on(bob.staging_store.staged_keys()).unwrap();
+    assert!(
+        leaves
+            .iter()
+            .chain([&root_cid])
+            .all(|cid| after_drain.contains(cid)),
+        "the losing edit keeps its staged version — nothing is silently dropped"
+    );
+}
+
+/// Two edits queued back to back follow each other, so the second inherits the
+/// first one's fate: neither may land on a head that beat them both. An anchor
+/// that counted versions instead of naming one would let the second through —
+/// its count and the concurrent writer's are the same number.
+#[test]
+fn a_second_queued_edit_does_not_slip_past_the_writer_that_beat_the_first() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let (first, bobs, alices) = contested_bodies();
+    let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
+    let (_bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
+
+    let one = write_file(&mut engine_b, WriteTarget::Version { node }, &bobs)
+        .expect("the first edit commits");
+    let two = write_file(&mut engine_b, WriteTarget::Version { node }, &first)
+        .expect("the second edit commits on top of the first");
+    write_file(&mut engine_a, WriteTarget::Version { node }, &alices)
+        .expect("the first device's write commits");
+    tick(&world, &engine_a, &mut tasks_a);
+
+    let (dead_letters, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
+    // The pass stops at the first loser, so the second is reached on a later
+    // tick; both must end the same way.
+    while block_on(engine_b.snapshot(ROOT))
+        .unwrap()
+        .dead_letters
+        .len()
+        < 2
+    {
+        tick(&world, &engine_b, &mut tasks_b);
+    }
+
+    assert_eq!(dead_letters.len(), 1, "one loser per pass");
+    assert_eq!(
+        block_on(engine_b.snapshot(ROOT)).unwrap().dead_letters,
+        vec![
+            DeadLetter {
+                op_id: one,
+                reason: DeadLetterReason::BaseSuperseded
+            },
+            DeadLetter {
+                op_id: two,
+                reason: DeadLetterReason::BaseSuperseded
+            },
+        ]
+    );
+    assert_eq!(
+        block_on(engine_b.read_content(node)).expect("the head still reads"),
+        alices,
+        "the concurrent version stands"
+    );
+}
+
+/// A draft held open across a refresh still refuses: the anchor is the
+/// handle's, not the commit's (the web text editor's shape).
+#[test]
+fn an_edit_anchors_on_the_version_its_handle_opened_on() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let (first, bobs, alices) = contested_bodies();
+    let (mut engine_a, _events_a, mut tasks_a, node) = publish_clip(&world, &blocks, &first);
+    let (_bob, mut engine_b, mut tasks_b) = open_writer(&world, &blocks, node, &first);
+
+    let handle = block_on(engine_b.begin_write(WriteTarget::Version { node }, bobs.len() as u64))
+        .expect("the handle opens against the version the caller read");
+
+    // The other device publishes, and this one's own render advances past it
+    // while the draft is still open.
+    write_file(&mut engine_a, WriteTarget::Version { node }, &alices)
+        .expect("the first device's write commits");
+    tick(&world, &engine_a, &mut tasks_a);
+    assert_eq!(
+        block_on(engine_b.read_content(node)).expect("the refreshed head reads"),
+        alices
+    );
+
+    for slice in bobs.chunks(7) {
+        block_on(engine_b.push_chunk(handle, slice)).expect("the draft stages");
+    }
+    let op_id = block_on(engine_b.commit_write(handle)).expect("the draft commits");
+
+    let (dead_letters, _) = tick_until_dead_lettered(&world, &engine_b, &mut tasks_b);
+
+    assert_eq!(
+        dead_letters,
+        vec![DeadLetter {
+            op_id,
+            reason: DeadLetterReason::BaseSuperseded
+        }]
+    );
+}
+
+/// A device that never read the file has no head to anchor on, so `beginWrite`
+/// resolves one — before a byte is spent. The write then publishes like any
+/// other rather than dead-lettering after a whole upload.
+#[test]
+fn an_edit_from_a_device_that_never_read_the_file_resolves_its_anchor() {
+    let world = FakeWorld::new();
+    let blocks = Blocks::default();
+    seed_account(&world, &blocks);
+    let (first, bobs, _) = contested_bodies();
+    let (_engine_a, _events_a, _tasks_a, node) = publish_clip(&world, &blocks, &first);
+
+    let bob = world.device(b"alice-second-device");
+    let (mut engine_b, _events_b, mut tasks_b) = boot(&world, &blocks, &bob, 7);
+    write_file(&mut engine_b, WriteTarget::Version { node }, &bobs)
+        .expect("the write commits against the head it resolved");
+    tick(&world, &engine_b, &mut tasks_b);
+
+    assert!(
+        block_on(engine_b.snapshot(ROOT))
+            .unwrap()
+            .dead_letters
+            .is_empty(),
+        "an anchored write is not a race"
+    );
+    assert_eq!(
+        block_on(engine_b.read_content(node)).expect("the head reads"),
+        bobs,
+        "the version this device wrote is the head"
     );
 }

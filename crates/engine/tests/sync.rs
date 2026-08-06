@@ -120,7 +120,7 @@ fn race_1_reverse_edit_resurrects_a_concurrently_deleted_node() {
     let res = rebase_one(
         &mut working,
         &local,
-        &Op::update_content(id(1), staged(b"v2"), 1, AT),
+        &Op::update_content(id(1), staged(b"v2"), None, 1, AT),
         SCOPE_ROOTS,
     );
     assert!(matches!(res, OpResolution::Applied { .. }));

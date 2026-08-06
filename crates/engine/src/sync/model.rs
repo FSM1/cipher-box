@@ -35,6 +35,11 @@ pub struct NodeMeta {
     /// per-version content key seals each version, CONTEXT.md "Content key").
     /// `None` until projected — unprojected is not zero.
     pub content_version: Option<u64>,
+    /// The `contentCid` of the head version, projected with the count — the
+    /// conditional-edit anchor an `updateContent` is formed against. `None`
+    /// while unprojected **and** for a file with no published version, which
+    /// the count tells apart.
+    pub head_content_cid: Option<Vec<u8>>,
     /// Plaintext content size in bytes; `None` until the content plane
     /// projects it.
     pub size: Option<u64>,
@@ -56,6 +61,7 @@ impl NodeMeta {
             kind,
             record_sequence: 1,
             content_version: None,
+            head_content_cid: None,
             size: None,
             mtime: None,
             ipns_name: None,

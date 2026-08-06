@@ -172,6 +172,8 @@ function deadLetterReason(wasm: EngineWasm, reason: number | undefined): DeadLet
       return 'attemptsExhausted';
     case wasm.DeadLetterReason.ContentUnrecoverable:
       return 'contentUnrecoverable';
+    case wasm.DeadLetterReason.BaseSuperseded:
+      return 'baseSuperseded';
     default:
       // Fail closed: an unmapped (or absent) value means a JS/WASM version
       // mismatch, not a dead letter safe to report without its reason.

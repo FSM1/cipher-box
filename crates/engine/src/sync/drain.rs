@@ -66,7 +66,7 @@ use crate::sync::cancel::UploadCancels;
 use crate::sync::model::{Snapshot, collation_key};
 use crate::sync::op::{NewNode, Op, OpKind, ScopeCrossing, StagedContent};
 use crate::sync::overlay::apply_overlay;
-use crate::sync::project::project_folder;
+use crate::sync::project::{project_child_version, project_folder};
 use crate::sync::rebase::{AppliedOp, DeadLetterReason, decode_queue, replay};
 use crate::sync::record::RecordReader;
 use crate::sync::staging::{preserve_dead_letter, release_version_blocks, version_leaf_cids};
@@ -669,6 +669,17 @@ where
                     report.dead_letters.push((op_id, op.target, reason));
                 }
             }
+            // A conditional-edit loser keeps its staged version and retires
+            // nothing: its own bytes may already be registered from a halted
+            // upload of the version now at the name, and unpinning content a
+            // live record names is loss where leaving rows charged is a leak.
+            Halt::Permanent(reason @ DeadLetterReason::BaseSuperseded) => {
+                if self.preserve_dead_letter(op_id).await.is_ok()
+                    && self.dequeue_op(op_id).await.is_ok()
+                {
+                    report.dead_letters.push((op_id, op.target, reason));
+                }
+            }
             Halt::Permanent(reason) => {
                 self.dead_letter(scope, op_id, op, reason, report).await;
             }
@@ -1063,9 +1074,18 @@ where
                 self.publish_ref_move(scope, pass, applied, rebased, plan)
                     .await
             }
-            OpKind::UpdateContent { content } => {
-                self.publish_update_content(scope, pass, applied, content)
-                    .await
+            OpKind::UpdateContent {
+                content,
+                base_version_cid,
+            } => {
+                self.publish_update_content(
+                    scope,
+                    pass,
+                    applied,
+                    content,
+                    base_version_cid.as_deref(),
+                )
+                .await
             }
             // A cross-scope relocation re-seals the moved subtree at the
             // destination epoch — a plan this driver does not author. Publishing
@@ -1111,7 +1131,6 @@ where
                 )
             }
         };
-
         let child_id = applied.op.target;
         let child_name = derive_write_name(scope.write_scope_seed, &child_id.0);
         let child = new_child(
@@ -1153,6 +1172,19 @@ where
         .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
         self.emit_mirror_shortfall(applied, shortfall);
+        // The parent's repaint lifts the child in without what its own record
+        // carries; the first edit of this file anchors on the version its
+        // create published.
+        if let Some(staged) = applied.op.staged_content() {
+            project_child_version(
+                &mut self.base.borrow_mut(),
+                child_id,
+                staged.plaintext_size,
+                applied.op.authored_at.0,
+                1,
+                Some(&staged.root_cid),
+            );
+        }
         // Held only once the parent names it: a record nothing references is
         // not one the liveness loop should keep alive.
         self.hold(child_id.0, published.held);
@@ -1454,6 +1486,7 @@ where
         pass: &mut Pass,
         applied: &AppliedOp,
         staged: &StagedContent,
+        base_version_cid: Option<&[u8]>,
     ) -> Result<(), Halt> {
         let target = applied.op.target;
         let modified_at = applied.op.authored_at.0;
@@ -1468,6 +1501,15 @@ where
         // node no parent links is not one this scope's write plane may author.
         self.ensure_folder(scope, pass, self.published_parent(target)?)
             .await?;
+        // The conditional-edit rule against the live record, which the rebase's
+        // snapshot can be stale about — first before spending an upload on an
+        // edit that cannot land, then again with the upload behind us, because
+        // the transfer is the widest window a version can land in unseen.
+        let seen = self.load_child_node(scope, pass.epoch, target).await?;
+        if head_version_cid(&seen.body) != base_version_cid {
+            return Err(Halt::Permanent(DeadLetterReason::BaseSuperseded));
+        }
+        let uploaded = self.upload_version(scope, applied, staged).await?;
         let loaded = self.load_child_node(scope, pass.epoch, target).await?;
         let ReadBody::File {
             created_at,
@@ -1478,7 +1520,9 @@ where
         else {
             return Err(Halt::Unclassified);
         };
-        let uploaded = self.upload_version(scope, applied, staged).await?;
+        if versions.first().map(|head| head.content_cid.as_slice()) != base_version_cid {
+            return Err(Halt::Permanent(DeadLetterReason::BaseSuperseded));
+        }
         let shortfall = mirror_shortfall(&uploaded);
         // Newest first, head is current (`crates/core/src/seal/body.rs`).
         versions.insert(0, uploaded.version);
@@ -1493,6 +1537,7 @@ where
                     .map(|version| encode_content_cid_str(&version.content_cid)),
             )
             .collect();
+        let version_count = versions.len() as u64;
         let body = ReadBody::File {
             created_at,
             modified_at,
@@ -1516,10 +1561,19 @@ where
             .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
         self.emit_mirror_shortfall(applied, shortfall);
+        // The head this publish established: the next edit of this file anchors
+        // on it, and without it this device would read its own publish as a
+        // concurrent writer.
+        project_child_version(
+            &mut self.base.borrow_mut(),
+            target,
+            staged.plaintext_size,
+            modified_at,
+            version_count,
+            Some(&staged.root_cid),
+        );
         if let Some(node) = self.base.borrow_mut().node_mut(target) {
             node.record_sequence = published.sequence;
-            node.mtime = Some(modified_at);
-            node.size = Some(staged.plaintext_size);
         }
         self.hold(target.0, published.held);
         Ok(())
@@ -2316,6 +2370,16 @@ where
             .fill(&mut nonce)
             .map_err(|_| Halt::Unclassified)?;
         Ok(nonce)
+    }
+}
+
+/// The `contentCid` of a file body's head version — the conditional-edit
+/// anchor. `None` for a file with no version, and for a folder body, which the
+/// publish plan refuses on its own.
+fn head_version_cid(body: &ReadBody) -> Option<&[u8]> {
+    match body {
+        ReadBody::File { versions, .. } => versions.first().map(|head| head.content_cid.as_slice()),
+        ReadBody::Folder { .. } => None,
     }
 }
 

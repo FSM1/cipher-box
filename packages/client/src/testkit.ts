@@ -50,6 +50,7 @@ export const fakeWasmEnums = {
     PayloadRefused: 5,
     AttemptsExhausted: 6,
     ContentUnrecoverable: 7,
+    BaseSuperseded: 8,
   },
 } as const;
 
