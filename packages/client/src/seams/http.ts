@@ -25,6 +25,8 @@ function requestInit(request: HttpRequestData): RequestInit {
     headers,
     // Fail-safe default: authority is opt-in per request, never inferred.
     credentials: request.credentials ?? 'omit',
+    // No redirects; see the `Http` seam contract. Rejects rather than resolving.
+    redirect: 'error',
   };
   const timeoutMs = request.timeoutMs;
   if (timeoutMs !== undefined && timeoutMs !== null) {

@@ -337,6 +337,34 @@ async fn reqwest_http_returns_non_2xx_as_a_response_not_an_error() {
     assert_eq!(response.status, 418);
 }
 
+/// The seam follows no redirect: the 3xx comes back as the response it is, and
+/// the `Authorization` header never reaches the hop's target. A doc comment
+/// cannot fail CI, so the policy is asserted against a live server.
+#[tokio::test]
+async fn reqwest_http_follows_no_redirect_and_does_not_replay_the_bearer() {
+    let server = MockServer::start();
+    let http = ReqwestHttp::new().expect("client builds");
+
+    let response = http
+        .send(HttpRequest {
+            method: HttpMethod::Get,
+            url: format!("{}/redirect", server.base_url()),
+            headers: vec![("Authorization".into(), "Bearer member-token".into())],
+            body: None,
+            credentials: HttpCredentials::Omit,
+            timeout_ms: None,
+        })
+        .await
+        .expect("a 3xx is a response, never a seam Err");
+
+    assert_eq!(response.status, 302, "the hop is surfaced, not taken");
+
+    // `/redirect` served no body and `/echo` would have echoed one, so the
+    // recorded request proves the target was never reached.
+    let recorded = server.last_request().expect("a request was recorded");
+    assert_eq!(recorded.path, "/redirect");
+}
+
 #[tokio::test]
 async fn reqwest_http_capped_fetch_rejects_a_chunk_larger_than_the_cap() {
     let server = MockServer::start();

@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 use cipherbox_core::content::{CONTENT_CID_CODEC, compute_cid, encode_content_cid_str};
 use cipherbox_desktop_seams::ReqwestHttp;
 use cipherbox_engine::api::{ApiClient, ApiError};
-use cipherbox_engine::seams::{Http, HttpCredentials, HttpMethod, HttpRequest};
+use cipherbox_engine::seams::{
+    Http, HttpCredentials, HttpMethod, HttpRequest, SeamError, bearer_header,
+};
 
 use crate::metrics::{Collector, Outcome, Sample};
 use crate::plan::{MAX_BLOCK_BYTES, RunPlan};
@@ -87,9 +89,13 @@ pub(crate) async fn gateway_get(
     url: &str,
     token: Option<&str>,
 ) -> Result<u64, ApiError> {
-    let headers = token
-        .map(|token| vec![("Authorization".to_owned(), format!("Bearer {token}"))])
-        .unwrap_or_default();
+    let headers = match token {
+        Some(token) => vec![
+            bearer_header(token)
+                .map_err(|_| ApiError::Transport(SeamError::new("gateway bearer is unusable")))?,
+        ],
+        None => Vec::new(),
+    };
     let request = HttpRequest {
         method: HttpMethod::Get,
         url: url.to_owned(),

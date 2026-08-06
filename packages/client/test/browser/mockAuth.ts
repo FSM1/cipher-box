@@ -42,7 +42,9 @@ function challenge(res: ServerResponse, dto: Fields): void {
     send(res, 400, { error: 'publicKey must be a string' });
     return;
   }
-  const value = `cipherbox-login:v2:${publicKey.slice(0, 16)}`;
+  // Shaped as the API issues one — the domain tag plus 32 bytes of lowercase
+  // hex — because the engine refuses to sign anything else.
+  const value = `cipherbox-login:v2:${publicKey.slice(0, 64).padEnd(64, '0')}`;
   issued.set(publicKey, value);
   completed.challenges += 1;
   send(res, 200, { challenge: value, expiresAt: '2099-01-01T00:00:00Z' });

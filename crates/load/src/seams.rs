@@ -18,6 +18,10 @@ pub(crate) fn build_http() -> Result<ReqwestHttp, String> {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(60))
+        // The seam forbids following a redirect, and a `with_client` caller
+        // owns that policy — a measured run must move bytes the way the
+        // shipping transport does.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| format!("build reqwest client: {error}"))?;
     Ok(ReqwestHttp::with_client(client))

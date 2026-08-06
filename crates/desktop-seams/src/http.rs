@@ -34,25 +34,8 @@ impl ReqwestHttp {
     pub fn new() -> SeamResult<Self> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                // The engine decides over which transport a request carrying an
-                // `Authorization` header may go (blueprint/engine.md "Content
-                // plane"). A redirect that downgrades to plaintext would carry
-                // the credential onto the clear network past that decision, so
-                // it is surfaced as the 3xx it is rather than followed.
-                let downgrade = attempt.url().scheme() == "http"
-                    && attempt
-                        .previous()
-                        .last()
-                        .is_some_and(|previous| previous.scheme() == "https");
-                if downgrade {
-                    attempt.stop()
-                } else if attempt.previous().len() > 10 {
-                    attempt.error("too many redirects")
-                } else {
-                    attempt.follow()
-                }
-            }))
+            // No redirects; see the `Http` seam contract.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|err| SeamError::new(format!("http client build: {err}")))?;
         Ok(Self { client })

@@ -20,9 +20,10 @@ use zeroize::Zeroizing;
 
 use super::dag::DAG_ROOT_CODEC;
 use super::limits::MAX_RESOLVED_RECORD_BYTES;
-use crate::seams::{CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest};
+use crate::seams::{
+    CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, SeamError, bearer_header,
+};
 
-const AUTHORIZATION: &str = "Authorization";
 const ACCEPT: &str = "Accept";
 /// Deadline for one leaf-block GET: a seek issues one per leaf against sources
 /// of unknown quality, so a stalled gateway must fail over.
@@ -270,10 +271,11 @@ async fn fetch(
     let base = source.base_url.trim_end_matches('/');
     let mut headers = vec![(ACCEPT.to_owned(), RAW_BLOCK.to_owned())];
     if let Some(bearer) = &source.bearer {
-        headers.push((
-            AUTHORIZATION.to_owned(),
-            format!("Bearer {}", bearer.as_str()),
-        ));
+        // A source whose token cannot be a header value is skipped, never
+        // contacted unauthenticated: rotation drops to the next source.
+        headers.push(bearer_header(bearer.as_str()).map_err(|_| {
+            CappedFetchError::Transport(SeamError::new("gateway source bearer is unusable"))
+        })?);
     }
     let request = HttpRequest {
         method: HttpMethod::Get,
@@ -322,7 +324,7 @@ mod tests {
     use super::*;
     use crate::content::chunk::{ContentKey, frame_and_seal};
     use crate::content::profile::ContentProfile;
-    use crate::seams::HttpResponse;
+    use crate::seams::{AUTHORIZATION, HttpResponse};
     use crate::testkit::SeededEntropy;
     use crate::testkit::block_on;
     use crate::testkit::fakes::ScriptedHttp;
@@ -548,6 +550,40 @@ mod tests {
                 .any(|(n, _)| n == AUTHORIZATION),
             "public fallback carries no bearer token"
         );
+    }
+
+    /// A source whose bearer cannot be a header value is skipped, never
+    /// contacted without it — and rotation still reaches a healthy source.
+    #[test]
+    fn a_source_with_an_unusable_bearer_is_skipped_not_contacted_bare() {
+        let leaf = one_leaf();
+        let http = ScriptedHttp::default();
+        http.enqueue_response(raw_response(leaf.sealed.clone()));
+
+        let gateway = Gateway {
+            accelerator: Some(GatewaySource {
+                base_url: "https://gw.cipherbox.test".into(),
+                bearer: Some(Zeroizing::new("member\r\nX-Injected: 1".to_owned())),
+            }),
+            public_fallbacks: vec![GatewaySource {
+                base_url: "https://public.gw.test".into(),
+                bearer: None,
+            }],
+        };
+
+        let out = block_on(read_block(
+            &gateway,
+            &http,
+            &cid_str(),
+            &leaf.cid,
+            ContentPlane::Leaf,
+        ))
+        .unwrap();
+        assert_eq!(out, leaf.sealed);
+
+        let requests = http.requests();
+        assert_eq!(requests.len(), 1, "the accelerator was never contacted");
+        assert!(requests[0].url.starts_with("https://public.gw.test/ipfs/"));
     }
 
     #[test]

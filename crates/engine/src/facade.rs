@@ -3367,11 +3367,15 @@ mod tests {
 
     #[test]
     fn start_performs_identity_login_and_persists_a_refresh_token() {
+        /// Shaped as the API issues one; the engine signs nothing else.
+        const LOGIN_CHALLENGE: &str =
+            "cipherbox-login:v2:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
         let (mut engine, _events, device) =
             engine_over(ApiBaseUrl::parse("http://api.test").expect("a configured base"));
         device.http.enqueue_response(json_response(
             200,
-            json!({ "challenge": "cipherbox-login:v2:abc", "expiresAt": "2099-01-01T00:00:00Z" }),
+            json!({ "challenge": LOGIN_CHALLENGE, "expiresAt": "2099-01-01T00:00:00Z" }),
         ));
         device.http.enqueue_response(json_response(
             200,
@@ -3394,7 +3398,7 @@ mod tests {
         let identity = engine.session().unwrap().identity();
         let expected = hex_lower(
             &identity
-                .sign_detcbor(b"cipherbox-login:v2:abc")
+                .sign_detcbor(LOGIN_CHALLENGE.as_bytes())
                 .to_compact(),
         );
         assert_eq!(login_body["signature"], expected);

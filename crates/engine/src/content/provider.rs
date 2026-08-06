@@ -17,7 +17,8 @@ use zeroize::Zeroizing;
 
 use crate::content::DAG_ROOT_CODEC;
 use crate::seams::{
-    CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse,
+    AUTHORIZATION, CappedFetchError, Http, HttpCredentials, HttpMethod, HttpRequest, HttpResponse,
+    check_bearer,
 };
 
 /// Deadline for a BYO-provider reachability probe: an unresponsive endpoint
@@ -35,7 +36,6 @@ const PLACEMENT_TIMEOUT_MS: u64 = 60_000;
 /// stream is the largest, one short object per block put.
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 64 * 1024;
 
-const AUTHORIZATION: &str = "Authorization";
 const CONTENT_TYPE: &str = "Content-Type";
 const APPLICATION_JSON: &str = "application/json";
 
@@ -343,14 +343,10 @@ pub async fn test_connection(
 pub fn validate_byo_config(config: &ByoIpfsConfig) -> Result<(), ProviderError> {
     validate_endpoint(&config.endpoint)?;
     match &config.access_token {
-        // The token is spliced into a header value verbatim, so a control
-        // character in it would inject a header. A present-but-empty one is an
-        // `Authorization: Bearer ` no provider accepts; `None` is how a
-        // credential-less provider is spelled.
-        Some(token) if token.is_empty() || !token.bytes().all(is_bearer_byte) => {
-            Err(ProviderError::InvalidCredential)
-        }
-        _ => Ok(()),
+        // `None` is how a credential-less provider is spelled, so it is not a
+        // verdict; a token that is present must be sendable as a header value.
+        Some(token) => check_bearer(token.as_str()).map_err(|_| ProviderError::InvalidCredential),
+        None => Ok(()),
     }
 }
 
@@ -462,12 +458,6 @@ fn is_authority_byte(b: u8) -> bool {
 /// (`@`, `?`, `#`, `\`) or that no URL may carry raw (controls, whitespace).
 fn is_path_byte(b: u8) -> bool {
     is_authority_byte(b) || matches!(b, b'/' | b'_' | b'~' | b'%' | b'+' | b'=' | b'&' | b',')
-}
-
-/// The bytes a bearer credential admits: visible ASCII, the header-value set
-/// minus the whitespace no token carries.
-fn is_bearer_byte(b: u8) -> bool {
-    matches!(b, 0x21..=0x7e)
 }
 
 /// The per-kind reachability probe. The endpoints are each provider's standard
@@ -678,6 +668,23 @@ mod tests {
         assert!(
             http.requests().is_empty(),
             "a refused credential never reaches the seam"
+        );
+    }
+
+    /// The config gate and the header the splice builds are the same rule, so
+    /// no token can pass one and be refused by the other.
+    #[test]
+    fn the_config_gate_and_the_header_splice_agree_on_every_token() {
+        for token in ["", "tok\r\n", "tok tok", "tok\u{80}", "ok-token", "!", "~"] {
+            assert_eq!(
+                validate_byo_config(&config(ByoKind::Psa, Some(token))).is_ok(),
+                crate::seams::bearer_header(token).is_ok(),
+                "{token:?}"
+            );
+        }
+        assert!(
+            validate_byo_config(&config(ByoKind::Psa, None)).is_ok(),
+            "a credential-less provider is not a verdict"
         );
     }
 
