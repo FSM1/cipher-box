@@ -35,13 +35,19 @@ describe('the folder picker', () => {
     await act(async () => {
       store.setFocus(NEXT);
     });
+    // The store's own write already names NEXT, so only a *further* write proves
+    // the close re-asserted the window rather than inheriting it.
+    const written = engine.focus.length;
+    const reported = engine.reported.length;
     rerender(
       <EngineProvider createClient={() => engine.client}>
         <Probe onStore={(next) => (store = next)} />
       </EngineProvider>
     );
 
-    await waitFor(() => expect(engine.focus.at(-1)).toBe(NEXT));
+    await waitFor(() => expect(engine.focus.length).toBeGreaterThan(written));
+    expect(engine.reported.length).toBeGreaterThan(reported);
+    expect(engine.focus.at(-1)).toBe(NEXT);
     expect(engine.reported.at(-1)).toBe(NEXT);
   });
 });

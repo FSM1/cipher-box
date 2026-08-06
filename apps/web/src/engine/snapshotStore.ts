@@ -95,6 +95,10 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
   // final view.
   let inFlight = false;
   let coalesced = false;
+  // The provider disposes this store and its client together, and a logout
+  // rebuild does so with the tab still live — so a continuation still holding an
+  // older intent must not reach a closed facade.
+  let disposed = false;
 
   const commit = (next: Commit): void => {
     const view = next.view === undefined ? state.view : next.view;
@@ -108,6 +112,7 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
   };
 
   const pull = (): void => {
+    if (disposed) return;
     if (inFlight) {
       coalesced = true;
       return;
@@ -139,6 +144,7 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
   };
 
   const assertFocus = (): void => {
+    if (disposed) return;
     client.reportFocus(focus);
     const id = ++generation;
     client.facade.setFocus(focus).then(
@@ -181,6 +187,7 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
     },
     refocus: assertFocus,
     refresh() {
+      if (disposed) return;
       const id = generation;
       const again = (): void => {
         if (id === generation) pull();
@@ -189,6 +196,9 @@ export function createSnapshotStore(client: EngineClient): SnapshotStore {
       void client.facade.manualRefresh().then(again, again);
     },
     dispose() {
+      disposed = true;
+      // Supersede every in-flight intent, so a late answer commits nothing.
+      generation += 1;
       unsubscribe();
       listeners.clear();
       // A warning names the scope it came from; it must not outlive its engine.

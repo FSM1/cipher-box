@@ -289,6 +289,27 @@ describe('the focus window', () => {
 
     expect(engine.pulls[1].folder).toBe(FOLDER);
   });
+
+  it('starts no pull for a focus that lands after disposal', async () => {
+    const engine = fakeEngine();
+    const store = createSnapshotStore(engine.client);
+    store.setFocus(FOLDER);
+
+    // The provider disposes the store, then the client; the focus it asked for
+    // settles afterwards and must not reach the closed facade.
+    store.dispose();
+    engine.ackFocus();
+    await flush();
+
+    expect(engine.pulls).toEqual([]);
+
+    // Nor may a later consumer call reopen one.
+    store.refresh();
+    store.refocus();
+    await flush();
+    expect(engine.pulls).toEqual([]);
+    expect(engine.focus).toEqual([FOLDER]);
+  });
 });
 
 describe('a manual refresh', () => {
