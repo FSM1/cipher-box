@@ -408,6 +408,10 @@ pub struct ConvertedClaim {
 /// contact and never the ephemeral half. `now` is the injected
 /// [`Scheduler::now`](crate::seams::Scheduler::now) instant.
 ///
+/// The caller signs and publishes the returned set, and acks the mailbox item
+/// only once that is durable (`mailbox` ack-after-durable) — a redelivery then
+/// converts to the same tag and changes nothing.
+///
 /// Residual: a ledger row's `recipientIdentityPk` sits outside the owner-signed
 /// commitment ([`enforce_committed_ledger`]), so a write-grantee re-authoring the
 /// write-body can point a committed row at an ephemeral identity it holds and
