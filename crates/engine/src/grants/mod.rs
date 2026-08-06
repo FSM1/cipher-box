@@ -33,13 +33,13 @@ pub use create::{
     ParentScopePlan, create_read_grant,
 };
 pub use invite::{
-    CommittedScope, ConvertedClaim, EphemeralInvitee, InviteClaim, InviteError, InviteRevocation,
-    LinkCapability, MintedInvite, OwnerAuthority, convert_invite_claim, mint_invite_grant,
-    post_invite_claim, revoke_invite_link,
+    ClaimOutcome, CommittedScope, ConvertedClaim, EphemeralInvitee, InviteClaim, InviteError,
+    InviteRevocation, LinkCapability, MintedInvite, OwnerAuthority, RecordedInvite,
+    convert_invite_claim, mint_invite_grant, post_invite_claim, revoke_invite_link,
 };
 pub use ledger::{
     AuthorityViolation, GrantRow, PublishedGrantBlob, enforce_committed_ledger, entry_is_live,
-    live_entry, mint_grant_row, recipient_blinded_tag, self_locate,
+    mint_grant_row, recipient_blinded_tag, self_locate,
 };
 pub use owner_entry::{AbuseEvent, OwnerEntry, OwnerSeedCache, OwnerSeedEntry, cross_check};
 pub use revocation::{ResolutionClass, ResolutionFacts, classify};

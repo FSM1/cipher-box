@@ -14,8 +14,8 @@ use cipherbox_core::suite::ed25519::Ed25519Signer;
 use cipherbox_core::suite::x25519::X25519Secret;
 
 use cipherbox_engine::grants::{
-    CommittedScope, EphemeralInvitee, InviteClaim, OwnerAuthority, convert_invite_claim,
-    import_contact, mint_invite_grant, post_invite_claim,
+    ClaimOutcome, CommittedScope, EphemeralInvitee, InviteClaim, OwnerAuthority, RecordedInvite,
+    convert_invite_claim, import_contact, mint_invite_grant, post_invite_claim,
 };
 use cipherbox_engine::mailbox::poll_verified;
 use cipherbox_engine::rotation::derive_write_name;
@@ -27,6 +27,8 @@ const V: u64 = 2;
 const SCOPE: [u8; 16] = [0x5c; 16];
 const WRITE_SCOPE_SEED: [u8; 32] = [0x55; 32];
 const EPH_MAILBOX: [u8; 32] = [0x71; 32];
+const EPH_FORGED: [u8; 32] = [0x72; 32];
+const EPH_TRANSPORT: [u8; 32] = [0x73; 32];
 
 fn owner_enc() -> X25519Secret {
     X25519Secret::from_scalar([0x11; 32])
@@ -48,12 +50,13 @@ fn owner_contact_code() -> Vec<u8> {
     ContactCode::create(&owner_identity(), owner_enc().public()).encode()
 }
 
-/// The published set committing one invite link, and the link's ephemeral
-/// identity reconstructed from the fragment secret the claimant would read.
+/// The published set committing one invite link, the owner's record of it, and
+/// the ephemeral identity a fragment holder reconstructs.
 struct Link {
     commitment: GrantSetCommitment,
     commitment_sig: cipherbox_core::suite::ecdsa::EcdsaSignature,
     ledger: Vec<cipherbox_core::seal::GrantLedgerEntry>,
+    recorded: RecordedInvite,
     invitee: EphemeralInvitee,
 }
 
@@ -114,6 +117,7 @@ fn link(permission: Permission) -> Link {
         commitment,
         commitment_sig,
         ledger: vec![minted.row.ledger_entry],
+        recorded: minted.link,
         invitee,
     }
 }
@@ -156,12 +160,13 @@ fn a_link_holder_claims_over_the_mailbox_and_the_owner_converts_it() {
     let converted = convert_invite_claim(
         &keys.authority(),
         &l.scope(),
+        &[l.recorded],
         &items[0],
         cipherbox_engine::seams::UnixMillis(0),
     )
     .expect("converts");
 
-    assert!(converted.newly_granted);
+    assert_eq!(converted.outcome, ClaimOutcome::Granted);
     assert_eq!(
         converted.row.ledger_entry.recipient_identity_pk,
         claimant_identity.verifying_key().to_sec1(),
@@ -186,7 +191,7 @@ fn a_claim_signed_by_a_key_the_link_does_not_commit_never_becomes_a_grant() {
         &forger_box,
         &owner_contact,
         &stranger,
-        &EPH_MAILBOX,
+        &EPH_FORGED,
         V,
         &InviteClaim {
             scope_root_name: scope_name(),
@@ -197,7 +202,7 @@ fn a_claim_signed_by_a_key_the_link_does_not_commit_never_becomes_a_grant() {
     .expect("posts");
 
     // The mailbox authenticates it — the forger signed honestly, just with a key
-    // the ledger does not commit — so the fail-closed reject is conversion's.
+    // the owner never recorded — so the fail-closed reject is conversion's.
     let items = block_on(poll_verified(&owner_box, &owner_enc(), V)).expect("polls");
     assert_eq!(items.len(), 1);
 
@@ -206,6 +211,7 @@ fn a_claim_signed_by_a_key_the_link_does_not_commit_never_becomes_a_grant() {
         convert_invite_claim(
             &keys.authority(),
             &l.scope(),
+            &[l.recorded],
             &items[0],
             cipherbox_engine::seams::UnixMillis(0),
         )
@@ -231,7 +237,7 @@ fn the_transport_sees_no_claim_field_in_the_clear() {
         &holder_box,
         &owner_contact,
         &l.invitee,
-        &EPH_MAILBOX,
+        &EPH_TRANSPORT,
         V,
         &InviteClaim {
             scope_root_name: scope_name(),

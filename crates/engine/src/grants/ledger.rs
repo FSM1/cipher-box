@@ -83,21 +83,6 @@ pub fn entry_is_live(entry: &GrantLedgerEntry, now: UnixMillis) -> bool {
     }
 }
 
-/// The read path's view of a resolved grant ledger: the row filed under `tag`,
-/// or `None` once it is past its deadline at `now`. An expired row is inert
-/// here — before and independently of the prune that eventually removes it — so
-/// a reader never depends on the owner having observed the expiry yet.
-pub fn live_entry<'a>(
-    ledger: &'a [GrantLedgerEntry],
-    tag: &[u8; 32],
-    now: UnixMillis,
-) -> Option<&'a GrantLedgerEntry> {
-    ledger
-        .iter()
-        .find(|e| &e.tag == tag)
-        .filter(|e| entry_is_live(e, now))
-}
-
 /// The rows one grantee contributes to a scope root: the blinded tag, the entry
 /// the owner signs into the grant-set commitment, and the authoritative ledger
 /// row.
@@ -281,25 +266,6 @@ mod tests {
             "dies at, not after"
         );
         assert!(!entry_is_live(&entry, UnixMillis(1_001)));
-    }
-
-    #[test]
-    fn an_expired_row_reads_as_no_grant_on_the_read_path() {
-        let live = ledger_entry([0x21; 32], Permission::Read);
-        let mut expiring = ledger_entry([0x22; 32], Permission::Write);
-        expiring.expires_at = NonZeroU64::new(1_000);
-        let ledger = vec![live, expiring];
-
-        assert!(live_entry(&ledger, &[0x22; 32], UnixMillis(999)).is_some());
-        assert!(
-            live_entry(&ledger, &[0x22; 32], UnixMillis(1_000)).is_none(),
-            "the row is still in the ledger but grants nothing once expired",
-        );
-        assert!(
-            live_entry(&ledger, &[0x21; 32], UnixMillis(u64::MAX)).is_some(),
-            "a deadline-free sibling is untouched",
-        );
-        assert!(live_entry(&ledger, &[0x99; 32], UnixMillis(0)).is_none());
     }
 
     #[test]

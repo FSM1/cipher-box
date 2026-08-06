@@ -25,8 +25,12 @@
 
 use cipherbox_core::codec::{Map, Value, decode, encode_fixed_depth};
 use cipherbox_core::error::{CodecError, Malformed};
-use cipherbox_core::seal::{GrantLedgerEntry, GrantSetCommitment, Permission, verify_grant_set};
-use cipherbox_core::suite::ecdsa::{EcdsaSignature, EcdsaSigner, EcdsaVerifier};
+use cipherbox_core::seal::{
+    GrantLedgerEntry, GrantSetCommitment, MAX_GRANT_BLOBS, Permission, verify_grant_set,
+};
+use cipherbox_core::suite::ecdsa::{
+    EcdsaSignature, EcdsaSigner, EcdsaVerifier, IDENTITY_PUBLIC_LEN,
+};
 use cipherbox_core::suite::secret::{SECRET_LEN, SecretBytes};
 use cipherbox_core::suite::x25519::{X25519Public, X25519Secret};
 use cipherbox_core::{ipns::IpnsName, kdf};
@@ -100,6 +104,13 @@ pub enum InviteError {
     /// Conversion exists to re-anchor a bearer link to a contact-anchored
     /// identity, so anchoring back to the ephemeral half is refused.
     ClaimantIsTheEphemeralHalf,
+    /// The claim handed back the owner's own contact bundle, which the invite URL
+    /// carries. The owner is not a grantee of its own scope.
+    ClaimantIsTheOwner,
+    /// The set is at the grant-set ceiling
+    /// ([`MAX_GRANT_BLOBS`](cipherbox_core::seal::MAX_GRANT_BLOBS)); one more row
+    /// could only ever mint a record its own decoder refuses.
+    GrantSetFull,
     /// The claimant's encryption subkey is non-contributory, so no blinded tag
     /// binds a grant to it.
     UnusableClaimantKey,
@@ -126,6 +137,8 @@ impl InviteError {
             Self::LinkExpired => "link-expired",
             Self::ClaimantContact(_) => "claimant-contact-invalid",
             Self::ClaimantIsTheEphemeralHalf => "claimant-is-the-ephemeral-half",
+            Self::ClaimantIsTheOwner => "claimant-is-the-owner",
+            Self::GrantSetFull => "grant-set-full",
             Self::UnusableClaimantKey => "unusable-claimant-key",
             Self::DuplicateTag => "duplicate-tag",
             Self::Authority(v) => v.check(),
@@ -226,12 +239,38 @@ impl LinkCapability {
     }
 }
 
-/// A minted invite link: the rows the owner commits, plus the capability flag
-/// the host renders and revocation must respect.
+/// One invite link as the owner recorded it at mint — **owner-local state, never
+/// network bytes**.
+///
+/// A published ledger row is deliberately byte-shaped like a personal grantee's,
+/// so nothing in a resolved record says "this row is an invite", and the fields
+/// that would say so (`recipientIdentityPk`, `expiresAt`) sit outside the owner's
+/// signature and are re-authorable by any write-grantee. Conversion therefore
+/// decides *what may be claimed* from this record and never from the record it
+/// converts against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecordedInvite {
+    /// The link's blinded tag.
+    pub tag: [u8; 32],
+    /// The ephemeral identity a fragment holder signs its claim with.
+    pub ephemeral_identity_pk: [u8; IDENTITY_PUBLIC_LEN],
+    /// The ephemeral encryption subkey the link's blob is sealed to.
+    pub ephemeral_enc_pk: [u8; SECRET_LEN],
+    /// The deadline as minted. This copy is the authority: the published
+    /// `expiresAt` is a cooperating-reader hint a write-grantee can strip or
+    /// forge ([`GrantLedgerEntry::expires_at`]).
+    pub expires_at: Option<UnixMillis>,
+}
+
+/// A minted invite link: the rows the owner commits, the record the owner keeps,
+/// and the capability flag the host renders and revocation must respect.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MintedInvite {
     /// The link's blinded tag, commitment entry and ledger row.
     pub row: GrantRow,
+    /// The owner-local record [`convert_invite_claim`] and
+    /// [`revoke_invite_link`] act on. Persist it with the link.
+    pub link: RecordedInvite,
     /// What the link hands out.
     pub capability: LinkCapability,
 }
@@ -252,7 +291,7 @@ pub fn mint_invite_grant(
     permission: Permission,
     expires_at: Option<UnixMillis>,
 ) -> Result<MintedInvite, InviteError> {
-    let expires_at = match expires_at {
+    let deadline = match expires_at {
         Some(deadline) => Some(NonZeroU64::new(deadline.0).ok_or(InviteError::InvalidExpiry)?),
         None => None,
     };
@@ -266,8 +305,14 @@ pub fn mint_invite_grant(
         permission,
     )
     .ok_or(InviteError::UnusableInviteeKey)?;
-    row.ledger_entry.expires_at = expires_at;
+    row.ledger_entry.expires_at = deadline;
     Ok(MintedInvite {
+        link: RecordedInvite {
+            tag: row.tag,
+            ephemeral_identity_pk: invitee.identity_pk().to_sec1(),
+            ephemeral_enc_pk: invitee.enc_public().to_bytes(),
+            expires_at,
+        },
         row,
         capability: LinkCapability::of(permission),
     })
@@ -298,7 +343,8 @@ impl InviteClaim {
     }
 
     /// Decode a claim (strict det-CBOR). A missing or mistyped field is
-    /// [`Malformed`].
+    /// [`Malformed`]. Unknown fields are dropped rather than preserved: this is a
+    /// consume-once engine payload, not a re-sealed shared structure.
     pub fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
         let value = decode(bytes)?;
         let map = value.as_map()?;
@@ -318,11 +364,15 @@ impl InviteClaim {
 
 /// Post a claim to the owner's mailbox, sealed to the owner's encryption subkey
 /// and signed — as the mailbox sender — with the link's ephemeral identity key.
-/// That signature is what [`convert_invite_claim`] binds to the ephemeral public
-/// half the ledger commits, so only a fragment holder can claim.
+/// That signature is what [`convert_invite_claim`] binds to the ephemeral half the
+/// owner recorded, so only a fragment holder can claim.
 ///
 /// `owner` is the contact bundle the invite URL carries; `ephemeral_scalar` is
 /// fresh-per-call HPKE entropy from the injected seam.
+///
+/// Residual: the post is an authenticated API call addressed to the owner's
+/// identity key, so the transport learns claimant→owner even for claims the owner
+/// never converts. Inherent to the mailbox; the payload itself stays sealed.
 #[allow(clippy::too_many_arguments)]
 pub async fn post_invite_claim<M: Mailbox>(
     mailbox: &M,
@@ -350,7 +400,9 @@ pub async fn post_invite_claim<M: Mailbox>(
 /// the commitment, and the encryption subkey secret every blinded tag derives
 /// from. Holding both is what makes a caller the owner.
 pub struct OwnerAuthority<'a> {
-    /// Owner identity signer — the key whose signature authorises the set.
+    /// Owner identity signer. Nothing here signs with it — it is the capability
+    /// token itself, since verifying the commitment against a *supplied* public
+    /// key would prove nothing about who is calling.
     pub identity_signer: &'a EcdsaSigner,
     /// Owner encryption subkey secret — the pairwise ECDH half.
     pub enc_secret: &'a X25519Secret,
@@ -359,8 +411,14 @@ pub struct OwnerAuthority<'a> {
 /// A scope root's owner-signed grant set as resolved: the commitment, its
 /// signature, and the write-body ledger it must reproduce. The scope root's
 /// `ipnsName` is the commitment's own, so no caller supplies one.
+///
+/// Must be the **currently adopted** record's set. The commitment is deliberately
+/// epoch-free (`CONTEXT.md`), so a stale one still verifies and re-signing it
+/// resurrects every tag cut since; the adoption gate's floor law is what keeps a
+/// served-stale record out.
 pub struct CommittedScope<'a> {
-    /// The scope id the writer pseudonyms bind.
+    /// The scope id the writer pseudonyms bind. Must be the scope the commitment
+    /// belongs to — no field of the commitment carries it.
     pub scope_id: &'a [u8; 16],
     /// The owner-signed grant-set commitment.
     pub commitment: &'a GrantSetCommitment,
@@ -384,45 +442,64 @@ impl OwnerAuthority<'_> {
     }
 }
 
+/// What converting a claim did to the owner-signed set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClaimOutcome {
+    /// The claimant had no grant on this scope; one was appended.
+    Granted,
+    /// The claimant already held a read grant and claimed a write link, so the
+    /// committed entry was raised to write. A claim never lowers a permission.
+    Upgraded,
+    /// The claimant already held this grant — a redelivered claim. The set comes
+    /// back untouched and needs no republish.
+    Unchanged,
+}
+
 /// A claim converted into a personal grant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConvertedClaim {
-    /// The personal grant minted for the claimant's contact-anchored identity.
+    /// The personal grant for the claimant's contact-anchored identity, at the
+    /// permission the returned commitment carries. It inherits no deadline: the
+    /// link expires, the grants it produced do not.
     pub row: GrantRow,
     /// The grant-set commitment the owner re-signs. The link's own entry stays,
     /// so one link yields a grant per claimant until it expires or is revoked.
     pub commitment: GrantSetCommitment,
     /// The grant ledger matching it.
     pub ledger: Vec<GrantLedgerEntry>,
-    /// `false` when the claimant already held a grant at this tag — a
-    /// redelivered claim, which changes nothing and needs no republish.
-    pub newly_granted: bool,
+    /// What this conversion changed.
+    pub outcome: ClaimOutcome,
 }
 
 /// Convert a sender-verified invite claim into a personal grant for the
 /// claimant's contact-anchored identity.
 ///
-/// The link's row commits the ephemeral public half, which is structurally a
-/// login identity rather than a contact-anchored one; re-anchoring is the whole
-/// point of conversion, so the minted grant binds the claimant's imported
-/// contact and never the ephemeral half. `now` is the injected
-/// [`Scheduler::now`](crate::seams::Scheduler::now) instant.
+/// `links` is the owner's own record of the live links on this scope
+/// ([`RecordedInvite`]); a claim converts only against one of those. Nothing in a
+/// resolved record marks a row as an invite, and the row fields that could
+/// (`recipientIdentityPk`, `expiresAt`) sit outside the owner's signature, so
+/// deciding claimability from the record would let any committed grantee — or any
+/// write-grantee re-authoring the ledger — drive the owner into signing a grant
+/// for an identity the owner never approved.
+///
+/// The ephemeral identity a link commits is structurally a login identity rather
+/// than a contact-anchored one; re-anchoring is the whole point of conversion, so
+/// the minted grant binds the claimant's imported contact and never the ephemeral
+/// half. `now` is the injected [`Scheduler::now`](crate::seams::Scheduler::now)
+/// instant. The owner's recorded deadline is the authority — the published one is
+/// honoured as well, but only ever to shorten a link, since a write-grantee can
+/// re-author that field.
 ///
 /// The caller signs and publishes the returned set, and acks the mailbox item
-/// only once that is durable (`mailbox` ack-after-durable) — a redelivery then
-/// converts to the same tag and changes nothing.
-///
-/// Residual: a ledger row's `recipientIdentityPk` sits outside the owner-signed
-/// commitment ([`enforce_committed_ledger`]), so a write-grantee re-authoring the
-/// write-body can point a committed row at an ephemeral identity it holds and
-/// have a claim convert at that row's committed permission. It gains no
-/// permission it does not already hold — only an extra committed tag surviving a
-/// cut of its original one. Pinned by
-/// `a_write_grantee_can_retarget_a_committed_row_at_an_ephemeral_identity`, so
-/// tightening this has to update that test.
+/// only once that is durable (`mailbox` ack-after-durable). The transport is
+/// integrity-untrusted and may redeliver: a redelivered claim already converted is
+/// [`ClaimOutcome::Unchanged`], but one whose grant the owner has since cut reads
+/// as a fresh claim, so a caller that revoked a converted grantee must drop claims
+/// deriving that tag rather than re-converting them.
 pub fn convert_invite_claim(
     owner: &OwnerAuthority<'_>,
     scope: &CommittedScope<'_>,
+    links: &[RecordedInvite],
     item: &VerifiedMailboxItem,
     now: UnixMillis,
 ) -> Result<ConvertedClaim, InviteError> {
@@ -433,25 +510,27 @@ pub fn convert_invite_claim(
         return Err(InviteError::ScopeMismatch);
     }
 
-    // The seal's inner sender signature is already verified; binding it to the
-    // ephemeral half this owner committed is what makes it a claim on this link.
+    // The seal's inner sender signature is already verified; binding it to a link
+    // the owner recorded is what makes it a claim rather than a re-share.
     // Ambiguity is refused rather than resolved to the first match.
     let sender = item.sender_identity.to_sec1();
-    let mut matches = scope
-        .ledger
-        .iter()
-        .filter(|e| e.recipient_identity_pk == sender);
+    let mut matches = links.iter().filter(|l| l.ephemeral_identity_pk == sender);
     let link = matches.next().ok_or(InviteError::LinkNotCommitted)?;
     if matches.next().is_some() {
         return Err(InviteError::LinkNotCommitted);
     }
+    if link.expires_at.is_some_and(|deadline| now.0 >= deadline.0) {
+        return Err(InviteError::LinkExpired);
+    }
+    // Re-derive the record's tag, so a link recorded against another scope root
+    // cannot be replayed here.
     let link_enc =
-        X25519Public::from_bytes(link.recipient_enc_pk).ok_or(InviteError::LinkNotCommitted)?;
+        X25519Public::from_bytes(link.ephemeral_enc_pk).ok_or(InviteError::LinkNotCommitted)?;
     if recipient_blinded_tag(owner.enc_secret, &link_enc, name) != Some(link.tag) {
         return Err(InviteError::LinkNotCommitted);
     }
-    // The owner-signed entry carries the authoritative permission; a write-
-    // grantee can re-author the ledger row's copy of it.
+    // The owner-signed entry carries the authoritative permission, and its
+    // absence is the link's revocation signal.
     let permission = scope
         .commitment
         .entries
@@ -459,17 +538,29 @@ pub fn convert_invite_claim(
         .find(|e| e.tag == link.tag)
         .map(|e| e.permission)
         .ok_or(InviteError::LinkNotCommitted)?;
-    if !entry_is_live(link, now) {
+    // The published deadline is honoured too, so an expired row is inert here
+    // before any prune reaches it. Only ever an additional restriction: a
+    // write-grantee re-authoring this field can shorten a link, never extend one.
+    if scope
+        .ledger
+        .iter()
+        .any(|e| e.tag == link.tag && !entry_is_live(e, now))
+    {
         return Err(InviteError::LinkExpired);
     }
 
     let contact = import_contact(&claim.contact_code).map_err(InviteError::ClaimantContact)?;
-    if contact.identity_pk() == item.sender_identity
-        || contact.enc_subkey().to_bytes() == link.recipient_enc_pk
+    if contact.identity_pk().to_sec1() == link.ephemeral_identity_pk
+        || contact.enc_subkey().to_bytes() == link.ephemeral_enc_pk
     {
         return Err(InviteError::ClaimantIsTheEphemeralHalf);
     }
-    let row = mint_grant_row(
+    // The invite URL carries the owner's own bundle; handing it back would file a
+    // self-grant that consumes a slot and reads as a grantee in the host's UI.
+    if contact.enc_subkey() == owner.enc_secret.public() {
+        return Err(InviteError::ClaimantIsTheOwner);
+    }
+    let mut row = mint_grant_row(
         owner.enc_secret,
         &contact.identity_pk(),
         &contact.enc_subkey(),
@@ -479,19 +570,41 @@ pub fn convert_invite_claim(
     )
     .ok_or(InviteError::UnusableClaimantKey)?;
 
-    let newly_granted = !scope.ledger.iter().any(|e| e.tag == row.tag);
     let mut commitment = scope.commitment.clone();
     let mut ledger = scope.ledger.to_vec();
-    if newly_granted {
-        commitment.entries.push(row.commitment_entry.clone());
-        ledger.push(row.ledger_entry.clone());
-    }
+    // The blinded tag does not depend on permission, so an existing grantee
+    // claiming a write link is an upgrade of the entry already committed.
+    let outcome = match commitment.entries.iter().position(|e| e.tag == row.tag) {
+        None => {
+            commitment.entries.push(row.commitment_entry.clone());
+            ledger.push(row.ledger_entry.clone());
+            ClaimOutcome::Granted
+        }
+        Some(i)
+            if commitment.entries[i].permission == Permission::Read
+                && permission == Permission::Write =>
+        {
+            commitment.entries[i].permission = Permission::Write;
+            for entry in ledger.iter_mut().filter(|e| e.tag == row.tag) {
+                entry.permission = Permission::Write;
+            }
+            ClaimOutcome::Upgraded
+        }
+        Some(i) => {
+            // A claim never lowers what the owner already committed; report the
+            // grant that stands, not the one the link would have minted.
+            let held = commitment.entries[i].permission;
+            row.commitment_entry.permission = held;
+            row.ledger_entry.permission = held;
+            ClaimOutcome::Unchanged
+        }
+    };
     check_publishable(&commitment, &ledger)?;
     Ok(ConvertedClaim {
         row,
         commitment,
         ledger,
-        newly_granted,
+        outcome,
     })
 }
 
@@ -517,30 +630,32 @@ impl InviteRevocation {
     }
 }
 
-/// Cut an invite link out of the owner-signed grant set. Owner-only.
+/// Cut an invite link out of the owner-signed grant set. Owner-only, and only a
+/// link the owner recorded — a tag that is merely committed belongs to some
+/// grantee and is not this function's to cut.
 ///
-/// Grants already converted from the link are untouched — revoking a link ends
+/// Grants already converted from the link are untouched: revoking a link ends
 /// future claims, not the personal grants it already produced.
 pub fn revoke_invite_link(
     owner: &OwnerAuthority<'_>,
     scope: &CommittedScope<'_>,
-    tag: &[u8; 32],
+    link: &RecordedInvite,
 ) -> Result<InviteRevocation, InviteError> {
     owner.authorise(scope)?;
     let capability = scope
         .commitment
         .entries
         .iter()
-        .find(|e| &e.tag == tag)
+        .find(|e| e.tag == link.tag)
         .map(|e| LinkCapability::of(e.permission))
         .ok_or(InviteError::LinkNotCommitted)?;
 
     let mut commitment = scope.commitment.clone();
-    commitment.entries.retain(|e| &e.tag != tag);
+    commitment.entries.retain(|e| e.tag != link.tag);
     let ledger: Vec<GrantLedgerEntry> = scope
         .ledger
         .iter()
-        .filter(|e| &e.tag != tag)
+        .filter(|e| e.tag != link.tag)
         .cloned()
         .collect();
     check_publishable(&commitment, &ledger)?;
@@ -551,14 +666,18 @@ pub fn revoke_invite_link(
     })
 }
 
-/// The produce-side mirror of what a resolver hard-rejects: duplicate tags (core
-/// rejects them at decode and before signing) and a ledger that diverges from
-/// the commitment (the adoption gate's owner-authority check). Release-active,
-/// so no build can emit a set its own readers refuse.
+/// The produce-side mirror of what a resolver hard-rejects: the grant-set
+/// ceiling, duplicate tags, and a ledger diverging from the commitment (core
+/// rejects the first two at decode and before signing; the third is the adoption
+/// gate's owner-authority check). Release-active, so no build can emit a set its
+/// own readers refuse.
 fn check_publishable(
     commitment: &GrantSetCommitment,
     ledger: &[GrantLedgerEntry],
 ) -> Result<(), InviteError> {
+    if commitment.entries.len() > MAX_GRANT_BLOBS || ledger.len() > MAX_GRANT_BLOBS {
+        return Err(InviteError::GrantSetFull);
+    }
     if !tags_are_unique(commitment.entries.iter().map(|e| e.tag))
         || !tags_are_unique(ledger.iter().map(|e| e.tag))
     {
@@ -575,18 +694,15 @@ fn tags_are_unique(tags: impl Iterator<Item = [u8; 32]>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grants::{
-        PublishedGrantBlob, enforce_committed_ledger, entry_is_live, live_entry,
-        recipient_blinded_tag, self_locate,
-    };
+    use crate::grants::{PublishedGrantBlob, enforce_committed_ledger, self_locate};
     use crate::rotation::{
         CommittedSet, ResealError, ResealSeeds, ScopeRootIdentity, reseal_scope_root,
     };
     use crate::testkit::SeededEntropy;
     use cipherbox_core::seal::{
-        AadContext, GrantLedgerEntry, GrantSection, GrantSetCommitment, PreservedFields,
-        STRUCT_TAG_GRANT_BLOB, SignedGrantBlob, StructureSigInput, encode_grant_section,
-        open_grant_blob, sign_grant_set, verify_structure,
+        AadContext, GrantLedgerEntry, GrantSection, GrantSetCommitment, GrantSetEntry,
+        PreservedFields, STRUCT_TAG_GRANT_BLOB, SignedGrantBlob, StructureSigInput,
+        encode_grant_section, open_grant_blob, sign_grant_set, verify_structure,
     };
     use cipherbox_core::suite::contact::ContactCode;
     use cipherbox_core::suite::ecdsa::IDENTITY_PUBLIC_LEN;
@@ -1099,7 +1215,25 @@ mod tests {
         }
     }
 
-    /// A claimant's own keypair and the contact code binding the two halves.
+    /// A minted link over `SCOPE`, keyed by its fragment secret.
+    fn link(secret: u8, permission: Permission, expires_at: Option<UnixMillis>) -> MintedInvite {
+        mint_invite_grant(
+            &owner_enc(),
+            &EphemeralInvitee::from_secret(&[secret; 32]).expect("valid"),
+            &SCOPE,
+            &WRITE_SCOPE_SEED,
+            permission,
+            expires_at,
+        )
+        .expect("mints")
+    }
+
+    /// The ephemeral signer a fragment holder reconstructs to sign its claim.
+    fn link_signer(secret: u8) -> EcdsaSigner {
+        EcdsaSigner::from_scalar(&[secret; 32]).expect("valid scalar")
+    }
+
+    /// A claimant's own keypair; the contact code binds the two halves.
     fn claimant(seed: u8) -> (EcdsaSigner, X25519Secret) {
         (
             EcdsaSigner::from_scalar(&[seed; 32]).expect("valid scalar"),
@@ -1111,8 +1245,7 @@ mod tests {
         ContactCode::create(identity, enc.public()).encode()
     }
 
-    /// A claim as the mailbox hands it over: sender-verified, and signed by the
-    /// link's ephemeral identity unless `sender` says otherwise.
+    /// A claim as the mailbox hands it over: sender-verified, signed by `sender`.
     fn claim_item(sender: &EcdsaSigner, contact_code: Vec<u8>) -> VerifiedMailboxItem {
         claim_item_for(sender, contact_code, scope_name())
     }
@@ -1133,38 +1266,24 @@ mod tests {
         }
     }
 
-    /// The ephemeral signer behind an invite secret — what a fragment holder
-    /// reconstructs to sign its claim.
-    fn link_signer(invitee: &EphemeralInvitee) -> EcdsaSigner {
-        EcdsaSigner::from_scalar(invitee.secret().as_bytes()).expect("valid scalar")
-    }
-
     #[test]
     fn one_link_converts_two_claimants_into_two_grants_and_stays_live() {
-        let minted = invitee();
-        let link = mint_invite_grant(
-            &owner_enc(),
-            &minted,
-            &SCOPE,
-            &WRITE_SCOPE_SEED,
-            Permission::Read,
-            None,
-        )
-        .expect("mints");
-        let (commitment, sig, ledger) = committed(&[link.row.clone()]);
+        let l = link(0x4e, Permission::Read, None);
+        let (commitment, sig, ledger) = committed(&[l.row.clone()]);
         let keys = Owner::new();
         let owner = keys.authority();
-        let signer = link_signer(&minted);
+        let signer = link_signer(0x4e);
 
         let (a_id, a_enc) = claimant(0x61);
         let first = convert_invite_claim(
             &owner,
             &committed_scope(&commitment, &sig, &ledger),
+            &[l.link],
             &claim_item(&signer, contact_code(&a_id, &a_enc)),
             UnixMillis(0),
         )
         .expect("converts");
-        assert!(first.newly_granted);
+        assert_eq!(first.outcome, ClaimOutcome::Granted);
 
         // The second claimant converts against the set the first produced: the
         // link's own entry is still there, so the link stays claimable.
@@ -1173,6 +1292,7 @@ mod tests {
         let second = convert_invite_claim(
             &owner,
             &committed_scope(&first.commitment, &second_sig, &first.ledger),
+            &[l.link],
             &claim_item(&signer, contact_code(&b_id, &b_enc)),
             UnixMillis(0),
         )
@@ -1186,33 +1306,25 @@ mod tests {
                 .commitment
                 .entries
                 .iter()
-                .any(|e| e.tag == link.row.tag),
+                .any(|e| e.tag == l.link.tag),
             "the link itself stays live until it expires or is revoked",
         );
     }
 
     #[test]
     fn a_converted_grant_anchors_to_the_claimants_contact_never_the_ephemeral_half() {
-        let minted = invitee();
-        let link = mint_invite_grant(
-            &owner_enc(),
-            &minted,
-            &SCOPE,
-            &WRITE_SCOPE_SEED,
-            Permission::Write,
-            None,
-        )
-        .expect("mints");
-        let (commitment, sig, ledger) = committed(&[link.row.clone()]);
+        let l = link(0x4e, Permission::Write, None);
+        let (commitment, sig, ledger) = committed(&[l.row.clone()]);
         let keys = Owner::new();
         let owner = keys.authority();
         let scope = committed_scope(&commitment, &sig, &ledger);
-        let signer = link_signer(&minted);
+        let signer = link_signer(0x4e);
         let (id, enc) = claimant(0x63);
 
         let converted = convert_invite_claim(
             &owner,
             &scope,
+            &[l.link],
             &claim_item(&signer, contact_code(&id, &enc)),
             UnixMillis(0),
         )
@@ -1228,7 +1340,7 @@ mod tests {
         );
         assert_ne!(
             converted.row.ledger_entry.recipient_identity_pk,
-            minted.identity_pk().to_sec1(),
+            l.link.ephemeral_identity_pk,
         );
         assert_eq!(
             converted.row.commitment_entry.permission,
@@ -1237,103 +1349,203 @@ mod tests {
         );
         assert_eq!(
             converted.row.ledger_entry.expires_at, None,
-            "the personal grant is not the link and carries no link deadline",
+            "the link expires; the grants it produced do not",
         );
         // The claimant may not hand back the link's own throwaway identity: it
         // self-signs a perfectly valid contact code, and re-anchoring is the
         // whole point of conversion.
+        let eph_enc = X25519Secret::from_scalar([0u8; 32]);
+        for (code, why) in [
+            (
+                contact_code(&signer, &eph_enc),
+                "claimant-is-the-ephemeral-half",
+            ),
+            (
+                contact_code(&id, &X25519Secret::from_scalar([0x11; 32])),
+                "claimant-is-the-owner",
+            ),
+        ] {
+            assert_eq!(
+                convert_invite_claim(
+                    &owner,
+                    &scope,
+                    &[l.link],
+                    &claim_item(&signer, code),
+                    UnixMillis(0)
+                )
+                .unwrap_err()
+                .check(),
+                why,
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_link_the_owner_recorded_can_be_claimed() {
+        // An ordinary grantee posts a well-formed, honestly-signed claim naming a
+        // sockpuppet contact. Its row is byte-shaped like a link's, so nothing in
+        // the record distinguishes them — only the owner's own record does.
+        let grantee_identity = EcdsaSigner::from_scalar(&[0x7a; 32]).expect("valid scalar");
+        let grantee_enc = X25519Secret::from_scalar([0x7b; 32]);
+        let grantee = mint_grant_row(
+            &owner_enc(),
+            &grantee_identity.verifying_key(),
+            &grantee_enc.public(),
+            &SCOPE,
+            &scope_name(),
+            Permission::Write,
+        )
+        .expect("contributory");
+        let l = link(0x4e, Permission::Read, None);
+        let (commitment, sig, mut ledger) = committed(&[grantee, l.row.clone()]);
+        let keys = Owner::new();
+        let owner = keys.authority();
+        let (id, enc) = claimant(0x7c);
+
         assert_eq!(
             convert_invite_claim(
                 &owner,
-                &scope,
-                &claim_item(&signer, contact_code(&signer, minted.enc_secret())),
+                &committed_scope(&commitment, &sig, &ledger),
+                &[l.link],
+                &claim_item(&grantee_identity, contact_code(&id, &enc)),
                 UnixMillis(0),
             )
             .unwrap_err()
             .check(),
-            "claimant-is-the-ephemeral-half",
+            "link-not-committed",
+            "a grantee cannot re-delegate its own row as if it were a link",
         );
-    }
 
-    #[test]
-    fn a_claim_signed_by_an_uncommitted_key_is_refused() {
-        let minted = invitee();
-        let link = invite(Permission::Read, None);
-        let (commitment, sig, ledger) = committed(&[link]);
-        let keys = Owner::new();
-        let owner = keys.authority();
-        let scope = committed_scope(&commitment, &sig, &ledger);
-        let (id, enc) = claimant(0x64);
-
-        // A different ephemeral identity than the one the ledger commits.
-        let forger = link_signer(&EphemeralInvitee::from_secret(&[0x4f; 32]).expect("valid"));
+        // Nor by re-authoring the ledger: a write-grantee pointing a committed
+        // row's recipientIdentityPk — a field outside the owner's signature — at
+        // an ephemeral identity it holds still matches no recorded link.
+        ledger[0].recipient_identity_pk = link_signer(0x4f).verifying_key().to_sec1();
         assert_eq!(
             convert_invite_claim(
                 &owner,
-                &scope,
-                &claim_item(&forger, contact_code(&id, &enc)),
+                &committed_scope(&commitment, &sig, &ledger),
+                &[l.link],
+                &claim_item(&link_signer(0x4f), contact_code(&id, &enc)),
                 UnixMillis(0),
             )
             .unwrap_err()
             .check(),
             "link-not-committed",
         );
-        // The committed one converts, so the reject above isolates the signer.
+    }
+
+    #[test]
+    fn a_claim_signed_by_an_uncommitted_key_is_refused() {
+        let l = link(0x4e, Permission::Read, None);
+        let (commitment, sig, ledger) = committed(&[l.row.clone()]);
+        let keys = Owner::new();
+        let owner = keys.authority();
+        let scope = committed_scope(&commitment, &sig, &ledger);
+        let (id, enc) = claimant(0x64);
+
+        // A different ephemeral identity than the one the owner recorded.
+        assert_eq!(
+            convert_invite_claim(
+                &owner,
+                &scope,
+                &[l.link],
+                &claim_item(&link_signer(0x4f), contact_code(&id, &enc)),
+                UnixMillis(0),
+            )
+            .unwrap_err()
+            .check(),
+            "link-not-committed",
+        );
+        // The recorded one converts, so the reject above isolates the signer.
         assert!(
             convert_invite_claim(
                 &owner,
                 &scope,
-                &claim_item(&link_signer(&minted), contact_code(&id, &enc)),
+                &[l.link],
+                &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
                 UnixMillis(0),
             )
             .is_ok()
+        );
+        // A link the owner revoked from the committed set no longer converts.
+        let (cut, cut_sig, cut_ledger) = committed(&[]);
+        assert_eq!(
+            convert_invite_claim(
+                &owner,
+                &committed_scope(&cut, &cut_sig, &cut_ledger),
+                &[l.link],
+                &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
+                UnixMillis(0),
+            )
+            .unwrap_err()
+            .check(),
+            "link-not-committed",
         );
     }
 
     #[test]
     fn a_claim_against_an_expired_link_is_refused_at_the_deadline() {
-        let minted = invitee();
-        let link = mint_invite_grant(
-            &owner_enc(),
-            &minted,
-            &SCOPE,
-            &WRITE_SCOPE_SEED,
-            Permission::Read,
-            Some(EXPIRES_AT),
-        )
-        .expect("mints");
-        let (commitment, sig, ledger) = committed(&[link.row.clone()]);
+        let l = link(0x4e, Permission::Read, Some(EXPIRES_AT));
+        let (commitment, sig, ledger) = committed(&[l.row.clone()]);
         let keys = Owner::new();
         let owner = keys.authority();
         let scope = committed_scope(&commitment, &sig, &ledger);
         let (id, enc) = claimant(0x65);
-        let item = claim_item(&link_signer(&minted), contact_code(&id, &enc));
+        let item = claim_item(&link_signer(0x4e), contact_code(&id, &enc));
 
         assert!(
-            convert_invite_claim(&owner, &scope, &item, UnixMillis(EXPIRES_AT.0 - 1)).is_ok(),
+            convert_invite_claim(
+                &owner,
+                &scope,
+                &[l.link],
+                &item,
+                UnixMillis(EXPIRES_AT.0 - 1)
+            )
+            .is_ok(),
             "live one tick before the deadline",
         );
         assert_eq!(
-            convert_invite_claim(&owner, &scope, &item, EXPIRES_AT)
+            convert_invite_claim(&owner, &scope, &[l.link], &item, EXPIRES_AT)
                 .unwrap_err()
                 .check(),
             "link-expired",
         );
-        // And the row is inert on the read path at the same instant, with no
-        // prune having touched the ledger.
-        assert!(live_entry(&ledger, &link.row.tag, EXPIRES_AT).is_none());
-        assert_eq!(ledger.len(), 1, "nothing was pruned");
+        assert_eq!(ledger.len(), 1, "the expired row is inert, not pruned");
+
+        // A stripped published deadline does not extend the link: the owner's own
+        // record is the authority.
+        let mut stripped = ledger.clone();
+        stripped[0].expires_at = None;
+        assert_eq!(
+            convert_invite_claim(
+                &owner,
+                &committed_scope(&commitment, &sig, &stripped),
+                &[l.link],
+                &item,
+                EXPIRES_AT,
+            )
+            .unwrap_err()
+            .check(),
+            "link-expired",
+        );
+
+        // And a published deadline alone makes the row inert before any prune.
+        let unrecorded = link(0x4e, Permission::Read, None);
+        assert_eq!(
+            convert_invite_claim(&owner, &scope, &[unrecorded.link], &item, EXPIRES_AT)
+                .unwrap_err()
+                .check(),
+            "link-expired",
+        );
     }
 
     #[test]
     fn a_non_owner_can_neither_convert_nor_revoke() {
-        let minted = invitee();
-        let link = invite(Permission::Read, None);
-        let tag = link.tag;
-        let (commitment, sig, ledger) = committed(&[link]);
+        let l = link(0x4e, Permission::Read, None);
+        let (commitment, sig, ledger) = committed(&[l.row.clone()]);
         let scope = committed_scope(&commitment, &sig, &ledger);
         let (id, enc) = claimant(0x66);
-        let item = claim_item(&link_signer(&minted), contact_code(&id, &enc));
+        let item = claim_item(&link_signer(0x4e), contact_code(&id, &enc));
 
         // A stranger's identity key never signed this committed set.
         let rogue_id = EcdsaSigner::from_scalar(&[0x34; 32]).expect("valid scalar");
@@ -1343,20 +1555,20 @@ mod tests {
             enc_secret: &owner_e,
         };
         assert_eq!(
-            convert_invite_claim(&rogue, &scope, &item, UnixMillis(0))
+            convert_invite_claim(&rogue, &scope, &[l.link], &item, UnixMillis(0))
                 .unwrap_err()
                 .check(),
             "not-owner",
         );
         assert_eq!(
-            revoke_invite_link(&rogue, &scope, &tag)
+            revoke_invite_link(&rogue, &scope, &l.link)
                 .unwrap_err()
                 .check(),
             "not-owner",
         );
 
         // Defense in depth: the owner identity with a foreign encryption subkey
-        // cannot re-derive the committed link tag either.
+        // cannot re-derive the recorded link tag either.
         let owner_id = owner_identity();
         let foreign_enc = X25519Secret::from_scalar([0x12; 32]);
         let half = OwnerAuthority {
@@ -1364,7 +1576,7 @@ mod tests {
             enc_secret: &foreign_enc,
         };
         assert_eq!(
-            convert_invite_claim(&half, &scope, &item, UnixMillis(0))
+            convert_invite_claim(&half, &scope, &[l.link], &item, UnixMillis(0))
                 .unwrap_err()
                 .check(),
             "link-not-committed",
@@ -1373,37 +1585,20 @@ mod tests {
 
     #[test]
     fn a_write_link_is_bearer_and_a_ledger_cut_alone_revokes_nothing() {
-        let read = mint_invite_grant(
-            &owner_enc(),
-            &EphemeralInvitee::from_secret(&[0x71; 32]).expect("valid"),
-            &SCOPE,
-            &WRITE_SCOPE_SEED,
-            Permission::Read,
-            None,
-        )
-        .expect("mints");
-        let write = mint_invite_grant(
-            &owner_enc(),
-            &EphemeralInvitee::from_secret(&[0x72; 32]).expect("valid"),
-            &SCOPE,
-            &WRITE_SCOPE_SEED,
-            Permission::Write,
-            None,
-        )
-        .expect("mints");
+        let read = link(0x71, Permission::Read, None);
+        let write = link(0x72, Permission::Write, None);
         assert!(
             write.capability.is_bearer_write(),
             "a write link hands out an extractable subtree signing key",
         );
         assert!(!read.capability.is_bearer_write());
-        let (read_link, write_link) = (read.row, write.row);
 
         let keys = Owner::new();
         let owner = keys.authority();
-        let (commitment, sig, ledger) = committed(&[read_link.clone(), write_link.clone()]);
+        let (commitment, sig, ledger) = committed(&[read.row.clone(), write.row.clone()]);
         let scope = committed_scope(&commitment, &sig, &ledger);
 
-        let cut = revoke_invite_link(&owner, &scope, &write_link.tag).expect("cuts");
+        let cut = revoke_invite_link(&owner, &scope, &write.link).expect("cuts");
         assert!(
             !cut.is_complete(),
             "a write link is not revoked until rotate_scope_write runs",
@@ -1413,25 +1608,23 @@ mod tests {
             !cut.commitment
                 .entries
                 .iter()
-                .any(|e| e.tag == write_link.tag)
+                .any(|e| e.tag == write.row.tag)
         );
-        assert!(!cut.ledger.iter().any(|e| e.tag == write_link.tag));
+        assert!(!cut.ledger.iter().any(|e| e.tag == write.row.tag));
         assert!(
-            cut.commitment
-                .entries
-                .iter()
-                .any(|e| e.tag == read_link.tag),
+            cut.commitment.entries.iter().any(|e| e.tag == read.row.tag),
             "the other grantee is untouched",
         );
 
         assert!(
-            revoke_invite_link(&owner, &scope, &read_link.tag)
+            revoke_invite_link(&owner, &scope, &read.link)
                 .expect("cuts")
                 .is_complete(),
             "a read link's cut plus a read rotation is the whole revocation",
         );
+        let unknown = link(0x73, Permission::Read, None);
         assert_eq!(
-            revoke_invite_link(&owner, &scope, &[0x77; 32])
+            revoke_invite_link(&owner, &scope, &unknown.link)
                 .unwrap_err()
                 .check(),
             "link-not-committed",
@@ -1439,58 +1632,18 @@ mod tests {
     }
 
     #[test]
-    fn a_write_grantee_can_retarget_a_committed_row_at_an_ephemeral_identity() {
-        // The honest bound on conversion: `recipientIdentityPk` sits outside the
-        // owner-signed commitment, so a write-grantee re-authoring the write-body
-        // can make a committed row answer to an ephemeral identity it holds. It
-        // gains no permission it does not already hold — only an extra tag.
-        // Pins the residual so tightening it must update this test.
-        let victim_identity = EcdsaSigner::from_scalar(&[0x7a; 32]).expect("valid scalar");
-        let victim_enc = X25519Secret::from_scalar([0x7b; 32]);
-        let victim = mint_grant_row(
-            &owner_enc(),
-            &victim_identity.verifying_key(),
-            &victim_enc.public(),
-            &SCOPE,
-            &scope_name(),
-            Permission::Write,
-        )
-        .expect("contributory");
-        let (commitment, sig, mut ledger) = committed(&[victim.clone()]);
-
-        let attacker = invitee();
-        ledger[0].recipient_identity_pk = attacker.identity_pk().to_sec1();
-
-        let keys = Owner::new();
-        let owner = keys.authority();
-        let (id, enc) = claimant(0x7c);
-        let converted = convert_invite_claim(
-            &owner,
-            &committed_scope(&commitment, &sig, &ledger),
-            &claim_item(&link_signer(&attacker), contact_code(&id, &enc)),
-            UnixMillis(0),
-        )
-        .expect("converts — the residual");
-        assert_eq!(
-            converted.row.commitment_entry.permission,
-            Permission::Write,
-            "the retargeted row's committed permission, not an escalation past it",
-        );
-    }
-
-    #[test]
     fn a_redelivered_claim_converts_to_the_same_grant_and_changes_nothing() {
-        let minted = invitee();
-        let link = invite(Permission::Read, None);
-        let (commitment, sig, ledger) = committed(&[link]);
+        let l = link(0x4e, Permission::Read, None);
+        let (commitment, sig, ledger) = committed(&[l.row.clone()]);
         let keys = Owner::new();
         let owner = keys.authority();
         let (id, enc) = claimant(0x67);
-        let item = claim_item(&link_signer(&minted), contact_code(&id, &enc));
+        let item = claim_item(&link_signer(0x4e), contact_code(&id, &enc));
 
         let first = convert_invite_claim(
             &owner,
             &committed_scope(&commitment, &sig, &ledger),
+            &[l.link],
             &item,
             UnixMillis(0),
         )
@@ -1500,30 +1653,89 @@ mod tests {
         let again = convert_invite_claim(
             &owner,
             &committed_scope(&first.commitment, &resigned, &first.ledger),
+            &[l.link],
             &item,
             UnixMillis(0),
         )
         .expect("converts");
 
-        assert!(!again.newly_granted);
+        assert_eq!(again.outcome, ClaimOutcome::Unchanged);
         assert_eq!(again.commitment, first.commitment);
         assert_eq!(again.ledger, first.ledger);
     }
 
     #[test]
-    fn a_claim_naming_another_scope_root_is_refused() {
-        let minted = invitee();
-        let link = invite(Permission::Read, None);
-        let (commitment, sig, ledger) = committed(&[link]);
+    fn claiming_a_write_link_upgrades_an_existing_read_grant_and_never_lowers_one() {
+        let read_link = link(0x4e, Permission::Read, None);
+        let write_link = link(0x4f, Permission::Write, None);
         let keys = Owner::new();
         let owner = keys.authority();
         let (id, enc) = claimant(0x68);
+
+        let (commitment, sig, ledger) = committed(&[read_link.row.clone(), write_link.row.clone()]);
+        let read_grant = convert_invite_claim(
+            &owner,
+            &committed_scope(&commitment, &sig, &ledger),
+            &[read_link.link],
+            &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
+            UnixMillis(0),
+        )
+        .expect("converts");
+        assert_eq!(read_grant.outcome, ClaimOutcome::Granted);
+
+        // Same claimant, same tag, now claiming the write link.
+        let resigned = sign_grant_set(&owner_identity(), &read_grant.commitment).expect("signs");
+        let upgraded = convert_invite_claim(
+            &owner,
+            &committed_scope(&read_grant.commitment, &resigned, &read_grant.ledger),
+            &[write_link.link],
+            &claim_item(&link_signer(0x4f), contact_code(&id, &enc)),
+            UnixMillis(0),
+        )
+        .expect("converts");
+        assert_eq!(upgraded.outcome, ClaimOutcome::Upgraded);
+        let committed_permission = |c: &GrantSetCommitment, tag: [u8; 32]| {
+            c.entries.iter().find(|e| e.tag == tag).unwrap().permission
+        };
+        assert_eq!(
+            committed_permission(&upgraded.commitment, upgraded.row.tag),
+            Permission::Write,
+        );
+        assert_eq!(
+            upgraded.row.commitment_entry.permission,
+            committed_permission(&upgraded.commitment, upgraded.row.tag),
+            "the reported row never contradicts the returned commitment",
+        );
+
+        // Claiming the read link back does not lower the write grant.
+        let resigned = sign_grant_set(&owner_identity(), &upgraded.commitment).expect("signs");
+        let held = convert_invite_claim(
+            &owner,
+            &committed_scope(&upgraded.commitment, &resigned, &upgraded.ledger),
+            &[read_link.link],
+            &claim_item(&link_signer(0x4e), contact_code(&id, &enc)),
+            UnixMillis(0),
+        )
+        .expect("converts");
+        assert_eq!(held.outcome, ClaimOutcome::Unchanged);
+        assert_eq!(held.row.commitment_entry.permission, Permission::Write);
+        assert_eq!(held.commitment, upgraded.commitment);
+    }
+
+    #[test]
+    fn a_claim_naming_another_scope_root_is_refused() {
+        let l = link(0x4e, Permission::Read, None);
+        let (commitment, sig, ledger) = committed(&[l.row.clone()]);
+        let keys = Owner::new();
+        let owner = keys.authority();
+        let (id, enc) = claimant(0x69);
         assert_eq!(
             convert_invite_claim(
                 &owner,
                 &committed_scope(&commitment, &sig, &ledger),
+                &[l.link],
                 &claim_item_for(
-                    &link_signer(&minted),
+                    &link_signer(0x4e),
                     contact_code(&id, &enc),
                     b"k51elsewhere".to_vec(),
                 ),
@@ -1536,22 +1748,35 @@ mod tests {
     }
 
     #[test]
-    fn a_claimant_contact_code_with_a_broken_binding_is_refused() {
-        let minted = invitee();
-        let link = invite(Permission::Read, None);
-        let (commitment, sig, ledger) = committed(&[link]);
+    fn a_malformed_or_unbindable_claim_is_refused() {
+        let l = link(0x4e, Permission::Read, None);
+        let (commitment, sig, ledger) = committed(&[l.row.clone()]);
         let keys = Owner::new();
         let owner = keys.authority();
-        let (id, enc) = claimant(0x69);
+        let scope = committed_scope(&commitment, &sig, &ledger);
+        let (id, enc) = claimant(0x6b);
+
+        let junk = VerifiedMailboxItem {
+            item_id: "claim-1".to_string(),
+            sender_identity: link_signer(0x4e).verifying_key(),
+            payload: b"not det-cbor".to_vec(),
+        };
+        assert_eq!(
+            convert_invite_claim(&owner, &scope, &[l.link], &junk, UnixMillis(0))
+                .unwrap_err()
+                .check(),
+            "malformed-claim",
+        );
+
         let mut code = contact_code(&id, &enc);
         let last = code.len() - 1;
         code[last] ^= 0x01;
-
         assert_eq!(
             convert_invite_claim(
                 &owner,
-                &committed_scope(&commitment, &sig, &ledger),
-                &claim_item(&link_signer(&minted), code),
+                &scope,
+                &[l.link],
+                &claim_item(&link_signer(0x4e), code),
                 UnixMillis(0),
             )
             .unwrap_err()
@@ -1562,59 +1787,63 @@ mod tests {
 
     #[test]
     fn a_conversion_that_would_publish_an_unreadable_set_returns_err() {
-        // Encode-side symmetry: core rejects a duplicate-tag commitment at decode
-        // and before signing, and the gate rejects a ledger that diverges from
-        // the commitment. Both are refused here rather than signed — a `return
-        // Err`, not an assertion a release build strips.
-        let minted = invitee();
-        let link = invite(Permission::Read, None);
+        // Encode-side symmetry: core rejects a duplicate-tag commitment and one
+        // past the grant-set ceiling at decode and before signing, and the gate
+        // rejects a ledger that diverges from the commitment. All three are
+        // refused here rather than signed — a `return Err`, not an assertion a
+        // release build strips.
+        let l = link(0x4e, Permission::Read, None);
         let keys = Owner::new();
         let owner = keys.authority();
         let (id, enc) = claimant(0x6a);
-        let item = claim_item(&link_signer(&minted), contact_code(&id, &enc));
-
-        // The claimant's tag is already committed but absent from the ledger, so
-        // appending it would file two commitment entries under one tag.
-        let claimant_row = mint_grant_row(
-            &owner_enc(),
-            &id.verifying_key(),
-            &enc.public(),
-            &SCOPE,
-            &scope_name(),
-            Permission::Read,
-        )
-        .expect("contributory");
-        let (mut commitment, _, ledger) = committed(&[link.clone(), claimant_row]);
-        let ledger: Vec<GrantLedgerEntry> = ledger.into_iter().take(1).collect();
-        let sig = sign_grant_set(&owner_identity(), &commitment).expect("signs");
-        assert_eq!(
-            convert_invite_claim(
-                &owner,
-                &committed_scope(&commitment, &sig, &ledger),
-                &item,
-                UnixMillis(0),
-            )
-            .unwrap_err()
-            .check(),
-            "duplicate-tag",
-        );
+        let item = claim_item(&link_signer(0x4e), contact_code(&id, &enc));
 
         // A ledger the commitment does not cover diverges once the new row lands.
-        commitment.entries.truncate(1);
-        let sig = sign_grant_set(&owner_identity(), &commitment).expect("signs");
-        let mut stray = link.ledger_entry.clone();
+        let (commitment, sig, _) = committed(&[l.row.clone()]);
+        let mut stray = l.row.ledger_entry.clone();
         stray.tag = [0x7e; 32];
         stray.recipient_identity_pk = [0x02; IDENTITY_PUBLIC_LEN];
         assert_eq!(
             convert_invite_claim(
                 &owner,
-                &committed_scope(&commitment, &sig, &[link.ledger_entry.clone(), stray]),
+                &committed_scope(&commitment, &sig, &[l.row.ledger_entry.clone(), stray]),
+                &[l.link],
                 &item,
                 UnixMillis(0),
             )
             .unwrap_err()
             .check(),
             "ledger-diverges-from-commitment",
+        );
+
+        // A set already at the ceiling cannot take one more row.
+        let mut full_commitment = commitment.clone();
+        let mut full_ledger = vec![l.row.ledger_entry.clone()];
+        for i in 1..MAX_GRANT_BLOBS {
+            let mut tag = [0u8; 32];
+            tag[..8].copy_from_slice(&(i as u64).to_be_bytes());
+            full_commitment
+                .entries
+                .push(GrantSetEntry::new(tag, Permission::Read, [0x02; 32]));
+            full_ledger.push(GrantLedgerEntry::new(
+                [0x02; IDENTITY_PUBLIC_LEN],
+                [0x11; 32],
+                Permission::Read,
+                tag,
+            ));
+        }
+        let full_sig = sign_grant_set(&owner_identity(), &full_commitment).expect("signs");
+        assert_eq!(
+            convert_invite_claim(
+                &owner,
+                &committed_scope(&full_commitment, &full_sig, &full_ledger),
+                &[l.link],
+                &item,
+                UnixMillis(0),
+            )
+            .unwrap_err()
+            .check(),
+            "grant-set-full",
         );
     }
 
