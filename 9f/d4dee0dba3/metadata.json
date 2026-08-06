@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "9fd4dee0dba3",
+  "strategy": "manual-commit",
+  "branch": "chore/rename-staging-api-url-var",
+  "checkpoints_count": 11,
+  "files_touched": [
+    ".github/workflows/load-test.yml",
+    "docs/DEPLOYMENT.md"
+  ],
+  "sessions": [
+    {
+      "metadata": "/9f/d4dee0dba3/0/metadata.json",
+      "transcript": "/9f/d4dee0dba3/0/full.jsonl",
+      "compact_transcript": "/9f/d4dee0dba3/0/transcript.jsonl",
+      "content_hash": "/9f/d4dee0dba3/0/content_hash.txt",
+      "prompt": "/9f/d4dee0dba3/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 1238,
+    "cache_creation_tokens": 2559623,
+    "cache_read_tokens": 132370562,
+    "output_tokens": 507361,
+    "api_call_count": 622
+  }
+}
