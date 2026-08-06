@@ -48,7 +48,10 @@ pub use liveness::{
     eol_republish, keyless_re_put, run_liveness_loop,
 };
 pub use pointer_fetch::RecordPointerFetch;
-pub use publish::{PublishError, PublishOutcome, PublishReceipt, PublishRequest, publish};
+pub use publish::{
+    InlineRecordRequest, PublishError, PublishOutcome, PublishReceipt, PublishRequest, publish,
+    publish_inline,
+};
 pub use record_publish::{PreflightError, RecordPublishError};
 pub use register::register;
 pub use resolve::{AdoptOutcome, Adopter, OwnScopeMaterial, ResolveOutcome, Resolved, resolve};
@@ -57,4 +60,4 @@ pub(crate) use resolve::{
 };
 pub use retire::{OrphanHeads, orphaned_head, retire, root_retire_ready};
 pub use revival::{ReviveError, ReviveRequest, revive};
-pub use rotation::{OwnerRotationKeys, OwnerRotationNet};
+pub use rotation::{OwnerRotationKeys, OwnerRotationNet, WriteWaveNet};
