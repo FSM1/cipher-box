@@ -101,7 +101,7 @@ jobs:
         env:
           VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_WEB3AUTH_VERIFIER: ${{ vars.VITE_WEB3AUTH_VERIFIER }}
-          VITE_API_URL: ${{ vars.STAGING_API_URL }}
+          VITE_API_URL: ${{ vars.API_URL }}
           # Unset leaves the content gateway dormant: reads fail closed as
           # unavailable rather than reaching for an unconfigured endpoint.
           VITE_READ_ACCELERATOR_URL: ${{ vars.VITE_READ_ACCELERATOR_URL }}
@@ -183,7 +183,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_WEB3AUTH_VERIFIER: ${{ vars.VITE_WEB3AUTH_VERIFIER }}
-          VITE_API_URL: ${{ vars.STAGING_API_URL }}
+          VITE_API_URL: ${{ vars.API_URL }}
           VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
           VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
@@ -277,7 +277,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_WEB3AUTH_VERIFIER: ${{ vars.VITE_WEB3AUTH_VERIFIER }}
-          VITE_API_URL: ${{ vars.STAGING_API_URL }}
+          VITE_API_URL: ${{ vars.API_URL }}
           VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
           VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}
@@ -353,7 +353,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           VITE_WEB3AUTH_CLIENT_ID: ${{ vars.VITE_WEB3AUTH_CLIENT_ID }}
           VITE_WEB3AUTH_VERIFIER: ${{ vars.VITE_WEB3AUTH_VERIFIER }}
-          VITE_API_URL: ${{ vars.STAGING_API_URL }}
+          VITE_API_URL: ${{ vars.API_URL }}
           VITE_ENVIRONMENT: staging
           VITE_GOOGLE_CLIENT_ID: ${{ vars.GOOGLE_CLIENT_ID }}
           VITE_FARO_URL: ${{ vars.VITE_FARO_URL }}

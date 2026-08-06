@@ -260,7 +260,7 @@ Key vars (non-secret):
 | ------------------------- | --------------------------------------------------------------- |
 | `STAGING_HOST`            | VPS hostname/IP <!-- VERIFY -->                                 |
 | `STAGING_USER`            | VPS SSH username <!-- VERIFY -->                                |
-| `STAGING_API_URL`         | Public API URL injected into web/desktop builds <!-- VERIFY --> |
+| `API_URL`                 | Public API URL injected into web/desktop builds <!-- VERIFY --> |
 | `STAGING_DB_USERNAME`     | PostgreSQL username                                             |
 | `CORS_ALLOWED_ORIGINS`    | Comma-separated allowed CORS origins                            |
 | `VITE_WEB3AUTH_CLIENT_ID` | Web3Auth client ID                                              |
