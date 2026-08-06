@@ -39,7 +39,7 @@ jobs:
         with:
           host: ${{ vars.HOST }}
           username: ${{ vars.USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
+          key: ${{ secrets.SSH_KEY }}
           source: 'landing/dist/*'
           target: /tmp/cipherbox-landing
           strip_components: 2
@@ -50,7 +50,7 @@ jobs:
         with:
           host: ${{ vars.HOST }}
           username: ${{ vars.USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
+          key: ${{ secrets.SSH_KEY }}
           capture_stdout: true
           script: |
             set -euo pipefail

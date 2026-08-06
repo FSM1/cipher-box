@@ -430,7 +430,7 @@ jobs:
         with:
           host: ${{ vars.HOST }}
           username: ${{ vars.USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
+          key: ${{ secrets.SSH_KEY }}
           source: '.env.staging,docker/docker-compose.staging.yml,docker/Caddyfile,docker/alloy-config.river,docker/ipfs-init/001-provide-strategy.sh'
           target: /opt/cipherbox
           strip_components: 0
@@ -440,7 +440,7 @@ jobs:
         with:
           host: ${{ vars.HOST }}
           username: ${{ vars.USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
+          key: ${{ secrets.SSH_KEY }}
           script: |
             # Move files to correct locations
             mv /opt/cipherbox/.env.staging /opt/cipherbox/docker/.env.staging 2>/dev/null || true
@@ -461,7 +461,7 @@ jobs:
         with:
           host: ${{ vars.HOST }}
           username: ${{ vars.USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
+          key: ${{ secrets.SSH_KEY }}
           source: 'web-dist/*'
           target: /opt/cipherbox/web
           strip_components: 1
@@ -472,7 +472,7 @@ jobs:
         with:
           host: ${{ vars.HOST }}
           username: ${{ vars.USER }}
-          key: ${{ secrets.STAGING_SSH_KEY }}
+          key: ${{ secrets.SSH_KEY }}
           script: |
             set -euo pipefail
             cd /opt/cipherbox/docker
