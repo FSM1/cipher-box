@@ -47,10 +47,9 @@ fn file_staging_store_passes_the_staging_store_kit() {
     }));
 }
 
-/// The retire ledger rides the durable staging store every host already
-/// implements, so the desktop's owed-retirement contract is the file store's.
-/// Each reopen is leaked because the kit borrows the handle it hands back; the
-/// test process owns them for its lifetime.
+/// The retire ledger rides the durable staging store, so the desktop's
+/// owed-retirement contract is the file store's. Each reopened handle is leaked
+/// for the kit's borrow; the test process is its owner.
 #[test]
 fn the_file_staging_store_passes_the_retire_ledger_kit() {
     let dir = tempfile::tempdir().unwrap();

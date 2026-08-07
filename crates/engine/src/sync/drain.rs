@@ -111,8 +111,17 @@ pub const PUBLISHED_OP_MARK_PREFIX: &[u8] = b"cipherbox/published-op/";
 #[must_use]
 pub fn op_mark_key(prefix: &[u8], enc_secret: &X25519Secret) -> Vec<u8> {
     let mut key = prefix.to_vec();
-    key.extend_from_slice(&RecordReader::new(enc_secret).owner_tag());
+    key.extend_from_slice(&owner_tag(enc_secret));
     key
+}
+
+/// The tag every per-identity durable record this device keeps is scoped by —
+/// the op-id marks and the retire ledger alike. One store is shared across
+/// accounts, so an unscoped record would let one identity's progress reach
+/// another's state.
+#[must_use]
+pub fn owner_tag(enc_secret: &X25519Secret) -> [u8; 32] {
+    RecordReader::new(enc_secret).owner_tag()
 }
 
 /// What one drain pass did.
@@ -557,13 +566,11 @@ where
     pub(crate) async fn run(&self, scope: &DrainScope<'_>) -> DrainReport {
         let report = self.drain_queue(scope).await;
         self.orphan_heads.retire_pending(self.api).await;
-        // Last, and never inside the queue loop: reclaiming a pruned version's
-        // bytes is garbage collection, and holding the FIFO head behind it would
-        // make the next rename wait on cleanup.
+        // Outside the queue loop, so the FIFO head never waits on cleanup.
         self.pending_reclaim.set(
             drain_owed_retires(
                 &StagingRetireLedger::new(self.staging),
-                &self.owner_tag(scope),
+                &owner_tag(scope.enc_secret),
                 self.api,
                 self.gateway,
                 self.http,
@@ -571,14 +578,6 @@ where
             .await,
         );
         report
-    }
-
-    /// This identity's ledger scope — the same owner tag the op-queue marks and
-    /// [`RecordReader`] classify against. Another account's owed CIDs retried
-    /// under this session's token would delete no rows, answer the done-signal,
-    /// and clear a debt nothing paid.
-    fn owner_tag(&self, scope: &DrainScope<'_>) -> [u8; 32] {
-        RecordReader::new(scope.enc_secret).owner_tag()
     }
 
     async fn drain_queue(&self, scope: &DrainScope<'_>) -> DrainReport {
@@ -1597,31 +1596,46 @@ where
             .map_err(Halt::from)?;
         self.release_staged_blocks(&applied.op).await;
         self.emit_mirror_shortfall(applied, shortfall);
-        // The head this publish established: the next edit of this file anchors
-        // on it, and without it this device would read its own publish as a
-        // concurrent writer.
-        project_child_version(
-            &mut self.base.borrow_mut(),
+        self.project_published_file(
             target,
             staged.plaintext_size,
             modified_at,
             version_count,
-            Some(&staged.root_cid),
+            &staged.root_cid,
+            published,
+        );
+        Ok(())
+    }
+
+    /// Repaint the base with the head this publish established, and hold the
+    /// record. Without it this device would read its own publish as a concurrent
+    /// writer, and the next edit of the file would have nothing to anchor on.
+    fn project_published_file(
+        &self,
+        target: NodeId,
+        plaintext_size: u64,
+        modified_at: u64,
+        version_count: u64,
+        head_cid: &[u8],
+        published: Published,
+    ) {
+        project_child_version(
+            &mut self.base.borrow_mut(),
+            target,
+            plaintext_size,
+            modified_at,
+            version_count,
+            Some(head_cid),
         );
         if let Some(node) = self.base.borrow_mut().node_mut(target) {
             node.record_sequence = published.sequence;
         }
         self.hold(target.0, published.held);
-        Ok(())
     }
 
     /// `prune`: republish the file's record with its history shortened to the
     /// newest `keep_latest` versions, then journal what that dropped to the
     /// retire ledger.
-    ///
-    /// The op ends at the publish. Its bytes come back on the ledger's own pass
-    /// ([`Self::run`]), because a garbage collection on this queue's critical
-    /// path would hold the FIFO head — the next rename would wait on cleanup.
     ///
     /// The journal happens **after** the publish: until the shortened history is
     /// live, a resolvable record still names the dropped roots, and retiring
@@ -1689,26 +1703,18 @@ where
             .await
             .map_err(Halt::from)?;
         self.owe_retires(scope, &plan.retire_targets).await?;
-        project_child_version(
-            &mut self.base.borrow_mut(),
+        self.project_published_file(
             target,
             head_size,
             modified_at,
             version_count,
-            Some(&head_cid),
+            &head_cid,
+            published,
         );
-        if let Some(node) = self.base.borrow_mut().node_mut(target) {
-            node.record_sequence = published.sequence;
-        }
-        self.hold(target.0, published.held);
         Ok(())
     }
 
-    /// A published history in the **pinned** unit a retire frees, newest first.
-    ///
-    /// A version record carries its plaintext `size`; sealing adds a nonce and a
-    /// tag to every leaf and stages a root block besides. Quoting the plaintext
-    /// number would report bytes no retire returns.
+    /// A published history as [`ContentVersion`]s, newest first.
     fn pinned_history(&self, versions: &[Version]) -> Result<Vec<ContentVersion>, Halt> {
         versions
             .iter()
@@ -1726,25 +1732,20 @@ where
     }
 
     /// Journal the dropped roots as owed, under this identity's ledger scope.
-    ///
-    /// Owed bytes are the hosted figure: an external-only vault registers its
-    /// content rows at size zero, so the registry retire this ledger drives
-    /// frees nothing there and a non-zero figure would never fall.
     async fn owe_retires(
         &self,
         scope: &DrainScope<'_>,
         doomed: &[ContentVersion],
     ) -> Result<(), Halt> {
-        let hosted = matches!(self.placement, Ok(placement) if placement.has_hosted_leg());
         let entries: Vec<OwedRetire> = doomed
             .iter()
             .map(|version| OwedRetire {
                 target: version.content_cid.clone(),
-                owed_bytes: if hosted { version.pinned_bytes } else { 0 },
+                owed_bytes: version.pinned_bytes,
             })
             .collect();
         StagingRetireLedger::new(self.staging)
-            .owe(&self.owner_tag(scope), &entries)
+            .owe(&owner_tag(scope.enc_secret), &entries)
             .await
             .map_err(seam)
     }
@@ -2815,10 +2816,13 @@ fn provider_failure(error: &ProviderError) -> &'static str {
 }
 
 /// One version as the registry names it: the root first, then every leaf in
-/// file order. Registration and retirement both go through here, so a retire
-/// batch names exactly what a register batch claimed — and every block is its
-/// own accountable pin row (blueprint/api.md "Pin/name registry"), so leaving
-/// a leaf out of a retirement spends account quota forever.
+/// file order, read from the blocks this device staged.
+///
+/// Every block is its own accountable pin row (blueprint/api.md "Pin/name
+/// registry"), so a retirement naming fewer CIDs than the registration claimed
+/// spends account quota forever. The prune drain names the same set from the
+/// fetched root block instead ([`expand_retire_targets`]), because by then
+/// staging has released the leaves.
 fn registry_cids(root_cid: &[u8], leaf_cids: &[Vec<u8>]) -> Vec<String> {
     core::iter::once(root_cid)
         .chain(leaf_cids.iter().map(Vec::as_slice))

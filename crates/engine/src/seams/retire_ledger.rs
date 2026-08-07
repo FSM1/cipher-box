@@ -1,4 +1,4 @@
-//! `RetireLedger` — the durable owed-retirement set (blueprint/engine.md).
+//! `RetireLedger` — the durable owed-retirement set.
 
 use super::SeamResult;
 
@@ -30,9 +30,9 @@ pub struct OwedRetire {
 ///
 /// - **Owner-scoped**: entries under one `owner_tag` are invisible under every
 ///   other, and [`settle`](RetireLedger::settle) under one tag never clears
-///   another's. Forced, not tidy: one account's owed CIDs retried under
-///   another's token delete no rows and answer the drain's done-signal without
-///   reclaiming anything.
+///   another's. Forced, not tidy: the registry's done-signal cannot tell one
+///   account's paid debt from another's unpaid one
+///   ([`RetireResult`](crate::api::RetireResult)).
 /// - **Keyed by target**: [`owe`](RetireLedger::owe)ing a target the store
 ///   already holds keeps the stored `owed_bytes` rather than adding a second
 ///   entry, so a replayed prune cannot double the pending figure. Order is not

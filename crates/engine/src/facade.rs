@@ -1564,8 +1564,8 @@ pub struct Engine<T: SeamTypes> {
     /// next drain attempt's own 413 rather than trusting a stale verdict.
     blocked: Rc<RefCell<Option<BlockedOp>>>,
     /// Pinned bytes a published prune still owes the registry, written by the
-    /// drain tick and read by [`snapshot`](Self::snapshot). In-memory: the
-    /// durable record is the retire ledger itself, which the next drain re-reads.
+    /// drain tick and read by [`pending_reclaim_bytes`](Self::pending_reclaim_bytes).
+    /// In-memory: the durable record is the retire ledger, which every pass re-reads.
     pending_reclaim: Rc<Cell<u64>>,
     /// Head blocks the drain uploaded for a publish that never reached the
     /// record transport, pending retirement. Session-lived so a retire the

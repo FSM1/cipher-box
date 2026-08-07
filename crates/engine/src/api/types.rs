@@ -193,10 +193,9 @@ pub struct Quota {
 /// What a batch retire deleted for the caller's account.
 ///
 /// `retired: 0` is the registry's own done-signal, not a failure: the rows are
-/// gone, whether this call deleted them or a lost-response replay of it did.
-/// Owner-scoped by construction — the endpoint deletes only the caller's rows,
-/// so another account's targets also answer 0, which is why the retire ledger is
-/// keyed by owner.
+/// gone, whether this call deleted them or a lost-response replay of it did. It
+/// is not evidence they were *this* account's — the endpoint only ever deletes
+/// the caller's rows, so another account's targets answer 0 too.
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RetireResult {
@@ -205,18 +204,6 @@ pub struct RetireResult {
     /// Rows whose global refcount reached zero, so the block physically
     /// unpinned.
     pub unpinned: u64,
-}
-
-impl RetireResult {
-    /// Fold another batch's counts in, for a retire chunked across several
-    /// calls.
-    #[must_use]
-    pub fn merge(self, other: Self) -> Self {
-        Self {
-            retired: self.retired.saturating_add(other.retired),
-            unpinned: self.unpinned.saturating_add(other.unpinned),
-        }
-    }
 }
 
 /// The result of a hosted upload.

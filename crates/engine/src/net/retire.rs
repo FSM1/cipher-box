@@ -7,16 +7,15 @@
 //! closes ([`root_retire_ready`], stubbed — see below).
 //!
 //! A pruned version's bytes are the one retirement that outlives the op that
-//! ordered it: [`drain_owed_retires`] works the durable [`RetireLedger`] off the
-//! op queue's critical path, so garbage collection never holds the FIFO head.
+//! ordered it ([`drain_owed_retires`]).
 
 use core::cell::RefCell;
 
 use cipherbox_core::content::decode_content_cid_str;
 
 use super::REGISTRY_BATCH_MAX;
-use crate::api::{ApiClient, ApiError, RetireResult};
-use crate::content::{ContentPlane, ContentVersion, Gateway, expand_retire_targets, read_block};
+use crate::api::{ApiClient, ApiError};
+use crate::content::{ContentPlane, Gateway, expand_retire_targets, read_block};
 use crate::net::publish::PublishError;
 use crate::net::record_publish::RecordPublishError;
 use crate::seams::{
@@ -103,19 +102,15 @@ pub fn orphaned_head(error: &RecordPublishError) -> bool {
 /// leaves the earlier ones retired and returns `Err`. Callers whose order is
 /// load-bearing — the prune expansion, whose root must outlive its leaves — get
 /// it from that.
-pub async fn retire<H, C>(
-    api: &ApiClient<H, C>,
-    targets: &[String],
-) -> Result<RetireResult, ApiError>
+pub async fn retire<H, C>(api: &ApiClient<H, C>, targets: &[String]) -> Result<(), ApiError>
 where
     H: Http,
     C: CredentialStore,
 {
-    let mut total = RetireResult::default();
     for chunk in targets.chunks(REGISTRY_BATCH_MAX) {
-        total = total.merge(api.retire(chunk).await?);
+        api.retire(chunk).await?;
     }
-    Ok(total)
+    Ok(())
 }
 
 /// The staging-key prefix the [`StagingRetireLedger`] journals under.
@@ -128,13 +123,6 @@ where
 ///
 /// [`orphan_staging_keys`]: crate::sync::orphan_staging_keys
 pub const RETIRE_LEDGER_PREFIX: &[u8] = b"cipherbox/retire-ledger/";
-
-/// Whether a staging key belongs to the retire ledger, so orphan GC leaves it
-/// alone.
-#[must_use]
-pub fn is_retire_ledger_key(key: &[u8]) -> bool {
-    key.starts_with(RETIRE_LEDGER_PREFIX)
-}
 
 /// The owed bytes as one ledger entry stores them.
 const OWED_BYTES_LEN: usize = 8;
@@ -226,18 +214,15 @@ impl<St: StagingStore> RetireLedger for StagingRetireLedger<'_, St> {
 /// vault's pending-reclaim figure.
 ///
 /// Each entry is expanded from its own root block, fetched keyless (plaintext
-/// det-CBOR), and retired **leaves first, root last**: the root is the only
-/// record of its leaf list, so a pass that dies mid-drain re-expands from a root
-/// that is still pinned rather than leaving those bytes unnameable and charged
-/// forever.
+/// det-CBOR), and retired in [`expand_retire_targets`] order.
 ///
-/// An entry clears only on the registry's own answer, `retired` count included —
-/// which is what makes a lost response harmless, since the replay finds the rows
-/// gone and answers `retired: 0`. Everything else — offline, an expired token, a
-/// throttle, a root no source will serve — leaves the entry owed and retries on
-/// a later pass. There is no attempt budget and no dead-letter class: every
-/// failure is either self-clearing or ours, and the byte figure is the only
-/// record of what was owed.
+/// An entry clears on the registry's own answer. Everything else — offline, an
+/// expired token, a throttle, a root no source will serve — leaves the entry
+/// owed and retries on a later pass; a registry that refused one batch also ends
+/// the pass, since every remaining entry would spend a root fetch to fail the
+/// same way. There is no attempt budget and no dead-letter class: every failure
+/// is either self-clearing or ours, and the byte figure is the only record of
+/// what was owed.
 pub async fn drain_owed_retires<L, H, C>(
     ledger: &L,
     owner_tag: &[u8],
@@ -255,11 +240,22 @@ where
     };
     let mut settled = Vec::new();
     let mut still_owed = 0u64;
+    let mut registry_up = true;
     for entry in owed {
-        if retire_owed(&entry, api, gateway, http).await {
-            settled.push(entry.target);
+        let outcome = if registry_up {
+            retire_owed(&entry, api, gateway, http).await
         } else {
-            still_owed = still_owed.saturating_add(entry.owed_bytes);
+            RetireOutcome::RegistryDown
+        };
+        match outcome {
+            RetireOutcome::Retired => settled.push(entry.target),
+            RetireOutcome::Unexpandable => {
+                still_owed = still_owed.saturating_add(entry.owed_bytes);
+            }
+            RetireOutcome::RegistryDown => {
+                registry_up = false;
+                still_owed = still_owed.saturating_add(entry.owed_bytes);
+            }
         }
     }
     if !settled.is_empty() {
@@ -271,39 +267,45 @@ where
     still_owed
 }
 
-/// Retire one owed version's whole block set; `false` leaves it owed.
+/// How one owed entry's pass ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RetireOutcome {
+    /// The registry answered, so the entry clears.
+    Retired,
+    /// This entry alone could not be expanded: a malformed target, or a root no
+    /// source served.
+    Unexpandable,
+    /// The registry refused or could not be reached — not this entry's fault,
+    /// and not the next one's either.
+    RegistryDown,
+}
+
+/// Retire one owed version's whole block set.
 async fn retire_owed<H, C>(
     entry: &OwedRetire,
     api: &ApiClient<H, C>,
     gateway: &Gateway,
     http: &H,
-) -> bool
+) -> RetireOutcome
 where
     H: Http,
     C: CredentialStore,
 {
-    let version = ContentVersion {
-        content_cid: entry.target.clone(),
-        pinned_bytes: entry.owed_bytes,
+    let Ok(expected) = decode_content_cid_str(&entry.target) else {
+        return RetireOutcome::Unexpandable;
     };
-    let Ok(expected) = decode_content_cid_str(&version.content_cid) else {
-        return false;
-    };
-    let Ok(root_block) = read_block(
-        gateway,
-        http,
-        &version.content_cid,
-        &expected,
-        ContentPlane::Root,
-    )
-    .await
+    let Ok(root_block) =
+        read_block(gateway, http, &entry.target, &expected, ContentPlane::Root).await
     else {
-        return false;
+        return RetireOutcome::Unexpandable;
     };
-    let Ok(targets) = expand_retire_targets(&version, &root_block) else {
-        return false;
+    let Ok(targets) = expand_retire_targets(&entry.target, &root_block) else {
+        return RetireOutcome::Unexpandable;
     };
-    retire(api, &targets).await.is_ok()
+    match retire(api, &targets).await {
+        Ok(()) => RetireOutcome::Retired,
+        Err(_) => RetireOutcome::RegistryDown,
+    }
 }
 
 /// Whether the old scope-root name may be retired yet. **Stubbed to `false`**:
@@ -319,12 +321,9 @@ pub fn root_retire_ready() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::content::ContentProfile;
     use crate::seams::{HttpMethod, HttpResponse};
     use crate::testkit::fakes::{InMemoryCredentialStore, InMemoryStagingStore, ScriptedHttp};
-    use crate::testkit::{block_on, frame_version, gateway, requested_cid};
-    use cipherbox_core::content::encode_content_cid_str;
-    use cipherbox_core::suite::aead::KEY_LEN;
+    use crate::testkit::{block_on, doomed_version, gateway, requested_cid};
 
     fn client() -> (
         ScriptedHttp,
@@ -340,13 +339,17 @@ mod tests {
     }
 
     /// The registry's own answer to a retire, as the ledger's done-signal reads
-    /// it.
-    fn retire_ack(http: &ScriptedHttp, retired: u64) {
-        http.enqueue_response(HttpResponse {
-            status: 200,
+    /// it. `None` is a refusal.
+    fn retire_answer(retired: Option<u64>) -> HttpResponse {
+        HttpResponse {
+            status: if retired.is_some() { 200 } else { 503 },
             headers: Vec::new(),
-            body: format!(r#"{{"retired":{retired},"unpinned":0}}"#).into_bytes(),
-        });
+            body: format!(
+                r#"{{"retired":{},"unpinned":0}}"#,
+                retired.unwrap_or_default()
+            )
+            .into_bytes(),
+        }
     }
 
     #[test]
@@ -359,14 +362,8 @@ mod tests {
     #[test]
     fn retire_posts_the_batch_to_the_registry() {
         let (http, client) = client();
-        retire_ack(&http, 1);
-        assert_eq!(
-            block_on(retire(&client, &["k51interior".to_owned()])).expect("retire"),
-            RetireResult {
-                retired: 1,
-                unpinned: 0
-            }
-        );
+        http.enqueue_response(retire_answer(Some(1)));
+        block_on(retire(&client, &["k51interior".to_owned()])).expect("retire");
         let requests = http.requests();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].method, HttpMethod::Post);
@@ -379,14 +376,10 @@ mod tests {
         let targets: Vec<String> = (0..REGISTRY_BATCH_MAX + 1)
             .map(|i| format!("cid{i}"))
             .collect();
-        for retired in [1000u64, 1] {
-            retire_ack(&http, retired);
+        for _ in 0..2 {
+            http.enqueue_response(retire_answer(Some(1)));
         }
-        assert_eq!(
-            block_on(retire(&client, &targets)).expect("retire").retired,
-            1001,
-            "the chunks' counts fold into one figure"
-        );
+        block_on(retire(&client, &targets)).expect("retire");
 
         let requests = http.requests();
         assert_eq!(requests.len(), 2, "the batch splits at the server's cap");
@@ -410,21 +403,9 @@ mod tests {
     const OWNER: &[u8] = b"owner-tag";
     const OTHER_OWNER: &[u8] = b"another-owner-tag";
 
-    /// One sealed version: the debt a prune journals for it, its root block, and
-    /// the leaf CIDs as the registry spells them.
-    fn doomed_version(plaintext: &[u8]) -> (OwedRetire, Vec<u8>, Vec<String>) {
-        let (_, root_block, content) = frame_version(plaintext, [9u8; KEY_LEN], 11);
-        let version = ContentVersion::from_plaintext_size(
-            encode_content_cid_str(content.content_cid()),
-            plaintext.len() as u64,
-            &ContentProfile::CI,
-        )
-        .expect("under the ceiling");
-        let leaf_cids = content
-            .leaf_cids()
-            .iter()
-            .map(|cid| encode_content_cid_str(cid))
-            .collect();
+    /// The debt a prune journals for one sealed version.
+    fn owed_version(plaintext: &[u8]) -> (OwedRetire, Vec<u8>, Vec<String>) {
+        let (version, root_block, leaf_cids) = doomed_version(plaintext);
         (
             OwedRetire {
                 target: version.content_cid,
@@ -436,25 +417,21 @@ mod tests {
     }
 
     /// A transport serving the doomed root off the gateway and answering the
-    /// registry however the case under test needs.
+    /// registry with `retired` — `None` being a refusal. An absent `root_block`
+    /// is a root no source will serve.
     fn ledger_http(
-        root: &OwedRetire,
+        entry: &OwedRetire,
         root_block: Option<Vec<u8>>,
-        retire_ok: bool,
+        retired: Option<u64>,
     ) -> ScriptedHttp {
         let http = ScriptedHttp::default();
-        let cid = root.target.clone();
+        let cid = entry.target.clone();
         for _ in 0..32 {
             let cid = cid.clone();
             let root_block = root_block.clone();
             http.enqueue_derived(move |request| {
                 if request.url.ends_with("/registry/retire") {
-                    let retired = u64::from(retire_ok);
-                    return Ok(HttpResponse {
-                        status: if retire_ok { 200 } else { 503 },
-                        headers: Vec::new(),
-                        body: format!(r#"{{"retired":{retired},"unpinned":0}}"#).into_bytes(),
-                    });
+                    return Ok(retire_answer(retired));
                 }
                 match root_block.filter(|_| requested_cid(&request.url) == cid) {
                     Some(block) => Ok(HttpResponse {
@@ -506,7 +483,7 @@ mod tests {
     #[test]
     fn a_drained_entry_retires_every_leaf_before_its_root_and_settles() {
         let plaintext: Vec<u8> = (0..100u8).collect();
-        let (entry, root_block, leaf_cids) = doomed_version(&plaintext);
+        let (entry, root_block, leaf_cids) = owed_version(&plaintext);
         assert!(
             leaf_cids.len() > 1,
             "a multi-chunk version is the normal case"
@@ -514,7 +491,7 @@ mod tests {
         let store = InMemoryStagingStore::default();
         owe(&store, OWNER, &entry);
 
-        let http = ledger_http(&entry, Some(root_block), true);
+        let http = ledger_http(&entry, Some(root_block), Some(1));
         let (remaining, owed) = drain(&store, OWNER, &http);
 
         assert_eq!(
@@ -529,37 +506,16 @@ mod tests {
         assert_eq!(remaining, 0, "nothing is still owed");
     }
 
-    /// The done-signal is the registry's own count, and zero is its positive
-    /// form: the rows are gone, whether this call deleted them or a replay of a
-    /// lost response did.
+    /// The done-signal is the registry's own answer, and a zero count is its
+    /// positive form: the rows are gone, whether this call deleted them or a
+    /// replay of a lost response did.
     #[test]
     fn a_retire_reporting_nothing_deleted_still_settles_the_entry() {
-        let (entry, root_block, _) = doomed_version(&[7u8; 40]);
+        let (entry, root_block, _) = owed_version(&[7u8; 40]);
         let store = InMemoryStagingStore::default();
         owe(&store, OWNER, &entry);
 
-        let http = ScriptedHttp::default();
-        let cid = entry.target.clone();
-        for _ in 0..32 {
-            let (cid, root_block) = (cid.clone(), root_block.clone());
-            http.enqueue_derived(move |request| {
-                if request.url.ends_with("/registry/retire") {
-                    return Ok(HttpResponse {
-                        status: 200,
-                        headers: Vec::new(),
-                        body: br#"{"retired":0,"unpinned":0}"#.to_vec(),
-                    });
-                }
-                if requested_cid(&request.url) == cid {
-                    return Ok(HttpResponse {
-                        status: 200,
-                        headers: Vec::new(),
-                        body: root_block,
-                    });
-                }
-                Err(SeamError::new("no such block"))
-            });
-        }
+        let http = ledger_http(&entry, Some(root_block), Some(0));
         let (remaining, owed) = drain(&store, OWNER, &http);
         assert!(owed.is_empty());
         assert_eq!(remaining, 0);
@@ -567,11 +523,11 @@ mod tests {
 
     #[test]
     fn a_refused_retire_keeps_the_debt_and_reports_it_as_pending() {
-        let (entry, root_block, _) = doomed_version(&[3u8; 40]);
+        let (entry, root_block, _) = owed_version(&[3u8; 40]);
         let store = InMemoryStagingStore::default();
         owe(&store, OWNER, &entry);
 
-        let http = ledger_http(&entry, Some(root_block), false);
+        let http = ledger_http(&entry, Some(root_block), None);
         let (remaining, owed) = drain(&store, OWNER, &http);
         assert_eq!(owed, vec![entry.clone()], "a refusal discards nothing");
         assert_eq!(
@@ -585,11 +541,11 @@ mod tests {
     /// be charged forever.
     #[test]
     fn an_unfetchable_root_retires_nothing_and_stays_owed() {
-        let (entry, ..) = doomed_version(&[4u8; 40]);
+        let (entry, ..) = owed_version(&[4u8; 40]);
         let store = InMemoryStagingStore::default();
         owe(&store, OWNER, &entry);
 
-        let http = ledger_http(&entry, None, true);
+        let http = ledger_http(&entry, None, Some(1));
         let (remaining, owed) = drain(&store, OWNER, &http);
         assert!(
             retired_targets(&http).is_empty(),
@@ -603,11 +559,11 @@ mod tests {
     /// pass under the wrong owner must never reach the debt.
     #[test]
     fn a_pass_under_another_owner_tag_neither_retires_nor_settles() {
-        let (entry, root_block, _) = doomed_version(&[5u8; 40]);
+        let (entry, root_block, _) = owed_version(&[5u8; 40]);
         let store = InMemoryStagingStore::default();
         owe(&store, OWNER, &entry);
 
-        let http = ledger_http(&entry, Some(root_block), true);
+        let http = ledger_http(&entry, Some(root_block), Some(1));
         let (remaining, owed) = drain(&store, OTHER_OWNER, &http);
         assert!(retired_targets(&http).is_empty());
         assert_eq!(remaining, 0, "the other owner owes nothing");
@@ -623,19 +579,19 @@ mod tests {
     /// resumability rests on the root surviving until every leaf is named.
     #[test]
     fn a_partially_retired_entry_stays_owed_and_replays_whole() {
-        let (entry, root_block, leaf_cids) = doomed_version(&[6u8; 100]);
+        let (entry, root_block, leaf_cids) = owed_version(&[6u8; 100]);
         let store = InMemoryStagingStore::default();
         owe(&store, OWNER, &entry);
 
         // The first pass loses the registry.
-        let failing = ledger_http(&entry, Some(root_block.clone()), false);
+        let failing = ledger_http(&entry, Some(root_block.clone()), None);
         let (remaining, owed) = drain(&store, OWNER, &failing);
         assert_eq!(owed, vec![entry.clone()]);
         assert_eq!(remaining, entry.owed_bytes);
 
         // The second re-expands from the still-pinned root and names the whole
         // set again — idempotent server-side, so a replay is a no-op.
-        let http = ledger_http(&entry, Some(root_block), true);
+        let http = ledger_http(&entry, Some(root_block), Some(1));
         let (remaining, owed) = drain(&store, OWNER, &http);
         assert_eq!(
             retired_targets(&http),

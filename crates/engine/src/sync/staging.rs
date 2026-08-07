@@ -22,7 +22,7 @@ use cipherbox_core::content::verify_cid;
 
 use crate::content::decode_root;
 use crate::facade::WriteHandle;
-use crate::net::is_retire_ledger_key;
+use crate::net::RETIRE_LEDGER_PREFIX;
 use crate::seams::{OpId, SeamError, SeamResult, StagingStore};
 use crate::sync::drain::{
     DRAINED_OP_MARK_PREFIX, OP_ATTEMPTS_KEY, PUBLISHED_OP_MARK_PREFIX, UPLOAD_MARK_KEY,
@@ -38,7 +38,7 @@ use crate::sync::record::{RecordSeal, encode_op_record, record_content_root_cid}
 fn is_bookkeeping(key: &[u8]) -> bool {
     key.starts_with(DRAINED_OP_MARK_PREFIX)
         || key.starts_with(PUBLISHED_OP_MARK_PREFIX)
-        || is_retire_ledger_key(key)
+        || key.starts_with(RETIRE_LEDGER_PREFIX)
 }
 
 /// Journal one op onto the durable queue, returning its id.

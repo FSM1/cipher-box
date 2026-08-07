@@ -68,9 +68,6 @@ fn apply_one(view: &mut Snapshot, op: &Op) {
                 op.stamp_authored(node);
             }
         }
-        // A prune leaves the head version exactly where it was, so it stamps
-        // nothing: the file's size and mtime are the head's, and only the count
-        // behind it shortens.
         OpKind::Prune { keep_latest } => {
             if let Some(node) = view.node_mut(op.target) {
                 node.content_version = node
