@@ -1,0 +1,27 @@
+{
+  "cli_version": "0.8.42",
+  "checkpoint_id": "c30a0e3a08a1",
+  "strategy": "manual-commit",
+  "branch": "fix/rotation-grant-tag-remint",
+  "checkpoints_count": 6,
+  "files_touched": [
+    "crates/engine/src/net/rotation.rs",
+    "crates/engine/src/rotation/cascade.rs"
+  ],
+  "sessions": [
+    {
+      "metadata": "/c3/0a0e3a08a1/0/metadata.json",
+      "transcript": "/c3/0a0e3a08a1/0/full.jsonl",
+      "compact_transcript": "/c3/0a0e3a08a1/0/transcript.jsonl",
+      "content_hash": "/c3/0a0e3a08a1/0/content_hash.txt",
+      "prompt": "/c3/0a0e3a08a1/0/prompt.txt"
+    }
+  ],
+  "token_usage": {
+    "input_tokens": 159,
+    "cache_creation_tokens": 206799,
+    "cache_read_tokens": 11703520,
+    "output_tokens": 99126,
+    "api_call_count": 80
+  }
+}
